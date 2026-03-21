@@ -26,7 +26,7 @@ describe('search pipeline integration', () => {
     const rows = db.prepare(`
       SELECT o.id, o.type, o.title, o.project, o.created_at, o.importance,
              o.files_modified,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (0.5 + 0.5 * COALESCE(o.importance, 1)) as score
       FROM observations_fts
@@ -110,7 +110,7 @@ describe('search pipeline integration', () => {
     const now = Date.now();
     const allRows = db.prepare(`
       SELECT o.id,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0)) as score
       FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id

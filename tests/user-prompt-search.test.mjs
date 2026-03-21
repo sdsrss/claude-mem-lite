@@ -406,7 +406,7 @@ describe('search query functions (in-memory DB)', () => {
     const typeClause = typeFilter ? `AND o.type = '${typeFilter}'` : '';
     const sql = `
       SELECT o.id, o.type, o.title, o.lesson_learned,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2) as relevance
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8) as relevance
       FROM observations_fts
       JOIN observations o ON o.id = observations_fts.rowid
       WHERE observations_fts MATCH ?
@@ -415,7 +415,7 @@ describe('search query functions (in-memory DB)', () => {
         AND o.created_at_epoch > ?
         AND COALESCE(o.compressed_into, 0) = 0
         ${typeClause}
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
       LIMIT ?
     `;
 

@@ -390,7 +390,7 @@ describe('access_count tracking', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.title, o.access_count,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (0.5 + 0.5 * COALESCE(o.importance, 1))
                * (1.0 + 0.1 * LN(1 + COALESCE(o.access_count, 0))) as score
@@ -741,7 +741,7 @@ describe('PRF document-level expansion', () => {
       SELECT o.id, o.title FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND COALESCE(o.compressed_into, 0) = 0
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
       LIMIT 8
     `).all(ftsQuery);
 
@@ -846,7 +846,7 @@ describe('BM25 scoring formula', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.created_at_epoch,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (0.5 + 0.5 * COALESCE(o.importance, 1))
                * (1.0 + 0.1 * LN(1 + COALESCE(o.access_count, 0))) as score
@@ -869,7 +869,7 @@ describe('BM25 scoring formula', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.project,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (CASE WHEN o.project = 'myproject' THEN 2.0 ELSE 1.0 END)
                * (0.5 + 0.5 * COALESCE(o.importance, 1)) as score
@@ -891,7 +891,7 @@ describe('BM25 scoring formula', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.importance,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (0.5 + 0.5 * COALESCE(o.importance, 1)) as score
       FROM observations_fts
@@ -912,7 +912,7 @@ describe('BM25 scoring formula', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.access_count,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
                * (0.5 + 0.5 * COALESCE(o.importance, 1))
                * (1.0 + 0.1 * LN(1 + COALESCE(o.access_count, 0))) as score
@@ -931,7 +931,7 @@ describe('BM25 scoring formula', () => {
     insertObs(db, { title: 'bm25base unique test term', text: 'bm25base unique test term' });
 
     const rows = db.prepare(`
-      SELECT bm25(observations_fts, 10, 5, 5, 3, 3, 2) as raw_score
+      SELECT bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8) as raw_score
       FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"bm25base"'
@@ -961,7 +961,7 @@ describe('mem_timeline', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
         AND COALESCE(o.compressed_into, 0) = 0
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
         * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
       LIMIT 1
     `).get(ftsQuery, now);
@@ -1277,7 +1277,7 @@ describe('type-differentiated decay', () => {
     const now = Date.now();
     const rows = db.prepare(`
       SELECT o.id, o.type, o.title,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+             bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / (
                  CASE o.type
                    WHEN 'decision'  THEN 7776000000.0

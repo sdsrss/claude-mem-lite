@@ -93,7 +93,7 @@ function searchObservations(db, query, options = {}) {
   const rows = db.prepare(`
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.importance,
            o.files_modified, o.narrative, o.text,
-           bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+           bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
              * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
              * (CASE WHEN ? IS NOT NULL AND o.project = ? THEN 2.0 ELSE 1.0 END)
              * (0.5 + 0.5 * COALESCE(o.importance, 1))
