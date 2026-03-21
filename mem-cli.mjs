@@ -3,23 +3,11 @@
 // No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs
 
 import { ensureDb, DB_PATH } from './schema.mjs';
-import { sanitizeFtsQuery, relaxFtsQueryToOr, truncate, typeIcon, inferProject, jaccardSimilarity, computeMinHash, scrubSecrets, cjkBigrams } from './utils.mjs';
+import { sanitizeFtsQuery, relaxFtsQueryToOr, truncate, typeIcon, inferProject, jaccardSimilarity, computeMinHash, scrubSecrets, cjkBigrams, OBS_BM25, TYPE_DECAY_CASE } from './utils.mjs';
 import { basename, join } from 'path';
 import { readFileSync } from 'fs';
 
-// ─── Scoring Constants (aligned with server.mjs) ───────────────────────────
-// Type-differentiated recency decay half-lives (milliseconds)
-const TYPE_DECAY_CASE = `(
-  CASE o.type
-    WHEN 'decision'  THEN 7776000000.0
-    WHEN 'discovery' THEN 5184000000.0
-    WHEN 'feature'   THEN 2592000000.0
-    WHEN 'bugfix'    THEN 1209600000.0
-    WHEN 'refactor'  THEN 1209600000.0
-    WHEN 'change'    THEN  604800000.0
-    ELSE 1209600000.0
-  END
-)`;
+// OBS_BM25, TYPE_DECAY_CASE imported from utils.mjs
 
 // ─── Argument Parsing ────────────────────────────────────────────────────────
 
@@ -161,7 +149,7 @@ function searchFts(db, ftsQuery, { type, project, limit, dateFrom, dateTo, minIm
     FROM observations_fts
     JOIN observations o ON observations_fts.rowid = o.id
     WHERE ${wheres.join(' AND ')}
-    ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+    ORDER BY ${OBS_BM25}
       * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / ${TYPE_DECAY_CASE}))
       * (CASE WHEN ? IS NOT NULL AND o.project = ? THEN 2.0 ELSE 1.0 END)
       * (0.5 + 0.5 * COALESCE(o.importance, 1))
@@ -309,7 +297,7 @@ function cmdTimeline(db, args) {
         SELECT o.id FROM observations_fts
         JOIN observations o ON observations_fts.rowid = o.id
         WHERE observations_fts MATCH ? AND COALESCE(o.compressed_into, 0) = 0
-        ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+        ORDER BY ${OBS_BM25}
         LIMIT 1
       `).get(ftsQuery);
       if (match) anchorId = match.id;

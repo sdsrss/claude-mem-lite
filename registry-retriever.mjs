@@ -377,8 +377,8 @@ const COMPOSITE_EXPR = `(
             (COALESCE(r.weighted_adopt_sum, 0) + 1.0) / (COALESCE(r.recommend_count, 0) + 2.0)
           ) * 0.5
       ) * 0.10
-    - CASE WHEN COALESCE(r.recommend_count, 0) < 10
-        THEN 0.10 * (1.0 - COALESCE(r.recommend_count, 0) * 1.0 / 10.0)
+    - CASE WHEN COALESCE(r.recommend_count, 0) <= 5
+        THEN 0.10 * (1.0 - COALESCE(r.recommend_count, 0) * 1.0 / 5.0)
         ELSE 0 END
     + CASE WHEN COALESCE(r.recommend_count, 0) > 5
            AND (COALESCE(r.adopt_count, 0) + 1.0) / (COALESCE(r.recommend_count, 0) + 2.0) < 0.1

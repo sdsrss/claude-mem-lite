@@ -12,7 +12,7 @@ import {
   truncate, typeIcon, inferProject, detectBashSignificance,
   extractErrorKeywords, extractFilePaths, isRelatedToEpisode,
   makeEntryDesc, scrubSecrets, EDIT_TOOLS, debugCatch, debugLog, fmtTime,
-  COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE, isoWeekKey,
+  COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE, isoWeekKey, OBS_BM25,
 } from './utils.mjs';
 import {
   readEpisodeRaw, episodeFile,
@@ -276,7 +276,7 @@ function triggerErrorRecall(db, toolInput, response) {
       FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND o.project = ?
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY ${OBS_BM25}
         * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
       LIMIT 3
     `).all(ftsQuery, project, nowR);
@@ -627,8 +627,8 @@ async function handleSessionStart() {
             if (fr || fc) {
               db.prepare(`
                 INSERT INTO session_summaries
-                (memory_session_id, project, request, investigated, learned, completed, next_steps, files_read, files_edited, notes, created_at, created_at_epoch)
-                VALUES (?, ?, ?, '', '', ?, '', '[]', '[]', 'fast', ?, ?)
+                (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, created_at, created_at_epoch)
+                VALUES (?, ?, ?, '', '', ?, '', '', '[]', '[]', 'fast', ?, ?)
               `).run(recentSession.content_session_id, project, fr, truncate(fc, 300), now.toISOString(), now.getTime());
             }
           }
@@ -650,7 +650,7 @@ async function handleSessionStart() {
 
     // Key context: top high-importance observations for CLAUDE.md persistence
     const keyObs = db.prepare(`
-      SELECT id, type, title FROM observations
+      SELECT id, type, title, lesson_learned FROM observations
       WHERE project = ? AND COALESCE(compressed_into, 0) = 0
         AND COALESCE(importance, 1) >= 2
       ORDER BY created_at_epoch DESC LIMIT 5
@@ -662,7 +662,8 @@ async function handleSessionStart() {
         const clean = (o.title || '(untitled)')
           .replace(/ → (?:ERROR: )?\{".*$/, '')
           .replace(/ → (?:ERROR: )?\{[^}]*\.{3}$/, '');
-        summaryLines.push(`- [${o.type || 'discovery'}] ${truncate(clean, 80)} (#${o.id})`);
+        const lesson = o.lesson_learned ? ` — ${truncate(o.lesson_learned, 60)}` : '';
+        summaryLines.push(`- [${o.type || 'discovery'}] ${truncate(clean, 80)} (#${o.id})${lesson}`);
       }
       summaryLines.push('');
     } else if (!latestSummary) {
@@ -803,6 +804,17 @@ async function handleUserPrompt() {
         ORDER BY created_at_epoch DESC LIMIT 5
       `).all(project);
       const keyContextIds = keyObs.map(o => o.id);
+
+      // Read IDs already injected by user-prompt-search.js to avoid duplicate injection
+      try {
+        const injectedFile = `/tmp/.claude-mem-injected-${project}`;
+        const raw = readFileSync(injectedFile, 'utf8');
+        const { ids, ts } = JSON.parse(raw);
+        // Only use if written within last 10 seconds (same prompt cycle)
+        if (ts && Date.now() - ts < 10000 && Array.isArray(ids)) {
+          for (const id of ids) keyContextIds.push(id);
+        }
+      } catch { /* file may not exist — that's fine */ }
 
       const memories = searchRelevantMemories(db, promptText, project, keyContextIds);
       if (memories.length > 0) {

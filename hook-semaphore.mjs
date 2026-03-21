@@ -62,7 +62,8 @@ export async function acquireLLMSlot() {
             active++;
           }
         } catch {
-          active++;
+          // Corrupt/unreadable semaphore file — treat as stale and remove
+          try { unlinkSync(fp); } catch {}
         }
       }
     } catch {}

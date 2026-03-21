@@ -1,7 +1,7 @@
 // claude-mem-lite — Semantic Memory Injection
 // Search past observations for relevant memories to inject as context at user-prompt time.
 
-import { sanitizeFtsQuery, debugCatch } from './utils.mjs';
+import { sanitizeFtsQuery, debugCatch, OBS_BM25 } from './utils.mjs';
 
 const MAX_MEMORY_INJECTIONS = 3;
 const MEMORY_LOOKBACK_MS = 60 * 86400000; // 60 days
@@ -32,7 +32,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
     // Phase 1: Same-project search (highest priority)
     const selectStmt = db.prepare(`
       SELECT o.id, o.type, o.title, o.importance, o.lesson_learned, o.project,
-             bm25(observations_fts, 10, 5, 5, 3, 3, 2) as relevance
+             ${OBS_BM25} as relevance
       FROM observations_fts
       JOIN observations o ON o.id = observations_fts.rowid
       WHERE observations_fts MATCH ?
@@ -40,7 +40,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
         AND o.importance >= 1
         AND o.created_at_epoch > ?
         AND COALESCE(o.compressed_into, 0) = 0
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY ${OBS_BM25}
       LIMIT 10
     `);
     const rows = selectStmt.all(ftsQuery, project, cutoff);
@@ -51,7 +51,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
     try {
       crossRows = db.prepare(`
         SELECT o.id, o.type, o.title, o.importance, o.lesson_learned, o.project,
-               bm25(observations_fts, 10, 5, 5, 3, 3, 2) as relevance
+               ${OBS_BM25} as relevance
         FROM observations_fts
         JOIN observations o ON o.id = observations_fts.rowid
         WHERE observations_fts MATCH ?
@@ -60,7 +60,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
           AND o.importance >= 2
           AND o.created_at_epoch > ?
           AND COALESCE(o.compressed_into, 0) = 0
-        ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+        ORDER BY ${OBS_BM25}
         LIMIT 5
       `).all(ftsQuery, project, cutoff);
     } catch (e) { debugCatch(e, 'crossProjectSearch'); }

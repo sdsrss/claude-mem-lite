@@ -47,20 +47,13 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
 <claude-mem-context>
 ### Last Session
-Request: 我们项目现在在实际工作中很少调用，因为claude code对mcp的调用是选择性的，所以不能很好地结合claude code 发挥我们项目的优势提高编程效率。我在网上看到一种方案：“先把 Claude Code 内的“被动 MCP”改成…
-Completed: Modified imperative-baking-hamster.md
-Remaining: Created imperative-baking-hamster.md (11514 chars)
+Request: 修复这些问题
 
 ### Key Context
+- [discovery] Reviewed 1 files: mem (#4292)
+- [bugfix] Error: user-prompt-search.js: === Scenario 1: New session context injection ===… (#4288)
+- [bugfix] Error: hook.mjs: #4118 bugfix 2026-03-17 Title: Error: dispatch.mj… (#4199)
+- [bugfix] Error: hook.mjs, mem-cli.mjs, cli.mjs +1 more: mem 3 results for fts5 tokenizer… (#4195)
 - [discovery] Worked on README.md, architecture.md, hook-system.md +6 more (#4141)
-- [change] Modified docs, README.md, architecture.md +7 more (#4140)
-- [bugfix] Error: package.json, plugin.json, marketplace.json +2 more: in_progress		chore:… (#4129)
-- [bugfix] Error: dispatch.mjs, dispatch-workflow.mjs: buildQueryFromText(playwright) → pl… (#4118)
-- [discovery] Worked on hook.mjs, hook-shared.mjs, schema.mjs (#4117)
-
-### Working State (from /clear)
-- Working on: 我们项目现在在实际工作中很少调用，因为claude code对mcp的调用是选择性的，所以不能很好地结合claude code 发挥我们项目的优势提高编程效率。我在网上看到一种方案：“先把 Claude Code 内的“被动 MCP”改成“主动 hook + skill + CLI 注入”。这是最快见效的桥接方案，而且是官方支持的。Claude Code 的 hooks 是确定性的，官方明确说它…
-- Unfinished: Created imperative-baking-hamster.md (11514 chars)
-- Key files: imperative-baking-hamster.md
 
 </claude-mem-context>

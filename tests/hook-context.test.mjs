@@ -157,9 +157,10 @@ describe('selectWithTokenBudget', () => {
 
     const result = selectWithTokenBudget(db, 'test', 2000);
     expect(result.observations.length).toBeGreaterThan(0);
-    // Most recent should be first due to high recency score
+    // High importance should rank first — exponential decay preserves recency for
+    // items within the half-life window (10d < 14d default), so importance=3 dominates
     const titles = result.observations.map(o => o.title);
-    expect(titles[0]).toBe('recent low importance');
+    expect(titles[0]).toBe('high importance old');
   });
 
   it('filters by project', () => {

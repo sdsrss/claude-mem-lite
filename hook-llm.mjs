@@ -6,7 +6,7 @@ import { existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
 import {
   jaccardSimilarity, truncate, clampImportance, computeRuleImportance,
   inferProject, parseJsonFromLLM,
-  computeMinHash, estimateJaccardFromMinHash, cjkBigrams, EDIT_TOOLS, debugCatch, debugLog,
+  computeMinHash, estimateJaccardFromMinHash, cjkBigrams, EDIT_TOOLS, debugCatch, debugLog, OBS_BM25,
 } from './utils.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import {
@@ -139,7 +139,7 @@ function linkRelatedObservations(db, savedId, obs, episode) {
           SELECT o.id FROM observations_fts
           JOIN observations o ON observations_fts.rowid = o.id
           WHERE observations_fts MATCH ? AND o.id != ? AND o.project = ?
-          ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+          ORDER BY ${OBS_BM25}
           LIMIT 5
         `).all(ftsQuery, newObs.id, episode.project);
         for (const m of ftsMatches) candidates.add(m.id);

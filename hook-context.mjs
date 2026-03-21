@@ -3,7 +3,7 @@
 
 import { join } from 'path';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
-import { estimateTokens, truncate, debugLog, debugCatch } from './utils.mjs';
+import { estimateTokens, truncate, debugLog, debugCatch, DECAY_HALF_LIFE_BY_TYPE, DEFAULT_DECAY_HALF_LIFE_MS } from './utils.mjs';
 
 /**
  * Infer the project directory from environment variables or cwd.
@@ -83,9 +83,10 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
   let totalTokens = 0;
 
   // Score each candidate: value = recency * importance, cost = tokens
+  // Recency uses exponential half-life (consistent with server.mjs BM25 scoring)
   const scoredObs = obsPool.map(o => {
-    const ageDays = (now_ms - o.created_at_epoch) / 86400000;
-    const recency = 1 / (1 + ageDays);
+    const halfLifeMs = DECAY_HALF_LIFE_BY_TYPE[o.type] || DEFAULT_DECAY_HALF_LIFE_MS;
+    const recency = 1.0 + Math.exp(-0.693 * (now_ms - o.created_at_epoch) / halfLifeMs);
     const impBoost = 0.5 + 0.5 * (o.importance || 1);
     const lessonBoost = o.lesson_learned ? 1.3 : 1.0;
     const value = recency * impBoost * lessonBoost;
@@ -94,8 +95,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
   });
 
   const scoredSess = sessPool.map(s => {
-    const ageDays = (now_ms - s.created_at_epoch) / 86400000;
-    const recency = 1 / (1 + ageDays);
+    const recency = 1.0 + Math.exp(-0.693 * (now_ms - s.created_at_epoch) / DEFAULT_DECAY_HALF_LIFE_MS);
     const value = recency * 1.5; // Session summaries slightly boosted
     const cost = estimateTokens((s.request || '') + (s.completed || '') + (s.next_steps || ''));
     return { ...s, value, cost, valueDensity: cost > 0 ? value / Math.sqrt(cost) : 0 };

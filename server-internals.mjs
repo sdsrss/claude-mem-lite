@@ -1,7 +1,7 @@
 // claude-mem-lite server internal functions
 // Extracted from server.mjs for testability (server.mjs has top-level side effects)
 
-import { debugCatch, COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE } from './utils.mjs';
+import { debugCatch, COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE, OBS_BM25 } from './utils.mjs';
 
 // ─── Search Re-ranking Helpers ────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ export function extractPRFTerms(results, ftsQuery, limit = 3) {
     const r = results[i];
     const text = ((r.title || '') + ' ' + (r.narrative || '')).toLowerCase();
     const tokens = text.replace(/[^a-z0-9_-]/g, ' ').split(/\s+/)
-      .filter(t => t.length > 3 && !PRF_STOP_WORDS.has(t) && !queryTokens.has(t));
+      .filter(t => t.length >= 3 && !PRF_STOP_WORDS.has(t) && !queryTokens.has(t));
     const seen = new Set();
     for (const t of tokens) {
       if (seen.has(t)) continue;
@@ -164,7 +164,7 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND COALESCE(o.compressed_into, 0) = 0
         AND (? IS NULL OR o.project = ?)
-      ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+      ORDER BY ${OBS_BM25}
       LIMIT 20
     `).all(ftsQuery, project ?? null, project ?? null);
   } catch (e) { debugCatch(e, 'expandQueryByConcepts-fts'); return []; }

@@ -4,7 +4,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { jaccardSimilarity, truncate, typeIcon, sanitizeFtsQuery, relaxFtsQueryToOr, inferProject, computeMinHash, estimateJaccardFromMinHash, scrubSecrets, cjkBigrams, fmtDate, isoWeekKey, debugLog, debugCatch, COMPRESSED_PENDING_PURGE } from './utils.mjs';
+import { jaccardSimilarity, truncate, typeIcon, sanitizeFtsQuery, relaxFtsQueryToOr, inferProject, computeMinHash, estimateJaccardFromMinHash, scrubSecrets, cjkBigrams, fmtDate, isoWeekKey, debugLog, debugCatch, COMPRESSED_PENDING_PURGE, OBS_BM25, SESS_BM25, TYPE_DECAY_CASE } from './utils.mjs';
 import { ensureDb, DB_PATH, REGISTRY_DB_PATH } from './schema.mjs';
 import { reRankWithContext, markSuperseded, extractPRFTerms, expandQueryByConcepts, autoBoostIfNeeded, runIdleCleanup } from './server-internals.mjs';
 import { memSearchSchema, memTimelineSchema, memGetSchema, memDeleteSchema, memSaveSchema, memStatsSchema, memCompressSchema, memMaintainSchema, memRegistrySchema } from './tool-schemas.mjs';
@@ -86,8 +86,8 @@ function resolveProject(name) {
 // Composite scoring: BM25(weights) × recency_decay × [project_boost] × [importance] × [access_bonus]
 //
 // BM25 column weights — higher weight = matches in that column score higher:
-//   observations_fts:        title=10, subtitle=5, narrative=5, text=3, facts=3, concepts=2
-//   session_summaries_fts:   request=5, investigated=3, learned=3, completed=3, next_steps=2, notes=1
+//   observations_fts:        title=10, subtitle=5, narrative=5, text=3, facts=3, concepts=2, lesson_learned=8
+//   session_summaries_fts:   request=5, investigated=3, learned=3, completed=3, next_steps=2, notes=1, remaining_items=1
 //
 // Recency decay — exponential half-life:
 //   factor = 1 + e^(-ln2 × age_ms / half_life_ms)
@@ -99,8 +99,7 @@ function resolveProject(name) {
 //   Importance:    0.5 + 0.5 × importance (range 0.5–2.0)
 //   Access bonus:  1 + 0.1 × ln(1 + access_count)
 
-const OBS_BM25 = 'bm25(observations_fts, 10, 5, 5, 3, 3, 2)';
-const SESS_BM25 = 'bm25(session_summaries_fts, 5, 3, 3, 3, 2, 1)';
+// OBS_BM25, SESS_BM25, TYPE_DECAY_CASE imported from utils.mjs
 const RECENCY_HALF_LIFE_MS = 1209600000; // 14 days in milliseconds
 
 // ─── MCP Server ─────────────────────────────────────────────────────────────
@@ -144,18 +143,7 @@ function safeHandler(fn) {
 
 // ─── Tool: mem_search — helper functions ────────────────────────────────────
 
-// Type-differentiated recency decay: decisions persist longer, routine changes fade fast
-const TYPE_DECAY_CASE = `(
-  CASE o.type
-    WHEN 'decision'  THEN 7776000000.0
-    WHEN 'discovery' THEN 5184000000.0
-    WHEN 'feature'   THEN 2592000000.0
-    WHEN 'bugfix'    THEN 1209600000.0
-    WHEN 'refactor'  THEN 1209600000.0
-    WHEN 'change'    THEN  604800000.0
-    ELSE 1209600000.0
-  END
-)`;
+// TYPE_DECAY_CASE imported from utils.mjs
 
 // Score expression variants for FTS5 queries (see Scoring Model Constants above)
 const FULL_SCORE = `${OBS_BM25}
@@ -511,6 +499,21 @@ server.registerTool(
     if (!effectiveType || effectiveType === 'sessions')     results.push(...searchSessions(ctx));
     if (!effectiveType || effectiveType === 'prompts')       results.push(...searchPrompts(ctx));
 
+    // Cross-source score normalization: normalize each source to [-1, 0] before merging
+    // Prevents observations (BM25 scores can reach -40) from systematically outranking
+    // sessions (-6) and prompts (-1) regardless of actual relevance
+    if (isCrossSource && results.length > 0 && ftsQuery) {
+      for (const source of ['obs', 'session', 'prompt']) {
+        const sourceResults = results.filter(r => r.source === source && r.score != null);
+        // Skip normalization for single-result sources — avoids inflating a weak match to -1.0
+        if (sourceResults.length < 2) continue;
+        const maxAbs = Math.max(...sourceResults.map(r => Math.abs(r.score)));
+        if (maxAbs > 0) {
+          for (const r of sourceResults) r.score = r.score / maxAbs;
+        }
+      }
+    }
+
     // Global sort (cross-source)
     if (isCrossSource && results.length > 0) {
       if (ftsQuery) {
@@ -680,7 +683,9 @@ server.registerTool(
         if (val === null || val === undefined || val === '') continue;
         // Skip 'text' field when it duplicates narrative (text = narrative + optional CJK bigrams)
         if (f === 'text' && row.narrative && typeof val === 'string' && val.startsWith(row.narrative)) continue;
-        lines.push(`${f}: ${typeof val === 'string' && val.length > 200 ? val.slice(0, 200) + '…' : val}`);
+        // Field-aware truncation: narrative and lesson need more space than metadata
+        const maxLen = f === 'narrative' ? 1000 : f === 'lesson_learned' ? 500 : f === 'text' ? 500 : 200;
+        lines.push(`${f}: ${typeof val === 'string' && val.length > maxLen ? val.slice(0, maxLen) + '…' : val}`);
       }
       parts.push(lines.join('\n'));
     }
@@ -1405,8 +1410,8 @@ idleTimer.unref();
 function shutdown(exitCode = 0) {
   clearInterval(walTimer);
   clearInterval(idleTimer);
-  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
-  try { db.close(); } catch {}
+  try { if (db) db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+  try { if (db) db.close(); } catch {}
   try { if (registryDb) registryDb.close(); } catch {}
   process.exit(exitCode);
 }

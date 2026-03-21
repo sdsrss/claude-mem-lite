@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
+import { OBS_FTS_COLUMNS } from './utils.mjs';
 
 export const DB_DIR = process.env.CLAUDE_MEM_DIR || join(homedir(), '.claude-mem-lite');
 export const DB_PATH = join(DB_DIR, 'claude-mem-lite.db');
@@ -157,10 +158,31 @@ export function initSchema(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_project_epoch_minhash ON observations(project, created_at_epoch DESC) WHERE minhash_sig IS NOT NULL`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_user_prompts_session ON user_prompts(content_session_id)`);
 
+  // FTS5 migration: add lesson_learned column to observations_fts (one-time)
+  // Detect old FTS5 table missing lesson_learned and recreate with full column set
+  try {
+    const ftsDdl = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='observations_fts'`).get();
+    if (ftsDdl && !ftsDdl.sql.includes('lesson_learned')) {
+      db.exec(`DROP TRIGGER IF EXISTS observations_ai`);
+      db.exec(`DROP TRIGGER IF EXISTS observations_ad`);
+      db.exec(`DROP TRIGGER IF EXISTS observations_au`);
+      db.exec(`DROP TABLE IF EXISTS observations_fts`);
+    }
+  } catch { /* non-critical — ensureFTS will create if missing */ }
+
   // FTS5 full-text search tables + triggers (idempotent)
-  ensureFTS(db, 'observations_fts', 'observations', ['title', 'subtitle', 'narrative', 'text', 'facts', 'concepts']);
+  ensureFTS(db, 'observations_fts', 'observations', OBS_FTS_COLUMNS);
   ensureFTS(db, 'session_summaries_fts', 'session_summaries', ['request', 'investigated', 'learned', 'completed', 'next_steps', 'notes', 'remaining_items']);
   ensureFTS(db, 'user_prompts_fts', 'user_prompts', ['prompt_text']);
+
+  // Rebuild FTS5 if we just recreated it (migration populates from content table)
+  try {
+    const needsRebuild = db.prepare(`SELECT COUNT(*) as cnt FROM observations`).get();
+    const ftsCount = db.prepare(`SELECT COUNT(*) as cnt FROM observations_fts`).get();
+    if (needsRebuild.cnt > 0 && ftsCount.cnt === 0) {
+      db.exec(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`);
+    }
+  } catch { /* non-critical */ }
 
   // Project name normalization: migrate short names ("mem") to canonical form ("projects--mem")
   // Strategy: exact suffix match first, then substring match for package-name aliases

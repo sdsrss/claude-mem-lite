@@ -4,12 +4,13 @@
 // Lightweight: only imports schema.mjs and utils.mjs, no MCP SDK
 
 import { ensureDb } from '../schema.mjs';
-import { sanitizeFtsQuery, relaxFtsQueryToOr, truncate, typeIcon, inferProject } from '../utils.mjs';
+import { sanitizeFtsQuery, relaxFtsQueryToOr, truncate, typeIcon, inferProject, OBS_BM25, TYPE_DECAY_CASE } from '../utils.mjs';
 import { statSync, writeFileSync } from 'fs';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const COOLDOWN_FILE = `/tmp/.claude-mem-prompt-ctx-${inferProject()}`;
+const INJECTED_IDS_FILE = `/tmp/.claude-mem-injected-${inferProject()}`;
 const COOLDOWN_MS = 60_000;
 const MAX_RESULTS = 5;
 const LOOKBACK_MS = 60 * 86400000; // 60 days
@@ -47,10 +48,10 @@ function touchCooldown() {
 const INTENTS = [
   // Error/debug intent
   { pattern: /error|bug|crash|broken|fail|fix|报错|出错|错误|崩溃|修复/i, type: 'bugfix', limit: 3 },
-  // Recall/history intent
-  { pattern: /before|previously|last time|remember|之前|上次|以前|记得/i, type: null, limit: 5, useRecent: true },
-  // Decision/architecture intent
+  // Decision/architecture intent (before recall — "为什么...之前" is a decision question, not recall)
   { pattern: /why|decided|architecture|design|为什么|决定|架构|设计/i, type: 'decision', limit: 3 },
+  // Recall/history intent (catch-all temporal, lowest priority)
+  { pattern: /before|previously|last time|remember|之前|上次|以前|记得/i, type: null, limit: 5, useRecent: true },
 ];
 
 function detectIntent(text) {
@@ -77,9 +78,12 @@ function searchByFts(db, queryText, project, limit, typeFilter) {
   const cutoff = Date.now() - LOOKBACK_MS;
 
   const typeClause = typeFilter ? 'AND o.type = ?' : '';
+  const now = Date.now();
   const sql = `
     SELECT o.id, o.type, o.title, o.lesson_learned,
-           bm25(observations_fts, 10, 5, 5, 3, 3, 2) as relevance
+           ${OBS_BM25}
+             * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / ${TYPE_DECAY_CASE}))
+             * (0.5 + 0.5 * COALESCE(o.importance, 1)) as relevance
     FROM observations_fts
     JOIN observations o ON o.id = observations_fts.rowid
     WHERE observations_fts MATCH ?
@@ -88,11 +92,11 @@ function searchByFts(db, queryText, project, limit, typeFilter) {
       AND o.created_at_epoch > ?
       AND COALESCE(o.compressed_into, 0) = 0
       ${typeClause}
-    ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2)
+    ORDER BY relevance
     LIMIT ?
   `;
 
-  const params = [ftsQuery, project, cutoff];
+  const params = [now, ftsQuery, project, cutoff];
   if (typeFilter) params.push(typeFilter);
   params.push(limit);
 
@@ -102,7 +106,7 @@ function searchByFts(db, queryText, project, limit, typeFilter) {
   if (rows.length === 0) {
     const orQuery = relaxFtsQueryToOr(ftsQuery);
     if (orQuery) {
-      params[0] = orQuery;
+      params[1] = orQuery;
       rows = db.prepare(sql).all(...params);
     }
   }
@@ -241,7 +245,11 @@ async function main() {
     } else {
       // FTS search: use the prompt as query, optionally type-filtered
       const files = extractFiles(promptText);
-      const ftsRows = searchByFts(db, promptText, project, intent?.limit || MAX_RESULTS, intent?.type || null);
+      let ftsRows = searchByFts(db, promptText, project, intent?.limit || MAX_RESULTS, intent?.type || null);
+      // Fallback: if typed search returned nothing, retry without type filter
+      if (ftsRows.length === 0 && intent?.type) {
+        ftsRows = searchByFts(db, promptText, project, intent.limit || MAX_RESULTS, null);
+      }
       const fileRows = files.length > 0 ? searchByFile(db, files, project, 2) : [];
 
       // Merge: FTS results first, then file results, deduplicated
@@ -260,6 +268,11 @@ async function main() {
     if (output) {
       process.stdout.write(output + '\n');
       touchCooldown();
+      // Write injected IDs for dedup with hook.mjs handleUserPrompt
+      try {
+        const ids = rows.map(r => r.id);
+        writeFileSync(INJECTED_IDS_FILE, JSON.stringify({ ids, ts: Date.now() }));
+      } catch {}
     }
   } catch {
     // Hooks must never break Claude Code — swallow all errors
