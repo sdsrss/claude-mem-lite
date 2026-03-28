@@ -1,5 +1,5 @@
 ---
-description: Recall past observations for a file before editing
+description: "Recall past observations for a file before editing. Use when: about to edit a file, investigating a file with past issues, or before refactoring to check for past lessons"
 argument-hint: <file_path>
 ---
 

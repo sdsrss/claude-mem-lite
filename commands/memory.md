@@ -1,5 +1,5 @@
 ---
-description: Save content to memory — with explicit content, instructions, or auto-summarize current session
+description: "Save content to memory — with explicit content, instructions, or auto-summarize current session. Use when: the user asks to remember something, after solving a non-obvious problem, or to capture key session findings"
 ---
 
 # Memory Save

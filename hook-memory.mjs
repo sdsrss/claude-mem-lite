@@ -14,7 +14,7 @@ const MAX_FILE_RECALL = 2;
 
 /**
  * Search for relevant past observations to inject as memory context.
- * Quality gates: importance>=1 (with 0.6x penalty), type-boosted, lesson-boosted, BM25-thresholded (>=1.5).
+ * Quality gates: importance>=1 (with 0.6x penalty), type-boosted, lesson-boosted, BM25-thresholded (adaptive: 0 for <5 obs, 1.5 otherwise).
  * @param {import('better-sqlite3').Database} db Memory database
  * @param {string} userPrompt User's prompt text
  * @param {string} project Current project
@@ -101,8 +101,14 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
       })
       .sort((a, b) => b.score - a.score);
 
-    // Strict threshold: raised from 1.0 to 1.5 to compensate for wider pool
-    if (scored.length === 0 || scored[0].score < 1.5) return [];
+    // Adaptive threshold: BM25 IDF collapses when corpus has <5 observations,
+    // producing scores ~0.00001 even for exact matches. At 5+ obs, IDF provides
+    // meaningful discrimination and the calibrated 1.5 threshold works well.
+    const obsCount = db.prepare(
+      'SELECT COUNT(*) as c FROM observations WHERE project = ? AND COALESCE(compressed_into, 0) = 0',
+    ).get(project)?.c || 0;
+    const threshold = obsCount < 5 ? 0 : 1.5;
+    if (scored.length === 0 || scored[0].score < threshold) return [];
 
     // Update access_count for injected memories
     const result = scored.slice(0, MAX_MEMORY_INJECTIONS);

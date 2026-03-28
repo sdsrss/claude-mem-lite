@@ -1,5 +1,5 @@
 ---
-description: Import skills and agents from GitHub repositories into the tool resource registry
+description: "Import skills and agents from GitHub repositories into the tool resource registry. Use when: looking for a skill to solve a problem, importing tools from a repo, or managing installed tools"
 ---
 
 # Tool Import

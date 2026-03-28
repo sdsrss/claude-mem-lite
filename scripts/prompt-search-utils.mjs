@@ -34,10 +34,25 @@ export const INTENTS = [
 ];
 
 export function detectIntent(text) {
+  // Collect all matching intents (patterns may overlap)
+  const matches = [];
   for (const intent of INTENTS) {
-    if (intent.pattern.test(text)) return intent;
+    if (intent.pattern.test(text)) matches.push(intent);
   }
-  return null;
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  // Disambiguation: specifically when bugfix and recall both match, use
+  // position-based resolution — the pattern appearing earlier in text wins.
+  // "I remember we fixed..." → recall leads. "fix the bug from before" → bugfix leads.
+  const first = matches[0];
+  const second = matches[1];
+  if (first.type === 'bugfix' && second.useRecent) {
+    const bugPos = text.search(first.pattern);
+    const recallPos = text.search(second.pattern);
+    if (recallPos < bugPos) return second;
+  }
+  return first;
 }
 
 // ─── Result Dedup ───────────────────────────────────────────────────────────
