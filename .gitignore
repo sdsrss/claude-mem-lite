@@ -58,3 +58,4 @@ release-signing-key.pem
 # runtime twin written by benchmark/rerank-pool-replay.mjs (deleted after import;
 # listed so a crashed run cannot leave a committable stray at the repo root)
 .tmp-rerank-pool-twin.mjs
+.tmp-keyctx-pool-twin.mjs

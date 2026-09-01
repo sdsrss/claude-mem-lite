@@ -18,6 +18,7 @@ import {
   assertFaceCoverage,
   assertRulerCanSayNo,
   byScope,
+  mentionVsApplication,
   pollutionSensitivity,
 } from '../benchmark/citation-live-replay.mjs';
 import { wilson95 } from '../benchmark/wilson.mjs';
@@ -290,6 +291,7 @@ beforeAll(() => {
     attach('node "/x/scripts/pre-tool-recall.js"', '  #701 [lesson] epsilon\n  #702 [bugfix] zeta', T_AFTER),
     assistant('Applied #701.', T_AFTER),
   ].join('\n') + '\n');
+
 });
 
 afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
@@ -326,6 +328,52 @@ describe('end-to-end over a known corpus', () => {
     // A session-union numerator — the caliber this face shipped with until v3.81.0 —
     // reads 3 of 3 on this same fixture; verified by mutating collectSubagentSurface.
     expect(faces.subagent).toMatchObject({ pairs: 3, cited: 1 });
+  });
+
+  // Review S2: the transcript -> `applied` path, end to end through the subprocess.
+  // The unit assertions on mentionVsApplication drive hand-built records and would all
+  // pass with `applied:` hardcoded to 0 in scanSession; this is the arm that fails then.
+  //
+  // Its OWN transcript root, deliberately. The corpus above encodes exact pair/cited
+  // counts chosen to discriminate specific calibers, and adding two more pretool ids to
+  // it would have meant editing those numbers to fit a new test — which is how a
+  // discriminating fixture quietly stops discriminating.
+  it('splits an injected id by whether the response naming it also called a tool', () => {
+    const r2 = mkdtempSync(join(tmpdir(), 'cite-mentions-'));
+    try {
+      const proj = join(r2, 'proj-m');
+      mkdirSync(proj, { recursive: true });
+      const T = '2026-08-20T10:00:00.000Z';
+      const resp = (requestId, blocks) => JSON.stringify({
+        type: 'assistant', timestamp: T, requestId,
+        message: { role: 'assistant', id: `msg-${requestId}`, content: blocks },
+      });
+      // #801 is named in a response that ALSO calls a tool; #802 only in prose. They sit
+      // in DIFFERENT responses, so a per-file or per-user-turn bucket marks both applied
+      // and this case reddens — that is the caliber the requestId unit exists for.
+      writeFileSync(join(proj, 's.jsonl'), [
+        // #803 is injected and never cited. Without it the corpus is 2 pairs / 2 hits and
+        // the ruler's own ALWAYS-TRUE self-check refuses the run — correctly, since a
+        // 100% face is indistinguishable from a broken membership test. Watching that
+        // guard fire on a fixture built for a different purpose is itself confirmation
+        // it is live.
+        attach('node "/x/scripts/pre-tool-recall.js"', '  #801 [lesson] eta\n  #802 [bugfix] theta\n  #803 [decision] iota', T),
+        resp('r1', [{ type: 'text', text: 'Applying #801 to the scheduler.' }]),
+        resp('r1', [{ type: 'tool_use', name: 'Edit', id: 'tu1', input: {} }]),
+        resp('r2', [{ type: 'text', text: 'For the record, #802 explains the earlier failure.' }]),
+      ].join('\n') + '\n');
+
+      const out = execFileSync(process.execPath, [SCRIPT, '--json', '--mentions'], {
+        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: r2 }, encoding: 'utf8',
+      });
+      const parsed = JSON.parse(out);
+      const rows = parsed.mention_vs_application;
+      expect(rows, '--mentions produced null — `applied` never reached the records').not.toBeNull();
+      const pretool = rows.find((r) => r.face === 'pretool');
+      expect(pretool).toMatchObject({ hits: 2, applied: 1, mentionOnly: 1, mentionOnlyPct: '50.0%' });
+    } finally {
+      rmSync(r2, { recursive: true, force: true });
+    }
   });
 
   it('declares keyctx unreachable rather than omitting it', () => {
@@ -486,5 +534,39 @@ describe('pollutionSensitivity', () => {
     const out = pollutionSensitivity(records, aggregate(records));
     expect(out.docSessions).toBe(1);
     expect(out.rows.find((r) => r.face === 'fyi').rateExclDocSessions).toBe('n/a');
+  });
+});
+
+// D#179 aggregation. The two properties worth pinning are both about NOT reporting
+// something that was never measured: an absent `applied` field (an older frozen corpus)
+// must come back as null rather than 0%, and only faces that actually carry the field
+// may appear at all.
+describe('mentionVsApplication (D#179)', () => {
+  const rec = (faces) => ({ project: 'p', session: 's', ts: 1, anyCite: true, citedTotal: 1, faces });
+
+  it('splits hits into applied and mention-only per face', () => {
+    const rows = mentionVsApplication([
+      rec({ pretool: { inj: [1, 2, 3], hit: [1, 2, 3], applied: 1 } }),
+      rec({ pretool: { inj: [4], hit: [4], applied: 0 } }),
+    ]);
+    expect(rows).toEqual([{ face: 'pretool', hits: 4, applied: 1, mentionOnly: 3, mentionOnlyPct: '75.0%' }]);
+  });
+
+  it('returns null — not zeros — when no record carries the field', () => {
+    // A frozen corpus dumped before D#179 has hits but no `applied`. Reporting that as
+    // "0 applied / 100% mention-only" would be a fabricated finding, and it is exactly
+    // the shape that reads most like a dramatic result.
+    expect(mentionVsApplication([rec({ pretool: { inj: [1], hit: [1] } })])).toBeNull();
+  });
+
+  it('omits a face whose records lack the field while keeping one that has it', () => {
+    const rows = mentionVsApplication([
+      rec({ pretool: { inj: [1], hit: [1], applied: 1 }, subagent: { inj: [2], hit: [2] } }),
+    ]);
+    expect(rows.map((r) => r.face)).toEqual(['pretool']);
+  });
+
+  it('ignores faces with no hits at all', () => {
+    expect(mentionVsApplication([rec({ ups: { inj: [1], hit: [], applied: 0 } })])).toBeNull();
   });
 });

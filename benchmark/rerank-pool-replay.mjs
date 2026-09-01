@@ -40,10 +40,19 @@
 // `assertCannotWrite()` below executes the bump against the handle and FAILS THE RUN if it
 // succeeds — a promise in a comment is not a guarantee.
 
+// D#190: until v3.86.0 nothing under tests/ imported this file, so every self-check
+// described above could be deleted with a fully green suite — the same shape that let
+// two of citation-live-replay.mjs's self-checks be removed from its main() undetected
+// (v3.82.0). The checks are now exported and driven from tests/rerank-pool-replay.test.mjs
+// with synthetic inputs, each one watched to FAIL. That is why they THROW rather than
+// call process.exit: an exit code cannot be asserted in-process. main() catches and
+// still exits 1 with the message on stderr, so the CLI contract is unchanged.
+
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import Database from 'better-sqlite3';
 import { DB_DIR } from '../schema.mjs';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { upsFtsQuery } from '../lib/ups-query.mjs';
 import { relaxFtsQueryToOr, notLowSignalTitleClause, OBS_BM25 } from '../utils.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
@@ -71,7 +80,7 @@ const has = (name) => process.argv.includes(name);
  * compare the shipped module against itself and report a reassuring 0% — the failure mode
  * this whole file exists to prevent.
  */
-function patchConst(src, name, value) {
+export function patchConst(src, name, value) {
   // Match on the DECLARATION, not on "did the text change". The first version of this
   // guard compared before/after strings, so holding one pool at its shipped value while
   // sweeping the other (`--baseline-same 30 --baseline-cross 50`) produced a no-op
@@ -84,7 +93,7 @@ function patchConst(src, name, value) {
   return { out: src.replace(re, `const ${name} = ${value};`), previous: Number(m[1]) };
 }
 
-function writeTwin(sameLimit, crossLimit) {
+export function writeTwin(sameLimit, crossLimit) {
   const src = readFileSync(SHIPPED_URL, 'utf8');
   const a = patchConst(src, 'RERANK_POOL_SAME_PROJECT', sameLimit);
   const b = patchConst(a.out, 'RERANK_POOL_CROSS_PROJECT', crossLimit);
@@ -98,18 +107,47 @@ function writeTwin(sameLimit, crossLimit) {
 }
 
 /** Proves the handle cannot write, so the replay cannot move the signal it measures. */
-function assertCannotWrite(db) {
+export function assertCannotWrite(db) {
   let wrote = false;
   try {
     db.prepare('UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1 WHERE id = -1').run();
     wrote = true;
   } catch { /* expected: SQLITE_READONLY */ }
   if (wrote) {
-    console.error('SELF-CHECK FAILED: the database handle accepted a write. Replaying '
+    throw new Error('SELF-CHECK FAILED: the database handle accepted a write. Replaying '
       + 'searchRelevantMemories against a writable handle bumps injection_count on every '
       + 'returned row and permanently contaminates the noise signal. Refusing to run.');
-    process.exit(1);
   }
+}
+
+/**
+ * Which direction, if any, monotonicity runs in — THREE states, not two. See the
+ * counterexample gate below for why a MIXED config must suppress the gate without
+ * borrowing the superset label.
+ */
+export function monotonicityState({ baselineSame, baselineCross }, shippedPools) {
+  if (baselineSame <= shippedPools.same && baselineCross <= shippedPools.cross) return 'subset';
+  if (baselineSame >= shippedPools.same && baselineCross >= shippedPools.cross) return 'superset';
+  return 'mixed';
+}
+
+export const MONOTONICITY_NOTE = {
+  subset: '(a counterexample to the superset argument; run exits 1 if > 0)',
+  superset: '(twin is wider — monotonicity runs the other way, not a test)',
+  mixed: '(twin is narrower in one arm and wider in the other — neither direction is monotone, so this number tests nothing)',
+};
+
+/** The gate itself, separated from its rendering so a test can watch it fire. */
+export function counterexampleGate(state, nonEmptyToEmpty) {
+  return state === 'subset' && nonEmptyToEmpty > 0;
+}
+
+/**
+ * `Number('foo')` is NaN and every downstream guard waves it through — see the block
+ * comment at the call site. Exported so the refusal is asserted, not assumed.
+ */
+export function validatePoolArg(v) {
+  return Number.isInteger(v) && v >= 1;
 }
 
 function loadPrompts(db, sampleN) {
@@ -122,7 +160,7 @@ function loadPrompts(db, sampleN) {
   return db.prepare(`${base} ORDER BY up.created_at_epoch DESC LIMIT ?`).all(sampleN);
 }
 
-function compare(prompts, narrow, wide) {
+export function compare(db, prompts, narrow, wide) {
   let n = 0, threw = 0, changed = 0, top1 = 0, gained = 0, lost = 0;
   let emptyNarrow = 0, emptyWide = 0, bothEmpty = 0;
   // DELIVERED ROWS, not just changed sets. `MAX_MEMORY_INJECTIONS` is a PER-SET cap and it
@@ -199,7 +237,7 @@ function compare(prompts, narrow, wide) {
  * in the numerator with no matching denominator — a bias in the same direction as the
  * understatement above, tiny at 1 throw in 11289 but pointing the wrong way.
  */
-function costCompare(prompts, narrow, wide) {
+export function costCompare(db, prompts, narrow, wide) {
   const warm = prompts.slice(0, Math.min(200, prompts.length));
   for (const { text, project } of warm) {
     try { narrow(db, text, project, []); wide(db, text, project, []); } catch { /* ignore */ }
@@ -230,9 +268,8 @@ function costCompare(prompts, narrow, wide) {
     }
   }
   if (pairs === 0) {
-    console.error('SELF-CHECK FAILED: every timed call threw — no cost measurement exists. '
+    throw new Error('SELF-CHECK FAILED: every timed call threw — no cost measurement exists. '
       + 'Refusing to report NaN as a ratio.');
-    process.exit(1);
   }
   const msNarrow = nsNarrow / 1e6 / pairs, msWide = nsWide / 1e6 / pairs;
   return { n: pairs, threw, msNarrow: +msNarrow.toFixed(4), msWide: +msWide.toFixed(4), ratio: +(msWide / msNarrow).toFixed(3) };
@@ -243,14 +280,13 @@ function costCompare(prompts, narrow, wide) {
  * report zero changes; anything else means the replay is not deterministic (a leaked
  * write, a stateful module, an unstable sort) and every other number it prints is noise.
  */
-function assertRulerCanSayNo(prompts, wide) {
+export function assertRulerCanSayNo(db, prompts, wide) {
   const slice = prompts.slice(0, Math.min(200, prompts.length));
-  const { changed } = compare(slice, wide, wide);
+  const { changed } = compare(db, slice, wide, wide);
   if (changed !== 0) {
-    console.error(`SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} changed result `
+    throw new Error(`SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} changed result `
       + 'sets over 200 prompts. The replay is not deterministic, so no delta it reports is '
       + 'attributable to the pool sizes. Refusing to report.');
-    process.exit(1);
   }
 }
 
@@ -304,132 +340,136 @@ function crossArmTruncation(db, prompts, poolSizes) {
   return { n, fired, orFired, max, over };
 }
 
-const sampleN = arg('--sample') ? Number(arg('--sample')) : null;
-const baselineSame = Number(arg('--baseline-same', String(DEFAULT_BASELINE_SAME)));
-const baselineCross = Number(arg('--baseline-cross', String(DEFAULT_BASELINE_CROSS)));
-const asJson = has('--json');
+async function main() {
+  const sampleN = arg('--sample') ? Number(arg('--sample')) : null;
+  const baselineSame = Number(arg('--baseline-same', String(DEFAULT_BASELINE_SAME)));
+  const baselineCross = Number(arg('--baseline-cross', String(DEFAULT_BASELINE_CROSS)));
+  const asJson = has('--json');
 
-// A non-numeric pool argument used to produce a full, exit-0, conclusive-LOOKING report.
-// `Number('foo')` is NaN, `patchConst` faithfully writes `const RERANK_POOL_SAME_PROJECT =
-// NaN;`, the twin's identity guard passes (NaN !== 10), `LIMIT NaN` returns no rows so the
-// narrow arm delivers ZERO, and `NaN <= 30` is false — which silently switches OFF the
-// counterexample gate and mislabels it "twin is wider". The run then reports "100% of
-// retrieving prompts changed set", a number that looks like a finding and is garbage.
-// Every other self-check in this file exists to stop exactly that shape; NaN was the hole.
-for (const [flag, v] of [['--baseline-same', baselineSame], ['--baseline-cross', baselineCross]]) {
-  if (!Number.isInteger(v) || v < 1) {
-    console.error(`${flag} must be a positive integer, got "${arg(flag)}". Refusing to run: `
-      + 'a NaN pool produces a complete report whose every number is meaningless.');
+  // A non-numeric pool argument used to produce a full, exit-0, conclusive-LOOKING report.
+  // `Number('foo')` is NaN, `patchConst` faithfully writes `const RERANK_POOL_SAME_PROJECT =
+  // NaN;`, the twin's identity guard passes (NaN !== 10), `LIMIT NaN` returns no rows so the
+  // narrow arm delivers ZERO, and `NaN <= 30` is false — which silently switches OFF the
+  // counterexample gate and mislabels it "twin is wider". The run then reports "100% of
+  // retrieving prompts changed set", a number that looks like a finding and is garbage.
+  // Every other self-check in this file exists to stop exactly that shape; NaN was the hole.
+  for (const [flag, v] of [['--baseline-same', baselineSame], ['--baseline-cross', baselineCross]]) {
+    if (!validatePoolArg(v)) {
+      throw new Error(`${flag} must be a positive integer, got "${arg(flag)}". Refusing to run: `
+        + 'a NaN pool produces a complete report whose every number is meaningless.');
+    }
+  }
+
+  const dbPath = process.env.CLAUDE_MEM_DB_PATH || join(DB_DIR, 'claude-mem-lite.db');
+  const db = new Database(dbPath, { readonly: true });
+  assertCannotWrite(db);
+
+  const shippedPools = writeTwin(baselineSame, baselineCross);
+  let wide, narrow;
+  try {
+    ({ searchRelevantMemories: wide } = await import(SHIPPED_URL.href));
+    ({ searchRelevantMemories: narrow } = await import(`${TWIN_URL.href}?v=${Date.now()}`));
+  } finally {
+    try { unlinkSync(TWIN_URL); } catch { /* already gone */ }
+  }
+
+  const prompts = loadPrompts(db, sampleN);
+  if (sampleN) {
+    console.error(`NOTE: --sample ${sampleN} is a sampling decision. On this corpus, 1200-row `
+      + 'samples of the same table span 11.9%-20.2% depending on the predicate. The default '
+      + '(whole corpus) has no such free parameter — prefer it for anything you publish.');
+  }
+
+  if (has('--cross-arm')) {
+    const r = crossArmTruncation(db, prompts, [baselineCross, 15, 50]);
+    const pct = (x) => (r.fired ? `${((100 * x) / r.fired).toFixed(1)}%` : 'n/a');
+    if (asJson) { console.log(JSON.stringify({ ...r, over: Object.fromEntries(r.over) }, null, 2)); }
+    else {
+      console.log(`\n─── cross-project leg truncation (n=${r.n}) ───`);
+      console.log(`  leg fires (matched >0):            ${r.fired} (${((100 * r.fired) / r.n).toFixed(1)}%)   [OR fallback used on ${r.orFired}]`);
+      for (const [p, c] of r.over) console.log(`  matched more than ${String(p).padStart(3)} rows:       ${c} (${pct(c)} of firings)`);
+      console.log(`  largest single match count:        ${r.max}`);
+      console.log('\n  Read as a reachability bound, not as harm: the OR penalty (0.4x), the');
+      console.log('  cross penalty (0.7x) and the adaptive threshold drop nearly all of these');
+      console.log('  rows downstream. Price the harm with the default mode, not with this one.');
+    }
+    process.exit(0);
+  }
+
+  if (has('--cost')) {
+    // Determinism check FIRST (review N8): the first draft exited above it, so the mode that
+    // produced this release's most contested number was the only one that never verified the
+    // replay is reproducible. A timing ratio over a non-deterministic replay is two different
+    // workloads being compared, not two pool sizes.
+    assertRulerCanSayNo(db, prompts, wide);
+    const c = costCompare(db, prompts, narrow, wide);
+    if (asJson) { console.log(JSON.stringify({ ...c, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2)); }
+    else {
+      console.log(`\n─── cost: ${baselineSame}/${baselineCross} vs shipped (${c.n} timed pairs over 2 passes, arm order alternated${c.threw ? `; ${c.threw} threw` : ''}) ───`);
+      console.log(`  ${String(baselineSame).padStart(2)}/${String(baselineCross).padStart(2)} baseline:  ${c.msNarrow.toFixed(3)} ms/prompt`);
+      console.log(`  shipped:         ${c.msWide.toFixed(3)} ms/prompt`);
+      console.log(`  ratio:           ${c.ratio.toFixed(3)}x  (${c.msWide >= c.msNarrow ? '+' : ''}${(100 * (c.msWide / c.msNarrow - 1)).toFixed(1)}%)`);
+      console.log('\n  The SELECT carries `narrative`, so the pool is the expensive term. This');
+      console.log('  measures the whole function, not the SELECT alone: timing only the SELECT');
+      console.log('  reports ~1.00x and misses the JS scoring the widened pool feeds.');
+    }
+    process.exit(0);
+  }
+
+  assertRulerCanSayNo(db, prompts, wide);
+  const r = compare(db, prompts, narrow, wide);
+
+  // Attack the superset argument instead of restating it. Only meaningful when the twin is
+  // genuinely NARROWER in both arms — under a sweep like `--baseline-same 30
+  // --baseline-cross 50` the twin is the wider one and monotonicity runs the other way, so
+  // a counterexample there says nothing about the shipped direction.
+  //
+  // THREE states, not two. A MIXED config (`--baseline-same 10 --baseline-cross 50`: one arm
+  // narrower, one wider) is neither a subset nor a superset, and it really does produce
+  // counterexamples — 51 of them on the whole corpus. Suppressing the gate there is right,
+  // but the first draft labelled them "twin is wider", which explains half the reason and
+  // invites the reader to think the other half was checked. In a ruler whose whole design
+  // principle is "say which population and which direction you measured", that label was the
+  // one place it didn't.
+  const state = monotonicityState({ baselineSame, baselineCross }, shippedPools);
+  const monotonicityNote = MONOTONICITY_NOTE[state];
+  if (counterexampleGate(state, r.nonEmptyToEmpty)) {
+    throw new Error(`COUNTEREXAMPLE: ${r.nonEmptyToEmpty} of ${r.n} prompts inject under the `
+      + `${baselineSame}/${baselineCross} pools and inject NOTHING under the shipped `
+      + `${shippedPools.same}/${shippedPools.cross}. The wider pool is a superset, so this `
+      + 'should be impossible — the monotonicity argument in hook-memory.mjs\'s RERANK_POOL_* '
+      + 'docblock does not hold as written. Investigate before quoting any number here.');
+  }
+
+  const either = r.n - r.bothEmpty;
+  const pctAll = (x) => `${((100 * x) / r.n).toFixed(1)}%`;
+  const pctEither = (x) => (either ? `${((100 * x) / either).toFixed(1)}%` : 'n/a');
+
+  if (asJson) {
+    console.log(JSON.stringify({ ...r, either, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2));
+  } else {
+    console.log(`\n─── rerank pool replay: ${baselineSame}/${baselineCross} vs shipped ───`);
+    console.log(`  prompts replayed:        ${r.n}${r.threw ? `  (${r.threw} threw)` : ''}`);
+    console.log(`  both arms empty:         ${r.bothEmpty} (${pctAll(r.bothEmpty)})`);
+    console.log(`  injected set differs:    ${r.changed} (${pctAll(r.changed)} of all, ${pctEither(r.changed)} of the ${either} that retrieve anything)`);
+    console.log(`  top-1 differs:           ${r.top1} (${pctAll(r.top1)} of all, ${pctEither(r.top1)} of ${either})`);
+    console.log(`  rows newly reachable:    ${r.gained}   displaced: ${r.lost}`);
+    console.log(`  empty injections:        ${r.emptyNarrow} -> ${r.emptyWide}`);
+    console.log(`  non-empty -> EMPTY:      ${r.nonEmptyToEmpty}   ${monotonicityNote}`);
+    console.log(`  rows DELIVERED:          ${r.deliveredNarrow} -> ${r.deliveredWide} `
+      + `(${r.deliveredNarrow ? `${r.deliveredWide >= r.deliveredNarrow ? '+' : ''}${((100 * (r.deliveredWide / r.deliveredNarrow - 1))).toFixed(1)}%` : 'n/a'})`);
+    console.log(`  set-size histogram:      ${JSON.stringify(r.sizesNarrow)} -> ${JSON.stringify(r.sizesWide)}   [index = set size]`);
+    console.log('\n  The per-set cap (MAX_MEMORY_INJECTIONS) does not move. The average fill');
+    console.log('  does — most of the extra rows come from under-filled sets reaching the cap,');
+    console.log('  not from prompts moving off zero. Read both rows before quoting either.');
+  }
+}
+
+// Only run when invoked as a script. Importing this file (tests/rerank-pool-replay.test.mjs)
+// must not open the live DB, write a twin, or exit the process.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err.message);
     process.exit(1);
-  }
-}
-
-const dbPath = process.env.CLAUDE_MEM_DB_PATH || join(DB_DIR, 'claude-mem-lite.db');
-const db = new Database(dbPath, { readonly: true });
-assertCannotWrite(db);
-
-const shippedPools = writeTwin(baselineSame, baselineCross);
-let wide, narrow;
-try {
-  ({ searchRelevantMemories: wide } = await import(SHIPPED_URL.href));
-  ({ searchRelevantMemories: narrow } = await import(`${TWIN_URL.href}?v=${Date.now()}`));
-} finally {
-  try { unlinkSync(TWIN_URL); } catch { /* already gone */ }
-}
-
-const prompts = loadPrompts(db, sampleN);
-if (sampleN) {
-  console.error(`NOTE: --sample ${sampleN} is a sampling decision. On this corpus, 1200-row `
-    + 'samples of the same table span 11.9%-20.2% depending on the predicate. The default '
-    + '(whole corpus) has no such free parameter — prefer it for anything you publish.');
-}
-
-if (has('--cross-arm')) {
-  const r = crossArmTruncation(db, prompts, [baselineCross, 15, 50]);
-  const pct = (x) => (r.fired ? `${((100 * x) / r.fired).toFixed(1)}%` : 'n/a');
-  if (asJson) { console.log(JSON.stringify({ ...r, over: Object.fromEntries(r.over) }, null, 2)); }
-  else {
-    console.log(`\n─── cross-project leg truncation (n=${r.n}) ───`);
-    console.log(`  leg fires (matched >0):            ${r.fired} (${((100 * r.fired) / r.n).toFixed(1)}%)   [OR fallback used on ${r.orFired}]`);
-    for (const [p, c] of r.over) console.log(`  matched more than ${String(p).padStart(3)} rows:       ${c} (${pct(c)} of firings)`);
-    console.log(`  largest single match count:        ${r.max}`);
-    console.log('\n  Read as a reachability bound, not as harm: the OR penalty (0.4x), the');
-    console.log('  cross penalty (0.7x) and the adaptive threshold drop nearly all of these');
-    console.log('  rows downstream. Price the harm with the default mode, not with this one.');
-  }
-  process.exit(0);
-}
-
-if (has('--cost')) {
-  // Determinism check FIRST (review N8): the first draft exited above it, so the mode that
-  // produced this release's most contested number was the only one that never verified the
-  // replay is reproducible. A timing ratio over a non-deterministic replay is two different
-  // workloads being compared, not two pool sizes.
-  assertRulerCanSayNo(prompts, wide);
-  const c = costCompare(prompts, narrow, wide);
-  if (asJson) { console.log(JSON.stringify({ ...c, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2)); }
-  else {
-    console.log(`\n─── cost: ${baselineSame}/${baselineCross} vs shipped (${c.n} timed pairs over 2 passes, arm order alternated${c.threw ? `; ${c.threw} threw` : ''}) ───`);
-    console.log(`  ${String(baselineSame).padStart(2)}/${String(baselineCross).padStart(2)} baseline:  ${c.msNarrow.toFixed(3)} ms/prompt`);
-    console.log(`  shipped:         ${c.msWide.toFixed(3)} ms/prompt`);
-    console.log(`  ratio:           ${c.ratio.toFixed(3)}x  (${c.msWide >= c.msNarrow ? '+' : ''}${(100 * (c.msWide / c.msNarrow - 1)).toFixed(1)}%)`);
-    console.log('\n  The SELECT carries `narrative`, so the pool is the expensive term. This');
-    console.log('  measures the whole function, not the SELECT alone: timing only the SELECT');
-    console.log('  reports ~1.00x and misses the JS scoring the widened pool feeds.');
-  }
-  process.exit(0);
-}
-
-assertRulerCanSayNo(prompts, wide);
-const r = compare(prompts, narrow, wide);
-
-// Attack the superset argument instead of restating it. Only meaningful when the twin is
-// genuinely NARROWER in both arms — under a sweep like `--baseline-same 30
-// --baseline-cross 50` the twin is the wider one and monotonicity runs the other way, so
-// a counterexample there says nothing about the shipped direction.
-//
-// THREE states, not two. A MIXED config (`--baseline-same 10 --baseline-cross 50`: one arm
-// narrower, one wider) is neither a subset nor a superset, and it really does produce
-// counterexamples — 51 of them on the whole corpus. Suppressing the gate there is right,
-// but the first draft labelled them "twin is wider", which explains half the reason and
-// invites the reader to think the other half was checked. In a ruler whose whole design
-// principle is "say which population and which direction you measured", that label was the
-// one place it didn't.
-const twinIsSubset = baselineSame <= shippedPools.same && baselineCross <= shippedPools.cross;
-const twinIsSuperset = baselineSame >= shippedPools.same && baselineCross >= shippedPools.cross;
-const monotonicityNote = twinIsSubset
-  ? '(a counterexample to the superset argument; run exits 1 if > 0)'
-  : twinIsSuperset
-    ? '(twin is wider — monotonicity runs the other way, not a test)'
-    : '(twin is narrower in one arm and wider in the other — neither direction is monotone, so this number tests nothing)';
-if (twinIsSubset && r.nonEmptyToEmpty > 0) {
-  console.error(`COUNTEREXAMPLE: ${r.nonEmptyToEmpty} of ${r.n} prompts inject under the `
-    + `${baselineSame}/${baselineCross} pools and inject NOTHING under the shipped `
-    + `${shippedPools.same}/${shippedPools.cross}. The wider pool is a superset, so this `
-    + 'should be impossible — the monotonicity argument in hook-memory.mjs\'s RERANK_POOL_* '
-    + 'docblock does not hold as written. Investigate before quoting any number here.');
-  process.exit(1);
-}
-
-const either = r.n - r.bothEmpty;
-const pctAll = (x) => `${((100 * x) / r.n).toFixed(1)}%`;
-const pctEither = (x) => (either ? `${((100 * x) / either).toFixed(1)}%` : 'n/a');
-
-if (asJson) {
-  console.log(JSON.stringify({ ...r, either, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2));
-} else {
-  console.log(`\n─── rerank pool replay: ${baselineSame}/${baselineCross} vs shipped ───`);
-  console.log(`  prompts replayed:        ${r.n}${r.threw ? `  (${r.threw} threw)` : ''}`);
-  console.log(`  both arms empty:         ${r.bothEmpty} (${pctAll(r.bothEmpty)})`);
-  console.log(`  injected set differs:    ${r.changed} (${pctAll(r.changed)} of all, ${pctEither(r.changed)} of the ${either} that retrieve anything)`);
-  console.log(`  top-1 differs:           ${r.top1} (${pctAll(r.top1)} of all, ${pctEither(r.top1)} of ${either})`);
-  console.log(`  rows newly reachable:    ${r.gained}   displaced: ${r.lost}`);
-  console.log(`  empty injections:        ${r.emptyNarrow} -> ${r.emptyWide}`);
-  console.log(`  non-empty -> EMPTY:      ${r.nonEmptyToEmpty}   ${monotonicityNote}`);
-  console.log(`  rows DELIVERED:          ${r.deliveredNarrow} -> ${r.deliveredWide} `
-    + `(${r.deliveredNarrow ? `${r.deliveredWide >= r.deliveredNarrow ? '+' : ''}${((100 * (r.deliveredWide / r.deliveredNarrow - 1))).toFixed(1)}%` : 'n/a'})`);
-  console.log(`  set-size histogram:      ${JSON.stringify(r.sizesNarrow)} -> ${JSON.stringify(r.sizesWide)}   [index = set size]`);
-  console.log('\n  The per-set cap (MAX_MEMORY_INJECTIONS) does not move. The average fill');
-  console.log('  does — most of the extra rows come from under-filled sets reaching the cap,');
-  console.log('  not from prompts moving off zero. Read both rows before quoting either.');
+  });
 }

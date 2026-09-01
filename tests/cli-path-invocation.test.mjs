@@ -98,14 +98,52 @@ describe('steering-surface consistency + injection budget', () => {
   // §7 metric-coupling: block + instructions are injected EVERY session; the
   // detail doc is written verbatim into a user file. Guard against unbounded
   // growth. Ceilings sit ~20-60% above the 2026-07 post-defer baseline
-  // (block 1226 / doc 5139 / instr-full 2866 / instr-BASE 1492) — a tripwire,
+  // (block 1226 / doc 6293 / instr-full 2866 / instr-BASE 1492, re-measured 2026-09-01;
+  // the doc figure stood at a stale 5139 until then) — a tripwire,
   // not a straitjacket: if an intended addition trips one, RAISE it deliberately
   // (and re-check the MCP instructions field against the harness cutoff).
+  //
+  // D#185: three of these surfaces embed the absolute CLI_PATH, 26 times in the
+  // detail doc alone, so a raw `.length` budget is partly a budget on how deep the
+  // reader's install prefix happens to be. Measured at the time of the fix, the
+  // thresholds at which each assertion reddens on CLI_PATH length alone were: doc
+  // >=104 chars, instr-full >=129, instr-BASE >=140 (the block embeds it zero times
+  // and could never redden). This machine's CLI_PATH is 38 chars and the surfaces
+  // were nowhere near their ceilings — but PR #17's external contributor reported
+  // this failing in their environment while all 12 cases passed here, and a deep
+  // prefix (`/Users/<name>/Library/Application Support/...`) clears 104 easily. Note
+  // the first surface to redden is the detail DOC, not the instructions.
+  //
+  // Fix: budget the CONTENT by normalising every CLI_PATH occurrence to one fixed
+  // reference install path, so the measured number is the same on every machine.
+  const REF_CLI_PATH = '/usr/lib/node_modules/claude-mem-lite/cli.mjs';
+  const contentLen = (s) => s.split(CLI_PATH).join(REF_CLI_PATH).length;
+
   test('steering surfaces stay within their injection budget', () => {
-    expect(buildClaudeMdBlock().length, 'CLAUDE.md block').toBeLessThan(2000);
-    expect(getDetailDoc().length, 'detail doc').toBeLessThan(8000);
-    expect(buildServerInstructions(false).length, 'instructions full').toBeLessThan(3500);
-    expect(buildServerInstructions(true).length, 'instructions BASE').toBeLessThan(2200);
+    expect(contentLen(buildClaudeMdBlock()), 'CLAUDE.md block').toBeLessThan(2000);
+    expect(contentLen(getDetailDoc()), 'detail doc').toBeLessThan(8000);
+    expect(contentLen(buildServerInstructions(false)), 'instructions full').toBeLessThan(3500);
+    expect(contentLen(buildServerInstructions(true)), 'instructions BASE').toBeLessThan(2200);
+  });
+
+  // Self-check on the fix above: normalisation that silently stops finding CLI_PATH
+  // degrades back to a raw-length budget without failing anything, so pin that the
+  // surfaces which are SUPPOSED to embed the path still do, and that the budget is
+  // genuinely independent of how long that path is.
+  test('the injection budget is decoupled from this install path length', () => {
+    for (const [name, text, minOcc] of [
+      ['detail doc', getDetailDoc(), 10],
+      ['instructions full', buildServerInstructions(false), 3],
+      ['instructions BASE', buildServerInstructions(true), 3],
+    ]) {
+      const occ = text.split(CLI_PATH).length - 1;
+      expect(occ, `${name} no longer embeds CLI_PATH — normalisation is a no-op`)
+        .toBeGreaterThanOrEqual(minOcc);
+      // budgeted length must not move when the install prefix does
+      const deepInstall = text.split(CLI_PATH).join(`/very/deep${CLI_PATH}`);
+      expect(deepInstall.split(`/very/deep${CLI_PATH}`).join(REF_CLI_PATH).length,
+        `${name} budget still tracks install-path length`).toBe(contentLen(text));
+    }
   });
 });
 

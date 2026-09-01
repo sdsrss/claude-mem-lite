@@ -16,6 +16,7 @@
     "benchmark/imperative-pool-replay.mjs",
     "benchmark/rerank-pool-replay.mjs",
     "benchmark/episode-flush-replay.mjs",
+    "benchmark/keyctx-pool-replay.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

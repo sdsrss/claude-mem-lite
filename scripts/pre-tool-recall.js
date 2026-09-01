@@ -8,7 +8,7 @@ import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
-import { injectedIdsFileName } from '../lib/injected-ids.mjs';
+import { injectedIdsFileName, injectedIdKey } from '../lib/injected-ids.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
@@ -592,8 +592,12 @@ try {
       ...rows.map(r => ({ ...r, src: 'obs' })),
       ...eventRows.map(r => ({ ...r, src: 'evt' })),
     ];
+    // D#188: compare on the NAMESPACED key, not the bare number. The `src` tag two
+    // comments up exists precisely because the two tables share an id space; the
+    // predicate that consumed it did not use it, so an observation injected by UPS
+    // silently blocked the same-numbered event and vice versa.
     const dedupedRows = crossHookSeen.size > 0
-      ? sourcedRows.filter(r => !crossHookSeen.has(String(r.id)))
+      ? sourcedRows.filter(r => !crossHookSeen.has(injectedIdKey(r.id, r.src)))
       : sourcedRows;
 
     // Merge: observations first (they carry richer lesson_learned), then events.
@@ -746,7 +750,13 @@ try {
     // file so the next UPS prompt skips them too. Always write, even on
     // empty allRows, so the file's ts stays fresh for the no-op case where
     // we'd otherwise drift outside the dedup window.
-    mergeCrossHookInjected(project, allRows.map(r => r.id), sessionId);
+    // D#188: namespaced on write too — otherwise a bare event id here would keep
+    // blocking the same-numbered observation on the next UPS prompt. (An earlier
+    // version of this comment also claimed it leaked into hook.mjs's
+    // pathAInjectedIds; it reaches there, but suppresses nothing, because this
+    // function stringifies every id and that consumer compares against a numeric
+    // row id. That inertness is a separate live defect — D#193.)
+    mergeCrossHookInjected(project, allRows.map(r => injectedIdKey(r.id, r.src)), sessionId);
   } catch (e) {
     // Silent failure — never block editing, but record for self-observation.
     recordHookError('pre-recall:query', e, RUNTIME_DIR, { filePath });

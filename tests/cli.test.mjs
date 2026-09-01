@@ -2064,6 +2064,60 @@ describe('CLI stats --quality command', () => {
     expect(output).toMatch(/LOW_SIGNAL:\s*3\s*\/\s*10\s*\(30\.0%\)/);
   });
 
+  // D#191: every ratio here must divide LIVE rows by LIVE rows. Before v3.86.0 the
+  // window / all-time / per-type queries were bare `FROM observations`, so compressed
+  // and superseded rows — which are overwhelmingly lesson-less LOW_SIGNAL `change`
+  // rows, that being why compression retires them — were counted into both halves and
+  // the dashboard described a population retrieval never searches (live store 92.9%
+  // lesson rate rendered as 59.6%).
+  //
+  // The decoys are chosen so the WRONG population computes DIFFERENT numbers, not
+  // merely a bigger denominator: 10 lesson-less LOW_SIGNAL retired rows against the
+  // 10-row live seed move lesson 40.0% -> 20.0% and LOW_SIGNAL 30.0% -> 65.0%, and
+  // the `change` type row 3 -> 13. Drop any one of the three filters and this reddens.
+  it('excludes compressed + superseded rows from every quality ratio', async () => {
+    for (let i = 0; i < 5; i++) {
+      insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', type: 'change',
+        title: `Modified retired-${i}.mjs`, text: 'r', compressedInto: 99 });
+      insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', type: 'change',
+        title: `Worked on stale-${i}.mjs`, text: 's', supersededAt: '2026-01-01T00:00:00.000Z' });
+    }
+    const output = await captureStdout(() => run(['stats', '--quality']));
+    // window ratios: unchanged by 10 retired rows
+    expect(output).toMatch(/Lesson rate:\s*4\s*\/\s*10\s*\(40\.0%\)/);
+    expect(output).toMatch(/LOW_SIGNAL:\s*3\s*\/\s*10\s*\(30\.0%\)/);
+    // all-time bracket: same live population, not the 20-row table
+    expect(output).toMatch(/\[all-time:\s*4\s*\/\s*10\s*=\s*40\.0%\]/);
+    expect(output).toMatch(/LOW_SIGNAL:.*\[all-time:\s*3\s*\/\s*10\s*=\s*30\.0%\]/);
+    // per-type breakdown: `change` stays at its 3 live rows
+    expect(output).toMatch(/change\s+3\s+.*hit\s*0\.0%.*lesson\s*0\.0%/);
+    // the population is named, so the reader is not left to assume it
+    expect(output).toContain('live observations');
+  });
+
+  // Review S1: the fourth query, `topLessons`, already filtered compressed rows before
+  // this round and gained the superseded arm with the rest. That arm was unpinned —
+  // reverting it to the old `AND COALESCE(compressed_into,0)=0` left the whole suite
+  // green, which is the superseded-invariant class this project has re-broken seven
+  // times. A superseded lesson with a high access_count belongs in no "Top accessed"
+  // list; both exclusions are asserted, with a live decoy that must still appear so
+  // "the section is empty" cannot satisfy the test.
+  it('keeps compressed AND superseded rows out of "Top accessed lessons"', async () => {
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', type: 'decision',
+      title: 'live top lesson', text: 'l', lessonLearned: 'LIVE-LESSON-MARKER', accessCount: 5 });
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', type: 'decision',
+      title: 'retired top lesson', text: 'c', lessonLearned: 'COMPRESSED-LESSON-MARKER',
+      accessCount: 99, compressedInto: 77 });
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', type: 'decision',
+      title: 'stale top lesson', text: 's', lessonLearned: 'SUPERSEDED-LESSON-MARKER',
+      accessCount: 98, supersededAt: '2026-01-01T00:00:00.000Z' });
+    const output = await captureStdout(() => run(['stats', '--quality']));
+    expect(output).toContain('Top accessed lessons');
+    expect(output).toContain('LIVE-LESSON-MARKER');          // the section is non-empty
+    expect(output).not.toContain('COMPRESSED-LESSON-MARKER');
+    expect(output).not.toContain('SUPERSEDED-LESSON-MARKER');
+  });
+
   it('shows per-type breakdown with hit% and lesson%', async () => {
     const output = await captureStdout(() => run(['stats', '--quality']));
     // bugfix row: count=4, hit=25% (1/4 accessed), lesson=50% (2/4)

@@ -2,6 +2,293 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.86.0 — six deferred items closed; two of the three real defects were described, in writing, in the file that then ignored the description
+
+Three behaviour fixes, three test-hygiene closures, two new rulers, and the project's
+first CONTRIBUTING.md.
+
+**Ledger caveat, since the review found it and the CLI cannot undo it.** The six items
+are recorded as `status = 'dropped'` with a reason string, not as `done` with a
+`closed_by_obs_id` — which is this repo's convention for a fix (D#167 -> obs 10823,
+D#172 -> 10851) and leaves them indistinguishable from the two genuine dismissals
+(D#153 "refuted by measurement", D#189 "superseded"). `mem_save --closes-deferred`
+refuses a dropped row (`no corresponding open deferred item`), so `defer drop` turns out
+to be a one-way door that discards the observation linkage it exists to create. Filed as
+D#195 rather than repaired by writing to the live database mid-release. `315 -> 317` test files, `5337 -> 5390` cases; lint clean; knip 46
+unused exports with a **byte-identical name set** against HEAD under the same-tree A/B
+(with a blind spot in that evidence, documented under the reviews below).
+
+**A correction the pre-tag review forced, stated up front because it applies to half the
+numbers below.** The first draft of this entry published figures from live-corpus rulers
+as if they were fixed. They are not: the databases and the transcript corpus grow every
+session, and `selectWithTokenBudget` additionally reads the wall clock. Re-run six hours
+later, `829 -> 1880` became `652 -> 1863`, `9 gained / 2 displaced` became `10 / 3`, the
+id-space overlap moved 90.1% -> 91.6%, and the error-recall off-arm moved 39.8% -> 39.7%.
+Every such number below now carries a timestamp, and where a ratio is stable while its
+counts move, the ratio is what is quoted. Two useful sub-rules fell out: on a **date
+split** only the BEFORE arm is reproducible, since it is a closed past window; and a
+**frozen fixture** does not freeze the corpus it is replayed against.
+
+**The pattern, stated once because it is the whole release.** Two of the three real
+defects were sitting under a comment that names the exact hazard the code then walks
+into. `scripts/pre-tool-recall.js` filters its candidate rows against a seen-set of bare
+numbers, six lines under the end of a comment reading "events share the numeric id space
+with observations" — and the `src` tag that comment was written to justify is not
+consulted by the filter. (A draft said "three lines"; in a release about reading what is
+actually written, the count is worth getting right.) `lib/stats-quality.mjs` opens with a rule that ratios must divide by the LIVE
+observation count, and then three of its five queries read `FROM observations`
+unqualified. (A draft said "every query", which the file itself refutes: `topLessons`
+already excluded compressed rows, and `purgeRow` is unfiltered on purpose.)
+Writing the rule down is not the same as executing it.
+
+### D#188 — a UPS-injected observation #42 made event #42 unreachable
+
+The cross-hook injected-ids marker is a union across TABLES, and the convention for
+keeping them apart already existed: `user-prompt-search.js` writes `P<id>` for
+`user_prompts` rows and `D<id>` for `deferred` rows, with the comment "so obs ids can't
+collide in the shared injected-ids file". Observations are the incumbent namespace and
+stay bare. `events` — the one table that genuinely shares the id space, **91.6% of
+observation ids also existing as an event id** (3432 of 3747, 2026-09-01T19:56Z; it read
+90.1% six hours earlier, because both tables grow) — never got a prefix.
+
+The consequence: an observation injected at prompt time silently suppressed the
+same-numbered event on the PreToolUse face for the five-minute window, and vice versa.
+
+**A second consequence was claimed in the draft of this entry and is false**; it is
+recorded rather than quietly dropped, because the method this release advertises is
+enumerating a marker's readers and writers, and the draft got one of them wrong. The
+draft said bare event ids leaked into `hook.mjs`'s `pathAInjectedIds` and suppressed the
+same-numbered observation on the `fyi` face. They reach that list and suppress nothing:
+`mergeCrossHookInjected` writes every id as a **string**, and both consumers test
+`new Set(excludeIds).has(r.id)` against a **number** out of SQLite. Measured against the
+real functions — excluding `1` returns nothing, excluding `'1'` returns the row.
+
+What the pre-tag correctness review exposed by catching it is a separate and still-live
+defect: that exclude list is inert for **every** id the marker holds as a string,
+observations included, so the `<memory-context>` dedup and the task-imperative exclude
+both silently do nothing whenever `pre-tool-recall.js` wrote the marker last. Filed as
+**D#193** with the probe, deliberately not fixed here — making an exclude list start
+working changes what gets injected, and this release has no measurement of that.
+
+Also unclaimed and real, found by the same review: `shouldSkipByDedup` *does*
+String-normalise both sides, so before this fix a bare event id colliding with a
+candidate observation id could push its overlap ratio past 0.8 and skip an entire UPS
+injection. Namespacing fixes that too — a third consumer the draft's two-bullet list
+missed in the other direction.
+
+Measured by replaying every real session's UPS-injected id set against the injectable
+events of the project **the session ran in**: **14 collisions across 11 of 60 sessions
+(18.3%)**, 2026-09-01T20:17Z.
+
+**The draft measured the wrong population, in the paragraph where it was arguing about
+populations.** `pre-tool-recall.js` calls `inferProject()` once and hands that one value
+to both the marker file and the events `WHERE project = ?`, so the session's project is
+the only scoping that exists in the code. The draft scoped by the injected observation's
+own `project` column — a different question, because the `ups`/`fyi` faces do inject
+cross-project rows — and published 9 in 9 (15.5%). That understated the defect. The
+pre-tag claims review reconstructed the session-scoped reading independently at 12 in 10,
+filed it as a blocker, withdrew the blocker when the draft's own number reproduced under
+the draft's own predicate, and then made the sharper point: reproducing exactly is not the
+same as measuring the right thing. The remaining gap between its 12 and the 14 here is its
+stand-in directory→project mapping plus an hour of growth.
+
+Dropping the project condition entirely reports 72 in 41 — a population the project-scoped
+query can never reach, so which population a figure came from is part of the figure. The
+14 is still an upper bound: it does not additionally require the blocked event to match
+the file being read. The full predicate is recorded in `CLAUDE.md` and in
+`lib/injected-ids.mjs`, because no harness is committed for it and "their own project's
+injectable events" turned out to be ambiguous between the two readings that produce 9
+and 14.
+
+Fixed with `injectedIdKey(id, src)` in `lib/injected-ids.mjs` (`E<id>` for events).
+Legacy in-flight markers keep their old meaning for at most `DEDUP_STALE_MS` and then
+rotate; deliberately no format version, because a five-minute window of the pre-existing
+behaviour is cheaper than a schema every reader must branch on.
+
+### D#187 — `claude-mem-lite update` turned a plugin-only install into a hybrid
+
+v3.84.1 fixed the version read for hook and MCP processes, where `CLAUDE_PLUGIN_ROOT` is
+always set. It is not set in a terminal, and there a plugin-only user fell off both
+plugin paths at once: `getCurrentVersion()` returned `0.0.0` (so every release compares
+as newer, forever) and `isPluginMode()` was false, so `allowInstall` defaulted to true and
+`downloadAndInstall` laid a full managed tree into `~/.claude-mem-lite` — converting a
+plugin-only install into exactly the hybrid whose two trees D#184 documents drifting
+apart.
+
+Same root cause as PR #17: the process ENVIRONMENT was the only install-shape evidence
+consulted. Both reads now fall back to `detectInstallShape()`, which asks the filesystem
+and answers the same in a hook, in a terminal, and in a subprocess. Memoised per process,
+because `installExtractedRelease()` calls `isPluginMode()` *after* writing the managed
+tree and a live re-probe would flip the answer mid-run.
+
+### D#191 — the quality dashboard described a store 20x noisier than the one retrieval searches
+
+`stats --quality` rendered every ratio over all rows, compressed and superseded included,
+under labels naming no population. Numerator and denominator were paired, so each ratio
+was internally consistent; what was wrong was the population it described. On the live
+store (3742 rows, 2284 live): all-time Lesson rate read **59.6%** where the live store is
+**92.9%**, all-time LOW_SIGNAL read **22.9%** where the live store is **1.1%** —
+compression retires precisely the low-signal, lesson-less rows. That LOW_SIGNAL pair is
+a factor of **20.8x** — a draft of this paragraph called it "roughly three decades of
+quality worse", which is 1000x and was an adjective standing in for a number that is
+already striking on its own (pre-tag claims review S1).
+
+The review proposed filtering the two all-time queries. The window and per-type queries
+have the same defect and `--days` is user-settable, so all three are filtered and the
+header now names the population once. `purgeRow` is deliberately left alone; compressed
+rows are its entire subject.
+
+### D#185 / D#186 / D#190 — test hygiene, one of which an outside contributor hit first
+
+* **D#185**: four injection-budget assertions measured strings containing the absolute
+  `CLI_PATH`, so they were partly measuring how deep the reader's install prefix is. PR
+  #17's contributor reported one failing while all 12 cases passed here. Reddening
+  thresholds, measured: detail doc at `CLI_PATH >= 104` chars, instructions-full 129,
+  instructions-BASE 140 — so the DOC reddens first, not the instructions. Budgets now
+  normalise `CLI_PATH` to a fixed reference path, with a self-check that the
+  normalisation still finds it and that the number does not move with the prefix.
+* **D#186**: inside the 24h throttle window `state.updateAvailable` is the only thing
+  between the cached banner and silence, and flipping that read left all 68 cases green.
+  Both polarities now asserted, with `fetch` proven uncalled so the assertions are about
+  the cached path.
+* **D#190**: nothing under `tests/` imported `benchmark/rerank-pool-replay.mjs`, so the
+  four self-checks the release notes vouch for could all be deleted with a green suite —
+  the same shape v3.82.0 found in `citation-live-replay.mjs`. The checks are now exported,
+  throw instead of `process.exit` so they can be driven in-process, and are covered by
+  `tests/rerank-pool-replay.test.mjs`; each of eight mutations was watched to fail.
+
+### Two new rulers
+
+**`benchmark/keyctx-pool-replay.mjs`** — the SessionStart Key Context face
+(D#192, formerly D#189), the fifth surface of the "SQL LIMIT upstream of a JS relevance
+filter" shape and the purest: both SELECTs order by `created_at_epoch DESC` alone while
+the selector re-sorts by a composite into which recency enters compressed to (1,2]. No
+existing ruler imports `hook-context.mjs`. Nothing about the shipped selection changed
+this release — the two bounds are only extracted to `KEYCTX_POOL_OBS` / `KEYCTX_POOL_SESS`
+so a twin can patch them.
+
+What it found refutes the premise the item was filed on. Truncation says `sessPool` is
+the worse offender (over LIMIT in 5/11 projects against `obsPool`'s 3/11). Decomposed,
+widening them does opposite things: `obs 50->200` alone changes the injected block in
+2/11 projects, makes **more rows reachable than it displaces**, and costs a few dozen
+tokens; `sess 10->40` alone changes **no observation at all** and adds 130 session
+summaries, roughly tripling the emitted block on the largest projects. Truncation count is
+not harm.
+
+**Those are the directional findings, and they are the only kind this ruler can support.**
+`selectWithTokenBudget` takes no clock — it reads `Date.now()`, derives adaptive windows
+from it, and weights candidates by recency — so its pools SLIDE and every absolute it
+prints is a snapshot. Not because the corpus grows, which was the first and half-right
+diagnosis: on `projects--mem` the obs pool read **113 -> 112 -> 108** across three runs
+the same evening while its live row count went **776 -> 777** with nothing superseded.
+Growth cannot lower a count; a receding window can. The first draft of this entry published `829 -> 1880`
+and `9 gained / 2 displaced` as if they were fixed; the pre-tag claims review re-ran the
+same commands hours later and got `652 -> 1863` and `10 gained / 3 displaced`, which is
+correct and the draft was not. Both arms still run in one process against one database
+microseconds apart, so the comparison holds while the numbers move. The tool now stamps
+its output with an ISO timestamp and says this in its own report. Snapshot at
+**2026-09-01T19:55Z**: obs-only 10 newly reachable / 3 displaced, `mem` 652 -> 733 and
+`code-graph-mcp` 696 -> 726; sess-only 0 observations changed, 130 summaries, `mem`
+652 -> 1863 and `code-graph-mcp` 696 -> 1838.
+
+Two of its own defects are recorded because they are the interesting part. Scoring only
+`observations` printed "selection differs 0/11" for the arm that had just tripled the
+emitted block. And its displacement self-check survived mutation until a negative arm was
+added — its structural sibling already had one, which is the tell.
+
+**`citation-live-replay.mjs --mentions`** — D#179's prerequisite. It re-splits each
+face's numerator into ids named in a model response that also called a tool and ids named
+only in prose, keyed by `requestId`. Over 79 injection-bearing sessions
+(2026-09-01T20:24Z): **`pretool` is 76.4% mention-only (420/550)**, fyi 61.9%, ups 61.5%,
+task_imperative 66.7%, error_recall 42.9%.
+
+Read the ratio, not the counts: three runs the same evening gave `pretool` **75.3% ->
+75.6% -> 76.4%** as the corpus grew under them. The corpus grows partly *because of this
+work* — the session writing these notes is itself a transcript the next walk will read,
+which is the self-reference D#179 is about. Put in one
+currency, because a share of hits and a change in a rate are not comparable and a draft set
+them side by side as if they were: **403 of pretool's hits are prose-only, against 149 hits
+contributed by the ten document-shaped sessions**, so the contamination is not confined to
+the release-note/audit sessions the pollution block already flags. Neither column
+is a bound, and the first draft of that docblock wrongly called one a floor: acting in one
+response and citing in a later summary lands in `mentionOnly`. `subagent` is declared
+unavailable rather than omitted.
+
+### A measurement debt settled halfway, and said so
+
+v3.79.0's error-recall rerank, re-measured over the frozen 2026-08-25 shapes with both
+arms on the same file and the switch flipped rather than the code edited (both arms run
+back to back, 2026-09-01T19:58Z): rows matching no error term **39.7% -> 21.7%**, TOP-1
+such rows **38.8% -> 20.5%**, with **2413 injected rows in both arms** and identical
+per-project row counts in all 15 projects. Equal totals alone would be necessary and not
+sufficient — a transform that drops one row and admits another keeps the count — so the
+per-project agreement is the part that carries the "reorders, never removes" claim, and
+even that is counts rather than set identity. The shapes are frozen but the corpus they
+are replayed against is not, so the off-arm read 39.8% / 38.9% six hours earlier; the
+on-arm was identical to the digit. The mechanism is confirmed.
+
+The outcome is not. `citation-live-replay --split` at the v3.79.0 boundary (one walk, two
+arms) reads `error_recall` cite-rate **9.0% [6.0, 13.2]% (22/245) before -> 5.2%
+[3.4, 7.9]% (20/383) after**. Note which half of a date split is reproducible: the BEFORE
+arm is a closed past window and read identically across runs six hours apart, while the
+after arm grew 374 -> 383 pairs.
+
+Two reasons that reads as "not established" rather than "worse", and the shorter one is
+the robust one: **the two intervals overlap** (`[6.0, 13.2]` and `[3.4, 7.9]` share
+6.0-7.9), so the difference is not significant however the period is treated. Separately,
+`pretool` moved 34.0% -> 39.9% across the same boundary, so a period effect is present and
+a date split cannot attribute either direction to the rerank.
+
+One clause the hedge owes in the other direction, from the review: the only outcome
+evidence available points AGAINST the rerank, not nowhere — a difference-in-differences
+across those two faces would read about -11pp. Declining to compute it is right, since
+nothing supports parallel trends between faces with different content, but "neither
+demonstrated nor refuted" should not be read as "uninformative". It is adverse and
+confounded. Mechanism confirmed; cite-rate benefit unestablished.
+
+### What the two pre-tag reviews changed
+
+Both ran before the tag and both are the reason several paragraphs above read differently
+from their drafts. Recorded because the corrections are more informative than the
+release: a **BLOCKER** (the false `pathAInjectedIds` consequence, retracted in all four
+places it had been copied to, with the real defect filed as D#193), the live-corpus
+snapshot class described at the top, and the fork-CI duration claim.
+
+Four coverage gaps they found, all now closed with the mutation watched to fail:
+
+* `topLessons`' new superseded arm was unpinned — reverting it to the old
+  compressed-only filter left the suite green. That is the superseded-invariant class
+  this project has re-broken repeatedly, so it now has a decoy-bearing case.
+* the transcript → `applied` computation behind the `--mentions` headline was unpinned;
+  `applied: 0` hardcoded passed everything. `--mentions` is now exposed in `--json` and
+  driven end to end through the subprocess over its own transcript root.
+* `classifyCitationContext`'s key-fallback test exercised the `uuid` arm, which
+  production never reaches, while the `message.id` arm that does run had no case.
+* the `installShape()` memo's stated reason was traced and found unreachable; the
+  docblock now says what the memo actually buys.
+
+And one measurement worth more than the release it came from: **`knip` reports no unused
+exports at all for a module named in a `new URL('../X.mjs', import.meta.url)`.** Probing
+`hook-episode.mjs` / `utils.mjs` / `tier.mjs` lists the probe; probing `hook-context.mjs`
+/ `hook-memory.mjs` does not, and those two are exactly the modules the pool-replay
+benchmarks patch by text. Parking the benchmark alone leaves them blind; parking its test
+alone leaves them blind; parking both restores visibility. So the standing knip baseline
+is blind to two files, and its "+0 / −0 name set" says nothing about `KEYCTX_POOL_OBS` /
+`KEYCTX_POOL_SESS` — which a draft of `CLAUDE.md` had wrongly credited to an importer
+that is really a regex. Filed as D#194.
+
+### CONTRIBUTING.md
+
+The project has outside contributors now. It documents the thing PR #17 discovered: a
+fork's CI run sits at zero jobs until a maintainer approves it. Measured on that run —
+created `2026-09-01T01:29:25Z`, zero jobs, marked `failure` twelve hours later. All ten
+same-repo pull-request runs in project history started their jobs and finished inside
+three minutes (the five that passed took 2m21s–2m34s, the five that failed 12s–1m51s), so
+the distinguishing symptom is **zero jobs and a multi-hour wall-clock**, not the
+conclusion — a first draft said "every same-repo run finished in about two and a half
+minutes", which is true only of the passing half and was corrected by the pre-tag review. The gate stays on deliberately (approving a fork run executes
+that fork's code); what was missing was anyone saying so.
+
 ## v3.85.1 — the gate added to stop a regression riding out was comparing against evidence it had already judged unreliable
 
 No behaviour change to the memory system. One CI gate is made real, and six statements

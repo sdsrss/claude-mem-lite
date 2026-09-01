@@ -21,6 +21,7 @@ import { httpConnectProxyFor, getViaConnectProxy } from './lib/proxy-fetch.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { verifyReleaseFiles, verifyManifestSignature } from './lib/release-digest.mjs';
+import { detectInstallShape } from './lib/install-shape.mjs';
 
 // ── Configuration ──────────────────────────────────────────
 const GITHUB_REPO = 'sdsrss/claude-mem-lite';
@@ -156,8 +157,47 @@ export function isUpdateCheckDue() {
   } catch { return false; }
 }
 
+// D#187. `CLAUDE_PLUGIN_ROOT` is set in every hook and MCP process Claude Code
+// spawns, so inside those the env var answers "am I a plugin install?" perfectly —
+// which is why v3.84.1's fix, which reads it, was enough THERE. It is not set in a
+// plain terminal, and a plugin-only user typing `claude-mem-lite update` therefore
+// fell off both plugin paths at once: getCurrentVersion() returned '0.0.0' (so every
+// release compares as newer, forever), and isPluginMode() was false, so allowInstall
+// defaulted to true and downloadAndInstall laid a full managed tree into
+// ~/.claude-mem-lite — silently converting a plugin-only install into the hybrid
+// whose two trees D#184 documents drifting apart.
+//
+// Same root cause as PR #17: process ENVIRONMENT was the only install-shape
+// evidence consulted. detectInstallShape() reads the FILESYSTEM instead, so it
+// answers the same in a hook, in a terminal, and in a subprocess.
+//
+// Memoised per process. The reason first written here was wrong and the pre-tag review
+// traced it out: it claimed the memo keeps installExtractedRelease()'s post-install
+// isPluginMode() call stable across the managed-tree write. That call cannot depend on
+// this fallback at all — every path reaching installExtractedRelease is a plugin process
+// (checkForUpdate cannot reach downloadAndInstall while pluginMode is true, and
+// syncDataDirFromCache is only called from scripts/launch.mjs and
+// scripts/hook-launcher.mjs), so CLAUDE_PLUGIN_ROOT is set and isPluginMode()
+// short-circuits before pluginOnlyInstall() is consulted, before AND after the write.
+// What the memo actually buys: one readdirSync per process instead of one per call, and
+// a stable answer inside a long-lived MCP server whose plugin cache may be pruned or
+// re-populated underneath it while it runs.
+let shapeMemo;
+function installShape() {
+  if (shapeMemo === undefined) {
+    try { shapeMemo = detectInstallShape({ installDir: INSTALL_DIR }); } catch { shapeMemo = null; }
+  }
+  return shapeMemo;
+}
+
+/** True when this machine runs the plugin and has NO managed code install to update. */
+function pluginOnlyInstall() {
+  const shape = installShape();
+  return Boolean(shape && !shape.managed && shape.activePluginVersion);
+}
+
 function isPluginMode() {
-  return Boolean(process.env.CLAUDE_PLUGIN_ROOT);
+  return Boolean(process.env.CLAUDE_PLUGIN_ROOT) || pluginOnlyInstall();
 }
 
 // ── Dev Mode Detection ─────────────────────────────────────
@@ -312,6 +352,17 @@ export function getCurrentVersion() {
       const pkg = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'));
       if (pkg.version) return pkg.version;
     } catch { /* fall through to the last resort */ }
+  }
+  // D#187: no env var in a plain terminal, so ask the filesystem which plugin
+  // version this machine actually runs. Without this a plugin-only user's
+  // `claude-mem-lite update` reads 0.0.0 and every release compares as newer.
+  const active = installShape()?.activePluginVersion;
+  if (active) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(active.root, 'package.json'), 'utf8'));
+      if (pkg.version) return pkg.version;
+    } catch { /* the cache dir name IS the version — use it rather than 0.0.0 */ }
+    if (active.version) return active.version;
   }
   return '0.0.0';
 }

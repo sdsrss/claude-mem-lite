@@ -70,6 +70,7 @@ import {
   DECAY_DENOMINATOR_SURFACES,
   extractInjectedBySurface,
   extractCitationsFromTranscript,
+  classifyCitationContext,
   collectSubagentSurface,
 } from '../lib/citation-tracker.mjs';
 import { readTranscriptEntries } from '../lib/transcript-scan.mjs';
@@ -86,11 +87,20 @@ const has = (flag) => argv.includes(flag);
 
 // ─── 0. Which faces this ruler can and cannot reach ──────────────────────────
 
-// Stamped into every `--dump` and required by `--corpus`. Bump it whenever a record's
-// shape changes, so a corpus frozen months ago is REFUSED rather than half-read.
-// Bumped to /2 by the FLOW-2 annotation: records now carry `citedTotal`. The
-// format check below refuses a /1 dump rather than reading a missing field as zero,
-// which would report every frozen session as pollution-free.
+// Stamped into every `--dump` and required by `--corpus`.
+//
+// THE RULE, restated precisely after v3.86.0's pre-tag review found it stated in a form
+// the same release then violated: bump this whenever a reader could MISREAD an older
+// dump — that is, whenever a field a consumer treats as REQUIRED changes shape or
+// meaning. Bumped to /2 by the FLOW-2 annotation, because records gained `citedTotal`
+// and reading its absence as zero would report every frozen session as pollution-free.
+//
+// It was deliberately NOT bumped for D#179's `applied`, and the difference is the
+// reader, not the record: `mentionVsApplication` returns `null` when no record carries
+// the field, so an older dump comes back as "unavailable" rather than as 0% applied. An
+// optional field whose own reader refuses to guess does not need a format bump; the
+// earlier wording ("whenever a record's shape changes") did not admit that distinction
+// and made this file state a rule and break it in one release.
 const CORPUS_FORMAT = 'citation-live-replay/2';
 
 // DERIVED from the production table, not a second list of face names: calling the
@@ -170,10 +180,22 @@ function scanSession(project, path) {
 
   const bySurface = extractInjectedBySurface(path, { mainOnly: true });
   const cited = extractCitationsFromTranscript(path, { mainOnly: true });
+  // D#179: split each hit into "named while acting" and "named in prose only", keyed by
+  // requestId. Must run BEFORE collectSubagentSurface, which parses the sidechain files
+  // and evicts the single-slot entry memo the three extractors above share.
+  const ctx = classifyCitationContext(path, { mainOnly: true });
   const faces = {};
   for (const face of ATTACHMENT_FACES) {
     const inj = [...bySurface[face]];
-    if (inj.length) faces[face] = { inj, hit: inj.filter((id) => cited.has(id)) };
+    if (!inj.length) continue;
+    const hit = inj.filter((id) => cited.has(id));
+    faces[face] = {
+      inj,
+      hit,
+      // Optional field: a frozen corpus dumped before this existed simply lacks it, and
+      // the --mentions mode says so rather than reporting the absence as zero.
+      applied: hit.filter((id) => (ctx.get(id)?.withTool ?? 0) > 0).length,
+    };
   }
   // Parses the sidechain files (evicting the memo), so it goes last.
   const sub = collectSubagentSurface(path);
@@ -458,6 +480,11 @@ function main() {
       },
       ...(has('--by-project') ? { by_project: byProject(inWindow) } : {}),
       ...(has('--by-scope') ? { by_scope: byScope(inWindow, scopeLookup()) } : {}),
+      // Review S2: the `applied` field is computed in scanSession from the transcript,
+      // and until this was exposed nothing exercised that path — setting it to a
+      // literal 0 left the suite green while the CHANGELOG headlined a figure derived
+      // from it. `null` when no record carries the field, never 0.
+      ...(has('--mentions') ? { mention_vs_application: mentionVsApplication(inWindow) } : {}),
     }, null, 2));
     return;
   }
@@ -503,12 +530,80 @@ function main() {
     console.table(byProject(inWindow));
   }
 
+  if (has('--mentions')) {
+    console.log('\n─── cited while ACTING vs cited in PROSE (D#179) ───');
+    const rows = mentionVsApplication(inWindow);
+    if (!rows) {
+      console.log('unavailable: these records carry no `applied` field (frozen corpus dumped');
+      console.log('before D#179). Re-walk live, or re-dump the corpus — an absent field is not a zero.');
+    } else {
+      console.log('Unit = one model RESPONSE (requestId). `applied` = the id was named in a response');
+      console.log('that also called a tool; `mentionOnly` = every response naming it was prose.');
+      console.log('NEITHER column is a bound: co-occurring with a tool call is not evidence the');
+      console.log('lesson was followed, and acting in one response then citing in a later summary');
+      console.log('lands in mentionOnly. This sizes the question; it does not settle it.');
+      console.table(rows);
+      console.log('`subagent` is unavailable here BY CONSTRUCTION — its hits come from the receiving');
+      console.log('agent\'s transcript, which this classification does not walk. Not a zero.');
+    }
+  }
+
   if (has('--by-scope')) {
     console.log('\n─── per observations.scope (D#153) ───');
     console.log('`pretool` IS the file-triggered face CLAUDE_MEM_SCOPE_FILTER gates. `(gone)` = the row');
     console.log('left the table since injection; kept so the buckets still sum to the face\'s pair count.');
     console.table(byScope(inWindow, scopeLookup()));
   }
+}
+
+/**
+ * D#179: of the hits that make up each face's numerator, how many were named in a
+ * response that also DID something, and how many only in prose?
+ *
+ * This is the prerequisite the deferred item names — it sizes the contamination, it does
+ * not fix it. `applyCitationDecay` promotes on any `#NN` in assistant text, so a release
+ * note or an audit promotes every memory it discusses; the same signal feeds
+ * citation_surface_log, citation-stats and this replay, so all three move together.
+ *
+ * NEITHER COLUMN IS A BOUND. `applied` over-counts, because naming an id in a response
+ * that also calls a tool is co-occurrence and not evidence the lesson was followed.
+ * `mentionOnly` also over-counts, because an agent that acts in one response and cites
+ * the lesson in a later summary is classified pure-mention. The split sizes the
+ * question; it does not settle it, and a first draft of this docblock called
+ * `mentionOnly` a floor, which is wrong in the second direction.
+ *
+ * `subagent` is absent from the output BY CONSTRUCTION, not because it scored zero: its
+ * hits come from the RECEIVING agent's own transcript via collectSubagentSurface, which
+ * this classification does not walk. It is declared unavailable rather than omitted —
+ * a missing row reads as "that face has no contamination", which is not what is known.
+ *
+ * Returns null when the records predate the `applied` field (a frozen corpus dumped
+ * before this existed) — an absent field must not be reported as zero.
+ */
+export function mentionVsApplication(records) {
+  const per = new Map();
+  let sawField = false;
+  for (const rec of records) {
+    for (const [face, v] of Object.entries(rec.faces)) {
+      if (!v.hit?.length) continue;
+      if (typeof v.applied !== 'number') continue;
+      sawField = true;
+      let e = per.get(face);
+      if (!e) { e = { face, hits: 0, applied: 0 }; per.set(face, e); }
+      e.hits += v.hit.length;
+      e.applied += v.applied;
+    }
+  }
+  if (!sawField) return null;
+  return [...per.values()]
+    .map((e) => ({
+      face: e.face,
+      hits: e.hits,
+      applied: e.applied,
+      mentionOnly: e.hits - e.applied,
+      mentionOnlyPct: e.hits ? `${((100 * (e.hits - e.applied)) / e.hits).toFixed(1)}%` : 'n/a',
+    }))
+    .sort((a, b) => b.hits - a.hits);
 }
 
 /**

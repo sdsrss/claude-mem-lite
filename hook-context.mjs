@@ -61,6 +61,23 @@ export function computeAdaptiveWindows(db, project) {
   }
 }
 
+// D#192 (filed as D#189, re-scoped after measurement). These two are REACHABILITY bounds, not ranking bounds — the D#172 shape, and
+// the fifth surface it has been found on. Both SELECTs order by pure `created_at_epoch
+// DESC`; the JS below then re-sorts every candidate by `valueDensity`, a composite of
+// typeQuality x impBoost(1.0/1.5/2.0) x lessonBoost(1.0/1.3) / sqrt(cost) whose dynamic
+// range is far wider than the (1,2] that recency contributes. So the key the SQL sorts
+// on barely participates in the final order, and anything past the LIMIT is unreachable
+// however well it scores.
+//
+// Named rather than inline so benchmark/keyctx-pool-replay.mjs can patch a twin and
+// price a change to them. Extracting them changed no value.
+//
+// NOT yet widened: SessionStart injects on every start, so moving these is a
+// user-visible default-behaviour change to a released artifact (L3) and gets its own
+// round. Measured truncation as of 2026-09-01 is in the replay's header.
+export const KEYCTX_POOL_OBS = 50;
+export const KEYCTX_POOL_SESS = 10;
+
 /**
  * Select observations and sessions within a token budget using greedy knapsack.
  * Scores candidates by recency * importance, picks highest value-density first.
@@ -91,7 +108,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
         OR (created_at_epoch > ? AND importance >= 3)
       )
     ORDER BY created_at_epoch DESC
-    LIMIT 50
+    LIMIT ${KEYCTX_POOL_OBS}
   `).all(project, tier1Ago, tier2Ago, tier3Ago);
 
   const sessPool = db.prepare(`
@@ -99,7 +116,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     FROM session_summaries
     WHERE project = ? AND created_at_epoch > ?
     ORDER BY created_at_epoch DESC
-    LIMIT 10
+    LIMIT ${KEYCTX_POOL_SESS}
   `).all(project, now_ms - windows.sessWindow);
 
   const selectedObs = [];

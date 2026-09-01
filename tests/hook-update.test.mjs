@@ -705,6 +705,75 @@ describe('validateExtractedTarball', () => {
   });
 });
 
+// D#187: install shape read from the FILESYSTEM, not from the process environment.
+//
+// `CLAUDE_PLUGIN_ROOT` is set in every hook and MCP process, so v3.84.1's env-var fix
+// held there — and only there. In a plain terminal a plugin-only user got 0.0.0 from
+// getCurrentVersion() (every release forever newer) AND allowInstall defaulting to
+// true, so `claude-mem-lite update` wrote a full managed tree into ~/.claude-mem-lite
+// and converted a plugin-only install into the hybrid whose two trees D#184 documents
+// drifting apart. Both halves are asserted here with CLAUDE_PLUGIN_ROOT UNSET, which
+// is the whole point — with it set, the pre-fix code passes these too.
+describe('D#187: plugin-only install detected without CLAUDE_PLUGIN_ROOT', () => {
+  // A runnable plugin cache version. `scripts/launch.mjs` is the gate
+  // listPluginCacheVersions uses — a dir without it is a half-written install the
+  // runtime cannot start, so it is deliberately not counted.
+  function makePluginOnlyHome(version = '3.9.0') {
+    const home = makeDir('mem-plugin-only-home');
+    const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', version);
+    mkdirSync(join(root, 'scripts'), { recursive: true });
+    writeFileSync(join(root, 'scripts', 'launch.mjs'), '// launcher');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version }, null, 2));
+    return { home, root, version };
+  }
+
+  it('getCurrentVersion reads the live plugin cache instead of returning 0.0.0', async () => {
+    const { home, version } = makePluginOnlyHome('3.9.0');
+    const dataDir = makeDataDir('1.0.0');
+    const { getCurrentVersion } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
+    expect(process.env.CLAUDE_PLUGIN_ROOT).toBeUndefined();  // the condition under test
+    expect(getCurrentVersion()).toBe(version);
+  });
+
+  it('defers the install rather than materialising a managed tree', async () => {
+    const { home } = makePluginOnlyHome('3.9.0');
+    const dataDir = makeDataDir('1.0.0');
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ tag_name: 'v9.9.9', tarball_url: 'https://example.invalid/t.tar.gz', assets: [] }),
+    });
+    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
+    const result = await checkForUpdate({ force: true });
+    expect(result).toMatchObject({ pluginMode: true, installDeferred: true, updated: false, from: '3.9.0', to: '9.9.9' });
+    // the conversion-to-hybrid this defect caused, asserted directly
+    expect(existsSync(join(home, '.claude-mem-lite', 'hook.mjs'))).toBe(false);
+    expect(existsSync(join(home, '.claude-mem-lite', 'server.mjs'))).toBe(false);
+  });
+
+  it('a machine WITH a managed code install is still not plugin-only — installs proceed', async () => {
+    // Anti-tautology for the two cases above: they would also pass if the new check
+    // simply reported plugin mode unconditionally. Same plugin cache, but a complete
+    // managed tree beside it (both entry points, which is what certifies a code home)
+    // — this is the hybrid shape, and it must keep auto-installing.
+    const { home } = makePluginOnlyHome('3.9.0');
+    const codeDir = join(home, '.claude-mem-lite');
+    mkdirSync(codeDir, { recursive: true });
+    writeFileSync(join(codeDir, 'package.json'), JSON.stringify({ version: '1.0.0' }, null, 2));
+    writeFileSync(join(codeDir, 'server.mjs'), '// code server');
+    writeFileSync(join(codeDir, 'hook.mjs'), '// code hook');
+    const dataDir = makeDataDir('1.0.0');
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ tag_name: 'v9.9.9', tarball_url: 'https://example.invalid/t.tar.gz', assets: [] }),
+    });
+    const { checkForUpdate, getCurrentVersion } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
+    // the managed package.json wins the version read, ahead of the plugin cache
+    expect(getCurrentVersion()).toBe('1.0.0');
+    const result = await checkForUpdate({ force: true });
+    expect(result).toMatchObject({ pluginMode: false, installDeferred: false });
+  });
+});
+
 describe('isRepairDowngrade (P3-3: signed-release rollback guard)', () => {
   it('flags a strictly-older resolved release as a downgrade', async () => {
     const { isRepairDowngrade } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
@@ -761,6 +830,41 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
     seedState(dataDir, { lastCheck: new Date().toISOString(), installedVersion: '1.0.0', updateAvailable: false });
     const { isUpdateCheckDue: due2 } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     expect(due2()).toBe(false); // just checked → throttled
+  });
+
+  // D#186: inside the 24h throttle window, `state.updateAvailable` is the ONLY thing
+  // standing between the cached banner and silence — no network call happens, so the
+  // flag is the whole decision. A tag-time mutation flipped that read to
+  // `!state.updateAvailable` and all 68 cases still passed: the branch existed, the
+  // throttled path was exercised, but nothing pinned which way round it went. A hook
+  // that says "up to date" while an update is cached, and nags while none is, is the
+  // same code either way to a suite that never asserts the return value here.
+  // Both polarities are asserted so neither direction of the flip survives.
+  it('throttled checkForUpdate returns the cached update when one is pending — no network', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    seedState(dataDir, {
+      lastCheck: new Date().toISOString(),   // inside the 24h window → shouldCheck false
+      installedVersion: '1.0.0', latestVersion: '1.2.0', updateAvailable: true,
+    });
+    globalThis.fetch = vi.fn();
+    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    const result = await checkForUpdate();   // NOT force — the throttled path
+    expect(result).toMatchObject({ updateAvailable: true, updated: false, from: '1.0.0', to: '1.2.0' });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('throttled checkForUpdate stays silent when no update is cached — no network', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    seedState(dataDir, {
+      lastCheck: new Date().toISOString(),
+      installedVersion: '1.0.0', latestVersion: '1.2.0', updateAvailable: false,
+    });
+    globalThis.fetch = vi.fn();
+    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    expect(await checkForUpdate()).toBeNull();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('isUpdateCheckDue is false when CLAUDE_MEM_SKIP_UPDATE is set', async () => {

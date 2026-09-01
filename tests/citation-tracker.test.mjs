@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   extractCitationsFromTranscript,
+  classifyCitationContext,
   extractUserTypedIds,
   buildCitationRelevanceSet,
   assertRelevanceCoversAllFaces,
@@ -463,5 +464,105 @@ describe('buildCitationRelevanceSet', () => {
     expect(() => assertRelevanceCoversAllFaces(
       CITATION_SURFACES.filter((f) => f !== 'subagent'),
     )).toThrow(/subagent/);
+  });
+});
+
+// D#179 prerequisite: split each cited id into "named while acting" and "named in
+// prose only". The unit is one model RESPONSE (requestId), because a whole user-to-user
+// exchange nearly always contains some tool call — bounding on user messages would
+// classify everything as applied and measure nothing.
+describe('classifyCitationContext (D#179)', () => {
+  let tmp;
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-ctx-')); });
+  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+
+  function writeTranscript(entries) {
+    const path = join(tmp, 'transcript.jsonl');
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
+    return path;
+  }
+  const say = (requestId, text) => ({
+    type: 'assistant', requestId, message: { content: [{ type: 'text', text }] },
+  });
+  const act = (requestId) => ({
+    type: 'assistant', requestId, message: { content: [{ type: 'tool_use', name: 'Edit', input: {} }] },
+  });
+
+  it('counts an id named in a response that also calls a tool as applied', () => {
+    const ctx = classifyCitationContext(writeTranscript([say('r1', 'Applying #42 now.'), act('r1')]));
+    expect(ctx.get(42)).toEqual({ withTool: 1, textOnly: 0 });
+  });
+
+  it('counts an id named in a prose-only response as text-only', () => {
+    const ctx = classifyCitationContext(writeTranscript([say('r1', 'The release note discusses #42.')]));
+    expect(ctx.get(42)).toEqual({ withTool: 0, textOnly: 1 });
+  });
+
+  it('does NOT let a tool call in a DIFFERENT response mark the mention as applied', () => {
+    // The whole reason the unit is a requestId. Grouping by user turn (or by file)
+    // would make one Edit anywhere mark every id in the session as acted on, and the
+    // measurement would report ~0% contamination on any coding session.
+    const ctx = classifyCitationContext(writeTranscript([
+      say('r1', 'Release note: #42 was the lesson that closed it.'),
+      say('r2', 'Now the unrelated change.'), act('r2'),
+    ]));
+    expect(ctx.get(42)).toEqual({ withTool: 0, textOnly: 1 });
+  });
+
+  it('groups the blocks of one response even when split across entries', () => {
+    const ctx = classifyCitationContext(writeTranscript([
+      say('r1', 'Per #42.'), act('r1'), act('r1'),
+    ]));
+    expect(ctx.get(42)).toEqual({ withTool: 1, textOnly: 0 });
+  });
+
+  it('keys on message.id when requestId is absent — the shape production actually emits', () => {
+    // The fallback chain is `requestId || message.id || uuid`. Real Claude Code entries
+    // that lack a requestId still carry message.id, so THIS is the arm that runs in
+    // production; the uuid arm below is the keyless last resort. The pre-tag review
+    // caught the original of this case testing only the uuid arm and describing it as
+    // "the fallback", i.e. validating a shape production never emits.
+    const ctx = classifyCitationContext(writeTranscript([
+      { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Discussing #42.' }] } },
+      { type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', name: 'Edit', input: {} }] } },
+    ]));
+    expect(ctx.get(42)).toEqual({ withTool: 0, textOnly: 1 });
+  });
+
+  it('falls back to uuid when there is no requestId and no message.id — never one giant bucket', () => {
+    // Merging keyless entries would let a single tool call anywhere in the file mark
+    // every id as applied.
+    const ctx = classifyCitationContext(writeTranscript([
+      { type: 'assistant', uuid: 'u1', message: { content: [{ type: 'text', text: 'Discussing #42.' }] } },
+      { type: 'assistant', uuid: 'u2', message: { content: [{ type: 'tool_use', name: 'Edit', input: {} }] } },
+    ]));
+    expect(ctx.get(42)).toEqual({ withTool: 0, textOnly: 1 });
+  });
+
+  it('groups by message.id across split entries, not by position', () => {
+    // The positive arm of the case above: two entries sharing one message.id ARE one
+    // response, so the tool call marks the text's id applied.
+    const ctx = classifyCitationContext(writeTranscript([
+      { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Applying #42.' }] } },
+      { type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', name: 'Edit', input: {} }] } },
+    ]));
+    expect(ctx.get(42)).toEqual({ withTool: 1, textOnly: 0 });
+  });
+
+  it('ignores thinking blocks — it must classify the same numerator decay acts on', () => {
+    const ctx = classifyCitationContext(writeTranscript([
+      { type: 'assistant', requestId: 'r1', message: { content: [{ type: 'thinking', thinking: 'recall #42' }] } },
+    ]));
+    expect(ctx.has(42)).toBe(false);
+  });
+
+  it('skips sidechain records by default and includes them when asked', () => {
+    const entries = [{
+      type: 'assistant', requestId: 'r1', isSidechain: true,
+      message: { content: [{ type: 'text', text: 'Subagent used #42.' }] },
+    }];
+    expect(classifyCitationContext(writeTranscript(entries)).has(42)).toBe(false);
+    expect(classifyCitationContext(writeTranscript(entries), { mainOnly: false }).get(42))
+      .toEqual({ withTool: 0, textOnly: 1 });
   });
 });

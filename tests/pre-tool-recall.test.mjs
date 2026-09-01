@@ -1497,6 +1497,98 @@ describe('pre-tool-recall', () => {
     });
   });
 
+  // ─── D#188: the seen-set is a UNION across TABLES, and `events` shares the numeric
+  // id space with `observations` (90.1% of observation ids also exist as an event id
+  // on the live store, 2026-09-01). The dedup predicate compared bare numbers while
+  // the rows it filtered already carried a `src` tag added for exactly this reason —
+  // the comment three lines above it says "events share the numeric id space with
+  // observations" in as many words. So a UPS-injected observation #42 silently made
+  // event #42 unreachable for the 5-minute window, and vice versa.
+  //
+  // The fixture forces the collision (same id in both tables) and puts the two rows on
+  // DIFFERENT files, so only the event can match the path under test — the bare-number
+  // predicate is then the only thing that can suppress it.
+  describe('cross-hook dedup respects the id NAMESPACE (D#188)', () => {
+    let tmpRoot;
+    let projectDir;
+    let collidingId;
+
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), `pre-recall-d188-${process.pid}-`));
+      projectDir = join(tmpRoot, 'parent', 'd188');
+      mkdirSync(projectDir, { recursive: true });
+      mkdirSync(join(tmpRoot, 'runtime'), { recursive: true });
+
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      db.pragma('foreign_keys = OFF');
+      initSchema(db);
+      insertSession(db, { id: 'sess-d188', project: 'parent--d188', memoryId: 'mem-d188' });
+      // The observation lives on obs-only.mjs and is never a candidate for the path
+      // under test — its ONLY role is to be the id UPS reports as already injected.
+      const info = insertObs(db, {
+        sessionId: 'mem-d188', project: 'parent--d188',
+        type: 'bugfix', importance: 2,
+        title: 'observation on a different file',
+        lessonLearned: 'OBSERVATION-BODY-MARKER',
+        filesModified: `["${join(projectDir, 'obs-only.mjs')}"]`,
+      });
+      collidingId = Number(info?.lastInsertRowid ?? info);
+      // Same numeric id, other table, on the file the run below touches.
+      db.prepare(`
+        INSERT INTO events (id, project, event_type, title, body, file_paths, importance, created_at_epoch)
+        VALUES (?, 'parent--d188', 'lesson', 'event that shares the number', 'EVENT-BODY-MARKER', ?, 2, ?)
+      `).run(collidingId, JSON.stringify([join(projectDir, 'evt-only.mjs')]), Date.now());
+      db.close();
+    });
+
+    afterEach(() => {
+      try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
+    });
+
+    function seedSeen(ids, sessionId) {
+      writeFileSync(
+        join(tmpRoot, 'runtime', `.claude-mem-injected-parent--d188-${sessionId}`),
+        JSON.stringify({ ids: ids.map(String), ts: Date.now(), count: 1, session: sessionId }),
+      );
+    }
+
+    async function runOnEventFile(sessionId) {
+      const { stdout } = await runScript({
+        tool_name: 'Edit',
+        tool_input: { file_path: join(projectDir, 'evt-only.mjs') },
+        session_id: sessionId,
+      }, { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir });
+      if (!stdout) return '';
+      return JSON.parse(stdout).hookSpecificOutput?.additionalContext || '';
+    }
+
+    it('an injected OBSERVATION id no longer blocks the event that shares its number', async () => {
+      seedSeen([collidingId], 'sess-d188-1');
+      expect(await runOnEventFile('sess-d188-1')).toContain('EVENT-BODY-MARKER');
+    });
+
+    it('but the namespaced EVENT key still dedups the event — the fix is not "stop deduping"', async () => {
+      // Anti-tautology for the case above: dropping the events arm from the dedup
+      // entirely would pass it. This is the arm that pins the key, not its absence.
+      seedSeen([`E${collidingId}`], 'sess-d188-2');
+      expect(await runOnEventFile('sess-d188-2')).not.toContain('EVENT-BODY-MARKER');
+    });
+
+    it('the face writes the event back under its namespaced key, not as a bare number', async () => {
+      // Otherwise the collision returns on the next prompt from the other direction:
+      // a bare event id in this file blocks the same-numbered observation on the next
+      // UPS prompt. (It also reaches hook.mjs's pathAInjectedIds, but suppresses
+      // nothing there — every id in this file is a string and that consumer compares
+      // against a numeric row id. That inertness is D#193, not this test's subject.)
+      await runOnEventFile('sess-d188-3');
+      const state = JSON.parse(readFileSync(
+        join(tmpRoot, 'runtime', '.claude-mem-injected-parent--d188-sess-d188-3'), 'utf8'));
+      const written = (state.ids || []).map(String);
+      expect(written).toContain(`E${collidingId}`);
+      expect(written).not.toContain(String(collidingId));
+    });
+  });
+
   // ─── D#172 class (audit 2026-08-29 ALGO-4): the cross-hook dedup ran DOWNSTREAM
   // of the SQL LIMIT, so a deduped row left its slot EMPTY instead of yielding it to
   // the next candidate — "dedup" implemented as "shrink". Own fixture rather than the
@@ -1642,9 +1734,13 @@ describe('pre-tool-recall', () => {
       // hit silences it outright. Driven through a file that has NO observation rows,
       // so the merge is events-only and the assertion cannot be satisfied by the obs arm.
       // VERIFIED RED: reverting `eventsLimit` to `(isRead ? 1 : 2)` empties stdout.
+      // D#188: an event is recorded in the seen-set under its namespaced `E<id>` key.
+      // Seeding bare numbers here would no longer suppress anything — and note this
+      // fixture's obs and event ids genuinely collide (both tables auto-number from 1),
+      // which is exactly the machine-wide condition D#188 measured at 90.1%.
       const file = join(tmpRoot, 'runtime', '.claude-mem-injected-parent--algo4-sess-a4-3');
       writeFileSync(file, JSON.stringify({
-        ids: [eventIds[0], eventIds[1]].map(String), ts: Date.now(), count: 2, session: 'sess-a4-3',
+        ids: [eventIds[0], eventIds[1]].map((id) => `E${id}`), ts: Date.now(), count: 2, session: 'sess-a4-3',
       }));
 
       const { stdout } = await runScript({
