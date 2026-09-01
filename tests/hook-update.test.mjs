@@ -402,6 +402,20 @@ describe('code/data dir separation under relocation (D#27)', () => {
     expect(getCurrentVersion()).toBe('2.0.0');
   });
 
+  // Pure-plugin install: ~/.claude-mem-lite holds only DB + runtime state, no
+  // package.json, so INSTALL_DIR read fails and pre-fix returned '0.0.0' — which
+  // made checkForUpdate compute hasUpdate=true and nag every SessionStart. Fix
+  // reads the running plugin-cache version from CLAUDE_PLUGIN_ROOT.
+  it('getCurrentVersion reads CLAUDE_PLUGIN_ROOT package.json in plugin mode when the code dir has none', async () => {
+    const home = makeDir('mem-update-home');
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });  // state only, no package.json
+    const pluginRoot = makeDir('mem-plugin-root');
+    writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '3.84.0' }, null, 2));
+    const { getCurrentVersion } = await loadModule({ HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot });
+    // Pre-fix: no package.json in the code dir → catch → '0.0.0'.
+    expect(getCurrentVersion()).toBe('3.84.0');
+  });
+
   it('installExtractedRelease defaults its target to the homedir code dir, not CLAUDE_MEM_DIR', async () => {
     const { home, codeDir } = makeCodeHome('1.0.0');
     writeFileSync(join(codeDir, 'hook.mjs'), '// old hook');

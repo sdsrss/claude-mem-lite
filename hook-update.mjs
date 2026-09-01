@@ -277,6 +277,17 @@ export function compareVersions(a, b) {
 }
 
 export function getCurrentVersion() {
+  // In plugin mode INSTALL_DIR (~/.claude-mem-lite/) holds only the DB + runtime
+  // state — no package.json — so read the running plugin-cache version from
+  // CLAUDE_PLUGIN_ROOT first, else the update check sees '0.0.0' and nags every
+  // SessionStart. Fall back to the INSTALL_DIR read for non-plugin installs.
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (pluginRoot) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'));
+      return pkg.version;
+    } catch { /* fall through to INSTALL_DIR */ }
+  }
   try {
     const pkg = JSON.parse(readFileSync(join(INSTALL_DIR, 'package.json'), 'utf8'));
     return pkg.version;
