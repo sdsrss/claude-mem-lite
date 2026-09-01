@@ -63,10 +63,28 @@ const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DATA_DIR, 'runtim
 import { DEDUP_STALE_MS as CROSS_HOOK_DEDUP_MS } from './prompt-search-utils.mjs';
 // Upper bound on the over-fetch the cross-hook dedup buys itself (ALGO-4). The dedup
 // runs in JS after the SELECTs, so each LIMIT is raised by the seen-set size to keep the
-// dedup a re-ranking rather than a truncation. This cap exists because the seen-set is
-// read from a file on disk: it is bounded by UPS's own per-prompt budget in practice
-// (MAX_RESULTS 3), but an unbounded value read off disk must never size a query. 5 is
-// well above that budget and still leaves the worst case at 2+5=7 rows per SELECT.
+// dedup a re-ranking rather than a truncation. This cap exists for one reason only: the
+// seen-set is read from a file on disk, and a number off disk must never size a query.
+//
+// It is NOT a sufficiency argument, and the first version of this comment claimed one —
+// "bounded by UPS's own per-prompt budget in practice (MAX_RESULTS 3)". That premise is
+// false. `crossHookInjectedFile` is a UNION across hooks and calls inside the staleness
+// window: `mergeCrossHookInjected` unions new ids into the old ones, UPS contributes up
+// to MAX_RESULTS per prompt and this script contributes up to `mergeCap` per trigger, so
+// nothing holds it at 3. Measured on this machine's `runtime/.claude-mem-injected-*`
+// markers (2026-09-01): id-count histogram 1x9, 2x1, 3x2, 16x1 over n=13, and 1x11, 2x1,
+// 3x1, 15x1 over n=14 an hour later. Read that as "3 is not a bound", not as a
+// distribution: it is one developer machine, the tail entry is a single long agent session
+// (on the re-measure the top entry was the measuring session itself), and the count is of
+// ids IN THE FILE while `readCrossHookInjected` returns an EMPTY set for a payload whose
+// `ts` is outside DEDUP_STALE_MS — file size and runtime seen-set size are not the same
+// quantity.
+//
+// The residual failure mode that premise was hiding, derived from the arithmetic and NOT
+// observed in the wild: at a seen-set of 16 the slack still caps at 5, so a Read fetches
+// obsLimit = 6, and if all 6 are in the seen-set the face goes silent again — the exact
+// failure ALGO-4 exists to fix. The cap is right (an unbounded LIMIT is worse), the
+// reassurance was wrong.
 const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
 // v2.33.1: cooldown path is session-scoped so same-file-twice within one
 // session never re-injects (was: global file, 5-min window). Cross-session:
@@ -465,8 +483,11 @@ try {
     // On a Read (obsLimit 1 / eventsLimit 1) one dedup hit silenced the whole face.
     // Read the seen-set FIRST and over-fetch by its size so the dedup removes rows
     // from a pool that still has enough left to fill the cap. Capped at
-    // CROSS_HOOK_DEDUP_SLACK_MAX: the seen-set is bounded by UPS's own per-prompt
-    // budget in practice, but it is read off disk and must not size a query.
+    // CROSS_HOOK_DEDUP_SLACK_MAX purely because the seen-set is read off disk and a
+    // number off disk must not size a query — NOT because the seen-set is small. It is
+    // a cross-hook union over the staleness window and was measured at up to 16 ids on
+    // this machine, so with the slack saturated a Read can still fetch fewer rows than
+    // the seen-set holds and go silent. See the constant's docblock.
     const crossHookSeen = readCrossHookInjected(project, sessionId);
     const dedupSlack = Math.min(crossHookSeen.size, CROSS_HOOK_DEDUP_SLACK_MAX);
     const obsLimit = (isRead ? 1 : 2) + dedupSlack;

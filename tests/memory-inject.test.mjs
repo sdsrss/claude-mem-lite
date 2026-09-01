@@ -790,7 +790,13 @@ describe('cross-project rows: stale-hint field parity (parallel-path miss)', () 
 // ─── D#172 class (audit 2026-08-29 ALGO-3): the candidate pool is taken by RAW bm25
 // but the injected row is chosen by the JS composite, so the SQL LIMIT bounds
 // REACHABILITY, not just output width. See the RERANK_POOL_* docblock in
-// hook-memory.mjs for the 281× multiplier spread that makes this reachable-in-practice.
+// hook-memory.mjs for the multiplier spread that makes this reachable-in-practice: 281×
+// by the factor tables, 60.0× as realised over the rows the pool can actually return
+// (`liveObsFilterSql`; the raw table reads 86.5× and 39% of it is unreachable). This
+// fixture deliberately constructs the DECLARED worst case — fillers at `uncited_streak = 3`,
+// which citation-decay resets and which NO row the pool can return is in — because that is
+// what a fixture is for, and it is why the fixture's own spread must never be quoted as a
+// corpus measurement.
 describe('rerank pool is a reachability bound, not a ranking gate (ALGO-3)', () => {
   // Ranks the target at raw-bm25 #13 while every JS multiplier favours it:
   //   fillers  = change(0.5) × no-lesson(1.0) × imp1(0.6) × noise(0.2) × cite(0.4) = 0.024

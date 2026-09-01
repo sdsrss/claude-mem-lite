@@ -2,7 +2,173 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.85.1 — the gate added to stop a regression riding out was comparing against evidence it had already judged unreliable
+
+No behaviour change to the memory system. One CI gate is made real, and six statements
+v3.85.0 shipped — three of them in code comments, which is how this project's wrong
+explanations propagate — are replaced with measurements.
+
+**The gate.** v3.85.0 added a benchmark gate to `publish.yml` (ENG-2) because `ci.yml`'s
+benchmark job gates the *branch*, not the tag. The gate ran. It compared against
+`benchmark/baseline.json`, timestamped `2026-07-24`, **39 days old against
+`ci-gate.mjs`'s own `BASELINE_STALE_AGE_DAYS = 30`** — and because the step did not pass
+`--strict`, the run printed the stale-baseline warning and continued. `ci-gate.mjs`'s
+docblock names release/CI as exactly the context `--strict` exists for.
+
+The race it was added to close is also confirmed on v3.85.0 itself, at job granularity
+(`gh run view`, UTC): Release's `publish` job **completed 15:53:53Z**; main CI's
+`benchmark` job **started 15:54:35Z**. The package was on npm 42 seconds before the branch
+gate began. So the in-release gate is the one that matters, and it was the one comparing
+against a baseline it had already flagged.
+
+Both fixed. `benchmark/baseline.json` recaptured (`--production-hybrid`, the path the gate
+runs); `publish.yml` passes `--strict`, and `ci.yml` passes it **on push only** — PRs stay
+advisory so an outside contributor is never blocked by the calendar. Verified binding in
+both directions: `--strict` exits 0 on the new baseline and exits 1 on the same file with
+the old timestamp restored.
+
+**That arms a dated failure, and saying so is the point.** The age test is
+`floor((now − timestamp) / DAY) ≥ 30` and the baseline is stamped `2026-09-01T16:29:45Z`, so
+**main goes red from 2026-10-01 16:29 UTC** — that morning's pushes are still green — until
+someone recaptures. Intended: recapture is a one-line commit and a red main is the cheapest
+reminder available. Nothing automates it.
+
+**The consequence on the release path is worse than a red main, so it gets its own
+sentence.** `publish.yml`'s gate is strict too, and it lives in `validate` — which runs
+*after* the tag has been pushed. Tagging more than 30 days after a recapture therefore fails
+the release with the tag already on the remote, and a stranded tag is expensive here (see
+the v3.69.0/v3.69.1 note in `publish.yml`; this project's rule is that a failed tag cannot
+simply be reused). Main going red first, at day 30, is what stops anyone reaching that state
+unaware — which is the actual reason `ci.yml` is strict on push and not merely advisory.
+
+**What the stale baseline was hiding, attributed rather than called drift.** `recall_at_10`
+0.8998, `ndcg_at_10` 0.9712, `mrr_at_10` 0.9611 all unchanged; `precision_at_10`
+**0.8597 → 0.8497 (−1.16%)** and tokens 106 → 108 — and **all of it is one query**. q15
+("WebSocket") returns 10 results where it returned 5, finding the same 3 relevant ids
+(recall and nDCG stay at 1.0); −0.3 ÷ 30 queries is exactly the −0.01 overall. The pre-tag
+review bisected it across five detached worktrees to a single commit, **v3.57.0
+(`564e63b`)**, whose single-match-clamp fix stopped applying `SINGLE_MATCH_BANDS` to
+vector-scale rows — the "strong single hit clamped down" item from the 2026-07-17 audit. A
+known consequence of admitting more fused rows, not a stealth regression, and not from
+v3.85.0's four fixes (the benchmark drives `search-engine.mjs`, which none of them touch).
+
+**And the sharper fact, which is worse than "39 days old":** the old baseline's timestamp
+(`2026-07-23T20:17−07:00`) predates v3.57.0 by about two hours. It was captured at v3.56.1
+and **never described any released version** — the gate has been comparing every release
+since v3.57.0 against a pre-v3.57.0 tree. That is why the drop went unpriced for six weeks.
+p95 latency moved 1.7385 → 1.9501 ms; a first capture read 3.068 on a loaded machine and was
+discarded, which is why two captures were taken.
+
+**Six claims, re-measured.** All numbers below come from one back-to-back walk of the whole
+`user_prompts` table (n = **11289**, 2026-09-01) through the committed
+`benchmark/rerank-pool-replay.mjs`, so the arms share a denominator. The corpus grows
+daily — v3.85.0 quoted n = 11279 — which is exactly why the three arms were re-run
+together rather than differenced across time.
+
+| v3.85.0 said | measured |
+|---|---|
+| the headlined `LIMIT 10 → 30` carries the change | the **cross-project `LIMIT 5 → 15` does**: 12.6% changed sets / 5.3% top-1 / **214** of the 225 empty→non-empty prompts, against 3.6% / 1.4% / **9** for same-project alone |
+| the composite "spans 281×" | 281× is the **table** bound; realised over the rows the pool can actually return (`liveObsFilterSql`, n = **2284**) it is **60.0×** (0.1125 … 6.750). `citeFactor = 0.4` needs `uncited_streak ≥ 3`, which citation-decay resets — **0 rows** are there. Over the raw table it reads 86.5×, but 39% of that table is compressed or superseded and unreachable — see below |
+| "cost stays flat" | **+5% to +16% across calibers, +6% to +10% with `--cost`**: six whole-corpus `--cost` runs on one machine gave 1.058–1.102 (same code, same corpus), against 1.054–1.065 with arm order fixed and 1.063–1.156 arm-alone. The run-to-run spread is comparable to the effect and the absolute ms/prompt moved 3.04 → 1.80 across those runs, so this is a range and the ms are not quotable. Its own parenthetical ("the pool is the expensive term") predicted the direction |
+| ALGO-2 is "strictly additive" | true of the bypass **set**, false of the **output**: the merge appends `fileRows` after `ftsRows` (dedup by id) then slices to `MAX_RESULTS`, and deep rows sort last within `ftsRows` — so a deep row takes a slot ahead of a file-recall row whenever `\|head\| + \|deep\| + \|fileRows\| > MAX_RESULTS` |
+| "the injected set is still `MAX_MEMORY_INJECTIONS = 3`" | true, and delivered rows still rise **9650 → 10895 (+12.9%)** — the cap did not move, the average fill did (size-3 sets 1966 → 2521) |
+| "every composite factor already has a SQL clause" | **three of seven** do. The 1.5× lesson bonus and the `importance ≥ 2` step do not — the SQL forms that exist encode different weights (`1.0 + 0.3·lesson`, `0.5 + 0.5·importance`) |
+
+The last one matters beyond bookkeeping: it was the argument for declining the deeper fix
+(ordering by the composite, which would make `LIMIT` a true ranking bound). The conclusion
+survives — both are trivially expressible — but it is a small piece of work, not zero.
+
+**The spread row above was itself wrong first, and the way it was wrong is the point.** The
+draft of this entry replaced v3.85.0's 281× with a "realised 86.5×" computed over
+`SELECT COUNT(*) FROM observations` while calling it "live rows". 1458 of 3742 rows (39.0%)
+are compressed or superseded; `liveObsFilterSql` is in the `WHERE` of **both** SELECTs, so
+none of them can enter the pool, be scored, or be an endpoint of a range describing what the
+`LIMIT` cuts. The row supplying the 0.0780 minimum is `id 10239`, `compressed_into = 10713`.
+Over the population the pool can return the spread is **60.0×** — the draft overstated by
+44%. `CLAUDE.md` already carried the instruction ("count that population with the pool's own
+`liveObsFilterSql`, never a bare `WHERE importance = 3`") because v3.82.0 shipped the same
+error and overstated a project by a third. Written down, told to itself, repeated anyway,
+and caught only by the independent review below — which is the argument for the review, not
+for the note in `CLAUDE.md`.
+
+**Two comments whose premise was false, not merely imprecise.**
+`CROSS_HOOK_DEDUP_SLACK_MAX`'s docblock and its use site both said the cross-hook seen-set
+"is bounded by UPS's own per-prompt budget in practice (MAX_RESULTS 3)". It is a **union**
+across hooks and calls inside the staleness window — `mergeCrossHookInjected` unions new
+ids into the old — so nothing holds it at 3. Measured over this machine's
+`runtime/.claude-mem-injected-*` markers: id counts `1×9, 2×1, 3×2, 16×1` over n=13, and
+`1×11, 2×1, 3×1, 15×1` over n=14 an hour later. **Read that as "3 is not a bound", not as a
+distribution** — one developer machine, the tail entry is a single long agent session (on
+the re-measure the top entry was the measuring session itself), and it counts ids in the
+file while `readCrossHookInjected` returns an empty set for a payload outside
+`DEDUP_STALE_MS`. The consequence is not a crash; it is that the sentence hid a failure mode
+that is reachable by arithmetic and has not been observed in the wild. At a seen-set
+of 16 the slack still caps at 5, so a Read fetches `obsLimit = 6`, and if all six are in
+the seen-set the face goes silent — the exact failure ALGO-4 exists to fix. The cap stays
+(an unbounded number off disk must not size a query); the reassurance is gone.
+
+**The ruler gained what the corrections needed**, rather than the numbers being published
+without one — the mistake v3.85.0's own pre-tag review filed as a blocker.
+`benchmark/rerank-pool-replay.mjs` now reports delivered rows and a set-size histogram in
+the default mode, adds `--cost` (whole function, both arms, alternated order — timing the
+SELECT alone reads 1.00× and misses the JS scoring the widened pool feeds), and **counts
+the counterexample to its own superset argument**: a prompt that injects under the narrow
+pools and nothing under the wide ones would refute monotonicity, so `nonEmptyToEmpty` is
+reported and a non-zero value exits 1. Currently **0 across 11289 prompts**. `emptyWide ≤
+emptyNarrow` does not establish this — two prompts moving off empty hide one moving onto
+it — and the check is verified able to fire (relaxing its predicate to `>= 0` makes the run
+exit 1). The gate is suppressed under a widening sweep such as `--baseline-cross 50`, where
+the twin is the wider arm and monotonicity runs the other way.
+
+**Two independent pre-tag reviews ran on this entry after it was written**, and this
+paragraph replaces one saying none had.
+
+The **claims** lens reproduced 29 figures to within corpus growth and rejected one — the
+86.5× population error above, graded a BLOCKER because a wrong replacement reads as measured
+and is therefore worse than the wrong original. It also refuted the cost figure's
+reproducibility across five calipers, bisected the precision drop to `564e63b`, and found
+the dated red-main event this entry had not disclosed.
+
+The **correctness** lens did not block, and independently re-derived the 60.0× correction to
+the digit. Its finding was that the three real logic changes in this release — both
+`--strict` wirings, `costCompare`, the counterexample gate — had **no test binding at all**:
+it deleted `--strict` from both workflows, deleted the gate, and gutted `assertCannotWrite`
+in one pass, and 315 files / 5335 tests stayed green. Dropping `--strict` from `publish.yml`
+restores the exact v3.85.0 defect with nothing in the repo making a sound. That is now
+pinned by `tests/source-files-sync.test.mjs`, anchored to **active** `run:` lines — verified
+red against four mutations including commenting the line out. It also found that
+`ci-gate.mjs` silently ignored unknown flags (`--strict` exit 1, `-strict` exit 0, `--Strict`
+exit 0), so a one-character typo in either workflow downgraded the gate while CI stayed
+green; unknown flags now exit 1. And it found `--baseline-same foo` producing a complete,
+exit-0, conclusive-looking report with every number meaningless — `NaN` pools now refuse to
+run. Reports: `tasks/review-claims-v3.85.1.md`, `tasks/review-correctness-v3.85.1.md`.
+
+The reason both mattered is narrow and worth naming: every number in this entry is the
+author re-measuring the author, usually to contradict someone else's figure. That is the
+weakest possible evidence chain — and the one BLOCKER it produced was in the number this
+entry was proudest of having corrected.
+
+Not fixed here, recorded instead: **D#191** (`lib/stats-quality.mjs` computes its all-time
+Lesson/LOW_SIGNAL rates over the raw table on a shipped user surface — 59.6% vs 92.9% and
+22.9% vs 1.1% against the live population — while that file's own docblock is the rule
+forbidding it; numerator and denominator are paired, so the ratios are self-consistent and
+only the population label is wrong, and the watchdog gate reads the 30-day window where
+223 of 224 rows are live, so the gate is not distorted), **D#190** (nothing under `tests/` imports
+`rerank-pool-replay.mjs`, so all four self-checks can be deleted with a green suite — the
+review confirmed they work today by mutation, and this project has the receipt for that
+failure mode in `citation-live-replay.mjs`), **D#189** (the same reachability bound on
+`hook-context.mjs`'s SessionStart face — SessionStart injects on every start, so it is a
+released-artifact default-behaviour change and gets its own round) and **D#188** (cross-hook
+dedup compares bare numeric ids while events and observations share an id space).
+
 ## v3.85.0 — the bound we closed in v3.82.0 was alive on four more surfaces
+
+> Six statements in this entry were corrected in v3.85.1 after re-measurement — the causal
+> attribution between the two pool clauses, the 281× spread, "cost stays flat", "strictly
+> additive", the delivered-row volume, and "every composite factor already has a SQL
+> clause". The table in v3.85.1 above has the measured values; the text below is left as
+> published.
+
 
 D#172 established that **a SQL `LIMIT` upstream of a JS-side relevance filter is a
 reachability bound, not a ranking bound** — whatever the SQL orders by, a row outside the

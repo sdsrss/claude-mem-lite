@@ -103,9 +103,20 @@ jobs:
         # 17:21:48Z / 17:22:02Z (14s). None of those gaps is long enough for the branch
         # benchmark job to finish.
         #
-        # Runs last: it is the slowest check here and the cheap ones should fail first.
+        # Runs last because it is the only check here that needs the benchmark corpus, not
+        # because it is the slowest — measured on a clean `git archive HEAD` tree it is
+        # 0.52s, against ~39s for the test matrix and a real `npm install` inside
+        # smoke-tarball. (The older comment claimed "slowest check here"; it isn't.)
         # `benchmark/baseline.json` is committed, so this works on a fresh checkout.
-        run: node benchmark/ci-gate.mjs
+        #
+        # `--strict` because a stale baseline makes the comparison untrustworthy, and this
+        # is exactly the release context `ci-gate.mjs`'s own docblock names for it. Without
+        # it the gate warns and continues — which is what it did on v3.85.0, comparing
+        # against a 39-day baseline past its own BASELINE_STALE_AGE_DAYS = 30. A gate added
+        # to stop a regression riding out with a release must not be able to pass by
+        # comparing against evidence it has already judged unreliable.
+        # Recapture: node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json
+        run: node benchmark/ci-gate.mjs --strict
 
   publish:
     needs: validate

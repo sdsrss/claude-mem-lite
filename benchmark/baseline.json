@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-07-24T03:17:35.789Z",
+  "timestamp": "2026-09-01T16:29:45.663Z",
   "mode": "production_hybrid",
   "queryCount": 30,
   "metrics": {
     "recall_at_10": 0.8998,
-    "precision_at_10": 0.8597,
+    "precision_at_10": 0.8497,
     "ndcg_at_10": 0.9712,
     "mrr_at_10": 0.9611,
-    "avg_tokens_injected": 106,
-    "p95_search_latency_ms": 1.7385
+    "avg_tokens_injected": 108,
+    "p95_search_latency_ms": 1.9501
   },
   "perQuery": [
     {
@@ -27,9 +27,9 @@
         114,
         50,
         105,
-        47,
         161,
-        167
+        53,
+        140
       ],
       "relevant_ids": [
         15,
@@ -37,7 +37,7 @@
         63,
         75
       ],
-      "tokens": 129
+      "tokens": 133
     },
     {
       "id": "q3",
@@ -401,22 +401,27 @@
       "query": "WebSocket",
       "category": "standard",
       "recall_at_10": 1,
-      "precision_at_10": 0.6,
+      "precision_at_10": 0.3,
       "ndcg_at_10": 1,
       "mrr": 1,
       "result_ids": [
         20,
         108,
         152,
-        145,
-        123
+        6,
+        123,
+        197,
+        3,
+        5,
+        15,
+        33
       ],
       "relevant_ids": [
         20,
         108,
         152
       ],
-      "tokens": 63
+      "tokens": 127
     },
     {
       "id": "q16",
@@ -934,7 +939,7 @@
     "standard": {
       "count": 25,
       "recall_at_10": 0.8865,
-      "precision_at_10": 0.8561,
+      "precision_at_10": 0.8441,
       "ndcg_at_10": 0.9795,
       "mrr_at_10": 0.9733
     },

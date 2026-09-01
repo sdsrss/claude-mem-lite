@@ -24,7 +24,13 @@
 //   node benchmark/rerank-pool-replay.mjs --sample 1200    newest N prompts (a sampling decision)
 //   node benchmark/rerank-pool-replay.mjs --baseline-same 10 --baseline-cross 5
 //   node benchmark/rerank-pool-replay.mjs --cross-arm      cross-leg truncation rates only
+//   node benchmark/rerank-pool-replay.mjs --cost           ms/prompt, both arms
 //   node benchmark/rerank-pool-replay.mjs --json
+//
+// The default mode reports DELIVERED ROWS and a set-size histogram alongside the change
+// rates. `MAX_MEMORY_INJECTIONS` is a per-set cap and the widening does not move it, but it
+// does move the average FILL — quoting the unchanged cap without the delivered-row line
+// reads as "no more rows are injected", which is not what happens.
 //
 // IT CANNOT POLLUTE THE CORPUS, and proves it rather than promising it.
 // `searchRelevantMemories` bumps `injection_count` on every row it returns — replaying it
@@ -119,15 +125,33 @@ function loadPrompts(db, sampleN) {
 function compare(prompts, narrow, wide) {
   let n = 0, threw = 0, changed = 0, top1 = 0, gained = 0, lost = 0;
   let emptyNarrow = 0, emptyWide = 0, bothEmpty = 0;
+  // DELIVERED ROWS, not just changed sets. `MAX_MEMORY_INJECTIONS` is a PER-SET cap and it
+  // did not move — but the average fill did, and a reader who only sees "the cap is still 3"
+  // will read "no more rows are injected", which is false. The pre-tag claims review (S5)
+  // found this stated only as the cap; the histogram is here so the volume consequence
+  // cannot be quoted without its source. Index = set size (0..MAX_MEMORY_INJECTIONS).
+  const sizesNarrow = [], sizesWide = [];
+  let deliveredNarrow = 0, deliveredWide = 0;
+  // The superset argument's counterexample. If the narrow arm injects and the wide arm
+  // does not, the widening COST a prompt its injection and "monotone" is false — the one
+  // observation that would refute the whole safety argument in hook-memory.mjs's docblock.
+  // Counted rather than assumed, the way imperative-pool-replay.mjs attacks its own claim;
+  // `emptyWide <= emptyNarrow` does NOT establish it, because two prompts moving off empty
+  // can hide one moving onto it.
+  let nonEmptyToEmpty = 0;
+  const bump = (hist, k) => { hist[k] = (hist[k] || 0) + 1; };
   for (const { text, project } of prompts) {
     let a, b;
     try { a = narrow(db, text, project, []); b = wide(db, text, project, []); }
     catch { threw++; continue; }
     n++;
     const ai = a.map((r) => r.id), bi = b.map((r) => r.id);
+    bump(sizesNarrow, ai.length); bump(sizesWide, bi.length);
+    deliveredNarrow += ai.length; deliveredWide += bi.length;
     if (ai.length === 0) emptyNarrow++;
     if (bi.length === 0) emptyWide++;
     if (ai.length === 0 && bi.length === 0) bothEmpty++;
+    if (ai.length > 0 && bi.length === 0) nonEmptyToEmpty++;
     if (JSON.stringify(ai) !== JSON.stringify(bi)) {
       changed++;
       if (ai[0] !== bi[0]) top1++;
@@ -135,7 +159,83 @@ function compare(prompts, narrow, wide) {
       lost += ai.filter((x) => !bi.includes(x)).length;
     }
   }
-  return { n, threw, changed, top1, gained, lost, emptyNarrow, emptyWide, bothEmpty };
+  const fill = (h) => Array.from({ length: Math.max(sizesNarrow.length, sizesWide.length) },
+    (_, i) => h[i] || 0);
+  return {
+    n, threw, changed, top1, gained, lost, emptyNarrow, emptyWide, bothEmpty,
+    nonEmptyToEmpty, deliveredNarrow, deliveredWide,
+    sizesNarrow: fill(sizesNarrow), sizesWide: fill(sizesWide),
+  };
+}
+
+/**
+ * What the widening COSTS, measured rather than asserted. The docblock this ruler backs
+ * used to say "a 3x widening chosen where cost stays flat", with a parenthetical stating
+ * that the pool is the expensive term — i.e. its own reasoning predicted the opposite of
+ * its claim, and the claims review measured +15.7%. A cost claim about our own work needs
+ * a number and a command that reproduces it.
+ *
+ * Ordering bias is real here — the first arm to touch a page pays for the read — so the
+ * two passes run the arms in OPPOSITE order and the per-arm totals are summed across both.
+ * Without that, whichever arm goes first reads slower and the ratio is an artefact of the
+ * loop, not of the pool size.
+ *
+ * READ THE RATIO AS A RANGE, NOT AS A VALUE, AND NEVER QUOTE THE ABSOLUTE ms. The v3.85.1
+ * pre-tag review measured this five ways over fifteen whole-corpus runs. Holding the arm
+ * order fixed reads 1.054–1.065; this design (alternating) reads 1.058–1.102 across six
+ * runs on one machine; measuring each arm alone in its own process — the closest caliber to
+ * production, where the function is called once per prompt minutes apart — reads
+ * 1.063–1.156. So pairing the arms per prompt DOES let the second call reuse the first's
+ * pages and alternating cancels only about half of it: this is the lowest-VARIANCE caliber,
+ * not the unbiased one.
+ *
+ * Even so, its own spread is comparable to the effect it measures. Same code, same corpus,
+ * an hour apart: 1.078 then 1.102, with ms/prompt moving 3.04 -> 1.80. So a three-digit
+ * value from this function is not a fact about the pools, and the number in
+ * hook-memory.mjs's docblock is deliberately a range.
+ *
+ * Both arms are timed for a prompt or neither is (review N7): the first draft incremented
+ * the denominator after both calls, so a throw in the wide arm left the narrow arm's time
+ * in the numerator with no matching denominator — a bias in the same direction as the
+ * understatement above, tiny at 1 throw in 11289 but pointing the wrong way.
+ */
+function costCompare(prompts, narrow, wide) {
+  const warm = prompts.slice(0, Math.min(200, prompts.length));
+  for (const { text, project } of warm) {
+    try { narrow(db, text, project, []); wide(db, text, project, []); } catch { /* ignore */ }
+  }
+  let nsNarrow = 0, nsWide = 0, pairs = 0, threw = 0;
+  const time = (fn, text, project) => {
+    const t = process.hrtime.bigint();
+    fn(db, text, project, []);
+    return Number(process.hrtime.bigint() - t);
+  };
+  for (const pass of [0, 1]) {
+    for (const { text, project } of prompts) {
+      // Stage into locals and commit both arms together, so a throw in either one
+      // contributes to neither numerator nor denominator.
+      let dn, dw;
+      try {
+        if (pass === 0) { dn = time(narrow, text, project); dw = time(wide, text, project); }
+        else { dw = time(wide, text, project); dn = time(narrow, text, project); }
+      } catch { threw++; continue; }
+      nsNarrow += dn; nsWide += dw;
+      // Count PAIRS ACTUALLY COMMITTED, across both passes — not `prompts × 2`. The first
+      // draft incremented only on pass 0 and divided by `n * 2`, which assumes the two
+      // passes throw identically. They do here (the throws are deterministic), and the bias
+      // cancels between the arms so the RATIO — the only figure quoted — was unaffected;
+      // but a pass-1 throw was invisible in `threw`, and the per-arm ms were off by the
+      // ratio of the two passes' completion counts.
+      pairs++;
+    }
+  }
+  if (pairs === 0) {
+    console.error('SELF-CHECK FAILED: every timed call threw — no cost measurement exists. '
+      + 'Refusing to report NaN as a ratio.');
+    process.exit(1);
+  }
+  const msNarrow = nsNarrow / 1e6 / pairs, msWide = nsWide / 1e6 / pairs;
+  return { n: pairs, threw, msNarrow: +msNarrow.toFixed(4), msWide: +msWide.toFixed(4), ratio: +(msWide / msNarrow).toFixed(3) };
 }
 
 /**
@@ -209,11 +309,26 @@ const baselineSame = Number(arg('--baseline-same', String(DEFAULT_BASELINE_SAME)
 const baselineCross = Number(arg('--baseline-cross', String(DEFAULT_BASELINE_CROSS)));
 const asJson = has('--json');
 
+// A non-numeric pool argument used to produce a full, exit-0, conclusive-LOOKING report.
+// `Number('foo')` is NaN, `patchConst` faithfully writes `const RERANK_POOL_SAME_PROJECT =
+// NaN;`, the twin's identity guard passes (NaN !== 10), `LIMIT NaN` returns no rows so the
+// narrow arm delivers ZERO, and `NaN <= 30` is false — which silently switches OFF the
+// counterexample gate and mislabels it "twin is wider". The run then reports "100% of
+// retrieving prompts changed set", a number that looks like a finding and is garbage.
+// Every other self-check in this file exists to stop exactly that shape; NaN was the hole.
+for (const [flag, v] of [['--baseline-same', baselineSame], ['--baseline-cross', baselineCross]]) {
+  if (!Number.isInteger(v) || v < 1) {
+    console.error(`${flag} must be a positive integer, got "${arg(flag)}". Refusing to run: `
+      + 'a NaN pool produces a complete report whose every number is meaningless.');
+    process.exit(1);
+  }
+}
+
 const dbPath = process.env.CLAUDE_MEM_DB_PATH || join(DB_DIR, 'claude-mem-lite.db');
 const db = new Database(dbPath, { readonly: true });
 assertCannotWrite(db);
 
-writeTwin(baselineSame, baselineCross);
+const shippedPools = writeTwin(baselineSame, baselineCross);
 let wide, narrow;
 try {
   ({ searchRelevantMemories: wide } = await import(SHIPPED_URL.href));
@@ -245,8 +360,57 @@ if (has('--cross-arm')) {
   process.exit(0);
 }
 
+if (has('--cost')) {
+  // Determinism check FIRST (review N8): the first draft exited above it, so the mode that
+  // produced this release's most contested number was the only one that never verified the
+  // replay is reproducible. A timing ratio over a non-deterministic replay is two different
+  // workloads being compared, not two pool sizes.
+  assertRulerCanSayNo(prompts, wide);
+  const c = costCompare(prompts, narrow, wide);
+  if (asJson) { console.log(JSON.stringify({ ...c, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2)); }
+  else {
+    console.log(`\n─── cost: ${baselineSame}/${baselineCross} vs shipped (${c.n} timed pairs over 2 passes, arm order alternated${c.threw ? `; ${c.threw} threw` : ''}) ───`);
+    console.log(`  ${String(baselineSame).padStart(2)}/${String(baselineCross).padStart(2)} baseline:  ${c.msNarrow.toFixed(3)} ms/prompt`);
+    console.log(`  shipped:         ${c.msWide.toFixed(3)} ms/prompt`);
+    console.log(`  ratio:           ${c.ratio.toFixed(3)}x  (${c.msWide >= c.msNarrow ? '+' : ''}${(100 * (c.msWide / c.msNarrow - 1)).toFixed(1)}%)`);
+    console.log('\n  The SELECT carries `narrative`, so the pool is the expensive term. This');
+    console.log('  measures the whole function, not the SELECT alone: timing only the SELECT');
+    console.log('  reports ~1.00x and misses the JS scoring the widened pool feeds.');
+  }
+  process.exit(0);
+}
+
 assertRulerCanSayNo(prompts, wide);
 const r = compare(prompts, narrow, wide);
+
+// Attack the superset argument instead of restating it. Only meaningful when the twin is
+// genuinely NARROWER in both arms — under a sweep like `--baseline-same 30
+// --baseline-cross 50` the twin is the wider one and monotonicity runs the other way, so
+// a counterexample there says nothing about the shipped direction.
+//
+// THREE states, not two. A MIXED config (`--baseline-same 10 --baseline-cross 50`: one arm
+// narrower, one wider) is neither a subset nor a superset, and it really does produce
+// counterexamples — 51 of them on the whole corpus. Suppressing the gate there is right,
+// but the first draft labelled them "twin is wider", which explains half the reason and
+// invites the reader to think the other half was checked. In a ruler whose whole design
+// principle is "say which population and which direction you measured", that label was the
+// one place it didn't.
+const twinIsSubset = baselineSame <= shippedPools.same && baselineCross <= shippedPools.cross;
+const twinIsSuperset = baselineSame >= shippedPools.same && baselineCross >= shippedPools.cross;
+const monotonicityNote = twinIsSubset
+  ? '(a counterexample to the superset argument; run exits 1 if > 0)'
+  : twinIsSuperset
+    ? '(twin is wider — monotonicity runs the other way, not a test)'
+    : '(twin is narrower in one arm and wider in the other — neither direction is monotone, so this number tests nothing)';
+if (twinIsSubset && r.nonEmptyToEmpty > 0) {
+  console.error(`COUNTEREXAMPLE: ${r.nonEmptyToEmpty} of ${r.n} prompts inject under the `
+    + `${baselineSame}/${baselineCross} pools and inject NOTHING under the shipped `
+    + `${shippedPools.same}/${shippedPools.cross}. The wider pool is a superset, so this `
+    + 'should be impossible — the monotonicity argument in hook-memory.mjs\'s RERANK_POOL_* '
+    + 'docblock does not hold as written. Investigate before quoting any number here.');
+  process.exit(1);
+}
+
 const either = r.n - r.bothEmpty;
 const pctAll = (x) => `${((100 * x) / r.n).toFixed(1)}%`;
 const pctEither = (x) => (either ? `${((100 * x) / either).toFixed(1)}%` : 'n/a');
@@ -261,4 +425,11 @@ if (asJson) {
   console.log(`  top-1 differs:           ${r.top1} (${pctAll(r.top1)} of all, ${pctEither(r.top1)} of ${either})`);
   console.log(`  rows newly reachable:    ${r.gained}   displaced: ${r.lost}`);
   console.log(`  empty injections:        ${r.emptyNarrow} -> ${r.emptyWide}`);
+  console.log(`  non-empty -> EMPTY:      ${r.nonEmptyToEmpty}   ${monotonicityNote}`);
+  console.log(`  rows DELIVERED:          ${r.deliveredNarrow} -> ${r.deliveredWide} `
+    + `(${r.deliveredNarrow ? `${r.deliveredWide >= r.deliveredNarrow ? '+' : ''}${((100 * (r.deliveredWide / r.deliveredNarrow - 1))).toFixed(1)}%` : 'n/a'})`);
+  console.log(`  set-size histogram:      ${JSON.stringify(r.sizesNarrow)} -> ${JSON.stringify(r.sizesWide)}   [index = set size]`);
+  console.log('\n  The per-set cap (MAX_MEMORY_INJECTIONS) does not move. The average fill');
+  console.log('  does — most of the extra rows come from under-filled sets reaching the cap,');
+  console.log('  not from prompts moving off zero. Read both rows before quoting either.');
 }

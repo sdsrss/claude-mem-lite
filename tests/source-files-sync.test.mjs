@@ -163,6 +163,56 @@ test('release workflow generates npm-shrinkwrap before smoke and publish', () =>
   expect(pkg.files, 'files[] must list npm-shrinkwrap.json or npm pack drops it').toContain('npm-shrinkwrap.json');
 });
 
+// v3.85.1: the release's headline change — both shipped `ci-gate.mjs` invocations running
+// in strict mode — had zero test binding. The pre-tag correctness review deleted `--strict`
+// from BOTH workflows, deleted the replay's counterexample gate, and gutted
+// `assertCannotWrite`, all at once: 315 files / 5335 tests stayed green. Dropping
+// `--strict` from publish.yml restores the exact v3.85.0 defect (a release gate passing on
+// a baseline it has itself judged unreliable) with nothing in the repo making a sound.
+//
+// Same reasoning and same shape as the shrinkwrap guard above. Anchored to ACTIVE `run:`
+// lines — not a substring scan of the file — because `expect(source).toMatch(/--strict/)`
+// is satisfied by a comment or a usage line, which is precisely how two of that review's
+// mutations walked past ci-gate.mjs's own source-scanning assertions.
+test('both shipped ci-gate invocations run in strict mode', () => {
+  const activeGateLines = (p) => readFileSync(resolve(ROOT, p), 'utf8')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => !l.startsWith('#') && l.startsWith('run: node benchmark/ci-gate.mjs'));
+
+  // publish.yml: unconditionally strict. This is the tag path — a stale baseline here means
+  // the comparison guarding the release is untrustworthy, which is the whole argument.
+  expect(
+    activeGateLines('.github/workflows/publish.yml'),
+    'publish.yml must invoke ci-gate.mjs exactly once, with --strict',
+  ).toEqual(['run: node benchmark/ci-gate.mjs --strict']);
+
+  // ci.yml: strict on push, advisory on pull_request, so the calendar never reds an
+  // outside contributor's PR for a reason they cannot clear. The conditional itself is the
+  // contract; assert it rather than just the presence of the word.
+  const [ciLine, ...extra] = activeGateLines('.github/workflows/ci.yml');
+  expect(ciLine, 'ci.yml has no active ci-gate run line').toBeTruthy();
+  expect(extra, 'ci.yml must invoke ci-gate.mjs exactly once').toEqual([]);
+  expect(ciLine).toMatch(/github\.event_name == 'push' && '--strict'/);
+});
+
+// v3.85.1: ci-gate.mjs must REJECT an unrecognised flag rather than ignore it. Measured
+// before the guard existed, all against the same stale baseline: `--strict` exit 1,
+// `-strict` exit 0, `--Strict` exit 0. A one-character typo in either workflow above
+// silently downgraded the release gate to advisory while CI stayed green — and the test
+// above pins the spelling, so the two guards only compose if this one holds too.
+test('ci-gate rejects unknown flags instead of silently ignoring them', () => {
+  const src = readFileSync(resolve(ROOT, 'benchmark/ci-gate.mjs'), 'utf8');
+  expect(src, 'ci-gate.mjs must declare its known-flag allowlist').toMatch(/KNOWN_FLAGS\s*=\s*new Set\(/);
+  const known = src.match(/KNOWN_FLAGS\s*=\s*new Set\(\[([^\]]*)\]/);
+  expect(known, 'KNOWN_FLAGS must be a literal array').toBeTruthy();
+  // Every flag either workflow actually passes must be in the allowlist, or the gate
+  // refuses to run and the release breaks for the wrong reason.
+  for (const flag of ['--strict', '--tolerance', '--baseline', '--skip-matrix']) {
+    expect(known[1], `KNOWN_FLAGS is missing ${flag}`).toContain(flag);
+  }
+});
+
 // Audit 2026-08-22 P2-3: the sandbox install harness now runs weekly in CI. The
 // workflow names its three entry scripts as plain strings, so renaming or moving a
 // phase leaves the schedule pointing at a file that no longer exists — and a weekly

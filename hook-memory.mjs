@@ -24,23 +24,65 @@ const MEMORY_LOOKBACK_MS = 60 * DAY_MS; // 60 days
  * importance × cross-project × OR × noise × cite). So whatever these numbers are, a row
  * outside the window cannot be picked however high its composite score would have been.
  *
- * The window has to be wide because the composite spread is enormous. Multiplying the
- * extremes of the JS factors (same-project, AND mode): best = 1.5 decision × 1.5 lesson
- * × 1.0 importance × 1.0 noise × 3.0 cite = 6.75; worst = 0.5 change × 1.0 no-lesson
- * × 0.6 importance × 0.2 noise × 0.4 cite = 0.024. That is a **281× spread**, so a row
- * ranked below the window on raw bm25 can outscore the window's contents by a wide
- * margin. (The audit estimated ">10×"; the factor tables say 281×.)
+ * The window has to be wide because the composite spread is wide — 281× by the tables,
+ * 60.0× as realised over the rows this pool can actually return. Multiplying the extremes
+ * of the JS factors
+ * (same-project, AND mode): best = 1.5 decision × 1.5 lesson × 1.0 importance × 1.0 noise
+ * × 3.0 cite = 6.75; worst = 0.5 change × 1.0 no-lesson × 0.6 importance × 0.2 noise ×
+ * 0.4 cite = 0.024, i.e. a **281× DECLARED range**. That is an upper bound off the factor
+ * tables, not a measurement: `citeFactor = 0.4` requires `uncited_streak >= 3`, and
+ * citation-decay resets the streak at 3 after demoting importance, so the steady state is
+ * bounded by [0,2] (scoring-sql.mjs, citeFactorJs docblock). Measured 2026-09-01 over the
+ * 2284 rows that clear `liveObsFilterSql` — the one predicate in the WHERE of BOTH SELECTs
+ * below — 0 are at streak >= 3, and recomputing the factor per row gives a REALISED range
+ * of 0.1125 … 6.750: a **60.0× spread** (81 rows hit the full best case, 0 the full worst).
+ * Each leg then narrows further and the spread survives the narrowing, which is why one
+ * number is quotable: live+`importance >= 1` n=2249 and +`notLowSignalTitleClause` n=2245
+ * both still read 60.00×. The CROSS leg is the exception — its own population
+ * (`type IN ('decision','discovery') AND importance >= 2`) is n=444 at **17.31×**, so if
+ * you are reasoning about `RERANK_POOL_CROSS_PROJECT` specifically, 60× is the wrong figure.
  *
- * HONEST LIMIT OF THIS FIX: because the spread is 281× and bm25 magnitude decays slowly
- * across a top-N window, NO finite pool size proves sufficiency. 30/15 is a 3× widening
- * chosen where cost stays flat (the SELECT carries `narrative`, so the pool is the
- * expensive term, not the sort) — it makes the bound loose, it does not remove it.
+ * COUNT THAT POPULATION WITH THE POOL'S OWN FILTER. Over the raw `observations` table it
+ * reads 0.0780 … 6.750 = 86.5×, and that is the number the first draft of this comment
+ * shipped: 1458 of 3742 rows (39.0%) are compressed or superseded, the row supplying the
+ * 0.0780 minimum (`id 10239`) carries `compressed_into = 10713`, and no such row can enter
+ * the pool, be scored, or be an endpoint of a range describing what the LIMIT cuts. Same
+ * error as v3.82.0's raw `importance = 3` count, overstating by 44% instead of a third.
  *
- * The bound is REMOVABLE, and deliberately was not removed: ordering both SELECTs by the
- * composite instead of raw bm25 is expressible in SQL today (every factor already has a
- * clause — TYPE_QUALITY_CASE / noisePenaltyClause / citeFactorClause — and the two
- * remaining factors, cross-project and OR, are per-QUERY constants that cannot affect
- * within-query order). That would make LIMIT a true ranking bound. It is not done here
+ * Quote whichever population you mean, and say which. Either is wide enough that a row
+ * ranked below the window on raw bm25 can outscore the window's contents by a wide margin.
+ * (The audit estimated ">10×".)
+ *
+ * HONEST LIMIT OF THIS FIX: because the spread is wide and bm25 magnitude decays slowly
+ * across a top-N window, NO finite pool size proves sufficiency. 30/15 makes the bound
+ * loose; it does not remove it. And it is bought, not free — the first draft of this
+ * comment claimed "cost stays flat" in the same breath as a parenthetical saying the pool
+ * is the expensive term, which is its own refutation. Measured instead:
+ * `node benchmark/rerank-pool-replay.mjs --cost` reads **+5% to +16% depending on caliber,
+ * and +6% to +10% with this one**. Whole-corpus runs of `--cost` on this machine: 1.058,
+ * 1.068, 1.078, 1.080, 1.083, 1.102 — same code, same corpus, pure machine variance, and
+ * the absolute ms/prompt moved 3.04 -> 1.80 across the same runs. Other calibers:
+ * 1.054–1.065 with the arm order held fixed, 1.063–1.156 with each arm alone in its own
+ * process (the closest shape to production).
+ *
+ * **Quote the range, re-measure, and never quote the absolute ms** — they vary by 2x with
+ * load while the ratio holds. The first draft of this comment quoted a flat 1.058x and said
+ * it reproduced to three digits; it does not, and every later run came in above it. See
+ * `costCompare`'s docblock for which caliber biases which way. Timing the SELECT alone
+ * reports ~1.00x and misses the JS scoring that the widened pool feeds — a different
+ * question, not a better answer.
+ *
+ * The bound is REMOVABLE, and deliberately was not removed. Ordering both SELECTs by the
+ * composite instead of raw bm25 is close to expressible in SQL, but "every factor already
+ * has a clause" overstated it: of the SEVEN factors, three have named clauses
+ * (TYPE_QUALITY_CASE / noisePenaltyClause / citeFactorClause); two more — the 1.5× lesson
+ * bonus and the `importance >= 2` step — still need one written, because the SQL forms
+ * that exist encode different weights and shapes (`1.0 + 0.3·lesson` and
+ * `0.5 + 0.5·importance` in search-engine.mjs's FULL_SCORE); and the last two,
+ * cross-project and OR, are constant WITHIN EACH SELECT — they differ between the
+ * same-project and cross-project legs, so they are not per-CALL constants, but they never
+ * vary among the rows any one LIMIT cuts, which is the only thing this argument needs.
+ * That would make LIMIT a true ranking bound. It is not done here
  * because `lib/inject-search-core.mjs:23-25` records this surface's "BM25-sort + JS
  * scoring" composition as a deliberate per-surface asymmetry (#8786), and this face is
  * one `benchmark/denoise-ab.mjs` is structurally blind to (its suites drive the
@@ -48,8 +90,13 @@ const MEMORY_LOOKBACK_MS = 60 * DAY_MS; // 60 days
  * project has repeatedly shipped regressions. Widening is monotone and provable;
  * re-ranking needs a ruler that does not exist yet.
  *
- * WHY WIDENING IS SAFE: the old window is a strict PREFIX of the new one (same ORDER BY,
- * larger LIMIT), so the new candidate set is a superset. `scored` sorts by composite and
+ * WHY WIDENING IS SAFE: in practice the old window is a PREFIX of the new one (same plan,
+ * same ORDER BY, larger LIMIT), so the new candidate set is a superset. "Strict" would be
+ * overclaiming — `ORDER BY bm25(...)` carries no tiebreaker, and this release's own
+ * fixture lesson is that a degenerate corpus makes `bm25()` return 0.000 for every row and
+ * ranking fall to rowid. What is measured rather than argued: `rerank-pool-replay.mjs`
+ * reports nonEmptyToEmpty = 0 across the whole corpus, i.e. no prompt loses its injection
+ * to the widening. `scored` sorts by composite and
  * the threshold filter is monotone in that score, so every row returned is at least as
  * good as the row it displaced. The only non-monotone stage is the term-coverage filter,
  * which is exactly why the pool needs slack rather than just `MAX_MEMORY_INJECTIONS`.

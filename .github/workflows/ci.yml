@@ -79,7 +79,26 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Run benchmark gate
-        run: node benchmark/ci-gate.mjs
+        # `--strict` on PUSH only, and deliberately not on pull_request.
+        #
+        # On push it matches publish.yml: the tag path must never be the stricter of the
+        # two, or a green branch tells you nothing about the release that follows it. A
+        # baseline past BASELINE_STALE_AGE_DAYS then fails here first, on main, where
+        # recapturing it is a one-line commit. That arms a DATED failure: the age test is
+        # `floor((now - baseline.timestamp) / DAY) >= 30` and the baseline is stamped
+        # 2026-09-01T16:29:45Z, so main goes red from 2026-10-01 **16:29 UTC** — that
+        # morning's pushes are still green. Intended reminder, not automated.
+        #
+        # It fires HERE FIRST, and that ordering is the mitigation for the release path:
+        # publish.yml's gate is also strict, and a strict failure there happens inside
+        # `validate` AFTER the tag has been pushed, which strands the tag (expensive — see
+        # the v3.69.0/v3.69.1 note in publish.yml). Main going red at day 30 is what stops
+        # anyone reaching that state unaware.
+        #
+        # PRs stay advisory because the same red would otherwise land on an outside
+        # contributor for a reason that has nothing to do with their change and that they
+        # have no way to clear (this repo started taking external PRs at v3.84.1).
+        run: node benchmark/ci-gate.mjs ${{ github.event_name == 'push' && '--strict' || '' }}
 
   # Real publishable-tarball install: npm pack → clean-dir npm install →
   # better-sqlite3 native rebuild → import entry + open DB. This is the ONLY CI

@@ -815,6 +815,21 @@ async function main() {
       // tail of the SAME query is the same reach with one fewer FTS scan, and it cannot
       // regress the head — a flat cap of 2 over the merged set could have, by evicting
       // a third head row that ships today.
+      //
+      // "Additive" scopes to THIS SET, not to what finally ships. Downstream the merge
+      // appends `fileRows` after `ftsRows` (dedup by id) and then slices to MAX_RESULTS, and
+      // `deep` rows sort LAST within `ftsRows` (weaker |bm25|, ascending sort) — so a deep
+      // row takes a slot ahead of a file-recall row whenever `|head| < MAX_RESULTS` AND
+      // `|head| + |deep| + |fileRows| > MAX_RESULTS`, with at least one deep row and one
+      // fileRow present. The first condition is not redundant: `mainLimit` is
+      // `intent?.limit || MAX_RESULTS`, so head can already be 3 — and at head=3 the fileRow
+      // never boarded in the first place, so nothing is displaced. At head=2/deep=1/
+      // fileRows=1 the output is [h1, h2, d1] where it was [h1, h2, f1]; at
+      // head=1/deep=1/fileRows=1 nothing is displaced. The trade is one
+      // "filename matched, presumed deliberate" row for one "weak overall bm25, admitted
+      // only on an identifier hit" row. It is a real quality judgement and it is UNMEASURED
+      // — denoise-ab is structurally blind to this face. v3.85.0's release note called the
+      // whole change "strictly additive"; true of the bypass set, false of the output.
       const bypassFloorOk = (r) => typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor;
       let bypassRows = [];
       if (IDENTIFIER_BYPASS && promptIdentifiers.length > 0) {

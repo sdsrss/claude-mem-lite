@@ -23,6 +23,22 @@ import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Reject unknown flags instead of ignoring them. A gate that silently accepts `-strict`
+// or `--Strict` and runs in advisory mode is a gate that a one-character typo in a workflow
+// turns off while CI still shows green — and the whole point of --strict is that a release
+// must not pass on evidence the gate has judged unreliable. Measured before this guard:
+// `--strict` exit 1, `-strict` exit 0, `--Strict` exit 0, all against the same stale
+// baseline. Positional arguments are left alone (--tolerance/--baseline take values).
+const KNOWN_FLAGS = new Set(['--strict', '--skip-matrix', '--tolerance', '--baseline']);
+for (let i = 2; i < process.argv.length; i++) {
+  const a = process.argv[i];
+  if (!a.startsWith('-')) continue;                       // a flag's value, or a stray positional
+  if (KNOWN_FLAGS.has(a)) { if (a === '--tolerance' || a === '--baseline') i++; continue; }
+  console.error(`Unknown option "${a}". Known: ${[...KNOWN_FLAGS].join(' ')}.\n`
+    + '  Refusing to run: an unrecognised flag here reads as "the mode you asked for is off".');
+  process.exit(1);
+}
+
 // Parse tolerance from CLI args (default: 5% relative regression allowed)
 const toleranceIdx = process.argv.indexOf('--tolerance');
 const tolerance = toleranceIdx !== -1 ? parseFloat(process.argv[toleranceIdx + 1]) : 0.05;
@@ -33,11 +49,17 @@ const tolerance = toleranceIdx !== -1 ? parseFloat(process.argv[toleranceIdx + 1
 const STRICT = process.argv.includes('--strict') ||
   /^(1|true|yes|on)$/i.test(String(process.env.CI_GATE_STRICT ?? '').trim());
 
-// v2.41: stale baseline warning. Baseline is load-bearing evidence; if it
-// predates significant code changes, the comparison is misleading. 30 days is
-// the soft threshold — matches compress age_days and roughly one release
-// cycle. Does NOT fail the gate — just prints a loud warning that the operator
-// should re-capture (`node benchmark/benchmark.mjs > benchmark/baseline.json`).
+// v2.41: stale baseline threshold. Baseline is load-bearing evidence; if it
+// predates significant code changes, the comparison is misleading. 30 days —
+// matches compress age_days and roughly one release cycle.
+//
+// v3.85.1: this is a HARD FAILURE in every shipped invocation. Both `publish.yml`
+// and `ci.yml` (on push; PRs stay advisory so an outside contributor is never
+// blocked by the calendar) pass `--strict`. Advisory-only is now the LOCAL mode:
+// a plain `node benchmark/ci-gate.mjs` still warns and continues. The comment
+// here used to say "does NOT fail the gate", which was true when written and
+// became false the moment the workflows started passing --strict.
+// Recapture: `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json`.
 const BASELINE_STALE_AGE_DAYS = 30;
 const DAY_MS = 86400000;
 
