@@ -59,3 +59,4 @@ release-signing-key.pem
 # listed so a crashed run cannot leave a committable stray at the repo root)
 .tmp-rerank-pool-twin.mjs
 .tmp-keyctx-pool-twin.mjs
+.tmp-keyctx-why-*.mjs

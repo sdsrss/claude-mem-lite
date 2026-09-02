@@ -70,12 +70,54 @@ export function computeAdaptiveWindows(db, project) {
 // however well it scores.
 //
 // Named rather than inline so benchmark/keyctx-pool-replay.mjs can patch a twin and
-// price a change to them. Extracting them changed no value.
+// price a change to them. Keep the `export const NAME = <int>;` shape — that ruler
+// patches the DECLARATION by regex and throws when the anchor moves.
 //
-// NOT yet widened: SessionStart injects on every start, so moving these is a
-// user-visible default-behaviour change to a released artifact (L3) and gets its own
-// round. Measured truncation as of 2026-09-01 is in the replay's header.
-export const KEYCTX_POOL_OBS = 50;
+// OBS was 50 through v3.86.0 and is now an OOM backstop, not a relevance gate. What the
+// ruler measured before the change (2026-09-02T06:11Z, 11 projects with >=20 live rows,
+// budget 2000, AGAINST THE 50/10 TREE — reproduce with `--population --ref-obs 50
+// --ref-sess 10` and with `--wide-obs 50 --wide-sess 10`, which runs the comparison
+// backwards; the bare command now reports 0/11 because shipped is the wider bound):
+// the 50-row bound truncated the pool in 3 of 11 projects, and lifting it
+// alone moved the injected block in 2 of 11 — 8 rows newly reachable against 2 displaced,
+// for +81 and +16 tokens. Selection here is NOT monotone, so a displaced row is a real
+// cost and the ruler prints it as a first-class number (`--why-displaced` names the rows
+// and the gate that dropped each).
+//
+// Both displaced rows lost their slot to the 3-per-type diversity cap. That is not a
+// three-way discrimination: the token budget does not bind on this corpus (651 of 2000 in
+// the widest arm's largest project) and the file-overlap `continue` below is UNREACHABLE
+// (D#197) — so the cap is currently the only gate that can fire.
+//
+// 200 is ~2x the largest pool observed (107). The ruler CANNOT distinguish 200 from 500
+// on this corpus — every bound >= the largest pool is one arm, identical in both
+// selection and cost — so this value is a headroom choice, not a measured optimum.
+// computeAdaptiveWindows NARROWS the windows as velocity rises (tier3 60d -> 30d -> 14d),
+// so activity counteracts pool growth instead of driving it: the largest pool here is the
+// lowest-velocity high-volume project (1.14 obs/day, 107 rows) while the only project a
+// band up has 2.9x the velocity and 29% of the pool. A draft of this comment had that
+// backwards.
+//
+// Cost is PER PROJECT: ~2.7x where the pool is 107, ~2.0x at 59, ~1.5x at 62, and
+// unchanged (inferred, not measured) for the eight projects whose pool never reached 50.
+// Once per SessionStart, both arms in the low single-digit milliseconds. It is NOT a clean
+// function of pool growth — the 59-row project grows less than the 62-row one and costs
+// more, on two independent harnesses, because fixed per-call work (SQL fetch,
+// estimateTokens, JSON.parse, the unchanged summary half) sets the denominator. Three
+// drafts were wrong here in three ways: a point estimate (2.65x), a global range
+// (2.1x-3.8x) no measurement produced, and a causal claim n=3 refutes. Absolute
+// milliseconds are not quotable. Re-derive with `--cost --wide-obs 50 --wide-sess 10
+// --project <p>`, which prices the widening in the correct direction.
+//
+// SESS stays 10 DELIBERATELY, and the discriminator is `sessDisplaced = 0` in 11 of 11
+// projects, not the observation column. Widening it to 40 displaces no summary at all —
+// it is PURELY ADDITIVE, so that LIMIT is a volume cap and not the D#172 shape, which is
+// the actual reason it does not need lifting. (It also changed zero observations, but
+// that only says the obs side is unaffected.) What widening does buy is 130 newly injected
+// summaries, roughly tripling the emitted block on the largest projects. It truncates MORE
+// projects than the obs bound, 5 of 11 against 3 of 11, which is what made the original
+// review propose it first; truncation count is not harm.
+export const KEYCTX_POOL_OBS = 200;
 export const KEYCTX_POOL_SESS = 10;
 
 /**

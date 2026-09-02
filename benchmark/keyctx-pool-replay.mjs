@@ -43,20 +43,51 @@
 // aggregate; a percentage over n=12 is a count wearing a disguise.
 //
 // SELECTION HERE IS NOT MONOTONE, and this ruler must not borrow rerank-pool-replay's
-// superset argument. Three stages downstream of the pool can DROP a row that a narrower
-// pool would have selected:
-//   • the token budget (a newly reachable, denser row consumes budget first);
-//   • the type-diversity cap (max 3 per type);
-//   • the file-overlap penalty (selection order changes which files are already taken).
+// superset argument. Three stages downstream of the pool can in principle DROP a row that
+// a narrower pool would have selected — but only ONE of them can currently fire, and
+// `--why-displaced` says which, per row, instead of leaving the reader to assume:
+//   • the type-diversity cap (max 3 per type) — the only live gate on this corpus;
+//   • the token budget — does not bind here (651 of 2000 in the widest arm's largest
+//     project), so a displacement attributed to it would be a surprise worth checking;
+//   • the file-overlap penalty — UNREACHABLE (D#197): its `continue` needs
+//     valueDensity < 0.001/0.7 while `value` has an analytic floor of 0.5, i.e. a title
+//     costing >122k tokens. Never attribute a displacement to it without re-deriving.
 // So `displaced` is expected to be non-zero and is reported as a first-class number
 // rather than gated to zero. What IS gated: the ruler must be able to SEE displacement
 // at all (a self-check drives a synthetic case and requires a non-zero count), and
 // shipped-vs-shipped must report no difference.
 //
+// AN ARM CAN BE INERT WITHOUT BEING EQUAL. `writeTwin` throws only when BOTH bounds match
+// shipped, so after v3.87.0 raised OBS to 200 the default invocation (200/10 vs 200/40)
+// runs an obs arm that is identical by construction and reports `obs newly reachable: 0`
+// with nothing to flag it — a reader takes that for "widening obs does nothing". Worse,
+// any bound at or above the largest pool is the same arm as any other: 200 and 500 are
+// indistinguishable here. Every mode that COMPARES two arms — the default replay,
+// --why-displaced and --cost — prints an INERT notice when the twin equals shipped or when
+// both bounds sit above the largest pool; --population takes no second arm and instead
+// prints the largest pool outright. A null result and a comparison that could not have
+// produced a non-null result are not the same finding.
+//
+// The notice is itself checked, because an annotation nothing can falsify is worse than
+// none: mutating the pool-size input to 0 once made every run print INERT directly above a
+// report showing two projects changing, with the whole suite green. assertInertConsistent
+// throws on that contradiction, and main() refuses to start if any project cleared the row
+// floor while the largest pool measured 0.
+//
 // USAGE
-//   node benchmark/keyctx-pool-replay.mjs                 all projects, 50/10 vs a wide twin
-//   node benchmark/keyctx-pool-replay.mjs --wide-obs 200 --wide-sess 40
+//   node benchmark/keyctx-pool-replay.mjs                 all projects, shipped vs a wide twin
+//   node benchmark/keyctx-pool-replay.mjs --wide-obs 50 --wide-sess 10
+//                                                        runs BACKWARDS (twin is narrower) —
+//                                                        this is how the pre-v3.87.0 50/10
+//                                                        baseline is re-derived
 //   node benchmark/keyctx-pool-replay.mjs --population    pool sizes + truncation only
+//   node benchmark/keyctx-pool-replay.mjs --population --ref-obs 50 --ref-sess 10
+//                                                        truncation against a bound OTHER than
+//                                                        shipped (the 3/11 figure quoted for
+//                                                        the v3.87.0 decision is --ref-obs 50)
+//   node benchmark/keyctx-pool-replay.mjs --why-displaced name the gained/displaced rows and
+//                                                        the gate that dropped each one
+//   node benchmark/keyctx-pool-replay.mjs --cost          per-call wall clock, arms alternated
 //   node benchmark/keyctx-pool-replay.mjs --min-rows 20   project inclusion floor
 //   node benchmark/keyctx-pool-replay.mjs --json
 
@@ -107,6 +138,86 @@ export function writeTwin(obsLimit, sessLimit) {
   }
   writeFileSync(TWIN_URL, b.out);
   return { obs: a.previous, sess: b.previous };
+}
+
+/**
+ * Instrument the shipped selection loop so each candidate records WHICH gate dropped it.
+ *
+ * v3.87.0 published "both displaced rows lost their slot to the 3-per-type cap" from a
+ * throwaway script that no longer existed by the time two reviewers tried to check it;
+ * both had to rebuild it. The attribution reproduced, but a claim only its author can
+ * re-derive is a claim on trust. Patching the shipped TEXT (rather than reimplementing the
+ * loop) keeps the scoring formulas from drifting from production — same reasoning as the
+ * twin.
+ *
+ * Every anchor is required. A silently-missed drop point would produce a complete-looking
+ * report in which one gate simply never fires, which is indistinguishable from that gate
+ * being inactive — the exact reading this mode exists to support.
+ */
+export const DROP_POINTS = [
+  ['if (totalTokens + c.cost > budget) continue;', 'budget'],
+  ['if (typeCount >= 3) continue;', 'typecap'],
+  ['if (penalizedValue < 0.001) continue;', 'overlap'],
+];
+
+export function patchDropPoints(src) {
+  let out = src;
+  for (const [anchor, label] of DROP_POINTS) {
+    if (!out.includes(anchor)) {
+      throw new Error(`drop-point anchor gone: ${label} ("${anchor}"). The selection loop `
+        + 'moved; refusing to report an attribution over gates that may never fire.');
+    }
+    out = out.replace(anchor, anchor.replace(/continue;$/,
+      `{ globalThis.__KEYCTX_TRACE.push([c._kind, c.id, '${label}']); continue; }`));
+  }
+  const sel = 'totalTokens += c.cost;';
+  if (!out.includes(sel)) throw new Error('drop-point anchor gone: the selection commit');
+  return out.replace(sel, `globalThis.__KEYCTX_TRACE.push([c._kind, c.id, 'SELECTED']); ${sel}`);
+}
+
+/**
+ * The largest candidate pool across the walked projects. Any bound at or above it selects
+ * the whole pool, so two such bounds are the SAME ARM however different the integers look.
+ */
+function largestObsPool(db, projects, computeAdaptiveWindows) {
+  let max = 0;
+  for (const { project } of projects) max = Math.max(max, poolSizes(db, project, computeAdaptiveWindows).obs);
+  return max;
+}
+
+/**
+ * Why a zero can be uninformative. Returns null when the comparison could genuinely have
+ * moved, a message when it could not.
+ */
+export function inertNotice(shippedObs, wideObs, maxPool) {
+  if (shippedObs === wideObs) {
+    return `obs arm is INERT: twin bound (${wideObs}) equals shipped. Any "0 newly reachable" `
+      + 'below is arithmetic, not a measurement.';
+  }
+  if (Math.min(shippedObs, wideObs) >= maxPool) {
+    return `obs arm is INERT: both bounds (${shippedObs}, ${wideObs}) are at or above the largest `
+      + `pool (${maxPool}), so both select every candidate. Widening past the pool cannot show `
+      + 'an effect; use --wide-obs below ' + maxPool + ' to compare arms that differ.';
+  }
+  return null;
+}
+
+/**
+ * Cost sampling. Arms ALTERNATE across passes because pairing them in one process lets the
+ * second reuse the first's warm pages — the bias documented for the sibling ruler, where
+ * alternating cancelled about half of it. Absolutes from this mode are NOT quotable: the
+ * sibling's own six-run spread moved 3.04 -> 1.80 ms/prompt on one machine while the ratio
+ * held. Report the RATIO RANGE.
+ */
+export function summarizeCost(samples) {
+  const ratios = samples.map((s) => s.wide / s.narrow);
+  return {
+    passes: samples.length,
+    narrow: samples.map((s) => s.narrow),
+    wide: samples.map((s) => s.wide),
+    ratioMin: Math.min(...ratios),
+    ratioMax: Math.max(...ratios),
+  };
 }
 
 /**
@@ -230,6 +341,49 @@ export function assertCanSeeDisplacement(cmp = compare) {
   }
 }
 
+/**
+ * The INERT notice is an annotation, and an annotation nothing can falsify is worse than
+ * none. Mutating `largestObsPool` to return 0 made every run print "both bounds are at or
+ * above the largest pool (0)" directly above a report showing 2 of 11 projects changing —
+ * a guard added to stop null results being misread, itself lying in the one direction that
+ * hides a real result. The whole suite stayed green, because `maxPool`'s wiring is not
+ * reachable from a unit test. So the contradiction is checked at runtime instead.
+ */
+export function assertInertConsistent(notice, changedObs) {
+  if (notice && changedObs > 0) {
+    throw new Error(`SELF-CHECK FAILED: printed an INERT notice ("${notice}") and then found `
+      + `${changedObs} projects whose observation selection differs. Both cannot be true; the `
+      + 'pool-size input to that notice is wrong. Refusing to report.');
+  }
+}
+
+/**
+ * The trace backing --why-displaced must account for every candidate exactly once: the
+ * selection loop either hits one of the three `continue`s or reaches the commit. A missing
+ * or duplicated record would make a drop reason vanish or double-count, and that mode's
+ * whole output is drop reasons.
+ */
+const TRACE_LABELS = new Set([...DROP_POINTS.map(([, l]) => l), 'SELECTED']);
+
+export function assertTraceWellFormed(trace, where = 'trace') {
+  if (!Array.isArray(trace) || trace.length === 0) {
+    throw new Error(`SELF-CHECK FAILED: ${where} produced no records. The instrumentation did `
+      + 'not run, so every drop reason below would be "not-in-pool" by default.');
+  }
+  const seen = new Set();
+  for (const [kind, id, label] of trace) {
+    if (!TRACE_LABELS.has(label)) throw new Error(`SELF-CHECK FAILED: ${where} unknown label "${label}".`);
+    const key = `${kind}:${id}`;
+    if (seen.has(key)) {
+      throw new Error(`SELF-CHECK FAILED: ${where} recorded ${key} twice. A candidate resolves `
+        + 'through exactly one gate; a duplicate means the loop was re-entered or an anchor '
+        + 'was patched into a path that runs more than once.');
+    }
+    seen.add(key);
+  }
+  return seen.size;
+}
+
 export function runSelfChecks(db, projects, wide, budget) {
   assertCanSeeDisplacement();
   assertRulerCanSayNo(db, projects, wide, budget);
@@ -265,25 +419,151 @@ async function main() {
   }
 
   const projects = loadProjects(db, minRows);
+  const maxPool = largestObsPool(db, projects, computeAdaptiveWindows);
+  // A zero here would make inertNotice fire on every run, including runs that then report a
+  // real difference. Cheap, and it is the input a unit test cannot reach.
+  if (projects.length > 0 && maxPool <= 0) {
+    throw new Error(`SELF-CHECK FAILED: ${projects.length} projects cleared the ${minRows}-row `
+      + 'floor but the largest candidate pool measured 0. poolSizes disagrees with loadProjects.');
+  }
 
   if (has('--population')) {
+    // Truncation is only meaningful against a STATED bound. Defaulting it to shipped made
+    // the figure that justified v3.87.0 (3/11 against 50) unreproducible from this tool the
+    // moment shipped became 200 — the reference has to be a parameter.
+    const refObs = Number(arg('--ref-obs', String(shipped.obs)));
+    const refSess = Number(arg('--ref-sess', String(shipped.sess)));
+    for (const [flag, v] of [['--ref-obs', refObs], ['--ref-sess', refSess]]) {
+      if (!Number.isInteger(v) || v < 1) throw new Error(`${flag} must be a positive integer.`);
+    }
     const out = projects.map(({ project, n }) => ({ project, live: n, ...poolSizes(db, project, computeAdaptiveWindows) }));
-    if (asJson) { console.log(JSON.stringify(out, null, 2)); return; }
-    console.log(`\n─── Key Context pool population (shipped LIMITs ${shipped.obs}/${shipped.sess}) ───`);
+    if (asJson) { console.log(JSON.stringify({ refObs, refSess, maxPool, rows: out }, null, 2)); return; }
+    const ref = refObs === shipped.obs && refSess === shipped.sess
+      ? `shipped LIMITs ${shipped.obs}/${shipped.sess}` : `reference bounds ${refObs}/${refSess} (shipped is ${shipped.obs}/${shipped.sess})`;
+    console.log(`\n─── Key Context pool population (${ref}) ───`);
     console.log('  project                     live   obsPool  sessPool   truncated');
     for (const r of out) {
-      const t = [r.obs > shipped.obs ? 'obs' : null, r.sess > shipped.sess ? 'sess' : null].filter(Boolean).join('+') || '—';
+      const t = [r.obs > refObs ? 'obs' : null, r.sess > refSess ? 'sess' : null].filter(Boolean).join('+') || '—';
       console.log(`  ${r.project.padEnd(26)}${String(r.live).padStart(5)}${String(r.obs).padStart(10)}${String(r.sess).padStart(10)}   ${t}`);
     }
-    const to = out.filter((r) => r.obs > shipped.obs).length;
-    const ts = out.filter((r) => r.sess > shipped.sess).length;
-    console.log(`\n  obsPool  truncated by LIMIT ${shipped.obs}:  ${to}/${out.length} projects`);
-    console.log(`  sessPool truncated by LIMIT ${shipped.sess}:  ${ts}/${out.length} projects`);
+    const to = out.filter((r) => r.obs > refObs).length;
+    const ts = out.filter((r) => r.sess > refSess).length;
+    console.log(`\n  obsPool  truncated by LIMIT ${refObs}:  ${to}/${out.length} projects`);
+    console.log(`  sessPool truncated by LIMIT ${refSess}:  ${ts}/${out.length} projects`);
+    console.log(`  largest obsPool: ${maxPool} — any bound at or above it selects the whole pool.`);
+    return;
+  }
+
+  if (has('--why-displaced')) {
+    const project = arg('--project', projects[0]?.project);
+    const src = readFileSync(SHIPPED_URL, 'utf8');
+    const arms = {};
+    for (const [label, limit] of [['narrow', shipped.obs], ['wide', wideObs]]) {
+      const patched = patchDropPoints(patchConst(src, 'KEYCTX_POOL_OBS', limit).out);
+      const url = new URL(`../.tmp-keyctx-why-${limit}.mjs`, import.meta.url);
+      writeFileSync(url, patched);
+      try {
+        const m = await import(`${url.href}?v=${Date.now()}`);
+        globalThis.__KEYCTX_TRACE = [];
+        arms[label] = { sel: m.selectWithTokenBudget(db, project, budget), trace: globalThis.__KEYCTX_TRACE };
+      } finally { try { unlinkSync(url); } catch { /* gone */ } }
+    }
+    // Label by BOUND, never by "narrow"/"wide" prose. The documented way to re-derive the
+    // pre-v3.87.0 baseline is `--wide-obs 50`, i.e. the twin is the NARROWER arm — and a
+    // first version of this mode hard-coded headings assuming the opposite, so every line
+    // contradicted its own data column (a row marked "unreachable at the narrower bound"
+    // printed `typecap`, which means it was in the pool and a gate dropped it).
+    for (const [k, set] of [['narrow', arms.narrow], ['wide', arms.wide]]) {
+      assertTraceWellFormed(set.trace, `${k} arm`);
+    }
+    const loBound = Math.min(shipped.obs, wideObs), hiBound = Math.max(shipped.obs, wideObs);
+    const loArm = shipped.obs <= wideObs ? arms.narrow : arms.wide;
+    const hiArm = shipped.obs <= wideObs ? arms.wide : arms.narrow;
+    const loIds = loArm.sel.observations.map((o) => o.id);
+    const hiIds = hiArm.sel.observations.map((o) => o.id);
+    const why = (trace, id) => (trace.find((t) => t[0] === 'obs' && t[1] === id) || [,, 'not-in-pool'])[2];
+    const info = db.prepare('SELECT id, type, importance, title, lesson_learned IS NOT NULL AS les FROM observations WHERE id = ?');
+    const stamp = new Date().toISOString();
+    const rows = (ids) => ids.map((id) => {
+      const o = info.get(id);
+      return { id, type: o?.type, importance: o?.importance, lesson: !!o?.les,
+        [`at${loBound}`]: why(loArm.trace, id), [`at${hiBound}`]: why(hiArm.trace, id), title: o?.title };
+    });
+    const gained = rows(hiIds.filter((x) => !loIds.includes(x)));
+    const displaced = rows(loIds.filter((x) => !hiIds.includes(x)));
+    const notice = inertNotice(shipped.obs, wideObs, maxPool);
+    if (asJson) { console.log(JSON.stringify({ project, stamp, shipped, wideObs, loBound, hiBound, notice, gained, displaced }, null, 2)); return; }
+    console.log(`\n─── Why rows moved: ${project}, obs ${loBound} vs ${hiBound}, budget ${budget} ───`);
+    console.log(`  measured ${stamp}   (shipped is ${shipped.obs}; twin is ${wideObs})`);
+    // This is the only mode whose output IS a row list, so an empty one reads hardest as
+    // "nothing moves" — it needs the notice more than the modes that already had it.
+    if (notice) console.log(`\n  !! ${notice}`);
+    for (const [label, set] of [
+      [`ONLY IN THE ${hiBound}-ARM — unreachable under LIMIT ${loBound}`, gained],
+      [`ONLY IN THE ${loBound}-ARM — kept at ${loBound}, dropped once the pool widened to ${hiBound}`, displaced]]) {
+      console.log(`\n  ${label} — ${set.length}:`);
+      for (const r of set) {
+        console.log(`    #${r.id} imp=${r.importance} type=${String(r.type).padEnd(9)} lesson=${r.lesson ? 'y' : 'n'}`
+          + `  at${loBound}=${String(r[`at${loBound}`]).padEnd(12)} at${hiBound}=${r[`at${hiBound}`]}`);
+        console.log(`        "${String(r.title || '').slice(0, 86)}"`);
+      }
+    }
+    console.log('\n  A row\'s importance is REWRITTEN by applyCitationDecay at every Stop hook, and the');
+    console.log('  pool admits importance>=2 only inside tier2 against importance>=3 inside tier3 — so a');
+    console.log('  single 3->2 demotion removes a row from the POPULATION, not just from the ranking.');
+    console.log('  Any named-row list from this mode is an instant, never a property.');
+    return;
+  }
+
+  if (has('--cost')) {
+    const iters = Number(arg('--iters', '200'));
+    if (!Number.isInteger(iters) || iters < 1) throw new Error('--iters must be a positive integer.');
+    const project = arg('--project', projects[0]?.project);
+    const notice = inertNotice(shipped.obs, wideObs, maxPool);
+    const time = (fn) => {
+      const t0 = process.hrtime.bigint();
+      for (let i = 0; i < iters; i++) fn(db, project, budget);
+      return Number(process.hrtime.bigint() - t0) / 1e6 / iters;
+    };
+    // ALWAYS price the WIDER bound against the narrower one, whichever arm each happens to
+    // be. The only non-inert way to run this mode is `--wide-obs 50`, where the twin is the
+    // narrower side; a first version reported cost(twin)/cost(shipped) and therefore printed
+    // 0.42x for a widening that costs ~2.4x — and `hook-context.mjs` says "re-derive with
+    // --cost", so a reader following the instruction would have concluded it got faster.
+    const loBound = Math.min(shipped.obs, wideObs), hiBound = Math.max(shipped.obs, wideObs);
+    const loFn = shipped.obs <= wideObs ? narrow : wide;
+    const hiFn = shipped.obs <= wideObs ? wide : narrow;
+    time(loFn); time(hiFn); // warm
+    const samples = [];
+    for (const order of [['narrow', 'wide'], ['wide', 'narrow']]) {
+      const s = {};
+      for (const k of order) s[k] = time(k === 'narrow' ? loFn : hiFn);
+      samples.push(s);
+    }
+    // Determinism still has to hold in the mode that produces the most contested number —
+    // v3.85.1's sibling defect was a --cost path that returned above its self-checks.
+    runSelfChecks(db, projects, wide, budget);
+    const sum = summarizeCost(samples);
+    if (asJson) { console.log(JSON.stringify({ project, iters, loBound, hiBound, ...sum, notice }, null, 2)); return; }
+    console.log(`\n─── Key Context selection cost: ${project}, obs ${loBound} vs ${hiBound} ───`);
+    console.log(`  ${iters} iterations/arm, ${sum.passes} passes with the arm order reversed, one process`);
+    if (notice) console.log(`\n  ${notice.replace('Any "0 newly reachable" below is arithmetic, not a measurement.', 'The two arms are the same code path, so expect a ratio near 1.00x.')}`);
+    console.log(`\n  LIMIT ${String(loBound).padEnd(4)} ${sum.narrow.map((x) => x.toFixed(3)).join(' , ')} ms/call`);
+    console.log(`  LIMIT ${String(hiBound).padEnd(4)} ${sum.wide.map((x) => x.toFixed(3)).join(' , ')} ms/call`);
+    console.log(`  RATIO RANGE (cost of widening ${loBound} -> ${hiBound}): ${sum.ratioMin.toFixed(2)}x - ${sum.ratioMax.toFixed(2)}x`);
+    console.log('\n  QUOTE THE RATIO RANGE, NEVER THE ABSOLUTE ms. The sibling ruler\'s six runs on one');
+    console.log('  machine spread 3.04 -> 1.80 ms/prompt while its ratio held; a reviewer re-measuring');
+    console.log('  this face read both arms ~2.6x higher than its author did, with the ratio intact.');
     return;
   }
 
   runSelfChecks(db, projects, wide, budget);
+  const inert = inertNotice(shipped.obs, wideObs, maxPool);
+  if (inert) console.log(`\n  !! ${inert}`);
   const r = compare(db, projects, narrow, wide, budget);
+  // Assert against THIS run's result, not a second compare() — the pools slide, so two
+  // calls are two populations and a contradiction check across them proves nothing.
+  assertInertConsistent(inert, r.changedObs);
 
   if (asJson) { console.log(JSON.stringify({ ...r, shipped, wideObs, wideSess, budget }, null, 2)); return; }
   console.log(`\n─── Key Context pool replay: shipped ${shipped.obs}/${shipped.sess} vs ${wideObs}/${wideSess} (budget ${budget}) ───`);

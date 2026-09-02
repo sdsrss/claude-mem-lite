@@ -17,6 +17,12 @@ import {
   assertRulerCanSayNo,
   assertCanSeeDisplacement,
   compare,
+  patchDropPoints,
+  DROP_POINTS,
+  inertNotice,
+  summarizeCost,
+  assertInertConsistent,
+  assertTraceWellFormed,
 } from '../benchmark/keyctx-pool-replay.mjs';
 
 const projects = [{ project: 'p' }];
@@ -117,5 +123,108 @@ describe('summaries are injected content, not a side channel', () => {
     expect(r.changedObs).toBe(1);
     expect(r.changedBlock).toBe(1);
     expect(r.sessGained).toBe(0);
+  });
+});
+
+describe('drop-point instrumentation — the attribution must not silently lose a gate', () => {
+  it('instruments every drop point AND the selection commit', () => {
+    const src = readFileSync(new URL('../hook-context.mjs', import.meta.url), 'utf8');
+    const out = patchDropPoints(src);
+    for (const [, label] of DROP_POINTS) {
+      expect(out).toContain(`__KEYCTX_TRACE.push([c._kind, c.id, '${label}'])`);
+    }
+    expect(out).toContain("__KEYCTX_TRACE.push([c._kind, c.id, 'SELECTED'])");
+  });
+
+  it('THROWS when a gate anchor is gone, naming which one', () => {
+    // The failure that matters: a silently-missed drop point yields a complete-looking
+    // report in which one gate never fires — indistinguishable from that gate being
+    // inactive, which is the exact reading this mode exists to support.
+    const src = readFileSync(new URL('../hook-context.mjs', import.meta.url), 'utf8');
+    for (const [anchor, label] of DROP_POINTS) {
+      const broken = src.replace(anchor, '/* moved */');
+      expect(() => patchDropPoints(broken)).toThrow(new RegExp(`drop-point anchor gone: ${label}`));
+    }
+    expect(() => patchDropPoints(src.replace('totalTokens += c.cost;', '/* moved */')))
+      .toThrow(/the selection commit/);
+  });
+});
+
+describe('an arm can be inert without being equal', () => {
+  it('flags an arm whose twin bound equals shipped', () => {
+    expect(inertNotice(200, 200, 107)).toMatch(/equals shipped/);
+  });
+
+  it('flags an arm where BOTH bounds clear the largest pool — the 200-vs-500 case', () => {
+    // The one that is not visible as equality: 200 and 500 are different integers and the
+    // same arm, because the pool is 107. Reporting that as "0 newly reachable" would read
+    // as a null result about widening.
+    expect(inertNotice(200, 500, 107)).toMatch(/at or above the largest pool/);
+  });
+
+  it('stays SILENT when the comparison could genuinely have moved', () => {
+    // Without this arm the notice could be hard-wired to always fire and every test above
+    // would still pass.
+    expect(inertNotice(50, 200, 107)).toBeNull();
+    expect(inertNotice(200, 50, 107)).toBeNull();
+  });
+});
+
+describe('the INERT notice must be falsifiable, not just present', () => {
+  it('THROWS when a notice is printed over a run that found real differences', () => {
+    // The defect this exists for: mutating largestObsPool to return 0 made every run print
+    // "both bounds are above the largest pool (0)" directly above a report showing 2 of 11
+    // projects changing — and the whole suite stayed green, because maxPool's wiring is not
+    // reachable from a unit test. An annotation nothing can contradict is worse than none.
+    expect(() => assertInertConsistent('obs arm is INERT: ...', 2))
+      .toThrow(/Both cannot be true/);
+  });
+
+  it('stays quiet for the two consistent combinations', () => {
+    expect(() => assertInertConsistent('obs arm is INERT: ...', 0)).not.toThrow();
+    expect(() => assertInertConsistent(null, 2)).not.toThrow();
+  });
+});
+
+describe('the drop-reason trace must account for every candidate exactly once', () => {
+  it('accepts a well-formed trace and returns the count', () => {
+    expect(assertTraceWellFormed([['obs', 1, 'SELECTED'], ['obs', 2, 'typecap']])).toBe(2);
+  });
+
+  it('THROWS on an empty trace — instrumentation that did not run', () => {
+    // Without this, a failed patch degrades every row to the "not-in-pool" default and the
+    // mode prints a complete-looking attribution in which no gate ever fired.
+    expect(() => assertTraceWellFormed([], 'wide arm')).toThrow(/wide arm produced no records/);
+  });
+
+  it('THROWS on a duplicate candidate and on an unknown label', () => {
+    expect(() => assertTraceWellFormed([['obs', 1, 'SELECTED'], ['obs', 1, 'budget']]))
+      .toThrow(/recorded obs:1 twice/);
+    expect(() => assertTraceWellFormed([['obs', 1, 'made-up']])).toThrow(/unknown label "made-up"/);
+  });
+
+  it('accepts every label the instrumentation can actually emit', () => {
+    // Binds the label set to DROP_POINTS: renaming a gate without updating TRACE_LABELS
+    // would make real traces throw.
+    for (const [, label] of DROP_POINTS) {
+      expect(() => assertTraceWellFormed([['obs', 1, label]])).not.toThrow();
+    }
+  });
+});
+
+describe('cost summary reports a ratio RANGE, not a point', () => {
+  it('spans the extremes of the passes', () => {
+    const s = summarizeCost([{ narrow: 1, wide: 2 }, { narrow: 1, wide: 3 }]);
+    expect(s.passes).toBe(2);
+    expect(s.ratioMin).toBe(2);
+    expect(s.ratioMax).toBe(3);
+  });
+
+  it('does not collapse a spread to its mean', () => {
+    // The defect this exists to prevent is publishing 2.65x as a point estimate when the
+    // same harness on the same machine spans 2.1x-3.8x.
+    const s = summarizeCost([{ narrow: 1, wide: 2 }, { narrow: 1, wide: 4 }]);
+    expect(s.ratioMax - s.ratioMin).toBe(2);
+    expect(s.ratioMin).not.toBe(3);
   });
 });

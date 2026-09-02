@@ -2,6 +2,332 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.87.0 — the fifth D#172 surface is closed on the bound that mattered, and the two bounds behaved oppositely
+
+One constant moves: `KEYCTX_POOL_OBS` in `hook-context.mjs`, **50 -> 200**. Its sibling
+`KEYCTX_POOL_SESS` stays at **10**, deliberately. This is the SessionStart Key Context
+face, so it is a user-visible default-behaviour change to a released artifact and got its
+own round with its own pre-tag review.
+
+**Upgrade note.** After upgrading, the `<claude-mem-context>` block may contain different
+observations for projects whose candidate pool exceeds 50 rows — more of them, and not
+always the same ones. That block has **three** emitters, all of which change, because all
+three call the same `buildSessionContextLines`: **SessionStart** (`hook.mjs`),
+**PreCompact** (`hook-precompact.mjs`, which re-emits it before an automatic compaction),
+and **`claude-mem-lite context`** (including `--json`, whose `sections` gains rows). A
+draft of this note named only SessionStart and claimed "no CLI change"; the CLI *surface*
+is unchanged — no new flag, no new subcommand — but `context` output is not, and on a
+change this project's own spec classifies as a user-visible default-behaviour change to a
+released artifact, the affected faces belong in the note. No schema change and no new
+config. To revert, pin the previous release
+(`npm i -g claude-mem-lite@3.86.0`, or the equivalent plugin pin); the constant is not
+env-overridable and deliberately so — an env knob would be a config surface that none of
+the measurements below model.
+
+### Why a LIMIT here was never a ranking bound
+
+The obsPool `SELECT` orders by `created_at_epoch DESC` and nothing else. The selector
+underneath it then re-sorts every candidate by `valueDensity` = recency x typeQuality x
+impBoost x lessonBoost / sqrt(cost), and recency enters that product **compressed into
+(1,2]** by `1.0 + exp(...)`, against impBoost alone spanning 1.0-2.0 with typeQuality and
+lessonBoost multiplying on top. So the key the SQL sorted on barely participates in the
+final order, and a row past the LIMIT was unreachable however well it scored. This is the
+D#172 shape and the **fifth** surface it has been found on; it is also the purest, since
+`rerank-pool-replay`'s face at least orders its pool by one factor of the final composite.
+
+### What the ruler measured, before the change
+
+11 projects with >=20 live rows, budget 2000, **2026-09-02T06:11Z, against the 50/10
+tree**. Since shipped is now 200, the bare command no longer reproduces any of this and a
+reader who runs it gets `0/11` with nothing explaining why — so the reproducing commands
+are, precisely:
+
+```
+node benchmark/keyctx-pool-replay.mjs --population --ref-obs 50 --ref-sess 10
+node benchmark/keyctx-pool-replay.mjs --wide-obs 50 --wide-sess 10     # runs BACKWARDS
+```
+
+The second inverts the arms — the shipped 200 becomes the "narrow" side — so every column
+reads in reverse. Both flags were added in this release for exactly this reason.
+
+Every absolute here is a snapshot — `selectWithTokenBudget` reads
+`Date.now()` for its adaptive windows, so these pools SLIDE and decay with the wall clock
+even while the store grows. The tool stamps its own output and says so.
+
+- Truncation: obsPool over LIMIT 50 in **3 of 11** projects (mem 107, ubuntu-sec 63,
+  code-graph-mcp 58); sessPool over LIMIT 10 in **5 of 11**.
+- Lifting obs alone (50 -> 200, sess held at 10): the injected block differs in **2 of
+  11** projects, the first observation differs in **0 of 11**, **8 rows newly reachable
+  against 2 displaced**, for +81 tokens (mem 570 -> 651) and +16 (code-graph-mcp
+  596 -> 612).
+- **Truncation count is not harm, for the second round running.** `ubuntu-sec`'s pool is
+  63 — over the bound — and lifting it changed nothing there: 14 observations before,
+  14 after, 0 gained, 0 displaced.
+
+### The two displaced rows, named
+
+D#192 required this individually rather than as a count, because selection here is **not
+monotone** — a wider pool can evict a row a narrower one kept. Both displaced rows were
+dropped by the **3-per-type diversity cap**:
+
+| row | type | why it lost its slot |
+|---|---|---|
+| #10855 | discovery | `typecap:discovery` — the wider pool offered that type a denser member |
+| #10780 | bugfix | `typecap:bugfix` — same |
+
+Measured by patching the shipped source's text at its three `continue` points and running
+both arms in one process — the same twin technique the ruler uses, so the scoring formulas
+cannot drift from production. That is no longer a throwaway script: `--why-displaced` and
+`--cost` are now modes on `benchmark/keyctx-pool-replay.mjs`, because the two claims this
+entry argues individually were both measured with scripts that did not exist by the time
+two reviewers tried to check them, and both had to rebuild them. The attributions
+reproduced; a claim only its author can re-derive is still a claim on trust.
+
+**"Both by the type cap" is not a three-way discrimination, and the review was right to
+say so.** The other two stages could not have fired. The token budget does not bind on
+this corpus — the widest arm's largest project uses 651 of 2000 tokens. And the
+file-overlap penalty's `continue` is **unreachable**: it needs `valueDensity < 0.001/0.7`,
+while `value` has an analytic floor of 0.5 (recency > 1 x the lowest `TYPE_QUALITY` 0.5 x
+`impBoost` >= 1 x `lessonBoost` >= 1), so tripping it takes a title costing more than
+122,000 tokens against a longest-title-in-the-table of 171 characters. Worse, the
+`penalizedValue` it computes is never applied to anything: the ordering was fixed at sort
+time, so the block's only live effect is `selectedFiles.add(f)` and the comment promising
+to "reduce value for file overlap" describes something that has never happened. That is a
+pre-existing defect, filed as **D#197** and deliberately not fixed here.
+
+**A third drift mechanism, found by the pre-tag claims review, and worth more than the
+list it corrects.** This entry's first draft named the seven rows that became reachable in
+that project and asserted they were all `importance = 3`. Eleven minutes later that was
+false: the review re-derived the set and got six of the seven, with **#10656** replaced by
+**#10431**, and #10656 reading `importance = 2` — a value at which, being 16.4 days old,
+it satisfies no arm of the pool's `WHERE` at all.
+
+The draft was correct when taken and the review was correct when taken. `#10656` carries
+`demoted_at = 2026-09-02T06:23:24Z` — **ten minutes after the first measurement and
+thirteen seconds before the second**. `applyCitationDecay` demoted it 3 -> 2 in between,
+and an `importance = 2` row must clear the 14-day tier2 window where an `importance = 3`
+row gets 60 days, so the demotion did not lower its rank: it removed it from the
+population. `#10431` is also type `change` and took the freed 3-per-type slot.
+
+So the store does not merely GROW under a receding window — the two drift mechanisms this
+project already had written down. **It rewrites the very column the pool's `WHERE` gates
+on.** Citation decay moves `importance` at every Stop hook, in both directions, including
+on the rows a release note is naming while it names them. No wall-clock caveat covers
+that, and it is the same self-reference D#179 exists to describe.
+
+**One instant, stamped, and not re-derived again — because re-deriving is itself an
+intervention.** At **2026-09-02T06:35:25Z** the set was #9166, #10416, #10417, #10431,
+#10609, #10622, #10717. Every one `importance = 3` with a lesson *at that instant*, which
+is a fact about mutable state and not a property of those rows. By 06:51Z it was the
+draft's original seven again — `#10431` out, `#10656` back — because the review had spent
+half an hour writing `#10656` in prose. The set flipped 3 → 2 → 3 in 28 minutes with our own
+text on both ends of it, so **naming ids in user-visible text is an intervention on the
+population, not an observation of it**, and each publish-then-re-derive cycle perturbs what
+it measures. The instant above stands as the published one.
+
+Two facts that bound how long even that instant means anything: `#9166` was created
+2026-07-04T08:02:39Z and leaves the 60-day window at **2026-09-02T08:02:39Z**, so a tag
+landing after that makes the seven six. And all seven sit in the 14–60 day band (the
+youngest, `#10717`, at 14.60 days), so **every one of them** — not just `#10656` — is a
+single 3 -> 2 demotion away from eviction.
+
+**Generalised, this is the sixth surface of a shape the project already catalogued — and
+it is a live defect, filed as D#198.** The pool's `WHERE` is
+`(age<tier1 AND imp>=1) OR (age<tier2 AND imp>=2) OR (age<tier3 AND imp>=3)`, so a row in
+the tier2–tier3 band qualifies **only** through the `imp >= 3` arm. `updateDemote` steps
+importance by −1. Therefore, for every row older than tier2, **a `3 -> 2` demotion is an
+eviction from the candidate pool, not a down-rank** — precisely what D#172 / v3.82.0
+established for the imperative pool, recurring here. Measured on `projects--mem`
+(2026-09-02T06:52Z): **45 of ~106 pool rows are `importance = 3` aged 14–60 days**, so
+roughly 42% of the pool sits one demote step from disappearing rather than from ranking
+lower. Repo-wide, 56 rows were demoted in the last 24 hours and 104 in the last 7 days.
+
+Not fixed here: it shares `applyCitationDecay` with D#179, and whether that demotion
+should have fired at all is exactly D#179's open question. Fixing the pool side first
+would be treating the symptom.
+
+**And the second-order effect, which is the part with no clean answer.** `#10656`'s
+`last_decided_session_id` is the id of the session that built and reviewed this release.
+Twenty rows across the table carry that id as last decider; nine of them were demoted in
+the last 24 hours. Reviewing this face perturbs the population under review, so
+"re-derive at tag time" is not an escape — it is another perturbation. The reviewer's
+counts (44 / 55 / 103 / 19 / 10) and mine (45 / 56 / 104 / 20 / 9) differ by one in every
+column, taken an hour apart.
+
+**Then `#10656` closed the loop, and this is the clearest evidence for D#179 the project
+has.** Watch one row across ninety minutes of writing about it:
+
+| time | state | what happened |
+|---|---|---|
+| 06:12:50Z | `importance = 3`, in the pool | measured, published in the draft |
+| 06:23:24Z | `importance = 2`, `demoted_at` set, **out of the pool** | `applyCitationDecay` demoted it; the review read it here and filed a BLOCKER |
+| 06:54:54Z | `importance = 3`, `demoted_at` cleared, `cited_count` 5 -> 6, **back in the pool** | this session wrote `#10656` into a report and a CHANGELOG; decay scored those as citations |
+
+`last_cited_session_id` on that row is now this release's own session. **Writing the
+release note about a row being evicted un-evicted it.** Nobody applied that memory;
+nobody acted on it. It was discussed — and `extractCitationsFromTranscript` cannot tell
+discussion from use, which is exactly D#179, recurring here on the very row a reviewer
+used to file a BLOCKER against this release. The measured scale of that confusion is
+already on record: 76.4% of the `pretool` face's citation numerator is prose-only mention.
+Left open deliberately — narrowing the citation predicate would move every cite-rate
+number this project has, and that is its own round.
+
+### 200 is a headroom choice, and the ruler cannot tell it from 500
+
+`--wide-obs 500` reads **identically** to `--wide-obs 200` on this corpus, in selection
+and in cost, because the largest pool is 107 and every bound at or above the largest pool
+is one arm. So the ruler has nothing to say about 200 vs 500; the value was picked as
+~2x the largest observed pool.
+
+**Three drafts tried to justify that headroom with a mechanism, and all three were wrong
+in the same way** — a correct per-project table with a sentence generalising *why* the
+numbers came out that way, written without checking the table's own rank order. The tables
+were never the problem.
+
+1. "The pool grows with a project's velocity, not with the size of the store." Backwards:
+   `computeAdaptiveWindows` makes windows **shorter** as velocity rises (tier3
+   60d -> 30d -> 14d at the 3/day and 10/day band edges), so activity *counteracts* pool
+   growth. The largest pool here belongs to the lowest-velocity high-volume project (mem,
+   1.14 obs/day, pool 107) while the only project a band up has 2.9x the velocity and 29%
+   of the pool (daagu, 3.29 obs/day, pool 31).
+2. "The pool tracks accumulated live rows inside a window that narrows as the project gets
+   busier." Also unearned, and this one the review wrote and I adopted. `pool ÷ live`
+   spans 0% to 76.5% across the eleven projects, and the rank order breaks in both
+   directions: `ubuntu-sec` is 6th by live rows and 2nd by pool; `daagu` is 3rd by live
+   rows and 6th by pool. Two rows out of order is enough to kill "tracks".
+3. The cost paragraph below made the identical move a third time.
+
+**What survives is a bound with a stated crossing point, plus the shape that defeats it.**
+A *steady* project in the low band (v < 3/day, tier3 = 60d) holds at most ~3 x 60 = 180
+rows in the widest window — under 200 with no empirical claim needed; the medium band
+(tier3 = 30d) crosses 200 only above ~6.7 obs/day and the high band (14d) only above
+~14.3 obs/day.
+
+**But "steady" is doing all the work, and no project here is steady.**
+`computeAdaptiveWindows` measures velocity over a trailing **7 days** while admitting rows
+from up to **60**, so a project that bursts and goes quiet reads as low-velocity, keeps the
+60-day window, and carries far more than the steady-state figure. The review named this as
+a theoretical hole and guessed no project here exhibited it. Measured, **every one does**:
+against what its own trailing-7-day velocity predicts for a 60-day window, mem holds
+**2.38x** (163 rows against 69 predicted), ubuntu-sec **6.88x** (118 against 17), and
+super-skill reads 0.00 obs/day while holding **51**. So the analytic bound does not hold
+here and must not be leaned on. The honest headroom claim is empirical and dated: the
+largest pool observed is 107 against a bound of 200, nothing is close, and this is a number
+to re-measure with `--population`, not to reason about.
+
+**Cost is per-project, and two drafts got it wrong in two different ways.** The first
+published `0.465 -> 1.23 ms per call, 2.65x` as a point estimate. The second replaced it
+with `2.1x - 3.8x`, which the review then caught as a range no measurement produces — it
+was assembled from hand harnesses on one project and was simultaneously too wide at the top
+and too narrow at the bottom.
+
+Measured on the committed `--cost` (200 iterations/arm, arm order reversed across two
+passes, one process, 2026-09-02T07:00Z):
+
+| project | obsPool | pool ÷ bound | cost of widening 50 -> 200 | reviewer's harness |
+|---|---|---|---|---|
+| projects--mem | 107 | 2.14x | **2.66x - 2.74x** | 2.56x - 2.63x |
+| projects--code-graph-mcp | 59 | 1.18x | **1.96x** | 1.82x |
+| projects--ubuntu-sec | 62 | 1.24x | **1.54x - 1.61x** | 1.49x - 1.59x |
+| the other 8 projects | <= 50 | 1.00x | unchanged (**inferred**, not measured) | — |
+
+So: **~1.5x to ~2.7x for the three projects whose pool exceeded 50, and nothing for the
+other eight.** Once per SessionStart. Both arms stay in the low single-digit milliseconds
+per call on every project measured — stated as a bound rather than a figure, because the
+absolutes drift by more than the effect.
+
+**A draft of this paragraph said the ratio "tracks how much each project's pool actually
+grows — which is the mechanism, not noise", and two of its own three rows refute it.**
+`code-graph-mcp` grows *less* than `ubuntu-sec` (1.18x against 1.24x) and costs *more*
+(1.96x against ~1.57x), and both harnesses reproduce the inversion, so it is not
+between-harness noise. The likely reason is that cost is not only rows-scored: the SQL
+fetch, `estimateTokens` per row, `JSON.parse(files_modified)` and the whole unchanged
+session-summary half are fixed work, so a project with a higher fixed baseline turns the
+same added work into a smaller multiple. What the data supports is the weaker claim: the
+ratio is largest where the pool grows most, by a clear margin, and the two mid-sized
+projects do not order consistently with pool growth. That is still ample reason to publish
+a per-project table instead of a global range — it was the causal wording that outran n=3.
+
+The reviewer's independent harness is in the last column. An early unstamped run on `mem`
+alone read 3.75x, outside everything either of us later measured (ceilings 2.96x and
+2.74x); it is retired here rather than carried. This is why the absolute milliseconds are
+not quotable on this face at all — the rule CLAUDE.md already carries for the sibling
+ruler, whose six runs on one machine spread 3.04 -> 1.80 ms/prompt while the ratio held.
+
+### Why `KEYCTX_POOL_SESS` did not move
+
+The discriminator is **`sessDisplaced = 0` in 11 of 11 projects**: widening it 10 -> 40
+displaces no summary at all, so it is purely additive and that LIMIT is a **volume cap,
+not the D#172 shape**. That — not the observation column — is what establishes it does not
+need lifting. (A draft led with "changed zero observations in every project", which only
+says the obs side is unaffected and would be equally true of a bound that *was* distorting
+the summary order.) What widening does buy is 130 newly injected summaries, roughly
+tripling the emitted block on the largest projects. It truncates *more* projects than the
+obs bound, 5 of 11 against 3 of 11, which is what made the original review propose it
+first. The two bounds behave oppositely.
+
+### The sibling query, enumerated and ruled out
+
+`buildSessionContextLines` holds a second pool-shaped query — `keyObs`, `ORDER BY
+o.created_at_epoch DESC LIMIT KEY_CONTEXT_LIMIT` (10). It is **not** this defect class,
+and the discriminator is specific: the JS underneath it preserves SQL order, partitioning
+the rows into File Lessons and Key Context and slicing each to 5. No re-scoring happens,
+so no row past position 10 could outrank one inside it. The bound is a ranking bound
+there, and it stays.
+
+That enumeration did surface something else, which is **filed and not fixed** (D#196):
+the two sections draw from one pool of 10 and each renders at most 5, so a session whose
+10 newest `importance >= 2` rows all carry a file-lesson shape emits 5 rows and leaves the
+other section empty, rather than emitting 10. That is an under-fill, not a
+reachability-vs-ranking defect, and folding it into this round would have been an
+unmeasured second change to the same block.
+
+### Evidence
+
+`tests/hook-context.test.mjs` gains one test that pins the **property**, not the number:
+a high-value row in a synthetic corpus is placed past position 50 by `created_at` and must
+still be selected. It is deliberately **not** a ranking test — a draft called the target
+the "densest" row in three places and the review refuted it by computing the shipped
+formula (control **3.4883**, target **3.3590**; the control shares its type, importance and
+lesson and is newer, so recency makes it denser by construction). Any rule that fills the
+pool in any order turns this green, which is the correct scope for a reachability backstop. It carries a same-shaped control at position 1, so a red run
+distinguishes "this row shape cannot be selected" from "this row's position made it
+unreachable". Verified RED against the shipped bound before the change — `expected
+[ 'reachability control', ...(3) ] to include 'reachability target'`, with the control
+present — and green after. It pins any bound >= 57 on that fixture, which is the honest
+scope: it guards the property, and the ruler prices the value.
+
+`317` test files, `5390 -> 5404` cases: one for the pool bound (`hook-context.test.mjs`
+35 -> 36) and thirteen binding the ruler's new modes and guards
+(`keyctx-pool-replay.test.mjs` 11 -> 24).
+
+Every new guard was driven to FAIL before being kept. Gutting `inertNotice` to return
+`null` reddens exactly the two cases that assert it fires; each drop-point anchor was
+removed in turn to confirm `patchDropPoints` names the missing gate rather than reporting
+an attribution over a gate that can no longer fire; and the review ran nine further
+mutations across the new exports with **zero survivors**. The one that mattered most was
+not unit-reachable: mutating the pool-size input to `0` made the INERT notice fire above a
+report showing two projects changing, with all 54 cases green — so `main()` now refuses to
+start when projects clear the row floor while the largest pool measures 0, and
+`assertInertConsistent` throws on the contradiction. Verified by mutation: the run prints
+`SELF-CHECK FAILED: 11 projects cleared the 20-row floor but the largest candidate pool
+measured 0`, emits no report, and exits 1.
+
+One non-reproducing failure is recorded rather than explained, per this project's
+convention for them: a reviewer's first full-suite run reddened
+`tests/events-pipeline-probes.test.mjs` (`expected [ Array(1) ] to deeply equal []`); that
+file in isolation passed 3/3 and their second full run was 317/317 green. A second reviewer
+was working the same tree concurrently and CLAUDE.md documents that concurrent `vitest`
+runs manufacture failures — but that is a plausible cause, not an established one, and
+calling it a flake would be a claim about a mechanism nobody demonstrated.
+
+Lint clean. Knip **46 unused exports / 0 unused files**, unchanged: the four new exports
+are all consumed by `tests/keyctx-pool-replay.test.mjs`, and `largestObsPool` was made
+module-private rather than exported by habit (the v3.70.0 precedent). Per D#194 that
+evidence says nothing about `hook-context.mjs` itself, which is invisible to knip because
+a benchmark names it in a `new URL(...)` specifier; this round adds no exports there, so
+there is nothing for the blind spot to hide.
+
 ## v3.86.0 — six deferred items closed; two of the three real defects were described, in writing, in the file that then ignored the description
 
 Three behaviour fixes, three test-hygiene closures, two new rulers, and the project's

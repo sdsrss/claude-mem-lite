@@ -291,6 +291,72 @@ describe('selectWithTokenBudget', () => {
     // All should be included but diversity affects ordering
     expect(result.observations.length).toBe(3);
   });
+
+  // D#192 — KEYCTX_POOL_OBS is a REACHABILITY backstop, not a relevance gate.
+  //
+  // The obsPool SELECT orders by `created_at_epoch DESC` and the selector below it
+  // re-sorts by valueDensity, into which recency enters compressed to (1,2] against
+  // impBoost 1.0-2.0 x typeQuality x lessonBoost. So the key the SQL sorts on barely
+  // participates in the final order, and a LIMIT on that SELECT decides what can be
+  // considered at all — the D#172 shape, fifth surface.
+  //
+  // This test pins the PROPERTY, not the number: a high-value row placed past position 50
+  // by created_at must still be selected. At KEYCTX_POOL_OBS = 50 it FAILS (verified:
+  // "expected [...] to contain 'reachability target'"); it passes at 57 and above, 57
+  // being the fixture's row count — so it guards reachability and the ruler prices the
+  // value.
+  //
+  // It is deliberately NOT a ranking test, and an earlier draft of this comment (and of
+  // the test name, and of the fixture's own lesson string) wrongly called the target the
+  // "densest" row. The pre-tag review computed the shipped formula by hand and refuted it:
+  // the control is denser (3.4883 against 3.3590) because it is newer and otherwise
+  // identical, so the target can never rank first by construction. Any rule that fills the
+  // pool in any order would turn this green. That is the correct scope for a reachability
+  // backstop; do not add ranking claims to it without changing the fixture.
+  it('D#192: selects a high-value row even when it sits past position 50 by recency', () => {
+    const DAY = 86400000;
+    // A control with the same shape at position 1, so a red run distinguishes "this row
+    // shape cannot be selected" from "this row's POSITION made it unreachable" — the
+    // discriminator this fixture exists to provide.
+    insertObs(db, {
+      sessionId: 'sess-1', project: 'test', type: 'decision',
+      title: 'reachability control', importance: 3,
+      lessonLearned: 'high value density, newest row',
+      epochOffset: -1000,
+    });
+    // 55 newer, denser-to-read but lower-scoring rows: type `change` (quality 0.5),
+    // importance 1, long titles (cost is the denominator of valueDensity). They occupy
+    // every pool slot up to 50 under the shipped bound.
+    for (let i = 0; i < 55; i++) {
+      insertObs(db, {
+        sessionId: 'sess-1', project: 'test', type: 'change',
+        title: `routine change ${i} with a deliberately long title so its cost is high`,
+        importance: 1,
+        epochOffset: -(i * 60000 + 60000),
+      });
+    }
+    // The target: oldest row in the corpus, so it sorts LAST by created_at_epoch and
+    // lands past the 50-row LIMIT. Ten days keeps it inside tier3 (30d at this
+    // velocity) and importance 3 keeps it inside the tier3 arm of the WHERE.
+    insertObs(db, {
+      sessionId: 'sess-1', project: 'test', type: 'decision',
+      title: 'reachability target', importance: 3,
+      lessonLearned: 'high value density, oldest row in the corpus',
+      epochOffset: -(10 * DAY),
+    });
+
+    // Pin the tier the fixture lands in. The target sits at -10d and only qualifies via the
+    // tier3 arm; at this row count velocity is 8/day (medium, tier3 = 30d), but ~15 more
+    // filler rows would cross 10/day into the high band, where tier3 collapses to 14d and
+    // the margin drops to 4 days. Without this assertion a later edit that adds fillers
+    // would turn the test red for a reason that has nothing to do with the pool bound.
+    const w = computeAdaptiveWindows(db, 'test');
+    expect(w.tier3).toBe(30 * DAY);
+
+    const titles = selectWithTokenBudget(db, 'test', 2000).observations.map((o) => o.title);
+    expect(titles).toContain('reachability control');
+    expect(titles).toContain('reachability target');
+  });
 });
 
 // ─── cleanupClaudeMdLegacyBlock ─────────────────────────────────────────────
