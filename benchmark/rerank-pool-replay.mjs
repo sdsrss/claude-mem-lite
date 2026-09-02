@@ -228,6 +228,10 @@ export function metricShardPath(dbDir) {
   try {
     recordMetric(tmp, { event: 'sink_liveness_probe' });
     const named = existsSync(join(tmp, 'metrics')) ? readdirSync(join(tmp, 'metrics')) : [];
+    // No direct case drives this branch, and that is recorded rather than papered over:
+    // it IS reachable and IS what fails when the sink is off — the mutation that removes
+    // the `= '1'` above dies here, with this exact message and `named.length` 0. Live
+    // code exercised indirectly, not the dead branch the D#197 precedent says to delete.
     if (named.length !== 1) {
       throw new Error(`SELF-CHECK FAILED: the metric sink named ${named.length} shards in a `
         + 'clean directory, so this guard does not know which file to watch and would pass '

@@ -31,6 +31,7 @@ import {
   readPathARows,
   assertCanSeeSuppression,
   assertErrorArmIsNotAZero,
+  parseDaysArg,
 } from '../benchmark/patha-exclude-report.mjs';
 
 /** A post-B5 row with sane defaults; override what a case is about. */
@@ -249,5 +250,33 @@ describe('self-checks', () => {
       return { ...a, okPrompts: rows.length };
     };
     expect(() => assertErrorArmIsNotAZero(sloppy)).toThrow(/error/i);
+  });
+});
+
+describe('--days cannot silently answer a different question than it was asked', () => {
+  // Review N8. `parseInt('0')` is 0, which is FALSY, so the original
+  // `Math.max(1, parseInt(v, 10) || DEFAULT)` sent `--days 0` to the 7-day default while
+  // the report header printed `last 0d`. The clamp that looks like it covers this was
+  // unreachable for 0 — only negatives ever reached it.
+  it('honours 0 by clamping to 1, instead of falling through to the default', () => {
+    expect(parseDaysArg(['node', 'x', '--days', '0'], 7)).toBe(1);
+  });
+
+  it('clamps negatives to 1 as well', () => {
+    expect(parseDaysArg(['node', 'x', '--days', '-3'], 7)).toBe(1);
+  });
+
+  it('passes real values through untouched', () => {
+    expect(parseDaysArg(['node', 'x', '--days', '30'], 7)).toBe(30);
+    expect(parseDaysArg(['node', 'x', '--days', '1'], 7)).toBe(1);
+  });
+
+  it('falls back to the default only for a genuinely absent or non-numeric argument', () => {
+    // The distinction the bug erased: "you gave me nothing" and "you gave me a number I
+    // do not like" are different, and only the first should silently become 7.
+    expect(parseDaysArg(['node', 'x'], 7)).toBe(7);
+    expect(parseDaysArg(['node', 'x', '--days'], 7)).toBe(7);
+    expect(parseDaysArg(['node', 'x', '--days', 'abc'], 7)).toBe(7);
+    expect(parseDaysArg(['node', 'x', '--json'], 7)).toBe(7);
   });
 });

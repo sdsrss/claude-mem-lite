@@ -291,12 +291,31 @@ export function assertErrorArmIsNotAZero(aggregate) {
   }
 }
 
+/**
+ * `--days`, parsed so it cannot silently answer a different question than it was asked.
+ *
+ * The first version was `Math.max(1, parseInt(v, 10) || DEFAULT_WINDOW_DAYS)`. `parseInt('0')`
+ * is 0, which is FALSY, so `--days 0` fell through to the default and reported a 7-day
+ * window under a header that said `last 0d` — and the `Math.max(1, …)` clamp that looks
+ * like it handles this was unreachable for 0, reachable only for negatives. A window
+ * argument that quietly means something else is the shape this repo files under silent
+ * narrowing; garbage still falls back to the default, but a NUMBER is always honoured.
+ *
+ * Exported because it lived inside `main()`, where nothing under tests/ can reach it —
+ * the blind spot this file's own self-checks are guarded against.
+ */
+export function parseDaysArg(argv, fallback = DEFAULT_WINDOW_DAYS) {
+  const i = argv.indexOf('--days');
+  if (i === -1 || argv[i + 1] === undefined) return fallback;
+  const n = parseInt(argv[i + 1], 10);
+  return Number.isFinite(n) ? Math.max(1, n) : fallback;
+}
+
 function main() {
   assertCanSeeSuppression(aggregatePathAExclude);
   assertErrorArmIsNotAZero(aggregatePathAExclude);
 
-  const i = process.argv.indexOf('--days');
-  const days = i !== -1 && process.argv[i + 1] ? Math.max(1, parseInt(process.argv[i + 1], 10) || DEFAULT_WINDOW_DAYS) : DEFAULT_WINDOW_DAYS;
+  const days = parseDaysArg(process.argv);
   const asJson = process.argv.includes('--json');
 
   const rows = readPathARows(DB_DIR, days);
