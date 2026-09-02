@@ -11,10 +11,10 @@ import {
   sandboxEnv, mcpSession, runHook, join, existsSync, readFileSync, writeFileSync, mkdirSync,
 } from './lib.mjs';
 import { mkdtempSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { sandboxBase } from './sbx-base.mjs';
 import { execFileSync } from 'node:child_process';
 
-const SBX = mkdtempSync(join(process.env.SBX_BASE || tmpdir(), 'memsbx-C-'));
+const SBX = mkdtempSync(join(sandboxBase(), 'memsbx-C-'));
 const HOME = join(SBX, 'home');
 const PROJECT = join(SBX, 'work', 'my-app');
 const V_OLD = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version;

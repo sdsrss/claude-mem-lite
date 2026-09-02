@@ -6,15 +6,24 @@ real `npm install` inside a fake plugin cache, and a real MCP server over stdio,
 full pass takes minutes and needs network.
 
 ```bash
-node tests/sandbox/phaseA-plugin.mjs   # /plugin install …            43 checks
-node tests/sandbox/phaseB-npm.mjs      # npm i -g + claude-mem-lite install   45 checks
-node tests/sandbox/phaseC-update.mjs   # /plugin update version swap  15 checks
+SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseA-plugin.mjs   # /plugin install …    43 checks
+SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseB-npm.mjs      # npm i -g + install   45 checks
+SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseC-update.mjs   # version swap         15 checks
 ```
 
 Each exits non-zero if any check fails and prints a `PASS`/`FAIL` line per check.
-Sandboxes are created under `$TMPDIR` (override with `SBX_BASE=/some/dir`) and are
-**left on disk** so a failure can be inspected — delete them when you are done. Phase B
-alone leaves ~50 MB (a real `npm i -g` tree).
+Sandboxes are created under `SBX_BASE`, falling back to `$TMPDIR`, and are **left on
+disk** so a failure can be inspected — delete them when you are done. Phase B alone
+leaves ~50 MB (a real `npm i -g` tree).
+
+**`SBX_BASE` is in every command above on purpose.** `os.tmpdir()` reads `$TMPDIR`, and
+in a Claude Code session `$TMPDIR` is `~/.claude/tmp/claude-<uid>` — under `$HOME`,
+which is exactly what the "Do not put the sandbox under `$HOME`" convention below
+forbids, for the reason given there. That is not a hypothetical: on a machine where
+`~/node_modules` holds `better-sqlite3` and `claude-mem-lite`, the run measures the home
+tree and passes. `tests/sandbox/sbx-base.mjs` now refuses such a base outright rather
+than leaving the rule to a reader — `tests/sandbox-base-guard.test.mjs` drives the
+refusal, and it is in `vitest run` even though the harness itself is not.
 
 **Run them one at a time.** Chaining `phaseA … ; phaseB …` in a single shell crashed
 phase B once, while phase B on its own passed 45/45 immediately after. Not attributed —

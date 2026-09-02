@@ -247,7 +247,28 @@ function hasFilePaths(filesModified) {
  * @param {number[]} excludeIds Observation IDs already in Key Context
  * @returns {object[]} Top memories (max 3) with {id, type, title, lesson_learned}
  */
-export function searchRelevantMemories(db, userPrompt, project, excludeIds = []) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.counterfactual] — this call is a MEASUREMENT, not a delivery.
+ *   Nothing it returns is shown to the model, so it must leave no trace: no
+ *   `injection_count` / `last_injected_at` bump, and no `inject` metric row.
+ *
+ *   Added for `lib/patha-exclude-meter.mjs`'s arm B (D#214). The first version of that
+ *   ruler handed this function the live writable handle, and the pre-tag review
+ *   reproduced both halves of the damage: rows that were never shown to anyone reached
+ *   `injection_count = 1` — which feeds `noisePenaltyClause`, `demotePinned`'s
+ *   `injection_count >= N AND cited_count = 0` predicate, and the `injection_count = 0`
+ *   GC-eligibility gate — and the `inject` meter counted two calls per prompt, on
+ *   exactly the installs where the D#214 corpus is gathered. CLAUDE.md already carried
+ *   this rule for `rerank-pool-replay` ("the handle must reject a write … a writable
+ *   handle would move the very noise signal being measured"); the new ruler quoted it
+ *   and then broke it.
+ *
+ *   A read-only handle would also work; a flag is used instead because the caller needs
+ *   BOTH arms to see one store state, which is achieved by ordering (arm B first, and
+ *   it writes nothing) rather than by isolation.
+ */
+export function searchRelevantMemories(db, userPrompt, project, excludeIds = [], { counterfactual = false } = {}) {
   // Min-length guard is English-centric: 5 chars ≈ one short English word. A CJK
   // query is meaningful at 2 chars (状态/架构) and most real Chinese queries are
   // 2-4 chars (状态管理, 召回率, 熔断降级) — the bare `.length < 5` silently
@@ -271,6 +292,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
   const _t0 = Date.now();
   let _candidates = 0, _aboveThreshold = 0, _returned = 0, _orFired = false;
   const _emit = () => {
+    if (counterfactual) return;
     try {
       recordMetric(DB_DIR, {
         event: 'inject',
@@ -472,12 +494,16 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
     //                     denominator is citation_surface_log, not this column.
     // Per-row try/catch for FTS trigger safety (project_non_obvious.md).
     const result = coverageFiltered.slice(0, MAX_MEMORY_INJECTIONS);
-    const now = Date.now();
-    const bumpStmt = db.prepare(
-      'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?'
-    );
-    for (const r of result) {
-      try { bumpStmt.run(now, r.id); } catch {}
+    // `counterfactual` skips the bump entirely rather than reverting it: these rows were
+    // never shown to anyone, and `injection_count` is read by three ranking/GC paths.
+    if (!counterfactual) {
+      const now = Date.now();
+      const bumpStmt = db.prepare(
+        'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?'
+      );
+      for (const r of result) {
+        try { bumpStmt.run(now, r.id); } catch {}
+      }
     }
 
     _returned = result.length;

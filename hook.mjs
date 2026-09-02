@@ -84,6 +84,7 @@ import { recordSkillAdoption, gcOldShadowShards } from './registry-recommend.mjs
 import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
 import { injectedIdsFileName, keyContextIdsFileName } from './lib/injected-ids.mjs';
+import { pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } from './lib/patha-exclude-meter.mjs';
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
@@ -2214,9 +2215,12 @@ async function handleUserPrompt() {
           // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
           // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
           //
-          // The ruler that would settle it does not exist yet: reconstructing per-prompt
-          // exclude sets needs the marker file, which rotates after DEDUP_STALE_MS and is
-          // never persisted. Tracked as a re-filed D#193 naming that as the prerequisite.
+          // The ruler that settles it is now BUILT and sits at the bottom of this same
+          // function: `lib/patha-exclude-meter.mjs`, off unless CLAUDE_MEM_METRICS=1. It
+          // does not persist the marker for an offline replay — reconstructing per-prompt
+          // exclude sets that way needs a file that rotates after DEDUP_STALE_MS, and the
+          // replay would then run against a drifted database. Both arms run at this read
+          // instead. What is still missing is elapsed time, not a method. D#213.
           // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
           for (const id of ids) { keyContextIds.push(id); pathAInjectedIds.push(id); }
         }
@@ -2238,6 +2242,42 @@ async function handleUserPrompt() {
       // until then this stays experimental and off.
       const taskImperativeOn = process.env.CLAUDE_MEM_TASK_IMPERATIVE === 'on'
         || process.env.CLAUDE_MEM_TASK_IMPERATIVE === '1';
+      // ── D#214 arm B (counterfactual), computed BEFORE the delivered arm ─────────
+      // Ordering is the whole correctness argument, so it is stated where the order is:
+      // arm A's search legitimately bumps `injection_count` on every row it delivers,
+      // and that column feeds `noisePenaltyClause`. Running the counterfactual AFTER it
+      // — as the first version did — lets arm A push a row across the >=4 noise gate and
+      // then attributes the resulting difference to the repair. The pre-tag review
+      // reproduced that: a marker id for a row the query never matches, where the honest
+      // answer is `suppressed 0 / refilled 0`, reported `refilled: 1, setChanged: true`.
+      //
+      // So arm B runs first, on the same handle, with `counterfactual: true` — it writes
+      // nothing and emits no `inject` metric row, so arm A afterwards sees exactly the
+      // state arm B saw. Both arms, one state, and neither one perturbs the other.
+      //
+      // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
+      // repaired system would not have made into arm B's exclude, so on any prompt where
+      // the pick changed, the delta described a system that does not exist.
+      const meterCoerced = (pathAMeterEnabled() && pathAInjectedIds.length > 0)
+        ? [...coerceMarkerIds(pathAInjectedIds)]
+        : null;
+      let meterArmB = null;
+      if (meterCoerced) {
+        try {
+          const pickB = taskImperativeOn
+            ? selectImperativeLesson(db, promptText, project, [...pathAInjectedIds, ...meterCoerced])
+            : null;
+          const excludeB = pickB ? [...keyContextIds, pickB.id] : keyContextIds;
+          meterArmB = {
+            rows: searchRelevantMemories(db, promptText, project, [...excludeB, ...meterCoerced], { counterfactual: true }),
+            pick: pickB ? pickB.id : null,
+          };
+        } catch (e) {
+          debugCatch(e, 'patha-exclude-meter-armB');
+          meterArmB = { error: String(e?.message || 'unknown') };
+        }
+      }
+
       // Exclude only ids path-A (user-prompt-search.js) already injected — NOT the
       // SessionStart Key Context set, which overlaps the high-value lesson pool and
       // would suppress the pick. The chosen id is excluded from the <memory-context>
@@ -2282,6 +2322,27 @@ async function handleUserPrompt() {
         const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
         if (imperativeLine) process.stdout.write(imperativeLine + '\n');
       }
+
+      // D#214's ruler, second half: arm B was computed above, before anything was
+      // delivered; this only shapes the row and appends it. Kept after every
+      // `process.stdout.write` so the metric append is never in front of the injection,
+      // and so a throw here cannot corrupt what was already emitted.
+      //
+      // `meterCoerced` being non-null is the gate — it is null unless
+      // CLAUDE_MEM_METRICS=1 AND the marker carried ids, which is what keeps both the
+      // counterfactual search and the second lesson selection off a stock install.
+      try {
+        if (meterCoerced) {
+          recordPathAExclude(join(RUNTIME_DIR, '..'), {
+            markerIds: pathAInjectedIds,
+            emitted: memories,
+            after: meterArmB,
+            imperativeArm: taskImperativeOn ? 'on' : 'off',
+            imperativeBefore: imperativePick ? imperativePick.id : null,
+            imperativeAfter: meterArmB ? (meterArmB.pick ?? null) : null,
+          });
+        }
+      } catch (e) { debugCatch(e, 'patha-exclude-meter'); }
     } catch (e) { debugCatch(e, 'handleUserPrompt-memory'); }
   } finally {
     db.close();

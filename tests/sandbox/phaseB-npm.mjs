@@ -9,9 +9,9 @@ import {
 } from './lib.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { sandboxBase } from './sbx-base.mjs';
 
-const SBX = mkdtempSync(join(process.env.SBX_BASE || tmpdir(), 'memsbx-B-'));
+const SBX = mkdtempSync(join(sandboxBase(), 'memsbx-B-'));
 const HOME = join(SBX, 'home');
 const PROJECT = join(SBX, 'work', 'my-app');
 const NPM_PREFIX = join(SBX, 'npm-global');

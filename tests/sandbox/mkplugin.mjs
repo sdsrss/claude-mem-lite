@@ -1,12 +1,12 @@
 // mkplugin.mjs — build a plugin-ONLY sandbox HOME fast (no npm install).
 // Exports makePluginHome() so repro scripts can iterate in seconds.
 import { REPO, snapshotRepo, makeFakeClaudeBin, sandboxEnv, join } from './lib.mjs';
-import { tmpdir } from 'node:os';
+import { sandboxBase } from './sbx-base.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 export function makePluginHome(label = 'P') {
-  const SBX = mkdtempSync(join(process.env.SBX_BASE || tmpdir(), `memsbx-${label}-`));
+  const SBX = mkdtempSync(join(sandboxBase(), `memsbx-${label}-`));
   const HOME = join(SBX, 'home');
   const PROJECT = join(SBX, 'work', 'my-app');
   const VERSION = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version;

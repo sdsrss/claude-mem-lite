@@ -2,6 +2,184 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.90.0 — the ruler runs at the read, and four retired numbers that outlived the paragraphs retracting them
+
+**Upgrade note. Nothing changes by default.** The one new code path is a measurement that
+does not execute unless `CLAUDE_MEM_METRICS=1`, which is off unless you set it. No schema
+change, no migration, no new configuration. **Revert path:** pin the previous release
+(`npm i -g claude-mem-lite@3.89.0`, or the equivalent plugin pin).
+
+### A ruler that runs at the read instead of replaying a recording of it
+
+The path-A injected-ids exclude in `hook.mjs handleUserPrompt` is inert against string ids:
+the marker holds `'42'`, and both consumers test `new Set(excludeIds).has(r.id)` against a
+NUMBER out of SQLite. That has been known and deliberately unrepaired for two releases, for
+a stated reason — this path already has a suppressor that *works* (`shouldSkipByDedup`
+String-normalises both sides), so switching this one on adds a second, finer suppressor to
+an already-suppressed face in an unknown direction. What was missing was a price.
+
+The obvious way to get one — persist the marker at write time, replay it in a few weeks —
+was **rejected**, and the reason is a rule this repo already applies to three other faces:
+*never diff two runs taken at different times.* A recorded marker still has to be replayed
+against an `observations` table that has moved. So `lib/patha-exclude-meter.mjs` runs both
+arms **at the read**, in one process against one database state: arm A is the set just
+delivered, arm B is the same `searchRelevantMemories` call with the ids coerced to numbers.
+
+Three consequences worth stating because each one is a design decision, not a detail:
+
+- **`suppressed` is exact, not estimated — under a stated condition.** Arm A's exclude is
+  inert, so arm A's result IS the unexcluded search, and intersecting it with the coerced
+  marker names precisely the rows a working exclude would drop. That holds while no single
+  marker mixes coercible numbers with coercible strings; on a mixed marker arm A would
+  already have dropped the numeric half and the count would silently run low. No writer
+  produces one today, and the row carries `markerNumbers` beside `markerStrings` so the day
+  one does is visible in the data rather than only in a comment.
+- **The column that will decide the ledger entry is `refilled`, not `suppressed`.** The open
+  question is whether a freed slot gets refilled from the pool or is simply lost, and a
+  suppression count cannot answer it. `net` is recorded beside `setChanged` because a
+  one-for-one replacement is net zero while the delivered set has changed.
+- **`inert` is recorded per prompt, and on the right predicate.** A prompt's exclude is
+  inert when an id it *could* have matched arrives as a string — not merely when some
+  string is present. The looser rule shipped in a draft, resting on "only a PreToolUse
+  emission turns the union into strings", which the pre-tag review refuted from the writer
+  itself: `user-prompt-search.js` emits `P<id>` and `D<id>` on its own legs, and the
+  deferred leg merges `prevIds.map(String)`. Under the loose rule a marker holding nothing
+  but those namespaces counted as inert while having nothing excludable at all — inflating
+  the denominator in exactly the direction the column exists to prevent. `inert` now keys
+  on ids that are both coercible and string-typed, reported beside `markerCoercibleStrings`.
+
+Coerced ids are ADDED to `contextExclude` rather than replacing it, so the Key Context half
+— a different mechanism with its own history — is identical in both arms. Arm B also
+carries its **own** imperative pick: reusing arm A's put a choice the repaired system would
+not have made into arm B's exclude, so on any prompt where the pick changed, the delta
+described a system that exists in neither arm. `task_imperative` records
+`imperativeArm: 'off'` on a stock install rather than being dropped from the row.
+
+**The pre-tag review found this ruler writing production state, and it is the finding worth
+carrying out of this release.** `searchRelevantMemories` is not a read — every successful
+call ends with `UPDATE observations SET injection_count = injection_count + 1`. The first
+version of the meter handed that function the live writable handle for its counterfactual
+arm and ran it *after* the delivery, which the reviewer reproduced doing three things:
+rows never shown to anyone reached `injection_count = 1` (a column read by
+`noisePenaltyClause`, by `demotePinned`'s `injection_count >= N AND cited_count = 0`
+predicate, and as the `= 0` GC gate); the ruler manufactured its own delta, reporting
+`refilled: 1, setChanged: true` on a prompt whose honest answer was zero, because arm A's
+bump pushed a row across the `>= 4` noise gate before arm B scored; and the sibling
+`inject` meter counted two calls per prompt, on exactly the installs where this corpus
+gets gathered. **CLAUDE.md already carried this rule for `rerank-pool-replay` — "the handle
+must reject a write" — and the release note above quotes that ruler by name.**
+
+Both halves are now fixed and pinned. `searchRelevantMemories` takes an explicit
+`{ counterfactual: true }` that skips the bump and the metric emission, and arm B runs
+**before** the delivered search, so both arms see one store state by ordering rather than
+by hope. `tests/patha-meter-counterfactual.test.mjs` asserts the behaviour and the wiring —
+including the source-position ordering, because the flag with the wrong order still leaves
+the second defect intact. Six mutations were driven against it and all six turn the file
+red, among them moving arm B back below the delivery.
+
+**This ships the ruler, not a verdict.** There is no corpus yet; the ledger entry stays open
+(re-filed twice during this round — D#213 → D#214 → **D#215** — because a premise defines
+scope, and both the blocker and the missing-ruler premise changed under it).
+
+**One mutation survived that round, and the code was what was wrong.** An explicit `/^E/`
+skip for namespaced event ids sat above a `Number.isInteger` gate that already rejects
+everything reaching it (`Number('E42')` is NaN). Deleting the branch left all cases green,
+so it was deleted rather than given a test — the D#197 precedent. Five other mutations were
+killed. Self-review then found a twin: the metric row and the tests were about to assert on
+two copies of one filter; `measurePathAExclude` now calls the exported helper.
+
+### The install harness violated its own README, and the README already said so
+
+`tests/sandbox/README.md` has carried "Do not put the sandbox under `$HOME`" since v3.71.0
+— in its "Conventions worth keeping" section, forty lines *below* the quickstart line that
+says "sandboxes are created under `$TMPDIR`". In a Claude Code session those two are the
+same sentence: `os.tmpdir()` reads `$TMPDIR`, which is `~/.claude/tmp/claude-<uid>`.
+On a machine whose `~/node_modules` holds `better-sqlite3` and `claude-mem-lite`, the
+harness then resolves up the tree into the home install and measures the wrong one — and
+all 103 checks still pass. Found by running it, not by reading it.
+
+A README line could not fix this, because the README already said it. `tests/sandbox/sbx-base.mjs`
+refuses such a base outright, naming the resolved path rather than the variable, and
+`tests/sandbox-base-guard.test.mjs` drives the refusal in both directions — it is in
+`vitest run` even though the harness it guards is not.
+
+**The first version of that guard tested a proxy rather than the hazard, and the review
+drove a real path through the gap.** The stated hazard is an ancestor directory owning a
+`node_modules`; the check was "is it under `$HOME`". Those are different sets, and
+`<repo>/tmp/sbx` — a path this project uses — sits in the difference: nowhere near `$HOME`,
+and it resolves `better-sqlite3` and `claude-mem-lite` straight out of the package under
+test. The guard now checks the hazard itself (`ancestorWithNodeModules`) alongside the HOME
+rule, compares through `realpathSync` so a symlink into HOME cannot walk around it, and
+creates the base directory — because the README's own newly-documented command named
+`/tmp/claude/sbx`, which does not exist on a fresh machine, so the default threw by design
+and the documented override crashed with ENOENT, leaving no working invocation at all.
+
+All three phases measured green with an explicit base, before the guard change and again
+after it: **43/43 · 45/45 · 15/15**, run separately, and the documented command verified
+from a state where `/tmp/claude/sbx` did not exist. Sandboxes total ~351 MB and are left on
+disk by design; they were deleted afterwards.
+
+### Four sentences that were false, in the files this project steers itself with
+
+Each was verified false before being changed, and they share one shape: **a retired number
+outliving the paragraph that retired it.**
+
+- CLAUDE.md said nothing under `tests/` imports `benchmark/rerank-pool-replay.mjs`, so its
+  four self-checks could be deleted with a green suite. `tests/rerank-pool-replay.test.mjs`
+  imports them. The correction also states the half that is still open: deleting a
+  self-check *function* breaks the named import and goes red, but deleting its **call site
+  in `main()`** stays green, which is the exact shape found on `citation-live-replay.mjs`.
+- D#196 was recorded as "CLOSED v3.88.0-dev". Its fix commit lands after the v3.88.0 release
+  commit; it shipped in v3.89.0.
+- `tests/pathA-exclude-inert.test.mjs` still opened with 18%, twenty lines above its own
+  paragraph explaining that 18.0% is the mirror population and the figure is 9.0%.
+- v3.89.0's note that a dead export in the three `entry` files is invisible to knip is
+  literally true and still misleads, because **the hole is empty**. Re-running the same
+  binary against a copy of `knip.json` with `includeEntryExports: true` takes the report
+  53 → 66; all 13 extra names are in `benchmark/*` and `scripts/*`, and **zero** are in
+  `hook.mjs`, `server.mjs` or `install.mjs`. Both files now carry the qualifier.
+
+### A ledger entry closed on its own measurement rather than left hanging
+
+**D#211** (citation → importance via the `boost` maintain op) is closed as *measured, not
+worth changing* — not as non-existent. Re-verified on the live store, **and the denominator
+is named because a bare table count is the error this file already records twice**: the
+`boostAccessed` predicate selects **52 rows**, out of the **1425** it could ever select
+(`compressed_into = 0 AND importance < 3`, both clauses of its own `WHERE`) — 2332 rows are
+uncompressed and the table holds 3771, neither of which is the population. Of the 52,
+**24 are cited nowhere** in a 101-transcript corpus (re-derived independently at review
+time; the author's earlier pass over 98 transcripts read 25). At most 3 could have crossed
+the threshold on citations, under a bound that ignores the relevance gate entirely — two
+independent reconstructions during review put it at 1 and 2, both inside that bound, and
+no harness for it is committed. The mechanism is real and moves few rows. Leaving a
+fully-measured entry open makes the next reader think something is still unmeasured.
+
+**E#10524 retired** using v3.89.0's own `--supersedes E#<n>` path — the first real use of
+it. It carried `2.1×–3.8×` for Key Context pool cost, a range no measurement produced: the
+per-project figures are 1.54–1.61×, 1.96× and 2.66–2.74×, so the low end falls below its
+floor and nothing approaches its ceiling. As designed, `superseded_at_epoch` is set and
+`superseded_by_id` stays null (that column references `events` and cannot hold an
+observation id).
+
+### Verification
+
+`npx vitest run` **323 files / 5489 tests**, all passing (from 320 / 5445). The deltas
+account exactly: **+3 files** are `tests/patha-exclude-meter.test.mjs` (22),
+`tests/sandbox-base-guard.test.mjs` (13) and `tests/patha-meter-counterfactual.test.mjs`
+(8); **+44 cases** are those 43 plus **one** generated case, because
+`tests/obs-id-caliber-sync.test.mjs` emits one per `.mjs`/`.js` under `benchmark/`, `lib/`,
+`scripts/` and the repo root and this round added exactly one such file
+(`lib/patha-exclude-meter.mjs`; the two new files under `tests/` are outside the roots that
+generator walks). `npx eslint .` clean. `knip` **53** unused
+exports / **0** unused files, and the same-tree A/B per the CLAUDE.md measurement contract
+returned a **byte-identical name set (+0 / −0)**. Coverage measured **on the tagged tree**,
+which is the correction the review asked for — a first draft quoted the pre-round run
+(320 files / 5445 cases) inside this release's verification block, and `lib/patha-exclude-meter.mjs`
+matches the coverage `include` glob, so it was inside the shipped scope and outside the
+measured one: statements **83.73%** (7183/8578) · branches **78.06%** (5385/6898) ·
+functions **88.52%** (918/1037) · lines **87.13%** (6007/6894), against a gate of
+80 / 74 / 84 / 83 — 3.7–4.5pp of headroom, and the gate is deliberately left where it is.
+
 ## v3.89.0 — a ledger of measurements, two of which were taken on the wrong side of the thing they describe
 
 **Upgrade note.**
@@ -44,7 +222,11 @@ identifies them as caliber errors rather than drift.
   independent reason this round did not touch: it is in `knip.json`'s `entry` array, and
   knip's `includeEntryExports` defaults to false. Probe-verified both ways. The same holds
   for `server.mjs` and `install.mjs`, so a dead export in any of the three entry files is
-  still invisible today.
+  still invisible today. *(Added after the tag, because the sentence above is literally
+  true and still misleads: the hole is EMPTY. Re-running the same binary against a copy of
+  `knip.json` with `includeEntryExports: true` takes the report 53 → 66, and all 13 extra
+  names are in `benchmark/*` and `scripts/*` — zero in `hook.mjs`, `server.mjs` or
+  `install.mjs`. Nothing is hidden there today.)*
 
 ### knip: the blind spot is removed rather than compensated for
 

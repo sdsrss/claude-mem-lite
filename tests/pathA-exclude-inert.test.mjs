@@ -1,10 +1,13 @@
-// D#193 — the path-A exclude set is currently INERT against string ids, and this file
-// pins that so the state cannot change by accident.
+// D#213 (re-filed from D#212, itself re-filed from D#193) — the path-A exclude set is
+// currently INERT against string ids, and this file pins that so the state cannot change
+// by accident.
 //
 // This is an unusual test: it asserts a defect. The reason is that repairing it is a
 // behaviour change nobody has measured, so the dangerous outcome is not "the bug stays",
-// it is "someone normalises a type in passing and 18% of one injection face disappears
-// without anyone deciding to".
+// it is "someone normalises a type in passing and up to 9% of one injection face
+// disappears without anyone deciding to". (An earlier version of this line said 18%,
+// carried over from the mirror-image population corrected 20 lines below — the wrong
+// number outlived the paragraph that retracted it, in the same file.)
 //
 // THE MECHANISM, verified below rather than described:
 //   - `user-prompt-search.js` writes plain numbers into the shared marker;
@@ -33,12 +36,18 @@
 // Direction unknown — the freed slot is sometimes refilled and sometimes lost — and this
 // path already has a WORKING suppressor in `shouldSkipByDedup`, which String-normalises
 // both sides and skips the whole injection at >=0.8 overlap. Repairing this one adds a
-// second suppressor to an already-suppressed face, which needs an A/B, and its ruler does
-// not exist yet.
+// second suppressor to an already-suppressed face, which needs an A/B.
+//
+// THE RULER NOW EXISTS — `lib/patha-exclude-meter.mjs`, wired into the same read in
+// `hook.mjs handleUserPrompt` and off unless `CLAUDE_MEM_METRICS=1`. It does NOT persist
+// the marker for a later replay (the route the ledger leaned toward, and one this repo has
+// a standing rule against: never diff two runs taken at different times). It runs both
+// arms at the read, one database state, and records `suppressed` / `refilled` / `net` per
+// prompt. So the missing input is now a matter of elapsed time rather than of method.
 //
 // WHEN THE TIME COMES: delete this file in the same commit that coerces the ids, and put
-// the A/B in the commit message. A green suite after a silent coercion is the failure
-// this file exists to prevent.
+// the meter's own numbers in the commit message. A green suite after a silent coercion is
+// the failure this file exists to prevent.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
