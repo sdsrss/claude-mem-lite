@@ -191,13 +191,20 @@ const coerceDeferredTokens = z.preprocess(
   ])).min(1).max(20)
 );
 
-// Coerce supersedes input — array of positive observation ids (accept numeric
-// strings from MCP bridges that JSON-stringify ints). Empty/other shapes reject.
+// Coerce supersedes input — positive observation ids, plus `E#<n>` for an EVENT row
+// (D#205), which is the prefix those rows are rendered with in the injected lessons
+// block. Numeric strings are accepted because some MCP bridges JSON-stringify ints;
+// `E#<n>` is kept as a STRING and split by `splitSupersedeTokens`, since coercing it to
+// a number here would lose the only thing that says which table it names.
+// Empty/other shapes reject.
 const coerceSupersedes = z.preprocess(
   (v) => (Array.isArray(v)
     ? v.map(x => (typeof x === 'string' && /^\d+$/.test(x.trim()) ? parseInt(x.trim(), 10) : x))
     : v),
-  z.array(z.number().int().positive()).min(1).max(20)
+  z.array(z.union([
+    z.number().int().positive(),
+    z.string().regex(/^[Ee]#?\d+$/, 'expected a positive observation id or E#<n> for an event'),
+  ])).min(1).max(20)
 );
 
 export const memSaveSchema = {
@@ -216,7 +223,7 @@ export const memSaveSchema = {
   files: coerceStringArray.optional().describe('File paths associated with this observation. Stored in the `files_modified` column and rendered as `files` — passing a path here does not assert the file was edited; a file you only read belongs here too'),
   lesson_learned: z.string().max(500).optional().describe('Key lesson or takeaway, ≤500 chars (for bugfix: root cause & fix; for decision: rationale)'),
   closes_deferred: coerceDeferredTokens.optional().describe('Close one or more deferred_work items in the same project. Mixed array: bare integer = ordinal-within-project, "D#<n>" string = raw id. Transactional with the obs insert — a single invalid id rolls back the whole save.'),
-  supersedes: coerceSupersedes.optional().describe('Observation ids (same project) that this save overturns. They are marked superseded — dropped from live search — and linked to the new row (superseded_by). Use ONLY when this genuinely replaces a prior conclusion; do NOT use for merely-related or updated-but-still-valid memories.'),
+  supersedes: coerceSupersedes.optional().describe('Ids (same project) that this save overturns: a bare number for an observation, or E#<n> for an event — the same prefix events are shown with in the injected lessons block, so you can retire one by typing back what you read. They are marked superseded (dropped from live search); observations are also linked to the new row via superseded_by, events are not, because that column can only reference another event. Use ONLY when this genuinely replaces a prior conclusion; do NOT use for merely-related or updated-but-still-valid memories.'),
 };
 
 export const memStatsSchema = {

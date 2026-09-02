@@ -14,7 +14,9 @@ import { fileURLToPath } from 'url';
 // — the URL form makes knip drop the named module from its unused-export report.
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { saveObservation } from '../lib/save-observation.mjs';
+import {
+  saveObservation, formatSupersedeSkipped, formatSupersededNote, splitSupersedeTokens,
+} from '../lib/save-observation.mjs';
 
 describe('saveObservation supersedes', () => {
   let db;
@@ -135,10 +137,13 @@ describe('saveObservation supersedes', () => {
     expect(r.supersededIds).toEqual([good]);
     // Sorted by id so the assertion does not depend on input order.
     const skipped = [...r.supersedeSkipped].sort((a, b) => a.id - b.id);
+    // `kind` is asserted, not tolerated: D#205 made the same three reasons reachable for
+    // EVENT ids, so a skip entry that does not say which table it came from would name an
+    // id that exists in both.
     expect(skipped).toEqual([
-      { id: otherId, reason: 'other-project' },
-      { id: already, reason: 'already-superseded' },
-      { id: gone, reason: 'no-such-observation' },
+      { id: otherId, reason: 'other-project', kind: 'obs' },
+      { id: already, reason: 'already-superseded', kind: 'obs' },
+      { id: gone, reason: 'no-such-observation', kind: 'obs' },
     ].sort((a, b) => a.id - b.id));
   });
 
@@ -179,7 +184,7 @@ describe('saveObservation supersedes', () => {
       content: body, title: 'Correction', project: 'test', supersedes: [oldId],
     });
     expect(second.kind).toBe('duplicate');
-    expect(second.supersedeSkipped).toEqual([{ id: oldId, reason: 'duplicate-save' }]);
+    expect(second.supersedeSkipped).toEqual([{ id: oldId, reason: 'duplicate-save', kind: 'obs' }]);
     // …and the row really did stay live, which is what makes the report necessary.
     expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at).toBeNull();
   });
@@ -224,6 +229,134 @@ describe('saveObservation supersedes', () => {
     const oldId = Number(seedOld().lastInsertRowid);
     const r = saveObservation(db, { content: 'Plain save with no supersedes field at all here', title: 'Plain', project: 'test' });
     expect(r.supersededIds).toEqual([]);
+    expect(r.supersededEventIds).toEqual([]);
     expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at).toBeNull();
+  });
+
+  // ─── D#205: events are supersedable through the same verb ──────────────────
+  describe('E# addresses the events table (D#205)', () => {
+    // Tested directly, not only through saveObservation: this split is the whole
+    // namespace decision, and a bare number silently landing in `events` would retire a
+    // row the caller never named — the two tables share an id space.
+    it('splitSupersedeTokens routes each token to exactly one table', () => {
+      const r = splitSupersedeTokens([7, '8', 'E#9', 'e10', ' E#11 ', 'E#0', 'abc', '1abc', -3, null, '']);
+      expect(r.obs).toEqual([7, 8]);
+      // `E9`/`E#9`, upper or lower, with or without surrounding space — all the shapes a
+      // reader might type back from an injected `E#9` line.
+      expect(r.events).toEqual([9, 10, 11]);
+      // Everything else is REPORTED with the caller's original token, not dropped: that
+      // is D#201's rule, and `E#0` is in here because a zero id is not a row.
+      expect(r.malformed.map((m) => m.id)).toEqual(['E#0', 'abc', '1abc', -3, null, '']);
+      expect(r.malformed.every((m) => m.reason === 'malformed-id')).toBe(true);
+    });
+
+    it('a bare number is never routed to events, and E# is never routed to observations', () => {
+      // The one-line statement of the invariant, asserted rather than described.
+      expect(splitSupersedeTokens([42]).events).toEqual([]);
+      expect(splitSupersedeTokens(['E#42']).obs).toEqual([]);
+      expect(splitSupersedeTokens([]).obs).toEqual([]);
+      expect(splitSupersedeTokens(undefined).events).toEqual([]);
+    });
+
+    function seedEvent({ project = 'test', title = 'Hook context cost scales 2.1-3.8x per call' } = {}) {
+      return Number(db.prepare(`
+        INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
+        VALUES (?, 'discovery', ?, 'body', 3, ?)
+      `).run(project, title, Date.now() - 60_000).lastInsertRowid);
+    }
+
+    it('retires the event and reports it separately from observations', () => {
+      const evId = seedEvent();
+      const obsId = Number(seedOld().lastInsertRowid);
+      const r = saveObservation(db, {
+        content: 'The 2.1-3.8x range was never produced by any measurement and is withdrawn',
+        title: 'Cost range withdrawn', project: 'test', supersedes: [obsId, `E#${evId}`],
+      });
+      expect(r.supersedeSkipped).toEqual([]);
+      // Separate arrays, because the two tables share an id space: a merged list of bare
+      // `#N` could not say which table each retired row came from.
+      expect(r.supersededIds).toEqual([obsId]);
+      expect(r.supersededEventIds).toEqual([evId]);
+      const ev = db.prepare('SELECT superseded_at_epoch, superseded_by_id FROM events WHERE id = ?').get(evId);
+      expect(ev.superseded_at_epoch, 'event must be tombstoned').toBeGreaterThan(0);
+      // superseded_by_id REFERENCES events(id) and the retiring row is an OBSERVATION, so
+      // writing savedId there would point at whatever event happens to share the number —
+      // the cross-table collision D#202 closed. A missing link beats a wrong one.
+      expect(ev.superseded_by_id, 'must not fabricate an event->event link').toBeNull();
+    });
+
+    it('a bare number still means an observation, never an event with the same id', () => {
+      // The two tables share an id space; this is the case that would silently retire the
+      // wrong row if the prefix were treated as optional decoration.
+      const evId = seedEvent();
+      const sameNumbered = Number(seedOld({ title: 'same-id decoy' }).lastInsertRowid);
+      const r = saveObservation(db, {
+        content: 'Bare numbers address observations only, one more sentence for length',
+        title: 'Namespace check', project: 'test', supersedes: [sameNumbered],
+      });
+      expect(r.supersededIds).toEqual([sameNumbered]);
+      expect(r.supersededEventIds).toEqual([]);
+      expect(db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch).toBeNull();
+    });
+
+    it('classifies an unusable E# id instead of dropping it', () => {
+      const foreign = seedEvent({ project: 'other-project' });
+      const already = seedEvent();
+      db.prepare('UPDATE events SET superseded_at_epoch = ? WHERE id = ?').run(Date.now(), already);
+      const r = saveObservation(db, {
+        content: 'Three unusable event ids must each come back with their own reason here',
+        title: 'Classification', project: 'test',
+        supersedes: ['E#99999', `E#${foreign}`, `E#${already}`],
+      });
+      expect(r.supersededEventIds).toEqual([]);
+      expect(r.supersedeSkipped.map((s) => [s.kind, s.reason])).toEqual([
+        ['event', 'no-such-event'],
+        ['event', 'other-project'],
+        ['event', 'already-superseded'],
+      ]);
+      // And the reasons must reach the user with the prefix they typed, not as bare `#N`
+      // — which would name a DIFFERENT row in the other table.
+      const msg = formatSupersedeSkipped(r.supersedeSkipped);
+      expect(msg).toContain('E#99999');
+      expect(msg).not.toMatch(/(?<!E)#99999/);
+    });
+
+    it('the dedup short-circuit reports swallowed EVENT ids too', () => {
+      // The path D#201 exists for, on the namespace D#205 just added: a correction written
+      // within the dedup window never happens, and the event it meant to retire stays live.
+      const evId = seedEvent();
+      const text = 'A correction that will read as a near duplicate of itself shortly';
+      saveObservation(db, { content: text, title: 'Dup base', project: 'test' });
+      const r = saveObservation(db, { content: text, title: 'Dup base', project: 'test', supersedes: [`E#${evId}`] });
+      expect(r.kind).toBe('duplicate');
+      expect(r.supersedeSkipped).toEqual([{ id: evId, reason: 'duplicate-save', kind: 'event' }]);
+      expect(db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch).toBeNull();
+    });
+
+    it('formatSupersededNote renders both tables, and neither face rebuilds the string', () => {
+      expect(formatSupersededNote({ supersededIds: [7], supersededEventIds: [9] }))
+        .toBe(' Superseded: #7, E#9.');
+      expect(formatSupersededNote({ supersededIds: [], supersededEventIds: [] })).toBe('');
+      expect(formatSupersededNote(undefined)).toBe('');
+
+      // CLASS-LEVEL SWEEP, same reasoning as the D#201 one above: both faces hand-built
+      // this note, so adding events to one and not the other was the default outcome.
+      // Requires the shared renderer AND the absence of a local rebuild.
+      const problems = [];
+      for (const face of ['mem-cli.mjs', 'server.mjs']) {
+        const src = readFileSync(join(REPO, face), 'utf8');
+        if (!/import\s*\{[^}]*\bformatSupersededNote\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(src)) {
+          problems.push(`${face}: does not import formatSupersededNote`);
+          continue;
+        }
+        if (![...src.matchAll(/formatSupersededNote\(/g)].length) {
+          problems.push(`${face}: imports formatSupersededNote but never calls it`);
+        }
+        if (/Superseded: \$\{/.test(src)) {
+          problems.push(`${face}: rebuilds the Superseded note locally instead of using the shared renderer`);
+        }
+      }
+      expect(problems).toEqual([]);
+    });
   });
 });

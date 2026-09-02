@@ -55,7 +55,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
 import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
 import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdToken, formatProbeHints, rejectBareStringFlags, resolvePositionalAlias, suggestUnknownFlags, OBS_TIME_FIELDS, formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
-import { saveObservation, formatSupersedeSkipped } from './lib/save-observation.mjs';
+import { saveObservation, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
@@ -896,7 +896,7 @@ function cmdSave(db, args) {
   const text = resolvePositionalAlias(positional.join(' '), flags, ['text', 'content']);
   if (text === null) return;
   if (!text.trim()) {
-    fail('[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,8771] — content may also be passed via --text/--content "<text>"');
+    fail('[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] — content may also be passed via --text/--content "<text>"');
     return;
   }
 
@@ -963,7 +963,7 @@ function cmdSave(db, args) {
     // the exact face whose silence motivated D#201. Number() rejects `1abc` as NaN.
     supersedesIds = raw.split(',').map((t) => t.trim()).filter(Boolean);
     if (supersedesIds.length === 0) {
-      fail('[mem] --supersedes requires at least one positive observation id (e.g. --supersedes 8754,8771)');
+      fail('[mem] --supersedes requires at least one id: a number for an observation, or E#<n> for an event (e.g. --supersedes 8754,E#10524)');
       return;
     }
   }
@@ -1020,9 +1020,7 @@ function cmdSave(db, args) {
   const closedNote = closesIds && closesIds.length > 0
     ? ` Closed: ${closesIds.map(i => `D#${i}`).join(', ')}.`
     : '';
-  const supersededNote = result.supersededIds && result.supersededIds.length > 0
-    ? ` Superseded: ${result.supersededIds.map(i => `#${i}`).join(', ')}.`
-    : '';
+  const supersededNote = formatSupersededNote(result);
   // G1+G2: detached backfill worker (lesson for obligated types + aliases for
   // every save) — fill-only-empty, so an agent acting on the nudge still wins.
   const enrichNote = shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id)

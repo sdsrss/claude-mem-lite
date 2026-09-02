@@ -50,7 +50,7 @@ import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegi
 import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
-import { saveObservation, formatSupersedeSkipped } from './lib/save-observation.mjs';
+import { saveObservation, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -881,9 +881,7 @@ server.registerTool(
     const closedNote = closesIds && closesIds.length > 0
       ? ` Closed deferred: ${closesIds.map(i => `D#${i}`).join(', ')}.`
       : '';
-    const supersededNote = result.supersededIds && result.supersededIds.length > 0
-      ? ` Superseded: ${result.supersededIds.map(i => `#${i}`).join(', ')}.`
-      : '';
+    const supersededNote = formatSupersededNote(result);
     const nudge = buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'mcp' });
     // G1+G2: detached backfill worker (lesson for obligated types + aliases for
     // every save) — fill-only-empty, so an agent acting on the nudge still wins.
