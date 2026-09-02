@@ -21,9 +21,18 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { join, basename } from 'path';
+import { join, basename, dirname } from 'path';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// Built with dirname()+join() rather than `new URL('..', import.meta.url)`:
+// the URL form is itself what blinds knip to a module (this file's whole
+// subject), so a guard for that blind spot must not widen it. Measured on the
+// sibling D#202 test: the URL form removed
+// `lib/citation-tracker.mjs:extractInjectedFromSubagentPrompt` from knip's name
+// set; switching to join() put it back. No change is visible for the two
+// modules below — the pool-replay benchmarks still name them the URL way — but
+// this file stops being a second cause, so parking those benchmarks would now
+// actually restore visibility.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Modules knip is structurally blind to (D#194). */
 const BLIND_MODULES = ['hook-context.mjs', 'hook-memory.mjs'];

@@ -8,7 +8,7 @@ import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
-import { injectedIdsFileName, injectedIdKey } from '../lib/injected-ids.mjs';
+import { injectedIdsFileName, injectedIdKey, EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
@@ -660,17 +660,36 @@ try {
     if (fileIntelLine) lines.push(neutralizeContextDelimiters(fileIntelLine));
     if (hasLessons) {
       lines.push(`[mem] Lessons for ${fname}:`);
+      // D#202: this block merges TWO TABLES and rendered both with a bare `#NN`.
+      // lib/events-injection.mjs already established the `E#` prefix for exactly
+      // this reason, and its header even enumerates the extractors the prefix
+      // protects — FYI, memory-context, error-recall. It does not name THIS face,
+      // which is the one that was breaking the invariant.
+      //
+      // Measured on the live metrics log (4227 `pretool_recall` firings,
+      // 2026-07-18 -> 2026-09-02): 44.9% of the rows injected here are
+      // event-sourced and 40.2% of firings inject events only. Two costs:
+      //   * a reader cannot tell which table to follow an id into — a
+      //     `--supersedes` or `mem_get` on one fails for no visible reason;
+      //   * load-bearing: extractInjectedFromPreToolUse reads these ids into the
+      //     citation-decay DENOMINATOR, and applyCitationDecay resolves them
+      //     against `observations` alone, so an event id colliding with a live
+      //     SAME-PROJECT observation streaked or promoted an unrelated memory.
+      //     198 of 5476 injectable events (3.6%) sit in that position.
+      // The `E#` prefix closes the second by construction: INJECTED_ROW_RE
+      // anchors `#` after at most six spaces, so `E#` cannot match it.
       for (const r of allRows) {
+        const idTag = `${r.src === 'evt' ? EVENT_ID_PREFIX : '#'}${r.id}`;
         if (r.lesson_learned) {
           const lesson = r.lesson_learned.length > LESSON_MAX
             ? r.lesson_learned.slice(0, LESSON_MAX - 3) + '...'
             : r.lesson_learned;
-          lines.push(`  #${r.id} [${r.type}] ${neutralizeContextDelimiters(lesson)}`);
+          lines.push(`  ${idTag} [${r.type}] ${neutralizeContextDelimiters(lesson)}`);
         } else {
           const title = (r.title || '').length > LESSON_MAX
             ? r.title.slice(0, LESSON_MAX - 3) + '...'
             : (r.title || '');
-          lines.push(`  #${r.id} [${r.type}] ${neutralizeContextDelimiters(title)}`);
+          lines.push(`  ${idTag} [${r.type}] ${neutralizeContextDelimiters(title)}`);
         }
       }
       // v2.98 salience: Edit/Write is the action point — close the block with an
