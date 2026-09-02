@@ -55,7 +55,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
 import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
 import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdToken, formatProbeHints, rejectBareStringFlags, resolvePositionalAlias, suggestUnknownFlags, OBS_TIME_FIELDS, formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
-import { saveObservation } from './lib/save-observation.mjs';
+import { saveObservation, formatSupersedeSkipped } from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
@@ -1004,6 +1004,10 @@ function cmdSave(db, args) {
 
   if (result.kind === 'duplicate') {
     out(`[mem] Skipped: similar to existing #${result.existingId}. Use "claude-mem-lite get ${result.existingId}" to review.`);
+    // D#201: the dedup swallowed the requested supersession too — say so here,
+    // because this branch returns before the note below is ever reached.
+    const dupSkip = formatSupersedeSkipped(result.supersedeSkipped);
+    if (dupSkip) out(`[mem] ${dupSkip}`);
     return;
   }
 
@@ -1019,6 +1023,10 @@ function cmdSave(db, args) {
   const enrichNote = shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id)
     ? ' (background enrichment queued)' : '';
   out(`[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`);
+  // D#201: on its OWN line, after the success line. Appending it to the success
+  // string would put a warning inside a sentence that reads as "done".
+  const skipNote = formatSupersedeSkipped(result.supersedeSkipped);
+  if (skipNote) out(`[mem] ${skipNote}`);
 }
 
 // ─── cmdDefer (sub-dispatch: add | list | drop) ──────────────────────────────

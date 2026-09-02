@@ -50,7 +50,7 @@ import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegi
 import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
-import { saveObservation } from './lib/save-observation.mjs';
+import { saveObservation, formatSupersedeSkipped } from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -871,7 +871,10 @@ server.registerTool(
     }
 
     if (result.kind === 'duplicate') {
-      return { content: [{ type: 'text', text: `Skipped: similar to existing #${result.existingId} in project "${project}". Use mem_get(ids=[${result.existingId}]) to review.` }] };
+      // D#201: this branch returns before the note below, so it renders its own.
+      const dupSkip = formatSupersedeSkipped(result.supersedeSkipped);
+      const dupText = `Skipped: similar to existing #${result.existingId} in project "${project}". Use mem_get(ids=[${result.existingId}]) to review.`;
+      return { content: [{ type: 'text', text: dupSkip ? `${dupText}\n${dupSkip}` : dupText }] };
     }
 
     const lessonNote = result.lessonCaptured ? ` 💡lesson captured` : '';
@@ -886,7 +889,10 @@ server.registerTool(
     // every save) — fill-only-empty, so an agent acting on the nudge still wins.
     const enrichNote = shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id)
       ? ' (background enrichment queued)' : '';
-    return { content: [{ type: 'text', text: `Saved as observation #${result.id} [${result.type}] in project "${project}".${lessonNote}${closedNote}${supersededNote}${enrichNote}${nudge}` }] };
+    // D#201: on its own line rather than inside the success sentence.
+    const skipNote = formatSupersedeSkipped(result.supersedeSkipped);
+    const savedText = `Saved as observation #${result.id} [${result.type}] in project "${project}".${lessonNote}${closedNote}${supersededNote}${enrichNote}${nudge}`;
+    return { content: [{ type: 'text', text: skipNote ? `${savedText}\n${skipNote}` : savedText }] };
   })
 );
 
