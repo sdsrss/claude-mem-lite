@@ -70,8 +70,11 @@ export function computeAdaptiveWindows(db, project) {
 // however well it scores.
 //
 // Named rather than inline so benchmark/keyctx-pool-replay.mjs can patch a twin and
-// price a change to them. Keep the `export const NAME = <int>;` shape — that ruler
-// patches the DECLARATION by regex and throws when the anchor moves.
+// price a change to them. Keep the `const NAME = <int>;` shape — that ruler patches the
+// DECLARATION by regex and throws when the anchor moves. (Said `export const` until
+// D#207: the names went module-private once knip could finally see this file and
+// reported them as permanently unused, and the ruler's regex was widened to match a bare
+// `const`, which is what its rerank-pool sibling always matched.)
 //
 // OBS was 50 through v3.86.0 and is now an OOM backstop, not a relevance gate. What the
 // ruler measured before the change (2026-09-02T06:11Z, 11 projects with >=20 live rows,
@@ -127,6 +130,28 @@ export function computeAdaptiveWindows(db, project) {
 // (v3.70.0 precedent, #9675). The replay's `patchConst` matches `const <NAME> = <n>;`.
 const KEYCTX_POOL_OBS = 200;
 const KEYCTX_POOL_SESS = 10;
+
+/**
+ * Split the shared Key Context pool between its two sections (D#196).
+ *
+ * Each keeps a guaranteed half and may take whatever the other cannot use, so the two
+ * together still emit at most KEY_CONTEXT_LIMIT rows. Extracted from the render block so
+ * the additivity property can be asserted over every split rather than sampled through a
+ * seeded database.
+ *
+ * @param {number} fileLessonCount rows that landed in the File Lessons section
+ * @param {number} keyContextCount rows that landed in the Key Context section
+ * @returns {{fileLessonQuota: number, keyContextQuota: number}}
+ */
+export function sectionQuotas(fileLessonCount, keyContextCount) {
+  const half = Math.floor(KEY_CONTEXT_LIMIT / 2);
+  const fileLessonQuota = Math.min(
+    fileLessonCount,
+    Math.max(half, KEY_CONTEXT_LIMIT - Math.min(keyContextCount, half)),
+  );
+  const keyContextQuota = Math.min(keyContextCount, KEY_CONTEXT_LIMIT - fileLessonQuota);
+  return { fileLessonQuota, keyContextQuota };
+}
 
 /**
  * Select observations and sessions within a token budget using greedy knapsack.
@@ -444,15 +469,35 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
     // remain reachable via mem_get. The collector sees only rows that survive
     // BOTH the quiet gate and the per-section slice — rendered rows, nothing else.
     const quiet = effectiveQuiet();
+
+    // D#196: the two sections draw from ONE pool of KEY_CONTEXT_LIMIT rows but each used
+    // to cap at half of it, so a pool that is all one shape emitted 5 lines and left the
+    // other section empty — half the rows the query had already paid for. Not a ranking
+    // bound (SQL order is preserved and nothing is re-scored); a plain under-fill.
+    //
+    // Measured 2026-09-02T10:28Z over the 11 projects with >=20 live rows: 10 of them
+    // lose rows to the per-section cap right now, 28 of 110 pooled rows (25.5%) fetched
+    // and discarded. code-graph-mcp is the extreme at 10 fileLessons / 0 keyContext,
+    // emitting 5 of 10; projects--mem is 9/1 and emits 6; only claudemd (5/5) loses
+    // nothing. The shapes are not evenly mixed because "has a lesson AND names a file" is
+    // the standard shape of a bugfix or decision row, which is most of what gets saved.
+    //
+    // Each section keeps its guaranteed half and may take what the other cannot use, so
+    // the combined ceiling is still KEY_CONTEXT_LIMIT. STRICTLY ADDITIVE: every quota is
+    // >= min(section length, half), i.e. no row that used to be shown can be dropped —
+    // asserted in tests/hook-context.test.mjs rather than left as a claim, because "it
+    // only adds" is exactly the kind of sentence this repo keeps finding to be false.
+    const { fileLessonQuota, keyContextQuota } = sectionQuotas(fileLessons.length, keyContext.length);
+
     if (fileLessons.length > 0 && !quiet) {
-      const shown = fileLessons.slice(0, 5);
+      const shown = fileLessons.slice(0, fileLessonQuota);
       summaryLines.push('### File Lessons');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');
       if (collector) collector.keyContextIds.push(...shown.map((e) => e.id));
     }
     if (keyContext.length > 0 && !quiet) {
-      const shown = keyContext.slice(0, 5);
+      const shown = keyContext.slice(0, keyContextQuota);
       summaryLines.push('### Key Context');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');

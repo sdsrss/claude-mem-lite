@@ -1,10 +1,11 @@
 // Tests for hook-context.mjs — adaptive time windows, token budgeting, CLAUDE.md updates
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { estimateTokens } from '../utils.mjs';
-import { computeAdaptiveWindows, selectWithTokenBudget, cleanupClaudeMdLegacyBlock, buildSummaryLines, buildSessionContextLines } from '../hook-context.mjs';
+import { computeAdaptiveWindows, selectWithTokenBudget, cleanupClaudeMdLegacyBlock, buildSummaryLines, buildSessionContextLines, sectionQuotas } from '../hook-context.mjs';
 import { insertDeferred } from '../lib/deferred-work.mjs';
 
 // ─── computeAdaptiveWindows ──────────────────────────────────────────────────
@@ -661,6 +662,103 @@ describe('buildSessionContextLines: Recent table cell safety', () => {
     // Table row, not any matching line — see the note in the pipe-escaping case above.
     const row = out.split('\n').find(l => l.startsWith('|') && l.includes('multi'));
     expect(row).toContain('multi line title');
+  });
+});
+
+describe('Key Context section quotas (D#196)', () => {
+  let db;
+  let savedEnv;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-q', project: 'test' });
+    // Both descriptive sections are dropped under `effectiveQuiet()`, which is
+    // `isQuietHooks() || isAdoptedHere(cwd)` — and THIS REPO IS ADOPTED, so with the
+    // default cwd every assertion below reads zero rows and would pass for a reason that
+    // has nothing to do with the quotas. Point the adoption probe at a directory that
+    // carries no managed block. Same hazard the Recent-table cases above call out:
+    // green in the maintainer's tree, red (or vacuous) from any clone.
+    savedEnv = { dir: process.env.CLAUDE_PROJECT_DIR, quiet: process.env.MEM_QUIET_HOOKS };
+    process.env.CLAUDE_PROJECT_DIR = mkdtempSync(join(tmpdir(), 'keyctx-notadopted-'));
+    delete process.env.MEM_QUIET_HOOKS;
+  });
+  afterEach(() => {
+    try { rmSync(process.env.CLAUDE_PROJECT_DIR, { recursive: true, force: true }); } catch { /* gone */ }
+    if (savedEnv.dir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = savedEnv.dir;
+    if (savedEnv.quiet === undefined) delete process.env.MEM_QUIET_HOOKS;
+    else process.env.MEM_QUIET_HOOKS = savedEnv.quiet;
+    try { db.close(); } catch { /* already closed */ }
+  });
+
+  it('premise: the sections render at all in this fixture', () => {
+    // Without this the three cases below cannot distinguish "the quota is wrong" from
+    // "the quiet gate ate the whole block", which is the failure mode that made the
+    // first draft of them report 0/0 and look like a quota bug.
+    lesson(0);
+    expect(buildSessionContextLines(db, 'test')).toContain('### File Lessons');
+  });
+
+  // A row lands in File Lessons only if it has BOTH a lesson and a parseable first
+  // filename; anything else falls to Key Context. These two helpers are the two shapes.
+  const lesson = (n) => insertObs(db, {
+    sessionId: 'sess-q', project: 'test', type: 'bugfix', importance: 3,
+    title: `lesson row ${n}`, lessonLearned: `retire the wrong thing ${n}`,
+    filesModified: JSON.stringify([`src/file${n}.mjs`]), epochOffset: -n * 1000,
+  });
+  const plain = (n) => insertObs(db, {
+    sessionId: 'sess-q', project: 'test', type: 'decision', importance: 3,
+    title: `plain row ${n}`, epochOffset: -n * 1000,
+  });
+
+  it('an all-one-shape pool emits the whole pool, not half of it', () => {
+    // The defect: 10 rows fetched, 5 rendered, the sibling section empty. Measured on the
+    // live DB at 2026-09-02T10:28Z, 10 of 11 projects were in this state to some degree
+    // and code-graph-mcp was exactly this one — 10 File Lessons, 0 Key Context.
+    for (let i = 0; i < 10; i++) lesson(i);
+    const out = buildSessionContextLines(db, 'test');
+    const rows = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
+    expect(rows.length, 'all ten pooled rows should be emitted, not five').toBe(10);
+    expect(extractSection(out, 'Key Context')).toBe('');
+  });
+
+  it('a balanced pool is unchanged — 5 and 5, exactly as before', () => {
+    // Guards the fix against being a widening: where both sections could already fill
+    // their half, nothing about the output may move.
+    for (let i = 0; i < 5; i++) lesson(i);
+    for (let i = 5; i < 10; i++) plain(i);
+    const out = buildSessionContextLines(db, 'test');
+    const fl = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
+    const kc = extractSection(out, 'Key Context').split('\n').filter((l) => l.startsWith('- '));
+    expect([fl.length, kc.length]).toEqual([5, 5]);
+  });
+
+  it('a lopsided pool fills from the side that has rows', () => {
+    for (let i = 0; i < 9; i++) lesson(i);
+    plain(9);
+    const out = buildSessionContextLines(db, 'test');
+    const fl = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
+    const kc = extractSection(out, 'Key Context').split('\n').filter((l) => l.startsWith('- '));
+    // 9/1 was emitting 6 of 10 (projects--mem's real shape on the measurement date).
+    expect([fl.length, kc.length]).toEqual([9, 1]);
+  });
+
+  it('sectionQuotas is strictly additive and never exceeds the pool, over every split', () => {
+    // The property the comment claims, asserted over the whole domain rather than at the
+    // three points above — "it only adds" is exactly the sentence this repo keeps finding
+    // to be false when only sampled.
+    const HALF = 5;
+    for (let fl = 0; fl <= 20; fl++) {
+      for (let kc = 0; kc <= 20; kc++) {
+        const q = sectionQuotas(fl, kc);
+        expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(fl);
+        expect(q.keyContextQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(kc);
+        // Never fewer than the old fixed halves — this is the additivity claim.
+        expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(fl, HALF));
+        expect(q.keyContextQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(kc, HALF));
+        // And the combined ceiling is still one pool, not two.
+        expect(q.fileLessonQuota + q.keyContextQuota, `fl=${fl} kc=${kc}: exceeded the pool`).toBeLessThanOrEqual(10);
+      }
+    }
   });
 });
 
