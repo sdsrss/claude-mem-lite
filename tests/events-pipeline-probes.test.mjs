@@ -31,6 +31,27 @@ describe('events pipeline probes (G16)', () => {
     expect(byName['event-type-filter-maps'].pass).toBe(false);
   });
 
+  // D#200: the cite-widening probe compares two INDEPENDENTLY seeded corpora, so
+  // each arm computes its own integer-millisecond recency `age` and the ratio
+  // drifts by 2.0052e-10 per millisecond of skew between them. That is real
+  // flake, not a scoring defect — it went red on CI (run 33602196907) at 5 ms.
+  // A clock whose STEP grows makes arm 2's seed→query elapsed exceed arm 1's
+  // deterministically; an equal-step clock cancels out and cannot catch this.
+  it('TEETH: the cite-widening ratio is clock-independent (D#200)', async () => {
+    const realNow = Date.now;
+    let t = realNow.call(Date);
+    let step = 0;
+    Date.now = () => (t += ++step);
+    let probes;
+    try {
+      probes = await runEventsPipelineProbes();
+    } finally {
+      Date.now = realNow;
+    }
+    const failed = probes.filter((p) => !p.pass);
+    expect(failed.map((p) => `${p.name}: ${p.detail}`)).toEqual([]);
+  });
+
   it('TEETH: a broken events_fts face THROWS into the probe (tolerateMissingFts=false), not silent-degrades', async () => {
     const db = createTestDb();
     seedEventsPipelineCorpus(db);

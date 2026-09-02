@@ -195,18 +195,45 @@ export async function runEventsPipelineProbes(dbIn = null) {
     // The same obs row's raw FULL_SCORE at cited_count=10 must be exactly the
     // 3.0× cap of its baseline — pins that the cite clause reaches the real SQL
     // AND that the widening the banding faces is bounded by CITE_FACTOR_MAX.
+    //
+    // D#200 — why the clock is frozen, and why the tolerance is 1e-12 and not
+    // wider. FULL_SCORE (search-engine.mjs) is a pure left-associative product
+    // and citeFactor is its last multiplicand, so base = P × 1.0 and
+    // cited = P × 3.0 over the SAME P: the ratio is 3.0 up to the float
+    // rounding of (P×3.0)/P, i.e. ≤1 ULP. But P is only the same if the
+    // recency-decay factor is, and each arm below seeds a FRESH corpus and then
+    // queries it, so each computes its own integer-millisecond
+    // `age = Date.now() − created_at_epoch`. The arms' seed→query elapsed times
+    // differ by whatever the machine gives, and MEASURED, each 1 ms of that
+    // difference moves the ratio by exactly 2.0052e-10
+    // (= 3.0 × 0.693 / (2 × 60d), the discovery half-life at age ≈ 0, since
+    //  recencyDecaySql is 1 + EXP(−0.693·age/hl)). The old 1e-9 absolute
+    // tolerance therefore admitted only ±4 ms of scheduling skew, and CI run
+    // 33602196907 went red at ratio=3.0000000010026033 — exactly 5 × 2.0052e-10,
+    // i.e. 5 ms. Freezing Date.now across both arms deletes the term rather than
+    // widening the tolerance to hide it. Note an equal-step clock stub cannot
+    // reproduce the flake (it shifts both arms alike and the difference
+    // cancels); the regression test uses an ACCELERATING one.
     const rawScores = (mdb) => {
       const ctx = { ftsQuery: buildSearchFtsQuery('chronograph'), args: { project: PROJECT },
         epochFrom: null, epochTo: null, perSourceLimit: 10, perSourceOffset: 0,
         currentProject: PROJECT, limit: 10 };
       return new Map(searchObservationsHybrid(mdb, ctx).map((r) => [r.id, r.score]));
     };
-    const base = await withMutatedCorpus(null, async (mdb) => rawScores(mdb));
-    const cited = await withMutatedCorpus('UPDATE observations SET cited_count = 10', async (mdb) => rawScores(mdb));
+    const realNow = Date.now;
+    const frozen = realNow.call(Date);
+    let base, cited;
+    try {
+      Date.now = () => frozen;
+      base = await withMutatedCorpus(null, async (mdb) => rawScores(mdb));
+      cited = await withMutatedCorpus('UPDATE observations SET cited_count = 10', async (mdb) => rawScores(mdb));
+    } finally {
+      Date.now = realNow;
+    }
     if (base.size === 0) return { pass: false, detail: 'no baseline obs rows' };
     for (const [id, s] of base) {
       const ratio = cited.get(id) / s;
-      if (!(Math.abs(ratio - 3.0) < 1e-9)) return { pass: false, detail: `obs#${id} ratio=${ratio}` };
+      if (!(Math.abs(ratio - 3.0) < 1e-12)) return { pass: false, detail: `obs#${id} ratio=${ratio}` };
     }
     return { pass: true, detail: `${base.size} rows widened exactly 3.0×` };
   });
