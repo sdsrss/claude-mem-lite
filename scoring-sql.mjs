@@ -185,10 +185,20 @@ export function notLowSignalTitleClause(alias = 'o') {
 //
 // Closes the citation-decay → ranking loop. The Stop hook citation-decay
 // already maintains cited_count (Promote on cite) and uncited_streak (bump on
-// uncited; reset on cite or demote-at-3). Before A1, both columns affected
+// uncited; reset on cite or rollover-at-3). Before A1, both columns affected
 // only the importance ±1 dial — through `(0.5 + 0.5·importance)` that's a
 // ≤2× swing and saturates fast. This factor lets ranking respond directly to
 // observed agent behavior on the obs itself.
+//
+// D#179/D#198 made this factor the ONLY thing citation-decay feeds: that loop
+// no longer writes `importance` at all. The reason is that importance is not a
+// ranking dial — every injection surface gates candidacy on it, so moving it
+// changed WHO IS IN the pool rather than where they ranked. This clause is the
+// right home for the signal precisely because it is bounded and pure-ranking:
+// a mis-read citation costs at most a 3.0× / 0.4× rank shift and can never
+// evict a row. (A second, independent citation → importance path still exists
+// via bumpCitationAccess → access_count → the `boost` maintain op; see obs
+// #10911. It is out of this clause's scope and is NOT closed.)
 //
 // Formula: clamp(0.4, 3.0, 1 + 0.2·cited_count − 0.25·uncited_streak)
 // Distribution:

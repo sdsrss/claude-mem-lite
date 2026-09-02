@@ -2687,7 +2687,11 @@ function cmdCitationStats(db, args) {
     out(`  #${r.id} [${r.type}] ${(r.title || '').slice(0, 60)}   cited ${r.cited_count}x`);
   }
   out('');
-  out(`Recently demoted (last ${days}d, importance ↓):`);
+  // D#179/D#198: demoted_at now stamps the UNCITED-STREAK ROLLOVER, which no
+  // longer lowers importance. The old label ("importance ↓") would describe a
+  // write that stopped happening while the column beside it kept printing the
+  // row's unchanged value — a caption contradicting its own table.
+  out(`Recently rolled over (last ${days}d, uncited streak reset; importance unaffected):`);
   if (demoted.length === 0) out('  (none)');
   for (const r of demoted) {
     const ago = Math.round((Date.now() - r.demoted_at) / DAY_MS);

@@ -80,13 +80,13 @@ describe('citation-decay loop: UserPromptSubmit injections (via extractAllInject
     const row = db.prepare(
       'SELECT importance, cited_count, decay_seen_count, uncited_streak FROM observations WHERE id = ?'
     ).get(obsId);
-    expect(row.importance).toBe(2);          // 1 → 2 (cap is 3)
+    expect(row.importance).toBe(1);          // D#179: untouched (seeded at 1)
     expect(row.cited_count).toBe(1);
     expect(row.decay_seen_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
   });
 
-  it('demotes a UserPromptSubmit-injected obs after 3 uncited sessions', () => {
+  it('rolls the uncited streak over for a UserPromptSubmit-injected obs after 3 uncited sessions', () => {
     insertSession(db, { id: 'seed', project: 'p' });
     const r = insertObs(db, {
       sessionId: 'seed', project: 'p',
@@ -112,8 +112,12 @@ describe('citation-decay loop: UserPromptSubmit injections (via extractAllInject
       'SELECT importance, uncited_streak, decay_seen_count, demoted_at FROM observations WHERE id = ?'
     ).get(obsId);
     expect(row.decay_seen_count).toBe(3);
-    expect(row.importance).toBe(2);          // demoted once (3 → 2)
-    expect(row.uncited_streak).toBe(0);      // reset after demotion
+    // D#179/D#198: importance stays 3. This row is exactly the case the change
+    // exists for — a decision at importance 3 that goes three sessions uncited
+    // used to drop to 2, which on the Key Context pool's `>= 3` tier arm is an
+    // eviction from the candidate population, not a down-rank.
+    expect(row.importance).toBe(3);
+    expect(row.uncited_streak).toBe(0);      // reset after the rollover
     expect(row.demoted_at).not.toBeNull();
   });
 

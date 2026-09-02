@@ -47,7 +47,7 @@ describe('applyCitationDecay transaction mode (MED-2)', () => {
     expect(usedDefault).toBe(false);
   });
 
-  it('regression: normal (uncontended) promote still lifts importance and resets streak', () => {
+  it('regression: normal (uncontended) promote still credits cited_count and resets streak', () => {
     const db = createTestDb();
     cleanups.push(() => db.close());
     insertSession(db, { id: 'sess-1', project: 'p' });
@@ -56,7 +56,7 @@ describe('applyCitationDecay transaction mode (MED-2)', () => {
     const res = applyCitationDecay(db, 'p', [id], [id], 'sess-A');
     expect(res.promoted).toBe(1);
     const row = db.prepare('SELECT importance, uncited_streak, cited_count FROM observations WHERE id = ?').get(id);
-    expect(row.importance).toBe(2);
+    expect(row.importance).toBe(1); // D#179: untouched (seeded at 1)
     expect(row.uncited_streak).toBe(0);
     expect(row.cited_count).toBe(1);
   });

@@ -177,14 +177,19 @@ describe('citation-stats CLI', () => {
     expect(output).not.toContain('superseded promoted');
   });
 
-  it('reports recently-demoted (demoted_at within window)', async () => {
+  // D#179/D#198 renamed this section: demoted_at now stamps the uncited-streak
+  // ROLLOVER, which no longer lowers importance, so "Recently demoted (importance ↓)"
+  // had become a caption contradicting the imp= value printed on the same line.
+  it('reports recently rolled-over rows (demoted_at within window)', async () => {
     const fresh = obs({ title: 'just demoted', importance: 1 });
     testDb.prepare('UPDATE observations SET demoted_at = ? WHERE id = ?').run(Date.now(), fresh);
     const stale = obs({ title: 'stale demoted', importance: 0 });
     testDb.prepare('UPDATE observations SET demoted_at = ? WHERE id = ?')
       .run(Date.now() - 60 * 86400 * 1000, stale); // 60d ago, outside default 7d window
     const output = await captureStdout(() => run(['citation-stats']));
-    expect(output).toMatch(/Recently demoted/);
+    expect(output).toMatch(/Recently rolled over/);
+    // The caption must not re-acquire the claim the loop stopped making.
+    expect(output).not.toMatch(/importance ↓/);
     expect(output).toContain('just demoted');
     expect(output).not.toContain('stale demoted');
   });

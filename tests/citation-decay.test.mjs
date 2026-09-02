@@ -164,11 +164,59 @@ describe('applyCitationDecay', () => {
     return id;
   }
 
-  it('cited obs gets +1 importance and cited_count += 1, streak reset to 0', () => {
+  // D#179 / D#198 — citation-decay no longer writes `importance` on ANY branch.
+  //
+  // `importance` was doing two jobs: a relevance prior AND a pool-admission gate.
+  // Every injection surface gates on it (`>= 1`, `>= 2`, or the Key Context
+  // tier arms `>= 1 / >= 2 / >= 3`), so a decay-driven 3 -> 2 was not a down-rank,
+  // it REMOVED the row from the candidate population — the D#172 shape, confirmed
+  // on the imperative pool (v3.82.0) and on the Key Context pool (D#198, 45 of
+  // ~106 pool rows in that position). And the promote side cannot tell "acted on
+  // this lesson" from "wrote about this lesson", so a release-note session lifts
+  // exactly the rows it is discussing (D#179).
+  //
+  // The ranking loop does NOT need importance: cited_count / uncited_streak
+  // already feed citeFactorClause, a BOUNDED [0.4, 3.0] pure ranking multiplier.
+  // Dropping the importance writes leaves that intact while taking decay out of
+  // population membership entirely — so a mis-read citation costs a bounded rank
+  // shift instead of an eviction.
+  //
+  // One assertion per branch, because a single combined case would let a partial
+  // revert (say, promote fixed, demote still writing) stay green.
+  it('D#179: NO branch of the decay loop writes importance', () => {
+    const promote = makeObs({ importance: 2, uncited_streak: 1, cited_count: 0 });
+    const streakOnly = makeObs({ importance: 2, uncited_streak: 0 });
+    const demote = makeObs({ importance: 2, uncited_streak: 2 });
+    const atCap = makeObs({ importance: 3 });
+    const atFloor = makeObs({ importance: 1, uncited_streak: 2 });
+
+    applyCitationDecay(db, 'p',
+      new Set([promote, streakOnly, demote, atCap, atFloor]),
+      new Set([promote, atCap]), 'sess-1');
+
+    const imp = (id) => db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance;
+    expect(imp(promote), 'promote branch must not raise importance').toBe(2);
+    expect(imp(streakOnly), 'streak-only branch must not touch importance').toBe(2);
+    expect(imp(demote), 'demote branch must not lower importance').toBe(2);
+    expect(imp(atCap), 'promote at the old cap is unchanged either way').toBe(3);
+    expect(imp(atFloor), 'demote at the old floor is unchanged either way').toBe(1);
+
+    // The behaviour signals the loop DOES own must still move, or "no importance
+    // write" would be trivially satisfiable by disabling the loop altogether.
+    const r = db.prepare('SELECT cited_count, uncited_streak, demoted_at, decay_seen_count FROM observations WHERE id=?').get(promote);
+    expect(r.cited_count).toBe(1);
+    expect(r.uncited_streak).toBe(0);
+    expect(r.decay_seen_count).toBe(1);
+    const d = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(demote);
+    expect(d.uncited_streak).toBe(0);          // streak still rolls over at the threshold
+    expect(d.demoted_at).toBeGreaterThan(0);   // …and is still stamped
+  });
+
+  it('cited obs gets cited_count += 1, streak reset to 0, importance untouched', () => {
     const id = makeObs({ importance: 2, uncited_streak: 1, cited_count: 0 });
     applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');
     const row = db.prepare('SELECT importance, cited_count, uncited_streak, last_decided_session_id, decay_seen_count FROM observations WHERE id=?').get(id);
-    expect(row.importance).toBe(3);
+    expect(row.importance).toBe(2); // D#179: unchanged — the loop's output is cited_count/streak
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
     expect(row.last_decided_session_id).toBe('sess-1');
@@ -224,23 +272,27 @@ describe('applyCitationDecay', () => {
     expect(r.uncited_streak).toBe(1);
   });
 
-  it('uncited at streak=2 → demotion (importance -1) and streak reset to 0', () => {
+  it('uncited at streak=2 → streak rolls over to 0 and demoted_at is stamped', () => {
     const id = makeObs({ importance: 2, uncited_streak: 2 });
     const before = Date.now();
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
     const r = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
-    expect(r.importance).toBe(1);
+    expect(r.importance).toBe(2); // D#179/D#198: the rollover no longer lowers importance
     expect(r.uncited_streak).toBe(0);
-    // v33: demoted_at gets a real timestamp on the demote branch
+    // v33: demoted_at gets a real timestamp on the rollover branch
     expect(r.demoted_at).toBeGreaterThanOrEqual(before);
     expect(r.demoted_at).toBeLessThanOrEqual(Date.now());
   });
 
-  it('importance floor=1: demote never drops a row below the injection-visibility boundary', () => {
-    // A row at imp=1, uncited past threshold, must NOT sink to 0. Both passive
-    // injection surfaces exclude imp=0 (pre-tool-recall >=2, user-prompt-search >=1),
-    // so a 0 is a one-way burial: never re-injected → never re-cited → never recovers.
-    // Floor=1 keeps it on the >=1 surface with a citation-recovery path.
+  // These two used to pin the IMPORTANCE_FLOOR clamp (`MAX(1, imp - 1)`) — the
+  // guard against burying a row at 0, where no injection surface can reach it and
+  // it can never be re-cited. D#179/D#198 removed the subtraction that clamp
+  // existed to bound, so the clamp is gone with it. Rewritten to pin the stronger
+  // property that replaced it: the rollover leaves importance EXACTLY as it found
+  // it, at every point on the scale including the two the clamp used to special-case.
+  // Deleting them instead would have quietly dropped the only coverage of the
+  // bottom of the range.
+  it('the streak rollover leaves importance untouched at the old floor (imp=1)', () => {
     const id = makeObs({ importance: 1, uncited_streak: 2 });
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
     const r = db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id);
@@ -248,12 +300,16 @@ describe('applyCitationDecay', () => {
     expect(r.uncited_streak).toBe(0);
   });
 
-  it('legacy imp=0 row heals up to the floor on its next demote resolution', () => {
-    // Rows buried at 0 by the pre-fix floor lift back to 1 if ever resolved again
-    // (MAX(1, 0-1) = 1), so the floor change is self-healing for the injected path.
+  it('a legacy imp=0 row is left at 0 — the rollover no longer heals or buries it', () => {
+    // Pre-D#179 this row healed 0 -> 1 via MAX(1, 0-1). It no longer does, and
+    // that is the honest consequence: rows already buried at 0 by the old loop
+    // stay there. Nothing in this change is retroactive — 1199 of 2298 live rows
+    // on the maintainer's DB carry at least one decay-driven importance write, and
+    // that accumulated state is frozen, not reverted (there is no record of each
+    // row's pre-decay value to revert to).
     const id = makeObs({ importance: 0, uncited_streak: 2 });
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
-    expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance).toBe(1);
+    expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance).toBe(0);
   });
 
   it('partial cite: of injected {100, 200}, cited={100} → 100 promoted, 200 streak++', () => {
@@ -262,7 +318,9 @@ describe('applyCitationDecay', () => {
     applyCitationDecay(db, 'p', new Set([id100, id200]), new Set([id100]), 'sess-1');
     const a = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id100);
     const b = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id200);
-    expect(a.importance).toBe(3);  expect(a.cited_count).toBe(1);  expect(a.uncited_streak).toBe(0);
+    // D#179: both keep importance 2 — the two branches are told apart by
+    // cited_count / uncited_streak, which is now the loop's entire output.
+    expect(a.importance).toBe(2);  expect(a.cited_count).toBe(1);  expect(a.uncited_streak).toBe(0);
     expect(b.importance).toBe(2);  expect(b.cited_count).toBe(0);  expect(b.uncited_streak).toBe(1);
   });
 
@@ -349,39 +407,48 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     expect(r2.promoted).toBe(1);
     expect(r2.touched).toBe(0); // already in the injected denominator from turn 1 — not re-counted
     const row = db.prepare('SELECT importance, cited_count, uncited_streak, decay_seen_count, last_cited_session_id FROM observations WHERE id=?').get(id);
-    expect(row.importance).toBe(3);
+    expect(row.importance).toBe(2); // D#179: untouched
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
     expect(row.last_cited_session_id).toBe('sess-1');
     expect(row.decay_seen_count).toBe(1); // counted ONCE (turn 1), not double-counted on the upgrade
   });
 
-  it('a late citation undoes a same-session demotion (importance restored)', () => {
-    const id = makeObs({ importance: 2, uncited_streak: 2 }); // one more uncited → demote
+  // Pre-D#179 this test read the undo off `importance` (1 -> 2). That column is no
+  // longer written, so the undo is asserted on the state the rollover actually
+  // owns: demoted_at set, then cleared by the late citation. Same property, read
+  // through the signal that still moves.
+  it('a late citation undoes a same-session streak rollover (demoted_at cleared)', () => {
+    const id = makeObs({ importance: 2, uncited_streak: 2 }); // one more uncited → rollover
     const r1 = applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
     expect(r1.demoted).toBe(1);
-    expect(db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id).importance).toBe(1);
+    const mid = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
+    expect(mid.importance).toBe(2);              // not lowered
+    expect(mid.demoted_at).toBeGreaterThan(0);   // rollover stamped
 
     const r2 = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // late cite
     expect(r2.promoted).toBe(1);
-    const row = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id);
-    expect(row.importance).toBe(2);   // restored 1 → 2
+    const row = db.prepare('SELECT importance, cited_count, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
+    expect(row.importance).toBe(2);   // still untouched by either branch
+    expect(row.demoted_at).toBeNull(); // the undo
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
   });
 
   it('the promote upgrade is itself idempotent (guarded by last_cited_session_id)', () => {
-    const id = makeObs({ importance: 1, uncited_streak: 0 }); // start below cap so climb is visible
+    // The "climb" this used to watch on importance is now watched on cited_count,
+    // which is the counter the idempotency key actually guards.
+    const id = makeObs({ importance: 1, uncited_streak: 0 });
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');        // uncited
-    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');    // upgrade → promote (imp 1→2)
+    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');    // upgrade → promote
     const after1 = db.prepare('SELECT importance, cited_count FROM observations WHERE id=?').get(id);
-    expect(after1.importance).toBe(2);
+    expect(after1.importance).toBe(1);
     expect(after1.cited_count).toBe(1);
 
     const r3 = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // re-fire cited
     expect(r3.promoted).toBe(0); // already promoted this session
     const after2 = db.prepare('SELECT importance, cited_count FROM observations WHERE id=?').get(id);
-    expect(after2.importance).toBe(2);  // no further climb
+    expect(after2.importance).toBe(1);
     expect(after2.cited_count).toBe(1); // NOT double-counted
   });
 
@@ -457,7 +524,10 @@ describe('Stop hook integration — fixture transcript composition', () => {
     const cited = extractCitationsFromTranscript(path, { mainOnly: true });
     const result = applyCitationDecay(db, 'p', injected, cited, 'sess-int');
     expect(result).toEqual({ promoted: 1, demoted: 0, touched: 1 });
-    expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance).toBe(3);
+    // D#179: the promote lands in cited_count, not importance.
+    const r = db.prepare('SELECT importance, cited_count FROM observations WHERE id=?').get(id);
+    expect(r.cited_count).toBe(1);
+    expect(r.importance).toBe(2);
   });
 
   it('cite-back signal promotes an injected obs the agent edited but never cited (P5 ①)', async () => {
@@ -497,7 +567,9 @@ describe('Stop hook integration — fixture transcript composition', () => {
 
     const result = applyCitationDecay(db, 'p', injected, cited, 'sess-int');
     expect(result.promoted).toBe(1);
-    expect(db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id).importance).toBe(3);
+    const rb = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id);
+    expect(rb.cited_count).toBe(1);   // D#179: cite-back credits the counter…
+    expect(rb.importance).toBe(2);    // …and leaves the population gate alone
   });
 
   it('fixture transcript: injection from sidechain agent does NOT promote main', () => {
@@ -570,18 +642,28 @@ describe('applyCitationDecay — project adoption-rate gate (P5 ②)', () => {
     expect(r.touched).toBe(1);
   });
 
-  it('allows demotion once the project cites enough to clear the threshold', () => {
+  // D#179 note for this whole block: these cases used `importance` to tell
+  // "the gate suppressed the rollover" from "it ran". That column is no longer
+  // written by either branch, so an unchanged `importance` is now true on BOTH
+  // sides — asserting it would make every case here PASS regardless of the gate.
+  // The discriminator moves to the pair the branches genuinely differ on:
+  //   ran       -> demoted_at stamped, uncited_streak reset to 0
+  //   suppressed-> demoted_at NULL,    uncited_streak capped at threshold-1 (2)
+  it('allows the rollover once the project cites enough to clear the threshold', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 5 });
     applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-    const row = db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(target);
-    expect(row.importance).toBe(1);           // demoted normally
+    const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+    expect(row.demoted_at).toBeGreaterThan(0); // rollover ran
     expect(row.uncited_streak).toBe(0);
+    expect(row.importance).toBe(2);            // and still did not move the gate column
   });
 
   it('does not engage on low-data projects (<min-seen) — existing behavior preserved', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 2, cited_count: 0 });
     applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-    expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(target).importance).toBe(1);
+    const row = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+    expect(row.demoted_at).toBeGreaterThan(0); // gate dormant → rollover ran
+    expect(row.uncited_streak).toBe(0);
   });
 
   it('env override CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD widens the suppression band', () => {
@@ -590,14 +672,18 @@ describe('applyCitationDecay — project adoption-rate gate (P5 ②)', () => {
     process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD = '0.5';
     try {
       applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-      expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(target).importance).toBe(2);
+      const row = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+      expect(row.demoted_at).toBeNull();   // suppressed
+      expect(row.uncited_streak).toBe(2);  // capped, not rolled over
     } finally { delete process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD; }
   });
 
   it('promotion is never gated — a cited obs still promotes in a non-adopting project', () => {
     const target = makeObs({ importance: 2, uncited_streak: 0, decay_seen_count: 20, cited_count: 0 });
     applyCitationDecay(db, 'p', new Set([target]), new Set([target]), 'sess-1');
-    expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(target).importance).toBe(3);
+    const row = db.prepare('SELECT importance, cited_count FROM observations WHERE id=?').get(target);
+    expect(row.cited_count).toBe(1); // promote ran despite the suppression gate
+    expect(row.importance).toBe(2);
   });
 });
 
@@ -673,7 +759,7 @@ describe('applyCitationDecay — superseded keeper redirect (D#61)', () => {
     expect(r.promoted).toBe(1);
     const k = row(keeper);
     expect(k.cited_count).toBe(1);
-    expect(k.importance).toBe(3);
+    expect(k.importance).toBe(2); // D#179: credit lands in cited_count only
     // The tombstone itself stays untouched (defense-in-depth parity holds).
     expect(row(oldId).cited_count).toBe(0);
   });
