@@ -2181,6 +2181,28 @@ async function handleUserPrompt() {
         // Legacy payloads without `session` keep the old time-window-only behavior.
         if (ts && Date.now() - ts < 10000 && Array.isArray(ids)
             && !(session && ccSessionId && session !== ccSessionId)) {
+          // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
+          //
+          // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
+          // `mergeCrossHookInjected` (pre-tool-recall.js) `.map(String)`s the whole union,
+          // so once PreToolUse has emitted one row in the window every id is a STRING.
+          // Both consumers below test `new Set(excludeIds).has(r.id)` against a NUMBER out
+          // of SQLite, so from that moment the exclude suppresses nothing.
+          //
+          // Coercing with Number() here would make it work — and that is a real behaviour
+          // change, not a type repair, which is why it is not done as a drive-by. Measured
+          // 2026-09-02 over 99 transcripts, as an UPPER bound (session-level, ignoring the
+          // marker's stale window): a working exclude would drop at most 46 of 255 `fyi`
+          // injections (18.0%) across 30 of 67 sessions, and 4 of 24 on task_imperative.
+          // Direction unknown: the excluded slot is sometimes refilled from the pool and
+          // sometimes just lost (`rerank-pool-replay` reports 6587 of 11289 prompts
+          // already injecting nothing), and `fyi` cite-rate is 11.3%, so removing repeat
+          // exposure could cut either way.
+          //
+          // The ruler that would settle it does not exist yet: reconstructing per-prompt
+          // exclude sets needs the marker file, which rotates after DEDUP_STALE_MS and is
+          // never persisted. Tracked as a re-filed D#193 naming that as the prerequisite.
+          // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
           for (const id of ids) { keyContextIds.push(id); pathAInjectedIds.push(id); }
         }
       } catch { /* file may not exist — that's fine */ }

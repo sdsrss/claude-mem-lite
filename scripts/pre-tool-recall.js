@@ -766,9 +766,16 @@ try {
     };
     writeCooldown(cooldownPath, cooldown, isSessionScoped);
     // A3 (v2.83): merge our newly-emitted IDs into the cross-hook injected
-    // file so the next UPS prompt skips them too. Always write, even on
-    // empty allRows, so the file's ts stays fresh for the no-op case where
-    // we'd otherwise drift outside the dedup window.
+    // file so the next UPS prompt skips them too.
+    //
+    // This comment used to say "Always write, even on empty allRows, so the file's ts
+    // stays fresh". It does not: `mergeCrossHookInjected` returns on line 268 when
+    // `newIds` is empty, so a firing that emits nothing leaves the timestamp where it
+    // was and the marker can age out of the dedup window. Corrected rather than
+    // implemented — refreshing `ts` on an empty firing would EXTEND suppression on the
+    // strength of an injection that did not happen, which is the opposite of what the
+    // window is for. The practical consequence is only that the trigger condition for
+    // D#193 is "PreToolUse emitted at least one row in the window", not "always".
     // D#188: namespaced on write too — otherwise a bare event id here would keep
     // blocking the same-numbered observation on the next UPS prompt. (An earlier
     // version of this comment also claimed it leaked into hook.mjs's
