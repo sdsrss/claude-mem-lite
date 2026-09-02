@@ -120,7 +120,11 @@ describe('deferred_work CRUD', () => {
       '等待上游修复', '尚未修复', '需修复但优先级太低',
       // Widening the positive arm to `closed` made these reachable; the veto
       // has to hold them back or the hint fires on ordinary rejections.
-      'closed as obsolete', 'closed — superseded by D#42', 'waiting for an upstream fix'];
+      'closed as obsolete', 'closed — superseded by D#42', 'waiting for an upstream fix',
+      // `wontfix` has no word boundary after `wont`, so `won'?t\b` never saw it and the
+      // positive arm's `resolved` won. The single most common English spelling of this
+      // rejection (pre-tag review v3.88.0, correctness N4).
+      'resolved as wontfix', "closed — won'tfix", 'wontfix'];
     for (const r of quiet) {
       expect(dw.formatDropReasonHint(r), `expected NO hint for: ${r}`).toBeNull();
     }

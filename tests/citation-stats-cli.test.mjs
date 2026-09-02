@@ -119,11 +119,33 @@ describe('citation-stats CLI', () => {
     expect(output).not.toContain('safe');
   });
 
-  it('reports recently-promoted (cited_count > 0, importance >= 3)', async () => {
-    obs({ title: 'pro', importance: 3, cited_count: 2 });
+  it('reports recently-cited on what the decay loop writes, not on a pre-set importance', async () => {
+    // The previous version seeded `importance: 3, cited_count: 2` and asserted the row
+    // appeared. That is the end state the section is supposed to REPORT, so the case
+    // could not observe that the loop had stopped producing it: after D#179/D#198 the
+    // promote branch writes `cited_count + 1` and `uncited_streak = 0` and never touches
+    // `importance`, and the section's old `importance >= 3` gate therefore matched only
+    // rows that arrived at 3 some other way. Both rows below are chosen so the old gate
+    // and the new one disagree about them, in opposite directions.
+    const cited = obs({ title: 'loopcited', importance: 1, cited_count: 2 });
+    const stale = obs({ title: 'staleimp', importance: 3, cited_count: 5, uncited_streak: 3 });
     const output = await captureStdout(() => run(['citation-stats']));
-    expect(output).toMatch(/promoted/i);
-    expect(output).toContain('pro');
+    expect(output).toMatch(/recently cited/i);
+    // Scope to the section under test. A whole-stdout assertion is not equivalent here:
+    // `staleimp` legitimately appears in the decay-queue section above (uncited_streak 3),
+    // so a bare `not.toContain` fails for a reason that has nothing to do with this gate.
+    const section = output.slice(output.search(/Recently cited/i));
+    const recentlyCited = section.slice(0, section.search(/\nRecently rolled over/i) + 1);
+    expect(recentlyCited, 'section did not terminate — the sibling caption moved')
+      .not.toMatch(/Recently rolled over/i);
+    // Under the old gate this row was invisible (importance 1 < 3) though the loop had
+    // credited it twice — the structural emptiness the fix is about.
+    expect(recentlyCited, `#${cited} cited by the loop but below the old importance gate`)
+      .toContain('loopcited');
+    // And a high-importance row that has since missed its citations is NOT "recently
+    // cited"; the old gate listed it. Guards the fix against being a pure widening.
+    expect(recentlyCited, `#${stale} has a live uncited streak and must not read as recently cited`)
+      .not.toContain('staleimp');
   });
 
   it('reports per-project cite stats', async () => {

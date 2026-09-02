@@ -2,6 +2,206 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.88.0 — five times over, the case that motivated the rule fell outside the rule
+
+**Upgrade note — read this one, it changes what your memories do on their own.**
+
+**Citing a memory no longer moves its `importance`.** Until this release
+`applyCitationDecay` ran at every Stop hook and rewrote `importance` in both directions: a
+memory you cited went up, a memory that was injected and not cited went down. It no longer
+writes that column on any branch. Nothing is migrated and no stored value changes — the
+column keeps whatever it holds today; only the citation-driven rewriting stops.
+
+**This is not a claim that `importance` stops changing**, and the scoping word matters
+because the injection pools gate on that column. Ordinary maintenance still moves it on its
+own: `decay`, `boost` and `demote_pinned` are all in the default auto-maintain set, and
+`demote_pinned` in particular selects rows on `injection_count >= 8 AND cited_count = 0`,
+i.e. precisely rows these blocks have been injecting. A first draft of this note said "rows
+stop migrating between importance tiers on their own" and the pre-tag review refuted it by
+enumerating five automatic writers (`recoverBuriedLessons`, `decayAndMarkIdle`,
+`boostAccessed`, `demotePinned`, and `autoBoostIfNeeded` on every `mem_get`). What stops is
+one input to that movement, not the movement.
+
+One **citation → importance** path does remain, and it is open as **D#206**: cited ids
+credit `access_count`, and the `boost` maintain op raises `importance` by 1 above
+`access_count > 3`. Two things bound it, both established rather than assumed. It is *not*
+ungated — since v3.84.0 `bumpCitationAccess` credits only an id that was injected this
+session on one of the seven faces, or that you typed yourself (`CLAUDE_MEM_CITATION_RELEVANCE_GATE=off`
+reverts that); what the gate does not ask is whether you *acted* on the lesson. And the
+effect is small: measured 2026-09-02T10:2xZ against the live DB and 98 transcripts, 52 rows
+are currently `boost`-eligible, **25 of them are cited nowhere in the corpus**, and **at
+most 3 could have crossed `access_count > 3` on citations** even under an upper bound that
+ignores the gate entirely. The leg was left deliberately — `access_count` has other writers
+(explicit `recall` / `get` / `timeline`) and also feeds the noise-penalty denominator — so
+cutting it is a different blast radius and a separate decision.
+
+**Event ids now render as `E#123`** in the `[mem] Lessons for <file>:` block. If you cite
+an event, cite it with the prefix. This is not cosmetic: those ids fed the citation-decay
+denominator and were resolved against `observations` alone, so an event id colliding with a
+live same-project observation credited an unrelated memory. Measured 2026-09-02T10:55Z,
+5548 injectable events, under the decay `SELECT`'s own `WHERE` (`superseded_at IS NULL`,
+which is all it filters on): **2222 (40.1%) share an id with a live observation and 263
+(4.7%) with one in the same project**. The same-project figure is the operative one because
+that `SELECT` also matches on `project`. A first draft published 1406 (25.7%) / 198 (3.6%)
+under a sentence claiming the decay `SELECT`'s `WHERE` while actually measuring
+`liveObsFilterSql`, which additionally excludes compressed rows — and a compressed
+observation is still `UPDATE`-able by that loop, so the stricter filter under-counted the
+mis-attribution by about a quarter. Correct table, wrong sentence: the exact defect this
+release is named after, caught by the pre-tag review.
+
+**Revert path:** pin the previous release — `npm i -g claude-mem-lite@3.87.0`, or the
+equivalent plugin pin. Neither change is env-overridable, deliberately: a knob here would
+be a config surface none of the measurements below model. No schema change, no migration,
+no new configuration.
+
+### The shape this round kept finding
+
+Five of this release's fixes are the same defect: a rule was written from a motivating
+case, and the motivating case did not satisfy the rule. A sixth turned up in the pre-tag
+review — see below, where a caption was corrected on one section and not its sibling.
+
+- The **drop-reason hint** exists to catch the six v3.86.0 items that were `defer drop`ped
+  when they should have been closed. Those six carry the reason `closed this round; fix +
+  mutation-verified binding test landed`. The first pattern anchored on `fixed` and
+  `closed by` — neither string is in it. Every `fires` case in its test was a synonym
+  invented at authoring time rather than the datum. The real string is now a test case,
+  and the positive arm gains `closed` / `landed` while bare `fix` stays out ("waiting for
+  an upstream fix" is a legitimate rejection). Widening to `closed` makes ordinary
+  rejections reachable, so the veto arm gains waiting / obsolete / superseded / duplicate
+  / irrelevant / refuted plus CJK equivalents, three of which are pinned as must-stay-quiet.
+
+- The **`E#` convention already existed**, in `lib/events-injection.mjs`, whose header
+  explains why the prefix is needed and lists the extractors it protects. It does not list
+  `scripts/pre-tool-recall.js` — which builds its own merged obs+event rows and printed a
+  bare `#` for both. An invariant asserted in one file about faces living in others, with
+  the offending face never enumerated. On the live metrics log (4227 firings,
+  2026-07-18 → 2026-09-02T09:3xZ) 2376 of 5291 injected rows (44.9%) were event-sourced and
+  40.2% of firings injected events only, so this face was not a corner. That log grows —
+  the review re-derived 4277 / 5371 / 45.1% / 40.3% an hour later. Note also what the guard
+  is: the `E#` prefix is pinned by ONE source-text assertion over the renderer. The three
+  behavioural cases beside it feed hand-written lines to the extractor, so they pass at
+  v3.87.0 too; the file says so itself rather than counting four guards where there is one.
+
+- The **file-overlap penalty** in `hook-context.mjs` had a comment saying it affects
+  ordering. It did not: `penalizedValue` was read by exactly one `continue`, order was
+  fixed upstream by the raw-`valueDensity` sort, and the greedy loop never re-sorts. It
+  also could not fire — firing needed a title costing >122500 tokens against a
+  longest-in-table of 171 chars, which this code's own `estimateTokens` prices at 43.
+  Deleted rather than implemented, along with
+  the comment. Its test asserted only `observations.length === 3` under the label "applies
+  diversity penalty", so it passed with or without the block; it now pins the order on a
+  fixture built so the two behaviours emit different sequences, and is mutation-verified.
+
+- The **cite-widening probe** was filed as evidence of a term in `FULL_SCORE` that does not
+  scale with `citeFactor`. There is none. The two arms each seed a fresh corpus and so
+  compute their own integer-millisecond `age`, giving a linear response of 2.0052e-10 per
+  millisecond; the CI value `3.0000000010026033` is exactly 5 of those units, i.e. 5ms of
+  scheduling skew, and the 1e-9 tolerance admitted only ±4ms. Fixed by freezing the clock
+  across both arms and tightening the tolerance to 1e-12 — deleting the drift rather than
+  widening the gate to hide it. The regression test needed an *accelerating* clock: an
+  equal-step stub shifts both arms alike and reports ALL PASS on the unfixed code.
+
+- The **UPS test timeout** had already been raised once for exactly the cause that blew it
+  again (D#203, run 33605998984). The discriminator was the matrix inside that single run:
+  identical code, `ups-cold-start-injection.test.mjs` at 3792ms on Node 20, 30173ms on
+  Node 24 and 67527ms on Node 22. Code cannot get 18× slower on one leg, so the stall is
+  the runner and no fixed budget survives a multiplier. The base cost was addressed
+  instead — `saveObservation` commits per call, so a 600-row seed paid 600 fsyncs. Across
+  five measurements on three harnesses (mine plus both reviewers'), unwrapped 2.1–2.3s vs
+  0.22–0.28s wrapped: **7.5×–9.6×**, quoted as a range because a single point estimate is
+  what the first draft published. The ratio is load-bearing on a pragma the fixture does
+  not set — under `journal_mode = WAL` it collapses to 1.3–1.4×. Rows are byte-identical
+  through the same production write path (one reviewer byte-compared all 22 columns, the
+  FTS rows and the vectors in both seed shapes, including the 1-minute-step shape that
+  sits inside the dedup window); only the commit boundary moves. Both files together:
+  6.06s → 1.13s wall, 9.20s → 1.57s cumulative (5.9×), 10/10 still pass. Timeout stays 60s.
+
+### Also in this release
+
+- **`save --supersedes` says when it superseded nothing.** It filtered requested ids down
+  to eligible ones and dropped the difference silently, printing the `Superseded:` note
+  only on a non-empty result — so "requested 4, superseded 0" and "requested nothing" were
+  byte-identical output on both faces. Now returns one entry per unlanded id, classified:
+  `malformed-id` / `no-such-observation` / `other-project` / `already-superseded` /
+  `duplicate-save`. Classified rather than lumped because `already-superseded` is a benign
+  idempotent replay that must not read as an error. `duplicate-save` covers the worst
+  instance of the same sentence: a dedup short-circuit swallows the supersession whole, so
+  a correction you write in the five minutes after a near-duplicate never happens and the
+  rows you meant to retire stay live.
+
+- **`defer close` accepts a mis-dropped item.** `resolveDeferredIds` took only `open` rows,
+  so the six items above were unrecoverable short of editing the live DB. It now takes an
+  `allowStatuses` policy — defaulting to open-only, so the drop verb and every existing
+  caller are unchanged — and the close call sites pass `['open','dropped']`. `done` stays
+  rejected under both, since re-closing would overwrite an existing `closed_by_obs_id`.
+  The `drop_reason` is kept and rendered as `previously_dropped:`, because the mis-drop is
+  the part a later reader needs. Ordinals stay open-only under every policy; recovery uses
+  the explicit `D#N` form.
+
+- **A stand-in knip guard** for `hook-context.mjs` and `hook-memory.mjs`, which knip cannot
+  see. It resolves real import edges (named imports plus `ns.NAME` reads through a
+  namespace import) rather than searching text — deliberately, because `KEYCTX_POOL_OBS` /
+  `KEYCTX_POOL_SESS` *do* appear in `benchmark/keyctx-pool-replay.mjs`, as a regex over the
+  file's source, which a grep-based guard would miscount as a consumer. Those two sit in an
+  explicit allowlist, and the guard fails if an allowlisted name gains an importer so the
+  list cannot rot into a raised baseline. Scope is those two modules; the other ~90 remain
+  knip's job.
+
+- **The `new URL('../X.mjs', import.meta.url)` form costs knip coverage of whatever it
+  names**, and this round tripped it live: adding a test that read three source files that
+  way dropped `lib/citation-tracker.mjs:extractInjectedFromSubagentPrompt` out of knip's
+  name set (46 → 45) — one test file blinding knip to a module it has nothing to do with.
+  Rebuilt with `dirname()` + `join()`; same-tree A/B back to +0 / −0 and the count back to
+  46. Both guard tests now follow that rule.
+
+### Found by the pre-tag review, fixed before the tag
+
+Two independent reviewers read the diff and the release note. The correctness lens returned
+no blocker but two real defects; the claims lens returned one blocker against this note.
+
+- **`citation-stats`'s "Recently promoted" section had gone structurally empty.** Its query
+  was `WHERE importance >= 3 AND cited_count >= 1`. The sibling "demoted" caption ten lines
+  below was re-worded when the decay loop stopped writing `importance`; this one was not —
+  the same "the copy I fixed was not the only copy" shape the round's own sweeps exist to
+  prevent. A row cited in ten sessions now has `cited_count = 10` and whatever importance it
+  was saved with, so the section degenerated into "rows that were already at 3" under a
+  caption saying "promoted". It now keys on what the promote branch actually writes
+  (`cited_count >= 1 AND uncited_streak = 0`) and is captioned "Recently cited … importance
+  unaffected". Both tests that covered it seeded `importance = 3` directly, so neither could
+  observe the loop had stopped producing it; the replacement uses two rows the old gate and
+  the new one disagree about in opposite directions, and is mutation-verified.
+
+- **`save --supersedes` could tombstone an observation you never named.** The CLI parsed its
+  tokens with `parseInt`, which reads `1abc` as `1` — so a typo (`875x` for `8754`) retired
+  an unrelated memory and printed a clean `Superseded: #1.` The same lenience made the
+  `malformed-id` class this release added unreachable from the CLI, which is the exact face
+  whose silence motivated D#201. Tokens now reach `saveObservation` unparsed, so the
+  classifier decides: `--supersedes 1abc,2` supersedes only `#2` and reports
+  `#1abc (not a positive integer id)`. The MCP face was never affected (Zod rejects it).
+
+- Smaller, same round: the drop-reason veto missed `wontfix` (no word boundary after `wont`,
+  so the positive arm's `resolved` won); the `E#` sweep matched its own `import` line and so
+  stayed green under a mutation that dropped the prefix from the renderer — mutation-verified
+  in both directions now; the knip guard's `statSync` walk could throw on a file that
+  disappeared mid-run, which is not hypothetical, it happened during this review.
+
+- **Five stale mechanism sentences** left behind by the decay change were swept, all of them
+  citing `IMPORTANCE_FLOOR`, a constant this batch deleted: `hook-memory.mjs` (the paragraph
+  directly below the one that *was* rewritten), two in `lib/citation-tracker.mjs` — including
+  one that described a row promoting itself by being written about, which can no longer
+  happen — `hook.mjs`'s stated justification for the promotion-only Key Context policy (the
+  policy survives on its other ground), and `lib/maintain-core.mjs`. Corrections are written
+  in place with the superseded reading kept and marked, not edited to read as if it had
+  always said this.
+
+### Verification
+
+319 test files / 5429 tests pass (`npx vitest run`); `npx eslint .` clean; knip 46 unused
+exports / 0 unused files, unchanged from the recorded baseline and measured per the
+CLAUDE.md contract (primary working tree, name-set diff rather than count subtraction).
+The test count is partly generated and moves when source files are added — re-measure it
+rather than carrying it forward.
+
 ## v3.87.0 — the fifth D#172 surface is closed on the bound that mattered, and the two bounds behaved oppositely
 
 One constant moves: `KEYCTX_POOL_OBS` in `hook-context.mjs`, **50 -> 200**. Its sibling

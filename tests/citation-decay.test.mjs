@@ -320,8 +320,12 @@ describe('applyCitationDecay', () => {
 
   it('a legacy imp=0 row is left at 0 — the rollover no longer heals or buries it', () => {
     // Pre-D#179 this row healed 0 -> 1 via MAX(1, 0-1). It no longer does, and
-    // that is the honest consequence: rows already buried at 0 by the old loop
-    // stay there. Nothing in this change is retroactive — 1199 of 2298 live rows
+    // that is the honest consequence: THIS LOOP leaves rows already buried at 0 by
+    // the old one where they are. It is not the last word on them — `recoverBuriedLessons`
+    // runs in the default auto-maintain set and lifts every LESSON-BEARING live row
+    // 0 -> 1, so only lesson-less rows actually stay at 0. Said precisely because the
+    // first version of this comment claimed they all do.
+    // Nothing in this change is retroactive — 1199 of 2298 live rows
     // on the maintainer's DB carry at least one decay-driven importance write, and
     // that accumulated state is frozen, not reverted (there is no record of each
     // row's pre-decay value to revert to).

@@ -35,10 +35,13 @@
 // halves are pinned below: the prefix on both render paths, and that `event`
 // must never join the extractor's bounded type list.
 //
-// NOT closed: `bumpCitationAccess` credits access_count for any `#NN` in
-// assistant text without asking whether it was injected at all (obs #10911), so
-// the same 198-row collision still misattributes there. Different mechanism,
-// different fix.
+// NOT closed: `bumpCitationAccess` credits access_count for a cited `#NN`, and the
+// `boost` maintain op turns enough of those into an importance bump (obs #10911,
+// D#206), so the same same-project collision still misattributes there. Note the
+// gate this does NOT lack: since v3.84.0 the credit requires the id to have been
+// injected this session (or typed by the user), so "without asking whether it was
+// injected at all" — how this comment first read — is wrong. What it does not ask is
+// whether the lesson was ACTED on. Different mechanism from the prefix, different fix.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync, mkdtempSync } from 'fs';
@@ -142,8 +145,14 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
     const problems = [];
     for (const face of faces) {
       const src = readFileSync(join(REPO, face), 'utf8');
-      if (!src.includes('EVENT_ID_PREFIX')) {
-        problems.push(`${face}: does not use EVENT_ID_PREFIX`);
+      // Count USES, not occurrences: `src.includes(...)` matched the import statement,
+      // so dropping the prefix from the renderer while leaving the import in place kept
+      // this case GREEN (mutation-verified in the v3.88.0 pre-tag review, N1). The
+      // sibling behavioural case caught it, but a sweep that cannot see its own subject
+      // is worse than no sweep. Strip the import lines first, then require a use.
+      const body = src.replace(/^\s*import\s[^;]*;$/gm, '');
+      if (!body.includes('EVENT_ID_PREFIX')) {
+        problems.push(`${face}: imports EVENT_ID_PREFIX but never renders with it`);
       }
       // A hard-coded 'E#' inside a template literal is the drift this prevents.
       // (Prose mentions of E# in comments are fine; a rendered one is not.)

@@ -299,13 +299,17 @@ describe('CLI feature sweep: read commands', () => {
   itCmd('citation-stats', () => {
     // Seed the two feedback-loop states the report is FOR, so the arrays carry a row
     // whose presence is provable rather than an empty [] that any broken query returns:
-    //   at-risk  → uncited_streak >= 2  → decay_queue
-    //   promoted → importance >= 3 AND cited_count >= 1 → promoted
+    //   at-risk → uncited_streak >= 2 → decay_queue
+    //   cited   → cited_count >= 1 AND uncited_streak = 0 → promoted
+    // The cited row deliberately does NOT get its importance raised. It used to (set to 3
+    // alongside cited_count), which seeded the section's own gate and so could not observe
+    // that D#179/D#198 had stopped the loop producing that state; the row is left at its
+    // saved importance so only what the promote branch writes can put it in the array.
     const atRisk = savedId(ok(['save', 'Row parked in the citation decay queue by the sweep', '--project', 'sweep-citation']));
     const promotedId = savedId(ok(['save', 'Row promoted by repeated citation in the sweep', '--project', 'sweep-citation']));
     withDb((db) => {
       db.prepare('UPDATE observations SET uncited_streak = 3 WHERE id = ?').run(atRisk);
-      db.prepare('UPDATE observations SET importance = 3, cited_count = 2 WHERE id = ?').run(promotedId);
+      db.prepare('UPDATE observations SET cited_count = 2, uncited_streak = 0 WHERE id = ?').run(promotedId);
     });
 
     const data = jsonOf(ok(['citation-stats', '--json']));

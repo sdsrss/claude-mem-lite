@@ -955,8 +955,13 @@ function cmdSave(db, args) {
   let supersedesIds = null;
   if (flags.supersedes !== undefined && flags.supersedes !== false) {
     const raw = String(flags.supersedes);
-    supersedesIds = raw.split(',').map(t => t.trim()).filter(Boolean)
-      .map(t => parseInt(t, 10)).filter(n => Number.isInteger(n) && n > 0);
+    // Tokens go through UNPARSED so saveObservation's classifier — not parseInt — decides
+    // what is malformed. parseInt is lenient in the one direction that costs data: it read
+    // `1abc` as 1, so a typo (`875x` for `8754`) tombstoned an unrelated observation and
+    // printed a clean `Superseded: #1.` Worse, the token vanished before saveObservation
+    // saw it, which made the `malformed-id` class D#201 added unreachable from the CLI —
+    // the exact face whose silence motivated D#201. Number() rejects `1abc` as NaN.
+    supersedesIds = raw.split(',').map((t) => t.trim()).filter(Boolean);
     if (supersedesIds.length === 0) {
       fail('[mem] --supersedes requires at least one positive observation id (e.g. --supersedes 8754,8771)');
       return;
@@ -2558,10 +2563,19 @@ function cmdCitationStats(db, args) {
      LIMIT 20
   `).all();
 
+  // D#179/D#198, second half: the sibling `demoted` caption below was re-worded when the
+  // decay loop stopped writing `importance`, and this one was not — the same "the copy I
+  // fixed was not the only copy" shape the batch's own sweeps exist to prevent. Gating on
+  // `importance >= 3` made the section structurally empty for anything the loop produces:
+  // a row cited in ten sessions now has cited_count = 10 and whatever importance it was
+  // saved with, so the section degenerated into "rows that were already at 3" under a
+  // caption reading "promoted". The discriminator is now the pair the promote branch
+  // actually writes (`cited_count + 1`, `uncited_streak = 0`); `importance` is still
+  // SELECTed and printed, so a reader can see it is unrelated.
   const promoted = db.prepare(`
     SELECT id, project, type, title, importance, cited_count
       FROM observations
-     WHERE importance >= 3 AND cited_count >= 1
+     WHERE cited_count >= 1 AND COALESCE(uncited_streak, 0) = 0
        AND ${liveObsFilterSql('')}
   ORDER BY cited_count DESC
      LIMIT 10
@@ -2683,13 +2697,13 @@ function cmdCitationStats(db, args) {
     }
   }
   out('');
-  out('Active decay queue (uncited_streak >= 2, next miss → demote):');
+  out('Active decay queue (uncited_streak >= 2, next miss → rollover):');
   if (decayQueue.length === 0) out('  (none)');
   for (const r of decayQueue) {
     out(`  #${r.id} [${r.type}] ${(r.title || '').slice(0, 60)}   imp=${r.importance} streak=${r.uncited_streak}`);
   }
   out('');
-  out('Recently promoted (importance=3, cited_count >= 1):');
+  out('Recently cited (cited_count >= 1, streak reset; importance unaffected):');
   if (promoted.length === 0) out('  (none)');
   for (const r of promoted) {
     out(`  #${r.id} [${r.type}] ${(r.title || '').slice(0, 60)}   cited ${r.cited_count}x`);

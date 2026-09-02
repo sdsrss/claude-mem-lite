@@ -1004,10 +1004,14 @@ async function handleStop() {
             // marker. They are added to the decay set ONLY where they were
             // actually cited (below), never as bare denominator: the block
             // re-renders the same fixed top-10 unconditionally, so an uncited
-            // render says nothing about relevance — and since keyObs gates on
-            // `importance >= 2`, one demotion evicts the common importance-2 row
-            // from Key Context for good. v3.66.0 fed them in as denominator and
-            // that made the block eat its own contents.
+            // render says nothing about relevance. v3.66.0 fed them in as
+            // denominator and that made the block eat its own contents.
+            // The policy used to rest on a second ground as well — "since keyObs
+            // gates on `importance >= 2`, one demotion evicts the common
+            // importance-2 row from Key Context for good" — which D#179/D#198
+            // retired: this loop no longer writes `importance`, so no citation
+            // miss can evict anything. The first ground is untouched and is why
+            // the policy stays.
             const keyCtxIds = extractInjectedFromKeyContext({
               runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId,
             });

@@ -86,8 +86,10 @@ export function computeAdaptiveWindows(db, project) {
 //
 // Both displaced rows lost their slot to the 3-per-type diversity cap. That is not a
 // three-way discrimination: the token budget does not bind on this corpus (651 of 2000 in
-// the widest arm's largest project) and the file-overlap `continue` below is UNREACHABLE
-// (D#197) — so the cap is currently the only gate that can fire.
+// the widest arm's largest project) and the file-overlap `continue` that used to sit in
+// the selector was UNREACHABLE and has since been deleted (D#197) — so the cap is
+// currently the only gate that can fire. ("below" until v3.88.0; there is nothing below
+// any more, and a reader who went looking found the sentence outliving its referent.)
 //
 // 200 is ~2x the largest pool observed (107). The ruler CANNOT distinguish 200 from 500
 // on this corpus — every bound >= the largest pool is one arm, identical in both
@@ -221,7 +223,9 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     //      would drive valueDensity to 0 and make it fire. Triggering needed a title
     //      costing > 122500 tokens. Measured over the 2027 live rows carrying
     //      files_modified: zero zero-cost rows, minimum valueDensity 0.1147 (80x the
-    //      trigger), longest title 171 chars = 49 tokens.
+    //      trigger), longest title 171 chars = 43 tokens by this code's own
+    //      estimateTokens (ceil(ascii/4) + ceil(cjk/1.5)). A first version of this line
+    //      said 49, which is 3.5 chars/token — a rate nothing here uses.
     //
     // With both gone `selectedFiles` had no reader left, so the Set and its
     // JSON.parse went with it. Type diversity above is the only diversity constraint

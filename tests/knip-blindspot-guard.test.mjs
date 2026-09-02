@@ -55,7 +55,13 @@ function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
+    // A file can vanish between readdirSync and statSync — a concurrent agent writing
+    // and removing a scratch file under tests/ did exactly that during the v3.88.0
+    // pre-tag review, turning an unrelated guard red. A disappeared file cannot be an
+    // unconsumed export, so skipping it is the correct answer, not a papered-over one.
+    let st;
+    try { st = statSync(full); } catch { continue; }
+    if (st.isDirectory()) walk(full, out);
     else if (/\.(mjs|js)$/.test(name)) out.push(full);
   }
   return out;

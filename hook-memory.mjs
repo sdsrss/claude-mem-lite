@@ -534,14 +534,17 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
  * in lib/citation-tracker.mjs. Re-measure with `node benchmark/imperative-pool-replay.mjs
  * --population`, never with a bare `SELECT ... WHERE importance = 3`.
  *
- * 3->2 IS NOW A DOWN-RANK; 2->1 IS STILL AN EVICTION. The pool gate is
- * `COALESCE(importance, 1) >= 2`, so a row demoted to the IMPORTANCE_FLOOR of 1 leaves
- * this face's reach until some other face cites it back up. Widening the bound is also
- * what first makes importance=2 rows reachable here (56 of projects--mem's 383 eligible),
- * so it creates the injections that can walk one down to 1. Measured exposure: of the
- * picks the widening newly surfaces, one is importance=2 — `score = importance x overlap`
- * keeps importance=3 rows ahead nearly always — so this is a known small edge, not a
- * closed loop.
+ * THE EVICTION EDGE IS CLOSED FROM THE OTHER END, AND NOT BY THIS BOUND. The pool gate is
+ * `COALESCE(importance, 1) >= 2`, so a row at 1 is out of this face's reach — that part is
+ * unchanged. What changed is that nothing in the citation loop can put it there any more:
+ * D#179/D#198 deleted the `importance` write from BOTH branches of `applyCitationDecay`
+ * along with `IMPORTANCE_FLOOR` itself, so neither a 3->2 down-rank nor a 2->1 eviction can
+ * originate from a citation. This paragraph used to read "3->2 IS NOW A DOWN-RANK; 2->1 IS
+ * STILL AN EVICTION" and cite that constant; it survived the deletion because the paragraph
+ * immediately above it was the one rewritten (pre-tag review v3.88.0, correctness S3).
+ * What can still move a row to 1 is ordinary maintenance — `demotePinned` writes 1 on a
+ * heavily-injected uncited row with no lesson, and `decayAndMarkIdle` walks `imp - 1` on a
+ * never-accessed never-injected row — so the edge exists, it just is not citation-driven.
  *
  * MEASURED, and reproducible: `node benchmark/imperative-pool-replay.mjs`. Over 373 real
  * user prompts replayed against their OWN project's live corpus (85 produced a candidate
