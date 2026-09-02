@@ -18,6 +18,25 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+      # Informational only — this step cannot fail the job, and nothing reads its
+      # output automatically. CLAUDE.md's knip measurement contract records that a
+      # `git worktree --detach HEAD` checkout reads ~15 LOWER than the primary
+      # working tree on the same commit with the same binary, reproduced and cause
+      # never established. CI is a fresh clone: which side it lands on is unknown,
+      # so a name-set guard written today would be a bet, not a measurement. Print
+      # it for a few rounds first. The NAME SET goes to the log too, not just the
+      # count — rule 3 of that contract is that a count is a smoke alarm and the
+      # name set is the evidence, and a future guard needs the set.
+      #
+      # Output goes to RUNNER_TEMP, never the workspace: an untracked file at the
+      # repo root changes the case count `tests/obs-id-caliber-sync.test.mjs`
+      # generates, which is a real (if here cross-job) way to move a headline number.
+      - name: Knip unused-export count (informational — cannot fail the job)
+        continue-on-error: true
+        run: |
+          ./node_modules/.bin/knip --reporter json > "$RUNNER_TEMP/knip-ci.json" || true
+          node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/knip-ci.json','utf8'));const n=d.issues.flatMap(i=>(i.exports||[]).map(e=>i.file+':'+e.name)).sort();console.log('knip unused exports (CI fresh clone):',n.length);console.log('unused files:',d.issues.flatMap(i=>i.files||[]).length);console.log(n.join('\n'))"
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:

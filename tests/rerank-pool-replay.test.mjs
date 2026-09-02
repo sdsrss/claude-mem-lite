@@ -15,13 +15,18 @@
 // machine whose corpus happens to satisfy it, it never will.
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   patchConst,
   writeTwin,
+  callArm,
+  assertNoMetricWrite,
+  metricShardPath,
+  metricsDirSize,
+  runLevelGrowth,
   assertCannotWrite,
   assertRulerCanSayNo,
   compare,
@@ -31,6 +36,7 @@ import {
   validatePoolArg,
   MONOTONICITY_NOTE,
 } from '../benchmark/rerank-pool-replay.mjs';
+import { recordMetric } from '../lib/metrics.mjs';
 
 // D#207: built with join(), never `new URL('../X.mjs', import.meta.url)` — the URL form
 // makes knip drop the named module out of its unused-export report entirely, and this
@@ -198,5 +204,167 @@ describe('costCompare refuses to report a ratio it cannot measure', () => {
     expect(c.threw).toBe(2);   // q2 throws on both passes
     expect(c.n).toBe(2);       // q1 commits on both passes
     expect(Number.isFinite(c.ratio)).toBe(true);
+  });
+});
+
+// ─── self-check 5: the SECOND sink ────────────────────────────────────────────
+//
+// v3.90.0's release note is titled "the ruler ran at the read, then wrote to the thing it
+// was measuring", and it fixed that shape in lib/patha-exclude-meter.mjs. The same shape
+// was alive in THIS file the whole time and the guard above could not see it: a readonly
+// database handle blocks the `injection_count` UPDATE and says nothing about
+// `recordMetric`'s appendFileSync. A whole-corpus run with CLAUDE_MEM_METRICS=1 appended
+// ~1.5M `inject` rows in one day. The four checks pinned below this line all existed; the
+// sink they did not cover is the one that fired.
+describe('self-check 5: the metric sink is shut, and the guard can see it open', () => {
+  const withTmp = (fn) => {
+    const dir = mkdtempSync(join(tmpdir(), 'rerank-sink-test-'));
+    try { return fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+  };
+
+  it('callArm passes the shipped counterfactual option — the whole fix, in one place', () => {
+    let seen;
+    callArm((...args) => { seen = args; return []; }, 'DB', 'text', 'proj');
+    expect(seen[4]).toEqual({ counterfactual: true });
+  });
+
+  it('passes when the probe reaches the emit path and writes nothing', () => {
+    withTmp((dir) => {
+      expect(() => assertNoMetricWrite(metricShardPath(dir), () => true)).not.toThrow();
+    });
+  });
+
+  it('THROWS when the probe appends a metric row — the guard can see the harm', () => {
+    // The mutation this exists for is deleting `{ counterfactual: true }` from callArm.
+    // That cannot be simulated without a live corpus, so the probe stands in for it by
+    // doing what an unflagged call does: appending one row to the watched shard. If the
+    // guard silently watched the wrong filename (its other failure mode) this stays green
+    // for the wrong reason — which is why the shard name comes from recordMetric itself.
+    withTmp((dir) => {
+      expect(() => assertNoMetricWrite(metricShardPath(dir), () => {
+        recordMetric(dir, { event: 'inject', durationMs: 1 });
+        return true;
+      })).toThrow(/grew .*bytes/);
+    });
+  });
+
+  it('THROWS when the probe never reached the metric block — no vacuous pass', () => {
+    // searchRelevantMemories returns above its metric block for short prompts and for
+    // queries that sanitize to nothing. A probe on one of those writes nothing whatever
+    // the flag says, so "the shard did not grow" would certify a sink never approached.
+    withTmp((dir) => {
+      expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow(/never reached the metric block/);
+    });
+  });
+
+  it('leaves CLAUDE_MEM_METRICS exactly as it found it, on both paths', () => {
+    // The guard forces the sink ON so it cannot pass merely because metrics are disabled.
+    // Leaking that into the rest of the process would turn the sink on for every later
+    // call in the same run — the guard would then have created the condition it prevents.
+    const original = process.env.CLAUDE_MEM_METRICS;
+    try {
+      delete process.env.CLAUDE_MEM_METRICS;
+      withTmp((dir) => assertNoMetricWrite(metricShardPath(dir), () => true));
+      expect('CLAUDE_MEM_METRICS' in process.env).toBe(false);
+
+      process.env.CLAUDE_MEM_METRICS = '0';
+      withTmp((dir) => {
+        expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow();  // throwing path
+      });
+      expect(process.env.CLAUDE_MEM_METRICS).toBe('0');
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_MEM_METRICS;
+      else process.env.CLAUDE_MEM_METRICS = original;
+    }
+  });
+
+  it('the shard name is never derived here — it is read back off recordMetric', () => {
+    // Review N2: the "watch a self-derived filename" mutation only kills if the derived
+    // name is WRONG. A mutation that re-derived the CORRECT convention by hand would
+    // survive every behavioural case while genuinely weakening the guard, because the
+    // property is "the convention is never copied" — a property of the SOURCE. So pin it
+    // there. (The mutation that was run used the literal `zzz-wrong.jsonl`, which is why
+    // it killed; that is a weaker fact than this assertion.)
+    const src = readFileSync(join(REPO, 'benchmark/rerank-pool-replay.mjs'), 'utf8');
+    const body = src.slice(src.indexOf('export function metricShardPath'),
+      src.indexOf('export function metricsDirSize'));
+    expect(body).toContain('recordMetric(tmp');
+    for (const forbidden of ['toISOString', 'getFullYear', 'getMonth', 'padStart', 'slice(0, 10)', 'slice(0,10)']) {
+      expect(body, `metricShardPath derives the date itself via ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('metricShardPath names the file recordMetric actually writes', () => {
+    withTmp((dir) => {
+      const shard = metricShardPath(dir);
+      const prev = process.env.CLAUDE_MEM_METRICS;
+      process.env.CLAUDE_MEM_METRICS = '1';
+      try { recordMetric(dir, { event: 'inject' }); }
+      finally { if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = prev; }
+      // If this ever fails, the guard has been watching a file nothing writes — the exact
+      // vacuous pass the throwaway-dir design exists to prevent.
+      expect(existsSync(shard)).toBe(true);
+      expect(statSync(shard).size).toBeGreaterThan(0);
+    });
+  });
+
+  it('metricShardPath does not leak CLAUDE_MEM_METRICS when mkdtemp throws', () => {
+    // Review S2: the first version wrote the env var BEFORE mkdtempSync, so a throwing
+    // mkdtemp (TMPDIR gone, ENOSPC, EACCES) skipped the finally and left ='1' set for the
+    // rest of the process — the guard creating the condition its own comment warns about.
+    const original = process.env.CLAUDE_MEM_METRICS;
+    const originalTmp = process.env.TMPDIR;
+    try {
+      delete process.env.CLAUDE_MEM_METRICS;
+      process.env.TMPDIR = join(REPO, 'no', 'such', 'dir', 'anywhere');
+      for (const fn of [() => metricShardPath('/nope'), () => assertNoMetricWrite('/nope/x.jsonl', () => true)]) {
+        try { fn(); } catch { /* expected: ENOENT from mkdtemp */ }
+        expect('CLAUDE_MEM_METRICS' in process.env).toBe(false);
+      }
+    } finally {
+      if (originalTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = originalTmp;
+      if (original === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = original;
+    }
+  });
+
+  it('the RUN-level gate sees growth the helper-level probe structurally cannot', () => {
+    // Review S1, and the reason this gate exists at all. `assertNoMetricWrite` proves that
+    // `callArm` is clean; that every invocation GOES through callArm was left to a source
+    // regex, and four bypasses defeat it (aliasing the handle, `.call()`, aliasing the fn
+    // inside the timer, a new exported helper). One of them, replayed over 300 real
+    // prompts, appended 992 metric rows with the suite green and the run exiting 0. A
+    // whole-directory before/after cannot be defeated by call form.
+    withTmp((dir) => {
+      const before = metricsDirSize(dir);
+      expect(before).toBe(0);                       // premise: nothing there yet
+      expect(runLevelGrowth(dir, before)).toBe(0);  // and the gate agrees
+      const prev = process.env.CLAUDE_MEM_METRICS;
+      process.env.CLAUDE_MEM_METRICS = '1';
+      try { recordMetric(dir, { event: 'inject', durationMs: 1 }); }
+      finally { if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = prev; }
+      expect(runLevelGrowth(dir, before)).toBeGreaterThan(0);
+    });
+  });
+
+  it('metricsDirSize counts every shard, not just today - the day-rollover hole', () => {
+    // Review N7: a run started at 23:59 writes into TOMORROW's shard, so a one-shard
+    // baseline misses every row of it. Summing the directory closes that by construction.
+    withTmp((dir) => {
+      mkdirSync(join(dir, 'metrics'), { recursive: true });
+      writeFileSync(join(dir, 'metrics', '2026-09-01.jsonl'), 'a\n');
+      const before = metricsDirSize(dir);
+      writeFileSync(join(dir, 'metrics', '2026-09-02.jsonl'), 'bbbb\n');
+      expect(runLevelGrowth(dir, before)).toBe(5);
+    });
+  });
+
+  it('every arm invocation in the benchmark goes through callArm', () => {
+    // The guard runs its probe through callArm, so a call site that bypassed callArm
+    // would keep the guard green while writing on every prompt — a guard testing a proxy
+    // instead of the harm. This is a text check over ONE file and is only that: it pins
+    // the call form, not the semantics, which is what the cases above are for.
+    const src = readFileSync(join(REPO, 'benchmark/rerank-pool-replay.mjs'), 'utf8');
+    expect(src.match(/\b(?:narrow|wide)\(\s*db\b/g)).toBe(null);
+    expect(src.match(/\bfn\(\s*db\b/g)).toHaveLength(1);   // callArm's own body, and only it
   });
 });

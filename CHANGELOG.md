@@ -2,6 +2,245 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.91.0 — the write-guard quoted in the last release only ever covered one of the two sinks
+
+**Upgrade note. Nothing in the shipped runtime changes.** The diff touches
+`benchmark/rerank-pool-replay.mjs`, its test, a CI step and documentation. No hook, no CLI
+command, no schema, no configuration. **Revert path:** pin the previous release
+(`npm i -g claude-mem-lite@3.90.0`, or the equivalent plugin pin).
+
+### The ruler was writing to the series it exists to keep honest
+
+v3.90.0 shipped under the title *"the ruler ran at the read, then wrote to the thing it was
+measuring"*. It fixed that shape in `lib/patha-exclude-meter.mjs`, and it justified the fix
+by quoting a rule this repo had already written down for `benchmark/rerank-pool-replay.mjs`:
+*the handle must reject a write*. The rule was quoted accurately. It was also, at that
+moment, being violated by the very ruler it was quoted from.
+
+`searchRelevantMemories` has **two** sinks:
+
+1. `UPDATE observations SET injection_count` — a database write. The replay opens the DB
+   `readonly` and `assertCannotWrite()` executes the bump against the handle to prove it
+   fails. This half worked exactly as documented.
+2. `recordMetric(DB_DIR, { event: 'inject', … })` — an `appendFileSync` to
+   `$DB_DIR/metrics/YYYY-MM-DD.jsonl`. **A read-only *database* handle does nothing about a
+   file append.** Nothing in the file mentioned this sink, so nothing guarded it.
+
+On a machine with `CLAUDE_MEM_METRICS=1`, one whole-corpus run is 11,289 prompts × 2 arms,
+and `--cost` is six more passes over the same corpus. Measured on the shard:
+
+| day | `inject` rows |
+|---|---|
+| 2026-08-27 | 26 |
+| 2026-08-29 | 17 |
+| 2026-08-31 | 15 |
+| **2026-09-01** | **1,541,442** |
+
+Those are **pre-repair** figures: the shard was surgically repaired later in this same
+release (see *Also in this release*), so they are no longer reproducible from disk and the
+row above now reads 0. That one shard was **204,499,386 B / 1,543,630 lines**, peaking at
+48,478 rows/minute.
+`claude-mem-lite doctor --metrics` consequently reported `inject · n=1543363 · 2 / 8 / 19
+(ms)` over its 7-day window — a row that is at least 99.87% benchmark traffic, with three
+percentiles that are this replay's in-process timings rather than injection latency.
+`mem-cli stats` was unaffected **in its values, not in its cost** — a distinction worth
+keeping, because "the pollution had no reach into `stats`" would be wrong. It never displays
+`inject` (it reads `file_intel` / `reread_warn` / `pretool_recall` / `error_recall` /
+`enrich_save`), but `aggregateMetrics(DB_DIR, 7)` and `readMetrics(DB_DIR, 7)` walk every row
+in the window — so it was parsing a 204 MB file to print the same figures.
+
+**"At least" 99.87%, because a second day is contaminated by a different tool.** 2026-09-02
+read **1,863 at 15:5xZ and 1,864 minutes later** — two orders above the clean days, and still
+accruing, because 09-02 is the current day. **1,794** of them fall inside two UTC hours
+(11:00-12:59) that coincide with that day's ad-hoc D#215 measurement harness; that half is
+stable, because those hours are closed. That harness is not in the
+repository and no guard here can reach it. The rule that does: **any script that calls
+`searchRelevantMemories`, committed or not, passes `{ counterfactual: true }`.**
+
+### The fix, and why it is two changes rather than one
+
+`{ counterfactual: true }` is a shipped option on `searchRelevantMemories` — v3.90.0 added
+it for exactly this reason — and it skips both side effects. Every arm invocation in the
+replay now goes through one helper:
+
+```js
+export function callArm(fn, db, text, project) {
+  return fn(db, text, project, [], { counterfactual: true });
+}
+```
+
+That is not a style preference. The new self-check probes the sink *through this same
+helper*, so a probe that carried the flag while a loop had lost it would be a guard testing
+a proxy instead of the harm — the failure mode this project has recorded on three previous
+faces.
+
+`assertNoMetricWrite()` is the fifth self-check. It has three ways it could have looked
+green while seeing nothing, and each one is closed rather than noted:
+
+- **It could watch a filename it derived itself.** So it doesn't derive one: it calls
+  `recordMetric` into a throwaway directory, reads back whatever basename appeared there,
+  and watches *that* name in the real directory. The naming convention is never copied.
+- **It could run with the sink disabled** and pass on every machine that never set
+  `CLAUDE_MEM_METRICS`. So it forces the sink on for the duration and restores the previous
+  value on both the passing and the throwing path — leaking `=1` into the rest of the
+  process would have the guard create the condition it prevents.
+- **Its probe call could return without ever calling `_emit`.** `searchRelevantMemories` has
+  **three** such returns — `!db || !userPrompt`, the length floor, and an empty FTS query —
+  and only the first two are positionally above the block; the third sits below `_emit`'s
+  definition, inside the `try`, and simply never calls it. (A draft of this note said "two
+  early returns above the block": wrong count, and a phrasing that rots on any reorder.) So a
+  probe on a two-word prompt writes nothing whatever the flag says. The probe therefore has
+  to report that it reached the emit path, and a probe that did not **fails the run**.
+  Returning rows is a sufficient witness for that, not a necessary one — the empty-result
+  paths emit too — which is the safe direction for a guard.
+
+### The probe alone was not enough, and the review proved it with a running counterexample
+
+`assertNoMetricWrite` establishes that **`callArm` carries the flag**. That every arm
+invocation *goes through* `callArm` was left to a source-text case, and a regex only matches
+literal forms. The pre-tag correctness review broke it four ways — aliasing the handle
+(`const d = db; narrow(d, …)`), `narrow.call(null, db, …)`, aliasing the function inside
+`costCompare`'s timer, and adding an exported helper that calls an arm directly. **All four
+survived the suite.** One of them, replayed over 300 real prompts, appended **992 metric
+rows while the run printed a complete report and exited 0** — this release's own defect,
+reopened through a form the text guard cannot see.
+
+So the guarantee is re-stated at the level that matters: not *"the helper carries the flag"*
+but **"this run wrote nothing"**. `metricsDirSize` takes a whole-`metrics/`-directory
+baseline and a `process.on('exit')` handler re-checks it. Three properties of that shape,
+each chosen rather than fallen into:
+
+- **Registered on `exit`, not called before each `process.exit(0)`.** It therefore covers
+  every exit path, including two modes that exit early and any mode not yet written — the
+  `main()`-call-site blind spot this repo has recorded since v3.82.0 cannot reopen it one
+  mode at a time.
+- **It fires after the report has printed.** A false positive — a live hook writing during a
+  multi-minute run, which it genuinely cannot distinguish and says so — then costs a loud
+  message and a non-zero exit, not the run's output.
+- **Whole directory, not one shard.** This also closes a rollover hole nobody had noticed: a
+  run started at 23:59 UTC writes into *tomorrow's* shard, which a one-shard baseline misses
+  entirely.
+
+Re-measured on the same aliasing bypass: **exit 1, 992 rows named, report intact.** Before
+this gate the identical mutation exited 0 in silence.
+
+**One limitation, stated rather than discovered later:** with `CLAUDE_MEM_METRICS` unset a
+bypassing call writes nothing, so the run-level gate passes — correctly, since no harm
+occurred, but it is then silent about call *form*. The probe, which forces the sink on for
+its own duration, is what covers that case. The two guards are complementary, not redundant.
+
+Two smaller findings from the same review, both fixed: the guard set `CLAUDE_MEM_METRICS='1'`
+*before* `mkdtempSync`, so a throwing mkdtemp (TMPDIR gone, ENOSPC, EACCES) skipped the
+`finally` and **leaked `='1'` into the rest of the process** — the guard creating the exact
+condition its own comment warns about; and the shard-naming step now carries a *source*
+assertion that it contains no date formatting, because the "watch a self-derived filename"
+mutation only kills when the derived name is **wrong** — a mutation that re-derived the
+correct convention by hand would have survived every behavioural case while genuinely
+weakening the guard.
+
+**Ten mutations, ten killed**, including that correct-convention one. They were re-run in a
+quiet tree: the first round was taken while a reviewer was mutating the same file, its backup
+captured the *other* agent's mutated state, and neither harness could have detected the
+interference. A mutation round in a shared tree needs an exclusive owner per file.
+
+### What was swept, and what the sweep cannot cover
+
+Every metric emitter in the tree was enumerated and cross-referenced against what the
+benchmarks import. `rankImperativeCandidates` — used by `imperative-pool-replay.mjs` and
+`adoption-rankers.mjs` — has neither sink. `hook-context.mjs`, which `keyctx-pool-replay.mjs`
+drives, emits no metrics at all. `hook.mjs` and `scripts/pre-tool-recall.js` emit, but no
+benchmark imports them. `timed()` has zero production callers at all.
+
+**The sweep is over functions CALLED, not modules imported, and saying so matters**, because
+two committed benchmarks do import metric-emitting modules: `benchmark/patha-exclude-report.mjs`
+takes only the `PATHA_EXCLUDE_EVENT` constant from `lib/patha-exclude-meter.mjs` and only the
+read side from `lib/metrics.mjs`, and `benchmark/rerank-pool-replay.mjs` now imports
+`recordMetric` itself, deliberately, to name a shard in a throwaway directory. Both are
+benign; a reader re-deriving the sweep without that sentence hits those imports and has to
+redo the work to find out. So: `searchRelevantMemories` was the only production **function**
+with a metric sink reachable from a committed ruler.
+
+The sweep says nothing about uncommitted one-off harnesses, and 2026-09-02's burst is proof
+that those exist and do write. That is a discipline, not a guard, and it is stated as one.
+
+### The lesson, stated plainly
+
+This file's own docblock said **"IT CANNOT POLLUTE THE CORPUS, and proves it rather than
+promising it."** Every word of that was true. It was also read — by its author, in the next
+release — as a claim about the file. **A guard is only as wide as the sinks it enumerates,
+and a sentence that names one sink does not become a sentence about all of them by being
+confident.** The docblock now enumerates both and says which check covers which.
+
+### Also in this release
+
+- **A reader for `patha_exclude` (`benchmark/patha-exclude-report.mjs`).** The v3.90.0 meter
+  shipped with no consumer at all — nothing under `mem-cli` / `lib` / `benchmark` / `scripts`
+  filtered on that event, so every column had to be unpicked from raw JSONL by hand. The
+  reader takes no measurement of its own; both arms already ran at the read. Its three
+  pooling rules exist because each would otherwise produce a number that looks measured and
+  is not: rows written before the pre-tag B5 fix carry a superseded `inert` rule and cannot
+  be recomputed (their marker ids are not in the row), so they are bucketed as `legacy` on
+  the *absence* of a key and leave the denominator; `armB: 'error'` rows carry no `net` and
+  no `setChanged`, so a reader that `?? 0`s them would report a failed arm as "the repair
+  changed nothing"; and a zero in `suppressed` is a fact about the sample, so the verdict is
+  `NO-POPULATION`, kept distinct from `DECIDABLE`. Standing read (**2026-09-02T16:12Z**, 18 rows over
+  12:49Z-16:10Z): **NO-POPULATION** — 3 legacy, and of the 15 comparable rows, inert 0 /
+  working 8 / nothing-excludable 7, with 0 slots freed and 0 refilled. **Stamped, because the
+  reader walks a live corpus**: the same command read 8 rows (working 2 / nothing-excludable
+  3) three hours earlier. The verdict did not move; the population doubled. 23 cases, 11 mutations, 11 killed. One mutation survived the
+  first round and **the test was what was wrong**: deleting the `NO-POPULATION` caveat's
+  lead-in left it green, because `/NO-POPULATION/` + `/inert/` + `/sample/i` are each
+  satisfied by the verdict header and the regime table. An assertion another line can satisfy
+  is not an assertion about that line.
+- **A CI step that prints the knip count and name set** on every push and PR,
+  `continue-on-error` and gating nothing. It exists to answer, over a few rounds, which side
+  of the ~15-name worktree/working-tree gap a fresh CI clone lands on. Until that is
+  answered, a name-set guard would be a bet rather than a measurement. It writes its JSON to
+  `$RUNNER_TEMP` and never the workspace, because an untracked file at the repo root moves
+  the generated case count.
+- **The 2026-09-01 shard was repaired surgically, not deleted.** Its 1,541,442 `inject` rows
+  were filtered out and its 2,188 genuine rows (`episode_reads`, `pretool_recall`,
+  `file_intel`, …) kept: 204,499,386 B → 279,021 B, and the metrics directory 204 MB → 8.8
+  MB. **This does cost that day's real `inject` rows** — on the order of 15–25 by the
+  clean-day rate — because nothing in a metric row records which process wrote it. That is
+  stated rather than rounded away: the alternative was leaving a poisoned series in place
+  until the 90-day GC reached it around 2026-11-30.
+- **D#215 was replaced by D#216** rather than edited, *including inside the new reader*,
+  whose header line printed `patha_exclude — D#215 reader` — a tool pointing at a ledger
+  entry retired because of that tool's own existence. `defer` has `add`/`list`/`drop` and no
+  update, and D#215's body claimed `patha_exclude` had no dedicated reader — which this
+  release makes false. A backlog entry describing already-completed work is actively
+  misleading, so the entry was re-filed with the corrected text and the standing
+  `NO-POPULATION` read folded into it.
+
+### Verification
+
+- `npx vitest run` — **324 files / 5524 tests green** (the count is partly generated; it was
+  re-measured on this tree, not carried).
+- `npx vitest run --coverage` — statements 83.73% (7183/8578) · branches 78.06% (5385/6898)
+  · functions 88.52% (918/1037) · lines 87.13% (6007/6894) — byte-identical to v3.90.0 on
+  every axis. **A draft of this line gave the wrong reason and the pre-tag review refuted it
+  with a counterexample.** It said the change lives in `benchmark/` and `tests/`, "neither of
+  which the glob covers, so 30 new cases could not move a single covered line". But `tests/**`
+  is never in the include glob — true of all 5,524 cases — and tests are precisely what
+  produces coverage of the files that ARE included. Run alone, this release's
+  `tests/patha-exclude-report.test.mjs` executes 91 lines of `lib/metrics.mjs`. **Acting on
+  that: coverage was re-measured after the five review-driven cases were added, not carried
+  from the earlier run** — same eight figures. The real
+  reason: those lines were already covered by `tests/metrics.test.mjs`, and the four
+  denominators (8578 / 6898 / 1037 / 6894) held because no file entered or left the glob. **A
+  new test CAN move these numbers; being in `tests/` is not what stops it.**
+- `./node_modules/.bin/knip` from the primary working tree — **53 unused exports / 0 unused
+  files**, unchanged, so `callArm` and `assertNoMetricWrite` both have real consumers.
+- End-to-end: a 500-prompt replay run under `CLAUDE_MEM_METRICS=1` grew the shard by
+  **0 bytes / 0 lines**.
+- Ten mutations against the new code, ten killed, re-run in a quiet tree.
+- `npx eslint .` clean; and `--no-ignore` on both changed benchmark files clean too, since
+  `benchmark/**` is eslint-ignored in this repo and "passes lint" would otherwise mean
+  "was never linted".
+- `./node_modules/.bin/knip` from the primary working tree — 53 unused exports / 0 unused
+  files, and none of the five new exports is in the list.
+
 ## v3.90.0 — the ruler runs at the read, and four retired numbers that outlived the paragraphs retracting them
 
 **Upgrade note. Nothing changes by default.** The one new code path is a measurement that

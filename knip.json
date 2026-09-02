@@ -17,6 +17,7 @@
     "benchmark/rerank-pool-replay.mjs",
     "benchmark/episode-flush-replay.mjs",
     "benchmark/keyctx-pool-replay.mjs",
+    "benchmark/patha-exclude-report.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

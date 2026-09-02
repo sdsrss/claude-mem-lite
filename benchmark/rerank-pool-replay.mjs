@@ -32,13 +32,22 @@
 // does move the average FILL — quoting the unchanged cap without the delivered-row line
 // reads as "no more rows are injected", which is not what happens.
 //
-// IT CANNOT POLLUTE THE CORPUS, and proves it rather than promising it.
-// `searchRelevantMemories` bumps `injection_count` on every row it returns — replaying it
-// against the live DB would permanently move the very noise signal `noisePenaltyClause`
-// reads, and arm A's bumps would change arm B's scores. The DB is opened `readonly`, so
-// that UPDATE raises SQLITE_READONLY and is swallowed by the shipped line's own bare catch.
-// `assertCannotWrite()` below executes the bump against the handle and FAILS THE RUN if it
-// succeeds — a promise in a comment is not a guarantee.
+// IT CANNOT POLLUTE WHAT IT MEASURES, and proves it rather than promising it — for BOTH
+// sinks, which is the part this file got wrong until v3.91.0.
+// (1) The corpus. `searchRelevantMemories` bumps `injection_count` on every row it returns
+// — replaying it against the live DB would permanently move the very noise signal
+// `noisePenaltyClause` reads, and arm A's bumps would change arm B's scores. The DB is
+// opened `readonly`, so that UPDATE raises SQLITE_READONLY and is swallowed by the shipped
+// line's own bare catch. `assertCannotWrite()` below executes the bump against the handle
+// and FAILS THE RUN if it succeeds — a promise in a comment is not a guarantee.
+// (2) The metrics. The same function also appends an `inject` row to
+// `$DB_DIR/metrics/YYYY-MM-DD.jsonl`, and a readonly DATABASE handle does nothing about a
+// file append. With CLAUDE_MEM_METRICS=1 a whole-corpus run wrote ~1.5M of them in a day
+// against ~1.5k on a real day, and `doctor` then reported this replay's in-process timings
+// as live injection latency. Every arm invocation now goes through `callArm()`, which
+// passes the shipped `{ counterfactual: true }` option (it skips both side effects), and
+// `assertNoMetricWrite()` proves the shard does not grow. Sentence (1) was true and read
+// as if it covered the file; a guard is only as wide as the sinks it enumerates.
 
 // D#190: until v3.86.0 nothing under tests/ imported this file, so every self-check
 // described above could be deleted with a fully green suite — the same shape that let
@@ -48,11 +57,13 @@
 // call process.exit: an exit code cannot be asserted in-process. main() catches and
 // still exits 1 with the message on stderr, so the CLI contract is unchanged.
 
-import { readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, readdirSync, statSync, rmSync, existsSync } from 'fs';
 import Database from 'better-sqlite3';
 import { DB_DIR } from '../schema.mjs';
 import { join, dirname } from 'path';
+import { tmpdir } from 'os';
 import { pathToFileURL, fileURLToPath } from 'url';
+import { recordMetric } from '../lib/metrics.mjs';
 import { upsFtsQuery } from '../lib/ups-query.mjs';
 import { relaxFtsQueryToOr, notLowSignalTitleClause, OBS_BM25 } from '../utils.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
@@ -126,6 +137,153 @@ export function assertCannotWrite(db) {
 }
 
 /**
+ * EVERY arm invocation in this file goes through here. Not a style choice: the guard
+ * below probes the sink through this same function, so a probe that carried the flag
+ * while a loop had lost it would be a guard testing a proxy instead of the harm.
+ *
+ * `counterfactual` is the shipped option that skips BOTH side effects — the
+ * `injection_count` bump and the `inject` metric row. Two sinks, and only one of them
+ * is a database.
+ */
+export function callArm(fn, db, text, project) {
+  return fn(db, text, project, [], { counterfactual: true });
+}
+
+/**
+ * THE SECOND SINK, and the one `assertCannotWrite` above is structurally unable to see.
+ *
+ * `searchRelevantMemories` writes twice per call: `UPDATE observations SET
+ * injection_count` (a database write, blocked by the readonly handle) and
+ * `recordMetric(DB_DIR, { event: 'inject' })` (an appendFileSync to
+ * `$DB_DIR/metrics/YYYY-MM-DD.jsonl`, which a readonly *database* handle does nothing
+ * about). Until v3.91.0 this file replayed the whole corpus through both arms with the
+ * metric sink wide open: on a machine running with CLAUDE_MEM_METRICS=1 that appended
+ * ~1.5M `inject` rows in a day — three orders of magnitude over a production day — and
+ * `claude-mem-lite doctor` then reported the replay's in-process timings as if they were
+ * live injection latency. The docblock at the top of this file said "IT CANNOT POLLUTE
+ * THE CORPUS, and proves it rather than promising it"; that sentence was true of the
+ * corpus and false of the metrics, because the proof only ever covered one sink.
+ *
+ * Liveness is why the throwaway dir exists. A guard that derives the shard filename
+ * itself passes vacuously whenever the convention differs, and one that runs with the
+ * sink disabled passes vacuously always — two of the three ways this check could look
+ * green while seeing nothing. So: force the sink on, let `recordMetric` NAME the file in
+ * a temp dir, and watch that same basename in the real one. Nothing is written to the
+ * real dir to prove the detector works, because that would be the contamination it
+ * exists to stop.
+ *
+ * The THIRD way is the probe call itself. `searchRelevantMemories` has three returns that
+ * never call `_emit` — `!db || !userPrompt`, the length floor, and an empty FTS query. State
+ * the invariant that way and not as "returns above the block": only the first two are
+ * positionally above it, the third sits BELOW `_emit`'s definition inside the `try` and
+ * simply never calls it, and the positional phrasing rots on any reorder. Either way a probe
+ * on a two-word prompt writes nothing whatever the flag says, and the guard would certify a
+ * sink it never approached. Hence `probe` must report whether it reached the emit path, and
+ * a probe that did not fails the run rather than passing it. Returning rows is a SUFFICIENT
+ * witness (that path emits), not a necessary one — the empty-result paths emit too — which
+ * is the right direction for a guard.
+ */
+export function assertNoMetricWrite(shard, probe) {
+  const tmp = mkdtempSync(join(tmpdir(), 'rerank-pool-sink-'));   // BEFORE the env write:
+  const prevEnv = process.env.CLAUDE_MEM_METRICS;                 // if mkdtemp throws (TMPDIR
+  process.env.CLAUDE_MEM_METRICS = '1';                           // gone, ENOSPC, EACCES) the
+  try {                                                           // finally never runs and
+    const size = () => (existsSync(shard) ? statSync(shard).size : 0);  // '1' leaks into the
+    const before = size();                                        // rest of the process — the
+    const reached = probe();                                      // guard creating the very
+    const after = size();                                         // condition it prevents.
+    if (!reached) {
+      throw new Error('SELF-CHECK FAILED: the probe call never reached the metric block '
+        + '(searchRelevantMemories has three returns that never call _emit: a null guard, the '
+        + 'length floor, and a query that sanitizes to nothing), so "the shard did not grow" '
+        + 'says nothing about the flag. Refusing to run.');
+    }
+    if (after !== before) {
+      throw new Error(`SELF-CHECK FAILED: one replay call grew ${shard} by ${after - before} `
+        + 'bytes. Either an arm invocation lost `{ counterfactual: true }` — in which case a '
+        + 'whole-corpus run appends two metric rows per prompt and poisons the `inject` '
+        + 'latency series this project reads from `doctor --metrics` — or a live hook wrote '
+        + 'to the shard during the probe window. Check the tail of that file to tell them '
+        + 'apart.');
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (prevEnv === undefined) delete process.env.CLAUDE_MEM_METRICS;
+    else process.env.CLAUDE_MEM_METRICS = prevEnv;
+  }
+}
+
+/**
+ * Which file the guard above watches — and the convention is NEVER derived here. It is read
+ * back off `recordMetric` itself, in a throwaway directory, so a change to the shard naming
+ * cannot leave this file quietly watching a name nothing writes. That is why there is no
+ * date formatting in this function, and why a test asserts on its source that there is none:
+ * a mutation that re-derived the CORRECT convention by hand would survive a behavioural
+ * case, so the property being pinned ("the convention is never copied") is a source property.
+ */
+export function metricShardPath(dbDir) {
+  const tmp = mkdtempSync(join(tmpdir(), 'rerank-pool-name-'));
+  const prevEnv = process.env.CLAUDE_MEM_METRICS;
+  process.env.CLAUDE_MEM_METRICS = '1';
+  try {
+    recordMetric(tmp, { event: 'sink_liveness_probe' });
+    const named = existsSync(join(tmp, 'metrics')) ? readdirSync(join(tmp, 'metrics')) : [];
+    if (named.length !== 1) {
+      throw new Error(`SELF-CHECK FAILED: the metric sink named ${named.length} shards in a `
+        + 'clean directory, so this guard does not know which file to watch and would pass '
+        + 'without seeing anything. Refusing to run.');
+    }
+    return join(dbDir, 'metrics', named[0]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (prevEnv === undefined) delete process.env.CLAUDE_MEM_METRICS;
+    else process.env.CLAUDE_MEM_METRICS = prevEnv;
+  }
+}
+
+/**
+ * THE RUN-LEVEL GUARD, and the reason the probe above is not enough on its own.
+ *
+ * `assertNoMetricWrite` proves that `callArm` is clean. That every arm invocation GOES
+ * through `callArm` was left to a source-text case, and the pre-tag review broke it in four
+ * ways the text cannot see — aliasing the handle (`const d = db; narrow(d, …)`),
+ * `narrow.call(null, db, …)`, aliasing the function inside `costCompare`'s timer, and a
+ * newly added exported helper that calls an arm directly. Each survived the suite, and the
+ * aliasing one, replayed over 300 real prompts, **appended 992 metric rows while the run
+ * exited 0 and printed a complete report** — this release's own defect, reopened through a
+ * form the regex does not match. So the guarantee is re-stated at the level that matters:
+ * not "the helper carries the flag" but "THIS RUN wrote nothing".
+ *
+ * It measures the whole `metrics/` DIRECTORY, not the one shard, which also closes the
+ * UTC-day-rollover hole (a long run started at 23:59 writes into tomorrow's shard, and a
+ * one-shard baseline would miss every row of it).
+ *
+ * Registered on `process.on('exit')` rather than called before each `process.exit(0)`: it
+ * then covers every exit path including modes not yet written, and it runs AFTER the report
+ * has printed, so a false positive — a live hook writing during a multi-minute run, which
+ * this cannot distinguish and says so — costs a scary message rather than the run's output.
+ *
+ * One stated limitation: with `CLAUDE_MEM_METRICS` unset, a bypassing call writes nothing,
+ * so this passes. That is correct (no harm occurred) but it means the run-level guard is
+ * silent about call FORM on a metrics-off machine; the probe, which forces the sink on for
+ * its own duration, is what covers that case. The two are complementary, not redundant.
+ */
+export function metricsDirSize(dbDir) {
+  const dir = join(dbDir, 'metrics');
+  if (!existsSync(dir)) return 0;
+  let total = 0;
+  for (const f of readdirSync(dir)) {
+    try { total += statSync(join(dir, f)).size; } catch { /* raced with a rotation */ }
+  }
+  return total;
+}
+
+/** The gate itself, separated from its `process.on('exit')` registration so a test can watch it fire. */
+export function runLevelGrowth(dbDir, before) {
+  return metricsDirSize(dbDir) - before;
+}
+
+/**
  * Which direction, if any, monotonicity runs in — THREE states, not two. See the
  * counterexample gate below for why a MIXED config must suppress the gate without
  * borrowing the superset label.
@@ -185,7 +343,7 @@ export function compare(db, prompts, narrow, wide) {
   const bump = (hist, k) => { hist[k] = (hist[k] || 0) + 1; };
   for (const { text, project } of prompts) {
     let a, b;
-    try { a = narrow(db, text, project, []); b = wide(db, text, project, []); }
+    try { a = callArm(narrow, db, text, project); b = callArm(wide, db, text, project); }
     catch { threw++; continue; }
     n++;
     const ai = a.map((r) => r.id), bi = b.map((r) => r.id);
@@ -245,12 +403,12 @@ export function compare(db, prompts, narrow, wide) {
 export function costCompare(db, prompts, narrow, wide) {
   const warm = prompts.slice(0, Math.min(200, prompts.length));
   for (const { text, project } of warm) {
-    try { narrow(db, text, project, []); wide(db, text, project, []); } catch { /* ignore */ }
+    try { callArm(narrow, db, text, project); callArm(wide, db, text, project); } catch { /* ignore */ }
   }
   let nsNarrow = 0, nsWide = 0, pairs = 0, threw = 0;
   const time = (fn, text, project) => {
     const t = process.hrtime.bigint();
-    fn(db, text, project, []);
+    callArm(fn, db, text, project);
     return Number(process.hrtime.bigint() - t);
   };
   for (const pass of [0, 1]) {
@@ -379,6 +537,39 @@ async function main() {
   }
 
   const prompts = loadPrompts(db, sampleN);
+
+  // Both sinks, before any mode branches, and at TWO levels.
+  //
+  // (1) Run-level, registered first so it covers every exit path including the two modes
+  //     that `process.exit(0)` and any mode added later. It fires after the report prints.
+  // (2) Helper-level, through the same `callArm` every arm invocation uses, on real prompts
+  //     until one reaches the emit path. The window is normally a couple of calls; it is
+  //     bounded at 200 and is the whole loop only if none of the first 200 retrieve, so the
+  //     "tight window" claim is about the typical case and the bound is the guarantee.
+  const runBaseline = metricsDirSize(DB_DIR);
+  process.on('exit', () => {
+    const grew = runLevelGrowth(DB_DIR, runBaseline);
+    if (grew <= 0) return;
+    process.exitCode = 1;
+    console.error(`\nSELF-CHECK FAILED: this run grew ${join(DB_DIR, 'metrics')} by ${grew} `
+      + 'bytes. Every arm invocation is supposed to carry `{ counterfactual: true }`, which '
+      + 'skips both the injection_count bump and the `inject` metric row. Either a call site '
+      + 'stopped going through callArm() — a whole-corpus run then appends ~2 rows per prompt '
+      + 'and poisons the series `doctor --metrics` reads — or a live hook wrote while this '
+      + 'ran. Tail the shard: a replay shows a burst of `inject` rows, a hook shows one row. '
+      + 'EVERY NUMBER PRINTED ABOVE STILL STANDS; what is compromised is the metrics sink.');
+  });
+
+  if (prompts.length) {
+    assertNoMetricWrite(metricShardPath(DB_DIR), () => {
+      for (const { text, project } of prompts.slice(0, 200)) {
+        let rows;
+        try { rows = callArm(wide, db, text, project); } catch { continue; }
+        if (rows.length) return true;
+      }
+      return false;
+    });
+  }
   if (sampleN) {
     console.error(`NOTE: --sample ${sampleN} is a sampling decision. On this corpus, 1200-row `
       + 'samples of the same table span 11.9%-20.2% depending on the predicate. The default '
