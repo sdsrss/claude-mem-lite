@@ -841,7 +841,7 @@ benchmark and A/B harness are calibrated against — changing them invalidates t
 |----------|-------------|---------|
 | `CLAUDE_MEM_NO_CITATION_TRACK` | `1` disables both the access-count bump and the decay loop — no citation bookkeeping at all. | _(enabled)_ |
 | `MEM_DISABLE_CITATION_DECAY` | `1` disables only the decay writes, keeping access-count bumps. | _(enabled)_ |
-| `CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD` | Session cite-rate below which demotion is suppressed (promotion always proceeds). | `0.02` |
+| `CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD` | **Removed — inert.** Tuned the per-project adoption gate, which is gone (D#204). Setting it warns on stderr and changes nothing. | _(n/a)_ |
 | `CLAUDE_MEM_NO_CITE_NUDGE` | `1` fully silences the cite-back nudge. | _(enabled)_ |
 | `CLAUDE_MEM_CITE_NUDGE_THRESHOLD` | Cite-rate below which the nudge fires. | `0.6` |
 | `CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED` | Minimum injection volume before the ratio gate is judged at all. | `5` |

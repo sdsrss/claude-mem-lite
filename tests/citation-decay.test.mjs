@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { extractInjectedFromPreToolUse, extractCitationsFromTranscript, applyCitationDecay, computeCitationAdoption, redirectSupersededIds } from '../lib/citation-tracker.mjs';
+import { extractInjectedFromPreToolUse, extractCitationsFromTranscript, applyCitationDecay, redirectSupersededIds } from '../lib/citation-tracker.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 describe('extractInjectedFromPreToolUse', () => {
@@ -237,25 +237,43 @@ describe('applyCitationDecay', () => {
     expect(dSeen).toBe(1);
   });
 
-  it('suppressed (non-adopting) project caps uncited_streak instead of growing unbounded', () => {
-    // Force suppression: the project has decay history (seen>=8) but ~0 cite-rate,
-    // so applyCitationDecay never demotes. Pre-fix the streak-only path grew the
-    // streak without bound, sinking citeFactorClause to its 0.4 floor permanently.
+  // D#204. The adoption gate suppressed the rollover in projects with a ~0
+  // cite-rate, and the streak-only path then needed a CAP so the streak could not
+  // climb without bound and pin citeFactorClause at its floor. Both halves existed
+  // to protect a project that does not use the `#NN` convention from losing
+  // `importance` it would never earn back.
+  //
+  // D#179 took importance out of the loop, so there is nothing left to suppress —
+  // and what remained was INVERTED. A capped streak never returns to 0 except on a
+  // citation, so a non-adopting project's uncited rows pinned at 0.5x forever,
+  // while an adopting project's rolled over to 1.0x every third resolution. The
+  // gate meant to be gentler on non-adopting projects had become strictly harsher
+  // on them. The cap's own purpose — bounding the streak — is served by the
+  // rollover anyway, and served better, because the rollover also recovers.
+  //
+  // So: one path for every project. This is the case that pins it.
+  it('D#204: a project with ~0 cite-rate rolls the streak over like any other', () => {
+    // Same construction the gate used to trip on: >= 8 resolutions on record,
+    // nothing ever cited.
     const noise = makeObs({ importance: 1 });
     db.prepare('UPDATE observations SET decay_seen_count = 20, cited_count = 0 WHERE id = ?').run(noise);
-    const adoption = computeCitationAdoption(db, 'p');
-    expect(adoption.seen).toBeGreaterThanOrEqual(8);
-    expect(adoption.rate).toBeLessThan(0.02); // => suppressDemotion = true
 
     const id = makeObs({ importance: 2, uncited_streak: 0 });
-    // Inject-but-never-cite across many distinct sessions (distinct sessionId bypasses
-    // the idempotent skip). Streak must plateau at UNCITED_STREAK_THRESHOLD-1, not climb.
+    // Inject-but-never-cite across distinct sessions (a distinct sessionId bypasses
+    // the idempotent skip). 6 resolutions = two full rollover cycles.
+    const seen = [];
     for (let i = 1; i <= 6; i++) {
       applyCitationDecay(db, 'p', new Set([id]), new Set(), `s-${i}`);
+      seen.push(db.prepare('SELECT uncited_streak FROM observations WHERE id=?').get(id).uncited_streak);
     }
-    const row = db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id);
-    expect(row.uncited_streak).toBe(2); // capped (threshold-1), pre-fix would be 6
-    expect(row.importance).toBe(2);     // never demoted under suppression
+    // The whole trajectory, not just the endpoint: a cap at 2 and a rollover at 3
+    // agree on resolutions 1 and 2, so an endpoint-only assertion after an even
+    // number of cycles would be weak evidence.
+    expect(seen).toEqual([1, 2, 0, 1, 2, 0]);
+    const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
+    expect(row.uncited_streak).toBe(0);          // recovered without a citation
+    expect(row.demoted_at).toBeGreaterThan(0);   // rollover stamped here too
+    expect(row.importance).toBe(2);              // still never a population change
   });
 
   it('importance cap: cited at importance=3 stays at 3', () => {
@@ -601,7 +619,7 @@ describe('Stop hook integration — fixture transcript composition', () => {
   });
 });
 
-describe('applyCitationDecay — project adoption-rate gate (P5 ②)', () => {
+describe('applyCitationDecay — the removed adoption-rate gate (D#204)', () => {
   let db;
   beforeEach(() => {
     db = createTestDb();
@@ -619,63 +637,60 @@ describe('applyCitationDecay — project adoption-rate gate (P5 ②)', () => {
     return id;
   }
 
-  it('computeCitationAdoption returns cite-rate over the project resolution history', () => {
-    makeObs({ cited_count: 3, decay_seen_count: 10 });
-    makeObs({ cited_count: 0, decay_seen_count: 10 });
-    const a = computeCitationAdoption(db, 'p');
-    expect(a.cited).toBe(3);
-    expect(a.seen).toBe(20);
-    expect(a.rate).toBeCloseTo(0.15, 5);
-  });
-
-  it('suppresses demotion for a non-adopting project (≥min-seen, 0% cite-rate)', () => {
-    // Target at streak=2 would normally demote, but the project has 20 prior
-    // resolutions and never cited anything → suppress the importance drop.
+  // D#204 removed this gate. What is left to pin is that its three former inputs
+  // — a ~0 cite-rate, a below-min-seen history, and the env override — now select
+  // the SAME behaviour, and that the env var says so instead of going quiet.
+  //
+  // Each case names the cite-rate it used to trip on, so if the gate is ever
+  // re-introduced these turn red at the exact populations it discriminated.
+  it('a ~0 cite-rate project (the old suppression band) rolls over like any other', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 0 });
     const r = applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
     const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
-    expect(row.importance).toBe(2);          // NOT demoted
-    expect(row.demoted_at).toBeNull();        // demote branch never ran
-    expect(row.uncited_streak).toBe(2);       // CAPPED at threshold-1 under suppression —
-                                              // not advanced unbounded (would sink cite_factor to floor)
-    expect(r.demoted).toBe(0);
+    expect(row.demoted_at).toBeGreaterThan(0); // used to be NULL under suppression
+    expect(row.uncited_streak).toBe(0);        // used to be capped at 2, forever
+    expect(row.importance).toBe(2);
+    expect(r.demoted).toBe(1);                 // used to be 0
     expect(r.touched).toBe(1);
   });
 
-  // D#179 note for this whole block: these cases used `importance` to tell
-  // "the gate suppressed the rollover" from "it ran". That column is no longer
-  // written by either branch, so an unchanged `importance` is now true on BOTH
-  // sides — asserting it would make every case here PASS regardless of the gate.
-  // The discriminator moves to the pair the branches genuinely differ on:
-  //   ran       -> demoted_at stamped, uncited_streak reset to 0
-  //   suppressed-> demoted_at NULL,    uncited_streak capped at threshold-1 (2)
-  it('allows the rollover once the project cites enough to clear the threshold', () => {
+  it('an adopting project (cite-rate well over the old threshold) is indistinguishable', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 5 });
     applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
     const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
-    expect(row.demoted_at).toBeGreaterThan(0); // rollover ran
+    expect(row.demoted_at).toBeGreaterThan(0);
     expect(row.uncited_streak).toBe(0);
-    expect(row.importance).toBe(2);            // and still did not move the gate column
+    expect(row.importance).toBe(2);
   });
 
-  it('does not engage on low-data projects (<min-seen) — existing behavior preserved', () => {
+  it('a low-data project (under the old min-seen) is indistinguishable', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 2, cited_count: 0 });
     applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
     const row = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
-    expect(row.demoted_at).toBeGreaterThan(0); // gate dormant → rollover ran
+    expect(row.demoted_at).toBeGreaterThan(0);
     expect(row.uncited_streak).toBe(0);
   });
 
-  it('env override CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD widens the suppression band', () => {
-    // 15% cite-rate normally clears the 2% default, but a 0.5 override suppresses it.
+  it('CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD is inert AND warns — not silently ignored', () => {
+    // 0.5 used to suppress a 15%-cite-rate project. It must now change nothing,
+    // and must not do that quietly: an accepted setting that means nothing is
+    // worse than an unsupported one (the CLAUDE_MEM_RECOMMEND_MODE=live precedent).
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 3 });
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let captured = '';
+    process.stderr.write = (chunk) => { captured += String(chunk); return true; };
     process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD = '0.5';
     try {
       applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-      const row = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
-      expect(row.demoted_at).toBeNull();   // suppressed
-      expect(row.uncited_streak).toBe(2);  // capped, not rolled over
-    } finally { delete process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD; }
+    } finally {
+      process.stderr.write = realWrite;
+      delete process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD;
+    }
+    const row = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+    expect(row.demoted_at).toBeGreaterThan(0); // NOT suppressed
+    expect(row.uncited_streak).toBe(0);
+    expect(captured).toMatch(/CITATION_ADOPTION_THRESHOLD/);
+    expect(captured).toMatch(/no longer has any effect/);
   });
 
   it('promotion is never gated — a cited obs still promotes in a non-adopting project', () => {
