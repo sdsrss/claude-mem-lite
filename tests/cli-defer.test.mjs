@@ -163,6 +163,49 @@ describe('claude-mem-lite defer CLI', () => {
     expect(list.stdout).toMatch(/No open deferred items/);
   });
 
+  // ── D#195: mis-drop recovery, end-to-end through the real CLI ─────────────
+  // `defer drop` used on an item that was in fact FIXED used to be a one-way
+  // gate: the row became indistinguishable from a genuinely rejected one and
+  // lost the closed_by_obs_id link the ledger convention depends on.
+  it('save --closes-deferred D#N re-closes a mis-DROPPED item into done (D#195)', () => {
+    const add = runCli(['defer', 'add', 'fix the FTS leak', '--priority', '2']);
+    const dId = /D#(\d+)/.exec(add.stdout)[1];
+
+    // Drop it "by mistake" — reason worded as a completion, so the advisory
+    // hint must fire on this very call.
+    const drop = runCli(['defer', 'drop', '1', '--reason', 'already fixed in this round']);
+    expect(drop.exitCode).toBe(0);
+    expect(drop.stdout).toMatch(/closes-deferred/);
+
+    // The ordinal is gone with the row — ordinals are defined over OPEN rows
+    // only, so recovery MUST go through the explicit D#N form.
+    const byOrdinal = runCli(['save', 'x', '--type', 'bugfix', '--closes-deferred', '1']);
+    expect(byOrdinal.exitCode).not.toBe(0);
+
+    const save = runCli([
+      'save', 'Fixed FTS leak by holding a connection-scoped statement cache',
+      '--type', 'bugfix', '--importance', '2',
+      '--closes-deferred', `D#${dId}`,
+    ]);
+    expect(save.exitCode).toBe(0);
+    expect(save.stdout).toMatch(new RegExp(`Closed: D#${dId}`));
+
+    const row = db.prepare(`SELECT status, closed_by_obs_id, drop_reason FROM deferred_work WHERE id=?`).get(Number(dId));
+    expect(row.status).toBe('done');
+    expect(row.closed_by_obs_id).toBeGreaterThan(0);
+    // The mis-drop stays on the record rather than being erased.
+    expect(row.drop_reason).toBe('already fixed in this round');
+    const detail = runCli(['get', `D#${dId}`]);
+    expect(detail.stdout).toMatch(/previously_dropped: already fixed in this round/);
+  });
+
+  it('defer drop stays quiet when the reason is a genuine rejection (D#195)', () => {
+    runCli(['defer', 'add', 'some item', '--priority', '2']);
+    const drop = runCli(['defer', 'drop', '1', '--reason', 'no longer relevant']);
+    expect(drop.exitCode).toBe(0);
+    expect(drop.stdout).not.toMatch(/closes-deferred/);
+  });
+
   // ── Folded from Task 5 review (M-1): duplicate path skips closure ──────────
   // Dogfood-4 regression: `defer add` with > 200-char titles silently accepted them,
   // wrapping into multi-line garbage in `defer list`. CLI now matches MCP memDeferSchema

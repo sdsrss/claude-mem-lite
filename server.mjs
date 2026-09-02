@@ -58,7 +58,7 @@ import { recallByFile } from './lib/recall-core.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
-  insertDeferred, listOpenWithOrdinal, dropDeferred,
+  insertDeferred, listOpenWithOrdinal, dropDeferred, formatDropReasonHint,
   resolveDeferredIds, closeDeferredItems,
   getDeferredByIds, formatDeferredDetail,
   searchDeferredWork, formatDeferredSearchTrailer,
@@ -853,7 +853,9 @@ server.registerTool(
         // Resolve INSIDE tx + after dedup check so duplicate replays don't throw on
         // already-closed items. Mirrors mem-cli.mjs cmdSave shape.
         if (args.closes_deferred && args.closes_deferred.length > 0) {
-          closesIds = resolveDeferredIds(db, project, args.closes_deferred);
+          // D#195: 'dropped' is closable by the close verb (kept in sync with
+          // mem-cli.mjs cmdSave — same policy, both faces).
+          closesIds = resolveDeferredIds(db, project, args.closes_deferred, { allowStatuses: ['open', 'dropped'] });
           closeDeferredItems(db, closesIds, r.id);
         }
         return r;
@@ -960,7 +962,11 @@ server.registerTool(
     if (r.changed === 0) {
       return { content: [{ type: 'text', text: `D#${realId} was not in 'open' status — drop is a no-op.` }] };
     }
-    return { content: [{ type: 'text', text: `Dropped D#${realId} in project "${project}". Reason: ${args.reason}` }] };
+    // D#195 (c): same advisory as the CLI's `defer drop`, so an agent reaching
+    // this through MCP gets the same steer toward `mem_save(closes_deferred)`.
+    const hint = formatDropReasonHint(args.reason);
+    const dropText = `Dropped D#${realId} in project "${project}". Reason: ${args.reason}`;
+    return { content: [{ type: 'text', text: hint ? `${dropText}\n${hint}` : dropText }] };
   })
 );
 

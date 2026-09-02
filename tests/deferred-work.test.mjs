@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
 import { createTestDb } from './test-helpers.mjs';
 import {
   insertDeferred, listOpenWithOrdinal, dropDeferred,
@@ -101,6 +102,24 @@ describe('deferred_work CRUD', () => {
     db.close();
   });
 
+  // D#195 (c): the mis-drop is cheap to prevent at the moment it happens. The
+  // hint is advisory text only — drop still succeeds, so a false positive costs
+  // one line of output and never blocks.
+  it('formatDropReasonHint fires on fixed-shaped reasons and stays quiet otherwise', () => {
+    const fires = ['已在 v3.86.0 修复', 'fixed in this round', 'implemented', 'shipped in v3.9',
+      'done — closed by the batch', 'resolved upstream'];
+    for (const r of fires) {
+      expect(dw.formatDropReasonHint(r), `expected a hint for: ${r}`).toMatch(/closes-deferred/);
+    }
+    const quiet = ['no longer relevant', 'superseded by D#42', 'refuted by measurement',
+      'obsolete', 'out of scope', '',
+      // The negative CJK senses must NOT fire — they say the opposite.
+      '等待上游修复', '尚未修复', '需修复但优先级太低'];
+    for (const r of quiet) {
+      expect(dw.formatDropReasonHint(r), `expected NO hint for: ${r}`).toBeNull();
+    }
+  });
+
   it('dropDeferred requires non-empty reason', () => {
     const db = createTestDb();
     const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
@@ -150,11 +169,77 @@ describe('deferred_work closure', () => {
     db.close();
   });
 
-  it('resolveDeferredIds rejects done/dropped items', () => {
+  // Was named "rejects done/dropped items" while only exercising 'done'. Split,
+  // because D#195 makes the two statuses behave DIFFERENTLY under the close verb.
+  it('resolveDeferredIds rejects done items', () => {
     const db = createTestDb();
     const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
     db.prepare(`UPDATE deferred_work SET status='done' WHERE id=?`).run(a.id);
     expect(() => resolveDeferredIds(db, 'p', [`D#${a.id}`])).toThrow(/status.*done/);
+    // 'done' stays rejected even under the permissive close policy — re-closing an
+    // already-closed item would overwrite a real closed_by_obs_id link.
+    expect(() => resolveDeferredIds(db, 'p', [`D#${a.id}`], { allowStatuses: ['open', 'dropped'] }))
+      .toThrow(/status.*done/);
+    db.close();
+  });
+
+  it('resolveDeferredIds rejects dropped items BY DEFAULT (drop verb keeps open-only)', () => {
+    const db = createTestDb();
+    const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
+    dropDeferred(db, a.id, 'dropped by mistake');
+    expect(() => resolveDeferredIds(db, 'p', [`D#${a.id}`])).toThrow(/status.*dropped/);
+    db.close();
+  });
+
+  // D#195: `defer drop` used on an item that was actually FIXED was a one-way
+  // gate — the row became indistinguishable from a genuinely rejected item and
+  // lost the closed_by_obs_id link that the repo's convention relies on. The
+  // real invariant is "a fixed item must carry an obs link", not "dropped is
+  // immutable", so the close verb may re-open a dropped row into 'done'.
+  it('resolveDeferredIds accepts a dropped item under the close policy (D#195)', () => {
+    const db = createTestDb();
+    const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
+    dropDeferred(db, a.id, 'dropped by mistake');
+    expect(resolveDeferredIds(db, 'p', [`D#${a.id}`], { allowStatuses: ['open', 'dropped'] }))
+      .toEqual([a.id]);
+    db.close();
+  });
+
+  it('closeDeferredItems converts a dropped row to done and attaches the obs link (D#195)', () => {
+    const db = createTestDb();
+    db.pragma('foreign_keys = OFF'); // see note in atomicity test below
+    const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
+    dropDeferred(db, a.id, 'dropped by mistake');
+    closeDeferredItems(db, [a.id], 4242);
+    const ra = db.prepare(`SELECT * FROM deferred_work WHERE id=?`).get(a.id);
+    expect(ra.status).toBe('done');
+    expect(ra.closed_by_obs_id).toBe(4242);
+    // The drop reason is KEPT, not erased — the row's history is what makes the
+    // mis-drop auditable afterwards.
+    expect(ra.drop_reason).toBe('dropped by mistake');
+    db.close();
+  });
+
+  it('closeDeferredItems still refuses a done row (no silent obs-link overwrite)', () => {
+    const db = createTestDb();
+    db.pragma('foreign_keys = OFF');
+    const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
+    closeDeferredItems(db, [a.id], 111);
+    expect(() => closeDeferredItems(db, [a.id], 222)).toThrow(/not in a closable status/);
+    expect(db.prepare(`SELECT closed_by_obs_id FROM deferred_work WHERE id=?`).get(a.id).closed_by_obs_id).toBe(111);
+    db.close();
+  });
+
+  it('formatDeferredDetail surfaces the prior drop reason on a re-closed row (D#195)', () => {
+    const db = createTestDb();
+    db.pragma('foreign_keys = OFF');
+    const a = insertDeferred(db, { project: 'p', title: 'A', priority: 2 });
+    dropDeferred(db, a.id, 'dropped by mistake');
+    closeDeferredItems(db, [a.id], 4242);
+    const [row] = dw.getDeferredByIds(db, [a.id]);
+    const out = dw.formatDeferredDetail(row);
+    expect(out).toContain('closed_by: #4242');
+    expect(out).toContain('previously_dropped: dropped by mistake');
     db.close();
   });
 
@@ -174,6 +259,52 @@ describe('deferred_work closure', () => {
     expect(ra.closed_at_epoch).toBeGreaterThan(0);
     expect(rb.status).toBe('done');
     db.close();
+  });
+
+  // CLASS-LEVEL SWEEP, not a per-face test. This repo's recurring defect is
+  // "the copy I fixed was not the only copy" — a guard wired on the CLI face
+  // while the MCP twin keeps the old policy passes every per-face test. So:
+  // find EVERY closeDeferredItems() call site in the shipped faces and require
+  // the resolveDeferredIds() immediately above it to carry the close policy.
+  // Reverting either face turns this red.
+  it('SWEEP: every close-verb call site passes the dropped-allowing policy (D#195)', () => {
+    const faces = ['mem-cli.mjs', 'server.mjs'];
+    const offenders = [];
+    let sites = 0;
+    for (const face of faces) {
+      const src = readFileSync(new URL(`../${face}`, import.meta.url), 'utf8');
+      // Call sites only — skip the import statement, which also names the symbol.
+      const re = /closeDeferredItems\(/g;
+      for (const m of src.matchAll(re)) {
+        sites++;
+        const window = src.slice(Math.max(0, m.index - 500), m.index);
+        const resolved = window.lastIndexOf('resolveDeferredIds(');
+        if (resolved === -1) { offenders.push(`${face}: no resolveDeferredIds above call at ${m.index}`); continue; }
+        if (!window.slice(resolved).includes('allowStatuses')) {
+          offenders.push(`${face}: close call at ${m.index} resolves with the default open-only policy`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    // Denominator guard: if a face stops calling closeDeferredItems the sweep
+    // above passes vacuously, which is the shape that lets a face go dark.
+    expect(sites).toBe(2);
+  });
+
+  // Same sweep for the OTHER half of D#195. The CLI drop face has a behavioural
+  // E2E in cli-defer.test.mjs; the MCP one does not (it needs real stdio), so
+  // this is the only thing standing between the MCP twin and a silent revert.
+  it('SWEEP: every drop-verb face consults formatDropReasonHint (D#195)', () => {
+    const faces = ['mem-cli.mjs', 'server.mjs'];
+    const missing = [];
+    for (const face of faces) {
+      const src = readFileSync(new URL(`../${face}`, import.meta.url), 'utf8');
+      const drops = [...src.matchAll(/dropDeferred\(/g)].length;
+      const hints = [...src.matchAll(/formatDropReasonHint\(/g)].length;
+      if (drops === 0) missing.push(`${face}: no dropDeferred call site — sweep would pass vacuously`);
+      else if (hints === 0) missing.push(`${face}: drops without consulting formatDropReasonHint`);
+    }
+    expect(missing).toEqual([]);
   });
 
   it('closeDeferredItems rolls back when one id is invalid', () => {

@@ -80,7 +80,7 @@ const SURFACE_LABELS = {
 };
 import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
-  insertDeferred, listOpenWithOrdinal, dropDeferred,
+  insertDeferred, listOpenWithOrdinal, dropDeferred, formatDropReasonHint,
   resolveDeferredIds, closeDeferredItems,
   getDeferredByIds, formatDeferredDetail,
   searchDeferredWork, formatDeferredSearchTrailer,
@@ -984,7 +984,11 @@ function cmdSave(db, args) {
       // the deferred row has transitioned out of 'open'.
       if (r.kind === 'duplicate') return r;
       if (closesTokens) {
-        closesIds = resolveDeferredIds(db, project, closesTokens);
+        // D#195: the close verb accepts a 'dropped' row and converts it to
+        // 'done'. `defer drop` used on an item that was actually fixed was
+        // otherwise a one-way gate, permanently losing the obs link. Kept in
+        // sync with the same policy in server.mjs mem_save.
+        closesIds = resolveDeferredIds(db, project, closesTokens, { allowStatuses: ['open', 'dropped'] });
         closeDeferredItems(db, closesIds, r.id);
       }
       return r;
@@ -1148,6 +1152,12 @@ function cmdDeferDrop(db, args) {
   }
   if (noop.length > 0) {
     out(`[mem] No-op (not in 'open' status): ${noop.map(id => `D#${id}`).join(', ')}`);
+  }
+  // D#195 (c): catch the mis-drop at the moment it happens, not months later
+  // when the ledger can no longer tell a fixed item from a rejected one.
+  if (dropped.length > 0) {
+    const hint = formatDropReasonHint(reason);
+    if (hint) out(`[mem] ${hint}`);
   }
 }
 
