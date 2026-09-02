@@ -107,14 +107,20 @@ describe('deferred_work CRUD', () => {
   // one line of output and never blocks.
   it('formatDropReasonHint fires on fixed-shaped reasons and stays quiet otherwise', () => {
     const fires = ['已在 v3.86.0 修复', 'fixed in this round', 'implemented', 'shipped in v3.9',
-      'done — closed by the batch', 'resolved upstream'];
+      'done — closed by the batch', 'resolved upstream',
+      // The REAL reason on the six v3.86.0 mis-drops that motivated this hint.
+      // An earlier draft of the pattern missed exactly this string.
+      'closed this round; fix + mutation-verified binding test landed'];
     for (const r of fires) {
       expect(dw.formatDropReasonHint(r), `expected a hint for: ${r}`).toMatch(/closes-deferred/);
     }
     const quiet = ['no longer relevant', 'superseded by D#42', 'refuted by measurement',
       'obsolete', 'out of scope', '',
       // The negative CJK senses must NOT fire — they say the opposite.
-      '等待上游修复', '尚未修复', '需修复但优先级太低'];
+      '等待上游修复', '尚未修复', '需修复但优先级太低',
+      // Widening the positive arm to `closed` made these reachable; the veto
+      // has to hold them back or the hint fires on ordinary rejections.
+      'closed as obsolete', 'closed — superseded by D#42', 'waiting for an upstream fix'];
     for (const r of quiet) {
       expect(dw.formatDropReasonHint(r), `expected NO hint for: ${r}`).toBeNull();
     }
