@@ -949,9 +949,11 @@ function cmdSave(db, args) {
     }
   }
 
-  // --supersedes: comma-separated observation ids this save overturns. On save they
-  // are tombstoned (drop out of live search) + linked (superseded_by = the new id).
-  // Only same-project live rows are affected (enforced in saveObservation).
+  // --supersedes: comma-separated ids this save overturns — a bare number for an
+  // observation, `E#<n>` for an events row (D#205). Both are tombstoned (dropped from
+  // live search); only the observation half is LINKED (`superseded_by` = the new id),
+  // because `events.superseded_by_id` references events and cannot hold an observation
+  // id. Only same-project live rows are affected (enforced in saveObservation).
   let supersedesIds = null;
   if (flags.supersedes !== undefined && flags.supersedes !== false) {
     const raw = String(flags.supersedes);

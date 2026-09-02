@@ -7,6 +7,7 @@ import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { estimateTokens } from '../utils.mjs';
 import { computeAdaptiveWindows, selectWithTokenBudget, cleanupClaudeMdLegacyBlock, buildSummaryLines, buildSessionContextLines, sectionQuotas } from '../hook-context.mjs';
 import { insertDeferred } from '../lib/deferred-work.mjs';
+import { KEY_CONTEXT_LIMIT } from '../hook-shared.mjs';
 
 // ─── computeAdaptiveWindows ──────────────────────────────────────────────────
 
@@ -746,9 +747,13 @@ describe('Key Context section quotas (D#196)', () => {
     // The property the comment claims, asserted over the whole domain rather than at the
     // three points above — "it only adds" is exactly the sentence this repo keeps finding
     // to be false when only sampled.
-    const HALF = 5;
-    for (let fl = 0; fl <= 20; fl++) {
-      for (let kc = 0; kc <= 20; kc++) {
+    // Derived, not hardcoded: `sectionQuotas` takes both from KEY_CONTEXT_LIMIT, so a
+    // re-tune of the constant must move this test's expectations with it rather than
+    // leaving it asserting a pool size the code no longer uses.
+    const POOL = KEY_CONTEXT_LIMIT;
+    const HALF = Math.floor(POOL / 2);
+    for (let fl = 0; fl <= 2 * POOL; fl++) {
+      for (let kc = 0; kc <= 2 * POOL; kc++) {
         const q = sectionQuotas(fl, kc);
         expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(fl);
         expect(q.keyContextQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(kc);
@@ -756,7 +761,7 @@ describe('Key Context section quotas (D#196)', () => {
         expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(fl, HALF));
         expect(q.keyContextQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(kc, HALF));
         // And the combined ceiling is still one pool, not two.
-        expect(q.fileLessonQuota + q.keyContextQuota, `fl=${fl} kc=${kc}: exceeded the pool`).toBeLessThanOrEqual(10);
+        expect(q.fileLessonQuota + q.keyContextQuota, `fl=${fl} kc=${kc}: exceeded the pool`).toBeLessThanOrEqual(POOL);
       }
     }
   });

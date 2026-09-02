@@ -248,6 +248,17 @@ describe('saveObservation supersedes', () => {
       // is D#201's rule, and `E#0` is in here because a zero id is not a row.
       expect(r.malformed.map((m) => m.id)).toEqual(['E#0', 'abc', '1abc', -3, null, '']);
       expect(r.malformed.every((m) => m.reason === 'malformed-id')).toBe(true);
+      // `kind` is carried through the malformed branch too — nothing consumes it for
+      // rendering (see below), but a caller inspecting the array should still be able to
+      // tell which namespace the caller meant.
+      expect(r.malformed.map((m) => m.kind)).toEqual(['event', 'obs', 'obs', 'obs', 'obs', 'obs']);
+      // An unparseable token is echoed EXACTLY as typed, with no prefix bolted on: the
+      // pre-tag review caught `#E#0`, and the first repair produced `E#E#0`. Only a
+      // resolved numeric id gets a `#` / `E#`.
+      const msg = formatSupersedeSkipped(r.malformed);
+      expect(msg).toContain('E#0 (not a positive integer id)');
+      expect(msg, 'no doubled prefix, in either direction').not.toMatch(/#E#0|E#E#0/);
+      expect(msg, 'a non-id token is quoted back as-is').toContain('abc (not a positive integer id)');
     });
 
     it('a bare number is never routed to events, and E# is never routed to observations', () => {

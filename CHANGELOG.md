@@ -2,6 +2,103 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.89.0 — a ledger of measurements, two of which were taken on the wrong side of the thing they describe
+
+**Upgrade note.**
+
+**The SessionStart Key Context block gets fuller on most projects.** Its two sections —
+File Lessons and Key Context — draw from one pool of ten rows but each capped at five, so
+a pool that is all one shape emitted five lines and left the sibling section empty. Each
+section now keeps its guaranteed half and may take what the other cannot use; the combined
+ceiling is unchanged at ten. Measured before the change over the 11 projects here with ≥20
+live rows: **10 of them were losing rows, 28 of 110 pooled rows (25.5%) fetched and then
+discarded**. You will see up to five more lines on a lopsided project and no change at all
+on a balanced one. The same block is emitted by SessionStart, PreCompact and
+`claude-mem-lite context`.
+
+**`save --supersedes` accepts `E#<n>`.** Until now it could only retire an observation, so
+a conclusion carried by an `events` row had no retirement path — the column existed and
+both injection readers filtered on it, but nothing user-facing ever wrote it. `E#` is the
+prefix those rows are already rendered with, so you retire one by typing back what you
+read. The observation half is linked (`superseded_by`); the events half is not, because
+`events.superseded_by_id` references `events` and cannot hold an observation id.
+
+**Revert path:** pin the previous release (`npm i -g claude-mem-lite@3.88.0`, or the
+equivalent plugin pin). No schema change, no migration, no new configuration.
+
+### Two measurements were taken on the wrong side of their own mechanism
+
+Both were caught by the pre-tag review, both reproduce exactly, and that exactness is what
+identifies them as caliber errors rather than drift.
+
+- **The D#193 exclude number described the marker's WRITER, not its reader.** The
+  cross-hook marker is written by `user-prompt-search.js` (the `fyi` face) and
+  `pre-tool-recall.js` (`pretool`), and read in `hook.mjs handleUserPrompt` — which is the
+  `ups` face. So the gated population is `ups ∩ (fyi ∪ pretool)`. The first measurement
+  took the mirror image and published 18.0%. Correct figure, same walk, 99 transcripts,
+  2026-09-02T12:12Z: **23 of 256 (session, id) pairs — 9.0% — over 14 of 71 sessions**, and
+  3 of 24 (12.5%) on `task_imperative`; by attachments, 29 of 332 (8.7%).
+
+- **`hook.mjs` was never made visible to knip and could not have been.** The `new URL`
+  blind spot was **six** modules, not seven. `hook.mjs` is invisible for a second,
+  independent reason this round did not touch: it is in `knip.json`'s `entry` array, and
+  knip's `includeEntryExports` defaults to false. Probe-verified both ways. The same holds
+  for `server.mjs` and `install.mjs`, so a dead export in any of the three entry files is
+  still invisible today.
+
+### knip: the blind spot is removed rather than compensated for
+
+`new URL('<relative>.mjs', import.meta.url)` anywhere in the analysed tree makes knip drop
+that module from its unused-export report entirely — the whole file, not the one export,
+and the count goes DOWN, which reads like an improvement. Six modules were affected.
+Converting every site to `join()` took the report **46 → 57**: eleven dead exports that had
+been hidden, in `search-engine.mjs` (7), `hook-llm.mjs` (2) and `hook-context.mjs` (2). The
+seven `search-engine` names are the ones CLAUDE.md's category (a) has always *claimed* were
+in the list — they were not; the module was invisible, so the note described a membership
+nobody could have observed. Four were then made module-private rather than carried as a
+raised baseline: **53** unused exports, 0 unused files.
+
+The guard is now on the cause — `tests/no-url-module-paths.test.mjs`, no allowlist. Two
+things it earned immediately: it found three sites `grep` had missed (including
+`tests/install-bsqlite-probe.test.mjs` blinding `lib/binding-probe.mjs`, which no list had
+ever recorded), and the pre-tag review defeated its first version with a line-wrapped
+`new URL(` — green suite, knip blinded — so it now scans whole files with offsets mapped
+back to line numbers, and the wrapped form is a fixture.
+
+`tests/knip-blindspot-guard.test.mjs`, the hand-written stand-in from D#194, is deleted.
+Stated plainly rather than as a pure win: `knip` runs from an npm script only — no CI job,
+no pre-commit hook, no test — so those two modules moved from an automated check to a
+manual one, exactly as the other ~90 always were.
+
+### Also
+
+- **CI: the UPS subprocess tests stopped riding their timeout**, without the timeout moving.
+  The discriminator was the matrix inside one failing run — identical code at 3792ms on
+  Node 20, 30173ms on Node 24 and 67527ms on Node 22 — so the stall is the runner and no
+  fixed budget survives a multiplier. The base cost was cut instead: `saveObservation`
+  commits per call, so a 600-row seed paid 600 fsyncs. In CI after the change those two
+  files run **957–1848ms and 893–2544ms**, against a 3.1–4.1s / 5.1–7.5s green baseline
+  before.
+- **`citation-stats` reported on what the decay loop still writes.** "Recently promoted"
+  gated on `importance >= 3` after v3.88.0 stopped that column being written by citation,
+  so it had gone structurally empty; both covering tests seeded the end state directly and
+  could not see it.
+- **`save --supersedes` no longer tombstones a row you did not name.** The CLI parsed with
+  `parseInt`, which reads `1abc` as `1`.
+- The path-A exclude is **pinned, not repaired**: `tests/pathA-exclude-inert.test.mjs`
+  turns red at both sites where a repair would plausibly be written, so the 9.0% cannot
+  change by accident. It stays open because this path already has a working suppressor
+  (`shouldSkipByDedup` normalises both sides) and adding a second, finer one needs an A/B
+  whose ruler does not exist — reconstructing per-prompt exclude sets needs the marker
+  file, which rotates and is never persisted.
+
+### Verification
+
+320 test files / 5445 tests pass (`npx vitest run`); `npx eslint .` clean; knip 53 unused
+exports / 0 unused files from the primary working tree. Both pool replays run end-to-end
+against the now-private constants. The pre-tag review's mutation round: six attempted, six
+red; the one guard that survived a mutation is the one fixed above.
+
 ## v3.88.0 — five times over, the case that motivated the rule fell outside the rule
 
 **Upgrade note — read this one, it changes what your memories do on their own.**

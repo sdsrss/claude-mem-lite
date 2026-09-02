@@ -2190,14 +2190,29 @@ async function handleUserPrompt() {
           // of SQLite, so from that moment the exclude suppresses nothing.
           //
           // Coercing with Number() here would make it work — and that is a real behaviour
-          // change, not a type repair, which is why it is not done as a drive-by. Measured
-          // 2026-09-02 over 99 transcripts, as an UPPER bound (session-level, ignoring the
-          // marker's stale window): a working exclude would drop at most 46 of 255 `fyi`
-          // injections (18.0%) across 30 of 67 sessions, and 4 of 24 on task_imperative.
-          // Direction unknown: the excluded slot is sometimes refilled from the pool and
-          // sometimes just lost (`rerank-pool-replay` reports 6587 of 11289 prompts
-          // already injecting nothing), and `fyi` cite-rate is 11.3%, so removing repeat
-          // exposure could cut either way.
+          // change, not a type repair, which is why it is not done as a drive-by.
+          //
+          // GET THE SIDE RIGHT. The marker is WRITTEN by `user-prompt-search.js` (the
+          // `fyi` face) and `pre-tool-recall.js` (`pretool`); it is READ here, in
+          // handleUserPrompt, which is the `ups` face. So the gated population is
+          // `ups ∩ (fyi ∪ pretool)`. A first version of this note measured the mirror
+          // image — `fyi ∩ (pretool ∪ ups)` — and published 18.0%, the number for a
+          // mechanism that is not this one. The pre-tag review caught it.
+          //
+          // Measured 2026-09-02T12:12Z over 99 transcripts, one walk, as an UPPER bound
+          // (session-level, ignoring the marker's stale window): a working exclude would
+          // drop at most 23 of 256 `ups` (session, id) pairs — 9.0% — across 14 of 71
+          // sessions, and 3 of 24 on task_imperative (12.5%). By attachments rather than
+          // pairs it is 29 of 332 (8.7%).
+          //
+          // Still not repaired at 9.0%, and the corrected number strengthens the case
+          // rather than weakening it: this path ALREADY has a working suppressor.
+          // `shouldSkipByDedup` (prompt-search-utils.mjs) String-normalises both sides, so
+          // it functions, and it skips the whole injection at >=0.8 overlap. Turning this
+          // one on adds a second, finer-grained suppressor on a face that is already
+          // suppressed, with the direction unknown — the freed slot is sometimes refilled
+          // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
+          // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
           //
           // The ruler that would settle it does not exist yet: reconstructing per-prompt
           // exclude sets needs the marker file, which rotates after DEDUP_STALE_MS and is

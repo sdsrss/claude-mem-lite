@@ -15,12 +15,26 @@
 //     `new Set(excludeIds).has(r.id)` against a NUMBER out of SQLite.
 // A Set keyed by '42' does not contain 42, so the exclude drops nothing.
 //
-// THE MEASUREMENT that says why it is not simply fixed (2026-09-02, 99 real transcripts,
-// through the shipped `extractInjectedBySurface`), stated as an UPPER bound because it is
-// session-level and ignores the marker's stale window: a working exclude would suppress
-// at most 46 of 255 `fyi` injections (18.0%) over 30 of 67 sessions, and 4 of 24 on
-// `task_imperative`. Direction unknown — the freed slot is sometimes refilled and
-// sometimes lost — so it needs an A/B whose ruler does not exist yet.
+// THE MEASUREMENT that says why it is not simply fixed (2026-09-02T12:12Z, 99 real
+// transcripts, one walk, through the shipped `extractInjectedBySurface`), stated as an
+// UPPER bound because it is session-level and ignores the marker's stale window.
+//
+// The population is `ups ∩ (fyi ∪ pretool)`: the marker is WRITTEN by
+// `user-prompt-search.js` (the `fyi` face) and `pre-tool-recall.js` (`pretool`), and READ
+// in `hook.mjs handleUserPrompt`, which is the `ups` face. A first version of this header
+// measured the mirror image and published 18.0% — the figure for a mechanism that is not
+// this one; the pre-tag review caught it, and the wrong number reproduces exactly, which
+// is what identifies it as a caliber error rather than corpus drift.
+//
+//   ups              23 of 256 (session, id) pairs — 9.0% — over 14 of 71 sessions
+//   task_imperative   3 of  24 (12.5%) over 3 of 23
+//   (by attachments rather than pairs: 29 of 332, 8.7%)
+//
+// Direction unknown — the freed slot is sometimes refilled and sometimes lost — and this
+// path already has a WORKING suppressor in `shouldSkipByDedup`, which String-normalises
+// both sides and skips the whole injection at >=0.8 overlap. Repairing this one adds a
+// second suppressor to an already-suppressed face, which needs an A/B, and its ruler does
+// not exist yet.
 //
 // WHEN THE TIME COMES: delete this file in the same commit that coerces the ids, and put
 // the A/B in the commit message. A green suite after a silent coercion is the failure

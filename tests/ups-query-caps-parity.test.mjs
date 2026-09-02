@@ -100,12 +100,50 @@ describe('UserPromptSubmit query caps — both hooks of the event', () => {
     // builder, so this is a real input. Measured before the fix: 356ms, synchronously,
     // before the model sees the turn. Distinct CJK terms, not a repeated phrase —
     // repetition dedups to a handful of tokens and the cap never fires (#9081).
-    let text = '';
-    for (let i = 0; text.length < 250_000; i++) text += `第${i}号缺陷在检索层的注入面上复现 `;
-    const started = process.hrtime.bigint();
-    const q = upsFtsQuery(text);
-    const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    expect(String(q).length).toBeLessThanOrEqual(UPS_QUERY_CAPS.maxChars);
-    expect(ms, `upsFtsQuery took ${ms.toFixed(1)}ms on ${text.length} bytes`).toBeLessThan(60);
+    //
+    // JUDGED ON SCALING, NOT ON A WALL-CLOCK BUDGET. This case used to assert
+    // `ms < 60`, and on 2026-09-02 it blocked a release at 67.6ms during a suite run that
+    // took 135s instead of the usual 40s — nothing on this path had changed since v3.75,
+    // and the same case runs in ~44ms alone. An absolute millisecond bound on a shared
+    // machine measures the machine. The property actually under guard is that the builder
+    // does not blow up superlinearly on a large input (the pre-fix behaviour was a
+    // 356ms synchronous stall), so compare 250KB against a 25KB baseline in the SAME
+    // process: a ratio cancels the load that an absolute number cannot. Same lesson as
+    // D#203, and the same one CLAUDE.md records for every ruler here — quote the ratio,
+    // never the absolute ms.
+    const build = (bytes) => {
+      let text = '';
+      for (let i = 0; text.length < bytes; i++) text += `第${i}号缺陷在检索层的注入面上复现 `;
+      return text;
+    };
+    const timed = (text) => {
+      const started = process.hrtime.bigint();
+      const q = upsFtsQuery(text);
+      return { ms: Number(process.hrtime.bigint() - started) / 1e6, q };
+    };
+
+    const small = build(25_000);
+    const large = build(250_000);
+    // Warm the path once so the first-call JIT cost lands outside both measurements —
+    // otherwise the SMALL arm absorbs it and the ratio reads far below 1.
+    timed(small);
+    const a = timed(small);
+    const b = timed(large);
+
+    expect(String(b.q).length).toBeLessThanOrEqual(UPS_QUERY_CAPS.maxChars);
+    expect(String(a.q).length).toBeLessThanOrEqual(UPS_QUERY_CAPS.maxChars);
+
+    // 10x the input must not cost more than ~30x the time. Linear is 10x; the pre-fix
+    // quadratic shape would be ~100x. The floor on the denominator keeps a sub-millisecond
+    // small arm from manufacturing a huge ratio out of timer granularity.
+    const ratio = b.ms / Math.max(a.ms, 0.5);
+    expect(
+      ratio,
+      `10x input cost ${ratio.toFixed(1)}x time (25KB ${a.ms.toFixed(1)}ms -> 250KB ${b.ms.toFixed(1)}ms)`,
+    ).toBeLessThan(30);
+
+    // Backstop only, deliberately loose: catches a genuine stall (the 356ms original)
+    // without failing on ordinary contention. The ratio above is the real assertion.
+    expect(b.ms, `upsFtsQuery took ${b.ms.toFixed(1)}ms on ${large.length} bytes`).toBeLessThan(300);
   });
 });

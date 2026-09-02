@@ -8,12 +8,19 @@
 // the loss is invisible: the count goes DOWN, which reads like an improvement.
 //
 // Established by probe, both directions, 2026-09-02. Appending
-// `export const __KNIP_PROBE__ = 1;` to eight modules and running knip once: only
-// `tier.mjs` — the one module not named in this form anywhere — appeared. The other
-// seven (hook-context, hook-memory, hook.mjs, search-engine, hook-semaphore, hook-llm,
-// cli-path) were invisible. Converting every site to join() and re-running took the
-// report from 46 unused exports to 57: eleven dead exports that had been hidden, in
-// search-engine.mjs (7), hook-llm.mjs (2) and hook-context.mjs (2).
+// `export const __KNIP_PROBE__ = 1;` to a module and running knip once shows whether knip
+// can see it. SIX modules were blind for this reason — hook-context, hook-memory,
+// search-engine, hook-semaphore, hook-llm, cli-path (plus lib/binding-probe, found by the
+// guard itself). Converting every site to join() and re-running took the report from 46
+// unused exports to 57: eleven dead exports that had been hidden, in search-engine.mjs
+// (7), hook-llm.mjs (2) and hook-context.mjs (2).
+//
+// `hook.mjs` was named as a seventh in the first version of this header and that was
+// WRONG, in a way worth keeping: it is invisible for a SECOND, independent reason this
+// rule does not touch — it is listed in `knip.json`'s `entry` array, and knip's
+// `includeEntryExports` defaults to false. Converting its call sites changed nothing for
+// it, and it is still unreported today, as are `server.mjs` and `install.mjs`. Caught by
+// the pre-tag review; do not read a green run of this file as knip coverage of an entry.
 //
 // It also happened live rather than in theory: adding
 // `tests/pretool-event-id-namespace.test.mjs`, which read three source files this way,
@@ -50,7 +57,7 @@ const SKIP_DIRS = new Set([
  * START relative and END in a module extension — a bare `'..'` or a `'./fixtures/'`
  * directory is out of scope per the note above.
  */
-const URL_MODULE_PATH = /new\s+URL\(\s*(['"`])\.{1,2}\/[^'"`]*\.(?:mjs|js)\1/;
+const URL_MODULE_PATH = /new\s+URL\(\s*(['"`])\.{1,2}\/[^'"`]*\.(?:mjs|js)\1/g;
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -66,20 +73,33 @@ function walk(dir, out = []) {
   return out;
 }
 
-/** Offending `file:line` for every source line matching the banned form. */
+/**
+ * Offending `file:line` for every match of the banned form.
+ *
+ * Scans the WHOLE FILE, not line by line. The first version did the latter and the
+ * pre-tag review broke it in one move: splitting the call across lines —
+ * `new URL(\n  '../tier.mjs',\n  import.meta.url,\n)`, ordinary formatting that no lint
+ * rule here prevents — passed the guard green while knip went blind to `tier.mjs`. A
+ * guard whose selling point is "no allowlist, scans the tree" must not be defeated by a
+ * line wrap. Comment lines are stripped first (the rule is described in comments at every
+ * conversion site), then the remainder is scanned as one string and each match's offset
+ * is mapped back to a line number so the report still names a place.
+ */
 function findOffenders(files) {
   const hits = [];
   for (const f of files) {
     let src;
     try { src = readFileSync(f, 'utf8'); } catch { continue; }
     if (!src.includes('new URL')) continue;
-    src.split('\n').forEach((line, i) => {
-      // Comments describing the rule (this file, and the note left at each conversion
-      // site) are not uses. Checked on the raw line so an inline trailing comment after
-      // real code is still scanned.
-      const code = line.replace(/^\s*(?:\/\/|\*|\/\*).*$/, '');
-      if (URL_MODULE_PATH.test(code)) hits.push(`${relative(REPO, f)}:${i + 1}`);
-    });
+    // Blank out comment lines while PRESERVING offsets, so line numbers stay exact.
+    const scannable = src.split('\n')
+      .map((line) => (/^\s*(?:\/\/|\*|\/\*)/.test(line) ? ' '.repeat(line.length) : line))
+      .join('\n');
+    URL_MODULE_PATH.lastIndex = 0;
+    for (const m of scannable.matchAll(URL_MODULE_PATH)) {
+      const line = scannable.slice(0, m.index).split('\n').length;
+      hits.push(`${relative(REPO, f)}:${line}`);
+    }
   }
   return hits;
 }
@@ -105,14 +125,21 @@ describe('D#207 — repo-source paths use join(), not new URL(module)', () => {
       `const p = ${U}('../hook.mjs', import.meta.url);`,
       `const p = ${U}(\`../\${f}.mjs\`, import.meta.url);`,
       `readFileSync(${U}('./sibling.js', import.meta.url), 'utf8');`,
+      // The wrapped form. The pre-tag review defeated the first version of this guard with
+      // exactly this — green suite, knip blinded — so it is a fixture, not a hypothetical.
+      `const p = ${U}(\n  '../tier.mjs',\n  import.meta.url,\n);`,
     ];
     const ok = [
       `const root = ${U}('..', import.meta.url);`,
       "const p = join(dirname(fileURLToPath(import.meta.url)), '..', 'hook.mjs');",
       `const u = ${U}('https://example.invalid/x.mjs');`,
     ];
-    for (const s of bad) expect(URL_MODULE_PATH.test(s), `should flag: ${s}`).toBe(true);
-    for (const s of ok) expect(URL_MODULE_PATH.test(s), `should NOT flag: ${s}`).toBe(false);
+    // `URL_MODULE_PATH` is global, so `.test` advances `lastIndex` between calls and a
+    // shared regex silently starts skipping matches. Reset before each probe — this is
+    // the failure that makes a detector self-check report a false clean.
+    const fires = (s) => { URL_MODULE_PATH.lastIndex = 0; return URL_MODULE_PATH.test(s); };
+    for (const s of bad) expect(fires(s), `should flag: ${s}`).toBe(true);
+    for (const s of ok) expect(fires(s), `should NOT flag: ${s}`).toBe(false);
   });
 
   it('no source file names a module through new URL()', () => {
