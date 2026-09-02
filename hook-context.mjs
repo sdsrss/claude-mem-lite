@@ -9,7 +9,7 @@ import { basename, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
 import {
   estimateTokens, truncate, typeIcon, fmtTime, inferProject,
-  debugLog, debugCatch, neutralizeContextDelimiters,
+  debugLog, neutralizeContextDelimiters,
   DECAY_HALF_LIFE_BY_TYPE, DEFAULT_DECAY_HALF_LIFE_MS, notLowSignalTitleClause,
 } from './utils.mjs';
 import { STALE_SESSION_MS, FALLBACK_OBS_WINDOW_MS, RUNTIME_DIR, effectiveQuiet, isQuietHooks, KEY_CONTEXT_LIMIT } from './hook-shared.mjs';
@@ -196,7 +196,6 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     ...scoredSess.map(s => ({ ...s, _kind: 'sess' })),
   ].sort((a, b) => b.valueDensity - a.valueDensity);
 
-  const selectedFiles = new Set();
   const selectedTypes = new Map(); // type → count for diversity constraint
 
   for (const c of allCandidates) {
@@ -208,20 +207,30 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
       if (typeCount >= 3) continue;
     }
 
-    // Diversity penalty: reduce value for file overlap with already-selected
-    if (c._kind === 'obs' && c.files_modified) {
-      let cFiles;
-      try { cFiles = JSON.parse(c.files_modified || '[]'); } catch (e) { debugCatch(e, 'budgetSelect-parseFiles'); cFiles = []; }
-      if (cFiles.length > 0 && selectedFiles.size > 0) {
-        const overlap = cFiles.filter(f => selectedFiles.has(f)).length;
-        const overlapRatio = overlap / cFiles.length;
-        const penalizedValue = c.valueDensity * (1 - 0.3 * overlapRatio);
-        if (penalizedValue < 0.001) continue;
-      }
-      for (const f of cFiles) selectedFiles.add(f);
-    }
-
-    // Commit type diversity counter after both gates pass
+    // D#197: a "Diversity penalty: reduce value for file overlap" block used to sit
+    // here. It is gone, and the deletion is behaviour-preserving, because it reduced
+    // nothing. Two independent reasons, both verified rather than reasoned about:
+    //
+    //  (1) Its `penalizedValue` was a local read by exactly one `continue`. Order was
+    //      already fixed upstream by the raw-valueDensity sort and this greedy loop
+    //      never re-sorts — so the comment's promise could not happen at all.
+    //  (2) That `continue` was unreachable. penalizedValue >= 0.7 * valueDensity, and
+    //      valueDensity = value / sqrt(cost) with value > 0.5 (recency > 1 x
+    //      TYPE_QUALITY min 0.5 x impBoost >= 1.0 x lessonBoost >= 1.0) and cost >= 1
+    //      — estimateTokens('') returns 1, checked, so there is no zero-cost row that
+    //      would drive valueDensity to 0 and make it fire. Triggering needed a title
+    //      costing > 122500 tokens. Measured over the 2027 live rows carrying
+    //      files_modified: zero zero-cost rows, minimum valueDensity 0.1147 (80x the
+    //      trigger), longest title 171 chars = 49 tokens.
+    //
+    // With both gone `selectedFiles` had no reader left, so the Set and its
+    // JSON.parse went with it. Type diversity above is the only diversity constraint
+    // that was ever live, which is why the counter below no longer says "both gates".
+    //
+    // Real overlap down-weighting, if wanted, belongs in the sort key — a ranking
+    // change owing an A/B, not a revival of this block. tests/hook-context.test.mjs
+    // pins the current unpenalized order and asserts its own discriminator, so a
+    // penalty that reached the ordering turns red instead of landing silently.
     if (c._kind === 'obs' && c.type) {
       selectedTypes.set(c.type, (selectedTypes.get(c.type) || 0) + 1);
     }

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
+import { estimateTokens } from '../utils.mjs';
 import { computeAdaptiveWindows, selectWithTokenBudget, cleanupClaudeMdLegacyBlock, buildSummaryLines, buildSessionContextLines } from '../hook-context.mjs';
 import { insertDeferred } from '../lib/deferred-work.mjs';
 
@@ -266,30 +267,61 @@ describe('selectWithTokenBudget', () => {
     expect(titles.every(t => !t.startsWith('Reviewed '))).toBe(true);
   });
 
-  it('applies diversity penalty for file overlap', () => {
-    // Two observations touching same files should have overlap penalty
+  // D#197. This case was named 'applies diversity penalty for file overlap' and
+  // asserted only `observations.length === 3`, with the comment "diversity
+  // affects ordering". Neither was true, and the assertion passed either way,
+  // which is a large part of why the dead branch survived: the file-overlap
+  // block computed a `penalizedValue` that nothing read except an unreachable
+  // `continue`, while the order was fixed by the raw valueDensity sort upstream.
+  //
+  // Rewritten to state the contract that actually holds AND to be able to fail
+  // if a real penalty is ever introduced — which per D#197 must be a deliberate,
+  // A/B'd ranking change, not a silent one.
+  //
+  // The fixture is built so the two are distinguishable. All three rows are the
+  // same type/importance and seconds apart, so value is ~equal (recency ~2.0 x
+  // typeQuality 1.1 x impBoost 1.0 x lessonBoost 1.0 = 2.2) and density is driven
+  // by title cost alone:
+  //   A  4 tokens -> 1.100   (selected first; puts server.mjs in the overlap set)
+  //   B 11 tokens -> 0.663   (FULL overlap with A)
+  //   C 13 tokens -> 0.610   (no overlap)
+  // B outranks C on raw density, but 0.7 x 0.663 = 0.464 < 0.610 — so under a
+  // penalty that actually reached the ordering, C would come before B.
+  it('file overlap does NOT reorder selection (D#197: the penalty never applied)', () => {
+    const A = 'fix auth guard';
+    const B = 'fix the same auth guard again in server file';
+    const C = 'fix an unrelated helper in the utils module today ok';
+    // Premise check: the discriminator above depends on these exact costs, so a
+    // change to estimateTokens must fail loudly here rather than quietly leave
+    // the case unable to tell the two behaviours apart.
+    expect([estimateTokens(A), estimateTokens(B), estimateTokens(C)]).toEqual([4, 11, 13]);
+    // …and the discriminator itself, asserted rather than only described: with
+    // equal value, B outranks C on raw density, and a 0.3 overlap penalty on B
+    // would put C ahead. If these two ever stop holding, the order assertion
+    // below can no longer tell the two behaviours apart and is just decoration.
+    const dB = 1 / Math.sqrt(estimateTokens(B));
+    const dC = 1 / Math.sqrt(estimateTokens(C));
+    expect(dB).toBeGreaterThan(dC);          // raw order is B before C
+    expect(0.7 * dB).toBeLessThan(dC);       // penalized order would be C before B
+
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'edit server.mjs', importance: 1,
-      filesModified: '["server.mjs"]',
-      epochOffset: -1000,
+      sessionId: 'sess-1', project: 'test', type: 'bugfix',
+      title: A, importance: 1, filesModified: '["server.mjs"]', epochOffset: -1000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'also edit server.mjs', importance: 1,
-      filesModified: '["server.mjs"]',
-      epochOffset: -2000,
+      sessionId: 'sess-1', project: 'test', type: 'bugfix',
+      title: B, importance: 1, filesModified: '["server.mjs"]', epochOffset: -2000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'edit different utils.mjs', importance: 1,
-      filesModified: '["utils.mjs"]',
-      epochOffset: -3000,
+      sessionId: 'sess-1', project: 'test', type: 'bugfix',
+      title: C, importance: 1, filesModified: '["utils.mjs"]', epochOffset: -3000,
     });
 
     const result = selectWithTokenBudget(db, 'test', 2000);
-    // All should be included but diversity affects ordering
     expect(result.observations.length).toBe(3);
+    // Raw-density order. If this ever reads [A, C, B], a file-overlap penalty
+    // has reached the ranking — which is a behaviour change owing an A/B.
+    expect(result.observations.map(o => o.title)).toEqual([A, B, C]);
   });
 
   // D#192 — KEYCTX_POOL_OBS is a REACHABILITY backstop, not a relevance gate.

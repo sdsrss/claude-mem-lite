@@ -97,10 +97,11 @@ describe('the displacement counter — the number that argues AGAINST widening',
   });
 
   it('counts displacement caused by the non-monotone stages', () => {
-    // Selection here is genuinely NOT monotone: the token budget, the 3-per-type cap
-    // and the file-overlap penalty can each evict a row a narrower pool kept. A ruler
-    // that gated this to zero (as rerank-pool-replay's face correctly does) would be
-    // asserting a property this face does not have.
+    // Selection here is genuinely NOT monotone: the token budget and the 3-per-type
+    // cap can each evict a row a narrower pool kept. A ruler that gated this to zero
+    // (as rerank-pool-replay's face correctly does) would be asserting a property this
+    // face does not have. (A third stage, the file-overlap penalty, was named here
+    // until D#197 established it could never fire and deleted it.)
     const r = compare(null, projects, arm([1, 2, 3]), arm([2, 3, 4]), 0);
     expect(r.gained).toBe(1);
     expect(r.displaced).toBe(1);

@@ -43,15 +43,17 @@
 // aggregate; a percentage over n=12 is a count wearing a disguise.
 //
 // SELECTION HERE IS NOT MONOTONE, and this ruler must not borrow rerank-pool-replay's
-// superset argument. Three stages downstream of the pool can in principle DROP a row that
-// a narrower pool would have selected — but only ONE of them can currently fire, and
-// `--why-displaced` says which, per row, instead of leaving the reader to assume:
+// superset argument. TWO stages downstream of the pool can DROP a row that a narrower
+// pool would have selected, and `--why-displaced` says which, per row, instead of
+// leaving the reader to assume:
 //   • the type-diversity cap (max 3 per type) — the only live gate on this corpus;
 //   • the token budget — does not bind here (651 of 2000 in the widest arm's largest
-//     project), so a displacement attributed to it would be a surprise worth checking;
-//   • the file-overlap penalty — UNREACHABLE (D#197): its `continue` needs
-//     valueDensity < 0.001/0.7 while `value` has an analytic floor of 0.5, i.e. a title
-//     costing >122k tokens. Never attribute a displacement to it without re-deriving.
+//     project), so a displacement attributed to it would be a surprise worth checking.
+// There was a third, the file-overlap penalty, and D#197 deleted it rather than
+// leaving it listed as a gate that never fires: its `continue` needed
+// valueDensity < 0.001/0.7 against an analytic floor of 0.5 for `value` (a title
+// costing >122k tokens; the live minimum measured 0.1147, 80x above the trigger), and
+// the penalty it computed was never read by the ordering anyway.
 // So `displaced` is expected to be non-zero and is reported as a first-class number
 // rather than gated to zero. What IS gated: the ruler must be able to SEE displacement
 // at all (a self-check drives a synthetic case and requires a non-zero count), and
@@ -154,10 +156,15 @@ export function writeTwin(obsLimit, sessLimit) {
  * report in which one gate simply never fires, which is indistinguishable from that gate
  * being inactive — the exact reading this mode exists to support.
  */
+// The file-overlap penalty was a third entry here until D#197 deleted the block it
+// anchored on. Removing the entry is not a loss of attribution coverage: that gate
+// was unreachable (its `continue` needed a title costing >122k tokens; the live
+// minimum valueDensity measured 80x above the trigger) AND its computed penalty was
+// never read by the ordering, so it could never have explained a displacement. This
+// list now holds only gates that can actually fire.
 export const DROP_POINTS = [
   ['if (totalTokens + c.cost > budget) continue;', 'budget'],
   ['if (typeCount >= 3) continue;', 'typecap'],
-  ['if (penalizedValue < 0.001) continue;', 'overlap'],
 ];
 
 export function patchDropPoints(src) {
@@ -508,10 +515,12 @@ async function main() {
         console.log(`        "${String(r.title || '').slice(0, 86)}"`);
       }
     }
-    console.log('\n  A row\'s importance is REWRITTEN by applyCitationDecay at every Stop hook, and the');
-    console.log('  pool admits importance>=2 only inside tier2 against importance>=3 inside tier3 — so a');
-    console.log('  single 3->2 demotion removes a row from the POPULATION, not just from the ranking.');
-    console.log('  Any named-row list from this mode is an instant, never a property.');
+    console.log('\n  The pool admits importance>=2 only inside tier2 against importance>=3 inside');
+    console.log('  tier3, so a single 3->2 demotion removes a row from the POPULATION rather than');
+    console.log('  down-ranking it. applyCitationDecay used to rewrite that column at every Stop');
+    console.log('  hook and no longer does (D#179/D#198), so the population is far steadier than');
+    console.log('  it was — but this list is still an INSTANT, not a property: the selector reads');
+    console.log('  Date.now() and weights every candidate by recency, and rows keep arriving.');
     return;
   }
 
@@ -586,9 +595,10 @@ async function main() {
   console.log('  as often as up. Both arms ran in one process against one database, so the');
   console.log('  DIRECTION and the sign of the cost are what survives. Quote those; stamp any');
   console.log('  absolute you must quote with the timestamp above.');
-  console.log('\n  `displaced` is REAL, not an artefact: the token budget, the 3-per-type');
-  console.log('  diversity cap and the file-overlap penalty all make selection non-monotone,');
-  console.log('  so a wider pool can evict a row a narrower one kept. Weigh both columns.');
+  console.log('\n  `displaced` is REAL, not an artefact: the token budget and the 3-per-type');
+  console.log('  diversity cap both make selection non-monotone, so a wider pool can evict a');
+  console.log('  row a narrower one kept. Weigh both columns. (A third stage was listed here');
+  console.log('  until D#197 showed the file-overlap penalty could never fire and deleted it.)');
   console.log('  n is the PROJECT COUNT — read the table, not a percentage over a dozen rows.');
 }
 

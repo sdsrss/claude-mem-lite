@@ -31,8 +31,11 @@ const MEMORY_LOOKBACK_MS = 60 * DAY_MS; // 60 days
  * × 3.0 cite = 6.75; worst = 0.5 change × 1.0 no-lesson × 0.6 importance × 0.2 noise ×
  * 0.4 cite = 0.024, i.e. a **281× DECLARED range**. That is an upper bound off the factor
  * tables, not a measurement: `citeFactor = 0.4` requires `uncited_streak >= 3`, and
- * citation-decay resets the streak at 3 after demoting importance, so the steady state is
- * bounded by [0,2] (scoring-sql.mjs, citeFactorJs docblock). Measured 2026-09-01 over the
+ * citation-decay rolls the streak over to 0 when it reaches 3, so the steady state is
+ * bounded by [0,2] (scoring-sql.mjs, citeFactorJs docblock). That rollover used to be
+ * paired with an `importance - 1`; D#179/D#198 removed the importance write, and the
+ * bound is unaffected because it was always the streak reset that produced it.
+ * Measured 2026-09-01 over the
  * 2284 rows that clear `liveObsFilterSql` — the one predicate in the WHERE of BOTH SELECTs
  * below — 0 are at streak >= 3, and recomputing the factor per row gives a REALISED range
  * of 0.1125 … 6.750: a **60.0× spread** (81 rows hit the full best case, 0 the full worst).
@@ -513,9 +516,13 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [])
  * projects on this machine the importance=3 population ALONE exceeds 50 — so every
  * importance=2 lesson in those projects was structurally unreachable, and a
  * citation-decay demotion 3->2 EVICTED a row from the pool instead of down-ranking it.
- * That eviction loop is the risk D#172 was filed on; raising the bound above any
- * plausible per-project population is what closes it, because a 3->2 demotion then only
- * changes the row's score multiplier, which is what the decay design intends.
+ * That eviction loop is the risk D#172 was filed on, and raising the bound above any
+ * plausible per-project population is what closed it. The second half of that sentence
+ * is now moot from the other end too: D#179/D#198 stopped citation-decay writing
+ * `importance` at all, so there is no 3->2 walk left for the bound to have to absorb.
+ * The bound still matters on its own terms — it is what makes importance=2 rows
+ * reachable here — but it is no longer the only thing standing between a citation and
+ * an eviction.
  *
  * COUNT THE POPULATION WITH THE POOL'S OWN FILTER. Those figures are
  * `liveObsFilterSql` + the `importance >= 2` + non-empty-lesson gates, i.e. what the query
