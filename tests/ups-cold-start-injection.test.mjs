@@ -42,6 +42,13 @@ import { extractTechIdentifiers } from '../scripts/user-prompt-search.js';
 // deadline, not a behaviour change: nothing here got slower, there is just more
 // competing for two cores. Raising the budget keeps every assertion intact; capping it
 // at 20s would only convert contention into a red release.
+//
+// D#203 — the budget was blown again at 60s (run 33605998984), and the number is NOT
+// being raised a third time. The discriminator was the matrix: one commit, three legs,
+// this file at 3792ms on Node 20, 30173ms on Node 24 and 67527ms on Node 22. Identical
+// code cannot get 18x slower on one leg, so the stall is the runner and no fixed budget
+// is safe against a multiplier — the base cost is the only term under our control. It is
+// now ~2.4x smaller (see `seedCorpus`), which is what buys the headroom; 60s stays.
 vi.setConfig({ testTimeout: 60_000 });
 
 const SCRIPT_PATH = resolve(import.meta.dirname, '../scripts/user-prompt-search.js');
@@ -72,16 +79,25 @@ function seedCorpus(n) {
   // corpus seeded without it cannot be searched the way a real one can.
   // `now` is stepped 10 min apart so the 5-minute near-duplicate window doesn't
   // collapse the filler rows into one.
-  const target = saveObservation(db, {
-    content: TARGET_TEXT, type: 'bugfix', importance: 3, project: PROJECT,
-    lesson_learned: TARGET_LESSON, now: new Date(base),
-  });
-  for (let i = 1; i < n; i++) {
-    saveObservation(db, {
-      content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
-      type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 10 * 60_000),
+  // One transaction, not n. `saveObservation` commits per call, so a 600-row seed paid
+  // 600 fsyncs: measured 2026-09-02 on this corpus shape, 2019ms unwrapped vs 270ms
+  // wrapped (7.5x). The rows written are byte-identical — still the production write
+  // path, still CJK bigram expansion, still the stepped `now` — this changes the seed's
+  // COST, not its shape, which is why the floors it feeds are unaffected. It matters
+  // because the CI stall this file's timeout absorbs is multiplicative (D#203).
+  let target;
+  db.transaction(() => {
+    target = saveObservation(db, {
+      content: TARGET_TEXT, type: 'bugfix', importance: 3, project: PROJECT,
+      lesson_learned: TARGET_LESSON, now: new Date(base),
     });
-  }
+    for (let i = 1; i < n; i++) {
+      saveObservation(db, {
+        content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
+        type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 10 * 60_000),
+      });
+    }
+  })();
   const count = db.prepare('SELECT count(*) AS c FROM observations').get().c;
   db.close();
   return { dir, targetId: target.id, count };

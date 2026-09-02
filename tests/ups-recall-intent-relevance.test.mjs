@@ -34,6 +34,11 @@ import { detectIntent } from '../scripts/prompt-search-utils.mjs';
 // scripts/user-prompt-search.js against a seeded corpus, and the 20s global timeout is
 // a unit-test budget. Both files began timing out on the 2-core CI runner as the suite
 // grew (v3.70.0 Release run 32070192835) — contention, not a regression.
+//
+// D#203 — blown again at 60s (run 33605998984). Not raised a third time: in that one run
+// this file measured 5690ms on Node 20, 57058ms on Node 24 and 119949ms on Node 22, so
+// the multiplier is the runner and no fixed budget survives it. The seed below is now
+// ~7x cheaper instead; 60s stays. Sibling reasoning: ups-cold-start-injection.test.mjs.
 vi.setConfig({ testTimeout: 60_000 });
 
 const SCRIPT_PATH = resolve(import.meta.dirname, '../scripts/user-prompt-search.js');
@@ -56,17 +61,23 @@ function seedCorpus(n = 600) {
   db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
               VALUES ('cc', 'mem', ?, datetime('now'), ?)`).run(PROJECT, Date.now());
   const base = Date.now();
-  const target = saveObservation(db, {
-    content: TARGET, type: 'bugfix', importance: 3, project: PROJECT,
-    lesson_learned: '分页边界要 clamp offset，不要把负数传进 LIMIT',
-    now: new Date(base - 600 * 60 * 60 * 1000),
-  });
-  for (let i = 1; i < n; i++) {
-    saveObservation(db, {
-      content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
-      type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 60_000),
+  // One transaction, not n — `saveObservation` commits per call, so this seed paid 600
+  // fsyncs (2019ms unwrapped vs 270ms wrapped, measured 2026-09-02). Identical rows
+  // through the identical production write path; only the commit boundary moves. D#203.
+  let target;
+  db.transaction(() => {
+    target = saveObservation(db, {
+      content: TARGET, type: 'bugfix', importance: 3, project: PROJECT,
+      lesson_learned: '分页边界要 clamp offset，不要把负数传进 LIMIT',
+      now: new Date(base - 600 * 60 * 60 * 1000),
     });
-  }
+    for (let i = 1; i < n; i++) {
+      saveObservation(db, {
+        content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
+        type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 60_000),
+      });
+    }
+  })();
   db.close();
   return { dir, targetId: target.id };
 }
