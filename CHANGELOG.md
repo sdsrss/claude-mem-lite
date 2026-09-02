@@ -205,6 +205,17 @@ confident.** The docblock now enumerates both and says which check covers which.
   clean-day rate — because nothing in a metric row records which process wrote it. That is
   stated rather than rounded away: the alternative was leaving a poisoned series in place
   until the 90-day GC reached it around 2026-11-30.
+- **Two transitive production dependencies bumped in the lockfile**, which is what the tag
+  actually waited on. `npm audit --omit=dev` went red between v3.90.0's release run (green
+  at 13:59Z the same day, identical tree) and this one: four `fast-uri` advisories and two
+  `qs` advisories published in between. `fast-uri` 3.1.5 → 3.1.7 (via `ajv`) and `qs` 6.15.2
+  → 6.16.0 (via `express`), both under `@modelcontextprotocol/sdk@1.29.0` and both inside
+  the semver ranges their parents already declare — so `package.json` is untouched and only
+  `package-lock.json` moved. Production audit 2 → **0 vulnerabilities**; suite re-run against
+  the new tree, 324 files / 5524 green. Dev-side advisories (vite and friends) were left
+  alone: the release gate is `--omit=dev`, and moving the test runner's own dependencies to
+  unblock a tag is a change with no evidence behind it.
+
 - **D#215 was replaced by D#216** rather than edited, *including inside the new reader*,
   whose header line printed `patha_exclude — D#215 reader` — a tool pointing at a ledger
   entry retired because of that tool's own existence. `defer` has `add`/`list`/`drop` and no
