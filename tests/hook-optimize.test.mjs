@@ -17,6 +17,12 @@ vi.mock('../haiku-client.mjs', () => ({
 }));
 
 import { callModelJSONAsync } from '../haiku-client.mjs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// D#207: built with join(), never `new URL('../hook.mjs', import.meta.url)` — the URL
+// form makes knip drop hook.mjs out of its unused-export report entirely.
+const HOOK_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'hook.mjs');
 
 describe('schema: optimized_at column', () => {
   let db;
@@ -911,19 +917,22 @@ describe('smart-compress', () => {
 describe('hook integration', () => {
   it('BG_EVENTS includes llm-optimize', async () => {
     const { readFileSync } = await import('fs');
-    const hookSrc = readFileSync(new URL('../hook.mjs', import.meta.url), 'utf8');
+    // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to hook.mjs.
+    const hookSrc = readFileSync(HOOK_PATH, 'utf8');
     expect(hookSrc).toContain("'llm-optimize'");
   });
 
   it('hook.mjs imports handleLLMOptimize', async () => {
     const { readFileSync } = await import('fs');
-    const hookSrc = readFileSync(new URL('../hook.mjs', import.meta.url), 'utf8');
+    // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to hook.mjs.
+    const hookSrc = readFileSync(HOOK_PATH, 'utf8');
     expect(hookSrc).toContain('handleLLMOptimize');
   });
 
   it('hook.mjs spawns llm-optimize after auto-compress', async () => {
     const { readFileSync } = await import('fs');
-    const hookSrc = readFileSync(new URL('../hook.mjs', import.meta.url), 'utf8');
+    // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to hook.mjs.
+    const hookSrc = readFileSync(HOOK_PATH, 'utf8');
     const autoCompressIdx = hookSrc.indexOf("spawnBackground('auto-compress')");
     const llmOptimizeIdx = hookSrc.indexOf("spawnBackground('llm-optimize')");
     expect(autoCompressIdx).toBeGreaterThan(-1);

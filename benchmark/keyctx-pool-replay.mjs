@@ -95,17 +95,24 @@
 
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import Database from 'better-sqlite3';
-import { join } from 'path';
-import { pathToFileURL } from 'url';
+import { join, dirname } from 'path';
+import { pathToFileURL, fileURLToPath } from 'url';
 import { DB_DIR } from '../schema.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { notLowSignalTitleClause } from '../utils.mjs';
 
-const SHIPPED_URL = new URL('../hook-context.mjs', import.meta.url);
+// D#207: paths built with `join()`, never `new URL('../X.mjs', import.meta.url)`. That
+// form makes knip drop the named module out of its unused-export report ENTIRELY — this
+// file naming hook-context.mjs that way is why knip could not see it at all, which is
+// what tests/knip-blindspot-guard.test.mjs was written to compensate for. Established by
+// probe, both directions. tests/no-url-module-paths.test.mjs pins the rule for the class.
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SHIPPED_PATH = join(REPO_ROOT, 'hook-context.mjs');
+const SHIPPED_URL = pathToFileURL(SHIPPED_PATH);
 // Repo root, not benchmark/, or hook-context's own './lib/...' specifiers resolve
-// against the wrong directory. Relative on purpose: tests/import-graph.test.mjs fails
-// any absolute import specifier.
-const TWIN_URL = new URL('../.tmp-keyctx-pool-twin.mjs', import.meta.url);
+// against the wrong directory.
+const TWIN_PATH = join(REPO_ROOT, '.tmp-keyctx-pool-twin.mjs');
+const TWIN_URL = pathToFileURL(TWIN_PATH);
 
 const DEFAULT_WIDE_OBS = 200;
 const DEFAULT_WIDE_SESS = 40;
@@ -124,10 +131,14 @@ const has = (name) => process.argv.includes(name);
  * as a missing constant sends the reader to the wrong file.
  */
 export function patchConst(src, name, value) {
-  const re = new RegExp(`export const ${name} = (\\d+);`);
+  // No `export` in the pattern: the bounds are module-private (D#207 — exporting them
+  // bought nothing, since this patch works on TEXT, and cost two permanent entries in
+  // knip's report once hook-context.mjs became visible to it). Same shape as
+  // rerank-pool-replay.mjs's patchConst, which has always matched a bare `const`.
+  const re = new RegExp(`const ${name} = (\\d+);`);
   const m = src.match(re);
   if (!m) throw new Error(`twin patch failed: ${name} not found in hook-context.mjs (renamed?)`);
-  return { out: src.replace(re, `export const ${name} = ${value};`), previous: Number(m[1]) };
+  return { out: src.replace(re, `const ${name} = ${value};`), previous: Number(m[1]) };
 }
 
 export function writeTwin(obsLimit, sessLimit) {
@@ -467,7 +478,7 @@ async function main() {
     const arms = {};
     for (const [label, limit] of [['narrow', shipped.obs], ['wide', wideObs]]) {
       const patched = patchDropPoints(patchConst(src, 'KEYCTX_POOL_OBS', limit).out);
-      const url = new URL(`../.tmp-keyctx-why-${limit}.mjs`, import.meta.url);
+      const url = pathToFileURL(join(REPO_ROOT, `.tmp-keyctx-why-${limit}.mjs`));
       writeFileSync(url, patched);
       try {
         const m = await import(`${url.href}?v=${Date.now()}`);

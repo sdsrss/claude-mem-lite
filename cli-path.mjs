@@ -16,6 +16,10 @@
 // substitutes at execution time (the env var is absent from a plain Bash env).
 
 import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 
-export const CLI_PATH = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+// D#207: join(), not `new URL('./cli.mjs', …)` — that form makes knip drop the named
+// module from its unused-export report entirely. Enforced by
+// tests/no-url-module-paths.test.mjs.
+export const CLI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
 export const CLI_INVOKE = `node ${CLI_PATH}`;

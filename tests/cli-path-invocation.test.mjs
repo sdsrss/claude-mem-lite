@@ -18,7 +18,10 @@ import { tools } from '../tool-schemas.mjs';
 import { buildServerInstructions } from '../search-scoring.mjs';
 import { getDetailDoc, buildClaudeMdBlock } from '../adopt-content.mjs';
 
-const ROOT = dirname(fileURLToPath(new URL('../cli-path.mjs', import.meta.url)));
+// D#207: `join()`, not `new URL('../cli-path.mjs', import.meta.url)`. Naming a module
+// that way anywhere in the analysed tree makes knip drop it from the unused-export
+// report entirely. Pinned for the class by tests/no-url-module-paths.test.mjs.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BROKEN = '~/.claude-mem-lite/cli.mjs';
 
 describe('cli-path single source of truth', () => {

@@ -1,6 +1,7 @@
 // Tests for hook-semaphore.mjs — LLM concurrency semaphore
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, mkdirSync } from 'fs';
 import {
   acquireLLMSlot,
@@ -78,7 +79,8 @@ describe('hook-semaphore.mjs', () => {
     // reinstates D#134 MEDIUM-2 verbatim while every assertion above stays
     // green. Cheap source guard for the one line that consumes the budget.
     it('the acquire loop derives its deadline from LLM_SEM_TIMEOUT, not a literal', () => {
-      const src = readFileSync(new URL('../hook-semaphore.mjs', import.meta.url), 'utf8');
+      // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to the module.
+      const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hook-semaphore.mjs'), 'utf8');
       const deadline = src.match(/const deadline = [^;]+;/);
       expect(deadline, 'acquire deadline not found').not.toBeNull();
       expect(deadline[0]).toContain('LLM_SEM_TIMEOUT');
@@ -86,7 +88,8 @@ describe('hook-semaphore.mjs', () => {
     });
 
     it('the stale reaper compares against LLM_SEM_STALE_MS, not a literal', () => {
-      const src = readFileSync(new URL('../hook-semaphore.mjs', import.meta.url), 'utf8');
+      // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to the module.
+      const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hook-semaphore.mjs'), 'utf8');
       const ageCheck = src.match(/if \(age > [^)]+\)/);
       expect(ageCheck, 'age check not found').not.toBeNull();
       expect(ageCheck[0]).toContain('LLM_SEM_STALE_MS');

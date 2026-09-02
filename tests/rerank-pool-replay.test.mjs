@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   patchConst,
   writeTwin,
@@ -30,6 +31,11 @@ import {
   validatePoolArg,
   MONOTONICITY_NOTE,
 } from '../benchmark/rerank-pool-replay.mjs';
+
+// D#207: built with join(), never `new URL('../X.mjs', import.meta.url)` — the URL form
+// makes knip drop the named module out of its unused-export report entirely, and this
+// file naming hook-memory.mjs that way was one half of that blind spot.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // `compare` only ever hands `db` through to the two arms, so the arms here are plain
 // functions over a table of canned answers and the handle is never touched.
@@ -59,14 +65,14 @@ describe('self-check 1: the twin patch must apply, and must differ from shipped'
     // A twin that failed to differ compares the shipped module against itself and
     // reports a reassuring 0% — the exact failure this whole file exists to prevent.
     // The values come from hook-memory.mjs itself, so this stays true across re-tunes.
-    const src = readFileSync(new URL('../hook-memory.mjs', import.meta.url), 'utf8');
+    const src = readFileSync(join(REPO, 'hook-memory.mjs'), 'utf8');
     const same = Number(/const RERANK_POOL_SAME_PROJECT = (\d+);/.exec(src)[1]);
     const cross = Number(/const RERANK_POOL_CROSS_PROJECT = (\d+);/.exec(src)[1]);
     expect(() => writeTwin(same, cross)).toThrow(/twin is identical to shipped/);
     // and a genuinely different twin does NOT throw — otherwise the case above passes
     // for any reason at all
     expect(() => writeTwin(same, cross + 1)).not.toThrow();
-    rmSync(new URL('../.tmp-rerank-pool-twin.mjs', import.meta.url), { force: true });
+    rmSync(join(REPO, '.tmp-rerank-pool-twin.mjs'), { force: true });
   });
 });
 

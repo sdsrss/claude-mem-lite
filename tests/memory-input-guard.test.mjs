@@ -12,16 +12,22 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 
 const src = readFileSync(
-  fileURLToPath(new URL('../hook-llm.mjs', import.meta.url)),
+  // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to hook-llm.mjs.
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'hook-llm.mjs'),
   'utf8',
 );
 
 describe('MEMORY_INPUT_GUARD', () => {
-  it('is exported and keeps its load-bearing security semantics', () => {
-    const m = src.match(/export const MEMORY_INPUT_GUARD\s*=\s*'([^']*)'/);
-    expect(m, 'MEMORY_INPUT_GUARD export must exist').toBeTruthy();
+  it('is declared and keeps its load-bearing security semantics', () => {
+    // `export` optional: the constant went module-private in D#207 (nothing imported it,
+    // and being exported put a permanently-unused name in knip's report the moment that
+    // change made hook-llm.mjs visible). This test never imported it either — it reads
+    // the source — so the pattern is widened rather than the visibility kept for its sake.
+    const m = src.match(/(?:export\s+)?const MEMORY_INPUT_GUARD\s*=\s*'([^']*)'/);
+    expect(m, 'MEMORY_INPUT_GUARD declaration must exist').toBeTruthy();
     const guard = m[1];
     expect(guard).toMatch(/untrusted/i);
     expect(guard).toMatch(/DATA only/i);

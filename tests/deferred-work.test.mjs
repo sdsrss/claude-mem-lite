@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// D#207: repo-source paths are built with join(), never `new URL('../…', import.meta.url)`
+// — the URL form makes knip drop the named module from its unused-export report.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { createTestDb } from './test-helpers.mjs';
 import {
   insertDeferred, listOpenWithOrdinal, dropDeferred,
@@ -282,7 +288,7 @@ describe('deferred_work closure', () => {
     const offenders = [];
     let sites = 0;
     for (const face of faces) {
-      const src = readFileSync(new URL(`../${face}`, import.meta.url), 'utf8');
+      const src = readFileSync(join(REPO, face), 'utf8');
       // Call sites only — skip the import statement, which also names the symbol.
       const re = /closeDeferredItems\(/g;
       for (const m of src.matchAll(re)) {
@@ -308,7 +314,7 @@ describe('deferred_work closure', () => {
     const faces = ['mem-cli.mjs', 'server.mjs'];
     const missing = [];
     for (const face of faces) {
-      const src = readFileSync(new URL(`../${face}`, import.meta.url), 'utf8');
+      const src = readFileSync(join(REPO, face), 'utf8');
       const drops = [...src.matchAll(/dropDeferred\(/g)].length;
       const hints = [...src.matchAll(/formatDropReasonHint\(/g)].length;
       if (drops === 0) missing.push(`${face}: no dropDeferred call site — sweep would pass vacuously`);

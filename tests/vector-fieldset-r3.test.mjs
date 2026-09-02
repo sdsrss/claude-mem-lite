@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { VEC_HIT_OBS_COLS } from '../search-engine.mjs';
 
@@ -25,7 +26,8 @@ describe('vector-hit fetch column parity (F4)', () => {
   });
 
   it('both vector-hit SELECTs use the shared constant — no hardcoded observation column list', () => {
-    const src = readFileSync(fileURLToPath(new URL('../search-engine.mjs', import.meta.url)), 'utf8');
+    // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to search-engine.mjs.
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'search-engine.mjs'), 'utf8');
     // Both vector-hit fetches must read `SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`.
     const shared = (src.match(/SELECT \$\{VEC_HIT_OBS_COLS\} FROM observations WHERE id = \?/g) || []).length;
     expect(shared, 'both vector-hit branches must fetch via VEC_HIT_OBS_COLS').toBe(2);

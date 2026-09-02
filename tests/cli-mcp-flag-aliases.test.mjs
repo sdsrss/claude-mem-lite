@@ -19,6 +19,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// D#207: repo-source paths are built with join(), never `new URL('../…', import.meta.url)`
+// — the URL form makes knip drop the named module from its unused-export report.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { parseArgs, suggestUnknownFlags, KNOWN_CLI_FLAGS } from '../cli/common.mjs';
 
 describe('parseArgs — MCP field names normalize onto CLI flags', () => {
@@ -80,7 +86,7 @@ describe('suggestUnknownFlags — no unknown flag is silently dropped', () => {
       'cli/fts-check.mjs', 'adopt-cli.mjs', 'cli.mjs'];
     const read = new Set();
     for (const f of roots) {
-      const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+      const src = readFileSync(join(REPO, f), 'utf8');
       for (const m of src.matchAll(/flags\.([a-zA-Z][a-zA-Z0-9]*)/g)) read.add(m[1]);
       for (const m of src.matchAll(/flags\['([^']+)'\]/g)) read.add(m[1]);
       // raw-argv reads: args.includes('--x') / argv.indexOf('--x')

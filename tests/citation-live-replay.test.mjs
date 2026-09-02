@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -25,7 +25,9 @@ import { wilson95 } from '../benchmark/wilson.mjs';
 import { CITATION_SURFACES } from '../lib/citation-tracker.mjs';
 import { TASK_IMPERATIVE_PREFIX } from '../lib/task-imperative.mjs';
 
-const SCRIPT = fileURLToPath(new URL('../benchmark/citation-live-replay.mjs', import.meta.url));
+// D#207: join(), not `new URL('../…mjs', …)` — the URL form makes knip drop the named
+// module from its unused-export report. Enforced by tests/no-url-module-paths.test.mjs.
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'benchmark', 'citation-live-replay.mjs');
 
 describe('face-coverage guard', () => {
   it('passes with the real face list — the binding this script actually ships with', () => {

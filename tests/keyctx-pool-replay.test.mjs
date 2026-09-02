@@ -10,6 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { readFileSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   patchConst,
   writeTwin,
@@ -24,6 +26,11 @@ import {
   assertInertConsistent,
   assertTraceWellFormed,
 } from '../benchmark/keyctx-pool-replay.mjs';
+
+// D#207: built with join(), never `new URL('../X.mjs', import.meta.url)` — the URL form
+// makes knip drop the named module out of its unused-export report entirely, and this
+// file naming hook-context.mjs that way was one half of that blind spot.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const projects = [{ project: 'p' }];
 // compare() only hands `db` through to the two arms, so the arms are canned answers.
@@ -48,13 +55,21 @@ describe('twin patch', () => {
   });
 
   it('THROWS when the twin would be identical to shipped in BOTH bounds', () => {
-    // Values read from hook-context.mjs itself, so this survives a re-tune.
-    const src = readFileSync(new URL('../hook-context.mjs', import.meta.url), 'utf8');
-    const obs = Number(/export const KEYCTX_POOL_OBS = (\d+);/.exec(src)[1]);
-    const sess = Number(/export const KEYCTX_POOL_SESS = (\d+);/.exec(src)[1]);
+    // Values read from hook-context.mjs itself, so this survives a re-tune. `export` is
+    // optional in the pattern: the bounds went module-private in D#207 and this pattern,
+    // being a second hand-written copy of `patchConst`'s, silently stopped matching and
+    // threw on `null[1]` rather than reporting a missing anchor.
+    const src = readFileSync(join(REPO, 'hook-context.mjs'), 'utf8');
+    const read = (name) => {
+      const m = new RegExp(`(?:export\\s+)?const ${name} = (\\d+);`).exec(src);
+      expect(m, `${name} declaration not found in hook-context.mjs`).toBeTruthy();
+      return Number(m[1]);
+    };
+    const obs = read('KEYCTX_POOL_OBS');
+    const sess = read('KEYCTX_POOL_SESS');
     expect(() => writeTwin(obs, sess)).toThrow(/twin is identical to shipped/);
     expect(() => writeTwin(obs + 1, sess)).not.toThrow();
-    rmSync(new URL('../.tmp-keyctx-pool-twin.mjs', import.meta.url), { force: true });
+    rmSync(join(REPO, '.tmp-keyctx-pool-twin.mjs'), { force: true });
   });
 });
 
@@ -129,7 +144,7 @@ describe('summaries are injected content, not a side channel', () => {
 
 describe('drop-point instrumentation — the attribution must not silently lose a gate', () => {
   it('instruments every drop point AND the selection commit', () => {
-    const src = readFileSync(new URL('../hook-context.mjs', import.meta.url), 'utf8');
+    const src = readFileSync(join(REPO, 'hook-context.mjs'), 'utf8');
     const out = patchDropPoints(src);
     for (const [, label] of DROP_POINTS) {
       expect(out).toContain(`__KEYCTX_TRACE.push([c._kind, c.id, '${label}'])`);
@@ -141,7 +156,7 @@ describe('drop-point instrumentation — the attribution must not silently lose 
     // The failure that matters: a silently-missed drop point yields a complete-looking
     // report in which one gate never fires — indistinguishable from that gate being
     // inactive, which is the exact reading this mode exists to support.
-    const src = readFileSync(new URL('../hook-context.mjs', import.meta.url), 'utf8');
+    const src = readFileSync(join(REPO, 'hook-context.mjs'), 'utf8');
     for (const [anchor, label] of DROP_POINTS) {
       const broken = src.replace(anchor, '/* moved */');
       expect(() => patchDropPoints(broken)).toThrow(new RegExp(`drop-point anchor gone: ${label}`));

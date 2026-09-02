@@ -11,13 +11,17 @@ import { describe, it, expect } from 'vitest';
 import { resolve, join } from 'path';
 import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { probeBetterSqlite3Binding, ensureBetterSqlite3Working } from '../install.mjs';
 import { probeBindingInFreshProcess } from '../lib/binding-probe.mjs';
 import { RELEASE_SIGNED_FILES } from '../source-files.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const PROBE_MOD = JSON.stringify(new URL('../lib/binding-probe.mjs', import.meta.url).href);
+// D#207: the module path is built with join() and only then turned into a URL. Naming it
+// directly in `new URL('../lib/binding-probe.mjs', …)` made knip drop binding-probe.mjs
+// out of its unused-export report entirely. The spawned child still needs an href, so the
+// conversion is pathToFileURL, not a bare path. Enforced by tests/no-url-module-paths.test.mjs.
+const PROBE_MOD = JSON.stringify(pathToFileURL(join(REPO_ROOT, 'lib', 'binding-probe.mjs')).href);
 const PKG_JSON = JSON.stringify(join(REPO_ROOT, 'package.json'));
 
 // Run `body` in a pristine child and report whether better-sqlite3's .node ended

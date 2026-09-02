@@ -51,18 +51,23 @@
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import Database from 'better-sqlite3';
 import { DB_DIR } from '../schema.mjs';
-import { join } from 'path';
-import { pathToFileURL } from 'url';
+import { join, dirname } from 'path';
+import { pathToFileURL, fileURLToPath } from 'url';
 import { upsFtsQuery } from '../lib/ups-query.mjs';
 import { relaxFtsQueryToOr, notLowSignalTitleClause, OBS_BM25 } from '../utils.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 
-const SHIPPED_URL = new URL('../hook-memory.mjs', import.meta.url);
+// D#207: `join()`, never `new URL('../X.mjs', import.meta.url)` — that form makes knip
+// drop the named module out of its unused-export report entirely, and this file naming
+// hook-memory.mjs that way was one of the two causes of that blind spot.
+// tests/no-url-module-paths.test.mjs pins the rule for the class.
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SHIPPED_PATH = join(REPO_ROOT, 'hook-memory.mjs');
+const SHIPPED_URL = pathToFileURL(SHIPPED_PATH);
 // The twin has to sit at the REPO ROOT, not in benchmark/, or hook-memory's own relative
-// imports ('./utils.mjs', './lib/...') resolve against the wrong directory. Relative
-// specifier on purpose: tests/import-graph.test.mjs fails any absolute import spec, which
-// is exactly how the review round's own scratch replay broke the suite.
-const TWIN_URL = new URL('../.tmp-rerank-pool-twin.mjs', import.meta.url);
+// imports ('./utils.mjs', './lib/...') resolve against the wrong directory.
+const TWIN_PATH = join(REPO_ROOT, '.tmp-rerank-pool-twin.mjs');
+const TWIN_URL = pathToFileURL(TWIN_PATH);
 
 const DEFAULT_BASELINE_SAME = 10;
 const DEFAULT_BASELINE_CROSS = 5;

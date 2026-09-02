@@ -119,8 +119,14 @@ export function computeAdaptiveWindows(db, project) {
 // summaries, roughly tripling the emitted block on the largest projects. It truncates MORE
 // projects than the obs bound, 5 of 11 against 3 of 11, which is what made the original
 // review propose it first; truncation count is not harm.
-export const KEYCTX_POOL_OBS = 200;
-export const KEYCTX_POOL_SESS = 10;
+// Module-private, like their siblings RERANK_POOL_SAME_PROJECT / RERANK_POOL_CROSS_PROJECT
+// in hook-memory.mjs. Nothing imports them: `benchmark/keyctx-pool-replay.mjs` rewrites
+// these DECLARATIONS with a regex over this file's text, which needs no export, and being
+// exported by habit put two permanently-unused names into knip's report the moment D#207
+// made this module visible to it. Raising a baseline is the wrong way to hold a name
+// (v3.70.0 precedent, #9675). The replay's `patchConst` matches `const <NAME> = <n>;`.
+const KEYCTX_POOL_OBS = 200;
+const KEYCTX_POOL_SESS = 10;
 
 /**
  * Select observations and sessions within a token budget using greedy knapsack.

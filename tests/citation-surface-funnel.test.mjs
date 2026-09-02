@@ -20,7 +20,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import {
   extractInjectedBySurface,
@@ -402,7 +403,8 @@ describe('computeSurfaceFunnel', () => {
 });
 
 describe('hook.mjs Stop wiring', () => {
-  const src = readFileSync(new URL('../hook.mjs', import.meta.url), 'utf8');
+  // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to hook.mjs.
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hook.mjs'), 'utf8');
 
   it('feeds the decay denominator from the per-surface breakdown', () => {
     expect(src).toMatch(/extractInjectedBySurface\(transcriptPath,\s*\{[^}]*mainOnly:\s*true/);

@@ -7,6 +7,12 @@
 // column already exists (schema.mjs) — no migration needed.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// D#207: repo-source paths are built with join(), never `new URL('../…', import.meta.url)`
+// — the URL form makes knip drop the named module from its unused-export report.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
 
@@ -187,7 +193,7 @@ describe('saveObservation supersedes', () => {
     const faces = ['mem-cli.mjs', 'server.mjs'];
     const problems = [];
     for (const face of faces) {
-      const src = readFileSync(new URL(`../${face}`, import.meta.url), 'utf8');
+      const src = readFileSync(join(REPO, face), 'utf8');
       if (!/import\s*\{[^}]*\bformatSupersedeSkipped\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(src)) {
         problems.push(`${face}: does not import formatSupersedeSkipped`);
         continue;
