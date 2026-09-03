@@ -152,7 +152,12 @@ export const CODE_DIR = join(homedir(), '.claude-mem-lite');
 // (citation_surface_log.surface) in LATEST_MIGRATION_COLUMNS: a table that only
 // the forced pass can create is unreachable forever once the version row says
 // "done", which is not a hypothetical — see the note there.
-export const CURRENT_SCHEMA_VERSION = 46;
+// v47: two additive indexes (P2-11 + ALGO-7). The bump is LOAD-BEARING, not bookkeeping:
+// `initSchema`'s fast path returns before the `CREATE INDEX IF NOT EXISTS` block, so on
+// every existing install at v46 a new index there would simply never be created. Same trap
+// the FTS5 migration hit — a DDL change that is not reachable from the version the DB
+// already reports is a no-op with a convincing diff.
+export const CURRENT_SCHEMA_VERSION = 47;
 
 // Sentinel columns for the LATEST migration set(s). The fast-path uses these
 // to self-heal half-migrated DBs — schema_version bumped but column ALTERs
@@ -551,6 +556,18 @@ export function initSchema(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project ON sdk_sessions(project)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_not_compressed ON observations(created_at_epoch DESC) WHERE COALESCE(compressed_into, 0) = 0`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_handoffs_project_time ON session_handoffs(project, type, created_at_epoch DESC)`);
+  // v47 (audit 2026-09-02 P2-11 + the previous round's ALGO-7), one additive migration for
+  // both. Additive only: new indexes on existing columns, no table rewrite, no data move.
+  //
+  // The first was the ONLY genuine full table scan in the 30 statements the audit ran
+  // through EXPLAIN QUERY PLAN. Stop and SessionStart both probe "does a summary exist for
+  // this memory session?", `session_summaries` is 10,160 rows here, and the cost grows
+  // linearly with the table for a question asked on every hook event.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sess_sum_memory_session ON session_summaries(memory_session_id)`);
+  // The second narrows the live-row scan the injection faces run per project. Partial on the
+  // same predicate `liveObsFilterSql` uses, so the index covers exactly the rows those
+  // queries can return.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_project_live ON observations(project, created_at_epoch DESC) WHERE superseded_at IS NULL AND COALESCE(compressed_into, 0) = 0`);
 
   // FTS5 migration: recreate observations_fts when columns are missing (one-time)
   // Detect old FTS5 table missing lesson_learned or search_aliases and recreate with full column set

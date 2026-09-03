@@ -17,10 +17,10 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -28,16 +28,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Run tests with coverage
-        run: npm run test:coverage
-
-      - name: Security audit
-        run: npm audit --omit=dev
-
       - name: Verify version consistency
+        # FIRST check after install, deliberately (audit 2026-09-02 P2-19). It used to run
+        # after lint + the full coverage suite + `npm audit`, which is several minutes of
+        # work to reach a verdict that depends on nothing any of them produce. The failure
+        # this guards is a MISTAGGED release, and by the time the workflow starts the tag is
+        # already pushed — so the only thing the delay bought was a later error message on a
+        # mistake that has to be undone in git either way. It needs `npm ci` only because it
+        # reads the version out of the manifests with `node -p`.
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           PKG_VERSION=$(node -p "require('./package.json').version")
@@ -69,6 +67,15 @@ jobs:
             exit 1
           fi
           echo "All versions consistent: $VERSION"
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Security audit
+        run: npm audit --omit=dev
 
       - name: Generate npm-shrinkwrap (lock the publishable tarball)
         # npm NEVER packs package-lock.json (even when listed in files[]), so
@@ -125,9 +132,9 @@ jobs:
       contents: write
       id-token: write  # required for npm provenance attestation
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org

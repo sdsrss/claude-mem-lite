@@ -1,0 +1,37 @@
+# Audit 2026-09-02 P2-19: there was no dependency-update automation at all, so the four dev
+# advisories the audit found (brace-expansion / nanoid / postcss / vite, all reached through
+# vitest) were visible only to someone who happened to run `npm audit` WITHOUT
+# `--omit=dev` — and CI runs it with that flag, because a dev advisory must not block a
+# release. That is the right call for the gate and the wrong place to learn about the
+# advisory; this is the other half.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Every lockfile change has to pass the `@emnapi` pruning guard in
+    # `scripts/pre-commit.sh`, which has regressed at least twice. A PR per package makes a
+    # failure attributable; a batched one makes it a bisect.
+    groups:
+      dev-minor-and-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Majors are reviewed by hand against their changelog, per the audit's explicit
+      # "do not bump better-sqlite3 to 13, do not `npm audit fix` the dev tree wholesale".
+      # better-sqlite3 in particular carries a compiled native binding whose ABI this
+      # project has already had to self-heal in the field.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # The actions are SHA-pinned (same audit item). Pinning without an updater is how a
+    # pinned SHA quietly becomes an unpatched one, so the two ship together: dependabot
+    # rewrites the SHA and the trailing `# vX.Y.Z` comment.
+    open-pull-requests-limit: 3
