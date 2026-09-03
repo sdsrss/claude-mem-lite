@@ -39,6 +39,8 @@ import { neutralizeContextDelimiters } from '../format-utils.mjs';
 //
 // Import-free module, no runtime deps — nothing added to this script's load cost.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
+// P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
+import { readHookStdin } from '../lib/hook-stdin.mjs';
 // Recall queries the SAVE-path project, so this MUST produce the same string as the
 // save path. It used to be a hand-kept copy of the same 6 lines; that copy had already
 // drifted once (missing the process.env.PWD fallback, so a symlinked project dir
@@ -301,9 +303,13 @@ try {
   // Skip if DB doesn't exist
   if (!existsSync(DB_PATH)) process.exit(0);
 
-  // Read stdin
-  let input = '';
-  for await (const chunk of process.stdin) input += chunk;
+  // Read stdin, bounded (P1-9). This is the site where the unbounded `for await` cost the
+  // most: on `PreToolUse:Write` the payload's `tool_input.content` is the ENTIRE file being
+  // written, so writing a multi-megabyte file buffered all of it and `JSON.parse`d all of
+  // it — to read `file_path`. The cap truncates the JSON, which fails to parse and lands in
+  // the same catch that already handles a malformed payload: the recall is skipped, which
+  // is what the host's 3 s fail-open did anyway, only now it is bounded and deliberate.
+  const { text: input } = await readHookStdin();
 
   // Parse event
   let filePath;

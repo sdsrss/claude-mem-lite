@@ -1,8 +1,8 @@
 // claude-mem-lite: Background LLM workers for episode extraction and session summaries
 // Extracted from hook.mjs for testability and reduced complexity
 
-import { basename } from 'path';
-import { existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
+import { basename, join } from 'path';
+import { existsSync, readFileSync, unlinkSync, readdirSync, statSync } from 'fs';
 import {
   jaccardSimilarity, truncate, clampImportance, computeRuleImportance,
   inferProject, parseJsonFromLLM, scrubSecrets,
@@ -16,7 +16,7 @@ import { vecTextForRow } from './tfidf.mjs';
 import { insertObservationRow, insertObservationFiles, insertObservationVector, upsertObservationVector, normalizeScope, SCOPE_PROMPT_LEGEND } from './lib/observation-write.mjs';
 import { DEDUP_JACCARD_THRESHOLD, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
-  RUNTIME_DIR, DEDUP_WINDOW_MS, RELATED_OBS_WINDOW_MS,
+  RUNTIME_DIR, DEDUP_WINDOW_MS, RELATED_OBS_WINDOW_MS, ORPHAN_EPISODE_AGE_MS,
   sessionFile, getSessionId, openDb, callLLM, sleep,
 } from './hook-shared.mjs';
 import { EVENT_TYPES, saveEvent } from './lib/activity.mjs';
@@ -1147,13 +1147,44 @@ ${actionList}`;
 export async function handleLLMSummary() {
   const parsed = parseInt(process.env.CLAUDE_MEM_FLUSH_TIMEOUT, 10);
   const flushTimeout = Number.isNaN(parsed) ? 15 : parsed;
-  for (let i = 0; i < flushTimeout; i++) {
-    try {
-      const files = readdirSync(RUNTIME_DIR).filter(f => f.startsWith('ep-flush-'));
-      if (files.length === 0) break;
-    } catch { break; }
-    debugLog('DEBUG', 'llm-summary', `waiting for flush files (${i + 1}/15)`);
+
+  // Wait for a DEFINED SET of flush files, not for "the directory is empty" (audit
+  // 2026-09-02 P1-7). RUNTIME_DIR is shared by every project on the machine, and the old
+  // predicate was `readdirSync(RUNTIME_DIR).some(f => f.startsWith('ep-flush-'))` — so:
+  //
+  //   • ONE crashed llm-episode worker leaves a file nothing will ever delete, and from
+  //     then on EVERY project's summary burns the full 15 s on every Stop until the next
+  //     maintain run sweeps it. Orphan cleanup lives behind a 24 h gate, so "until then"
+  //     is up to a day.
+  //   • A flush spawned by an unrelated project WHILE this summary is waiting extends the
+  //     wait, for work this summary will never read.
+  //
+  // The set is snapshotted at entry and filtered to files young enough to belong to a live
+  // worker. A file that appears after this point is somebody else's; a file older than
+  // ORPHAN_EPISODE_AGE_MS is nobody's. Both were previously indistinguishable from work in
+  // progress.
+  //
+  // Not narrowed to this project: the flush filename is `ep-flush-<ts>-<rand>.json` and
+  // carries no project. Widening it is a marker-format change with in-flight files during
+  // an upgrade, and the two filters above already remove the unbounded cases — what is left
+  // is a bounded overlap with genuinely concurrent work.
+  let pending;
+  try {
+    const cutoff = Date.now() - ORPHAN_EPISODE_AGE_MS;
+    pending = readdirSync(RUNTIME_DIR)
+      .filter((f) => f.startsWith('ep-flush-'))
+      .filter((f) => {
+        try { return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff; } catch { return false; }
+      });
+  } catch { pending = []; }
+
+  for (let i = 0; i < flushTimeout && pending.length > 0; i++) {
     await sleep(1000);
+    pending = pending.filter((f) => existsSync(join(RUNTIME_DIR, f)));
+    debugLog('DEBUG', 'llm-summary', `waiting for ${pending.length} flush file(s) (${i + 1}/${flushTimeout})`);
+  }
+  if (pending.length > 0) {
+    debugLog('DEBUG', 'llm-summary', `gave up waiting on ${pending.length} flush file(s) after ${flushTimeout}s: ${pending.join(', ')}`);
   }
 
   const db = openDb();

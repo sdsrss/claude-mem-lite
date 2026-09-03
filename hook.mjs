@@ -33,6 +33,7 @@ import {
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
 import { inferProjectDir } from './project-utils.mjs';
+import { readHookStdin } from './lib/hook-stdin.mjs';
 // Aliased: `acquireLock` from hook-episode.mjs below is the episode buffer's own
 // (argument-less) lock — a different mutex with a different staleness policy.
 import { acquireLock as acquireProcLock } from './lib/proc-lock.mjs';
@@ -2487,22 +2488,20 @@ function handleAutoCompress() {
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
+// P1-9: the mechanism is shared (lib/hook-stdin.mjs); the CALIBER stays this entry point's
+// own. 256 KB because a tool response is the largest payload the host sends here, and
+// `rejectOnTimeout` because this reader's callers treat a timeout as "drop the event" — the
+// alternative, acting on a partial payload, means writing a truncated tool response into
+// memory as if it were the whole thing. The other four hook processes are advisory and
+// resolve instead; those are different decisions about different payloads, not drift.
 function readStdin() {
-  const MAX_STDIN = MAX_HOOK_STDIN_BYTES; // large tool responses are truncated (shared tier, utils.mjs)
-  return new Promise((resolve, reject) => {
-    let data = '';
-    const timeout = setTimeout(() => { debugLog('WARN', 'readStdin', 'stdin timeout after 3s — event dropped'); process.stdin.destroy(); reject(new Error('timeout')); }, 3000);
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => {
-      data += chunk;
-      if (data.length > MAX_STDIN) {
-        process.stdin.destroy(); clearTimeout(timeout);
-        resolve({ text: data.slice(0, MAX_STDIN), truncated: true });
-      }
-    });
-    process.stdin.on('end', () => { clearTimeout(timeout); resolve({ text: data, truncated: false }); });
-    process.stdin.on('error', err => { clearTimeout(timeout); reject(err); });
-    process.stdin.resume();
+  return readHookStdin({
+    timeoutMs: 3000,
+    maxBytes: MAX_HOOK_STDIN_BYTES, // shared tier, utils.mjs
+    rejectOnTimeout: true,
+  }).catch((err) => {
+    if (err?.message === 'timeout') debugLog('WARN', 'readStdin', 'stdin timeout after 3s — event dropped');
+    throw err;
   });
 }
 

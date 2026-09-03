@@ -32,6 +32,13 @@ async function recordFailure(scope, err, ctx) {
   } catch { /* never */ }
 }
 
+// The ONE hand-written stdin reader left in the tree, and it stays deliberately (P1-9).
+// The other five now share `lib/hook-stdin.mjs`; this script is the default-OFF path whose
+// entire reason to exist is costing nothing when the feature is disabled, and it reaches
+// this line before importing anything at all — even an import-free module is a module
+// resolution. Its caliber (1.5 s, 262144, never rejects) is the same shape the shared
+// reader implements with `rejectOnTimeout: false`, so if this ever gains an import, delete
+// this function and call `readHookStdin({ timeoutMs: 1500, maxBytes: 262144 })`.
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';

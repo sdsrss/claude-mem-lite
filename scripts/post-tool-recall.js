@@ -27,6 +27,8 @@ import { recordHookError } from '../lib/hook-telemetry.mjs';
 // emit added later merges instead of producing two JSON documents, which the host
 // parses as neither (lib/hook-stdout.mjs). Import-free module over no runtime deps.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
+// P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
+import { readHookStdin } from '../lib/hook-stdin.mjs';
 import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
 
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
@@ -46,8 +48,8 @@ function cooldownPathFor(sessionId) {
 async function main() {
   if (!SALIENCE_BIND) return;
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
-  let input = '';
-  for await (const chunk of process.stdin) input += chunk;
+  // Bounded stdin (P1-9) — was an unbounded `for await` accumulate with no cap or timeout.
+  const { text: input } = await readHookStdin();
   let filePath, sessionId;
   try {
     const e = JSON.parse(input);

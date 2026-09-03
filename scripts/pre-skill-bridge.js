@@ -14,6 +14,9 @@ import { neutralizeContextDelimiters, neutralizeSkillDelimiters, neutralizeSkill
 // D#154: single envelope writer. Also import-free (no runtime deps), so it stays
 // inside this script's "lightweight standalone" budget.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
+// P1-9: bounded stdin. Also import-free, so it stays inside the "lightweight standalone"
+// budget this script's header claims.
+import { readHookStdin } from '../lib/hook-stdin.mjs';
 
 // CLAUDE_MEM_DIR mirrors pre-tool-recall.js — one env var sandboxes everything.
 const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
@@ -32,9 +35,10 @@ try {
   // Skip if recursive hook
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) process.exit(0);
 
-  // Read stdin
-  let input = '';
-  for await (const chunk of process.stdin) input += chunk;
+  // Read stdin, bounded (P1-9). This used to be an unbounded `for await` accumulate: no
+  // cap, no timeout, the only limit being the host's own fail-open — which looks exactly
+  // like the hook having nothing to say.
+  const { text: input } = await readHookStdin();
 
   // Parse event
   let skillName;

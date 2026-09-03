@@ -5,6 +5,7 @@
 
 import { ensureDb, DB_DIR, REGISTRY_DB_PATH } from '../schema.mjs';
 import { relaxFtsQueryToOr, truncate, typeIcon, inferProject, OBS_BM25, notLowSignalTitleClause, stripPrivate, neutralizeContextDelimiters, MAX_UPS_PROMPT_BYTES } from '../utils.mjs';
+import { readHookStdin } from '../lib/hook-stdin.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
 import { fileMatchClause, fileMatchParams, basenameAnySep } from '../lib/file-edge-match.mjs';
 import { cjkPrecisionOk } from '../nlp.mjs';
@@ -482,28 +483,19 @@ function searchRecent(db, project, limit) {
 
 // ─── stdin Reader ───────────────────────────────────────────────────────────
 
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    const timeout = setTimeout(() => {
-      process.stdin.destroy();
-      reject(new Error('timeout'));
-    }, 2000);
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => {
-      data += chunk;
-      // Cap the prompt (#9494 huge-prompt guard) — deliberately tighter than the
-      // 256KB full-payload tier; both tiers live in utils.mjs (G19).
-      if (data.length > MAX_UPS_PROMPT_BYTES) {
-        process.stdin.destroy();
-        clearTimeout(timeout);
-        resolve(data.slice(0, MAX_UPS_PROMPT_BYTES));
-      }
-    });
-    process.stdin.on('end', () => { clearTimeout(timeout); resolve(data); });
-    process.stdin.on('error', err => { clearTimeout(timeout); reject(err); });
-    process.stdin.resume();
+// P1-9: shared mechanism (lib/hook-stdin.mjs), this entry point's own caliber. 2 s and
+// MAX_UPS_PROMPT_BYTES (64 KB, #9494's huge-prompt guard) are deliberately tighter than the
+// 256 KB full-payload tier hook.mjs uses — both tiers live in utils.mjs (G19) — because the
+// payload here is a user PROMPT, not a tool response. `rejectOnTimeout` matches the previous
+// behaviour: the caller treats a timeout as "skip the injection".
+// Returns a bare string, as this script's callers expect.
+async function readStdin() {
+  const { text } = await readHookStdin({
+    timeoutMs: 2000,
+    maxBytes: MAX_UPS_PROMPT_BYTES,
+    rejectOnTimeout: true,
   });
+  return text;
 }
 
 // ─── Format Output ──────────────────────────────────────────────────────────
