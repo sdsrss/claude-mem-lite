@@ -163,10 +163,41 @@ describe('the WIRING: hook.mjs must use the flag, and must run arm B FIRST', () 
     expect(armB, 'arm B must precede the delivered search').toBeLessThan(delivered);
   });
 
+  /**
+   * The text of the `const meterCoerced = …;` statement.
+   *
+   * Anchored on the ASSIGNMENT rather than on one spelling of its condition. The first
+   * version of this guard matched the literal `pathAMeterEnabled() && pathAInjectedIds…`,
+   * and P1-8 broke it by making patha-exclude-meter a lazy import — which reorders the
+   * conjuncts (the id check has to come first, to decide whether to load the module at
+   * all) while keeping the property exactly. A guard that fails on a semantics-preserving
+   * edit trains people to rewrite the guard, which is how the property gets lost.
+   */
+  function meterCoercedAssignment(text) {
+    const start = text.indexOf('const meterCoerced =');
+    if (start === -1) return '';
+    const end = text.indexOf(';', start);
+    return end === -1 ? '' : text.slice(start, end + 1);
+  }
+
   it('gates the counterfactual on the metrics flag, not on the marker alone', () => {
     // The gate the review deleted with a fully green suite. It is what keeps a second
     // search and a second lesson selection off an install that never asked to measure.
-    expect(src).toMatch(/pathAMeterEnabled\(\)\s*&&\s*pathAInjectedIds\.length\s*>\s*0/);
+    // `meterCoerced` is the variable every downstream arm-B step is gated on, so its
+    // assignment is the whole property: the flag must appear in it, and it must be able
+    // to produce null.
+    const stmt = meterCoercedAssignment(src);
+    expect(stmt, 'meterCoerced assignment not found — the anchor moved').not.toBe('');
+    expect(stmt).toMatch(/pathAMeterEnabled\(\)/);
+    expect(stmt).toMatch(/:\s*null/);
+  });
+
+  it('that gate check can say NO', () => {
+    // Both arms. Without them the assertions above pass on any text that happens to
+    // contain the two tokens somewhere in the statement.
+    expect(meterCoercedAssignment('const meterCoerced = [...coerceMarkerIds(ids)];'))
+      .not.toMatch(/pathAMeterEnabled\(\)/);
+    expect(meterCoercedAssignment('const x = 1;')).toBe('');
   });
 
   it('adds the coerced ids to the Key Context exclude rather than replacing it', () => {

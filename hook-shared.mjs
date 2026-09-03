@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, readdirSync, statSync, unlinkSync, chmodSync } from 'fs';
 import { inferProject, debugCatch } from './utils.mjs';
+import { CITE_RECALL_FILE_PREFIX } from './lib/cite-recall-path.mjs';
 import { ensureDbWithWalRecovery, DB_DIR } from './schema.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
@@ -104,18 +105,50 @@ export const ORPHAN_EPISODE_AGE_MS = 60 * 60 * 1000;
 // stale to any current episode) while leaving every active session's file untouched.
 export const ORPHAN_READS_AGE_MS = 24 * 60 * 60 * 1000;
 
-// Sweep stale `ep-flush-*` / `pending-*` (older than `ageMs`, default 1h) and
-// `reads-*.txt` (older than `readsAgeMs`, default 24h) files in `runtimeDir` by
-// mtime. Returns the number of files removed. fs-only — no DB / no network. Used by
+// `ep-<project>.json` — the LIVE episode buffer, one file per project — had no reclamation
+// path at all: it is excluded from both marker-GC lists below (correctly: it holds unflushed
+// observations, not cache) and `sweepOrphanEpisodeFiles` only ever matched `ep-flush-`.
+// A real install on 2026-09-02 held four of them for projects deleted months earlier, the
+// oldest 53 days (`ep-tmp--loop-testing-e2e.*.json`, 07-11).
+//
+// Leaving them is not neutral. `readEpisode` has no staleness gate, so `handleSessionStart`
+// unconditionally flushes whatever it finds (hook.mjs "Flush any leftover episode buffer") —
+// revisiting such a project injects months-old tool activity into today's memory stamped
+// with today's date. The stale buffer is not preserved data, it is data that will be
+// mis-dated the moment anyone touches the project again.
+//
+// 7 days, and the argument is that no LEGITIMATE state needs a buffer to live even one day:
+// `EPISODE_TIME_GAP_MS` is 5 min and `SESSION_EXPIRY_MS` is 12 h, so a buffer untouched for
+// 7 days outlived its owning session by an order of magnitude. The margin over 12 h is
+// deliberate slack for a laptop suspended across a long weekend, not a second threshold with
+// its own meaning. Considered and rejected: flushing on sweep instead of deleting — it would
+// re-date the content exactly the way the revisit path does, i.e. commit the defect on
+// purpose rather than by omission.
+//
+// Module-private, unlike the two thresholds above it. Those are pre-existing knip baseline
+// entries (nothing imports them either); adding a third would raise the baseline by one for
+// a constant with no consumer outside this file, which is the v3.70.0 precedent (#9675) —
+// export it the day something needs it. `bufferAgeMs` is a parameter, so a test can pin the
+// threshold without an import.
+const STALE_EPISODE_BUFFER_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Sweep stale `ep-flush-*` / `pending-*` (older than `ageMs`, default 1h),
+// `reads-*.txt` (older than `readsAgeMs`, default 24h) and abandoned per-project episode
+// buffers `ep-<project>.json` (older than `bufferAgeMs`, default 7d) in `runtimeDir` by
+// mtime. `onSweep(name, kind)` is called before each unlink so a caller can log the one
+// deletion that discards content rather than residue ('buffer'); it is a callback rather
+// than a debugLog here because this module is imported by every hook entry point and stays
+// dependency-free. Returns the number of files removed. fs-only — no DB / no network. Used by
 // handleSessionStart auto-maintain to prevent the doctor "Stale temp files" warning
 // from accumulating across crashes; equivalent to the manual path in
 // `node install.mjs cleanup` but age-gated so concurrent in-flight workers / active
 // read sessions are never raced.
-export function sweepOrphanEpisodeFiles(runtimeDir, { ageMs = ORPHAN_EPISODE_AGE_MS, readsAgeMs = ORPHAN_READS_AGE_MS, now = Date.now() } = {}) {
+export function sweepOrphanEpisodeFiles(runtimeDir, { ageMs = ORPHAN_EPISODE_AGE_MS, readsAgeMs = ORPHAN_READS_AGE_MS, bufferAgeMs = STALE_EPISODE_BUFFER_AGE_MS, now = Date.now(), onSweep = () => {} } = {}) {
   let entries;
   try { entries = readdirSync(runtimeDir); } catch { return 0; }
   const cutoff = now - ageMs;
   const readsCutoff = now - readsAgeMs;
+  const bufferCutoff = now - bufferAgeMs;
   let count = 0;
   for (const f of entries) {
     // Crash residue: this runtime dir writes four families of temp name, each the middle
@@ -139,15 +172,22 @@ export function sweepOrphanEpisodeFiles(runtimeDir, { ageMs = ORPHAN_EPISODE_AGE
     const isCrashResidue = /\.(claim|collect|trim|tmp)-[^.]*$/.test(f);
     const isEpisode = f.startsWith('ep-flush-') || f.startsWith('pending-');
     const isReads = f.startsWith('reads-') && f.endsWith('.txt');
-    if (!isCrashResidue && !isEpisode && !isReads) continue;
+    // The live per-project buffer, on its own 7-day cutoff. `ep-flush-*` is also `ep-`-
+    // prefixed AND also ends in `.json`, so the exclusion is load-bearing, not defensive:
+    // without it a queued flush file would jump from the 1h cutoff to the 7d one.
+    const isStaleBuffer = f.startsWith('ep-') && !f.startsWith('ep-flush-') && f.endsWith('.json');
+    if (!isCrashResidue && !isEpisode && !isReads && !isStaleBuffer) continue;
     const full = join(runtimeDir, f);
     try {
       // Residue takes the short cutoff and a live tracker takes the 24h one, with no
       // tie-break needed: residue always APPENDS its suffix, so it never ends in `.txt`
       // and `isReads` is already false for it. (A `&& !isCrashResidue` tie-break was
       // written here first and no mutation could kill it — it was guarding a state the
-      // two predicates cannot both be in.)
-      if (statSync(full).mtimeMs < (isReads ? readsCutoff : cutoff)) {
+      // two predicates cannot both be in.) `isStaleBuffer` is in the same position: a
+      // residue name ends in `.tmp-<pid>`, never `.json`.
+      const fileCutoff = isReads ? readsCutoff : isStaleBuffer ? bufferCutoff : cutoff;
+      if (statSync(full).mtimeMs < fileCutoff) {
+        try { onSweep(f, isStaleBuffer ? 'buffer' : isReads ? 'reads' : isCrashResidue ? 'residue' : 'episode'); } catch { /* logging must never block the sweep */ }
         unlinkSync(full);
         count++;
       }
@@ -177,15 +217,17 @@ export const STALE_PROJECT_MARKER_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // Regenerated on demand; safe to lose at any time.
 export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
   'session-',                 // project → memory-session-id pointer
-  'cite-recall-',             // last session's cite-recall snapshot (nudge input)
+  CITE_RECALL_FILE_PREFIX,    // last session's cite-recall snapshot (nudge input)
   '.skill-cooldown-',         // suggestion throttle timestamp
   '.skill-reco-cooldown-',    // recommendation throttle timestamp
 ]);
 
 // Records of a completed side effect — never age out. `ep-`/`ep-flush-`/
-// `pending-`/`reads-` are absent from BOTH lists on purpose: the first holds
-// unflushed observations (data, not cache) and the rest already belong to
-// sweepOrphanEpisodeFiles on tighter cutoffs.
+// `pending-`/`reads-` are absent from BOTH lists on purpose: they all belong to
+// sweepOrphanEpisodeFiles, on three cutoffs of their own (1h residue / 24h reads /
+// 7d abandoned buffer). `ep-<project>.json` was the one with no cutoff at all until
+// audit P1-12 — it is still not marker-GC-able here, because 30 days of unflushed
+// observations is far past the point where flushing them would mis-date them.
 export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   '.auto-adopt-',
   '.deferred-block-migrated-',

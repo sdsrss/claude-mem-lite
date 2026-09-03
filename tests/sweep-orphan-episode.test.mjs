@@ -1,6 +1,7 @@
 // Tests for sweepOrphanEpisodeFiles — the SessionStart auto-maintain helper
-// that removes crashed `ep-flush-*` / `pending-*` runtime files (1h floor) and
-// abandoned `reads-*.txt` Read trackers (24h floor). Locks the age-gated
+// that removes crashed `ep-flush-*` / `pending-*` runtime files (1h floor),
+// abandoned `reads-*.txt` Read trackers (24h floor) and abandoned per-project
+// episode buffers `ep-<project>.json` (7d floor). Locks the age-gated
 // contract: in-flight episode files AND active read sessions (mtime newer than
 // their respective cutoff) are NEVER touched, only orphans are reaped.
 
@@ -137,6 +138,60 @@ describe('sweepOrphanEpisodeFiles', () => {
       expect(sweepOrphanEpisodeFiles(dir)).toBe(0);
       // …and is still swept once it really is abandoned.
       expect(sweepOrphanEpisodeFiles(dir, { readsAgeMs: 3600 * 1000 })).toBe(1);
+    });
+  });
+
+  // Audit 2026-09-02 P1-12. `ep-<project>.json` is the live per-project episode buffer and
+  // had NO reclamation path: not in either marker-GC list, and this sweep only ever matched
+  // `ep-flush-`. A real install held four of them for deleted projects, the oldest 53 days.
+  // Leaving them is not neutral — readEpisode has no staleness gate, so handleSessionStart
+  // flushes whatever it finds, stamping months-old activity with today's date on revisit.
+  describe('abandoned per-project episode buffers (7d)', () => {
+    it('sweeps a buffer past 7d', () => {
+      writeWithMtime('ep-tmp--loop-testing-e2e.ykdcfH.json', 53 * 24 * 3600 * 1000);
+      expect(sweepOrphanEpisodeFiles(dir)).toBe(1);
+      expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it('leaves a buffer inside 7d alone, including one older than every OTHER cutoff', () => {
+      // 48h: past the 1h residue cutoff AND past the 24h reads cutoff. If the buffer were
+      // clocked by either of those — the mistake a three-way cutoff invites — this is the
+      // case that catches it, and a live project idle over a weekend is the real victim.
+      writeWithMtime('ep-projects--mem.json', 48 * 3600 * 1000);
+      expect(sweepOrphanEpisodeFiles(dir)).toBe(0);
+      expect(readdirSync(dir)).toEqual(['ep-projects--mem.json']);
+    });
+
+    it('does NOT promote a queued ep-flush-* file to the 7d clock', () => {
+      // `ep-flush-<ts>-<uuid>.json` is both `ep-`-prefixed and `.json`-suffixed, so the
+      // exclusion in `isStaleBuffer` decides which of two cutoffs it gets. Without it this
+      // 2h-old flush file — a crashed worker's leftovers — would survive for a week.
+      writeWithMtime('ep-flush-1699999999-abcd1234.json', 2 * 3600 * 1000);
+      expect(sweepOrphanEpisodeFiles(dir)).toBe(1);
+    });
+
+    it('reports the buffer to onSweep as a distinct kind, before it is unlinked', () => {
+      // The one deletion here that discards content rather than residue must be nameable by
+      // the caller; everything else is re-derivable. Asserting the file still exists at
+      // callback time pins the ordering the log line depends on.
+      writeWithMtime('ep-dead-project.json', 8 * 24 * 3600 * 1000);
+      writeWithMtime('ep-flush-old.json', 2 * 3600 * 1000);
+      const seen = [];
+      sweepOrphanEpisodeFiles(dir, { onSweep: (name, kind) => seen.push([name, kind, existsSync(join(dir, name))]) });
+      expect(seen).toContainEqual(['ep-dead-project.json', 'buffer', true]);
+      expect(seen).toContainEqual(['ep-flush-old.json', 'episode', true]);
+    });
+
+    it('a throwing onSweep does not abort the sweep', () => {
+      writeWithMtime('ep-dead-project.json', 8 * 24 * 3600 * 1000);
+      expect(sweepOrphanEpisodeFiles(dir, { onSweep: () => { throw new Error('logger down'); } })).toBe(1);
+      expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it('bufferAgeMs is honored so the threshold is not baked into the caller', () => {
+      writeWithMtime('ep-dead-project.json', 2 * 24 * 3600 * 1000);
+      expect(sweepOrphanEpisodeFiles(dir)).toBe(0);
+      expect(sweepOrphanEpisodeFiles(dir, { bufferAgeMs: 24 * 3600 * 1000 })).toBe(1);
     });
   });
 

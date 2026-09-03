@@ -1,5 +1,13 @@
-// D#207 — a repo-source path must be built with join(), never with
-// `new URL('../X.mjs', import.meta.url)`.
+// Two rules, both about the same thing: ways of NAMING a repo module that make knip stop
+// reporting that module's unused exports. Each is a silent loss — knip's count goes DOWN,
+// which reads like an improvement.
+//
+//   1. D#207 — a repo-source path must be built with join(), never with
+//      `new URL('../X.mjs', import.meta.url)`.
+//   2. P1-8 — a dynamic import of a repo module must DESTRUCTURE its named bindings, never
+//      member-access the awaited namespace.
+//
+// ─── Rule 1 ───────────────────────────────────────────────────────────────────────
 //
 // WHY THIS IS A GUARD AND NOT A STYLE PREFERENCE. Naming a module that way anywhere in
 // the analysed tree makes knip drop that module out of its unused-export report
@@ -146,5 +154,67 @@ describe('D#207 — repo-source paths use join(), not new URL(module)', () => {
     // No allowlist, deliberately. Every site in the tree was converted in D#207, and an
     // exception here would be indistinguishable from the blind spot coming back.
     expect(findOffenders(files)).toEqual([]);
+  });
+});
+
+// ─── Rule 2 ───────────────────────────────────────────────────────────────────────
+//
+// P1-8 — a dynamic import of a REPO module must destructure its named bindings:
+//
+//   ok:   const { fn } = await import('./x.mjs'); fn();
+//   not:  (await import('./x.mjs')).fn();
+//
+// Measured, both directions, 2026-09-03. P1-8 converted six of hook.mjs's static imports
+// to `await import()`. Written as `(await import('./hook-optimize.mjs')).handleLLMOptimize()`,
+// knip's unused-export count fell 53 -> 49 and the four names that LEFT the list were all
+// exports of hook-optimize.mjs (`executeNormalize`, `executeClusterMerge`,
+// `clusterForCompression`, `executeSmartCompress`) — still dead, now invisible, because
+// knip cannot resolve a member access on the namespace and treats the whole module as
+// consumed. Rewriting the same six sites with destructuring put the count back to 53 with
+// a byte-identical name set. Same class as rule 1, opposite sign: rule 1 hides a module by
+// naming its PATH oddly, rule 2 by using its NAMESPACE oddly.
+//
+// SCOPE: relative specifiers only. `(await import('better-sqlite3')).default` is the
+// idiom at five sites here and is not in scope — an external package has no exports for
+// knip to report, and `.default` has no named form to destructure to.
+const DYNAMIC_NAMESPACE_ACCESS = /\(\s*await\s+import\(\s*(['"`])\.{1,2}\/[^'"`]*\1\s*\)\s*\)\s*\./g;
+
+describe('P1-8 — a dynamic import of a repo module destructures its bindings', () => {
+  const files = walk(REPO);
+
+  it('the detector fires on the relative form and not on a bare package', () => {
+    // Assembled so these fixtures do not trip the tree scan below — the same reason rule
+    // 1 assembles its own, and the reason neither rule needs a file exemption.
+    const I = 'await import';
+    const bad = [
+      `(${I}('./hook-optimize.mjs')).handleLLMOptimize();`,
+      `await (${I}('../lib/x.mjs')).run();`,
+      `const v = ( ${I}( "./y.js" ) ) .thing;`,
+    ];
+    const ok = [
+      `const Database = (${I}('better-sqlite3')).default;`,
+      `const { handleLLMOptimize } = ${I}('./hook-optimize.mjs');`,
+      `const ns = ${I}('./x.mjs');`,
+    ];
+    const fires = (s) => { DYNAMIC_NAMESPACE_ACCESS.lastIndex = 0; return DYNAMIC_NAMESPACE_ACCESS.test(s); };
+    for (const s of bad) expect(fires(s), `should flag: ${s}`).toBe(true);
+    for (const s of ok) expect(fires(s), `should NOT flag: ${s}`).toBe(false);
+  });
+
+  it('no source file member-accesses an awaited repo import', () => {
+    const hits = [];
+    for (const f of files) {
+      let src;
+      try { src = readFileSync(f, 'utf8'); } catch { continue; }
+      if (!src.includes('await import')) continue;
+      const scannable = src.split('\n')
+        .map((line) => (/^\s*(?:\/\/|\*|\/\*)/.test(line) ? ' '.repeat(line.length) : line))
+        .join('\n');
+      DYNAMIC_NAMESPACE_ACCESS.lastIndex = 0;
+      for (const m of scannable.matchAll(DYNAMIC_NAMESPACE_ACCESS)) {
+        hits.push(`${relative(REPO, f)}:${scannable.slice(0, m.index).split('\n').length}`);
+      }
+    }
+    expect(hits).toEqual([]);
   });
 });

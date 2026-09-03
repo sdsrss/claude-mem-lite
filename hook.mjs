@@ -80,20 +80,15 @@ import { searchRelevantMemories, formatMemoryLine, selectImperativeLesson } from
 import { searchInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
 import { upsFtsQuery } from './lib/ups-query.mjs';
 import { formatTaskImperative } from './lib/task-imperative.mjs';
-import { recordSkillAdoption, gcOldShadowShards } from './registry-recommend.mjs';
 import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
-import { injectedIdsFileName, keyContextIdsFileName } from './lib/injected-ids.mjs';
-import { pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } from './lib/patha-exclude-meter.mjs';
+import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from './lib/injected-ids.mjs';
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import { buildAndSaveHandoff, detectContinuationIntent, renderHandoffInjection, pickHandoffToInject, extractUnfinishedSummary } from './hook-handoff.mjs';
-import { checkForUpdate, getCachedUpdateBanner, isUpdateCheckDue } from './hook-update.mjs';
-import { handleLLMOptimize } from './hook-optimize.mjs';
-import { silentAutoAdopt } from './adopt-cli.mjs';
-import { emitV270UpgradeBanner, hasPreV270Data } from './lib/upgrade-banner.mjs';
 import { loadCiteBackForEpisode, extractCiteBackSignals, buildUnsavedBugfixHint, countUnsavedBugfixShape, buildCiteRecallNudge as libBuildCiteRecallNudge, nextCiteLowStreak } from './lib/cite-back-hint.mjs';
+import { citeRecallPathFor } from './lib/cite-recall-path.mjs';
 import { detectUnpersistedDecision } from './lib/persist-reminder.mjs';
 // plugin-cache-guard.mjs loaded dynamically — pre-2.31.2 installs that auto-upgraded
 // from an older hook-update.mjs SOURCE_FILES (which did not list this module) would
@@ -105,6 +100,31 @@ async function loadCacheGuard() {
   catch { _cacheGuardCache = {}; }
   return _cacheGuardCache;
 }
+// Audit 2026-09-02 P1-8. `hook.mjs` is ONE entry point for seven events, so every static
+// import is paid by every event — PostToolUse, the highest-frequency one, was loading 85
+// modules (1.37 MB) to use a handful. The six modules below are loaded inside the handler
+// that needs them instead: registry-recommend, patha-exclude-meter, hook-update,
+// hook-optimize, adopt-cli, upgrade-banner. Measured marginal cost of the four largest,
+// same process: hook-update 9.4 ms, registry-recommend 5.1, hook-optimize 5.9, the rest
+// 0.5-2.4 each.
+//
+// A failing dynamic import lands in the dispatcher's tail catch -> recordHookError, the
+// same place a failing static import would have landed the whole process; each site keeps
+// whatever local try/catch it already had, so a missing module degrades exactly one
+// feature rather than the event.
+//
+// Three named by the audit are deliberately NOT converted, because the reason they are
+// loaded is not that nobody looked:
+//   * hook-llm.mjs (+16.3 ms, the single largest) — `flushEpisode` is SYNCHRONOUS and on
+//     the PostToolUse path, and it calls `saveEpisodeImmediate` from that module. Lazy
+//     loading needs either an async rewrite of the flush path or extracting the function,
+//     and extraction does not pay: `saveEpisodeImmediate` reaches `saveObservation`, which
+//     pulls tfidf / observation-write / activity / maintain-core anyway — only
+//     haiku-client would actually stop loading.
+//   * lib/db-backup.mjs and lib/compress-core.mjs (<=2.4 ms each) — their call sites sit
+//     in `runSessionStartAutoMaintain` and `handleAutoCompress`, both synchronous. Turning
+//     two functions and their callers async across a background-worker path costs more
+//     risk than the milliseconds are worth.
 import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
 import { getVocabulary } from './tfidf.mjs';
 
@@ -523,7 +543,12 @@ async function handlePostToolUse() {
     const ti = typeof tool_input === 'string' ? tryParseJson(tool_input) : (tool_input || {});
     // hookData.session_id (CC UUID) pairs this adoption to the would-be reco from the
     // UserPromptSubmit hook earlier in the same session (matched precision, B1).
-    try { recordSkillAdoption('Skill', ti, inferProject(), hookData.session_id); } catch {}
+    // Lazy: only a `Skill` tool call needs this module, which is a small fraction of
+    // PostToolUse fires.
+    try {
+      const { recordSkillAdoption } = await import('./registry-recommend.mjs');
+      recordSkillAdoption('Skill', ti, inferProject(), hookData.session_id);
+    } catch { /* telemetry only — never blocks capture */ }
   }
 
   const resp = normalizeToolResponse(tool_response);
@@ -1160,7 +1185,7 @@ async function handleStop() {
             // alongside cite-recall. Same scan target (transcript already in OS
             // cache); same persistence file; one extra line in buildCiteRecallNudge.
             const bugfixStats = countUnsavedBugfixShape(transcriptPath);
-            const dest = join(RUNTIME_DIR, `cite-recall-${project.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 64)}.json`);
+            const dest = citeRecallPathFor(RUNTIME_DIR, project);
             // Carry the consecutive-low-cite streak forward so the SessionStart
             // nag can self-silence after the project has ignored it N times.
             let priorStreak = 0;
@@ -1526,8 +1551,18 @@ function runSessionStartAutoMaintain(db, project) {
       // the file behind, and the doctor "Stale temp files" warning then
       // accumulates indefinitely. fs-only; runs inside the 24h gate so it
       // shares cadence with the rest of auto-maintain.
+      //
+      // Since audit P1-12 this also reclaims abandoned per-project episode buffers at 7d.
+      // That one is named individually in the log: every other family it sweeps is residue
+      // or a re-derivable tracker, while `ep-<project>.json` holds unflushed observations —
+      // and the alternative to deleting it is worse (SessionStart flushes whatever it finds
+      // with no staleness gate, so a revisit stamps months-old activity with today's date).
       try {
-        const swept = sweepOrphanEpisodeFiles(RUNTIME_DIR);
+        const swept = sweepOrphanEpisodeFiles(RUNTIME_DIR, {
+          onSweep: (name, kind) => {
+            if (kind === 'buffer') debugLog('DEBUG', 'auto-maintain', `discarding abandoned episode buffer ${name} (>7d; would otherwise flush mis-dated on revisit)`);
+          },
+        });
         if (swept > 0) debugLog('DEBUG', 'auto-maintain', `swept ${swept} orphan ep-flush/pending file(s)`);
       } catch (e) { debugCatch(e, 'auto-maintain-orphan-sweep'); }
 
@@ -1798,7 +1833,7 @@ async function handleSessionStart() {
   // SessionStart cadence, 30d gate, named family list (hook-shared.mjs).
   try { sweepStaleProjectMarkers(RUNTIME_DIR); } catch { /* best-effort */ }
   // Bound the shadow-recommendation log (daily JSONL shards, no GC at write time).
-  try { gcOldShadowShards(); } catch { /* best-effort, never blocks SessionStart */ }
+  try { const { gcOldShadowShards } = await import('./registry-recommend.mjs'); gcOldShadowShards(); } catch { /* best-effort, never blocks SessionStart */ }
   // Same for the opt-in metrics sink (RUNTIME_DIR's parent is DB_DIR). Runs even when
   // metrics are disabled, so shards left by a since-toggled-off run still get pruned.
   try { gcOldMetricShards(join(RUNTIME_DIR, '..')); } catch { /* best-effort */ }
@@ -1842,6 +1877,7 @@ async function handleSessionStart() {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
       const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+      const { silentAutoAdopt } = await import('./adopt-cli.mjs');
       const r = silentAutoAdopt({ cwd, markerDir: RUNTIME_DIR, markerKey: project });
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
@@ -1949,6 +1985,7 @@ async function handleSessionStart() {
     // the single envelope; the spawn stays a side effect and is fired below.
     let updateCheckDue = false;
     try {
+      const { getCachedUpdateBanner, isUpdateCheckDue } = await import('./hook-update.mjs');
       const banner = getCachedUpdateBanner();
       // The human channel, not additionalContext: "vX available" is a notice for the
       // USER. Folding it into additionalContext under suppressOutput:true kept its
@@ -1998,6 +2035,7 @@ async function handleSessionStart() {
       // "Any observations at all" still misfired for someone who installed today
       // and saved a few memories before their first SessionStart — age is what
       // actually identifies an upgrader (see lib/upgrade-banner.mjs).
+      const { emitV270UpgradeBanner, hasPreV270Data } = await import('./lib/upgrade-banner.mjs');
       emitV270UpgradeBanner({
         project,
         runtimeDir: RUNTIME_DIR,
@@ -2175,13 +2213,16 @@ async function handleUserPrompt() {
         // project-keyed name), so a concurrent session's write can no longer
         // replace this session's payload between the UPS write and this read.
         const injectedFile = join(RUNTIME_DIR, injectedIdsFileName(project, ccSessionId));
-        const raw = readFileSync(injectedFile, 'utf8');
-        const { ids, ts, session } = JSON.parse(raw);
-        // Only use if written within last 10 seconds (same prompt cycle) AND by this
-        // CC session (M-6 payload gate, still load-bearing for legacy files).
-        // Legacy payloads without `session` keep the old time-window-only behavior.
-        if (ts && Date.now() - ts < 10000 && Array.isArray(ids)
-            && !(session && ccSessionId && session !== ccSessionId)) {
+        // The freshness + same-session gate is lib/injected-ids.mjs's (audit 2026-09-02
+        // P1-2); this was the third hand-typed copy of it. THE 10 s WINDOW STAYS HERE and
+        // is passed in: the two writers gate on DEDUP_STALE_MS (5 min) and this reader on
+        // 10 s ("same prompt cycle"), and that disagreement is a real open question
+        // (P1-2's second half — the 10 s window still accepts the PREVIOUS prompt's
+        // marker), not a copy-paste slip to be normalised away by the consolidation.
+        // Legacy payloads without `session` keep the old time-window-only behaviour.
+        const { ids, fresh } = readInjectedMarker(injectedFile,
+          { sessionId: ccSessionId, maxAgeMs: 10000 });
+        if (fresh) {
           // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
           //
           // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
@@ -2258,7 +2299,16 @@ async function handleUserPrompt() {
       // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
       // repaired system would not have made into arm B's exclude, so on any prompt where
       // the pick changed, the delta described a system that does not exist.
-      const meterCoerced = (pathAMeterEnabled() && pathAInjectedIds.length > 0)
+      // Lazy on "the marker carried ids", NOT on the metrics env. Gating the import on
+      // `CLAUDE_MEM_METRICS === '1'` would read cheaper still, and would put a second copy
+      // of `pathAMeterEnabled`'s own predicate here — the twin shape this meter's tests
+      // exist to pin. `pathAMeterEnabled()` stays the only place that predicate lives; the
+      // module still stops loading on every OTHER event, which is what P1-8 is about.
+      let pathAMeterEnabled, coerceMarkerIds, recordPathAExclude;
+      if (pathAInjectedIds.length > 0) {
+        ({ pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } = await import('./lib/patha-exclude-meter.mjs'));
+      }
+      const meterCoerced = (pathAMeterEnabled && pathAMeterEnabled())
         ? [...coerceMarkerIds(pathAInjectedIds)]
         : null;
       let meterArmB = null;
@@ -2493,7 +2543,7 @@ try {
     case 'auto-compress':    handleAutoCompress(); break;
     case 'enrich-save':      await handleEnrichSave(process.argv[3]); break;
     case 'auto-maintain':    handleAutoMaintain(process.argv[3]); break;
-    case 'llm-optimize':   await handleLLMOptimize(); break;
+    case 'llm-optimize':   { const { handleLLMOptimize } = await import('./hook-optimize.mjs'); await handleLLMOptimize(); break; }
     // Detached update refresh spawned by handleSessionStart (audit P3d) — does the
     // GitHub fetch off the SessionStart critical path, writing update-state.json so
     // the NEXT session's cached banner is fresh.
@@ -2507,7 +2557,7 @@ try {
     // self-installer back on in the same release that resurrects the worker. The
     // module default and the installer's own guards are unchanged — install.mjs
     // still passes allowInstall:true for the explicit, user-invoked update.
-    case 'update-check':     await checkForUpdate({ allowInstall: false }); break;
+    case 'update-check':     { const { checkForUpdate } = await import('./hook-update.mjs'); await checkForUpdate({ allowInstall: false }); break; }
   }
 } catch (err) {
   // Log fatal errors (ungated) with structured format. ERR_DLOPEN_FAILED (an

@@ -63,6 +63,7 @@ export const SOURCE_FILES = [
   'lib/cite-back-hint.mjs',
   // The one definition of the pre-recall cooldown path — shared by its writer
   // (scripts/pre-tool-recall.js) and both readers (cite-back-hint, edge-attribution).
+  'lib/cite-recall-path.mjs',
   'lib/cooldown-path.mjs',
   // v2.85: stale test-fixture sweeper. Imported by install.mjs (cleanup) + cli.mjs.
   // Missing from manifest → tarball ships install.mjs that ERR_MODULE_NOT_FOUND on cleanup.
