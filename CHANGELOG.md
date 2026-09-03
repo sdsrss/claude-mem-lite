@@ -2,6 +2,104 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — five items from the 2026-09-02 audit backlog
+
+Covers audit items **P1-3, P1-12, P2-15(d), P2-12, P1-8** only. The working tree carries an
+earlier, separate batch from the same backlog that this section does not describe.
+
+### change: registry enrichment is path-confined on all four legs, not one (P1-3)
+
+Enrichment reads the file at `resources.local_path` and hands it to an LLM. The confinement
+check guarded **one** of the four code paths that do this — `mem_registry(action="enrich")` —
+while `enrich <name>`, `enrich --all` and `import --enrich` (on **both** faces) read whatever
+path the row held. Counting the legs is what showed the MCP side was itself half-guarded: a
+CLI-only patch would have left the shape alive on both.
+
+All four now funnel through `enrichResourceRow` in `lib/registry-core.mjs`, and `confineTo`
+is a **required** argument — a fifth leg written without it throws instead of silently
+running ungated, and `tests/registry-enrich-confinement.test.mjs` catches it statically
+first. **Escape hatch:** `CLAUDE_MEM_REGISTRY_CONFINE=off`. Only the exact value `off`
+disables the gate; a typo leaves it on.
+
+**This is a behaviour change on the CLI**: a resource registered outside `CLAUDE_MEM_DIR` now
+reports `Refused N: local_path outside the managed directory` instead of being read. Refusals
+are counted separately from failures, so `Done: N enriched, M failed` keeps its old meaning.
+
+### fix: abandoned per-project episode buffers are reclaimed at 7 days (P1-12)
+
+`runtime/ep-<project>.json` had no reclamation path at all — excluded from both marker-GC
+lists and never matched by `sweepOrphanEpisodeFiles`, which only ever looked at `ep-flush-`.
+Four of them were live on the machine that filed the audit, the oldest 53 days.
+
+Leaving them was not neutral: `readEpisode` has no staleness gate, so `handleSessionStart`
+flushes whatever it finds, and revisiting such a project injects months-old tool activity
+stamped with today's date. 7 days, because nothing legitimate keeps a buffer alive even one
+day (`EPISODE_TIME_GAP_MS` 5 min, `SESSION_EXPIRY_MS` 12 h); the margin is slack for a
+suspended laptop. The one deletion here that discards content rather than residue is named
+individually in the debug log.
+
+### fix: the cite-recall snapshot filename has one definition (P2-15(d))
+
+`handleStop` wrote `runtime/cite-recall-<project>.json` and `buildCiteRecallNudge` read it
+back, each deriving the name itself — the shape ARCH-2 collapsed for the cooldown file one
+round earlier. A writer and a reader disagreeing about a filename does not throw; the read
+misses, the catch swallows it, and the SessionStart nudge is silently gone. Now
+`lib/cite-recall-path.mjs`, with the marker GC matching the family by the same exported
+prefix.
+
+### perf: the transcript retention cap is derived from the heap instead of hardcoded (P2-12)
+
+Above the cap the parse memo is declined and every caller parses for itself, so `handleStop`
+— which asks `lib/transcript-scan.mjs` twelve questions — degraded to twelve full parses at
+exactly the size where one parse is already expensive.
+
+The audit proposed caching a projected subset of each entry. **Not taken:** the twelve
+scanners read arbitrary fields, so a projection is a hand-maintained field manifest, and a
+scanner reading a field nobody projected sees `undefined` and silently answers a narrower
+question. Measured before deciding: **112 transcripts on this machine, largest 4.9 MB, zero
+above the 24 MB cap** — the report's "50 MB ≈ 3.8 s" is an extrapolation from a 4.37 MB
+measurement, not an observation.
+
+Instead the cap is expressed against the thing it protects: a quarter of the process heap
+limit, ceilinged at 256 MB and floored at the old 24 MB constant. On an ordinary 64-bit Node
+that admits ~74 MB transcripts (one parse, not twelve); under a constrained limit it shrinks
+*below* 24 MB, which is the correct direction and is exactly what a fixed constant could not
+do. No caller sees a difference in what it gets.
+
+### perf: six modules load in the handler that needs them, not on every hook event (P1-8)
+
+`hook.mjs` is one entry point for seven events, so every static import is paid by every
+event. Six are now `await import()`ed inside their handler: `hook-update`, `hook-optimize`,
+`registry-recommend`, `adopt-cli`, `lib/upgrade-banner`, `lib/patha-exclude-meter`.
+**Deterministic result: hook.mjs's static import graph is 85 → 75 modules** (85 matches the
+audit's own count).
+
+**The cold-start saving is NOT established.** A back-to-back alternating wall-clock A/B read
+76 → 69 ms (min of 15 each), but a three-arm re-measurement the same minute put "eager
+hook-update only" at 68 ms against 70 ms for the shipped all-lazy build — the arms overlap
+and the direction reverses, so the effect is below this machine's noise. A heap-at-exit
+caliber read the wrong sign in all three runs. What is measured is the graph size; the
+milliseconds are not.
+
+Three modules the audit named are deliberately **not** converted: `hook-llm.mjs` (the largest
+at +16.3 ms) because the synchronous `flushEpisode` on the PostToolUse path calls
+`saveEpisodeImmediate` from it, and extracting that function does not pay — it reaches
+`saveObservation`, which pulls tfidf / observation-write / activity / maintain-core anyway;
+`lib/db-backup.mjs` and `lib/compress-core.mjs` (≤2.4 ms each) because their call sites sit
+in synchronous functions whose callers would all have to become async.
+
+### test: a dynamic import of a repo module must destructure its bindings
+
+Found while doing the above, and it is the same class as D#207. Written as
+`(await import('./hook-optimize.mjs')).handleLLMOptimize()`, knip's unused-export count fell
+**53 → 49** and the four names that LEFT the list were all exports of `hook-optimize.mjs` —
+still dead, now invisible, because knip cannot resolve a member access on the namespace and
+treats the whole module as consumed. **The count going down read like an improvement.**
+Rewriting the six sites with destructuring restored 53 with a byte-identical name set.
+`tests/no-url-module-paths.test.mjs` now carries both rules. Scope is relative specifiers
+only: `(await import('better-sqlite3')).default` is the idiom at five sites here and an
+external package has no exports for knip to report.
+
 ## v3.91.0 — the write-guard quoted in the last release only ever covered one of the two sinks
 
 **Upgrade note. Nothing in the shipped runtime changes.** The diff touches
