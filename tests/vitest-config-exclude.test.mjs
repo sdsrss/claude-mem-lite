@@ -20,6 +20,12 @@ describe('vitest test.exclude (D#168)', () => {
     expect(exclude, 'test.exclude must be configured at all').toBeInstanceOf(Array);
     expect(exclude).toContain('tmp/**');
     expect(exclude).toContain('.tmp/**');
+    // `tasks/**` joined them in the 2026-09-02 P2-1 round. Same known weakness as the two
+    // above and the same reason (a real probe means spawning vitest from inside vitest):
+    // this asserts the pattern is in the array the runner reads, not that collection
+    // honours it. The eslint half of that round was probe-verified instead, because eslint
+    // CAN be run as a subprocess — see the round's note in the audit report.
+    expect(exclude).toContain('tasks/**');
   });
 
   it('re-states every default it replaces — `exclude` overrides, it does not extend', () => {

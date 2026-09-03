@@ -21,7 +21,12 @@ export default defineConfig({
       '**/node_modules/**', '**/.git/**',
       '**/dist/**', '**/cypress/**', '**/.{idea,git,cache,output,temp}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
-      'tmp/**', '.tmp/**',
+      // `tasks/**` for the same reason as `tmp/**` (audit 2026-09-02 P2-1): it is
+      // gitignored scratch, and it currently holds `tasks/bak-3810/*.mjs` — whole-file
+      // BACKUP COPIES of shipped modules. A `*.test.mjs` parked there would be collected
+      // and run, and a backup copy of a module is exactly the thing that must never be
+      // mistaken for the module. D#168 closed this hole for `tmp/` and stopped there.
+      'tmp/**', '.tmp/**', 'tasks/**',
     ],
     // D#40: the CLI auto-escalation path is default-ON in production but must
     // never spawn a real `claude` subprocess during the suite. This forces

@@ -16,7 +16,11 @@
   },
   "scripts": {
     "lint": "eslint .",
+    "format": "prettier --write \"**/*.{mjs,js}\"",
+    "format:check": "prettier --check \"**/*.{mjs,js}\"",
     "dead-code": "knip",
+    "audit:metrics": "node scripts/audit-metrics.mjs --md",
+    "audit:baseline": "node scripts/audit-metrics.mjs --run-tests --md",
     "test": "vitest run",
     "test:smoke": "vitest run tests/smoke.test.mjs",
     "test:coverage": "vitest run --coverage",
@@ -65,6 +69,7 @@
     "lib/edge-attribution.mjs",
     "lib/file-edge-match.mjs",
     "lib/cite-back-hint.mjs",
+    "lib/cite-recall-path.mjs",
     "lib/cooldown-path.mjs",
     "lib/tmp-fixture-sweep.mjs",
     "lib/summary-extractor.mjs",
@@ -201,10 +206,12 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^4.0.18",
+    "acorn": "8.16.0",
     "eslint": "^10.0.0",
     "fast-check": "^4.5.3",
     "knip": "^6.12.1",
     "picomatch": "^4.0.4",
+    "prettier": "3.6.2",
     "vitest": "^4.0.18"
   }
 }

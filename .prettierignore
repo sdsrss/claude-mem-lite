@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+docs/
+tmp/
+.tmp/
+tasks/
+managed/
+experiment/
+benchmark/datasets/
+benchmark/results/
+package-lock.json
+CHANGELOG.md

@@ -50,6 +50,13 @@ export default [
   // from the unused-export report by definition. Un-ignoring cost five fixes.
   // Adding a directory here means deciding its code may rot unchecked.
   {
-    ignores: ['node_modules/**', 'coverage/**', 'benchmark/**', '.tmp/**', 'tmp/**', 'docs/**'],
+    // `tasks/**` is gitignored scratch (specs, plans, paused-task notes) and it holds
+    // `tasks/bak-3810/*.mjs` — whole-file BACKUP COPIES of shipped modules. Linting those
+    // reports findings against code that is not in the build, and "fixing" one edits a
+    // backup. The warning above still applies to every OTHER entry in this list: adding a
+    // directory here decides its code may rot unchecked. This one has no code to rot —
+    // nothing imports it and nothing ships it (audit 2026-09-02 P2-1; D#168 closed the
+    // same hole for `tmp/`).
+    ignores: ['node_modules/**', 'coverage/**', 'benchmark/**', '.tmp/**', 'tmp/**', 'docs/**', 'tasks/**'],
   },
 ];
