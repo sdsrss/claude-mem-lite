@@ -11,6 +11,7 @@ import {
   insertDeferred, listOpenWithOrdinal, dropDeferred,
   resolveDeferredIds, closeDeferredItems,
 } from '../lib/deferred-work.mjs';
+import { saveWithClosures } from '../lib/save-observation.mjs';
 
 describe('deferred_work schema (v31)', () => {
   it('creates deferred_work table with required columns', () => {
@@ -277,6 +278,39 @@ describe('deferred_work closure', () => {
     db.close();
   });
 
+  // The OTHER policy `saveWithClosures` holds, and the one nothing pinned until a mutation
+  // said so: the dedup short-circuit must come BEFORE the resolver. Removing that `return`
+  // left all 41 cases green while making a repeated save re-close an item that had already
+  // transitioned out of 'open' — i.e. throw at the user for replaying an idempotent command.
+  it('a DUPLICATE save does not re-resolve or re-close the deferred item (P1-6)', () => {
+    const db = createTestDb();
+    const project = 'dupproj';
+    const d = insertDeferred(db, { project, title: 'fix the thing', priority: 2 });
+    const params = {
+      content: 'Root cause was an off-by-one in the window bound; fixed and covered.',
+      title: 'off-by-one in the window bound',
+      type: 'bugfix',
+      importance: 2,
+      project,
+      files: [],
+    };
+
+    const first = saveWithClosures(db, params, { closesTokens: [`D#${d.id}`], project });
+    expect(first.result.kind).not.toBe('duplicate');
+    expect(first.closesIds).toEqual([d.id]);
+    expect(db.prepare('SELECT status FROM deferred_work WHERE id=?').get(d.id).status).toBe('done');
+
+    // Same content, inside saveObservation's 5-minute dedup window → duplicate. The item is
+    // now 'done', which allowStatuses does NOT accept, so a resolver call here THROWS. The
+    // short-circuit is what keeps the replay idempotent instead of erroring.
+    const second = saveWithClosures(db, params, { closesTokens: [`D#${d.id}`], project });
+    expect(second.result.kind, 'the second save must dedup, or this case proves nothing').toBe('duplicate');
+    expect(second.closesIds, 'a duplicate must not report closures it did not make').toBeNull();
+    expect(db.prepare('SELECT closed_by_obs_id FROM deferred_work WHERE id=?').get(d.id).closed_by_obs_id)
+      .toBe(first.result.id);
+    db.close();
+  });
+
   // CLASS-LEVEL SWEEP, not a per-face test. This repo's recurring defect is
   // "the copy I fixed was not the only copy" — a guard wired on the CLI face
   // while the MCP twin keeps the old policy passes every per-face test. So:
@@ -284,7 +318,12 @@ describe('deferred_work closure', () => {
   // the resolveDeferredIds() immediately above it to carry the close policy.
   // Reverting either face turns this red.
   it('SWEEP: every close-verb call site passes the dropped-allowing policy (D#195)', () => {
-    const faces = ['mem-cli.mjs', 'server.mjs'];
+    // `lib/save-observation.mjs` joined this list in audit P1-6, which collapsed the save
+    // transaction — including this policy — out of both faces into one body. The sweep has
+    // to follow the code: scoped to the two faces it found ZERO call sites and passed its
+    // own offenders check while failing only on the denominator, i.e. the guard would have
+    // gone quiet about the policy the moment the policy moved.
+    const faces = ['mem-cli.mjs', 'server.mjs', 'lib/save-observation.mjs'];
     const offenders = [];
     let sites = 0;
     for (const face of faces) {
@@ -302,9 +341,16 @@ describe('deferred_work closure', () => {
       }
     }
     expect(offenders).toEqual([]);
-    // Denominator guard: if a face stops calling closeDeferredItems the sweep
-    // above passes vacuously, which is the shape that lets a face go dark.
-    expect(sites).toBe(2);
+    // Denominator guard: with no call sites the sweep above passes vacuously, which is the
+    // shape that lets a face go dark. It was 2 (one per face) until P1-6 made it 1 (the
+    // shared body). Raise or lower this deliberately, never to make a red run green.
+    expect(sites).toBe(1);
+    // …and the reachability half, which the per-face count used to provide implicitly:
+    // one shared call site is only as good as the faces that reach it.
+    for (const face of ['mem-cli.mjs', 'server.mjs']) {
+      const src = readFileSync(join(REPO, face), 'utf8');
+      expect(src, `${face} must close deferred items through the shared body`).toMatch(/saveWithClosures\(/);
+    }
   });
 
   // Same sweep for the OTHER half of D#195. The CLI drop face has a behavioural

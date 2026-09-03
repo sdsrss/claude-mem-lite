@@ -48,7 +48,7 @@ import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegi
 import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichImportedResources, enrichNamedResource } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
-import { saveObservation, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
+import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -57,7 +57,7 @@ import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
   insertDeferred, listOpenWithOrdinal, dropDeferred, formatDropReasonHint,
-  resolveDeferredIds, closeDeferredItems,
+  resolveDeferredIds,
   getDeferredByIds, formatDeferredDetail,
   searchDeferredWork, formatDeferredSearchTrailer,
   formatDeferListRow, countStaleOpen, formatDeferStaleHint,
@@ -831,33 +831,23 @@ server.registerTool(
     if (args.project) args = { ...args, project: resolveProject(args.project) };
     const project = args.project || inferProject();
 
-    let closesIds = null;
-    let result;
+    let closesIds, result;
     try {
-      result = db.transaction(() => {
-        const r = saveObservation(db, {
-          // Size ceiling applied here rather than in lib/save-observation.mjs so the
-          // shared pipeline keeps its "caller validates" contract (see its header).
-          content: clampSaveText(args.content, SAVE_TEXT_LIMITS.content),
-          title: clampSaveText(args.title, SAVE_TEXT_LIMITS.title),
-          type: args.type || 'discovery',
-          importance: args.importance,
-          project,
-          files: args.files || [],
-          lesson_learned: clampSaveText(args.lesson_learned, SAVE_TEXT_LIMITS.lesson_learned),
-          supersedes: args.supersedes,
-        });
-        if (r.kind === 'duplicate') return r; // dedup short-circuits BEFORE resolver — replay is idempotent
-        // Resolve INSIDE tx + after dedup check so duplicate replays don't throw on
-        // already-closed items. Mirrors mem-cli.mjs cmdSave shape.
-        if (args.closes_deferred && args.closes_deferred.length > 0) {
-          // D#195: 'dropped' is closable by the close verb (kept in sync with
-          // mem-cli.mjs cmdSave — same policy, both faces).
-          closesIds = resolveDeferredIds(db, project, args.closes_deferred, { allowStatuses: ['open', 'dropped'] });
-          closeDeferredItems(db, closesIds, r.id);
-        }
-        return r;
-      })();
+      // The transaction body — dedup short-circuit BEFORE the resolver, and D#195's
+      // allowStatuses — is lib/save-observation.mjs's (audit 2026-09-02 P1-6). Both faces
+      // used to write it out and each carried a "kept in sync with the other" comment.
+      ({ result, closesIds } = saveWithClosures(db, {
+        // Size ceiling applied here rather than in lib/save-observation.mjs so the
+        // shared pipeline keeps its "caller validates" contract (see its header).
+        content: clampSaveText(args.content, SAVE_TEXT_LIMITS.content),
+        title: clampSaveText(args.title, SAVE_TEXT_LIMITS.title),
+        type: args.type || 'discovery',
+        importance: args.importance,
+        project,
+        files: args.files || [],
+        lesson_learned: clampSaveText(args.lesson_learned, SAVE_TEXT_LIMITS.lesson_learned),
+        supersedes: args.supersedes,
+      }, { closesTokens: args.closes_deferred, project }));
     } catch (e) {
       if (args.closes_deferred && args.closes_deferred.length > 0) {
         // Re-throw with a clearer prefix so MCP error response names the

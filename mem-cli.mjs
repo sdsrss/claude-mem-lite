@@ -54,7 +54,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
 import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
 import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdToken, formatProbeHints, rejectBareStringFlags, resolvePositionalAlias, suggestUnknownFlags, OBS_TIME_FIELDS, formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
-import { saveObservation, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
+import { saveObservation, saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
@@ -80,7 +80,7 @@ const SURFACE_LABELS = {
 import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
   insertDeferred, listOpenWithOrdinal, dropDeferred, formatDropReasonHint,
-  resolveDeferredIds, closeDeferredItems,
+  resolveDeferredIds,
   getDeferredByIds, formatDeferredDetail,
   searchDeferredWork, formatDeferredSearchTrailer,
   formatDeferListRow, countStaleOpen, formatDeferStaleHint,
@@ -969,36 +969,21 @@ function cmdSave(db, args) {
     }
   }
 
-  let result;
-  let closesIds = null;
+  let result, closesIds;
   try {
-    result = db.transaction(() => {
-      const r = saveObservation(db, {
-        content: text,
-        title: flags.title,
-        type,
-        importance: rawImp,
-        project,
-        files: saveFiles,
-        lesson_learned: rawLesson,
-        supersedes: supersedesIds || undefined,
-      });
-      // Skip closure on dedup short-circuit — the obs row already exists, so
-      // the deferred item should NOT be re-closed by a duplicate save call.
-      // Resolving deferred ids only on the non-duplicate path keeps repeated
-      // save commands (with the same --closes-deferred) idempotent even after
-      // the deferred row has transitioned out of 'open'.
-      if (r.kind === 'duplicate') return r;
-      if (closesTokens) {
-        // D#195: the close verb accepts a 'dropped' row and converts it to
-        // 'done'. `defer drop` used on an item that was actually fixed was
-        // otherwise a one-way gate, permanently losing the obs link. Kept in
-        // sync with the same policy in server.mjs mem_save.
-        closesIds = resolveDeferredIds(db, project, closesTokens, { allowStatuses: ['open', 'dropped'] });
-        closeDeferredItems(db, closesIds, r.id);
-      }
-      return r;
-    })();
+    // The transaction body — dedup short-circuit BEFORE the resolver, and D#195's
+    // allowStatuses — is lib/save-observation.mjs's (audit 2026-09-02 P1-6). Both faces
+    // used to write it out and each carried a "kept in sync with the other" comment.
+    ({ result, closesIds } = saveWithClosures(db, {
+      content: text,
+      title: flags.title,
+      type,
+      importance: rawImp,
+      project,
+      files: saveFiles,
+      lesson_learned: rawLesson,
+      supersedes: supersedesIds || undefined,
+    }, { closesTokens, project }));
   } catch (e) {
     if (closesTokens) {
       fail(`[mem] save with --closes-deferred failed: ${e.message}`);
