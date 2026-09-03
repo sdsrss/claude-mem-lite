@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { readTranscriptEntries, _resetTranscriptCache, TRANSCRIPT_CACHE_MAX_BYTES } from '../lib/transcript-scan.mjs';
+import { readTranscriptEntries, _resetTranscriptCache, TRANSCRIPT_CACHE_MAX_BYTES, transcriptCacheBudgetBytes, TRANSCRIPT_ENTRY_HEAP_FACTOR } from '../lib/transcript-scan.mjs';
 
 let dir, tx;
 
@@ -88,24 +88,85 @@ describe('readTranscriptEntries', () => {
     expect(second[0].message.content[0].text).toBe('cached');
   });
 
-  it('does not retain a transcript larger than the cap', () => {
+  it('does not retain a transcript larger than the budget', () => {
     // Parsed entries cost ~3.45× the file in heap; holding that for a very large
     // transcript risks the hook being OOM-killed, which loses the session's work. Over
-    // the cap each caller parses for itself, exactly as before this change.
+    // the budget each caller parses for itself, exactly as before this change.
+    //
+    // The budget is passed explicitly. It used to be the bare 24MB constant, and this case
+    // wrote a 25MB fixture to clear it; P2-12 made the budget heap-derived (~256MB on an
+    // ordinary Node), so a fixture that clears it for real is no longer writable. The seam
+    // keeps the DECLINE branch exercised — the alternative was to assert the budget's value
+    // and leave the branch it feeds untested.
+    const CAP = 64 * 1024;
     const padding = 'x'.repeat(4096);
     const one = `${line(padding)}\n`;
-    const repeats = Math.ceil((TRANSCRIPT_CACHE_MAX_BYTES + 1024 * 1024) / one.length);
+    const repeats = Math.ceil((CAP + 4096) / one.length);
     writeFileSync(tx, one.repeat(repeats));
-    expect(statSync(tx).size).toBeGreaterThan(TRANSCRIPT_CACHE_MAX_BYTES);
+    expect(statSync(tx).size).toBeGreaterThan(CAP);
 
     utimesSync(tx, PINNED_MTIME_SEC, PINNED_MTIME_SEC);
-    const first = readTranscriptEntries(tx);
+    const first = readTranscriptEntries(tx, { maxBytes: CAP });
     const st = statSync(tx);
     // Same pinned-key rewrite as above: an oversized file must come back FRESH.
     writeFileSync(tx, `${line('x'.repeat(padding.length - 6) + 'CHANGED')}\n`.padEnd(st.size, ' '));
     utimesSync(tx, PINNED_MTIME_SEC, PINNED_MTIME_SEC);
-    const second = readTranscriptEntries(tx);
+    const second = readTranscriptEntries(tx, { maxBytes: CAP });
     expect(second).not.toBe(first);
     expect(JSON.stringify(second).includes('CHANGED')).toBe(true);
+  });
+
+  it('two callers with different budgets do not read each other cached entries', () => {
+    // The budget is in the cache KEY, not only in the decision. Without that, a caller
+    // passing a small budget would be served the array a default-budget caller retained —
+    // the decline it asked for would silently not happen.
+    writeFileSync(tx, `${line('shared')}\n`);
+    utimesSync(tx, PINNED_MTIME_SEC, PINNED_MTIME_SEC);
+    const wide = readTranscriptEntries(tx);
+    const narrow = readTranscriptEntries(tx, { maxBytes: 1 });
+    expect(narrow).not.toBe(wide);
+    expect(narrow[0].message.content[0].text).toBe('shared');
+  });
+});
+
+// P2-12. The cap used to be a bare 24MB constant, so above it `handleStop` — which asks
+// this module twelve questions — degraded to twelve full parses at exactly the size where
+// one parse is already expensive. What the constant is protecting is the heap, so it is now
+// derived from the heap.
+describe('transcriptCacheBudgetBytes', () => {
+  it('scales with the heap limit and applies the measured 3.45x entry cost', () => {
+    // 4GB is the ordinary 64-bit Node limit: a quarter of it, divided by the entry factor,
+    // lands above the 256MB ceiling, so the ceiling is what binds.
+    expect(transcriptCacheBudgetBytes(4 * 1024 ** 3)).toBe(256 * 1024 * 1024);
+    // 1GB limit: 256MB of heap / 3.45 ≈ 74MB of transcript — under the ceiling, so the
+    // heap share is what binds, and the number is a computation rather than a constant.
+    const oneGb = transcriptCacheBudgetBytes(1024 ** 3);
+    expect(oneGb).toBe(Math.floor((1024 ** 3 * 0.25) / TRANSCRIPT_ENTRY_HEAP_FACTOR));
+    expect(oneGb).toBeLessThan(256 * 1024 * 1024);
+  });
+
+  it('goes BELOW the old fixed cap on a small heap — the direction a constant could not', () => {
+    // A 256MB container. The point of the change is not "cache more": it is that 24MB was
+    // simultaneously too small on a large heap and too large on a small one.
+    expect(transcriptCacheBudgetBytes(256 * 1024 * 1024)).toBeLessThan(TRANSCRIPT_CACHE_MAX_BYTES);
+  });
+
+  it('falls back to the old constant when the heap limit is unreadable', () => {
+    // Fail SAFE, not open: an unusable limit must not widen the budget.
+    //
+    // `undefined` is deliberately NOT in this list — it means "not supplied", which is the
+    // production call and must read v8. The first draft lumped the two together and the
+    // code did too, so a bad explicit argument silently fell through to the real heap.
+    for (const bad of [0, -1, NaN, null, 'lots', Infinity]) {
+      expect(transcriptCacheBudgetBytes(bad), `bad limit ${String(bad)}`).toBe(TRANSCRIPT_CACHE_MAX_BYTES);
+    }
+  });
+
+  it('the real process budget is a positive number, so the default path is exercised', () => {
+    // Called with no argument it reads v8.getHeapStatistics(). Every case above passes an
+    // explicit limit, so without this one the production call path is never run.
+    const actual = transcriptCacheBudgetBytes();
+    expect(actual).toBeGreaterThan(0);
+    expect(actual).toBeLessThanOrEqual(256 * 1024 * 1024);
   });
 });
