@@ -12,8 +12,8 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
-import { getVocabulary, computeVector, vecTextForRow } from './tfidf.mjs';
-import { insertObservationRow, insertObservationFiles, insertObservationVector, normalizeScope, SCOPE_PROMPT_LEGEND } from './lib/observation-write.mjs';
+import { vecTextForRow } from './tfidf.mjs';
+import { insertObservationRow, insertObservationFiles, insertObservationVector, upsertObservationVector, normalizeScope, SCOPE_PROMPT_LEGEND } from './lib/observation-write.mjs';
 import { DEDUP_JACCARD_THRESHOLD, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
   RUNTIME_DIR, DEDUP_WINDOW_MS, RELATED_OBS_WINDOW_MS,
@@ -1098,18 +1098,13 @@ ${actionList}`;
           savedTable = 'observations';
           debugLog('DEBUG', 'llm-episode', `upgraded pre-saved obs #${savedId}`);
 
-          // Update TF-IDF vector with enriched content
-          try {
-            const vocab = getVocabulary(db);
-            if (vocab) {
-              const vecText = vecTextForRow({ title: obs.title, narrative: obs.narrative, concepts: conceptsText, lesson_learned: safe.lesson_learned, search_aliases: safe.search_aliases });
-              const vec = computeVector(vecText, vocab);
-              if (vec) {
-                db.prepare('INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)')
-                  .run(savedId, Buffer.from(vec.buffer), vocab.version, Date.now());
-              }
-            }
-          } catch (e) { debugCatch(e, 'handleLLMEpisode-vector'); }
+          // Update TF-IDF vector with enriched content. SQL + text derivation are
+          // lib/observation-write.mjs's (audit 2026-09-02 P1-4); `gate: false` keeps this
+          // path's prior behaviour, which never consulted vectorsEnabled().
+          upsertObservationVector(db, savedId, {
+            title: obs.title, narrative: obs.narrative, concepts: conceptsText,
+            lesson_learned: safe.lesson_learned, search_aliases: safe.search_aliases,
+          }, { gate: false, scope: 'handleLLMEpisode-vector' });
         }
       }
     } else {

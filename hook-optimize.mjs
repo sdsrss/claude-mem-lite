@@ -16,11 +16,11 @@ import {
 import { callModelJSONAsync, BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
-import { getVocabulary, computeVector, cosineSimilarity, vecTextForRow } from './tfidf.mjs';
+import { getVocabulary, computeVector, cosineSimilarity } from './tfidf.mjs';
 import { MERGE_JACCARD_LOW, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { DB_DIR } from './schema.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
-import { normalizeScope, SCOPE_PROMPT_LEGEND } from './lib/observation-write.mjs';
+import { normalizeScope, SCOPE_PROMPT_LEGEND, upsertObservationVector } from './lib/observation-write.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
@@ -49,30 +49,22 @@ export function distributeBudget(total = 15) {
 
 /**
  * Rebuild TF-IDF vector for an observation. Non-critical — swallows errors.
- * Exported for testing; also kept as the single source of vector-rebuild logic
- * for the optimize / re-enrich path to avoid drift with the hook-llm write path.
+ *
+ * The SQL, the text derivation and the vocab lookup are lib/observation-write.mjs's since
+ * audit 2026-09-02 P1-4; this is the optimize path's name for it. Accepts a legacy [parts]
+ * array OR an observation row (preferred — vecTextForRow gives the same field set the save
+ * path uses, so a rebuild matches the original write).
+ *
+ * `gate: false` preserves this path's behaviour exactly: it never checked
+ * `vectorsEnabled()`. That is a redundancy rather than a hole — `getVocabulary` returns
+ * null whenever the arm is off — but this refactor is not the place to decide it.
+ *
+ * The historical drift worth remembering: this copy wrote the column as `computed_at`
+ * instead of `created_at_epoch`, and its own catch swallowed the error until an experiment
+ * surfaced it. That is what a fifth copy of a statement buys.
  */
 export function rebuildVector(db, obsId, textPartsOrRow) {
-  try {
-    const vocab = getVocabulary(db);
-    if (!vocab) return;
-    // Accept a legacy [parts] array OR an observation row (preferred — single-source field set
-    // incl. lesson_learned/search_aliases via vecTextForRow, so rebuilds match the save path).
-    const text = Array.isArray(textPartsOrRow)
-      ? textPartsOrRow.filter(Boolean).join(' ')
-      : vecTextForRow(textPartsOrRow);
-    const vec = computeVector(text, vocab);
-    if (vec) {
-      // Bug #1 fix: column is `created_at_epoch`, not `computed_at`. Every other
-      // INSERT callsite (server.mjs, hook-llm.mjs, mem-cli.mjs) uses the correct
-      // name; this was the only drift, silently caught by the catch below until
-      // the R-7 experiment surfaced it.
-      db.prepare(`
-        INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch)
-        VALUES (?, ?, ?, ?)
-      `).run(obsId, Buffer.from(vec.buffer), vocab.version, Date.now());
-    }
-  } catch (e) { debugCatch(e, 'optimize-vector'); }
+  upsertObservationVector(db, obsId, textPartsOrRow, { gate: false, scope: 'optimize-vector' });
 }
 
 // ─── Task 1: Re-enrich ─────────────────────────────────────────────────────
