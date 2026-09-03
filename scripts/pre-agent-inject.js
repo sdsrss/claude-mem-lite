@@ -22,13 +22,14 @@ const ENABLED = process.env.CLAUDE_MEM_SUBAGENT_INJECT === 'on'
 // 2026-08-14 M-5). Swallows everything: telemetry must never break a dispatch.
 async function recordFailure(scope, err, ctx) {
   try {
-    const [{ recordHookError }, { resolveDataDir }, { join }] = await Promise.all([
+    const [{ recordHookError }, { resolveDataDir, resolveRuntimeDir }] = await Promise.all([
       import('../lib/hook-telemetry.mjs'),
       import('../lib/resolve-data-dir.mjs'),
-      import('path'),
     ]);
-    const dataDir = resolveDataDir(process.env.CLAUDE_MEM_DIR);
-    recordHookError(scope, err, process.env.CLAUDE_MEM_RUNTIME_DIR || join(dataDir, 'runtime'), ctx);
+    // P1-14: the shared resolver, not a fourth hand-written `env || join(...)`. This is on
+    // the error path, which already dynamic-imports, so the script's zero-import budget on
+    // the HAPPY path is untouched.
+    recordHookError(scope, err, resolveRuntimeDir(resolveDataDir(process.env.CLAUDE_MEM_DIR)), ctx);
   } catch { /* never */ }
 }
 

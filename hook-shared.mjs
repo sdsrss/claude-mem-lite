@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, readdir
 import { inferProject, debugCatch } from './utils.mjs';
 import { CITE_RECALL_FILE_PREFIX } from './lib/cite-recall-path.mjs';
 import { ensureDbWithWalRecovery, DB_DIR } from './schema.mjs';
+import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
 import { recordHookError } from './lib/hook-telemetry.mjs';
@@ -22,7 +23,11 @@ import { PLUGIN_SLUG as _PLUGIN_SLUG } from './adopt-content.mjs';
 import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const RUNTIME_DIR = join(DB_DIR, 'runtime');
+// P1-14: one resolver, so this module honours CLAUDE_MEM_RUNTIME_DIR like the five
+// standalone hook scripts already did. It did not, and hook.mjs / server.mjs /
+// hook-context.mjs / hook-episode.mjs all take RUNTIME_DIR from here — so the override
+// split the runtime dir in half instead of relocating it.
+export const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 export const SCRIPT_PATH = process.argv[1];
 
 // Timing constants

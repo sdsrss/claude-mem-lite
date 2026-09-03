@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
-import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
+import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
 import { injectedIdsFileName, injectedIdKey, EVENT_ID_PREFIX, readInjectedMarker, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
@@ -55,7 +55,7 @@ import { DAY_MS } from '../lib/time-constants.mjs';
 // per-component overrides for tests that mix isolated + real paths.
 const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
 const DB_PATH = process.env.CLAUDE_MEM_DB_PATH || join(DATA_DIR, 'claude-mem-lite.db');
-const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DATA_DIR, 'runtime');
+const RUNTIME_DIR = resolveRuntimeDir(DATA_DIR);
 // A3 (v2.83): cross-hook dedup window. UPS writes
 // `runtime/.claude-mem-injected-<project>` after each inject; we read it to drop IDs the
 // agent already saw in this window. Imported, not inlined (ARCH-3): the copy's stated

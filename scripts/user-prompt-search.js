@@ -6,6 +6,7 @@
 import { ensureDb, DB_DIR, REGISTRY_DB_PATH } from '../schema.mjs';
 import { relaxFtsQueryToOr, truncate, typeIcon, inferProject, OBS_BM25, notLowSignalTitleClause, stripPrivate, neutralizeContextDelimiters, MAX_UPS_PROMPT_BYTES } from '../utils.mjs';
 import { readHookStdin } from '../lib/hook-stdin.mjs';
+import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
 import { fileMatchClause, fileMatchParams, basenameAnySep } from '../lib/file-edge-match.mjs';
 import { cjkPrecisionOk } from '../nlp.mjs';
@@ -26,7 +27,7 @@ import { DAY_MS } from '../lib/time-constants.mjs';
 
 // Telemetry sink (lib/hook-telemetry.mjs contract): env override for tests, else
 // <data-dir>/runtime — the same dir the sibling hook scripts + `stats` read.
-const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DB_DIR, 'runtime');
+const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 // D#120: one marker file per CC session — payload-only session keying (M-6) let
 // two concurrent windows full-replace each other's marker, killing dedup between
 // them and resetting `count` on every alternation. Derived per invocation once

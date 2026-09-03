@@ -66,6 +66,11 @@ const BROKEN_MARKER = join(RUNTIME_DIR, 'hook-launcher-broken');
 // Marker dir mirrors the standalone hook scripts (pre-tool-recall /
 // pre-skill-bridge), which honor CLAUDE_MEM_RUNTIME_DIR — they write 78 of every
 // 79 of these markers, so reading a different dir would mean never healing.
+// The last hand-written copy of this rule, and it stays: this launcher runs BEFORE the
+// native binding is known to work, so it imports only `node:` builtins on purpose — even
+// `lib/resolve-data-dir.mjs` is a module resolution it declines to make on the path whose
+// job is to survive a broken install. `lib/resolve-data-dir.mjs::resolveRuntimeDir` is the
+// canonical rule (audit 2026-09-02 P1-14); keep this expression identical to it.
 const NB_RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || RUNTIME_DIR;
 const NB_BROKEN_MARKER = join(NB_RUNTIME_DIR, 'native-binding-broken');
 const NB_HEAL_MARKER = join(NB_RUNTIME_DIR, 'native-binding-lastheal');

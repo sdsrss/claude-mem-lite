@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
-import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
+import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 // D#154: every envelope on this stdout goes through the one writer. This script has a
 // single emit today, so the change buys nothing on its own — it buys that a SECOND
@@ -34,7 +34,7 @@ import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.m
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 
 const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
-const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DATA_DIR, 'runtime');
+const RUNTIME_DIR = resolveRuntimeDir(DATA_DIR);
 const LEGACY_COOLDOWN_PATH = join(RUNTIME_DIR, 'pre-recall-cooldown.json');
 
 // The no-session legacy fallback stays local: it is this script's own back-compat with

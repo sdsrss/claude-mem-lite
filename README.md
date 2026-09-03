@@ -895,6 +895,15 @@ Set by the tool or by the test harness. Setting these by hand is not supported:
 `CLAUDE_MEM_DB_PATH`, `CLAUDE_MEM_RUNTIME_DIR`, `MEM_DISABLE_SPAWN_LOG`.
 `CLAUDE_PLUGIN_ROOT` is set by Claude Code itself.
 
+The last two are worth one more sentence each, because they are the ones a harness reaches
+for. `CLAUDE_MEM_RUNTIME_DIR` now relocates the runtime directory for the *whole* system;
+before v3.92.0 it was honoured by the standalone hook scripts and ignored by
+`hook-shared.mjs` and `hook-optimize.mjs`, so setting it split the runtime in half rather
+than moving it. **`CLAUDE_MEM_DB_PATH` still has that shape**: the standalone hook scripts
+honour it, `schema.mjs` does not, so a harness that sets it points the hooks at one database
+while the CLI and MCP server open the real one. Use `CLAUDE_MEM_DIR` — the only override
+every component respects, including the bash pre-filter — to isolate state.
+
 Three more are set by `vitest.config.mjs` / `tests/global-setup.mjs` and exist only to
 keep a test run off the live database: `CLAUDE_MEM_TEST_GUARD` (`1` arms the guard, `off`
 opts a test out), `CLAUDE_MEM_TEST_REALDIR` (the live data dir, captured before the suite

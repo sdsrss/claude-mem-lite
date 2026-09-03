@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
-import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
+import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 // format-utils.mjs is import-free — pulling three defang helpers keeps this script
 // inside its "lightweight standalone" budget (no heavy transitive deps).
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, neutralizeSkillBridgeDelimiters } from '../format-utils.mjs';
@@ -20,7 +20,7 @@ import { readHookStdin } from '../lib/hook-stdin.mjs';
 
 // CLAUDE_MEM_DIR mirrors pre-tool-recall.js — one env var sandboxes everything.
 const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
-const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DATA_DIR, 'runtime');
+const RUNTIME_DIR = resolveRuntimeDir(DATA_DIR);
 // D#29: all data artifacts follow DATA_DIR (CLAUDE_MEM_DIR-aware), not a hardcoded
 // homedir — previously REGISTRY_DB_PATH/MANAGED_BASE/MARKER pinned homedir while line 12
 // honored the env, so relocated installs opened the wrong DB and the marker never matched

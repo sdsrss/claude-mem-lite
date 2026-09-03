@@ -22,9 +22,12 @@ import { DB_DIR } from './schema.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
 import { normalizeScope, SCOPE_PROMPT_LEGEND, upsertObservationVector } from './lib/observation-write.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
+import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
-const RUNTIME_DIR = join(DB_DIR, 'runtime');
+// P1-14: same resolver as hook-shared.mjs — this was the second module that had never
+// heard of CLAUDE_MEM_RUNTIME_DIR, and a third hand-written copy of the join().
+const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 
 // ─── Budget ─────────────────────────────────────────────────────────────────
 
