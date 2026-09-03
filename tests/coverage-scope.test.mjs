@@ -48,15 +48,29 @@ describe('coverage scope (audit P2-2)', () => {
     expect(inCoverageScope('experiment/lib/runner.mjs')).toBe(false);
   });
 
-  it('excludes the four god modules deliberately, not by omission', () => {
+  it('excludes the three entry files deliberately, not by omission', () => {
     // These are exercised through subprocess E2E, which v8 coverage of the parent
     // process cannot observe — including them would measure the harness, not the
     // code. Listing them in `exclude` (rather than just leaving them out of
     // `include`) is what makes that a decision someone has to edit on purpose.
-    for (const f of ['install.mjs', 'server.mjs', 'hook.mjs', 'registry.mjs']) {
+    //
+    // Was four. `registry.mjs` left this list in v3.92.0 after audit P1-15 asked whether
+    // the rationale had expired, and the answer was measured per file rather than argued:
+    // install.mjs 11.67% / server.mjs 25.89% (rationale holds — importing a module is not
+    // exercising it) against registry.mjs 86.78% (expired). See vitest.config.mjs.
+    for (const f of ['install.mjs', 'server.mjs', 'hook.mjs']) {
       expect(coverage.exclude).toContain(f);
       expect(inCoverageScope(f)).toBe(false);
     }
+  });
+
+  it('measures registry.mjs, which was well covered and invisible', () => {
+    // The other half, asserted separately so a revert of the scope change goes red rather
+    // than merely shrinking a loop above. Moving it IN raised the totals (84.32% → 84.38%
+    // statements), which is the tell that it was never harness-only.
+    expect(coverage.include).toContain('registry.mjs');
+    expect(coverage.exclude).not.toContain('registry.mjs');
+    expect(inCoverageScope('registry.mjs')).toBe(true);
   });
 
   it('still measures the 22 hand-picked root modules', () => {

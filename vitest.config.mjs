@@ -70,12 +70,33 @@ export default defineConfig({
       // "77.47% covered" described a curated subset while lib/'s ~70 shipped modules
       // — every extracted shared core since v3.4x — had no coverage signal at all.
       // lib/** is now in scope; the thresholds below were re-baselined against the
-      // real number rather than the subset's. The four god modules stay excluded
-      // (see `exclude`): they are exercised through E2E/subprocess tests, which v8
-      // coverage of the parent process cannot see, so including them would measure
-      // the harness rather than the code.
+      // real number rather than the subset's.
+      //
+      // The excluded entry files are exercised through E2E/subprocess tests, which v8
+      // coverage of the parent process cannot see — so including them would measure the
+      // harness rather than the code. Audit 2026-09-02 P1-15 challenged that rationale as
+      // expired for three of four, on the grounds that 13 / 13 / 9 test files import
+      // install.mjs / server.mjs / registry.mjs IN-PROCESS. Measured rather than argued
+      // (2026-09-03, whole suite, each file temporarily added to `include`):
+      //
+      //     install.mjs    11.67% stmts / 10.22% lines    rationale HOLDS
+      //     server.mjs     25.89% stmts / 27.54% lines    rationale HOLDS
+      //     registry.mjs   86.78% stmts / 90.27% lines    rationale EXPIRED
+      //
+      // Importing a module is not exercising it: the thirteen files that import
+      // install.mjs reach an eighth of it. registry.mjs is the one the finding was right
+      // about, and it is now IN scope — which RAISED the totals (84.32% → 84.38% stmts),
+      // because a well-covered file had simply been invisible. Adding all three would have
+      // dropped statements to 71.05% and blown every threshold, i.e. measured the harness
+      // exactly as this comment always claimed.
+      //
+      // NOTE: these three were listed in BOTH `include`-absent and `exclude`. `include`
+      // below is an explicit allowlist that never named them, so their `exclude` entries
+      // were belt-and-braces and removing one changed nothing — which is worth knowing
+      // before anyone "fixes" scope by editing `exclude` alone and measures no difference.
       include: [
         'lib/**/*.mjs',
+        'registry.mjs',
         'utils.mjs', 'schema.mjs', 'search-scoring.mjs', 'mem-cli.mjs',
         'registry-scanner.mjs', 'resource-discovery.mjs',
         'hook-episode.mjs', 'hook-context.mjs', 'hook-semaphore.mjs',
@@ -88,7 +109,7 @@ export default defineConfig({
       // `experiment/**` is listed because the `lib/**/*.mjs` include above is NOT anchored
       // to the repo root — it also matches `experiment/lib/*.mjs`, an unshipped scratch dir
       // that would otherwise drag the gate down with code nothing ships.
-      exclude: ['install.mjs', 'server.mjs', 'hook.mjs', 'registry.mjs', 'registry-retriever.mjs', 'benchmark/**', 'scripts/**', 'experiment/**'],
+      exclude: ['install.mjs', 'server.mjs', 'hook.mjs', 'registry-retriever.mjs', 'benchmark/**', 'scripts/**', 'experiment/**'],
       // Re-baselined 2026-08-22 against the measured number, which the P2-2 re-scoping
       // had left 12 points below: the gate said 75/75/65 while the suite actually ran
       // 86.58 lines / 87.42 functions / 77.22 branches, i.e. coverage could fall by a
