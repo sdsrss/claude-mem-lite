@@ -26,13 +26,12 @@ import { searchResources } from './registry-retriever.mjs';
 import { computeFunnel, formatFunnel, computeSweep, formatSweep, DEFAULT_SWEEP_FLOORS, DEFAULT_SWEEP_MARGINS } from './registry-recommend.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
-  cleanupBroken, decayAndMarkIdle, boostAccessed, demotePinned, mergeDuplicates,
-  recoverOrphanedChildren, recoverBuriedLessons, sweepDeferredWorkOrphans,
-  purgeStale, purgeStalePreview, findDuplicates, maintenanceStats, rebuildVectors, vacuum,
-  hardDeleteCandidateCount,
+  runMaintainOps, findDuplicates, maintenanceStats,
   OP_CAP, STALE_AGE_MS, PINNED_INJ_THRESHOLD, resolveDefaultMaintainOps,
 } from './lib/maintain-core.mjs';
-import { snapshotDb, listSnapshots, backupBudgetBytes } from './lib/db-backup.mjs';
+// snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
+// (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
+import { listSnapshots, backupBudgetBytes } from './lib/db-backup.mjs';
 import { deleteObservations, previewDeleteRows } from './lib/delete-core.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
 import { computeStatsFeed } from './lib/stats-core.mjs';
@@ -2084,10 +2083,6 @@ function cmdMaintain(db, args) {
   }
   const staleAge = Date.now() - STALE_AGE_MS;
   const mctx = { projectFilter, baseParams, staleAge, opCap: OP_CAP };
-  const results = [];
-
-  // T2-P1-B: surface the OP_CAP hit so users know to re-run, matching MCP mem_maintain.
-  const capHint = (changes) => (changes >= OP_CAP ? ' (cap reached, re-run for more)' : '');
 
   // Parse + validate --retain-days BEFORE the transaction so an invalid value rejects the
   // whole command atomically. The old code validated inside db.transaction() with a bare
@@ -2108,134 +2103,40 @@ function cmdMaintain(db, args) {
   // purge_stale is the only DELETE here — require --confirm so a mis-typed run can't wipe rows.
   const confirmed = flags.confirm === true || flags.confirm === 'true';
 
-  // Snapshot the DB before the irreversible cleanup/purge hard-deletes — only when rows will
-  // actually be removed, and OUTSIDE the transaction below (VACUUM cannot run inside one).
-  // Best-effort; snapshotDb never throws.
-  const willPurge = ops.includes('purge_stale') && confirmed;
-  if (hardDeleteCandidateCount(db, mctx, { cleanup: ops.includes('cleanup'), purge: willPurge }) > 0) {
-    snapshotDb(db, { tag: 'pre-maintain' });
-  }
-
-  db.transaction(() => {
-    // PURGE FIRST — matches the auto-maintain hook order (hook.mjs:766). Running decay BEFORE
-    // purge in one transaction marked a stale row pending-purge AND deleted it in the SAME call
-    // (zero grace), and the pre-txn snapshot guard counts only PRE-EXISTING pending rows so it
-    // skipped the backup → permanent, unrecoverable loss of notable imp-2/3 memories (audit
-    // HIGH-1). Purging first deletes only rows a PRIOR run marked (which the guard saw + backed
-    // up); rows decay marks below wait for the next maintain run, regaining the grace cycle.
-    if (ops.includes('purge_stale')) {
-      if (!confirmed) {
-        const previewRow = purgeStalePreview(db, mctx, retainCutoff);
-        const pushLines = [`purge_stale preview (no --confirm):`,
-          `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`];
-        if (previewRow.candidates > 0) {
-          pushLines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-          pushLines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
-        }
-        pushLines.push(`  To delete, re-run with --confirm.`);
-        results.push(pushLines.join('\n'));
-      } else {
-        const purged = purgeStale(db, mctx, retainCutoff);
-        results.push(`Purged ${purged} stale observations (retained last ${retainDays} days)${capHint(purged)}`);
-      }
-    }
-
-    if (ops.includes('cleanup')) {
-      const deleted = cleanupBroken(db, mctx);
-      results.push(`Cleaned up ${deleted} broken observations${capHint(deleted)}`);
-      // Self-heal legacy orphans (keeper hard-deleted pre-recoverChildrenOf): resurface
-      // unreachable children. Non-destructive — un-hide only, no delete.
-      const orphans = recoverOrphanedChildren(db, mctx);
-      if (orphans > 0) results.push(`Recovered ${orphans} orphaned compression children`);
-      // Heal lesson rows citation-decay buried at importance 0 (pre floor=1). 0→1 on
-      // lesson-bearing rows only; idempotent no-op once none remain.
-      const lessonsHealed = recoverBuriedLessons(db, mctx);
-      if (lessonsHealed > 0) results.push(`Healed ${lessonsHealed} lesson rows buried at importance 0`);
-      // Heal deferred_work rows whose closing obs / source prompt was hard-deleted while FK was
-      // OFF (dangling ref foreign_key_check flags). Applies the ON DELETE SET NULL the FK would.
-      const deferredHealed = sweepDeferredWorkOrphans(db, mctx);
-      if (deferredHealed > 0) results.push(`Healed ${deferredHealed} deferred-work rows with dangling references`);
-    }
-
-    if (ops.includes('decay')) {
-      // injection_count>0 protected (maintain-core; shared with MCP + hook auto-maintain).
-      const { decayed, idleMarked } = decayAndMarkIdle(db, mctx);
-      const decayCap = (decayed >= OP_CAP || idleMarked >= OP_CAP) ? ' (cap reached, re-run for more)' : '';
-      results.push(`Decayed ${decayed} stale observations, marked ${idleMarked} idle as pending-purge${decayCap}`);
-    }
-
-    if (ops.includes('boost')) {
-      const boosted = boostAccessed(db, mctx);
-      results.push(`Boosted ${boosted} frequently-accessed observations${capHint(boosted)}`);
-    }
-
-    // AFTER boost, matching server.mjs and hook.mjs. This block used to sit BEFORE
-    // it, and the order was load-bearing in the wrong direction: boostAccessed lifts
-    // any access_count>3 row with importance<3, so demoting a pinned row to 1 and
-    // then boosting handed it straight back at 2 — the demotion silently undone
-    // inside a single maintain run. DEFAULT_MAINTAIN_OPS pins the order; this block
-    // has to physically follow the boost block for that order to be real.
-    if (ops.includes('demote_pinned')) {
-      // Repair the citation-decay blind spot: decay protects injection_count>0, so a
-      // heavily-injected-but-uncited memory stays pinned at max importance forever.
-      // demotePinned (maintain-core) floors it in one pass: no lesson_learned -> 1,
-      // lesson-bearing -> 2 (v3.76.1 dual floor). Floor, not purge.
-      const demoted = demotePinned(db, mctx);
-      results.push(`Demoted ${demoted} pinned-but-uncited observations (inj>=${PINNED_INJ_THRESHOLD}, cited=0; no lesson → importance 1, lesson → 2)${capHint(demoted)}`);
-    }
-
-    if (ops.includes('dedup') && flags['merge-ids']) {
-      // Parse "keepId:removeId1:removeId2,keepId2:removeId3"; surface malformed segments
-      // (non-numeric / single-element) instead of silently dropping them. The merge SQL
-      // itself lives in maintain-core mergeDuplicates (shared with MCP).
-      const invalidSegments = [];
-      const groups = [];
-      for (const seg of flags['merge-ids'].split(',').map(s => s.trim()).filter(Boolean)) {
-        const parts = seg.split(':').map(s => s.trim());
-        const nums = parts.map(p => Number(p));
-        if (parts.length < 2 || nums.some(n => !Number.isFinite(n) || n <= 0)) { invalidSegments.push(seg); continue; }
-        groups.push(nums);
-      }
-      const totalMerged = mergeDuplicates(db, groups);
-      if (invalidSegments.length) {
-        results.push(`Warning: ignored ${invalidSegments.length} malformed --merge-ids segment(s): ${invalidSegments.join(', ')} (expected keepId:removeId[:removeId...] with positive integers)`);
-      }
-      results.push(`Merged ${totalMerged} duplicate observations`);
-    }
-
-    // T2-P1-B parity with MCP: warn when merge-ids is provided but dedup wasn't requested.
-    if (!ops.includes('dedup') && flags['merge-ids']) {
-      results.push('Warning: --merge-ids provided but "dedup" not in operations — merge-ids ignored');
-    }
-
-  })();
-
-  // FTS optimize
-  db.exec("INSERT INTO observations_fts(observations_fts) VALUES('optimize')");
-  results.push('FTS5 index optimized');
-
-  // rebuild_vectors: outside main transaction (maintain-core, shared with MCP).
-  if (ops.includes('rebuild_vectors')) {
-    try {
-      const r = rebuildVectors(db);
-      results.push(r.ok
-        ? `Vectors: rebuilt vocabulary (${r.terms} terms), updated ${r.updated}/${r.total} vectors`
-        : `Vectors: ${r.reason}`);
-    } catch (e) {
-      results.push(`Vectors: rebuild failed — ${e.message}`);
+  // Parse "keepId:removeId1:removeId2,keepId2:removeId3"; surface malformed segments
+  // (non-numeric / single-element) instead of silently dropping them. The merge SQL and the
+  // op ORDER both live in maintain-core (shared with MCP, audit 2026-09-02 P1-5) — this is
+  // the one genuinely CLI-shaped part, because the MCP tool receives groups already typed.
+  const invalidMergeSegments = [];
+  const mergeGroups = [];
+  if (flags['merge-ids']) {
+    for (const seg of String(flags['merge-ids']).split(',').map(x => x.trim()).filter(Boolean)) {
+      const parts = seg.split(':').map(x => x.trim());
+      const nums = parts.map(x => Number(x));
+      if (parts.length < 2 || nums.some(n => !Number.isFinite(n) || n <= 0)) { invalidMergeSegments.push(seg); continue; }
+      mergeGroups.push(nums);
     }
   }
 
-  // vacuum: reclaim freelist pages left by DELETEs. Whole-DB, outside any transaction.
-  // maintain-core, shared with MCP. Reports freelist before/after as the §7 reclaim metric.
-  if (ops.includes('vacuum')) {
-    try {
-      const v = vacuum(db);
-      results.push(`VACUUM: reclaimed ~${v.reclaimedMB}MB (freelist ${v.freeBefore} → ${v.freeAfter} pages)`);
-    } catch (e) {
-      results.push(`VACUUM failed — ${e.message}`);
-    }
-  }
+  const results = runMaintainOps(db, mctx, ops, {
+    retainDays,
+    retainCutoff,
+    confirmed,
+    mergeGroups,
+    mergeIdsProvided: Boolean(flags['merge-ids']),
+    invalidMergeSegments,
+    mergeIdsFlagName: '--merge-ids',
+    renderPurgePreview: (previewRow) => {
+      const lines = ['purge_stale preview (no --confirm):',
+        `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`];
+      if (previewRow.candidates > 0) {
+        lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
+        lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
+      }
+      lines.push('  To delete, re-run with --confirm.');
+      return lines.join('\n');
+    },
+  });
 
   out(`[mem] ${results.join('\n[mem] ')}`);
 }
@@ -2844,7 +2745,7 @@ Commands:
     --merge-ids K:R,... For dedup: keepId:removeId pairs (e.g. 10:11,20:21:22)
     --project P         Filter by project
     --retain-days N     For purge_stale: keep last N days (default 30)
-                        demote_pinned: floors importance for inj>=8 & cited=0 — to 1 with no
+                        demote_pinned: floors importance for inj>=${PINNED_INJ_THRESHOLD} & cited=0 — to 1 with no
                         lesson_learned, to 2 with one (clears pinned noise; a lesson-bearing
                         row keeps eligibility on every importance>=2 injection face).
                         In the default set since v3.76.0; runs AFTER boost, which would

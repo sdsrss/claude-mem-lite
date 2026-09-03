@@ -204,7 +204,20 @@ describe('demote_pinned copy matches the shipped behaviour', () => {
     });
 
     it(`${label} quotes the real injection threshold (${PINNED_INJ_THRESHOLD})`, () => {
-      expect(copyAround(src)).toMatch(new RegExp(`>=\\s*${PINNED_INJ_THRESHOLD}\\b`));
+      // Two legal spellings, and the difference is not cosmetic.
+      //
+      //   `>=8`                        — a literal that HAPPENS to equal the constant today
+      //   `>=${PINNED_INJ_THRESHOLD}`  — a template that cannot fall out of step
+      //
+      // tool-schemas.mjs is a plain string in an LLM-visible tool description and stays a
+      // literal (changing that text is an L3 change on its own terms); mem-cli.mjs's help
+      // is a template literal, so P1-5 moved it to the interpolated form after
+      // tests/maintain-ops-sequence.test.mjs started forbidding hardcoded thresholds in
+      // the shipped renderers. This assertion has to accept both or the two guards
+      // contradict each other — which they did, and this is that resolution.
+      expect(copyAround(src)).toMatch(
+        new RegExp(`>=\\s*(?:${PINNED_INJ_THRESHOLD}\\b|\\$\\{PINNED_INJ_THRESHOLD\\})`),
+      );
     });
   }
 });

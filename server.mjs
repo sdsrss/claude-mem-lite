@@ -15,13 +15,11 @@ import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from '
 import { resolveAnchorToken, formatAnchorError, resolveQueryAnchor, fetchRecentTimeline, fetchTimelineWindow } from './lib/timeline-core.mjs';
 import { buildSearchFtsQuery, parseDateBounds, parseDuration, coreRunSearchPipeline } from './lib/search-core.mjs';
 import {
-  cleanupBroken, decayAndMarkIdle, boostAccessed, demotePinned, mergeDuplicates,
-  recoverOrphanedChildren, recoverBuriedLessons, sweepDeferredWorkOrphans,
-  purgeStale, purgeStalePreview, findDuplicates, maintenanceStats, rebuildVectors, vacuum,
-  hardDeleteCandidateCount,
+  runMaintainOps, findDuplicates, maintenanceStats,
   OP_CAP, STALE_AGE_MS, resolveDefaultMaintainOps, DEFAULT_MAINTAIN_OPS,
 } from './lib/maintain-core.mjs';
-import { snapshotDb } from './lib/db-backup.mjs';
+// snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
+// (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
 import { deleteObservations, previewDeleteRows } from './lib/delete-core.mjs';
 import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
 import { collectBrowseTiers, getActiveMemorySessionId, BROWSE_TIERS, BROWSE_TIER_LABELS } from './lib/browse-core.mjs';
@@ -1164,7 +1162,6 @@ server.registerTool(
       if (args.operations && args.operations.length === 0) {
         return { content: [{ type: 'text', text: `operations array is empty. Pass a non-empty list (e.g. ${JSON.stringify(DEFAULT_MAINTAIN_OPS)}) or omit operations to use the default set.` }], isError: true };
       }
-      const results = [];
       const staleAge = Date.now() - STALE_AGE_MS;
       const mctx = { projectFilter, baseParams, staleAge, opCap: OP_CAP };
 
@@ -1180,116 +1177,33 @@ server.registerTool(
       // runs unconfirmed on either surface now or before).
       const purgeConfirmed = args.confirm === true;
 
-      // MED-2: snapshot the DB before the irreversible cleanup/purge hard-deletes —
-      // only when rows will actually be removed, and OUTSIDE the transaction below
-      // (VACUUM cannot run inside one). Best-effort; snapshotDb never throws.
-      if (hardDeleteCandidateCount(db, mctx, { cleanup: ops.includes('cleanup'), purge: ops.includes('purge_stale') && purgeConfirmed }) > 0) {
-        snapshotDb(db, { tag: 'pre-maintain' });
-      }
-
-      db.transaction(() => {
-        // PURGE FIRST — matches the auto-maintain hook order (hook.mjs:766) and the CLI
-        // cmdMaintain. Running decay BEFORE purge in one transaction marked a stale row
-        // pending-purge AND deleted it in the SAME call (zero grace), while the pre-txn
-        // snapshot guard counts only PRE-EXISTING pending rows so it skipped the backup →
-        // permanent loss of notable imp-2/3 memories (audit HIGH-1). Purging first deletes
-        // only rows a PRIOR run marked (backed up); rows decay marks below wait one cycle.
-        if (ops.includes('purge_stale')) {
-          const retainDays = args.retain_days ?? 30;
-          const retainCutoff = Date.now() - retainDays * DAY_MS;
-          if (!purgeConfirmed) {
-            // Dry-run preview (parity with CLI `maintain` without --confirm): the other
-            // requested non-destructive ops still run below.
-            const previewRow = purgeStalePreview(db, mctx, retainCutoff);
-            const lines = [
-              'purge_stale preview (confirm=false):',
-              `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`,
-            ];
-            if (previewRow.candidates > 0) {
-              lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-              lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
-            }
-            lines.push('  Nothing was deleted. To delete, re-run with confirm=true:');
-            lines.push(`  mem_maintain(action="execute", operations=${JSON.stringify(ops)}, confirm=true${args.retain_days ? `, retain_days=${args.retain_days}` : ''}${args.project ? `, project="${args.project}"` : ''})`);
-            results.push(lines.join('\n'));
-          } else {
-            const purged = purgeStale(db, mctx, retainCutoff);
-            results.push(`Purged ${purged} stale observations (retained last ${retainDays} days)` + (purged >= OP_CAP ? ' (cap reached, re-run for more)' : ''));
+      // The op ORDER, the pre-transaction snapshot and the three post-transaction ops all
+      // live in maintain-core (audit 2026-09-02 P1-5) — this face keeps only what is
+      // genuinely MCP-shaped: how `merge_ids` is spelled in a warning, and what the purge
+      // preview tells the caller to type next. Before the extraction this block rendered
+      // `inj>=8` as a literal while the CLI twin interpolated PINNED_INJ_THRESHOLD.
+      const results = runMaintainOps(db, mctx, ops, {
+        retainDays: args.retain_days ?? 30,
+        retainCutoff: Date.now() - (args.retain_days ?? 30) * DAY_MS,
+        confirmed: purgeConfirmed,
+        mergeGroups: args.merge_ids || null,
+        mergeIdsProvided: Boolean(args.merge_ids),
+        mergeIdsFlagName: 'merge_ids',
+        onError: debugCatch,
+        renderPurgePreview: (previewRow, retainDays) => {
+          const lines = [
+            'purge_stale preview (confirm=false):',
+            `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`,
+          ];
+          if (previewRow.candidates > 0) {
+            lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
+            lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
           }
-        }
-
-        if (ops.includes('cleanup')) {
-          const deleted = cleanupBroken(db, mctx);
-          results.push(`Cleaned up ${deleted} broken observations` + (deleted >= OP_CAP ? ' (cap reached, re-run for more)' : ''));
-          // Self-heal legacy orphans (keeper hard-deleted pre-recoverChildrenOf):
-          // resurface unreachable children. Non-destructive — un-hide only, no delete.
-          const orphans = recoverOrphanedChildren(db, mctx);
-          if (orphans > 0) results.push(`Recovered ${orphans} orphaned compression children`);
-          // Heal lesson rows citation-decay buried at importance 0 (pre floor=1). 0→1 on
-          // lesson-bearing rows only; idempotent no-op once none remain.
-          const lessonsHealed = recoverBuriedLessons(db, mctx);
-          if (lessonsHealed > 0) results.push(`Healed ${lessonsHealed} lesson rows buried at importance 0`);
-          // Heal deferred_work rows whose closing obs / source prompt was deleted while FK was
-          // OFF (dangling ref foreign_key_check flags). Applies the ON DELETE SET NULL the FK would.
-          const deferredHealed = sweepDeferredWorkOrphans(db, mctx);
-          if (deferredHealed > 0) results.push(`Healed ${deferredHealed} deferred-work rows with dangling references`);
-        }
-
-        if (ops.includes('decay')) {
-          // injection_count>0 protected (maintain-core; unifies with CLI + hook —
-          // the MCP copy previously lacked this clause and decayed/purged injected memories).
-          const { decayed, idleMarked } = decayAndMarkIdle(db, mctx);
-          results.push(`Decayed ${decayed} stale observations, marked ${idleMarked} idle as pending-purge` + ((decayed >= OP_CAP || idleMarked >= OP_CAP) ? ' (cap reached, re-run for more)' : ''));
-        }
-
-        if (ops.includes('boost')) {
-          const boosted = boostAccessed(db, mctx);
-          results.push(`Boosted ${boosted} frequently-accessed observations` + (boosted >= OP_CAP ? ' (cap reached, re-run for more)' : ''));
-        }
-
-        if (ops.includes('demote_pinned')) {
-          const demoted = demotePinned(db, mctx);
-          results.push(`Demoted ${demoted} pinned-but-uncited observations (inj>=8, cited=0; no lesson → importance 1, lesson → 2)` + (demoted >= OP_CAP ? ' (cap reached, re-run for more)' : ''));
-        }
-
-        if (ops.includes('dedup') && args.merge_ids) {
-          const totalMerged = mergeDuplicates(db, args.merge_ids);
-          results.push(`Merged ${totalMerged} duplicate observations`);
-        }
-
-        if (!ops.includes('dedup') && args.merge_ids) {
-          results.push('Warning: merge_ids provided but "dedup" not in operations — merge_ids ignored');
-        }
-      })();
-
-      // FTS5 optimize (outside transaction)
-      db.exec("INSERT INTO observations_fts(observations_fts) VALUES('optimize')");
-      results.push('FTS5 index optimized');
-
-      // rebuild_vectors: outside main transaction (maintain-core, shared with CLI).
-      if (ops.includes('rebuild_vectors')) {
-        try {
-          const r = rebuildVectors(db);
-          results.push(r.ok
-            ? `Vectors: rebuilt vocabulary (${r.terms} terms), updated ${r.updated}/${r.total} vectors`
-            : `Vectors: ${r.reason}`);
-        } catch (e) {
-          debugCatch(e, 'rebuild_vectors');
-          results.push(`Vectors: rebuild failed — ${e.message}`);
-        }
-      }
-
-      // vacuum: reclaim freelist dead space left by DELETEs. Whole-DB, outside any
-      // transaction. maintain-core, shared with CLI.
-      if (ops.includes('vacuum')) {
-        try {
-          const v = vacuum(db);
-          results.push(`VACUUM: reclaimed ~${v.reclaimedMB}MB (freelist ${v.freeBefore} → ${v.freeAfter} pages)`);
-        } catch (e) {
-          debugCatch(e, 'vacuum');
-          results.push(`VACUUM failed — ${e.message}`);
-        }
-      }
+          lines.push('  Nothing was deleted. To delete, re-run with confirm=true:');
+          lines.push(`  mem_maintain(action="execute", operations=${JSON.stringify(ops)}, confirm=true${args.retain_days ? `, retain_days=${args.retain_days}` : ''}${args.project ? `, project="${args.project}"` : ''})`);
+          return lines.join('\n');
+        },
+      });
 
       return { content: [{ type: 'text', text: results.join('\n') }] };
     }
