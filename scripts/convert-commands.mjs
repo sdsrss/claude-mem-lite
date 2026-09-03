@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
+import { parseFrontmatter } from '../lib/frontmatter.mjs';
 
 // D#29: honor CLAUDE_MEM_DIR (equals homedir when the env is unset).
 const MANAGED_DIR = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'managed');
@@ -26,24 +27,9 @@ const SKIP_LIST = new Set([
 
 // ─── Frontmatter Parsing ─────────────────────────────────────────────────────
 
-function parseFrontmatter(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return { frontmatter: {}, body: content };
-
-  const raw = match[1];
-  const body = content.slice(match[0].length).trim();
-  const fm = {};
-  for (const line of raw.split('\n')) {
-    const kv = line.match(/^(\w[\w-]*)\s*:\s*(.*)/);
-    if (kv) {
-      let val = kv[2].trim();
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
-        val = val.slice(1, -1);
-      fm[kv[1]] = val;
-    }
-  }
-  return { frontmatter: fm, body };
-}
+// parseFrontmatter is lib/frontmatter.mjs's (audit 2026-09-02 P1-16). The copy that used
+// to live here was a SIMPLIFIED cut with no `|` / `>` block support, so a `description: |`
+// block — the normal shape in a SKILL.md — came back as the literal `|`.
 
 // ─── Description Extraction ──────────────────────────────────────────────────
 

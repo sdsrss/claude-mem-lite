@@ -2,10 +2,70 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — five items from the 2026-09-02 audit backlog
+## Unreleased — ten items from the 2026-09-02 audit backlog
 
-Covers audit items **P1-3, P1-12, P2-15(d), P2-12, P1-8** only. The working tree carries an
-earlier, separate batch from the same backlog that this section does not describe.
+Audit items **P1-3, P1-4, P1-5, P1-6, P1-8, P1-12, P1-13, P1-16, P2-12, P2-15(d)**.
+Earlier batches from the same backlog (P0-2/3/4/5/6, P1-1, P1-2, P1-11, P2-1) landed in the
+four commits before this section and are not described here.
+
+Five of the ten are the same defect class — a rule that shipped in more than one place —
+and the reason they keep being worth closing is that **each one had already drifted**:
+`server.mjs` reported a demote threshold the code no longer used, `hook-optimize` wrote the
+vector row to a column name that did not exist, and `convert-commands` parsed a
+`description: |` block as the literal `|`.
+
+### refactor: the maintain execute SEQUENCE, once (P1-5)
+
+Every maintain OPERATION was already shared; the ORDER, the cap hint and the result strings
+were hand-copied into both faces. `runMaintainOps` in `lib/maintain-core.mjs` owns the
+snapshot, the transaction and the three post-transaction ops — all three are part of the
+ordering contract (the snapshot counts only PRE-EXISTING pending rows, so purge must precede
+decay; VACUUM cannot run in a transaction). Each surface keeps only its own dialect: how it
+spells `merge_ids`, and what its purge preview tells the caller to type.
+
+Found by the new guard rather than by reading: `maintain --help` also quoted `inj>=8` as a
+literal.
+
+### refactor: one save transaction, and the two policies inside it (P1-6)
+
+`mem_save` and `cmdSave` each wrote out the same transaction under a comment saying it was
+"kept in sync with" the other. The dedup short-circuit before the resolver (which is what
+makes a replayed save idempotent) and D#195's `allowStatuses: ['open', 'dropped']` are
+policy, not plumbing. `saveWithClosures` imports the resolver rather than taking it as a
+parameter, so a caller cannot reinstate the one-way gate D#195 closed.
+
+### refactor: one observation_vectors writer, and lib/ stops importing the hook layer (P1-4)
+
+The upsert shipped five times. Four now share one body; the fifth — maintain-core's bulk
+rebuild — stays a copy on purpose (own vocabulary, one reused statement, throw-aborts
+semantics). Separately, `lib/save-enrich.mjs`'s `await import('../hook-optimize.mjs')` was
+the only edge from `lib/` into a non-leaf hook module; the body moved into `lib/`, so the
+edge is gone and a guard now pins the direction with one named exception.
+
+**Correcting the audit on its own finding:** it reports the `vectorsEnabled()` gate as
+inconsistent across the five sites. It is inconsistent, but it is not a hole —
+`getVocabulary` returns null whenever the arm is off and every path guards on the vocab, so
+no site can write while disabled.
+
+### refactor: one frontmatter parser and one registry FTS5 DDL (P1-16)
+
+Three parsers, of which two were byte-identical and the third was a simplified cut with no
+`|` block support — so `description:`, the field the recommendation gate reads, came back as
+the literal `|` from whichever script ran last. Now `lib/frontmatter.mjs`. In the same file
+pair, `scripts/index-managed.mjs` also carried its own copy of registry.mjs's FTS5 table and
+trigger DDL, and that copy had drifted **in its documentation first**: its comment gave
+`trigger_patterns` a weight of five against a shipped `bm25(…, 3.0, 3.0, 3.0, 2.0, 2.0, 1.0,
+1.0, 1.0)`.
+
+### test: the sandbox harness was driving an entry point that does not exist (P1-13)
+
+Phase A's auto-update case ran `node hook-update.mjs --check` with
+`CLAUDE_MEM_FORCE_UPDATE_CHECK=1`. That file has no argv entry and nothing reads that env
+var, so the process imported a module, ran nothing and exited 0 — two of the 43/43 this
+harness reports were vacuous. It drives `hook.mjs update-check` now, and the premise took
+three cuts: "the state file exists" passed against the no-op too, "lastCheck advanced" went
+correctly RED because the 24h gate short-circuits, and backdating the gate first took it
+43/44 → 44/44.
 
 ### change: registry enrichment is path-confined on all four legs, not one (P1-3)
 

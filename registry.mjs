@@ -443,7 +443,8 @@ export function ensureRegistryDb(dbPath) {
   return db;
 }
 
-// ─── Exported Schema (for test-helpers.mjs) ─────────────────────────────────
+// ─── Exported Schema (test-helpers.mjs, and scripts/index-managed.mjs since P1-16, which
+// rebuilds resources_fts from scratch and used to carry its own copy of both blocks) ──
 
 export { RESOURCES_SCHEMA, FTS5_SCHEMA, TRIGGERS_SCHEMA, INVOCATIONS_SCHEMA, PREINSTALLED_SCHEMA };
 

@@ -70,6 +70,7 @@
     "lib/file-edge-match.mjs",
     "lib/cite-back-hint.mjs",
     "lib/cite-recall-path.mjs",
+    "lib/frontmatter.mjs",
     "lib/cooldown-path.mjs",
     "lib/tmp-fixture-sweep.mjs",
     "lib/summary-extractor.mjs",

@@ -8,6 +8,8 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 import { discoverAllManaged, withRelativePaths } from '../resource-discovery.mjs';
+import { parseFrontmatter } from '../lib/frontmatter.mjs';
+import { FTS5_SCHEMA, TRIGGERS_SCHEMA } from '../registry.mjs';
 
 // D#29: honor CLAUDE_MEM_DIR (offline indexer must read the same relocated data dir
 // install.mjs/registry-scanner use; equals homedir when the env is unset).
@@ -21,40 +23,8 @@ const DB_PATH = join(BASE_DIR, 'resource-registry.db');
 // or unquoted values containing colons (e.g. bare URLs). For such fields,
 // wrap the value in quotes in the frontmatter: url: "https://..."
 
-function parseFrontmatter(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return { frontmatter: {}, body: content };
-
-  const raw = match[1];
-  const body = content.slice(match[0].length).trim();
-  const fm = {};
-  let currentKey = null, currentValue = '', inMultiline = false;
-
-  for (const line of raw.split('\n')) {
-    if (inMultiline && (line.startsWith('  ') || line.startsWith('\t') || line.trim() === '')) {
-      currentValue += ' ' + line.trim();
-      continue;
-    }
-    if (inMultiline && currentKey) { fm[currentKey] = currentValue.trim(); inMultiline = false; }
-
-    const kv = line.match(/^(\w[\w-]*)\s*:\s*(.*)/);
-    if (kv) {
-      currentKey = kv[1];
-      let val = kv[2].trim();
-      if (val === '|' || val === '>') { inMultiline = true; currentValue = ''; continue; }
-      if (val.startsWith('[') && val.endsWith(']')) {
-        try { fm[currentKey] = JSON.parse(val); } catch { fm[currentKey] = val; }
-        continue;
-      }
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
-        val = val.slice(1, -1);
-      if (currentKey === 'description' && val) { inMultiline = true; currentValue = val; continue; }
-      fm[currentKey] = val;
-    }
-  }
-  if (inMultiline && currentKey) fm[currentKey] = currentValue.trim();
-  return { frontmatter: fm, body };
-}
+// parseFrontmatter is lib/frontmatter.mjs's (audit 2026-09-02 P1-16). This file carried a
+// byte-identical 30-line copy — the largest duplicate block in the tree.
 
 // ─── Feature Extraction v2 — Multi-Dimensional ──────────────────────────────
 
@@ -382,24 +352,16 @@ function main() {
   }
   try { db.exec('DROP TABLE IF EXISTS resources_fts'); } catch {}
 
-  // Rebuild FTS with canonical column order (must match registry.mjs)
-  // BM25 weights: trigger_patterns(5), keywords(3), capability_summary(3),
-  //   intent_tags(2), use_cases(2), domain_tags(1), tech_stack(1), name(1)
-  db.exec(`
-    CREATE VIRTUAL TABLE resources_fts USING fts5(
-      trigger_patterns,
-      keywords,
-      capability_summary,
-      intent_tags,
-      use_cases,
-      domain_tags,
-      tech_stack,
-      name,
-      content=resources,
-      content_rowid=id,
-      tokenize='unicode61 remove_diacritics 2'
-    );
-  `);
+  // Rebuild FTS from registry.mjs's canonical definition (audit 2026-09-02 P1-16). The
+  // copy that used to live here restated the BM25 weights in a comment and gave
+  // trigger_patterns a weight of five, while the shipped bm25() call has always been
+  // 3,3,3,2,2,1,1,1 — a duplicated block drifting in its DOCUMENTATION first, which is how
+  // a reader ends up tuning against a weight that does not exist. The real weights live at
+  // registry-retriever.mjs's COMPOSITE_EXPR, and the guard in
+  // tests/frontmatter-single-home.test.mjs sweeps for the stale spelling, so this note
+  // deliberately does not reproduce it.
+  // `IF NOT EXISTS` in the shared text is harmless here: the table was dropped above.
+  db.exec(FTS5_SCHEMA);
 
   // UPSERT: preserve resource IDs so invocations.resource_id stays valid
   const upsert = db.prepare(`
@@ -478,31 +440,9 @@ function main() {
     FROM resources WHERE status = 'active'
   `);
 
-  // Recreate FTS sync triggers for future changes
-  db.exec(`
-    CREATE TRIGGER res_fts_insert AFTER INSERT ON resources BEGIN
-      INSERT INTO resources_fts(rowid, trigger_patterns, keywords, capability_summary,
-        intent_tags, use_cases, domain_tags, tech_stack, name)
-      VALUES (NEW.id, NEW.trigger_patterns, NEW.keywords, NEW.capability_summary,
-        NEW.intent_tags, NEW.use_cases, NEW.domain_tags, NEW.tech_stack, NEW.name);
-    END;
-    CREATE TRIGGER res_fts_update AFTER UPDATE ON resources BEGIN
-      INSERT INTO resources_fts(resources_fts, rowid, trigger_patterns, keywords,
-        capability_summary, intent_tags, use_cases, domain_tags, tech_stack, name)
-      VALUES ('delete', OLD.id, OLD.trigger_patterns, OLD.keywords, OLD.capability_summary,
-        OLD.intent_tags, OLD.use_cases, OLD.domain_tags, OLD.tech_stack, OLD.name);
-      INSERT INTO resources_fts(rowid, trigger_patterns, keywords, capability_summary,
-        intent_tags, use_cases, domain_tags, tech_stack, name)
-      VALUES (NEW.id, NEW.trigger_patterns, NEW.keywords, NEW.capability_summary,
-        NEW.intent_tags, NEW.use_cases, NEW.domain_tags, NEW.tech_stack, NEW.name);
-    END;
-    CREATE TRIGGER res_fts_delete AFTER DELETE ON resources BEGIN
-      INSERT INTO resources_fts(resources_fts, rowid, trigger_patterns, keywords,
-        capability_summary, intent_tags, use_cases, domain_tags, tech_stack, name)
-      VALUES ('delete', OLD.id, OLD.trigger_patterns, OLD.keywords, OLD.capability_summary,
-        OLD.intent_tags, OLD.use_cases, OLD.domain_tags, OLD.tech_stack, OLD.name);
-    END;
-  `);
+  // Recreate FTS sync triggers for future changes — registry.mjs's definition (P1-16).
+  db.exec(TRIGGERS_SCHEMA);
+
 
   // Stats
   const stats = db.prepare('SELECT type, COUNT(*) as cnt FROM resources GROUP BY type').all();

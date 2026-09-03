@@ -5,6 +5,7 @@
 import { parseGitHubUrl, buildTreeUrl, buildContentUrl, buildRepoUrl, buildHeaders } from './registry-github.mjs';
 import { upsertResource } from './registry.mjs';
 import { debugLog, isPathConfined } from './utils.mjs';
+import { parseFrontmatter } from './lib/frontmatter.mjs';
 import { createHash } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -98,40 +99,9 @@ export function discoverFromTree(treeData, pathFilter) {
  * @param {string} content Full file content
  * @returns {{ frontmatter: Record<string, any>, body: string }}
  */
-export function parseFrontmatter(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return { frontmatter: {}, body: content };
-
-  const raw = match[1];
-  const body = content.slice(match[0].length).trim();
-  const fm = {};
-  let currentKey = null, currentValue = '', inMultiline = false;
-
-  for (const line of raw.split('\n')) {
-    if (inMultiline && (line.startsWith('  ') || line.startsWith('\t') || line.trim() === '')) {
-      currentValue += ' ' + line.trim();
-      continue;
-    }
-    if (inMultiline && currentKey) { fm[currentKey] = currentValue.trim(); inMultiline = false; }
-
-    const kv = line.match(/^(\w[\w-]*)\s*:\s*(.*)/);
-    if (kv) {
-      currentKey = kv[1];
-      let val = kv[2].trim();
-      if (val === '|' || val === '>') { inMultiline = true; currentValue = ''; continue; }
-      if (val.startsWith('[') && val.endsWith(']')) {
-        try { fm[currentKey] = JSON.parse(val); } catch { fm[currentKey] = val; }
-        continue;
-      }
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
-        val = val.slice(1, -1);
-      if (currentKey === 'description' && val) { inMultiline = true; currentValue = val; continue; }
-      fm[currentKey] = val;
-    }
-  }
-  if (inMultiline && currentKey) fm[currentKey] = currentValue.trim();
-  return { frontmatter: fm, body };
-}
+// The parser itself is lib/frontmatter.mjs's (audit 2026-09-02 P1-16); re-exported here
+// because callers and tests import it from this module.
+export { parseFrontmatter };
 
 // ─── Keyword Extraction ─────────────────────────────────────────────────────
 
