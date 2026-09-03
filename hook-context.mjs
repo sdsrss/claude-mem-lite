@@ -6,7 +6,8 @@
 // Handles adaptive time windows, token-budgeted selection, and legacy CLAUDE.md cleanup.
 
 import { basename, join } from 'path';
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import {
   estimateTokens, truncate, typeIcon, fmtTime, inferProject,
   debugLog, neutralizeContextDelimiters,
@@ -351,16 +352,16 @@ export function cleanupClaudeMdLegacyBlock() {
 
   if (normalized === content) { dropMarker(); return; }
 
-  // Per-pid temp suffix so two concurrent first-run SessionStarts in the same
-  // project (e.g. two terminals) can't rename each other's half-written temp
-  // onto the user's tracked CLAUDE.md. Matches the idiom in hook-shared.mjs.
-  const tmp = claudeMdPath + `.mem-tmp-${process.pid}`;
+  // atomicWriteFileSync keeps the per-pid temp (two concurrent first-run SessionStarts in
+  // one project must not rename each other's half-written temp onto the user's tracked
+  // CLAUDE.md) AND adds the lstat the local twin lacked: renaming onto a symlink NAME
+  // replaces the link with a regular file, orphaning a dotfiles-managed CLAUDE.md
+  // (audit 2026-09-02 P0-5). Its temp lands beside the RESOLVED target, so the rename
+  // stays same-device even when the real file lives on another mount.
   try {
-    writeFileSync(tmp, normalized);
-    renameSync(tmp, claudeMdPath);
+    atomicWriteFileSync(claudeMdPath, normalized);
     dropMarker();
   } catch (e) {
-    try { unlinkSync(tmp); } catch {}
     debugLog('ERROR', 'cleanupClaudeMdLegacyBlock', `CLAUDE.md write failed: ${e.message}`);
     // Intentionally do NOT drop the marker on write failure — retry next session.
   }

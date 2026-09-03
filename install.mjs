@@ -614,7 +614,11 @@ if (existsSync(pluginDir)) {
     if (existsSync(pluginHooksPath)) {
       const pluginHooks = JSON.parse(readFileSync(pluginHooksPath, 'utf8'));
       if (pluginHooks.hooks && Object.keys(pluginHooks.hooks).length > 0) {
-        writeFileSync(pluginHooksPath, JSON.stringify({
+        // Atomic (audit 2026-09-02 P1-10): a torn hooks.json is not a fail-open marker —
+        // Claude Code parses it at plugin load, so half a file disables the plugin's hooks
+        // for that install until the next successful write. Same writer settings.json
+        // already uses 1600 lines down.
+        atomicWriteFileSync(pluginHooksPath, JSON.stringify({
           description: pluginHooks.description || 'claude-mem-lite hooks',
           _note: 'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
           hooks: {}
@@ -653,7 +657,10 @@ if (existsSync(pluginDir)) {
           try {
             const h = JSON.parse(readFileSync(cachedHooksPath, 'utf8'));
             if (h.hooks && Object.keys(h.hooks).length > 0) {
-              writeFileSync(cachedHooksPath, JSON.stringify({
+              // Atomic, same reason as the marketplace-source copy above (P1-10). This one
+              // is the higher-cost of the two: it runs once PER CACHED VERSION, so a tear
+              // here disables hooks for whichever version Claude Code happens to load.
+              atomicWriteFileSync(cachedHooksPath, JSON.stringify({
                 description: h.description || 'claude-mem-lite hooks',
                 _note: `Hooks managed by install.mjs in settings.json — cache hooks.json cleared to prevent duplicate registration (cache ver: ${ver})`,
                 hooks: {}

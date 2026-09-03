@@ -16,7 +16,8 @@
 //
 // See docs/CLAUDE-MD-STEERING-PLAN.md for rationale + migration.
 
-import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, mkdirSync, rmdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync } from 'fs';
+import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { memdirPath, removePluginSection, removePluginDoc, isAdopted as memdirIsAdopted } from './memdir.mjs';
@@ -54,11 +55,13 @@ function renderBlock(slug, version, body) {
 
 function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
 
-function atomicWrite(path, content) {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, content);
-  renameSync(tmp, path);
-}
+// `atomicWriteFileSync`, not a local temp+rename (audit 2026-09-02 P0-5). The local twin
+// renamed onto the PATH; when a project's CLAUDE.md is a symlink into a dotfiles repo
+// (chezmoi/stow/yadm) or a monorepo's shared root, that REPLACES the link with a regular
+// file — silently, on the first SessionStart, with no user-visible signal beyond a git
+// typechange. The shared writer lstats first and writes THROUGH to the real target. It has
+// been in this repo, shipped and used by install.mjs for ~/.claude/settings.json, since the
+// day that failure mode was first written down in its own docblock.
 
 function writeState(cwd, slug, state) {
   const dir = dotClaudeDir(cwd);

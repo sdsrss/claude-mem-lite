@@ -9,7 +9,8 @@
 //
 // See docs/plans/2026-04-16-invited-memory-pattern.md for rationale.
 
-import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'fs';
+import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
@@ -100,11 +101,10 @@ function canonicalBody(contentLine) {
 
 function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
 
-function atomicWrite(path, content) {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, content);
-  renameSync(tmp, path);
-}
+// Third byte-identical copy of the same temp+rename, all three missing the same lstat
+// (audit 2026-09-02 P0-5). MEMORY.md under a memory dir is a prime symlink candidate —
+// users point it at a dotfiles repo so the same index follows them between machines —
+// and renaming onto the link NAME severs it silently. See lib/atomic-write.mjs.
 
 function readState(memdir, slug) {
   const p = stateFile(memdir, slug);
