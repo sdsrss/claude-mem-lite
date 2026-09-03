@@ -24,6 +24,25 @@ export default [
     rules: {
       'no-undef': 'error',
       'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      // `no-shadow`: MEASURED AND DECLINED (audit 2026-09-02 P2-17 recommended it).
+      // 70 violations tree-wide, 16 in shipped source + 1 in tests/sandbox, 54 under
+      // tests/. Enumerated rather than counted, because the shape matters:
+      //
+      //   install.mjs:1530-1533  ok/warn/fail/log — THE AUDIT'S HEADLINE EXAMPLE, and it
+      //     is the design, not a defect. `doctor()` shadows the file-level helpers on
+      //     purpose so every existing call site captures into `checks` instead of
+      //     printing; that IS how `--json` works, and the code says so two lines above.
+      //     The rule would force a disable comment on a documented mechanism or ~40
+      //     renames to undo it.
+      //   server.mjs ×6         a handler parameter named `db` over the module-level
+      //     `db`. Idiomatic, scoped, and the rename makes every call site read worse.
+      //   install.mjs ×3        `cmd`, same shape.
+      //
+      // That leaves two or three marginal renames. A rule whose first-listed hit is a
+      // deliberate mechanism is a rule that gets disabled by the next person rather than
+      // obeyed — which is the reasoning this config already applies to `no-param-reassign`
+      // and `require-await`. The one genuinely confusing case (`raw` reused inside
+      // hook.mjs handleUserPrompt for a file's contents) was renamed by hand instead.
       'no-unreachable': 'error',
       eqeqeq: ['error', 'always'],
       'no-var': 'error',

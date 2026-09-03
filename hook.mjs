@@ -2225,8 +2225,11 @@ async function handleUserPrompt() {
       // (inject, maybe duplicate) rather than fail closed (suppress).
       const keyContextIds = [];
       try {
-        const raw = readFileSync(join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)), 'utf8');
-        const { ids, session } = JSON.parse(raw);
+        // `keyCtxRaw`, not `raw`: this function already binds `raw` to the stdin payload
+        // ~120 lines up, and a second `raw` holding a marker FILE's contents reads as that
+        // one (audit 2026-09-02 P2-17 — the one hit in the tree worth a rename).
+        const keyCtxRaw = readFileSync(join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)), 'utf8');
+        const { ids, session } = JSON.parse(keyCtxRaw);
         if (Array.isArray(ids) && !(session && ccSessionId && session !== ccSessionId)) {
           keyContextIds.push(...ids);
         }
