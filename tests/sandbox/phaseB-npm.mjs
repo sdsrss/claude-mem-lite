@@ -186,7 +186,10 @@ check('MCP mem_save then mem_search round-trips', () => {
 setPhase('B7: auto-update (managed form)');
 
 check('self-update in a healthy install exits 0 (no-op when current)', () => {
-  const r = run(CLI, ['self-update'], { env: { ...ENV, CLAUDE_MEM_FORCE_UPDATE_CHECK: '1' }, cwd: PROJECT, timeout: 180_000 });
+  // CLAUDE_MEM_FORCE_UPDATE_CHECK removed (P1-13): nothing in the tree reads it, so it was
+  // decoration implying a force mechanism that does not exist. `self-update` is explicit and
+  // needs no forcing.
+  const r = run(CLI, ['self-update'], { env: ENV, cwd: PROJECT, timeout: 180_000 });
   return { ok: r.code === 0, detail: `exit=${r.code} ${(r.stdout || r.stderr).slice(0, 400)}` };
 });
 check('doctor never prescribes `claude-mem-lite update` (that is the observation editor)', () => {

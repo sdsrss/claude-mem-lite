@@ -243,10 +243,53 @@ for (const [label, args] of [
 // ── 9. Auto-update in plugin mode ───────────────────────────────────────────
 setPhase('A9: auto-update — plugin mode must report, never self-install');
 
+// Audit 2026-09-02 P1-13: this drove `node hook-update.mjs --check` with
+// CLAUDE_MEM_FORCE_UPDATE_CHECK=1. `hook-update.mjs` has NO argv entry point and nothing
+// anywhere reads that env var, so the process imported the module, ran nothing and exited
+// 0 — both checks passed vacuously, and the contract in this phase's own title was never
+// exercised. The real entry is `hook.mjs update-check` (the detached worker SessionStart
+// spawns). The env var is gone rather than renamed: inventing a reader for it would be
+// building a mechanism to justify a test.
+const STATE_JSON = join(HOME, '.claude-mem-lite', 'runtime', 'update-state.json');
+const readLastCheck = () => {
+  try { return JSON.parse(readFileSync(STATE_JSON, 'utf8')).lastCheck ?? null; } catch { return null; }
+};
+// Backdate the 24h gate so the real entry point actually does its work. `checkForUpdate`
+// returns the CACHED state when `shouldCheck` says the last check was recent, and an
+// earlier step in this phase has already written one — so without this the entry runs and
+// writes nothing, which is indistinguishable from the no-op entry this case replaced. The
+// second draft of this case caught exactly that (before === after) and this is the fix;
+// the first draft, which only asserted the file exists, passed against both.
+try {
+  const st = JSON.parse(readFileSync(STATE_JSON, 'utf8'));
+  st.lastCheck = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  writeFileSync(STATE_JSON, JSON.stringify(st));
+} catch { /* no prior state — shouldCheck() then returns true on its own */ }
+const lastCheckBefore = readLastCheck();
 const before = readdirSync(join(HOME, '.claude', 'plugins', 'cache', MP, 'claude-mem-lite'));
-const upd = node([join(CACHE, 'hook-update.mjs'), '--check'], { env: { ...ENV, CLAUDE_MEM_FORCE_UPDATE_CHECK: '1' }, cwd: PROJECT, timeout: 60_000 });
-check('hook-update --check exits 0 in plugin mode', () => ({ ok: upd.code === 0, detail: `exit=${upd.code} ${(upd.stdout || upd.stderr).slice(0, 300)}` }));
-check('plugin mode did not mutate the plugin cache', () => {
+const upd = node([join(CACHE, 'hook.mjs'), 'update-check'], { env: ENV, cwd: PROJECT, timeout: 60_000 });
+check('hook.mjs update-check exits 0 in plugin mode', () => ({ ok: upd.code === 0, detail: `exit=${upd.code} ${(upd.stdout || upd.stderr).slice(0, 300)}` }));
+// PREMISE, and the whole point of the rewrite: prove the path RAN. checkForUpdate writes
+// update-state.json on every branch that reaches the network — including the failure and
+// rate-limited ones — so this holds with or without connectivity, while a no-op entry
+// point (the state this replaces) leaves the file absent.
+check('update-check actually ran (update-state.json lastCheck advanced)', () => {
+  // Compares BEFORE and AFTER rather than asserting the file exists. The first cut did the
+  // latter and the very first real run reported `existedBefore=true` — an earlier phase step
+  // had already written it, so "exists && has a lastCheck" would have passed against a
+  // no-op entry point too. That is this item's own defect, reproduced in its replacement.
+  const lastCheckAfter = readLastCheck();
+  return {
+    ok: Boolean(lastCheckAfter) && lastCheckAfter !== lastCheckBefore,
+    detail: `before=${lastCheckBefore} after=${lastCheckAfter}`,
+  };
+});
+// STATED LIMIT: `hook.mjs`'s update-check case passes `allowInstall: false` unconditionally
+// (the F6 staging note there), and canInstall is `!pluginMode && allowInstall`. So this
+// proves the update-check worker never installs — it does NOT isolate the plugin-mode arm,
+// because the flag alone already forces the same answer. Testing plugin mode on its own
+// would need a caller that passes allowInstall:true, and no shipped entry point does.
+check('the update-check worker did not mutate the plugin cache', () => {
   const after = readdirSync(join(HOME, '.claude', 'plugins', 'cache', MP, 'claude-mem-lite'));
   return { ok: JSON.stringify(before) === JSON.stringify(after), detail: `${before} -> ${after}` };
 });
