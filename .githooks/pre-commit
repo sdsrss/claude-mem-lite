@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Tracked git hooks dir — wired with `git config core.hooksPath .githooks`.
+#
+# Why this shim exists (audit 2026-09-02 P1-11): `.git/hooks/` is untracked, so every clone
+# starts with no hook and any copy made once goes stale silently. On the maintainer's
+# machine `.git/hooks/pre-commit` was a 2050 B copy from 2026-03-27 against a 6290 B
+# `scripts/pre-commit.sh` — 72 lines of divergence, which meant the `@emnapi` lockfile-
+# pruning guard and the frozen-corpus commit gate had NEVER run locally. A copy cannot be
+# kept in sync; an exec can only be wrong by being deleted, which
+# tests/pre-commit-hook-sync.test.mjs then reports.
+#
+# Deliberately a one-line exec and nothing else: any logic added here is logic that is not
+# in `scripts/pre-commit.sh`, which is the file CI and the release runbook name.
+exec "$(git rev-parse --show-toplevel)/scripts/pre-commit.sh" "$@"

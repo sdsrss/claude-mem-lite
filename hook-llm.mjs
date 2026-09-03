@@ -26,6 +26,36 @@ import { OBS_TYPE_SET } from './lib/obs-types.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
+import { recoverChildrenOf } from './lib/maintain-core.mjs';
+
+/**
+ * Retract a pre-saved observation this worker created moments ago, after the Haiku
+ * round-trip decided the row is not worth keeping.
+ *
+ * Three call sites used to be three DELETEs and only ONE of them had the guard (audit
+ * 2026-09-02 P0-6). Seconds pass between the pre-save and the LLM verdict, and in that
+ * window auto-dedup or `save --supersedes` can make the row a keeper or a tombstone:
+ *   - not live  -> not ours to hard-delete any more (a keeper may have absorbed it, and
+ *                  children can point at it through compressed_into). Leave it; the
+ *                  maintenance path deletes with recovery.
+ *   - live      -> still recover any children FIRST, the same order lib/delete-core.mjs
+ *                  uses, so nothing dangles behind a now-missing parent.
+ * Exported for a direct test only (no importer in production). Same call as `inertMarkerIds`
+ * in lib/patha-exclude-meter.mjs: the rule it encodes is one a review just caught missing on
+ * two of three sites, so it gets a test of its own rather than being reachable only through
+ * two mocked LLM workers.
+ * @returns {boolean} true when the row was actually removed
+ */
+export function retractPreSavedObs(db, obsId, where) {
+  recoverChildrenOf(db, [obsId]);
+  const removed = db.prepare(
+    `DELETE FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
+  ).run(obsId).changes;
+  if (removed === 0) {
+    debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
+  }
+  return removed > 0;
+}
 // T9: memdir-incompatible types live in the `events` table, not `observations`.
 // Set lookup is O(1) — authoritative source is lib/activity.mjs::EVENT_TYPES.
 const EVENT_TYPE_SET = new Set(EVENT_TYPES);
@@ -358,18 +388,10 @@ export function persistHaikuSummary(db, summary, ctx) {
 
     if (ctx.preSavedObsId) {
       const id = db.transaction(() => {
-        // Same live-row guard as the in-place upgrade (FLOW-7). If auto-dedup superseded
-        // or compressed the pre-saved row while this worker was in flight, that row is no
-        // longer ours to hard-delete — a keeper may have absorbed it, and children can
-        // point at it through compressed_into. Leave it to the maintenance path, which
-        // recovers children before deleting; the event still gets written either way.
-        const removed = db.prepare(
-          `DELETE FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
-        ).run(ctx.preSavedObsId).changes;
-        if (removed === 0) {
-          debugLog('DEBUG', 'llm-episode',
-            `upgrade-delete: pre-saved obs #${ctx.preSavedObsId} no longer live — left in place`);
-        }
+        // Same live-row guard as the in-place upgrade (FLOW-7); the event gets written
+        // either way. Shared helper since audit 2026-09-02 P0-6 — this was the only one
+        // of the three retraction sites that carried the guard.
+        retractPreSavedObs(db, ctx.preSavedObsId, 'upgrade-delete');
         return insertEvent();
       })();
       return { table: 'events', id };
@@ -846,7 +868,7 @@ ${actionList}`;
         if (episode.savedId) {
           const ddb = openDb();
           if (ddb) {
-            try { ddb.prepare('DELETE FROM observations WHERE id = ?').run(episode.savedId); }
+            try { retractPreSavedObs(ddb, episode.savedId, 'low-value-discard'); }
             finally { ddb.close(); }
           }
         }
@@ -971,7 +993,7 @@ ${actionList}`;
         if (episode.savedId) {
           const ddb = openDb();
           if (ddb) {
-            try { ddb.prepare('DELETE FROM observations WHERE id = ?').run(episode.savedId); }
+            try { retractPreSavedObs(ddb, episode.savedId, 'low-yield-change-drop'); }
             finally { ddb.close(); }
           }
         }

@@ -676,7 +676,19 @@ Return ONLY valid JSON:
       text: textField,
       lesson_learned: lessonLearned,
     });
-    db.transaction(() => {
+    const mergeApplied = db.transaction(() => {
+      // Re-check the keeper's liveness INSIDE the transaction (audit 2026-09-02 P0-3).
+      // findMergeCandidates selected live rows, but a Sonnet round-trip sits between that
+      // SELECT and this write (:617, BG_LLM_TIMEOUT_MS), and a concurrent SessionStart
+      // auto-dedup or `save --supersedes` can tombstone the keeper in that window. Pointing
+      // the other members at a tombstoned keeper is precisely the "buried behind a hidden
+      // parent" loss that mergeDuplicates' docblock enumerates (lib/maintain-core.mjs), and
+      // it is what that function's own isLive gate exists to prevent. Same predicate here.
+      const keeperLive = db.prepare(
+        `SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`
+      ).get(keeper.id);
+      if (!keeperLive) return false;
+
       // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
       // full text survives as a recoverable compressed_into child (mirroring
       // compressGroup / recoverChildrenOf). The keeper is the cluster's most-
@@ -701,9 +713,16 @@ Return ONLY valid JSON:
 
       const otherIds = others.map(o => o.id);
       const ph = otherIds.map(() => '?').join(',');
-      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph})`)
+      // Live guard on the members too: one already compressed into ANOTHER summary S during
+      // the LLM window would be re-pointed here, silently dropping a row out of S's child set.
+      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`)
         .run(keeper.id, ...otherIds);
+      return true;
     })();
+    if (!mergeApplied) {
+      debugLog('DEBUG', 'llm-optimize', `cluster-merge aborted: keeper #${keeper.id} no longer live`);
+      return { merged: false };
+    }
 
     rebuildVector(db, keeper.id, { title, narrative, concepts: conceptsText, lesson_learned: lessonLearned, search_aliases: keeper.search_aliases });
 
@@ -741,7 +760,11 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
   const stmt = db.prepare(`
     SELECT id, title, narrative, lesson_learned, project, type, created_at_epoch
     FROM observations
-    WHERE COALESCE(compressed_into, 0) = 0
+    -- liveObsFilterSql, not compressed_into alone (audit 2026-09-02 P0-3): auto-dedup losers
+    -- carry superseded_at with compressed_into=0 and match this predicate exactly (imp=1,
+    -- access 0, no lesson), so the narrower filter fed RETRACTED text to Sonnet and returned
+    -- it to live retrieval as a fresh "discovery" summary. Parity with findMergeCandidates.
+    WHERE ${liveObsFilterSql('')}
       AND COALESCE(importance, 1) = 1
       AND COALESCE(access_count, 0) = 0
       -- Never auto-compress a lesson-bearing row. Smart-compress sets compressed_into
@@ -903,7 +926,11 @@ JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive sum
 
       const obsIds = observations.map(o => o.id);
       const ph = obsIds.map(() => '?').join(',');
-      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph})`)
+      // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
+      // by a Sonnet round-trip, so a member may already be compressed into another summary or
+      // tombstoned. Re-pointing it here would silently remove a row from that summary's child
+      // set. Members that lost liveness stay where they are; the summary still lands.
+      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`)
         .run(sId, ...obsIds);
 
       return sId;

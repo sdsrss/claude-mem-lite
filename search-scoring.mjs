@@ -308,6 +308,13 @@ export function runIdleCleanup(db) {
       const marked = db.prepare(`
         UPDATE observations SET compressed_into = ${COMPRESSED_PENDING_PURGE}
         WHERE importance <= 1 AND COALESCE(access_count, 0) = 0
+          -- injection_count=0, the second half of decayAndMarkIdle's engagement guard
+          -- (audit 2026-09-02 P0-4). Since v2.56 an injected-but-never-accessed row counts
+          -- as PROVEN RELEVANT and decay protects it; this MCP sibling carried the lesson
+          -- guard (CHANGELOG "the sixth enforcement site") and not this one, so a row the
+          -- CLI/hook paths preserve was pending-purge'd 5 minutes into an idle server —
+          -- the same guard-on-one-path shape the docblock below claims was consolidated.
+          AND COALESCE(injection_count, 0) = 0
           AND type IN (${types})
           AND created_at_epoch < ? AND COALESCE(compressed_into, 0) = 0
           -- Never auto-mark a lesson-bearing row for purge. This idle path is the
@@ -321,6 +328,9 @@ export function runIdleCleanup(db) {
       const compressed = db.prepare(`
         UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}
         WHERE COALESCE(compressed_into, 0) = 0 AND importance = 1
+          -- Same engagement guard as the mark-idle pass above: COMPRESSED_AUTO also hides
+          -- the row from every retrieval surface, so an injected row must not reach it.
+          AND COALESCE(injection_count, 0) = 0
           AND type IN (${types})
           AND created_at_epoch < ?
           -- Same lesson guard: auto-compress (-1) hides the row from all retrieval and
