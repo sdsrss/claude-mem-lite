@@ -88,6 +88,7 @@
     "lib/binding-probe.mjs",
     "lib/install-shape.mjs",
     "lib/hook-stdin.mjs",
+    "lib/plugin-key.mjs",
     "lib/hook-stdout.mjs",
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",

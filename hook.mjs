@@ -33,6 +33,7 @@ import {
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
 import { inferProjectDir } from './project-utils.mjs';
+import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 import { readHookStdin } from './lib/hook-stdin.mjs';
 // Aliased: `acquireLock` from hook-episode.mjs below is the episode buffer's own
 // (argument-less) lock — a different mutex with a different staleness policy.
@@ -150,18 +151,22 @@ const BG_EVENTS = new Set(['llm-episode', 'llm-summary', 'auto-compress', 'llm-o
 // Respect Claude Code plugin disable state even when legacy settings.json hooks remain.
 // install.mjs writes direct hooks into ~/.claude/settings.json, so disabling the plugin
 // in Claude UI does not automatically remove them. Exit early to make disable actually work.
-const PLUGIN_KEY = 'claude-mem-lite@sdsrss';
-function isPluginExplicitlyDisabled() {
+// The KEY and the predicate live in lib/plugin-key.mjs (P2-7) — install.mjs branches on the
+// same decision, and a key that drifts on one side leaves the user with a plugin they
+// switched off and a settings.json hook set that never noticed. Reading the file stays here:
+// install.mjs already holds a parsed settings object when it asks, this process does not.
+function pluginDisabledHere() {
   try {
     const settingsPath = join(homedir(), '.claude', 'settings.json');
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    return settings.enabledPlugins?.[PLUGIN_KEY] === false;
+    return isPluginExplicitlyDisabled(JSON.parse(readFileSync(settingsPath, 'utf8')));
   } catch {
+    // Missing or unparseable settings.json → not disabled. Fail OPEN: a corrupt file must
+    // not switch the plugin off for a user who never asked for that.
     return false;
   }
 }
 
-if (event && isPluginExplicitlyDisabled()) process.exit(0);
+if (event && pluginDisabledHere()) process.exit(0);
 if (process.env.CLAUDE_MEM_HOOK_RUNNING && !BG_EVENTS.has(event)) process.exit(0);
 
 // Crash-safe: flush episode buffer on unexpected termination to prevent data loss
@@ -1486,7 +1491,13 @@ function runSessionStartAutoMaintain(db, project) {
       // Auto-dedup (fuzzy): catches near-identical titles that exact-match
       // misses across larger time windows — e.g. episode-batch titles like
       // "Modified A.mjs, B.mjs" vs "Modified B.mjs, A.mjs" written days apart.
-      // MinHash pre-filter (≥0.7) cuts the O(N²) scan; Jaccard ≥0.95 stays
+      // MinHash pre-filter (≥0.7) makes each PAIR cheap; it does not reduce the number of
+      // pairs. Said precisely because the comment here used to read "cuts the O(N²) scan",
+      // which is false and reads as an algorithmic bound (audit 2026-09-02 P2-13): the
+      // estimate is evaluated INSIDE the inner loop of a full nested scan in
+      // `lib/maintain-core.mjs`, so every pair is still visited — what it skips is the
+      // expensive exact Jaccard behind it. Measured, the whole pair pass is ~0.6 ms at
+      // n=500. Jaccard ≥0.95 stays
       // well clear of legit "two updates same area" pairs (those typically
       // score 0.7–0.85, surfaced via `maintain scan` for manual review).
       // Bounded by ${SCAN_LIMIT} recent rows × ${FUZZY_MAX_MERGES}-merge cap.

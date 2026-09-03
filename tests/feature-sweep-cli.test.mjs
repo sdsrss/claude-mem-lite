@@ -632,7 +632,15 @@ describe('CLI feature sweep: registry commands', () => {
 
     const found = ok(['registry', 'search', 'sweep-registry-skill']);
     expect(found.stdout).toContain('sweep-registry-skill');
-    expect(found.stdout).toContain(skill);
+    // This fixture lives at ROOT/skills/, i.e. NOT under the managed dir — so no `Path:`
+    // line, and the row is invoked by name. Until v3.92.0 the CLI printed the absolute
+    // local_path here while the MCP face printed nothing (audit P2-6), and this assertion
+    // was `toContain(skill)`, pinning that divergence as if it were the contract. The Use:
+    // line for a non-managed hit never refers to the path, so printing an absolute home
+    // path bought the reader nothing.
+    expect(found.stdout).not.toContain(skill);
+    expect(found.stdout).not.toMatch(/\n\s*Path:/);
+    expect(found.stdout).toMatch(/Use: (Skill\(|mem_use\(name=)/);
 
     expect(ok(['registry', 'reindex']).stdout).toMatch(/FTS5 reindexed\. \d+ active resources/);
 

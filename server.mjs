@@ -45,7 +45,7 @@ import { optimizePreview, optimizeRun } from './hook-optimize.mjs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegistryListLine } from './registry.mjs';
-import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichImportedResources, enrichNamedResource } from './lib/registry-core.mjs';
+import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichImportedResources, enrichNamedResource, resourceUseHint } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
 import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
@@ -1307,27 +1307,12 @@ server.registerTool(
         return { content: [{ type: 'text', text: `No matching resources for: "${args.query}"` }] };
       }
       const home = homedir();
-      const toPortable = (p) => p && p.startsWith(home) ? '~' + p.slice(home.length) : (p || '');
       const lines = results.map(r => {
         const qualityBadge = r.quality_tier === 'installed' ? '[✓]' : r.quality_tier === 'verified' ? '[★]' : '[○]';
         const categoryLabel = r.category ? ` [${r.category}]` : '';
-        const isManaged = r.local_path && r.local_path.includes(join(DB_DIR, 'managed') + sep);
-        const portablePath = isManaged ? toPortable(r.local_path) : '';
-        let howToUse;
-        if (isManaged) {
-          // Managed: use Read(path) or mem_use — Skill() won't work for managed resources
-          // Agents always have complete .md paths (e.g., agents/group/agents/name.md)
-          // Only skills can be directory paths (9 cases) — resolve to /SKILL.md
-          const resolvedPath = portablePath.endsWith('.md') ? portablePath : `${portablePath}/SKILL.md`;
-          howToUse = `Read("${resolvedPath}") or mem_use(name="${r.name}"${r.type === 'agent' ? ', type="agent"' : ''})`;
-        } else if (r.invocation_name) {
-          // Native plugin/user skill: Skill() with full invocation name
-          howToUse = r.type === 'skill'
-            ? `Skill("${r.invocation_name}")`
-            : `Agent(subagent_type="${r.invocation_name}")`;
-        } else {
-          howToUse = `mem_use(name="${r.name}"${r.type === 'agent' ? ', type="agent"' : ''})`;
-        }
+        // P2-6: the invocation rule is shared; only the Markdown bold and the two-space
+        // indent below are this face's.
+        const { portablePath, howToUse } = resourceUseHint(r, { home, managedPrefix: join(DB_DIR, 'managed') + sep });
         const pathLine = portablePath ? `\n  Path: ${portablePath}` : '';
         return `${qualityBadge} ${r.type === 'skill' ? 'S' : 'A'} **${r.name}**${categoryLabel} — ${truncate(r.capability_summary || '', 80)}${pathLine}\n  Use: ${howToUse}`;
       });

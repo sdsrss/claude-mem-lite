@@ -33,8 +33,9 @@ const IS_NPX = process.env.npm_command === 'exec' ||
 const INSTALL_DIR = DATA_DIR;
 const SERVER_PATH = join(INSTALL_DIR, 'server.mjs');
 const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
-const MARKETPLACE_KEY = 'sdsrss';
-const PLUGIN_KEY = `claude-mem-lite@${MARKETPLACE_KEY}`;
+// P2-7: both constants and the predicate come from lib/plugin-key.mjs, which hook.mjs also
+// imports — this pair used to be typed out in each.
+import { MARKETPLACE_KEY, PLUGIN_KEY, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import { RESOURCE_METADATA } from './install-metadata.mjs';
@@ -2210,9 +2211,7 @@ function cleanupMemHooksFromSettings(settings) {
   return removed;
 }
 
-function isPluginExplicitlyDisabled(settings) {
-  return settings?.enabledPlugins?.[PLUGIN_KEY] === false;
-}
+
 
 function getInstalledPluginEntries(installed) {
   if (installed?.plugins && typeof installed.plugins === 'object') return installed.plugins;

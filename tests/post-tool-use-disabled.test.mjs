@@ -19,7 +19,10 @@ import { join, resolve } from 'path';
 
 const SCRIPT = resolve(import.meta.dirname, '../scripts/post-tool-use.sh');
 const HOOK_MJS = resolve(import.meta.dirname, '../hook.mjs');
-const PLUGIN_KEY = 'claude-mem-lite@sdsrss';
+// Imported, not re-typed. This file compares a BASH literal against the JS side, so the JS
+// side has to be the shipped value — a third hand-written copy here would let the shell and
+// the code drift together while the test kept agreeing with itself (#10716).
+const { PLUGIN_KEY } = await import('../lib/plugin-key.mjs');
 
 const sandboxes = [];
 function sandbox(prefix) {
@@ -131,10 +134,22 @@ describe('bash/Node disable-detection parity', () => {
   const bash = readFileSync(SCRIPT, 'utf8');
   const nodeSrc = readFileSync(HOOK_MJS, 'utf8');
 
-  it('both sides hard-code the same plugin key', () => {
-    const nodeKey = (nodeSrc.match(/const PLUGIN_KEY = '([^']+)'/) || [])[1];
-    expect(nodeKey).toBe(PLUGIN_KEY);
-    expect(bash, 'post-tool-use.sh must carry the same key literal as hook.mjs PLUGIN_KEY').toContain(PLUGIN_KEY);
+  it('the shell copy carries the same plugin key as the JS side', () => {
+    // The Node key is no longer a literal in hook.mjs: audit P2-7 moved it to
+    // lib/plugin-key.mjs, which install.mjs imports too. This case used to grep hook.mjs
+    // for `const PLUGIN_KEY = '…'` and went RED on that move — the source-text guard whose
+    // anchor legitimately relocated, which this repo has now recorded in both directions
+    // (P3-16). It is anchored on the IMPORTED value instead, so the key can live anywhere
+    // and only a genuine bash/JS divergence fails.
+    expect(PLUGIN_KEY, 'premise: the shared module must export a non-empty key').toBeTruthy();
+    expect(bash, 'post-tool-use.sh must carry the same key literal as lib/plugin-key.mjs')
+      .toContain(PLUGIN_KEY);
+    // hook.mjs must still REACH that key rather than having quietly re-typed one: an
+    // inline literal here would satisfy the bash check above while being free to drift.
+    expect(nodeSrc, 'hook.mjs must take the key from the shared module')
+      .toMatch(/from\s+'\.\/lib\/plugin-key\.mjs'/);
+    expect(nodeSrc, 'hook.mjs must not re-type the plugin key')
+      .not.toMatch(/const PLUGIN_KEY\s*=\s*['"]/);
   });
 
   it('both sides read $HOME/.claude/settings.json (not CLAUDE_CONFIG_DIR)', () => {

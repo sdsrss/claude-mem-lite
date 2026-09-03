@@ -68,6 +68,18 @@ export function estimateJaccardFromMinHash(sig1, sig2) {
   if (sig1.length !== sig2.length) return 0;
   const numHashes = sig1.length / 8;
   if (numHashes === 0) return 0;
+  // NEGATIVE RESULT, kept so nobody re-proposes it (audit 2026-09-02 P2-13 suggested an
+  // "allocation-free comparison"). `slice()` does allocate two 8-char strings per band, and
+  // the caller is a full nested pair loop — ~125k pairs at the 500-row scan bound. A
+  // charCodeAt inner loop was written and measured against this form over all 124,750 pairs
+  // of a 500-title fixture: identical results (0 mismatches, so the rewrite was correct) and
+  // NO time difference — 0.77× / 1.08× / 1.03× across three passes, i.e. the first pass was
+  // slower and the rest were noise. V8 handles short slices well enough that the byte loop
+  // buys nothing, and the whole pass is 0.6 ms.
+  //
+  // So the slice form stays: it is the more readable of two equally fast implementations,
+  // and shipping the other would be churn with a performance claim behind it that the
+  // measurement does not support.
   let matches = 0;
   for (let i = 0; i < numHashes; i++) {
     const offset = i * 8;

@@ -111,6 +111,7 @@ export const SOURCE_FILES = [
   // parses hook stdout as ONE JSON document; missing from the manifest → an updated
   // install throws ERR_MODULE_NOT_FOUND on every hook fire.
   'lib/hook-stdin.mjs',
+  'lib/plugin-key.mjs',
   'lib/hook-stdout.mjs',
   // audit P0/P1: inter-process install lock + atomic config writes — imported by
   // install.mjs (settings.json + install lock) and hook-update.mjs (.claude.json
