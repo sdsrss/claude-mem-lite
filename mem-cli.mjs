@@ -21,7 +21,7 @@ import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, OBS_FIELDS, SESSIO
 import { collectBrowseTiers, getActiveMemorySessionId, BROWSE_TIERS, BROWSE_TIER_LABELS } from './lib/browse-core.mjs';
 import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
 import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegistryListLine } from './registry.mjs';
-import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources } from './lib/registry-core.mjs';
+import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichResourceRow, enrichImportedResources, enrichNamedResource, REGISTRY_CONFINE_ENV } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { computeFunnel, formatFunnel, computeSweep, formatSweep, DEFAULT_SWEEP_FLOORS, DEFAULT_SWEEP_MARGINS } from './registry-recommend.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
@@ -2993,17 +2993,9 @@ async function cmdImport(argv) {
     if (flags.enrich) {
       out('[mem] Running LLM enrichment...');
       const { enrichResource } = await import('./registry-enricher.mjs');
-      let enriched = 0;
-      for (const r of results) {
-        const row = rdb.prepare('SELECT local_path FROM resources WHERE id = ?').get(r.id);
-        if (!row?.local_path) continue;
-        try {
-          const content = readFileSync(row.local_path, 'utf8');
-          const ok = await enrichResource(rdb, r.name, r.type, content);
-          if (ok) enriched++;
-        } catch {}
-      }
+      const { ok: enriched, denied } = await enrichImportedResources(rdb, results, { confineTo: DB_DIR, enrichResource });
       out(`[mem] Enriched ${enriched}/${results.length} resources.`);
+      if (denied) out(`[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`);
     }
   } catch (e) {
     fail(`[mem] Import failed: ${e.message}`);
@@ -3121,24 +3113,28 @@ async function cmdEnrich(argv) {
       const rows = rdb.prepare("SELECT name, type, local_path FROM resources WHERE status = 'active' AND (enrichment_status IS NULL OR enrichment_status = 'failed')").all();
       if (rows.length === 0) { out('[mem] All resources already enriched.'); return; }
       out(`[mem] Enriching ${rows.length} resources...`);
-      let ok = 0, failCount = 0;
+      let ok = 0, failCount = 0, denied = 0;
       for (const r of rows) {
-        if (!r.local_path) { failCount++; continue; }
-        try {
-          const content = readFileSync(r.local_path, 'utf8');
-          const success = await enrichResource(rdb, r.name, r.type, content);
-          if (success) ok++; else failCount++;
-          if (!flags.batch) await new Promise(resolve => setTimeout(resolve, 500));
-        } catch { failCount++; }
+        const { status, error } = await enrichResourceRow(rdb, r, { confineTo: DB_DIR, enrichResource });
+        if (status === 'enriched') ok++;
+        else if (status === 'denied') denied++;
+        else failCount++;
+        // Pace exactly where the pre-refactor loop did: after an enrichResource call that
+        // RETURNED. A missing path, an unreadable file, a gate refusal and a throw out of
+        // enrichResource all skipped the sleep before, and still do — `error` present on a
+        // 'failed' row is what distinguishes "returned false" from "threw".
+        const apiReturned = status === 'enriched' || (status === 'failed' && !error);
+        if (apiReturned && !flags.batch) await new Promise(resolve => setTimeout(resolve, 500));
       }
       out(`[mem] Done: ${ok} enriched, ${failCount} failed.`);
+      if (denied) out(`[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`);
     } else if (name) {
-      const row = rdb.prepare("SELECT name, type, local_path FROM resources WHERE name = ? AND status = 'active'").get(name);
-      if (!row) { fail(`[mem] Resource not found: ${name}`); return; }
-      if (!row.local_path) { fail(`[mem] No local_path for ${name}`); return; }
-      const content = readFileSync(row.local_path, 'utf8');
-      const success = await enrichResource(rdb, row.name, row.type, content);
-      out(success ? `[mem] Enriched: ${name}` : `[mem] Enrichment failed for ${name}`);
+      const { status, error } = await enrichNamedResource(rdb, name, { confineTo: DB_DIR, enrichResource });
+      if (status === 'not-found') { fail(`[mem] Resource not found: ${name}`); return; }
+      if (status === 'no-path') { fail(`[mem] No local_path for ${name}`); return; }
+      if (status === 'denied') { fail(`[mem] Access denied: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`); return; }
+      if (status === 'unreadable') { fail(`[mem] Enrich error: ${error?.message || 'cannot read local_path'}`); return; }
+      out(status === 'enriched' ? `[mem] Enriched: ${name}` : `[mem] Enrichment failed for ${name}`);
     } else {
       fail('[mem] Usage: claude-mem-lite enrich <name> OR claude-mem-lite enrich --all [--batch]');
     }

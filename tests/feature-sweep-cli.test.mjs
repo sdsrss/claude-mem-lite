@@ -129,8 +129,31 @@ function writeTranscript(path, sessionId) {
 }
 
 /** A local SKILL.md the registry can import without touching the network. */
+/**
+ * A skill fixture at an arbitrary path OUTSIDE the managed data dir.
+ *
+ * Fine for `registry import`, which only records the path. NOT what `enrich` reads —
+ * see writeManagedSkill.
+ */
 function writeSkill(name) {
   const dir = join(ROOT, 'skills', name);
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, 'SKILL.md');
+  writeFileSync(p, `---\nname: ${name}\ndescription: sweep fixture skill for ${name}\n---\n\nBody.\n`);
+  return p;
+}
+
+/**
+ * The same fixture where a real imported resource actually lands: under
+ * `<CLAUDE_MEM_DIR>/managed/`, which is what registry-importer writes.
+ *
+ * Audit P1-3 put the path-confinement gate on all four enrichment legs, so a fixture
+ * parked next to the sandbox (ROOT/skills) is now refused before the enricher is called —
+ * which is correct behaviour, and would silently turn the `enrich --all` case into an
+ * assertion about refusals rather than about an unreachable LLM.
+ */
+function writeManagedSkill(name) {
+  const dir = join(DATA_DIR, 'managed', 'skills', name);
   mkdirSync(dir, { recursive: true });
   const p = join(dir, 'SKILL.md');
   writeFileSync(p, `---\nname: ${name}\ndescription: sweep fixture skill for ${name}\n---\n\nBody.\n`);
@@ -628,12 +651,26 @@ describe('CLI feature sweep: registry commands', () => {
     expect(unknown.stdout + unknown.stderr).toContain('Resource not found: no-such-resource-xyzzy');
 
     // With a resource pending enrichment and no reachable LLM, --all must report an
-    // honest failure count and exit 0 — not hang, not spawn a real `claude`.
-    const skill = writeSkill('sweep-enrich-skill');
+    // honest failure count and exit 0 — not hang, not spawn a real `claude`. The fixture
+    // has to live under the managed dir or the P1-3 confinement gate refuses it before
+    // the enricher is reached, and this case would be asserting the wrong thing.
+    const skill = writeManagedSkill('sweep-enrich-skill');
     ok(['registry', 'import', '--name', 'sweep-enrich-skill', '--resource-type', 'skill', '--local-path', skill]);
     const all = ok(['enrich', '--all']);
     expect(all.stdout).toMatch(/Done: 0 enriched, [1-9]\d* failed\./);
+    expect(all.stdout, 'a managed path must not be refused').not.toMatch(/Refused/);
     ok(['registry', 'remove', '--name', 'sweep-enrich-skill', '--resource-type', 'skill']);
+
+    // The other side of the same gate, on the shipped CLI: a resource whose local_path
+    // sits outside the managed dir is refused rather than read. tests/registry-enrich-
+    // confinement.test.mjs owns the detail; this one pins that the sweep's own surface
+    // routes it, since `enrich` is the command this case is named after.
+    const outside = writeSkill('sweep-enrich-outside');
+    ok(['registry', 'import', '--name', 'sweep-enrich-outside', '--resource-type', 'skill', '--local-path', outside]);
+    const refused = ok(['enrich', '--all']);
+    expect(refused.stdout).toMatch(/Refused 1: local_path outside the managed directory/);
+    expect(refused.stdout).toMatch(/Done: 0 enriched, 0 failed\./);
+    ok(['registry', 'remove', '--name', 'sweep-enrich-outside', '--resource-type', 'skill']);
   }, 40000);
 });
 

@@ -47,7 +47,7 @@ import { optimizePreview, optimizeRun } from './hook-optimize.mjs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegistryListLine } from './registry.mjs';
-import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources } from './lib/registry-core.mjs';
+import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichImportedResources, enrichNamedResource } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
 import { saveObservation, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
@@ -1500,16 +1500,8 @@ server.registerTool(
         let enrichMsg = '';
         if (args.enrich) {
           const { enrichResource } = await import('./registry-enricher.mjs');
-          let ok = 0;
-          for (const r of results) {
-            const row = rdb.prepare('SELECT local_path FROM resources WHERE id = ?').get(r.id);
-            if (!row?.local_path) continue;
-            try {
-              const content = readFileSync(row.local_path, 'utf8');
-              if (await enrichResource(rdb, r.name, r.type, content)) ok++;
-            } catch {}
-          }
-          enrichMsg = `\nEnriched: ${ok}/${results.length}`;
+          const { ok, denied } = await enrichImportedResources(rdb, results, { confineTo: DB_DIR, enrichResource });
+          enrichMsg = `\nEnriched: ${ok}/${results.length}` + (denied ? ` (${denied} refused: path outside managed directory)` : '');
         }
 
         const lines = results.map(r => `${r.type === 'skill' ? 'S' : 'A'} ${r.name} (id=${r.id})`);
@@ -1523,25 +1515,27 @@ server.registerTool(
       if (!args.name) {
         return { content: [{ type: 'text', text: 'enrich requires a name parameter' }], isError: true };
       }
-      const row = rdb.prepare("SELECT name, type, local_path FROM resources WHERE name = ? AND status = 'active'").get(args.name);
-      if (!row) {
-        return { content: [{ type: 'text', text: `Resource not found: ${args.name}` }], isError: true };
-      }
-      if (!row.local_path) {
-        return { content: [{ type: 'text', text: `No local_path for ${args.name}` }], isError: true };
-      }
       // Confine to the env-aware data dir (managed/ relocates with CLAUDE_MEM_DIR, D#29);
-      // === homedir when the env is unset, so non-relocated confinement is unchanged.
-      const enrichBase = DB_DIR;
-      if (!isPathConfined(row.local_path, enrichBase)) {
-        return { content: [{ type: 'text', text: `Access denied: path outside managed directory` }], isError: true };
-      }
-
+      // === homedir when the env is unset, so non-relocated confinement is unchanged. The
+      // gate itself now lives in lib/registry-core.mjs so all four enrichment legs share it.
       const { enrichResource } = await import('./registry-enricher.mjs');
       try {
-        const content = readFileSync(row.local_path, 'utf8');
-        const ok = await enrichResource(rdb, row.name, row.type, content);
-        return { content: [{ type: 'text', text: ok ? `Enriched: ${args.name}` : `Enrichment failed for ${args.name}` }] };
+        const { status, error } = await enrichNamedResource(rdb, args.name, { confineTo: DB_DIR, enrichResource });
+        if (status === 'not-found') {
+          return { content: [{ type: 'text', text: `Resource not found: ${args.name}` }], isError: true };
+        }
+        if (status === 'no-path') {
+          return { content: [{ type: 'text', text: `No local_path for ${args.name}` }], isError: true };
+        }
+        if (status === 'denied') {
+          return { content: [{ type: 'text', text: `Access denied: path outside managed directory` }], isError: true };
+        }
+        if (status === 'unreadable') {
+          // Pre-refactor this threw out of readFileSync into the catch below and rendered
+          // `Enrich error: <errno>`. Keep the errno: a stale local_path is the common cause.
+          return { content: [{ type: 'text', text: `Enrich error: ${error?.message || 'cannot read local_path'}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: status === 'enriched' ? `Enriched: ${args.name}` : `Enrichment failed for ${args.name}` }] };
       } catch (e) {
         return { content: [{ type: 'text', text: `Enrich error: ${e.message}` }], isError: true };
       }

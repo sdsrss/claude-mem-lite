@@ -620,6 +620,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `MEM_QUIET_HOOKS` | 低噪声 hook。设为 `1` 时，SessionStart 注入去掉 `File Lessons` / `Key Context` 两节，`[mem] Related memories` 去掉 lesson 后缀，MCP server instructions 去掉 `WHEN TO USE` / `Decision rules` 两段。ID 与 `Recent` 表仍保留，`mem_get(ids=[…])` 可继续展开细节。适用于启用了 invited-memory adopt 流程或偏好最小化自动注入的用户。**v2.82.0 起此 env 不再阻挡 auto-adopt——如需关闭 auto-adopt 用 `MEM_NO_AUTO_ADOPT=1`。** | _(禁用)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 阻止每次 SessionStart 在**所有**项目自动写入 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
 | `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
+| `CLAUDE_MEM_REGISTRY_CONFINE` | 设为 `off` 允许 registry enrich 读取 `local_path` 位于托管数据目录之外的资源。**默认开启。** enrich 会读取 `resources.local_path` 指向的文件并发给 LLM；此前这道路径限制只接在四条读取路径中的一条（`mem_registry(action="enrich")`）上，`enrich <name>`、`enrich --all` 和 `import --enrich` 三条都是裸读。现在四条同门。仅当你确实把资源注册在 `CLAUDE_MEM_DIR` 之外并希望对其 enrich 时才关闭；只有精确值 `off` 会关闭它，拼错则守卫保持开启。 | _(开启)_ |
 
 ## 许可证
 
