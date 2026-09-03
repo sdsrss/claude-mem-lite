@@ -153,10 +153,37 @@ describe('consumer ledger — no inlined live-filter pairs in the converted file
     });
   }
 
-  it('every consumer imports the shared core', () => {
+  // A file may reach the core THROUGH a named shared module instead of importing it
+  // directly. Each entry names the intermediary, and the intermediary is then checked to
+  // actually import the core — so the exemption cannot rot into "this file no longer uses
+  // the live filter at all", which the per-file pair scan above would happily pass.
+  //
+  // server.mjs joined this list in v3.92.0: audit P2-5 moved `runExport`'s WHERE assembly
+  // into `lib/export-columns.mjs::buildExportWhere`, which is where its live-row predicate
+  // now comes from. Its direct import became unused and eslint removed it. Without this
+  // indirection the ledger goes red on a change that made the sharing STRONGER — the
+  // source-anchor guard failing because its anchor legitimately moved.
+  const VIA = { 'server.mjs': 'lib/export-columns.mjs' };
+
+  it('every consumer reaches the shared core, directly or through a declared module', () => {
     for (const f of FILES) {
       const src = readFileSync(join(REPO, f), 'utf8');
-      expect(src.includes('inject-search-core.mjs'), `${f} does not import the core`).toBe(true);
+      if (src.includes('inject-search-core.mjs')) continue;
+      const via = VIA[f];
+      expect(via, `${f} neither imports the core nor declares an intermediary`).toBeTruthy();
+      expect(src.includes(via.replace(/^lib\//, '')), `${f} does not import its declared intermediary ${via}`).toBe(true);
+      expect(readFileSync(join(REPO, via), 'utf8').includes('inject-search-core.mjs'),
+        `${via} is declared as ${f}'s route to the core but does not import it`).toBe(true);
+    }
+  });
+
+  it('the indirection list has no dead entries', () => {
+    // An intermediary that stopped being needed — because the file went back to importing
+    // the core directly — must be removed rather than left as a standing exemption.
+    for (const [f, via] of Object.entries(VIA)) {
+      const src = readFileSync(join(REPO, f), 'utf8');
+      expect(src.includes('inject-search-core.mjs'),
+        `${f} imports the core directly now; drop its ${via} entry from VIA`).toBe(false);
     }
   });
 

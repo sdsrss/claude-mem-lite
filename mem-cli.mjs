@@ -17,7 +17,7 @@ import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { _resetVocabCache, vecTextForRow, vectorsEnabled } from './tfidf.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
+import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, fetchSessionDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
 import { collectBrowseTiers, getActiveMemorySessionId, BROWSE_TIERS, BROWSE_TIER_LABELS } from './lib/browse-core.mjs';
 import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
 import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegistryListLine } from './registry.mjs';
@@ -56,7 +56,7 @@ import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
 import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdToken, formatProbeHints, rejectBareStringFlags, resolvePositionalAlias, suggestUnknownFlags, OBS_TIME_FIELDS, formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
 import { saveObservation, saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
-import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
+import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
 import { fetchRecent, RECENT_MAX } from './lib/recent-core.mjs';
 import { resolveAnchorToken, formatAnchorError, resolveQueryAnchor, fetchRecentTimeline, fetchTimelineWindow } from './lib/timeline-core.mjs';
@@ -561,8 +561,7 @@ function renderObsRows(db, ids, requestedFields) {
 }
 
 function renderSessionRows(db, ids) {
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT * FROM session_summaries WHERE id IN (${placeholders}) ORDER BY created_at_epoch ASC`).all(...ids);
+  const rows = fetchSessionDetail(db, ids);
   if (rows.length === 0) return null;
   const parts = [];
   for (const r of rows) {
@@ -1654,42 +1653,37 @@ function cmdExport(db, args) {
   // script (`export --to "$END" > backup.json`) with an unset `$END` would silently
   // write an empty backup and report success. Reject like cmdSearch does.
   if (rejectBareStringFlags(flags, ['project', 'type', 'from', 'to'])) return;
-  const wheres = [];
-  const params = [];
-  // --include-compressed: include compressed observations (aligned with MCP mem_export).
-  // Superseded rows are excluded either way; the flag only toggles the compressed half
-  // of the live-row pair (backup/export of tombstones is opt-in, retractions are not).
-  if (flags['include-compressed'] === true || flags['include-compressed'] === 'true') {
-    wheres.push('superseded_at IS NULL');
-  } else {
-    wheres.push(liveObsFilterSql(''));
-  }
-
+  // PARSE + VALIDATE here; the SQL predicate itself comes from buildExportWhere (P2-5),
+  // shared with server.mjs runExport. The split is deliberate: the CLI `fail()`s with a
+  // usage message where the MCP tool throws, and only this face has a stderr channel for
+  // the inverted-range note below.
   const project = flags.project ? resolveProject(db, flags.project) : null;
-  if (project) { wheres.push('project = ?'); params.push(project); }
   if (flags.type) {
     // Reject unknown types — silently returning [] for `--type bogus` looked like a
     // legitimate empty filter result, hiding the typo. Mirrors cmdSearch / cmdSave / cmdUpdate.
-    const validObsTypes = OBS_TYPE_SET;
-    if (!validObsTypes.has(flags.type)) {
-      fail(`[mem] Invalid --type "${flags.type}". Valid: ${[...validObsTypes].join(', ')}`);
+    if (!OBS_TYPE_SET.has(flags.type)) {
+      fail(`[mem] Invalid --type "${flags.type}". Valid: ${[...OBS_TYPE_SET].join(', ')}`);
       return;
     }
-    wheres.push('type = ?'); params.push(flags.type);
   }
   let exportFromEpoch = null;
   let exportToEpoch = null;
   if (flags.from) {
     exportFromEpoch = new Date(flags.from).getTime();
     if (isNaN(exportFromEpoch)) { fail(`[mem] Invalid --from date: "${flags.from}". Use YYYY-MM-DD or ISO 8601.`); return; }
-    wheres.push('created_at_epoch >= ?'); params.push(exportFromEpoch);
   }
   if (flags.to) {
     exportToEpoch = new Date(flags.to).getTime();
     if (isNaN(exportToEpoch)) { fail(`[mem] Invalid --to date: "${flags.to}". Use YYYY-MM-DD or ISO 8601.`); return; }
     if (/^\d{4}-\d{2}-\d{2}$/.test(flags.to)) exportToEpoch += DAY_MS - 1;
-    wheres.push('created_at_epoch <= ?'); params.push(exportToEpoch);
   }
+  // --include-compressed: include compressed observations (aligned with MCP mem_export).
+  // Superseded rows are excluded either way; the flag only toggles the compressed half
+  // of the live-row pair (backup/export of tombstones is opt-in, retractions are not).
+  const { wheres, params } = buildExportWhere({
+    includeCompressed: flags['include-compressed'] === true || flags['include-compressed'] === 'true',
+    project, type: flags.type || null, fromEpoch: exportFromEpoch, toEpoch: exportToEpoch,
+  });
   if (exportFromEpoch !== null && exportToEpoch !== null && exportFromEpoch > exportToEpoch) {
     process.stderr.write(`[mem] Note: --from "${flags.from}" is after --to "${flags.to}"; this range is empty\n`);
   }

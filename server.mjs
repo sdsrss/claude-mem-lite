@@ -21,7 +21,7 @@ import {
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
 import { deleteObservations, previewDeleteRows } from './lib/delete-core.mjs';
-import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
+import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, fetchSessionDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
 import { collectBrowseTiers, getActiveMemorySessionId, BROWSE_TIERS, BROWSE_TIER_LABELS } from './lib/browse-core.mjs';
 import { effectiveQuiet, RUNTIME_DIR } from './hook-shared.mjs';
 import { computeStatsFeed } from './lib/stats-core.mjs';
@@ -50,8 +50,7 @@ import { searchResources } from './registry-retriever.mjs';
 import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
 import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
-import { EXPORT_COLUMNS_SQL } from './lib/export-columns.mjs';
-import { liveObsFilterSql } from './lib/inject-search-core.mjs';
+import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
@@ -646,8 +645,7 @@ server.registerTool(
     }
 
     if (bySrc.session.length > 0) {
-      const ph = bySrc.session.map(() => '?').join(',');
-      const rows = db.prepare(`SELECT * FROM session_summaries WHERE id IN (${ph}) ORDER BY created_at_epoch ASC`).all(...bySrc.session);
+      const rows = fetchSessionDetail(db, bySrc.session);
       // SESSION_DETAIL_FIELDS (get-core, P2-12): shared full set — adds remaining_items
       // (searchable via FTS but previously unrendered on BOTH detail faces).
       const sessFields = SESSION_DETAIL_FIELDS;
@@ -1579,33 +1577,27 @@ export async function handleExportForTest(db, args) {
 }
 
 async function runExport(db, args) {
-  const wheres = [];
-  const params = [];
-  // Composed, not hand-written: the CLI twin (mem-cli.mjs cmdExport) already
-  // routes through liveObsFilterSql, and a hand-rolled copy here is how the
-  // live-row predicate drifted apart on other surfaces (P2-11/D#123). With
-  // include_compressed the compressed half is dropped but retractions still
-  // are not — tombstone export is opt-in, supersession is never exported.
-  wheres.push(args.include_compressed ? 'superseded_at IS NULL' : liveObsFilterSql(''));
-  if (args.project) { wheres.push('project = ?'); params.push(_resolveProjectShared(db, args.project)); }
-  if (args.type) { wheres.push('type = ?'); params.push(args.type); }
-  // T3-P1-A: surface invalid dates instead of silently dropping the filter — mirrors
-  // mem_search, which threw. A dropped filter can quietly expand the export blast radius.
+  // PARSE + VALIDATE here; the SQL predicate comes from buildExportWhere (P2-5), shared
+  // with mem-cli.mjs cmdExport. This face THROWS where the CLI prints a usage message —
+  // T3-P1-A: surface invalid dates instead of silently dropping the filter (mirrors
+  // mem_search). A dropped filter can quietly expand the export blast radius.
+  let fromEpoch = null;
+  let toEpoch = null;
   if (args.date_from) {
-    const epoch = new Date(args.date_from).getTime();
-    if (isNaN(epoch)) throw new Error(`Invalid date_from: "${args.date_from}" (use ISO 8601 or YYYY-MM-DD)`);
-    wheres.push('created_at_epoch >= ?');
-    params.push(epoch);
+    fromEpoch = new Date(args.date_from).getTime();
+    if (isNaN(fromEpoch)) throw new Error(`Invalid date_from: "${args.date_from}" (use ISO 8601 or YYYY-MM-DD)`);
   }
   if (args.date_to) {
     const d = args.date_to.length === 10 ? args.date_to + 'T23:59:59.999Z' : args.date_to;
-    const epoch = new Date(d).getTime();
-    if (isNaN(epoch)) throw new Error(`Invalid date_to: "${args.date_to}" (use ISO 8601 or YYYY-MM-DD)`);
-    wheres.push('created_at_epoch <= ?');
-    params.push(epoch);
+    toEpoch = new Date(d).getTime();
+    if (isNaN(toEpoch)) throw new Error(`Invalid date_to: "${args.date_to}" (use ISO 8601 or YYYY-MM-DD)`);
   }
-
-  const where = wheres.length > 0 ? 'WHERE ' + wheres.join(' AND ') : '';
+  const { params, where } = buildExportWhere({
+    includeCompressed: Boolean(args.include_compressed),
+    project: args.project ? _resolveProjectShared(db, args.project) : null,
+    type: args.type || null,
+    fromEpoch, toEpoch,
+  });
   // No clamp (audit 2026-08-14 A2): `Math.min(args.limit ?? 200, 1000)` made an MCP-driven
   // backup of a >1000-row store impossible, on the tool whose own description says "USE
   // when: Backing up memory before a migration or reinstall" — while the CLI twin exported
