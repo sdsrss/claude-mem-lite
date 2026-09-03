@@ -47,6 +47,7 @@ import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
   RUNTIME_DIR, EPISODE_BUFFER_SIZE, EPISODE_TIME_GAP_MS,
   SESSION_EXPIRY_MS, STALE_SESSION_MS, STALE_LOCK_MS, AUTO_MAINTAIN_LOCK,
+  STALE_EPISODE_BUFFER_AGE_MS,
   HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT,
   sessionFile, getSessionId, createSessionId, openDb,
   spawnBackground, sweepOrphanEpisodeFiles, sweepStaleProjectMarkers,
@@ -1901,12 +1902,30 @@ async function handleSessionStart() {
   // Snapshot episode BEFORE flush for handoff extraction
   const episodeSnapshot = readEpisodeRaw();
 
-  // Flush any leftover episode buffer from previous session (e.g. after /clear)
+  // Flush any leftover episode buffer from previous session (e.g. after /clear).
+  //
+  // A buffer older than STALE_EPISODE_BUFFER_AGE_MS is DISCARDED, not flushed. This is the
+  // half of P1-12 the orphan sweep cannot reach: the sweep runs inside the detached
+  // auto-maintain worker scheduled further down this same function, so on the revisit that
+  // matters the flush below has already happened and the sweeper finds nothing. Without this
+  // gate, returning to a project abandoned months ago injects its months-old tool activity
+  // stamped with today's date — the exact harm hook-shared.mjs's threshold docblock names.
+  // Same constant, because it is the same question ("did this buffer outlive its session by
+  // an order of magnitude?"), asked at the other end.
   if (acquireLock()) {
     try {
-      const prevEpisode = readEpisode();
-      if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
-        flushEpisode(prevEpisode, 'SessionStart');
+      let stale = false;
+      try {
+        stale = Date.now() - statSync(episodeFile()).mtimeMs > STALE_EPISODE_BUFFER_AGE_MS;
+      } catch { /* no buffer file — readEpisode() returns null below */ }
+      if (stale) {
+        debugLog('INFO', 'session-start', `discarding stale episode buffer (>${STALE_EPISODE_BUFFER_AGE_MS}ms): ${episodeFile()}`);
+        try { unlinkSync(episodeFile()); } catch { /* best-effort */ }
+      } else {
+        const prevEpisode = readEpisode();
+        if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
+          flushEpisode(prevEpisode, 'SessionStart');
+        }
       }
     } finally {
       releaseLock();

@@ -47,6 +47,21 @@ describe('dedup thresholds', () => {
     expect(MINHASH_PREFILTER).toBeGreaterThan(MINHASH_PRE_THRESHOLD);
   });
 
+  it('the four values this file NAMES in prose are the ones that ship', () => {
+    // The cases above pin ORDER, which is what the header claims — but the comments right
+    // beside them assert VALUES ("the exact compare at 0.7", "the exact title compare at
+    // 0.95"), and order alone does not bind those. The v3.92.0 review moved
+    // DEDUP_JACCARD_THRESHOLD 0.7 → 0.68: every ordering held, the suite stayed green, and
+    // two of this file's own comments became false. Since this file is the only
+    // importer-independent record of these numbers, the four it names are bound here.
+    // Deliberately NOT all seven: pinning a value is a decision to make changing it
+    // deliberate, and the other three have no prose here that would go stale.
+    expect(DEDUP_JACCARD_THRESHOLD).toBe(0.7);
+    expect(FUZZY_DEDUP_THRESHOLD).toBe(0.95);
+    expect(MINHASH_PRE_THRESHOLD).toBe(0.5);
+    expect(MINHASH_PREFILTER).toBe(0.7);
+  });
+
   it('inline fuzzy dedup is the strictest title cutoff and its body floor is softer', () => {
     expect(FUZZY_DEDUP_THRESHOLD).toBeGreaterThan(AUTO_MERGE_THRESHOLD);
     expect(FUZZY_BODY_THRESHOLD).toBeLessThan(FUZZY_DEDUP_THRESHOLD);

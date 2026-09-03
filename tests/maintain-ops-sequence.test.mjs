@@ -70,11 +70,17 @@ describe('runMaintainOps — the sequence', () => {
   it('renders the demote threshold from the constant, not a literal', () => {
     const [line] = runMaintainOps(db, ctx(), ['demote_pinned'], { retainCutoff: Date.now(), renderPurgePreview: preview });
     expect(line).toContain(`inj>=${PINNED_INJ_THRESHOLD}`);
-    // The assertion above passes on a hardcoded `8` as long as the constant is also 8, which
-    // is exactly the state the defect shipped in. Bind the value to the constant instead.
-    expect(line).not.toMatch(/inj>=(?!\d*\b)/);
     expect(PINNED_INJ_THRESHOLD).toBeGreaterThan(0);
     expect(line.match(/inj>=(\d+)/)[1]).toBe(String(PINNED_INJ_THRESHOLD));
+    // NOTHING IN THIS CASE CAN CATCH A HARDCODED LITERAL, and saying so is the point: every
+    // assertion here compares the rendered value against the constant, and the defect
+    // shipped in the state where those are EQUAL (`server.mjs` wrote `inj>=8` while the
+    // constant was 8). The guard that actually binds it is the static sweep further down
+    // this file, which reads the three sources and fails on a literal. A fourth assertion
+    // once sat here — `not.toMatch(/inj>=(?!\d*\b)/)` — reading as if it closed the gap;
+    // `\d*` matches empty and `\b` then holds at the `=`, so it returned false for every
+    // realistic input including `inj>=X`. Removed rather than repaired: a runtime assertion
+    // cannot express "this number was interpolated, not typed".
   });
 
   it('the FTS optimize line is always emitted, ops or not', () => {

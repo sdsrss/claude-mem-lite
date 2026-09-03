@@ -71,11 +71,19 @@ describe('pre-commit hook sync (P1-11)', () => {
       + `  git config core.hooksPath .githooks`,
     ).toBe(true);
 
-    // A byte copy is accepted (it is correct today) but flagged as the shape that rots:
-    // it was correct on 2026-03-27 too.
+    // A byte copy is accepted (it is correct today) but it is the shape that rots — it was
+    // correct on 2026-03-27 too. Reported through ctx.annotate, not an assertion: the
+    // version that shipped here was `expect(body.length).toBe(canonical.length)` guarded by
+    // `isCopy`, and `isCopy` already means the two strings are identical, so the comparison
+    // was a tautology presented as a warning. A note is what this actually is; the binding
+    // rule is the assertion above.
     if (isCopy && !isShim) {
-      expect(body.length, 'hook is a byte copy — it will go stale; prefer the .githooks shim')
-        .toBe(canonical.length);
+      ctx.annotate?.(
+        `${hookPath} is a byte copy of ${CANONICAL}, not a shim. It is correct now and will `
+        + `silently go stale on the next edit to ${CANONICAL}. Prefer:\n`
+        + `  git config core.hooksPath .githooks`,
+        'warning',
+      );
     }
   });
 });

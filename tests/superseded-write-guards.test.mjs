@@ -230,4 +230,49 @@ describe('P0-6 pre-saved retraction: live guard + child recovery on all three si
     expect(col(db, child, 'compressed_into')).toBeNull(); // resurfaced, not dangling
     db.close();
   });
+
+  it('leaves the children of a NOT-live row hidden — recovery is gated, not unconditional', async () => {
+    const { retractPreSavedObs } = await import('../hook-llm.mjs');
+    // The cell between the two cases above, and the one that was defective. The first cut
+    // ran recoverChildrenOf unconditionally and put the live guard only on the DELETE, so
+    // on this path the delete was a no-op while the children had ALREADY been un-hidden:
+    // a dedup that legitimately folded #child into #row was silently undone, #row survived,
+    // and the debug line still said "left in place" — true of #row, false of #child.
+    // "not live -> not deleted" and "live -> children recovered" both passed throughout.
+    const db = freshDb();
+    const row = add(db, { title: 'pre-saved, since tombstoned', supersededAt: TOMB });
+    const child = add(db, { title: 'absorbed dup', compressedInto: row });
+
+    expect(retractPreSavedObs(db, row, 'test')).toBe(false);
+    expect(col(db, row, 'title')).toBe('pre-saved, since tombstoned'); // premise: still there
+    expect(col(db, child, 'compressed_into')).toBe(row);               // and still hidden
+    db.close();
+  });
+});
+
+// ─── mergeDuplicates: the removeId arm ──────────────────────────────────────
+
+describe('mergeDuplicates does not write compressed_into onto a tombstone', () => {
+  it('refuses a removeId that is itself superseded, and does not inflate the count', async () => {
+    const { mergeDuplicates } = await import('../lib/maintain-core.mjs');
+    // The file pins the KEEPER arm twice and left the CHILD arm untested: dropping
+    // `AND liveObsFilterSql('')` from mergeStmt left all twelve cases green, because every
+    // case seeded a superseded KEEPER and none ever seeded a superseded removeId.
+    // The mutant writes compressed_into onto an already-superseded row — double-hiding it
+    // past recoverOrphanedChildren's reach, the exact loss mergeDuplicates' own docblock
+    // describes — and reports `merged: 1` to the user for a row it did not merge.
+    const db = freshDb();
+    const keeper = add(db, { title: 'live keeper' });
+    const tomb = add(db, { title: 'already retracted', supersededAt: TOMB });
+
+    expect(mergeDuplicates(db, [[keeper, tomb]])).toBe(0);
+    expect(col(db, tomb, 'compressed_into')).toBeNull();
+
+    // Premise: the same call DOES merge once the removeId is live, so the zero above is the
+    // guard firing and not mergeDuplicates declining the pair for some unrelated reason.
+    const live = add(db, { title: 'live duplicate' });
+    expect(mergeDuplicates(db, [[keeper, live]])).toBe(1);
+    expect(col(db, live, 'compressed_into')).toBe(keeper);
+    db.close();
+  });
 });

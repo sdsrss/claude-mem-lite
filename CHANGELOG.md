@@ -2,7 +2,19 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — ten items from the 2026-09-02 audit backlog
+## v3.92.0 — ten items from the 2026-09-02 audit backlog
+
+**Upgrade note — one user-visible behaviour change.** Registry *enrichment* now refuses to
+read a resource whose `local_path` lies outside `CLAUDE_MEM_DIR`, on all four legs instead of
+one (`enrich <name>`, `enrich --all`, `import --enrich`, `mem_registry(action="enrich")`).
+If you have resources registered outside the managed directory, those rows will report
+`Refused N: local_path outside the managed directory` instead of being enriched — the message
+is the discoverability signal, printed at the point of use rather than only here. **Action:**
+either re-register those resources inside `CLAUDE_MEM_DIR`, or set
+`CLAUDE_MEM_REGISTRY_CONFINE=off` (only `off` disables the gate, case-insensitively and
+ignoring surrounding whitespace; every other value — including a typo — leaves it on).
+**Revert path:** pin the previous release — `npm i -g claude-mem-lite@3.91.0`, or the
+equivalent plugin pin. Nothing else in this release changes a default.
 
 Audit items **P1-3, P1-4, P1-5, P1-6, P1-8, P1-12, P1-13, P1-16, P2-12, P2-15(d)**.
 Earlier batches from the same backlog (P0-2/3/4/5/6, P1-1, P1-2, P1-11, P2-1) landed in the
@@ -78,8 +90,9 @@ CLI-only patch would have left the shape alive on both.
 All four now funnel through `enrichResourceRow` in `lib/registry-core.mjs`, and `confineTo`
 is a **required** argument — a fifth leg written without it throws instead of silently
 running ungated, and `tests/registry-enrich-confinement.test.mjs` catches it statically
-first. **Escape hatch:** `CLAUDE_MEM_REGISTRY_CONFINE=off`. Only the exact value `off`
-disables the gate; a typo leaves it on.
+first. **Escape hatch:** `CLAUDE_MEM_REGISTRY_CONFINE=off`. Only `off` disables the gate —
+case-insensitively and ignoring surrounding whitespace (`OFF` and ` off ` open it too); every
+other value, a typo included, leaves the gate on.
 
 **This is a behaviour change on the CLI**: a resource registered outside `CLAUDE_MEM_DIR` now
 reports `Refused N: local_path outside the managed directory` instead of being read. Refusals
@@ -159,6 +172,76 @@ Rewriting the six sites with destructuring restored 53 with a byte-identical nam
 `tests/no-url-module-paths.test.mjs` now carries both rules. Scope is relative specifiers
 only: `(await import('better-sqlite3')).default` is the idiom at five sites here and an
 external package has no exports for knip to report.
+
+### fix: two defects this release introduced, found by the pre-tag review
+
+Two independent reviewers ran the diff before the tag — one on correctness, one on test
+effectiveness (85 mutations, 78 killed). Neither found a BLOCKER. Both found defects **this
+round created**, which is the point of running them.
+
+**`retractPreSavedObs` un-hid the children of a row it then refused to delete.** Collapsing
+three bare `DELETE`s into one guarded helper put `recoverChildrenOf` *above* the liveness
+check. On the not-live branch the DELETE was correctly a no-op — and the children had
+already been un-hidden, so a dedup that had legitimately folded #M into #N was silently
+undone while #N survived and the debug line said "left in place" (true of #N, false of #M).
+None of the three pre-refactor sites called `recoverChildrenOf` at all, so this did not
+exist before. The check now precedes the recovery and both statements share a transaction.
+The new test file had a case on either side of this cell and none on it.
+
+**`atomicWriteFileSync` left its temp file behind on a failed rename.** The private twin in
+`hook-context.mjs` had a `catch { unlinkSync(tmp) }`; the shared writer never did, so the
+migration lost it. Several callers write into the *user's* project root, where nothing
+sweeps `CLAUDE.md.tmp-<pid>` and it surfaces in their `git status` — the silent-artifact
+class P0-5 was about. Fixed once in the shared writer rather than restoring one local catch.
+
+**And a claim that was wrong in four places, not three.** `CLAUDE_MEM_REGISTRY_CONFINE` was
+documented as disabled by "only the exact value `off`" against a
+`.trim().toLowerCase() !== 'off'`. The safety property held (every typo fails closed); the
+wording did not. The review named three sites; sweeping for the assertion rather than
+visiting the named ones found a fourth in `README.md`.
+
+### test: three guards enumerated yesterday's file names
+
+The review's structural finding, and it is one shape three times. `frontmatter-single-home`,
+`cite-recall-path-single-home` and `symlink-preserving-writes` each argued in their own
+header that a unit test of the shared thing is insufficient — then swept a **fixed list** of
+the files the duplicate had occupied that day. A fourth copy is invisible to all three, and
+the review demonstrated it three times with all cases staying green. Two of the headers say
+in as many words that "three copies existed because nothing stopped the third".
+
+All three now walk the tree with a stated allowlist, a "the walk found a plausible number of
+files" premise, and a check that each allowlisted file really does still carry the thing it
+is allowlisted for — so the rule cannot rot into an empty set. The walk itself lives in
+`tests/shipped-tree.mjs`, because three copies of a directory walk is the same defect again.
+
+The symlink sweep's predicate took a correction worth recording: `renameSync(` alone
+reported six files, none of which is this defect — they are file *moves* (data-dir
+migrations, the update version swap, the episode-claim rename), and a move cannot replace a
+user's symlink because it writes no temp first. The predicate is the `writeFileSync(tmp,…)`
+→ `renameSync(tmp,…)` **pair**, and the runtime-state writers that legitimately use it are
+allowlisted by name with a reason each, so a fourth means arguing for it in the open.
+
+Also from the review: `mergeDuplicates`' child arm had no test (dropping its live filter
+left all twelve cases green while the mutant wrote `compressed_into` onto a tombstone and
+reported an inflated count); `lib/frontmatter.mjs`'s `>` fold-block arm was untested while
+both docblocks named it; the bm25-weight assertion `toMatch`ed a file containing **three**
+identical calls, so two could drift silently; `tests/dedup-constants.test.mjs` asserted only
+ordering while its own comments named values nothing bound. Two assertions were deleted
+rather than repaired — `not.toMatch(/inj>=(?!\d*\b)/)`, which returns false for every
+realistic input, and a `body.length` comparison guarded by `body === canonical` — because
+neither can express what it was written to say.
+
+### test: the audit ruler carries a self-check that is proven able to fail
+
+`scripts/audit-metrics.mjs` produces the duplicate rate, long-function counts and cycle
+counts that `docs/audit/*.md` quotes as measurements, and it shipped with no guard at all.
+The failure mode is not a crash but a plausible wrong number — a detector that silently
+returns empty reports a clean, well-factored tree, and 0% duplication is the answer that
+gets believed. `--self-check` now drives the walk and both detectors in both directions, and
+`tests/audit-metrics-selfcheck.test.mjs` mutates the tool three times to show the mode goes
+non-zero. Its own first probe was invalid JS (a redeclared `const`), so acorn rejected the
+file and the check reported "longFunctions did not flag" — a probe defect wearing a detector
+defect's message, caught by checking the anchor before believing the result.
 
 ## v3.91.0 — the write-guard quoted in the last release only ever covered one of the two sinks
 

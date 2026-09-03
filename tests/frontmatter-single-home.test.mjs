@@ -21,6 +21,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { parseFrontmatter } from '../lib/frontmatter.mjs';
 import { parseFrontmatter as importerParseFrontmatter } from '../registry-importer.mjs';
+import { walkShipped, sweepShipped } from './shipped-tree.mjs';
 
 // D#207: join(), never new URL('../X.mjs', import.meta.url).
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,6 +40,18 @@ describe('parseFrontmatter — one implementation', () => {
     expect(frontmatter.name).toBe('probe-skill');
     expect(frontmatter.description).toBe('Use when the registry needs a multi-line description');
     expect(frontmatter.description).not.toBe('|');
+  });
+
+  it('parses the `>` fold block, the other half of the same branch', () => {
+    // `if (val === '|' || val === '>')` is ONE line with two arms, and only the `|` arm was
+    // covered: the v3.92.0 review deleted the `>` arm alone and all seven cases stayed
+    // green. Both this file's header and the module's docblock name `|` AND `>` as what the
+    // simplified parser lacked, so a half-covered branch left half the stated claim unpinned.
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: n\ndescription: >\n  folded across\n  two source lines\n---\nbody\n',
+    );
+    expect(frontmatter.description).toBe('folded across two source lines');
+    expect(frontmatter.description).not.toBe('>');
   });
 
   it('continues an unmarked description onto its indented lines', () => {
@@ -61,16 +74,39 @@ describe('parseFrontmatter — one implementation', () => {
     expect(none.body).toBe('# Just a body');
   });
 
-  it('no other file defines its own parser', () => {
-    // Class sweep. Three copies existed because nothing stopped the third.
-    const DEFINE_RE = /function\s+parseFrontmatter\s*\(/;
+  // Tree sweep, not a name list. The first cut of this guard named the three files the
+  // parser had lived in — while its own comment said "three copies existed because nothing
+  // stopped the third". Nothing stopped a fourth either: the v3.92.0 review added one to
+  // `scripts/prompt-search-utils.mjs` and all seven cases stayed green.
+  const DEFINE_RE = /function\s+parseFrontmatter\s*\(/;
+  const PARSER_ALLOWED = new Set(['lib/frontmatter.mjs']);
+
+  it('the sweep walks a plausible number of shipped modules', () => {
+    // A walk returning [] would make the rule below pass vacuously.
+    expect(walkShipped().length).toBeGreaterThan(60);
+  });
+
+  it('no other shipped file defines its own parser', () => {
+    expect(sweepShipped(DEFINE_RE, PARSER_ALLOWED)).toEqual([]);
+  });
+
+  it('the three known consumers import the shared one', () => {
+    // The sweep above proves nobody DEFINES a second parser; this proves the three files
+    // that used to carry one now take it from the shared module rather than having simply
+    // dropped the feature.
     for (const rel of ['registry-importer.mjs', 'scripts/index-managed.mjs', 'scripts/convert-commands.mjs']) {
-      const src = read(rel).split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
-      expect(src, `${rel} defines its own parseFrontmatter`).not.toMatch(DEFINE_RE);
-      expect(src, `${rel} must import the shared one`).toMatch(/frontmatter\.mjs'/);
+      expect(read(rel), `${rel} must import the shared one`).toMatch(/frontmatter\.mjs'/);
     }
-    // …and the sweep can fire: this is the line that shipped in all three.
+  });
+
+  it('the sweep can say NO, and the one allowlisted file really does define it', () => {
+    // Without the first arm a regex matching nothing reports a clean tree; without the
+    // second, the allowlist could rot into a name that defines nothing while the rule reads
+    // as enforced.
     expect('function parseFrontmatter(content) {').toMatch(DEFINE_RE);
+    for (const rel of PARSER_ALLOWED) {
+      expect(read(rel), `${rel} is allowlisted but defines no parser`).toMatch(DEFINE_RE);
+    }
   });
 });
 
@@ -96,7 +132,18 @@ describe('registry FTS5 DDL — one definition', () => {
     // Match the SQL as it actually is — the first cut of this assertion required integers
     // and failed against the shipped call, which is the wrong direction for a guard whose
     // whole subject is documentation drifting away from code.
-    expect(read('registry-retriever.mjs'))
-      .toMatch(/bm25\(resources_fts,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*2(?:\.0)?,\s*2(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?\)/);
+    //
+    // Count and assert EVERY call, do not `toMatch` the file. `registry-retriever.mjs`
+    // contains three identical `bm25(resources_fts, …)` calls and a whole-file `toMatch`
+    // passes when any ONE of them matches — the v3.92.0 review changed only the third and
+    // the case stayed green, so two of the three weights this test names could drift while
+    // it read as enforced.
+    const src = read('registry-retriever.mjs');
+    const calls = src.match(/bm25\(resources_fts,[^)]*\)/g) || [];
+    expect(calls.length, 'no bm25(resources_fts, …) call found — the anchor moved').toBeGreaterThan(0);
+    const WEIGHTS = /^bm25\(resources_fts,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*2(?:\.0)?,\s*2(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?\)$/;
+    calls.forEach((call, i) => {
+      expect(call, `bm25 call #${i + 1} of ${calls.length} carries different weights`).toMatch(WEIGHTS);
+    });
   });
 });

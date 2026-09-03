@@ -1969,7 +1969,7 @@ describe('Suite 10: Code Review Fix Validations', () => {
     // SOURCE_FILES now lives in source-files.mjs (shared between install.mjs and
     // hook-update.mjs). tests/source-files-sync.test.mjs does the full walker
     // check; this quicker spot-check asserts the shared list has not regressed
-    // for the two most critical entry points.
+    // for the two most critical entry points — statically AND dynamically imported.
     const { SOURCE_FILES } = await import('../source-files.mjs');
 
     const entryFiles = ['server.mjs', 'hook.mjs'];
@@ -1981,7 +1981,16 @@ describe('Suite 10: Code Review Fix Validations', () => {
       if (visited.has(file)) continue;
       visited.add(file);
       const src = readFileSync(resolve(file), 'utf8');
-      const imports = [...src.matchAll(/from\s+'\.\/([^']+\.mjs)'/g)].map(m => m[1]);
+      // Static AND dynamic specifiers. Static-only silently narrowed this walk when P1-8
+      // converted six of hook.mjs's imports to `await import()`: four modules and their
+      // whole subgraphs left the traversal while the comment above still said it covered
+      // the two entry points. Not a coverage LOSS at the time — source-files-sync.test.mjs
+      // walks dynamic specifiers too — but a spot-check whose stated scope is wider than
+      // its regex is the shape that goes unnoticed the next time.
+      const imports = [
+        ...[...src.matchAll(/from\s+'\.\/([^']+\.mjs)'/g)].map(m => m[1]),
+        ...[...src.matchAll(/import\s*\(\s*['"]\.\/([^'"]+\.mjs)['"]/g)].map(m => m[1]),
+      ];
       for (const imp of imports) {
         // Resolve './' imports relative to the importing file's dir so a lib/ module's
         // sibling import (lib/compress-core.mjs -> './scrub-record.mjs') maps to

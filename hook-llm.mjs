@@ -47,14 +47,25 @@ import { recoverChildrenOf } from './lib/maintain-core.mjs';
  * @returns {boolean} true when the row was actually removed
  */
 export function retractPreSavedObs(db, obsId, where) {
-  recoverChildrenOf(db, [obsId]);
-  const removed = db.prepare(
-    `DELETE FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
-  ).run(obsId).changes;
-  if (removed === 0) {
-    debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
-  }
-  return removed > 0;
+  // Liveness is checked BEFORE the recovery, not folded into the DELETE's WHERE. A first
+  // cut ran recoverChildrenOf unconditionally and let the guard live only on the DELETE:
+  // on the not-live branch the DELETE was then a no-op while the children had already been
+  // un-hidden, so a dedup that had legitimately folded #M into #N was silently undone and
+  // the debug line still said the row was "left in place" (true of #N, false of #M).
+  // Both statements run in one transaction so a crash between them cannot leave that state
+  // either; nesting under persistHaikuSummary's transaction is safe (better-sqlite3 uses
+  // savepoints).
+  return db.transaction(() => {
+    const live = db.prepare(
+      `SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
+    ).get(obsId);
+    if (!live) {
+      debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
+      return false;
+    }
+    recoverChildrenOf(db, [obsId]);
+    return db.prepare('DELETE FROM observations WHERE id = ?').run(obsId).changes > 0;
+  })();
 }
 // T9: memdir-incompatible types live in the `events` table, not `observations`.
 // Set lookup is O(1) — authoritative source is lib/activity.mjs::EVENT_TYPES.

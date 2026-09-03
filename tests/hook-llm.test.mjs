@@ -1472,7 +1472,18 @@ describe('handleLLMEpisode', () => {
 
     // The discard path calls openDb() to get a DB handle for deleting the pre-saved obs.
     // We return a wrapper around our test db that tracks close() but doesn't actually close.
-    const deleteDbProxy = { ...db, close: vi.fn(), prepare: (...a) => db.prepare(...a) };
+    // `{ ...db }` copies OWN properties only, and better-sqlite3's API lives on the
+    // prototype — so every method this proxy is expected to forward has to be re-bound by
+    // hand. `prepare` always was; `transaction` was not, and the proxy therefore modelled a
+    // handle that cannot open one. That is a defect in the double, not a constraint on the
+    // code: the real callers pass a real handle, and `retractPreSavedObs` needs a
+    // transaction so recover-then-delete cannot be interrupted half-done.
+    const deleteDbProxy = {
+      ...db,
+      close: vi.fn(),
+      prepare: (...a) => db.prepare(...a),
+      transaction: (...a) => db.transaction(...a),
+    };
     openDb.mockReturnValueOnce(deleteDbProxy);
 
     callLLM.mockReturnValue(JSON.stringify({

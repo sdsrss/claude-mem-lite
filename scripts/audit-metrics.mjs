@@ -27,12 +27,19 @@
 //   • Coverage: read from coverage/coverage-summary.json (the mtime is reported so a
 //     stale summary is visible); `--run-tests` regenerates it.
 
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve, dirname, relative, extname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as acorn from 'acorn';
 
-const REPO = resolve(import.meta.dirname, '..');
+// Normally the repo this file sits in. `AUDIT_METRICS_REPO` exists so a COPY of this script
+// can be run from a temp dir against the real tree — which is how `--self-check` is proven
+// able to fail without writing a scratch `.mjs` into `scripts/`, where it would move the
+// per-file case count `tests/obs-id-caliber-sync.test.mjs` generates.
+const REPO = process.env.AUDIT_METRICS_REPO
+  ? resolve(process.env.AUDIT_METRICS_REPO)
+  : resolve(import.meta.dirname, '..');
 const args = new Set(process.argv.slice(2));
 const WANT_MD = args.has('--md');
 const WANT_INVENTORY = args.has('--inventory');
@@ -446,6 +453,72 @@ function inventoryMd(list) {
 
 if (WANT_INVENTORY) {
   process.stdout.write(inventoryMd(files.source));
+  process.exit(0);
+}
+
+// ── self-check ─────────────────────────────────────────────────────────────────
+//
+// This file is a RULER: `docs/audit/*.md` quotes its duplicate rate, its long-function
+// counts and its cycle counts as measurements. This repo's standing rule for a ruler is
+// that it must carry a check able to FAIL rather than a promise that it works — the failure
+// mode being guarded is not a crash but a plausible WRONG NUMBER, and the specific shape
+// already recorded here is a detector that silently returns empty (the `grep` that returned
+// 0 self-checks and produced an undercount, CLAUDE.md's knip rule 3).
+//
+// Each check is written so that breaking the thing it measures makes it throw.
+// `tests/audit-metrics-selfcheck.test.mjs` drives this mode and asserts it exits 0, and
+// asserts the harness can go non-zero.
+if (args.has('--self-check')) {
+  const fail = (msg) => { process.stderr.write(`SELF-CHECK FAILED: ${msg}\n`); process.exit(1); };
+
+  // 1. The file walk found a plausible corpus. A walk returning [] makes every figure
+  //    below it read as a clean, tiny, well-factored repo.
+  if (files.source.length < 60) fail(`source walk found ${files.source.length} files, expected >= 60`);
+  if (files.tests.length < 60) fail(`test walk found ${files.tests.length} files, expected >= 60`);
+
+  // 2. The duplicate detector can say YES and NO. Real files on disk, because
+  //    duplicateRate reads them itself. Without the NO arm a detector that flags
+  //    everything scores 100% and reads as a catastrophic finding; without the YES arm one
+  //    that flags nothing scores 0% and reads as a clean tree — and 0% is the answer that
+  //    gets believed.
+  const probeDir = mkdtempSync(join(tmpdir(), 'audit-metrics-selfcheck-'));
+  try {
+    const body = Array.from({ length: DUP_WINDOW + 2 }, (_, i) => `const dupProbe${i} = ${i} + 1;`).join('\n');
+    const uniqA = Array.from({ length: DUP_WINDOW + 2 }, (_, i) => `const onlyA${i} = ${i} * 2;`).join('\n');
+    const uniqB = Array.from({ length: DUP_WINDOW + 2 }, (_, i) => `const onlyB${i} = ${i} * 3;`).join('\n');
+    const dupA = join(probeDir, 'dup-a.mjs');
+    const dupB = join(probeDir, 'dup-b.mjs');
+    const uA = join(probeDir, 'uniq-a.mjs');
+    const uB = join(probeDir, 'uniq-b.mjs');
+    writeFileSync(dupA, body); writeFileSync(dupB, body);
+    writeFileSync(uA, uniqA); writeFileSync(uB, uniqB);
+
+    const yes = duplicateRate([dupA, dupB]);
+    if (yes.crossFile.lines === 0) fail('duplicateRate reported 0 cross-file lines on two identical files');
+    const no = duplicateRate([uA, uB]);
+    if (no.crossFile.lines !== 0) fail(`duplicateRate reported ${no.crossFile.lines} cross-file lines on two files sharing nothing`);
+
+    // 3. The long-function detector can say YES and NO, and reports parse errors rather
+    //    than swallowing them — a file that fails to parse is silently zero functions.
+    const longFile = join(probeDir, 'long.mjs');
+    // Distinct names per line: `const x` repeated is a redeclaration, which acorn REJECTS.
+    // The first cut of this probe did that, `parse` returned {error}, the function was never
+    // counted and the check reported "longFunctions did not flag a function over the
+    // threshold" — a probe defect wearing a detector defect's message.
+    const longBody = Array.from({ length: LONG_FN_LINES + 5 }, (_, i) => `  const v${i} = ${i};`).join('\n');
+    writeFileSync(longFile, `function tooLong() {\n${longBody}\n}\n`);
+    const shortFile = join(probeDir, 'short.mjs');
+    writeFileSync(shortFile, 'function tiny() { return 1; }\n');
+    if (longFunctions([longFile]).over !== 1) fail('longFunctions did not flag a function over the threshold');
+    if (longFunctions([shortFile]).over !== 0) fail('longFunctions flagged a one-line function');
+    const badFile = join(probeDir, 'bad.mjs');
+    writeFileSync(badFile, 'function ( { unparseable\n');
+    if (longFunctions([badFile]).parseErrors.length !== 1) fail('longFunctions swallowed a parse error instead of reporting it');
+  } finally {
+    try { rmSync(probeDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+
+  process.stdout.write('audit-metrics self-check: OK\n');
   process.exit(0);
 }
 

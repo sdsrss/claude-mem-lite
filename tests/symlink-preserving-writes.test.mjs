@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { walkShipped, sweepShipped, sourceWithoutComments, REPO } from './shipped-tree.mjs';
 
 let root;
 // $TMPDIR in a Claude Code session lives under $HOME, and Node resolves node_modules up the
@@ -116,5 +117,62 @@ describe('P0-5 hook-context.cleanupClaudeMdLegacyBlock writes through a symlinke
     expect(after).not.toContain('<claude-mem-context>'); // premise: it really did rewrite
     expect(after).toContain('# more prose');
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe('no shipped module keeps a private temp+rename writer', () => {
+  // The three cases above are per-FACE and behavioural, which is right — but the header
+  // called them a "class-level guard" and they are not: they drive three named entry points
+  // and a FOURTH face with its own private twin is invisible to them. The v3.92.0 pre-tag
+  // review demonstrated it by adding one to `lib/cite-recall-path.mjs`; all four cases
+  // stayed green. That is the same shape this repo recorded in v3.76.2 — the fix is a class
+  // sweep, so here it is, alongside (not instead of) the behavioural cases.
+  //
+  // The predicate is the IDIOM, not `renameSync(` alone. A bare renameSync sweep reports
+  // every file MOVE in the tree — the install/schema data-dir migrations, hook-update's
+  // version swap, hook.mjs's episode-claim rename — none of which can replace a user's
+  // symlink with a regular file, because none of them writes a temp first. What this guard
+  // is about is `writeFileSync(tmp, …)` followed by `renameSync(tmp, target)`: the private
+  // re-implementation of the shared writer. Same variable, within a short window.
+  const PRIVATE_ATOMIC_RE = /writeFileSync\(\s*(\w+)[\s\S]{0,400}?renameSync\(\s*\1\b/;
+  const ALLOWED = new Set([
+    'lib/atomic-write.mjs',   // the shared writer — the one legitimate home
+    // RUNTIME-STATE writers, not user-owned config. These write into the plugin's own data
+    // directory, where a torn write is fail-open, no user symlink can exist, and the write
+    // is on a hot path whose import budget the shared writer would add to. Allowlisted by
+    // NAME rather than by a directory rule, so adding a fourth means arguing for it here in
+    // the open instead of inheriting a blanket exemption.
+    'hook.mjs',                      // reads-<session> accumulator
+    'hook-episode.mjs',              // ep-<project>.json buffer
+    'hook-shared.mjs',               // session file — and it writes `mode: 0o600`, which the
+                                     // shared writer has no parameter for; routing it there
+                                     // would silently widen the permissions on session state
+    'hook-update.mjs',               // update-state.json
+    'registry-recommend.mjs',        // recommendation cooldown marker
+    'lib/native-binding-hint.mjs',   // ABI self-heal marker (runs when the DB cannot open)
+    'scripts/user-prompt-search.js', // injected-ids marker, hot path, zero-import budget
+  ]);
+
+  it('the sweep walks a plausible number of shipped modules', () => {
+    expect(walkShipped().length).toBeGreaterThan(60);
+  });
+
+  it('the private temp+rename idiom lives only in the shared writer and the declared runtime-state writers', () => {
+    expect(sweepShipped(PRIVATE_ATOMIC_RE, ALLOWED)).toEqual([]);
+  });
+
+  it('the sweep can say NO and YES, and every allowlisted file really does carry the idiom', () => {
+    // Arm 1: a regex matching nothing would report a clean tree. This is the exact shape
+    // the three private twins shipped.
+    expect('const tmp = p + ".tmp";\n  writeFileSync(tmp, data);\n  renameSync(tmp, p);')
+      .toMatch(PRIVATE_ATOMIC_RE);
+    // Arm 2: it must NOT fire on a plain file move, which is what a bare `renameSync` sweep
+    // reported — six files, none of them this defect.
+    expect('renameSync(oldDbPath, newDbPath);').not.toMatch(PRIVATE_ATOMIC_RE);
+    // Arm 3: the allowlist could rot into names that no longer carry the idiom, leaving the
+    // rule guarding an empty set while still reading as enforced.
+    for (const rel of ALLOWED) {
+      expect(sourceWithoutComments(join(REPO, rel)), `${rel} is allowlisted but has no temp+rename`).toMatch(PRIVATE_ATOMIC_RE);
+    }
   });
 });

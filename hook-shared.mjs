@@ -125,12 +125,15 @@ export const ORPHAN_READS_AGE_MS = 24 * 60 * 60 * 1000;
 // re-date the content exactly the way the revisit path does, i.e. commit the defect on
 // purpose rather than by omission.
 //
-// Module-private, unlike the two thresholds above it. Those are pre-existing knip baseline
-// entries (nothing imports them either); adding a third would raise the baseline by one for
-// a constant with no consumer outside this file, which is the v3.70.0 precedent (#9675) —
-// export it the day something needs it. `bufferAgeMs` is a parameter, so a test can pin the
-// threshold without an import.
-const STALE_EPISODE_BUFFER_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Exported as of the pre-tag review for v3.92.0, on this constant's own stated rule ("export
+// it the day something needs it"): the sweep alone does NOT close the harm described above.
+// `handleSessionStart` flushes the leftover buffer in the FOREGROUND, and the sweeper runs
+// later, in a detached auto-maintain worker — so on the revisit itself the mis-dated flush
+// happens first and the sweeper then finds nothing. What the sweep delivers is dir-wide
+// reclamation of OTHER projects' abandoned buffers; the same-project revisit needs the same
+// threshold applied at the flush, which is `hook.mjs`'s importer of this symbol.
+// `bufferAgeMs` stays a parameter so a test can pin the sweep threshold without an import.
+export const STALE_EPISODE_BUFFER_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Sweep stale `ep-flush-*` / `pending-*` (older than `ageMs`, default 1h),
 // `reads-*.txt` (older than `readsAgeMs`, default 24h) and abandoned per-project episode
