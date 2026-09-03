@@ -15,11 +15,10 @@ import { join, sep } from 'path';
 import { pathToFileURL } from 'url';
 import Database from 'better-sqlite3';
 import { shouldSkip, computeEffectiveLen, detectIntent, shouldSkipByDedup, extractFiles, extractErrorSignature, extractDeferredRefs, DEDUP_STALE_MS, matchRegistrySkillName, detectMemOverride } from './prompt-search-utils.mjs';
-import { injectedIdsFileName } from '../lib/injected-ids.mjs';
+import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { getDeferredByIds } from '../lib/deferred-work.mjs';
 import { recommendSkill } from '../registry-recommend.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
-import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
 
 import { DAY_MS } from '../lib/time-constants.mjs';
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -671,26 +670,12 @@ async function main() {
         // window skips re-injection. A later FTS-path write replaces ids wholesale
         // (accepted: worst case is one cheap re-injection after an obs-emitting
         // prompt inside the same 5-min window).
+        // union: the M-6 same-session/staleness gate + the atomic write live in
+        // lib/injected-ids.mjs (audit 2026-09-02 P1-2). `dedupIds` are `D<id>` strings, so
+        // the lib's union-side String() is the identity here — same bytes as before.
         try {
-          let prevIds = [];
-          let prevCount = 0;
-          try {
-            const prev = JSON.parse(readFileSync(injectedIdsFile, 'utf8'));
-            // M-6: inherit only same-session (or legacy) state — another session's
-            // ids/count must not carry over. Atomic write below: a torn concurrent
-            // write left the shared marker as invalid JSON (dedup silently off).
-            if (prev.ts && Date.now() - prev.ts < DEDUP_STALE_MS
-                && !(prev.session && hookData.session_id && prev.session !== hookData.session_id)) {
-              prevIds = Array.isArray(prev.ids) ? prev.ids : [];
-              prevCount = prev.count || 0;
-            }
-          } catch {}
-          atomicWriteFileSync(injectedIdsFile, JSON.stringify({
-            ids: [...new Set([...prevIds.map(String), ...dedupIds])],
-            ts: Date.now(),
-            count: prevCount + 1,
-            ...(hookData.session_id ? { session: hookData.session_id } : {}),
-          }));
+          mergeInjectedMarker(injectedIdsFile, dedupIds,
+            { sessionId: hookData.session_id, maxAgeMs: DEDUP_STALE_MS, mode: 'union' });
         } catch {}
       }
     }
@@ -932,22 +917,14 @@ async function main() {
     if (output) {
       process.stdout.write(output + '\n');
       // Write injected IDs for dedup with hook.mjs handleUserPrompt + self-dedup
+      // replace, NOT union: this leg writes the prompt's own result set wholesale, and it
+      // is the ONE writer that puts raw observation numbers (mixed with `P<id>` strings)
+      // into the marker. `mode:'replace'` writes `candidateIds` verbatim for exactly that
+      // reason — stringifying here would flip the D#213 exclude from inert to live, which
+      // is a behaviour change with its own ruler and its own decision to make.
       try {
-        let prevCount = 0;
-        try {
-          const prev = JSON.parse(readFileSync(injectedIdsFile, 'utf8'));
-          // M-6: same-session (or legacy) count only; atomic write (torn-write guard).
-          if (prev.ts && Date.now() - prev.ts < DEDUP_STALE_MS
-              && !(prev.session && hookData.session_id && prev.session !== hookData.session_id)) {
-            prevCount = prev.count || 0;
-          }
-        } catch {}
-        atomicWriteFileSync(injectedIdsFile, JSON.stringify({
-          ids: candidateIds,
-          ts: Date.now(),
-          count: prevCount + 1,
-          ...(hookData.session_id ? { session: hookData.session_id } : {}),
-        }));
+        mergeInjectedMarker(injectedIdsFile, candidateIds,
+          { sessionId: hookData.session_id, maxAgeMs: DEDUP_STALE_MS, mode: 'replace' });
       } catch {}
       // v26 P0: bump injection_count for obs-based emits only (prompt-corpus
       // rows have "P<id>" string IDs; skip those — they live in user_prompts).

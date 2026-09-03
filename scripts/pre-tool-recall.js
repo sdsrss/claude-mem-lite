@@ -8,7 +8,7 @@ import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
-import { injectedIdsFileName, injectedIdKey, EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
+import { injectedIdsFileName, injectedIdKey, EVENT_ID_PREFIX, readInjectedMarker, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
@@ -253,45 +253,21 @@ function crossHookInjectedFile(project, sessionId) {
 // read and merge now carry the CC session id: a payload written by a DIFFERENT
 // session is ignored (read) / replaced (merge), mirroring the v3.35.2 episode
 // session-key fix. Legacy payloads without `session` keep the old behavior.
+// Predicate + payload shape live in lib/injected-ids.mjs (audit 2026-09-02 P1-2) — this
+// script held two of the five hand-typed copies. The window stays this script's own
+// constant; only the gate and the write are shared.
 function readCrossHookInjected(project, sessionId) {
-  try {
-    const raw = readFileSync(crossHookInjectedFile(project, sessionId), 'utf8');
-    const { ids, ts, session } = JSON.parse(raw);
-    if (session && sessionId && session !== sessionId) return new Set();
-    if (!ts || Date.now() - ts > CROSS_HOOK_DEDUP_MS) return new Set();
-    if (!Array.isArray(ids)) return new Set();
-    return new Set(ids.map(String));
-  } catch { return new Set(); }
+  const { ids } = readInjectedMarker(crossHookInjectedFile(project, sessionId),
+    { sessionId, maxAgeMs: CROSS_HOOK_DEDUP_MS });
+  return new Set(ids.map(String));
 }
 
 function mergeCrossHookInjected(project, newIds, sessionId) {
   if (!newIds || newIds.length === 0) return;
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
-    const file = crossHookInjectedFile(project, sessionId);
-    let prev = { ids: [], ts: 0, count: 0 };
-    try {
-      const raw = readFileSync(file, 'utf8');
-      const parsed = JSON.parse(raw);
-      // Within the staleness window AND same session (or legacy): union.
-      // Outside / other session: replace.
-      if (parsed.ts && Date.now() - parsed.ts < CROSS_HOOK_DEDUP_MS
-          && !(parsed.session && sessionId && parsed.session !== sessionId)) {
-        prev = parsed;
-      }
-    } catch { /* fresh file */ }
-    const ids = [...new Set([
-      ...(Array.isArray(prev.ids) ? prev.ids.map(String) : []),
-      ...newIds.map(String),
-    ])];
-    // Atomic (tmp+rename, M-6): a plain write torn by a concurrent hook left the
-    // shared marker as invalid JSON, silently disabling cross-hook dedup.
-    atomicWriteFileSync(file, JSON.stringify({
-      ids,
-      ts: Date.now(),
-      count: (prev.count || 0) + 1,
-      ...(sessionId ? { session: sessionId } : {}),
-    }));
+    mergeInjectedMarker(crossHookInjectedFile(project, sessionId), newIds,
+      { sessionId, maxAgeMs: CROSS_HOOK_DEDUP_MS, mode: 'union' });
   } catch { /* silent — dedup is best-effort */ }
 }
 

@@ -56,6 +56,7 @@ import { fileURLToPath } from 'node:url';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { searchRelevantMemories } from '../hook-memory.mjs';
 import { countInjectedBySurface } from '../lib/citation-tracker.mjs';
+import { mergeInjectedMarker, readInjectedMarker } from '../lib/injected-ids.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -91,15 +92,36 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
   });
 
   it('the writer still stringifies, and the reader still does not coerce', () => {
-    // The two source halves that produce the string ids. Asserted separately from the
+    // The two halves that produce the string ids, asserted separately from the end-to-end
     // behaviour because either one alone changing is enough to flip it, and a
     // behaviour-only test would not say which side moved.
-    const ptr = readFileSync(join(REPO, 'scripts', 'pre-tool-recall.js'), 'utf8');
-    const merge = ptr.slice(ptr.indexOf('function mergeCrossHookInjected'));
-    expect(merge.indexOf('function mergeCrossHookInjected'), 'anchor not found').toBe(0);
-    const body = merge.slice(0, merge.indexOf('\n}\n') + 1);
-    expect(body, 'mergeCrossHookInjected no longer stringifies the union').toMatch(/\.map\(String\)/);
+    //
+    // This used to grep `mergeCrossHookInjected`'s BODY for `.map(String)`. When the
+    // union/replace rule moved into lib/injected-ids.mjs (audit 2026-09-02 P1-2) the
+    // behaviour was byte-identical and this case still went red — a source-text anchor
+    // reports a refactor as a regression and, worse, would report a real coercion added in
+    // the lib as no change at all. Driving the shipped functions instead survives both.
+    const dir = mkdtempSync(join(tmpdir(), 'd193-marker-'));
+    const file = join(dir, 'marker.json');
 
+    // union: what pre-tool-recall.js does. Numbers in, STRINGS on disk.
+    mergeInjectedMarker(file, [41, 42], { sessionId: 's1', maxAgeMs: 60000, mode: 'union' });
+    const unioned = JSON.parse(readFileSync(file, 'utf8')).ids;
+    expect(unioned, 'the union arm no longer stringifies').toEqual(['41', '42']);
+
+    // replace: what user-prompt-search.js's main leg does. Numbers in, NUMBERS on disk —
+    // this is the leg that lets a raw number into the marker at all.
+    mergeInjectedMarker(file, [43, 'P44'], { sessionId: 's1', maxAgeMs: 60000, mode: 'replace' });
+    const replaced = JSON.parse(readFileSync(file, 'utf8')).ids;
+    expect(replaced, 'the replace arm must write ids verbatim').toEqual([43, 'P44']);
+
+    // the reader hands them back untouched — no Number(), no String().
+    const back = readInjectedMarker(file, { sessionId: 's1', maxAgeMs: 60000 });
+    expect(back.ids, 'readInjectedMarker coerced something').toEqual([43, 'P44']);
+    rmSync(dir, { recursive: true, force: true });
+
+    // hook.mjs's own half stays a source assertion: there is no seam to drive here, the
+    // ids go straight from the reader into the exclude array.
     const hook = readFileSync(join(REPO, 'hook.mjs'), 'utf8');
     const push = /for \(const id of ids\) \{ keyContextIds\.push\(id\); pathAInjectedIds\.push\(id\); \}/;
     expect(hook, 'hook.mjs no longer pushes marker ids verbatim — was the coercion added?')

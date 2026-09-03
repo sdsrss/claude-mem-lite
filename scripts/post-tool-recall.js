@@ -10,8 +10,13 @@
 // presentIdents excluded it); that class is carried by the pre-edit
 // BIND_DIRECTIVE, not here. See the spec's component-2 limits.
 //
-// Safety: readonly, no DB, exit 0 always. cooldownPathFor mirrors
-// pre-tool-recall.js (inlined per the #8447 fast-path convention).
+// Safety: readonly, no DB, exit 0 always. The cooldown path rule comes from
+// lib/cooldown-path.mjs — it used to be inlined here "per the #8447 fast-path
+// convention", but that exemption stopped applying to THIS script the moment it grew
+// the four lib imports below (audit 2026-09-02 P1-1: the fourth copy; the previous
+// round collapsed only three of four). A writer/reader disagreement on this name does
+// not error — it reads a file nobody wrote, silently zeroing the bind-mode
+// dropped-identifier check.
 
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
@@ -22,6 +27,7 @@ import { recordHookError } from '../lib/hook-telemetry.mjs';
 // emit added later merges instead of producing two JSON documents, which the host
 // parses as neither (lib/hook-stdout.mjs). Import-free module over no runtime deps.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
+import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
 
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 
@@ -29,10 +35,12 @@ const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
 const RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || join(DATA_DIR, 'runtime');
 const LEGACY_COOLDOWN_PATH = join(RUNTIME_DIR, 'pre-recall-cooldown.json');
 
+// The no-session legacy fallback stays local: it is this script's own back-compat with
+// pre-session-id cooldown files, not part of the shared naming rule. Same split as
+// scripts/pre-tool-recall.js, which is the writer.
 function cooldownPathFor(sessionId) {
   if (!sessionId) return LEGACY_COOLDOWN_PATH;
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 64);
-  return join(RUNTIME_DIR, `pre-recall-cooldown-${safe}.json`);
+  return sharedCooldownPathFor(RUNTIME_DIR, sessionId);
 }
 
 async function main() {
