@@ -7,7 +7,7 @@
 // `off` skips all work.
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { resolveDataDir } from './lib/resolve-data-dir.mjs';
+import { resolveDataDir, resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { searchResources, cjkIntentTokens } from './registry-retriever.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
@@ -57,7 +57,7 @@ const RECO_COOLDOWN_MS = 300_000;        // 5 min, mirrors T4 SKILL_COOLDOWN_MS 
 // DB_DIR formula) so tests sandbox via env without ESM-cache gymnastics, and prod reads
 // the same dir as the rest of the app.
 function recoRuntimeDir() {
-  return join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime');
+  return resolveRuntimeDir(resolveDataDir(process.env.CLAUDE_MEM_DIR));
 }
 
 const TOKEN_SPLIT = /[^a-z0-9一-鿿]+/;

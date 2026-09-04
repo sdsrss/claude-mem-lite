@@ -171,7 +171,12 @@ describe('consumer ledger — no inlined live-filter pairs in the converted file
       if (src.includes('inject-search-core.mjs')) continue;
       const via = VIA[f];
       expect(via, `${f} neither imports the core nor declares an intermediary`).toBeTruthy();
-      expect(src.includes(via.replace(/^lib\//, '')), `${f} does not import its declared intermediary ${via}`).toBe(true);
+      // Anchored on the import SPECIFIER, not a bare substring: `src.includes('export-columns.mjs')`
+      // is satisfied by a COMMENT naming the module, so the ledger could clear a file whose
+      // real edge had moved away. Today an adjacent behavioural case happens to catch that;
+      // the ledger should stand on its own.
+      const viaSpecifier = new RegExp(`from\\s+'[^']*${via.replace(/^lib\//, '').replace(/\./g, '\\.')}'`);
+      expect(viaSpecifier.test(src), `${f} does not import its declared intermediary ${via}`).toBe(true);
       expect(readFileSync(join(REPO, via), 'utf8').includes('inject-search-core.mjs'),
         `${via} is declared as ${f}'s route to the core but does not import it`).toBe(true);
     }

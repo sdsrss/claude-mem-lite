@@ -40,7 +40,7 @@ import { neutralizeContextDelimiters } from '../format-utils.mjs';
 // Import-free module, no runtime deps — nothing added to this script's load cost.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
-import { readHookStdin } from '../lib/hook-stdin.mjs';
+import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
 // Recall queries the SAVE-path project, so this MUST produce the same string as the
 // save path. It used to be a hand-kept copy of the same 6 lines; that copy had already
 // drifted once (missing the process.env.PWD fallback, so a symlinked project dir
@@ -56,6 +56,7 @@ import { DAY_MS } from '../lib/time-constants.mjs';
 const DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
 const DB_PATH = process.env.CLAUDE_MEM_DB_PATH || join(DATA_DIR, 'claude-mem-lite.db');
 const RUNTIME_DIR = resolveRuntimeDir(DATA_DIR);
+
 // A3 (v2.83): cross-hook dedup window. UPS writes
 // `runtime/.claude-mem-injected-<project>` after each inject; we read it to drop IDs the
 // agent already saw in this window. Imported, not inlined (ARCH-3): the copy's stated
@@ -303,13 +304,25 @@ try {
   // Skip if DB doesn't exist
   if (!existsSync(DB_PATH)) process.exit(0);
 
-  // Read stdin, bounded (P1-9). This is the site where the unbounded `for await` cost the
-  // most: on `PreToolUse:Write` the payload's `tool_input.content` is the ENTIRE file being
-  // written, so writing a multi-megabyte file buffered all of it and `JSON.parse`d all of
-  // it — to read `file_path`. The cap truncates the JSON, which fails to parse and lands in
-  // the same catch that already handles a malformed payload: the recall is skipped, which
-  // is what the host's 3 s fail-open did anyway, only now it is bounded and deliberate.
-  const { text: input } = await readHookStdin();
+  // Read stdin, bounded (P1-9), at THIS path's own caliber — not the module default.
+  //
+  // A first cut called `readHookStdin()` bare, taking the 256 KB default, and justified it
+  // by saying a truncated payload "is what the host's 3 s fail-open did anyway". That was
+  // measured at the v3.93.0 pre-tag review and is FALSE: `JSON.parse` of a 5 MB payload
+  // takes 2.99 ms and 10 MB takes 10.8 ms — three orders of magnitude inside the fail-open,
+  // so the old unbounded read was not timing out, it was working. The cap did not make an
+  // existing loss deliberate, it CREATED one, on `pretool` — the highest-cite-rate injection
+  // face this project measures. This repo's own CHANGELOG.md is 1 MB, so a `Write` to it
+  // crossed the default cap and silently lost the recall while logging a hook error.
+  //
+  // Two changes, because they cover different halves. The cap is now a MEMORY backstop
+  // sized to the payload class (a whole file), not a functional gate. And a truncated read
+  // is salvaged rather than dropped, the same way `hook.mjs handlePostToolUse` salvages
+  // `tool_name` from a truncated prefix: everything below needs `file_path` / `tool_name` /
+  // `session_id`, all of which are scalars the host emits alongside `content`. Salvage is
+  // strictly better than the previous behaviour — when the prefix does not carry them we
+  // land exactly where the drop landed.
+  const { text: input, truncated } = await readHookStdin({ maxBytes: TOOL_INPUT_FILE_MAX_BYTES });
 
   // Parse event
   let filePath;
@@ -329,8 +342,17 @@ try {
     const lim = event.tool_input?.limit;
     isFullRead = (off === undefined || off === null) && (lim === undefined || lim === null);
   } catch (e) {
-    recordHookError('pre-recall:json', e, RUNTIME_DIR, { inputLen: input.length });
-    process.exit(0);
+    const salvaged = truncated ? salvageTruncatedHookEvent(input) : null;
+    if (!salvaged) {
+      // A genuinely malformed payload. Kept distinct from the truncation case above so the
+      // hook-error log that `stats` and `doctor` read as an install-health signal does not
+      // fill with rows for perfectly normal large writes.
+      recordHookError('pre-recall:json', e, RUNTIME_DIR, { inputLen: input.length, truncated });
+      process.exit(0);
+    }
+    ({ filePath, sessionId, toolName } = salvaged);
+    toolInput = {};
+    isFullRead = true;
   }
 
   // Upstream-shape probe: hook ran but neither field nor input shape matches the

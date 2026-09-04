@@ -2,6 +2,330 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.93.0 — a DDL change unreachable from the version the DB reports is a no-op with a convincing diff
+
+**Upgrade note — two user-visible behaviour changes, both narrow.**
+
+1. **`CLAUDE_MEM_RUNTIME_DIR` now relocates hook-written runtime state instead of splitting
+   it.** Previous releases moved only part of the runtime, so the `fyi` and `pretool` faces
+   wrote their markers into the override while `ups` and `keyctx` read them from the real
+   directory — no error, no empty directory, nothing to notice. Four subsystems were split
+   that way: the cross-hook injected-ids marker and skill cooldown, hook-error telemetry, the
+   metrics sink and its GC, and the native-binding breakage marker (the self-heal trigger).
+   **Action:** none if you do not set the variable. If you do: state left in the override
+   directory by an older release is now read as well as written; an empty-string value is
+   treated as unset rather than resolving to the current working directory; and
+   installation-identity state — `install.lock`, `update-state.json`, update residue —
+   deliberately does NOT move with the override, because two installers pointed at different
+   override directories would each take their own lock and both proceed.
+2. **`registry search` no longer prints a `Path:` line for a resource outside the managed
+   directory.** The CLI and MCP copies of that renderer had drifted; the MCP semantics were
+   kept, so the CLI now matches it. The path was never actionable on those rows — their `Use:`
+   line names the resource — and printing it spelled out a home directory for no gain.
+
+**Revert path** for either: pin the previous release (`npm i -g claude-mem-lite@3.92.0`, or
+the equivalent plugin pin). **Schema:** this release adds migration **v47**, additive only —
+two indexes, no column or table change, applied automatically on the next DB open.
+
+Audit items **P1-7, P1-9, P1-14, P1-15, P2-4, P2-5, P2-6, P2-7, P2-11, P2-13, P2-17, P2-19**
+from the 2026-09-02 backlog, which closes every P0 and P1 that round opened except P0-1 —
+skipped by decision after its own premises were refuted (the host's `SessionEnd` has no
+`exit` reason, also fires on `resume`/`logout`, and runs inside a kill window the proposal
+did not account for).
+
+### chore: two indexes, and the version bump that makes them reachable (P2-11 + the previous round's ALGO-7)
+
+An index on `session_summaries.memory_session_id` — the only genuine full table scan among
+the 30 statements the audit put through `EXPLAIN QUERY PLAN`, on a probe both Stop and
+SessionStart make — and a partial index on `observations(project, created_at_epoch DESC)`
+over the same live-row predicate `liveObsFilterSql` uses.
+
+**The version bump is the fix, not bookkeeping.** `initSchema`'s fast path returns before the
+`CREATE INDEX IF NOT EXISTS` block, so on every install already reporting v46 a new index
+there is simply never created — the trap the FTS5 migration hit. A DDL change unreachable
+from the version the DB reports is a no-op with a convincing diff.
+
+The test for that took two cuts, and **the first one could not have caught the omission it
+was written for**: it stamped `CURRENT_SCHEMA_VERSION - 1`, a relative anchor that moves with
+the constant and is one behind by construction, so reverting the bump left it green. The
+literal `46` — the version v3.91.0 shipped — is what discriminates.
+
+### The two pre-tag reviews, and what they changed
+
+Both independent reviews of this batch found live defects, and one of them found that a fix
+in this very release was only half applied. Recording it here because the pattern is the
+useful part.
+
+**The correctness review's grep said the sweep was complete; the mutation review's probe
+said it was not, and the mutation review was right.** The grep looked for readers of
+`CLAUDE_MEM_RUNTIME_DIR` and found every one of them going through the resolver — which is
+necessary and not sufficient, because a module that builds `join(dataDir, 'runtime')` and
+never mentions the variable cannot appear in that grep at all. That is the shape both
+original offenders had. `scripts/user-prompt-search.js` was still doing it: it resolved its
+own `RUNTIME_DIR` here and then built the SHARED cross-hook marker from the data dir, so the
+release's headline claim was false when it was written.
+
+The guard has been rewritten to sweep for the defect FORM rather than for a re-derivation of
+the rule, which kills both of that review's surviving mutations at once — including
+`hook-optimize.mjs`, which the fix named and nothing covered. Its allowlist is a Map of
+file → reason with a reverse-guard: an entry whose file no longer builds the path fails, so
+the list cannot rot into a raised baseline. **Its first regex was itself wrong** — `[^)]*`
+cannot cross the inner `)` in `join(resolveDataDir(env), 'runtime', …)`, so it was blind to
+exactly the two files it was exempting. The reverse-guard is what caught that, which is the
+argument for having one.
+
+Five other assertions were found not to bind and are fixed here: `settles exactly once` was
+satisfied identically with and without the guard (a native promise ignores a `reject` after
+it has resolved, so the stated rationale was wrong — it now spies on teardown); the five
+stdin entry points were guarded on IMPORT, so keeping the import and bypassing the call with
+an unbounded `stdin.on('data')` accumulator stayed green; `doctor`'s two missing-file checks
+could collapse onto one message and still satisfy both regexes; the drift check's level was
+asserted as `['fail','warn']`, which cannot see the `fail`→`warn` downgrade it exists to
+catch (it emits `warn`, pinned as measured); and P2-6's semantics were pinned on the CLI face
+while the MCP face — whose semantics were the ones KEPT — had no assertion on its rendered
+output at all.
+
+**One of those fixes reproduced the defect it was written for, one line at a time.** The new
+MCP assertion first checked the whole search response for the absence of a `Path:` line —
+which the OTHER row in the same response satisfies, since both fixtures share query tokens.
+It now extracts the row block and asserts the managed and non-managed rows against each
+other, so the negative half cannot pass on a face that stopped rendering anything.
+
+### fix: `CLAUDE_MEM_RUNTIME_DIR` had eight hand-written homes and two modules that never heard of it (P1-14)
+
+The audit proposed deleting the variable from the five scripts. Measured before copying that
+down: it is load-bearing in ten test files, in `hook-launcher.mjs`, and in the experiment
+harness — a lot to spend removing a knob when the defect was never that the knob exists.
+`resolveRuntimeDir` in `lib/resolve-data-dir.mjs` is the one home.
+
+**Which sites call it is a decision, not a sweep, and that is written down at the resolver.**
+Hook-WRITTEN state that another component reads back moves with the override: the cross-hook
+marker and skill cooldown (`scripts/user-prompt-search.js`), hook-error telemetry
+(`mem-cli.mjs` was reading it from the data dir while every writer used the override, so
+`stats` would have reported zero hook errors), the metrics sink and its GC (`hook.mjs` derived
+the data dir as `join(RUNTIME_DIR, '..')` seven times — an identity that stopped holding the
+moment the override was honoured, so metrics were written to the override's parent and the
+real `metrics/` was never pruned), episode buffers, the shadow-recommendation log, and the
+native-binding breakage marker (`install.mjs` read it from the data dir while
+`lib/hook-telemetry.mjs` wrote it to the override — that marker is the self-heal trigger,
+the mechanism that was once dead for four days).
+
+Installation-identity state does NOT move: `install.lock`, `update-state.json`, the swap
+marker, the `.update-staging-*` residue scan. The lock exists to serialise concurrent
+installers, and two installers pointed at different override directories would each take
+their own and both proceed. Sweeping those into the resolver would have looked like finishing
+the job and would have broken it.
+
+`hook-launcher.mjs` keeps an inline copy and says why: it runs before the native binding is
+known to work and imports only `node:` builtins on purpose, so even an import-free module is
+a resolution it declines on the path whose job is surviving a broken install. It is the
+sweep's single declared exception, and **the sweep fails if that file stops carrying the
+rule**, so the allowlist cannot rot into a raised baseline.
+
+**The whole suite passed both before and after, which is why the new test file exists.**
+Nothing anywhere asserted the variable did what its name says, so the fix would have been
+invisible and the next regression silent. Reverting `hook-shared.mjs` to
+`join(DB_DIR, 'runtime')` turns it red.
+
+**Not fixed, and now documented instead of implied:** `CLAUDE_MEM_DB_PATH` has the same
+shape — the hook scripts honour it, `schema.mjs` does not, so a harness setting it aims the
+hooks at one database while the CLI and MCP server open the real one. Closing that changes
+which database a released CLI opens, which is a decision to take on its own rather than
+inside a refactor. The README now says so.
+
+### fix: the summary waited on every project's flushes, and three stdin readers had no bound (P1-7 + P1-9)
+
+`handleLLMSummary` waited for `readdirSync(RUNTIME_DIR)` to contain no `ep-flush-*` file at
+all — a condition about the whole machine, checked by a worker that only cares about its own
+session. `RUNTIME_DIR` is shared by every project, so one crashed `llm-episode` worker left a
+flush file nothing deletes, and from then on **every** project's summary burned its full 15 s
+on **every** Stop until a maintain run swept it — and orphan cleanup sits behind a 24 h gate.
+A flush spawned by an unrelated project mid-wait extended the wait for work the summary would
+never read.
+
+Now a defined set, snapshotted at entry and filtered to files young enough to belong to a
+live worker: a file that appears later is somebody else's, and one older than
+`ORPHAN_EPISODE_AGE_MS` is nobody's. Both were previously indistinguishable from work in
+progress. Not narrowed by project — the flush filename carries none, and widening it is a
+marker-format change with in-flight files across an upgrade.
+
+Six hook processes read the host payload off stdin six ways: three bounded at three different
+calibers, three as `for await (const chunk of process.stdin)` with no cap and no timeout.
+`lib/hook-stdin.mjs` owns the mechanism now — cap, timer, teardown, and settling exactly
+once. **The calibers are not unified:** a user prompt is not a tool response, and handing one
+caller another's limits is a behaviour change wearing a refactor's clothes.
+
+**The first cut of this got the caliber wrong on the face that mattered, and the pre-tag
+review measured it.** `pre-tool-recall` was given the 256 KB module default with the argument
+that a truncated payload "is what the host's 3 s fail-open did anyway". It is not:
+`JSON.parse` of a 5 MB payload takes **2.99 ms**, and 10 MB takes **10.8 ms** — three orders
+of magnitude inside the fail-open, so the old unbounded read was not timing out, it was
+working. The cap did not make an existing loss deliberate, it created one, on `pretool` — the
+highest-cite-rate injection face this project measures — and logged a `pre-recall:json` hook
+error for it, which `stats` and `doctor` read as an install-health signal. This repo's own
+`CHANGELOG.md` is 1 MB, so a `Write` to it was enough to trigger the whole sequence.
+
+Both halves are fixed. `TOOL_INPUT_FILE_MAX_BYTES` (8 MB) names the payload CLASS — a whole
+file — and is shared by the two entry points that see it, so they cannot drift apart; it is a
+memory backstop, not a functional gate. And past the cap the payload is now salvaged rather
+than dropped: `salvageTruncatedHookEvent` recovers `file_path` / `session_id` / `tool_name`
+from the truncated prefix, the same way `hook.mjs handlePostToolUse` already recovered
+`tool_name`. **Salvage can only add recalls, never remove one** — when the prefix does not
+carry the field it returns null and the caller takes exactly the path it took before.
+
+Settling once is the other property worth naming: each hand-written copy had four paths to
+get right, and `.destroy()` in the cap branch can itself emit `'error'`, so `settle()` really
+is entered twice. What that guard buys is **teardown running once** — not, as the first
+version of its test claimed, protection from an unhandled rejection; a native promise
+silently ignores a `reject` after it has resolved, which is why deleting the guard left all
+seventeen cases green.
+
+### chore: 20 action references pinned to SHAs, and a workflow that had no permissions block (P2-19)
+
+All 20 first-party action references pinned to commit SHAs, each carrying its version as a
+comment so the diff stays reviewable. **Pinned to the SHA of the major already in use**, not
+the latest release — upgrading majors is a separate change and mixing it into a security fix
+hides a behaviour delta inside it. `softprops` was already pinned; the `actions/*` were not,
+which is the more common half of this shape because first-party feels safe.
+
+`ci.yml` gains `permissions: contents: read`. It was the workflow without a block, and it is
+the one that runs on `pull_request` — a fork's branch, after several thousand dev
+dependencies' install scripts. `publish.yml`'s version-consistency check moves ahead of lint
+and the coverage suite: it gates a mistagged release, depends on nothing they produce, and by
+then the tag is already pushed either way.
+
+`.github/dependabot.yml`, because a pinned SHA with no updater is how a pin becomes an
+unpatched pin. Majors ignored, dev updates grouped — every lockfile change has to pass the
+`@emnapi` pruning guard that has regressed twice.
+
+### change: the registry `Use:` renderer had one rule and two implementations, already drifted (P2-6)
+
+    MCP   isManaged ? toPortable(local_path) : ''
+    CLI   isManaged && local_path.startsWith(home) ? '~'+… : (local_path || '')
+
+For a non-managed resource the CLI printed `Path: /home/<user>/…` — absolute, un-tilde'd — on
+a row whose `Use:` line never refers to the path. MCP printed nothing. **Nothing asserted
+either behaviour**, so the divergence was free to happen and free to stay.
+
+`resourceUseHint()` returns data, not a rendered line: the two faces genuinely differ in
+dialect (four spaces and `out()` vs two spaces and Markdown bold), and collapsing that would
+replace a real duplicate with a formatting flag.
+
+One test was pinning the old behaviour. Its sibling `enrich` case failed too, and **the cause
+is worth recording because it looked like a second regression**: the first case threw before
+its `registry remove` step, leaving a non-managed row behind for `enrich` to refuse.
+Confirmed by running the file against HEAD (28/28) before touching either.
+
+### refactor: one home for the plugin key, because "disabled" has to mean disabled (P2-7)
+
+`PLUGIN_KEY` and `isPluginExplicitlyDisabled` shipped twice in JS, and that duplication was
+load-bearing rather than untidy: `install.mjs` writes hooks directly into `settings.json`, so
+disabling the plugin in the UI does not remove them. This predicate is the only thing that
+makes "disabled" mean disabled, and a key drifting on one side leaves the user with a plugin
+they switched off and a hook set that never noticed. Now `lib/plugin-key.mjs`,
+zero-dependency because `hook.mjs` imports it at module scope on the hottest path in the
+system. The bash copy in `post-tool-use.sh` stays a copy — that path exists to never reach
+node — and its parity is tested, which is a different thing from two homes and a comment.
+
+**Its parity guard went red on the move, and that is the source-anchor shape exactly**: it
+grepped `hook.mjs` for `const PLUGIN_KEY = '…'`, an anchor that legitimately relocated. It is
+now anchored on the imported value, and additionally asserts `hook.mjs` has not re-typed a
+literal — an inline copy would have satisfied the bash comparison while being free to drift.
+The test also carried a third hand-written copy of the key; it imports the shipped one now,
+or the whole comparison was the test agreeing with itself.
+
+### refactor: the last two CLI/MCP twins (P2-4, P2-5)
+
+`get`'s session leg was the one detail source with no shared fetch. Its **field** set already
+came from `get-core`'s `SESSION_DETAIL_FIELDS`, so the twin was down to the query itself —
+**a shared field list sitting over two hand-copied SELECTs is the half-collapsed shape that
+lets a WHERE drift while the columns stay in step.**
+
+`export`'s columns have been shared since v3.42 HIGH-2 — found when the MCP handler was
+carrying a narrower 16-column SELECT and silently dropping text, aliases and citation signals
+from the advertised backup→restore flow. The predicate was still written twice. On the one
+command whose output people restore from, that is the same half-collapse.
+
+Every difference between the faces stays with them, because each is a decision rather than an
+accident: the CLI `fail()`s with a usage message where the MCP tool throws; the CLI defaults
+to the complete matching set (it is the documented backup half) where MCP defaults to 200 and
+probes `limit+1`, because an MCP result is model context and a bare exploratory call must not
+dump a store into a transcript.
+
+**A consumer ledger went red because the sharing got stronger**: it required every listed file
+to import the live-filter core, and `server.mjs` now reaches it *through* `buildExportWhere`.
+It accepts a declared intermediary now, then checks that intermediary actually imports the
+core, plus a second case that fails if an entry goes dead. Deleting the assertion would have
+been the wrong repair — the per-file pair scan passes trivially for a file that stopped using
+the live filter at all, which is the regression the import check exists to catch.
+
+### test: the coverage exclusion rationale was expired for one of three, not three (P1-15)
+
+The audit challenged the `exclude` rationale ("only exercised through subprocess E2E") for
+`install.mjs`, `server.mjs` and `registry.mjs`, on the grounds that 13 / 13 / 9 test files
+import each one in-process. Measured per file rather than argued, by temporarily adding each
+to `include`:
+
+| file | statements | lines | verdict |
+|---|---|---|---|
+| `install.mjs` | 11.67% | 10.22% | rationale **holds** |
+| `server.mjs` | 25.89% | 27.54% | rationale **holds** |
+| `registry.mjs` | 86.78% | 90.27% | rationale **expired** |
+
+**Importing a module is not exercising it**: the thirteen files importing `install.mjs` reach
+an eighth of it. `registry.mjs` is now in scope, which *raised* the totals — 84.32% → 84.38%
+statements — because a well-covered file had been invisible. Adding all three would have taken
+statements to 71.05% and blown every threshold, i.e. measured the harness exactly as the
+original comment claimed.
+
+**Worth knowing before anyone repeats the experiment**: those three were named in `exclude`
+while `include` is an explicit allowlist that never named them, so the `exclude` entries were
+belt-and-braces and removing one changes nothing. The first attempt measured a 152-statement
+delta that was entirely unrelated edits.
+
+Second half: `doctor` renders 26 check lines and 15 appeared nowhere under `tests/`. Three
+failure branches are now driven through the real `install.mjs doctor --json` against a fixture
+HOME, asserting the level rather than the ✗ glyph. **Each asserts a premise first** — the same
+fixture reports the check clean before the defect is introduced — because "the entry says
+fail" also passes on a fixture so broken that `doctor` never reaches the check.
+
+Two things kept as comments rather than smoothed over: `Object.values(parsed)` on
+`doctor --json` yields `[4, 3, "4 issue(s)…", [...]]`, so every `find()` returns `undefined`
+and all three cases fail claiming the branch never fired — the parser now asserts `checks` is
+an array. And `server.mjs` and `hook.mjs` are **not** independent checks: deleting `hook.mjs`
+makes doctor report `server.mjs` missing too, because `detectInstallShape` only calls a
+directory a managed install when both are present. A first draft asserted the opposite.
+
+### Measured and declined, with the enumeration as the deliverable
+
+**`no-shadow` (P2-17).** Enabled, measured, turned back off. 70 violations tree-wide: 16 in
+shipped source, 1 in `tests/sandbox`, 54 under `tests/`. The audit reported 17, matching
+shipped + sandbox exactly, so the disagreement was scope and not measurement. **The shape is
+what decides it:** `install.mjs:1530-1533` — `ok`/`warn`/`fail`/`log`, the audit's
+first-listed example — is the mechanism rather than a defect. `doctor()` shadows the
+file-level helpers on purpose so every existing call site records into `checks` instead of
+printing; that *is* how `--json` works. The rule would force a disable comment onto a
+documented design, or ~40 renames to undo it. A rule whose first hit is a deliberate mechanism
+gets disabled by the next person rather than obeyed. The one hit worth acting on was renamed
+by hand: `handleUserPrompt` bound `raw` to the stdin payload and rebound it ~120 lines later
+to a marker file's contents — now `keyCtxRaw`. Fixing it did not need the rule, and the rule
+would have buried it among sixteen renames nobody asked for.
+
+**The MinHash claim, half right (P2-13).** "MinHash pre-filter cuts the O(N²) scan" is false —
+the estimate is evaluated inside the inner loop of a full nested scan, so every pair is still
+visited; what it skips is the exact Jaccard behind it. Comment corrected. The other half, an
+allocation-free comparison, was **built, measured and rejected**: a `charCodeAt` loop replacing
+`slice()` gave identical results over all 124,750 pairs of a 500-title fixture (0 mismatches,
+so the rewrite was correct) and no time difference — 0.77× / 1.08× / 1.03× across three
+passes, the first pass *slower*. The whole pair pass is 0.6 ms. The negative result lives in
+the docblock so nobody re-proposes it.
+
+### docs: the test count belongs to a tree, and there are three of them
+
+`main` after the audit-backlog work reads 344 / 5726; the **v3.92.0 tag** is 337 / 5665 and
+v3.91.0 was 324 / 5524. The tag is the one a user installs, so quoting `main`'s number under
+the tag's name attributes post-release work to a release that does not contain it.
+
 ## v3.92.0 — ten items from the 2026-09-02 audit backlog
 
 **Upgrade note — one user-visible behaviour change.** Registry *enrichment* now refuses to

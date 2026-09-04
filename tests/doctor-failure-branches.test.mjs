@@ -117,6 +117,15 @@ describe('doctor reports its failure branches', () => {
     const serverEntry = find(checks, /server\.mjs.*missing/i);
     expect(serverEntry, 'the two checks share install-shape detection — see comment').toBeTruthy();
     expect(serverEntry.level).toBe('fail');
+
+    // …and they must be TWO entries. The comment above claims asserting them separately
+    // catches "both collapsing onto one message"; the v3.93.0 pre-tag review showed it did
+    // not — a single `fail('server.mjs and hook.mjs: missing')` satisfies both regexes, and
+    // `find()` then returns the SAME object twice with level 'fail'. Two `find()` hits are
+    // not two checks unless you say so.
+    expect(serverEntry, 'server.mjs and hook.mjs collapsed onto one check').not.toBe(hookEntry);
+    expect(checks.filter((c) => /missing/i.test(c.message)).length)
+      .toBeGreaterThanOrEqual(2);
   });
 
   it('a hook script named by a command line is missing → the drift check fires', () => {
@@ -135,6 +144,10 @@ describe('doctor reports its failure branches', () => {
     unlinkSync(join(installDir, 'scripts', victim));
     const entry = find(doctorChecks(home), new RegExp(victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     expect(entry, `doctor did not name the missing ${victim}`).toBeTruthy();
-    expect(['fail', 'warn']).toContain(entry.level);
+    // Pinned to the level this branch ACTUALLY emits, measured rather than assumed. The
+    // first cut accepted `['fail', 'warn']`, which is not an assertion about the level at
+    // all: the branch already emits 'warn', so the fail→warn downgrade the file header says
+    // it guards against was the one thing it could not see.
+    expect(entry.level).toBe('warn');
   });
 });

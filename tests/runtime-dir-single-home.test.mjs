@@ -83,26 +83,78 @@ describe('the override reaches the modules that ignored it', () => {
 });
 
 describe('the rule has one home', () => {
-  // `hook-launcher.mjs` is the single declared exception: it runs before the native binding
-  // is known to work and imports only `node:` builtins on purpose, so it keeps an inline
-  // copy with a comment pointing here. Everything else must go through the resolver, or the
-  // next module added is free to be the third that never heard of the variable.
+  // TWO sweeps, because the first cut of this file only had the second one and the v3.93.0
+  // pre-tag test-effectiveness review showed it could not see the live defect.
+  //
+  // `INLINE_RE` catches a module that DID hear of the variable and wrote its own copy of the
+  // rule. No module in the tree has that shape except the one declared exception.
+  //
+  // `CONSTRUCT_RE` catches the shape both defective modules ACTUALLY had — building
+  // `join(x, 'runtime')` and never mentioning the variable at all. That form is invisible to
+  // INLINE_RE, which is why `scripts/user-prompt-search.js` could resolve its RUNTIME_DIR
+  // here and still build its cross-hook marker from the data dir: with the override set, the
+  // `fyi` face wrote the SHARED marker to one directory while `pretool` wrote it to another.
+  // The suite was fully green with that live.
   const INLINE_RE = /process\.env\.CLAUDE_MEM_RUNTIME_DIR\s*\|\|/;
-  const ALLOWED = new Set(['scripts/hook-launcher.mjs']);
+  // One level of nesting is allowed inside the first argument on purpose: the real sites are
+  // `join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', …)`, and a `[^)]*` first
+  // argument cannot cross that inner `)`. The first draft of this regex used `[^)]*` and was
+  // blind to exactly the two files it was allowlisting — caught by the reverse-guard below,
+  // which is the whole reason that assertion exists.
+  const CONSTRUCT_RE = /join\((?:[^()]|\([^()]*\))*,\s*['"]runtime['"]/;
+
+  // `hook-launcher.mjs` runs before the native binding is known to work and imports only
+  // `node:` builtins on purpose, so it keeps an inline copy with a comment pointing here.
+  const INLINE_ALLOWED = new Set(['scripts/hook-launcher.mjs']);
+
+  // Files that legitimately build `<dataDir>/runtime` themselves, each for a stated reason.
+  // The distinction is documented at `resolveRuntimeDir`: hook-WRITTEN state that another
+  // component reads back moves with the override; state about the ONE REAL INSTALLATION does
+  // not, because two installers pointed at different override directories would each take
+  // their own `install.lock` and both proceed.
+  const CONSTRUCT_ALLOWED = new Map([
+    ['lib/resolve-data-dir.mjs', 'the definition itself'],
+    ['scripts/hook-launcher.mjs', 'pre-binding path, see INLINE_ALLOWED'],
+    ['install.mjs', 'install.lock / update-state.json / update residue — installation identity'],
+    ['hook-update.mjs', 'update-state.json / swap marker / install.lock — installation identity'],
+    ['scripts/launch.mjs', 'install.lock'],
+    ['scripts/binding-probe-cli.mjs', 'install.lock'],
+  ]);
 
   it('the sweep walks a plausible number of shipped modules', () => {
     expect(walkShipped().length).toBeGreaterThan(60);
   });
 
   it('no shipped module re-derives the rule inline', () => {
-    expect(sweepShipped(INLINE_RE, ALLOWED)).toEqual([]);
+    expect(sweepShipped(INLINE_RE, INLINE_ALLOWED)).toEqual([]);
   });
 
-  it('the sweep can say NO, and the one exception really does carry the inline copy', () => {
+  it('no shipped module builds <dataDir>/runtime itself', () => {
+    // The live-defect guard. A new hook path that hardcodes the join is caught here even
+    // though it never mentions CLAUDE_MEM_RUNTIME_DIR — which is precisely how both original
+    // offenders looked.
+    expect(sweepShipped(CONSTRUCT_RE, new Set(CONSTRUCT_ALLOWED.keys()))).toEqual([]);
+  });
+
+  it('both sweeps can say NO, and every allowlisted file still earns its entry', () => {
+    // A sweep that cannot fire is indistinguishable from a clean tree.
     expect("const d = process.env.CLAUDE_MEM_RUNTIME_DIR || join(x, 'runtime');").toMatch(INLINE_RE);
-    for (const rel of ALLOWED) {
+    expect("const d = join(DATA_DIR, 'runtime', 'marker');").toMatch(CONSTRUCT_RE);
+    expect("const d = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime');").toMatch(CONSTRUCT_RE);
+    // …and must NOT fire on the resolved form, or the guard would forbid the fix.
+    expect('const d = resolveRuntimeDir(DATA_DIR);').not.toMatch(CONSTRUCT_RE);
+
+    for (const rel of INLINE_ALLOWED) {
       expect(readFileSync(join(process.cwd(), rel), 'utf8'),
         `${rel} is allowlisted but no longer carries the inline rule`).toMatch(INLINE_RE);
+    }
+    // Reverse-guard the second allowlist too: an entry whose file stopped constructing the
+    // path is a stale exemption, and a stale exemption is how an allowlist becomes a raised
+    // baseline that quietly re-admits the defect.
+    for (const [rel, why] of CONSTRUCT_ALLOWED) {
+      expect(readFileSync(join(process.cwd(), rel), 'utf8'),
+        `${rel} is allowlisted (${why}) but no longer builds the path — drop the entry`)
+        .toMatch(CONSTRUCT_RE);
     }
   });
 });

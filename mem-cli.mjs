@@ -4,6 +4,7 @@
 
 import { homedir } from 'os';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, REGISTRY_DB_PATH } from './schema.mjs';
+import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { truncate, typeIcon, inferProject, scrubSecrets, COMPRESSED_PENDING_PURGE } from './utils.mjs';
 import { resolveProject } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
@@ -1247,7 +1248,7 @@ async function cmdStats(db, args) {
   // recorded in the last 24h. Surfaces silent breakage (DB corruption,
   // CC upstream field rename) that would otherwise stay invisible — the
   // failure mode that left code-graph's matcher bug undetected for 10 sessions.
-  const hookErrors24h = countRecentHookErrors(join(DB_DIR, 'runtime'), now - DAY_MS);
+  const hookErrors24h = countRecentHookErrors(resolveRuntimeDir(DB_DIR), now - DAY_MS);
 
   // M-9 (audit 2026-08-14): disk footprint — a "lite" store had accumulated 360MB of
   // pre-maintain snapshots against a 59MB DB with nothing reporting it. Cheap probes

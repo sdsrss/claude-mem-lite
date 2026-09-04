@@ -16,8 +16,8 @@ import { describe, it, expect } from 'vitest';
 import { Readable } from 'node:stream';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { readHookStdin, DEFAULT_STDIN_MAX_BYTES, DEFAULT_STDIN_TIMEOUT_MS } from '../lib/hook-stdin.mjs';
-import { REPO } from './shipped-tree.mjs';
+import { readHookStdin, DEFAULT_STDIN_MAX_BYTES, DEFAULT_STDIN_TIMEOUT_MS, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
+import { REPO, sourceWithoutComments } from './shipped-tree.mjs';
 
 /** A stream that emits `chunks` then ends. */
 const streamOf = (...chunks) => Readable.from(chunks);
@@ -69,20 +69,72 @@ describe('readHookStdin', () => {
   it('settles exactly once when the cap is hit and the stream then errors', async () => {
     // The shape the six hand-written copies each had to get right on four separate paths
     // (cap, end, error, timer) — and `.destroy()` in the cap branch can itself emit
-    // 'error', so "resolve then reject" was reachable. An unhandled rejection here would
-    // crash a hook process the host is waiting on.
+    // 'error', so settle() really is entered twice here.
+    //
+    // What this case asserts, and why it is NOT the promise: the v3.93.0 pre-tag review
+    // deleted the `if (done) return; done = true;` guard and all 17 cases stayed green. A
+    // native promise silently IGNORES a reject after it has resolved, so the resolved value
+    // is identical with and without the guard — the old rationale ("an unhandled rejection
+    // would crash a hook process") is factually wrong and the assertion it justified proved
+    // nothing. The guard's observable effect is that TEARDOWN runs once, so that is what is
+    // asserted: a spy on destroy.
     const s = new Readable({ read() { /* pushed below */ } });
+    let destroys = 0;
+    const realDestroy = s.destroy.bind(s);
+    s.destroy = (...args) => { destroys++; return realDestroy(...args); };
     const p = readHookStdin({ stream: s, maxBytes: 4, timeoutMs: 500 });
     s.push('abcdefgh');
     setTimeout(() => s.emit('error', new Error('post-destroy noise')), 20);
     await expect(p).resolves.toEqual({ text: 'abcd', truncated: true, timedOut: false });
     await new Promise((r) => setTimeout(r, 60)); // let the late error fire into the void
+    expect(destroys, 'settle() ran its teardown twice — the done guard is gone').toBe(1);
   });
 
   it('rejects on a stream error before anything settled', async () => {
     const s = new Readable({ read() { /* nothing */ } });
     setTimeout(() => s.emit('error', new Error('EPIPE')), 10);
     await expect(readHookStdin({ stream: s, timeoutMs: 500 })).rejects.toThrow('EPIPE');
+  });
+
+  it('the whole-file payload cap is sized to a file, not to a tool response', () => {
+    // v3.93.0. The default 256 KB was applied to `PreToolUse:Write`, whose payload carries
+    // the ENTIRE file in `tool_input.content` — this repo's own CHANGELOG.md is 1 MB, so a
+    // Write to it truncated, failed to parse, and silently lost the recall on `pretool`.
+    expect(TOOL_INPUT_FILE_MAX_BYTES).toBe(8 * 1024 * 1024);
+    expect(TOOL_INPUT_FILE_MAX_BYTES).toBeGreaterThan(DEFAULT_STDIN_MAX_BYTES);
+  });
+
+
+  describe('salvageTruncatedHookEvent', () => {
+    // The other half of the fix: past the cap, recover rather than drop. Asserted on the
+    // helper because it is where the rule lives; the caller's use of it is pinned by the
+    // source case above.
+    const prefix = (obj, cut) => JSON.stringify(obj).slice(0, cut);
+
+    it('recovers file_path, session_id and tool_name from a cut-off payload', () => {
+      const full = { session_id: 's1', tool_name: 'Write', tool_input: { file_path: '/a/b.mjs', content: 'x'.repeat(5000) } };
+      const got = salvageTruncatedHookEvent(prefix(full, 140));
+      expect(got).toEqual({ filePath: '/a/b.mjs', sessionId: 's1', toolName: 'Write' });
+    });
+
+    it('un-escapes a JSON-escaped path rather than handing back the raw capture', () => {
+      const got = salvageTruncatedHookEvent('{"tool_input":{"file_path":"C:\\\\x\\\\y.mjs","content":"zz');
+      expect(got.filePath).toBe('C:\\x\\y.mjs');
+    });
+
+    it('returns null when the prefix stops before file_path — the caller then behaves as before', () => {
+      // The bound on the whole change: salvage can only ADD recalls. If it cannot find the
+      // field, the caller takes exactly the path it took when there was no salvage at all.
+      const full = { tool_input: { content: 'x'.repeat(5000), file_path: '/a/b.mjs' } };
+      expect(salvageTruncatedHookEvent(prefix(full, 60))).toBeNull();
+      expect(salvageTruncatedHookEvent('')).toBeNull();
+      expect(salvageTruncatedHookEvent('{"tool_input":{"file_path":""')).toBeNull();
+    });
+
+    it('reports the two optional scalars as null rather than inventing them', () => {
+      const got = salvageTruncatedHookEvent('{"tool_input":{"file_path":"/a/b.mjs","content":"zz');
+      expect(got).toEqual({ filePath: '/a/b.mjs', sessionId: null, toolName: null });
+    });
   });
 
   it('defaults match the host tier they are documented against', () => {
@@ -92,7 +144,15 @@ describe('readHookStdin', () => {
 });
 
 describe('every hook entry point reads stdin through the shared module', () => {
-  const read = (rel) => readFileSync(join(REPO, rel), 'utf8');
+  // Comment-stripped, per tests/shipped-tree.mjs. Reading raw source here was a live
+  // false-alarm: `lib/hook-stdin.mjs`'s own docblock quotes the banned unbounded idiom, and
+  // this file's own fix note quotes `readHookStdin()` — a guard that fires on prose about
+  // the rule instead of on the rule is worse than no guard, because the next person deletes
+  // the prose to make it green.
+  const read = (rel) => sourceWithoutComments(join(REPO, rel));
+  // …and the raw text, for the ONE assertion whose subject IS a comment: the exemption has
+  // to state its reason, so stripping comments there would assert the opposite of the point.
+  const readRaw = (rel) => readFileSync(join(REPO, rel), 'utf8');
 
   // The three that were unbounded, plus the two that were bounded at their own calibers.
   const SHARED = [
@@ -103,8 +163,27 @@ describe('every hook entry point reads stdin through the shared module', () => {
     'scripts/post-tool-recall.js',
   ];
 
-  it.each(SHARED)('%s imports readHookStdin', (rel) => {
-    expect(read(rel)).toMatch(/from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+  it.each(['scripts/pre-tool-recall.js', 'scripts/post-tool-recall.js'])(
+    '%s passes the whole-file cap rather than taking the default', (rel) => {
+      // Both see the same payload class. A call with NO options takes 256 KB, which is the
+      // regression this pins — and the shared constant is what stops the two drifting.
+      const src = read(rel);
+      expect(src).toMatch(/readHookStdin\(\{[^}]*maxBytes:\s*TOOL_INPUT_FILE_MAX_BYTES/);
+      expect(src, 'a bare readHookStdin() here silently takes the 256 KB default')
+        .not.toMatch(/readHookStdin\(\s*\)/);
+    });
+
+  it.each(SHARED)('%s imports readHookStdin AND calls it, with no second reader', (rel) => {
+    const src = read(rel);
+    // The import alone is not the property. The v3.93.0 pre-tag review kept the import and
+    // bypassed the call with an unbounded `process.stdin.on('data', …)` accumulator, and
+    // every case in this file stayed green — the "rule bypassed by an alias" direction the
+    // header names. The old assertion also never mentioned the symbol, so importing only
+    // DEFAULT_STDIN_MAX_BYTES satisfied it.
+    expect(src).toMatch(/from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect(src).toMatch(/\breadHookStdin\b[\s\S]{0,80}from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect(src).toMatch(/readHookStdin\(/);
+    expect(src).not.toMatch(/process\.stdin\.on\s*\(/);
   });
 
   it('no entry point still accumulates stdin unbounded', () => {
@@ -114,6 +193,14 @@ describe('every hook entry point reads stdin through the shared module', () => {
       (rel) => /for\s+await\s*\([^)]*\bprocess\.stdin\b/.test(read(rel)),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it('the bypass scans can say NO', () => {
+    // Each new assertion above must be able to fire, or it is decoration.
+    expect("  process.stdin.on('data', (c) => { input += c; });").toMatch(/process\.stdin\.on\s*\(/);
+    expect("import { DEFAULT_STDIN_MAX_BYTES } from '../lib/hook-stdin.mjs';")
+      .not.toMatch(/\breadHookStdin\b[\s\S]{0,80}from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect('const x = 1;').not.toMatch(/readHookStdin\(/);
   });
 
   it('the scan can say NO', () => {
@@ -128,7 +215,7 @@ describe('every hook entry point reads stdin through the shared module', () => {
     // before importing anything, so even an import-free module is a cost it declines. The
     // exemption is only defensible while the reader is BOUNDED and the reason is written
     // down — both are asserted, so silently dropping either goes red.
-    const src = read('scripts/pre-agent-inject.js');
+    const src = readRaw('scripts/pre-agent-inject.js');
     expect(src).not.toMatch(/from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
     expect(src, 'the exempt copy must still cap').toMatch(/data\.length\s*>\s*262144/);
     expect(src, 'the exempt copy must still time out').toMatch(/\}, 1500\)/);

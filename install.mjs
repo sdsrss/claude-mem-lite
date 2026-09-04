@@ -7,7 +7,7 @@ import { join, resolve, dirname, isAbsolute, basename } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
-import { resolveDataDir } from './lib/resolve-data-dir.mjs';
+import { resolveDataDir, resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 
 const PROJECT_DIR = resolve(import.meta.dirname ?? dirname(fileURLToPath(import.meta.url)));
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json');
@@ -22,6 +22,11 @@ const DATA_DIR = join(homedir(), '.claude-mem-lite');
 // the relocated dir → preinstalled skills silently vanished, doctor read the wrong
 // DB). Equals DATA_DIR when CLAUDE_MEM_DIR is unset (the common case).
 const MEM_DATA_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
+// Hook-WRITTEN runtime state (breakage markers, ep-flush/pending buffers) lives here.
+// Installation-identity state — install.lock, update-state.json, update residue — stays
+// under MEM_DATA_DIR on purpose: those are about the one real installation, and moving
+// them with a per-harness override would let two concurrent installs take separate locks.
+const MEM_RUNTIME_DIR = resolveRuntimeDir(MEM_DATA_DIR);
 const DB_PATH = join(MEM_DATA_DIR, 'claude-mem-lite.db');
 const OLD_DATA_DIR = join(homedir(), '.claude-mem');
 
@@ -1617,7 +1622,7 @@ async function doctor() {
   // broken install to exit 0 so it never spams a Node stack trace on every hook
   // fire. That silence is intentional but hides failure — it drops a breakage
   // marker so this check can surface the otherwise-invisible degraded state.
-  const brokenMarker = join(MEM_DATA_DIR, 'runtime', 'hook-launcher-broken');
+  const brokenMarker = join(MEM_RUNTIME_DIR, 'hook-launcher-broken');
   if (existsSync(brokenMarker)) {
     let detail = '';
     try {
@@ -1635,7 +1640,7 @@ async function doctor() {
   // is 6h-rate-limited stderr nobody reads), the live probe says "is it broken
   // right now". A Node upgrade breaks every DB-touching path at once, so this is
   // the single highest-value line in doctor when it fires.
-  const breakage = readNativeBindingBreakage(join(MEM_DATA_DIR, 'runtime'));
+  const breakage = readNativeBindingBreakage(MEM_RUNTIME_DIR);
   // Reuses the per-root probes above — same trees, same question, and doctor
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
@@ -2272,8 +2277,8 @@ function cleanup() {
     }
   }
 
-  // Clean pending-* / ep-flush-* in runtime/ (under the env-aware data dir)
-  const runtimeDir = join(MEM_DATA_DIR, 'runtime');
+  // Clean pending-* / ep-flush-* in runtime/ (env-aware, and honouring the runtime override)
+  const runtimeDir = MEM_RUNTIME_DIR;
   if (existsSync(runtimeDir)) {
     for (const f of readdirSync(runtimeDir)) {
       if (f.startsWith('pending-') || f.startsWith('ep-flush-')) {
@@ -2591,7 +2596,7 @@ async function rebuildBinding() {
       process.exitCode = 1;
     } else {
       // Every tree is loadable → drop the marker so session-start stops retrying.
-      clearNativeBindingBreakage(join(MEM_DATA_DIR, 'runtime'));
+      clearNativeBindingBreakage(MEM_RUNTIME_DIR);
     }
   } finally {
     release();

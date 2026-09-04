@@ -1594,7 +1594,12 @@ async function runExport(db, args) {
   }
   const { params, where } = buildExportWhere({
     includeCompressed: Boolean(args.include_compressed),
-    project: args.project ? _resolveProjectShared(db, args.project) : null,
+    // `|| args.project`: buildExportWhere gates the predicate on TRUTHINESS, so a falsy
+    // resolution would DROP the project filter and export the whole store. The code this
+    // replaced pushed `project = ?` unconditionally, so an unresolvable name yielded zero
+    // rows — which is the safe direction, and the comment above is specifically about not
+    // letting a dropped filter widen the export.
+    project: args.project ? (_resolveProjectShared(db, args.project) || args.project) : null,
     type: args.type || null,
     fromEpoch, toEpoch,
   });

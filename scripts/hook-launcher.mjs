@@ -70,7 +70,12 @@ const BROKEN_MARKER = join(RUNTIME_DIR, 'hook-launcher-broken');
 // native binding is known to work, so it imports only `node:` builtins on purpose — even
 // `lib/resolve-data-dir.mjs` is a module resolution it declines to make on the path whose
 // job is to survive a broken install. `lib/resolve-data-dir.mjs::resolveRuntimeDir` is the
-// canonical rule (audit 2026-09-02 P1-14); keep this expression identical to it.
+// canonical rule (audit 2026-09-02 P1-14). It is NOT identical to it, and saying so was
+// wrong: the resolver additionally makes a RELATIVE override absolute (`isAbsolute(raw) ?
+// raw : resolve(raw)`), while this expression hands the relative value straight to `fs`,
+// which resolves it against cwd at call time instead of at module load. They agree on
+// unset, on empty and on an absolute override — the three cases that reach a real install.
+// Keep the DEFAULTING behaviour in step; do not read "identical" into the difference.
 const NB_RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || RUNTIME_DIR;
 const NB_BROKEN_MARKER = join(NB_RUNTIME_DIR, 'native-binding-broken');
 const NB_HEAL_MARKER = join(NB_RUNTIME_DIR, 'native-binding-lastheal');

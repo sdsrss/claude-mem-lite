@@ -46,6 +46,11 @@ describe('GitHub Actions workflows are hardened', () => {
       const src = readFileSync(join(WF_DIR, f), 'utf8');
       USES_RE.lastIndex = 0;
       for (const m of src.matchAll(USES_RE)) {
+        // The header says docker/local forms are out of scope; the first cut did not
+        // IMPLEMENT that, so a legitimate local composite action would have turned this
+        // guard red for a correct change — the false-alarm direction. Skipped before
+        // `total++` so they cannot pad the premise count either.
+        if (/^(?:\.{1,2}\/|docker:\/\/)/.test(m[1])) continue;
         total++;
         const ref = m[1].split('@')[1];
         if (!/^[0-9a-f]{40}$/.test(ref || '')) unpinned.push(`${f}: ${m[1]}`);

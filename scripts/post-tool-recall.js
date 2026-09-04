@@ -28,7 +28,7 @@ import { recordHookError } from '../lib/hook-telemetry.mjs';
 // parses as neither (lib/hook-stdout.mjs). Import-free module over no runtime deps.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
-import { readHookStdin } from '../lib/hook-stdin.mjs';
+import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES } from '../lib/hook-stdin.mjs';
 import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
 
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
@@ -49,7 +49,8 @@ async function main() {
   if (!SALIENCE_BIND) return;
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
   // Bounded stdin (P1-9) — was an unbounded `for await` accumulate with no cap or timeout.
-  const { text: input } = await readHookStdin();
+  // Same payload class as pre-tool-recall: a PostToolUse on `Write` carries the whole file.
+  const { text: input } = await readHookStdin({ maxBytes: TOOL_INPUT_FILE_MAX_BYTES });
   let filePath, sessionId;
   try {
     const e = JSON.parse(input);

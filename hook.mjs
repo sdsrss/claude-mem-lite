@@ -44,6 +44,7 @@ import {
   createEpisode, addFileToEpisode, planEpisodeFlush,
   writePendingEntry, mergePendingEntries, episodeHasSignificantContent, explainSignificance,
 } from './hook-episode.mjs';
+import { DB_DIR } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
@@ -401,7 +402,7 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
   // and with the flag on that case is strictly better than before, because the reads file
   // was never touched and the retry still finds it.
   // Off unless CLAUDE_MEM_METRICS=1, like every other row in this sink.
-  recordMetric(join(RUNTIME_DIR, '..'), {
+  recordMetric(DB_DIR, {
     event: 'episode_reads',
     readsConsumed: (episode.filesRead || []).length,
     readsHeld,
@@ -465,7 +466,7 @@ function flushEpisodeGroup(ep, db) {
   // episodes are kept ONLY because of their Greps — and demoting what the product
   // remembers on a deduction is how work disappears silently. This is that counter.
   // Off unless CLAUDE_MEM_METRICS=1, like every other row in this sink.
-  recordMetric(join(RUNTIME_DIR, '..'), {
+  recordMetric(DB_DIR, {
     event: 'episode_significance',
     rule: verdict.rule,
     significant: isSignificant,
@@ -688,7 +689,7 @@ function triggerErrorRecall(db, toolInput, response, opts = {}) {
       // G13: this surface feeds the citation denominator but had zero metering —
       // the G8 gate change (isError→isHardError) could not be volume-verified
       // from metrics. Counter only; no latency (query is bundled in the hook).
-      recordMetric(join(RUNTIME_DIR, '..'), { event: metricEvent, returned: rows.length });
+      recordMetric(DB_DIR, { event: metricEvent, returned: rows.length });
       // MED-3 (full audit 2026-07-16): go through the envelope, NOT raw stdout —
       // a raw multi-line write corrupts a co-emitted episode-flush receipt.
       // The follow-up correction (2026-08-17): "two separate JSON lines each parse
@@ -1847,9 +1848,9 @@ async function handleSessionStart() {
   try { sweepStaleProjectMarkers(RUNTIME_DIR); } catch { /* best-effort */ }
   // Bound the shadow-recommendation log (daily JSONL shards, no GC at write time).
   try { const { gcOldShadowShards } = await import('./registry-recommend.mjs'); gcOldShadowShards(); } catch { /* best-effort, never blocks SessionStart */ }
-  // Same for the opt-in metrics sink (RUNTIME_DIR's parent is DB_DIR). Runs even when
+  // Same for the opt-in metrics sink, which lives under DB_DIR. Runs even when
   // metrics are disabled, so shards left by a since-toggled-off run still get pruned.
-  try { gcOldMetricShards(join(RUNTIME_DIR, '..')); } catch { /* best-effort */ }
+  try { gcOldMetricShards(DB_DIR); } catch { /* best-effort */ }
 
   // Plugin cache self-heal: Claude Code auto-updates the marketplace plugin can
   // re-populate cache/<ver>/hooks/hooks.json, reintroducing duplicate hook
@@ -2417,7 +2418,7 @@ async function handleUserPrompt() {
       // counterfactual search and the second lesson selection off a stock install.
       try {
         if (meterCoerced) {
-          recordPathAExclude(join(RUNTIME_DIR, '..'), {
+          recordPathAExclude(DB_DIR, {
             markerIds: pathAInjectedIds,
             emitted: memories,
             after: meterArmB,
@@ -2452,14 +2453,14 @@ async function handleEnrichSave(rawId) {
     // work" was invisible (32% alias coverage with 3 indistinguishable failure
     // causes). reason 'filled-concurrently' = txn ran but a concurrent optimize/
     // update had already filled every empty field.
-    recordMetric(join(RUNTIME_DIR, '..'), {
+    recordMetric(DB_DIR, {
       event: 'enrich_save',
       id,
       enriched: result.enriched,
       reason: result.reason ?? (result.enriched ? 'enriched' : 'filled-concurrently'),
     });
   } catch (e) {
-    recordMetric(join(RUNTIME_DIR, '..'), { event: 'enrich_save', id, enriched: false, reason: 'worker-error' });
+    recordMetric(DB_DIR, { event: 'enrich_save', id, enriched: false, reason: 'worker-error' });
     debugCatch(e, 'enrich-save');
   } finally {
     try { db.close(); } catch {}

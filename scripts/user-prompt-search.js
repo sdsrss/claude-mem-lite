@@ -27,13 +27,20 @@ import { DAY_MS } from '../lib/time-constants.mjs';
 
 // Telemetry sink (lib/hook-telemetry.mjs contract): env override for tests, else
 // <data-dir>/runtime — the same dir the sibling hook scripts + `stats` read.
+// EVERY runtime path in this file goes through this constant, including the two
+// below. They used to be `join(DB_DIR, 'runtime', …)`, which reproduced the exact
+// defect P1-14 closed one seam over: this file's RUNTIME_DIR honoured the override
+// while its MARKER did not, so under `CLAUDE_MEM_RUNTIME_DIR` the `fyi` face wrote
+// the shared cross-hook marker to <data>/runtime while `pre-tool-recall` (`pretool`)
+// wrote it to the override and `hook.mjs` (`ups`) read the override. Caught by the
+// v3.93.0 pre-tag test-effectiveness review, from a surviving mutation.
 const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 // D#120: one marker file per CC session — payload-only session keying (M-6) let
 // two concurrent windows full-replace each other's marker, killing dedup between
 // them and resetting `count` on every alternation. Derived per invocation once
 // the session id is parsed from stdin; no session id → legacy project-keyed file.
 const injectedIdsFileFor = (sessionId) =>
-  join(DB_DIR, 'runtime', injectedIdsFileName(inferProject(), sessionId));
+  join(RUNTIME_DIR, injectedIdsFileName(inferProject(), sessionId));
 // Per-prompt UPS cap. Cut from 5 → 3 after the 2026-05-09 per-hook recall
 // scan (#8255): UPS contributed 74% of silent injected IDs (131/177) at 26%
 // recall, vs PreToolUse:Read at 94% recall on a tighter file-keyed set.
@@ -543,7 +550,7 @@ function formatPromptResults(rows) {
 // pointer line so Claude can decide to invoke via SkillTool. The cooldown
 // and match mechanics below are unchanged.
 
-const SKILL_COOLDOWN_FILE = join(DB_DIR, 'runtime', `.skill-cooldown-${inferProject()}`);
+const SKILL_COOLDOWN_FILE = join(RUNTIME_DIR, `.skill-cooldown-${inferProject()}`);
 const SKILL_COOLDOWN_MS = 300_000; // 5 minutes
 
 function loadManagedSkillNames() {

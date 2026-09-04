@@ -546,6 +546,44 @@ describe('MCP feature sweep: hidden tools', () => {
       .toContain('mcpsweep-registry-skill');
     expect(await call('mem_registry', { action: 'reindex' })).toMatch(/FTS5 reindexed\. \d+ active resources\./);
 
+    // P2-6's semantics, pinned on the MCP face. The CLI face got a `not.toMatch(/\n\s*Path:/)`
+    // when the two renderers were collapsed; this face — whose semantics were the ones KEPT —
+    // had no assertion on its rendered output at all, so the v3.93.0 pre-tag review could
+    // reintroduce the exact leak at `server.mjs`'s call site with every suite still green.
+    //
+    // The pair is the assertion, not the negative half alone: the fixture above is MANAGED
+    // (writeSkill puts it under <data>/managed), so it MUST still render a Path line, while a
+    // resource outside that prefix must not. A lone `not.toMatch` would also pass on a face
+    // that stopped rendering anything.
+    const unmanagedDir = join(DATA_DIR, 'unmanaged', 'skills', 'mcpsweep-unmanaged-skill');
+    mkdirSync(unmanagedDir, { recursive: true });
+    const unmanagedPath = join(unmanagedDir, 'SKILL.md');
+    writeFileSync(unmanagedPath, '---\nname: mcpsweep-unmanaged-skill\ndescription: mcp sweep unmanaged fixture\n---\n\nBody.\n');
+    await call('mem_registry', {
+      action: 'import', name: 'mcpsweep-unmanaged-skill', resource_type: 'skill',
+      local_path: unmanagedPath, use_cases: 'exercising the non-managed render path',
+      capability_summary: 'registry sweep unmanaged fixture skill',
+    });
+
+    // Per-ROW, not per-response. A whole-response `not.toMatch(/Path:/)` is satisfied by the
+    // OTHER row: both fixtures share the `mcpsweep`/`skill` tokens, so either query returns
+    // both, and the managed row's legitimate Path line would clear the negative assertion for
+    // the unmanaged one. That is the "assertion satisfied by something other than its target"
+    // shape this repo keeps recording — hit while writing this very case.
+    const blockFor = (out, name) => out.split(/\n(?=\[)/).find((b) => b.includes(`**${name}**`));
+
+    const hits = await call('mem_registry', { action: 'search', query: 'mcpsweep' });
+    const managedBlock = blockFor(hits, 'mcpsweep-registry-skill');
+    const unmanagedBlock = blockFor(hits, 'mcpsweep-unmanaged-skill');
+    expect(managedBlock, 'premise: the managed fixture must be in the result set').toBeTruthy();
+    expect(unmanagedBlock, 'premise: the unmanaged fixture must be in the result set').toBeTruthy();
+
+    expect(managedBlock, 'a MANAGED hit must still render its portable path').toMatch(/\n\s*Path:/);
+    expect(unmanagedBlock, 'the P2-6 path leak is back on the MCP face').not.toMatch(/\n\s*Path:/);
+    expect(unmanagedBlock).toMatch(/Use: (Skill\(|mem_use\(name=)/);
+
+    await call('mem_registry', { action: 'remove', name: 'mcpsweep-unmanaged-skill', resource_type: 'skill' });
+
     expect(await call('mem_registry', { action: 'remove', name: 'mcpsweep-registry-skill', resource_type: 'skill' }))
       .toBe('Removed: skill:mcpsweep-registry-skill');
     expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' }))
