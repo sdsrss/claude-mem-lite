@@ -250,6 +250,11 @@ export const SOURCE_FILES = [
   // hook-optimize.mjs, mem-cli.mjs, server.mjs, and the save/maintain cores;
   // missing it from the manifest would break those paths on auto-update.
   'lib/dedup-constants.mjs',
+  // Numeric env-override parsing with an explicit failure mode. Statically imported
+  // by scripts/user-prompt-search.js (a HOOK entry point — a missing manifest entry
+  // kills the UserPromptSubmit face outright on auto-update), lib/relevance-floor.mjs
+  // and lib/cite-back-hint.mjs.
+  'lib/env-number.mjs',
   // v2.70 deferred-work: carry-forward TODO primitives. Statically imported by
   // server.mjs (mem_defer family) and mem-cli.mjs (defer subcommand).
   'lib/deferred-work.mjs',

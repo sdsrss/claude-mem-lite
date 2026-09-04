@@ -1592,14 +1592,24 @@ async function runExport(db, args) {
     toEpoch = new Date(d).getTime();
     if (isNaN(toEpoch)) throw new Error(`Invalid date_to: "${args.date_to}" (use ISO 8601 or YYYY-MM-DD)`);
   }
+  // Same policy as the two date checks: refuse rather than silently drop a filter.
+  //
+  // This replaces a `_resolveProjectShared(db, x) || x` fallback that could not do what
+  // its comment claimed. `resolveProject` returns a falsy value on exactly one input —
+  // a truthy NON-STRING, which it deliberately maps to null so that `true.includes('--')`
+  // stops crashing every project-filtered command at the root helper. Through MCP that
+  // input cannot arrive (`memExportSchema.project` is `z.string().optional()`, validated
+  // before the handler); through `handleExportForTest` it can. So the fallback's only
+  // reachable effect was to hand the non-string straight back, undoing that guard and
+  // trading a wide export for a bind error. Neither is the documented behaviour, and the
+  // other project-resolving sites (server.mjs:326/465, and every cmd* in mem-cli.mjs)
+  // carry no such fallback — this one was the outlier.
+  if (args.project !== undefined && args.project !== null && typeof args.project !== 'string') {
+    throw new Error(`Invalid project: expected a string, got ${typeof args.project}`);
+  }
   const { params, where } = buildExportWhere({
     includeCompressed: Boolean(args.include_compressed),
-    // `|| args.project`: buildExportWhere gates the predicate on TRUTHINESS, so a falsy
-    // resolution would DROP the project filter and export the whole store. The code this
-    // replaced pushed `project = ?` unconditionally, so an unresolvable name yielded zero
-    // rows — which is the safe direction, and the comment above is specifically about not
-    // letting a dropped filter widen the export.
-    project: args.project ? (_resolveProjectShared(db, args.project) || args.project) : null,
+    project: args.project ? _resolveProjectShared(db, args.project) : null,
     type: args.type || null,
     fromEpoch, toEpoch,
   });

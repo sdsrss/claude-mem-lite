@@ -9,12 +9,18 @@
 // needs to separate injection-driven adoption from noise).
 import { searchByFts } from '../scripts/user-prompt-search.js';
 import { rankImperativeCandidates } from '../hook-memory.mjs';
+import { envNumber } from '../lib/env-number.mjs';
 
 // Mirror the ACTUAL live ranker's env-overridable cutoffs (scripts/user-prompt-search.js:27,86)
 // so a benchmark run against a differently-tuned deployment replays under the same floor/cap
 // it actually ran with. Unset → same defaults as before (3 / 50).
-const MAX_RESULTS = Number(process.env.CLAUDE_MEM_UPS_MAX_RESULTS || 3);
-const TOP_REL_FLOOR = Number(process.env.CLAUDE_MEM_UPS_TOP_MIN || 50);
+// Same parse as the live ranker's, through the same helper — a ruler that read a
+// malformed knob as NaN would score `cand.filter(c => c.runningVar >= NaN)` = [] and
+// report a face as producing nothing, which is a measurement, not a crash.
+const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS,
+  { name: 'CLAUDE_MEM_UPS_MAX_RESULTS', defaultValue: 3, min: 0, integer: true });
+const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
+  { name: 'CLAUDE_MEM_UPS_TOP_MIN', defaultValue: 50, min: 0 });
 
 /**
  * Pure, DB-free split of already-scored candidates into `shown` (floor-crossing, capped at

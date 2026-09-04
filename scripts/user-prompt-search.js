@@ -23,6 +23,7 @@ import { recommendSkill } from '../registry-recommend.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 
 import { DAY_MS } from '../lib/time-constants.mjs';
+import { envNumber } from '../lib/env-number.mjs';
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 // Telemetry sink (lib/hook-telemetry.mjs contract): env override for tests, else
@@ -48,7 +49,12 @@ const injectedIdsFileFor = (sessionId) =>
 // useRecent intent path is unaffected (it uses intent.limit=5 directly,
 // gated by explicit "before/previously/记得" prompts where breadth is the
 // point). Env override for projects that want broader recall or to A/B.
-const MAX_RESULTS = Number(process.env.CLAUDE_MEM_UPS_MAX_RESULTS || 3);
+// Integer, min 0. This value reaches `rows.slice(0, MAX_RESULTS)`, and 0 there means
+// "inject nothing" — a legitimate way to turn this face off, so it is accepted rather
+// than warned back up to 3 (falling back would INJECT for a user who asked for silence).
+// What is screened is NaN, which produced the same silence from a typo, unasked.
+const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS,
+  { name: 'CLAUDE_MEM_UPS_MAX_RESULTS', defaultValue: 3, min: 0, integer: true });
 const LOOKBACK_MS = 60 * DAY_MS; // 60 days
 
 // v2.56.x: Past-similar-questions fallback row cap. Cut from 3 → 1 after
@@ -57,7 +63,11 @@ const LOOKBACK_MS = 60 * DAY_MS; // 60 days
 // Unlike the obs FTS path (TOP_REL_FLOOR + BM25 gates), prompt-fallback has no
 // quality gate — only BM25 ordering — so additional rows inflate noise without
 // improving signal. Env-overridable for projects that want broader prompt recall.
-const PROMPT_FALLBACK_LIMIT = Number(process.env.CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT || 1);
+// Integer, min 0: bound directly into a SQL `LIMIT ?`, where better-sqlite3 rejects a
+// non-integer outright (`SqliteError: datatype mismatch`). `LIMIT 0` is valid and means
+// "disable the prompt-fallback path", so 0 stays a usable setting.
+const PROMPT_FALLBACK_LIMIT = envNumber(process.env.CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT,
+  { name: 'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT', defaultValue: 1, min: 0, integer: true });
 // Over-fetch factor for that cap. searchByUserPrompts filters rows in JS (cjkPrecisionOk)
 // AFTER the SQL LIMIT, so the LIMIT bounds reachability, not just output width — see the
 // comment at the query. These size the pool only; the function still returns at most
@@ -77,7 +87,10 @@ const PROMPT_FALLBACK_POOL_MAX = 25;
 // acts as a NULL-rel guard, not a real noise filter. The primary noise gate
 // is TOP_REL_FLOOR below, which drops the whole FTS set when the best match
 // is weak.
-const BM25_MIN_SCORE = Number(process.env.CLAUDE_MEM_UPS_BM25_MIN || 1e-5);
+// min 0, non-integer: a magnitude floor compared with `Math.abs(relevance) >= …`.
+// NaN here makes that comparison always false, i.e. it drops every row.
+const BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN,
+  { name: 'CLAUDE_MEM_UPS_BM25_MIN', defaultValue: 1e-5, min: 0 });
 // CJK-weighted minimum length for the prompt. Catches medium-short Latin
 // prompts ("run tests", "fix bug now") that survive `shouldSkip`'s weaker 8-unit
 // floor but carry too few tokens to justify an FTS lookup.
@@ -92,7 +105,8 @@ const PROMPT_MIN_LENGTH = 15;
 // memory at least once, relax gates so short follow-ups still get recall.
 // Detection: injected-ids marker count > 0 within DEDUP_STALE_MS window.
 const FOLLOWUP_PROMPT_MIN_LENGTH = 8;
-const FOLLOWUP_BM25_MIN_SCORE = Number(process.env.CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP || 5e-6);
+const FOLLOWUP_BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP,
+  { name: 'CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP', defaultValue: 5e-6, min: 0 });
 
 // v2.34.3: top-|rel| sanity gate. BM25_MIN_SCORE filters per-row; this floor
 // gates the entire FTS set. Noise prompts ("today's date", "current time")
@@ -113,7 +127,12 @@ const FOLLOWUP_BM25_MIN_SCORE = Number(process.env.CLAUDE_MEM_UPS_BM25_MIN_FOLLO
 // through, but the top-|rel| gap is an absolute distribution separator —
 // lowering it in follow-up mode re-admits the 37..48 noise band that the
 // gate exists to drop.
-const TOP_REL_FLOOR = Number(process.env.CLAUDE_MEM_UPS_TOP_MIN || 50);
+// min 0, and 0 is a REAL value here, not a fallback: it is the documented seed-mode
+// switch that kills both absolute floors (see OR_TOP_BM25_FLOOR below). The old
+// `Number(env || 50)` could not express it — `'0' || 50` is 50 — so the knob the
+// comment below advertises never worked through the env, only through the literal.
+const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
+  { name: 'CLAUDE_MEM_UPS_TOP_MIN', defaultValue: 50, min: 0 });
 
 // v2.43.x: OR-fallback raw BM25 magnitude floor. The composite TOP_REL_FLOOR
 // above gates on `bm25 × importance × type_quality × decay × noise_penalty`.
@@ -141,7 +160,8 @@ const TOP_REL_FLOOR = Number(process.env.CLAUDE_MEM_UPS_TOP_MIN || 50);
 // we piggy-back on it rather than introducing a second override env.
 const OR_TOP_BM25_FLOOR = TOP_REL_FLOOR === 0
   ? 0
-  : Number(process.env.CLAUDE_MEM_UPS_OR_BM25_MIN || 30);
+  : envNumber(process.env.CLAUDE_MEM_UPS_OR_BM25_MIN,
+    { name: 'CLAUDE_MEM_UPS_OR_BM25_MIN', defaultValue: 30, min: 0 });
 
 // ─── Corpus-size normalization of the absolute floors (v3.61.0) ─────────────
 //

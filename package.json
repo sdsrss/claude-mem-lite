@@ -128,6 +128,7 @@
     "lib/transcript-scan.mjs",
     "lib/ups-query.mjs",
     "lib/dedup-constants.mjs",
+    "lib/env-number.mjs",
     "lib/deferred-work.mjs",
     "lib/upgrade-banner.mjs",
     "lib/scrub-record.mjs",
