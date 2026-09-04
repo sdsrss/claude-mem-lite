@@ -123,9 +123,12 @@ describe('doctor reports its failure branches', () => {
     // not — a single `fail('server.mjs and hook.mjs: missing')` satisfies both regexes, and
     // `find()` then returns the SAME object twice with level 'fail'. Two `find()` hits are
     // not two checks unless you say so.
+    // `not.toBe` is the WHOLE of the catch. A `checks.filter(/missing/i).length >= 2`
+    // companion was dropped rather than kept as reassurance: with the two calls merged the
+    // fixture still yields two matching rows (the merged one plus an unrelated
+    // `Managed files: N missing` warn), so it passes under the exact defect it was written
+    // against — decoration that reads as coverage.
     expect(serverEntry, 'server.mjs and hook.mjs collapsed onto one check').not.toBe(hookEntry);
-    expect(checks.filter((c) => /missing/i.test(c.message)).length)
-      .toBeGreaterThanOrEqual(2);
   });
 
   it('a hook script named by a command line is missing → the drift check fires', () => {

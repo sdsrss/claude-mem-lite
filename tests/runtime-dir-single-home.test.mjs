@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
-import { walkShipped, sweepShipped } from './shipped-tree.mjs';
+import { walkShipped, sweepShipped, relShipped } from './shipped-tree.mjs';
 
 let sandbox;
 let override;
@@ -83,43 +83,74 @@ describe('the override reaches the modules that ignored it', () => {
 });
 
 describe('the rule has one home', () => {
-  // TWO sweeps, because the first cut of this file only had the second one and the v3.93.0
-  // pre-tag test-effectiveness review showed it could not see the live defect.
+  // TWO sweeps plus a per-SITE allowlist. Each shape here was earned by a defect.
   //
   // `INLINE_RE` catches a module that DID hear of the variable and wrote its own copy of the
-  // rule. No module in the tree has that shape except the one declared exception.
+  // rule. No module has that shape except the one declared exception.
   //
-  // `CONSTRUCT_RE` catches the shape both defective modules ACTUALLY had — building
-  // `join(x, 'runtime')` and never mentioning the variable at all. That form is invisible to
-  // INLINE_RE, which is why `scripts/user-prompt-search.js` could resolve its RUNTIME_DIR
-  // here and still build its cross-hook marker from the data dir: with the override set, the
-  // `fyi` face wrote the SHARED marker to one directory while `pretool` wrote it to another.
-  // The suite was fully green with that live.
+  // `CONSTRUCT_RE` catches the shape the defective modules ACTUALLY had — building the
+  // runtime path themselves and never mentioning the variable. Invisible to INLINE_RE, which
+  // is why `scripts/user-prompt-search.js` could resolve its RUNTIME_DIR and still build the
+  // SHARED cross-hook marker from the data dir.
+  //
+  // `INVERSE_RE` catches the OTHER direction: deriving the data dir back out of the runtime
+  // dir. `hook.mjs` did that seven times as `join(RUNTIME_DIR, '..')`, an identity that
+  // stopped holding the moment the override was honoured — reverting those five metric sites
+  // was invisible to both sweeps above (v3.93.0 post-release review, M5).
+  //
+  // THE ALLOWLIST IS PER SITE, NOT PER FILE, and that is the whole point. v3.93.0 shipped a
+  // whole-file allowlist; three of its six entries hold BOTH stays-put and moves-with-the-
+  // override sites, so inside those files the guard was simply off — and two live splits were
+  // sitting in them, one created by that release. A file-level reason cannot express "this
+  // file has both kinds". A constructing line now needs `// runtime-dir:stays-put — <reason>`
+  // on the line itself.
   const INLINE_RE = /process\.env\.CLAUDE_MEM_RUNTIME_DIR\s*\|\|/;
-  // One level of nesting is allowed inside the first argument on purpose: the real sites are
-  // `join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', …)`, and a `[^)]*` first
-  // argument cannot cross that inner `)`. The first draft of this regex used `[^)]*` and was
-  // blind to exactly the two files it was allowlisting — caught by the reverse-guard below,
-  // which is the whole reason that assertion exists.
-  const CONSTRUCT_RE = /join\((?:[^()]|\([^()]*\))*,\s*['"]runtime['"]/;
+  // `join` or `resolve`; `\s*\(`; TWO levels of nested parens in the first argument, because
+  // `join(dirname(fileURLToPath(import.meta.url)), 'runtime')` is an idiom this repo uses and
+  // one level cannot cross it. A JS regex cannot recurse, so this is a bounded depth, not a
+  // parser — the residual forms are named in the NOT-BINDING list of the review that found
+  // them, and the marker-reverse-guard below is what stops the allowlist rotting instead.
+  const CONSTRUCT_RE = /\b(?:join|resolve)\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*,\s*['"`]runtime['"`]/;
+  // Template-literal and concatenation forms of the same construction.
+  const CONSTRUCT_ALT_RE = /['"`][^'"`]*\/runtime(?:['"`/]|$)|\+\s*['"`]\/?runtime['"`]/;
+  // `[\w$]*` and NOT `[A-Za-z_$][\w$]*`: the prefix is OPTIONAL. The first draft required at
+  // least one character before RUNTIME_DIR, so it matched `NB_RUNTIME_DIR` and missed the bare
+  // `join(RUNTIME_DIR, '..')` — which is the exact form of all seven sites it exists to catch.
+  const INVERSE_RE = /\b(?:join|resolve)\s*\(\s*[\w$]*RUNTIME_DIR\b\s*,\s*['"`]\.\.['"`]/;
+  const MARKER_RE = /\/\/\s*runtime-dir:stays-put\s*—\s*(\S.*)$/;
 
-  // `hook-launcher.mjs` runs before the native binding is known to work and imports only
-  // `node:` builtins on purpose, so it keeps an inline copy with a comment pointing here.
   const INLINE_ALLOWED = new Set(['scripts/hook-launcher.mjs']);
 
-  // Files that legitimately build `<dataDir>/runtime` themselves, each for a stated reason.
-  // The distinction is documented at `resolveRuntimeDir`: hook-WRITTEN state that another
-  // component reads back moves with the override; state about the ONE REAL INSTALLATION does
-  // not, because two installers pointed at different override directories would each take
-  // their own `install.lock` and both proceed.
-  const CONSTRUCT_ALLOWED = new Map([
-    ['lib/resolve-data-dir.mjs', 'the definition itself'],
-    ['scripts/hook-launcher.mjs', 'pre-binding path, see INLINE_ALLOWED'],
-    ['install.mjs', 'install.lock / update-state.json / update residue — installation identity'],
-    ['hook-update.mjs', 'update-state.json / swap marker / install.lock — installation identity'],
-    ['scripts/launch.mjs', 'install.lock'],
-    ['scripts/binding-probe-cli.mjs', 'install.lock'],
-  ]);
+  /** Non-comment source lines of a shipped module, with 1-based numbers. */
+  const codeLines = (file) => readFileSync(file, 'utf8').split('\n')
+    .map((text, i) => ({ text, line: i + 1 }))
+    .filter(({ text }) => !/^\s*(?:\/\/|\*|\/\*)/.test(text));
+
+  /** Every constructing line in the shipped tree that carries no stays-put marker. */
+  function unmarkedConstructions() {
+    const out = [];
+    for (const file of walkShipped()) {
+      for (const { text, line } of codeLines(file)) {
+        const constructs = CONSTRUCT_RE.test(text)
+          || (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text))
+          || INVERSE_RE.test(text);
+        if (constructs && !MARKER_RE.test(text)) out.push(`${relShipped(file)}:${line}`);
+      }
+    }
+    return out;
+  }
+
+  /** Every stays-put marker in the tree, with the line it sits on. */
+  function markers() {
+    const out = [];
+    for (const file of walkShipped()) {
+      for (const { text, line } of codeLines(file)) {
+        const m = text.match(MARKER_RE);
+        if (m) out.push({ where: `${relShipped(file)}:${line}`, reason: m[1].trim(), text });
+      }
+    }
+    return out;
+  }
 
   it('the sweep walks a plausible number of shipped modules', () => {
     expect(walkShipped().length).toBeGreaterThan(60);
@@ -129,32 +160,61 @@ describe('the rule has one home', () => {
     expect(sweepShipped(INLINE_RE, INLINE_ALLOWED)).toEqual([]);
   });
 
-  it('no shipped module builds <dataDir>/runtime itself', () => {
-    // The live-defect guard. A new hook path that hardcodes the join is caught here even
-    // though it never mentions CLAUDE_MEM_RUNTIME_DIR — which is precisely how both original
-    // offenders looked.
-    expect(sweepShipped(CONSTRUCT_RE, new Set(CONSTRUCT_ALLOWED.keys()))).toEqual([]);
+  it('every line that builds a runtime path is either resolved or marked stays-put', () => {
+    expect(unmarkedConstructions()).toEqual([]);
   });
 
-  it('both sweeps can say NO, and every allowlisted file still earns its entry', () => {
+  it('every stays-put marker sits on a line that really constructs, and states a reason', () => {
+    // A marker that stops matching is a stale exemption, and a stale exemption is how an
+    // allowlist becomes a raised baseline that quietly re-admits the defect.
+    const all = markers();
+    expect(all.length, 'premise: the tree must actually carry markers, or this asserts nothing')
+      .toBeGreaterThan(5);
+    for (const { where, reason, text } of all) {
+      const constructs = CONSTRUCT_RE.test(text)
+        || (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text))
+        || INVERSE_RE.test(text);
+      expect(constructs, `${where} is marked stays-put but no longer builds a runtime path`).toBe(true);
+      expect(reason.length, `${where} carries no reason`).toBeGreaterThan(10);
+    }
+  });
+
+  it('the sweeps can say NO — every shape that must fire, and every shape that must not', () => {
     // A sweep that cannot fire is indistinguishable from a clean tree.
-    expect("const d = process.env.CLAUDE_MEM_RUNTIME_DIR || join(x, 'runtime');").toMatch(INLINE_RE);
-    expect("const d = join(DATA_DIR, 'runtime', 'marker');").toMatch(CONSTRUCT_RE);
-    expect("const d = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime');").toMatch(CONSTRUCT_RE);
-    // …and must NOT fire on the resolved form, or the guard would forbid the fix.
-    expect('const d = resolveRuntimeDir(DATA_DIR);').not.toMatch(CONSTRUCT_RE);
+    const fires = [
+      "const d = join(DATA_DIR, 'runtime', 'marker');",
+      'const d = join(DATA_DIR, "runtime");',
+      "const d = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime');",
+      "const d = join(resolveDataDir(env || fallback()), 'runtime');",
+      "const d = join(dirname(fileURLToPath(import.meta.url)), 'runtime');",
+      "const d = resolve(DATA_DIR, 'runtime');",
+      "const d = join (DATA_DIR, 'runtime');",
+      'const d = join(`${DIR}/runtime`, x);',
+      "const d = DATA_DIR + '/runtime';",
+      "recordMetric(join(RUNTIME_DIR, '..'), {});",
+      "gcOldMetricShards(resolve(NB_RUNTIME_DIR, '..'));",
+    ];
+    for (const f of fires) {
+      const hit = CONSTRUCT_RE.test(f) || (CONSTRUCT_ALT_RE.test(f) && /runtime/.test(f)) || INVERSE_RE.test(f);
+      expect(hit, `sweep is blind to: ${f}`).toBe(true);
+    }
+    const quiet = [
+      'const d = resolveRuntimeDir(DATA_DIR);',
+      "const d = join(DB_DIR, 'managed');",
+      'const d = join(RUNTIME_DIR, fileName);',
+      "const d = join(DB_DIR, 'metrics');",
+    ];
+    for (const q of quiet) {
+      const hit = CONSTRUCT_RE.test(q) || (CONSTRUCT_ALT_RE.test(q) && /runtime/.test(q)) || INVERSE_RE.test(q);
+      expect(hit, `sweep falsely fires on: ${q}`).toBe(false);
+    }
+    // …and the marker must be what silences it, not the shape.
+    expect(MARKER_RE.test("const d = join(X, 'runtime'); // runtime-dir:stays-put — because")).toBe(true);
+    expect(MARKER_RE.test("const d = join(X, 'runtime'); // runtime-dir:stays-put —")).toBe(false);
 
     for (const rel of INLINE_ALLOWED) {
       expect(readFileSync(join(process.cwd(), rel), 'utf8'),
         `${rel} is allowlisted but no longer carries the inline rule`).toMatch(INLINE_RE);
-    }
-    // Reverse-guard the second allowlist too: an entry whose file stopped constructing the
-    // path is a stale exemption, and a stale exemption is how an allowlist becomes a raised
-    // baseline that quietly re-admits the defect.
-    for (const [rel, why] of CONSTRUCT_ALLOWED) {
-      expect(readFileSync(join(process.cwd(), rel), 'utf8'),
-        `${rel} is allowlisted (${why}) but no longer builds the path — drop the entry`)
-        .toMatch(CONSTRUCT_RE);
     }
   });
 });

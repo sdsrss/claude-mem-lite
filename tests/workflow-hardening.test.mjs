@@ -50,7 +50,10 @@ describe('GitHub Actions workflows are hardened', () => {
         // IMPLEMENT that, so a legitimate local composite action would have turned this
         // guard red for a correct change — the false-alarm direction. Skipped before
         // `total++` so they cannot pad the premise count either.
-        if (/^(?:\.{1,2}\/|docker:\/\/)/.test(m[1])) continue;
+        // LOCAL paths only. `docker://node:20` was exempted too, but the justification —
+        // "not third-party code fetched by a moving name" — is true of `./` and false of a
+        // mutable docker tag, which is the same supply-chain shape as `@v5`.
+        if (/^\.{1,2}\//.test(m[1])) continue;
         total++;
         const ref = m[1].split('@')[1];
         if (!/^[0-9a-f]{40}$/.test(ref || '')) unpinned.push(`${f}: ${m[1]}`);

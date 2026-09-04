@@ -897,8 +897,9 @@ Set by the tool or by the test harness. Setting these by hand is not supported:
 
 The last two are worth one more sentence each, because they are the ones a harness reaches
 for. `CLAUDE_MEM_RUNTIME_DIR` relocates the runtime directory for hook-written state — markers,
-cooldowns, hook-error telemetry, the native-binding breakage marker, `metrics/`, episode
-buffers. Before v3.93.0 it was honoured by some readers and ignored by others, so setting it
+cooldowns, hook-error telemetry, the native-binding breakage marker, episode buffers.
+(`metrics/` is NOT in that set: it is a sibling of `runtime/` under the data dir and moves
+with `CLAUDE_MEM_DIR` only.) Before v3.93.0 it was honoured by some readers and ignored by others, so setting it
 split the runtime rather than moving it. Installation-identity state (`install.lock`,
 `update-state.json`, update residue) deliberately stays under `CLAUDE_MEM_DIR`: two
 installers pointed at different override directories would otherwise each take their own

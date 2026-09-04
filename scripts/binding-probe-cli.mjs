@@ -102,7 +102,7 @@ if (first.ok) process.exit(0);
 // .node mid-compile.
 let lockPath;
 try {
-  lockPath = join(helpers.resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', 'install.lock');
+  lockPath = join(helpers.resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
 } catch (e) {
   // resolveDataDir THROWS on a non-absolute CLAUDE_MEM_DIR. Unhandled, that
   // prints an 8-line rejection stack onto SessionStart stderr; one line is enough.

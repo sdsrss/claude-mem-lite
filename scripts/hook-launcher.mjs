@@ -39,13 +39,36 @@ const INSTALL_DIR = join(__dirname, '..');
 // non-absolute → default. Data-writing paths import that module and throw instead.
 const MEM_DIR = process.env.CLAUDE_MEM_DIR;
 const DATA_DIR = MEM_DIR && isAbsolute(MEM_DIR) ? MEM_DIR : join(homedir(), '.claude-mem-lite');
-const RUNTIME_DIR = join(DATA_DIR, 'runtime');
-const HEAL_MARKER = join(RUNTIME_DIR, 'hook-launcher-lastheal');
+// TWO runtime dirs, because this file writes BOTH classes of state and v3.93.0 shipped a
+// split by moving only doctor's READ side. `RUNTIME_DIR` is data-dir-relative and serves
+// `swap-in-progress`, which is installation identity and must NOT follow a per-harness
+// override (two installers pointed at different override dirs would each see no swap in
+// progress). `HOOK_RUNTIME_DIR` is override-aware and serves every marker another component
+// reads back — the launcher's own breakage/heal markers, which `install.mjs doctor` reads,
+// and the native-binding pair below. That second constant already existed here as
+// `NB_RUNTIME_DIR` and was applied to only half this file's markers.
+//
+// Inline `||`, not `lib/resolve-data-dir.mjs::resolveRuntimeDir`, and this is the single
+// declared exception in the tree: the launcher runs BEFORE the native binding is known to
+// work, so it imports only `node:` builtins on purpose — even a leaf lib module is a
+// resolution it declines to make on the path whose job is surviving a broken install. The
+// standalone hook scripts it mirrors (pre-tool-recall / pre-skill-bridge) honour the same
+// variable and write 78 of every 79 of these markers, so reading a different dir would mean
+// never healing. `resolveRuntimeDir` is the canonical rule (audit 2026-09-02 P1-14) and this
+// is NOT identical to it: the resolver additionally makes a RELATIVE override absolute
+// (`isAbsolute(raw) ? raw : resolve(raw)`), while this hands the relative value straight to
+// `fs`, which resolves it against cwd at call time rather than at module load. They agree on
+// unset, empty and absolute — the three cases that reach a real install. Keep the DEFAULTING
+// behaviour in step; do not read "identical" into the difference.
+// `tests/runtime-dir-single-home.test.mjs` asserts this file still carries the rule.
+const RUNTIME_DIR = join(DATA_DIR, 'runtime'); // runtime-dir:stays-put — serves swap-in-progress only; HOOK_RUNTIME_DIR carries the hook markers
+const HOOK_RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || RUNTIME_DIR;
+const HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'hook-launcher-lastheal');
 const HEAL_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 // Observable breakage state: written when the launcher degrades a broken install
 // to exit 0, cleared once the install is confirmed healthy. `doctor` reads it so
 // the intentional silence (no stack trace per fire) stays detectable. (#4/#8)
-const BROKEN_MARKER = join(RUNTIME_DIR, 'hook-launcher-broken');
+const BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'hook-launcher-broken');
 
 // ── Native-binding (ABI) self-heal ──────────────────────────────────────────
 // A stale better_sqlite3.node after a Node upgrade does NOT throw at import time
@@ -63,22 +86,9 @@ const BROKEN_MARKER = join(RUNTIME_DIR, 'hook-launcher-broken');
 // lib/hook-telemetry.mjs and lib/native-binding-hint.mjs); this heals from it at
 // SESSION-START only — never on the per-tool hot path, where an npm run would
 // stall the user's edit.
-// Marker dir mirrors the standalone hook scripts (pre-tool-recall /
-// pre-skill-bridge), which honor CLAUDE_MEM_RUNTIME_DIR — they write 78 of every
-// 79 of these markers, so reading a different dir would mean never healing.
-// The last hand-written copy of this rule, and it stays: this launcher runs BEFORE the
-// native binding is known to work, so it imports only `node:` builtins on purpose — even
-// `lib/resolve-data-dir.mjs` is a module resolution it declines to make on the path whose
-// job is to survive a broken install. `lib/resolve-data-dir.mjs::resolveRuntimeDir` is the
-// canonical rule (audit 2026-09-02 P1-14). It is NOT identical to it, and saying so was
-// wrong: the resolver additionally makes a RELATIVE override absolute (`isAbsolute(raw) ?
-// raw : resolve(raw)`), while this expression hands the relative value straight to `fs`,
-// which resolves it against cwd at call time instead of at module load. They agree on
-// unset, on empty and on an absolute override — the three cases that reach a real install.
-// Keep the DEFAULTING behaviour in step; do not read "identical" into the difference.
-const NB_RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || RUNTIME_DIR;
-const NB_BROKEN_MARKER = join(NB_RUNTIME_DIR, 'native-binding-broken');
-const NB_HEAL_MARKER = join(NB_RUNTIME_DIR, 'native-binding-lastheal');
+// Marker dir: HOOK_RUNTIME_DIR (see its definition above for why it is override-aware).
+const NB_BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-broken');
+const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-lastheal');
 // Literal, not imported: the pure-`node:` charter above forbids importing lib/
 // here (this file must survive a broken install). Kept in sync with
 // lib/binding-probe.mjs::NATIVE_BINDING_REBUILD_CMD, which is the single home
@@ -225,7 +235,7 @@ function recentHealAttempt() {
 
 function recordHealAttempt() {
   try {
-    mkdirSync(RUNTIME_DIR, { recursive: true });
+    mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
     writeFileSync(HEAL_MARKER, String(Date.now()));
   } catch { /* best-effort */ }
 }
@@ -239,7 +249,7 @@ function clearHealMarker() {
 
 function recordBreakage(reason) {
   try {
-    mkdirSync(RUNTIME_DIR, { recursive: true });
+    mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
     writeFileSync(BROKEN_MARKER, JSON.stringify({ reason, ts: Date.now() }));
   } catch { /* best-effort */ }
 }
@@ -316,7 +326,7 @@ function healNativeBindingIfBroken() {
       if (Date.now() - statSync(NB_HEAL_MARKER).mtimeMs < HEAL_COOLDOWN_MS) return;
     } catch { /* no marker → not on cooldown */ }
     try {
-      mkdirSync(NB_RUNTIME_DIR, { recursive: true });
+      mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
       writeFileSync(NB_HEAL_MARKER, String(Date.now()));
     } catch { /* best-effort */ }
 

@@ -33,7 +33,7 @@ const INSTALL_DIR = CODE_DIR;  // ~/.claude-mem-lite/ (code)
 // DB_DIR), matching hook-shared RUNTIME_DIR and install.mjs doctor's read path.
 // Equal to INSTALL_DIR unless CLAUDE_MEM_DIR relocates the data dir.
 const STATE_DIR = DB_DIR;
-const STATE_FILE = join(STATE_DIR, 'runtime', 'update-state.json');
+const STATE_FILE = join(STATE_DIR, 'runtime', 'update-state.json'); // runtime-dir:stays-put — installation identity
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;       // 24 hours
 const FETCH_TIMEOUT_MS = 3000;                         // 3s network timeout
 // When rate-limited we got NO release data, so re-check sooner than the normal 24h
@@ -641,7 +641,7 @@ export async function verifyReleaseAuthenticity(extractedDir, assets, publicKey 
 // hooks are best-effort, so losing one fire beats importing a mixed module graph.
 // Carries pid + ts because the launcher must never be muted permanently by an
 // updater that was killed mid-swap (it applies the same staleness bound).
-const SWAP_MARKER = join(STATE_DIR, 'runtime', 'swap-in-progress');
+const SWAP_MARKER = join(STATE_DIR, 'runtime', 'swap-in-progress'); // runtime-dir:stays-put — installation identity
 // Intent journal, written INSIDE the backup dir before each rename. On a hard kill
 // the backup dir survives (every normal exit deletes it) and this file says exactly
 // which paths were in flight, so the next entry can finish the rollback at the right
@@ -781,7 +781,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   // holding the lock means an install is already in flight — skip rather than
   // race. Shared path with install.mjs so direct install + repair + auto-update
   // are mutually exclusive.
-  const release = acquireLock(join(STATE_DIR, 'runtime', 'install.lock'));
+  const release = acquireLock(join(STATE_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!release) {
     debugLog('DEBUG', 'hook-update', 'installExtractedRelease: another install/update is in progress — skipping');
     return false;
@@ -1115,7 +1115,7 @@ function readState() {
 
 function saveState(state) {
   try {
-    const dir = join(STATE_DIR, 'runtime');
+    const dir = join(STATE_DIR, 'runtime'); // runtime-dir:stays-put — mkdir for update-state.json above
     mkdirSync(dir, { recursive: true });
     const tmpFile = STATE_FILE + `.tmp-${process.pid}`;
     writeFileSync(tmpFile, JSON.stringify(state, null, 2));

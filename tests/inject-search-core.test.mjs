@@ -167,17 +167,25 @@ describe('consumer ledger — no inlined live-filter pairs in the converted file
 
   it('every consumer reaches the shared core, directly or through a declared module', () => {
     for (const f of FILES) {
-      const src = readFileSync(join(REPO, f), 'utf8');
+      // Comment-stripped with this file's own helper (the same one the pair-scan above uses),
+      // because raw source lets a COMMENTED-OUT import satisfy the VIA check below while the
+      // real edge is gone. It also stops a commented `inject-search-core.mjs` short-circuiting
+      // the whole case on the line after this one.
+      const src = stripLineComments(readFileSync(join(REPO, f), 'utf8'));
       if (src.includes('inject-search-core.mjs')) continue;
       const via = VIA[f];
       expect(via, `${f} neither imports the core nor declares an intermediary`).toBeTruthy();
       // Anchored on the import SPECIFIER, not a bare substring: `src.includes('export-columns.mjs')`
       // is satisfied by a COMMENT naming the module, so the ledger could clear a file whose
-      // real edge had moved away. Today an adjacent behavioural case happens to catch that;
-      // the ledger should stand on its own.
-      const viaSpecifier = new RegExp(`from\\s+'[^']*${via.replace(/^lib\//, '').replace(/\./g, '\\.')}'`);
-      expect(viaSpecifier.test(src), `${f} does not import its declared intermediary ${via}`).toBe(true);
-      expect(readFileSync(join(REPO, via), 'utf8').includes('inject-search-core.mjs'),
+      // real edge had moved away. The specifier narrowed that hole; comment-stripping above
+      // closes it (v3.93.0 post-release review, I2 — a commented-out import still passed).
+      // Full regex escape, not just `.`: today's single entry is inert either way, but an
+      // entry containing `+ ( [ $ ^ * ?` would build a wrong or throwing regex.
+      const viaEsc = via.replace(/^lib\//, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const viaSpecifier = new RegExp(`from\\s+'[^']*${viaEsc}'`);
+      expect(viaSpecifier.test(src),
+        `${f} does not import its declared intermediary ${via}`).toBe(true);
+      expect(stripLineComments(readFileSync(join(REPO, via), 'utf8')).includes('inject-search-core.mjs'),
         `${via} is declared as ${f}'s route to the core but does not import it`).toBe(true);
     }
   });

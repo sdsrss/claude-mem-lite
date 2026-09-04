@@ -1326,7 +1326,7 @@ async function cmdStats(db, args) {
   out(`  Low-value (imp≤1, never used, >30d): ${lowVal.c} (${(noiseRatio * 100).toFixed(1)}% noise)`);
   out(`  Low-signal titles (Modified/Error/Worked on…): ${lowSignalTitle.c} (${(lowSignalRatio * 100).toFixed(1)}%)`);
   out(`  Compressed: ${compressedCount.c}`);
-  out(`  Hook errors (last 24h): ${hookErrors24h}${hookErrors24h > 0 ? `  ← tail ${join(DB_DIR, 'runtime/hook-errors')}` : ''}`);
+  out(`  Hook errors (last 24h): ${hookErrors24h}${hookErrors24h > 0 ? `  ← tail ${join(resolveRuntimeDir(DB_DIR), 'hook-errors')}` : ''}`);
   // Hint threshold = the REAL eviction budget (pre-release review 2026-08-16: a
   // hardcoded 3×-DB heuristic promised an eviction that fires only past the budget).
   out(`  Disk: DB ${mb(dbBytes)}MB | ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB${backupBytes > backupBudgetBytes() ? `  ← over the ${mb(backupBudgetBytes())}MB backup budget; next maintain/save snapshot evicts oldest (>7d old)` : ''}`);

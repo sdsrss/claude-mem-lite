@@ -76,7 +76,7 @@ try {
   // proceeds; a broken one defers to the peer instead of racing it).
   const { acquireLock } = await import('../lib/proc-lock.mjs');
   const { resolveDataDir } = await import('../lib/resolve-data-dir.mjs');
-  const lockPath = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', 'install.lock');
+  const lockPath = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
   let release = null;
   for (let i = 0; i < 20 && !(release = acquireLock(lockPath)); i++) {
     await new Promise((r) => setTimeout(r, 500));

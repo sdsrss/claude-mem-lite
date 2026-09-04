@@ -107,8 +107,10 @@ describe('readHookStdin', () => {
 
   describe('salvageTruncatedHookEvent', () => {
     // The other half of the fix: past the cap, recover rather than drop. Asserted on the
-    // helper because it is where the rule lives; the caller's use of it is pinned by the
-    // source case above.
+    // helper because it is where the rule lives. An earlier version of this comment said the
+    // caller's use was "pinned by the source case above" — it was not; that case only pinned
+    // `maxBytes`, and the review that found it deleted the salvage branch with every case
+    // still green. The source case now asserts the call as well.
     const prefix = (obj, cut) => JSON.stringify(obj).slice(0, cut);
 
     it('recovers file_path, session_id and tool_name from a cut-off payload', () => {
@@ -171,6 +173,13 @@ describe('every hook entry point reads stdin through the shared module', () => {
       expect(src).toMatch(/readHookStdin\(\{[^}]*maxBytes:\s*TOOL_INPUT_FILE_MAX_BYTES/);
       expect(src, 'a bare readHookStdin() here silently takes the 256 KB default')
         .not.toMatch(/readHookStdin\(\s*\)/);
+      // And the OTHER half of the cap fix. Deleting the salvage branch at the caller left
+      // 107 cases green across this file and pre-tool-recall's own (v3.93.0 post-release
+      // review, C1) — the helper was well pinned and its wiring was not.
+      if (rel === 'scripts/pre-tool-recall.js') {
+        expect(src, 'the truncation salvage branch is gone from the caller')
+          .toMatch(/salvageTruncatedHookEvent\(/);
+      }
     });
 
   it.each(SHARED)('%s imports readHookStdin AND calls it, with no second reader', (rel) => {
@@ -181,7 +190,11 @@ describe('every hook entry point reads stdin through the shared module', () => {
     // header names. The old assertion also never mentioned the symbol, so importing only
     // DEFAULT_STDIN_MAX_BYTES satisfied it.
     expect(src).toMatch(/from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
-    expect(src).toMatch(/\breadHookStdin\b[\s\S]{0,80}from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    // Keyed to the import STATEMENT, not to an 80-character budget. The budget version went
+    // red on correct code: `scripts/pre-tool-recall.js` used 57 of its 80 characters, so
+    // adding one more symbol to that import turned the guard red for a valid change — the
+    // false-alarm direction this same batch fixed in workflow-hardening.
+    expect(src).toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
     expect(src).toMatch(/readHookStdin\(/);
     expect(src).not.toMatch(/process\.stdin\.on\s*\(/);
   });
@@ -199,7 +212,11 @@ describe('every hook entry point reads stdin through the shared module', () => {
     // Each new assertion above must be able to fire, or it is decoration.
     expect("  process.stdin.on('data', (c) => { input += c; });").toMatch(/process\.stdin\.on\s*\(/);
     expect("import { DEFAULT_STDIN_MAX_BYTES } from '../lib/hook-stdin.mjs';")
-      .not.toMatch(/\breadHookStdin\b[\s\S]{0,80}from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+      .not.toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    // …and a long-but-correct import must still pass, which the 80-char version did not.
+    expect("import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent, DEFAULT_STDIN_TIMEOUT_MS } from '../lib/hook-stdin.mjs';")
+      .toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect('const x = 1;').not.toMatch(/salvageTruncatedHookEvent\(/);
     expect('const x = 1;').not.toMatch(/readHookStdin\(/);
   });
 

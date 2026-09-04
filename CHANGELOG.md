@@ -2,6 +2,102 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.93.1 — the repair for a writer/reader split moved the reader
+
+Two independent reviews of v3.93.0's own repairs — the twelve files that changed *after* that
+release's pre-tag reviews finished, and which therefore shipped unreviewed. They found three
+defects introduced by those repairs and one false rule published in the place designated to
+be followed. Everything here is inert on a default install: with `CLAUDE_MEM_RUNTIME_DIR`
+unset, `resolveRuntimeDir(dataDir)` and `join(dataDir, 'runtime')` are the same string, so
+the population affected is harnesses and `experiment/lib/arms.mjs` — which is precisely the
+population the original fix existed for.
+
+### fix: `hook-launcher-broken` — the repair moved doctor's READ side and left the only writer behind
+
+v3.93.0 made `install.mjs doctor` read the launcher's breakage marker from the override-aware
+directory. Its only writer, `scripts/hook-launcher.mjs`, still wrote it to
+`join(DATA_DIR, 'runtime')`. **Before that change the two matched in every configuration**, so
+the release closing a writer/reader split opened one, on the signal whose whole job is to make
+a silently-degraded install visible: under the override, `doctor` could not see a broken hook
+launcher.
+
+The direction of the fix is the point. By the rule that release wrote down, this marker is
+hook-written state another component reads back, so it MOVES — the writer was what was
+unfinished. That file is the one place that legitimately cannot import the resolver (it runs
+before the native binding is known to work and imports only `node:` builtins), and it already
+had an override-aware constant, `NB_RUNTIME_DIR`, applied to its native-binding markers and
+not to these. **One file, two markers, one line apart, and the rule was applied to half of
+them.** It is now `HOOK_RUNTIME_DIR`, covering all four; `RUNTIME_DIR` stays data-dir-relative
+and serves `swap-in-progress` alone, which is installation identity.
+
+### fix: `doctor`'s stale-temp scan and `cleanup()` disagreed about where `pending-*` lives
+
+Same shape, opposite half: v3.93.0 moved the deleter (`cleanup()`) to the override-aware
+directory and left the scanner eight hundred lines earlier reading the data dir. `doctor`
+reported `✓ Stale temp files: none` while the command it recommends removed two files. The
+scanner's other half — the `.update-staging-*` / `.update-backup-*` residue — reads
+`MEM_DATA_DIR` directly and is untouched: one block, both classes, which is exactly why the
+guard below had to change.
+
+### fix: `stats` counted hook errors in one directory and told you to tail another
+
+The count was moved to the resolver in v3.93.0; the `← tail <path>` hint beside it was not.
+Under the override it reported a non-zero count and pointed at an empty directory.
+
+### fix: the salvage regex could throw at the cap instead of returning null
+
+`salvageTruncatedHookEvent`'s capture was unbounded. On an 8 MB prefix whose `file_path`
+string is never closed, V8 exceeds its regexp backtrack limit and throws `RangeError` — past
+the caller's catch, into its top-level one. The process still exits 0, but it writes a
+`pre-recall:top` telemetry row: the same hook-error noise the v3.93.0 repair split
+`pre-recall:json` away from. Bounded to 4096 characters, above `PATH_MAX` on both platforms.
+**Not a ReDoS** — the review timed the historic backtracking shapes at 8 MB and the capture is
+the unrolled, unambiguous form; every input measured linear.
+
+### docs: `metrics/` was published as "moves with the override" in three places and it does not
+
+`lib/resolve-data-dir.mjs`'s docblock, README and the v3.93.0 CHANGELOG all listed `metrics/`
+in the MOVES column. `lib/metrics.mjs` is `join(dbDir, 'metrics')` and every shipped caller
+passes the data dir — it is a SIBLING of `runtime/`, not inside it, and setting the override
+moves none of it. The v3.93.0 *fix* was right: `join(RUNTIME_DIR, '..')` stopped equalling
+`DB_DIR` the moment the override was honoured, and deriving one directory out of the other is
+the defect. The one-word classification was wrong, **in the sentence that exists to stop the
+next person guessing** — a sweep obeying it literally would convert `recordMetric(DB_DIR, …)`
+back to a runtime-relative path and re-open what that release closed. The STAYS column now
+separates its two different reasons instead of implying one.
+
+### test: the guard's allowlist is per SITE, not per file — which is why it missed both fixes above
+
+v3.93.0's sweep allowlisted whole FILES. Three of its six entries hold both stays-put and
+moves-with-the-override sites, so **inside those files the guard was simply off** — reverting
+that release's own `install.mjs` repair was invisible to the entire suite, and both live
+splits above were sitting in allowlisted files. A file-level reason cannot express "this file
+has both kinds".
+
+A constructing line now carries `// runtime-dir:stays-put — <reason>`; eleven sites are
+annotated, and a marker on a line that no longer constructs, or with no reason, fails. Three
+blind spots the review found are closed with it: two levels of nested parens
+(`join(dirname(fileURLToPath(…)), 'runtime')` is a repo idiom that one level cannot cross),
+`resolve()` alongside `join()`, and template-literal / concatenation forms. A third sweep,
+`INVERSE_RE`, catches the other direction — deriving the data dir back out of the runtime dir,
+the `join(RUNTIME_DIR, '..')` shape that nothing guarded even though this release's own fix
+set removed seven of them. **Its first draft required a prefix before `RUNTIME_DIR`, so it
+matched `NB_RUNTIME_DIR` and missed the bare form — i.e. all seven sites it exists to catch.**
+
+Also fixed, each found by mutation: nothing asserted that `pre-tool-recall.js` actually
+*calls* the salvage helper (deleting the branch left 107 cases green, and the test file's own
+comment claimed the opposite); the import-proximity check used an 80-character window that a
+correct fourth import symbol would have turned red; the `VIA` ledger was still satisfiable by
+a commented-out import; a `filter(…).length >= 2` companion assertion passed under the exact
+collapse it named and was removed rather than kept as reassurance; and the workflow pin
+exemption covered `docker://` with a mutable tag, which is the supply-chain shape it exists
+to catch.
+
+Verification: 344 files / **5736** tests green, eslint 0/0, knip 52 unused exports / 0 unused
+files. Nine mutations this round, nine killed — including all four that survived the review
+(two-level nesting, template literal, a revert inside a formerly-allowlisted file, and the
+inverse derivation), each now naming its own `file:line`.
+
 ## v3.93.0 — a DDL change unreachable from the version the DB reports is a no-op with a convincing diff
 
 **Upgrade note — two user-visible behaviour changes, both narrow.**

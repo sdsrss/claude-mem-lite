@@ -1791,7 +1791,7 @@ async function doctor() {
 
   // Update state
   try {
-    const stateFile = join(MEM_DATA_DIR, 'runtime', 'update-state.json');
+    const stateFile = join(MEM_DATA_DIR, 'runtime', 'update-state.json'); // runtime-dir:stays-put — installation identity
     if (existsSync(stateFile)) {
       const state = JSON.parse(readFileSync(stateFile, 'utf8'));
       const parts = [];
@@ -1951,8 +1951,12 @@ async function doctor() {
   try {
     // hook-update + the episode workers write runtime/ + staging under DB_DIR
     // (= MEM_DATA_DIR, env-aware), NOT the homedir code dir — scan there so doctor
-    // sees the real residue under relocation.
-    const runtimeDir = join(MEM_DATA_DIR, 'runtime');
+    // sees the real residue under relocation. MEM_RUNTIME_DIR rather than
+    // join(MEM_DATA_DIR,'runtime'): `pending-*` / `ep-flush-*` are written through
+    // hook-shared.mjs's override-aware RUNTIME_DIR, and `cleanup()` below deletes them from
+    // MEM_RUNTIME_DIR — v3.93.0 moved the deleter and left this scanner behind, so under the
+    // override doctor reported "none" while the cleanup it recommends removed files.
+    const runtimeDir = MEM_RUNTIME_DIR;
     let staleCount = 0;
     const stalePatterns = ['.update-staging-', '.update-backup-'];
     if (existsSync(MEM_DATA_DIR)) {
@@ -2560,7 +2564,7 @@ function bindingHostDir() {
 // two concurrent rebuilds can clobber the .node mid-compile. A live peer → report
 // and exit 0 (it is doing this very work), never race it.
 async function rebuildBinding() {
-  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock'));
+  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!release) {
     // NOT exit 0: skipping is not healing. Callers key their state on the exit
     // code — a false success would let the launcher drop its cooldown and the
@@ -2609,7 +2613,7 @@ async function rebuildBinding() {
 // install/self-heal) holds it → skip rather than race into a torn install. Lock
 // path is shared with hook-update.installExtractedRelease (both env-aware).
 async function runLockedInstall() {
-  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock'));
+  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!release) {
     console.log('[install] Another install/repair is in progress — skipping to avoid a torn write.');
     return;
