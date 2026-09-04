@@ -196,7 +196,7 @@
     "registry/preinstalled.json"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^12.11.1",
     "zod": "^4.3.6"
   },
