@@ -546,6 +546,55 @@ describe('buildCiteRecallNudge', () => {
     seed('p-never', { injected: 10, recalled: 0, ratio: 0, lowStreak: 99 });
     expect(buildCiteRecallNudge('p-never', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '0' })).toContain('cite-recall 0%');
   });
+
+  // ── v3.94.0: the three knobs that moved to envNumber ─────────────────────────
+  //
+  // Added because the pre-tag test-effectiveness review reverted all three sites to their
+  // pre-release idioms and the whole tree stayed green — 65 cases here plus the class-level
+  // sweep, none of which could tell. The cases above could not discriminate: they set
+  // MIN_INJECTED='3' / THRESHOLD='0.8' (parse identically under either idiom) and
+  // SILENCE_AFTER='0' (which the old ternary also handled). These pin the two behaviours
+  // that actually changed.
+
+  it('THRESHOLD=0 means "never nag on ratio" — an explicit 0 the old idiom swallowed', () => {
+    // Pre-release this read `Number(env.X) || 0.6`: '0' parsed to 0, `0 || 0.6` gave 0.6,
+    // and the nag fired anyway. Now 0 survives and `ratio < 0` is never true.
+    seed('p-thr0', { injected: 10, recalled: 0, ratio: 0 });
+    expect(buildCiteRecallNudge('p-thr0', tmp, {}), 'premise: these stats DO fire by default')
+      .toContain('cite-recall 0%');
+    expect(buildCiteRecallNudge('p-thr0', tmp, { CLAUDE_MEM_CITE_NUDGE_THRESHOLD: '0' }))
+      .toBe('');
+  });
+
+  it('MIN_INJECTED=0 removes the volume floor — the other swallowed 0', () => {
+    // One injection, zero recalled. Default floor of 5 keeps it silent; an explicit 0 must
+    // let it through, which `Number(env.X) || 5` could not express.
+    seed('p-min0', { injected: 1, recalled: 0, ratio: 0 });
+    expect(buildCiteRecallNudge('p-min0', tmp, {}), 'premise: default floor suppresses it')
+      .toBe('');
+    expect(buildCiteRecallNudge('p-min0', tmp, { CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED: '0' }))
+      .toContain('cite-recall 0%');
+  });
+
+  it('SILENCE_AFTER=garbage still silences at the default — it used to disable silencing', () => {
+    // The old form was `env.X !== undefined ? Number(env.X) : 3`, so a typo became NaN and
+    // `lowStreak >= NaN` is false: the self-silencing turned OFF, which is the opposite of
+    // every other knob's failure direction and the one a user would never notice.
+    seed('p-garbage', { injected: 10, recalled: 0, ratio: 0, lowStreak: CITE_NUDGE_SILENCE_AFTER });
+    expect(buildCiteRecallNudge('p-garbage', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: 'abc' }))
+      .toBe('');
+  });
+
+  it('a fractional SILENCE_AFTER still works — the bound is >=, not an integer domain', () => {
+    // Guards the v3.94.0 pre-tag decision to DROP `integer: true` here: 2.5 was a usable
+    // setting, and rejecting it would silently swap a working value for the default of 3.
+    seed('p-frac', { injected: 10, recalled: 0, ratio: 0, lowStreak: 2 });
+    expect(buildCiteRecallNudge('p-frac', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
+      'lowStreak 2 is below 2.5, so the nag must still fire').toContain('cite-recall 0%');
+    seed('p-frac2', { injected: 10, recalled: 0, ratio: 0, lowStreak: 3 });
+    expect(buildCiteRecallNudge('p-frac2', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
+      'lowStreak 3 is above 2.5, so it must be silenced').toBe('');
+  });
 });
 
 describe('nextCiteLowStreak', () => {

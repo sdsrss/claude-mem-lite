@@ -76,7 +76,7 @@ export async function cmdDoctor(db, args) {
       out(`  id_mix_other (fixture-style equality, info-only):  ${audit.id_mix_other}`);
       out(`  missing_mem_id (sdk_sessions w/ NULL after 5min):  ${audit.missing_mem_id}`);
       out(`  orphan_obs (observations w/o matching session):    ${audit.orphan_obs}`);
-      out(`  obs_importance_null (NULL importance, P3-14):     ${audit.obs_importance_null}`);
+      out(`  obs_importance_null (NULL importance, P3-14):      ${audit.obs_importance_null}`);
       if (audit.id_mix_other > 0 && audit.id_mix_uuid_shape === 0) {
         out('\n  Notes:');
         out('    • id_mix_other > 0 with uuid_shape=0 is typically benign — usually means insertSession({id:\'X\'}) test scaffold or pre-v30 data with non-UUID equal values. Does NOT drive failure.');

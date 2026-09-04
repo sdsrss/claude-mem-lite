@@ -2,6 +2,277 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.94.0 — six silent degradations, and three claims the code was making that were false
+
+Six defects from the standing audit backlog, plus the two semantic adjudications it had
+deliberately left open. What ties them together is not a subsystem — it is that every one
+of them *reported nothing*: a typo that turned an injection face off, a save refused as a
+duplicate of a row that no longer existed, a comment describing a host contract that the
+host does not have, and a fallback branch whose comment described a case it could not
+reach.
+
+**Upgrade note (one thing can newly fail):** `claude-mem-lite doctor --session-audit` now
+counts `observations.importance IS NULL` and treats a non-zero count as unhealthy, so on a
+store carrying such rows that command exits 1 where it previously exited 0. It is an
+explicit diagnostic, not a hook or a hot path — nothing else changes behaviour because of
+it. The output names the one-line repair
+(`UPDATE observations SET importance = 1 WHERE importance IS NULL;`). Measured 0 rows on
+the maintainer's 3779-observation store; no new row can reach that state after this
+release. Nothing here needs an opt-out flag: every other change either preserves data that
+was being destroyed or replaces a silent failure with a stderr line, and neither has a
+direction a user would want to revert.
+
+### fix: `Number(process.env.X || DEFAULT)` has no failure mode — one typo took the UserPromptSubmit face dark
+
+`Number('abc')` is NaN, and NaN then propagated into whatever the constant fed. Nothing
+threw and nothing was logged, so the surface degraded silently and in a direction that
+depended on which consumer received it. Measured against the shipped code:
+
+| env | consumer | what NaN did |
+|---|---|---|
+| `CLAUDE_MEM_UPS_MAX_RESULTS` | `rows.slice(0, MAX_RESULTS)` | `slice(0, 0)` → **the whole FTS injection face emitted nothing** |
+| `CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT` | SQL `LIMIT ?` | `SqliteError: datatype mismatch` |
+| `CLAUDE_MEM_UPS_TOP_MIN` | `Math.abs(rel) < floor` | always false → **the set-level noise floor stopped firing** |
+| `CLAUDE_MEM_UPS_OR_BM25_MIN` | `orFloor > 0` | false → the OR-fallback floor stopped firing |
+
+So one typo either silences the face or disables the gates that keep it quiet, and from
+outside the two are indistinguishable. `lib/env-number.mjs` gives env overrides the
+contract `lib/cli-flags.mjs` has given CLI flags since #8277: warn once on stderr, fall
+back to the documented default, honour an explicit `0` when the range admits it. Twelve
+call sites converted (six in `scripts/user-prompt-search.js`, three in
+`lib/cite-back-hint.mjs`, one in `lib/relevance-floor.mjs`, two in the
+`benchmark/adoption-rankers.mjs` twin), plus a class-level source sweep so the idiom cannot
+return anywhere in the tree.
+
+`Number`, not `parseInt`: two of these floors are written `1e-5` and `5e-6`, and
+`parseInt('1e-5')` is `1` — a 10^5 misparse with no warning, i.e. the same defect wearing a
+different hat.
+
+**Two knobs turn out never to have worked through the environment at all**, and it is worth
+naming the idiom precisely because a draft of this entry — and one source comment — got it
+backwards. `process.env.X` is always a **string**, and `'0'` is truthy (only `''` is falsy),
+so `Number(env.X || D)` handles `0` correctly and always has. The shape that swallows a `0`
+is the other one, **parse first and then fall back**: `Number(env.X) || D`. That is
+`lib/cite-back-hint.mjs`, and the two knobs are `CLAUDE_MEM_CITE_NUDGE_THRESHOLD=0` ("never
+nag on ratio") and `CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED=0` ("no volume requirement"). Both
+work now. `CLAUDE_MEM_UPS_TOP_MIN=0` was never broken — the suite has been green with `'0'`
+as `runScript`'s default all along, which is the running counterexample the pre-tag
+correctness review used to refute the draft.
+
+A range bound is a behaviour change, and this release learned it the expensive way. The
+first cut gave `CLAUDE_MEM_UPS_FLOOR_REF_CORPUS` a `min: 2`, reasoning that `maxIdf` is 0
+below n=2 so the corpus ramp would divide by zero. `corpusFloorScale` already handles that
+(`ref <= 1` returns 1, and so does `!(refIdf > 0)`), and `1` is the documented way to pin
+the ramp **off** — two cases in `tests/user-prompt-search.test.mjs` depend on it. `min: 2`
+silently replaced it with 584 and unfired both floor gates. The full suite caught it. Every
+bound is now read off its consumer, and the values these knobs are actually set to across
+the tree (`0 / 0.0000001 / 1 / 2 / 3 / 1e9`) were enumerated rather than assumed.
+
+### fix: the 5-minute write-side dedup window compared against retired rows and handed back their ids
+
+Every read path in the tree filters through `liveObsFilterSql`
+(`COALESCE(compressed_into,0) = 0 AND superseded_at IS NULL`). `saveObservation`'s
+near-duplicate window did not, so a save could be refused as a duplicate of a row that had
+already been retired — and the caller was handed that tombstone's id as `existingId`, an id
+no injection face will ever return and no `get` will show as current.
+
+Sharpest form: save something wrong, retire it, save the correction inside five minutes, and
+the correction is refused as a duplicate **of the row it corrects** — with its requested
+supersession dropped too, by the D#201 short-circuit one line down. Measured on the live DB:
+3 of the 31 superseded rows were retired 2.9 / 3.6 / 3.9 minutes after they were created,
+which is exactly this window.
+
+`hook-llm.mjs` runs its own three-tier dedup over the same table without the filter and is
+deliberately **not** changed. Its 7-day / 3-day low-signal tiers are *meant* to keep matching
+rows that auto-compress has retired — that is what stops "Modified package.json"
+re-accumulating — and it returns `null`, so no id escapes to a caller. Different
+consequence, not a twin.
+
+### fix: two maintenance passes queued retired rows for hard delete, destroying the citation redirect
+
+The 2026-09-02 audit filed this as a semantic question it would not answer alone (P3-13):
+should tombstones go through automatic GC? Measured per op, it has one answer per
+consequence rather than one answer:
+
+- `boostAccessed`, `demotePinned` and `decayAndMarkIdle`'s decay arm write `importance`
+  only — inert on a row every read path already hides. Including or excluding tombstones
+  there is a behavioural no-op, so they are **unchanged**, and a test now pins that the
+  decay arm still steps a tombstone down.
+- `cleanupBroken` hard-deletes rows with no title, no narrative and no lesson.
+  **Unchanged, and this one is a genuine remaining gap rather than a reasoned exemption.**
+  A tombstone reaching it loses its redirect exactly as `purgeStale` would — a draft of this
+  entry said "'broken' is true of a tombstone either way", which does not engage with the
+  argument the rest of this section rests on, and the pre-tag correctness review said so.
+  It is not a regression (`cleanupBroken` has always been able to delete a tombstone), its
+  reachable population is **0** today, and the adjudication that authorised this work was
+  scoped to the two `COMPRESSED_PENDING_PURGE` writers — so it is filed rather than widened
+  under cover of a release. The honest statement is: three paths can hard-delete an
+  observation, two are now guarded, and the third is open.
+- `decayAndMarkIdle`'s mark-idle arm and `search-scoring.runIdleCleanup`'s mark pass write
+  `COMPRESSED_PENDING_PURGE`, which `purgeStale` then hard-DELETEs. **That is the one path
+  with teeth**: deleting the row destroys `superseded_by`, and 27 of those 31 superseded
+  rows carry one. Three functions in the Stop citation loop route old ids through
+  `redirectSupersededIds` to reach the successor, so purging a tombstone silently ends a
+  `#NN` naming a corrected memory resolving to its correction.
+
+Both mark passes now use `liveObsFilterSql('')`, and `maintenanceStats`' `stale` forecast
+moved with them — only `stale`, because `boostable` and `pinned` forecast ops that
+deliberately still touch tombstones, and forecasting an exemption they do not have would
+break the scan-equals-execute invariant in the other direction. The precedent is one clause
+up in the same statement: lesson-bearing rows were exempted from mark-idle on exactly this
+reasoning, and an explicit `delete` still removes either.
+
+Exposure today is zero on all five ops, and that zero is not vacuous. Measured read-only
+2026-09-04T17:05Z (3781 observations, 31 superseded, **19 live tombstones**): all 19 pass
+the `compressed_into` conjunct, and it is the later ones that exclude them, narrowly — one
+sits at `injection_count = 12`, past `demotePinned`'s threshold of 8 and held out only by
+`cited_count`, and **13** are above `boostAccessed`'s access threshold, held out only by
+`importance = 3`, with the lowest of them at exactly `access_count = 4`. These figures are
+stamped because they walk: a draft written hours earlier read 3779 and 12.
+
+Using the shared predicate rather than an inline pair was not a style choice: the consumer
+ledger in `tests/inject-search-core.test.mjs` fired on `search-scoring.mjs` the moment the
+two clauses landed within its 200-character window. It did **not** fire on
+`lib/maintain-core.mjs`, where a long comment had pushed them apart — a scanner blind spot,
+not an exemption, so that site was converted too.
+
+### fix: `observations.importance` could be written NULL, and the two maintenance faces disagreed about what that meant
+
+`importance` is `INTEGER DEFAULT 1` but nullable, and the DEFAULT only applies when the
+column is omitted from the INSERT — which it never is, the column list being fixed. So a
+caller passing `importance: null`, or `importance: undefined` as an **own property** (which
+skips the defaults lookup), wrote a NULL. better-sqlite3 binds both to SQL NULL and throws
+on neither, so nothing upstream would have caught it.
+
+A NULL there is not cosmetic. `maintain-core.decayAndMarkIdle` reads
+`COALESCE(importance,1) = 1` and queues the row for purge; `search-scoring.runIdleCleanup`
+reads a bare `importance <= 1`, which is NULL and skips it. The row decays on one face and
+not the other.
+
+Aligning the two predicates was rejected — the alignment that closes the gap is the one that
+makes the MCP face **start** purging those rows — and so was a `NOT NULL` migration, which
+means rebuilding a table carrying FTS5 triggers and several indexes for a population
+measured at 0. Closed at the source instead: one normalizer in `lib/observation-write.mjs`,
+applied by **both** write cores, coerces a nullish `importance` to 1, so NULL is unwritable
+by construction rather than by luck. `doctor --session-audit` reports what got in another
+way (see the upgrade note above).
+
+The divergence itself is pinned rather than quietly aligned: a case drives a NULL-importance
+row through both faces and asserts they still disagree. Anyone who aligns them later does it
+on purpose.
+
+### docs: `lib/hook-stdout.mjs` asserted a host contract that would make `hook-precompact.mjs` dead code
+
+Its header said Claude Code drops a hook's plain-text stdout for every event except
+UserPromptSubmit — under which `hook-precompact.mjs`, which writes a bare
+`<claude-mem-context>` block, does nothing at all. Re-verified against the 2.1.260 bundle,
+that reading is wrong in two places, and a maintainer acting on it would have caused a
+regression.
+
+There are **three** channels, not one, and each event uses a different subset:
+
+1. **`additionalContext`**, off the stdout classifier's `answer` — built from plain text for
+   UserPromptSubmit and UserPromptExpansion **only**. SessionStart is not in that set,
+   contrary to the old comment.
+2. **`newCustomInstructions`**, off the result's `output` field, which is
+   `status === 0 ? stdout : stderr` — the raw stdout, whatever it is, quite apart from the
+   parsed answer. `executePreCompactHooks` reads exactly that and hands it to the compaction
+   summarizer; six read sites in the bundle.
+3. **the `hook_success` attachment**, emitted on the same status-0 branch with
+   `content = stdout.trim()`, which the attachment renderer turns into a real message for
+   SessionStart / UserPromptSubmit / UserPromptExpansion, prefixed
+   `<hookName> hook success: `.
+
+The first rewrite of this header found channel 2 and then asserted SessionStart was
+"dropped in silence" — false via channel 3, and the pre-tag correctness review caught it.
+Both the original error and that one have the same root: reading one channel and
+generalising to the event. The header now enumerates the channels instead of summarising
+them.
+
+So writing a bare block there is not merely allowed, it is the **only** correct form:
+routing it through the envelope would deliver literal `{"hookSpecificOutput":…}` to the
+summarizer as its instructions. `tests/precompact-stdout-shape.test.mjs` pins both the
+emitted shape and the absence of any envelope-writer import, so the consistency refactor
+cannot happen by accident.
+
+The rule both corrections share: *"the host drops plain text" is a claim about one channel.*
+Before believing it for an event, find which field that event's runner actually reads.
+
+### fix: `mem_export`'s project fallback undid the guard it was standing next to
+
+`_resolveProjectShared(db, x) || x` carried a comment about stopping a falsy resolution from
+dropping the project filter and exporting the whole store. It could not do that.
+`resolveProject` returns falsy on exactly one input a truthy `args.project` can be — a
+non-string, which it maps to `null` deliberately so `true.includes('--')` stops crashing
+every project-filtered command at the root helper. Unreachable over MCP
+(`memExportSchema.project` is `z.string().optional()`, validated before the handler);
+reachable through the exported `handleExportForTest` seam, where the fallback handed the
+non-string straight back.
+
+Reverting to the old shape and measuring what it actually did gives **three** outcomes and
+none of them is the wide export the comment feared: `true` gives
+`SQLite3 can only bind numbers, strings…`, `{}` gives `Too few parameter values were
+provided`, and `42` / `['a']` bind cleanly and silently return **zero rows**. (A draft of
+this paragraph put all three non-`{}` inputs in the bind-error bucket; the pre-tag
+correctness review re-ran them one at a time.) It is now screened explicitly, matching the policy the two date checks in the same
+function already state ("refuse rather than silently drop a filter"), and matching the two
+sibling sites in `server.mjs` and every `cmd*` in `mem-cli.mjs`, none of which carry the
+fallback. This one was the outlier.
+
+### Verification
+
+`env -u CLAUDE_MEM_DIR npx vitest run` → **350 files / 5787 cases**, green (v3.93.1 tag
+measured 344 / 5736; +6 files and +51 cases are this release's, of which one is generated —
+`tests/obs-id-caliber-sync.test.mjs` reacting to the new `lib/` module). `npx eslint .`
+→ no output. `./node_modules/.bin/knip` from the primary working tree → **52 unused
+exports, 0 unused files**, the same count as the v3.93.0 baseline with no new name in the
+set, so none of the release's **four** new exports is dead — `envNumber` plus three
+test-only helpers in `tests/env-number.test.mjs`; the other five new test files export
+nothing. (A draft said six, in a paragraph whose subject is counting.)
+
+Every guard added here was driven to fail before being trusted. The env sweep and the dedup
+suite were run **red against the real defect** before the fix. The rest were mutated:
+removing the superseded clause from all three maintenance sites reds exactly 3 of the 5
+tombstone cases; removing the importance coercion reds exactly the 3 write-core cases and
+leaves the doctor backstop green (correct — that case seeds its NULL with raw SQL);
+rewriting `hook-precompact.mjs` to emit an envelope reds the shape case, and adding an
+envelope-writer reference reds the source case; restoring `mem_export`'s old fallback reds
+all 4 non-string cases.
+
+### Pre-tag review
+
+Two independent fresh-context reviewers ran against the release diff before the tag, one on
+correctness and one on test effectiveness. Both returned SHIP-AFTER-FIXES. **Neither found a
+code defect** — 24 mutations between them, and every guard this release adds killed its own.
+Everything they found was a *claim* defect or a second-ring coverage gap, and all of it is
+repaired above rather than carried:
+
+- the **BLOCKER**: a draft credited the `0`-swallowing fix to `CLAUDE_MEM_UPS_TOP_MIN`, on
+  the false premise that `'0' || 50` is `50`. It is `'0'` — env values are strings and only
+  `''` is falsy. The suite has been green with `CLAUDE_MEM_UPS_TOP_MIN='0'` for releases,
+  which is the running counterexample. Corrected in the entry above, in
+  `scripts/user-prompt-search.js`, and in `lib/env-number.mjs`'s docblock.
+- the class-level env sweep was **blind over 346 lines of real code across 11 files**: its
+  block-comment stripper had no string awareness, so a glob or a URL replacement opened a
+  phantom comment. A banned idiom planted in one of those spans passed. The stripper is now
+  purely line-based, and the sweep also learned the two idioms it had been missing — the
+  trailing `Number(env.X) || D` and the `!== undefined ?` ternary — which is what let three
+  reverted `lib/cite-back-hint.mjs` sites go undetected. That module now has behavioural
+  cases of its own; reverting it reds four ways instead of zero.
+- `maintenanceStats`' `boostable` / `pinned` counters could gain the tombstone guard with
+  300 cases green, breaking scan-equals-execute in the direction the release's own comment
+  warns about. Both now pin forecast **and** execute.
+- one end-to-end case had only negative assertions and passed against a hook killed at
+  line 2. It now carries a deliberately-malformed knob whose warning must appear.
+- `CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED` / `_SILENCE_AFTER` lost their `integer: true` — `2.5`
+  was a usable setting and a NaN guard should only screen NaN, which is this release's own
+  lesson applied to its own new code.
+
+**One finding is filed rather than fixed**, and it is named in the tombstone section above:
+`cleanupBroken` is a third hard-delete path a tombstone can reach. Not a regression, zero
+reachable rows today, and outside the scope the adjudication authorised — widening that
+under cover of a release is exactly what this project's process exists to prevent.
+
 ## v3.93.1 — the repair for a writer/reader split moved the reader
 
 Two independent reviews of v3.93.0's own repairs — the twelve files that changed *after* that

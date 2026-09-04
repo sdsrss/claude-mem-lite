@@ -127,10 +127,16 @@ const FOLLOWUP_BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN_FO
 // through, but the top-|rel| gap is an absolute distribution separator —
 // lowering it in follow-up mode re-admits the 37..48 noise band that the
 // gate exists to drop.
-// min 0, and 0 is a REAL value here, not a fallback: it is the documented seed-mode
-// switch that kills both absolute floors (see OR_TOP_BM25_FLOOR below). The old
-// `Number(env || 50)` could not express it — `'0' || 50` is 50 — so the knob the
-// comment below advertises never worked through the env, only through the literal.
+// min 0, because 0 is a REAL value here: the documented seed-mode switch that kills both
+// absolute floors (see OR_TOP_BM25_FLOOR below).
+//
+// It has ALWAYS worked, and a first draft of this comment claimed otherwise on a false
+// premise worth recording: `process.env.X` is always a STRING, and `'0'` is truthy — only
+// `''` is falsy. So `Number(env || 50)` with `CLAUDE_MEM_UPS_TOP_MIN='0'` was already 0,
+// which is why `tests/user-prompt-search.test.mjs` has been green with `'0'` as runScript's
+// default. The idiom that genuinely swallows a 0 is the OTHER one — `Number(env.X) || D`,
+// parse first then fall back — which is what lib/cite-back-hint.mjs used. Caught by the
+// v3.94.0 pre-tag correctness review. What changed here is NaN screening, nothing else.
 const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
   { name: 'CLAUDE_MEM_UPS_TOP_MIN', defaultValue: 50, min: 0 });
 

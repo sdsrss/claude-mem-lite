@@ -1570,8 +1570,12 @@ server.registerTool(
 // ─── Tool: mem_export ────────────────────────────────────────────────────────
 
 // In-process test seam (mirrors handleRecentForTest, #8743): threads an injected db
-// through the SAME body the registered handler runs. NOTE: a `project` arg is still
-// resolved via resolveProject() against the MODULE db, not the injected one.
+// through the SAME body the registered handler runs — INCLUDING the project resolution,
+// which uses `runExport`'s own `db` parameter. (A note here used to say the resolution ran
+// against the module db instead; it was false before this release too. Corrected while
+// rewriting the block below, since a stale note three lines above a rewrite is the one a
+// reader trusts.) This seam bypasses the zod layer, which is why `runExport` screens a
+// non-string `project` itself rather than relying on `memExportSchema`.
 export async function handleExportForTest(db, args) {
   return runExport(db, args);
 }

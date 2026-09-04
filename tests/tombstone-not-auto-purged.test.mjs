@@ -9,8 +9,14 @@
 //     only, and importance is inert on a row every read path already filters out via
 //     liveObsFilterSql. Including or excluding tombstones there is a behavioural no-op,
 //     so they are deliberately NOT changed (and their forecasts stay untouched with them).
-//   cleanupBroken — hard-deletes content-free rows; a content-free tombstone carries
-//     nothing but its redirect, and "broken" is true of it either way. Left alone.
+//   cleanupBroken — hard-deletes rows with no title, no narrative and no lesson. Left
+//     alone, and this is an OPEN GAP, not a reasoned exemption: a tombstone reaching it
+//     loses its redirect exactly as purgeStale would. An earlier draft of this comment
+//     said "'broken' is true of a tombstone either way", which concedes the row carries
+//     the redirect and then deletes it anyway — the pre-tag correctness review refuted it.
+//     Not a regression (this has always been true), reachable population 0 today, and out
+//     of the scope the adjudication authorised. Three paths hard-delete an observation,
+//     two are guarded, this is the third.
 //   decayAndMarkIdle's MARK-IDLE arm + search-scoring.runIdleCleanup's mark pass —
 //     write COMPRESSED_PENDING_PURGE, which purgeStale then HARD-DELETES. That is the
 //     one path with teeth, because deleting the row destroys `superseded_by`.
@@ -25,17 +31,20 @@
 // cannot regenerate, while an explicit `delete` still can. A tombstone's redirect is the
 // same shape of value, and explicit `delete` still removes it.
 //
-// Exposure today is zero on all five ops, and that zero is NOT vacuous: all 19 live
-// tombstones pass the `compressed_into = 0` conjunct, and it is the LATER conjuncts that
-// exclude them — narrowly. One tombstone already sits at injection_count = 12 (past
-// demotePinned's threshold of 8, held out only by cited_count), and 12 are above
-// boostAccessed's access threshold, held out only by importance = 3. These are near
-// misses, not impossibilities, which is why the guard goes in before the first hit.
+// Exposure today is zero on all five ops, and that zero is NOT vacuous. Measured read-only
+// 2026-09-04T17:05Z: all 19 live tombstones pass the `compressed_into = 0` conjunct, and it
+// is the LATER conjuncts that exclude them — narrowly. One sits at injection_count = 12
+// (past demotePinned's threshold of 8, held out only by cited_count), and 13 are above
+// boostAccessed's access threshold, held out only by importance = 3, the lowest at exactly
+// access_count = 4. Near misses, not impossibilities — which is why the guard goes in
+// before the first hit. Stamped because they walk: hours earlier the same queries read 12.
 
 import { describe, it, expect } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
-import { decayAndMarkIdle, maintenanceStats, purgeStale } from '../lib/maintain-core.mjs';
+import {
+  decayAndMarkIdle, maintenanceStats, purgeStale, boostAccessed, demotePinned,
+} from '../lib/maintain-core.mjs';
 import { runIdleCleanup } from '../search-scoring.mjs';
 import { redirectSupersededIds } from '../lib/citation-tracker.mjs';
 
@@ -93,6 +102,33 @@ describe('decayAndMarkIdle: a tombstone is not auto-marked for purge', () => {
     const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
     expect(stats.stale, 'scan still forecasts the tombstone as stale').toBe(1);
     expect(decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY)).idleMarked).toBe(stats.stale);
+    db.close();
+  });
+
+  it('the forecast for boostable/pinned deliberately still counts tombstones', () => {
+    // The other half of scan-equals-execute, and it had no guard: the pre-tag
+    // test-effectiveness review added `superseded_at IS NULL` to BOTH of these CASE arms
+    // and 300 cases stayed green, with the forecast then under-reporting what execute does.
+    // `stale` is pinned by the case above; these two pin the opposite direction, so a
+    // future "let's finish the job" edit reds instead of silently breaking parity.
+    const db = freshDb();
+    const successor = add(db, { title: 'successor', importance: 3 });
+
+    // boostAccessed's predicate: access_count > 3 AND importance < 3.
+    const boostable = add(db, { title: 'retired but hot', importance: 2, accessCount: 9 });
+    retire(db, boostable, successor);
+    // demotePinned's: injection_count >= 8 AND cited_count = 0 AND importance > floor.
+    const pinned = add(db, { title: 'retired but pinned', importance: 3, injectionCount: 9 });
+    retire(db, pinned, successor);
+
+    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(stats.boostable, 'boostable stopped counting tombstones').toBe(1);
+    expect(stats.pinned, 'pinned stopped counting tombstones').toBe(1);
+
+    // …and execute agrees, which is what makes the forecast correct rather than merely
+    // unchanged. Asserting only the counters would pass if BOTH sides were changed.
+    expect(boostAccessed(db, ctx()), 'boostAccessed no longer touches tombstones').toBe(stats.boostable);
+    expect(demotePinned(db, ctx()), 'demotePinned no longer touches tombstones').toBe(stats.pinned);
     db.close();
   });
 

@@ -136,27 +136,68 @@ export function sweepFiles() {
 }
 
 /**
- * Blank out comments, preserving line count so reported line numbers stay true.
+ * Blank out comment LINES, preserving line count so reported line numbers stay true.
  *
- * Needed because lib/env-number.mjs's own docblock QUOTES the banned idiom in order
- * to explain it, and the first version of this sweep flagged that quote. A guard a
- * comment can trip is a guard someone will weaken; blanking comments is the fix that
- * keeps it strict on code. Deliberately conservative — only block comments and lines
- * whose first non-space characters are `//` — so a `//` inside a string literal
- * cannot make the scanner drop real code and go quietly blind.
+ * Needed because lib/env-number.mjs's own docblock QUOTES the banned idiom in order to
+ * explain it, and the first version of this sweep flagged that quote. A guard a comment
+ * can trip is a guard someone will weaken.
+ *
+ * PURELY LINE-BASED, and the reason is a measured failure. The first cut also ran
+ * `src.replace(/\/\*[\s\S]*?\*\//g, blank)` over raw source with no string awareness, so
+ * any slash-star INSIDE A STRING opened a phantom comment that swallowed everything to the
+ * next star-slash. That text is not exotic — it is glob patterns and URL replacements: the
+ * node_modules exclude glob in vitest.config.mjs, the `'$1://***'` replacement in
+ * secret-scrub.mjs (both contain a slash immediately followed by a star). It blanked
+ * **346 lines of real code across 11 files** (214 of them in scripts/audit-metrics.mjs),
+ * and the v3.94.0 pre-tag test-effectiveness review planted the banned idiom inside one of
+ * those spans: the suite stayed green and the sweep reported zero offenders. The same line
+ * in a clean file was caught, so the blinding was the whole cause.
+ *
+ * A line is a comment line iff its first non-space characters are `//`, `*` (a JSDoc
+ * continuation or closer) or `/*`. Consequence, stated because it is the trade: a block
+ * comment TRAILING real code on one line is no longer stripped, so the banned idiom
+ * written there would be a false positive. That fails loudly — somebody rewords a comment
+ * — which is the direction to err in. Blanking code silently does not.
  *
  * @param {string} src
  * @returns {string}
  */
 export function stripComments(src) {
-  const noBlocks = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
-  return noBlocks.split('\n').map((l) => (/^\s*\/\//.test(l) ? '' : l)).join('\n');
+  return src.split('\n').map((l) => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l)).join('\n');
 }
 
+/** An env read, either syntactically or by this repo's env-name convention. */
+const ENV_READ_RE = /(^|[^A-Za-z0-9_$])env\s*[.[]|process\.env|\bCLAUDE_MEM_[A-Z0-9_]+|\bMEM_[A-Z][A-Z0-9_]*/;
+
 /**
- * Numeric-parse calls whose ARGUMENT contains both an env read and a `||`/`??`
- * fallback. Scans to the matching close paren rather than regexing the whole call,
- * so a nested call (`Number(foo(a || b))`) is measured on its real argument text.
+ * The TERNARY form: `env.X !== undefined ? Number(env.X) : DEFAULT`. NaN-unsafe, and it is
+ * one of the two idioms v3.94.0 removed from lib/cite-back-hint.mjs, so it is a shape that
+ * gets written here rather than a hypothetical.
+ */
+const TERNARY_RES = [
+  /(?:process\.env|(?:^|[^A-Za-z0-9_$])env)\s*[.[][A-Za-z0-9_$.'"[\]]{1,60}\s*!==\s*undefined\s*\?[\s\S]{0,160}?\b(?:Number|parseInt|parseFloat)\s*\(/g,
+  /\b(?:CLAUDE_MEM_[A-Z0-9_]+|MEM_[A-Z][A-Z0-9_]*)\s*!==\s*undefined\s*\?[\s\S]{0,160}?\b(?:Number|parseInt|parseFloat)\s*\(/g,
+];
+
+/**
+ * Numeric parses of an env value that carry an inline default. THREE shapes, because the
+ * first cut covered one of them and the v3.94.0 pre-tag review reverted the other two in a
+ * shipped module with the whole tree still green:
+ *
+ *   Number(env.X || D)                          folded into the argument
+ *   Number(env.X) || D                          trailing — the shape that swallows a 0
+ *   env.X !== undefined ? Number(env.X) : D     ternary — NaN-unsafe
+ *
+ * Scans to the matching close paren rather than regexing the whole call, so a nested call
+ * (`Number(foo(a || b))`) is measured on its real argument text. The env read is matched
+ * syntactically OR by name convention (`CLAUDE_MEM_*` / `MEM_*`), which is what catches a
+ * destructured `const { CLAUDE_MEM_X } = process.env`.
+ *
+ * NOT caught, stated as the technique's ceiling rather than as a claim of completeness:
+ * an env object aliased to a name this repo does not use (`const e = process.env;
+ * Number(e.X || 3)`), and unary-plus coercion (`+(process.env.X || 3)`), which is not this
+ * codebase's style. A source guard cannot follow bindings; that is what the behavioural
+ * cases below are for.
  *
  * @param {string} raw File source.
  * @returns {Array<{line:number, text:string}>}
@@ -164,6 +205,8 @@ export function stripComments(src) {
 export function findFoldedEnvParses(raw) {
   const src = stripComments(raw);
   const hits = [];
+  const lineOf = (idx) => src.slice(0, idx).split('\n').length;
+
   const re = /\b(Number|parseInt|parseFloat)\s*\(/g;
   let m;
   while ((m = re.exec(src)) !== null) {
@@ -174,8 +217,27 @@ export function findFoldedEnvParses(raw) {
       else if (src[i] === ')') depth--;
     }
     const arg = src.slice(m.index + m[0].length, i - 1);
-    if (/(^|[^A-Za-z0-9_$])env\s*[.[]|process\.env/.test(arg) && /\|\||\?\?/.test(arg)) {
-      hits.push({ line: src.slice(0, m.index).split('\n').length, text: `${m[1]}(${arg})` });
+    if (!ENV_READ_RE.test(arg)) continue;
+    const folded = /\|\||\?\?/.test(arg);
+    const trailing = /^\s*(\|\||\?\?)/.test(src.slice(i));
+    if (folded || trailing) {
+      hits.push({ line: lineOf(m.index), text: `${m[1]}(${arg})${trailing ? ' || …' : ''}` });
+    }
+  }
+
+  // Deduped by where the match ENDS (always just past the `Number(`), because the two
+  // ternary patterns overlap by design: the syntactic one and the name-convention one both
+  // fire on `env.CLAUDE_MEM_X !== undefined ? Number(…)`. Reporting one offender twice is
+  // not a false positive, but it makes the sweep's output lie about how many there are.
+  const seen = new Set();
+  for (const tre of TERNARY_RES) {
+    tre.lastIndex = 0;
+    let t;
+    while ((t = tre.exec(src)) !== null) {
+      const end = t.index + t[0].length;
+      if (seen.has(end)) continue;
+      seen.add(end);
+      hits.push({ line: lineOf(t.index), text: t[0].replace(/\s+/g, ' ').slice(0, 90) });
     }
   }
   return hits;
@@ -192,6 +254,35 @@ describe('no numeric env parse may fold its own fallback into the parse', () => 
     expect(findFoldedEnvParses('const r = process.env.X; const a = Number(r);')).toHaveLength(0);
     expect(findFoldedEnvParses('const a = Number(x || 3);')).toHaveLength(0);
     expect(findFoldedEnvParses('const a = Number(process.env.X);')).toHaveLength(0);
+  });
+
+  it('catches the other two idioms — the ones a shipped module actually used', () => {
+    // The first cut caught only the folded form. The v3.94.0 pre-tag review reverted
+    // lib/cite-back-hint.mjs's three sites to these two shapes and the whole tree stayed
+    // green, so these are the shapes most likely to be written here again, not exotica.
+    expect(findFoldedEnvParses('const a = Number(process.env.CLAUDE_MEM_X) || 3;'),
+      'trailing-default form missed').toHaveLength(1);
+    expect(findFoldedEnvParses('const a = Number(env.CLAUDE_MEM_X) ?? 3;')).toHaveLength(1);
+    expect(findFoldedEnvParses(
+      'const a = env.CLAUDE_MEM_X !== undefined ? Number(env.CLAUDE_MEM_X) : 3;'),
+    'ternary form missed').toHaveLength(1);
+    expect(findFoldedEnvParses(
+      'const { CLAUDE_MEM_X } = process.env; const a = Number(CLAUDE_MEM_X || 3);'),
+    'destructured env missed — name-convention arm not firing').toHaveLength(1);
+  });
+
+  it('a code line containing a glob is not blanked by the comment stripper', () => {
+    // The regression that made the sweep blind over 346 lines: a glob and a URL-replacement
+    // string both contain a slash immediately followed by a star, and a regex-based
+    // block-comment stripper read that as an opener and swallowed to the next star-slash.
+    // Driven on the two real shapes, taken from vitest.config.mjs and secret-scrub.mjs.
+    const glob = "const exclude = ['**/node_modules/**'];\nconst a = Number(process.env.CLAUDE_MEM_X || 3);\n";
+    expect(stripComments(glob).split('\n')[0], 'a glob line was blanked').toContain('node_modules');
+    expect(findFoldedEnvParses(glob), 'offender after a glob line is invisible').toHaveLength(1);
+
+    const url = "const R = '$1://***';\nconst a = Number(process.env.CLAUDE_MEM_Y || 3);\n";
+    expect(stripComments(url).split('\n')[0]).toContain('***');
+    expect(findFoldedEnvParses(url)).toHaveLength(1);
   });
 
   it('ignores the idiom when it appears in a comment, but not one line below it', () => {
@@ -334,7 +425,17 @@ describe('a malformed numeric env must not silence the UserPromptSubmit face', (
       CLAUDE_MEM_UPS_FLOOR_REF_CORPUS: '1',
       CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT: '0',
       CLAUDE_MEM_UPS_MAX_RESULTS: '0',
+      // The POSITIVE premise, and it is load-bearing: every other assertion here is a
+      // `not.toContain`, which a process that died before parsing any env satisfies just
+      // as well as one that accepted all three. The pre-tag review proved it — with
+      // `process.exit(0)` at the top of the hook, four of the five e2e cases went red and
+      // this one stayed green. A garbage knob cannot be swapped for one of the three above
+      // (MAX_RESULTS='0' makes stdout empty by design, so stdout is no use here); a fourth
+      // one that MUST warn is what shows the process reached env parsing at all.
+      CLAUDE_MEM_UPS_BM25_MIN: 'zzz',
     }, 'env-low');
+    expect(stderr, 'the hook never reached env parsing — the negative assertions below are vacuous')
+      .toContain('CLAUDE_MEM_UPS_BM25_MIN');
     for (const knob of ['CLAUDE_MEM_UPS_FLOOR_REF_CORPUS', 'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT',
       'CLAUDE_MEM_UPS_MAX_RESULTS']) {
       expect(stderr, `${knob} rejected a value the code documents as meaningful`).not.toContain(knob);

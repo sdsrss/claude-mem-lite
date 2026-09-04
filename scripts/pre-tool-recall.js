@@ -39,6 +39,7 @@ import { neutralizeContextDelimiters } from '../format-utils.mjs';
 //
 // Import-free module, no runtime deps — nothing added to this script's load cost.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
+import { envNumber } from '../lib/env-number.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
 import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
 // Recall queries the SAVE-path project, so this MUST produce the same string as the
@@ -176,16 +177,21 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 // dominated by legacy rows.
 const SCOPE_FILTER_ON = ['1', 'on', 'true', 'yes'].includes(
   String(process.env.CLAUDE_MEM_SCOPE_FILTER || '').toLowerCase());
-const FILE_INTEL_MIN_TOKENS = Math.max(1,
-  parseInt(process.env.CLAUDE_MEM_FILE_INTEL_MIN_TOKENS, 10) || 800);
+// `min: 1` replaces the old `Math.max(1, parseInt(…) || 800)`. The wrapper made the
+// clamp look like the whole story, but the `|| 800` inside it swallowed an explicit 0 —
+// `CLAUDE_MEM_FILE_INTEL_MIN_TOKENS=0` (a user asking for no floor) landed on 800, not on
+// 1. Same class as the UPS knobs; caught by the widened tree sweep in
+// tests/env-number.test.mjs once it learned the trailing-default shape.
+const FILE_INTEL_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_FILE_INTEL_MIN_TOKENS,
+  { name: 'CLAUDE_MEM_FILE_INTEL_MIN_TOKENS', defaultValue: 800, min: 1, integer: true });
 // Feature ② (repeated-read guard): when the agent does a FULL re-read of a file
 // it already read this session and the file is unchanged (mtime), nudge it to
 // reuse context instead of re-slurping. Read-only; only fires above the floor and
 // never on offset/limit paging. Default ON; CLAUDE_MEM_REREAD_GUARD=0 disables.
 const REREAD_GUARD_OFF = ['0', 'off', 'false', 'no'].includes(
   String(process.env.CLAUDE_MEM_REREAD_GUARD || '').toLowerCase());
-const REREAD_MIN_TOKENS = Math.max(1,
-  parseInt(process.env.CLAUDE_MEM_REREAD_MIN_TOKENS, 10) || 600);
+const REREAD_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_REREAD_MIN_TOKENS,
+  { name: 'CLAUDE_MEM_REREAD_MIN_TOKENS', defaultValue: 600, min: 1, integer: true });
 // Stale-cooldown GC moved to hook.mjs::handleSessionStart — running it on every
 // Edit cost 15-30 disk stats per call. SessionStart fires once at session boot,
 // which is enough to keep RUNTIME_DIR from growing unbounded.

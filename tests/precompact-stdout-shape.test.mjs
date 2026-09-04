@@ -10,7 +10,7 @@
 //       v = results.filter(r => r.succeeded && !r.blocked && r.output.trim()).map(r => r.output.trim())
 //       return { newCustomInstructions: v.length ? v.join("\n\n") : undefined, … }
 //   • and `newCustomInstructions` is handed to the compaction summarizer as its
-//     `customInstructions` at four call sites.
+//     `customInstructions` — six read sites in the 2.1.260 bundle.
 //
 // So routing this through lib/hook-stdout.mjs would deliver `{"hookSpecificOutput":…}`
 // to the summarizer as its literal instruction text. The header of lib/hook-stdout.mjs
