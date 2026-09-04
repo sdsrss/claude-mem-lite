@@ -107,11 +107,16 @@ describe('auditSessionConsistency (v29)', () => {
 
   it('returns healthy=true on a clean DB', () => {
     const result = auditSessionConsistency(db);
+    // Exact shape on purpose — a new field cannot be added to this report without a
+    // deliberate edit here. `obs_importance_null` is audit P3-14's backstop; its own
+    // cases (including the one proving it can be non-zero) live in
+    // tests/importance-never-null.test.mjs.
     expect(result).toEqual({
       id_mix_uuid_shape: 0,
       id_mix_other: 0,
       missing_mem_id: 0,
       orphan_obs: 0,
+      obs_importance_null: 0,
       healthy: true,
     });
   });

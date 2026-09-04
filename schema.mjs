@@ -935,12 +935,25 @@ export function auditSessionConsistency(db, { graceMinutes = 5 } = {}) {
       SELECT 1 FROM sdk_sessions s WHERE s.memory_session_id = o.memory_session_id
     )
   `).get().c;
+  // Audit P3-14 backstop. `observations.importance` is INTEGER DEFAULT 1 but NULLABLE, and
+  // the two maintenance faces disagree about what NULL means: decayAndMarkIdle reads
+  // COALESCE(importance,1)=1 and queues the row for purge, runIdleCleanup reads a bare
+  // `importance <= 1` which is NULL and skips it. lib/observation-write.mjs now coerces
+  // nullish to 1 on both write cores, so no NEW row can be in that state; this counts the
+  // ones that got in another way — an old version, a hand-edited DB, a restored dump.
+  // Reported here rather than in its own command because `orphan_obs` above establishes
+  // that this audit already covers observation-level integrity, not only sessions.
+  const obsImportanceNull = db.prepare(
+    'SELECT COUNT(*) AS c FROM observations WHERE importance IS NULL'
+  ).get().c;
   return {
     id_mix_uuid_shape: idMixUuidShape,
     id_mix_other: idMixOther,
     missing_mem_id: missingMemId,
     orphan_obs: orphanObs,
-    healthy: idMixUuidShape === 0 && missingMemId === 0 && orphanObs === 0,
+    obs_importance_null: obsImportanceNull,
+    healthy: idMixUuidShape === 0 && missingMemId === 0 && orphanObs === 0
+      && obsImportanceNull === 0,
   };
 }
 

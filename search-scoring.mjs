@@ -316,7 +316,16 @@ export function runIdleCleanup(db) {
           -- the same guard-on-one-path shape the docblock below claims was consolidated.
           AND COALESCE(injection_count, 0) = 0
           AND type IN (${types})
-          AND created_at_epoch < ? AND COALESCE(compressed_into, 0) = 0
+          -- liveObsFilterSql, not compressed_into alone (P3-13), and the THIRD clause this
+          -- MCP twin has had to be brought level on (lesson guard, then injection_count in
+          -- audit P0-4, now this). A retired row's superseded_by column is the redirect the
+          -- Stop citation loop follows to credit a #NN naming a corrected memory; purgeStale
+          -- hard-deletes what this marks, and that destroys it. Same predicate, same
+          -- reasoning, as decayAndMarkIdle's mark-idle pass -- the two are twins and drift
+          -- here has cost data twice. The COMPRESSED_AUTO pass below deliberately does NOT
+          -- get it: -1 is not deletable by any path, so a tombstone reaching it loses nothing.
+          -- (No backticks: inside a JS template literal.)
+          AND created_at_epoch < ? AND ${liveObsFilterSql('')}
           -- Never auto-mark a lesson-bearing row for purge. This idle path is the
           -- MCP-server sibling of maintain-core.decayAndMarkIdle and must carry the
           -- SAME "lessons never auto-GC" guard; without it a lesson demoted to imp≤1
