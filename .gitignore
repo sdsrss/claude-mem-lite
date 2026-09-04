@@ -1,6 +1,12 @@
 /docs
 /CLAUDE.md
 /node_modules
+# Bumping a native dep on a FUSE filesystem can leave one behind: `npm ci` cannot rmdir
+# `better-sqlite3/build/Release` while a long-running process still has the old `.node`
+# open, so the tree gets renamed aside and reinstalled. What is left is a ~2 MB
+# `.fuse_hidden*` binary that only disappears when that process exits — untracked, at the
+# repo root, and one `git add -A` away from a release commit.
+/node_modules.stale-*
 /coverage
 /managed
 /resource-registry.db*

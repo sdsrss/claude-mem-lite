@@ -11,10 +11,34 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-    # Every lockfile change has to pass the `@emnapi` pruning guard in
-    # `scripts/pre-commit.sh`, which has regressed at least twice. A PR per package makes a
-    # failure attributable; a batched one makes it a bisect.
+    # 5 -> 3 (2026-09-04). The first run opened seven PRs at once — four npm plus three
+    # actions — which reads as a rate and was a one-time backlog: all seven were created
+    # inside a 68-second span (2026-09-03T19:29:12Z -> 19:30:20Z). That span is BETWEEN the
+    # PRs; the config itself landed as 25cd93d about fifty minutes earlier, and the first
+    # version of this comment conflated the two. Steady state is under three, so this caps
+    # a future burst without delaying anything today.
+    #
+    # Two changes deliberately NOT made, because each trades a real property for less
+    # noise. Grouping prod minor/patch would have cut those four PRs to one, and the
+    # `groups:` comment below is the standing argument against it (attributable failure
+    # over a bisect) — it applies with more force to prod than to dev. And moving to
+    # `interval: monthly` is per-ECOSYSTEM, not per-group: dependabot allows one entry
+    # per ecosystem+directory, so the only way to slow the dev tree is to slow the prod
+    # deps with it, which is backwards — the prod bumps are the ones that reach users
+    # through the release-time `npm shrinkwrap`.
+    open-pull-requests-limit: 3
+    # A PR per package makes a failure attributable; a batched one makes it a bisect.
+    #
+    # This comment used to open with "Every lockfile change has to pass the `@emnapi`
+    # pruning guard in `scripts/pre-commit.sh`". That is FALSE for the PRs this file
+    # creates, and 2026-09-04 demonstrated it: the grouped dev bump took `@emnapi` grep
+    # lines 13 -> 11, exactly the signature that guard exits 1 on — and nothing fired,
+    # because a dependabot PR is merged server-side and no local pre-commit hook runs.
+    # The guard covers hand-written lockfile changes only. That drop was benign on
+    # inspection (all three `@emnapi/*` entries survive; the two lost lines are references
+    # from upstream-removed wasm32-wasi bindings, not the single-platform prune signature),
+    # and the guard counts LINES rather than entries, so it would have false-positived here
+    # anyway. Reviewing a grouped lockfile diff by hand is the real control.
     groups:
       dev-minor-and-patch:
         dependency-type: development

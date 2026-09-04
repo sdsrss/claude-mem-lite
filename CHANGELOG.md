@@ -2,6 +2,164 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.95.0 — a dependency release, and the one advisory the updater we installed structurally cannot reach
+
+No source change. Seven dependabot PRs merged plus one hand-written floor, and the reason
+this gets a release note rather than a line is that **the dev-tree advisory count and the
+shipped-tree advisory count moved in completely different ways**, and reporting the first
+number without the second would be the more flattering of the two readings.
+
+Measured as a same-caliber A/B — `npm audit --package-lock-only`, both arms in one session
+against one advisory database, only the lockfile swapped:
+
+| | v3.94.0 | v3.95.0 |
+|---|---|---|
+| whole tree | **4 high (9 GHSAs)** | **0** |
+| `--omit=dev`, i.e. what a user installs | **0** | **0** |
+
+So: six GHSAs closed in the dev tree (nanoid ×2, postcss ×2, vite ×2) by the grouped dev
+bump, three more by the brace-expansion floor below — and **nothing that ships to users got
+safer, because nothing that ships to users was unsafe**. The prod blast radius is exactly
+three packages, counted by diffing the two lockfiles' package/version maps rather than by
+counting PRs: `@modelcontextprotocol/sdk` 1.29.0 → 1.30.0, `better-sqlite3` 12.10.0 →
+12.11.1, `zod` 4.4.3 → 4.5.4, with zero prod additions and zero removals, and no entry
+flipping its `dev` flag. Everything else lands in the dev tree: **96 dev entries changed
+version, plus 5 added and 6 removed, all of them `dev: true`**. Those three figures are
+stated separately on purpose — a first draft of this note gave a single "106", which is not
+what any caliber returns (the nearest are 104 and 107, depending on whether the three
+packages that merely moved from nested to hoisted are counted once or twice), and this
+repo's own rule is that a population is a required field on a number, not a caveat.
+
+Suite on this tree, run after the pre-tag review's repairs were in: **350 files / 5787
+tests green**, `eslint` clean. Unchanged from v3.94.0, which is the expected result for a
+release with no source and no test-file changes — but the native binding underneath it did
+change, which is why it was re-run rather than carried.
+
+**Upgrade note (one thing genuinely changes for every user):** `better-sqlite3` 12.11.1
+pins into `npm-shrinkwrap.json`, which `publish.yml` generates from the lockfile at release
+time, so this is the version every fresh install compiles or downloads. It carries SQLite
+**3.53.2** (was 3.53.1). The three sandbox phases — the only harness that drives a real
+`npm pack` → `npm i -g` → real MCP stdio — were re-run for exactly this reason and are
+green: **A 44/44 · B 45/45 · C 15/15**. Phase A is 44 and not the 43 in the previous
+record; that is a check `c3cf6c9` added after v3.90.0, attributed with
+`git log v3.90.0..HEAD -- tests/sandbox/phaseA-plugin.mjs` rather than by subtracting two
+counts.
+
+### fix: brace-expansion floored at 5.0.9 — a transitive advisory sits outside everything we built to catch it
+
+Three high GHSAs (`GHSA-3jxr-9vmj-r5cp` / `GHSA-mh99-v99m-4gvg` / `GHSA-rgw5-rvv9-x895`,
+DoS via unbounded `{}` expansion), reached as `eslint@10.9.1 → minimatch@10.2.5 →
+brace-expansion`.
+
+Both of this repo's dependency safety nets have a hole in exactly this shape, and the hole
+is structural rather than a misconfiguration: `.github/dependabot.yml` drives *version*
+updates, which track **direct** dependencies only — a transitive package with a published
+fix is the job of Dependabot *security* updates, a repository setting that is not on. And
+CI's audit gate runs `npm audit --omit=dev`, correctly, because a dev advisory must not
+block a release — so it never saw this either. The dependabot config's own comment says it
+exists because dev advisories were "visible only to someone who happened to run `npm audit`
+WITHOUT `--omit=dev`". This one sat just outside the half that closed.
+
+Fixed with an `overrides` floor, joining the five already in that block. Worth stating
+plainly because it changes what a future reader should conclude: **`npm update` would also
+have worked today** — minimatch asks for `^5.0.5` and 5.0.9 is inside it, so only the
+lockfile pin held it back. The floor is preferred because it survives a future resolution
+walking back down, not because the range forbade the fix.
+
+The lockfile name-set diff for this change is exactly one line
+(`brace-expansion@5.0.6 → 5.0.9`): 338 entries on both sides, `@emnapi` lines 11 on both
+sides, so `scripts/pre-commit.sh`'s pruning guard has nothing to catch **in this commit**.
+That is a consequence of using `npm install --package-lock-only`, which lets the ideal tree
+write the lock instead of this linux-x64 machine's installed tree.
+
+The qualifier matters, because across the round as a whole that guard's premise failed:
+the grouped dev bump took `@emnapi` grep lines **13 → 11**, which is precisely the
+signature it exits 1 on — and it never ran, because a dependabot PR is merged server-side
+and no local pre-commit hook fires. The drop was benign (all three `@emnapi/*` entries
+survive; the two lost lines are references from upstream-removed wasm32-wasi bindings, not
+the single-platform prune signature), and the guard counts lines rather than entries, so it
+would have false-positived here regardless. `.github/dependabot.yml` no longer claims
+otherwise.
+
+**A trap this round produced, recorded because all three of its symptoms look like
+confirmation:** after the override, `npm install` reported `found 0 vulnerabilities`,
+`npm ls brace-expansion --all` reported `5.0.9`, and the lockfile said `5.0.9` — while
+`node_modules/brace-expansion/package.json` on disk still said **5.0.6**. The cause is the
+command that was used to write the lock: `npm install --package-lock-only`, chosen so the
+ideal tree rather than this linux-x64 machine's installed tree writes it, **does not touch
+`node_modules` by definition**. `npm ls` then answers from the tree npm computed, not the
+one that exists. `npm ci` is what moved the bytes.
+
+The pre-tag review refuted a stronger sentence this note first carried — "only `npm ci`
+moved the bytes", which reads as a claim about `npm install` in general. On two minimal
+`minimatch@10.2.5` projects on the same npm 12.0.1, a full `npm install` after the override
+did update both the lock and the disk to 5.0.9, while `--package-lock-only` reproduced all
+three misleading confirmations at once. The practical rule survives and the mechanism did
+not: verify a dependency fix by reading the installed `package.json`, never by reading
+`npm ls`.
+
+### chore: two GitHub Actions majors, and the half of their risk that could be checked without a tag
+
+`actions/checkout` v5.1.0 → v7.0.1, `actions/upload-artifact` v6.0.0 → v7.0.1,
+`softprops/action-gh-release` v3.0.0 → v3.0.3. All three pins re-resolved against the
+upstream repositories with `git ls-remote` rather than trusted from the trailing comment —
+each SHA is the commit its claimed tag points to today (`action-gh-release`'s is an
+annotated tag, dereferenced with `^{}`). That rules out a comment/SHA mismatch; it is not a
+claim that the commits are benign.
+
+checkout's two majors are both hardening: v6.0.0 persists credentials to a separate file
+instead of `.git/config`, and v7.0.0 blocks checking out a fork PR under
+`pull_request_target` / `workflow_run`. The second is free here and stays free — grep
+confirms no workflow in this repo uses either trigger; `ci.yml` runs on `pull_request`.
+
+Input schemas checked against the pinned versions rather than assumed: `checkout` is
+invoked with **no inputs at all** at all ten call sites, `upload-artifact` v7 still declares
+`name` and `path`, and `action-gh-release` v3.0.3 still declares `generate_release_notes`
+and `files`, still documents `fail_on_unmatched_files` as defaulting to false (the comment
+in `publish.yml` depends on that), and still leaves `make_latest` to the GitHub API default
+— which matters because `hook-update.mjs:243` asks `releases/latest` first. It is not the
+only path: `:259` falls back to the Tags API, so a `make_latest` regression would degrade
+rather than break auto-update. Stated because "resolves through `releases/latest`" reads as
+a single point of failure and is not one.
+
+**What this could not verify, stated rather than left implied:** `publish.yml` runs only on
+a tag push, so its two checkout call sites and the release action itself have never
+executed at these versions. This tag is their first run.
+
+### chore: dependabot npm PR limit 5 → 3
+
+The first run opened seven PRs 68 seconds apart end to end
+(`2026-09-03T19:29:12Z` → `19:30:20Z`). That is a backlog, not a rate — the config had
+landed as `25cd93d` about fifty minutes earlier, and a first draft of this line
+misattributed the 68-second span as the delay from that commit. The cap costs nothing at a
+steady state under three. Two changes
+were deliberately not made and the config now says why: grouping prod minor/patch would
+contradict the standing "attributable failure over a bisect" argument already written
+there, and `interval: monthly` is per-ecosystem, so slowing the dev tree would slow the
+prod deps with it — backwards, since the prod bumps are the ones that reach users through
+the shrinkwrap.
+
+### note on this release's review
+
+One independent pre-tag lens ran, a claims-verification pass, and it is the reason four of
+the paragraphs above read differently than they first did: the "106", the `npm install`
+mechanism, the eighty-seconds attribution, and the unqualified `@emnapi` sentence were all
+its findings, plus an untracked 2.1 MB `.fuse_hidden` leftover sitting one `git add -A`
+away from this commit — now covered by `/node_modules.stale-*` in `.gitignore`. It returned
+**zero BLOCKERs** and confirmed twenty-two separate claims by re-deriving them, including
+every figure in the audit table and all three action SHA-to-tag mappings.
+
+**A correctness lens did not run**, so nothing independently re-read the diff for
+behavioural risk. On a release with no source change that gap is small, and it is stated
+rather than left to be inferred.
+
+### unchanged, and re-verified because a patch release of SQLite would be the obvious place for it to change
+
+`SELECT 1 FROM x_fts WHERE rowid = ? AND x_fts MATCH ?` still drops the rowid constraint on
+SQLite 3.53.2 — probed with a two-row table where only rowid 2 matches, and the query
+returns a row for rowid 1. The rule this repo derived from it (pull each term's rowid set
+and test membership in memory) stands.
+
 ## v3.94.0 — six silent degradations, and three claims the code was making that were false
 
 Six defects from the standing audit backlog, plus the two semantic adjudications it had
