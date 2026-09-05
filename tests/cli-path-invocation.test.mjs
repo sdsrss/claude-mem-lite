@@ -53,10 +53,28 @@ describe('LLM-visible CLI hints advertise the resolvable path, not the tilde pat
     }
   });
 
-  test('adopt detail doc (persisted verbatim into the user MEMORY.md)', () => {
+  // RESTATED for audit R7 P2-1 (was: `expect(doc).toContain(CLI_PATH)`).
+  //
+  // This case used to demand the ABSOLUTE path in the detail doc, on the v3.1.1 reasoning
+  // that an LLM-facing hint must name a command that actually resolves. That reasoning is
+  // intact; the mechanism changed. The doc is written into <cwd>/.claude/ — the user's repo,
+  // commonly committed — so an absolute, version-pinned path made the file churn on every
+  // release and handed teammates a $HOME path that exists on no other machine. The doc now
+  // names the bare command and points at the MCP instructions, which is the runtime-resolved
+  // surface that DOES carry the absolute path (asserted two cases up, and it must keep doing
+  // so or the pointer dangles).
+  //
+  // Title also corrected: since v3.13 the doc lands in <cwd>/.claude/plugin_<slug>.md, not
+  // in the memory-dir MEMORY.md.
+  test('adopt detail doc (written into the user project at .claude/plugin_<slug>.md)', () => {
     const doc = getDetailDoc();
     expect(doc).not.toContain(BROKEN);
-    expect(doc).toContain(CLI_PATH);
+    // No absolute path of ANY shape — not this install's, not a generic one.
+    expect(doc).not.toContain(CLI_PATH);
+    expect(doc).not.toMatch(/node\s+\/\S*cli\.mjs/);
+    // …but the reader must still be able to reach a resolvable command.
+    expect(doc).toContain('claude-mem-lite');
+    expect(doc, 'doc must point at the surface that carries the absolute path').toContain('instructions');
     // routing-cost guidance present: deferred mem_* → CLI is fewer round-trips
     expect(doc).toContain('ToolSearch');
     expect(doc).toContain('round-trip');
@@ -119,6 +137,14 @@ describe('steering-surface consistency + injection budget', () => {
   //
   // Fix: budget the CONTENT by normalising every CLI_PATH occurrence to one fixed
   // reference install path, so the measured number is the same on every machine.
+  //
+  // SUPERSEDED IN PART by audit R7 P2-1: the detail doc no longer embeds CLI_PATH at
+  // all, so the surface that reddened FIRST under a deep prefix can no longer redden
+  // on path length — the D#185 hazard now applies only to the two instructions
+  // surfaces. Normalisation stays for those. The doc keeps its budget (it is still
+  // written into a user file) but its number is now install-independent by
+  // construction rather than by normalisation, which is why the self-check below
+  // asserts ZERO occurrences for it instead of a floor.
   const REF_CLI_PATH = '/usr/lib/node_modules/claude-mem-lite/cli.mjs';
   const contentLen = (s) => s.split(CLI_PATH).join(REF_CLI_PATH).length;
 
@@ -133,9 +159,11 @@ describe('steering-surface consistency + injection budget', () => {
   // degrades back to a raw-length budget without failing anything, so pin that the
   // surfaces which are SUPPOSED to embed the path still do, and that the budget is
   // genuinely independent of how long that path is.
+  // R7 P2-1: the two surfaces that are BUILT at runtime and never written to the user's
+  // repo must still embed the path (or normalisation is silently a no-op and the budget
+  // degrades to a raw-length budget). The detail doc is asserted the other way, below.
   test('the injection budget is decoupled from this install path length', () => {
     for (const [name, text, minOcc] of [
-      ['detail doc', getDetailDoc(), 10],
       ['instructions full', buildServerInstructions(false), 3],
       ['instructions BASE', buildServerInstructions(true), 3],
     ]) {
@@ -149,6 +177,22 @@ describe('steering-surface consistency + injection budget', () => {
         deepInstall.split(`/very/deep${CLI_PATH}`).join(REF_CLI_PATH).length,
         `${name} budget still tracks install-path length`,
       ).toBe(contentLen(text));
+    }
+  });
+
+  // R7 P2-1, the other half: surfaces PERSISTED into the user's project tree must embed
+  // the install path ZERO times, so the bytes that land in their repo are identical on
+  // every machine and across every plugin version. Stated as a length identity rather
+  // than only an occurrence count, so a path smuggled in by some other spelling
+  // (a different variable, a hand-typed prefix) still trips it.
+  test('files written into the user project are byte-identical across installs', () => {
+    for (const [name, text] of [
+      ['CLAUDE.md block', buildClaudeMdBlock()],
+      ['detail doc', getDetailDoc()],
+    ]) {
+      expect(text.split(CLI_PATH).length - 1, `${name} embeds the absolute CLI path`).toBe(0);
+      expect(contentLen(text), `${name} length moves with the install prefix`).toBe(text.length);
+      expect(text, `${name} embeds an absolute node invocation`).not.toMatch(/node\s+\/\S*cli\.mjs/);
     }
   });
 });

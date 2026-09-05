@@ -16,7 +16,7 @@
 //
 // See docs/CLAUDE-MD-STEERING-PLAN.md for rationale + migration.
 
-import { readFileSync, existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -259,7 +259,21 @@ export function removeManaged(cwd, slug) {
       // Delete the now-empty file rather than writing a 0-byte CLAUDE.md, so
       // unadopt fully restores the pre-adopt state — mirrors the emptied-.claude/
       // cleanup below ("unadopt leaves no trace").
-      if (raw.trim() === '') {
+      //
+      // UNLESS the path is a SYMLINK (audit R7 P2-2). writeManaged reaches this file
+      // through atomicWriteFileSync, which lstats and writes THROUGH a link on purpose —
+      // that is the audit 2026-09-02 P0-5 fix, for CLAUDE.md symlinked into a dotfiles
+      // repo (chezmoi/stow/yadm). Unlinking here would delete the LINK and orphan the
+      // target, i.e. undo that invariant on the removal side. Empty it through the link
+      // instead: a 0-byte file is the lesser evil against silently rearranging the
+      // user's dotfiles. Only a regular file we can prove is ours to remove gets removed.
+      let isLink = false;
+      try {
+        isLink = lstatSync(p).isSymbolicLink();
+      } catch {
+        /* raced away → fall through to the unlink attempt, which will no-op */
+      }
+      if (raw.trim() === '' && !isLink) {
         try {
           unlinkSync(p);
         } catch {

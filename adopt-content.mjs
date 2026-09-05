@@ -17,10 +17,20 @@
 // memory-dir MEMORY.md sentinel also carried `v1`, but it lives in a different file
 // and is migrated away (claudemd.migrateLegacyMemoryDir), so there is no collision.
 
-import { CLI_INVOKE } from './cli-path.mjs';
-
 export const PLUGIN_SLUG = 'claude-mem-lite';
 export const CURRENT_SENTINEL_VERSION = 'v1';
+
+// The CLI name as written into the user's project tree — deliberately NOT `CLI_INVOKE`
+// (audit R7 P2-1). CLI_INVOKE resolves to an absolute, VERSION-PINNED path
+// (`node /home/<user>/.claude/plugins/cache/sdsrss/claude-mem-lite/<version>/cli.mjs`), and
+// both generators below write files the user may commit: the managed block lands in
+// <cwd>/CLAUDE.md and the detail doc in <cwd>/.claude/, which is the standard home for
+// project-scoped settings/commands/agents and is commonly tracked. Embedding the resolved
+// path there rewrote the file on every plugin release (needsRefresh sees doc drift) and gave
+// teammates a $HOME path that exists on no other machine. This module's output must be
+// byte-identical across installs; the resolved path belongs only on runtime-generated
+// surfaces that never touch the repo (MCP `instructions`, hook recovery lines).
+const CLI = 'claude-mem-lite';
 
 /**
  * The concise managed block injected into <cwd>/CLAUDE.md (between the
@@ -32,8 +42,8 @@ export const CURRENT_SENTINEL_VERSION = 'v1';
 export function buildClaudeMdBlock() {
   // Intentionally machine-stable: MCP tool names only, NO CLI_INVOKE (that
   // resolves to an absolute path that differs per install — it would make this
-  // committed/refreshed block churn across machines). The robust CLI table lives
-  // in the detail doc (.claude/, gitignored).
+  // committed/refreshed block churn across machines). The detail doc holds the
+  // full CLI table and, since R7 P2-1, is held to the same standard — see CLI above.
   return `## claude-mem-lite — persistent memory
 
 PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Write. The calls worth making proactively:
@@ -46,7 +56,7 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
 | Looking up past work / history | \`mem_search "keywords"\` · \`mem_recent\` · \`mem_timeline\` |
 
-Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these \`mem_*\` tools are deferred behind ToolSearch this session, the Bash CLI (exact path in the detail doc) is one call vs two (ToolSearch + call).
+Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these \`mem_*\` tools are deferred behind ToolSearch this session, the Bash CLI \`${CLI}\` is one call vs two (ToolSearch + call); the MCP server instructions carry the absolute path to use when it is not on PATH.
 
 Full tool + CLI tables, citation/decay rules, and save discipline → \`.claude/plugin_claude_mem_lite.md\``;
 }
@@ -60,9 +70,15 @@ Full tool + CLI tables, citation/decay rules, and save discipline → \`.claude/
 export function getDetailDoc() {
   return `# claude-mem-lite 插件契约（完整）
 
-> 由 \`${CLI_INVOKE} adopt\` 生成、随版本自动刷新；卸载用 \`${CLI_INVOKE} unadopt\`。
+> 由 \`${CLI} adopt\` 生成、随版本自动刷新；卸载用 \`${CLI} unadopt\`。
 > 精炼触发表在项目 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里；本文件是其展开。
 > 设计背景见 docs/CLAUDE-MD-STEERING-PLAN.md。
+
+> **本文下方所有命令写作 \`${CLI} <cmd>\`。** 该名字只在全局装过
+> （\`npm i -g claude-mem-lite\`）时才在 PATH 上；否则用等价的
+> \`node <插件根目录>/cli.mjs <cmd>\`，绝对路径见本会话 MCP server 的 instructions。
+> 本文件**刻意不写死绝对路径**：它随安装位置与版本变化，而本文件可能被提交进仓库，
+> 写死会导致每次升版都改动该文件、且队友拿到的是只在别人机器上存在的路径。
 
 ## 被动 recall（hook 已自动跑，你只需采纳）
 
@@ -108,7 +124,7 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
   lesson_learned="<一行根因+一行修法>", importance=2)\`。判据：未来改同一文件的会话看到这条能否避坑？能→存。
 - **非显然架构决策后**（≠ 改名/挪代码）调 \`mem_save(type="decision",
   lesson_learned="<约束+为何这样选+牺牲了什么>")\`。\`decision\` 命中率显著高于 \`change\`（当前遥测约
-  3:1，会漂移——用 \`${CLI_INVOKE} stats\` 实测，别套固定倍数）；方向稳健：一条好 decision 抵数条 change。
+  3:1，会漂移——用 \`${CLI} stats\` 实测，别套固定倍数）；方向稳健：一条好 decision 抵数条 change。
   别注水：decision 只留给真权衡，不是风格选择。
 - **推迟到未来会话**（≠ 在途 todo、≠ 本 PR 跟进）调
   \`mem_defer({title, priority:1|2|3, detail:"<约束+为何推迟>"})\`。
@@ -127,45 +143,45 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 
 | 场景 | CLI |
 |------|-----|
-| 清理过期记忆 | \`${CLI_INVOKE} maintain scan --ops purge_stale\` → \`maintain execute --ops purge_stale --confirm\`（删行必须 \`--confirm\`） |
-| 深度优化（Haiku） | \`${CLI_INVOKE} optimize\`（默认 preview；\`--run\` 执行，\`--task re-enrich,normalize,cluster-merge,smart-compress\`） |
-| 压缩旧条目 | \`${CLI_INVOKE} compress\`（默认 preview；\`--execute\` 执行，\`--age-days N\`） |
-| FTS5 索引检查 / 重建 | \`${CLI_INVOKE} fts-check <check\\|rebuild>\` |
-| tier 分组浏览 | \`${CLI_INVOKE} browse [--tier active]\` |
-| 导出 JSON/JSONL | \`${CLI_INVOKE} export [--format jsonl]\` |
-| 统计总量 / 健康 | \`${CLI_INVOKE} stats [--days 30]\` |
-| 删除 / 更新某条 | \`${CLI_INVOKE} delete <id>[,<id>]\` · \`${CLI_INVOKE} update <id> [--title ...]\` |
-| skill-agent registry | \`${CLI_INVOKE} registry <list\\|search\\|import>\` |
+| 清理过期记忆 | \`${CLI} maintain scan --ops purge_stale\` → \`maintain execute --ops purge_stale --confirm\`（删行必须 \`--confirm\`） |
+| 深度优化（Haiku） | \`${CLI} optimize\`（默认 preview；\`--run\` 执行，\`--task re-enrich,normalize,cluster-merge,smart-compress\`） |
+| 压缩旧条目 | \`${CLI} compress\`（默认 preview；\`--execute\` 执行，\`--age-days N\`） |
+| FTS5 索引检查 / 重建 | \`${CLI} fts-check <check\\|rebuild>\` |
+| tier 分组浏览 | \`${CLI} browse [--tier active]\` |
+| 导出 JSON/JSONL | \`${CLI} export [--format jsonl]\` |
+| 统计总量 / 健康 | \`${CLI} stats [--days 30]\` |
+| 删除 / 更新某条 | \`${CLI} delete <id>[,<id>]\` · \`${CLI} update <id> [--title ...]\` |
+| skill-agent registry | \`${CLI} registry <list\\|search\\|import>\` |
 
 ## CLI 速查（常用检索）
 
 | 命令 | 用途 |
 |------|------|
-| \`${CLI_INVOKE} search "query"\` | FTS5 全文搜索（默认排除低信号 \`Modified X\` 等；加 \`--include-noise\` 找文件变更记录） |
-| \`${CLI_INVOKE} search "err" --type bugfix\` | 按类型过滤 |
-| \`${CLI_INVOKE} recall "file.mjs"\` | 文件相关记忆 |
-| \`${CLI_INVOKE} recent 5\` | 最近 5 条 |
-| \`${CLI_INVOKE} get 42,43\` | 按 ID 展开 |
-| \`${CLI_INVOKE} timeline --anchor 42\` | 时间线上下文 |
+| \`${CLI} search "query"\` | FTS5 全文搜索（默认排除低信号 \`Modified X\` 等；加 \`--include-noise\` 找文件变更记录） |
+| \`${CLI} search "err" --type bugfix\` | 按类型过滤 |
+| \`${CLI} recall "file.mjs"\` | 文件相关记忆 |
+| \`${CLI} recent 5\` | 最近 5 条 |
+| \`${CLI} get 42,43\` | 按 ID 展开 |
+| \`${CLI} timeline --anchor 42\` | 时间线上下文 |
 
 ## CLI 速查（写入 / 记录）
 
-写入类工具多从 \`tools/list\` 隐藏 → 只能走 CLI。下表带**硬上限**（超限直接报错，别撞了才知道）；完整 flag 见 \`${CLI_INVOKE} help\`。
+写入类工具多从 \`tools/list\` 隐藏 → 只能走 CLI。下表带**硬上限**（超限直接报错，别撞了才知道）；完整 flag 见 \`${CLI} help\`。
 
 | 命令 | 签名（含硬约束） |
 |------|------------------|
-| 存观测 | \`${CLI_INVOKE} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail |
-| 推迟工作 | \`${CLI_INVOKE} defer add "<title ≤200>" [--priority 1\\|2\\|3] [--detail "<约束+为何推迟>"]\` — 标题 >200 挪到 \`--detail\` |
-| 改某条 | \`${CLI_INVOKE} update <id> [--lesson "<≤500>"] [--title T] [--type T] [--importance 1-3] [--narrative T] [--concepts "a b c"]\` |
-| 事件日志 | \`${CLI_INVOKE} activity save --type <bugfix\\|lesson\\|bug\\|discovery\\|refactor\\|feature\\|observation\\|decision> "<title>" [--body T] [--files f1,f2]\` |
+| 存观测 | \`${CLI} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail |
+| 推迟工作 | \`${CLI} defer add "<title ≤200>" [--priority 1\\|2\\|3] [--detail "<约束+为何推迟>"]\` — 标题 >200 挪到 \`--detail\` |
+| 改某条 | \`${CLI} update <id> [--lesson "<≤500>"] [--title T] [--type T] [--importance 1-3] [--narrative T] [--concepts "a b c"]\` |
+| 事件日志 | \`${CLI} activity save --type <bugfix\\|lesson\\|bug\\|discovery\\|refactor\\|feature\\|observation\\|decision> "<title>" [--body T] [--files f1,f2]\` |
 
 \`maintain\` / \`optimize\` / \`compress\` 见上方「维护 / 管理类工具」；\`maintain --ops\` 取值 \`cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum\`，省略时默认 \`cleanup,decay,boost,demote_pinned\`（顺序有意义：demote_pinned 必须在 boost 之后）；\`--retain-days\` ∈ [7,365]。
 
 ## 卸载 / 关闭
 
-- \`${CLI_INVOKE} unadopt\`：移除 CLAUDE.md 托管块 + \`.claude/plugin_claude_mem_lite.md\`；
+- \`${CLI} unadopt\`：移除 CLAUDE.md 托管块 + \`.claude/plugin_claude_mem_lite.md\`；
   CLAUDE.md 里你自己的内容（sentinel 之外）不动。
-- 本项目永久关闭自动 adopt：\`${CLI_INVOKE} adopt --disable\`（\`--enable\` 重新武装）。
+- 本项目永久关闭自动 adopt：\`${CLI} adopt --disable\`（\`--enable\` 重新武装）。
 - 全局禁用自动 adopt：环境变量 \`MEM_NO_AUTO_ADOPT=1\`。
 - 关闭版本漂移自动刷新（保留你对托管块的手改）：\`CLAUDE_MEM_NO_TEMPLATE_REFRESH=1\`。
 `;
