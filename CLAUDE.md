@@ -82,10 +82,12 @@ from the DB — CLAUDE.md is no longer auto-updated (pre-v2.30 left a stale snap
 
 ### Where new code goes
 
-The four big files — `mem-cli.mjs` 3300, `install.mjs` 2697, `hook.mjs` 2615, `server.mjs`
-1982 (measured 2026-09-05) — are **routers and faces, not a split left half-finished**.
+The four big files — `mem-cli.mjs` 4156, `install.mjs` 3203, `hook.mjs` 3187, `server.mjs`
+2413 (measured 2026-09-05 at `a8d7dd1`, **after** the `36f8c0f` reformat; they were 3300 /
+2697 / 2615 / 1982 before it, same code) — are **routers and faces, not a split left
+half-finished**.
 v2.41 moved four handlers into `cli/` and stopped; the direction that took hold since has
-produced **83 modules under `lib/`**: logic two faces share (CLI and MCP, or two hook
+produced **87 modules under `lib/`**: logic two faces share (CLI and MCP, or two hook
 events) gets extracted into a `lib/*-core.mjs`, and the big file keeps only argument
 parsing, rendering, and wiring.
 
@@ -170,9 +172,22 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **350 files / 5825** (5824 passed, 1 skipped) | v3.96.0 release tree, 2026-09-05 |
-| Knip | **52** unused exports, **0** unused files | v3.96.0 release tree, 2026-09-05, primary working tree |
-| Coverage | statements **84.34%** · branches **78.87%** · functions **89.25%** · lines **87.67%** | v3.96.0 release tree, 2026-09-05 (Δ vs v3.95.1: −0.03 / −0.01 / +0.03 / −0.05 pp — the release's new code is split across `recall-core.mjs`, inside the gate's file set, and `plugin-cache-guard.mjs` / `install.mjs` / `mem-cli.mjs` / `cli.mjs`, outside it) |
+| Tests | **351 files / 5844** (5843 passed, 1 skipped) | `audit/2026-09-05-round4` @ `a8d7dd1`, 2026-09-05 |
+| Knip | **50** unused exports, **0** unused files | same tree, primary working tree (was 52 at v3.96.0; −1 `install-metadata.mjs:MARKETING_ON_REQUEST` now imported by a test, −1 `_extractResponseFromError` deleted as dead) |
+| Coverage | statements **84.34%** · branches **78.88%** · functions **89.26%** · lines **85.44%** | same tree. Gate (80 / 74 / 84 / 83) passes. |
+
+**The 2026-09-05 whole-tree reformat (`36f8c0f`) changed the CALIBER of four
+line-denominated metrics. Do not diff any of them across it** — prettier split one-line
+statements, so the denominators grew while no code was added or removed:
+
+| Metric | before `36f8c0f` | at `a8d7dd1` | why it is not a regression |
+|---|---|---|---|
+| Source lines | 52,356 | **61,311** | same 167 files |
+| Functions > 50 lines | 140 | **179** | same ~2,045 functions; the threshold is in LINES |
+| Duplicate rate any / cross-file | 1.88% / 0.29% | **5.15% / 2.35%** | uniform formatting makes far more 6-line windows compare equal |
+| Coverage **lines** | 87.67% | **85.44%** | statements (84.34) and functions (89.26) did not move — only the line denominator did |
+
+Re-stamp from `a8d7dd1`, never from an earlier figure.
 
 **Knip measurement contract** (full version + name-set history in
 `docs/measurement/baselines.md`):

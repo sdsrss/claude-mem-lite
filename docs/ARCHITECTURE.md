@@ -1,10 +1,10 @@
 # claude-mem-lite — Architecture
 
-Generated 2026-09-05 against v3.96.0. §3 and §4 regenerated at `f9e4a8c`, the head of
-`audit/2026-09-05-round3` — **after** that round reformatted the whole tree (P1-3) and
-moved edge extraction onto the AST (P2-9). Both changes move numbers: every LINE COUNT in
-§4 is post-reformat and is not comparable with a figure quoted before `36f8c0f`, and §3's
-edge counts supersede any earlier quote. §1/§2/§5 hand-maintained, last re-read on round 3.
+Generated 2026-09-05 against v3.96.0. §3 and §4 regenerated at `a8d7dd1`, the head of
+`audit/2026-09-05-round4`. Two earlier changes still govern how to read them: the whole-tree
+reformat (`36f8c0f`) means **every LINE COUNT in §4 is post-reformat and must not be compared
+with a figure quoted before it**, and edge extraction moved onto the AST (P2-9), so §3's edge
+counts supersede any earlier quote. §1/§2/§5 hand-maintained, last re-read on round 4.
 
 Sections 3 and 4 are **tool output** — regenerate them rather than editing by hand:
 
@@ -278,12 +278,13 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 
 
 
+
 ### Entry points
 
 | Module | Lines | Responsibility | Public interface (exports; `*` = re-export) |
 |---|---|---|---|
 | `cli.mjs` | 133 | (no header comment) | (entry — no exports) |
-| `hook.mjs` | 3134 | Hook v2 — Cognitive memory architecture Selective encoding, episodic batching, error-triggered recall Hooks (fast <100ms): post-tool-use,… | (entry — no exports) |
+| `hook.mjs` | 3187 | Hook v2 — Cognitive memory architecture Selective encoding, episodic batching, error-triggered recall Hooks (fast <100ms): post-tool-use,… | (entry — no exports) |
 | `install.mjs` | 3203 | Installer — Smart install/uninstall/status/doctor | HOOK_SCRIPT_FILES, probeBetterSqlite3Binding, ensureBetterSqlite3Working, copyHookScripts(), migrateLegacyClaudeMemData(), bumpJsonField(), patchClaudeMdVersion() … (+10) |
 | `scripts/hook-launcher.mjs` | 435 | Self-healing wrapper for Node hook entry points. Why: pre-v2.84 a stale-manifest bug in hook-update.mjs could leave the install with a hook.mjs that… | (entry — no exports) |
 | `scripts/launch-preflight.mjs` | 83 | Detect incomplete installs at MCP server launch. Why: issue #15 — published v2.53.0 npm tarball contains all files, but some users end up with a… | detectMissingImports(), resolveLaunchEntry() |
@@ -489,15 +490,17 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 1. `scripts/user-prompt-search.js:main` — strip `<private>`, mem-override short-circuit (`lib/mem-override.mjs`), deterministic `D#N` deferred injection.
 2. Skip gates (`shouldSkip`, length, follow-up); FTS search over observations (`lib/inject-search-core.mjs`, `nlp.mjs`) → dedup against the session marker (`lib/injected-ids.mjs`) → emit `<memory-context>`, bump `injection_count`.
 3. Shadow skill recommendation (`registry-recommend.mjs:recommendSkill`) logged, not injected.
-4. `hook.mjs:handleUserPrompt` — insert the prompt row (atomic counter), inject the cross-session handoff for the first 3 prompts (`renderHandoffInjection`).
-5. Semantic memory injection (`hook-memory.mjs:searchRelevantMemories`) excluding ids already injected by step 2 (marker file is the cross-process contract).
+4. `hook.mjs:handleUserPrompt` → `recordUserPromptRow` (prompt row + atomic counter, returns the CC session id), then `injectHandoffIfEarly` for the first 3 prompts of that CC session (`renderHandoffInjection`).
+5. `hook.mjs:injectSemanticMemory` → `hook-memory.mjs:searchRelevantMemories`, excluding ids already injected by step 2 (marker file is the cross-process contract).
 
 **F4 · Stop** (turn end → citation accounting)
-1. `hook.mjs:handleStop` reads the CC session id; snapshots and flushes the episode buffer (lock, else atomic claim-rename fallback).
-2. Marks the session completed, saves the handoff (`hook-handoff.mjs:buildAndSaveHandoff`).
-3. Scans the transcript for injected ids by surface and for `#NN` citations (`lib/citation-tracker.mjs`, `lib/transcript-scan.mjs`).
-4. `applyCitationDecay(...)` per face (subagent face gated) — citation accounting no longer writes `importance` (D#179/D#198).
+1. `hook.mjs:readStopHookInput` reads the CC session id and transcript path; `flushEpisodeAtStop` snapshots and flushes the episode buffer (lock, else atomic claim-rename fallback).
+2. `markSessionCompletedAndSaveHandoff` (`hook-handoff.mjs:buildAndSaveHandoff`), then `writeFastSummaryBaseline`.
+3. `trackCitationsAtStop` scans the transcript for injected ids by surface and for `#NN` citations (`lib/citation-tracker.mjs`, `lib/transcript-scan.mjs`).
+4. …and runs `applyCitationDecay(...)` per face (subagent face gated) — citation accounting no longer writes `importance` (D#179/D#198).
 5. Emits the cite-recall nudge when due (`buildCiteRecallNudge`).
+
+   (Steps 1-5 were one 470-line `handleStop` until audit 2026-09-05 P2-1; the handler is now 40 lines calling the five phases named above.)
 
 **F5 · Search** (MCP `mem_search` / CLI `search` — one pipeline)
 1. Face parses args (`server.mjs:runSearchPipeline` / `mem-cli.mjs:cmdSearch`), sanitizes the FTS query (`utils.mjs:sanitizeFtsQuery`, synonym expansion), resolves deep mode.
