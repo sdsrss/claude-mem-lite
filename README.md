@@ -370,8 +370,12 @@ Slash commands `/adopt` and `/unadopt` wrap the same CLI.
   runtime-gated on sentinel presence, so projects without adoption get the
   full verbose output.
 
-See `docs/plans/2026-04-16-invited-memory-pattern.md` for the full design
-(including the reusable template other plugins can follow).
+See [the invited-memory design][invited-memory] for the full design (including the
+reusable template other plugins can follow). It is a development-time document and
+is no longer in the repository at HEAD, so that link is pinned to `v3.95.0`, the
+last release that carried it.
+
+[invited-memory]: https://github.com/sdsrss/claude-mem-lite/blob/v3.95.0/docs/plans/2026-04-16-invited-memory-pattern.md
 
 ## Database Schema
 
