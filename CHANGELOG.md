@@ -2,6 +2,123 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.97.0 — four janitors that deleted or blocked things that were still in use
+
+One theme runs through this release: maintenance code that decided by AGE or by RANK where
+the real question was "is this still in use?". A lock sweeper that asked how old a lock was
+instead of whether its holder was alive. A cache pruner that asked which version was newest
+instead of which one was running. A self-heal that asked whether an import failed instead of
+whether this hook had the seconds to fix it. And, found while shipping the other three, a
+commit gate that had never once run past its first step.
+
+### Behaviour change — self-heal now runs at SessionStart only
+
+**What changes.** When a hook fires and a module of this install is missing,
+`scripts/hook-launcher.mjs` used to run `install.mjs repair` right there, on whatever event
+was firing. It no longer does. Hot-path events record the breakage and defer; the repair runs
+at the next SessionStart, which is also where a repair recorded by any OTHER entry now gets
+picked up.
+
+**Why.** That repair is a synchronous spawn with a 300s timeout, and `hooks/hooks.json` gives
+PreToolUse 3s, PostToolUse 3s, UserPromptSubmit 2s. Worse than being killed: the 6h cooldown
+is armed BEFORE the spawn — deliberately, it is the mutual exclusion between concurrent fires
+— so a repair the host killed at two seconds bought six hours of `Self-heal skipped`,
+including for the SessionStart fire that had the budget to finish it. The mechanism that was
+supposed to recover a broken install was reliably disabling itself.
+
+**What you do.** Nothing. A broken install still heals, one session later at worst, and it now
+also heals when the missing module is on an entry your session never touched.
+
+**How you will notice.** The deferring fire says so on stderr:
+
+```
+[claude-mem-lite] Broken install (lib/cite-back-hint.mjs) — self-heal deferred to the next
+SessionStart (this hook has a 2-5s budget; repair needs minutes).
+```
+
+**Revert path.** `npm i claude-mem-lite@3.96.1`, or pin `3.96.1` in your plugin marketplace
+entry. There is no env flag for this one: a switch that puts an npm run back on a 2s hook is
+not a setting worth shipping.
+
+### The lock sweeper deleted locks whose holder was alive
+
+`cleanStaleLockFiles()` ran on every SessionStart and unlinked any `*.lock` in the runtime dir
+older than 30s. It did consult the holder's pid — but only for locks YOUNGER than the
+threshold, which is to say only for the ones it was going to keep anyway. Anything older went,
+holder or no holder.
+
+`runtime/install.lock` is exactly such a lock, and its critical section is not 30 seconds:
+`install.mjs repair`, `install.mjs rebuild-binding`, `hook-update.installExtractedRelease` and
+`scripts/launch.mjs` all take it around a write phase whose npm steps are capped at 60s
+(staging install) and 120s (smoke rebuild). A second Claude Code window starting up inside
+that window deleted the lock, the next installer acquired it, and two processes renamed files
+into the same install directory — the torn `server vN + hook vN+1` install that
+`lib/proc-lock.mjs` exists to prevent. Reproduced in a sandbox: a live-pid lock aged 31s
+vanished across a real SessionStart; the 5s control survived.
+
+A live pid (including EPERM — someone else's process) is now kept until `ABANDONED_LOCK_MS`
+(10 min), deliberately longer than proc-lock's own 5-minute steal window so the sweeper is
+never the more aggressive of the two. A provably-dead pid is still swept at any age, and a
+lock with no usable pid still falls back to the old 30s rule.
+
+The codebase already knew about this hazard from one direction: the auto-maintain mutex is
+named `.proclock` specifically to stay out of this sweeper's way. `install.lock` never got the
+same treatment.
+
+### Both plugin-cache pruners deleted the version they were running from
+
+"Not in the newest 3" is not the same question as "not in use". After a marketplace rollback —
+a bad release withdrawn while three newer version dirs are still cached — `CLAUDE_PLUGIN_ROOT`
+is not among the newest three, and both pruners `rm -rf`'d it: the tree the running hooks and
+MCP server import from, mid-session.
+
+Reproduced on both paths, `hook-update.prunePluginCache()` and `scripts/setup.sh` step 8 (by
+running that step's own bytes, not a retyped copy). Both now skip the running root, compared by
+device+inode (`-ef` / `realpathSync`) rather than by string, so a trailing slash or a symlinked
+cache dir cannot defeat it. Pruning is otherwise unchanged: with the running root inside the
+keep window the surplus still goes.
+
+### The commit gate had never run
+
+`scripts/pre-commit.sh` exits 1 at step 1 with `Version mismatch: package.json=3.96.1 vs
+CLAUDE.md=3.96.1` — two values that look identical because the second line of a two-line
+variable falls off the end of the message. Its extractor was an unanchored
+`grep -oP '(?<=\*\*Version\*\*: )\S+'`, and CLAUDE.md contains that literal twice: the real
+value, and the `**Version**: <v>` inside the sentence describing the release guard.
+
+So the eslint, `format:check` and full-suite gates below it had never executed in any
+invocation. It went unnoticed because the script is not installed as a git hook and `ci.yml`
+only shellchecks it. The pattern is anchored now, and an extraction that does not yield exactly
+one line fails with the real cause instead of sending you to sync five already-synced files.
+
+### Measurement
+
+`scripts/audit-metrics.mjs` spelled its module-graph filter out in four places and two of them
+forgot the `*.config.mjs` half, so `--deps` printed 161 modules while `--md` printed 163 for
+what reads as the same set — and `eslint.config.mjs` was listed as a source module with no
+test. One predicate now, and `--self-check` fails if the reporters ever disagree again.
+Modules **163 → 161**, untested **24/163 → 23/161**; edges unchanged at 481 static + 48 lazy,
+0 cycles, because both config files have zero local imports.
+
+`benchmark/baseline.json` was recaptured on this tree (it expires 30 days after its own
+timestamp and both workflows pass `--strict`; on the release path that failure lands after the
+tag is pushed). All four quality metrics are bit-identical to the superseded baseline —
+recall 0.8998, precision 0.8497, nDCG 0.9712, MRR 0.9611 — which is the expected result for a
+release that does not touch retrieval.
+
+`docs/audits/` is no longer gitignored, so the report this release implements survives to the
+round that has to mark its items resolved. The plural directory is a second ledger path, not a
+typo for `docs/audit/`.
+
+### Verification
+
+353 test files, 5862 passed, 1 skipped. Coverage 84.34 / 78.88 / 89.26 / 85.44 against a
+80/74/84/83 gate. eslint 0/0, prettier clean, shellcheck clean. knip 50 unused exports, 0
+unused files, 0 duplicate exports, with the unused-export name set byte-identical to v3.96.1
+(same-tree A/B, not a count subtraction). Every fix carries a mutation-verified test: reverting
+the fix reddens exactly the cases that describe it, and each "the guard held" assertion is
+paired with a control proving the guarded code still ran.
+
 ## v3.96.1 — four audit rounds that mostly repaired the instruments, and one 82,048-character regex
 
 No user-visible behaviour changes. Every shipped code change here is a refactor whose
