@@ -28,7 +28,7 @@
 //   • Coverage: read from coverage/coverage-summary.json (the mtime is reported so a
 //     stale summary is visible); `--run-tests` regenerates it.
 
-import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, relative, extname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -360,6 +360,11 @@ function prettierCheck() {
   return { unformatted, status: r.status };
 }
 
+// Tail kept when a run goes red. 200 lines covers vitest's summary block plus the
+// last failure's diff; the FAIL names are extracted separately so the number and the
+// name reach the report together.
+const VITEST_FAIL_TAIL_LINES = 200;
+
 function runVitestCoverage() {
   const r = spawnSync(bin('vitest'), ['run', '--coverage', '--coverage.reporter=json-summary', '--coverage.reporter=text'],
     { cwd: REPO, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -367,12 +372,27 @@ function runVitestCoverage() {
   const tf = /Test Files\s+(\d+) passed(?: \| (\d+) failed)?/.exec(out) || /Test Files\s+(\d+) failed \| (\d+) passed/.exec(out);
   const tc = /Tests\s+(\d+) passed(?: \| (\d+) failed)?/.exec(out) || /Tests\s+(\d+) failed \| (\d+) passed/.exec(out);
   const dur = /Duration\s+([\d.]+s)/.exec(out);
-  return {
+  const res = {
     status: r.status,
     testFiles: tf ? tf[0].replace(/\s+/g, ' ') : 'unparsed',
     tests: tc ? tc[0].replace(/\s+/g, ' ') : 'unparsed',
     duration: dur ? dur[1] : null,
   };
+  // Audit 2026-09-05 P2-7: everything but the summary regex used to be dropped, so a
+  // red run reported "1 failed" and the NAME was unrecoverable — which is why that
+  // round's single failure (P2-8) could not be attributed or reproduced. A count is a
+  // smoke alarm; the name is the evidence.
+  if (r.status !== 0) {
+    res.failed = [...out.matchAll(/^\s*FAIL\s+(.+?)\s*$/gm)].map((m) => m[1].trim());
+    try {
+      const dir = join(REPO, 'tmp');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const log = join(dir, `audit-vitest-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+      writeFileSync(log, out.split('\n').slice(-VITEST_FAIL_TAIL_LINES).join('\n'));
+      res.log = relative(REPO, log);
+    } catch (e) { res.log = `unwritable: ${e.message}`; }
+  }
+  return res;
 }
 
 function coverageSummary() {
@@ -652,7 +672,11 @@ function md(r) {
   L.push(`| Duplicate rate, ${r.duplicates.window}-line window (any / cross-file) | ${r.duplicates.any.pct}% (${r.duplicates.any.lines}/${r.duplicates.normalisedLines}) / ${r.duplicates.crossFile.pct}% (${r.duplicates.crossFile.lines}) |`);
   L.push(`| Import cycles static / incl. lazy (${r.cycles.modules} modules, ${r.cycles.staticEdges} static + ${r.cycles.lazyEdges} lazy edges) | ${r.cycles.static.count} / ${r.cycles.includingLazy.count} |`);
   L.push(`| Source modules not directly imported by any test / not mentioned at all | ${r.testReachability.notDirectlyImported.length} / ${r.testReachability.notMentionedAtAll.length} (of ${r.testReachability.sourceModules}) |`);
-  if (r.vitest) L.push(`| vitest | ${r.vitest.testFiles}; ${r.vitest.tests}; ${r.vitest.duration} (exit ${r.vitest.status}) |`);
+  if (r.vitest) {
+    const fail = r.vitest.status === 0 ? ''
+      : ` — **failed: ${r.vitest.failed?.length ? r.vitest.failed.join(', ') : 'no FAIL line parsed'}**; output tail: \`${r.vitest.log}\``;
+    L.push(`| vitest | ${r.vitest.testFiles}; ${r.vitest.tests}; ${r.vitest.duration} (exit ${r.vitest.status})${fail} |`);
+  }
   if (r.coverage) {
     if (r.coverage.error) L.push(`| Coverage | ${r.coverage.error} |`);
     else L.push(`| Coverage stmts / branches / functions / lines (summary ${r.coverage.generatedAt}) | ${r.coverage.statements.pct} / ${r.coverage.branches.pct} / ${r.coverage.functions.pct} / ${r.coverage.lines.pct} |`);
