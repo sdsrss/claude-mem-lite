@@ -25,7 +25,10 @@
     "test:smoke": "vitest run tests/smoke.test.mjs",
     "test:coverage": "vitest run --coverage",
     "benchmark": "node benchmark/benchmark.mjs",
-    "benchmark:gate": "node benchmark/ci-gate.mjs"
+    "benchmark:gate": "node benchmark/ci-gate.mjs",
+    "audit:inventory": "node scripts/audit-metrics.mjs --inventory",
+    "audit:deps": "node scripts/audit-metrics.mjs --deps",
+    "audit:selfcheck": "node scripts/audit-metrics.mjs --self-check"
   },
   "files": [
     "cli.mjs",

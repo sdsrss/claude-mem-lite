@@ -6,6 +6,7 @@
 //   node scripts/audit-metrics.mjs --run-tests  # also runs `vitest run --coverage` first (slow, ~1 min)
 //   node scripts/audit-metrics.mjs --no-tools   # skip eslint / knip / prettier / coverage (pure static scan)
 //   node scripts/audit-metrics.mjs --inventory  # Markdown module table (layer / lines / header / exports) for docs/ARCHITECTURE.md
+//   node scripts/audit-metrics.mjs --deps       # Markdown dependency section (layer matrix, upward edges, hubs, mermaid) for docs/ARCHITECTURE.md
 //
 // Every number is derived from the working tree at run time. Nothing here is a
 // baseline to carry forward — re-run the script and diff the output.
@@ -43,6 +44,7 @@ const REPO = process.env.AUDIT_METRICS_REPO
 const args = new Set(process.argv.slice(2));
 const WANT_MD = args.has('--md');
 const WANT_INVENTORY = args.has('--inventory');
+const WANT_DEPS = args.has('--deps');
 const RUN_TESTS = args.has('--run-tests');
 const NO_TOOLS = args.has('--no-tools');
 
@@ -453,6 +455,91 @@ function inventoryMd(list) {
 
 if (WANT_INVENTORY) {
   process.stdout.write(inventoryMd(files.source));
+  process.exit(0);
+}
+
+// ── dependency section (docs/ARCHITECTURE.md §3) ─────────────────────────────
+//
+// Same edge extraction as `cycles()`; aggregated by `layerOf` so the doc can state the
+// dependency DIRECTION as a measured table rather than a diagram someone drew once. The
+// "upward" list is the evidence for any layering claim: an edge from a lower layer into a
+// higher one. `tooling` is excluded from that list (dev scripts may import anything) and
+// `lib -> engine` is reported on its own line because CLAUDE.md sanctions it (shared
+// cores call the engines they front), so it is a fact to record, not a violation.
+
+const LAYER_ORDER = ['entry', 'face', 'engine', 'lib', 'leaf', 'tooling'];
+
+function depsMd(list) {
+  const nodes = list.filter((f) => CODE_EXT.has(extname(f)) && !/\.config\.mjs$/.test(f));
+  const edges = [];
+  for (const f of nodes) {
+    const { stat, lazy } = edgesOf(f);
+    for (const t of stat) edges.push({ from: rel(f), to: rel(t), kind: 'static' });
+    for (const t of lazy) edges.push({ from: rel(f), to: rel(t), kind: 'lazy' });
+  }
+  const matrix = {};
+  const fanIn = new Map(); const fanOut = new Map();
+  for (const e of edges) {
+    const key = `${layerOf(e.from)}→${layerOf(e.to)}`;
+    matrix[key] = (matrix[key] || 0) + 1;
+    fanIn.set(e.to, (fanIn.get(e.to) || 0) + 1);
+    fanOut.set(e.from, (fanOut.get(e.from) || 0) + 1);
+  }
+  const rank = (l) => LAYER_ORDER.indexOf(l);
+  const upward = edges.filter((e) => layerOf(e.from) !== 'tooling' && rank(layerOf(e.from)) > rank(layerOf(e.to)));
+  const libToEngine = upward.filter((e) => layerOf(e.from) === 'lib' && layerOf(e.to) === 'engine');
+  const leafUp = upward.filter((e) => layerOf(e.from) === 'leaf');
+
+  const L = [];
+  L.push(`Modules: ${nodes.length} · edges: ${edges.filter((e) => e.kind === 'static').length} static + ${edges.filter((e) => e.kind === 'lazy').length} lazy (relative \`import\`/\`export … from\` + literal \`import()\`).`);
+  L.push('');
+  L.push('### Layer matrix (rows import columns; count of edges)');
+  L.push('');
+  L.push(`| from \\ to | ${LAYER_ORDER.join(' | ')} |`);
+  L.push(`|---|${LAYER_ORDER.map(() => '---').join('|')}|`);
+  for (const a of LAYER_ORDER) L.push(`| **${a}** | ${LAYER_ORDER.map((b) => matrix[`${a}→${b}`] || 0).join(' | ')} |`);
+  L.push('');
+  L.push(`### Upward edges (lower layer importing a higher one; tooling excluded): ${upward.length}`);
+  L.push('');
+  L.push(`- lib → engine: ${libToEngine.length} (sanctioned — shared cores front the engines)`);
+  for (const e of libToEngine) L.push(`  - \`${e.from}\` → \`${e.to}\`${e.kind === 'lazy' ? ' (lazy)' : ''}`);
+  L.push(`- leaf → lib / engine: ${leafUp.length}`);
+  for (const e of leafUp) L.push(`  - \`${e.from}\` → \`${e.to}\`${e.kind === 'lazy' ? ' (lazy)' : ''}`);
+  const other = upward.filter((e) => !libToEngine.includes(e) && !leafUp.includes(e));
+  L.push(`- other: ${other.length}`);
+  for (const e of other) L.push(`  - \`${e.from}\` → \`${e.to}\`${e.kind === 'lazy' ? ' (lazy)' : ''}`);
+  L.push('');
+  const top = (m) => [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12);
+  L.push('### Hubs');
+  L.push('');
+  L.push('| Most imported (fan-in) | edges | Most importing (fan-out) | edges |');
+  L.push('|---|---|---|---|');
+  const fi = top(fanIn); const fo = top(fanOut);
+  for (let i = 0; i < 12; i++) L.push(`| \`${fi[i]?.[0] ?? ''}\` | ${fi[i]?.[1] ?? ''} | \`${fo[i]?.[0] ?? ''}\` | ${fo[i]?.[1] ?? ''} |`);
+  L.push('');
+  L.push('### Entry → module graph (mermaid; static edges from entry/face files into engine-layer modules, lib/ and leaves collapsed)');
+  L.push('');
+  L.push('```mermaid');
+  L.push('graph LR');
+  const id = (r) => r.replace(/[^A-Za-z0-9]/g, '_');
+  const shown = new Set();
+  const node = (r) => { const l = layerOf(r); const label = l === 'lib' ? 'lib/ (shared cores)' : l === 'leaf' ? 'leaf utilities' : r; const k = l === 'lib' ? 'LIB' : l === 'leaf' ? 'LEAF' : id(r); if (!shown.has(k)) { shown.add(k); L.push(`  ${k}["${label}"]`); } return k; };
+  const seen = new Set();
+  for (const e of edges) {
+    const lf = layerOf(e.from); const lt = layerOf(e.to);
+    if (!['entry', 'face'].includes(lf) || lt === 'tooling') continue;
+    if (lt === 'leaf') continue;
+    const a = node(e.from); const b = node(e.to);
+    const key = `${a}>${b}`;
+    if (seen.has(key)) continue; seen.add(key);
+    L.push(`  ${a} ${e.kind === 'lazy' ? '-.->' : '-->'} ${b}`);
+  }
+  L.push('```');
+  return L.join('\n') + '\n';
+}
+
+if (WANT_DEPS) {
+  process.stdout.write(depsMd(files.source));
   process.exit(0);
 }
 
