@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 3.98.0 — **this exact string is a release guard.**
+- **Version**: 3.99.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=20, ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -175,7 +175,7 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **357 files / 5907** (5906 passed, 1 skipped) | R7 batch working tree on `e694259` (re-stamp to the landing sha), 2026-09-05 (was 355 / 5890 at tag `v3.98.0`: +2 test files `audit-r7-citation-subagent-type-gate` / `audit-r7-adopt-boundary`, +17 cases across those two plus the restated + added cases in `cli-path-invocation`; both new files live under `tests/`, which `obs-id-caliber-sync` does not generate cases from) |
+| Tests | **357 files / 5907** (5906 passed, 1 skipped) | tag `v3.99.0` (R7 batch), 2026-09-05 (was 355 / 5890 at tag `v3.98.0`: +2 test files `audit-r7-citation-subagent-type-gate` / `audit-r7-adopt-boundary`, +17 cases across those two plus the restated + added cases in `cli-path-invocation`; both new files live under `tests/`, which `obs-id-caliber-sync` does not generate cases from) |
 | Knip | **49** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. The −1 is ATTRIBUTED by same-tree A/B name-set diff (`git stash push -u`), not by subtraction: the single name that left is `extractInjectedFromSubagentPrompt`, because R7's new test is the first to import it directly. That it sat in this list is itself the finding's backstory — no test reached the function, which is how the missing entry-type gate survived. Every other name is byte-identical to the `v3.98.0` set. |
 | Coverage | statements **84.29%** · branches **78.84%** · functions **89.26%** · lines **85.40%** (87 file rows) | same tree. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **The `v3.98.0` row (84.34 / 78.88 / 89.26 / 85.44) does not reproduce** — HEAD `e694259` itself measures **84.29 / 78.85 / 89.26 / 85.40, 86 rows**, so that figure was CARRIED across R6 ("unmoved by R5") rather than re-measured, which is what this section's header warns against. **The ruler is per-tree reproducible** — A/A run twice on HEAD and twice on the R7 tree, byte-identical each time — so sub-0.05 moves here are signal, not run noise. R7's measured effect: branches 78.85 → 78.84, other three identical; `lib/citation-tracker.mjs`, the only edited file inside the measured set, went UP on all four (93.71→93.73 / 88.13→88.19 / 100→100 / 97.32→97.33). **UNATTRIBUTED, do not repeat a guess here**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from HEAD's report and present on the R7 tree, and it is neither imported by anything R7 changed nor pulled in by R7's new tests — holding both new test files aside still shows it, at a third aggregate (84.28 / 78.81). Two attributions were written into this row and both were wrong before this measurement; the mechanism is open. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
 

@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v3.99.0 — the file we write into your repo, and the quote we counted as a citation
 
 Audit round R7 (`docs/audits/20260905-225651.md`) read the two write paths R6 named as the
 next entry: the adopt boundary that writes into every user's project tree
