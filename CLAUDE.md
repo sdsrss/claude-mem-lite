@@ -107,8 +107,11 @@ evidence for each is in `docs/measurement/`. **Violating one silently produces a
 that looks measured and is not.**
 
 > **`docs/measurement/` IS tracked — it is this file's appendix, not internal notes.**
-> The rest of `docs/` (design specs, plans, templates) is developer-local and ignored, so
-> a fresh clone gets the appendix and nothing else from `docs/`. Even so, **the ten rules
+> So are `docs/audit/` (the audit ledger — each round marks the previous round's items
+> 已解决/未解决/复发, which is impossible against a report nobody can read) and
+> `docs/ARCHITECTURE.md`. The rest of `docs/` (design specs, plans, templates) is
+> developer-local and ignored, so a fresh clone gets those three and nothing else from
+> `docs/`. Even so, **the ten rules
 > and every invariant in this file are self-contained**: the appendix carries the evidence
 > (calibers, populations, superseded drafts, the reasoning behind each rule), never a rule
 > you need and cannot find here. Keep it that way when you add to either — a rule that

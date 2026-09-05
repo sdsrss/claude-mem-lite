@@ -1,9 +1,13 @@
-# docs/ is developer-local (design specs, plans, templates) EXCEPT docs/measurement/,
-# which is CLAUDE.md's evidence appendix and is tracked with it. Written as `/docs/*`
-# plus a negation on purpose: git does not descend into an excluded DIRECTORY, so a
-# bare `/docs` would make `!/docs/measurement/` silently inert.
+# docs/ is developer-local (design specs, plans, templates) EXCEPT the three negated
+# below, which are records later rounds have to read: docs/measurement/ is CLAUDE.md's
+# evidence appendix, and docs/audit/ + docs/ARCHITECTURE.md are the audit ledger — with
+# them ignored, every round re-derived its context and nine items of the 2026-09-02 round
+# were unrecoverable. Written as `/docs/*` plus negations on purpose: git does not descend
+# into an excluded DIRECTORY, so a bare `/docs` would make every `!` line silently inert.
 /docs/*
 !/docs/measurement/
+!/docs/audit/
+!/docs/ARCHITECTURE.md
 # CLAUDE.md is tracked on purpose — it is the operating manual for this tree, and /init
 # cannot reconstruct the measurement doctrine or the record of which drafts were refuted.
 # It was listed here once; the entry did nothing (gitignore does not apply to tracked
