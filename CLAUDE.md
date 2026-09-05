@@ -20,7 +20,7 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 | Smoke only | `npm run test:smoke` |
 | Coverage | `npm run test:coverage` (gate: statements 80 / branches 74 / functions 84 / lines 83) |
 | Lint | `npx eslint .` — or `npm run lint` |
-| Format | `npm run format` (prettier) · `npm run format:check` |
+| Format | `npm run format` (prettier — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point) · `npm run format:check` — **gated** in `ci.yml` and `scripts/pre-commit.sh` since the 2026-09-05 reformat |
 | Dead code | `npm run dead-code` (knip — **read the measurement contract below first**) |
 | Shell | `shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-commit.sh scripts/setup.sh` |
 | Micro-bench | `npm run benchmark` (`node benchmark/benchmark.mjs`) · CI gate: `npm run benchmark:gate` (`benchmark/ci-gate.mjs`) |

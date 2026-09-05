@@ -27,6 +27,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # Added with the 2026-09-05 P1-3 reformat (commit 36f8c0f). This is a real gate:
+      # it fails the job. Before the reformat it would have failed on 525 of 531 files,
+      # which is why the check existed unenforced for two days.
+      - run: npm run format:check
 
       # Informational only — this step cannot fail the job, and nothing reads its
       # output automatically. CLAUDE.md's knip measurement contract records that a

@@ -99,6 +99,22 @@ npx eslint . || {
   exit 1
 }
 
+# ── Format ───────────────────────────────────────────────────────────────────
+# Added with the 2026-09-05 P1-3 reformat. Before that the tree had a .prettierrc
+# nothing enforced and 525 of 531 files failing `format:check`, so the command was
+# a permanently-red signal rather than a gate.
+#
+# Placed AFTER the lint block on purpose: tests/pre-commit-corpus-guard.test.mjs slices
+# this script from `# ── Frozen-corpus guard` to `# ── Lint ` and executes those bytes in a
+# throwaway fixture repo, so a step between those two anchors runs where npm and prettier
+# do not exist. It still gates before the full suite, which is the expensive part.
+echo "[pre-commit] Checking formatting..."
+npm run format:check || {
+  echo "[pre-commit] ❌ Formatting. Run: npm run format  (twice — one file needs a second"
+  echo "[pre-commit]    pass to reach a fixed point), then re-stage."
+  exit 1
+}
+
 echo "[pre-commit] Running tests..."
 npx vitest run || {
   echo "[pre-commit] ❌ Tests failed. Fix errors before committing."

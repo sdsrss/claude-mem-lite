@@ -1,0 +1,11 @@
+# Revisions to skip in `git blame`. Configure once per clone:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub's blame view reads this file automatically.)
+#
+# Only whole-tree mechanical reformats belong here. A commit listed here must
+# have changed no behaviour, or blame will hide a real edit.
+
+# style: apply prettier to the tree (audit 2026-09-05 P1-3) — 525 files, `npm run
+# format` output only. The two commits before it (c4ed9eb, fd82342) are the ones
+# that changed anything, and are deliberately NOT listed.
+36f8c0ff89a87c18fb7f9da86fa58a3ed0a95420
