@@ -85,6 +85,7 @@
     "lib/file-intel.mjs",
     "lib/reread-guard.mjs",
     "lib/metrics.mjs",
+    "lib/shard-gc.mjs",
     "lib/lesson-idents.mjs",
     "lib/task-imperative.mjs",
     "lib/lesson-bridge.mjs",

@@ -84,6 +84,7 @@ export const SOURCE_FILES = [
   'lib/file-intel.mjs',
   'lib/reread-guard.mjs',
   'lib/metrics.mjs',
+  'lib/shard-gc.mjs',
   // v3.6.x: bind-salience producer — extracts identifiers a lesson names that
   // are present in the pre-edit file (component 2). Imported ONLY by
   // scripts/pre-tool-recall.js; kept here for the same reason as file-intel.mjs.

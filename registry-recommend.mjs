@@ -5,12 +5,13 @@
 // invocations/recommend_count. Live injection is Phase 2 and does not exist yet, so
 // `live` resolves to shadow with a one-time warning (see UNIMPLEMENTED_MODES).
 // `off` skips all work.
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { resolveDataDir, resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { searchResources, cjkIntentTokens } from './registry-retriever.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+import { gcDailyShards } from './lib/shard-gc.mjs';
 const VALID_MODES = new Set(['shadow', 'live', 'off']);
 // Phase 2 (live injection) was never built. `live` stayed in VALID_MODES and
 // getRecommendMode returned it verbatim, so setting it bought a user exactly
@@ -154,26 +155,15 @@ function appendShadow(row) {
 /**
  * Prune shadow-log daily shards older than `retainDays`. appendShadow writes one
  * YYYY-MM-DD.jsonl per day with no GC, so a long-lived install grows the dir
- * unbounded (audit: shadow log non-bounded). Shard date is read from the filename
- * (ISO dates sort lexicographically = chronologically). 90d keeps a full quarter
- * for recommend-stats --days while bounding the dir to ~90 sub-MB files.
- * Best-effort, never throws — called from the SessionStart GC sweep.
+ * unbounded (audit: shadow log non-bounded). 90d keeps a full quarter for
+ * recommend-stats --days while bounding the dir to ~90 sub-MB files. Best-effort,
+ * never throws — called from the SessionStart GC sweep. The sweep itself is
+ * `lib/shard-gc.mjs`, shared with the metrics sink; `shadowDir()` may not exist
+ * yet (nothing logged), which gcDailyShards treats as a no-op.
  * @returns {number} shards removed
  */
 export function gcOldShadowShards(retainDays = 90) {
-  try {
-    const dir = shadowDir();
-    if (!existsSync(dir)) return 0;
-    const cutoff = new Date(Date.now() - retainDays * DAY_MS).toISOString().slice(0, 10);
-    let removed = 0;
-    for (const name of readdirSync(dir)) {
-      const m = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(name);
-      if (m && m[1] < cutoff) {
-        try { unlinkSync(join(dir, name)); removed++; } catch { /* per-entry, silent */ }
-      }
-    }
-    return removed;
-  } catch { return 0; }
+  return gcDailyShards(shadowDir(), retainDays);
 }
 
 export function logShadowReco(project, rec) { appendShadow({ ts: new Date().toISOString(), kind: 'reco', project, ...rec }); }
