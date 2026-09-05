@@ -22,7 +22,7 @@
 // directory tree and returns exactly the five lines above.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -201,28 +201,67 @@ describe('launch.mjs npm-install failure: npm speaks for itself on inherited std
     }
   });
 
-  it("delivers npm's own diagnosis plus an actionable repair", () => {
-    // The guard opens on missing node_modules/better-sqlite3 alone (launch.mjs:13), so
-    // npm runs. Making npm FAIL has to be done here, not left to the empty directory:
-    // npm walks PARENT directories looking for a package.json, and $TMPDIR is commonly
-    // nested under one (here ~/.claude/tmp, below /home/sds/package.json), in which case
-    // npm cheerfully installs THAT manifest's dependencies and exits 0 — the test then
-    // fails on a machine where nothing is wrong. An unparseable manifest fails locally
-    // and immediately (`npm error code EJSONPARSE`), keeping the original "no network
-    // needed" property while removing the dependency on what sits above $TMPDIR.
-    writeFileSync(join(root, 'package.json'), '{ this is not json');
-    const r = spawnSync(process.execPath, [join(root, 'scripts', 'launch.mjs')], {
-      encoding: 'utf8',
-      timeout: 180_000,
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_MEM_DIR: root },
-    });
-    const err = r.stderr || '';
-    // npm's diagnosis arrives on inherited stderr — this is the assertion that would
-    // break if someone switched stdio to 'pipe' to "capture" it.
-    expect(err, `npm's own diagnosis did not reach stderr:\n${err}`).toMatch(/npm error code [A-Z]+/);
-    // …and our own framing still names the directory and the repair.
-    expect(err).toMatch(/npm install failed in/);
-    expect(err).toMatch(/Repair: cd /);
-    expect(r.status).toBe(1);
-  }, 240_000);
+  // `npm` here is a STUB first on PATH, not the real one. Audit 2026-09-05 P2-11: this
+  // case used to run a genuine `npm install` and wait up to 180 s for npm's own stderr,
+  // which made it the suite's one randomly-red case — it is the failure that sat as P2-8
+  // "Uncertain, could not be reproduced" for two audit rounds until the ruler learned to
+  // print the failing test's name. Under a full parallel run npm had not written its
+  // diagnosis before the timeout, so stderr held only our own "Installing
+  // dependencies…" line.
+  //
+  // The stub keeps the whole property, rather than trading it away: `launch.mjs` runs
+  // `execSync('npm install --omit=dev')`, which resolves `npm` through PATH, so the stub
+  // IS npm as far as launch.mjs is concerned. It writes an `npm error code …` line to
+  // stderr and exits 1 — instantly, with no network and no package.json trickery. If
+  // someone switches that `stdio` to 'pipe' to "capture" the diagnosis, execSync folds
+  // the stub's stderr into `e.message` instead, `.split('\n')[0]` yields "Command
+  // failed: …", and the first assertion below goes red exactly as it did with real npm.
+  //
+  // The code is EFAKESTUB rather than a generic pattern so the substitution is
+  // observable: if PATH shadowing ever stopped working and the real npm ran, this
+  // assertion fails by name instead of silently restoring the flake.
+  function fakeNpmBin(dir) {
+    const binDir = join(dir, 'fakebin');
+    mkdirSync(binDir, { recursive: true });
+    const script = join(binDir, 'npm');
+    writeFileSync(
+      script,
+      [
+        '#!/usr/bin/env bash',
+        'echo "npm error code EFAKESTUB" >&2',
+        'echo "npm error stub refused to install" >&2',
+        'exit 1',
+      ].join('\n') + '\n',
+    );
+    chmodSync(script, 0o755);
+    return binDir;
+  }
+
+  it.skipIf(process.platform === 'win32')(
+    "delivers npm's own diagnosis plus an actionable repair",
+    () => {
+      // The guard opens on missing node_modules/better-sqlite3 alone (launch.mjs:13), so
+      // npm runs — and the stub is what answers.
+      const binDir = fakeNpmBin(root);
+      const r = spawnSync(process.execPath, [join(root, 'scripts', 'launch.mjs')], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          CLAUDE_PLUGIN_ROOT: root,
+          CLAUDE_MEM_DIR: root,
+        },
+      });
+      const err = r.stderr || '';
+      // npm's diagnosis arrives on inherited stderr — this is the assertion that would
+      // break if someone switched stdio to 'pipe' to "capture" it.
+      expect(err, `npm's own diagnosis did not reach stderr:\n${err}`).toMatch(/npm error code EFAKESTUB/);
+      // …and our own framing still names the directory and the repair.
+      expect(err).toMatch(/npm install failed in/);
+      expect(err).toMatch(/Repair: cd /);
+      expect(r.status).toBe(1);
+    },
+    60_000,
+  );
 });
