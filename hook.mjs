@@ -70,6 +70,7 @@ import {
   SESSION_EXPIRY_MS,
   STALE_SESSION_MS,
   STALE_LOCK_MS,
+  ABANDONED_LOCK_MS,
   AUTO_MAINTAIN_LOCK,
   STALE_EPISODE_BUFFER_AGE_MS,
   HANDOFF_EXPIRY_CLEAR,
@@ -1945,14 +1946,15 @@ function scheduleSessionStartAutoMaintain(project) {
   if (!process.env.CLAUDE_MEM_SKIP_MAINTAIN) spawnBackground('auto-maintain', project);
 }
 
-// The maintenance mutex deliberately does NOT end in `.lock`: cleanStaleLockFiles()
-// below unlinks every `*.lock` in RUNTIME_DIR whose age exceeds STALE_LOCK_MS (30s)
-// WITHOUT consulting the holder's pid — a policy written for the episode lock, whose
-// critical section is milliseconds. A maintenance pass is seconds to minutes (VACUUM INTO
-// snapshot, purge, decay, dedup over the whole DB), so that sweeper would strip this lock
-// mid-pass and hand the exclusion straight back to the race it exists to close.
-// proc-lock brings its own staleness policy (age OR provably-dead pid), which is the
-// correct one here.
+// The maintenance mutex deliberately does NOT end in `.lock`, so cleanStaleLockFiles()
+// below never sees it at all. That sweeper used to unlink every `*.lock` past
+// STALE_LOCK_MS (30s) without consulting the holder's pid — a policy written for the
+// episode lock, whose critical section is milliseconds — and a maintenance pass is seconds
+// to minutes (VACUUM INTO snapshot, purge, decay, dedup over the whole DB). It now spares a
+// live holder (A20260905-R5-P1-1), but this escape stays: not being swept is a stronger
+// guarantee than being spared by a pid probe, and pids are meaningless across a shared
+// homedir. proc-lock brings its own staleness policy (age OR provably-dead pid), which is
+// the correct one here.
 // Generous upper bound on one pass; a crashed holder is normally reclaimed sooner via the
 // dead-pid check, so this only matters for a holder killed on another host.
 const AUTO_MAINTAIN_LOCK_STALE_MS = 10 * 60 * 1000;
@@ -2078,8 +2080,29 @@ function saveHandoffAndFastSummary(
   }
 }
 
+/**
+ * Sweep abandoned `*.lock` files out of RUNTIME_DIR on SessionStart.
+ *
+ * "Stale" has to mean ABANDONED, not merely old. Until A20260905-R5-P1-1 this swept on AGE
+ * ALONE (pid was consulted only for locks YOUNGER than STALE_LOCK_MS, i.e. exactly the ones
+ * it was going to keep anyway), so a lock older than 30s was unlinked no matter who held it.
+ * `runtime/install.lock` — lib/proc-lock.mjs, taken by `install.mjs repair`,
+ * `install.mjs rebuild-binding`, hook-update.installExtractedRelease and scripts/launch.mjs —
+ * guards a critical section that routinely runs 30s–2min (npm install in staging is capped at
+ * 60s, npm rebuild in smoke at 120s). Any parallel Claude Code window starting up during that
+ * span deleted the live holder's lock; the next installer then acquired it and began renaming
+ * files into the same install dir, which is the torn mixed-version install (server vN + hook
+ * vN+1) proc-lock.mjs's header exists to prevent.
+ *
+ * Policy now: a recorded pid that is ALIVE (or alive-but-not-ours, EPERM) is spared until
+ * ABANDONED_LOCK_MS; a provably-dead pid (ESRCH) is swept at any age; a lock with no usable
+ * pid falls back to STALE_LOCK_MS, as before.
+ *
+ * Liveness of the two real lock families does not depend on this sweeper, so tightening it
+ * cannot wedge either: hook-episode.acquireLock() preempts a >30s episode lock itself at
+ * acquire time, and proc-lock.acquireLock() steals on age OR dead pid at 5 min.
+ */
 function cleanStaleLockFiles() {
-  // Clean stale lock files in runtime dir
   try {
     for (const f of readdirSync(RUNTIME_DIR)) {
       if (!f.endsWith('.lock')) continue;
@@ -2089,12 +2112,16 @@ function cleanStaleLockFiles() {
         const info = JSON.parse(raw);
         const age = Date.now() - (info.ts || 0);
         let stale = age > STALE_LOCK_MS;
-        if (!stale && info.pid) {
+        if (info.pid) {
+          let alive = false;
           try {
             process.kill(info.pid, 0);
+            alive = true;
           } catch (killErr) {
-            stale = killErr.code === 'ESRCH';
+            // EPERM = the process exists but belongs to another user — still a live holder.
+            alive = killErr.code === 'EPERM';
           }
+          stale = alive ? age > ABANDONED_LOCK_MS : true;
         }
         if (stale) unlinkSync(lp);
       } catch {

@@ -11,7 +11,27 @@ PKG_VER=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('p
 LOCK_VER=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package-lock.json')).version)")
 PLUGIN_VER=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json')).version)")
 MKT_VER=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/marketplace.json')).plugins[0].version)")
-CLAUDE_VER=$(grep -oP '(?<=\*\*Version\*\*: )\S+' CLAUDE.md)
+# `-m1` is NOT enough and a bare match is wrong: CLAUDE.md contains the literal string
+# `**Version**: <v>` a second time, inside the sentence describing the release guard, so the
+# unanchored pattern returned TWO lines ("3.96.1" and "<v>`"). The comparison below then saw
+# a two-line value, reported `package.json=3.96.1 vs CLAUDE.md=3.96.1` — the printed values
+# LOOK equal because the second line is off the end of the message — and exited 1. Every
+# invocation of this script failed at step 1, so the eslint / format:check / vitest gates
+# below it had never run; nothing caught it because the script is not wired as a git hook
+# and ci.yml only shellchecks it. (A20260905-R5-P1-2, found while committing the R5 batch.)
+#
+# Anchor on the list-item form that actually carries the version. The guard sentence's copy
+# is mid-line and preceded by a backtick, so `^- ` excludes it without depending on which
+# occurrence comes first.
+CLAUDE_VER=$(grep -oP '(?<=^- \*\*Version\*\*: )\S+' CLAUDE.md)
+# A version check that silently extracts the wrong number of things is worse than none: it
+# sends the reader to "sync all 5 files" that are already in sync. Fail with the real cause.
+CLAUDE_VER_COUNT=$(printf '%s' "$CLAUDE_VER" | grep -c '' || true)
+if [ "$CLAUDE_VER_COUNT" != "1" ]; then
+  echo "[pre-commit] ❌ Could not read a single version from CLAUDE.md (got $CLAUDE_VER_COUNT match(es))."
+  echo "[pre-commit]    Expected exactly one line matching '- **Version**: <x>'. Fix the file or this pattern."
+  exit 1
+fi
 
 MISMATCH=0
 if [ "$PKG_VER" != "$LOCK_VER" ]; then

@@ -812,6 +812,58 @@ describe('plugin cache pruning', () => {
     }
   });
 
+  // A20260905-R5-Q1: "not in the newest 3" is not "not in use". After a marketplace rollback
+  // Claude Code runs from an older cached version while newer dirs remain on disk, so
+  // CLAUDE_PLUGIN_ROOT falls outside the keep window and this pruner rm -rf'd the tree the
+  // running hooks and MCP server import from. scripts/setup.sh step 8 has the same guard
+  // (tests/install-lifecycle.test.mjs) — the two prune the same directory.
+  it('never removes the version dir CLAUDE_PLUGIN_ROOT points at', async () => {
+    const home = makeDir('mem-prune-home3');
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+    for (const v of ['3.90.0', '3.94.0', '3.95.0', '3.96.0']) {
+      mkdirSync(join(cacheBase, v), { recursive: true });
+      writeFileSync(join(cacheBase, v, 'server.mjs'), `// v${v}`);
+    }
+
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { prunePluginCache } = await loadModule({
+        CLAUDE_MEM_DIR: makeDataDir(),
+        // Trailing slash on purpose: the guard compares inodes, not strings.
+        CLAUDE_PLUGIN_ROOT: join(cacheBase, '3.90.0') + '/',
+      });
+      expect(prunePluginCache()).toBe(0);
+      expect(readdirSync(cacheBase).sort()).toEqual(['3.90.0', '3.94.0', '3.95.0', '3.96.0']);
+      expect(existsSync(join(cacheBase, '3.90.0', 'server.mjs'))).toBe(true);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  // Control: the guard must not be a blanket "stop pruning". With the running root inside
+  // the keep window the surplus still goes.
+  it('CONTROL: still prunes the surplus when the running root is inside keep-latest-3', async () => {
+    const home = makeDir('mem-prune-home4');
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+    for (const v of ['3.90.0', '3.94.0', '3.95.0', '3.96.0']) {
+      mkdirSync(join(cacheBase, v), { recursive: true });
+    }
+
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { prunePluginCache } = await loadModule({
+        CLAUDE_MEM_DIR: makeDataDir(),
+        CLAUDE_PLUGIN_ROOT: join(cacheBase, '3.96.0'),
+      });
+      expect(prunePluginCache()).toBe(1);
+      expect(readdirSync(cacheBase).sort()).toEqual(['3.94.0', '3.95.0', '3.96.0']);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
   it('does nothing when 3 or fewer versions exist', async () => {
     const home = makeDir('mem-prune-home2');
     const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');

@@ -16,6 +16,7 @@ import {
   rmSync,
   renameSync,
   chmodSync,
+  realpathSync,
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -1294,6 +1295,19 @@ export function clearCacheHookResidue() {
 // ── Plugin Cache Pruning ──────────────────────────────────
 const PLUGIN_CACHE_KEEP = 3;
 
+/**
+ * Same-directory test that survives trailing slashes, `..` segments and symlinks.
+ * realpathSync throws on a path that no longer exists → fall back to lexical resolve.
+ */
+function isSameDir(a, b) {
+  if (!a || !b) return false;
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return resolve(a) === resolve(b);
+  }
+}
+
 export function prunePluginCache() {
   const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
   if (!existsSync(cacheBase)) return 0;
@@ -1304,11 +1318,20 @@ export function prunePluginCache() {
 
   if (entries.length <= PLUGIN_CACHE_KEEP) return 0;
 
+  // A20260905-R5-Q1: "not in the newest 3" is not the same question as "not in use".
+  // CLAUDE_PLUGIN_ROOT is the version dir THIS process was launched from, and after a
+  // marketplace rollback (a bad release withdrawn while >=3 newer dirs are already cached)
+  // it is not among the newest 3 — so keep-latest-3 rm -rf'd the tree the running hooks and
+  // MCP server import from. scripts/setup.sh step 8 carries the same guard for the same
+  // reason; the two prune the same directory and must agree.
+  const runningRoot = process.env.CLAUDE_PLUGIN_ROOT;
   const toRemove = entries.slice(PLUGIN_CACHE_KEEP);
   let removed = 0;
   for (const ver of toRemove) {
+    const dir = join(cacheBase, ver);
+    if (isSameDir(dir, runningRoot)) continue;
     try {
-      rmSync(join(cacheBase, ver), { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
       removed++;
     } catch {}
   }

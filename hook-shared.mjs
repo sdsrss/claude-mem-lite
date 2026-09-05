@@ -54,18 +54,27 @@ export const SESSION_EXPIRY_MS = 12 * 60 * 60 * 1000; // 12h
 export const STALE_SESSION_MS = 24 * 60 * 60 * 1000; // 24h
 export const STALE_LOCK_MS = 30000; // 30s
 
+// Backstop for cleanStaleLockFiles(): a lock whose recorded pid is ALIVE is kept until it
+// reaches this age, not STALE_LOCK_MS. Deliberately LONGER than proc-lock.mjs's own 5-min
+// steal window, so the sweeper is never the more aggressive of the two — whatever it
+// removes, the lock protocol itself would already have let the next caller steal. Its only
+// job is to garbage-collect a leaked file whose pid was recycled onto an unrelated live
+// process, which would otherwise pin the file forever. (A20260905-R5-P1-1)
+export const ABANDONED_LOCK_MS = 10 * 60 * 1000; // 10 min
+
 // The background-maintenance mutex, defined HERE next to the sweeper policy it has to
-// escape. cleanStaleLockFiles() below unlinks any `*.lock` older than STALE_LOCK_MS
-// WITHOUT checking whether the holder is alive — right for the episode lock's millisecond
-// critical section, fatal for a maintenance pass that runs for seconds to minutes. The
-// name therefore ends in `.proclock`, and `tests/auto-maintain-proc-lock.test.mjs` asserts
-// that against THIS constant rather than a re-typed copy: the first version of that test
-// built its own path from a literal, so renaming the lock left it green with the hazard
+// escape. cleanStaleLockFiles() sweeps every `*.lock` in RUNTIME_DIR; until
+// A20260905-R5-P1-1 it did so on AGE ALONE once past STALE_LOCK_MS — right for the episode
+// lock's millisecond critical section, fatal for a maintenance pass that runs for seconds
+// to minutes. The sweeper now spares a live holder, but this mutex keeps the `.proclock`
+// name: not being swept at all is a stronger guarantee than being spared by a liveness
+// probe, and pid checks are meaningless across a shared homedir. `tests/auto-maintain-proc-lock.test.mjs`
+// asserts that against THIS constant rather than a re-typed copy: the first version of that
+// test built its own path from a literal, so renaming the lock left it green with the hazard
 // back. proc-lock's own staleness policy (age OR provably-dead pid) is the correct one.
 export const AUTO_MAINTAIN_LOCK = 'auto-maintain.proclock';
 export const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 min (title dedup)
 export const RELATED_OBS_WINDOW_MS = 7 * DAY_MS; // 7 days
-export const FALLBACK_OBS_WINDOW_MS = RELATED_OBS_WINDOW_MS; // same window
 // Candidate rows the SessionStart Key Context surface considers (hook-context.mjs
 // keyObs; each of the two sections then renders at most 5). The user-prompt
 // exclude-set does NOT mirror this query — it reads the ids actually rendered

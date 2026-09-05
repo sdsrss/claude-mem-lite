@@ -22,7 +22,7 @@ import {
 } from './utils.mjs';
 import {
   STALE_SESSION_MS,
-  FALLBACK_OBS_WINDOW_MS,
+  RELATED_OBS_WINDOW_MS,
   RUNTIME_DIR,
   effectiveQuiet,
   isQuietHooks,
@@ -459,7 +459,7 @@ export function buildSessionContextLines(
   let fallbackObs = [];
   if (observations.length < 3) {
     const fbOneDayAgo = now.getTime() - STALE_SESSION_MS;
-    const fbSevenDaysAgo = now.getTime() - FALLBACK_OBS_WINDOW_MS;
+    const fbSevenDaysAgo = now.getTime() - RELATED_OBS_WINDOW_MS;
     fallbackObs = db
       .prepare(
         `

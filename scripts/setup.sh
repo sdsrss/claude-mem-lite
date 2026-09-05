@@ -248,10 +248,25 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
     done < <(for _d in "${_all_dirs[@]}"; do [[ -d "$_d" ]] && echo "${_d##*/}"; done | sort -t. -k1,1nr -k2,2nr -k3,3nr | tail -n +4)
     unset _all_dirs _d
     if [[ ${#OLD_VERS[@]} -gt 0 ]]; then
+      PRUNED=0
       for ver in "${OLD_VERS[@]}"; do
+        # A20260905-R5-Q1: "not in the newest 3" is not the same question as "not in use".
+        # CLAUDE_PLUGIN_ROOT is the version dir this session is RUNNING from, and after a
+        # marketplace rollback (a bad release withdrawn while >=3 newer dirs sit in the
+        # cache) it falls outside the newest 3 — so this loop deleted the tree every hook
+        # and the MCP server import from, mid-session. -ef compares device+inode, so it is
+        # not fooled by a trailing slash, a `..` segment or a symlinked cache dir.
+        # hook-update.mjs prunePluginCache() carries the same guard; the two prune the same
+        # directory and must agree.
+        if [[ "$CACHE_DIR/$ver" -ef "$CLAUDE_PLUGIN_ROOT" ]]; then
+          continue
+        fi
         rm -rf "${CACHE_DIR:?}/$ver" 2>/dev/null || true
+        PRUNED=$((PRUNED + 1))
       done
-      log_ok "Plugin cache pruned: removed ${#OLD_VERS[@]} old version(s)"
+      if [[ $PRUNED -gt 0 ]]; then
+        log_ok "Plugin cache pruned: removed $PRUNED old version(s)"
+      fi
     fi
   fi
 fi

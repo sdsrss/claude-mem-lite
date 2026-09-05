@@ -583,6 +583,84 @@ describe('install lifecycle checks', () => {
       } catch {}
     }
   });
+
+  // A20260905-R5-Q1. The case above runs from the NEWEST cached version, which is the only
+  // arrangement keep-latest-3 is safe in. Rollback inverts it: a bad release is withdrawn from
+  // the marketplace, Claude Code drops back to an older cached version, and the three newer
+  // dirs are still on disk — so CLAUDE_PLUGIN_ROOT, the tree these very hooks and the MCP
+  // server import from, is outside the keep window. setup.sh step 8 rm -rf'd it mid-session.
+  it('plugin setup never prunes the version dir it is RUNNING from (marketplace rollback)', () => {
+    const home = makeTmpDir();
+    try {
+      const dataDir = join(home, '.claude-mem-lite');
+      const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+      // Running from the OLDEST of four — rank 4 of 4, outside keep-latest-3.
+      const pluginRoot = join(cacheBase, '3.90.0');
+      mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+      symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
+
+      for (const v of ['3.90.0', '3.94.0', '3.95.0', '3.96.0']) {
+        mkdirSync(join(cacheBase, v), { recursive: true });
+      }
+      // A file inside it: `rm -rf` on the dir is what the guard has to prevent, and an empty
+      // dir that got recreated later by some other step would read as "survived".
+      writeFileSync(join(pluginRoot, 'server.mjs'), '// running version\n');
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({}, null, 2));
+
+      execFileSync('bash', [SETUP_PATH], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      expect(existsSync(join(pluginRoot, 'server.mjs'))).toBe(true);
+      // Sparing the running root must not disable pruning: nothing else is protected, and
+      // with only four dirs and one spared there is nothing left to remove, so assert the
+      // shape rather than a count — all four survive precisely because rank 4 is in use.
+      const remaining = readdirSync(cacheBase)
+        .filter((n) => /^\d+\./.test(n))
+        .sort();
+      expect(remaining).toEqual(['3.90.0', '3.94.0', '3.95.0', '3.96.0']);
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // Control for the case above: with the running root safely inside the keep window, the
+  // guard changes nothing and step 8 still prunes. Without this, "the dirs survived" is
+  // equally consistent with a step 8 that stopped running at all.
+  it('CONTROL: pruning still removes the surplus when the running root is inside keep-latest-3', () => {
+    const home = makeTmpDir();
+    try {
+      const dataDir = join(home, '.claude-mem-lite');
+      const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+      const pluginRoot = join(cacheBase, '3.96.0');
+      mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+      symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
+
+      for (const v of ['3.90.0', '3.94.0', '3.95.0', '3.96.0']) {
+        mkdirSync(join(cacheBase, v), { recursive: true });
+      }
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({}, null, 2));
+
+      execFileSync('bash', [SETUP_PATH], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const remaining = readdirSync(cacheBase)
+        .filter((n) => /^\d+\./.test(n))
+        .sort();
+      expect(remaining).toEqual(['3.94.0', '3.95.0', '3.96.0']);
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
 });
 
 // ─── D#24: install layer honors CLAUDE_MEM_DIR for DATA ───────────────────────

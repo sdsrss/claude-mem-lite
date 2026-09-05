@@ -101,6 +101,17 @@ function walk(dir, out = []) {
 const CODE_EXT = new Set(['.mjs', '.js']);
 const SOURCE_EXT = new Set(['.mjs', '.js', '.sh']);
 
+// THE module-graph population, in one place (A20260905-R5-P3-2). Four reporters used to
+// spell this filter out for themselves and two of them forgot the `*.config.mjs` half, so
+// `--deps` printed "161 modules" while `--md` printed "163" for what reads as the same set,
+// and `eslint.config.mjs` was listed as a SOURCE MODULE with no test — a lint config that
+// can never have one. Build/lint configs are tooling INPUTS: nothing in the shipped tree
+// imports them (verified: both carry zero local imports, so excluding them changes no edge,
+// only the node count). Doctrine rule 3 — "which rows" is a required field — applies to a
+// ruler's own numbers first. `--self-check` requires all three reporters to agree.
+const CONFIG_MODULE_RE = /\.config\.mjs$/;
+const isGraphModule = (f) => CODE_EXT.has(extname(f)) && !CONFIG_MODULE_RE.test(f);
+
 function rel(p) {
   return relative(REPO, p).split('\\').join('/');
 }
@@ -412,7 +423,7 @@ function tarjan(nodes, adj) {
 }
 
 function cycles(list) {
-  const nodes = list.filter((f) => CODE_EXT.has(extname(f)));
+  const nodes = list.filter(isGraphModule);
   const staticAdj = new Map();
   const fullAdj = new Map();
   let staticEdges = 0;
@@ -459,7 +470,7 @@ function untestedModules(sourceList, testList) {
   }
   // Transitive closure through source modules: a module imported by a tested module is
   // still only "indirectly reached"; report DIRECT-import gaps, which is what "has a test" means.
-  const sources = sourceList.filter((f) => CODE_EXT.has(extname(f)));
+  const sources = sourceList.filter(isGraphModule);
   const direct = sources.filter((f) => !imported.has(f)).map(rel);
   // Also flag those whose basename is never even mentioned in tests (subprocess E2E often
   // spawns by path string rather than importing).
@@ -657,7 +668,7 @@ function headerOf(src) {
 function inventoryMd(list) {
   const rows = [];
   for (const f of list) {
-    if (!CODE_EXT.has(extname(f)) || /\.config\.mjs$/.test(f)) continue;
+    if (!isGraphModule(f)) continue;
     const src = read(f);
     const ast = parse(src, rel(f));
     const exps = ast.error ? ['(parse error)'] : exportsOf(ast);
@@ -707,7 +718,7 @@ if (WANT_INVENTORY) {
 const LAYER_ORDER = ['entry', 'face', 'engine', 'lib', 'leaf', 'tooling'];
 
 function depsMd(list) {
-  const nodes = list.filter((f) => CODE_EXT.has(extname(f)) && !/\.config\.mjs$/.test(f));
+  const nodes = list.filter(isGraphModule);
   const edges = [];
   for (const f of nodes) {
     const { stat, lazy } = edgesOf(f);
@@ -915,6 +926,32 @@ if (args.has('--self-check')) {
     const edgeString = join(probeDir, 'edge-string.mjs');
     writeFileSync(edgeString, `export const msg = "run import('${TGT}') yourself";\n`);
     if (edgesOf(edgeString).lazy.size !== 0) fail('edgesOf counted a string literal as a dynamic import');
+
+    // 5. Every reporter that quotes a MODULE COUNT quotes the SAME population
+    //    (A20260905-R5-P3-2). It did not hold: depsMd() filtered *.config.mjs out of the
+    //    graph while cycles() and untestedModules() did not, so `--deps` printed 161 and
+    //    `--md` printed 163 for what a reader takes to be one set, and eslint.config.mjs
+    //    appeared in "source modules with no test". A count nobody can attach a population
+    //    to is doctrine rule 3's failure mode, and this is the ruler's own output.
+    //
+    //    Both arms first: a predicate that admits everything, or nothing, would make the
+    //    three-way agreement below pass vacuously.
+    if (isGraphModule(join(probeDir, 'plain.mjs')) !== true)
+      fail('isGraphModule rejected a plain .mjs module');
+    if (isGraphModule(join(probeDir, 'x.config.mjs')) !== false)
+      fail('isGraphModule admitted a *.config.mjs into the module graph');
+    if (isGraphModule(join(probeDir, 'notes.md')) !== false)
+      fail('isGraphModule admitted a non-code file into the module graph');
+
+    //    Then the agreement itself, read back out of each reporter's real output rather
+    //    than from the shared predicate — that is what catches a future reporter quietly
+    //    re-implementing the filter inline, which is exactly how the two drifted apart.
+    const cyclePop = cycles(files.source).modules;
+    const reachPop = untestedModules(files.source, files.tests).sourceModules;
+    const depsPop = Number(/^Modules: (\d+) /m.exec(depsMd(files.source))?.[1]);
+    if (!Number.isInteger(depsPop)) fail('could not read a module count out of depsMd() output');
+    if (cyclePop !== reachPop || reachPop !== depsPop)
+      fail(`module populations disagree: cycles=${cyclePop}, testReachability=${reachPop}, deps=${depsPop}`);
   } finally {
     try {
       rmSync(probeDir, { recursive: true, force: true });

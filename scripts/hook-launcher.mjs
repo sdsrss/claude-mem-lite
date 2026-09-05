@@ -14,7 +14,9 @@
 // dir) or a missing bare dependency like better-sqlite3 (e.url is undefined and
 // the importer named in the message is under the install dir) — run
 // `install.mjs repair` (rate-limited via a 6h marker file under runtime/) and
-// retry the import once. If repair is unavailable or fails, degrade quietly:
+// retry the import once. That repair runs at SESSION-START ONLY; every other
+// event records the breakage and defers (A20260905-R5-Q2, see attemptHeal).
+// If repair is unavailable, deferred or fails, degrade quietly:
 // these are best-effort memory hooks, so a broken/missing dependency emits one
 // clean recovery line and exits 0 rather than dumping a Node stack trace on
 // every fire. On any other (foreign) exception, re-throw so Node's default
@@ -272,6 +274,37 @@ function clearBreakage() {
   }
 }
 
+// Hot-path counterpart of attemptHeal (A20260905-R5-Q2).
+//
+// attemptHeal() runs `install.mjs repair` SYNCHRONOUSLY with a 300s timeout. The events
+// this launcher fires on cannot host that: hooks/hooks.json gives PreToolUse 3s,
+// PostToolUse 3s, UserPromptSubmit 2s, Stop and PreCompact 5s — only SessionStart's 15s is
+// in the same order of magnitude as an npm run. Worse than being killed: recordHealAttempt()
+// arms the 6h cooldown BEFORE the spawn, deliberately, as concurrent-fire rate limiting (see
+// clearHealMarker below). So a repair the host killed at 2s still bought six hours of
+// "Self-heal skipped" — including for the SessionStart fire that had the budget to finish it.
+// The hot path now records the breakage for `doctor` and gets out of the way.
+//
+// This is the same rule healNativeBindingIfBroken() below already follows, for the same
+// reason ("never on the per-tool hot path, where an npm run would stall the user's edit").
+//
+// Do NOT "fix" the cooldown by moving recordHealAttempt() after the spawn instead: that is
+// the mutual-exclusion between concurrent fires, and the R5 report's first suggestion.
+//
+// Known gap this does NOT close, because it was already open: if the missing module sits on
+// a DIFFERENT entry's import chain and session-start's own entry imports cleanly, nothing
+// heals — a clean session-start clears the breakage marker without repairing. Narrow in
+// practice (hook.mjs imports most of lib/), and closing it needs a detached, stdio-ignored
+// spawn like the native-binding path, not this one.
+function deferHealToSessionStart(reason) {
+  process.stderr.write(
+    `[claude-mem-lite] Broken install (${reason}) — self-heal deferred to the next SessionStart ` +
+      `(this hook has a 2-5s budget; repair needs minutes).\n` +
+      `[claude-mem-lite] Manual recovery: ${CLI_REPAIR}\n`,
+  );
+  return false;
+}
+
 async function attemptHeal(reason) {
   if (recentHealAttempt()) {
     process.stderr.write(
@@ -408,7 +441,7 @@ try {
 } catch (e) {
   if (!isLocalModuleErr(e)) throw e;
   const reason = describeFailure(e);
-  const healed = await attemptHeal(reason);
+  const healed = IS_SESSION_START ? await attemptHeal(reason) : deferHealToSessionStart(reason);
   if (!healed) {
     // Broken/missing dependency we can't repair right now (repair failed, or
     // was skipped within the 6h cooldown). attemptHeal already wrote actionable
