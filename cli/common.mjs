@@ -8,7 +8,7 @@
 // relative-time formatting — every command imports from here so the CLI stays
 // consistent.
 
-import { neutralizeContextDelimiters } from '../format-utils.mjs';
+import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from '../format-utils.mjs';
 
 // ─── Argument Parsing ────────────────────────────────────────────────────────
 
@@ -107,11 +107,19 @@ export function parseArgs(argv) {
  * The transform is idempotent (it strips brackets, it does not re-add them), so a
  * path that already defanged upstream — `context` → buildSessionContextLines — is
  * unaffected.
+ *
+ * `<skill-loaded>` is neutralized here too (audit 2026-09-05 R6 P1-2). It is deliberately
+ * OFF CONTEXT_DELIMITER_RE so the MCP `mem_use` load path can emit a real wrapper — but no
+ * CLI command emits one, while `registry search|list` DOES print third-party registry names
+ * (a GitHub frontmatter name, or `import --name`, which applies no charset filter). A crafted
+ * name therefore forged a complete skill block out of nothing in ordinary CLI output. The MCP
+ * twin closes the same hole at its own chokepoint (server.mjs defangResult); doing it on one
+ * face only is this repo's first-listed defect class.
  */
 export function out(text) {
-  // String() first: neutralizeContextDelimiters coerces nullish to '', which would turn
-  // a pre-existing `out(undefined)` line from "undefined" into an empty line.
-  outVerbatim(neutralizeContextDelimiters(String(text)));
+  // String() first: the neutralizers coerce nullish to '', which would turn a pre-existing
+  // `out(undefined)` line from "undefined" into an empty line.
+  outVerbatim(neutralizeSkillDelimiters(neutralizeContextDelimiters(String(text))));
 }
 
 /**

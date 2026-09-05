@@ -22,6 +22,71 @@ import { DB_DIR } from './schema.mjs';
 // read them under CLAUDE_MEM_DIR relocation (D#29). Equals homedir when the env is unset.
 const MANAGED_DIR = join(DB_DIR, 'managed');
 
+// ─── Import bounds (audit 2026-09-05 R6 Q1) ─────────────────────────────────
+// Measured before these existed: a tree offering 500 `skills/*/SKILL.md` entries of 2 MB
+// each imported all 500, issued 502 fetches and wrote 1000.0 MB in 20.1 s — from one
+// `registry import-url`. There was no bound on count, per-file size, or run total, and the
+// input is a third-party repository, so one URL could fill the user's data dir.
+//
+// USER-VISIBLE DEFAULT BEHAVIOR CHANGE: an import that used to be unbounded can now refuse
+// entries. Each bound has an env opt-out and `0` means unlimited — the pre-cap behavior.
+export const IMPORT_DEFAULT_LIMITS = {
+  items: 200,
+  fileBytes: 2 * 1024 * 1024,
+  totalBytes: 50 * 1024 * 1024,
+};
+
+// Module-private: both consumers (resolveImportLimits, formatImportSkips) live here, and
+// exporting it would add a name to the knip unused-export baseline for nothing.
+const IMPORT_LIMIT_ENV = {
+  items: 'CLAUDE_MEM_IMPORT_MAX_ITEMS',
+  fileBytes: 'CLAUDE_MEM_IMPORT_MAX_FILE_BYTES',
+  totalBytes: 'CLAUDE_MEM_IMPORT_MAX_TOTAL_BYTES',
+};
+
+const SKIP_REASON_TEXT = {
+  'item-cap': 'beyond the per-import item cap',
+  'file-too-large': 'over the per-file byte cap',
+  'total-budget': 'past the total byte budget for this import',
+};
+
+/**
+ * Effective bounds: caller override (tests) < env < default.
+ * @param {object} [override] Partial {items,fileBytes,totalBytes}
+ * @param {object} [env] Env source (tests pass their own)
+ */
+function resolveImportLimits(override = {}, env = process.env) {
+  const limits = {};
+  for (const key of Object.keys(IMPORT_DEFAULT_LIMITS)) {
+    const base = override[key] ?? IMPORT_DEFAULT_LIMITS[key];
+    const raw = env[IMPORT_LIMIT_ENV[key]];
+    if (raw === undefined || String(raw).trim() === '') {
+      limits[key] = base;
+      continue;
+    }
+    const n = Number(raw);
+    // `0` = unlimited, the documented opt-out. Anything unparseable or negative KEEPS the
+    // bound: the failure mode of a typo must be "the limit still applies", never "no limit"
+    // — the same fail-closed rule registryConfineEnabled states for its escape hatch.
+    limits[key] = Number.isFinite(n) && n >= 0 ? (n === 0 ? Infinity : n) : base;
+  }
+  return limits;
+}
+
+/**
+ * One-line refusal summary for the two import faces. Shared so the CLI and the MCP tool
+ * cannot drift into two spellings of the same refusal (this repo's first-listed defect class).
+ * @param {Array<{reason: string}>} skipped
+ * @returns {string} '' when nothing was refused.
+ */
+export function formatImportSkips(skipped) {
+  if (!skipped || skipped.length === 0) return '';
+  const byReason = new Map();
+  for (const s of skipped) byReason.set(s.reason, (byReason.get(s.reason) || 0) + 1);
+  const parts = [...byReason].map(([reason, n]) => `${n} ${SKIP_REASON_TEXT[reason] || reason} (${reason})`);
+  return `Refused ${skipped.length}: ${parts.join('; ')}. Set ${IMPORT_LIMIT_ENV.items}/${IMPORT_LIMIT_ENV.fileBytes}/${IMPORT_LIMIT_ENV.totalBytes} (0 = unlimited) to change these bounds.`;
+}
+
 // ─── Tree Discovery ─────────────────────────────────────────────────────────
 
 // Patterns: flat (skills/name/SKILL.md), plugin (plugins/x/skills/y/SKILL.md),
@@ -346,11 +411,30 @@ export async function importFromGitHub(db, url, opts = {}) {
   const discovered = discoverFromTree(treeData, pathFilter);
   if (discovered.length === 0) return [];
 
+  // 4b. Apply the import bounds (R6 Q1). `skipped` is a caller-supplied sink so both faces
+  // can render the refusal; callers that pass nothing keep the previous return shape.
+  const limits = resolveImportLimits(opts.limits, opts.env);
+  const skipped = opts.skipped ?? [];
+  let admitted = discovered;
+  if (discovered.length > limits.items) {
+    admitted = discovered.slice(0, limits.items);
+    for (const over of discovered.slice(limits.items)) {
+      skipped.push({ name: over.name, type: over.type, reason: 'item-cap' });
+    }
+    debugLog(
+      'WARN',
+      'importer',
+      `Item cap ${limits.items} reached; refused ${discovered.length - limits.items} entries`,
+    );
+  }
+
   const repoUrl = `https://github.com/${owner}/${repo}`;
   const results = [];
+  let totalBytes = 0;
 
   // 5. Process each discovered item
-  for (const item of discovered) {
+  for (let i = 0; i < admitted.length; i++) {
+    const item = admitted[i];
     try {
       // 5a. Fetch content via raw GitHub URL
       const contentUrl = buildContentUrl(owner, repo, branch, item.filePath);
@@ -361,14 +445,45 @@ export async function importFromGitHub(db, url, opts = {}) {
       }
       const content = await contentResp.text();
 
+      // 5a-bis. Byte bounds, checked on the fetched body before anything is parsed or
+      // written. The per-file cap refuses ONE entry and keeps going; the run total is a
+      // budget, so exhausting it stops the walk and books every remaining entry as refused
+      // (a partial import must still account for what it did not take).
+      const bytes = Buffer.byteLength(content, 'utf8');
+      if (bytes > limits.fileBytes) {
+        skipped.push({ name: item.name, type: item.type, reason: 'file-too-large', bytes });
+        debugLog('WARN', 'importer', `Refused ${item.filePath}: ${bytes} B over cap ${limits.fileBytes}`);
+        continue;
+      }
+      if (totalBytes + bytes > limits.totalBytes) {
+        for (const rest of admitted.slice(i)) {
+          skipped.push({ name: rest.name, type: rest.type, reason: 'total-budget' });
+        }
+        debugLog('WARN', 'importer', `Total byte budget ${limits.totalBytes} exhausted at ${item.filePath}`);
+        break;
+      }
+      totalBytes += bytes;
+
       // 5b. Parse frontmatter
       const { frontmatter, body } = parseFrontmatter(content);
 
       // Root skill naming: use frontmatter name if present, else repo name for root, else discovered name
       const rawName = frontmatter.name || (item.name === 'root' ? repo : item.name);
       const name = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      // Path traversal guard: reject names that would escape managed directory
       const typeDir = item.type === 'agent' ? 'agents' : 'skills';
+      // Segment guard, BEFORE the confinement check — which cannot catch these (audit
+      // 2026-09-05 R6 P3-2). `.` and `..` survive the charset filter (dot is allowed) and
+      // then PASS confinement, because join() resolves them away first: `<managed>/skills/..`
+      // IS `<managed>`, admitted on isPathConfined's `resolved === base` arm. Not a traversal
+      // — the write stays inside managedDir — but it lands outside the one-directory-per-
+      // resource layout (`<managed>/SKILL.md`, `<managed>/skills/SKILL.md`), where the flat
+      // scanner picks the latter up as a loose resource named `SKILL`, and two repos both
+      // declaring `name: .` overwrite each other. An empty name collapses the same way.
+      if (!name || name === '.' || name === '..') {
+        debugLog('WARN', 'importer', `Rejected non-segment name: ${rawName}`);
+        continue;
+      }
+      // Path traversal guard: reject names that would escape managed directory
       if (!isPathConfined(join(managedDir, typeDir, name), managedDir)) {
         debugLog('WARN', 'importer', `Rejected path-traversal name: ${rawName}`);
         continue;

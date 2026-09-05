@@ -809,6 +809,19 @@ claude-mem-lite.
 | `CLAUDE_MEM_NO_TEMPLATE_REFRESH` | `1` stops SessionStart from refreshing the adopted `CLAUDE.md` managed block when the shipped template changes. | _(refreshes)_ |
 | `MEM_QUIET_HOOKS` | See Core above — the broadest injection-volume switch. | _(disabled)_ |
 
+### Registry import bounds
+
+`registry import-url` pulls from a third-party repository, so it is bounded. Entries past a
+bound are refused, not truncated, and the refusal is printed with the import result. Set any
+of these to `0` for the pre-v3.98 unlimited behavior; an unparseable or negative value keeps
+the default rather than removing the bound.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLAUDE_MEM_IMPORT_MAX_ITEMS` | Max skills/agents imported from one repository. | `200` |
+| `CLAUDE_MEM_IMPORT_MAX_FILE_BYTES` | Max size of a single `SKILL.md`/`AGENT.md`. Oversized entries are skipped; the rest still import. | `2097152` (2 MB) |
+| `CLAUDE_MEM_IMPORT_MAX_TOTAL_BYTES` | Byte budget for one import run. Exhausting it stops the walk and books the remainder as refused. | `52428800` (50 MB) |
+
 ### Retrieval tuning
 
 Prompt-time search (`UPS_*` = the UserPromptSubmit surface). Defaults are the values the

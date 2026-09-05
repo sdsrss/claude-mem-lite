@@ -3531,12 +3531,17 @@ async function cmdImport(argv) {
   }
 
   try {
-    const { importFromGitHub } = await import('./registry-importer.mjs');
+    const { importFromGitHub, formatImportSkips } = await import('./registry-importer.mjs');
     out(`[mem] Importing from ${url}...`);
-    const results = await importFromGitHub(rdb, url);
+    // `skipped` sink + shared summary (R6 Q1) — same helper the MCP twin renders, so the
+    // bounds cannot end up enforced-but-silent on one of the two faces.
+    const skipped = [];
+    const results = await importFromGitHub(rdb, url, { skipped });
+    const refusal = formatImportSkips(skipped);
 
     if (results.length === 0) {
       out('[mem] No skills/agents found in this repository.');
+      if (refusal) out(`[mem] ${refusal}`);
       return;
     }
 
@@ -3544,6 +3549,7 @@ async function cmdImport(argv) {
     for (const r of results) {
       out(`  ${r.type === 'skill' ? 'S' : 'A'} ${r.name} (id=${r.id})`);
     }
+    if (refusal) out(`[mem] ${refusal}`);
 
     if (flags.enrich) {
       out('[mem] Running LLM enrichment...');

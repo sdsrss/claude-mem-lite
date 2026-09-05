@@ -293,14 +293,28 @@ function applyArgAliases(args, pairs) {
   return next;
 }
 
-function defangResult(result) {
+/**
+ * @param {object} result Tool result.
+ * @param {object} [opts]
+ * @param {boolean} [opts.skillBlocks=true] Also neutralize `<skill-loaded>`. Default ON:
+ *   registry rows carry third-party text (a GitHub frontmatter name, or `import --name`,
+ *   which applies no charset filter), and every registry render used to interpolate it raw —
+ *   so a crafted name FORGED a whole skill block out of nothing in ordinary search/list
+ *   output (audit 2026-09-05 R6 P1-2; F7 on a third face). Enumerating mem_registry found
+ *   the same shape on seven branches plus the shared formatRegistryListLine, which is why
+ *   this is a chokepoint default rather than seven call-site patches. `mem_use` — the one
+ *   handler that must emit a REAL wrapper — turns it off explicitly and defangs its own
+ *   untrusted pieces per call site instead (R6 P1-1).
+ */
+function defangResult(result, { skillBlocks = true } = {}) {
   if (!result || !Array.isArray(result.content)) return result;
+  const scrub = skillBlocks
+    ? (t) => neutralizeSkillDelimiters(neutralizeContextDelimiters(t))
+    : neutralizeContextDelimiters;
   return {
     ...result,
     content: result.content.map((c) =>
-      c && c.type === 'text' && typeof c.text === 'string'
-        ? { ...c, text: neutralizeContextDelimiters(c.text) }
-        : c,
+      c && c.type === 'text' && typeof c.text === 'string' ? { ...c, text: scrub(c.text) } : c,
     ),
   };
 }
@@ -311,14 +325,18 @@ function defangResult(result) {
  * @param {boolean} [opts.verbatim=false] Skip the defang pass. Only for payloads that
  *   must round-trip byte-exact — `mem_export` feeds `restore`, so neutralizing it would
  *   silently corrupt backups of any memory that legitimately discusses these tags.
+ * @param {boolean} [opts.emitsSkillBlock=false] This handler legitimately emits a real
+ *   `<skill-loaded>` wrapper, so the chokepoint must not strip it. `mem_use` is the only
+ *   one, and it neutralizes its own untrusted body/name/path per call site (R6 P1-1).
+ *   Applies to the SUCCESS path only — an error message never emits a wrapper.
  */
-function safeHandler(fn, { verbatim = false } = {}) {
+function safeHandler(fn, { verbatim = false, emitsSkillBlock = false } = {}) {
   return async (args, extra) => {
     try {
       lastMcpRequestTime = Date.now();
       idleCleanupRan = false;
       const result = await fn(args, extra);
-      return verbatim ? result : defangResult(result);
+      return verbatim ? result : defangResult(result, { skillBlocks: !emitsSkillBlock });
     } catch (err) {
       return defangResult({ content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true });
     }
@@ -1683,11 +1701,16 @@ server.registerTool(
       if (!args.url) {
         return { content: [{ type: 'text', text: 'import_url requires a url parameter' }], isError: true };
       }
-      const { importFromGitHub } = await import('./registry-importer.mjs');
+      const { importFromGitHub, formatImportSkips } = await import('./registry-importer.mjs');
       try {
-        const results = await importFromGitHub(rdb, args.url);
+        // `skipped` sink + shared summary (R6 Q1): the import bounds must REFUSE visibly, and
+        // the CLI twin renders the identical string from the identical helper.
+        const skipped = [];
+        const results = await importFromGitHub(rdb, args.url, { skipped });
+        const refusal = formatImportSkips(skipped);
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: `No skills/agents found in: ${args.url}` }] };
+          const head = `No skills/agents found in: ${args.url}`;
+          return { content: [{ type: 'text', text: refusal ? `${head}\n${refusal}` : head }] };
         }
 
         let enrichMsg = '';
@@ -1707,7 +1730,7 @@ server.registerTool(
           content: [
             {
               type: 'text',
-              text: `Imported ${results.length} resource(s) from ${args.url}:\n${lines.join('\n')}${enrichMsg}`,
+              text: `Imported ${results.length} resource(s) from ${args.url}:\n${lines.join('\n')}${enrichMsg}${refusal ? `\n${refusal}` : ''}`,
             },
           ],
         };
@@ -1787,133 +1810,166 @@ server.registerTool(
     description: descriptionOf('mem_use'),
     inputSchema: memUseSchema,
   },
-  safeHandler(async (args) => {
-    const rdb = getRegistryDb();
-    if (!rdb) {
-      return { content: [{ type: 'text', text: 'Registry DB not available.' }], isError: true };
-    }
+  safeHandler(
+    async (args) => {
+      const rdb = getRegistryDb();
+      if (!rdb) {
+        return { content: [{ type: 'text', text: 'Registry DB not available.' }], isError: true };
+      }
 
-    const name = args.name.trim();
-    const type = args.type || 'skill';
+      const name = args.name.trim();
+      const type = args.type || 'skill';
 
-    // 1. Exact match by name or invocation_name — the ONLY path that loads content.
-    const row = rdb
-      .prepare(
-        `
+      // 1. Exact match by name or invocation_name — the ONLY path that loads content.
+      const row = rdb
+        .prepare(
+          `
       SELECT id, name, type, local_path, invocation_name, capability_summary
       FROM resources
       WHERE status = 'active' AND type = ?
         AND (name = ? OR invocation_name = ?)
       LIMIT 1
     `,
-      )
-      .get(type, name, name);
+        )
+        .get(type, name, name);
 
-    // 2. Name miss → SUGGEST, never substitute. The FTS5 search still runs (it is what
-    // produces the candidate list), but its result is only ever rendered as names: loading
-    // the top hit under the caller's requested name shipped a different skill's body inside
-    // <skill-loaded> plus "Follow the instructions above to execute this <type>." — with
-    // nothing marking the swap, so an agent that asked for A executed B (audit F1,
-    // 2026-08-14: with only `deploy-rollback-runbook` registered, `deploy-notes` /
-    // `rollback-checklist` / `runbook-index` each returned its full body). Loading stays an
-    // exact-name decision the caller makes.
-    if (!row) {
-      let candidates = [];
+      // 2. Name miss → SUGGEST, never substitute. The FTS5 search still runs (it is what
+      // produces the candidate list), but its result is only ever rendered as names: loading
+      // the top hit under the caller's requested name shipped a different skill's body inside
+      // <skill-loaded> plus "Follow the instructions above to execute this <type>." — with
+      // nothing marking the swap, so an agent that asked for A executed B (audit F1,
+      // 2026-08-14: with only `deploy-rollback-runbook` registered, `deploy-notes` /
+      // `rollback-checklist` / `runbook-index` each returned its full body). Loading stays an
+      // exact-name decision the caller makes.
+      if (!row) {
+        let candidates = [];
+        try {
+          candidates = searchResources(rdb, name, { type, limit: 5 })
+            .map((r) => r.name)
+            .filter(Boolean);
+        } catch {
+          /* a suggestion is best-effort; the miss message below still stands */
+        }
+        // Every echo of the caller's own name below is bounded + delimiter-inert (audit F7):
+        // raw interpolation let a crafted `name` forge a <skill-loaded> block and the execute
+        // imperative inside this message, and the handler-wide defangResult cannot catch it —
+        // <skill-loaded> is off CONTEXT_DELIMITER_RE precisely so the real load path can emit
+        // it. `truncate` also folds newlines, so a multi-line name cannot fake block structure.
+        // Registered names are defanged too (a crafted one can be imported), but NOT truncated:
+        // the suggestion tells the caller to load one by its exact name, so it must stay exact.
+        const echoed = neutralizeSkillDelimiters(truncate(name, ECHO_NAME_MAX));
+        const echoedCandidates = candidates.map((n) => neutralizeSkillDelimiters(n));
+        const head = `No ${type} found for "${echoed}".`;
+        const browse = `mem_registry(action="search", query="${echoed}")`;
+        if (candidates.length === 0) {
+          return { content: [{ type: 'text', text: `${head} Try ${browse} to browse.` }] };
+        }
+        const list = echoedCandidates.map((n) => `  - ${n}`).join('\n');
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `${head} Closest ${type}s by search (NOT loaded — none matched the name you asked for):\n${list}\n\n` +
+                `Load one deliberately with its exact name, e.g. mem_use(name="${echoedCandidates[0]}"${type === 'skill' ? '' : `, type="${type}"`}), or browse with ${browse}.`,
+            },
+          ],
+        };
+      }
+
+      // 3. Resolve path: directory skills → SKILL.md (agents always have full .md paths)
+      let skillPath = row.local_path || '';
+      if (skillPath && !skillPath.endsWith('.md')) {
+        for (const candidate of [
+          join(skillPath, 'SKILL.md'),
+          join(skillPath, `skills/${row.name}/SKILL.md`),
+        ]) {
+          if (existsSync(candidate)) {
+            skillPath = candidate;
+            break;
+          }
+        }
+      }
+
+      // 4. Path confinement check — prevent reading arbitrary files via crafted local_path.
+      // Base is the env-aware data dir (D#29): managed/ relocates with CLAUDE_MEM_DIR and
+      // equals homedir when unset, so this does not weaken the non-relocated confinement.
+      const managedBase = DB_DIR;
+      if (skillPath && !isPathConfined(skillPath, managedBase)) {
+        return {
+          content: [
+            { type: 'text', text: `Access denied: path "${skillPath}" is outside managed directory` },
+          ],
+          isError: true,
+        };
+      }
+
+      // 5. Read content
+      let content;
       try {
-        candidates = searchResources(rdb, name, { type, limit: 5 })
-          .map((r) => r.name)
-          .filter(Boolean);
+        content = readFileSync(skillPath, 'utf8');
       } catch {
-        /* a suggestion is best-effort; the miss message below still stands */
+        const msg = skillPath.endsWith('.md')
+          ? `Found ${type} "${row.name}" but cannot read file: ${skillPath}`
+          : `Found ${type} "${row.name}" but no .md file in: ${skillPath}`;
+        return { content: [{ type: 'text', text: msg }], isError: true };
       }
-      // Every echo of the caller's own name below is bounded + delimiter-inert (audit F7):
-      // raw interpolation let a crafted `name` forge a <skill-loaded> block and the execute
-      // imperative inside this message, and the handler-wide defangResult cannot catch it —
-      // <skill-loaded> is off CONTEXT_DELIMITER_RE precisely so the real load path can emit
-      // it. `truncate` also folds newlines, so a multi-line name cannot fake block structure.
-      // Registered names are defanged too (a crafted one can be imported), but NOT truncated:
-      // the suggestion tells the caller to load one by its exact name, so it must stay exact.
-      const echoed = neutralizeSkillDelimiters(truncate(name, ECHO_NAME_MAX));
-      const echoedCandidates = candidates.map((n) => neutralizeSkillDelimiters(n));
-      const head = `No ${type} found for "${echoed}".`;
-      const browse = `mem_registry(action="search", query="${echoed}")`;
-      if (candidates.length === 0) {
-        return { content: [{ type: 'text', text: `${head} Try ${browse} to browse.` }] };
+
+      // 5. Record invocation
+      try {
+        rdb
+          .prepare(
+            `
+        INSERT INTO invocations (resource_id, session_id, trigger, adopted, outcome)
+        VALUES (?, ?, 'user_explicit', 1, 'success')
+      `,
+          )
+          .run(row.id, process.env.CLAUDE_SESSION_ID || 'unknown');
+      } catch {
+        /* non-critical */
       }
-      const list = echoedCandidates.map((n) => `  - ${n}`).join('\n');
+
+      const _home = homedir();
+      const portablePath =
+        skillPath && skillPath.startsWith(_home) ? '~' + skillPath.slice(_home.length) : skillPath || '';
+
+      // Defang the untrusted pieces before wrapping (audit 2026-09-05 R6 P1-1). All three come
+      // from a third-party repo by way of the registry — `registry import-url` stores a body
+      // verbatim, and `registry import --name` stores a name with no charset filter at all — so
+      // this emitter is the containment boundary, not the import.
+      //
+      // The handler-wide defangResult only runs neutralizeContextDelimiters, and <skill-loaded>
+      // is deliberately OFF that list (format-utils.mjs) so this very line can emit a real
+      // wrapper. So the body needs the per-call-site neutralizer: a literal `</skill-loaded>`
+      // in it closed the wrapper and forged a second block attributed to another skill, with
+      // the "Follow the instructions above" sentence below landing after it as an endorsement.
+      // Name and path are stripped rather than neutralized because they land in ATTRIBUTE
+      // position, where a bare `"` breaks out of the tag regardless of any tag-shaped pattern.
+      //
+      // Same treatment the sibling face already applies (scripts/pre-skill-bridge.js, audit
+      // 2026-08-14 M-4 + D#122 ③). The wrapper itself stays live — that is the counter-case
+      // pinned by tests/audit-findings-20260814.test.mjs:605 and this file's last case.
+      // `row.type` is not defanged: the resources CHECK constraint admits only 'skill'|'agent'.
+      const attrSafe = (s) => String(s ?? '').replace(/["'<>]/g, '');
+      const safeName = attrSafe(row.name);
+      const safePath = attrSafe(portablePath);
+      const safeBody = neutralizeSkillDelimiters(content);
+      const pathAttr = safePath ? ` path="${safePath}"` : '';
+      const reloadHint = safePath ? ` Reload: Read("${safePath}")` : '';
       return {
         content: [
           {
             type: 'text',
-            text:
-              `${head} Closest ${type}s by search (NOT loaded — none matched the name you asked for):\n${list}\n\n` +
-              `Load one deliberately with its exact name, e.g. mem_use(name="${echoedCandidates[0]}"${type === 'skill' ? '' : `, type="${type}"`}), or browse with ${browse}.`,
+            text: `<skill-loaded name="${safeName}" type="${row.type}"${pathAttr}>\n${safeBody}\n</skill-loaded>\n\nFollow the instructions above to execute this ${row.type}.${reloadHint}`,
           },
         ],
       };
-    }
-
-    // 3. Resolve path: directory skills → SKILL.md (agents always have full .md paths)
-    let skillPath = row.local_path || '';
-    if (skillPath && !skillPath.endsWith('.md')) {
-      for (const candidate of [join(skillPath, 'SKILL.md'), join(skillPath, `skills/${row.name}/SKILL.md`)]) {
-        if (existsSync(candidate)) {
-          skillPath = candidate;
-          break;
-        }
-      }
-    }
-
-    // 4. Path confinement check — prevent reading arbitrary files via crafted local_path.
-    // Base is the env-aware data dir (D#29): managed/ relocates with CLAUDE_MEM_DIR and
-    // equals homedir when unset, so this does not weaken the non-relocated confinement.
-    const managedBase = DB_DIR;
-    if (skillPath && !isPathConfined(skillPath, managedBase)) {
-      return {
-        content: [{ type: 'text', text: `Access denied: path "${skillPath}" is outside managed directory` }],
-        isError: true,
-      };
-    }
-
-    // 5. Read content
-    let content;
-    try {
-      content = readFileSync(skillPath, 'utf8');
-    } catch {
-      const msg = skillPath.endsWith('.md')
-        ? `Found ${type} "${row.name}" but cannot read file: ${skillPath}`
-        : `Found ${type} "${row.name}" but no .md file in: ${skillPath}`;
-      return { content: [{ type: 'text', text: msg }], isError: true };
-    }
-
-    // 5. Record invocation
-    try {
-      rdb
-        .prepare(
-          `
-        INSERT INTO invocations (resource_id, session_id, trigger, adopted, outcome)
-        VALUES (?, ?, 'user_explicit', 1, 'success')
-      `,
-        )
-        .run(row.id, process.env.CLAUDE_SESSION_ID || 'unknown');
-    } catch {
-      /* non-critical */
-    }
-
-    const _home = homedir();
-    const portablePath =
-      skillPath && skillPath.startsWith(_home) ? '~' + skillPath.slice(_home.length) : skillPath || '';
-    const pathAttr = portablePath ? ` path="${portablePath}"` : '';
-    const reloadHint = portablePath ? ` Reload: Read("${portablePath}")` : '';
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `<skill-loaded name="${row.name}" type="${row.type}"${pathAttr}>\n${content}\n</skill-loaded>\n\nFollow the instructions above to execute this ${row.type}.${reloadHint}`,
-        },
-      ],
-    };
-  }),
+      // The one handler that emits a real <skill-loaded> wrapper, so the chokepoint's
+      // skill-block pass is turned OFF here — see defangResult. Everything untrusted inside
+      // the wrapper is neutralized above, per call site.
+    },
+    { emitsSkillBlock: true },
+  ),
 );
 
 // ─── Tool: mem_update ────────────────────────────────────────────────────────
