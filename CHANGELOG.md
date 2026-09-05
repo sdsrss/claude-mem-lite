@@ -2,6 +2,58 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.98.0 — the one untrusted input, read end to end
+
+Audit round R6 (`docs/audits/20260905-214840.md`) read the third-party skill-import path end
+to end — the one untrusted input this project has: 9 modules, 3,149 lines. Everything below
+came out of that round. Minor, not patch: the import bounds change a released default.
+
+**⚠️ Behavior change — `registry import-url` is now bounded.** It used to have no limit on
+anything: a tree offering 500 `SKILL.md` entries of 2 MB each imported all 500 and wrote
+**1000 MB** in 20 s, from one command. Defaults are now **200 entries**, **2 MB per file**,
+**50 MB per run**. Entries past a bound are **refused, not truncated**, and the refusal is
+printed with the import result on both the CLI and the MCP tool.
+
+- *What you must do*: nothing, unless you import a repository larger than those bounds — in
+  which case the refusal line names how many entries were skipped and why.
+- *Opt out / revert*: set `CLAUDE_MEM_IMPORT_MAX_ITEMS`, `CLAUDE_MEM_IMPORT_MAX_FILE_BYTES`
+  or `CLAUDE_MEM_IMPORT_MAX_TOTAL_BYTES` to `0` for the previous unlimited behavior. An
+  unparseable or negative value keeps the default — a typo must never remove a bound.
+  To roll back entirely, pin the previous release.
+
+**Security — a third-party skill could forge a `<skill-loaded>` block in your context.**
+`<skill-loaded>` is deliberately outside the shared delimiter filter so `mem_use`'s load path
+can emit a real wrapper, which meant nothing neutralized it anywhere else:
+
+- `mem_use` interpolated the skill body, name and path raw. A body containing a literal
+  `</skill-loaded>` closed the real wrapper and opened a second block attributed to another
+  skill — with the tool's own "Follow the instructions above" landing after it. A `"` in the
+  name or path injected attributes into the wrapper tag.
+- `mem_registry search|list|stats|import|remove|import_url|enrich` rendered registry names
+  raw on **both** faces, so a crafted name fabricated a whole skill block out of nothing in
+  ordinary browse output — no wrapper to escape at all.
+
+Fixed at the two output chokepoints (`defangResult` on MCP, `out()` on the CLI) rather than
+at the individual call sites, with `mem_use` — the one legitimate emitter — exempted
+explicitly. No user action required; a skill whose text genuinely discusses `<skill-loaded>`
+now renders it bracket-stripped outside the load path.
+
+**Also fixed**
+
+- Import rejects a frontmatter `name` of `.` or `..`. Both survived the charset filter and
+  then passed the confinement check (`<managed>/skills/..` resolves to `<managed>` itself),
+  writing outside the one-directory-per-resource layout. Not a traversal — the write stayed
+  inside the managed dir — but two repositories declaring it clobbered each other.
+- GitHub URLs are percent-encoded per path segment. A branch name containing `#` (legal in
+  git refs) turned `…/git/trees/feat#x?recursive=1` into a URL whose query was **empty** and
+  whose fragment was `#x?recursive=1`, so GitHub answered a non-recursive tree and every
+  nested `skills/*/SKILL.md` went silently undiscovered.
+
+**Considered and declined**: capping `mem_use`'s load length to match the skill-bridge's
+16 000-character limit. The bridge truncates because it auto-injects on a hot path with a
+token budget; `mem_use` is an explicit load, where truncating a legitimately long skill would
+break the thing the user asked for.
+
 ## v3.97.0 — four janitors that deleted or blocked things that were still in use
 
 One theme runs through this release: maintenance code that decided by AGE or by RANK where

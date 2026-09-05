@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 3.97.0 — **this exact string is a release guard.**
+- **Version**: 3.98.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=20, ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -175,8 +175,8 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **353 files / 5863** (5862 passed, 1 skipped) | `audit/2026-09-05-r5-impl`, 2026-09-05 (was 351 / 5844 at `a8d7dd1`: +2 test files — `session-start-lock-sweeper`, `pre-commit-version-sync` — and +14 cases across those plus `install-lifecycle`, `hook-update`, `hook-launcher`) |
-| Knip | **50** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unused-export NAME SET is byte-identical to `a8d7dd1` (same-tree A/B, `git stash`). The duplicate export (`FALLBACK_OBS_WINDOW_MS`) was removed, not reclassified. |
+| Tests | **355 files / 5890** (5889 passed, 1 skipped) | tag `v3.98.0` (R6 batch), 2026-09-05 (was 353 / 5863 at `audit/2026-09-05-r5-impl`: +2 test files `audit-r6-mem-use-defang` / `audit-r6-registry-render-defang`, +27 cases across those two plus `registry-importer` and `registry-github`; both new files live under `tests/`, which `obs-id-caliber-sync` does not generate cases from) |
+| Knip | **50** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unmoved by the R6 batch: its three new exports are all consumed (`formatImportSkips` by both faces, `IMPORT_DEFAULT_LIMITS` by its test), and `IMPORT_LIMIT_ENV` was made module-private after a measurement showed it as the 51st. Unused-export NAME SET is byte-identical to `a8d7dd1` (same-tree A/B, `git stash`). |
 | Coverage | statements **84.34%** · branches **78.88%** · functions **89.26%** · lines **85.44%** | same tree. Gate (80 / 74 / 84 / 83) passes. Unmoved by the R5 batch. |
 
 **`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
