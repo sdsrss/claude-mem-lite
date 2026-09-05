@@ -1,8 +1,9 @@
 # claude-mem-lite — Architecture
 
-Generated 2026-09-05 against v3.96.0. §3/§4 regenerated at `2cb0a41`, the head of
-`audit/2026-09-05-round2` (the five fixes from `docs/audit/2026-09-05-audit.md`); §1/§2/§5
-re-read at the same commit.
+Generated 2026-09-05 against v3.96.0. §4 regenerated at `2cb0a41` (head of
+`audit/2026-09-05-round2`); §3 regenerated on `audit/2026-09-05-round3` after P2-9 moved
+edge extraction onto the AST — its edge counts supersede any earlier quote. §1/§2/§5
+hand-maintained, last re-read on round 3.
 
 Sections 3 and 4 are **tool output** — regenerate them rather than editing by hand:
 
@@ -54,20 +55,22 @@ leaf     utils.mjs (barrel) · format-utils · project-utils · tfidf · nlp · 
 Measured direction (§3, 2026-09-05): **0 static cycles, 0 lazy cycles** (also pinned by
 `tests/import-graph.test.mjs`). The graph is a DAG but **not strictly layered**:
 
-- `lib → engine` has 13 edges. This is by design — a shared core fronts the engine it
+- `lib → engine` has 12 edges. This is by design — a shared core fronts the engine it
   wraps (`lib/search-core.mjs → search-engine.mjs`, `lib/registry-core.mjs → registry.mjs`).
   **None of them reaches the hook layer any more.** Two used to: `lib/lesson-bridge.mjs`
   and `lib/startup-dashboard.mjs` imported `hook-shared.mjs`, which
   `tests/observation-vector-single-writer.test.mjs` waved through as a named exception
   (audit 2026-09-02 P2-9 → 2026-09-05 P1-2). The three symbols they needed now live in
   `lib/llm-call.mjs`, `lib/quiet-scope.mjs` and `lib/handoff-constants.mjs` — which is
-  where 4 of the current 13 come from (`→ haiku-client`, `→ memdir/claudemd/adopt-content`)
+  where 4 of the current 12 come from (`→ haiku-client`, `→ memdir/claudemd/adopt-content`)
   — and the guard's exception is deleted, so `lib/` may now import no `hook-*.mjs` at all.
-- One entry in §3's lazy list is a **ruler artifact, not an edge**:
-  `lib/save-enrich.mjs → hook-optimize.mjs (lazy)` is a commented-out `await import(...)`
-  at `lib/save-enrich.mjs:175`. `edgesOf()` in `scripts/audit-metrics.mjs` matches raw
-  source text without stripping comments; the guard test does strip them, which is why the
-  two disagree. Filed as P2-9 in `docs/audit/2026-09-05-audit.md`.
+  (Round 2 recorded 13 here; the 13th was the P2-9 phantom below, gone in round 3.)
+- §3's edges are read from the **AST**, so comments and string literals are not edges
+  (audit 2026-09-05 P2-9, fixed in round 3). Until then `edgesOf()` regexed raw source and
+  counted the commented-out `await import('../hook-optimize.mjs')` at
+  `lib/save-enrich.mjs:175` as a live lazy edge into the hook layer — 49 lazy edges where
+  there are 48. The same extraction feeds `cycles()`, so that class of miscount could
+  report a cycle nobody wrote. `--self-check` now carries YES and NO arms for it.
 - `leaf → lib` has 9 edges, all from `utils.mjs`/`tfidf.mjs`/`tier.mjs`/`format-utils.mjs`
   /`secret-scrub.mjs` into small `lib/` leaves (`time-constants`, `private-strip`, `rrf`,
   `resolve-data-dir`, `low-signal-patterns`, `inject-search-core`). `utils.mjs` is a
@@ -79,7 +82,7 @@ middle tier a single mutual layer. Nothing in `lib/` or `engine` imports a face 
 
 ## 3. Dependency graph (generated: `npm run audit:deps`)
 
-Modules: 161 · edges: 481 static + 49 lazy (relative `import`/`export … from` + literal `import()`).
+Modules: 161 · edges: 481 static + 48 lazy (relative `import`/`export … from` + literal `import()`, read from the AST — comments and string literals are not edges).
 
 ### Layer matrix (rows import columns; count of edges)
 
@@ -88,13 +91,13 @@ Modules: 161 · edges: 481 static + 49 lazy (relative `import`/`export … from`
 | **entry** | 2 | 4 | 34 | 108 | 16 | 2 |
 | **face** | 0 | 8 | 19 | 39 | 7 | 0 |
 | **engine** | 0 | 0 | 36 | 59 | 33 | 0 |
-| **lib** | 0 | 0 | 13 | 78 | 39 | 0 |
+| **lib** | 0 | 0 | 12 | 78 | 39 | 0 |
 | **leaf** | 0 | 0 | 1 | 9 | 11 | 0 |
 | **tooling** | 0 | 0 | 3 | 8 | 1 | 0 |
 
-### Upward edges (lower layer importing a higher one; tooling excluded): 23
+### Upward edges (lower layer importing a higher one; tooling excluded): 22
 
-- lib → engine: 13 (sanctioned — shared cores front the engines)
+- lib → engine: 12 (sanctioned — shared cores front the engines)
   - `lib/error-recall-core.mjs` → `scoring-sql.mjs`
   - `lib/get-core.mjs` → `search-scoring.mjs`
   - `lib/inject-search-core.mjs` → `scoring-sql.mjs`
@@ -104,7 +107,6 @@ Modules: 161 · edges: 481 static + 49 lazy (relative `import`/`export … from`
   - `lib/quiet-scope.mjs` → `adopt-content.mjs`
   - `lib/registry-core.mjs` → `registry.mjs`
   - `lib/save-enrich.mjs` → `haiku-client.mjs` (lazy)
-  - `lib/save-enrich.mjs` → `hook-optimize.mjs` (lazy)
   - `lib/search-core.mjs` → `search-engine.mjs`
   - `lib/search-core.mjs` → `scoring-sql.mjs`
   - `lib/timeline-core.mjs` → `search-engine.mjs`

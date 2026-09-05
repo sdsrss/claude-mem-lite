@@ -246,10 +246,34 @@ function resolveSpec(fromFile, spec) {
   return target;
 }
 
-function edgesOf(f) {
-  const src = read(f);
-  const stat = new Set();
-  const lazy = new Set();
+// Audit 2026-09-05 P2-9: this used to run the three regexes over RAW source, so a
+// commented-out import counted as a dependency — `lib/save-enrich.mjs:175` says in prose
+// that it no longer does `await import('../hook-optimize.mjs')`, and the ruler read that
+// sentence as a live lazy edge into the hook layer. The guard test that enforces the same
+// rule strips comment lines first, so the two disagreed about the same file, and the
+// over-reported edges fed `cycles()` — where a comment is enough to mint a cycle nobody
+// wrote. The AST cannot make that mistake: comments and string literals are not nodes.
+//
+// The regexes stay as the FALLBACK for a file acorn refuses. Returning no edges there
+// would be the worse failure: a silently edge-less module cannot participate in a cycle,
+// so a parse error would read as a clean graph.
+function edgesFromAst(ast, f, stat, lazy) {
+  walkAst(ast, (n) => {
+    const src = n.source;
+    const isStatic = n.type === 'ImportDeclaration'
+      || n.type === 'ExportNamedDeclaration'
+      || n.type === 'ExportAllDeclaration';
+    if (isStatic && src?.type === 'Literal' && typeof src.value === 'string') {
+      const t = resolveSpec(f, src.value); if (t) stat.add(t);
+    } else if (n.type === 'ImportExpression' && src?.type === 'Literal' && typeof src.value === 'string') {
+      // A non-literal specifier (`import(someVar)`) is unresolvable by any method and is
+      // skipped here exactly as the regex skipped it.
+      const t = resolveSpec(f, src.value); if (t) lazy.add(t);
+    }
+  });
+}
+
+function edgesFromRegex(src, f, stat, lazy) {
   for (const re of [STATIC_IMPORT, BARE_IMPORT]) {
     re.lastIndex = 0;
     let m;
@@ -258,6 +282,23 @@ function edgesOf(f) {
   DYNAMIC_IMPORT.lastIndex = 0;
   let m;
   while ((m = DYNAMIC_IMPORT.exec(src))) { const t = resolveSpec(f, m[1]); if (t) lazy.add(t); }
+}
+
+// Files whose edges came from the regex fallback rather than the AST. Reported so a
+// parse failure is visible in §3 instead of quietly degrading the graph.
+const unparsedEdgeFiles = [];
+
+function edgesOf(f) {
+  const src = read(f);
+  const stat = new Set();
+  const lazy = new Set();
+  const ast = parse(src, rel(f));
+  if (ast.error) {
+    if (!unparsedEdgeFiles.includes(rel(f))) unparsedEdgeFiles.push(rel(f));
+    edgesFromRegex(src, f, stat, lazy);
+  } else {
+    edgesFromAst(ast, f, stat, lazy);
+  }
   return { stat, lazy };
 }
 
@@ -511,7 +552,11 @@ function depsMd(list) {
   const leafUp = upward.filter((e) => layerOf(e.from) === 'leaf');
 
   const L = [];
-  L.push(`Modules: ${nodes.length} · edges: ${edges.filter((e) => e.kind === 'static').length} static + ${edges.filter((e) => e.kind === 'lazy').length} lazy (relative \`import\`/\`export … from\` + literal \`import()\`).`);
+  L.push(`Modules: ${nodes.length} · edges: ${edges.filter((e) => e.kind === 'static').length} static + ${edges.filter((e) => e.kind === 'lazy').length} lazy (relative \`import\`/\`export … from\` + literal \`import()\`, read from the AST — comments and string literals are not edges).`);
+  if (unparsedEdgeFiles.length) {
+    L.push('');
+    L.push(`> **${unparsedEdgeFiles.length} file(s) fell back to regex edge extraction** (acorn could not parse them), so their edges may include commented-out imports: ${unparsedEdgeFiles.map((r) => `\`${r}\``).join(', ')}.`);
+  }
   L.push('');
   L.push('### Layer matrix (rows import columns; count of edges)');
   L.push('');
@@ -621,6 +666,35 @@ if (args.has('--self-check')) {
     const badFile = join(probeDir, 'bad.mjs');
     writeFileSync(badFile, 'function ( { unparseable\n');
     if (longFunctions([badFile]).parseErrors.length !== 1) fail('longFunctions swallowed a parse error instead of reporting it');
+
+    // 4. The edge extractor can say YES and NO (audit 2026-09-05 P2-9). It read raw source
+    //    with three regexes, so a commented-out `import()` counted as a dependency —
+    //    over-reporting §3's graph and feeding cycles(), where a comment is enough to mint a
+    //    cycle nobody wrote. The NO arm is the one that regressed; the YES arms are what
+    //    stop a "fix" that simply stops finding imports, which would read as a clean DAG.
+    //    The probe specifier is assembled from TGT rather than written inline, because
+    //    `tests/import-graph.test.mjs` scans THIS file's text with the same kind of regex
+    //    this check exists to retire, and a literal './edge-target.mjs' here reads to it as
+    //    an unresolvable import OF audit-metrics.mjs. That second home of the defect is
+    //    filed as P2-10 rather than fixed here.
+    const TGT = './edge-target.mjs';
+    const edgeTarget = join(probeDir, 'edge-target.mjs');
+    writeFileSync(edgeTarget, 'export const t = 1;\n');
+    const edgeReal = join(probeDir, 'edge-real.mjs');
+    writeFileSync(edgeReal, `import { t } from '${TGT}';\nconst p = await import('${TGT}');\nexport { t, p };\n`);
+    const realEdges = edgesOf(edgeReal);
+    if (!realEdges.stat.has(edgeTarget)) fail('edgesOf missed a real static import');
+    if (!realEdges.lazy.has(edgeTarget)) fail('edgesOf missed a real dynamic import');
+    const edgeCommented = join(probeDir, 'edge-commented.mjs');
+    writeFileSync(edgeCommented, `// This used to \`await import('${TGT}')\` and no longer does.\n/* import { t } from '${TGT}'; */\nexport const q = 2;\n`);
+    const commentedEdges = edgesOf(edgeCommented);
+    if (commentedEdges.stat.size !== 0 || commentedEdges.lazy.size !== 0) {
+      fail(`edgesOf counted a commented-out import as an edge (${commentedEdges.stat.size} static, ${commentedEdges.lazy.size} lazy)`);
+    }
+    // A specifier inside a real string literal is not an import either.
+    const edgeString = join(probeDir, 'edge-string.mjs');
+    writeFileSync(edgeString, `export const msg = "run import('${TGT}') yourself";\n`);
+    if (edgesOf(edgeString).lazy.size !== 0) fail('edgesOf counted a string literal as a dynamic import');
   } finally {
     try { rmSync(probeDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
