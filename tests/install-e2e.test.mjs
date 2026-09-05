@@ -481,12 +481,35 @@ describe('E2E: Version consistency across all manifests', () => {
     const pkg = readJson('package.json');
     const plugin = readJson('.claude-plugin/plugin.json');
     const marketplace = readJson('.claude-plugin/marketplace.json');
-    const claudeMd = readFileSync('CLAUDE.md', 'utf8');
 
     const version = pkg.version;
     expect(plugin.version).toBe(version);
     expect(marketplace.plugins[0].version).toBe(version);
-    expect(claudeMd).toContain(`**Version**: ${version}`);
+
+    // CLAUDE.md is developer-local and untracked (it is in .gitignore), so a fresh
+    // clone — CI included — does not have it. The three SHIPPED manifests above are
+    // checked unconditionally; the CLAUDE.md leg only runs where a REAL one exists.
+    //
+    // "Exists" is not the right predicate, and plain existsSync was measured wrong:
+    // this plugin's own SessionStart adopt hook RECREATES CLAUDE.md within seconds of
+    // it going missing, writing a file that holds nothing but the managed block. So on
+    // any adopted machine the file is present again almost immediately, carries no
+    // `**Version**:` line, and an existence check turns that into a hard failure for a
+    // developer who never touched the version at all.
+    //
+    // The predicate is therefore "is there project content OUTSIDE the managed
+    // sentinel blocks" — true for a real CLAUDE.md, false for an adopt-generated stub.
+    // Deliberately NOT a silent skip: this repo's doctrine is that a case which cannot
+    // fail is not a case, and this assertion has already caught a real defect (a
+    // reformat that dropped the literal `**Version**:` token). Where a real file is
+    // present the check is exactly as strict as before.
+    const claudeMd = existsSync('CLAUDE.md') ? readFileSync('CLAUDE.md', 'utf8') : '';
+    const outsideManagedBlocks = claudeMd
+      .replace(/<!--\s*[\w-]+:begin[^>]*-->[\s\S]*?<!--\s*[\w-]+:end\s*-->/g, '')
+      .trim();
+    if (outsideManagedBlocks) {
+      expect(claudeMd).toContain(`**Version**: ${version}`);
+    }
   });
 
   it('npm package includes all necessary files for publishing', () => {

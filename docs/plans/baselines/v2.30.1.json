@@ -1,9 +1,0 @@
-{
-  "version": "1",
-  "mcp_tool_count": 17,
-  "mcp_instructions_bytes": 2101,
-  "prompt_count": 0,
-  "injection_rate": 0,
-  "hook_p50_ms": null,
-  "hook_p99_ms": null
-}
