@@ -12,13 +12,14 @@ import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
 import { recordHookError } from './lib/hook-telemetry.mjs';
-import { execClaudeCliSync, resolveModel as resolveModelShared, flattenForCLI as _flattenForCLI, detectMode as detectLLMMode, callHaiku, BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
-// Phase D: invited-memory sentinel detection. memdir.mjs/claudemd.mjs only pull in
-// fs/path/os/crypto; adopt-content.mjs is pure strings. No circular deps —
-// neither imports hook-shared.
-import { memdirPath as _memdirPath, isAdopted as _isAdoptedMemdir } from './memdir.mjs';
-import { isAdopted as _isAdoptedClaudeMd } from './claudemd.mjs';
-import { PLUGIN_SLUG as _PLUGIN_SLUG } from './adopt-content.mjs';
+// Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
+// predicates and the handoff constants moved into `lib/` because two lib modules
+// imported them from here and dragged this file's whole import graph — haiku-client,
+// memdir, claudemd, adopt-content — along with them. Re-exported below so every caller
+// of `hook-shared.mjs` is unchanged; those four imports now live with the moved code.
+export { callLLM } from './lib/llm-call.mjs';
+export { isQuietHooks, isAdoptedHere, effectiveQuiet } from './lib/quiet-scope.mjs';
+export { HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE, HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS } from './lib/handoff-constants.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -55,44 +56,6 @@ export const FALLBACK_OBS_WINDOW_MS = RELATED_OBS_WINDOW_MS; // same window
 // from the keyctx marker (D#123 review C-1: query-mirroring suppressed
 // <memory-context> injection on quiet/adopted projects where nothing renders).
 export const KEY_CONTEXT_LIMIT = 10;
-
-// Phase A (v2.31.3+): MEM_QUIET_HOOKS=1 drops descriptive hook/MCP-instruction
-// bodies (File Lessons / Key Context headers, MCP WHEN-TO-USE & decision rules,
-// related-memory lesson suffix). Intended for users who adopted invited-memory
-// (MEMORY.md sentinel) or who otherwise want minimal hook noise. Function form
-// (not const) so modules importing at load time still respect later env sets
-// in-process, and tests can toggle per-call. See docs/plans/2026-04-16-invited-memory-pattern.md.
-export function isQuietHooks() {
-  return process.env.MEM_QUIET_HOOKS === '1';
-}
-
-// Phase D (v2.32.1+) → v3.13: if the current project has adopted our steering,
-// the contract is already loaded at system-prompt authority — so hook +
-// MCP-instruction output can also go quiet. v3.13 moved that contract from the
-// memory-dir MEMORY.md sentinel to the project CLAUDE.md managed block, so check
-// the new scheme first and keep the legacy memdir sentinel as a fallback (an
-// un-migrated project stays quiet through the transition). isQuietHooks (env)
-// remains an independent, stronger override.
-export function isAdoptedHere(cwd) {
-  try {
-    const resolved = cwd || process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd();
-    return _isAdoptedClaudeMd(resolved, _PLUGIN_SLUG)
-      || _isAdoptedMemdir(_memdirPath(resolved), _PLUGIN_SLUG);
-  } catch {
-    return false;
-  }
-}
-
-export function effectiveQuiet(cwd) {
-  return isQuietHooks() || isAdoptedHere(cwd);
-}
-
-// Handoff system constants
-export const HANDOFF_EXPIRY_CLEAR = 6 * 3600000;                // 6 hours (covers lunch/meeting breaks)
-export const HANDOFF_EXPIRY_EXIT = 7 * 24 * 60 * 60 * 1000;   // 7 days
-export const HANDOFF_ANCHOR_MAX_AGE = 72 * 3600000;             // 72h cap on git_sha anchor — avoids stale-HEAD false positives
-export const HANDOFF_MATCH_THRESHOLD = 3;                       // min weighted score
-export const CONTINUE_KEYWORDS = /继续|接着|上次|之前的|前面的|刚才|\bcontinue\b|\bresume\b|\bwhere[\s-]+we[\s-]+left\b|\bpick[\s-]+up\b|\bcarry[\s-]+on\b/i;
 
 // Orphan-sweep threshold for `ep-flush-*` / `pending-*` runtime artifacts.
 // handleLLMEpisode's worst-case round-trip is ~60s (delay + LLM call + DB
@@ -378,41 +341,6 @@ export function openDb() {
   }
 }
 
-// ─── LLM (provider-routed: Anthropic API → OpenRouter → claude CLI) ─────────
-
-// Accepts either a plain string (legacy) or {system, user} (defense-in-depth
-// against prompt injection from poisoned user_prompts content — cso F#4 fix).
-// Provider priority mirrors haiku-client (ANTHROPIC_API_KEY > OPENROUTER_API_KEY
-// > CLI): when a key is present, delegate to callHaiku — it owns the Anthropic
-// Messages / OpenRouter chat-completions request shapes, uses the system role
-// natively, AND degrades to the `claude -p` CLI internally if the keyed provider
-// fails (so a region-blocked / out-of-credit key still yields a summary). The
-// keyless case shells out to `claude -p` directly here, where flattenForCLI
-// renders {system, user} with an explicit data-boundary marker. Returns the raw
-// response string (callers run parseJsonFromLLM themselves) or null.
-// maxTokens is sized for session-summary / episode JSON (larger than the
-// registry/optimize callers' budgets).
-export async function callLLM(prompt, timeoutMs = BG_LLM_TIMEOUT_MS) {
-  if (detectLLMMode() !== 'cli') {
-    const result = await callHaiku(prompt, { timeout: timeoutMs, maxTokens: 2000 });
-    return result?.text ?? null;
-  }
-
-  const { cli: modelName } = resolveModelShared();
-  try {
-    // Shared runner with haiku-client.mjs#callModelCLI (rationale there): no
-    // transcript persistence, no claudemd hook fan-out, and the one-shot
-    // retry-without-flag that keeps this leg alive on an older Claude Code CLI.
-    const result = execClaudeCliSync(modelName, { input: _flattenForCLI(prompt), timeout: timeoutMs });
-    return result.trim();
-  } catch (e) {
-    const out = _extractResponseFromError(e);
-    if (out) return out;
-    debugCatch(e, 'callLLM');
-    return null;
-  }
-}
-
 // ─── Background Spawner ─────────────────────────────────────────────────────
 
 export function spawnBackground(bgEvent, ...extraArgs) {
@@ -435,20 +363,3 @@ export function spawnBackground(bgEvent, ...extraArgs) {
 
 export function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-/**
- * Extract partial response from CLI error output (timeout/error recovery).
- * @param {Error} error The caught error from execFileSync
- * @returns {string|null} Extracted JSON string or null
- */
-export function _extractResponseFromError(error) {
-  const out = error.stdout?.toString?.()?.trim() || error.output?.[1]?.toString?.()?.trim() || '';
-  if (out && out.startsWith('{') && out.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(out);
-      // Reject structurally incomplete responses (e.g. truncated mid-output)
-      if (typeof parsed !== 'object' || parsed === null || Object.keys(parsed).length === 0) return null;
-      return out;
-    } catch { return null; }
-  }
-  return null;
-}

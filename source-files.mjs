@@ -83,7 +83,10 @@ export const SOURCE_FILES = [
   // source-files-sync.test.mjs is what keeps these from being dropped on bump.
   'lib/file-intel.mjs',
   'lib/reread-guard.mjs',
+  'lib/handoff-constants.mjs',
+  'lib/llm-call.mjs',
   'lib/metrics.mjs',
+  'lib/quiet-scope.mjs',
   'lib/shard-gc.mjs',
   // v3.6.x: bind-salience producer — extracts identifiers a lesson names that
   // are present in the pre-edit file (component 2). Imported ONLY by

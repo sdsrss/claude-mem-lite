@@ -74,11 +74,13 @@ describe('observation_vectors has one writer (plus one declared exception)', () 
 });
 
 describe('lib/ does not depend on the hook layer', () => {
-  // `hook-shared.mjs` is the one exception and it is NOT waved through silently: two lib
-  // modules import it for constants and callLLM, which the audit tracks separately as P2-9
-  // ("hook-shared is misnamed — server and two lib modules depend on it"). Everything else
-  // is out: lib/save-enrich.mjs's `await import('../hook-optimize.mjs')` was the last one.
-  const ALLOWED_HOOK_IMPORT = 'hook-shared.mjs';
+  // No exceptions. `hook-shared.mjs` used to be one — two lib modules imported it for
+  // callLLM and two constants, so a lib module loaded the whole hook constellation and
+  // this rule read as enforced while carving out a name (audit 2026-09-02 P2-9 →
+  // 2026-09-05 P1-2). Those three symbols now live in lib/llm-call.mjs,
+  // lib/quiet-scope.mjs and lib/handoff-constants.mjs; hook-shared re-exports them for
+  // its own callers. lib/save-enrich.mjs's `await import('../hook-optimize.mjs')` was
+  // the other one, removed earlier.
   const HOOK_IMPORT_RE = /(?:from|import\()\s*['"]\.\.\/(hook-[a-z-]+\.mjs)['"]/g;
 
   it('the detector fires on a hook import and not on a sibling lib import', () => {
@@ -88,14 +90,14 @@ describe('lib/ does not depend on the hook layer', () => {
     expect(fires("import { y } from './observation-write.mjs';")).toBe(false);
   });
 
-  it('no lib module imports a hook-layer module other than hook-shared', () => {
+  it('no lib module imports a hook-layer module at all', () => {
     const offenders = [];
     for (const f of walkShipped(join(REPO, 'lib'))) {
       const src = readFileSync(f, 'utf8').split('\n')
         .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
       HOOK_IMPORT_RE.lastIndex = 0;
       for (const m of src.matchAll(HOOK_IMPORT_RE)) {
-        if (m[1] !== ALLOWED_HOOK_IMPORT) offenders.push(`${relative(REPO, f)} -> ${m[1]}`);
+        offenders.push(`${relative(REPO, f)} -> ${m[1]}`);
       }
     }
     expect(offenders).toEqual([]);
