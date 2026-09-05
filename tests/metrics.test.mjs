@@ -7,6 +7,46 @@ import { join } from 'path';
 import {
   recordMetric, readMetrics, aggregateMetrics, formatSummary, timed, DEFAULT_WINDOW_DAYS, gcOldMetricShards,
 } from '../lib/metrics.mjs';
+import { gcDailyShards } from '../lib/shard-gc.mjs';
+
+// The sweep `gcOldMetricShards` and `registry-recommend.gcOldShadowShards` now share
+// (audit 2026-09-05 P2-3). Both callers exercise it through their own directory
+// resolution; these cases pin the parts neither caller's test reaches — what counts as a
+// shard name, and that a caller may hand it a path that does not exist.
+describe('gcDailyShards (the shared sweep)', () => {
+  let tmp;
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'shard-gc-')); });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it('deletes by the DATE IN THE FILENAME, not by mtime', () => {
+    // A shard rewritten today is still that day's shard. Both files are created now, so
+    // an mtime-based sweep would keep both and this case would read 0.
+    const old1 = new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10);
+    const old2 = new Date(Date.now() - 91 * 86400000).toISOString().slice(0, 10);
+    const keep = new Date(Date.now() - 89 * 86400000).toISOString().slice(0, 10);
+    for (const d of [old1, old2, keep]) writeFileSync(join(tmp, `${d}.jsonl`), '{}\n');
+    expect(gcDailyShards(tmp, 90)).toBe(2);
+    expect(existsSync(join(tmp, `${keep}.jsonl`))).toBe(true);
+  });
+
+  it('only treats YYYY-MM-DD.jsonl as a shard', () => {
+    const old = new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10);
+    writeFileSync(join(tmp, `${old}.jsonl`), '{}\n');
+    for (const name of [`${old}.json`, `${old}.jsonl.bak`, `x-${old}.jsonl`, '2026-1-2.jsonl', 'latest.jsonl']) {
+      writeFileSync(join(tmp, name), 'keep');
+    }
+    expect(gcDailyShards(tmp, 90)).toBe(1);
+    expect(readdirSync(tmp).sort()).toEqual(
+      [`${old}.json`, `${old}.jsonl.bak`, `x-${old}.jsonl`, '2026-1-2.jsonl', 'latest.jsonl'].sort(),
+    );
+  });
+
+  it('is a no-op on a missing or empty path rather than throwing', () => {
+    expect(gcDailyShards(join(tmp, 'nope'), 90)).toBe(0);
+    expect(gcDailyShards('', 90)).toBe(0);
+    expect(gcDailyShards(tmp, 90)).toBe(0);
+  });
+});
 
 describe('gcOldMetricShards', () => {
   let tmp;
