@@ -26,7 +26,13 @@ fi
 log_ok()   { echo -e "${GREEN}✓${NC} $*" >&2; }
 log_info() { echo -e "${BLUE}ℹ${NC} $*" >&2; }
 log_warn() { echo -e "${YELLOW}⚠${NC} $*" >&2; }
-# shellcheck disable=SC2317  # kept for API symmetry with log_ok/log_info/log_warn
+# shellcheck disable=SC2317,SC2329  # kept for API symmetry with log_ok/log_info/log_warn
+# Both codes on purpose: shellcheck 0.10.0 split "this function is never invoked" out of
+# SC2317 (unreachable command) into its own SC2329. The lone SC2317 stopped matching, so
+# 0.11.0 flags this line and `npx eslint`-style local runs exit 1 while CI stays green —
+# the ubuntu-latest runner still ships a pre-0.10 shellcheck. That is a version skew, not
+# a disagreement about the code: this job gates on exit 0, so it turns red on its own the
+# day GitHub bumps the runner image. Keep SC2317 for anyone on an older shellcheck.
 log_err()  { echo -e "${RED}✗${NC} $*" >&2; }
 
 # 1. Migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
