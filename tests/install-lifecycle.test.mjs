@@ -681,7 +681,11 @@ describe('D#24 install layer honors CLAUDE_MEM_DIR for data', () => {
 
   it('doctor reads the relocated DB (CLAUDE_MEM_DIR ≠ HOME), not the homedir code dir', () => {
     const home = makeTmpDir();
-    const dataDir = join(makeTmpDir(), 'relocated-mem');
+    // Hold the PARENT: `join(makeTmpDir(), …)` discarded it, and the cleanup below removed
+    // only the `relocated-mem` child — so every run of this file left one empty
+    // /tmp/mem-install-* behind. (Found while auditing sandbox disposal for the R5 batch.)
+    const dataRoot = makeTmpDir();
+    const dataDir = join(dataRoot, 'relocated-mem');
     mkdirSync(dataDir, { recursive: true });
     const db = new Database(join(dataDir, 'claude-mem-lite.db'));
     initSchema(db); // creates observations_fts → doctor reports "FTS5 index: present"
@@ -694,7 +698,7 @@ describe('D#24 install layer honors CLAUDE_MEM_DIR for data', () => {
         rmSync(home, { recursive: true, force: true });
       } catch {}
       try {
-        rmSync(dataDir, { recursive: true, force: true });
+        rmSync(dataRoot, { recursive: true, force: true }); // recursive → takes dataDir with it
       } catch {}
     }
   });

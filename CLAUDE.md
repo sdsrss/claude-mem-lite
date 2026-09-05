@@ -175,7 +175,7 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **353 files / 5858** (5857 passed, 1 skipped) | `audit/2026-09-05-r5-impl` @ `c13d66c`, 2026-09-05 (was 351 / 5844 at `a8d7dd1`: +2 test files — `session-start-lock-sweeper`, `pre-commit-version-sync` — and +14 cases across those plus `install-lifecycle`, `hook-update`, `hook-launcher`) |
+| Tests | **353 files / 5863** (5862 passed, 1 skipped) | `audit/2026-09-05-r5-impl`, 2026-09-05 (was 351 / 5844 at `a8d7dd1`: +2 test files — `session-start-lock-sweeper`, `pre-commit-version-sync` — and +14 cases across those plus `install-lifecycle`, `hook-update`, `hook-launcher`) |
 | Knip | **50** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unused-export NAME SET is byte-identical to `a8d7dd1` (same-tree A/B, `git stash`). The duplicate export (`FALLBACK_OBS_WINDOW_MS`) was removed, not reclassified. |
 | Coverage | statements **84.34%** · branches **78.88%** · functions **89.26%** · lines **85.44%** | same tree. Gate (80 / 74 / 84 / 83) passes. Unmoved by the R5 batch. |
 

@@ -270,6 +270,124 @@ describe('hook-launcher self-heal', () => {
   });
 });
 
+// A20260905-R5-Q2, second half. Gating the heal to session-start left one route open and
+// one closed: a hot-path fire now records the breakage and defers, but if the missing module
+// sits on ANOTHER entry's import chain (this launcher fronts hook.mjs plus four standalone
+// hook scripts), session-start's own entry imports cleanly, the catch never fires, and the
+// clean fire used to simply clear the marker — so nothing ever repaired it.
+//
+// The repair here is DETACHED with stdio ignored: the fire is capped at 15s while
+// `install.mjs repair` takes minutes, and install.mjs logs to stdout while SessionStart
+// stdout is the JSON envelope Claude Code parses. So it cannot be observed through the
+// launcher's streams — the stub records itself on disk and these cases wait for that.
+describe('hook-launcher marker-driven self-heal (session-start)', () => {
+  const BROKEN = (root) => join(root, 'runtime', 'hook-launcher-broken');
+  const COOLDOWN = (root) => join(root, 'runtime', 'hook-launcher-lastheal');
+  const RAN = (root) => join(root, 'repair-ran');
+  const sleepSync = (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  };
+  const waitFor = (pred, ms = 5000) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (pred()) return true;
+      sleepSync(25);
+    }
+    return pred();
+  };
+  const writeBroken = (root, reason = 'lib/cite-back-hint.mjs') => {
+    mkdirSync(join(root, 'runtime'), { recursive: true });
+    writeFileSync(BROKEN(root), JSON.stringify({ reason, ts: Date.now() }));
+  };
+  const stubInstaller = (root) =>
+    writeFileSync(
+      join(root, 'install.mjs'),
+      `import { writeFileSync } from 'fs';\n` +
+        `writeFileSync(${JSON.stringify(RAN(root))}, process.argv[2] || '');\n` +
+        `process.exit(0);\n`,
+    );
+  const cleanEntry = (root) =>
+    writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-OK\\n");\n');
+
+  it('repairs in the background when a PREVIOUS fire recorded a breakage this entry cannot see', () => {
+    const root = makeInstall('cml-launcher-marker-heal');
+    stubInstaller(root);
+    cleanEntry(root); // this entry is fine — the broken module is on another one's chain
+    writeBroken(root);
+
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('ENTRY-OK'); // the fire is never blocked on the repair
+    expect(waitFor(() => existsSync(RAN(root)))).toBe(true);
+    expect(readFileSync(RAN(root), 'utf8')).toBe('repair');
+    // Marker cleared (doctor must not keep reporting a breakage we acted on) and the 6h
+    // cooldown armed (it, not the marker, is what bounds repair spawns).
+    expect(waitFor(() => !existsSync(BROKEN(root)))).toBe(true);
+    expect(existsSync(COOLDOWN(root))).toBe(true);
+  });
+
+  it('CONTROL: a healthy install spawns nothing at session-start', () => {
+    // Without this the case above is equally consistent with a launcher that repairs on
+    // every session-start regardless of state.
+    const root = makeInstall('cml-launcher-marker-healthy');
+    stubInstaller(root);
+    cleanEntry(root);
+
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    sleepSync(300);
+    expect(existsSync(RAN(root))).toBe(false);
+    expect(existsSync(COOLDOWN(root))).toBe(false);
+  });
+
+  it('drops a stale cooldown once no fire is recording breakage any more (#6/#9)', () => {
+    const root = makeInstall('cml-launcher-marker-cooldown-drop');
+    stubInstaller(root);
+    cleanEntry(root);
+    mkdirSync(join(root, 'runtime'), { recursive: true });
+    writeFileSync(COOLDOWN(root), String(Date.now()));
+
+    runLauncher(root, ['entry.mjs', 'session-start']);
+    // No marker → the install is as healthy as this launcher can tell → an old window must
+    // not keep blocking an unrelated future break.
+    expect(existsSync(COOLDOWN(root))).toBe(false);
+  });
+
+  it('honors the cooldown, and KEEPS the marker while it does so', () => {
+    const root = makeInstall('cml-launcher-marker-cooldown-honored');
+    stubInstaller(root);
+    cleanEntry(root);
+    writeBroken(root);
+    mkdirSync(join(root, 'runtime'), { recursive: true });
+    writeFileSync(COOLDOWN(root), String(Date.now())); // fresh window
+
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    sleepSync(300);
+    expect(existsSync(RAN(root))).toBe(false);
+    // Not clearing here is the point: within the window nothing repaired it, so `doctor`
+    // must still be able to see the degraded state.
+    expect(existsSync(BROKEN(root))).toBe(true);
+  });
+
+  it('does nothing on the per-tool hot path — the marker survives for session-start', () => {
+    const root = makeInstall('cml-launcher-marker-hotpath');
+    stubInstaller(root);
+    cleanEntry(root);
+    writeBroken(root);
+
+    const hot = runLauncher(root, ['entry.mjs']); // no event arg = hot path
+    expect(hot.status).toBe(0);
+    sleepSync(300);
+    expect(existsSync(RAN(root))).toBe(false);
+    expect(existsSync(BROKEN(root))).toBe(true);
+
+    // CONTROL, same fixture: session-start does act on it.
+    runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(waitFor(() => existsSync(RAN(root)))).toBe(true);
+  });
+});
+
 // An ABI-stale better-sqlite3 (Node upgrade) does NOT throw at import time — the
 // .node is dlopen'd lazily at the first `new Database()`, deep inside hook.mjs,
 // which catches it. So the ERR_MODULE_NOT_FOUND path above never sees it and, in

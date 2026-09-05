@@ -331,6 +331,64 @@ async function attemptHeal(reason) {
   return result.status === 0;
 }
 
+// Session-start heal driven by the BREAKAGE MARKER rather than by our own failed import
+// (A20260905-R5-Q2, second half).
+//
+// Since the heal moved off the hot path, a hot-path fire that hits a missing module records
+// the breakage and defers. But this launcher fronts several entries — hook.mjs plus
+// pre-tool-recall.js, pre-skill-bridge.js, post-tool-recall.js, user-prompt-search.js — and
+// the missing module may sit on one of THEIR import chains and not on hook.mjs's. Then
+// session-start's own entry imports cleanly, the catch below never fires, and before this
+// function existed the clean fire simply cleared the marker: nothing ever repaired it. (That
+// gap predates the hot-path gate — a clean session-start always cleared the marker — but the
+// gate is what makes it the ONLY remaining route, so it is closed here.)
+//
+// DETACHED with stdio ignored, exactly like healNativeBindingIfBroken() below and for the
+// same two reasons: the fire is capped at 15s while `install.mjs repair` can take minutes,
+// and install.mjs logs to STDOUT while SessionStart stdout is a JSON envelope Claude Code
+// parses. That is also why this cannot reuse attemptHeal(), whose spawn is synchronous and
+// inherits stdio — correct where the entry failed and nothing has been written yet, wrong
+// here, where runEntry() has already emitted the envelope.
+//
+// Marker bookkeeping, and why it differs from the native-binding path: `install.mjs repair`
+// does not know about `hook-launcher-broken` (only doctor reads it, only this file writes
+// it), so no child can clear it on our behalf. Clearing it here after spawning keeps
+// `doctor` honest — a repair that did not take is re-recorded by the very next failing fire
+// — while the 6h cooldown, not the marker, is what bounds repair spawns to one per window.
+// Within that window the marker is deliberately left in place so doctor still reports the
+// unrepaired breakage.
+function healRecordedBreakage() {
+  try {
+    if (!existsSync(BROKEN_MARKER)) {
+      // No fire has recorded a degraded exit since the last session-start → as healthy as
+      // this launcher can tell. Drop a stale cooldown so a LATER unrelated break heals
+      // immediately rather than waiting out a window earned by an old fault. (#6/#9)
+      clearHealMarker();
+      return;
+    }
+    if (recentHealAttempt()) return; // on cooldown — keep the marker, doctor should see it
+    const installer = join(INSTALL_DIR, 'install.mjs');
+    if (!existsSync(installer)) {
+      process.stderr.write(
+        `[claude-mem-lite] A hook fire degraded to exit 0 and install.mjs is missing — ${TARBALL_FALLBACK}\n`,
+      );
+      return;
+    }
+    recordHealAttempt();
+    process.stderr.write(
+      '[claude-mem-lite] A previous hook fire degraded to exit 0 — repairing in the background\n',
+    );
+    const child = spawn(process.execPath, [installer, 'repair'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    clearBreakage();
+  } catch {
+    /* best-effort — a heal failure must never stop the fire */
+  }
+}
+
 // Defense-in-depth for plugin-mode version drift: the plugin-cache MCP server
 // (kept current by Claude Code) migrates the shared DB schema forward, while
 // this data-dir code (the standalone CLI + these hooks) is only advanced by the
@@ -431,9 +489,12 @@ if (IS_SESSION_START) {
 
 try {
   await runEntry();
-  // A clean session-start fire confirms the install is healthy → clear any stale
-  // breakage marker. Gated to session-start so the per-tool hot path pays nothing.
-  if (IS_SESSION_START) clearBreakage();
+  // Our entry imported cleanly, but that is NOT the same as "the install is whole": this
+  // launcher fronts five entries and the missing module may be on another one's chain. So
+  // act on the recorded breakage instead of just clearing it — background repair if there is
+  // one to do, clear either way. Gated to session-start so the hot path pays nothing.
+  // (Was an unconditional clearBreakage(); A20260905-R5-Q2.)
+  if (IS_SESSION_START) healRecordedBreakage();
   // After the entry too: the fire that DISCOVERS the breakage is the one that
   // records it, so a pre-entry-only check would leave the whole session dead and
   // heal one session late.
