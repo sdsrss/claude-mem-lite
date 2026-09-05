@@ -2,7 +2,22 @@
 // claude-mem-lite Installer — Smart install/uninstall/status/doctor
 
 import { execSync, execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, mkdtempSync, copyFileSync, cpSync, renameSync, symlinkSync, unlinkSync, readdirSync, statSync, lstatSync } from 'fs';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  rmSync,
+  mkdirSync,
+  mkdtempSync,
+  copyFileSync,
+  cpSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  readdirSync,
+  statSync,
+  lstatSync,
+} from 'fs';
 import { join, resolve, dirname, isAbsolute, basename } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -31,8 +46,8 @@ const DB_PATH = join(MEM_DATA_DIR, 'claude-mem-lite.db');
 const OLD_DATA_DIR = join(homedir(), '.claude-mem');
 
 // Detect ephemeral context (npx) — files won't persist after exit
-const IS_NPX = process.env.npm_command === 'exec' ||
-  PROJECT_DIR.includes('_npx') || PROJECT_DIR.includes('.npm/_');
+const IS_NPX =
+  process.env.npm_command === 'exec' || PROJECT_DIR.includes('_npx') || PROJECT_DIR.includes('.npm/_');
 
 // Both modes install to ~/.claude-mem-lite/ (copies or symlinks)
 const INSTALL_DIR = DATA_DIR;
@@ -44,9 +59,17 @@ import { MARKETPLACE_KEY, PLUGIN_KEY, isPluginExplicitlyDisabled } from './lib/p
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import { RESOURCE_METADATA } from './install-metadata.mjs';
-import { scanPluginCacheHookPollution, hasInstallManagedHooks, pluginCacheHookEvents } from './plugin-cache-guard.mjs';
+import {
+  scanPluginCacheHookPollution,
+  hasInstallManagedHooks,
+  pluginCacheHookEvents,
+} from './plugin-cache-guard.mjs';
 import { SOURCE_FILES, HOOK_SCRIPT_FILES } from './source-files.mjs';
-import { probeBetterSqlite3Binding, ensureBetterSqlite3Working, NATIVE_BINDING_REBUILD_CMD } from './lib/binding-probe.mjs';
+import {
+  probeBetterSqlite3Binding,
+  ensureBetterSqlite3Working,
+  NATIVE_BINDING_REBUILD_CMD,
+} from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
@@ -148,14 +171,22 @@ function reindexKnownResources(rdb) {
       const ts = meta.tech_stack || '';
       const uc = meta.use_cases || '';
       update.run(
-        meta.intent_tags, meta.domain_tags,
-        meta.capability_summary, meta.trigger_patterns,
-        invName, invName,
-        recMode, recMode,
-        kw, kw,
-        ts, ts,
-        uc, uc,
-        type, name
+        meta.intent_tags,
+        meta.domain_tags,
+        meta.capability_summary,
+        meta.trigger_patterns,
+        invName,
+        invName,
+        recMode,
+        recMode,
+        kw,
+        kw,
+        ts,
+        ts,
+        uc,
+        uc,
+        type,
+        name,
       );
     }
   })();
@@ -196,7 +227,8 @@ function registerVirtualResources(rdb) {
       const type = key.slice(0, sep);
       const name = key.slice(sep + 1);
       const { changes } = insert.run(
-        name, type,
+        name,
+        type,
         meta.invocation_name || deriveInvocationName(name),
         meta.intent_tags || name.replace(/-/g, ' '),
         meta.domain_tags || '',
@@ -246,10 +278,14 @@ function registerVirtualResources(rdb) {
     // Backfill invocation_name for resources that still have it empty
     // Derive from name: "parent/child" → "parent:child", otherwise use name as-is
     try {
-      const emptyInvoc = rdb.prepare(`
+      const emptyInvoc = rdb
+        .prepare(
+          `
         SELECT id, name FROM resources
         WHERE status = 'active' AND (invocation_name IS NULL OR invocation_name = '')
-      `).all();
+      `,
+        )
+        .all();
       if (emptyInvoc.length > 0) {
         const setInvoc = rdb.prepare('UPDATE resources SET invocation_name = ? WHERE id = ?');
         for (const r of emptyInvoc) {
@@ -264,8 +300,12 @@ function registerVirtualResources(rdb) {
 let cmd = process.argv[2];
 let flags = new Set(process.argv.slice(3));
 
-function log(msg) { console.log(`  ${msg}`); }
-function ok(msg) { console.log(`  ✓ ${msg}`); }
+function log(msg) {
+  console.log(`  ${msg}`);
+}
+function ok(msg) {
+  console.log(`  ✓ ${msg}`);
+}
 
 /**
  * Recursive on-disk size of `dir`, in bytes. Bounded by `maxEntries` so a
@@ -277,17 +317,32 @@ function ok(msg) { console.log(`  ✓ ${msg}`); }
  * @returns {{bytes: number, truncated: boolean}}
  */
 function dirSizeBytes(dir, maxEntries = 50000) {
-  let bytes = 0, seen = 0, truncated = false;
+  let bytes = 0,
+    seen = 0,
+    truncated = false;
   const stack = [dir];
   while (stack.length > 0) {
     const cur = stack.pop();
     let entries;
-    try { entries = readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const e of entries) {
-      if (++seen > maxEntries) { truncated = true; return { bytes, truncated }; }
+      if (++seen > maxEntries) {
+        truncated = true;
+        return { bytes, truncated };
+      }
       const p = join(cur, e.name);
       if (e.isDirectory()) stack.push(p);
-      else if (e.isFile()) { try { bytes += statSync(p).size; } catch { /* raced away */ } }
+      else if (e.isFile()) {
+        try {
+          bytes += statSync(p).size;
+        } catch {
+          /* raced away */
+        }
+      }
     }
   }
   return { bytes, truncated };
@@ -297,8 +352,12 @@ function dirSizeBytes(dir, maxEntries = 50000) {
 function fmtMB(bytes, truncated = false) {
   return `${truncated ? '≥' : ''}${Math.round(bytes / 1048576)} MB`;
 }
-function warn(msg) { console.log(`  ⚠ ${msg}`); }
-function fail(msg) { console.log(`  ✗ ${msg}`); }
+function warn(msg) {
+  console.log(`  ⚠ ${msg}`);
+}
+function fail(msg) {
+  console.log(`  ✗ ${msg}`);
+}
 
 // Pure JSON-version field bumper for the release pipeline. Reads `filePath`,
 // walks `keyPath` (e.g. `['version']` or `['plugins', 0, 'version']`), and
@@ -391,7 +450,10 @@ export function planRepoSparsePaths(entries) {
   const paths = [];
   for (const e of entries || []) {
     const p = e && e.path;
-    if (!p || p === '.' || p === './') { needsFull = true; continue; }
+    if (!p || p === '.' || p === './') {
+      needsFull = true;
+      continue;
+    }
     if (isAbsolute(p) || String(p).includes('..')) continue; // unsafe — skipped at copy too
     const norm = String(p).replace(/^\.\//, '').replace(/\/+$/, '');
     if (norm && !paths.includes(norm)) paths.push(norm);
@@ -408,15 +470,18 @@ export function planRepoSparsePaths(entries) {
 function isPartialSparseClone(clonePath) {
   const cfg = (key) => {
     try {
-      return execFileSync('git', ['-C', clonePath, 'config', '--get', key],
-        { encoding: 'utf8', stdio: 'pipe' }).trim();
-    } catch { return ''; } // missing key → git exits non-zero → treat as unset
+      return execFileSync('git', ['-C', clonePath, 'config', '--get', key], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }).trim();
+    } catch {
+      return '';
+    } // missing key → git exits non-zero → treat as unset
   };
   return cfg('remote.origin.promisor') === 'true' && cfg('core.sparseCheckout') === 'true';
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
-
 
 // Dynamic-import helpers, resolved against the installed copy at INSTALL_DIR
 // (lets install.mjs run from a /tmp staging dir whose node_modules is at
@@ -426,864 +491,1008 @@ const requireFromInstall = createRequire(pathToFileURL(join(INSTALL_DIR, 'packag
 
 // ─── install() step helpers (audit P1-9) ──────────────────────────────────────
 function installSourceFiles(IS_DEV) {
-// Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-const oldUnhidden = join(homedir(), 'claude-mem-lite');
-if (!existsSync(DATA_DIR) && existsSync(oldUnhidden)) {
-  log('Migrating ~/claude-mem-lite/ → ~/.claude-mem-lite/...');
-  renameSync(oldUnhidden, DATA_DIR);
-  ok('Directory migrated');
-}
+  // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
+  const oldUnhidden = join(homedir(), 'claude-mem-lite');
+  if (!existsSync(DATA_DIR) && existsSync(oldUnhidden)) {
+    log('Migrating ~/claude-mem-lite/ → ~/.claude-mem-lite/...');
+    renameSync(oldUnhidden, DATA_DIR);
+    ok('Directory migrated');
+  }
 
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-// Under relocation the DB/managed/runtime live here, not in the code dir — create it too.
-if (!existsSync(MEM_DATA_DIR)) mkdirSync(MEM_DATA_DIR, { recursive: true });
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  // Under relocation the DB/managed/runtime live here, not in the code dir — create it too.
+  if (!existsSync(MEM_DATA_DIR)) mkdirSync(MEM_DATA_DIR, { recursive: true });
 
-if (IS_DEV) {
-  log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
-  // Symlink individual source files
-  for (const f of SOURCE_FILES) {
-    const target = join(PROJECT_DIR, f);
-    const link = join(DATA_DIR, f);
-    if (existsSync(target)) {
-      // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
-      const linkParent = dirname(link);
-      if (!existsSync(linkParent)) mkdirSync(linkParent, { recursive: true });
-      // Remove existing file/symlink before creating
-      if (existsSync(link)) try { unlinkSync(link); } catch {}
-      symlinkSync(target, link);
+  if (IS_DEV) {
+    log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
+    // Symlink individual source files
+    for (const f of SOURCE_FILES) {
+      const target = join(PROJECT_DIR, f);
+      const link = join(DATA_DIR, f);
+      if (existsSync(target)) {
+        // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
+        const linkParent = dirname(link);
+        if (!existsSync(linkParent)) mkdirSync(linkParent, { recursive: true });
+        // Remove existing file/symlink before creating
+        if (existsSync(link))
+          try {
+            unlinkSync(link);
+          } catch {}
+        symlinkSync(target, link);
+      }
+    }
+    // Symlink scripts/ directory
+    const scriptsLink = join(DATA_DIR, 'scripts');
+    if (existsSync(scriptsLink))
+      try {
+        rmSync(scriptsLink, { recursive: true, force: true });
+      } catch {}
+    symlinkSync(join(PROJECT_DIR, 'scripts'), scriptsLink);
+    // Symlink node_modules/
+    const nmLink = join(DATA_DIR, 'node_modules');
+    if (existsSync(nmLink))
+      try {
+        rmSync(nmLink, { recursive: true, force: true });
+      } catch {}
+    symlinkSync(join(PROJECT_DIR, 'node_modules'), nmLink);
+    // Symlink registry/ directory
+    const regLink = join(DATA_DIR, 'registry');
+    if (existsSync(regLink))
+      try {
+        rmSync(regLink, { recursive: true, force: true });
+      } catch {}
+    if (existsSync(join(PROJECT_DIR, 'registry'))) {
+      symlinkSync(join(PROJECT_DIR, 'registry'), regLink);
+    }
+    // commands/ is intentionally NOT linked: Claude Code reads slash commands
+    // from the plugin cache (~/.claude/plugins/cache/<mp>/<plugin>/<ver>/commands/)
+    // or user-level ~/.claude/commands/, never from ~/.claude-mem-lite/commands/.
+    // Pre-v2.55 maintained a symlink/copy here that had no consumers.
+    ok('Symlinks created in ~/.claude-mem-lite/ → dev dir');
+  } else {
+    log('Installing to ~/.claude-mem-lite/...');
+    const scriptsDir = join(DATA_DIR, 'scripts');
+    if (!existsSync(scriptsDir)) mkdirSync(scriptsDir, { recursive: true });
+    for (const f of SOURCE_FILES) {
+      const src = join(PROJECT_DIR, f);
+      const dst = join(DATA_DIR, f);
+      if (existsSync(src)) {
+        // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
+        const dstParent = dirname(dst);
+        if (!existsSync(dstParent)) mkdirSync(dstParent, { recursive: true });
+        copyFileSync(src, dst);
+      }
+    }
+    // Copy hook scripts (settings.json hook commands point at these — must
+    // stay in sync with HOOK_SCRIPT_FILES manifest)
+    copyHookScripts(join(PROJECT_DIR, 'scripts'), scriptsDir);
+    // Ensure bash script is executable
+    try {
+      execFileSync('chmod', ['+x', join(scriptsDir, 'post-tool-use.sh')], { stdio: 'pipe' });
+    } catch {}
+    // commands/ is intentionally NOT copied — see dev-mode branch above.
+    // Copy registry manifest
+    const registryDir = join(DATA_DIR, 'registry');
+    if (!existsSync(registryDir)) mkdirSync(registryDir, { recursive: true });
+    const manifestSrc = join(PROJECT_DIR, 'registry', 'preinstalled.json');
+    if (existsSync(manifestSrc)) copyFileSync(manifestSrc, join(registryDir, 'preinstalled.json'));
+    ok('Source files copied to ~/.claude-mem-lite/');
+
+    // v2.48 P1-4: prune stale top-level .mjs + 0-byte .db files left behind by
+    // prior upgrades (e.g. dispatch.mjs removed in v2.20.0, zero-byte mem.db /
+    // memory.db / registry.db from pre-consolidation installs). Subdirs +
+    // symlinks + non-empty DBs are always preserved.
+    try {
+      const pruned = pruneStaleInstallFiles(DATA_DIR, SOURCE_FILES);
+      if (pruned.length > 0) {
+        ok(`Pruned ${pruned.length} stale file(s): ${pruned.map((p) => basename(p)).join(', ')}`);
+      }
+    } catch (e) {
+      /* prune is best-effort — never block install */ void e;
     }
   }
-  // Symlink scripts/ directory
-  const scriptsLink = join(DATA_DIR, 'scripts');
-  if (existsSync(scriptsLink)) try { rmSync(scriptsLink, { recursive: true, force: true }); } catch {}
-  symlinkSync(join(PROJECT_DIR, 'scripts'), scriptsLink);
-  // Symlink node_modules/
-  const nmLink = join(DATA_DIR, 'node_modules');
-  if (existsSync(nmLink)) try { rmSync(nmLink, { recursive: true, force: true }); } catch {}
-  symlinkSync(join(PROJECT_DIR, 'node_modules'), nmLink);
-  // Symlink registry/ directory
-  const regLink = join(DATA_DIR, 'registry');
-  if (existsSync(regLink)) try { rmSync(regLink, { recursive: true, force: true }); } catch {}
-  if (existsSync(join(PROJECT_DIR, 'registry'))) {
-    symlinkSync(join(PROJECT_DIR, 'registry'), regLink);
-  }
-  // commands/ is intentionally NOT linked: Claude Code reads slash commands
-  // from the plugin cache (~/.claude/plugins/cache/<mp>/<plugin>/<ver>/commands/)
-  // or user-level ~/.claude/commands/, never from ~/.claude-mem-lite/commands/.
-  // Pre-v2.55 maintained a symlink/copy here that had no consumers.
-  ok('Symlinks created in ~/.claude-mem-lite/ → dev dir');
-} else {
-  log('Installing to ~/.claude-mem-lite/...');
-  const scriptsDir = join(DATA_DIR, 'scripts');
-  if (!existsSync(scriptsDir)) mkdirSync(scriptsDir, { recursive: true });
-  for (const f of SOURCE_FILES) {
-    const src = join(PROJECT_DIR, f);
-    const dst = join(DATA_DIR, f);
-    if (existsSync(src)) {
-      // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
-      const dstParent = dirname(dst);
-      if (!existsSync(dstParent)) mkdirSync(dstParent, { recursive: true });
-      copyFileSync(src, dst);
-    }
-  }
-  // Copy hook scripts (settings.json hook commands point at these — must
-  // stay in sync with HOOK_SCRIPT_FILES manifest)
-  copyHookScripts(join(PROJECT_DIR, 'scripts'), scriptsDir);
-  // Ensure bash script is executable
-  try { execFileSync('chmod', ['+x', join(scriptsDir, 'post-tool-use.sh')], { stdio: 'pipe' }); } catch {}
-  // commands/ is intentionally NOT copied — see dev-mode branch above.
-  // Copy registry manifest
-  const registryDir = join(DATA_DIR, 'registry');
-  if (!existsSync(registryDir)) mkdirSync(registryDir, { recursive: true });
-  const manifestSrc = join(PROJECT_DIR, 'registry', 'preinstalled.json');
-  if (existsSync(manifestSrc)) copyFileSync(manifestSrc, join(registryDir, 'preinstalled.json'));
-  ok('Source files copied to ~/.claude-mem-lite/');
-
-  // v2.48 P1-4: prune stale top-level .mjs + 0-byte .db files left behind by
-  // prior upgrades (e.g. dispatch.mjs removed in v2.20.0, zero-byte mem.db /
-  // memory.db / registry.db from pre-consolidation installs). Subdirs +
-  // symlinks + non-empty DBs are always preserved.
-  try {
-    const pruned = pruneStaleInstallFiles(DATA_DIR, SOURCE_FILES);
-    if (pruned.length > 0) {
-      ok(`Pruned ${pruned.length} stale file(s): ${pruned.map(p => basename(p)).join(', ')}`);
-    }
-  } catch (e) { /* prune is best-effort — never block install */ void e; }
-}
 }
 
 async function installDependencies(IS_DEV) {
-// 2. npm install (skip for --dev: node_modules is symlinked)
-if (IS_DEV) {
-  ok('Dependencies: using dev dir (symlinked)');
-} else {
-  log('Ensuring dependencies installed...');
-  try {
-    // stderr inherited so users see real-time progress (network slowness,
-    // node-gyp compile spinner, prebuild-install fallback messages). With
-    // `stdio: 'pipe'` the install appeared to hang under the 5-min Bash
-    // timeout when better-sqlite3 had no Node v24 prebuild and had to
-    // compile from source — see bug audit 2026-05.
-    execSync(NPM_INSTALL_CMD, { cwd: INSTALL_DIR, stdio: ['ignore', 'pipe', 'inherit'] });
-    ok('Dependencies installed');
-  } catch (e) {
-    fail('npm install failed: ' + e.message);
-    process.exit(1);
-  }
-  // npm install exits 0 even when the better-sqlite3 prebuilt .node binary
-  // mismatches the running Node ABI (e.g. NODE_MODULE_VERSION 137 on Node v24).
-  // Probe and auto-rebuild before declaring success — otherwise the next
-  // launch FATALs with "Could not locate the bindings file".
-  const verify = await ensureBetterSqlite3Working(INSTALL_DIR);
-  if (verify.ok) {
-    ok(`better-sqlite3: ${verify.action}`);
+  // 2. npm install (skip for --dev: node_modules is symlinked)
+  if (IS_DEV) {
+    ok('Dependencies: using dev dir (symlinked)');
   } else {
-    fail(`better-sqlite3 binding unusable after rebuild: ${verify.error}`);
-    log('Try manually: cd ' + INSTALL_DIR + ' && npm rebuild better-sqlite3 --dangerously-allow-all-scripts');
-    process.exit(1);
-  }
-
-  // The package this installer is RUNNING from owns a second tree, and after
-  // `npm i -g claude-mem-lite` npm >= 12 has left its better-sqlite3 install
-  // scripts blocked — so the binding is present-but-uncompiled and nothing
-  // above touches it. The shell CLI heals it on first DB use, but only after
-  // the user has already seen `doctor` report `2 issue(s) found` on a
-  // correct install. Close the window here instead. Never fatal: this tree is
-  // not what hooks or the MCP server load.
-  if (PROJECT_DIR !== INSTALL_DIR && existsSync(join(PROJECT_DIR, 'node_modules', 'better-sqlite3'))) {
-    const selfVerify = await ensureBetterSqlite3Working(PROJECT_DIR);
-    if (selfVerify.ok) {
-      if (selfVerify.action === 'rebuilt') ok(`better-sqlite3: rebuilt for the running package too (${PROJECT_DIR})`);
+    log('Ensuring dependencies installed...');
+    try {
+      // stderr inherited so users see real-time progress (network slowness,
+      // node-gyp compile spinner, prebuild-install fallback messages). With
+      // `stdio: 'pipe'` the install appeared to hang under the 5-min Bash
+      // timeout when better-sqlite3 had no Node v24 prebuild and had to
+      // compile from source — see bug audit 2026-05.
+      execSync(NPM_INSTALL_CMD, { cwd: INSTALL_DIR, stdio: ['ignore', 'pipe', 'inherit'] });
+      ok('Dependencies installed');
+    } catch (e) {
+      fail('npm install failed: ' + e.message);
+      process.exit(1);
+    }
+    // npm install exits 0 even when the better-sqlite3 prebuilt .node binary
+    // mismatches the running Node ABI (e.g. NODE_MODULE_VERSION 137 on Node v24).
+    // Probe and auto-rebuild before declaring success — otherwise the next
+    // launch FATALs with "Could not locate the bindings file".
+    const verify = await ensureBetterSqlite3Working(INSTALL_DIR);
+    if (verify.ok) {
+      ok(`better-sqlite3: ${verify.action}`);
     } else {
-      warn(`better-sqlite3 unusable in the package this installer runs from (${PROJECT_DIR}): ${selfVerify.error}`);
-      log(`  The install itself is fine; the \`claude-mem-lite\` shell command will self-heal on first use, or run: cd ${PROJECT_DIR} && ${NATIVE_BINDING_REBUILD_CMD}`);
+      fail(`better-sqlite3 binding unusable after rebuild: ${verify.error}`);
+      log(
+        'Try manually: cd ' + INSTALL_DIR + ' && npm rebuild better-sqlite3 --dangerously-allow-all-scripts',
+      );
+      process.exit(1);
+    }
+
+    // The package this installer is RUNNING from owns a second tree, and after
+    // `npm i -g claude-mem-lite` npm >= 12 has left its better-sqlite3 install
+    // scripts blocked — so the binding is present-but-uncompiled and nothing
+    // above touches it. The shell CLI heals it on first DB use, but only after
+    // the user has already seen `doctor` report `2 issue(s) found` on a
+    // correct install. Close the window here instead. Never fatal: this tree is
+    // not what hooks or the MCP server load.
+    if (PROJECT_DIR !== INSTALL_DIR && existsSync(join(PROJECT_DIR, 'node_modules', 'better-sqlite3'))) {
+      const selfVerify = await ensureBetterSqlite3Working(PROJECT_DIR);
+      if (selfVerify.ok) {
+        if (selfVerify.action === 'rebuilt')
+          ok(`better-sqlite3: rebuilt for the running package too (${PROJECT_DIR})`);
+      } else {
+        warn(
+          `better-sqlite3 unusable in the package this installer runs from (${PROJECT_DIR}): ${selfVerify.error}`,
+        );
+        log(
+          `  The install itself is fine; the \`claude-mem-lite\` shell command will self-heal on first use, or run: cd ${PROJECT_DIR} && ${NATIVE_BINDING_REBUILD_CMD}`,
+        );
+      }
     }
   }
-}
 }
 
 function createCliSymlink() {
-// 2b. Create global CLI symlink (claude-mem-lite command)
-const cliSource = join(INSTALL_DIR, 'cli.mjs');
-if (existsSync(cliSource)) {
-  try { execFileSync('chmod', ['+x', cliSource], { stdio: 'pipe' }); } catch {}
-  // Try ~/.local/bin first (user-writable, commonly on PATH)
-  const localBin = join(homedir(), '.local', 'bin');
-  const cliLink = join(localBin, 'claude-mem-lite');
-  try {
-    if (!existsSync(localBin)) mkdirSync(localBin, { recursive: true });
-    if (existsSync(cliLink)) unlinkSync(cliLink);
-    symlinkSync(cliSource, cliLink);
-    ok(`CLI: ${cliLink} → ${cliSource}`);
-  } catch {
-    // Fallback: try /usr/local/bin (may need sudo)
+  // 2b. Create global CLI symlink (claude-mem-lite command)
+  const cliSource = join(INSTALL_DIR, 'cli.mjs');
+  if (existsSync(cliSource)) {
     try {
-      const globalLink = '/usr/local/bin/claude-mem-lite';
-      if (existsSync(globalLink)) unlinkSync(globalLink);
-      symlinkSync(cliSource, globalLink);
-      ok(`CLI: ${globalLink} → ${cliSource}`);
+      execFileSync('chmod', ['+x', cliSource], { stdio: 'pipe' });
+    } catch {}
+    // Try ~/.local/bin first (user-writable, commonly on PATH)
+    const localBin = join(homedir(), '.local', 'bin');
+    const cliLink = join(localBin, 'claude-mem-lite');
+    try {
+      if (!existsSync(localBin)) mkdirSync(localBin, { recursive: true });
+      if (existsSync(cliLink)) unlinkSync(cliLink);
+      symlinkSync(cliSource, cliLink);
+      ok(`CLI: ${cliLink} → ${cliSource}`);
     } catch {
-      warn('CLI symlink failed — run manually: ln -sf ' + cliSource + ' ~/.local/bin/claude-mem-lite');
+      // Fallback: try /usr/local/bin (may need sudo)
+      try {
+        const globalLink = '/usr/local/bin/claude-mem-lite';
+        if (existsSync(globalLink)) unlinkSync(globalLink);
+        symlinkSync(cliSource, globalLink);
+        ok(`CLI: ${globalLink} → ${cliSource}`);
+      } catch {
+        warn('CLI symlink failed — run manually: ln -sf ' + cliSource + ' ~/.local/bin/claude-mem-lite');
+      }
     }
   }
-}
 }
 
 function registerMcpServer() {
-// 3. Register MCP server (skip if plugin system already handles it)
-// Plugin MCP must stay at root .mcp.json so Claude Code registers plugin:*:mem-lite.
-// Duplicate registrations in practice come from old global install.mjs state
-// (claude mcp add) or stale marketplace copies, not from the cache root itself.
-// Global registration via `claude mcp add` creates a DUPLICATE mcp__mem-lite__* server.
-// The legacy generic name "mem" (pre-v2.78) is also purged so a user who installed in
-// either era ends up with a single canonical "mem-lite" registration.
-// Detect plugin mode: installed_plugins.json has our entry → plugin handles MCP.
-const installedPluginsPath = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
-let pluginHandlesMcp = false;
-try {
-  const installed = JSON.parse(readFileSync(installedPluginsPath, 'utf8'));
-  pluginHandlesMcp = !!installed?.plugins?.[PLUGIN_KEY]?.length;
-} catch { /* not installed via plugin system */ }
-
-if (pluginHandlesMcp) {
-  log('MCP server: plugin system handles registration (skipping global)');
-  // Clean up stale global registrations (both legacy "mem" and current "mem-lite")
-  for (const name of ['mem', 'mem-lite']) {
-    try {
-      execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
-      ok(`Removed stale global MCP "${name}"`);
-    } catch {}
-  }
-} else {
-  log('Registering MCP server...');
+  // 3. Register MCP server (skip if plugin system already handles it)
+  // Plugin MCP must stay at root .mcp.json so Claude Code registers plugin:*:mem-lite.
+  // Duplicate registrations in practice come from old global install.mjs state
+  // (claude mcp add) or stale marketplace copies, not from the cache root itself.
+  // Global registration via `claude mcp add` creates a DUPLICATE mcp__mem-lite__* server.
+  // The legacy generic name "mem" (pre-v2.78) is also purged so a user who installed in
+  // either era ends up with a single canonical "mem-lite" registration.
+  // Detect plugin mode: installed_plugins.json has our entry → plugin handles MCP.
+  const installedPluginsPath = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
+  let pluginHandlesMcp = false;
   try {
-    // Purge legacy "mem" and any pre-existing "mem-lite" before re-registering
-    for (const name of ['mem', 'mem-lite']) {
-      try { execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' }); } catch {}
-      try { execFileSync('claude', ['mcp', 'remove', '-s', 'project', name], { stdio: 'pipe' }); } catch {}
-    }
-    execFileSync('claude', ['mcp', 'add', '-s', 'user', '-t', 'stdio', 'mem-lite', '--', 'node', SERVER_PATH], { stdio: 'pipe' });
-    ok('MCP server registered: mem-lite');
-  } catch (e) {
-    fail('MCP registration failed: ' + e.message);
-    warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node ' + SERVER_PATH);
+    const installed = JSON.parse(readFileSync(installedPluginsPath, 'utf8'));
+    pluginHandlesMcp = !!installed?.plugins?.[PLUGIN_KEY]?.length;
+  } catch {
+    /* not installed via plugin system */
   }
-}
+
+  if (pluginHandlesMcp) {
+    log('MCP server: plugin system handles registration (skipping global)');
+    // Clean up stale global registrations (both legacy "mem" and current "mem-lite")
+    for (const name of ['mem', 'mem-lite']) {
+      try {
+        execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
+        ok(`Removed stale global MCP "${name}"`);
+      } catch {}
+    }
+  } else {
+    log('Registering MCP server...');
+    try {
+      // Purge legacy "mem" and any pre-existing "mem-lite" before re-registering
+      for (const name of ['mem', 'mem-lite']) {
+        try {
+          execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
+        } catch {}
+        try {
+          execFileSync('claude', ['mcp', 'remove', '-s', 'project', name], { stdio: 'pipe' });
+        } catch {}
+      }
+      execFileSync(
+        'claude',
+        ['mcp', 'add', '-s', 'user', '-t', 'stdio', 'mem-lite', '--', 'node', SERVER_PATH],
+        { stdio: 'pipe' },
+      );
+      ok('MCP server registered: mem-lite');
+    } catch (e) {
+      fail('MCP registration failed: ' + e.message);
+      warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node ' + SERVER_PATH);
+    }
+  }
 }
 
 function dedupePluginCacheAndHooks({ managedHooks } = {}) {
-// 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
-// clear them to prevent double execution. install.mjs hooks (in settings.json)
-// point to ~/.claude-mem-lite/ (latest code in dev mode via symlinks),
-// while plugin hooks use ${CLAUDE_PLUGIN_ROOT} (potentially stale marketplace copy).
-//
-// MCP dedup: Claude Code copies .mcp.json from marketplace clone → plugin cache.
-// Do NOT modify marketplace .mcp.json — it breaks the MCP server registration chain.
-// Dedup is handled by skipping global `claude mcp add` when plugin system is active.
-const pluginDir = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
-const pluginHooksPath = join(pluginDir, 'hooks', 'hooks.json');
+  // 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
+  // clear them to prevent double execution. install.mjs hooks (in settings.json)
+  // point to ~/.claude-mem-lite/ (latest code in dev mode via symlinks),
+  // while plugin hooks use ${CLAUDE_PLUGIN_ROOT} (potentially stale marketplace copy).
+  //
+  // MCP dedup: Claude Code copies .mcp.json from marketplace clone → plugin cache.
+  // Do NOT modify marketplace .mcp.json — it breaks the MCP server registration chain.
+  // Dedup is handled by skipping global `claude mcp add` when plugin system is active.
+  const pluginDir = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
+  const pluginHooksPath = join(pluginDir, 'hooks', 'hooks.json');
 
-// Clearing is a DEDUP, and a dedup with only one registration left is a delete.
-// Both clearers below empty a file Claude Code reads hooks from; that is correct
-// only while settings.json ALSO registers them. On a plugin-only install (no
-// install.mjs-managed entries) the cache manifest is the sole registration, so
-// clearing it silently unregisters all seven events — and status/doctor then read
-// "settings.json holds none" as the healthy plugin shape. plugin-cache-guard.mjs
-// has documented this precondition since it was written and hook.mjs's self-heal
-// honours it; these two sites did not.
-//
-// `managedHooks` comes from the caller rather than a bare hasInstallManagedHooks()
-// call, and that is the whole point: install() runs configureHooks() first, so a
-// self-read here is ALWAYS true and the guard would be decorative — the real
-// protection would be the call ORDER, which nothing pins and a future reorder
-// would silently revert (pre-ship review, finding 1). Passing the value makes the
-// dependency data, not sequence. Explicit `false` is honoured; omitted → self-read,
-// for any caller that has not just written settings.json.
-const settingsOwnsHooks = managedHooks ?? hasInstallManagedHooks();
+  // Clearing is a DEDUP, and a dedup with only one registration left is a delete.
+  // Both clearers below empty a file Claude Code reads hooks from; that is correct
+  // only while settings.json ALSO registers them. On a plugin-only install (no
+  // install.mjs-managed entries) the cache manifest is the sole registration, so
+  // clearing it silently unregisters all seven events — and status/doctor then read
+  // "settings.json holds none" as the healthy plugin shape. plugin-cache-guard.mjs
+  // has documented this precondition since it was written and hook.mjs's self-heal
+  // honours it; these two sites did not.
+  //
+  // `managedHooks` comes from the caller rather than a bare hasInstallManagedHooks()
+  // call, and that is the whole point: install() runs configureHooks() first, so a
+  // self-read here is ALWAYS true and the guard would be decorative — the real
+  // protection would be the call ORDER, which nothing pins and a future reorder
+  // would silently revert (pre-ship review, finding 1). Passing the value makes the
+  // dependency data, not sequence. Explicit `false` is honoured; omitted → self-read,
+  // for any caller that has not just written settings.json.
+  const settingsOwnsHooks = managedHooks ?? hasInstallManagedHooks();
 
-// Scope note (pre-ship review, finding 2): the gate covers the two hook-CLEARING
-// blocks only. The launch.mjs / launch-preflight.mjs sync below it is not dedup —
-// it is issue #15's dev-mode MCP routing fix — and an early return out of the whole
-// function would silently stop shipping it to plugin-cache users.
-if (!settingsOwnsHooks) {
-  log('Plugin cache: hooks left in place (plugin-only install — the cache manifest is the only registration)');
-}
+  // Scope note (pre-ship review, finding 2): the gate covers the two hook-CLEARING
+  // blocks only. The launch.mjs / launch-preflight.mjs sync below it is not dedup —
+  // it is issue #15's dev-mode MCP routing fix — and an early return out of the whole
+  // function would silently stop shipping it to plugin-cache users.
+  if (!settingsOwnsHooks) {
+    log(
+      'Plugin cache: hooks left in place (plugin-only install — the cache manifest is the only registration)',
+    );
+  }
 
-if (existsSync(pluginDir)) {
-  // NOTE: Do NOT clear marketplace .mcp.json — Claude Code copies from
-  // marketplace clone → plugin cache on updates. Clearing it causes the
-  // cache .mcp.json to lose the MCP server definition, breaking plugin MCP.
-  // Dedup is already handled by skipping global `claude mcp add` above.
+  if (existsSync(pluginDir)) {
+    // NOTE: Do NOT clear marketplace .mcp.json — Claude Code copies from
+    // marketplace clone → plugin cache on updates. Clearing it causes the
+    // cache .mcp.json to lose the MCP server definition, breaking plugin MCP.
+    // Dedup is already handled by skipping global `claude mcp add` above.
 
-  // Clear plugin hooks to prevent double hook execution
-  try {
-    if (settingsOwnsHooks && existsSync(pluginHooksPath)) {
-      const pluginHooks = JSON.parse(readFileSync(pluginHooksPath, 'utf8'));
-      if (pluginHooks.hooks && Object.keys(pluginHooks.hooks).length > 0) {
-        // Atomic (audit 2026-09-02 P1-10): a torn hooks.json is not a fail-open marker —
-        // Claude Code parses it at plugin load, so half a file disables the plugin's hooks
-        // for that install until the next successful write. Same writer settings.json
-        // already uses 1600 lines down.
-        atomicWriteFileSync(pluginHooksPath, JSON.stringify({
-          description: pluginHooks.description || 'claude-mem-lite hooks',
-          _note: 'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
-          hooks: {}
-        }, null, 2) + '\n');
-        ok('Marketplace plugin: hooks cleared (prevents duplicate)');
+    // Clear plugin hooks to prevent double hook execution
+    try {
+      if (settingsOwnsHooks && existsSync(pluginHooksPath)) {
+        const pluginHooks = JSON.parse(readFileSync(pluginHooksPath, 'utf8'));
+        if (pluginHooks.hooks && Object.keys(pluginHooks.hooks).length > 0) {
+          // Atomic (audit 2026-09-02 P1-10): a torn hooks.json is not a fail-open marker —
+          // Claude Code parses it at plugin load, so half a file disables the plugin's hooks
+          // for that install until the next successful write. Same writer settings.json
+          // already uses 1600 lines down.
+          atomicWriteFileSync(
+            pluginHooksPath,
+            JSON.stringify(
+              {
+                description: pluginHooks.description || 'claude-mem-lite hooks',
+                _note:
+                  'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
+                hooks: {},
+              },
+              null,
+              2,
+            ) + '\n',
+          );
+          ok('Marketplace plugin: hooks cleared (prevents duplicate)');
+        }
       }
+    } catch (e) {
+      warn(`Marketplace hooks dedup: ${e.message}`);
     }
-  } catch (e) { warn(`Marketplace hooks dedup: ${e.message}`); }
 
-  // Sync launch.mjs to plugin cache — ensures MCP server loads dev code via symlink detection.
-  // ALSO clear cached hooks.json in every version dir — Claude Code runtime reads hooks from
-  // ~/.claude/plugins/cache/<mp>/<plugin>/<ver>/hooks/hooks.json, NOT from the marketplace source.
-  // Clearing only the marketplace source (above) leaves stale cache copies that double-register
-  // hooks alongside install.mjs-written settings.json entries.
-  try {
-    const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
-    if (existsSync(cacheBase)) {
-      const launchSyncFiles = ['launch.mjs', 'launch-preflight.mjs'];
-      let clearedHooks = 0;
-      for (const ver of readdirSync(cacheBase)) {
-        const verDir = join(cacheBase, ver);
+    // Sync launch.mjs to plugin cache — ensures MCP server loads dev code via symlink detection.
+    // ALSO clear cached hooks.json in every version dir — Claude Code runtime reads hooks from
+    // ~/.claude/plugins/cache/<mp>/<plugin>/<ver>/hooks/hooks.json, NOT from the marketplace source.
+    // Clearing only the marketplace source (above) leaves stale cache copies that double-register
+    // hooks alongside install.mjs-written settings.json entries.
+    try {
+      const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
+      if (existsSync(cacheBase)) {
+        const launchSyncFiles = ['launch.mjs', 'launch-preflight.mjs'];
+        let clearedHooks = 0;
+        for (const ver of readdirSync(cacheBase)) {
+          const verDir = join(cacheBase, ver);
 
-        // Sync launch.mjs + its preflight companion (issue #15)
-        if (existsSync(join(verDir, 'scripts'))) {
-          for (const f of launchSyncFiles) {
-            const src = join(PROJECT_DIR, 'scripts', f);
-            if (existsSync(src)) {
-              try { copyFileSync(src, join(verDir, 'scripts', f)); } catch { /* keep going */ }
+          // Sync launch.mjs + its preflight companion (issue #15)
+          if (existsSync(join(verDir, 'scripts'))) {
+            for (const f of launchSyncFiles) {
+              const src = join(PROJECT_DIR, 'scripts', f);
+              if (existsSync(src)) {
+                try {
+                  copyFileSync(src, join(verDir, 'scripts', f));
+                } catch {
+                  /* keep going */
+                }
+              }
+            }
+          }
+
+          // Clear cached hooks.json (runtime reads here, not marketplace source)
+          const cachedHooksPath = join(verDir, 'hooks', 'hooks.json');
+          if (settingsOwnsHooks && existsSync(cachedHooksPath)) {
+            try {
+              const h = JSON.parse(readFileSync(cachedHooksPath, 'utf8'));
+              if (h.hooks && Object.keys(h.hooks).length > 0) {
+                // Atomic, same reason as the marketplace-source copy above (P1-10). This one
+                // is the higher-cost of the two: it runs once PER CACHED VERSION, so a tear
+                // here disables hooks for whichever version Claude Code happens to load.
+                atomicWriteFileSync(
+                  cachedHooksPath,
+                  JSON.stringify(
+                    {
+                      description: h.description || 'claude-mem-lite hooks',
+                      _note: `Hooks managed by install.mjs in settings.json — cache hooks.json cleared to prevent duplicate registration (cache ver: ${ver})`,
+                      hooks: {},
+                    },
+                    null,
+                    2,
+                  ) + '\n',
+                );
+                clearedHooks++;
+              }
+            } catch {
+              /* silent — never block install on one bad cache entry */
             }
           }
         }
-
-        // Clear cached hooks.json (runtime reads here, not marketplace source)
-        const cachedHooksPath = join(verDir, 'hooks', 'hooks.json');
-        if (settingsOwnsHooks && existsSync(cachedHooksPath)) {
-          try {
-            const h = JSON.parse(readFileSync(cachedHooksPath, 'utf8'));
-            if (h.hooks && Object.keys(h.hooks).length > 0) {
-              // Atomic, same reason as the marketplace-source copy above (P1-10). This one
-              // is the higher-cost of the two: it runs once PER CACHED VERSION, so a tear
-              // here disables hooks for whichever version Claude Code happens to load.
-              atomicWriteFileSync(cachedHooksPath, JSON.stringify({
-                description: h.description || 'claude-mem-lite hooks',
-                _note: `Hooks managed by install.mjs in settings.json — cache hooks.json cleared to prevent duplicate registration (cache ver: ${ver})`,
-                hooks: {}
-              }, null, 2) + '\n');
-              clearedHooks++;
-            }
-          } catch { /* silent — never block install on one bad cache entry */ }
-        }
+        const parts = ['launch.mjs synced (dev mode MCP routing)'];
+        if (clearedHooks > 0) parts.push(`${clearedHooks} stale hooks.json cleared`);
+        ok(`Plugin cache: ${parts.join('; ')}`);
       }
-      const parts = ['launch.mjs synced (dev mode MCP routing)'];
-      if (clearedHooks > 0) parts.push(`${clearedHooks} stale hooks.json cleared`);
-      ok(`Plugin cache: ${parts.join('; ')}`);
+    } catch (e) {
+      warn(`Plugin cache sync: ${e.message}`);
     }
-  } catch (e) { warn(`Plugin cache sync: ${e.message}`); }
-}
+  }
 }
 
 function configureHooks() {
-// 4. Configure hooks (merge: preserve user's existing hooks, replace ours)
-log('Configuring hooks...');
-const settings = readSettings();
-if (clearPluginDisabledMarkerForDirectInstall(settings)) {
-  ok('Cleared stale disabled plugin flag so install.mjs-managed hooks can run');
-}
-settings.hooks = settings.hooks || {};
+  // 4. Configure hooks (merge: preserve user's existing hooks, replace ours)
+  log('Configuring hooks...');
+  const settings = readSettings();
+  if (clearPluginDisabledMarkerForDirectInstall(settings)) {
+    ok('Cleared stale disabled plugin flag so install.mjs-managed hooks can run');
+  }
+  settings.hooks = settings.hooks || {};
 
-const SCRIPTS_PATH = join(INSTALL_DIR, 'scripts');
-const PREFILTER_PATH = join(SCRIPTS_PATH, 'post-tool-use.sh');
-// Second bash prefilter, same idea one event over: skip the Node start for a
-// default-off feature (audit 2026-08-22 P2-5, see the script's header).
-const AGENT_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-agent-inject.sh');
-// v2.84: every Node hook invocation routes through hook-launcher.mjs so an
-// ERR_MODULE_NOT_FOUND from a partial-install drift auto-heals via
-// install.mjs repair instead of permanently bricking the hook chain.
-const LAUNCHER_PATH = join(SCRIPTS_PATH, 'hook-launcher.mjs');
-const nodeHook = (entry, ...args) => `node "${LAUNCHER_PATH}" ${entry} ${args.join(' ')}`.trim();
+  const SCRIPTS_PATH = join(INSTALL_DIR, 'scripts');
+  const PREFILTER_PATH = join(SCRIPTS_PATH, 'post-tool-use.sh');
+  // Second bash prefilter, same idea one event over: skip the Node start for a
+  // default-off feature (audit 2026-08-22 P2-5, see the script's header).
+  const AGENT_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-agent-inject.sh');
+  // v2.84: every Node hook invocation routes through hook-launcher.mjs so an
+  // ERR_MODULE_NOT_FOUND from a partial-install drift auto-heals via
+  // install.mjs repair instead of permanently bricking the hook chain.
+  const LAUNCHER_PATH = join(SCRIPTS_PATH, 'hook-launcher.mjs');
+  const nodeHook = (entry, ...args) => `node "${LAUNCHER_PATH}" ${entry} ${args.join(' ')}`.trim();
 
-const memPostToolUse = {
-  matcher: '*',
-  hooks: [{
-    type: 'command',
-    command: `bash "${PREFILTER_PATH}"`,
-    timeout: 5
-  }]
-};
+  const memPostToolUse = {
+    matcher: '*',
+    hooks: [
+      {
+        type: 'command',
+        command: `bash "${PREFILTER_PATH}"`,
+        timeout: 5,
+      },
+    ],
+  };
 
-// Component 2 of the bind-salience forcing function: after an Edit/Write, flag an
-// identifier the file's own lesson named that the edit just removed (component 1 is the
-// pre-edit directive from scripts/pre-tool-recall.js, which also records the identifiers
-// this one checks). Shipped, signed and tested since it was written, but registered in
-// NEITHER registry — so `CLAUDE_MEM_SALIENCE=bind` delivered half the mechanism and
-// nothing said so (audit B6, 2026-08-14). Matched on the edit tools only, NOT Read: there
-// is no post-edit state to compare after a read. Inert (returns before touching stdin)
-// unless CLAUDE_MEM_SALIENCE=bind, so the default chain pays one short-circuit spawn per
-// edit and emits nothing.
-const memPostToolRecall = {
-  matcher: 'Edit|Write|NotebookEdit',
-  hooks: [{
-    type: 'command',
-    command: nodeHook('scripts/post-tool-recall.js'),
-    timeout: 3
-  }]
-};
+  // Component 2 of the bind-salience forcing function: after an Edit/Write, flag an
+  // identifier the file's own lesson named that the edit just removed (component 1 is the
+  // pre-edit directive from scripts/pre-tool-recall.js, which also records the identifiers
+  // this one checks). Shipped, signed and tested since it was written, but registered in
+  // NEITHER registry — so `CLAUDE_MEM_SALIENCE=bind` delivered half the mechanism and
+  // nothing said so (audit B6, 2026-08-14). Matched on the edit tools only, NOT Read: there
+  // is no post-edit state to compare after a read. Inert (returns before touching stdin)
+  // unless CLAUDE_MEM_SALIENCE=bind, so the default chain pays one short-circuit spawn per
+  // edit and emits nothing.
+  const memPostToolRecall = {
+    matcher: 'Edit|Write|NotebookEdit',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('scripts/post-tool-recall.js'),
+        timeout: 3,
+      },
+    ],
+  };
 
-// D#170. A SEPARATE event from PostToolUse, not a variant of it: Claude Code does not
-// fire PostToolUse for a tool call it judged failed, so without this registration the
-// plugin never sees a single host-flagged failure. Matched on Bash alone — the surface
-// it feeds queries on a command plus its output, and no other tool has that shape.
-const memPostToolFailure = {
-  matcher: 'Bash',
-  hooks: [{
-    type: 'command',
-    command: nodeHook('hook.mjs', 'post-tool-failure'),
-    timeout: 5
-  }]
-};
+  // D#170. A SEPARATE event from PostToolUse, not a variant of it: Claude Code does not
+  // fire PostToolUse for a tool call it judged failed, so without this registration the
+  // plugin never sees a single host-flagged failure. Matched on Bash alone — the surface
+  // it feeds queries on a command plus its output, and no other tool has that shape.
+  const memPostToolFailure = {
+    matcher: 'Bash',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('hook.mjs', 'post-tool-failure'),
+        timeout: 5,
+      },
+    ],
+  };
 
-const memSessionStart = {
-  matcher: 'startup|clear|compact',
-  hooks: [{
-    type: 'command',
-    command: nodeHook('hook.mjs', 'session-start'),
-    timeout: 10
-  }]
-};
+  const memSessionStart = {
+    matcher: 'startup|clear|compact',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('hook.mjs', 'session-start'),
+        timeout: 10,
+      },
+    ],
+  };
 
-const memStop = {
-  matcher: '*',
-  hooks: [{
-    type: 'command',
-    command: nodeHook('hook.mjs', 'stop'),
-    timeout: 5
-  }]
-};
+  const memStop = {
+    matcher: '*',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('hook.mjs', 'stop'),
+        timeout: 5,
+      },
+    ],
+  };
 
-// Fires immediately BEFORE auto-compaction, re-emitting <claude-mem-context> so the
-// summarizer that rewrites the transcript still has memory in scope (SessionStart's
-// compact matcher fires AFTER, when the context is already gone). Parity with
-// hooks/hooks.json: omitting it here made every settings.json install lose exactly the
-// block that exists to survive compaction, invisibly — doctor only ever asked "are ANY
-// mem hooks present", never "which events" (audit B3, 2026-08-14).
-const memPreCompact = {
-  matcher: '*',
-  hooks: [{
-    type: 'command',
-    command: nodeHook('hook.mjs', 'pre-compact'),
-    timeout: 5
-  }]
-};
+  // Fires immediately BEFORE auto-compaction, re-emitting <claude-mem-context> so the
+  // summarizer that rewrites the transcript still has memory in scope (SessionStart's
+  // compact matcher fires AFTER, when the context is already gone). Parity with
+  // hooks/hooks.json: omitting it here made every settings.json install lose exactly the
+  // block that exists to survive compaction, invisibly — doctor only ever asked "are ANY
+  // mem hooks present", never "which events" (audit B3, 2026-08-14).
+  const memPreCompact = {
+    matcher: '*',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('hook.mjs', 'pre-compact'),
+        timeout: 5,
+      },
+    ],
+  };
 
-const memUserPrompt = {
-  matcher: '*',
-  hooks: [
-    {
-      type: 'command',
-      command: nodeHook('scripts/user-prompt-search.js'),
-      timeout: 2
-    },
-    {
-      type: 'command',
-      command: nodeHook('hook.mjs', 'user-prompt'),
-      timeout: 5
-    }
-  ]
-};
+  const memUserPrompt = {
+    matcher: '*',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('scripts/user-prompt-search.js'),
+        timeout: 2,
+      },
+      {
+        type: 'command',
+        command: nodeHook('hook.mjs', 'user-prompt'),
+        timeout: 5,
+      },
+    ],
+  };
 
-const memPreToolRecall = {
-  // v2.34.6: Read added to cover planning-Read (pre-Edit exploration).
-  // Read-path uses a tighter filter (lesson_learned required, top-1,
-  // 120-char truncation, silent-on-empty) — see scripts/pre-tool-recall.js.
-  matcher: 'Edit|Write|NotebookEdit|Read',
-  hooks: [
-    {
-      type: 'command',
-      command: nodeHook('scripts/pre-tool-recall.js'),
-      timeout: 3
-    }
-  ]
-};
+  const memPreToolRecall = {
+    // v2.34.6: Read added to cover planning-Read (pre-Edit exploration).
+    // Read-path uses a tighter filter (lesson_learned required, top-1,
+    // 120-char truncation, silent-on-empty) — see scripts/pre-tool-recall.js.
+    matcher: 'Edit|Write|NotebookEdit|Read',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('scripts/pre-tool-recall.js'),
+        timeout: 3,
+      },
+    ],
+  };
 
-const memPreSkillBridge = {
-  matcher: 'Skill',
-  hooks: [
-    {
-      type: 'command',
-      command: nodeHook('scripts/pre-skill-bridge.js'),
-      timeout: 3
-    }
-  ]
-};
+  const memPreSkillBridge = {
+    matcher: 'Skill',
+    hooks: [
+      {
+        type: 'command',
+        command: nodeHook('scripts/pre-skill-bridge.js'),
+        timeout: 3,
+      },
+    ],
+  };
 
-// P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
-// Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
-// can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
-// Behind the bash prefilter since 2026-08-22 (audit P2-5): the flag is off by
-// default, and a disabled feature was starting a Node interpreter on every single
-// Agent dispatch (22.6ms → 2.4ms; see scripts/pre-agent-inject.sh). The prefilter
-// execs the same launcher when the flag is on.
-const memPreAgentInject = {
-  matcher: 'Agent|Task',
-  hooks: [
-    {
-      type: 'command',
-      command: `bash "${AGENT_PREFILTER_PATH}"`,
-      timeout: 5
-    }
-  ]
-};
+  // P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
+  // Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
+  // can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
+  // Behind the bash prefilter since 2026-08-22 (audit P2-5): the flag is off by
+  // default, and a disabled feature was starting a Node interpreter on every single
+  // Agent dispatch (22.6ms → 2.4ms; see scripts/pre-agent-inject.sh). The prefilter
+  // execs the same launcher when the flag is on.
+  const memPreAgentInject = {
+    matcher: 'Agent|Task',
+    hooks: [
+      {
+        type: 'command',
+        command: `bash "${AGENT_PREFILTER_PATH}"`,
+        timeout: 5,
+      },
+    ],
+  };
 
-// Filter out existing mem hooks, then append fresh ones
-// PreToolUse has three separate matchers, so we register all three
-// Event set MUST stay equal to hooks/hooks.json's (minus scripts/setup.sh, which
-// bootstraps the plugin cache and has no settings.json counterpart) —
-// tests/audit-silent-20260814.test.mjs diffs a real `install --dev` run's
-// settings.json against the shipped manifest and reds on any new divergence.
-const hookConfigs = {
-  PreToolUse: [memPreToolRecall, memPreSkillBridge, memPreAgentInject],
-  PostToolUse: [memPostToolUse, memPostToolRecall],
-  PostToolUseFailure: [memPostToolFailure],
-  PreCompact: [memPreCompact],
-  SessionStart: [memSessionStart],
-  Stop: [memStop],
-  UserPromptSubmit: [memUserPrompt],
-};
+  // Filter out existing mem hooks, then append fresh ones
+  // PreToolUse has three separate matchers, so we register all three
+  // Event set MUST stay equal to hooks/hooks.json's (minus scripts/setup.sh, which
+  // bootstraps the plugin cache and has no settings.json counterpart) —
+  // tests/audit-silent-20260814.test.mjs diffs a real `install --dev` run's
+  // settings.json against the shipped manifest and reds on any new divergence.
+  const hookConfigs = {
+    PreToolUse: [memPreToolRecall, memPreSkillBridge, memPreAgentInject],
+    PostToolUse: [memPostToolUse, memPostToolRecall],
+    PostToolUseFailure: [memPostToolFailure],
+    PreCompact: [memPreCompact],
+    SessionStart: [memSessionStart],
+    Stop: [memStop],
+    UserPromptSubmit: [memUserPrompt],
+  };
 
-for (const [event, configs] of Object.entries(hookConfigs)) {
-  const existing = Array.isArray(settings.hooks[event]) ? settings.hooks[event].filter(cfg => !isMemHook(cfg)) : [];
-  settings.hooks[event] = [...existing, ...configs];
-}
+  for (const [event, configs] of Object.entries(hookConfigs)) {
+    const existing = Array.isArray(settings.hooks[event])
+      ? settings.hooks[event].filter((cfg) => !isMemHook(cfg))
+      : [];
+    settings.hooks[event] = [...existing, ...configs];
+  }
 
-writeSettings(settings);
-// Derived from the map, not a parallel literal: the pre-B3 line said five events and
-// kept saying five after the map changed, which is how a missing registration reads as
-// a successful one.
-ok(`Hooks configured (${Object.keys(hookConfigs).join(', ')})`);
-// Returned so dedupePluginCacheAndHooks gates on a VALUE this function produced
-// rather than re-reading settings.json — see the `managedHooks` note there. This
-// function writes all seven events unconditionally, so the answer is always true;
-// returning it keeps that fact in the caller's dataflow instead of in call order.
-return true;
+  writeSettings(settings);
+  // Derived from the map, not a parallel literal: the pre-B3 line said five events and
+  // kept saying five after the map changed, which is how a missing registration reads as
+  // a successful one.
+  ok(`Hooks configured (${Object.keys(hookConfigs).join(', ')})`);
+  // Returned so dedupePluginCacheAndHooks gates on a VALUE this function produced
+  // rather than re-reading settings.json — see the `managedHooks` note there. This
+  // function writes all seven events unconditionally, so the answer is always true;
+  // returning it keeps that fact in the caller's dataflow instead of in call order.
+  return true;
 }
 
 function backupLegacyClaudeMemData() {
-// 5. Legacy ~/.claude-mem/ → ~/.claude-mem-lite/ — back up, don't reuse.
-// The legacy DB is schema v16 (schema_versions plural) and there's no
-// bridge in MIGRATIONS[] to v28. Reusing it FATALs on first launch with
-// "no such column: memory_session_id". Rename to a timestamped backup
-// so the new install creates a fresh v28 DB.
-try {
-  const r = migrateLegacyClaudeMemData(OLD_DATA_DIR, MEM_DATA_DIR);
-  if (r.action === 'backed-up') {
-    ok(`Legacy ~/.claude-mem/ DB backed up to ${r.backupPath}`);
-    log('New v28 DB will be created on first launch (legacy schema is incompatible).');
+  // 5. Legacy ~/.claude-mem/ → ~/.claude-mem-lite/ — back up, don't reuse.
+  // The legacy DB is schema v16 (schema_versions plural) and there's no
+  // bridge in MIGRATIONS[] to v28. Reusing it FATALs on first launch with
+  // "no such column: memory_session_id". Rename to a timestamped backup
+  // so the new install creates a fresh v28 DB.
+  try {
+    const r = migrateLegacyClaudeMemData(OLD_DATA_DIR, MEM_DATA_DIR);
+    if (r.action === 'backed-up') {
+      ok(`Legacy ~/.claude-mem/ DB backed up to ${r.backupPath}`);
+      log('New v28 DB will be created on first launch (legacy schema is incompatible).');
+    }
+  } catch (e) {
+    warn('Legacy DB backup failed: ' + e.message);
   }
-} catch (e) {
-  warn('Legacy DB backup failed: ' + e.message);
-}
 
-// 5b. Rename claude-mem.db → claude-mem-lite.db in same directory
-const oldDbInDir = join(MEM_DATA_DIR, 'claude-mem.db');
-if (existsSync(oldDbInDir) && !existsSync(DB_PATH)) {
-  renameSync(oldDbInDir, DB_PATH);
-  for (const ext of ['-wal', '-shm']) {
-    if (existsSync(oldDbInDir + ext)) try { renameSync(oldDbInDir + ext, DB_PATH + ext); } catch {}
+  // 5b. Rename claude-mem.db → claude-mem-lite.db in same directory
+  const oldDbInDir = join(MEM_DATA_DIR, 'claude-mem.db');
+  if (existsSync(oldDbInDir) && !existsSync(DB_PATH)) {
+    renameSync(oldDbInDir, DB_PATH);
+    for (const ext of ['-wal', '-shm']) {
+      if (existsSync(oldDbInDir + ext))
+        try {
+          renameSync(oldDbInDir + ext, DB_PATH + ext);
+        } catch {}
+    }
+    ok('Database renamed: claude-mem.db → claude-mem-lite.db');
   }
-  ok('Database renamed: claude-mem.db → claude-mem-lite.db');
-}
 }
 
 async function installPreinstalledResources() {
-// 6. Install pre-installed resources (skills + agents)
-if (process.env.CLAUDE_MEM_SKIP_REPOS) {
-  ok('Skill/agent registry: skipped (CLAUDE_MEM_SKIP_REPOS)');
-} else try {
-  const manifestPath = join(INSTALL_DIR, 'registry', 'preinstalled.json');
-  if (!existsSync(manifestPath)) {
-    // For git-clone mode, check PROJECT_DIR
-    const altPath = join(PROJECT_DIR, 'registry', 'preinstalled.json');
-    if (existsSync(altPath)) {
-      const registryDir = join(INSTALL_DIR, 'registry');
-      if (!existsSync(registryDir)) mkdirSync(registryDir, { recursive: true });
-      copyFileSync(altPath, manifestPath);
-    }
-  }
-
-  if (existsSync(manifestPath)) {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    const resources = manifest.resources || [];
-
-    if (resources.length > 0) {
-      const managedDir = join(MEM_DATA_DIR, 'managed');
-
-      // 6a. Git shallow clone unique repos
-      const repos = new Map();
-      for (const r of resources) {
-        if (!repos.has(r.repo)) repos.set(r.repo, []);
-        repos.get(r.repo).push(r);
-      }
-
-      // Disclose the cost BEFORE spending it. This step is the single largest
-      // thing `install` does — N shallow git clones over the network, ~150 MB on
-      // disk for the default manifest — and it used to announce itself only after
-      // the fact ("Repos: 15 cloned"). A first-time user on a metered link or a
-      // small disk had no warning and no visible way out; the opt-out existed but
-      // lived only in an env var no output ever mentioned.
-      // Count only repos not already on disk — a re-run/update clones nothing, and
-      // announcing "cloning 15 repos" every time would be false.
-      const repoDirName = (repoUrl) =>
-        repoUrl.split('/').slice(-2).join('-').replace(/[^a-zA-Z0-9._-]/g, '_');
-      const pendingClones = [...repos.keys()]
-        .filter(repoUrl => !existsSync(join(managedDir, 'repos', repoDirName(repoUrl)))).length;
-      if (pendingClones > 0) {
-        log(`Skill/agent registry: cloning ${pendingClones} repo(s) — network + ~150 MB on disk.`);
-        log('  Skip with CLAUDE_MEM_SKIP_REPOS=1 (memory features work without it).');
-      }
-
-      let cloned = 0, updated = 0;
-      const deadRepos = new Set(); // repos that no longer exist (404)
-
-      const isRepoNotFound = (err) => {
-        const msg = (err?.stderr ? err.stderr.toString() : '') + (err?.message || '');
-        return /repository.*not found|404/i.test(msg);
-      };
-
-      for (const [repoUrl, entries] of repos) {
-        const repoName = repoUrl.split('/').slice(-2).join('-').replace(/[^a-zA-Z0-9._-]/g, '_');
-        const clonePath = join(managedDir, 'repos', repoName);
-        let repoReady = false;
-
-        const plan = planRepoSparsePaths(entries);
-        const cloneUrl = `${repoUrl.replace(/\.git$/, '')}.git`;
-        // Clone only what we extract: a partial (blob:none) + sparse clone fetches
-        // just the manifest subpaths' subtrees instead of the whole repo. Falls
-        // back to a plain shallow clone if partial-clone/sparse-checkout is
-        // unsupported (old git/server) — identical to the prior behavior.
-        const cloneSlim = () => {
-          if (plan.full) {
-            execFileSync('git', ['clone', '--depth', '1', cloneUrl, clonePath], { stdio: 'pipe', timeout: 30000 });
-            return;
-          }
-          try {
-            execFileSync('git', ['clone', '--depth', '1', '--filter=blob:none', '--no-checkout', cloneUrl, clonePath], { stdio: 'pipe', timeout: 30000 });
-            execFileSync('git', ['-C', clonePath, 'sparse-checkout', 'set', '--no-cone', ...plan.paths], { stdio: 'pipe', timeout: 30000 });
-            execFileSync('git', ['-C', clonePath, 'checkout'], { stdio: 'pipe', timeout: 30000 });
-          } catch {
-            try { rmSync(clonePath, { recursive: true, force: true }); } catch {}
-            execFileSync('git', ['clone', '--depth', '1', cloneUrl, clonePath], { stdio: 'pipe', timeout: 30000 });
-          }
-        };
-
-        // Migrate a legacy full clone: drop it so the fresh-clone path below
-        // rebuilds it slim. managed/repos is a rebuildable cache, so this loses
-        // nothing and reclaims the bulk of its footprint on the next install run.
-        if (!plan.full && existsSync(clonePath) && !isPartialSparseClone(clonePath)) {
-          try { rmSync(clonePath, { recursive: true, force: true }); } catch {}
+  // 6. Install pre-installed resources (skills + agents)
+  if (process.env.CLAUDE_MEM_SKIP_REPOS) {
+    ok('Skill/agent registry: skipped (CLAUDE_MEM_SKIP_REPOS)');
+  } else
+    try {
+      const manifestPath = join(INSTALL_DIR, 'registry', 'preinstalled.json');
+      if (!existsSync(manifestPath)) {
+        // For git-clone mode, check PROJECT_DIR
+        const altPath = join(PROJECT_DIR, 'registry', 'preinstalled.json');
+        if (existsSync(altPath)) {
+          const registryDir = join(INSTALL_DIR, 'registry');
+          if (!existsSync(registryDir)) mkdirSync(registryDir, { recursive: true });
+          copyFileSync(altPath, manifestPath);
         }
+      }
 
-        if (!existsSync(clonePath)) {
-          // Fresh clone (also the rebuild path for a just-migrated legacy clone)
-          try {
-            mkdirSync(join(managedDir, 'repos'), { recursive: true });
-            cloneSlim();
-            cloned++;
-            repoReady = true;
-          } catch (err) {
-            if (isRepoNotFound(err)) {
-              deadRepos.add(repoUrl);
-              warn(`  Repo not found (removed?): ${repoUrl}`);
-            } else {
-              warn(`  Clone failed: ${repoUrl}`);
-            }
-            continue;
+      if (existsSync(manifestPath)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        const resources = manifest.resources || [];
+
+        if (resources.length > 0) {
+          const managedDir = join(MEM_DATA_DIR, 'managed');
+
+          // 6a. Git shallow clone unique repos
+          const repos = new Map();
+          for (const r of resources) {
+            if (!repos.has(r.repo)) repos.set(r.repo, []);
+            repos.get(r.repo).push(r);
           }
-        } else {
-          // Update existing: fetch latest and fast-forward
-          try {
-            // Re-assert the sparse set so a newer manifest that adds a subpath to
-            // an already-slim clone checks it out (idempotent; no-op for full clones).
-            if (!plan.full && isPartialSparseClone(clonePath)) {
-              try { execFileSync('git', ['-C', clonePath, 'sparse-checkout', 'set', '--no-cone', ...plan.paths], { stdio: 'pipe', timeout: 30000 }); } catch {}
-            }
-            const localHash = execFileSync('git', ['-C', clonePath, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: 'pipe' }).trim();
-            execFileSync('git', ['-C', clonePath, 'fetch', '--depth', '1', 'origin'], { stdio: 'pipe', timeout: 30000 });
-            const remoteHash = execFileSync('git', ['-C', clonePath, 'rev-parse', 'FETCH_HEAD'], { encoding: 'utf8', stdio: 'pipe' }).trim();
-            if (localHash !== remoteHash) {
-              execFileSync('git', ['-C', clonePath, 'reset', '--hard', 'FETCH_HEAD'], { stdio: 'pipe' });
-              updated++;
-              repoReady = true; // needs re-copy
-            }
-          } catch (err) {
-            if (isRepoNotFound(err)) {
-              deadRepos.add(repoUrl);
-              warn(`  Repo not found (removed?): ${repoUrl} — cleaning up`);
-              // Remove local clone
-              try { rmSync(clonePath, { recursive: true, force: true }); } catch {}
-              // Remove extracted resources
-              for (const entry of entries) {
-                const destDir = join(managedDir, entry.type === 'skill' ? 'skills' : 'agents');
-                const destPath = join(destDir, entry.name);
-                try { if (existsSync(destPath)) rmSync(destPath, { recursive: true, force: true }); } catch {}
+
+          // Disclose the cost BEFORE spending it. This step is the single largest
+          // thing `install` does — N shallow git clones over the network, ~150 MB on
+          // disk for the default manifest — and it used to announce itself only after
+          // the fact ("Repos: 15 cloned"). A first-time user on a metered link or a
+          // small disk had no warning and no visible way out; the opt-out existed but
+          // lived only in an env var no output ever mentioned.
+          // Count only repos not already on disk — a re-run/update clones nothing, and
+          // announcing "cloning 15 repos" every time would be false.
+          const repoDirName = (repoUrl) =>
+            repoUrl
+              .split('/')
+              .slice(-2)
+              .join('-')
+              .replace(/[^a-zA-Z0-9._-]/g, '_');
+          const pendingClones = [...repos.keys()].filter(
+            (repoUrl) => !existsSync(join(managedDir, 'repos', repoDirName(repoUrl))),
+          ).length;
+          if (pendingClones > 0) {
+            log(`Skill/agent registry: cloning ${pendingClones} repo(s) — network + ~150 MB on disk.`);
+            log('  Skip with CLAUDE_MEM_SKIP_REPOS=1 (memory features work without it).');
+          }
+
+          let cloned = 0,
+            updated = 0;
+          const deadRepos = new Set(); // repos that no longer exist (404)
+
+          const isRepoNotFound = (err) => {
+            const msg = (err?.stderr ? err.stderr.toString() : '') + (err?.message || '');
+            return /repository.*not found|404/i.test(msg);
+          };
+
+          for (const [repoUrl, entries] of repos) {
+            const repoName = repoUrl
+              .split('/')
+              .slice(-2)
+              .join('-')
+              .replace(/[^a-zA-Z0-9._-]/g, '_');
+            const clonePath = join(managedDir, 'repos', repoName);
+            let repoReady = false;
+
+            const plan = planRepoSparsePaths(entries);
+            const cloneUrl = `${repoUrl.replace(/\.git$/, '')}.git`;
+            // Clone only what we extract: a partial (blob:none) + sparse clone fetches
+            // just the manifest subpaths' subtrees instead of the whole repo. Falls
+            // back to a plain shallow clone if partial-clone/sparse-checkout is
+            // unsupported (old git/server) — identical to the prior behavior.
+            const cloneSlim = () => {
+              if (plan.full) {
+                execFileSync('git', ['clone', '--depth', '1', cloneUrl, clonePath], {
+                  stdio: 'pipe',
+                  timeout: 30000,
+                });
+                return;
               }
-              continue;
+              try {
+                execFileSync(
+                  'git',
+                  ['clone', '--depth', '1', '--filter=blob:none', '--no-checkout', cloneUrl, clonePath],
+                  { stdio: 'pipe', timeout: 30000 },
+                );
+                execFileSync('git', ['-C', clonePath, 'sparse-checkout', 'set', '--no-cone', ...plan.paths], {
+                  stdio: 'pipe',
+                  timeout: 30000,
+                });
+                execFileSync('git', ['-C', clonePath, 'checkout'], { stdio: 'pipe', timeout: 30000 });
+              } catch {
+                try {
+                  rmSync(clonePath, { recursive: true, force: true });
+                } catch {}
+                execFileSync('git', ['clone', '--depth', '1', cloneUrl, clonePath], {
+                  stdio: 'pipe',
+                  timeout: 30000,
+                });
+              }
+            };
+
+            // Migrate a legacy full clone: drop it so the fresh-clone path below
+            // rebuilds it slim. managed/repos is a rebuildable cache, so this loses
+            // nothing and reclaims the bulk of its footprint on the next install run.
+            if (!plan.full && existsSync(clonePath) && !isPartialSparseClone(clonePath)) {
+              try {
+                rmSync(clonePath, { recursive: true, force: true });
+              } catch {}
             }
-            // Transient failure — use existing clone as-is
+
+            if (!existsSync(clonePath)) {
+              // Fresh clone (also the rebuild path for a just-migrated legacy clone)
+              try {
+                mkdirSync(join(managedDir, 'repos'), { recursive: true });
+                cloneSlim();
+                cloned++;
+                repoReady = true;
+              } catch (err) {
+                if (isRepoNotFound(err)) {
+                  deadRepos.add(repoUrl);
+                  warn(`  Repo not found (removed?): ${repoUrl}`);
+                } else {
+                  warn(`  Clone failed: ${repoUrl}`);
+                }
+                continue;
+              }
+            } else {
+              // Update existing: fetch latest and fast-forward
+              try {
+                // Re-assert the sparse set so a newer manifest that adds a subpath to
+                // an already-slim clone checks it out (idempotent; no-op for full clones).
+                if (!plan.full && isPartialSparseClone(clonePath)) {
+                  try {
+                    execFileSync(
+                      'git',
+                      ['-C', clonePath, 'sparse-checkout', 'set', '--no-cone', ...plan.paths],
+                      { stdio: 'pipe', timeout: 30000 },
+                    );
+                  } catch {}
+                }
+                const localHash = execFileSync('git', ['-C', clonePath, 'rev-parse', 'HEAD'], {
+                  encoding: 'utf8',
+                  stdio: 'pipe',
+                }).trim();
+                execFileSync('git', ['-C', clonePath, 'fetch', '--depth', '1', 'origin'], {
+                  stdio: 'pipe',
+                  timeout: 30000,
+                });
+                const remoteHash = execFileSync('git', ['-C', clonePath, 'rev-parse', 'FETCH_HEAD'], {
+                  encoding: 'utf8',
+                  stdio: 'pipe',
+                }).trim();
+                if (localHash !== remoteHash) {
+                  execFileSync('git', ['-C', clonePath, 'reset', '--hard', 'FETCH_HEAD'], { stdio: 'pipe' });
+                  updated++;
+                  repoReady = true; // needs re-copy
+                }
+              } catch (err) {
+                if (isRepoNotFound(err)) {
+                  deadRepos.add(repoUrl);
+                  warn(`  Repo not found (removed?): ${repoUrl} — cleaning up`);
+                  // Remove local clone
+                  try {
+                    rmSync(clonePath, { recursive: true, force: true });
+                  } catch {}
+                  // Remove extracted resources
+                  for (const entry of entries) {
+                    const destDir = join(managedDir, entry.type === 'skill' ? 'skills' : 'agents');
+                    const destPath = join(destDir, entry.name);
+                    try {
+                      if (existsSync(destPath)) rmSync(destPath, { recursive: true, force: true });
+                    } catch {}
+                  }
+                  continue;
+                }
+                // Transient failure — use existing clone as-is
+              }
+            }
+
+            // Copy resources to managed/skills/ or managed/agents/
+            // Re-copy if repo was freshly cloned or updated
+            mkdirSync(join(managedDir, 'skills'), { recursive: true });
+            mkdirSync(join(managedDir, 'agents'), { recursive: true });
+            for (const entry of entries) {
+              // Path traversal guard: reject entries with '..' or absolute paths
+              if (
+                entry.path.includes('..') ||
+                entry.name.includes('..') ||
+                isAbsolute(entry.path) ||
+                isAbsolute(entry.name)
+              )
+                continue;
+              const srcPath = entry.path === '.' ? clonePath : join(clonePath, entry.path);
+              const destDir = join(managedDir, entry.type === 'skill' ? 'skills' : 'agents');
+              const destPath = join(destDir, entry.name);
+              if (existsSync(srcPath) && (repoReady || !existsSync(destPath))) {
+                try {
+                  if (existsSync(destPath)) rmSync(destPath, { recursive: true, force: true });
+                  cpSync(srcPath, destPath, { recursive: true });
+                } catch {}
+              }
+            }
           }
-        }
+          const managedSize = dirSizeBytes(managedDir);
+          ok(
+            `Repos: ${cloned} cloned, ${updated} updated, ${repos.size - deadRepos.size} active` +
+              (deadRepos.size > 0 ? `, ${deadRepos.size} dead removed` : '') +
+              ` (${fmtMB(managedSize.bytes, managedSize.truncated)} in ${managedDir})`,
+          );
 
-        // Copy resources to managed/skills/ or managed/agents/
-        // Re-copy if repo was freshly cloned or updated
-        mkdirSync(join(managedDir, 'skills'), { recursive: true });
-        mkdirSync(join(managedDir, 'agents'), { recursive: true });
-        for (const entry of entries) {
-          // Path traversal guard: reject entries with '..' or absolute paths
-          if (entry.path.includes('..') || entry.name.includes('..') ||
-              isAbsolute(entry.path) || isAbsolute(entry.name)) continue;
-          const srcPath = entry.path === '.' ? clonePath : join(clonePath, entry.path);
-          const destDir = join(managedDir, entry.type === 'skill' ? 'skills' : 'agents');
-          const destPath = join(destDir, entry.name);
-          if (existsSync(srcPath) && (repoReady || !existsSync(destPath))) {
-            try {
-              if (existsSync(destPath)) rmSync(destPath, { recursive: true, force: true });
-              cpSync(srcPath, destPath, { recursive: true });
-            } catch {}
-          }
-        }
-      }
-      const managedSize = dirSizeBytes(managedDir);
-      ok(`Repos: ${cloned} cloned, ${updated} updated, ${repos.size - deadRepos.size} active` +
-         (deadRepos.size > 0 ? `, ${deadRepos.size} dead removed` : '') +
-         ` (${fmtMB(managedSize.bytes, managedSize.truncated)} in ${managedDir})`);
+          // 6b. Init registry DB and record preinstalled entries
+          const { ensureRegistryDb } = await importFromInstall('registry.mjs');
+          const regDbPath = join(MEM_DATA_DIR, 'resource-registry.db');
+          const rdb = ensureRegistryDb(regDbPath);
 
-      // 6b. Init registry DB and record preinstalled entries
-      const { ensureRegistryDb } = await importFromInstall('registry.mjs');
-      const regDbPath = join(MEM_DATA_DIR, 'resource-registry.db');
-      const rdb = ensureRegistryDb(regDbPath);
-
-      const insertPre = rdb.prepare(`
+          const insertPre = rdb.prepare(`
         INSERT OR REPLACE INTO preinstalled (name, type, repo_url, repo_path, tags, enabled)
         VALUES (?, ?, ?, ?, ?, 1)
       `);
-      const activeResources = deadRepos.size > 0
-        ? resources.filter(r => !deadRepos.has(r.repo))
-        : resources;
-      for (const r of activeResources) {
-        insertPre.run(r.name, r.type, r.repo, r.path, JSON.stringify(r.tags || []));
-      }
+          const activeResources =
+            deadRepos.size > 0 ? resources.filter((r) => !deadRepos.has(r.repo)) : resources;
+          for (const r of activeResources) {
+            insertPre.run(r.name, r.type, r.repo, r.path, JSON.stringify(r.tags || []));
+          }
 
-      // Clean up DB entries for dead repos
-      if (deadRepos.size > 0) {
-        const delPre = rdb.prepare('DELETE FROM preinstalled WHERE repo_url = ?');
-        const delRes = rdb.prepare('DELETE FROM resources WHERE repo_url = ?');
-        for (const deadUrl of deadRepos) {
-          try { delPre.run(deadUrl); } catch {}
-          try { delRes.run(deadUrl); } catch {}
-        }
-      }
-      ok(`Registry DB initialized (${activeResources.length} preinstalled entries` +
-         (deadRepos.size > 0 ? `, ${deadRepos.size} dead repos purged` : '') + ')');
-
-      // 6c. Fetch GitHub stars (best-effort, unauthenticated)
-      log('  Fetching GitHub stars...');
-      const starCache = new Map();
-      for (const [repoUrl] of repos) {
-        if (deadRepos.has(repoUrl)) continue;
-        const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-        if (match) {
-          try {
-            const apiUrl = `https://api.github.com/repos/${match[1]}/${match[2]}`;
-            const res = execFileSync('curl', ['-sf', apiUrl], { encoding: 'utf8', timeout: 10000 });
-            const data = JSON.parse(res);
-            if (typeof data.stargazers_count === 'number') {
-              starCache.set(repoUrl, data.stargazers_count);
+          // Clean up DB entries for dead repos
+          if (deadRepos.size > 0) {
+            const delPre = rdb.prepare('DELETE FROM preinstalled WHERE repo_url = ?');
+            const delRes = rdb.prepare('DELETE FROM resources WHERE repo_url = ?');
+            for (const deadUrl of deadRepos) {
+              try {
+                delPre.run(deadUrl);
+              } catch {}
+              try {
+                delRes.run(deadUrl);
+              } catch {}
             }
-          } catch {}
+          }
+          ok(
+            `Registry DB initialized (${activeResources.length} preinstalled entries` +
+              (deadRepos.size > 0 ? `, ${deadRepos.size} dead repos purged` : '') +
+              ')',
+          );
+
+          // 6c. Fetch GitHub stars (best-effort, unauthenticated)
+          log('  Fetching GitHub stars...');
+          const starCache = new Map();
+          for (const [repoUrl] of repos) {
+            if (deadRepos.has(repoUrl)) continue;
+            const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+            if (match) {
+              try {
+                const apiUrl = `https://api.github.com/repos/${match[1]}/${match[2]}`;
+                const res = execFileSync('curl', ['-sf', apiUrl], { encoding: 'utf8', timeout: 10000 });
+                const data = JSON.parse(res);
+                if (typeof data.stargazers_count === 'number') {
+                  starCache.set(repoUrl, data.stargazers_count);
+                }
+              } catch {}
+            }
+          }
+          if (starCache.size > 0) ok(`Stars fetched (${starCache.size}/${repos.size} repos)`);
+
+          // 6d. Scan and index resources (fallback-only, Haiku indexing deferred to first run)
+          log('  Scanning resources...');
+          const { scanAllResources, diffResources } = await importFromInstall('registry-scanner.mjs');
+          const scanned = scanAllResources({ dataDir: MEM_DATA_DIR });
+
+          // Attach star counts and repo URLs
+          for (const s of scanned) {
+            const entry = resources.find((r) => r.name === s.name && r.type === s.type);
+            if (entry) {
+              s.repoUrl = entry.repo;
+              s.repoStars = starCache.get(entry.repo) || 0;
+            }
+          }
+
+          const { toIndex } = diffResources(rdb, scanned);
+          if (toIndex.length > 0) {
+            // Use fallback indexing at install time (no Haiku calls)
+            // Full Haiku indexing happens on first SessionStart
+            const { upsertResource } = await importFromInstall('registry.mjs');
+            for (const res of toIndex) {
+              try {
+                const metaKey = `${res.type}:${res.name}`;
+                const meta = RESOURCE_METADATA[metaKey];
+                upsertResource(rdb, {
+                  name: res.name,
+                  type: res.type,
+                  status: 'active',
+                  source: res.source,
+                  repo_url: res.repoUrl || null,
+                  repo_stars: res.repoStars || 0,
+                  local_path: res.localPath,
+                  file_hash: res.fileHash,
+                  invocation_name: meta?.invocation_name || deriveInvocationName(res.name),
+                  intent_tags: meta?.intent_tags || res.name.replace(/-/g, ' '),
+                  domain_tags: meta?.domain_tags || '',
+                  trigger_patterns:
+                    meta?.trigger_patterns || `when user needs ${res.name.replace(/-/g, ' ')}`,
+                  capability_summary:
+                    meta?.capability_summary || `${res.type}: ${res.name.replace(/-/g, ' ')}`,
+                });
+              } catch {}
+            }
+            ok(`Resources registered: ${toIndex.length} indexed`);
+          }
+
+          // Apply curated metadata to all known resources (fixes existing installs)
+          reindexKnownResources(rdb);
+          ok('Resource metadata curated (FTS5 reindexed)');
+
+          // Register plugin resources (skills/agents from other plugins, no local files)
+          const virtualCount = registerVirtualResources(rdb);
+          if (virtualCount > 0) ok(`Plugin resources registered: ${virtualCount} virtual entries`);
+
+          rdb.close();
         }
+      } else {
+        log('  No preinstalled manifest found, skipping');
       }
-      if (starCache.size > 0) ok(`Stars fetched (${starCache.size}/${repos.size} repos)`);
-
-      // 6d. Scan and index resources (fallback-only, Haiku indexing deferred to first run)
-      log('  Scanning resources...');
-      const { scanAllResources, diffResources } = await importFromInstall('registry-scanner.mjs');
-      const scanned = scanAllResources({ dataDir: MEM_DATA_DIR });
-
-      // Attach star counts and repo URLs
-      for (const s of scanned) {
-        const entry = resources.find(r => r.name === s.name && r.type === s.type);
-        if (entry) {
-          s.repoUrl = entry.repo;
-          s.repoStars = starCache.get(entry.repo) || 0;
-        }
-      }
-
-      const { toIndex } = diffResources(rdb, scanned);
-      if (toIndex.length > 0) {
-        // Use fallback indexing at install time (no Haiku calls)
-        // Full Haiku indexing happens on first SessionStart
-        const { upsertResource } = await importFromInstall('registry.mjs');
-        for (const res of toIndex) {
-          try {
-            const metaKey = `${res.type}:${res.name}`;
-            const meta = RESOURCE_METADATA[metaKey];
-            upsertResource(rdb, {
-              name: res.name,
-              type: res.type,
-              status: 'active',
-              source: res.source,
-              repo_url: res.repoUrl || null,
-              repo_stars: res.repoStars || 0,
-              local_path: res.localPath,
-              file_hash: res.fileHash,
-              invocation_name: meta?.invocation_name || deriveInvocationName(res.name),
-              intent_tags: meta?.intent_tags || res.name.replace(/-/g, ' '),
-              domain_tags: meta?.domain_tags || '',
-              trigger_patterns: meta?.trigger_patterns || `when user needs ${res.name.replace(/-/g, ' ')}`,
-              capability_summary: meta?.capability_summary || `${res.type}: ${res.name.replace(/-/g, ' ')}`,
-            });
-          } catch {}
-        }
-        ok(`Resources registered: ${toIndex.length} indexed`);
-      }
-
-      // Apply curated metadata to all known resources (fixes existing installs)
-      reindexKnownResources(rdb);
-      ok('Resource metadata curated (FTS5 reindexed)');
-
-      // Register plugin resources (skills/agents from other plugins, no local files)
-      const virtualCount = registerVirtualResources(rdb);
-      if (virtualCount > 0) ok(`Plugin resources registered: ${virtualCount} virtual entries`);
-
-      rdb.close();
+    } catch (e) {
+      warn('Resource setup: ' + e.message);
+      log('  Skills/agents will be indexed on first use');
     }
-  } else {
-    log('  No preinstalled manifest found, skipping');
-  }
-} catch (e) {
-  warn('Resource setup: ' + e.message);
-  log('  Skills/agents will be indexed on first use');
-}
 }
 
 function verifyDatabase() {
-// 7. Verify database
-if (existsSync(DB_PATH)) {
-  try {
-    const Database = requireFromInstall('better-sqlite3');
-    const db = new Database(DB_PATH, { readonly: true });
-    const count = db.prepare('SELECT COUNT(*) as c FROM observations').get();
-    db.close();
-    ok(`Database accessible: ${count.c} observations`);
-  } catch (e) {
-    warn('Database check failed: ' + e.message);
+  // 7. Verify database
+  if (existsSync(DB_PATH)) {
+    try {
+      const Database = requireFromInstall('better-sqlite3');
+      const db = new Database(DB_PATH, { readonly: true });
+      const count = db.prepare('SELECT COUNT(*) as c FROM observations').get();
+      db.close();
+      ok(`Database accessible: ${count.c} observations`);
+    } catch (e) {
+      warn('Database check failed: ' + e.message);
+    }
+  } else {
+    log('No existing database — will be created on first use');
   }
-} else {
-  log('No existing database — will be created on first use');
-}
 }
 
 async function dogfoodAutoAdopt() {
-// 7b. Dogfood auto-adopt (invited-memory, Phase C T13).
-// Only fires when install.mjs is running from the claude-mem-lite source repo
-// itself (detected via git remote match). In npm/npx flows PROJECT_DIR is a
-// cache dir with no git metadata, so this is a no-op for end users.
-// --no-adopt override respected.
-if (!flags.has('--no-adopt')) {
-  try {
-    const remote = execFileSync('git', ['-C', PROJECT_DIR, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', stdio: 'pipe' }).trim();
-    const isDogfood = /github\.com[:/]sdsrss\/claude-mem-lite(\.git)?$/i.test(remote);
-    if (isDogfood) {
-      const { cmdAdopt } = await importFromInstall('adopt-cli.mjs');
-      cmdAdopt([]);
-      ok('Invited-memory: auto-adopt for claude-mem-lite dogfood repo');
+  // 7b. Dogfood auto-adopt (invited-memory, Phase C T13).
+  // Only fires when install.mjs is running from the claude-mem-lite source repo
+  // itself (detected via git remote match). In npm/npx flows PROJECT_DIR is a
+  // cache dir with no git metadata, so this is a no-op for end users.
+  // --no-adopt override respected.
+  if (!flags.has('--no-adopt')) {
+    try {
+      const remote = execFileSync('git', ['-C', PROJECT_DIR, 'config', '--get', 'remote.origin.url'], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }).trim();
+      const isDogfood = /github\.com[:/]sdsrss\/claude-mem-lite(\.git)?$/i.test(remote);
+      if (isDogfood) {
+        const { cmdAdopt } = await importFromInstall('adopt-cli.mjs');
+        cmdAdopt([]);
+        ok('Invited-memory: auto-adopt for claude-mem-lite dogfood repo');
+      }
+    } catch {
+      // Not a git repo, or git missing — silent skip (this is the normal npm path).
     }
-  } catch {
-    // Not a git repo, or git missing — silent skip (this is the normal npm path).
   }
-}
 }
 
 function disableOldClaudeMemPlugin() {
   const settings = readSettings();
-// 8. Disable old claude-mem plugin
-if (settings.enabledPlugins?.['claude-mem@thedotmack'] !== undefined) {
-  settings.enabledPlugins['claude-mem@thedotmack'] = false;
-  writeSettings(settings);
-  ok('Old claude-mem plugin disabled');
-}
+  // 8. Disable old claude-mem plugin
+  if (settings.enabledPlugins?.['claude-mem@thedotmack'] !== undefined) {
+    settings.enabledPlugins['claude-mem@thedotmack'] = false;
+    writeSettings(settings);
+    ok('Old claude-mem plugin disabled');
+  }
 }
 
 function offerCleanOldVectorDb() {
-// 9. Offer to clean old vector-db
-const vectorDbPath = join(OLD_DATA_DIR, 'vector-db');
-if (existsSync(vectorDbPath)) {
-  try {
-    const size = execFileSync('du', ['-sh', vectorDbPath], { encoding: 'utf8' }).trim().split('\t')[0];
-    warn(`Old vector-db exists (${size}). Run: rm -rf ~/.claude-mem/vector-db/`);
-  } catch {}
-}
+  // 9. Offer to clean old vector-db
+  const vectorDbPath = join(OLD_DATA_DIR, 'vector-db');
+  if (existsSync(vectorDbPath)) {
+    try {
+      const size = execFileSync('du', ['-sh', vectorDbPath], { encoding: 'utf8' }).trim().split('\t')[0];
+      warn(`Old vector-db exists (${size}). Run: rm -rf ~/.claude-mem/vector-db/`);
+    } catch {}
+  }
 }
 
 async function install() {
@@ -1314,7 +1523,6 @@ async function install() {
   console.log('\n  Done! Restart Claude Code to activate.\n');
 }
 
-
 // ─── Uninstall ──────────────────────────────────────────────────────────────
 
 async function uninstall() {
@@ -1337,8 +1545,13 @@ async function uninstall() {
   for (const binDir of [join(homedir(), '.local', 'bin'), '/usr/local/bin']) {
     const cliLink = join(binDir, 'claude-mem-lite');
     try {
-      if (existsSync(cliLink)) { unlinkSync(cliLink); ok(`CLI symlink removed: ${cliLink}`); }
-    } catch { /* may not have permissions */ }
+      if (existsSync(cliLink)) {
+        unlinkSync(cliLink);
+        ok(`CLI symlink removed: ${cliLink}`);
+      }
+    } catch {
+      /* may not have permissions */
+    }
   }
 
   // 2. Remove hooks from settings.json (match both npx and git-clone install paths)
@@ -1413,7 +1626,9 @@ async function uninstall() {
       writeFileSync(knownPath, JSON.stringify(known, null, 2) + '\n');
       ok('Removed from known_marketplaces.json');
     }
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
 
   if (!canRemoveMarketplaceArtifacts && (existsSync(marketplaceDir) || existsSync(cacheDir))) {
     log('Marketplace cache preserved (other plugins may still depend on sdsrss marketplace)');
@@ -1436,7 +1651,9 @@ async function uninstall() {
         rmSync(MEM_DATA_DIR, { recursive: true, force: true });
         ok(`Relocated data purged (${MEM_DATA_DIR})`);
       } else if (existsSync(MEM_DATA_DIR)) {
-        warn(`CLAUDE_MEM_DIR (${MEM_DATA_DIR}) has no claude-mem-lite.db — left untouched. Remove manually if intended.`);
+        warn(
+          `CLAUDE_MEM_DIR (${MEM_DATA_DIR}) has no claude-mem-lite.db — left untouched. Remove manually if intended.`,
+        );
       }
     }
   } else {
@@ -1498,7 +1715,12 @@ async function status() {
     if (registered) {
       push('ok', 'mcp', 'MCP server: registered', { registered });
     } else if (pluginProvides) {
-      push('ok', 'mcp', `MCP server: provided by the plugin manifest (v${shape.activePluginVersion.version} .mcp.json) — no user-scope registration expected`, { registered: false, via: 'plugin' });
+      push(
+        'ok',
+        'mcp',
+        `MCP server: provided by the plugin manifest (v${shape.activePluginVersion.version} .mcp.json) — no user-scope registration expected`,
+        { registered: false, via: 'plugin' },
+      );
     } else {
       push('fail', 'mcp', 'MCP server: not registered', { registered });
     }
@@ -1513,11 +1735,17 @@ async function status() {
   const pluginEnabled = settings.enabledPlugins?.[PLUGIN_KEY] === true;
 
   if (pluginEnabled) push('ok', 'plugin', 'Plugin: enabled in settings', { enabled: true, disabled: false });
-  else if (pluginDisabled) push('warn', 'plugin', 'Plugin: disabled in settings', { enabled: false, disabled: true });
+  else if (pluginDisabled)
+    push('warn', 'plugin', 'Plugin: disabled in settings', { enabled: false, disabled: true });
   else push('warn', 'plugin', 'Plugin: not present in enabledPlugins', { enabled: false, disabled: false });
 
   if (hasHooks && pluginDisabled) {
-    push('warn', 'hooks', 'Hooks: still configured in settings.json while plugin is disabled (runtime ignores them; run cleanup-hooks or uninstall to clean up)', { configured: true });
+    push(
+      'warn',
+      'hooks',
+      'Hooks: still configured in settings.json while plugin is disabled (runtime ignores them; run cleanup-hooks or uninstall to clean up)',
+      { configured: true },
+    );
   } else if (hasHooks) {
     push('ok', 'hooks', 'Hooks: configured', { configured: true });
   } else if (pluginDisabled) {
@@ -1527,10 +1755,23 @@ async function status() {
     // reported all-green over an emptied cache manifest — zero hooks registered.
     const manifest = pluginCacheHookEvents(shape.activePluginVersion.root);
     if (manifest.ok) {
-      push('ok', 'hooks', `Hooks: provided by the plugin manifest (v${shape.activePluginVersion.version} hooks/hooks.json, ${manifest.events.length} events) — settings.json correctly holds none`, { configured: false, via: 'plugin', events: manifest.events });
+      push(
+        'ok',
+        'hooks',
+        `Hooks: provided by the plugin manifest (v${shape.activePluginVersion.version} hooks/hooks.json, ${manifest.events.length} events) — settings.json correctly holds none`,
+        { configured: false, via: 'plugin', events: manifest.events },
+      );
     } else {
-      const repair = hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY));
-      push('fail', 'hooks', `Hooks: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered. Repair: ${repair}`, { configured: false, via: 'plugin', events: [], manifest_reason: manifest.reason });
+      const repair = hookManifestRepairHint(
+        shape.activePluginVersion.root,
+        join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY),
+      );
+      push(
+        'fail',
+        'hooks',
+        `Hooks: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered. Repair: ${repair}`,
+        { configured: false, via: 'plugin', events: [], manifest_reason: manifest.reason },
+      );
     }
   } else {
     push('fail', 'hooks', 'Hooks: not configured', { configured: false });
@@ -1540,11 +1781,23 @@ async function status() {
   // settings.json hooks → runtime registers both → duplicate firing.
   const polluted = scanPluginCacheHookPollution();
   if (polluted.length > 0 && hasHooks) {
-    push('fail', 'plugin_cache', `Plugin cache: stale hooks.json in version(s) ${polluted.join(', ')} — duplicate firing alongside settings.json (run 'install' to auto-clear)`, { polluted_versions: polluted });
+    push(
+      'fail',
+      'plugin_cache',
+      `Plugin cache: stale hooks.json in version(s) ${polluted.join(', ')} — duplicate firing alongside settings.json (run 'install' to auto-clear)`,
+      { polluted_versions: polluted },
+    );
   } else if (polluted.length > 0) {
-    push('ok', 'plugin_cache', `Plugin cache: ${polluted.length} version(s) with hooks.json (plugin-only mode)`, { polluted_versions: polluted });
+    push(
+      'ok',
+      'plugin_cache',
+      `Plugin cache: ${polluted.length} version(s) with hooks.json (plugin-only mode)`,
+      { polluted_versions: polluted },
+    );
   } else if (pluginEnabled || hasHooks) {
-    push('ok', 'plugin_cache', 'Plugin cache: no stale hooks.json (no duplicate firing)', { polluted_versions: [] });
+    push('ok', 'plugin_cache', 'Plugin cache: no stale hooks.json (no duplicate firing)', {
+      polluted_versions: [],
+    });
   }
 
   // Database
@@ -1555,9 +1808,16 @@ async function status() {
       const obs = db.prepare('SELECT COUNT(*) as c FROM observations').get();
       const sess = db.prepare('SELECT COUNT(*) as c FROM session_summaries').get();
       db.close();
-      push('ok', 'database', `Database: ${obs.c} observations, ${sess.c} sessions`, { exists: true, observations: obs.c, sessions: sess.c });
+      push('ok', 'database', `Database: ${obs.c} observations, ${sess.c} sessions`, {
+        exists: true,
+        observations: obs.c,
+        sessions: sess.c,
+      });
     } catch (e) {
-      push('warn', 'database', 'Database: exists but check failed — ' + e.message, { exists: true, error: e.message });
+      push('warn', 'database', 'Database: exists but check failed — ' + e.message, {
+        exists: true,
+        error: e.message,
+      });
     }
   } else {
     push('warn', 'database', 'Database: not found', { exists: false });
@@ -1568,7 +1828,9 @@ async function status() {
     execFileSync('claude-mem-lite', ['--help'], { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
     push('ok', 'cli', 'CLI: claude-mem-lite command available', { available: true });
   } catch {
-    push('warn', 'cli', 'CLI: command not on PATH — run install again to create symlink', { available: false });
+    push('warn', 'cli', 'CLI: command not on PATH — run install again to create symlink', {
+      available: false,
+    });
   }
 
   // Old system
@@ -1611,10 +1873,21 @@ async function doctor() {
   if (!json) console.log('\nclaude-mem-lite doctor\n');
 
   // Shadow file-level helpers so every call site auto-records.
-  const ok   = (msg) => { checks.push({ level: 'ok',   message: msg }); if (!json) console.log(`  ✓ ${msg}`); };
-  const warn = (msg) => { checks.push({ level: 'warn', message: msg }); if (!json) console.log(`  ⚠ ${msg}`); };
-  const fail = (msg) => { checks.push({ level: 'fail', message: msg }); if (!json) console.log(`  ✗ ${msg}`); };
-  const log  = (msg) => { if (!json) console.log(`  ${msg}`); };
+  const ok = (msg) => {
+    checks.push({ level: 'ok', message: msg });
+    if (!json) console.log(`  ✓ ${msg}`);
+  };
+  const warn = (msg) => {
+    checks.push({ level: 'warn', message: msg });
+    if (!json) console.log(`  ⚠ ${msg}`);
+  };
+  const fail = (msg) => {
+    checks.push({ level: 'fail', message: msg });
+    if (!json) console.log(`  ✗ ${msg}`);
+  };
+  const log = (msg) => {
+    if (!json) console.log(`  ${msg}`);
+  };
 
   let issues = 0;
   let warnings = 0;
@@ -1623,7 +1896,10 @@ async function doctor() {
   // "warnings present". Used for informational ⚠ checks; the two ⚠ paths
   // that ALSO bump `issues` (stale procs, dev drift) keep using the file-level
   // `warn` directly to avoid double-counting.
-  const dwarn = (msg) => { warnings++; warn(msg); };
+  const dwarn = (msg) => {
+    warnings++;
+    warn(msg);
+  };
 
   // Node version
   const nodeVer = process.version;
@@ -1654,7 +1930,9 @@ async function doctor() {
     fail('better-sqlite3: no install on this machine owns a native binding — nothing here can open the DB');
     issues++;
   } else if (brokenRoots.length === 0) {
-    ok(`better-sqlite3: verified in ${rootProbes.length} install${rootProbes.length === 1 ? '' : 's'} (${rootProbes.map((r) => r.label).join('; ')})`);
+    ok(
+      `better-sqlite3: verified in ${rootProbes.length} install${rootProbes.length === 1 ? '' : 's'} (${rootProbes.map((r) => r.label).join('; ')})`,
+    );
   } else {
     // Name the ROOT, not just the fault: the repair is per-tree, and pointing a
     // user at the wrong `cd` is how `rebuild-binding` used to report success
@@ -1684,10 +1962,14 @@ async function doctor() {
     ok(`hook.mjs: ${HOOK_PATH}`);
   } else if (shape.activePluginVersion) {
     const v = shape.activePluginVersion;
-    ok(`Entry points: served from plugin cache v${v.version} (plugin-only install — the ~/.claude-mem-lite code layout is not used)`);
+    ok(
+      `Entry points: served from plugin cache v${v.version} (plugin-only install — the ~/.claude-mem-lite code layout is not used)`,
+    );
     for (const entry of ['server.mjs', 'hook.mjs', 'cli.mjs']) {
       if (!existsSync(join(v.root, entry))) {
-        fail(`Plugin cache v${v.version}: ${entry} missing — reinstall with \`/plugin install claude-mem-lite@sdsrss\``);
+        fail(
+          `Plugin cache v${v.version}: ${entry} missing — reinstall with \`/plugin install claude-mem-lite@sdsrss\``,
+        );
         issues++;
       }
     }
@@ -1708,8 +1990,12 @@ async function doctor() {
       const b = JSON.parse(readFileSync(brokenMarker, 'utf8'));
       const ageH = Math.round((Date.now() - (b.ts || 0)) / 3600000);
       detail = ` (last: ${b.reason || 'unknown'}, ~${ageH}h ago)`;
-    } catch { /* unreadable marker → bare warning */ }
-    dwarn(`Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${join(PROJECT_DIR, 'install.mjs')} repair\``);
+    } catch {
+      /* unreadable marker → bare warning */
+    }
+    dwarn(
+      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${join(PROJECT_DIR, 'install.mjs')} repair\``,
+    );
   } else {
     ok('Hook self-heal: no recent silent hook breakage');
   }
@@ -1723,11 +2009,15 @@ async function doctor() {
   // Reuses the per-root probes above — same trees, same question, and doctor
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
-    fail(`Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${join(PROJECT_DIR, 'cli.mjs')} rebuild-binding\` (repairs every broken install, not just this one)`);
+    fail(
+      `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${join(PROJECT_DIR, 'cli.mjs')} rebuild-binding\` (repairs every broken install, not just this one)`,
+    );
     issues++;
   } else if (breakage) {
     const ageH = Math.round((Date.now() - (breakage.ts || 0)) / 3600000);
-    dwarn(`Native DB binding: healthy now, but a fire failed ~${ageH}h ago (${breakage.reason || 'unknown'}) — stale marker clears on the next successful rebuild-binding`);
+    dwarn(
+      `Native DB binding: healthy now, but a fire failed ~${ageH}h ago (${breakage.reason || 'unknown'}) — stale marker clears on the next successful rebuild-binding`,
+    );
   } else {
     ok(`Native DB binding: loadable on Node ${process.version}`);
   }
@@ -1747,11 +2037,17 @@ async function doctor() {
     // Warn threshold = the REAL eviction budget (pre-release review 2026-08-16) —
     // warning below it promised an eviction enforceBackupBudget would never do.
     if (backupBytes > backupBudgetBytes()) {
-      dwarn(`Disk footprint: ${snaps.length} backup snapshot(s) hold ${mb(backupBytes)}MB, over the ${mb(backupBudgetBytes())}MB budget (CLAUDE_MEM_BACKUP_BUDGET_MB) — the next maintain/save snapshot evicts oldest snapshots past the 7d undo grace`);
+      dwarn(
+        `Disk footprint: ${snaps.length} backup snapshot(s) hold ${mb(backupBytes)}MB, over the ${mb(backupBudgetBytes())}MB budget (CLAUDE_MEM_BACKUP_BUDGET_MB) — the next maintain/save snapshot evicts oldest snapshots past the 7d undo grace`,
+      );
     } else {
-      ok(`Disk footprint: DB ${mb(dbBytes)}MB, ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB (budget ${mb(backupBudgetBytes())}MB)`);
+      ok(
+        `Disk footprint: DB ${mb(dbBytes)}MB, ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB (budget ${mb(backupBudgetBytes())}MB)`,
+      );
     }
-  } catch { /* footprint check is informational — never block doctor */ }
+  } catch {
+    /* footprint check is informational — never block doctor */
+  }
 
   // Plugin/hook lifecycle state
   const settings = readSettings();
@@ -1772,10 +2068,16 @@ async function doctor() {
     // the healthy shape (same false green as status).
     const manifest = pluginCacheHookEvents(shape.activePluginVersion.root);
     if (manifest.ok) {
-      ok(`Plugin lifecycle: hooks served by the plugin manifest (v${shape.activePluginVersion.version}, ${manifest.events.length} events); settings.json correctly holds none`);
+      ok(
+        `Plugin lifecycle: hooks served by the plugin manifest (v${shape.activePluginVersion.version}, ${manifest.events.length} events); settings.json correctly holds none`,
+      );
     } else {
-      fail(`Plugin lifecycle: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered`);
-      log(`    Repair: ${hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY))}`);
+      fail(
+        `Plugin lifecycle: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered`,
+      );
+      log(
+        `    Repair: ${hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY))}`,
+      );
       issues++;
     }
   } else {
@@ -1791,7 +2093,9 @@ async function doctor() {
   // even when the user skipped the README.
   const orphanPaths = collectOrphanHookPaths(settings);
   if (orphanPaths.length > 0) {
-    fail(`Orphan hooks: ${orphanPaths.length} settings.json entr${orphanPaths.length === 1 ? 'y references a missing file' : 'ies reference missing files'}`);
+    fail(
+      `Orphan hooks: ${orphanPaths.length} settings.json entr${orphanPaths.length === 1 ? 'y references a missing file' : 'ies reference missing files'}`,
+    );
     for (const p of orphanPaths.slice(0, 5)) log(`    missing: ${p}`);
     if (orphanPaths.length > 5) log(`    ... +${orphanPaths.length - 5} more`);
     log(`    Repair: node ${join(PROJECT_DIR, 'install.mjs')} uninstall    # removes the dead hook entries`);
@@ -1806,7 +2110,9 @@ async function doctor() {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
       // Check FTS
-      const fts = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'").get();
+      const fts = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'")
+        .get();
       db.close();
       if (fts) {
         ok('FTS5 index: present');
@@ -1825,7 +2131,10 @@ async function doctor() {
               log('  Attempting FTS5 rebuild...');
               const { rebuilt, errors } = rebuildFTS(rwDb);
               if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-              if (errors.length > 0) { fail(`FTS5 rebuild errors: ${errors.join(', ')}`); issues++; }
+              if (errors.length > 0) {
+                fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                issues++;
+              }
             }
           } finally {
             rwDb.close();
@@ -1853,11 +2162,19 @@ async function doctor() {
   // when their version segment ≠ current package.json version; dev-install
   // paths (no version segment) are never flagged.
   try {
-    const procs = execFileSync('pgrep', ['-af', 'chroma|claude-mem-lite.*(scripts/launch|server)\\.mjs|\\.claude-mem/.*worker'], { encoding: 'utf8', timeout: 5000, stdio: 'pipe' }).trim();
-    const lines = procs.split('\n').filter(l => l && !l.includes('pgrep'));
+    const procs = execFileSync(
+      'pgrep',
+      ['-af', 'chroma|claude-mem-lite.*(scripts/launch|server)\\.mjs|\\.claude-mem/.*worker'],
+      { encoding: 'utf8', timeout: 5000, stdio: 'pipe' },
+    ).trim();
+    const lines = procs.split('\n').filter((l) => l && !l.includes('pgrep'));
     let currentVersion = '';
-    try { currentVersion = JSON.parse(readFileSync(join(PROJECT_DIR, 'package.json'), 'utf8')).version; } catch { /* fall through with empty version */ }
-    const stale = lines.filter(l => isStaleMemProcess(l, currentVersion));
+    try {
+      currentVersion = JSON.parse(readFileSync(join(PROJECT_DIR, 'package.json'), 'utf8')).version;
+    } catch {
+      /* fall through with empty version */
+    }
+    const stale = lines.filter((l) => isStaleMemProcess(l, currentVersion));
     if (stale.length > 0) {
       // ⚠-level ONLY, deliberately not `issues++`. buildDoctorSummary's contract is
       // "issues are ✗-level (action required); warnings are ⚠-level (informational)",
@@ -1878,7 +2195,10 @@ async function doctor() {
       // pure-function level; the counter simply never reached it from here. `dwarn`
       // increments `warnings` only — `issues` stays 0, so the paragraph above still
       // holds and `doctor` still exits 0.
-      dwarn(`Old processes running${currentVersion ? ` (current: v${currentVersion})` : ''}:\n    ` + stale.join('\n    '));
+      dwarn(
+        `Old processes running${currentVersion ? ` (current: v${currentVersion})` : ''}:\n    ` +
+          stale.join('\n    '),
+      );
     } else {
       ok('No stale processes');
     }
@@ -1946,14 +2266,18 @@ async function doctor() {
       return `${files.join(', ')}${suffix}`;
     };
     if (skipDrift) {
-      ok('Managed files: n/a (plugin-only install — code is served from the plugin cache, so ~/.claude-mem-lite holds data only)');
+      ok(
+        'Managed files: n/a (plugin-only install — code is served from the plugin cache, so ~/.claude-mem-lite holds data only)',
+      );
     } else if (r.devMode) {
       const parts = [];
       if (r.plainCount > 0) {
         parts.push(`${r.plainCount} non-symlink: ${nameList(r.plainFiles.slice(0, 5), r.plainCount)}`);
       }
       if (r.missingEntryCount > 0) {
-        parts.push(`${r.missingEntryCount} missing ENTRY POINT: ${nameList(r.missingEntryFiles, r.missingEntryCount)}`);
+        parts.push(
+          `${r.missingEntryCount} missing ENTRY POINT: ${nameList(r.missingEntryFiles, r.missingEntryCount)}`,
+        );
       }
       if (parts.length > 0) {
         // Hard: a non-symlink means repo edits stop propagating, and a missing entry point
@@ -1961,7 +2285,9 @@ async function doctor() {
         // install also loses the realpath argument below — a COPIED entry point resolves
         // its imports against the install dir, so absent modules can throw there.
         if (r.missingModuleCount > 0) {
-          parts.push(`${r.missingModuleCount} missing module: ${nameList(r.missingModuleFiles, r.missingModuleCount)}`);
+          parts.push(
+            `${r.missingModuleCount} missing module: ${nameList(r.missingModuleFiles, r.missingModuleCount)}`,
+          );
         }
         warn(`Dev drift: ${parts.join('; ')} (${devRemedy})`);
         issues++;
@@ -1972,10 +2298,12 @@ async function doctor() {
         // it as drift prescribed `install --dev` for a demonstrably healthy install (the
         // maintainer's own machine ran every one of those modules fine while doctor called
         // them missing).
-        dwarn(`Dev drift: ${r.symlinkCount} symlinks, 0 plain, all entry points present — `
-          + `${r.missingModuleCount} import-only file(s) not linked into the install dir `
-          + `(${nameList(r.missingModuleFiles, r.missingModuleCount)}). Harmless: Node resolves `
-          + `imports against each entry point's realpath, i.e. the repo. ${devRemedy} to link them.`);
+        dwarn(
+          `Dev drift: ${r.symlinkCount} symlinks, 0 plain, all entry points present — ` +
+            `${r.missingModuleCount} import-only file(s) not linked into the install dir ` +
+            `(${nameList(r.missingModuleFiles, r.missingModuleCount)}). Harmless: Node resolves ` +
+            `imports against each entry point's realpath, i.e. the repo. ${devRemedy} to link them.`,
+        );
       } else {
         ok(`Dev drift: clean (${r.symlinkCount} symlinks, 0 plain, 0 missing)`);
       }
@@ -1988,7 +2316,9 @@ async function doctor() {
       // are FATAL was the silent one (#8268's rule failing in the other direction).
       const parts = [];
       if (r.missingEntryCount > 0) {
-        parts.push(`${r.missingEntryCount} entry point: ${nameList(r.missingEntryFiles, r.missingEntryCount)}`);
+        parts.push(
+          `${r.missingEntryCount} entry point: ${nameList(r.missingEntryFiles, r.missingEntryCount)}`,
+        );
       }
       if (r.missingModuleCount > 0) {
         parts.push(`${r.missingModuleCount} module: ${nameList(r.missingModuleFiles, r.missingModuleCount)}`);
@@ -1996,9 +2326,11 @@ async function doctor() {
       // `claude-mem-lite update` is the observation editor (`update <id>`); the
       // self-updater is `self-update`. Naming the wrong one sent the user to a
       // usage error at the exact moment their install was incomplete.
-      warn(`Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves `
-        + `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update `
-        + `(or: node ${join(INSTALL_DIR, 'install.mjs')} repair)`);
+      warn(
+        `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
+          `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
+          `(or: node ${join(INSTALL_DIR, 'install.mjs')} repair)`,
+      );
       issues++;
     }
     // Complete copy install: no message — drift is a dev-install concern.
@@ -2022,23 +2354,31 @@ async function doctor() {
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {
-      warn(`Hook scripts: ${join(INSTALL_DIR, 'scripts')} `
-        + `${h.dirSymlink ? 'is a dangling symlink' : 'is absent'} — all ${HOOK_SCRIPT_ENTRY_POINTS.size} hook `
-        + `commands name absolute paths under it, so no hook can fire. Fix: ${scriptRemedy}`);
+      warn(
+        `Hook scripts: ${join(INSTALL_DIR, 'scripts')} ` +
+          `${h.dirSymlink ? 'is a dangling symlink' : 'is absent'} — all ${HOOK_SCRIPT_ENTRY_POINTS.size} hook ` +
+          `commands name absolute paths under it, so no hook can fire. Fix: ${scriptRemedy}`,
+      );
       issues++;
     } else if (h.missingCount > 0) {
       const parts = [];
       if (h.missingEntryFiles.length > 0) {
-        parts.push(`${h.missingEntryFiles.length} hook entry (${h.missingEntryFiles.join(', ')}) — the command cannot start`);
+        parts.push(
+          `${h.missingEntryFiles.length} hook entry (${h.missingEntryFiles.join(', ')}) — the command cannot start`,
+        );
       }
       if (h.missingModuleFiles.length > 0) {
-        parts.push(`${h.missingModuleFiles.length} imported helper (${h.missingModuleFiles.join(', ')}) — ERR_MODULE_NOT_FOUND at hook time`);
+        parts.push(
+          `${h.missingModuleFiles.length} imported helper (${h.missingModuleFiles.join(', ')}) — ERR_MODULE_NOT_FOUND at hook time`,
+        );
       }
       warn(`Hook scripts: ${h.missingCount} missing — ${parts.join('; ')}. Fix: ${scriptRemedy}`);
       issues++;
     } else {
-      ok(`Hook scripts: ${HOOK_SCRIPT_FILES.length} present `
-        + `(${h.dirSymlink ? 'dev — scripts/ symlinked to the repo' : 'copy install'})`);
+      ok(
+        `Hook scripts: ${HOOK_SCRIPT_FILES.length} present ` +
+          `(${h.dirSymlink ? 'dev — scripts/ symlinked to the repo' : 'copy install'})`,
+      );
     }
   } catch (e) {
     dwarn('Hook scripts: check failed — ' + e.message);
@@ -2058,7 +2398,7 @@ async function doctor() {
     const stalePatterns = ['.update-staging-', '.update-backup-'];
     if (existsSync(MEM_DATA_DIR)) {
       for (const f of readdirSync(MEM_DATA_DIR)) {
-        if (stalePatterns.some(p => f.startsWith(p))) staleCount++;
+        if (stalePatterns.some((p) => f.startsWith(p))) staleCount++;
       }
     }
     if (existsSync(runtimeDir)) {
@@ -2101,12 +2441,15 @@ async function doctor() {
   // whose whole job is to run when the tree is broken, and a local copy of the list
   // is the drift shape this repo keeps paying for.
   try {
-    const { getRequestedRecommendMode, RECOMMEND_MODE_UNIMPLEMENTED } = await import('./registry-recommend.mjs');
+    const { getRequestedRecommendMode, RECOMMEND_MODE_UNIMPLEMENTED } =
+      await import('./registry-recommend.mjs');
     const requested = getRequestedRecommendMode();
     if (RECOMMEND_MODE_UNIMPLEMENTED.has(requested)) {
-      dwarn(`CLAUDE_MEM_RECOMMEND_MODE=${requested}: accepted but NOT implemented — `
-        + 'live skill-recommendation injection is Phase 2 and does not exist. The engine '
-        + 'is running in shadow (logs only, injects nothing). Set shadow or off.');
+      dwarn(
+        `CLAUDE_MEM_RECOMMEND_MODE=${requested}: accepted but NOT implemented — ` +
+          'live skill-recommendation injection is Phase 2 and does not exist. The engine ' +
+          'is running in shadow (logs only, injects nothing). Set shadow or off.',
+      );
     }
   } catch (e) {
     dwarn('Env flags: check failed — ' + e.message);
@@ -2116,13 +2459,19 @@ async function doctor() {
   const pluginCacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
   if (existsSync(pluginCacheBase)) {
     try {
-      const versions = readdirSync(pluginCacheBase).filter(n => /^\d+\./.test(n));
+      const versions = readdirSync(pluginCacheBase).filter((n) => /^\d+\./.test(n));
       let sizeStr;
       try {
-        sizeStr = execFileSync('du', ['-sh', pluginCacheBase], { encoding: 'utf8', timeout: 5000 }).trim().split('\t')[0];
-      } catch { sizeStr = '?'; }
+        sizeStr = execFileSync('du', ['-sh', pluginCacheBase], { encoding: 'utf8', timeout: 5000 })
+          .trim()
+          .split('\t')[0];
+      } catch {
+        sizeStr = '?';
+      }
       if (versions.length > 3) {
-        dwarn(`Plugin cache: ${versions.length} versions (${sizeStr}) — run setup.sh or update to auto-prune to 3`);
+        dwarn(
+          `Plugin cache: ${versions.length} versions (${sizeStr}) — run setup.sh or update to auto-prune to 3`,
+        );
       } else {
         ok(`Plugin cache: ${versions.length} version(s) (${sizeStr})`);
       }
@@ -2130,12 +2479,18 @@ async function doctor() {
   }
 
   if (json) {
-    console.log(JSON.stringify({
-      issues,
-      warnings,
-      summary: buildDoctorSummary(issues, warnings),
-      checks,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          issues,
+          warnings,
+          summary: buildDoctorSummary(issues, warnings),
+          checks,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
     console.log(`\n  ${buildDoctorSummary(issues, warnings)}\n`);
   }
@@ -2156,9 +2511,10 @@ async function doctor() {
 // and the bash prefilter round out the real markers.
 export function isMemHook(cfg) {
   if (!cfg.hooks) return false;
-  return cfg.hooks.some(h => {
+  return cfg.hooks.some((h) => {
     const cmd = h.command || '';
-    return cmd.includes('claude-mem-lite') ||
+    return (
+      cmd.includes('claude-mem-lite') ||
       cmd.includes('hook-launcher.mjs') ||
       cmd.includes('scripts/post-tool-use.sh') ||
       // Same reason post-tool-use.sh is named here: a bash prefilter routes through
@@ -2166,14 +2522,15 @@ export function isMemHook(cfg) {
       // happens to contain it — which CLAUDE_MEM_DIR can relocate. Without this line
       // an Agent|Task hook in a relocated install survives uninstall and duplicates
       // on reinstall (audit 2026-08-22 P2-5 added the second prefilter).
-      cmd.includes('scripts/pre-agent-inject.sh');
+      cmd.includes('scripts/pre-agent-inject.sh')
+    );
   });
 }
 
 function hasMemHooksConfigured(settings) {
   if (!settings?.hooks) return false;
-  return Object.values(settings.hooks).some(configs =>
-    Array.isArray(configs) && configs.some(cfg => isMemHook(cfg))
+  return Object.values(settings.hooks).some(
+    (configs) => Array.isArray(configs) && configs.some((cfg) => isMemHook(cfg)),
   );
 }
 
@@ -2208,7 +2565,7 @@ const HOOK_PATH_EXTS = ['.mjs', '.js', '.cjs', '.sh'];
 
 function looksLikeHookPath(p) {
   if (!p || !p.startsWith('/')) return false;
-  return HOOK_PATH_EXTS.some(ext => p.endsWith(ext));
+  return HOOK_PATH_EXTS.some((ext) => p.endsWith(ext));
 }
 
 export function collectOrphanHookPaths(settings) {
@@ -2229,11 +2586,14 @@ export function collectOrphanHookPaths(settings) {
         // entry — we'd rather under-report than false-flag.
         let path = null;
         for (const m of cmd.matchAll(/"([^"]+)"/g)) {
-          if (looksLikeHookPath(m[1])) { path = m[1]; break; }
+          if (looksLikeHookPath(m[1])) {
+            path = m[1];
+            break;
+          }
         }
         if (!path) {
           const parts = cmd.split(/\s+/);
-          path = parts.find(p => looksLikeHookPath(p)) || null;
+          path = parts.find((p) => looksLikeHookPath(p)) || null;
         }
         if (!path) continue;
         if (!existsSync(path) && !out.includes(path)) out.push(path);
@@ -2268,27 +2628,41 @@ export function pruneStaleInstallFiles(dataDir, sourceFiles) {
   // Flatten manifest to just top-level basenames. SOURCE_FILES contains entries
   // like 'lib/activity.mjs' — those belong to a subdir and prune never touches
   // subdirs anyway. For top-level entries ('server.mjs'), basename === entry.
-  const topLevelAllowed = new Set(
-    sourceFiles
-      .filter(f => !f.includes('/'))
-      .map(f => f)
-  );
+  const topLevelAllowed = new Set(sourceFiles.filter((f) => !f.includes('/')).map((f) => f));
   const PROTECTED_DBS = new Set(['claude-mem-lite.db', 'resource-registry.db']);
   const removed = [];
   let entries;
-  try { entries = readdirSync(dataDir); } catch { return removed; }
+  try {
+    entries = readdirSync(dataDir);
+  } catch {
+    return removed;
+  }
   for (const name of entries) {
     const full = join(dataDir, name);
     let st;
-    try { st = lstatSync(full); } catch { continue; }
+    try {
+      st = lstatSync(full);
+    } catch {
+      continue;
+    }
     // Skip directories and symlinks (dev mode uses symlinks; treat as intentional).
     if (!st.isFile()) continue;
     if (name.endsWith('.mjs') && !topLevelAllowed.has(name)) {
-      try { unlinkSync(full); removed.push(full); } catch { /* best-effort */ }
+      try {
+        unlinkSync(full);
+        removed.push(full);
+      } catch {
+        /* best-effort */
+      }
       continue;
     }
     if (name.endsWith('.db') && !PROTECTED_DBS.has(name) && st.size === 0) {
-      try { unlinkSync(full); removed.push(full); } catch { /* best-effort */ }
+      try {
+        unlinkSync(full);
+        removed.push(full);
+      } catch {
+        /* best-effort */
+      }
     }
   }
   return removed;
@@ -2307,7 +2681,7 @@ function cleanupMemHooksFromSettings(settings) {
   let removed = 0;
   for (const [event, configs] of Object.entries(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
-    const kept = configs.filter(cfg => !isMemHook(cfg));
+    const kept = configs.filter((cfg) => !isMemHook(cfg));
     removed += configs.length - kept.length;
     if (kept.length > 0) settings.hooks[event] = kept;
     else delete settings.hooks[event];
@@ -2317,16 +2691,18 @@ function cleanupMemHooksFromSettings(settings) {
   return removed;
 }
 
-
-
 function getInstalledPluginEntries(installed) {
   if (installed?.plugins && typeof installed.plugins === 'object') return installed.plugins;
   return installed && typeof installed === 'object' ? installed : {};
 }
 
-export function hasOtherMarketplacePlugins(installed, marketplaceKey = MARKETPLACE_KEY, pluginKey = PLUGIN_KEY) {
+export function hasOtherMarketplacePlugins(
+  installed,
+  marketplaceKey = MARKETPLACE_KEY,
+  pluginKey = PLUGIN_KEY,
+) {
   const plugins = getInstalledPluginEntries(installed);
-  return Object.keys(plugins).some(key => key !== pluginKey && key.endsWith(`@${marketplaceKey}`));
+  return Object.keys(plugins).some((key) => key !== pluginKey && key.endsWith(`@${marketplaceKey}`));
 }
 
 function readSettings() {
@@ -2361,7 +2737,7 @@ function cleanup() {
   const stalePatterns = ['.update-staging-', '.update-backup-'];
   if (existsSync(MEM_DATA_DIR)) {
     for (const f of readdirSync(MEM_DATA_DIR)) {
-      if (stalePatterns.some(p => f.startsWith(p))) {
+      if (stalePatterns.some((p) => f.startsWith(p))) {
         if (dryRun) {
           ok(`Would remove: ${f}`);
           removed++;
@@ -2460,22 +2836,42 @@ async function repair() {
     // repo/TLS-MITM compromise achieved RCE, bypassing the Ed25519 signed-release control that
     // the manual `update` path enforces. Lazy import so a missing/broken hook-update dependency
     // degrades to the manual fallback (fail-closed) rather than to unverified auto-install.
-    let fetchLatestRelease, verifyReleaseAuthenticity, validateExtractedTarball, isRepairDowngrade, getCurrentVersion;
+    let fetchLatestRelease,
+      verifyReleaseAuthenticity,
+      validateExtractedTarball,
+      isRepairDowngrade,
+      getCurrentVersion;
     try {
-      ({ fetchLatestRelease, verifyReleaseAuthenticity, validateExtractedTarball, isRepairDowngrade, getCurrentVersion } = await import('./hook-update.mjs'));
+      ({
+        fetchLatestRelease,
+        verifyReleaseAuthenticity,
+        validateExtractedTarball,
+        isRepairDowngrade,
+        getCurrentVersion,
+      } = await import('./hook-update.mjs'));
     } catch (e) {
-      throw new Error(`cannot load the verified-update path (${e.message}) — refusing to auto-install unverified code`, { cause: e });
+      throw new Error(
+        `cannot load the verified-update path (${e.message}) — refusing to auto-install unverified code`,
+        { cause: e },
+      );
     }
     const rel = await fetchLatestRelease();
-    if (!rel || !rel.tarballUrl) throw new Error('could not resolve the latest release (network / rate-limit)');
+    if (!rel || !rel.tarballUrl)
+      throw new Error('could not resolve the latest release (network / rate-limit)');
     // Rollback guard: refuse to repair BACKWARD onto an older validly-signed release replayed
     // as "latest" (the only attack signing leaves open). Skipped when the local version is
     // unreadable — a broken install still needs repair; the signature check below still gates
     // authenticity either way.
     let localVersion = null;
-    try { localVersion = getCurrentVersion(); } catch { /* broken install → allow repair */ }
+    try {
+      localVersion = getCurrentVersion();
+    } catch {
+      /* broken install → allow repair */
+    }
     if (isRepairDowngrade(rel.version, localVersion)) {
-      throw new Error(`refusing to repair BACKWARD: resolved release v${rel.version} is older than installed v${localVersion} (possible signed-release rollback)`);
+      throw new Error(
+        `refusing to repair BACKWARD: resolved release v${rel.version} is older than installed v${localVersion} (possible signed-release rollback)`,
+      );
     }
     // URL allow-list mirrors hook-update.downloadAndInstall — only github.com tarball URLs.
     if (!/^https:\/\/(?:api\.)?github\.com\/[a-zA-Z0-9./_-]+$/.test(rel.tarballUrl)) {
@@ -2483,11 +2879,16 @@ async function repair() {
     }
     const tarballPath = join(stagingDir, 'release.tgz');
     log(`Downloading release v${rel.version}...`);
-    execFileSync('curl', ['-sL', '-f', '-H', 'Accept: application/vnd.github+json', rel.tarballUrl, '-o', tarballPath],
-      { timeout: 60000, stdio: ['ignore', 'pipe', 'inherit'] });
+    execFileSync(
+      'curl',
+      ['-sL', '-f', '-H', 'Accept: application/vnd.github+json', rel.tarballUrl, '-o', tarballPath],
+      { timeout: 60000, stdio: ['ignore', 'pipe', 'inherit'] },
+    );
     log('Extracting...');
-    execFileSync('tar', ['xzf', tarballPath, '-C', stagingDir, '--strip-components=1'],
-      { timeout: 30000, stdio: ['ignore', 'pipe', 'inherit'] });
+    execFileSync('tar', ['xzf', tarballPath, '-C', stagingDir, '--strip-components=1'], {
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
     // Defense-in-depth on the extracted tarball (name + version === resolved tag + entry
     // points) BEFORE the signature check — parity with hook-update.downloadAndInstall. Catches
     // a wrong-version / truncated / squatter artifact whose package.json doesn't match the tag.
@@ -2501,8 +2902,7 @@ async function repair() {
     const tarballInstaller = join(stagingDir, 'install.mjs');
     if (!existsSync(tarballInstaller)) throw new Error('verified tarball missing install.mjs');
     log('Re-running install from the verified release sources...');
-    execFileSync(process.execPath, [tarballInstaller, 'install'],
-      { stdio: 'inherit', timeout: 300000 });
+    execFileSync(process.execPath, [tarballInstaller, 'install'], { stdio: 'inherit', timeout: 300000 });
     ok(`Repair complete — resynced from verified release v${rel.version}`);
   } catch (e) {
     fail(`Repair failed: ${e.message}`);
@@ -2510,11 +2910,15 @@ async function repair() {
     console.log('  Automatic repair fails closed rather than run unverified code.');
     console.log('  Manual fallback — run this in any shell (you are choosing to trust it):');
     console.log('');
-    console.log('  T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install');
+    console.log(
+      '  T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install',
+    );
     console.log('');
     process.exit(1);
   } finally {
-    try { rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(stagingDir, { recursive: true, force: true });
+    } catch {}
   }
 }
 
@@ -2629,7 +3033,10 @@ export function isStaleMemProcess(line, currentVersion) {
   // release: first vitest workers under a checkout named `claude-mem-lite`, then the
   // `git commit -F -` publishing THIS fix, whose message text contains the word
   // "chroma". Anything that takes a program as an argument can quote us.
-  if (/(^|\/)(ba|z|k|da|c|t)?sh$/.test(exe) || /(^|\/)(env|xargs|timeout|nohup|sudo|git|grep|rg|less|vi|vim|nano|code)$/.test(exe)) {
+  if (
+    /(^|\/)(ba|z|k|da|c|t)?sh$/.test(exe) ||
+    /(^|\/)(env|xargs|timeout|nohup|sudo|git|grep|rg|less|vi|vim|nano|code)$/.test(exe)
+  ) {
     return false;
   }
 
@@ -2677,9 +3084,8 @@ async function rebuildBinding() {
     // still had no memory. Falling back to INSTALL_DIR keeps a source-only
     // layout with no deps of its own repairable.
     const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
-    const targets = shape.runtimeRoots.length > 0
-      ? shape.runtimeRoots
-      : [{ label: 'install dir', root: bindingHostDir() }];
+    const targets =
+      shape.runtimeRoots.length > 0 ? shape.runtimeRoots : [{ label: 'install dir', root: bindingHostDir() }];
 
     let failed = 0;
     for (const { label, root } of targets) {
@@ -2714,7 +3120,11 @@ async function runLockedInstall() {
     console.log('[install] Another install/repair is in progress — skipping to avoid a torn write.');
     return;
   }
-  try { await install(); } finally { release(); }
+  try {
+    await install();
+  } finally {
+    release();
+  }
 }
 
 export async function main(argv = process.argv.slice(2)) {

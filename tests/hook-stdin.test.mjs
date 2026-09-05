@@ -16,13 +16,24 @@ import { describe, it, expect } from 'vitest';
 import { Readable } from 'node:stream';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { readHookStdin, DEFAULT_STDIN_MAX_BYTES, DEFAULT_STDIN_TIMEOUT_MS, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
+import {
+  readHookStdin,
+  DEFAULT_STDIN_MAX_BYTES,
+  DEFAULT_STDIN_TIMEOUT_MS,
+  TOOL_INPUT_FILE_MAX_BYTES,
+  salvageTruncatedHookEvent,
+} from '../lib/hook-stdin.mjs';
 import { REPO, sourceWithoutComments } from './shipped-tree.mjs';
 
 /** A stream that emits `chunks` then ends. */
 const streamOf = (...chunks) => Readable.from(chunks);
 /** A stream that emits nothing and never ends — the timeout case. */
-const silentStream = () => new Readable({ read() { /* never pushes, never ends */ } });
+const silentStream = () =>
+  new Readable({
+    read() {
+      /* never pushes, never ends */
+    },
+  });
 
 describe('readHookStdin', () => {
   it('reads a whole payload', async () => {
@@ -54,12 +65,17 @@ describe('readHookStdin', () => {
   it('rejects on timeout when the caller asks for it', async () => {
     // hook.mjs's contract: a timeout drops the event rather than writing a partial tool
     // response into memory as if it were whole.
-    await expect(readHookStdin({ stream: silentStream(), timeoutMs: 60, rejectOnTimeout: true }))
-      .rejects.toThrow('timeout');
+    await expect(
+      readHookStdin({ stream: silentStream(), timeoutMs: 60, rejectOnTimeout: true }),
+    ).rejects.toThrow('timeout');
   });
 
   it('keeps what arrived before a timeout', async () => {
-    const s = new Readable({ read() { /* pushed manually below */ } });
+    const s = new Readable({
+      read() {
+        /* pushed manually below */
+      },
+    });
     setTimeout(() => s.push('partial'), 10);
     const r = await readHookStdin({ stream: s, timeoutMs: 80 });
     expect(r.text).toBe('partial');
@@ -78,10 +94,17 @@ describe('readHookStdin', () => {
     // would crash a hook process") is factually wrong and the assertion it justified proved
     // nothing. The guard's observable effect is that TEARDOWN runs once, so that is what is
     // asserted: a spy on destroy.
-    const s = new Readable({ read() { /* pushed below */ } });
+    const s = new Readable({
+      read() {
+        /* pushed below */
+      },
+    });
     let destroys = 0;
     const realDestroy = s.destroy.bind(s);
-    s.destroy = (...args) => { destroys++; return realDestroy(...args); };
+    s.destroy = (...args) => {
+      destroys++;
+      return realDestroy(...args);
+    };
     const p = readHookStdin({ stream: s, maxBytes: 4, timeoutMs: 500 });
     s.push('abcdefgh');
     setTimeout(() => s.emit('error', new Error('post-destroy noise')), 20);
@@ -91,7 +114,11 @@ describe('readHookStdin', () => {
   });
 
   it('rejects on a stream error before anything settled', async () => {
-    const s = new Readable({ read() { /* nothing */ } });
+    const s = new Readable({
+      read() {
+        /* nothing */
+      },
+    });
     setTimeout(() => s.emit('error', new Error('EPIPE')), 10);
     await expect(readHookStdin({ stream: s, timeoutMs: 500 })).rejects.toThrow('EPIPE');
   });
@@ -104,7 +131,6 @@ describe('readHookStdin', () => {
     expect(TOOL_INPUT_FILE_MAX_BYTES).toBeGreaterThan(DEFAULT_STDIN_MAX_BYTES);
   });
 
-
   describe('salvageTruncatedHookEvent', () => {
     // The other half of the fix: past the cap, recover rather than drop. Asserted on the
     // helper because it is where the rule lives. An earlier version of this comment said the
@@ -114,7 +140,11 @@ describe('readHookStdin', () => {
     const prefix = (obj, cut) => JSON.stringify(obj).slice(0, cut);
 
     it('recovers file_path, session_id and tool_name from a cut-off payload', () => {
-      const full = { session_id: 's1', tool_name: 'Write', tool_input: { file_path: '/a/b.mjs', content: 'x'.repeat(5000) } };
+      const full = {
+        session_id: 's1',
+        tool_name: 'Write',
+        tool_input: { file_path: '/a/b.mjs', content: 'x'.repeat(5000) },
+      };
       const got = salvageTruncatedHookEvent(prefix(full, 140));
       expect(got).toEqual({ filePath: '/a/b.mjs', sessionId: 's1', toolName: 'Write' });
     });
@@ -166,21 +196,25 @@ describe('every hook entry point reads stdin through the shared module', () => {
   ];
 
   it.each(['scripts/pre-tool-recall.js', 'scripts/post-tool-recall.js'])(
-    '%s passes the whole-file cap rather than taking the default', (rel) => {
+    '%s passes the whole-file cap rather than taking the default',
+    (rel) => {
       // Both see the same payload class. A call with NO options takes 256 KB, which is the
       // regression this pins — and the shared constant is what stops the two drifting.
       const src = read(rel);
       expect(src).toMatch(/readHookStdin\(\{[^}]*maxBytes:\s*TOOL_INPUT_FILE_MAX_BYTES/);
-      expect(src, 'a bare readHookStdin() here silently takes the 256 KB default')
-        .not.toMatch(/readHookStdin\(\s*\)/);
+      expect(src, 'a bare readHookStdin() here silently takes the 256 KB default').not.toMatch(
+        /readHookStdin\(\s*\)/,
+      );
       // And the OTHER half of the cap fix. Deleting the salvage branch at the caller left
       // 107 cases green across this file and pre-tool-recall's own (v3.93.0 post-release
       // review, C1) — the helper was well pinned and its wiring was not.
       if (rel === 'scripts/pre-tool-recall.js') {
-        expect(src, 'the truncation salvage branch is gone from the caller')
-          .toMatch(/salvageTruncatedHookEvent\(/);
+        expect(src, 'the truncation salvage branch is gone from the caller').toMatch(
+          /salvageTruncatedHookEvent\(/,
+        );
       }
-    });
+    },
+  );
 
   it.each(SHARED)('%s imports readHookStdin AND calls it, with no second reader', (rel) => {
     const src = read(rel);
@@ -202,8 +236,8 @@ describe('every hook entry point reads stdin through the shared module', () => {
   it('no entry point still accumulates stdin unbounded', () => {
     // The exact idiom that shipped three times. Checked across all six, including
     // pre-agent-inject.js, which keeps a hand-written reader but a BOUNDED one.
-    const offenders = [...SHARED, 'scripts/pre-agent-inject.js'].filter(
-      (rel) => /for\s+await\s*\([^)]*\bprocess\.stdin\b/.test(read(rel)),
+    const offenders = [...SHARED, 'scripts/pre-agent-inject.js'].filter((rel) =>
+      /for\s+await\s*\([^)]*\bprocess\.stdin\b/.test(read(rel)),
     );
     expect(offenders).toEqual([]);
   });
@@ -211,11 +245,13 @@ describe('every hook entry point reads stdin through the shared module', () => {
   it('the bypass scans can say NO', () => {
     // Each new assertion above must be able to fire, or it is decoration.
     expect("  process.stdin.on('data', (c) => { input += c; });").toMatch(/process\.stdin\.on\s*\(/);
-    expect("import { DEFAULT_STDIN_MAX_BYTES } from '../lib/hook-stdin.mjs';")
-      .not.toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect("import { DEFAULT_STDIN_MAX_BYTES } from '../lib/hook-stdin.mjs';").not.toMatch(
+      /import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/,
+    );
     // …and a long-but-correct import must still pass, which the 80-char version did not.
-    expect("import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent, DEFAULT_STDIN_TIMEOUT_MS } from '../lib/hook-stdin.mjs';")
-      .toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
+    expect(
+      "import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent, DEFAULT_STDIN_TIMEOUT_MS } from '../lib/hook-stdin.mjs';",
+    ).toMatch(/import\s*\{[^}]*\breadHookStdin\b[^}]*\}\s*from\s+'\.{1,2}\/lib\/hook-stdin\.mjs'/);
     expect('const x = 1;').not.toMatch(/salvageTruncatedHookEvent\(/);
     expect('const x = 1;').not.toMatch(/readHookStdin\(/);
   });
@@ -223,8 +259,9 @@ describe('every hook entry point reads stdin through the shared module', () => {
   it('the scan can say NO', () => {
     // `not.toMatch`-style assertions pass against a pattern that matches nothing. This is
     // the line that actually shipped in three files.
-    expect('  for await (const chunk of process.stdin) input += chunk;')
-      .toMatch(/for\s+await\s*\([^)]*\bprocess\.stdin\b/);
+    expect('  for await (const chunk of process.stdin) input += chunk;').toMatch(
+      /for\s+await\s*\([^)]*\bprocess\.stdin\b/,
+    );
   });
 
   it('pre-agent-inject keeps its own reader, bounded, and says why', () => {

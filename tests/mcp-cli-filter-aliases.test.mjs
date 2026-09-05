@@ -34,12 +34,17 @@ const DB_DIR = join(tmpdir(), `mem-alias-test-${process.pid}`);
 let client, transport;
 
 function textOf(result) {
-  return (result?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  return (result?.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 }
-const idsOf = (text) => [...new Set((String(text).match(/#(\d+)/g) || []).map(s => s.slice(1)))].sort();
+const idsOf = (text) => [...new Set((String(text).match(/#(\d+)/g) || []).map((s) => s.slice(1)))].sort();
 
 beforeAll(async () => {
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
   mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
 
   transport = new StdioClientTransport({
@@ -69,15 +74,25 @@ beforeAll(async () => {
 }, 25_000);
 
 afterAll(async () => {
-  try { await client?.close(); } catch {}
-  try { await transport?.close(); } catch {}
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    await client?.close();
+  } catch {}
+  try {
+    await transport?.close();
+  } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
 });
 
 describe('mem_recent honors CLI filter names', () => {
   it('`type` (CLI `recent --type`) filters, and matches `obs_type`', async () => {
-    const viaCli = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, type: 'bugfix' } })));
-    const viaMcp = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, obs_type: 'bugfix' } })));
+    const viaCli = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, type: 'bugfix' } })),
+    );
+    const viaMcp = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, obs_type: 'bugfix' } })),
+    );
     const unfiltered = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10 } })));
 
     expect(viaCli).toEqual(viaMcp);
@@ -86,15 +101,26 @@ describe('mem_recent honors CLI filter names', () => {
   });
 
   it('`since` (CLI `recent --since`) filters, and matches `date_since`', async () => {
-    const viaCli = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '30s' } })));
-    const viaMcp = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, date_since: '30s' } })));
+    const viaCli = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '30s' } })),
+    );
+    const viaMcp = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, date_since: '30s' } })),
+    );
     expect(viaCli).toEqual(viaMcp);
     // Equality alone passes when BOTH sides drop the filter. A window that excludes
     // everything is what proves the alias is honored.
-    const excluded = textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '1s' } }));
-    await new Promise(r => setTimeout(r, 1100));
-    const stillExcluded = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '1s' } })));
-    expect(stillExcluded, `a 1s window must exclude rows seeded seconds ago (got: ${excluded.slice(0, 80)})`).toEqual([]);
+    const excluded = textOf(
+      await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '1s' } }),
+    );
+    await new Promise((r) => setTimeout(r, 1100));
+    const stillExcluded = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, since: '1s' } })),
+    );
+    expect(
+      stillExcluded,
+      `a 1s window must exclude rows seeded seconds ago (got: ${excluded.slice(0, 80)})`,
+    ).toEqual([]);
   });
 
   it('rejects a bad `since` instead of ignoring it', async () => {
@@ -103,18 +129,29 @@ describe('mem_recent honors CLI filter names', () => {
   });
 
   it('canonical name wins when both are supplied', async () => {
-    const both = idsOf(textOf(await client.callTool({
-      name: 'mem_recent', arguments: { limit: 10, obs_type: 'bugfix', type: 'decision' },
-    })));
-    const canonical = idsOf(textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, obs_type: 'bugfix' } })));
+    const both = idsOf(
+      textOf(
+        await client.callTool({
+          name: 'mem_recent',
+          arguments: { limit: 10, obs_type: 'bugfix', type: 'decision' },
+        }),
+      ),
+    );
+    const canonical = idsOf(
+      textOf(await client.callTool({ name: 'mem_recent', arguments: { limit: 10, obs_type: 'bugfix' } })),
+    );
     expect(both).toEqual(canonical);
   });
 });
 
 describe('mem_search honors CLI filter names', () => {
   it('`source` (CLI `search --source`) filters, and matches `type`', async () => {
-    const viaCli = textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', source: 'sessions' } }));
-    const viaMcp = textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', type: 'sessions' } }));
+    const viaCli = textOf(
+      await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', source: 'sessions' } }),
+    );
+    const viaMcp = textOf(
+      await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', type: 'sessions' } }),
+    );
     // No sessions exist in this fresh DB, so a HONORED sessions-filter returns
     // nothing on both paths; a DROPPED one returns the observation hits.
     expect(idsOf(viaCli)).toEqual(idsOf(viaMcp));
@@ -122,19 +159,29 @@ describe('mem_search honors CLI filter names', () => {
   });
 
   it('`since` (CLI `search --since`) filters, and matches `date_since`', async () => {
-    const viaCli = idsOf(textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', since: '30s' } })));
-    const viaMcp = idsOf(textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', date_since: '30s' } })));
+    const viaCli = idsOf(
+      textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', since: '30s' } })),
+    );
+    const viaMcp = idsOf(
+      textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', date_since: '30s' } })),
+    );
     expect(viaCli).toEqual(viaMcp);
     // Narrowing proof (see the mem_recent sibling): a 1s window must drop everything.
-    await new Promise(r => setTimeout(r, 1100));
-    const narrowed = idsOf(textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', since: '1s' } })));
+    await new Promise((r) => setTimeout(r, 1100));
+    const narrowed = idsOf(
+      textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', since: '1s' } })),
+    );
     expect(narrowed, 'a 1s window must exclude rows seeded seconds ago').toEqual([]);
   });
 
   it('`from`/`to` (CLI `search --from/--to`) filter, and match date_from/date_to', async () => {
     const future = '2099-01-01';
-    const viaCli = idsOf(textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', from: future } })));
-    const viaMcp = idsOf(textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', date_from: future } })));
+    const viaCli = idsOf(
+      textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', from: future } })),
+    );
+    const viaMcp = idsOf(
+      textOf(await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', date_from: future } })),
+    );
     expect(viaCli).toEqual(viaMcp);
     expect(viaCli, 'a future lower bound must exclude everything').toEqual([]);
   });
@@ -144,7 +191,10 @@ describe('mem_search honors CLI filter names', () => {
     // silent empty result — that is the acceptable half of the `type` name collision.
     let message;
     try {
-      const res = await client.callTool({ name: 'mem_search', arguments: { query: 'fixed', type: 'bugfix' } });
+      const res = await client.callTool({
+        name: 'mem_search',
+        arguments: { query: 'fixed', type: 'bugfix' },
+      });
       expect(res?.isError, 'expected a validation failure').toBe(true);
       message = textOf(res);
     } catch (err) {

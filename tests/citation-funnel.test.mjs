@@ -8,8 +8,14 @@ import { recordCitationFunnel, computeCitationFunnelTrend } from '../lib/citatio
 
 describe('recordCitationFunnel', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { try { db.close(); } catch {} });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   const get = (project, session) =>
     db.prepare('SELECT * FROM citation_log WHERE project=? AND memory_session_id=?').get(project, session);
@@ -59,7 +65,7 @@ describe('recordCitationFunnel', () => {
     recordCitationFunnel(db, 'p1', 's1', 0, 1);
     const row = get('p1', 's1');
     expect(row.injected_n).toBe(3); // denominator unchanged — no double-count
-    expect(row.cited_n).toBe(1);    // numerator credited the late citation
+    expect(row.cited_n).toBe(1); // numerator credited the late citation
   });
 
   it('does not throw on null db / empty args', () => {
@@ -71,14 +77,20 @@ describe('recordCitationFunnel', () => {
 
 describe('computeCitationFunnelTrend', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { try { db.close(); } catch {} });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   // Insert a citation_log row at a controlled resolved_at (N days ago) so window
   // math is deterministic without depending on recordCitationFunnel's clock.
   function logAt(project, session, injected, cited, daysAgo) {
     db.prepare(
-      'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)'
+      'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)',
     ).run(project, session, Date.now() - daysAgo * 86400000, injected, cited);
   }
 
@@ -102,8 +114,8 @@ describe('computeCitationFunnelTrend', () => {
   });
 
   it('prior window covers [2*days, days) ago and yields delta_pt', () => {
-    logAt('p1', 'w', 10, 5, 1);   // last 7d → 0.5
-    logAt('p1', 'p', 8, 2, 10);   // 7–14d ago → 0.25
+    logAt('p1', 'w', 10, 5, 1); // last 7d → 0.5
+    logAt('p1', 'p', 8, 2, 10); // 7–14d ago → 0.25
     const t = computeCitationFunnelTrend(db, { days: 7 });
     expect(t.window.rate).toBeCloseTo(0.5, 5);
     expect(t.prior.rate).toBeCloseTo(0.25, 5);
@@ -135,6 +147,6 @@ describe('computeCitationFunnelTrend', () => {
     logAt('p2', 's2', 10, 0, 1);
     const t = computeCitationFunnelTrend(db, { days: 7, project: 'p1' });
     expect(t.window.injected).toBe(10);
-    expect(t.sessions.every(s => s.project === 'p1')).toBe(true);
+    expect(t.sessions.every((s) => s.project === 'p1')).toBe(true);
   });
 });

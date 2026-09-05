@@ -17,9 +17,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // vocabulary builds) plus an off-topic distractor.
 function makeSeed() {
   const mk = (id, title, narrative) => ({
-    id, session_id: 's1', project: 'proj-a', text: `${title} ${narrative}`,
-    type: 'bugfix', title, narrative, facts: '', concepts: '', files_modified: '[]',
-    importance: 2, epoch_offset_days: -1,
+    id,
+    session_id: 's1',
+    project: 'proj-a',
+    text: `${title} ${narrative}`,
+    type: 'bugfix',
+    title,
+    narrative,
+    facts: '',
+    concepts: '',
+    files_modified: '[]',
+    importance: 2,
+    epoch_offset_days: -1,
   });
   return {
     observations: [
@@ -34,7 +43,13 @@ function makeSeed() {
 }
 
 const QUERIES = [
-  { id: 'q-auth', query: 'authentication token login', relevant_ids: [1, 2, 3], project: 'proj-a', category: 'std' },
+  {
+    id: 'q-auth',
+    query: 'authentication token login',
+    relevant_ids: [1, 2, 3],
+    project: 'proj-a',
+    category: 'std',
+  },
   { id: 'q-db', query: 'database table query', relevant_ids: [4, 5], project: 'proj-a', category: 'std' },
 ];
 
@@ -65,7 +80,7 @@ describe('benchmark production_hybrid scenario (P7)', () => {
     expect(results.metrics.recall_at_10).toBeGreaterThan(0.5);
     expect(results.metrics.mrr_at_10).toBeGreaterThan(0);
     // It actually returned ids (not an empty/broken path).
-    expect(results.perQuery.every(q => q.result_ids.length > 0)).toBe(true);
+    expect(results.perQuery.every((q) => q.result_ids.length > 0)).toBe(true);
     db.close();
   });
 
@@ -77,7 +92,7 @@ describe('benchmark production_hybrid scenario (P7)', () => {
 
     const sweep = runVectorSweep(db, QUERIES, { dims: [256, 512], minCosines: [0.05], rrfKs: [60] });
     // Pinned default config (512/0.05/60) must be one of the swept rows.
-    expect(sweep.rows.some(r => r.dim === 512 && r.minCosine === 0.05 && r.rrfK === 60)).toBe(true);
+    expect(sweep.rows.some((r) => r.dim === 512 && r.minCosine === 0.05 && r.rrfK === 60)).toBe(true);
     expect(sweep.pinned).toEqual({ dim: 512, minCosine: 0.05, rrfK: 60 });
     expect(typeof sweep.pinnedIsBest).toBe('boolean');
     expect(sweep.best).toBeTruthy();
@@ -108,7 +123,9 @@ describe('benchmark BM25 parity with production OBS_BM25 (FIX 1)', () => {
   it('OBS_BM25 carries one weight per FTS column (search_aliases is weighted, not defaulted)', () => {
     // 8 FTS columns: title, subtitle, narrative, text, facts, concepts,
     // lesson_learned, search_aliases → 8 numeric weights after the table name.
-    const weights = OBS_BM25.replace(/^bm25\(observations_fts,\s*/, '').replace(/\)\s*$/, '').split(',');
+    const weights = OBS_BM25.replace(/^bm25\(observations_fts,\s*/, '')
+      .replace(/\)\s*$/, '')
+      .split(',');
     expect(weights.length).toBe(8);
     // The 8th weight (search_aliases) must be the production value 5, not 1.
     expect(weights[7].trim()).toBe('5');
@@ -120,28 +137,43 @@ describe('benchmark BM25 parity with production OBS_BM25 (FIX 1)', () => {
     // Seed a couple of normal rows so the FTS table is non-trivial.
     seedDatabase(db, {
       observations: [
-        { id: 1, session_id: 's1', project: 'proj-a', text: 'docker compose setup', type: 'change',
-          title: 'docker compose', narrative: 'set up docker compose', facts: '', concepts: '',
-          files_modified: '[]', importance: 2, epoch_offset_days: -1 },
+        {
+          id: 1,
+          session_id: 's1',
+          project: 'proj-a',
+          text: 'docker compose setup',
+          type: 'change',
+          title: 'docker compose',
+          narrative: 'set up docker compose',
+          facts: '',
+          concepts: '',
+          files_modified: '[]',
+          importance: 2,
+          epoch_offset_days: -1,
+        },
       ],
       sessions: [],
     });
     // One row whose distinctive token ('zqfftsalias') appears ONLY in search_aliases.
     insertSession(db, { id: 's2', project: 'proj-a' });
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO observations
         (id, memory_session_id, project, text, type, title, narrative, search_aliases,
          created_at, created_at_epoch, importance)
       VALUES (99, 's2', 'proj-a', 'unrelated body', 'change', 'unrelated title',
               'unrelated narrative', 'zqfftsalias', '2026-01-01', ?, 2)
-    `).run(Date.now());
+    `,
+    ).run(Date.now());
 
     // bm25_only mode goes through the benchmark's FTS searchObservations (now
     // OBS_BM25-weighted). The alias-only token must be retrievable → proves the
     // search_aliases column is FTS-indexed and inside the benchmark's match path.
-    const res = runBenchmark(db, [
-      { id: 'qa', query: 'zqfftsalias', relevant_ids: [99], project: 'proj-a', category: 'std' },
-    ], 'bm25_only');
+    const res = runBenchmark(
+      db,
+      [{ id: 'qa', query: 'zqfftsalias', relevant_ids: [99], project: 'proj-a', category: 'std' }],
+      'bm25_only',
+    );
     expect(res.perQuery[0].result_ids).toContain(99);
     db.close();
   });

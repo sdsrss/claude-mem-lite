@@ -15,16 +15,29 @@ import { cooldownPathFor } from '../lib/cooldown-path.mjs';
 // class `[^a-zA-Z0-9_.-]` and rewritten by any looser one, `/` and `:` must become `-`, and
 // the string runs past the 64-char cap so a different cap truncates elsewhere.
 const SID = (n) => `sess_${n}.run/id:${'x'.repeat(70)}`;
-const SID1 = SID(1), SID2 = SID(2), SID3 = SID(3);
+const SID1 = SID(1),
+  SID2 = SID(2),
+  SID3 = SID(3);
 
 const SCRIPT = resolve(import.meta.dirname, '../scripts/post-tool-recall.js');
 function run(input, env = {}) {
   return new Promise((res, rej) => {
-    const c = spawn('node', [SCRIPT], { env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
-    let out = ''; c.stdout.on('data', (d) => { out += d; });
-    c.on('close', () => res(out)); c.on('error', rej);
-    c.stdin.write(JSON.stringify(input)); c.stdin.end();
-    setTimeout(() => { c.kill(); rej(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    const c = spawn('node', [SCRIPT], {
+      env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '', ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '';
+    c.stdout.on('data', (d) => {
+      out += d;
+    });
+    c.on('close', () => res(out));
+    c.on('error', rej);
+    c.stdin.write(JSON.stringify(input));
+    c.stdin.end();
+    setTimeout(() => {
+      c.kill();
+      rej(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -32,17 +45,24 @@ describe('post-tool-recall (bind component 2)', () => {
   let root, runtime, fp;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'post-recall-'));
-    runtime = join(root, 'runtime'); mkdirSync(runtime, { recursive: true });
+    runtime = join(root, 'runtime');
+    mkdirSync(runtime, { recursive: true });
     fp = join(root, 'target.mjs');
   });
-  afterEach(() => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {}
+  });
   // Derive the filename from lib/cooldown-path.mjs, never re-type the rule (audit
   // 2026-09-02 P1-1). A hand-copied literal here is a FOURTH copy that pins the test to
   // itself: change the sanitizer in the lib and every case still passes while the real
   // writer and reader have silently diverged onto two different filenames.
   const seed = (sessionId, idents) => {
-    writeFileSync(cooldownPathFor(runtime, sessionId),
-      JSON.stringify({ [fp]: { ts: Date.now(), lessonIds: [42], lessonIdents: idents } }));
+    writeFileSync(
+      cooldownPathFor(runtime, sessionId),
+      JSON.stringify({ [fp]: { ts: Date.now(), lessonIds: [42], lessonIdents: idents } }),
+    );
   };
   const env = (extra = {}) => ({ CLAUDE_MEM_DIR: root, CLAUDE_MEM_SALIENCE: 'bind', ...extra });
 
@@ -63,7 +83,10 @@ describe('post-tool-recall (bind component 2)', () => {
   it('silent when NOT in bind mode (current)', async () => {
     seed(SID3, { 42: ['recoverChildrenOf'] });
     writeFileSync(fp, 'function purgeStale() { db.delete(); }');
-    const out = await run({ tool_name: 'Edit', session_id: SID3, tool_input: { file_path: fp } }, env({ CLAUDE_MEM_SALIENCE: 'current' }));
+    const out = await run(
+      { tool_name: 'Edit', session_id: SID3, tool_input: { file_path: fp } },
+      env({ CLAUDE_MEM_SALIENCE: 'current' }),
+    );
     expect(out).toBe('');
   });
   it('silent when no cooldown entry exists', async () => {

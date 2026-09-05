@@ -17,7 +17,8 @@ describe('startup dashboard (T10c)', () => {
         git: { changed: ['M docs/plan.md'], stashes: [], branch: 'main', headSha: 'abc' },
         tasks: [{ id: 't1', title: 'impl T1', status: 'in_progress' }],
         plans: [{ name: '2026-04-14-mem-v2.31-mvp', path: '/x.md', mtime: Date.now() }],
-        handoff: null, adopted: true,
+        handoff: null,
+        adopted: true,
       },
     });
     expect(text).toMatch(/Startup dashboard/);
@@ -30,10 +31,15 @@ describe('startup dashboard (T10c)', () => {
   test('returns empty string when all sources empty and project is adopted', () => {
     const db = createTestDb();
     const text = buildDashboard({
-      db, project: 'mem', projectPath: '/tmp',
+      db,
+      project: 'mem',
+      projectPath: '/tmp',
       stubs: {
         git: { changed: [], stashes: [], branch: 'main', headSha: '' },
-        tasks: [], plans: [], handoff: null, adopted: true,
+        tasks: [],
+        plans: [],
+        handoff: null,
+        adopted: true,
       },
     });
     expect(text).toBe('');
@@ -47,10 +53,15 @@ describe('startup dashboard (T10c)', () => {
     try {
       const db = createTestDb();
       const text = buildDashboard({
-        db, project: 'mem', projectPath: '/tmp',
+        db,
+        project: 'mem',
+        projectPath: '/tmp',
         stubs: {
           git: { changed: [], stashes: [], branch: 'main', headSha: '' },
-          tasks: [], plans: [], handoff: null, adopted: false,
+          tasks: [],
+          plans: [],
+          handoff: null,
+          adopted: false,
         },
       });
       expect(text).toMatch(/Invited-memory 未启用/);
@@ -67,10 +78,15 @@ describe('startup dashboard (T10c)', () => {
   test('adopt hint dropped once project is adopted (self-clearing)', () => {
     const db = createTestDb();
     const text = buildDashboard({
-      db, project: 'mem', projectPath: '/tmp',
+      db,
+      project: 'mem',
+      projectPath: '/tmp',
       stubs: {
         git: { changed: ['M x'], stashes: [], branch: 'main', headSha: 'abc' },
-        tasks: [], plans: [], handoff: null, adopted: true,
+        tasks: [],
+        plans: [],
+        handoff: null,
+        adopted: true,
       },
     });
     expect(text).toMatch(/uncommitted/);
@@ -83,10 +99,15 @@ describe('startup dashboard (T10c)', () => {
     try {
       const db = createTestDb();
       const text = buildDashboard({
-        db, project: 'mem', projectPath: '/tmp',
+        db,
+        project: 'mem',
+        projectPath: '/tmp',
         stubs: {
           git: { changed: [], stashes: [], branch: 'main', headSha: '' },
-          tasks: [], plans: [], handoff: null, adopted: false,
+          tasks: [],
+          plans: [],
+          handoff: null,
+          adopted: false,
         },
       });
       expect(text).toBe('');
@@ -102,10 +123,15 @@ describe('startup dashboard (T10c)', () => {
     try {
       const db = createTestDb();
       const text = buildDashboard({
-        db, project: 'mem', projectPath: '/tmp',
+        db,
+        project: 'mem',
+        projectPath: '/tmp',
         stubs: {
           git: { changed: [], stashes: [], branch: 'main', headSha: '' },
-          tasks: [], plans: [], handoff: null, adopted: false,
+          tasks: [],
+          plans: [],
+          handoff: null,
+          adopted: false,
         },
       });
       expect(text).toBe('');
@@ -118,10 +144,13 @@ describe('startup dashboard (T10c)', () => {
   test('shows a continuation pointer (age signal, not the working_on content)', () => {
     const db = createTestDb();
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: [], stashes: [], branch: 'main', headSha: 'abc' },
-        tasks: [], plans: [],
+        tasks: [],
+        plans: [],
         handoff: { created_at_epoch: Date.now() - 3600000, working_on: 'writing the plan' },
       },
     });
@@ -136,13 +165,19 @@ describe('startup dashboard (T10c)', () => {
   test('truncates tasks list to 3 with ellipsis', () => {
     const db = createTestDb();
     const tasks = Array.from({ length: 7 }, (_, i) => ({
-      id: `t${i}`, title: `task ${i}`, status: 'pending',
+      id: `t${i}`,
+      title: `task ${i}`,
+      status: 'pending',
     }));
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: [], stashes: [], branch: null, headSha: null },
-        tasks, plans: [], handoff: null,
+        tasks,
+        plans: [],
+        handoff: null,
       },
     });
     expect(text).toMatch(/\+4 more/);
@@ -155,14 +190,20 @@ describe('startup dashboard (T10c)', () => {
     const db = createTestDb();
     const now = Date.now();
     for (let i = 0; i < 5; i++) {
-      db.prepare(`INSERT INTO events (project, event_type, title, importance, created_at_epoch)
-                  VALUES (?, ?, ?, ?, ?)`).run('mem', 'lesson', `t${i}`, 1, now);
+      db.prepare(
+        `INSERT INTO events (project, event_type, title, importance, created_at_epoch)
+                  VALUES (?, ?, ?, ?, ?)`,
+      ).run('mem', 'lesson', `t${i}`, 1, now);
     }
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: [], stashes: [], branch: null, headSha: null },
-        tasks: [], plans: [], handoff: null,
+        tasks: [],
+        plans: [],
+        handoff: null,
       },
     });
     expect(text).toMatch(/mem events: 5/);
@@ -171,10 +212,14 @@ describe('startup dashboard (T10c)', () => {
   test('omits events line when count is zero', () => {
     const db = createTestDb();
     const text = buildDashboard({
-      db, project: 'no-events-project', projectPath: process.cwd(),
+      db,
+      project: 'no-events-project',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: ['M x'], stashes: [], branch: 'main', headSha: '' },
-        tasks: [], plans: [], handoff: null,
+        tasks: [],
+        plans: [],
+        handoff: null,
       },
     });
     expect(text).not.toMatch(/mem events/);
@@ -183,10 +228,14 @@ describe('startup dashboard (T10c)', () => {
   test('renders both uncommitted and stashes when present', () => {
     const db = createTestDb();
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: ['M a', 'M b'], stashes: ['stash@{0}: WIP'], branch: 'feat/x', headSha: 'def' },
-        tasks: [], plans: [], handoff: null,
+        tasks: [],
+        plans: [],
+        handoff: null,
       },
     });
     expect(text).toMatch(/2 uncommitted file\(s\) on feat\/x/);
@@ -195,13 +244,18 @@ describe('startup dashboard (T10c)', () => {
 
   test('reads handoff from DB when stubs.handoff is omitted', () => {
     const db = createTestDb();
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-                VALUES ('mem', 'exit', 's1', 'resumable task', ?)`).run(Date.now() - 300000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+                VALUES ('mem', 'exit', 's1', 'resumable task', ?)`,
+    ).run(Date.now() - 300000);
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: [], stashes: [], branch: null, headSha: null },
-        tasks: [], plans: [],
+        tasks: [],
+        plans: [],
         // handoff intentionally omitted to exercise the readRecentHandoff path
       },
     });
@@ -216,13 +270,18 @@ describe('startup dashboard (T10c)', () => {
     // >7 days old — pickHandoffToInject filters it as expired, so the UserPromptSubmit
     // injection could never deliver it. The dashboard must not promise a continuation it
     // can't fulfill (batch2-reviewer Finding 1 regression guard).
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-                VALUES ('mem', 'exit', 's1', 'ancient task', ?)`).run(Date.now() - 8 * 86400000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+                VALUES ('mem', 'exit', 's1', 'ancient task', ?)`,
+    ).run(Date.now() - 8 * 86400000);
     const text = buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: ['M x'], stashes: [], branch: 'main', headSha: 'abc' }, // ensure non-empty dashboard
-        tasks: [], plans: [],
+        tasks: [],
+        plans: [],
         // handoff omitted → exercises the age-filtered readRecentHandoff DB path
       },
     });
@@ -234,10 +293,14 @@ describe('startup dashboard (T10c)', () => {
     const db = createTestDb();
     const t0 = Date.now();
     buildDashboard({
-      db, project: 'mem', projectPath: process.cwd(),
+      db,
+      project: 'mem',
+      projectPath: process.cwd(),
       stubs: {
         git: { changed: [], stashes: [], branch: null, headSha: null },
-        tasks: [], plans: [], handoff: null,
+        tasks: [],
+        plans: [],
+        handoff: null,
       },
     });
     expect(Date.now() - t0).toBeLessThan(200);

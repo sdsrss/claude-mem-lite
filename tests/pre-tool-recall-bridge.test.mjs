@@ -23,7 +23,10 @@ function seed(tmpRoot, filePath) {
   db.pragma('foreign_keys = OFF');
   insertSession(db, { id: 's-bridge', project: PROJECT });
   insertObs(db, {
-    sessionId: 's-bridge', project: PROJECT, type: 'bugfix', importance: 2,
+    sessionId: 's-bridge',
+    project: PROJECT,
+    type: 'bugfix',
+    importance: 2,
     title: 'guard recoverChildrenOf',
     lessonLearned: 'always null-check before recoverChildrenOf',
     filesModified: JSON.stringify([filePath]),
@@ -35,11 +38,16 @@ function runHook(tmpRoot, projectDir, env) {
   const filePath = join(projectDir, 'target.js');
   const event = JSON.stringify({
     tool_name: 'Edit',
-    tool_input: { file_path: filePath, old_string: 'recoverChildrenOf(p)', new_string: 'recoverChildrenOf(p2)' },
+    tool_input: {
+      file_path: filePath,
+      old_string: 'recoverChildrenOf(p)',
+      new_string: 'recoverChildrenOf(p2)',
+    },
     session_id: 'sess-x',
   });
   return execFileSync('node', [HOOK], {
-    input: event, encoding: 'utf8',
+    input: event,
+    encoding: 'utf8',
     timeout: 5000,
     env: {
       ...process.env,

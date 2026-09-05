@@ -20,9 +20,18 @@ export function buildIdf(corpusTexts) {
 
 export function cosine(bagA, bagB, idf) {
   const w = (term, tf) => tf * (idf.get(term) ?? idf.__default ?? 0);
-  let dot = 0, na = 0, nb = 0;
-  for (const [t, tf] of bagA) { const x = w(t, tf); na += x * x; if (bagB.has(t)) dot += x * w(t, bagB.get(t)); }
-  for (const [t, tf] of bagB) { const y = w(t, tf); nb += y * y; }
+  let dot = 0,
+    na = 0,
+    nb = 0;
+  for (const [t, tf] of bagA) {
+    const x = w(t, tf);
+    na += x * x;
+    if (bagB.has(t)) dot += x * w(t, bagB.get(t));
+  }
+  for (const [t, tf] of bagB) {
+    const y = w(t, tf);
+    nb += y * y;
+  }
   if (na === 0 || nb === 0) return 0;
   return dot / Math.sqrt(na * nb);
 }

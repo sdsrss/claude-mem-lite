@@ -35,20 +35,29 @@ describe('schema v46 migration reachability', () => {
     db.exec('ALTER TABLE observations DROP COLUMN decay_seen_at_first_cite');
     db.exec('DELETE FROM schema_version');
     db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_SCHEMA_VERSION);
-    const cols = () => db.prepare('PRAGMA table_info(observations)').all().map((c) => c.name);
+    const cols = () =>
+      db
+        .prepare('PRAGMA table_info(observations)')
+        .all()
+        .map((c) => c.name);
     expect(cols(), 'precondition: the column is really gone').not.toContain('decay_seen_at_first_cite');
 
     initSchema(db);
-    expect(cols(), 'the fast path must not skip a table that is behind its version stamp')
-      .toContain('decay_seen_at_first_cite');
+    expect(cols(), 'the fast path must not skip a table that is behind its version stamp').toContain(
+      'decay_seen_at_first_cite',
+    );
     db.close();
   });
 
   it('a fresh database gets the column too', () => {
     const db = new Database(':memory:');
     initSchema(db);
-    expect(db.prepare('PRAGMA table_info(observations)').all().map((c) => c.name))
-      .toContain('decay_seen_at_first_cite');
+    expect(
+      db
+        .prepare('PRAGMA table_info(observations)')
+        .all()
+        .map((c) => c.name),
+    ).toContain('decay_seen_at_first_cite');
     db.close();
   });
 });
@@ -59,14 +68,26 @@ describe('decay_seen_at_first_cite (v46 / D#159)', () => {
     db = createTestDb();
     for (const id of ['s1', 's2', 's3', 's4', 's5']) insertSession(db, { id, project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
-  const mk = (title = 't') => insertObs(db, {
-    sessionId: 's1', project: 'p', type: 'bugfix', title, importance: 2,
-  }).lastInsertRowid;
-  const read = (id) => db.prepare(
-    'SELECT decay_seen_count, cited_count, decay_seen_at_first_cite AS firstCite FROM observations WHERE id = ?',
-  ).get(id);
+  const mk = (title = 't') =>
+    insertObs(db, {
+      sessionId: 's1',
+      project: 'p',
+      type: 'bugfix',
+      title,
+      importance: 2,
+    }).lastInsertRowid;
+  const read = (id) =>
+    db
+      .prepare(
+        'SELECT decay_seen_count, cited_count, decay_seen_at_first_cite AS firstCite FROM observations WHERE id = ?',
+      )
+      .get(id);
 
   it('stamps the decay_seen_count in force at the first citation, counting that resolution', () => {
     const id = mk();
@@ -120,10 +141,10 @@ describe('decay_seen_at_first_cite (v46 / D#159)', () => {
     // later turn of the SAME session. seenInc is 0 there, so the stamp must equal the
     // decay_seen_count that the earlier uncited resolution already produced.
     const id = mk();
-    applyCitationDecay(db, 'p', new Set([id]), new Set(), 's1');       // uncited, seen → 1
+    applyCitationDecay(db, 'p', new Set([id]), new Set(), 's1'); // uncited, seen → 1
     expect(read(id)).toMatchObject({ decay_seen_count: 1, firstCite: null });
 
-    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 's1');   // same session, late cite
+    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 's1'); // same session, late cite
     const after = read(id);
     expect(after.decay_seen_count, 'must NOT double-count one injection').toBe(1);
     expect(after.firstCite, 'stamp matches the denominator, not denominator+1').toBe(1);
@@ -139,9 +160,9 @@ describe('decay_seen_at_first_cite (v46 / D#159)', () => {
     for (const s of ['s1', 's2', 's3']) applyCitationDecay(db, 'p', new Set([slow]), new Set(), s);
     applyCitationDecay(db, 'p', new Set([slow]), new Set([slow]), 's4');
 
-    const lateCites = db.prepare(
-      'SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite >= 3',
-    ).get().n;
+    const lateCites = db
+      .prepare('SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite >= 3')
+      .get().n;
     expect(lateCites, 'a memory ignored 3× then cited would have been killed by a K=3 gate').toBe(1);
     // The never-cited half needs `cited_count = 0`, and this is not pedantry: NULL in
     // this column means "never cited OR first cited before v46". Every row already
@@ -152,16 +173,22 @@ describe('decay_seen_at_first_cite (v46 / D#159)', () => {
     // be written from a query shaped like this one, so it has to be the right shape.
     const legacy = mk('legacy-cited-before-v46');
     applyCitationDecay(db, 'p', new Set([legacy]), new Set(), 's2');
-    db.prepare('UPDATE observations SET cited_count = 2, decay_seen_at_first_cite = NULL WHERE id = ?').run(legacy);
+    db.prepare('UPDATE observations SET cited_count = 2, decay_seen_at_first_cite = NULL WHERE id = ?').run(
+      legacy,
+    );
 
-    const neverCited = db.prepare(
-      'SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite IS NULL AND cited_count = 0 AND decay_seen_count > 0',
-    ).get().n;
+    const neverCited = db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite IS NULL AND cited_count = 0 AND decay_seen_count > 0',
+      )
+      .get().n;
     expect(neverCited, 'no fixture row is genuinely never-cited-but-seen').toBe(0);
 
-    const naive = db.prepare(
-      'SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite IS NULL AND decay_seen_count > 0',
-    ).get().n;
+    const naive = db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM observations WHERE decay_seen_at_first_cite IS NULL AND decay_seen_count > 0',
+      )
+      .get().n;
     expect(naive, 'the predicate without cited_count miscounts the legacy row as never-cited').toBe(1);
   });
 });

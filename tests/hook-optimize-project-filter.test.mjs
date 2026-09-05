@@ -31,22 +31,47 @@ function seedTwoProjects(db) {
   // Tokenization (hash-utils.mjs:14) splits on whitespace, lowercases, strips
   // trailing punctuation — no dot/slash split, so "server.mjs" is one token.
   // Project A pair: 6 common / 10 union = 0.60 → cluster eligible.
-  insertObs(db, { sessionId: 'sess-A', project: 'project-A', title: 'Modified hook.mjs validation logic for error path',  narrative: 'auto-captured edit on hook.mjs A' });
-  insertObs(db, { sessionId: 'sess-A', project: 'project-A', title: 'Modified hook.mjs validation flow for null path',    narrative: 'auto-captured edit on hook.mjs A2' });
+  insertObs(db, {
+    sessionId: 'sess-A',
+    project: 'project-A',
+    title: 'Modified hook.mjs validation logic for error path',
+    narrative: 'auto-captured edit on hook.mjs A',
+  });
+  insertObs(db, {
+    sessionId: 'sess-A',
+    project: 'project-A',
+    title: 'Modified hook.mjs validation flow for null path',
+    narrative: 'auto-captured edit on hook.mjs A2',
+  });
   // Project B pair: 6 common / 10 union = 0.60 → cluster eligible.
-  insertObs(db, { sessionId: 'sess-B', project: 'project-B', title: 'Modified server.mjs cluster handler for slow path',  narrative: 'auto-captured edit on server.mjs B' });
-  insertObs(db, { sessionId: 'sess-B', project: 'project-B', title: 'Modified server.mjs cluster handler for fast path',  narrative: 'auto-captured edit on server.mjs B2' });
+  insertObs(db, {
+    sessionId: 'sess-B',
+    project: 'project-B',
+    title: 'Modified server.mjs cluster handler for slow path',
+    narrative: 'auto-captured edit on server.mjs B',
+  });
+  insertObs(db, {
+    sessionId: 'sess-B',
+    project: 'project-B',
+    title: 'Modified server.mjs cluster handler for fast path',
+    narrative: 'auto-captured edit on server.mjs B2',
+  });
 }
 
 describe('findMergeCandidates — project filter', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); seedTwoProjects(db); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    seedTwoProjects(db);
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns clusters from all projects when no project filter given', async () => {
     const { findMergeCandidates } = await import('../hook-optimize.mjs');
     const clusters = findMergeCandidates(db, 50);
-    const projects = new Set(clusters.flat().map(o => o.project));
+    const projects = new Set(clusters.flat().map((o) => o.project));
     expect(projects.size).toBeGreaterThanOrEqual(1);
     expect(clusters.length).toBeGreaterThan(0);
   });
@@ -71,13 +96,18 @@ describe('findMergeCandidates — project filter', () => {
 
 describe('findReenrichCandidates — project filter', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); seedTwoProjects(db); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    seedTwoProjects(db);
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns degraded candidates from all projects by default', async () => {
     const { findReenrichCandidates } = await import('../hook-optimize.mjs');
     const all = findReenrichCandidates(db, 10);
-    const projects = new Set(all.map(o => o.project));
+    const projects = new Set(all.map((o) => o.project));
     expect(all.length).toBeGreaterThanOrEqual(2);
     expect(projects.has('project-A') && projects.has('project-B')).toBe(true);
   });
@@ -99,9 +129,13 @@ describe('applyNormalization — project filter (cross-project contamination gua
     // Both projects carry the same alias term that a synonym group will rewrite.
     insertObs(db, { sessionId: 'sess-A', project: 'project-A', title: 'A obs' });
     insertObs(db, { sessionId: 'sess-B', project: 'project-B', title: 'B obs' });
-    db.prepare("UPDATE observations SET concepts = 'mutex lock concurrency' WHERE project IN ('project-A','project-B')").run();
+    db.prepare(
+      "UPDATE observations SET concepts = 'mutex lock concurrency' WHERE project IN ('project-A','project-B')",
+    ).run();
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('only rewrites concepts in the scoped project, never sibling projects', async () => {
     const { applyNormalization } = await import('../hook-optimize.mjs');
@@ -110,7 +144,7 @@ describe('applyNormalization — project filter (cross-project contamination gua
     expect(res.updated).toBe(1); // only project-A's row
     const a = db.prepare("SELECT concepts FROM observations WHERE project = 'project-A'").get();
     const b = db.prepare("SELECT concepts FROM observations WHERE project = 'project-B'").get();
-    expect(a.concepts).not.toContain('lock');     // rewritten: lock → mutex (deduped)
+    expect(a.concepts).not.toContain('lock'); // rewritten: lock → mutex (deduped)
     expect(b.concepts).toBe('mutex lock concurrency'); // sibling project untouched
   });
 
@@ -123,8 +157,13 @@ describe('applyNormalization — project filter (cross-project contamination gua
 
 describe('optimizePreview — project filter + detail mode', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); seedTwoProjects(db); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    seedTwoProjects(db);
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('default preview returns aggregate counts only (no detail arrays)', async () => {
     const { optimizePreview } = await import('../hook-optimize.mjs');
@@ -154,8 +193,8 @@ describe('optimizePreview — project filter + detail mode', () => {
   it('{ project } scopes both aggregate counts and detail arrays', async () => {
     const { optimizePreview } = await import('../hook-optimize.mjs');
     const previewA = optimizePreview(db, { project: 'project-A', detail: true });
-    const projectsInClusters = new Set(previewA.mergeClusters.flat().map(o => o.project));
-    const projectsInSamples = new Set(previewA.reenrichSamples.map(o => o.project));
+    const projectsInClusters = new Set(previewA.mergeClusters.flat().map((o) => o.project));
+    const projectsInSamples = new Set(previewA.reenrichSamples.map((o) => o.project));
     if (projectsInClusters.size > 0) expect([...projectsInClusters]).toEqual(['project-A']);
     if (projectsInSamples.size > 0) expect([...projectsInSamples]).toEqual(['project-A']);
   });

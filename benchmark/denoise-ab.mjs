@@ -114,7 +114,9 @@ function loadQueries(file) {
   return Array.isArray(j) ? j : j.queries;
 }
 
-function round(n) { return Math.round(n * 1e4) / 1e4; }
+function round(n) {
+  return Math.round(n * 1e4) / 1e4;
+}
 
 /**
  * Run both suites on the given DB and capture the four ranking metrics (+ per
@@ -197,7 +199,9 @@ function fmtSnapshot(snap) {
   for (const s of SUITES) {
     const m = snap[s.name];
     if (!m) continue;
-    lines.push(`  ${s.name.padEnd(28)} R@10=${m.recall_at_10.toFixed(3)}  P@10=${m.precision_at_10.toFixed(3)}  nDCG=${m.ndcg_at_10.toFixed(3)}  MRR=${m.mrr_at_10.toFixed(3)}`);
+    lines.push(
+      `  ${s.name.padEnd(28)} R@10=${m.recall_at_10.toFixed(3)}  P@10=${m.precision_at_10.toFixed(3)}  nDCG=${m.ndcg_at_10.toFixed(3)}  MRR=${m.mrr_at_10.toFixed(3)}`,
+    );
   }
   return lines.join('\n');
 }
@@ -209,7 +213,10 @@ function fmtDelta(d) {
 
 async function main() {
   const argv = process.argv.slice(2);
-  const get = (flag) => { const i = argv.indexOf(flag); return i !== -1 ? argv[i + 1] : null; };
+  const get = (flag) => {
+    const i = argv.indexOf(flag);
+    return i !== -1 ? argv[i + 1] : null;
+  };
   const savePath = get('--save');
   const comparePath = get('--compare');
   const mode = get('--mode') || 'production_hybrid';
@@ -247,9 +254,13 @@ async function main() {
 
   console.error('\n─── Behavioral probes (multiscript / cross-source / deferred / events) ───');
   console.error(`  ${guard.map((g) => `${g.script}${g.found ? '✓' : '✗ZERO'}`).join('  ')}`);
-  console.error(`  cross-source: ${crossProbes.filter((p) => p.pass).length}/${crossProbes.length} ✓   deferred: ${deferredProbes.filter((p) => p.pass).length}/${deferredProbes.length} ✓   events-pipeline: ${eventsProbes.filter((p) => p.pass).length}/${eventsProbes.length} ✓`);
+  console.error(
+    `  cross-source: ${crossProbes.filter((p) => p.pass).length}/${crossProbes.length} ✓   deferred: ${deferredProbes.filter((p) => p.pass).length}/${deferredProbes.length} ✓   events-pipeline: ${eventsProbes.filter((p) => p.pass).length}/${eventsProbes.length} ✓`,
+  );
   if (probeFailures.length) {
-    console.error(`  ⚠ PROBE-FAIL — ${probeFailures.join(', ')} — a face regression the ranking suites cannot see.`);
+    console.error(
+      `  ⚠ PROBE-FAIL — ${probeFailures.join(', ')} — a face regression the ranking suites cannot see.`,
+    );
     process.exitCode = 1;
   }
 
@@ -258,7 +269,9 @@ async function main() {
     const { suites, verdict } = summarizeTradeoff(before, snap);
     console.error(`\n─── Δ vs ${comparePath} ───`);
     for (const d of suites) {
-      console.error(`  ${d.name.padEnd(28)} ΔR@10=${fmtDelta(d.recall_at_10)}  ΔP@10=${fmtDelta(d.precision_at_10)}  ΔnDCG=${fmtDelta(d.ndcg_at_10)}  ΔMRR=${fmtDelta(d.mrr_at_10)}`);
+      console.error(
+        `  ${d.name.padEnd(28)} ΔR@10=${fmtDelta(d.recall_at_10)}  ΔP@10=${fmtDelta(d.precision_at_10)}  ΔnDCG=${fmtDelta(d.ndcg_at_10)}  ΔMRR=${fmtDelta(d.mrr_at_10)}`,
+      );
     }
     console.error(`\n  VERDICT: ${composeVerdict(verdict, probeFailures)}\n`);
   }
@@ -272,5 +285,6 @@ async function main() {
   console.log(JSON.stringify(snap));
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
 if (isMain) main();

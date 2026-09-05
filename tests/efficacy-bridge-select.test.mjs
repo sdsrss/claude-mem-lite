@@ -4,7 +4,9 @@ import { lessonBindsToRegion, bridgeFired } from '../lib/efficacy-bridge-select.
 
 describe('lessonBindsToRegion', () => {
   it('true when a lesson identifier appears in the region', () => {
-    expect(lessonBindsToRegion('guard `recoverChildrenOf` against null', 'function recoverChildrenOf(p){}')).toBe(true);
+    expect(
+      lessonBindsToRegion('guard `recoverChildrenOf` against null', 'function recoverChildrenOf(p){}'),
+    ).toBe(true);
   });
   it('false when no named identifier overlaps the region', () => {
     expect(lessonBindsToRegion('always validate input', 'const x = compressedInto + 1;')).toBe(false);

@@ -42,8 +42,8 @@ const seed = () => {
     "INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES (?,?,?,?,?,'active')",
   );
   const ins = db.prepare(
-    "INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, related_ids, access_count, created_at, created_at_epoch)"
-    + " VALUES (?, ?, '', 'change', ?, '', '', '', '', '[]', '[]', 1, '[]', 0, ?, ?)",
+    'INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, related_ids, access_count, created_at, created_at_epoch)' +
+      " VALUES (?, ?, '', 'change', ?, '', '', '', '', '[]', '[]', 1, '[]', 0, ?, ?)",
   );
   for (const p of ['projA', 'projB']) {
     sess.run(`s-${p}`, `s-${p}`, p, new Date(old).toISOString(), old);
@@ -52,9 +52,8 @@ const seed = () => {
   db.close();
 };
 
-const runAutoMaintain = (project) => execFileSync(
-  process.execPath, [join(REPO, 'hook.mjs'), 'auto-maintain', project],
-  {
+const runAutoMaintain = (project) =>
+  execFileSync(process.execPath, [join(REPO, 'hook.mjs'), 'auto-maintain', project], {
     cwd: REPO,
     env: {
       ...process.env,
@@ -65,12 +64,12 @@ const runAutoMaintain = (project) => execFileSync(
     },
     stdio: 'pipe',
     timeout: 60_000,
-  },
-);
+  });
 
 const markedCount = (project) => {
   const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
-  const row = db.prepare('SELECT COUNT(*) c FROM observations WHERE project = ? AND compressed_into = ?')
+  const row = db
+    .prepare('SELECT COUNT(*) c FROM observations WHERE project = ? AND compressed_into = ?')
     .get(project, COMPRESSED_AUTO);
   db.close();
   return row.c;
@@ -88,7 +87,13 @@ describe('auto-compress marking cadence across projects', () => {
     });
     seed();
   });
-  afterEach(() => { try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('marks the SECOND project too, even though the global 24h gate is already stamped', () => {
     runAutoMaintain('projA');

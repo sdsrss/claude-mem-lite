@@ -37,7 +37,9 @@ function runSessionStart(sessionId, extraEnv = {}, cwd = projDir) {
   try {
     return execFileSync(process.execPath, [HOOK_PATH, 'session-start'], {
       input: JSON.stringify({ session_id: sessionId, source: 'startup', cwd: projDir }),
-      timeout: 20000, encoding: 'utf8', cwd,
+      timeout: 20000,
+      encoding: 'utf8',
+      cwd,
       env: { ...env, HOME: tmpHome, CLAUDE_PROJECT_DIR: projDir, ...extraEnv },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -55,8 +57,8 @@ function expectSingleEnvelope(stdout) {
     parsed = JSON.parse(trimmed);
   } catch (e) {
     throw new Error(
-      `SessionStart stdout is not one JSON document — the host falls back to plain text `
-      + `and the envelope reaches the model as raw JSON:\n${stdout.slice(0, 600)}`,
+      `SessionStart stdout is not one JSON document — the host falls back to plain text ` +
+        `and the envelope reaches the model as raw JSON:\n${stdout.slice(0, 600)}`,
       { cause: e },
     );
   }
@@ -69,24 +71,29 @@ function expectSingleEnvelope(stdout) {
 function seedObservation(text, title) {
   const db = new Database(dbPath);
   const now = Date.now();
-  db.prepare(`INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-              VALUES ('seed-cc', 'seed-mem', 'work--fresh', ?, ?, 'active')`)
-    .run(new Date(now).toISOString(), now);
-  db.prepare(`
+  db.prepare(
+    `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+              VALUES ('seed-cc', 'seed-mem', 'work--fresh', ?, ?, 'active')`,
+  ).run(new Date(now).toISOString(), now);
+  db.prepare(
+    `
     INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,
                               facts, files_read, files_modified, importance, created_at, created_at_epoch)
     VALUES ('seed-mem', 'work--fresh', ?, 'bugfix', ?, '', '', '', '', '[]', '[]', 3, ?, ?)
-  `).run(text, title, new Date(now).toISOString(), now);
+  `,
+  ).run(text, title, new Date(now).toISOString(), now);
   db.close();
 }
 
 /** Give the dashboard a leg of its own that no other stdout contributor can produce. */
 function seedEvent(title) {
   const db = new Database(dbPath);
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
     VALUES ('work--fresh', 'lesson', ?, '', 1, ?)
-  `).run(title, Date.now());
+  `,
+  ).run(title, Date.now());
   db.close();
 }
 
@@ -125,12 +132,18 @@ describe('SessionStart stdout envelope', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('emits one JSON document when the memory block and the dashboard both have content', () => {
-    seedObservation('Retry budget was shared across shards so one hot shard starved the rest',
-      'Retry budget was shared across shards');
+    seedObservation(
+      'Retry budget was shared across shards so one hot shard starved the rest',
+      'Retry budget was shared across shards',
+    );
     const stdout = runSessionStart('cc-env-1');
     const parsed = expectSingleEnvelope(stdout);
     // Both surfaces must survive the merge — this is a delivery-channel change,
@@ -151,7 +164,12 @@ describe('SessionStart stdout envelope', () => {
     // One document ⇒ exactly one line that parses as JSON.
     const jsonLines = stdout.split('\n').filter((l) => {
       if (!l.trim()) return false;
-      try { JSON.parse(l); return true; } catch { return false; }
+      try {
+        JSON.parse(l);
+        return true;
+      } catch {
+        return false;
+      }
     });
     expect(jsonLines).toHaveLength(1);
     // Pin the DASHBOARD leg by content, not by "additionalContext is non-empty":
@@ -174,9 +192,14 @@ describe('SessionStart stdout envelope', () => {
     const listDir = join(tmpHome, '.claude', 'tasks', 'list-a');
     mkdirSync(listDir, { recursive: true });
     writeFileSync(join(listDir, 'meta.json'), JSON.stringify({ projectPath: projDir }));
-    writeFileSync(join(listDir, 't1.json'), JSON.stringify({
-      id: 't1', subject: 'rekey the shard router', status: 'in_progress',
-    }));
+    writeFileSync(
+      join(listDir, 't1.json'),
+      JSON.stringify({
+        id: 't1',
+        subject: 'rekey the shard router',
+        status: 'in_progress',
+      }),
+    );
 
     const repoRoot = resolve(import.meta.dirname, '..');
     const parsed = expectSingleEnvelope(runSessionStart('cc-env-cwd', {}, repoRoot));
@@ -185,9 +208,14 @@ describe('SessionStart stdout envelope', () => {
     const otherDir = join(tmpHome, '.claude', 'tasks', 'list-b');
     mkdirSync(otherDir, { recursive: true });
     writeFileSync(join(otherDir, 'meta.json'), JSON.stringify({ projectPath: repoRoot }));
-    writeFileSync(join(otherDir, 't2.json'), JSON.stringify({
-      id: 't2', subject: 'host-tree decoy task', status: 'in_progress',
-    }));
+    writeFileSync(
+      join(otherDir, 't2.json'),
+      JSON.stringify({
+        id: 't2',
+        subject: 'host-tree decoy task',
+        status: 'in_progress',
+      }),
+    );
     const second = expectSingleEnvelope(runSessionStart('cc-env-cwd2', {}, repoRoot));
     expect(second.hookSpecificOutput.additionalContext).toContain('rekey the shard router');
     expect(second.hookSpecificOutput.additionalContext).not.toContain('host-tree decoy task');
@@ -195,11 +223,14 @@ describe('SessionStart stdout envelope', () => {
 
   it('folds the update banner in too, instead of appending raw text after the envelope', () => {
     seedObservation('Shard rebalance dropped the last write', 'Shard rebalance dropped the last write');
-    writeFileSync(join(runtimeDir, 'update-state.json'), JSON.stringify({
-      lastCheck: new Date().toISOString(),
-      latestVersion: '99.0.0',
-      updateAvailable: true,
-    }));
+    writeFileSync(
+      join(runtimeDir, 'update-state.json'),
+      JSON.stringify({
+        lastCheck: new Date().toISOString(),
+        latestVersion: '99.0.0',
+        updateAvailable: true,
+      }),
+    );
     const stdout = runSessionStart('cc-env-3', { CLAUDE_MEM_SKIP_UPDATE: '' });
     const parsed = expectSingleEnvelope(stdout);
     // Pin the BANNER leg by content. Asserting only single-envelope-ness left the

@@ -186,7 +186,7 @@ describe('sanitizeFtsQuery', () => {
     // 're' is a real word ("re:"/regarding) so it is deliberately NOT stripped —
     // the they're/we're 're' artifact survives, a conscious trade vs dropping a
     // legitimate token.
-    expect(sanitizeFtsQuery("re the meeting")).toBe('re meeting');
+    expect(sanitizeFtsQuery('re the meeting')).toBe('re meeting');
   });
 
   it('treats apostrophes as separators (aligns with FTS5 index tokenization)', () => {
@@ -241,7 +241,9 @@ describe('sanitizeFtsQuery', () => {
     // "next-auth" stays quoted (has hyphen), "error" expands via synonym map
     // Uses AND joiner because of parenthesized group
     // "error" has abbreviation "err", semantic synonyms "bug", "failure", CJK "错误", "报错"
-    expect(sanitizeFtsQuery('-next-auth error')).toBe('"next-auth" AND (error OR err OR bug OR failure OR 错误 OR 报错)');
+    expect(sanitizeFtsQuery('-next-auth error')).toBe(
+      '"next-auth" AND (error OR err OR bug OR failure OR 错误 OR 报错)',
+    );
   });
 
   it('expands abbreviation synonyms', () => {
@@ -270,10 +272,10 @@ describe('sanitizeFtsQuery', () => {
   it('appends CJK bigrams for Chinese phrase matching', () => {
     // "系统崩溃" → extracted via merged CJK dictionary as compound words with synonyms
     const result = sanitizeFtsQuery('系统崩溃');
-    expect(result).toContain('系统');  // from CJK_COMPOUNDS
-    expect(result).toContain('崩溃');  // from CJK_COMPOUNDS + SYNONYM_MAP → (崩溃 OR crash)
+    expect(result).toContain('系统'); // from CJK_COMPOUNDS
+    expect(result).toContain('崩溃'); // from CJK_COMPOUNDS + SYNONYM_MAP → (崩溃 OR crash)
     expect(result).toContain('system'); // synonym for 系统
-    expect(result).toContain('crash');  // synonym for 崩溃
+    expect(result).toContain('crash'); // synonym for 崩溃
   });
 
   it('handles mixed CJK and Latin tokens with bigrams', () => {
@@ -461,16 +463,20 @@ describe('computeRuleImportance', () => {
   });
 
   it('returns 3 for test failure (isError + isTest)', () => {
-    const ep = mkEpisode([mkEntry({
-      bashSig: { isError: true, isTest: true, isBuild: false, isGit: false, isDeploy: false },
-    })]);
+    const ep = mkEpisode([
+      mkEntry({
+        bashSig: { isError: true, isTest: true, isBuild: false, isGit: false, isDeploy: false },
+      }),
+    ]);
     expect(computeRuleImportance(ep)).toBe(3);
   });
 
   it('returns 3 for build failure (isError + isBuild)', () => {
-    const ep = mkEpisode([mkEntry({
-      bashSig: { isError: true, isTest: false, isBuild: true, isGit: false, isDeploy: false },
-    })]);
+    const ep = mkEpisode([
+      mkEntry({
+        bashSig: { isError: true, isTest: false, isBuild: true, isGit: false, isDeploy: false },
+      }),
+    ]);
     expect(computeRuleImportance(ep)).toBe(3);
   });
 
@@ -484,18 +490,28 @@ describe('computeRuleImportance', () => {
 
   it('returns 3 for edited security files (.pem, .key)', () => {
     expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/ssl/cert.pem'] })]))).toBe(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/ssl/private.key'] })]))).toBe(3);
+    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/ssl/private.key'] })]))).toBe(
+      3,
+    );
   });
 
   it('returns 3 for edited auth-related files', () => {
     expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/src/auth.js'] })]))).toBe(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/config/credentials.json'] })]))).toBe(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/config/credentials.json'] })])),
+    ).toBe(3);
   });
 
   it('returns 3 for edited migration files', () => {
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/db/migration_001.sql'] })]))).toBe(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Write', files: ['/prisma/schema.prisma'] })]))).toBe(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/alembic/versions/abc.py'] })]))).toBe(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/db/migration_001.sql'] })])),
+    ).toBe(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Write', files: ['/prisma/schema.prisma'] })])),
+    ).toBe(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/alembic/versions/abc.py'] })])),
+    ).toBe(3);
   });
 
   // P3 (finding #7): the sensitive-file → imp=3 heuristic must require the file to
@@ -503,35 +519,49 @@ describe('computeRuleImportance', () => {
   // an unrelated task shouldn't promote the whole memory to critical and outrank
   // genuine memories in top-K injection.
   it('does NOT return 3 when a sensitive file is only READ (not edited)', () => {
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Read', files: ['/project/.env'] })]))).toBeLessThan(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Read', files: ['/prisma/schema.prisma'] })]))).toBeLessThan(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Read', files: ['/project/.env'] })])),
+    ).toBeLessThan(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Read', files: ['/prisma/schema.prisma'] })])),
+    ).toBeLessThan(3);
     // A bash command that merely references a sensitive path is not an edit either.
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Bash', files: ['/ssl/private.key'] })]))).toBeLessThan(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Bash', files: ['/ssl/private.key'] })])),
+    ).toBeLessThan(3);
   });
 
   it('returns 3 when a sensitive file is EDITED', () => {
     expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Edit', files: ['/project/.env'] })]))).toBe(3);
-    expect(computeRuleImportance(mkEpisode([mkEntry({ tool: 'Write', files: ['/db/migration_001.sql'] })]))).toBe(3);
+    expect(
+      computeRuleImportance(mkEpisode([mkEntry({ tool: 'Write', files: ['/db/migration_001.sql'] })])),
+    ).toBe(3);
   });
 
   it('returns 2 for non-test/build errors', () => {
-    const ep = mkEpisode([mkEntry({
-      bashSig: { isError: true, isTest: false, isBuild: false, isGit: false, isDeploy: false },
-    })]);
+    const ep = mkEpisode([
+      mkEntry({
+        bashSig: { isError: true, isTest: false, isBuild: false, isGit: false, isDeploy: false },
+      }),
+    ]);
     expect(computeRuleImportance(ep)).toBe(2);
   });
 
   it('returns 2 for git operations', () => {
-    const ep = mkEpisode([mkEntry({
-      bashSig: { isError: false, isTest: false, isBuild: false, isGit: true, isDeploy: false },
-    })]);
+    const ep = mkEpisode([
+      mkEntry({
+        bashSig: { isError: false, isTest: false, isBuild: false, isGit: true, isDeploy: false },
+      }),
+    ]);
     expect(computeRuleImportance(ep)).toBe(2);
   });
 
   it('returns 2 for deploy operations', () => {
-    const ep = mkEpisode([mkEntry({
-      bashSig: { isError: false, isTest: false, isBuild: false, isGit: false, isDeploy: true },
-    })]);
+    const ep = mkEpisode([
+      mkEntry({
+        bashSig: { isError: false, isTest: false, isBuild: false, isGit: false, isDeploy: true },
+      }),
+    ]);
     expect(computeRuleImportance(ep)).toBe(2);
   });
 
@@ -546,16 +576,16 @@ describe('computeRuleImportance', () => {
 
   it('takes the max across multiple entries', () => {
     const ep = mkEpisode([
-      mkEntry({ tool: 'Edit', files: ['/src/foo.js'] }),  // importance=1
-      mkEntry({ bashSig: { isError: true, isTest: false, isBuild: false, isGit: false, isDeploy: false } }),  // importance=2
+      mkEntry({ tool: 'Edit', files: ['/src/foo.js'] }), // importance=1
+      mkEntry({ bashSig: { isError: true, isTest: false, isBuild: false, isGit: false, isDeploy: false } }), // importance=2
     ]);
     expect(computeRuleImportance(ep)).toBe(2);
   });
 
   it('short-circuits on importance=3', () => {
     const ep = mkEpisode([
-      mkEntry({ tool: 'Edit', files: ['/project/.env'] }),  // importance=3, should break
-      mkEntry({ tool: 'Edit', files: ['/src/foo.js'] }),  // would be 1
+      mkEntry({ tool: 'Edit', files: ['/project/.env'] }), // importance=3, should break
+      mkEntry({ tool: 'Edit', files: ['/src/foo.js'] }), // would be 1
     ]);
     expect(computeRuleImportance(ep)).toBe(3);
   });
@@ -655,7 +685,7 @@ describe('detectBashSignificance', () => {
   it('detects errors in response (requires length > 30)', () => {
     const result = detectBashSignificance(
       { command: 'npm test' },
-      'Error: Cannot find module xyz at require (node:internal/modules/cjs:1234:56)'
+      'Error: Cannot find module xyz at require (node:internal/modules/cjs:1234:56)',
     );
     expect(result.isError).toBe(true);
     expect(result.isSignificant).toBe(true);
@@ -742,29 +772,45 @@ describe('detectBashSignificance', () => {
   });
 
   it('detects multiple error patterns', () => {
-    expect(detectBashSignificance({ command: 'x' }, 'ENOENT: no such file or directory, open').isError).toBe(true);
-    expect(detectBashSignificance({ command: 'x' }, 'panic: runtime error: index out of range').isError).toBe(true);
-    expect(detectBashSignificance({ command: 'x' }, 'Traceback (most recent call last): in foo.py').isError).toBe(true);
-    expect(detectBashSignificance({ command: 'x' }, 'bash: command not found: nonexistent_tool').isError).toBe(true);
+    expect(detectBashSignificance({ command: 'x' }, 'ENOENT: no such file or directory, open').isError).toBe(
+      true,
+    );
+    expect(detectBashSignificance({ command: 'x' }, 'panic: runtime error: index out of range').isError).toBe(
+      true,
+    );
+    expect(
+      detectBashSignificance({ command: 'x' }, 'Traceback (most recent call last): in foo.py').isError,
+    ).toBe(true);
+    expect(
+      detectBashSignificance({ command: 'x' }, 'bash: command not found: nonexistent_tool').isError,
+    ).toBe(true);
   });
 
   it('does NOT flag grep/search output containing error keywords as isError', () => {
-    expect(detectBashSignificance(
-      { command: 'grep -n error dispatch.mjs' },
-      '11:import { debugCatch } from ./utils.mjs;\n238:    [/\\b(debug|error|fail)\\b/i]'
-    ).isError).toBe(false);
-    expect(detectBashSignificance(
-      { command: 'rg "error" src/' },
-      'src/handler.mjs:42: throw new Error("not found")'
-    ).isError).toBe(false);
-    expect(detectBashSignificance(
-      { command: 'cat error.log' },
-      'Error: connection refused at line 12\nTraceback in module xyz'
-    ).isError).toBe(false);
+    expect(
+      detectBashSignificance(
+        { command: 'grep -n error dispatch.mjs' },
+        '11:import { debugCatch } from ./utils.mjs;\n238:    [/\\b(debug|error|fail)\\b/i]',
+      ).isError,
+    ).toBe(false);
+    expect(
+      detectBashSignificance(
+        { command: 'rg "error" src/' },
+        'src/handler.mjs:42: throw new Error("not found")',
+      ).isError,
+    ).toBe(false);
+    expect(
+      detectBashSignificance(
+        { command: 'cat error.log' },
+        'Error: connection refused at line 12\nTraceback in module xyz',
+      ).isError,
+    ).toBe(false);
   });
 
   it('does NOT flag commands with "test" in comments/args as isTest', () => {
-    expect(detectBashSignificance({ command: '# Test hook simulation\necho hello' }, 'ok').isTest).toBe(false);
+    expect(detectBashSignificance({ command: '# Test hook simulation\necho hello' }, 'ok').isTest).toBe(
+      false,
+    );
     expect(detectBashSignificance({ command: 'grep test file.mjs' }, 'ok').isTest).toBe(false);
     expect(detectBashSignificance({ command: 'cat test-results.json' }, 'ok').isTest).toBe(false);
     expect(detectBashSignificance({ command: 'find . -name "*.test.js"' }, 'ok').isTest).toBe(false);
@@ -922,7 +968,7 @@ describe('parseJsonFromLLM', () => {
     const redos = '```json' + ' '.repeat(50000);
     const t0 = Date.now();
     expect(parseJsonFromLLM(redos)).toBeNull();
-    expect(Date.now() - t0).toBeLessThan(1000);   // O(n): milliseconds, not 10+ seconds
+    expect(Date.now() - t0).toBeLessThan(1000); // O(n): milliseconds, not 10+ seconds
   });
 
   it('still strips fences with surrounding whitespace after the ReDoS-safe change', () => {
@@ -941,18 +987,18 @@ describe('parseJsonFromLLM', () => {
     // /\{[\s\S]*\}/ then backtracked O(n²) across every `{` (each start re-scans to EOF looking
     // for a `}` that never comes). The index-scan replacement is a single O(n) pass. On the old
     // regex this input takes seconds→timeout; the fix returns instantly.
-    const pathological = '{'.repeat(200000);   // no closing brace anywhere
+    const pathological = '{'.repeat(200000); // no closing brace anywhere
     const t0 = Date.now();
     expect(parseJsonFromLLM(pathological)).toBeNull();
-    expect(Date.now() - t0).toBeLessThan(1000);   // O(n): milliseconds, not seconds
+    expect(Date.now() - t0).toBeLessThan(1000); // O(n): milliseconds, not seconds
   });
 
   it('last-resort span stays behavior-identical to the old greedy /\\{[\\s\\S]*\\}/ (P3-2)', () => {
     // first `{` .. last `}`, exactly what the greedy match returned.
-    expect(parseJsonFromLLM('note {"k":1}')).toEqual({ k: 1 });                 // trailing object
-    expect(parseJsonFromLLM('{"a":1} tail')).toEqual({ a: 1 });                 // leading object
-    expect(parseJsonFromLLM('} only a close {')).toBeNull();                    // close before open → no span
-    expect(parseJsonFromLLM('x {oops {"w":true} y}')).toBeNull();               // widest span unparseable → null
+    expect(parseJsonFromLLM('note {"k":1}')).toEqual({ k: 1 }); // trailing object
+    expect(parseJsonFromLLM('{"a":1} tail')).toEqual({ a: 1 }); // leading object
+    expect(parseJsonFromLLM('} only a close {')).toBeNull(); // close before open → no span
+    expect(parseJsonFromLLM('x {oops {"w":true} y}')).toBeNull(); // widest span unparseable → null
   });
 
   it('extracts JSON object from mixed text', () => {
@@ -973,15 +1019,17 @@ describe('parseJsonFromLLM', () => {
   it('recovers a leading object when unfenced prose contains a later brace', () => {
     // Regression: the greedy {[\s\S]*} fallback spans first-{ to LAST-}, so an unrelated
     // trailing {…} in prose defeated it and the valid leading object was lost.
-    expect(parseJsonFromLLM('{"title":"ok"}\nNote: also touched config {timeout}'))
-      .toEqual({ title: 'ok' });
-    expect(parseJsonFromLLM('The change: {"title":"fix parser","importance":2}. Next, update config {key}.'))
-      .toEqual({ title: 'fix parser', importance: 2 });
+    expect(parseJsonFromLLM('{"title":"ok"}\nNote: also touched config {timeout}')).toEqual({ title: 'ok' });
+    expect(
+      parseJsonFromLLM('The change: {"title":"fix parser","importance":2}. Next, update config {key}.'),
+    ).toEqual({ title: 'fix parser', importance: 2 });
   });
 
   it('does not miscount braces that appear inside string values', () => {
-    expect(parseJsonFromLLM('prefix {"title":"has } brace","n":1} suffix'))
-      .toEqual({ title: 'has } brace', n: 1 });
+    expect(parseJsonFromLLM('prefix {"title":"has } brace","n":1} suffix')).toEqual({
+      title: 'has } brace',
+      n: 1,
+    });
   });
 
   it('handles JSON with arrays', () => {
@@ -1056,21 +1104,17 @@ describe('isRelatedToEpisode', () => {
   });
 
   it('returns true if any file pair overlaps', () => {
-    expect(isRelatedToEpisode(
-      mkEpisode(['/src/a.js', '/lib/b.js']),
-      ['/test/c.js', '/src/d.js']  // /src/ overlaps
-    )).toBe(true);
+    expect(
+      isRelatedToEpisode(
+        mkEpisode(['/src/a.js', '/lib/b.js']),
+        ['/test/c.js', '/src/d.js'], // /src/ overlaps
+      ),
+    ).toBe(true);
   });
 
   it('handles deeply nested paths', () => {
-    expect(isRelatedToEpisode(
-      mkEpisode(['/a/b/c/foo.js']),
-      ['/a/b/c/bar.js']
-    )).toBe(true);
-    expect(isRelatedToEpisode(
-      mkEpisode(['/a/b/c/foo.js']),
-      ['/a/b/d/bar.js']
-    )).toBe(false);
+    expect(isRelatedToEpisode(mkEpisode(['/a/b/c/foo.js']), ['/a/b/c/bar.js'])).toBe(true);
+    expect(isRelatedToEpisode(mkEpisode(['/a/b/c/foo.js']), ['/a/b/d/bar.js'])).toBe(false);
   });
 });
 
@@ -1078,11 +1122,15 @@ describe('isRelatedToEpisode', () => {
 
 describe('makeEntryDesc', () => {
   it('describes Edit tool', () => {
-    const desc = makeEntryDesc('Edit', {
-      file_path: '/src/app.js',
-      old_string: 'const x = 1',
-      new_string: 'const x = 2',
-    }, '');
+    const desc = makeEntryDesc(
+      'Edit',
+      {
+        file_path: '/src/app.js',
+        old_string: 'const x = 1',
+        new_string: 'const x = 2',
+      },
+      '',
+    );
     expect(desc).toContain('app.js');
     expect(desc).toContain('const x = 1');
     expect(desc).toContain('const x = 2');
@@ -1090,19 +1138,27 @@ describe('makeEntryDesc', () => {
   });
 
   it('describes Write tool', () => {
-    const desc = makeEntryDesc('Write', {
-      file_path: '/src/new.js',
-      content: 'hello world',
-    }, '');
+    const desc = makeEntryDesc(
+      'Write',
+      {
+        file_path: '/src/new.js',
+        content: 'hello world',
+      },
+      '',
+    );
     expect(desc).toContain('Created');
     expect(desc).toContain('new.js');
     expect(desc).toContain('11 chars');
   });
 
   it('describes NotebookEdit tool', () => {
-    const desc = makeEntryDesc('NotebookEdit', {
-      new_source: 'import pandas as pd',
-    }, '');
+    const desc = makeEntryDesc(
+      'NotebookEdit',
+      {
+        new_source: 'import pandas as pd',
+      },
+      '',
+    );
     expect(desc).toContain('Notebook cell');
     expect(desc).toContain('import pandas');
   });
@@ -1199,10 +1255,12 @@ describe('makeEntryDesc', () => {
 
     it('leaves ordinary text byte-identical', () => {
       // The scrub must be invisible on the case that is every other tool call.
-      expect(makeEntryDesc('Bash', { command: 'npm test' }, 'ok: 12 passed', { isError: false }))
-        .toBe('npm test → ok: 12 passed');
-      expect(makeEntryDesc('WebFetch', { url: 'https://example.com' }, ''))
-        .toBe('Fetch: https://example.com');
+      expect(makeEntryDesc('Bash', { command: 'npm test' }, 'ok: 12 passed', { isError: false })).toBe(
+        'npm test → ok: 12 passed',
+      );
+      expect(makeEntryDesc('WebFetch', { url: 'https://example.com' }, '')).toBe(
+        'Fetch: https://example.com',
+      );
     });
   });
 });
@@ -1245,7 +1303,9 @@ describe('scrubSecrets', () => {
   it('scrubs access_token / refresh_token in KV and JSON form (OAuth2 fields)', () => {
     expect(scrubSecrets('access_token=ya29.realtoken1234567890')).toBe('access_token=***');
     expect(scrubSecrets('refresh_token=1//realtoken1234567890')).toBe('refresh_token=***');
-    expect(scrubSecrets('{"access_token": "ya29.A0ARrdaM-realtoken1234567890"}')).toBe('{"access_token": "***"}');
+    expect(scrubSecrets('{"access_token": "ya29.A0ARrdaM-realtoken1234567890"}')).toBe(
+      '{"access_token": "***"}',
+    );
   });
 
   it('scrubs a bare SECRET= with a mixed-alnum (non-hex) value', () => {
@@ -1254,7 +1314,9 @@ describe('scrubSecrets', () => {
 
   it('does not over-redact prose mentions or non-credential words', () => {
     expect(scrubSecrets('the token: somemarkervalue')).toBe('the token: somemarkervalue');
-    expect(scrubSecrets('this is a normal sentence about a secret meeting')).toBe('this is a normal sentence about a secret meeting');
+    expect(scrubSecrets('this is a normal sentence about a secret meeting')).toBe(
+      'this is a normal sentence about a secret meeting',
+    );
     expect(scrubSecrets('topsecret=foobar123')).toBe('topsecret=foobar123');
   });
 
@@ -1268,7 +1330,17 @@ describe('scrubSecrets', () => {
   it('keeps structured credential keys covered in BOTH the KV and JSON forms (cross-list parity)', () => {
     // Drift guard: access_token/refresh_token once fell out of the KV list while staying in
     // the JSON list. Every structured key must redact in both shapes so neither list drifts.
-    const STRUCTURED_KEYS = ['api_key', 'api_secret', 'secret_key', 'access_key', 'access_token', 'private_key', 'client_secret', 'auth_token', 'refresh_token'];
+    const STRUCTURED_KEYS = [
+      'api_key',
+      'api_secret',
+      'secret_key',
+      'access_key',
+      'access_token',
+      'private_key',
+      'client_secret',
+      'auth_token',
+      'refresh_token',
+    ];
     for (const k of STRUCTURED_KEYS) {
       expect(scrubSecrets(`${k}=supersecretvalue123`), `KV form: ${k}`).toBe(`${k}=***`);
       expect(scrubSecrets(`{"${k}": "supersecretvalue123"}`), `JSON form: ${k}`).toBe(`{"${k}": "***"}`);
@@ -1315,8 +1387,8 @@ describe('scrubSecrets', () => {
   it('preserves key names while scrubbing values', () => {
     const result = scrubSecrets('password=secret123 token=abc user=john');
     expect(result).toContain('password=***');
-    expect(result).toContain('token=abc');  // short value (<6 chars), not a real secret
-    expect(result).toContain('user=john');  // not a secret key
+    expect(result).toContain('token=abc'); // short value (<6 chars), not a real secret
+    expect(result).toContain('user=john'); // not a secret key
   });
 
   it('does not scrub prose mentions of bare credential words (token/password/bearer)', () => {
@@ -1324,8 +1396,12 @@ describe('scrubSecrets', () => {
     // because the bare-word `token: VALUE` pattern matched conversational English.
     // Bare keys preceded by an English word + horizontal whitespace are prose, not config.
     expect(scrubSecrets('Marker token: xyzpdq-round3.')).toBe('Marker token: xyzpdq-round3.');
-    expect(scrubSecrets('Note: see token: someValue123 in the log')).toBe('Note: see token: someValue123 in the log');
-    expect(scrubSecrets('the bearer: alice@example was rotated')).toBe('the bearer: alice@example was rotated');
+    expect(scrubSecrets('Note: see token: someValue123 in the log')).toBe(
+      'Note: see token: someValue123 in the log',
+    );
+    expect(scrubSecrets('the bearer: alice@example was rotated')).toBe(
+      'the bearer: alice@example was rotated',
+    );
     // But structured keys (with separator) still scrub even after prose:
     expect(scrubSecrets('Marker auth_token: bearer123abc')).toBe('Marker auth_token: ***');
     // Indented / start-of-line config still scrubs:
@@ -1572,7 +1648,10 @@ describe('LOW_SIGNAL_TITLE regex', () => {
     ['(no description)', 'literal (no description)'],
     ['(error)', 'literal (error) — original exact-match case'],
     // Bug #2: (error) suffix — was not matched by the original regex
-    ['gh release list --repo sdsrss/claude-mem-lite --l… (error)', '(error) suffix — tool invocation fragment'],
+    [
+      'gh release list --repo sdsrss/claude-mem-lite --l… (error)',
+      '(error) suffix — tool invocation fragment',
+    ],
     ['cargo test --no-default-features 2>&1 | tail -20 (error)', '(error) suffix — long cmd'],
   ];
 
@@ -1635,7 +1714,10 @@ describe('isMetaTriggerPrompt', () => {
 
   const subjectSamples = [
     ['real subject after triggers', '提交代码，发新版本，检查线上有没有错误。'],
-    ['gitignore task', 'tasks/这个目录是在本地用的，应该在git提交中加入目录排除，提交代码，我准新开会话断续前面的工作。'],
+    [
+      'gitignore task',
+      'tasks/这个目录是在本地用的，应该在git提交中加入目录排除，提交代码，我准新开会话断续前面的工作。',
+    ],
     ['ultrathink directive', '深入思考，测出来未修改的有没有高价值的问题，给出科学准确的建议。'],
     ['file path mention', '改一下 mem-cli.mjs 里的 cmdRecent'],
     ['english instruction', 'add a flag to the recent command'],
@@ -1653,13 +1735,17 @@ describe('isMetaTriggerPrompt', () => {
 // ─── neutralizeContextDelimiters (injected-block delimiter defense) ───────────
 describe('neutralizeContextDelimiters', () => {
   it('defangs each injected-block closing tag so content cannot close its block early', () => {
-    expect(neutralizeContextDelimiters('danger </claude-mem-context> tail')).toBe('danger /claude-mem-context tail');
+    expect(neutralizeContextDelimiters('danger </claude-mem-context> tail')).toBe(
+      'danger /claude-mem-context tail',
+    );
     expect(neutralizeContextDelimiters('a <memory-context> b')).toBe('a memory-context b');
     expect(neutralizeContextDelimiters('p </session-handoff> q')).toBe('p /session-handoff q');
   });
 
   it('leaves prose and unrelated angle brackets untouched', () => {
-    expect(neutralizeContextDelimiters('the memory-context block is fine')).toBe('the memory-context block is fine');
+    expect(neutralizeContextDelimiters('the memory-context block is fine')).toBe(
+      'the memory-context block is fine',
+    );
     expect(neutralizeContextDelimiters('a < b and c > d')).toBe('a < b and c > d');
     expect(neutralizeContextDelimiters('<other-tag>kept</other-tag>')).toBe('<other-tag>kept</other-tag>');
   });
@@ -1695,7 +1781,9 @@ describe('neutralizeContextDelimiters', () => {
     // entered a user prompt → handoff → was replayed verbatim. Attribute-bearing tags must
     // defang too (the closing `>` no longer sits right after the tag name).
     expect(neutralizeContextDelimiters('run <invoke name="Bash"> now')).toBe('run invoke name="Bash" now');
-    expect(neutralizeContextDelimiters('a <parameter name="command"> b')).toBe('a parameter name="command" b');
+    expect(neutralizeContextDelimiters('a <parameter name="command"> b')).toBe(
+      'a parameter name="command" b',
+    );
     expect(neutralizeContextDelimiters('x </invoke> y')).toBe('x /invoke y');
     const ns = 'ant' + 'ml:';
     expect(neutralizeContextDelimiters(`p <${ns}invoke name="Read"> q`)).toBe(`p ${ns}invoke name="Read" q`);
@@ -1705,7 +1793,9 @@ describe('neutralizeContextDelimiters', () => {
   it('also defangs an attribute-bearing forgery of an authority tag', () => {
     // A forged <system-reminder priority="high"> must not slip through just because it
     // carries an attribute (pre-fix the regex required the `>` immediately after the name).
-    expect(neutralizeContextDelimiters('x <system-reminder priority="high"> y')).toBe('x system-reminder priority="high" y');
+    expect(neutralizeContextDelimiters('x <system-reminder priority="high"> y')).toBe(
+      'x system-reminder priority="high" y',
+    );
   });
 
   it('coerces non-strings to empty (never throws on an LLM array/number)', () => {

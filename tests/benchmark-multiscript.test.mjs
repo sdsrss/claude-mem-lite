@@ -28,21 +28,43 @@ describe('seedDatabase CJK fidelity (mirrors production bigramming)', () => {
     // distractors force the CJK query to discriminate via the bigram index.
     const db = createTestDb();
     const distractor = (id, w) => ({
-      id, project: 'mem', type: 'bugfix', title: `Fixed ${w} bug`, narrative: `Patched the ${w} handler`,
-      text: `${w} handler patch fix`, concepts: w, facts: w, files_modified: '[]',
-      importance: 2, epoch_offset_days: -1, session_id: 'sess-en',
+      id,
+      project: 'mem',
+      type: 'bugfix',
+      title: `Fixed ${w} bug`,
+      narrative: `Patched the ${w} handler`,
+      text: `${w} handler patch fix`,
+      concepts: w,
+      facts: w,
+      files_modified: '[]',
+      importance: 2,
+      epoch_offset_days: -1,
+      session_id: 'sess-en',
     });
     // The CJK doc uses natural UNSEGMENTED text (no space-separated dict words that
     // would be findable without bigramming) — "死锁" is only reachable if
     // seedDatabase mirrors the production bigram index.
     seedDatabase(db, {
       observations: [
-        { id: 9001, project: 'mem', type: 'bugfix',
-          title: '数据库死锁修复', narrative: '修复了并发写入导致的数据库死锁问题',
-          text: '数据库死锁问题排查并发事务回滚', concepts: '数据库死锁并发', facts: '死锁问题',
-          files_modified: '[]', importance: 2, epoch_offset_days: -1, session_id: 'sess-cjk-1' },
-        distractor(9010, 'auth'), distractor(9011, 'cache'), distractor(9012, 'router'),
-        distractor(9013, 'parser'), distractor(9014, 'scheduler'),
+        {
+          id: 9001,
+          project: 'mem',
+          type: 'bugfix',
+          title: '数据库死锁修复',
+          narrative: '修复了并发写入导致的数据库死锁问题',
+          text: '数据库死锁问题排查并发事务回滚',
+          concepts: '数据库死锁并发',
+          facts: '死锁问题',
+          files_modified: '[]',
+          importance: 2,
+          epoch_offset_days: -1,
+          session_id: 'sess-cjk-1',
+        },
+        distractor(9010, 'auth'),
+        distractor(9011, 'cache'),
+        distractor(9012, 'router'),
+        distractor(9013, 'parser'),
+        distractor(9014, 'scheduler'),
       ],
     });
     const ids = searchProductionHybrid(db, '死锁').map((r) => r.id);
@@ -53,12 +75,22 @@ describe('seedDatabase CJK fidelity (mirrors production bigramming)', () => {
   it('leaves English seed text unchanged (cjkBigrams is empty for pure-Latin)', () => {
     const db = createTestDb();
     seedDatabase(db, {
-      observations: [{
-        id: 9002, project: 'mem', type: 'bugfix',
-        title: 'Fixed race condition in scheduler', narrative: 'Added a mutex around the queue.',
-        text: 'race condition mutex scheduler queue', concepts: 'concurrency', facts: 'mutex',
-        files_modified: '[]', importance: 2, epoch_offset_days: -1, session_id: 'sess-en-1',
-      }],
+      observations: [
+        {
+          id: 9002,
+          project: 'mem',
+          type: 'bugfix',
+          title: 'Fixed race condition in scheduler',
+          narrative: 'Added a mutex around the queue.',
+          text: 'race condition mutex scheduler queue',
+          concepts: 'concurrency',
+          facts: 'mutex',
+          files_modified: '[]',
+          importance: 2,
+          epoch_offset_days: -1,
+          session_id: 'sess-en-1',
+        },
+      ],
     });
     const ids = searchProductionHybrid(db, 'race condition mutex').map((r) => r.id);
     expect(ids).toContain(9002);
@@ -86,7 +118,9 @@ describe('runScriptGuard (non-Latin regression gate)', () => {
     // corpus, then probe a well-formed CJK query whose content is NOT in any doc.
     const db = createTestDb();
     seedDatabase(db, { observations: MULTISCRIPT_FIXTURES.corpus });
-    const report = runScriptGuard(db, { queries: [{ script: 'cjk-absent', query: '量子纠缠观测', expectId: 999999 }] });
+    const report = runScriptGuard(db, {
+      queries: [{ script: 'cjk-absent', query: '量子纠缠观测', expectId: 999999 }],
+    });
     db.close();
     expect(report).toHaveLength(1);
     expect(report[0].found).toBe(false);

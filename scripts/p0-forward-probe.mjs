@@ -19,9 +19,9 @@ const CUTOFF = Date.now() - 30 * 24 * 3600 * 1000;
 
 // ─── Scan transcripts to get injection counts + cite counts ──────────────────
 const files = readdirSync(TRANSCRIPTS)
-  .filter(n => n.endsWith('.jsonl'))
-  .map(n => ({ p: join(TRANSCRIPTS, n), mt: statSync(join(TRANSCRIPTS, n)).mtimeMs }))
-  .filter(f => f.mt >= CUTOFF);
+  .filter((n) => n.endsWith('.jsonl'))
+  .map((n) => ({ p: join(TRANSCRIPTS, n), mt: statSync(join(TRANSCRIPTS, n)).mtimeMs }))
+  .filter((f) => f.mt >= CUTOFF);
 
 const injectedIds = new Map();
 const citedIds = new Map();
@@ -39,7 +39,11 @@ for (const f of files) {
   for await (const line of rl) {
     if (!line) continue;
     let obj;
-    try { obj = JSON.parse(line); } catch { continue; }
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
     // Injections: attachment or user-wrapped
     const texts = [];
     if (obj.type === 'attachment' && typeof obj.attachment?.content === 'string') {
@@ -47,7 +51,8 @@ for (const f of files) {
     }
     if (obj.message?.role === 'user' && Array.isArray(obj.message.content)) {
       for (const blk of obj.message.content) {
-        if (blk.type === 'tool_result' && typeof blk.content === 'string') texts.push(['inject', blk.content]);
+        if (blk.type === 'tool_result' && typeof blk.content === 'string')
+          texts.push(['inject', blk.content]);
         if (blk.type === 'text' && typeof blk.text === 'string') texts.push(['inject', blk.text]);
       }
     }
@@ -82,8 +87,12 @@ copyFileSync(MEM_DB, SNAP);
 const pdb = new Database(SNAP);
 
 // Seed injection_count from scan data (the post-v26 expected distribution)
-try { pdb.exec('ALTER TABLE observations ADD COLUMN injection_count INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { pdb.exec('ALTER TABLE observations ADD COLUMN last_injected_at INTEGER'); } catch {}
+try {
+  pdb.exec('ALTER TABLE observations ADD COLUMN injection_count INTEGER NOT NULL DEFAULT 0');
+} catch {}
+try {
+  pdb.exec('ALTER TABLE observations ADD COLUMN last_injected_at INTEGER');
+} catch {}
 const upd = pdb.prepare('UPDATE observations SET injection_count = ? WHERE id = ?');
 for (const [id, cnt] of injectedIds) upd.run(cnt, id);
 
@@ -112,9 +121,12 @@ console.log('  ID       type       inject  access  penalty           title');
 console.log('  ' + '-'.repeat(78));
 for (const [id] of topNoise) {
   const row = probeStmt.get(id);
-  if (!row) { console.log(`  #${id}  (not in DB — transcript-only ref)`); continue; }
+  if (!row) {
+    console.log(`  #${id}  (not in DB — transcript-only ref)`);
+    continue;
+  }
   console.log(
-    `  #${String(row.id).padEnd(5)} ${(row.type || '').padEnd(10)} ${String(row.injection_count).padStart(6)} ${String(row.access_count).padStart(7)}  ${tierLabel(row.penalty).padEnd(18)} ${(row.title || '').slice(0, 48)}`
+    `  #${String(row.id).padEnd(5)} ${(row.type || '').padEnd(10)} ${String(row.injection_count).padStart(6)} ${String(row.access_count).padStart(7)}  ${tierLabel(row.penalty).padEnd(18)} ${(row.title || '').slice(0, 48)}`,
   );
 }
 
@@ -125,18 +137,27 @@ console.log('  ID       type       inject  access  penalty           title');
 console.log('  ' + '-'.repeat(78));
 for (const [id] of topCited) {
   const row = probeStmt.get(id);
-  if (!row) { console.log(`  #${id}  (not in DB)`); continue; }
+  if (!row) {
+    console.log(`  #${id}  (not in DB)`);
+    continue;
+  }
   console.log(
-    `  #${String(row.id).padEnd(5)} ${(row.type || '').padEnd(10)} ${String(row.injection_count).padStart(6)} ${String(row.access_count).padStart(7)}  ${tierLabel(row.penalty).padEnd(18)} ${(row.title || '').slice(0, 48)}`
+    `  #${String(row.id).padEnd(5)} ${(row.type || '').padEnd(10)} ${String(row.injection_count).padStart(6)} ${String(row.access_count).padStart(7)}  ${tierLabel(row.penalty).padEnd(18)} ${(row.title || '').slice(0, 48)}`,
   );
 }
 
 // Aggregate impact
 const allInjected = [...injectedIds.keys()];
-let t2 = 0, t1 = 0, keep = 0, missing = 0;
+let t2 = 0,
+  t1 = 0,
+  keep = 0,
+  missing = 0;
 for (const id of allInjected) {
   const row = probeStmt.get(id);
-  if (!row) { missing++; continue; }
+  if (!row) {
+    missing++;
+    continue;
+  }
   if (row.penalty <= 0.25) t2++;
   else if (row.penalty <= 0.75) t1++;
   else keep++;
@@ -149,4 +170,6 @@ console.log(`  kept  (1.0×):  ${keep}`);
 console.log(`  not in DB:     ${missing}  (transcript refs older than current DB)`);
 
 pdb.close();
-try { unlinkSync(SNAP); } catch {}
+try {
+  unlinkSync(SNAP);
+} catch {}

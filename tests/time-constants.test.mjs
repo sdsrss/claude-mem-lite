@@ -22,15 +22,33 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // scanning it means an unrelated scratch file can turn the whole suite red with a
 // failure that points at a file nobody was working on. `.tmp` was already here; the
 // undotted sibling that people actually use was not.
-const SKIP_DIRS = new Set(['node_modules', 'tests', 'benchmark', '.git', 'tmp', '.tmp', 'coverage', 'docs', 'tasks', '.loop']);
+const SKIP_DIRS = new Set([
+  'node_modules',
+  'tests',
+  'benchmark',
+  '.git',
+  'tmp',
+  '.tmp',
+  'coverage',
+  'docs',
+  'tasks',
+  '.loop',
+]);
 
 function runtimeSources(dir = ROOT, acc = []) {
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
     const full = join(dir, name);
     let st;
-    try { st = statSync(full); } catch { continue; }
-    if (st.isDirectory()) { runtimeSources(full, acc); continue; }
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      runtimeSources(full, acc);
+      continue;
+    }
     if (/\.(mjs|js)$/.test(name)) acc.push(full.slice(ROOT.length + 1));
   }
   return acc;
@@ -58,7 +76,8 @@ describe('single-sourcing (runtime source only)', () => {
 
   it('no runtime module re-declares DAY_MS', () => {
     const offenders = files.filter((f) =>
-      /^\s*(?:export\s+)?const DAY_MS\s*=/m.test(readFileSync(join(ROOT, f), 'utf8')));
+      /^\s*(?:export\s+)?const DAY_MS\s*=/m.test(readFileSync(join(ROOT, f), 'utf8')),
+    );
     expect(offenders).toEqual([]);
   });
 
@@ -92,12 +111,24 @@ describe('single-sourcing (runtime source only)', () => {
       expect(/\b86_?400_?000\b/.test(src)).toBe(true);
 
       const scanned = runtimeSources();
-      expect(scanned.filter((f) => f.startsWith('tmp/')),
-        'the walker descended into tmp/ — any scratch file there can now fail this suite').toEqual([]);
+      expect(
+        scanned.filter((f) => f.startsWith('tmp/')),
+        'the walker descended into tmp/ — any scratch file there can now fail this suite',
+      ).toEqual([]);
     } finally {
-      try { rmSync(probe, { force: true }); } catch { /* best-effort */ }
+      try {
+        rmSync(probe, { force: true });
+      } catch {
+        /* best-effort */
+      }
       // Only if this case created it, and only if nothing else landed there meanwhile.
-      if (dirWasAbsent) { try { rmSync(dir, { recursive: false }); } catch { /* not empty — leave it */ } }
+      if (dirWasAbsent) {
+        try {
+          rmSync(dir, { recursive: false });
+        } catch {
+          /* not empty — leave it */
+        }
+      }
     }
   });
 });

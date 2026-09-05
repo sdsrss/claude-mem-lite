@@ -24,18 +24,37 @@ function fixture() {
   const taskDir = join(root, taskListId);
   mkdirSync(taskDir, { recursive: true });
   // meta.json identifies which project this task list belongs to
-  writeFileSync(join(taskDir, 'meta.json'), JSON.stringify({
-    taskListId, projectPath: '/mnt/data_ssd/dev/projects/mem',
-  }));
-  writeFileSync(join(taskDir, 't1.json'), JSON.stringify({
-    id: 't1', title: 'Write plan', status: 'completed',
-  }));
-  writeFileSync(join(taskDir, 't2.json'), JSON.stringify({
-    id: 't2', title: 'Implement T1', status: 'in_progress',
-  }));
-  writeFileSync(join(taskDir, 't3.json'), JSON.stringify({
-    id: 't3', title: 'Implement T2', status: 'pending',
-  }));
+  writeFileSync(
+    join(taskDir, 'meta.json'),
+    JSON.stringify({
+      taskListId,
+      projectPath: '/mnt/data_ssd/dev/projects/mem',
+    }),
+  );
+  writeFileSync(
+    join(taskDir, 't1.json'),
+    JSON.stringify({
+      id: 't1',
+      title: 'Write plan',
+      status: 'completed',
+    }),
+  );
+  writeFileSync(
+    join(taskDir, 't2.json'),
+    JSON.stringify({
+      id: 't2',
+      title: 'Implement T1',
+      status: 'in_progress',
+    }),
+  );
+  writeFileSync(
+    join(taskDir, 't3.json'),
+    JSON.stringify({
+      id: 't3',
+      title: 'Implement T2',
+      status: 'pending',
+    }),
+  );
   return { root, projectPath: '/mnt/data_ssd/dev/projects/mem' };
 }
 
@@ -43,10 +62,8 @@ test('readProjectTasks returns pending + in_progress only', () => {
   const { root, projectPath } = fixture();
   try {
     const tasks = readProjectTasks({ tasksRoot: root, projectPath });
-    expect(tasks.map(t => t.title)).toEqual(
-      expect.arrayContaining(['Implement T1', 'Implement T2'])
-    );
-    expect(tasks.find(t => t.title === 'Write plan')).toBeUndefined();
+    expect(tasks.map((t) => t.title)).toEqual(expect.arrayContaining(['Implement T1', 'Implement T2']));
+    expect(tasks.find((t) => t.title === 'Write plan')).toBeUndefined();
   } finally {
     rmSync(root, { recursive: true });
   }
@@ -84,9 +101,14 @@ test('readProjectTasks respects maxTasks cap', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'meta.json'), JSON.stringify({ projectPath: '/p' }));
     for (let i = 0; i < 30; i++) {
-      writeFileSync(join(dir, `t${i}.json`), JSON.stringify({
-        id: `t${i}`, title: `Task ${i}`, status: 'pending',
-      }));
+      writeFileSync(
+        join(dir, `t${i}.json`),
+        JSON.stringify({
+          id: `t${i}`,
+          title: `Task ${i}`,
+          status: 'pending',
+        }),
+      );
     }
     const tasks = readProjectTasks({ tasksRoot: root, projectPath: '/p', maxTasks: 5 });
     expect(tasks).toHaveLength(5);
@@ -127,14 +149,26 @@ test('readProjectTasks real-schema mode (projectsRoot + mangled dir + subject fi
     mkdirSync(dirA, { recursive: true });
     mkdirSync(dirB, { recursive: true });
     // Real-world shape: no meta.json. Tasks use `subject`/`activeForm` fields.
-    writeFileSync(join(dirA, '1.json'), JSON.stringify({
-      id: '1', subject: 'Real task A', activeForm: 'Doing A', status: 'in_progress',
-    }));
+    writeFileSync(
+      join(dirA, '1.json'),
+      JSON.stringify({
+        id: '1',
+        subject: 'Real task A',
+        activeForm: 'Doing A',
+        status: 'in_progress',
+      }),
+    );
     writeFileSync(join(dirA, '.lock'), '');
     writeFileSync(join(dirA, '.highwatermark'), '1');
-    writeFileSync(join(dirB, '2.json'), JSON.stringify({
-      id: '2', subject: 'Real task B', activeForm: 'Doing B', status: 'pending',
-    }));
+    writeFileSync(
+      join(dirB, '2.json'),
+      JSON.stringify({
+        id: '2',
+        subject: 'Real task B',
+        activeForm: 'Doing B',
+        status: 'pending',
+      }),
+    );
 
     // Mapping lives at projectsRoot/<mangled-projectPath>/<taskListId>/
     // Claude Code mangles EVERY non-alphanumeric char to `-` (not just `/`),

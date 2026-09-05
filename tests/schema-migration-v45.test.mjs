@@ -16,19 +16,32 @@ import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 // v38/v39 did not.
 describe('schema v45 — per-surface citation funnel table', () => {
   const tableNames = (db) =>
-    db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((r) => r.name);
 
   it('fresh init creates citation_surface_log with its composite PK', () => {
     const db = new Database(':memory:');
     initSchema(db);
     expect(tableNames(db)).toContain('citation_surface_log');
     const cols = db.prepare('PRAGMA table_info(citation_surface_log)').all();
-    expect(cols.map((c) => c.name).sort())
-      .toEqual(['cited_n', 'injected_n', 'project', 'resolved_at', 'session_id', 'surface']);
+    expect(cols.map((c) => c.name).sort()).toEqual([
+      'cited_n',
+      'injected_n',
+      'project',
+      'resolved_at',
+      'session_id',
+      'surface',
+    ]);
     // (project, session_id, surface) is the upsert conflict target — a
     // narrower PK would make per-face rows overwrite each other.
-    expect(cols.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name))
-      .toEqual(['project', 'session_id', 'surface']);
+    expect(
+      cols
+        .filter((c) => c.pk > 0)
+        .sort((a, b) => a.pk - b.pk)
+        .map((c) => c.name),
+    ).toEqual(['project', 'session_id', 'surface']);
     db.close();
   });
 
@@ -42,8 +55,9 @@ describe('schema v45 — per-surface citation funnel table', () => {
     initSchema(db);
     // Simulate the observed hole: version row already says "done", table absent.
     db.exec('DROP TABLE citation_surface_log');
-    expect(db.prepare('SELECT version FROM schema_version LIMIT 1').get().version)
-      .toBe(CURRENT_SCHEMA_VERSION);
+    expect(db.prepare('SELECT version FROM schema_version LIMIT 1').get().version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(tableNames(db)).not.toContain('citation_surface_log');
 
     initSchema(db); // re-open must NOT take the fast path
@@ -55,9 +69,11 @@ describe('schema v45 — per-surface citation funnel table', () => {
   it('re-init is idempotent and preserves existing rows', () => {
     const db = new Database(':memory:');
     initSchema(db);
-    db.prepare(`INSERT INTO citation_surface_log
+    db.prepare(
+      `INSERT INTO citation_surface_log
                   (project, session_id, surface, resolved_at, injected_n, cited_n)
-                VALUES ('p','s','pretool',1,7,2)`).run();
+                VALUES ('p','s','pretool',1,7,2)`,
+    ).run();
     expect(() => initSchema(db)).not.toThrow();
     const row = db.prepare('SELECT * FROM citation_surface_log').get();
     expect(row.injected_n).toBe(7);

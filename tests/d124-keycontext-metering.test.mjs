@@ -114,16 +114,23 @@ describe('recordKeyContextInjection — marker only, never a counter', () => {
 
   it('never throws when the runtime dir is unwritable — rendering must not break', () => {
     const [a] = seed(1);
-    expect(() => recordKeyContextInjection(db, {
-      runtimeDir: '/nonexistent-dir-for-keyctx-test', project: PROJECT, sessionId: SESSION, ids: [a],
-    })).not.toThrow();
+    expect(() =>
+      recordKeyContextInjection(db, {
+        runtimeDir: '/nonexistent-dir-for-keyctx-test',
+        project: PROJECT,
+        sessionId: SESSION,
+        ids: [a],
+      }),
+    ).not.toThrow();
   });
 
   it('drops non-id junk before it reaches the marker', () => {
     // The recorder's own sanitiser, not the extractor's — pinned separately
     // because a caller could hand it anything the collector picked up.
     recordKeyContextInjection(db, {
-      runtimeDir, project: PROJECT, sessionId: SESSION,
+      runtimeDir,
+      project: PROJECT,
+      sessionId: SESSION,
       ids: [7, 'abc', -1, 0, 1e9, null, 3.5],
     });
     expect(JSON.parse(readFileSync(markerPath(), 'utf8')).ids).toEqual([7]);
@@ -133,12 +140,16 @@ describe('recordKeyContextInjection — marker only, never a counter', () => {
 describe('extractInjectedFromKeyContext — the 5th extractor face', () => {
   it('returns the ids the marker says were rendered', () => {
     writeFileSync(markerPath(), JSON.stringify({ ids: [11, 22], ts: Date.now(), session: SESSION }));
-    expect([...extractInjectedFromKeyContext({ runtimeDir, project: PROJECT, sessionId: SESSION })].sort())
-      .toEqual([11, 22]);
+    expect(
+      [...extractInjectedFromKeyContext({ runtimeDir, project: PROJECT, sessionId: SESSION })].sort(),
+    ).toEqual([11, 22]);
   });
 
   it('ignores a marker written by a DIFFERENT session', () => {
-    writeFileSync(markerPath(), JSON.stringify({ ids: [11, 22], ts: Date.now(), session: 'cc-session-other' }));
+    writeFileSync(
+      markerPath(),
+      JSON.stringify({ ids: [11, 22], ts: Date.now(), session: 'cc-session-other' }),
+    );
     expect(extractInjectedFromKeyContext({ runtimeDir, project: PROJECT, sessionId: SESSION }).size).toBe(0);
   });
 
@@ -150,7 +161,9 @@ describe('extractInjectedFromKeyContext — the 5th extractor face', () => {
 
   it('rejects non-id junk in the marker', () => {
     writeFileSync(markerPath(), JSON.stringify({ ids: [7, 'abc', -1, 0, 1e9, null], session: SESSION }));
-    expect([...extractInjectedFromKeyContext({ runtimeDir, project: PROJECT, sessionId: SESSION })]).toEqual([7]);
+    expect([...extractInjectedFromKeyContext({ runtimeDir, project: PROJECT, sessionId: SESSION })]).toEqual([
+      7,
+    ]);
   });
 });
 
@@ -161,7 +174,12 @@ describe('extractAllInjected must NOT carry the Key Context face', () => {
     // query-conditioned, so an uncited appearance is evidence; an unconditional
     // Key Context render is not, and keyObs gates on importance >= 2 so one
     // demotion evicts the row permanently.
-    const all = extractAllInjected(null, { mainOnly: true, runtimeDir, project: PROJECT, sessionId: SESSION });
+    const all = extractAllInjected(null, {
+      mainOnly: true,
+      runtimeDir,
+      project: PROJECT,
+      sessionId: SESSION,
+    });
     expect(all.has(4242)).toBe(false);
   });
 });
@@ -180,10 +198,14 @@ describe('the Stop handler wires Key Context as promotion-only', () => {
     // clean call of either name appearing earlier in the file would shadow a
     // dirty one below it. At HEAD that was unreachable (one name, one site);
     // "keep extractAllInjected for a non-mainOnly path" makes it reachable.
-    const calls = [...src.matchAll(/(?:extractAllInjected|extractInjectedBySurface)\(transcriptPath,\s*\{[^}]*\}/gs)];
+    const calls = [
+      ...src.matchAll(/(?:extractAllInjected|extractInjectedBySurface)\(transcriptPath,\s*\{[^}]*\}/gs),
+    ];
     expect(calls.length, 'query-conditioned extraction call site not found').toBeGreaterThan(0);
     for (const [call] of calls) {
-      expect(call, 'marker coordinates must not reach the query-conditioned extraction').not.toContain('runtimeDir');
+      expect(call, 'marker coordinates must not reach the query-conditioned extraction').not.toContain(
+        'runtimeDir',
+      );
       expect(call).not.toContain('keyCtx');
     }
   });
@@ -226,5 +248,4 @@ describe('both render surfaces go through the one recorder', () => {
       expect(src).not.toMatch(/writeFileSync\(\s*\n?\s*join\([^)]*keyContextIdsFileName/);
     });
   }
-
 });

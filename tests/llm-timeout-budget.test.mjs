@@ -48,7 +48,10 @@ describe('save-enrich asks for a CLI-aware budget', () => {
     });
     let seen = null;
     await executeSaveEnrich(db, id, {
-      callJson: async (_prompt, _model, opts) => { seen = opts; return null; },
+      callJson: async (_prompt, _model, opts) => {
+        seen = opts;
+        return null;
+      },
     });
     db.close();
     expect(seen).not.toBeNull();
@@ -93,10 +96,11 @@ describe('background LLM call sites use the shared constant, not a bare literal'
       // sub-floor scan below cannot see it either.
       // Two call shapes carry it: an options object (`timeout: BG_...`) and
       // callLLM's own positional default / `callLLM(prompt, BG_...)`.
-      const uses = (src.match(/timeout(?:Ms)?\s*[:=]\s*BG_LLM_TIMEOUT_MS/g) || []).length
-        + (src.match(/\bcallLLM\([^)]*?,\s*BG_LLM_TIMEOUT_MS\s*\)/g) || []).length;
+      const uses =
+        (src.match(/timeout(?:Ms)?\s*[:=]\s*BG_LLM_TIMEOUT_MS/g) || []).length +
+        (src.match(/\bcallLLM\([^)]*?,\s*BG_LLM_TIMEOUT_MS\s*\)/g) || []).length;
       expect(uses, `${file} has ${uses} timeout:BG_LLM_TIMEOUT_MS uses`).toBeGreaterThanOrEqual(
-        BG_TIMEOUT_USE_COUNTS[file]
+        BG_TIMEOUT_USE_COUNTS[file],
       );
     });
 

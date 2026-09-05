@@ -5,7 +5,16 @@
 // throw and must not interfere with hook hot path when disabled.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  writeFileSync,
+  utimesSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { maybeSampleError, _sampleRate, SAMPLE_LOG_RETENTION_MS } from '../lib/err-sampler.mjs';
@@ -105,8 +114,8 @@ describe('err-sampler — maybeSampleError', () => {
 
     maybeSampleError(new Error('trigger a write'), 'ctx', tmp);
 
-    expect(existsSync(oldShard)).toBe(false);   // pruned
-    expect(existsSync(freshShard)).toBe(true);  // within window → kept
+    expect(existsSync(oldShard)).toBe(false); // pruned
+    expect(existsSync(freshShard)).toBe(true); // within window → kept
   });
 
   it('appends to same daily file on multiple calls', () => {

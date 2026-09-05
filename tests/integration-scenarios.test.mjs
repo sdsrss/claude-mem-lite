@@ -12,9 +12,20 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { createTestDb, insertObs, insertSession, createRegistryTestDb, fileEdgeMatchOnly } from './test-helpers.mjs';
+import {
+  createTestDb,
+  insertObs,
+  insertSession,
+  createRegistryTestDb,
+  fileEdgeMatchOnly,
+} from './test-helpers.mjs';
 import { searchRelevantMemories } from '../hook-memory.mjs';
-import { shouldSkip, detectIntent, shouldSkipByDedup, extractFiles } from '../scripts/prompt-search-utils.mjs';
+import {
+  shouldSkip,
+  detectIntent,
+  shouldSkipByDedup,
+  extractFiles,
+} from '../scripts/prompt-search-utils.mjs';
 
 // ─── Paths ──────────────────────────────────────────────────────────────────
 
@@ -26,44 +37,83 @@ const MOCK_CLAUDE = resolve('scripts/mock-claude.mjs');
 // ─── MCP Tool Descriptions (extracted from server.mjs) ─────────────────────
 
 const TOOL_DESCRIPTIONS = {
-  mem_search: 'Search project memory for past bugfixes, decisions, and discoveries. Use when: encountering a familiar error, investigating a module before changes, or looking for prior art on a problem. Returns compact index (use mem_get for full details).',
-  mem_recent: 'Show most recent observations. Use when: checking what happened recently in the project, reviewing progress after being away, or verifying that a recent change was captured.',
-  mem_timeline: 'Browse observations as a timeline around an anchor point. Use when: exploring what happened before/after a specific observation, understanding the sequence of changes that led to a bug, or reviewing a session chronologically.',
-  mem_get: 'Get full details for one or more records by ID. Use when: hook-injected context mentions a relevant observation ID, or after mem_search to drill into specific results for narrative, lesson_learned, and file details.',
-  mem_delete: 'Delete observations by ID. Use when: cleaning up incorrect or duplicate observations, removing test data, or when the user asks to forget something. Use confirm=false to preview, confirm=true to execute.',
-  mem_save: 'Save a memory/observation. Use when: solving a non-obvious bug (save the lesson), making an architecture decision, discovering something not obvious from code alone, or when the user asks to remember something.',
-  mem_stats: 'Get memory statistics: counts, types, projects, daily activity, data health. Use when: assessing memory system health, checking how much project history exists, or diagnosing search quality issues.',
-  mem_compress: 'Compress old low-value observations into weekly summaries. Use when: memory database is growing large, observations are months old, or after a major project phase completes. Use preview=true to see candidates first.',
-  mem_maintain: 'Memory maintenance: scan for duplicates/stale/broken items, then execute cleanup/decay/boost/dedup operations. Use when: search results seem noisy with duplicates, after bulk imports, or during periodic maintenance.',
-  mem_registry: 'Manage tool resource registry. Use when: looking for a skill or agent to solve a problem, importing tools from a repository, checking what resources are available, or managing installed tools.',
-  mem_update: 'Update an existing observation in-place. Use when: an observation needs correction, additional context was discovered later, or the user asks to update a specific memory. Preserves original ID and references.',
-  mem_export: 'Export observations as JSON or JSONL. Use when: backing up memory before migration, sharing observations between machines, or creating a snapshot before major changes.',
-  mem_recall: 'Recall observations related to a file. Use when: about to edit a file, investigating a file with past issues, or before refactoring to recall past bugfixes, decisions, and context.',
-  mem_fts_check: 'Check FTS5 index integrity or rebuild indexes. Use when: search results seem wrong or missing, after database recovery, or after manual DB edits.',
-  mem_browse: 'Tier-grouped memory dashboard. Use when: getting an overview of memory health, seeing how observations are distributed across tiers, or assessing what to compress or clean up.',
+  mem_search:
+    'Search project memory for past bugfixes, decisions, and discoveries. Use when: encountering a familiar error, investigating a module before changes, or looking for prior art on a problem. Returns compact index (use mem_get for full details).',
+  mem_recent:
+    'Show most recent observations. Use when: checking what happened recently in the project, reviewing progress after being away, or verifying that a recent change was captured.',
+  mem_timeline:
+    'Browse observations as a timeline around an anchor point. Use when: exploring what happened before/after a specific observation, understanding the sequence of changes that led to a bug, or reviewing a session chronologically.',
+  mem_get:
+    'Get full details for one or more records by ID. Use when: hook-injected context mentions a relevant observation ID, or after mem_search to drill into specific results for narrative, lesson_learned, and file details.',
+  mem_delete:
+    'Delete observations by ID. Use when: cleaning up incorrect or duplicate observations, removing test data, or when the user asks to forget something. Use confirm=false to preview, confirm=true to execute.',
+  mem_save:
+    'Save a memory/observation. Use when: solving a non-obvious bug (save the lesson), making an architecture decision, discovering something not obvious from code alone, or when the user asks to remember something.',
+  mem_stats:
+    'Get memory statistics: counts, types, projects, daily activity, data health. Use when: assessing memory system health, checking how much project history exists, or diagnosing search quality issues.',
+  mem_compress:
+    'Compress old low-value observations into weekly summaries. Use when: memory database is growing large, observations are months old, or after a major project phase completes. Use preview=true to see candidates first.',
+  mem_maintain:
+    'Memory maintenance: scan for duplicates/stale/broken items, then execute cleanup/decay/boost/dedup operations. Use when: search results seem noisy with duplicates, after bulk imports, or during periodic maintenance.',
+  mem_registry:
+    'Manage tool resource registry. Use when: looking for a skill or agent to solve a problem, importing tools from a repository, checking what resources are available, or managing installed tools.',
+  mem_update:
+    'Update an existing observation in-place. Use when: an observation needs correction, additional context was discovered later, or the user asks to update a specific memory. Preserves original ID and references.',
+  mem_export:
+    'Export observations as JSON or JSONL. Use when: backing up memory before migration, sharing observations between machines, or creating a snapshot before major changes.',
+  mem_recall:
+    'Recall observations related to a file. Use when: about to edit a file, investigating a file with past issues, or before refactoring to recall past bugfixes, decisions, and context.',
+  mem_fts_check:
+    'Check FTS5 index integrity or rebuild indexes. Use when: search results seem wrong or missing, after database recovery, or after manual DB edits.',
+  mem_browse:
+    'Tier-grouped memory dashboard. Use when: getting an overview of memory health, seeing how observations are distributed across tiers, or assessing what to compress or clean up.',
 };
 
 // ─── MCP Instructions Decision Rules ────────────────────────────────────────
 
 const MCP_INSTRUCTION_RULES = [
   { scenario: 'bug fix', rule: 'Before fixing a bug → recall the file', expectedTool: 'mem_recall' },
-  { scenario: 'error encounter', rule: 'Encountering an error → search for similar', expectedTool: 'mem_search' },
-  { scenario: 'module work', rule: 'Starting work on a module → recall past decisions', expectedTool: 'mem_search' },
-  { scenario: 'lesson save', rule: 'After solving a non-obvious problem → save the lesson', expectedTool: 'mem_save' },
-  { scenario: 'hook reference', rule: 'When hook-injected context mentions a relevant ID → get details', expectedTool: 'mem_get' },
+  {
+    scenario: 'error encounter',
+    rule: 'Encountering an error → search for similar',
+    expectedTool: 'mem_search',
+  },
+  {
+    scenario: 'module work',
+    rule: 'Starting work on a module → recall past decisions',
+    expectedTool: 'mem_search',
+  },
+  {
+    scenario: 'lesson save',
+    rule: 'After solving a non-obvious problem → save the lesson',
+    expectedTool: 'mem_save',
+  },
+  {
+    scenario: 'hook reference',
+    rule: 'When hook-injected context mentions a relevant ID → get details',
+    expectedTool: 'mem_get',
+  },
 ];
 
 // ─── Skill Descriptions ─────────────────────────────────────────────────────
 
 const SKILL_DESCRIPTIONS = {
-  'claude-mem-lite:search': 'Search memory for past bugfixes, decisions, discoveries. Use when: encountering a familiar error, investigating a module before changes, or looking for prior solutions to a similar problem',
-  'claude-mem-lite:recall': 'Recall past observations for a file before editing. Use when: about to edit a file, investigating a file with past issues, or before refactoring to check for past lessons',
-  'claude-mem-lite:recent': 'Show recent memory observations. Use when: checking what happened recently, reviewing session progress, or verifying recent changes were captured',
-  'claude-mem-lite:timeline': 'Browse memory timeline around an observation. Use when: exploring what happened before/after a specific event, understanding the sequence of changes that led to a bug, or reviewing chronological context',
-  'claude-mem-lite:memory': 'Save content to memory — with explicit content, instructions, or auto-summarize current session. Use when: the user asks to remember something, after solving a non-obvious problem, or to capture key session findings',
-  'claude-mem-lite:update': 'Auto-maintain memory and resource registry — deduplicate, merge, decay, cleanup, reindex. Use when: search results seem noisy, after bulk imports, or during periodic maintenance',
-  'claude-mem-lite:tools': 'Import skills and agents from GitHub repositories into the tool resource registry. Use when: looking for a skill to solve a problem, importing tools from a repo, or managing installed tools',
-  'claude-mem-lite:mem': 'Search and manage project memory (observations, sessions, prompts). Use when: user asks about past work, wants to find a previous bugfix, check project history, save a decision, or manage stored memories',
+  'claude-mem-lite:search':
+    'Search memory for past bugfixes, decisions, discoveries. Use when: encountering a familiar error, investigating a module before changes, or looking for prior solutions to a similar problem',
+  'claude-mem-lite:recall':
+    'Recall past observations for a file before editing. Use when: about to edit a file, investigating a file with past issues, or before refactoring to check for past lessons',
+  'claude-mem-lite:recent':
+    'Show recent memory observations. Use when: checking what happened recently, reviewing session progress, or verifying recent changes were captured',
+  'claude-mem-lite:timeline':
+    'Browse memory timeline around an observation. Use when: exploring what happened before/after a specific event, understanding the sequence of changes that led to a bug, or reviewing chronological context',
+  'claude-mem-lite:memory':
+    'Save content to memory — with explicit content, instructions, or auto-summarize current session. Use when: the user asks to remember something, after solving a non-obvious problem, or to capture key session findings',
+  'claude-mem-lite:update':
+    'Auto-maintain memory and resource registry — deduplicate, merge, decay, cleanup, reindex. Use when: search results seem noisy, after bulk imports, or during periodic maintenance',
+  'claude-mem-lite:tools':
+    'Import skills and agents from GitHub repositories into the tool resource registry. Use when: looking for a skill to solve a problem, importing tools from a repo, or managing installed tools',
+  'claude-mem-lite:mem':
+    'Search and manage project memory (observations, sessions, prompts). Use when: user asks about past work, wants to find a previous bugfix, check project history, save a decision, or manage stored memories',
 };
 
 // ─── E2E Subprocess Helpers ─────────────────────────────────────────────────
@@ -176,20 +226,25 @@ function seedScenarioData(db) {
 
   // Bugfix with lesson — for file recall and search
   insertObs(db, {
-    sessionId: 'sess-scenario', project,
-    type: 'bugfix', title: 'Fix FTS5 column mismatch in buildFtsTextField',
+    sessionId: 'sess-scenario',
+    project,
+    type: 'bugfix',
+    title: 'Fix FTS5 column mismatch in buildFtsTextField',
     text: 'FTS5 query failed because text_field column was renamed but buildFtsTextField still referenced old name',
     narrative: 'Root cause was schema migration not updating FTS5 virtual table definition',
     importance: 3,
-    lessonLearned: 'FTS5 column name mismatches silently trigger degraded mode without explicit error — need defensive check',
+    lessonLearned:
+      'FTS5 column name mismatches silently trigger degraded mode without explicit error — need defensive check',
     filesModified: '["hook-llm.mjs", "schema.mjs"]',
     epochOffset: -3600000, // 1h ago
   });
 
   // Decision — for cross-session and decision search
   insertObs(db, {
-    sessionId: 'sess-scenario', project,
-    type: 'decision', title: 'Use episode batching instead of per-tool saves',
+    sessionId: 'sess-scenario',
+    project,
+    type: 'decision',
+    title: 'Use episode batching instead of per-tool saves',
     text: 'Decided to batch tool events into episodes for LLM encoding efficiency',
     narrative: 'Reduces LLM calls from N per tool to 1 per episode. 10x cost reduction.',
     importance: 3,
@@ -199,20 +254,25 @@ function seedScenarioData(db) {
 
   // Discovery — for module investigation
   insertObs(db, {
-    sessionId: 'sess-scenario', project,
-    type: 'discovery', title: 'Weak regex in command parsers silently skip edge cases',
+    sessionId: 'sess-scenario',
+    project,
+    type: 'discovery',
+    title: 'Weak regex in command parsers silently skip edge cases',
     text: 'The makeEntryDesc regex failed to match tool names with underscores like mem_search',
     narrative: 'Found by adding typed test fixtures that caught the silent failure',
     importance: 2,
-    lessonLearned: 'Weak regex in command/function name parsers silently skip edge cases — catch with typed test fixtures',
+    lessonLearned:
+      'Weak regex in command/function name parsers silently skip edge cases — catch with typed test fixtures',
     filesModified: '["utils.mjs"]',
     epochOffset: -7200000, // 2h ago
   });
 
   // Recent change — for "what happened recently"
   insertObs(db, {
-    sessionId: 'sess-scenario', project,
-    type: 'change', title: 'Add MCP tool description trigger conditions',
+    sessionId: 'sess-scenario',
+    project,
+    type: 'change',
+    title: 'Add MCP tool description trigger conditions',
     text: 'Added Use when: trigger conditions to all 15 MCP tool descriptions',
     importance: 2,
     filesModified: '["server.mjs"]',
@@ -221,8 +281,10 @@ function seedScenarioData(db) {
 
   // Feature — for feature search
   insertObs(db, {
-    sessionId: 'sess-scenario', project,
-    type: 'feature', title: 'PreToolUse file recall for Edit and Write tools',
+    sessionId: 'sess-scenario',
+    project,
+    type: 'feature',
+    title: 'PreToolUse file recall for Edit and Write tools',
     text: 'Implemented pre-tool-recall hook that surfaces file-specific lesson_learned before editing',
     narrative: 'Triggers on Edit/Write/NotebookEdit, queries observation_files junction table',
     importance: 2,
@@ -233,8 +295,10 @@ function seedScenarioData(db) {
 
   // Cross-project decision (different project)
   insertObs(db, {
-    sessionId: 'sess-scenario', project: 'other--project',
-    type: 'decision', title: 'SQLite WAL mode required for concurrent readers',
+    sessionId: 'sess-scenario',
+    project: 'other--project',
+    type: 'decision',
+    title: 'SQLite WAL mode required for concurrent readers',
     text: 'Multiple hook processes reading DB simultaneously requires WAL mode to avoid SQLITE_BUSY',
     importance: 3,
     filesModified: '["schema.mjs"]',
@@ -261,7 +325,9 @@ describe('Scenario 1: Session Start — Context Injection', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   it('injects claude-mem-context with recent activity and key context', () => {
@@ -294,26 +360,39 @@ describe('Scenario 2: Bug Fix Memory Recall — User Prompt Search', () => {
     // BM25 requires corpus diversity for meaningful IDF scores.
     // Seed 15+ unrelated observations so the target observation's terms have high IDF.
     const fillerTopics = [
-      'Add user authentication flow', 'Refactor database connection pooling',
-      'Update CSS styling for dashboard', 'Fix navigation menu alignment',
-      'Implement pagination for search results', 'Add retry logic to API client',
-      'Optimize image loading performance', 'Update dependency versions quarterly',
-      'Add unit tests for validators', 'Refactor middleware pipeline architecture',
-      'Fix race condition in cache invalidation', 'Add logging to webhook handler',
-      'Update environment variable configuration', 'Fix timezone offset calculation',
+      'Add user authentication flow',
+      'Refactor database connection pooling',
+      'Update CSS styling for dashboard',
+      'Fix navigation menu alignment',
+      'Implement pagination for search results',
+      'Add retry logic to API client',
+      'Optimize image loading performance',
+      'Update dependency versions quarterly',
+      'Add unit tests for validators',
+      'Refactor middleware pipeline architecture',
+      'Fix race condition in cache invalidation',
+      'Add logging to webhook handler',
+      'Update environment variable configuration',
+      'Fix timezone offset calculation',
       'Add export functionality for reports',
     ];
     for (const title of fillerTopics) {
       insertObs(db, {
-        sessionId: 'sess-scenario', project,
-        type: 'change', title, text: title.toLowerCase(),
-        importance: 1, epochOffset: -Math.random() * 86400000 * 30,
+        sessionId: 'sess-scenario',
+        project,
+        type: 'change',
+        title,
+        text: title.toLowerCase(),
+        importance: 1,
+        epochOffset: -Math.random() * 86400000 * 30,
       });
     }
     // Target: bugfix with lesson — unique terms "FTS5", "column", "mismatch"
     insertObs(db, {
-      sessionId: 'sess-scenario', project,
-      type: 'bugfix', title: 'Fix FTS5 column mismatch in buildFtsTextField',
+      sessionId: 'sess-scenario',
+      project,
+      type: 'bugfix',
+      title: 'Fix FTS5 column mismatch in buildFtsTextField',
       text: 'FTS5 query failed because text_field column was renamed',
       importance: 3,
       lessonLearned: 'FTS5 column name mismatches silently trigger degraded mode',
@@ -341,8 +420,10 @@ describe('Scenario 2: Bug Fix Memory Recall — User Prompt Search', () => {
     const p = 'small--project';
     insertSession(smallDb, { id: 'ss', project: p });
     insertObs(smallDb, {
-      sessionId: 'ss', project: p,
-      type: 'bugfix', title: 'Fix authentication token expiry race condition',
+      sessionId: 'ss',
+      project: p,
+      type: 'bugfix',
+      title: 'Fix authentication token expiry race condition',
       text: 'Authentication token expiry race condition caused intermittent 401 errors',
       importance: 2,
       lessonLearned: 'Token refresh must be atomic — check expiry before AND after refresh',
@@ -378,7 +459,9 @@ describe('Scenario 3: File Edit Pre-Recall — PreToolUse', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   it('surfaces lesson_learned when editing file with past bugfix', () => {
@@ -406,7 +489,10 @@ describe('Scenario 3: File Edit Pre-Recall — PreToolUse', () => {
     });
     // The backfill reminder is opt-in (default off) since the cross-project audit
     // found it was ~70% no-value noise; CLAUDE_MEM_PRETOOL_NUDGE=1 restores it.
-    const { stdout, exitCode } = runScript(PRE_RECALL_PATH, { stdin: payload, env: { CLAUDE_MEM_PRETOOL_NUDGE: '1' } });
+    const { stdout, exitCode } = runScript(PRE_RECALL_PATH, {
+      stdin: payload,
+      env: { CLAUDE_MEM_PRETOOL_NUDGE: '1' },
+    });
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout);
     const ctx = parsed.hookSpecificOutput.additionalContext;
@@ -429,8 +515,10 @@ describe('Scenario 3: File Edit Pre-Recall — PreToolUse', () => {
     const project = 'parent--testproj';
     insertSession(db, { id: 'sess-1', project });
     insertObs(db, {
-      sessionId: 'sess-1', project,
-      type: 'bugfix', title: 'Fix utils.mjs regex edge case',
+      sessionId: 'sess-1',
+      project,
+      type: 'bugfix',
+      title: 'Fix utils.mjs regex edge case',
       importance: 2,
       lessonLearned: 'Weak regex silently skips underscored names',
       filesModified: '["utils.mjs"]',
@@ -454,40 +542,54 @@ describe('Scenario 4: Error Detection in Bash — PostToolUse', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   it('Bash with error creates episode entry', () => {
-    const payload = makeToolPayload('Bash', {
-      command: 'npx vitest run tests/schema.test.mjs',
-    }, 'Error: Cannot find module better-sqlite3\n  at require (node:internal/modules/cjs/loader:1225:18)');
+    const payload = makeToolPayload(
+      'Bash',
+      {
+        command: 'npx vitest run tests/schema.test.mjs',
+      },
+      'Error: Cannot find module better-sqlite3\n  at require (node:internal/modules/cjs/loader:1225:18)',
+    );
 
     const { exitCode } = runHook('post-tool-use', { stdin: payload });
     expect(exitCode).toBe(0);
 
     // Episode buffer should have the error entry
     const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
-    const epFiles = readdirSync(runtimeDir).filter(f => f.startsWith('ep-') && f.endsWith('.json') && !f.startsWith('ep-flush-'));
+    const epFiles = readdirSync(runtimeDir).filter(
+      (f) => f.startsWith('ep-') && f.endsWith('.json') && !f.startsWith('ep-flush-'),
+    );
     expect(epFiles.length).toBeGreaterThan(0);
 
     const episode = JSON.parse(readFileSync(join(runtimeDir, epFiles[0]), 'utf8'));
     expect(episode.entries.length).toBeGreaterThan(0);
     // Error should be detected in the entry
-    const entry = episode.entries.find(e => e.tool === 'Bash');
+    const entry = episode.entries.find((e) => e.tool === 'Bash');
     expect(entry).toBeTruthy();
   });
 
   it('Edit tool creates episode entry (not skipped)', () => {
-    const payload = makeToolPayload('Edit', {
-      file_path: '/tmp/src/schema.mjs',
-      old_string: 'old',
-      new_string: 'new',
-    }, 'OK — edited file');
+    const payload = makeToolPayload(
+      'Edit',
+      {
+        file_path: '/tmp/src/schema.mjs',
+        old_string: 'old',
+        new_string: 'new',
+      },
+      'OK — edited file',
+    );
     const { exitCode } = runHook('post-tool-use', { stdin: payload });
     expect(exitCode).toBe(0);
 
     const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
-    const epFiles = readdirSync(runtimeDir).filter(f => f.startsWith('ep-') && f.endsWith('.json') && !f.startsWith('ep-flush-'));
+    const epFiles = readdirSync(runtimeDir).filter(
+      (f) => f.startsWith('ep-') && f.endsWith('.json') && !f.startsWith('ep-flush-'),
+    );
     expect(epFiles.length).toBeGreaterThan(0);
   });
 });
@@ -501,7 +603,9 @@ describe('Scenario 5: Low-Value Tool Skip — PostToolUse Filtering', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   const SKIP_SCENARIOS = [
@@ -523,7 +627,7 @@ describe('Scenario 5: Low-Value Tool Skip — PostToolUse Filtering', () => {
       // No episode should be created (tool was skipped by bash pre-filter)
       const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
       const epFiles = existsSync(runtimeDir)
-        ? readdirSync(runtimeDir).filter(f => f.startsWith('ep-') && f.endsWith('.json'))
+        ? readdirSync(runtimeDir).filter((f) => f.startsWith('ep-') && f.endsWith('.json'))
         : [];
       expect(epFiles.length).toBe(0);
     });
@@ -532,26 +636,34 @@ describe('Scenario 5: Low-Value Tool Skip — PostToolUse Filtering', () => {
   it('does NOT skip Edit tool (high-value)', () => {
     // Start session first so post-tool-use can process
     runHook('session-start');
-    const payload = makeToolPayload('Edit', {
-      file_path: '/tmp/src/index.js',
-      old_string: 'a',
-      new_string: 'b',
-    }, 'OK');
+    const payload = makeToolPayload(
+      'Edit',
+      {
+        file_path: '/tmp/src/index.js',
+        old_string: 'a',
+        new_string: 'b',
+      },
+      'OK',
+    );
     const { exitCode } = runBash(POST_TOOL_SH, { stdin: payload });
     // Exit 0 means bash handed off to Node (not skipped)
     expect(exitCode).toBe(0);
   });
 
   it('Read tool tracks file path without launching Node', () => {
-    const payload = makeToolPayload('Read', {
-      file_path: '/mnt/data/projects/mem/schema.mjs',
-    }, 'file contents...');
+    const payload = makeToolPayload(
+      'Read',
+      {
+        file_path: '/mnt/data/projects/mem/schema.mjs',
+      },
+      'file contents...',
+    );
     runBash(POST_TOOL_SH, { stdin: payload });
 
     // Check reads file was created
     const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
     const readsFiles = existsSync(runtimeDir)
-      ? readdirSync(runtimeDir).filter(f => f.startsWith('reads-'))
+      ? readdirSync(runtimeDir).filter((f) => f.startsWith('reads-'))
       : [];
     expect(readsFiles.length).toBeGreaterThan(0);
     if (readsFiles.length > 0) {
@@ -633,10 +745,10 @@ describe('Scenario 6: Prompt Classification — Intent Detection', () => {
   });
 
   it('skips too-short prompts (CJK-weighted)', () => {
-    expect(shouldSkip('hi')).toBe(true);      // 2 chars < 8 effective
-    expect(shouldSkip('abc')).toBe(true);      // 3 chars < 8 effective
-    expect(shouldSkip('修复它')).toBe(false);   // 3 CJK × 3 = 9 effective >= 8
-    expect(shouldSkip('修')).toBe(true);       // 1 CJK × 3 = 3 effective < 8
+    expect(shouldSkip('hi')).toBe(true); // 2 chars < 8 effective
+    expect(shouldSkip('abc')).toBe(true); // 3 chars < 8 effective
+    expect(shouldSkip('修复它')).toBe(false); // 3 CJK × 3 = 9 effective >= 8
+    expect(shouldSkip('修')).toBe(true); // 1 CJK × 3 = 3 effective < 8
   });
 
   it('extracts file paths from prompt text', () => {
@@ -663,24 +775,40 @@ describe('Scenario 7: Cross-Session Memory — Semantic Search', () => {
 
     // BM25 needs corpus diversity — seed filler observations
     const fillerTopics = [
-      'Add user auth flow', 'Refactor connection pooling', 'Update CSS dashboard',
-      'Fix nav menu alignment', 'Implement pagination search', 'Add retry API client',
-      'Optimize image loading', 'Update dependency versions', 'Add unit test validators',
-      'Refactor middleware pipeline', 'Fix race condition cache', 'Add logging webhook',
-      'Update env var config', 'Fix timezone offset calc', 'Add export reports',
+      'Add user auth flow',
+      'Refactor connection pooling',
+      'Update CSS dashboard',
+      'Fix nav menu alignment',
+      'Implement pagination search',
+      'Add retry API client',
+      'Optimize image loading',
+      'Update dependency versions',
+      'Add unit test validators',
+      'Refactor middleware pipeline',
+      'Fix race condition cache',
+      'Add logging webhook',
+      'Update env var config',
+      'Fix timezone offset calc',
+      'Add export reports',
     ];
     for (const title of fillerTopics) {
       insertObs(db, {
-        sessionId: 'sess-1', project,
-        type: 'change', title, text: title.toLowerCase(),
-        importance: 1, epochOffset: -Math.random() * 86400000 * 30,
+        sessionId: 'sess-1',
+        project,
+        type: 'change',
+        title,
+        text: title.toLowerCase(),
+        importance: 1,
+        epochOffset: -Math.random() * 86400000 * 30,
       });
     }
 
     // Same-project bugfix — unique terms: SQLite, WAL, deadlock, SQLITE_BUSY
     insertObs(db, {
-      sessionId: 'sess-1', project,
-      type: 'bugfix', title: 'Fix SQLite WAL deadlock in concurrent hook processes',
+      sessionId: 'sess-1',
+      project,
+      type: 'bugfix',
+      title: 'Fix SQLite WAL deadlock in concurrent hook processes',
       text: 'SQLite WAL deadlock concurrent hook processes SQLITE_BUSY timeout',
       narrative: 'Multiple hook processes accessing DB caused SQLITE_BUSY errors',
       importance: 2,
@@ -689,8 +817,10 @@ describe('Scenario 7: Cross-Session Memory — Semantic Search', () => {
 
     // Cross-project decision (high-value, transferable)
     insertObs(db, {
-      sessionId: 'sess-2', project: 'other--project',
-      type: 'decision', title: 'SQLite WAL mode required for concurrent readers',
+      sessionId: 'sess-2',
+      project: 'other--project',
+      type: 'decision',
+      title: 'SQLite WAL mode required for concurrent readers',
       text: 'SQLite WAL concurrent readers multiple processes database access',
       importance: 3,
     });
@@ -700,7 +830,7 @@ describe('Scenario 7: Cross-Session Memory — Semantic Search', () => {
     const results = searchRelevantMemories(db, 'SQLite WAL deadlock concurrent', project);
     expect(results.length).toBeGreaterThan(0);
     // Same-project bugfix should be present
-    const sameProject = results.filter(r => r.project === project);
+    const sameProject = results.filter((r) => r.project === project);
     expect(sameProject.length).toBeGreaterThan(0);
   });
 
@@ -713,7 +843,7 @@ describe('Scenario 7: Cross-Session Memory — Semantic Search', () => {
   it('respects excludeIds filter', () => {
     const firstResults = searchRelevantMemories(db, 'SQLite WAL concurrent access', project);
     if (firstResults.length > 0) {
-      const excludeIds = firstResults.map(r => r.id);
+      const excludeIds = firstResults.map((r) => r.id);
       const secondResults = searchRelevantMemories(db, 'SQLite WAL concurrent access', project, excludeIds);
       // Should not contain any excluded IDs
       for (const r of secondResults) {
@@ -732,7 +862,9 @@ describe('Scenario 8: Deduplication — Repeated Injections', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   it('skips injection when 80%+ IDs overlap', () => {
@@ -753,20 +885,26 @@ describe('Scenario 8: Deduplication — Repeated Injections', () => {
   });
 
   it('allows injection when dedup file is stale (>5min)', () => {
-    writeFileSync(tmpFile, JSON.stringify({
-      ids: [1, 2, 3, 4, 5],
-      ts: Date.now() - 6 * 60 * 1000, // 6 minutes ago
-      count: 1,
-    }));
+    writeFileSync(
+      tmpFile,
+      JSON.stringify({
+        ids: [1, 2, 3, 4, 5],
+        ts: Date.now() - 6 * 60 * 1000, // 6 minutes ago
+        count: 1,
+      }),
+    );
     expect(shouldSkipByDedup([1, 2, 3, 4, 5], tmpFile)).toBe(false);
   });
 
   it('blocks injection after MAX_SESSION_INJECTIONS reached', () => {
-    writeFileSync(tmpFile, JSON.stringify({
-      ids: [99],
-      ts: Date.now(),
-      count: 15, // MAX_SESSION_INJECTIONS = 15
-    }));
+    writeFileSync(
+      tmpFile,
+      JSON.stringify({
+        ids: [99],
+        ts: Date.now(),
+        count: 15, // MAX_SESSION_INJECTIONS = 15
+      }),
+    );
     expect(shouldSkipByDedup([10, 20, 30], tmpFile)).toBe(true);
   });
 
@@ -785,7 +923,7 @@ describe('Scenario 9: MCP Tool Description Trigger Matching', () => {
     const matches = [];
     for (const [tool, desc] of Object.entries(TOOL_DESCRIPTIONS)) {
       const descLower = desc.toLowerCase();
-      const matchCount = keywords.filter(k => k.length > 3 && descLower.includes(k)).length;
+      const matchCount = keywords.filter((k) => k.length > 3 && descLower.includes(k)).length;
       if (matchCount >= 2) {
         matches.push({ tool, matchCount, desc: desc.slice(0, 80) });
       }
@@ -820,7 +958,8 @@ describe('Scenario 9: MCP Tool Description Trigger Matching', () => {
     },
     {
       name: 'Understanding bug sequence',
-      prompt: 'exploring what happened before after a specific observation understanding sequence changes bug',
+      prompt:
+        'exploring what happened before after a specific observation understanding sequence changes bug',
       expectedTools: ['mem_timeline'],
       mustInclude: 'mem_timeline',
     },
@@ -847,7 +986,7 @@ describe('Scenario 9: MCP Tool Description Trigger Matching', () => {
   for (const { name, prompt, mustInclude } of SCENARIOS) {
     it(`"${name}" → matches ${mustInclude}`, () => {
       const matches = findMatchingTools(prompt);
-      const toolNames = matches.map(m => m.tool);
+      const toolNames = matches.map((m) => m.tool);
       expect(toolNames, `Scenario "${name}" should match ${mustInclude}`).toContain(mustInclude);
     });
   }
@@ -874,7 +1013,7 @@ describe('Scenario 10: Skill Description Trigger Coverage', () => {
     const matches = [];
     for (const [skill, desc] of Object.entries(SKILL_DESCRIPTIONS)) {
       const descLower = desc.toLowerCase();
-      const matchCount = keywords.filter(k => k.length > 3 && descLower.includes(k)).length;
+      const matchCount = keywords.filter((k) => k.length > 3 && descLower.includes(k)).length;
       if (matchCount >= 1) matches.push({ skill, matchCount });
     }
     return matches.sort((a, b) => b.matchCount - a.matchCount);
@@ -882,31 +1021,31 @@ describe('Scenario 10: Skill Description Trigger Coverage', () => {
 
   it('search skill matches error investigation scenario', () => {
     const matches = skillMatchesScenario('encountering error investigating module bugfixes');
-    const skillNames = matches.map(m => m.skill);
+    const skillNames = matches.map((m) => m.skill);
     expect(skillNames).toContain('claude-mem-lite:search');
   });
 
   it('recall skill matches file editing scenario', () => {
     const matches = skillMatchesScenario('recall file before editing observations');
-    const skillNames = matches.map(m => m.skill);
+    const skillNames = matches.map((m) => m.skill);
     expect(skillNames).toContain('claude-mem-lite:recall');
   });
 
   it('memory skill matches save decision scenario', () => {
     const matches = skillMatchesScenario('save decision memory content session');
-    const skillNames = matches.map(m => m.skill);
+    const skillNames = matches.map((m) => m.skill);
     expect(skillNames).toContain('claude-mem-lite:memory');
   });
 
   it('recent skill matches progress check scenario', () => {
     const matches = skillMatchesScenario('checking recently progress session captured');
-    const skillNames = matches.map(m => m.skill);
+    const skillNames = matches.map((m) => m.skill);
     expect(skillNames).toContain('claude-mem-lite:recent');
   });
 
   it('timeline skill matches bug sequence scenario', () => {
     const matches = skillMatchesScenario('exploring before after observation sequence bug changes');
-    const skillNames = matches.map(m => m.skill);
+    const skillNames = matches.map((m) => m.skill);
     expect(skillNames).toContain('claude-mem-lite:timeline');
   });
 
@@ -933,11 +1072,11 @@ describe('Scenario 11: MCP Instructions Decision Rules', () => {
   });
 
   it('instruction rules cover the 3 core workflows', () => {
-    const ruleScenarios = MCP_INSTRUCTION_RULES.map(r => r.scenario);
+    const ruleScenarios = MCP_INSTRUCTION_RULES.map((r) => r.scenario);
     // Core workflows: investigate → fix → learn
-    expect(ruleScenarios.some(s => /bug|error/.test(s))).toBe(true);  // investigate
-    expect(ruleScenarios.some(s => /module|work/.test(s))).toBe(true); // fix context
-    expect(ruleScenarios.some(s => /lesson|save/.test(s))).toBe(true); // learn
+    expect(ruleScenarios.some((s) => /bug|error/.test(s))).toBe(true); // investigate
+    expect(ruleScenarios.some((s) => /module|work/.test(s))).toBe(true); // fix context
+    expect(ruleScenarios.some((s) => /lesson|save/.test(s))).toBe(true); // learn
   });
 
   it('instructions mention both CLI and MCP tools', () => {
@@ -964,18 +1103,26 @@ describe('Scenario 12: Skill Auto-Dispatch — L1 name match + L2 bridge + L3 me
   it('L2: pre-skill-bridge only matches managed paths', () => {
     const db = createRegistryTestDb();
     // Managed skill
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
       VALUES ('humanizer', 'skill', 'user', 'hash', 'active', '/home/.claude-mem-lite/managed/skills/humanizer/SKILL.md', 'humanizer', '', '', '', '', '', '', '')
-    `).run();
+    `,
+    ).run();
     // Non-managed skill
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
       VALUES ('brainstorming', 'skill', 'preinstalled', 'hash', 'active', '/home/.claude/plugins/cache/superpowers/SKILL.md', 'superpowers:brainstorming', '', '', '', '', '', '', '')
-    `).run();
+    `,
+    ).run();
 
-    const managed = db.prepare(`SELECT name FROM resources WHERE name = 'humanizer' AND local_path LIKE '%managed%'`).get();
-    const native = db.prepare(`SELECT name FROM resources WHERE name = 'brainstorming' AND local_path LIKE '%managed%'`).get();
+    const managed = db
+      .prepare(`SELECT name FROM resources WHERE name = 'humanizer' AND local_path LIKE '%managed%'`)
+      .get();
+    const native = db
+      .prepare(`SELECT name FROM resources WHERE name = 'brainstorming' AND local_path LIKE '%managed%'`)
+      .get();
 
     expect(managed).toBeTruthy();
     expect(native).toBeUndefined();
@@ -984,17 +1131,23 @@ describe('Scenario 12: Skill Auto-Dispatch — L1 name match + L2 bridge + L3 me
 
   it('L3: mem_use exact match query pattern works', () => {
     const db = createRegistryTestDb();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
       VALUES ('humanizer', 'skill', 'user', 'hash', 'active', '/tmp/test/SKILL.md', 'humanizer', 'Remove AI', '', '', '', '', '', '')
-    `).run();
+    `,
+    ).run();
 
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT id, name, local_path FROM resources
       WHERE status = 'active' AND type = 'skill'
         AND (name = ? OR invocation_name = ?)
       LIMIT 1
-    `).get('humanizer', 'humanizer');
+    `,
+      )
+      .get('humanizer', 'humanizer');
 
     expect(row).toBeTruthy();
     expect(row.name).toBe('humanizer');
@@ -1014,13 +1167,15 @@ describe('Scenario 13: Smart Import Pipeline — GitHub URL to registry', () => 
     };
     const results = discoverFromTree(tree, '');
     expect(results.length).toBe(3);
-    expect(results.map(r => r.type)).toContain('skill');
-    expect(results.map(r => r.type)).toContain('agent');
+    expect(results.map((r) => r.type)).toContain('skill');
+    expect(results.map((r) => r.type)).toContain('agent');
   });
 
   it('Stage 1: parseFrontmatter extracts name and description', async () => {
     const { parseFrontmatter } = await import('../registry-importer.mjs');
-    const { frontmatter } = parseFrontmatter('---\nname: test\ndescription: |\n  A test skill for testing\n---\n# Body');
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: test\ndescription: |\n  A test skill for testing\n---\n# Body',
+    );
     expect(frontmatter.name).toBe('test');
     expect(frontmatter.description).toContain('test skill');
   });
@@ -1028,8 +1183,14 @@ describe('Scenario 13: Smart Import Pipeline — GitHub URL to registry', () => 
   it('Stage 2: applyEnrichment fills empty fields only', async () => {
     const { applyEnrichment } = await import('../registry-enricher.mjs');
     const db = createRegistryTestDb();
-    db.prepare(`INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack) VALUES ('x', 'skill', 'github', 'h', 'active', '/tmp', 'x', 'existing', '', '', '', '', '', '')`).run();
-    applyEnrichment(db, 'x', 'skill', { capability_summary: 'new', intent_tags: 'new', quality_assessment: { has_clear_instructions: true, specificity: 'high' } });
+    db.prepare(
+      `INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack) VALUES ('x', 'skill', 'github', 'h', 'active', '/tmp', 'x', 'existing', '', '', '', '', '', '')`,
+    ).run();
+    applyEnrichment(db, 'x', 'skill', {
+      capability_summary: 'new',
+      intent_tags: 'new',
+      quality_assessment: { has_clear_instructions: true, specificity: 'high' },
+    });
     const row = db.prepare("SELECT * FROM resources WHERE name = 'x'").get();
     expect(row.capability_summary).toBe('existing'); // not overwritten
     expect(row.intent_tags).toBe('new'); // was empty, now filled
@@ -1044,11 +1205,11 @@ describe('Integration Coverage Summary', () => {
     const matrix = {
       'Layer 1: MCP Tool Descriptions': {
         total: Object.keys(TOOL_DESCRIPTIONS).length,
-        withTrigger: Object.values(TOOL_DESCRIPTIONS).filter(d => /use when:/i.test(d)).length,
+        withTrigger: Object.values(TOOL_DESCRIPTIONS).filter((d) => /use when:/i.test(d)).length,
       },
       'Layer 2: Skill Descriptions': {
         total: Object.keys(SKILL_DESCRIPTIONS).length,
-        withTrigger: Object.values(SKILL_DESCRIPTIONS).filter(d => /use when:/i.test(d)).length,
+        withTrigger: Object.values(SKILL_DESCRIPTIONS).filter((d) => /use when:/i.test(d)).length,
       },
       'Layer 3: MCP Instructions': {
         total: MCP_INSTRUCTION_RULES.length,
@@ -1087,7 +1248,7 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
   // ─── Portable paths matching real managed structure ────────────────────────
   const MANAGED_SKILL_PATH = '~/.claude-mem-lite/managed/skills/humanizer/SKILL.md';
   const MANAGED_AGENT_PATH = '~/.claude-mem-lite/managed/agents/api-scaffolding/agents/backend-architect.md';
-  const MANAGED_SKILL_DIR  = '~/.claude-mem-lite/managed/skills/pdf';  // directory, no .md (9 cases)
+  const MANAGED_SKILL_DIR = '~/.claude-mem-lite/managed/skills/pdf'; // directory, no .md (9 cases)
 
   // Physical temp dir for filesystem-dependent tests (SKILL.md resolution)
   const TMP = join(tmpdir(), 'smart-invoke-' + process.pid);
@@ -1097,7 +1258,9 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
     mkdirSync(TMP_SKILL_DIR, { recursive: true });
     writeFileSync(join(TMP_SKILL_DIR, 'SKILL.md'), '---\nname: pdf\n---\n# PDF');
   });
-  afterEach(() => { rmSync(TMP, { recursive: true, force: true }); });
+  afterEach(() => {
+    rmSync(TMP, { recursive: true, force: true });
+  });
 
   // Helper: detect managed resource (anchored with /.claude-mem-lite/managed/)
   const isManaged = (path) => !!path && path.includes('/.claude-mem-lite/managed/');
@@ -1123,7 +1286,8 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
     it('truncated skill: Read() and mem_use(), never Skill()', () => {
       const output = [
         `<skill-auto-loaded name="humanizer" source="managed-skill" path="${MANAGED_SKILL_PATH}" truncated="true">`,
-        'x'.repeat(800), '...',
+        'x'.repeat(800),
+        '...',
         '</skill-auto-loaded>',
         `Skill truncated. Full content: Read("${MANAGED_SKILL_PATH}") or mem_use(name="humanizer")`,
       ].join('\n');
@@ -1259,10 +1423,12 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
   describe('E2E: full smart invocation chain', () => {
     it('managed skill search → Read(~path)', () => {
       const db = createRegistryTestDb();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('humanizer', 'skill', 'preinstalled', 'h', 'active', '${MANAGED_SKILL_PATH}', 'humanizer', 'Remove AI writing', '', '', '', '', '', '')
-      `).run();
+      `,
+      ).run();
 
       const row = db.prepare(`SELECT * FROM resources WHERE name = 'humanizer'`).get();
       expect(isManaged(row.local_path)).toBe(true);
@@ -1275,16 +1441,22 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
 
     it('managed agent search → Read(~path) with {name}.md', () => {
       const db = createRegistryTestDb();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('api-scaffolding/backend-architect', 'agent', 'preinstalled', 'h', 'active', '${MANAGED_AGENT_PATH}', 'api-scaffolding:backend-architect', 'Design APIs', '', '', '', '', '', '')
-      `).run();
+      `,
+      ).run();
 
-      const row = db.prepare(`SELECT * FROM resources WHERE name = 'api-scaffolding/backend-architect'`).get();
+      const row = db
+        .prepare(`SELECT * FROM resources WHERE name = 'api-scaffolding/backend-architect'`)
+        .get();
       expect(isManaged(row.local_path)).toBe(true);
 
       const howToUse = `Read("${row.local_path}") or mem_use(name="${row.name}", type="agent")`;
-      expect(howToUse).toBe(`Read("${MANAGED_AGENT_PATH}") or mem_use(name="api-scaffolding/backend-architect", type="agent")`);
+      expect(howToUse).toBe(
+        `Read("${MANAGED_AGENT_PATH}") or mem_use(name="api-scaffolding/backend-architect", type="agent")`,
+      );
       expect(howToUse).not.toContain('Skill(');
       expect(howToUse).not.toContain('Agent(');
       db.close();
@@ -1292,10 +1464,12 @@ describe('Scenario 14: Smart Skill Invocation — path guidance + howToUse diffe
 
     it('native plugin search → Skill(full_name)', () => {
       const db = createRegistryTestDb();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('commit', 'skill', 'preinstalled', 'h', 'active', '', 'commit-commands:commit', 'Create git commit', '', '', '', '', '', '')
-      `).run();
+      `,
+      ).run();
 
       const row = db.prepare(`SELECT * FROM resources WHERE name = 'commit'`).get();
       expect(isManaged(row.local_path)).toBe(false);

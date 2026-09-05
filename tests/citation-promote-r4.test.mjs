@@ -13,10 +13,21 @@ describe('R4 citation promote/demote hardening', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   function makeObs(overrides = {}) {
-    const id = insertObs(db, { sessionId: 'sess-1', project: 'p', type: 'bugfix', title: 't', importance: 2, ...overrides }).lastInsertRowid;
+    const id = insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
+      ...overrides,
+    }).lastInsertRowid;
     if (overrides.uncited_streak !== undefined) {
       db.prepare('UPDATE observations SET uncited_streak = ? WHERE id = ?').run(overrides.uncited_streak, id);
     }
@@ -31,8 +42,8 @@ describe('R4 citation promote/demote hardening', () => {
 
     applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // late cite → re-promote
     const row = db.prepare('SELECT importance, demoted_at FROM observations WHERE id=?').get(id);
-    expect(row.importance).toBe(2);     // D#179: never moved in either direction
-    expect(row.demoted_at).toBeNull();  // no longer misreported as "recently demoted"
+    expect(row.importance).toBe(2); // D#179: never moved in either direction
+    expect(row.demoted_at).toBeNull(); // no longer misreported as "recently demoted"
   });
 
   // fix 13 guarded the COALESCE on the promote's `importance` write: without it a
@@ -47,7 +58,7 @@ describe('R4 citation promote/demote hardening', () => {
   //     caught by the non-NULL rows in citation-decay.test.mjs's D#179 sweep.
   it('D#179: a citation leaves even a NULL-importance row exactly as it found it', () => {
     const id = makeObs({ importance: 2, uncited_streak: 0 });
-    applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');       // inject (uncited, streak→1)
+    applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1'); // inject (uncited, streak→1)
     db.prepare('UPDATE observations SET importance = NULL WHERE id = ?').run(id);
     const r = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // late cite → promote
     expect(r.promoted).toBe(1); // the promote branch really ran…

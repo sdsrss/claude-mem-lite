@@ -18,13 +18,20 @@ describe('promoteInsightEvents', () => {
     // violation when promotion tried to store an observation id there.
     db.pragma('foreign_keys = ON');
   });
-  afterEach(() => { db.close(); });
-
-  const seedEvent = (over = {}) => saveEvent(db, {
-    project: 'sp', event_type: 'lesson', title: 'httpOnly cookies e2e',
-    body: 'session cookies must be httpOnly or the e2e tests bleed across browsers',
-    importance: 2, created_at_epoch: 1_600_000_000_000, ...over,
+  afterEach(() => {
+    db.close();
   });
+
+  const seedEvent = (over = {}) =>
+    saveEvent(db, {
+      project: 'sp',
+      event_type: 'lesson',
+      title: 'httpOnly cookies e2e',
+      body: 'session cookies must be httpOnly or the e2e tests bleed across browsers',
+      importance: 2,
+      created_at_epoch: 1_600_000_000_000,
+      ...over,
+    });
 
   it('preview (execute=false) counts eligible events but promotes nothing', () => {
     seedEvent();
@@ -53,9 +60,9 @@ describe('promoteInsightEvents', () => {
   });
 
   it('skips low-importance and empty-body events', () => {
-    seedEvent({ importance: 1 });                 // too low
-    seedEvent({ body: '', importance: 3 });        // no insight body
-    seedEvent({ body: null, importance: 3 });      // no insight body
+    seedEvent({ importance: 1 }); // too low
+    seedEvent({ body: '', importance: 3 }); // no insight body
+    seedEvent({ body: null, importance: 3 }); // no insight body
     const r = promoteInsightEvents(db, { execute: true });
     expect(r.eligible).toBe(0);
     expect(r.promoted).toBe(0);
@@ -77,7 +84,11 @@ describe('promoteInsightEvents', () => {
     // would re-introduce noise into search. "lesson-bearing" must exclude them.
     // Uses the project's canonical low-signal-title definition (same as re-enrich).
     seedEvent({ title: 'Modified schema.mjs', body: 'ran a grep over the file', importance: 2 });
-    seedEvent({ title: 'Worked on prompt_mgr.py, migrations', body: 'grep -A 50 def get → stdout empty', importance: 3 });
+    seedEvent({
+      title: 'Worked on prompt_mgr.py, migrations',
+      body: 'grep -A 50 def get → stdout empty',
+      importance: 3,
+    });
     const r = promoteInsightEvents(db, { execute: true });
     expect(r.eligible).toBe(0);
     expect(r.promoted).toBe(0);
@@ -87,8 +98,11 @@ describe('promoteInsightEvents', () => {
     seedEvent({ event_type: 'bug', title: 'b1', body: 'a known race in the pool' });
     seedEvent({ event_type: 'observation', title: 'o1', body: 'noticed the cache warms lazily' });
     promoteInsightEvents(db, { execute: true });
-    const types = db.prepare("SELECT type FROM observations ORDER BY title").all().map(r => r.type);
-    expect(types).toContain('bugfix');   // bug → bugfix
+    const types = db
+      .prepare('SELECT type FROM observations ORDER BY title')
+      .all()
+      .map((r) => r.type);
+    expect(types).toContain('bugfix'); // bug → bugfix
     expect(types).toContain('discovery'); // observation → discovery
   });
 });

@@ -18,7 +18,10 @@ describe('v2.70.0 first-run upgrade banner', () => {
       // Capture stderr writes
       const writes = [];
       const orig = process.stderr.write.bind(process.stderr);
-      process.stderr.write = (msg) => { writes.push(String(msg)); return true; };
+      process.stderr.write = (msg) => {
+        writes.push(String(msg));
+        return true;
+      };
       try {
         emitV270UpgradeBanner({ project, runtimeDir });
         emitV270UpgradeBanner({ project, runtimeDir }); // second call must be silent
@@ -44,14 +47,17 @@ describe('v2.70.0 first-run upgrade banner', () => {
       const marker = join(runtimeDir, `.deferred-block-migrated-${project}`);
       const writes = [];
       const orig = process.stderr.write.bind(process.stderr);
-      process.stderr.write = (msg) => { writes.push(String(msg)); return true; };
+      process.stderr.write = (msg) => {
+        writes.push(String(msg));
+        return true;
+      };
       try {
         emitV270UpgradeBanner({ project, runtimeDir, hasPriorData: false });
       } finally {
         process.stderr.write = orig;
       }
-      expect(writes.length).toBe(0);          // no banner
-      expect(existsSync(marker)).toBe(true);  // but permanently suppressed
+      expect(writes.length).toBe(0); // no banner
+      expect(existsSync(marker)).toBe(true); // but permanently suppressed
     } finally {
       rmSync(runtimeDir, { recursive: true, force: true });
     }
@@ -92,13 +98,22 @@ describe('hasPreV270Data — only genuine upgraders count as prior data', () => 
     db.close();
   });
 
-  it('is project-scoped — another project\'s old rows do not trigger it', () => {
+  it("is project-scoped — another project's old rows do not trigger it", () => {
     const db = seedDb([V270_RELEASE_EPOCH - 86400000], 'other');
     expect(hasPreV270Data(db, 'p')).toBe(false);
     db.close();
   });
 
   it('fails quiet (false) when the query throws — a missed notice beats a wrong one', () => {
-    expect(hasPreV270Data({ prepare() { throw new Error('no such table'); } }, 'p')).toBe(false);
+    expect(
+      hasPreV270Data(
+        {
+          prepare() {
+            throw new Error('no such table');
+          },
+        },
+        'p',
+      ),
+    ).toBe(false);
   });
 });

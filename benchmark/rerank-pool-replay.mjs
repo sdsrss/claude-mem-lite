@@ -57,7 +57,16 @@
 // call process.exit: an exit code cannot be asserted in-process. main() catches and
 // still exits 1 with the message on stderr, so the CLI contract is unchanged.
 
-import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, readdirSync, statSync, rmSync, existsSync } from 'fs';
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  mkdtempSync,
+  readdirSync,
+  statSync,
+  rmSync,
+  existsSync,
+} from 'fs';
 import Database from 'better-sqlite3';
 import { DB_DIR } from '../schema.mjs';
 import { join, dirname } from 'path';
@@ -114,9 +123,11 @@ export function writeTwin(sameLimit, crossLimit) {
   const a = patchConst(src, 'RERANK_POOL_SAME_PROJECT', sameLimit);
   const b = patchConst(a.out, 'RERANK_POOL_CROSS_PROJECT', crossLimit);
   if (a.previous === sameLimit && b.previous === crossLimit) {
-    throw new Error(`twin is identical to shipped (${sameLimit}/${crossLimit}) — the comparison `
-      + 'would report 0% for reasons that have nothing to do with the pools. Pass a baseline '
-      + 'that differs in at least one arm.');
+    throw new Error(
+      `twin is identical to shipped (${sameLimit}/${crossLimit}) — the comparison ` +
+        'would report 0% for reasons that have nothing to do with the pools. Pass a baseline ' +
+        'that differs in at least one arm.',
+    );
   }
   writeFileSync(TWIN_URL, b.out);
   return { same: a.previous, cross: b.previous };
@@ -126,13 +137,19 @@ export function writeTwin(sameLimit, crossLimit) {
 export function assertCannotWrite(db) {
   let wrote = false;
   try {
-    db.prepare('UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1 WHERE id = -1').run();
+    db.prepare(
+      'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1 WHERE id = -1',
+    ).run();
     wrote = true;
-  } catch { /* expected: SQLITE_READONLY */ }
+  } catch {
+    /* expected: SQLITE_READONLY */
+  }
   if (wrote) {
-    throw new Error('SELF-CHECK FAILED: the database handle accepted a write. Replaying '
-      + 'searchRelevantMemories against a writable handle bumps injection_count on every '
-      + 'returned row and permanently contaminates the noise signal. Refusing to run.');
+    throw new Error(
+      'SELF-CHECK FAILED: the database handle accepted a write. Replaying ' +
+        'searchRelevantMemories against a writable handle bumps injection_count on every ' +
+        'returned row and permanently contaminates the noise signal. Refusing to run.',
+    );
   }
 }
 
@@ -184,27 +201,32 @@ export function callArm(fn, db, text, project) {
  * is the right direction for a guard.
  */
 export function assertNoMetricWrite(shard, probe) {
-  const tmp = mkdtempSync(join(tmpdir(), 'rerank-pool-sink-'));   // BEFORE the env write:
-  const prevEnv = process.env.CLAUDE_MEM_METRICS;                 // if mkdtemp throws (TMPDIR
-  process.env.CLAUDE_MEM_METRICS = '1';                           // gone, ENOSPC, EACCES) the
-  try {                                                           // finally never runs and
-    const size = () => (existsSync(shard) ? statSync(shard).size : 0);  // '1' leaks into the
-    const before = size();                                        // rest of the process — the
-    const reached = probe();                                      // guard creating the very
-    const after = size();                                         // condition it prevents.
+  const tmp = mkdtempSync(join(tmpdir(), 'rerank-pool-sink-')); // BEFORE the env write:
+  const prevEnv = process.env.CLAUDE_MEM_METRICS; // if mkdtemp throws (TMPDIR
+  process.env.CLAUDE_MEM_METRICS = '1'; // gone, ENOSPC, EACCES) the
+  try {
+    // finally never runs and
+    const size = () => (existsSync(shard) ? statSync(shard).size : 0); // '1' leaks into the
+    const before = size(); // rest of the process — the
+    const reached = probe(); // guard creating the very
+    const after = size(); // condition it prevents.
     if (!reached) {
-      throw new Error('SELF-CHECK FAILED: the probe call never reached the metric block '
-        + '(searchRelevantMemories has three returns that never call _emit: a null guard, the '
-        + 'length floor, and a query that sanitizes to nothing), so "the shard did not grow" '
-        + 'says nothing about the flag. Refusing to run.');
+      throw new Error(
+        'SELF-CHECK FAILED: the probe call never reached the metric block ' +
+          '(searchRelevantMemories has three returns that never call _emit: a null guard, the ' +
+          'length floor, and a query that sanitizes to nothing), so "the shard did not grow" ' +
+          'says nothing about the flag. Refusing to run.',
+      );
     }
     if (after !== before) {
-      throw new Error(`SELF-CHECK FAILED: one replay call grew ${shard} by ${after - before} `
-        + 'bytes. Either an arm invocation lost `{ counterfactual: true }` — in which case a '
-        + 'whole-corpus run appends two metric rows per prompt and poisons the `inject` '
-        + 'latency series this project reads from `doctor --metrics` — or a live hook wrote '
-        + 'to the shard during the probe window. Check the tail of that file to tell them '
-        + 'apart.');
+      throw new Error(
+        `SELF-CHECK FAILED: one replay call grew ${shard} by ${after - before} ` +
+          'bytes. Either an arm invocation lost `{ counterfactual: true }` — in which case a ' +
+          'whole-corpus run appends two metric rows per prompt and poisons the `inject` ' +
+          'latency series this project reads from `doctor --metrics` — or a live hook wrote ' +
+          'to the shard during the probe window. Check the tail of that file to tell them ' +
+          'apart.',
+      );
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -233,9 +255,11 @@ export function metricShardPath(dbDir) {
     // the `= '1'` above dies here, with this exact message and `named.length` 0. Live
     // code exercised indirectly, not the dead branch the D#197 precedent says to delete.
     if (named.length !== 1) {
-      throw new Error(`SELF-CHECK FAILED: the metric sink named ${named.length} shards in a `
-        + 'clean directory, so this guard does not know which file to watch and would pass '
-        + 'without seeing anything. Refusing to run.');
+      throw new Error(
+        `SELF-CHECK FAILED: the metric sink named ${named.length} shards in a ` +
+          'clean directory, so this guard does not know which file to watch and would pass ' +
+          'without seeing anything. Refusing to run.',
+      );
     }
     return join(dbDir, 'metrics', named[0]);
   } finally {
@@ -277,7 +301,11 @@ export function metricsDirSize(dbDir) {
   if (!existsSync(dir)) return 0;
   let total = 0;
   for (const f of readdirSync(dir)) {
-    try { total += statSync(join(dir, f)).size; } catch { /* raced with a rotation */ }
+    try {
+      total += statSync(join(dir, f)).size;
+    } catch {
+      /* raced with a rotation */
+    }
   }
   return total;
 }
@@ -301,7 +329,8 @@ export function monotonicityState({ baselineSame, baselineCross }, shippedPools)
 export const MONOTONICITY_NOTE = {
   subset: '(a counterexample to the superset argument; run exits 1 if > 0)',
   superset: '(twin is wider — monotonicity runs the other way, not a test)',
-  mixed: '(twin is narrower in one arm and wider in the other — neither direction is monotone, so this number tests nothing)',
+  mixed:
+    '(twin is narrower in one arm and wider in the other — neither direction is monotone, so this number tests nothing)',
 };
 
 /** The gate itself, separated from its rendering so a test can watch it fire. */
@@ -328,15 +357,24 @@ function loadPrompts(db, sampleN) {
 }
 
 export function compare(db, prompts, narrow, wide) {
-  let n = 0, threw = 0, changed = 0, top1 = 0, gained = 0, lost = 0;
-  let emptyNarrow = 0, emptyWide = 0, bothEmpty = 0;
+  let n = 0,
+    threw = 0,
+    changed = 0,
+    top1 = 0,
+    gained = 0,
+    lost = 0;
+  let emptyNarrow = 0,
+    emptyWide = 0,
+    bothEmpty = 0;
   // DELIVERED ROWS, not just changed sets. `MAX_MEMORY_INJECTIONS` is a PER-SET cap and it
   // did not move — but the average fill did, and a reader who only sees "the cap is still 3"
   // will read "no more rows are injected", which is false. The pre-tag claims review (S5)
   // found this stated only as the cap; the histogram is here so the volume consequence
   // cannot be quoted without its source. Index = set size (0..MAX_MEMORY_INJECTIONS).
-  const sizesNarrow = [], sizesWide = [];
-  let deliveredNarrow = 0, deliveredWide = 0;
+  const sizesNarrow = [],
+    sizesWide = [];
+  let deliveredNarrow = 0,
+    deliveredWide = 0;
   // The superset argument's counterexample. If the narrow arm injects and the wide arm
   // does not, the widening COST a prompt its injection and "monotone" is false — the one
   // observation that would refute the whole safety argument in hook-memory.mjs's docblock.
@@ -344,15 +382,25 @@ export function compare(db, prompts, narrow, wide) {
   // `emptyWide <= emptyNarrow` does NOT establish it, because two prompts moving off empty
   // can hide one moving onto it.
   let nonEmptyToEmpty = 0;
-  const bump = (hist, k) => { hist[k] = (hist[k] || 0) + 1; };
+  const bump = (hist, k) => {
+    hist[k] = (hist[k] || 0) + 1;
+  };
   for (const { text, project } of prompts) {
     let a, b;
-    try { a = callArm(narrow, db, text, project); b = callArm(wide, db, text, project); }
-    catch { threw++; continue; }
+    try {
+      a = callArm(narrow, db, text, project);
+      b = callArm(wide, db, text, project);
+    } catch {
+      threw++;
+      continue;
+    }
     n++;
-    const ai = a.map((r) => r.id), bi = b.map((r) => r.id);
-    bump(sizesNarrow, ai.length); bump(sizesWide, bi.length);
-    deliveredNarrow += ai.length; deliveredWide += bi.length;
+    const ai = a.map((r) => r.id),
+      bi = b.map((r) => r.id);
+    bump(sizesNarrow, ai.length);
+    bump(sizesWide, bi.length);
+    deliveredNarrow += ai.length;
+    deliveredWide += bi.length;
     if (ai.length === 0) emptyNarrow++;
     if (bi.length === 0) emptyWide++;
     if (ai.length === 0 && bi.length === 0) bothEmpty++;
@@ -364,12 +412,23 @@ export function compare(db, prompts, narrow, wide) {
       lost += ai.filter((x) => !bi.includes(x)).length;
     }
   }
-  const fill = (h) => Array.from({ length: Math.max(sizesNarrow.length, sizesWide.length) },
-    (_, i) => h[i] || 0);
+  const fill = (h) =>
+    Array.from({ length: Math.max(sizesNarrow.length, sizesWide.length) }, (_, i) => h[i] || 0);
   return {
-    n, threw, changed, top1, gained, lost, emptyNarrow, emptyWide, bothEmpty,
-    nonEmptyToEmpty, deliveredNarrow, deliveredWide,
-    sizesNarrow: fill(sizesNarrow), sizesWide: fill(sizesWide),
+    n,
+    threw,
+    changed,
+    top1,
+    gained,
+    lost,
+    emptyNarrow,
+    emptyWide,
+    bothEmpty,
+    nonEmptyToEmpty,
+    deliveredNarrow,
+    deliveredWide,
+    sizesNarrow: fill(sizesNarrow),
+    sizesWide: fill(sizesWide),
   };
 }
 
@@ -407,9 +466,17 @@ export function compare(db, prompts, narrow, wide) {
 export function costCompare(db, prompts, narrow, wide) {
   const warm = prompts.slice(0, Math.min(200, prompts.length));
   for (const { text, project } of warm) {
-    try { callArm(narrow, db, text, project); callArm(wide, db, text, project); } catch { /* ignore */ }
+    try {
+      callArm(narrow, db, text, project);
+      callArm(wide, db, text, project);
+    } catch {
+      /* ignore */
+    }
   }
-  let nsNarrow = 0, nsWide = 0, pairs = 0, threw = 0;
+  let nsNarrow = 0,
+    nsWide = 0,
+    pairs = 0,
+    threw = 0;
   const time = (fn, text, project) => {
     const t = process.hrtime.bigint();
     callArm(fn, db, text, project);
@@ -421,10 +488,19 @@ export function costCompare(db, prompts, narrow, wide) {
       // contributes to neither numerator nor denominator.
       let dn, dw;
       try {
-        if (pass === 0) { dn = time(narrow, text, project); dw = time(wide, text, project); }
-        else { dw = time(wide, text, project); dn = time(narrow, text, project); }
-      } catch { threw++; continue; }
-      nsNarrow += dn; nsWide += dw;
+        if (pass === 0) {
+          dn = time(narrow, text, project);
+          dw = time(wide, text, project);
+        } else {
+          dw = time(wide, text, project);
+          dn = time(narrow, text, project);
+        }
+      } catch {
+        threw++;
+        continue;
+      }
+      nsNarrow += dn;
+      nsWide += dw;
       // Count PAIRS ACTUALLY COMMITTED, across both passes — not `prompts × 2`. The first
       // draft incremented only on pass 0 and divided by `n * 2`, which assumes the two
       // passes throw identically. They do here (the throws are deterministic), and the bias
@@ -435,11 +511,20 @@ export function costCompare(db, prompts, narrow, wide) {
     }
   }
   if (pairs === 0) {
-    throw new Error('SELF-CHECK FAILED: every timed call threw — no cost measurement exists. '
-      + 'Refusing to report NaN as a ratio.');
+    throw new Error(
+      'SELF-CHECK FAILED: every timed call threw — no cost measurement exists. ' +
+        'Refusing to report NaN as a ratio.',
+    );
   }
-  const msNarrow = nsNarrow / 1e6 / pairs, msWide = nsWide / 1e6 / pairs;
-  return { n: pairs, threw, msNarrow: +msNarrow.toFixed(4), msWide: +msWide.toFixed(4), ratio: +(msWide / msNarrow).toFixed(3) };
+  const msNarrow = nsNarrow / 1e6 / pairs,
+    msWide = nsWide / 1e6 / pairs;
+  return {
+    n: pairs,
+    threw,
+    msNarrow: +msNarrow.toFixed(4),
+    msWide: +msWide.toFixed(4),
+    ratio: +(msWide / msNarrow).toFixed(3),
+  };
 }
 
 /**
@@ -451,9 +536,11 @@ export function assertRulerCanSayNo(db, prompts, wide) {
   const slice = prompts.slice(0, Math.min(200, prompts.length));
   const { changed } = compare(db, slice, wide, wide);
   if (changed !== 0) {
-    throw new Error(`SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} changed result `
-      + 'sets over 200 prompts. The replay is not deterministic, so no delta it reports is '
-      + 'attributable to the pool sizes. Refusing to report.');
+    throw new Error(
+      `SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} changed result ` +
+        'sets over 200 prompts. The replay is not deterministic, so no delta it reports is ' +
+        'attributable to the pool sizes. Refusing to report.',
+    );
   }
 }
 
@@ -481,13 +568,20 @@ function crossArmTruncation(db, prompts, poolSizes) {
       ORDER BY ${OBS_BM25}
     )
   `);
-  let n = 0, fired = 0, orFired = 0, max = 0;
+  let n = 0,
+    fired = 0,
+    orFired = 0,
+    max = 0;
   const over = new Map(poolSizes.map((p) => [p, 0]));
   for (const { text, project } of prompts) {
     const q = upsFtsQuery(text);
     if (!q) continue;
     let c;
-    try { c = stmt.get(q, project, cutoff).c; } catch { continue; }
+    try {
+      c = stmt.get(q, project, cutoff).c;
+    } catch {
+      continue;
+    }
     if (c === 0) {
       const orQuery = relaxFtsQueryToOr(q);
       const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
@@ -496,7 +590,12 @@ function crossArmTruncation(db, prompts, poolSizes) {
         ? q.split(' AND ').length
         : q.split(/\s+/).filter((x) => x && !x.startsWith('(') && !x.endsWith(')')).length;
       if (orQuery && ((cjk > 0 && cjk >= ascii) || tokens <= 8)) {
-        try { c = stmt.get(orQuery, project, cutoff).c; orFired++; } catch { /* ignore */ }
+        try {
+          c = stmt.get(orQuery, project, cutoff).c;
+          orFired++;
+        } catch {
+          /* ignore */
+        }
       }
     }
     n++;
@@ -520,10 +619,15 @@ async function main() {
   // counterexample gate and mislabels it "twin is wider". The run then reports "100% of
   // retrieving prompts changed set", a number that looks like a finding and is garbage.
   // Every other self-check in this file exists to stop exactly that shape; NaN was the hole.
-  for (const [flag, v] of [['--baseline-same', baselineSame], ['--baseline-cross', baselineCross]]) {
+  for (const [flag, v] of [
+    ['--baseline-same', baselineSame],
+    ['--baseline-cross', baselineCross],
+  ]) {
     if (!validatePoolArg(v)) {
-      throw new Error(`${flag} must be a positive integer, got "${arg(flag)}". Refusing to run: `
-        + 'a NaN pool produces a complete report whose every number is meaningless.');
+      throw new Error(
+        `${flag} must be a positive integer, got "${arg(flag)}". Refusing to run: ` +
+          'a NaN pool produces a complete report whose every number is meaningless.',
+      );
     }
   }
 
@@ -537,7 +641,11 @@ async function main() {
     ({ searchRelevantMemories: wide } = await import(SHIPPED_URL.href));
     ({ searchRelevantMemories: narrow } = await import(`${TWIN_URL.href}?v=${Date.now()}`));
   } finally {
-    try { unlinkSync(TWIN_URL); } catch { /* already gone */ }
+    try {
+      unlinkSync(TWIN_URL);
+    } catch {
+      /* already gone */
+    }
   }
 
   const prompts = loadPrompts(db, sampleN);
@@ -555,39 +663,51 @@ async function main() {
     const grew = runLevelGrowth(DB_DIR, runBaseline);
     if (grew <= 0) return;
     process.exitCode = 1;
-    console.error(`\nSELF-CHECK FAILED: this run grew ${join(DB_DIR, 'metrics')} by ${grew} `
-      + 'bytes. Every arm invocation is supposed to carry `{ counterfactual: true }`, which '
-      + 'skips both the injection_count bump and the `inject` metric row. Either a call site '
-      + 'stopped going through callArm() — a whole-corpus run then appends ~2 rows per prompt '
-      + 'and poisons the series `doctor --metrics` reads — or a live hook wrote while this '
-      + 'ran. Tail the shard: a replay shows a burst of `inject` rows, a hook shows one row. '
-      + 'EVERY NUMBER PRINTED ABOVE STILL STANDS; what is compromised is the metrics sink.');
+    console.error(
+      `\nSELF-CHECK FAILED: this run grew ${join(DB_DIR, 'metrics')} by ${grew} ` +
+        'bytes. Every arm invocation is supposed to carry `{ counterfactual: true }`, which ' +
+        'skips both the injection_count bump and the `inject` metric row. Either a call site ' +
+        'stopped going through callArm() — a whole-corpus run then appends ~2 rows per prompt ' +
+        'and poisons the series `doctor --metrics` reads — or a live hook wrote while this ' +
+        'ran. Tail the shard: a replay shows a burst of `inject` rows, a hook shows one row. ' +
+        'EVERY NUMBER PRINTED ABOVE STILL STANDS; what is compromised is the metrics sink.',
+    );
   });
 
   if (prompts.length) {
     assertNoMetricWrite(metricShardPath(DB_DIR), () => {
       for (const { text, project } of prompts.slice(0, 200)) {
         let rows;
-        try { rows = callArm(wide, db, text, project); } catch { continue; }
+        try {
+          rows = callArm(wide, db, text, project);
+        } catch {
+          continue;
+        }
         if (rows.length) return true;
       }
       return false;
     });
   }
   if (sampleN) {
-    console.error(`NOTE: --sample ${sampleN} is a sampling decision. On this corpus, 1200-row `
-      + 'samples of the same table span 11.9%-20.2% depending on the predicate. The default '
-      + '(whole corpus) has no such free parameter — prefer it for anything you publish.');
+    console.error(
+      `NOTE: --sample ${sampleN} is a sampling decision. On this corpus, 1200-row ` +
+        'samples of the same table span 11.9%-20.2% depending on the predicate. The default ' +
+        '(whole corpus) has no such free parameter — prefer it for anything you publish.',
+    );
   }
 
   if (has('--cross-arm')) {
     const r = crossArmTruncation(db, prompts, [baselineCross, 15, 50]);
     const pct = (x) => (r.fired ? `${((100 * x) / r.fired).toFixed(1)}%` : 'n/a');
-    if (asJson) { console.log(JSON.stringify({ ...r, over: Object.fromEntries(r.over) }, null, 2)); }
-    else {
+    if (asJson) {
+      console.log(JSON.stringify({ ...r, over: Object.fromEntries(r.over) }, null, 2));
+    } else {
       console.log(`\n─── cross-project leg truncation (n=${r.n}) ───`);
-      console.log(`  leg fires (matched >0):            ${r.fired} (${((100 * r.fired) / r.n).toFixed(1)}%)   [OR fallback used on ${r.orFired}]`);
-      for (const [p, c] of r.over) console.log(`  matched more than ${String(p).padStart(3)} rows:       ${c} (${pct(c)} of firings)`);
+      console.log(
+        `  leg fires (matched >0):            ${r.fired} (${((100 * r.fired) / r.n).toFixed(1)}%)   [OR fallback used on ${r.orFired}]`,
+      );
+      for (const [p, c] of r.over)
+        console.log(`  matched more than ${String(p).padStart(3)} rows:       ${c} (${pct(c)} of firings)`);
       console.log(`  largest single match count:        ${r.max}`);
       console.log('\n  Read as a reachability bound, not as harm: the OR penalty (0.4x), the');
       console.log('  cross penalty (0.7x) and the adaptive threshold drop nearly all of these');
@@ -603,12 +723,21 @@ async function main() {
     // workloads being compared, not two pool sizes.
     assertRulerCanSayNo(db, prompts, wide);
     const c = costCompare(db, prompts, narrow, wide);
-    if (asJson) { console.log(JSON.stringify({ ...c, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2)); }
-    else {
-      console.log(`\n─── cost: ${baselineSame}/${baselineCross} vs shipped (${c.n} timed pairs over 2 passes, arm order alternated${c.threw ? `; ${c.threw} threw` : ''}) ───`);
-      console.log(`  ${String(baselineSame).padStart(2)}/${String(baselineCross).padStart(2)} baseline:  ${c.msNarrow.toFixed(3)} ms/prompt`);
+    if (asJson) {
+      console.log(
+        JSON.stringify({ ...c, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2),
+      );
+    } else {
+      console.log(
+        `\n─── cost: ${baselineSame}/${baselineCross} vs shipped (${c.n} timed pairs over 2 passes, arm order alternated${c.threw ? `; ${c.threw} threw` : ''}) ───`,
+      );
+      console.log(
+        `  ${String(baselineSame).padStart(2)}/${String(baselineCross).padStart(2)} baseline:  ${c.msNarrow.toFixed(3)} ms/prompt`,
+      );
       console.log(`  shipped:         ${c.msWide.toFixed(3)} ms/prompt`);
-      console.log(`  ratio:           ${c.ratio.toFixed(3)}x  (${c.msWide >= c.msNarrow ? '+' : ''}${(100 * (c.msWide / c.msNarrow - 1)).toFixed(1)}%)`);
+      console.log(
+        `  ratio:           ${c.ratio.toFixed(3)}x  (${c.msWide >= c.msNarrow ? '+' : ''}${(100 * (c.msWide / c.msNarrow - 1)).toFixed(1)}%)`,
+      );
       console.log('\n  The SELECT carries `narrative`, so the pool is the expensive term. This');
       console.log('  measures the whole function, not the SELECT alone: timing only the SELECT');
       console.log('  reports ~1.00x and misses the JS scoring the widened pool feeds.');
@@ -634,11 +763,13 @@ async function main() {
   const state = monotonicityState({ baselineSame, baselineCross }, shippedPools);
   const monotonicityNote = MONOTONICITY_NOTE[state];
   if (counterexampleGate(state, r.nonEmptyToEmpty)) {
-    throw new Error(`COUNTEREXAMPLE: ${r.nonEmptyToEmpty} of ${r.n} prompts inject under the `
-      + `${baselineSame}/${baselineCross} pools and inject NOTHING under the shipped `
-      + `${shippedPools.same}/${shippedPools.cross}. The wider pool is a superset, so this `
-      + 'should be impossible — the monotonicity argument in hook-memory.mjs\'s RERANK_POOL_* '
-      + 'docblock does not hold as written. Investigate before quoting any number here.');
+    throw new Error(
+      `COUNTEREXAMPLE: ${r.nonEmptyToEmpty} of ${r.n} prompts inject under the ` +
+        `${baselineSame}/${baselineCross} pools and inject NOTHING under the shipped ` +
+        `${shippedPools.same}/${shippedPools.cross}. The wider pool is a superset, so this ` +
+        "should be impossible — the monotonicity argument in hook-memory.mjs's RERANK_POOL_* " +
+        'docblock does not hold as written. Investigate before quoting any number here.',
+    );
   }
 
   const either = r.n - r.bothEmpty;
@@ -646,19 +777,33 @@ async function main() {
   const pctEither = (x) => (either ? `${((100 * x) / either).toFixed(1)}%` : 'n/a');
 
   if (asJson) {
-    console.log(JSON.stringify({ ...r, either, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' }, null, 2));
+    console.log(
+      JSON.stringify(
+        { ...r, either, baselineSame, baselineCross, sample: sampleN || 'whole-corpus' },
+        null,
+        2,
+      ),
+    );
   } else {
     console.log(`\n─── rerank pool replay: ${baselineSame}/${baselineCross} vs shipped ───`);
     console.log(`  prompts replayed:        ${r.n}${r.threw ? `  (${r.threw} threw)` : ''}`);
     console.log(`  both arms empty:         ${r.bothEmpty} (${pctAll(r.bothEmpty)})`);
-    console.log(`  injected set differs:    ${r.changed} (${pctAll(r.changed)} of all, ${pctEither(r.changed)} of the ${either} that retrieve anything)`);
-    console.log(`  top-1 differs:           ${r.top1} (${pctAll(r.top1)} of all, ${pctEither(r.top1)} of ${either})`);
+    console.log(
+      `  injected set differs:    ${r.changed} (${pctAll(r.changed)} of all, ${pctEither(r.changed)} of the ${either} that retrieve anything)`,
+    );
+    console.log(
+      `  top-1 differs:           ${r.top1} (${pctAll(r.top1)} of all, ${pctEither(r.top1)} of ${either})`,
+    );
     console.log(`  rows newly reachable:    ${r.gained}   displaced: ${r.lost}`);
     console.log(`  empty injections:        ${r.emptyNarrow} -> ${r.emptyWide}`);
     console.log(`  non-empty -> EMPTY:      ${r.nonEmptyToEmpty}   ${monotonicityNote}`);
-    console.log(`  rows DELIVERED:          ${r.deliveredNarrow} -> ${r.deliveredWide} `
-      + `(${r.deliveredNarrow ? `${r.deliveredWide >= r.deliveredNarrow ? '+' : ''}${((100 * (r.deliveredWide / r.deliveredNarrow - 1))).toFixed(1)}%` : 'n/a'})`);
-    console.log(`  set-size histogram:      ${JSON.stringify(r.sizesNarrow)} -> ${JSON.stringify(r.sizesWide)}   [index = set size]`);
+    console.log(
+      `  rows DELIVERED:          ${r.deliveredNarrow} -> ${r.deliveredWide} ` +
+        `(${r.deliveredNarrow ? `${r.deliveredWide >= r.deliveredNarrow ? '+' : ''}${(100 * (r.deliveredWide / r.deliveredNarrow - 1)).toFixed(1)}%` : 'n/a'})`,
+    );
+    console.log(
+      `  set-size histogram:      ${JSON.stringify(r.sizesNarrow)} -> ${JSON.stringify(r.sizesWide)}   [index = set size]`,
+    );
     console.log('\n  The per-set cap (MAX_MEMORY_INJECTIONS) does not move. The average fill');
     console.log('  does — most of the extra rows come from under-filled sets reaching the cap,');
     console.log('  not from prompts moving off zero. Read both rows before quoting either.');

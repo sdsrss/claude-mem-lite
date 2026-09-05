@@ -91,7 +91,9 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
   });
-  afterEach(() => { db?.close(); });
+  afterEach(() => {
+    db?.close();
+  });
 
   // Shared helper -> the shipped predicate (lib/file-edge-match.mjs), the same
   // one scripts/pre-tool-recall.js injects on.
@@ -99,10 +101,12 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
 
   it('matches history stored under a bare basename when given a backslash path', () => {
     insertObs(db, {
-      type: 'bugfix', title: 'Fix null deref in hook-memory.mjs',
+      type: 'bugfix',
+      title: 'Fix null deref in hook-memory.mjs',
       text: 'hook-memory.mjs null deref fix',
-      importance: 2, filesModified: '["hook-memory.mjs"]',
-      epochOffset: -3 * 86400000
+      importance: 2,
+      filesModified: '["hook-memory.mjs"]',
+      epochOffset: -3 * 86400000,
     });
     const results = match('C:\\proj\\src\\hook-memory.mjs');
     expect(results.length).toBeGreaterThanOrEqual(1);
@@ -113,10 +117,12 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
     // observation_files.filename is heterogeneous: an earlier session may have
     // recorded the file under another absolute Windows path.
     insertObs(db, {
-      type: 'decision', title: 'Chose FTS5 over LIKE in parser.mjs',
+      type: 'decision',
+      title: 'Chose FTS5 over LIKE in parser.mjs',
       text: 'parser.mjs FTS5 decision',
-      importance: 3, filesModified: '["C:\\\\old\\\\checkout\\\\parser.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 3,
+      filesModified: '["C:\\\\old\\\\checkout\\\\parser.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     const results = match('C:\\proj\\src\\parser.mjs');
     expect(results.length).toBeGreaterThanOrEqual(1);
@@ -125,16 +131,20 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
 
   it('still escapes LIKE wildcards when the path is backslash-separated', () => {
     insertObs(db, {
-      type: 'bugfix', title: 'Fix in test_100%.mjs',
+      type: 'bugfix',
+      title: 'Fix in test_100%.mjs',
       text: 'test_100%.mjs fix',
-      importance: 2, filesModified: '["test_100%.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 2,
+      filesModified: '["test_100%.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     insertObs(db, {
-      type: 'bugfix', title: 'Fix in testX100Y.mjs',
+      type: 'bugfix',
+      title: 'Fix in testX100Y.mjs',
       text: 'testX100Y.mjs fix',
-      importance: 2, filesModified: '["testX100Y.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 2,
+      filesModified: '["testX100Y.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     const results = match('C:\\proj\\test_100%.mjs');
     expect(results.length).toBe(1);
@@ -143,10 +153,12 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
 
   it('does not over-match: a backslash path with no history returns empty', () => {
     insertObs(db, {
-      type: 'bugfix', title: 'Fix in hook-memory.mjs',
+      type: 'bugfix',
+      title: 'Fix in hook-memory.mjs',
       text: 'hook-memory.mjs fix',
-      importance: 2, filesModified: '["hook-memory.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 2,
+      filesModified: '["hook-memory.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     expect(match('C:\\proj\\src\\brand-new.mjs')).toEqual([]);
   });
@@ -155,20 +167,24 @@ describe('the shipped file-match predicate handles Windows-style paths', () => {
     // Arm 3/4 exist to block this suffix collision; a backslash payload must
     // not weaken it back into a bare '%<basename>' LIKE.
     insertObs(db, {
-      type: 'bugfix', title: 'Fix in bash-utils.mjs',
+      type: 'bugfix',
+      title: 'Fix in bash-utils.mjs',
       text: 'bash-utils.mjs fix',
-      importance: 2, filesModified: '["C:\\\\proj\\\\src\\\\bash-utils.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 2,
+      filesModified: '["C:\\\\proj\\\\src\\\\bash-utils.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     expect(match('C:\\proj\\src\\utils.mjs')).toEqual([]);
   });
 
   it('keeps working for POSIX absolute paths (regression)', () => {
     insertObs(db, {
-      type: 'bugfix', title: 'Fix race in hook.mjs',
+      type: 'bugfix',
+      title: 'Fix race in hook.mjs',
       text: 'hook.mjs race fix',
-      importance: 2, filesModified: '["hook.mjs"]',
-      epochOffset: -2 * 86400000
+      importance: 2,
+      filesModified: '["hook.mjs"]',
+      epochOffset: -2 * 86400000,
     });
     expect(match('/mnt/data/projects/mem/hook.mjs').length).toBeGreaterThanOrEqual(1);
   });
@@ -196,7 +212,7 @@ describe('install prune log derives basenames with node:path', () => {
       writeFileSync(join(tmpDir, 'server.mjs'), 'real');
       writeFileSync(join(tmpDir, 'dispatch.mjs'), 'stale');
       const removed = pruneStaleInstallFiles(tmpDir, SOURCE_FILES);
-      expect(removed.map(p => basename(p))).toEqual(['dispatch.mjs']);
+      expect(removed.map((p) => basename(p))).toEqual(['dispatch.mjs']);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -236,9 +252,12 @@ describe('every shipped observation_files consumer uses the shared predicate', (
   // "a comment matched the substring scan" trap v3.76.1 recorded. Strip block
   // comments and whole-line `//` comments; a trailing comment carrying the shape
   // is rare enough that a false positive there is the safe direction.
-  const code = (src) => src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const code = (src) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('//'))
+      .join('\n');
 
   for (const rel of READ_FACES) {
     const src = code(readFileSync(join(ROOT, rel), 'utf8'));
@@ -247,16 +266,17 @@ describe('every shipped observation_files consumer uses the shared predicate', (
       expect(src, 'must import the shared predicate').toMatch(/fileMatchClause/);
       // The two-arm shape every one of these faces used to carry. It matches on a
       // bare '%<basename>' suffix, which cannot tell utils.mjs from bash-utils.mjs.
-      expect(src, 'hand-rolled two-arm match found')
-        .not.toMatch(/filename\s*=\s*\?\s*OR\s*of2?\.?filename\s+LIKE/i);
+      expect(src, 'hand-rolled two-arm match found').not.toMatch(
+        /filename\s*=\s*\?\s*OR\s*of2?\.?filename\s+LIKE/i,
+      );
     });
 
     it(`${rel} derives its lookup key with basenameAnySep, not a host-native split`, () => {
       // Display text may still use node:path basename; a LOOKUP KEY may not.
       // Narrow the search to assignment sites so a `basename(filePath)` inside an
       // injected message string does not trip this.
-      const hostNative = [...src.matchAll(/const\s+(\w*[Nn]ame\w*)\s*=\s*basename\(/g)].map(m => m[0]);
-      const naiveSplit = [...src.matchAll(/\.split\(['"]\/['"]\)\s*\.pop\(\)/g)].map(m => m[0]);
+      const hostNative = [...src.matchAll(/const\s+(\w*[Nn]ame\w*)\s*=\s*basename\(/g)].map((m) => m[0]);
+      const naiveSplit = [...src.matchAll(/\.split\(['"]\/['"]\)\s*\.pop\(\)/g)].map((m) => m[0]);
       expect(hostNative, `host-native basename assigned to a key: ${hostNative.join(', ')}`).toEqual([]);
       expect(naiveSplit, `split('/').pop() used as a key: ${naiveSplit.join(', ')}`).toEqual([]);
     });

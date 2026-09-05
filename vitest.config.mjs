@@ -18,15 +18,20 @@ export default defineConfig({
       // The installed vitest's two actual defaults, verbatim. The brace form below is a
       // superset in behaviour but a DIFFERENT string, and the guard compares strings —
       // which is how it caught `**/.git/**` being silently dropped here.
-      '**/node_modules/**', '**/.git/**',
-      '**/dist/**', '**/cypress/**', '**/.{idea,git,cache,output,temp}/**',
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/dist/**',
+      '**/cypress/**',
+      '**/.{idea,git,cache,output,temp}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
       // `tasks/**` for the same reason as `tmp/**` (audit 2026-09-02 P2-1): it is
       // gitignored scratch, and it currently holds `tasks/bak-3810/*.mjs` — whole-file
       // BACKUP COPIES of shipped modules. A `*.test.mjs` parked there would be collected
       // and run, and a backup copy of a module is exactly the thing that must never be
       // mistaken for the module. D#168 closed this hole for `tmp/` and stopped there.
-      'tmp/**', '.tmp/**', 'tasks/**',
+      'tmp/**',
+      '.tmp/**',
+      'tasks/**',
     ],
     // D#40: the CLI auto-escalation path is default-ON in production but must
     // never spawn a real `claude` subprocess during the suite. This forces
@@ -57,8 +62,12 @@ export default defineConfig({
     // own comment explains at length was wrong (fixtures hardcode /tmp, os.tmpdir()
     // follows a relocated $TMPDIR, several suites keep scratch DBs in tests/.tmp-*).
     env: {
-      CLAUDE_MEM_AUTO_DEEP_CLI: '0', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '',
-      MEM_QUIET_HOOKS: '', CLAUDE_MEM_DIR: '', CLAUDE_MEM_TEST_GUARD: '1',
+      CLAUDE_MEM_AUTO_DEEP_CLI: '0',
+      ANTHROPIC_API_KEY: '',
+      OPENROUTER_API_KEY: '',
+      MEM_QUIET_HOOKS: '',
+      CLAUDE_MEM_DIR: '',
+      CLAUDE_MEM_TEST_GUARD: '1',
     },
     // Reap test-fixture dirs leaked by prior interrupted/SIGKILL'd runs (afterEach
     // never reached). Runs once before the suite; 1h age guard never touches the
@@ -97,19 +106,42 @@ export default defineConfig({
       include: [
         'lib/**/*.mjs',
         'registry.mjs',
-        'utils.mjs', 'schema.mjs', 'search-scoring.mjs', 'mem-cli.mjs',
-        'registry-scanner.mjs', 'resource-discovery.mjs',
-        'hook-episode.mjs', 'hook-context.mjs', 'hook-semaphore.mjs',
-        'hook-shared.mjs', 'hook-llm.mjs', 'haiku-client.mjs',
-        'format-utils.mjs', 'hash-utils.mjs', 'bash-utils.mjs',
-        'secret-scrub.mjs', 'project-utils.mjs', 'tier.mjs',
-        'tfidf.mjs', 'nlp.mjs', 'stop-words.mjs', 'synonyms.mjs',
+        'utils.mjs',
+        'schema.mjs',
+        'search-scoring.mjs',
+        'mem-cli.mjs',
+        'registry-scanner.mjs',
+        'resource-discovery.mjs',
+        'hook-episode.mjs',
+        'hook-context.mjs',
+        'hook-semaphore.mjs',
+        'hook-shared.mjs',
+        'hook-llm.mjs',
+        'haiku-client.mjs',
+        'format-utils.mjs',
+        'hash-utils.mjs',
+        'bash-utils.mjs',
+        'secret-scrub.mjs',
+        'project-utils.mjs',
+        'tier.mjs',
+        'tfidf.mjs',
+        'nlp.mjs',
+        'stop-words.mjs',
+        'synonyms.mjs',
       ],
       // Entry files and MCP-only modules tested via E2E/integration, not unit coverage.
       // `experiment/**` is listed because the `lib/**/*.mjs` include above is NOT anchored
       // to the repo root — it also matches `experiment/lib/*.mjs`, an unshipped scratch dir
       // that would otherwise drag the gate down with code nothing ships.
-      exclude: ['install.mjs', 'server.mjs', 'hook.mjs', 'registry-retriever.mjs', 'benchmark/**', 'scripts/**', 'experiment/**'],
+      exclude: [
+        'install.mjs',
+        'server.mjs',
+        'hook.mjs',
+        'registry-retriever.mjs',
+        'benchmark/**',
+        'scripts/**',
+        'experiment/**',
+      ],
       // Re-baselined 2026-08-22 against the measured number, which the P2-2 re-scoping
       // had left 12 points below: the gate said 75/75/65 while the suite actually ran
       // 86.58 lines / 87.42 functions / 77.22 branches, i.e. coverage could fall by a

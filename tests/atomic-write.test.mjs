@@ -1,5 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, symlinkSync, lstatSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  symlinkSync,
+  lstatSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
@@ -10,7 +20,13 @@ function tmp() {
   dirs.push(d);
   return d;
 }
-afterEach(() => { while (dirs.length) { try { rmSync(dirs.pop(), { recursive: true, force: true }); } catch {} } });
+afterEach(() => {
+  while (dirs.length) {
+    try {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    } catch {}
+  }
+});
 
 describe('atomic-write', () => {
   it('writes the data and leaves no temp file behind', () => {
@@ -64,17 +80,21 @@ describe('atomic-write', () => {
 
   it('writes THROUGH a symlink (dotfiles) instead of replacing it with a regular file', () => {
     const d = tmp();
-    const dotfiles = join(d, 'dotfiles'); mkdirSync(dotfiles);
-    const claude = join(d, 'claude'); mkdirSync(claude);
-    const target = join(dotfiles, 'settings.json'); writeFileSync(target, '{"old":1}');
-    const link = join(claude, 'settings.json'); symlinkSync(target, link);
+    const dotfiles = join(d, 'dotfiles');
+    mkdirSync(dotfiles);
+    const claude = join(d, 'claude');
+    mkdirSync(claude);
+    const target = join(dotfiles, 'settings.json');
+    writeFileSync(target, '{"old":1}');
+    const link = join(claude, 'settings.json');
+    symlinkSync(target, link);
 
     atomicWriteFileSync(link, '{"new":2}', { backup: true });
 
-    expect(lstatSync(link).isSymbolicLink()).toBe(true);        // link preserved, not clobbered
-    expect(readFileSync(target, 'utf8')).toBe('{"new":2}');     // wrote through to the real target
+    expect(lstatSync(link).isSymbolicLink()).toBe(true); // link preserved, not clobbered
+    expect(readFileSync(target, 'utf8')).toBe('{"new":2}'); // wrote through to the real target
     expect(readFileSync(link, 'utf8')).toBe('{"new":2}');
     expect(readFileSync(target + '.bak', 'utf8')).toBe('{"old":1}'); // backup captured the target, not the link
-    expect(existsSync(link + '.bak')).toBe(false);              // no stray .bak next to the symlink
+    expect(existsSync(link + '.bak')).toBe(false); // no stray .bak next to the symlink
   });
 });

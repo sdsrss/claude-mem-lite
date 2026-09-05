@@ -26,33 +26,54 @@ const SERVER = resolve(import.meta.dirname, '../server.mjs');
 let dir, env;
 
 function callTool(name, args) {
-  const reqs = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
-  ].join('\n') + '\n';
-  const raw = execFileSync(process.execPath, [SERVER], { env, input: reqs, encoding: 'utf8', timeout: 30000 });
+  const reqs =
+    [
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
+    ].join('\n') + '\n';
+  const raw = execFileSync(process.execPath, [SERVER], {
+    env,
+    input: reqs,
+    encoding: 'utf8',
+    timeout: 30000,
+  });
   for (const line of raw.split('\n').filter(Boolean)) {
     try {
       const m = JSON.parse(line);
       if (m.id === 2) return m.result?.content?.[0]?.text || JSON.stringify(m.error);
-    } catch { /* server also logs non-JSON lines */ }
+    } catch {
+      /* server also logs non-JSON lines */
+    }
   }
   return '';
 }
 
 function call(args) {
-  const reqs = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'mem_save', arguments: args } }),
-  ].join('\n') + '\n';
-  const raw = execFileSync(process.execPath, [SERVER], { env, input: reqs, encoding: 'utf8', timeout: 30000 });
+  const reqs =
+    [
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'mem_save', arguments: args },
+      }),
+    ].join('\n') + '\n';
+  const raw = execFileSync(process.execPath, [SERVER], {
+    env,
+    input: reqs,
+    encoding: 'utf8',
+    timeout: 30000,
+  });
   for (const line of raw.split('\n').filter(Boolean)) {
     try {
       const m = JSON.parse(line);
       if (m.id === 2) return m.result?.content?.[0]?.text || JSON.stringify(m.error);
-    } catch { /* server also logs non-JSON lines */ }
+    } catch {
+      /* server also logs non-JSON lines */
+    }
   }
   return '';
 }
@@ -61,26 +82,42 @@ function typesInDb() {
   const db = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
   try {
     return db.prepare('SELECT id, type FROM observations ORDER BY id').all();
-  } finally { db.close(); }
+  } finally {
+    db.close();
+  }
 }
 
 describe('mem_save — obs_type alias parity', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'memsave-alias-'));
     env = {
-      ...process.env, CLAUDE_MEM_DIR: dir, CLAUDE_MEM_SKIP_UPDATE: '1',
-      CLAUDE_MEM_SKIP_SAVE_ENRICH: '1', MEM_QUIET_HOOKS: '1', MEM_NO_AUTO_ADOPT: '1',
-      CLAUDE_PROJECT_DIR: '/x/aliasproj', PWD: '/x/aliasproj',
+      ...process.env,
+      CLAUDE_MEM_DIR: dir,
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
+      MEM_QUIET_HOOKS: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+      CLAUDE_PROJECT_DIR: '/x/aliasproj',
+      PWD: '/x/aliasproj',
     };
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('declares obs_type so the field is not an unknown key', () => {
     expect(Object.keys(memSaveSchema)).toContain('obs_type');
   });
 
   it('honours obs_type instead of silently defaulting to discovery', () => {
-    const out = call({ content: 'shard retry budget was shared so one hot shard starved the rest', obs_type: 'bugfix' });
+    const out = call({
+      content: 'shard retry budget was shared so one hot shard starved the rest',
+      obs_type: 'bugfix',
+    });
     expect(out).toContain('[bugfix]');
     expect(typesInDb()).toEqual([{ id: 1, type: 'bugfix' }]);
   });

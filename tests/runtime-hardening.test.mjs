@@ -11,7 +11,16 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawn, spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, statSync, chmodSync, existsSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  statSync,
+  chmodSync,
+  existsSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
@@ -148,7 +157,7 @@ describe('P2-7 spawn-log retention', () => {
       // on a pruned-but-not-yet-hardened file. Wait for both conditions.
       let rows = [];
       for (let i = 0; i < 100; i++) {
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 100));
         rows = readFileSync(log, 'utf8').split('\n').filter(Boolean);
         if (rows.length === 1 && mode(log) === 0o600) break;
       }
@@ -244,7 +253,8 @@ describe('P3-2 runtime file permissions', () => {
     const memDir = freshDir('hookdir-fresh-');
     try {
       const r = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(HOOK_SHARED_PATH)})`], {
-        env: { ...process.env, CLAUDE_MEM_DIR: memDir }, encoding: 'utf8',
+        env: { ...process.env, CLAUDE_MEM_DIR: memDir },
+        encoding: 'utf8',
       });
       expect(r.status).toBe(0);
       const runtimeDir = join(memDir, 'runtime');
@@ -262,7 +272,8 @@ describe('P3-2 runtime file permissions', () => {
       mkdirSync(runtimeDir, { recursive: true });
       chmodSync(runtimeDir, 0o755); // simulate a dir created by an older version at default umask
       const r = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(HOOK_SHARED_PATH)})`], {
-        env: { ...process.env, CLAUDE_MEM_DIR: memDir }, encoding: 'utf8',
+        env: { ...process.env, CLAUDE_MEM_DIR: memDir },
+        encoding: 'utf8',
       });
       expect(r.status).toBe(0);
       expect(mode(runtimeDir)).toBe(0o700);
@@ -272,7 +283,15 @@ describe('P3-2 runtime file permissions', () => {
   });
 
   it('writeEpisode persists the episode buffer owner-only', () => {
-    writeEpisode({ sessionId: 's1', project: 'p', startedAt: 1, lastAt: 2, files: [], entries: [], filesRead: [] });
+    writeEpisode({
+      sessionId: 's1',
+      project: 'p',
+      startedAt: 1,
+      lastAt: 2,
+      files: [],
+      entries: [],
+      filesRead: [],
+    });
     const target = episodeFile();
     try {
       expect(existsSync(target)).toBe(true);

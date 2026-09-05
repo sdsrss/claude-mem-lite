@@ -19,7 +19,9 @@ import { onceViaConnectProxy, connectProbeViaProxy, redactProxyUrl } from '../li
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
 
 describe('finding 1 — proxy credentials must never reach a user-visible string', () => {
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('redactProxyUrl strips userinfo but keeps host and port identifiable', () => {
     expect(redactProxyUrl('http://alice:sup3rs3cret@127.0.0.1:10808')).toBe('http://127.0.0.1:10808');
@@ -36,8 +38,10 @@ describe('finding 1 — proxy credentials must never reach a user-visible string
     expect(redactProxyUrl(null)).toBeTruthy();
   });
 
-  for (const [label, probe] of [['reachable', async () => ({ reachable: true })],
-    ['unreachable', async () => ({ reachable: false, error: 'ECONNREFUSED' })]]) {
+  for (const [label, probe] of [
+    ['reachable', async () => ({ reachable: true })],
+    ['unreachable', async () => ({ reachable: false, error: 'ECONNREFUSED' })],
+  ]) {
     it(`doctor's ${label} message carries no proxy password`, async () => {
       for (const v of PROXY_ENV) vi.stubEnv(v, '');
       vi.stubEnv('HTTPS_PROXY', 'http://alice:sup3rs3cret@127.0.0.1:1');
@@ -46,7 +50,7 @@ describe('finding 1 — proxy credentials must never reach a user-visible string
       const s = await llmProviderStatus({ _probe: probe });
       expect(s.message).not.toContain('sup3rs3cret');
       expect(s.message).not.toContain('alice');
-      expect(s.message).toContain('127.0.0.1:1');   // still diagnosable
+      expect(s.message).toContain('127.0.0.1:1'); // still diagnosable
     });
   }
 
@@ -61,7 +65,11 @@ describe('finding 1 — proxy credentials must never reach a user-visible string
 
 describe('finding 2 — a listening socket is not a working proxy', () => {
   let servers = [];
-  afterEach(() => { for (const s of servers) s.close(); servers = []; vi.unstubAllEnvs(); });
+  afterEach(() => {
+    for (const s of servers) s.close();
+    servers = [];
+    vi.unstubAllEnvs();
+  });
 
   function listen(server) {
     servers.push(server);
@@ -78,7 +86,10 @@ describe('finding 2 — a listening socket is not a working proxy', () => {
 
   it('connectProbeViaProxy FAILS when the proxy refuses the CONNECT', async () => {
     const server = http.createServer();
-    server.on('connect', (req, socket) => { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.end(); });
+    server.on('connect', (req, socket) => {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.end();
+    });
     const port = await listen(server);
     const r = await connectProbeViaProxy(`http://127.0.0.1:${port}`, 'openrouter.ai', { timeout: 2000 });
     expect(r.reachable).toBe(false);
@@ -87,7 +98,9 @@ describe('finding 2 — a listening socket is not a working proxy', () => {
 
   it('connectProbeViaProxy SUCCEEDS when the proxy establishes the tunnel', async () => {
     const server = http.createServer();
-    server.on('connect', (req, socket) => { socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); });
+    server.on('connect', (req, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    });
     const port = await listen(server);
     const r = await connectProbeViaProxy(`http://127.0.0.1:${port}`, 'openrouter.ai', { timeout: 2000 });
     expect(r.reachable).toBe(true);
@@ -108,18 +121,25 @@ describe('finding 2 — a listening socket is not a working proxy', () => {
 
 describe('finding 3 — timeout bounds TOTAL time, not each phase', () => {
   let server;
-  afterEach(() => { if (server) { server.close(); server = null; } });
+  afterEach(() => {
+    if (server) {
+      server.close();
+      server = null;
+    }
+  });
 
   it('rejects within the budget when the proxy establishes the tunnel then goes silent', async () => {
     server = http.createServer();
     // 200 to the CONNECT, then never speaks TLS — the CONNECT timer disarms and
     // the request timer used to start a SECOND full-length countdown.
-    server.on('connect', (req, socket) => { socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); });
+    server.on('connect', (req, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    });
     const port = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
 
     const t0 = Date.now();
     await expect(
-      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 1000 })
+      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 1000 }),
     ).rejects.toThrow(/timeout/i);
     const elapsed = Date.now() - t0;
     // Was 2008ms for a 1000ms budget. Allow slack for scheduling, but it must be
@@ -139,7 +159,12 @@ describe('NOTE 7 — the redirect chain shares ONE budget', () => {
         ? { ok: false, status: 302, headers: { location: `https://a.test/${seen.length}` } }
         : { ok: true, status: 200, headers: {} };
     };
-    await requestViaConnectProxy('http://127.0.0.1:1', 'https://a.test/x', { timeout: 1000 }, { _once: once });
+    await requestViaConnectProxy(
+      'http://127.0.0.1:1',
+      'https://a.test/x',
+      { timeout: 1000 },
+      { _once: once },
+    );
     expect(seen.length).toBe(3);
     // Each hop burned ~120ms; a fresh full budget per hop would leave all three
     // at 1000 — that is the shape that made a 3s caller a worst-case 18s.
@@ -161,14 +186,16 @@ describe('NOTE 11 — the scopes backlog is counted, not materialised', () => {
     const { createTestDb, insertSession, insertObs } = await import('./test-helpers.mjs');
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
-    const long = 'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained at all.';
+    const long =
+      'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained at all.';
     expect(long.length).toBeGreaterThan(100);
     // 40 chars: passes a mutated `> 10`, fails the real `> 100`.
     const mid = 'Short narrative, over ten characters yet.';
     expect(mid.length).toBeGreaterThan(10);
     expect(mid.length).toBeLessThan(100);
 
-    for (let i = 0; i < 3; i++) insertObs(db, { title: `Included row ${i}`, narrative: long, type: 'bugfix' });
+    for (let i = 0; i < 3; i++)
+      insertObs(db, { title: `Included row ${i}`, narrative: long, type: 'bugfix' });
 
     // Excluded — narrative gate. Long enough to survive a relaxed bound.
     insertObs(db, { title: 'Too thin a narrative', narrative: mid, type: 'bugfix' });
@@ -184,8 +211,9 @@ describe('NOTE 11 — the scopes backlog is counted, not materialised', () => {
 
     expect(countReenrichCandidates(db, 'scopes')).toBe(3);
     // The point of the function: same answer as the finder, without loading rows.
-    expect(countReenrichCandidates(db, 'scopes'))
-      .toBe(findReenrichCandidates(db, 5000, { scope: 'scopes' }).length);
+    expect(countReenrichCandidates(db, 'scopes')).toBe(
+      findReenrichCandidates(db, 5000, { scope: 'scopes' }).length,
+    );
     db.close();
   });
 });

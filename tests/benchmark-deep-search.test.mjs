@@ -22,14 +22,14 @@ describe('deep-search benchmark suite', () => {
     const missing = [];
     for (const q of suite.queries) {
       const v = rewritesByQuery[q.query];
-      if (!Array.isArray(v) || v.length < 1 || v.some(s => typeof s !== 'string' || !s.trim())) {
+      if (!Array.isArray(v) || v.length < 1 || v.some((s) => typeof s !== 'string' || !s.trim())) {
         missing.push(q.id);
       }
     }
     expect(missing).toEqual([]);
     // No stray rewrite keys that don't map to a suite query (drift guard).
-    const suiteQueries = new Set(suite.queries.map(q => q.query));
-    const orphan = Object.keys(rewritesByQuery).filter(k => !suiteQueries.has(k));
+    const suiteQueries = new Set(suite.queries.map((q) => q.query));
+    const orphan = Object.keys(rewritesByQuery).filter((k) => !suiteQueries.has(k));
     expect(orphan).toEqual([]);
   });
 
@@ -62,8 +62,8 @@ describe('deep-search benchmark suite', () => {
     // (the only hard never-worse guarantee is the rewrite-failure floor, locked
     // in the next test). So we assert direction, not universal monotonicity:
     // far more queries improve than regress, and regressions are isolated.
-    const improved = res.perQuery.filter(q => q.recall_delta > 0).length;
-    const regressed = res.perQuery.filter(q => q.recall_delta < 0).length;
+    const improved = res.perQuery.filter((q) => q.recall_delta > 0).length;
+    const regressed = res.perQuery.filter((q) => q.recall_delta < 0).length;
     expect(improved).toBeGreaterThanOrEqual(8);
     expect(improved).toBeGreaterThan(regressed * 4);
     db.close();

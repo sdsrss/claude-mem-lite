@@ -13,17 +13,37 @@ function seed(db, rows) {
   insertSession(db, { id: 'mem-s1', project: 'p' });
   const ins = db.prepare(
     `INSERT INTO observations (memory_session_id, project, type, title, lesson_learned, importance, created_at, created_at_epoch)
-     VALUES (?,?,?,?,?,?,?,?)`);
-  for (const r of rows) ins.run('mem-s1', 'p', 'bugfix', r.title, r.lesson, r.importance ?? 2,
-    new Date(r.epoch).toISOString(), r.epoch);
+     VALUES (?,?,?,?,?,?,?,?)`,
+  );
+  for (const r of rows)
+    ins.run(
+      'mem-s1',
+      'p',
+      'bugfix',
+      r.title,
+      r.lesson,
+      r.importance ?? 2,
+      new Date(r.epoch).toISOString(),
+      r.epoch,
+    );
 }
 
 describe('rankImperativeCandidates', () => {
   it('returns a score-sorted candidate list, argmax === selectImperativeLesson', () => {
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate not manual merge', importance: 3, epoch: 1_700_000_000_000 },
-      { title: 'recoverChildrenOf', lesson: 'call recoverChildrenOf before delete', importance: 2, epoch: 1_700_000_100_000 },
+      {
+        title: 'rrfAccumulate',
+        lesson: 'call rrfAccumulate not manual merge',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
+      {
+        title: 'recoverChildrenOf',
+        lesson: 'call recoverChildrenOf before delete',
+        importance: 2,
+        epoch: 1_700_000_100_000,
+      },
     ]);
     const prompt = 'I need to fix the rrfAccumulate merge path';
     const ranked = rankImperativeCandidates(db, prompt, 'p');
@@ -36,8 +56,12 @@ describe('rankImperativeCandidates', () => {
 
   it('epochTo filters out later rows', () => {
     const db = createTestDb();
-    seed(db, [{ title: 'rrfAccumulate', lesson: 'call rrfAccumulate', importance: 3, epoch: 1_900_000_000_000 }]);
-    expect(rankImperativeCandidates(db, 'rrfAccumulate merge', 'p', [], { epochTo: 1_800_000_000_000 })).toEqual([]);
+    seed(db, [
+      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate', importance: 3, epoch: 1_900_000_000_000 },
+    ]);
+    expect(
+      rankImperativeCandidates(db, 'rrfAccumulate merge', 'p', [], { epochTo: 1_800_000_000_000 }),
+    ).toEqual([]);
   });
 
   // D#172 上闸. The pool's LIMIT is applied BEFORE the identifier-overlap filter, so
@@ -57,11 +81,21 @@ describe('rankImperativeCandidates', () => {
     // 100 would not rescue this either. The point is that the bound stops being a
     // relevance gate at all, not that it moved.
     for (let i = 0; i < 200; i++) {
-      rows.push({ title: `filler${i}`, lesson: `unrelated advice number ${i}`, importance: 3, epoch: 1_700_001_000_000 + i });
+      rows.push({
+        title: `filler${i}`,
+        lesson: `unrelated advice number ${i}`,
+        importance: 3,
+        epoch: 1_700_001_000_000 + i,
+      });
     }
     // The only row that matches the prompt — older AND lower importance, i.e. dead last
     // in the pool's ORDER BY, which is exactly where a decay demotion puts a row.
-    rows.push({ title: 'rrfAccumulate', lesson: 'call rrfAccumulate not manual merge', importance: 2, epoch: 1_700_000_000_000 });
+    rows.push({
+      title: 'rrfAccumulate',
+      lesson: 'call rrfAccumulate not manual merge',
+      importance: 2,
+      epoch: 1_700_000_000_000,
+    });
     seed(db, rows);
     const ranked = rankImperativeCandidates(db, 'fix the rrfAccumulate merge path', 'p');
     expect(ranked).toHaveLength(1);
@@ -75,10 +109,25 @@ describe('rankImperativeCandidates', () => {
     const db = createTestDb();
     const rows = [];
     for (let i = 0; i < 120; i++) {
-      rows.push({ title: `filler${i}`, lesson: `unrelated advice number ${i}`, importance: 3, epoch: 1_700_001_000_000 + i });
+      rows.push({
+        title: `filler${i}`,
+        lesson: `unrelated advice number ${i}`,
+        importance: 3,
+        epoch: 1_700_001_000_000 + i,
+      });
     }
-    rows.push({ title: 'weak', lesson: 'rrfAccumulate is involved', importance: 2, epoch: 1_700_000_500_000 });
-    rows.push({ title: 'strong', lesson: 'rrfAccumulate and rrfFuseN must agree', importance: 2, epoch: 1_700_000_000_000 });
+    rows.push({
+      title: 'weak',
+      lesson: 'rrfAccumulate is involved',
+      importance: 2,
+      epoch: 1_700_000_500_000,
+    });
+    rows.push({
+      title: 'strong',
+      lesson: 'rrfAccumulate and rrfFuseN must agree',
+      importance: 2,
+      epoch: 1_700_000_000_000,
+    });
     seed(db, rows);
     const ranked = rankImperativeCandidates(db, 'editing rrfAccumulate and rrfFuseN', 'p');
     expect(ranked).toHaveLength(2);
@@ -98,7 +147,12 @@ describe('rankImperativeCandidates', () => {
     const db = createTestDb();
     const rows = [];
     for (let i = 0; i < 6; i++) {
-      rows.push({ title: `t${i}`, lesson: 'rrfAccumulate needs care', importance: 2, epoch: 1_700_000_000_000 });
+      rows.push({
+        title: `t${i}`,
+        lesson: 'rrfAccumulate needs care',
+        importance: 2,
+        epoch: 1_700_000_000_000,
+      });
     }
     seed(db, rows);
     const ranked = rankImperativeCandidates(db, 'touching rrfAccumulate', 'p');
@@ -116,7 +170,12 @@ describe('rankImperativeCandidates', () => {
     const db = createTestDb();
     seed(db, [
       { title: 'a', lesson: 'touch rrfAccumulate carefully', importance: 2, epoch: 1_700_000_000_000 },
-      { title: 'b', lesson: 'rrfAccumulate and rrfFuseN must agree', importance: 3, epoch: 1_700_000_100_000 },
+      {
+        title: 'b',
+        lesson: 'rrfAccumulate and rrfFuseN must agree',
+        importance: 3,
+        epoch: 1_700_000_100_000,
+      },
     ]);
     const ranked = rankImperativeCandidates(db, 'editing rrfAccumulate today', 'p');
     expect(ranked.length).toBe(2);

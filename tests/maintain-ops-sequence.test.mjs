@@ -30,8 +30,16 @@ const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (rel) => readFileSync(join(REPO, rel), 'utf8');
 
 let db;
-beforeEach(() => { db = createTestDb(); });
-afterEach(() => { try { db.close(); } catch { /* already closed */ } });
+beforeEach(() => {
+  db = createTestDb();
+});
+afterEach(() => {
+  try {
+    db.close();
+  } catch {
+    /* already closed */
+  }
+});
 
 const ctx = () => ({ projectFilter: '', baseParams: [], staleAge: Date.now() - STALE_AGE_MS, opCap: OP_CAP });
 const preview = () => 'PREVIEW-RENDERED-BY-SURFACE';
@@ -42,18 +50,28 @@ describe('runMaintainOps — the sequence', () => {
     // caller's array: DEFAULT_MAINTAIN_OPS pins it, and a run that honoured the caller's
     // order would put demote_pinned before boost and have the demotion undone in-run.
     const lines = runMaintainOps(db, ctx(), ['demote_pinned', 'boost', 'decay', 'cleanup', 'purge_stale'], {
-      retainCutoff: Date.now(), confirmed: false, renderPurgePreview: preview,
+      retainCutoff: Date.now(),
+      confirmed: false,
+      renderPurgePreview: preview,
     });
-    const order = lines.map(l => l.split(' ')[0]);
-    expect(order.slice(0, 5)).toEqual(['PREVIEW-RENDERED-BY-SURFACE', 'Cleaned', 'Decayed', 'Boosted', 'Demoted']);
+    const order = lines.map((l) => l.split(' ')[0]);
+    expect(order.slice(0, 5)).toEqual([
+      'PREVIEW-RENDERED-BY-SURFACE',
+      'Cleaned',
+      'Decayed',
+      'Boosted',
+      'Demoted',
+    ]);
   });
 
   it('purge runs BEFORE decay — the zero-grace data-loss order (audit HIGH-1)', () => {
     const lines = runMaintainOps(db, ctx(), ['decay', 'purge_stale'], {
-      retainCutoff: Date.now(), confirmed: false, renderPurgePreview: preview,
+      retainCutoff: Date.now(),
+      confirmed: false,
+      renderPurgePreview: preview,
     });
-    const purgeAt = lines.findIndex(l => l.startsWith('PREVIEW'));
-    const decayAt = lines.findIndex(l => l.startsWith('Decayed'));
+    const purgeAt = lines.findIndex((l) => l.startsWith('PREVIEW'));
+    const decayAt = lines.findIndex((l) => l.startsWith('Decayed'));
     expect(purgeAt).toBeGreaterThanOrEqual(0);
     expect(decayAt).toBeGreaterThanOrEqual(0);
     expect(purgeAt, 'decay before purge marks a row and deletes it in one call').toBeLessThan(decayAt);
@@ -61,14 +79,19 @@ describe('runMaintainOps — the sequence', () => {
 
   it('demote_pinned runs AFTER boost — otherwise boostAccessed undoes the demotion in-run', () => {
     const lines = runMaintainOps(db, ctx(), ['demote_pinned', 'boost'], {
-      retainCutoff: Date.now(), renderPurgePreview: preview,
+      retainCutoff: Date.now(),
+      renderPurgePreview: preview,
     });
-    expect(lines.findIndex(l => l.startsWith('Boosted')))
-      .toBeLessThan(lines.findIndex(l => l.startsWith('Demoted')));
+    expect(lines.findIndex((l) => l.startsWith('Boosted'))).toBeLessThan(
+      lines.findIndex((l) => l.startsWith('Demoted')),
+    );
   });
 
   it('renders the demote threshold from the constant, not a literal', () => {
-    const [line] = runMaintainOps(db, ctx(), ['demote_pinned'], { retainCutoff: Date.now(), renderPurgePreview: preview });
+    const [line] = runMaintainOps(db, ctx(), ['demote_pinned'], {
+      retainCutoff: Date.now(),
+      renderPurgePreview: preview,
+    });
     expect(line).toContain(`inj>=${PINNED_INJ_THRESHOLD}`);
     expect(PINNED_INJ_THRESHOLD).toBeGreaterThan(0);
     expect(line.match(/inj>=(\d+)/)[1]).toBe(String(PINNED_INJ_THRESHOLD));
@@ -84,20 +107,28 @@ describe('runMaintainOps — the sequence', () => {
   });
 
   it('the FTS optimize line is always emitted, ops or not', () => {
-    expect(runMaintainOps(db, ctx(), [], { retainCutoff: Date.now(), renderPurgePreview: preview }))
-      .toEqual(['FTS5 index optimized']);
+    expect(runMaintainOps(db, ctx(), [], { retainCutoff: Date.now(), renderPurgePreview: preview })).toEqual([
+      'FTS5 index optimized',
+    ]);
   });
 
   it('warns about merge ids in the caller dialect, on both branches', () => {
     const withDedup = runMaintainOps(db, ctx(), ['dedup'], {
-      retainCutoff: Date.now(), renderPurgePreview: preview,
-      mergeGroups: [], mergeIdsProvided: true, invalidMergeSegments: ['oops'], mergeIdsFlagName: '--merge-ids',
+      retainCutoff: Date.now(),
+      renderPurgePreview: preview,
+      mergeGroups: [],
+      mergeIdsProvided: true,
+      invalidMergeSegments: ['oops'],
+      mergeIdsFlagName: '--merge-ids',
     });
     expect(withDedup.join('\n')).toContain('malformed --merge-ids segment(s): oops');
 
     const withoutDedup = runMaintainOps(db, ctx(), ['decay'], {
-      retainCutoff: Date.now(), renderPurgePreview: preview,
-      mergeGroups: [[1, 2]], mergeIdsProvided: true, mergeIdsFlagName: 'merge_ids',
+      retainCutoff: Date.now(),
+      renderPurgePreview: preview,
+      mergeGroups: [[1, 2]],
+      mergeIdsProvided: true,
+      mergeIdsFlagName: 'merge_ids',
     });
     expect(withoutDedup.join('\n')).toContain('merge_ids provided but "dedup" not in operations');
   });
@@ -107,7 +138,12 @@ describe('runMaintainOps — the sequence', () => {
     // on the confirmed path would tell a user who just confirmed to confirm again.
     let called = 0;
     const lines = runMaintainOps(db, ctx(), ['purge_stale'], {
-      retainCutoff: Date.now(), confirmed: true, renderPurgePreview: () => { called++; return 'X'; },
+      retainCutoff: Date.now(),
+      confirmed: true,
+      renderPurgePreview: () => {
+        called++;
+        return 'X';
+      },
     });
     expect(called).toBe(0);
     expect(lines[0]).toMatch(/^Purged \d+ stale observations/);
@@ -117,16 +153,30 @@ describe('runMaintainOps — the sequence', () => {
 describe('neither face re-implements the sequence', () => {
   // The op bodies must be reached through runMaintainOps. A face that imports one of these
   // directly is either re-implementing the order or about to.
-  const OP_NAMES = ['cleanupBroken', 'decayAndMarkIdle', 'boostAccessed', 'demotePinned', 'purgeStale', 'hardDeleteCandidateCount'];
+  const OP_NAMES = [
+    'cleanupBroken',
+    'decayAndMarkIdle',
+    'boostAccessed',
+    'demotePinned',
+    'purgeStale',
+    'hardDeleteCandidateCount',
+  ];
 
   function maintainCoreImports(src) {
     const m = src.match(/import\s*\{([^}]*)\}\s*from\s*'\.\/lib\/maintain-core\.mjs'/);
-    return m ? m[1].split(',').map(x => x.trim().split(/\s+as\s+/)[0]).filter(Boolean) : null;
+    return m
+      ? m[1]
+          .split(',')
+          .map((x) => x.trim().split(/\s+as\s+/)[0])
+          .filter(Boolean)
+      : null;
   }
 
   it('the import scanner can say NO', () => {
     // Without this, a regex that stopped matching would report both faces clean.
-    expect(maintainCoreImports("import { purgeStale } from './lib/maintain-core.mjs';")).toEqual(['purgeStale']);
+    expect(maintainCoreImports("import { purgeStale } from './lib/maintain-core.mjs';")).toEqual([
+      'purgeStale',
+    ]);
     expect(maintainCoreImports("import { a, b as c } from './lib/maintain-core.mjs';")).toEqual(['a', 'b']);
     expect(maintainCoreImports("import { x } from './lib/other.mjs';")).toBeNull();
   });
@@ -137,9 +187,13 @@ describe('neither face re-implements the sequence', () => {
       const names = maintainCoreImports(src);
       expect(names, `${face} must import from maintain-core`).not.toBeNull();
       expect(names).toContain('runMaintainOps');
-      expect(names.filter(n => OP_NAMES.includes(n)), `${face} imports op bodies directly`).toEqual([]);
-      expect(src, `${face} must not re-typed the transaction boundary for maintain`)
-        .not.toMatch(/results\.push\(`Demoted \$\{/);
+      expect(
+        names.filter((n) => OP_NAMES.includes(n)),
+        `${face} imports op bodies directly`,
+      ).toEqual([]);
+      expect(src, `${face} must not re-typed the transaction boundary for maintain`).not.toMatch(
+        /results\.push\(`Demoted \$\{/,
+      );
     });
   }
 
@@ -154,11 +208,16 @@ describe('neither face re-implements the sequence', () => {
     // state the defect shipped in. Collapsing a defect into a shared module does not remove
     // it; a guard scoped to the OLD homes just stops seeing it.
     for (const face of ['mem-cli.mjs', 'server.mjs', 'lib/maintain-core.mjs']) {
-      const src = read(face).split('\n').filter(l => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+      const src = read(face)
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+        .join('\n');
       expect(src, `${face} renders a literal threshold`).not.toMatch(/inj>=\d/);
     }
     // …and the sweep can fire: this is the string that shipped.
-    expect('results.push(`Demoted ${n} pinned-but-uncited observations (inj>=8, cited=0)`)').toMatch(/inj>=\d/);
+    expect('results.push(`Demoted ${n} pinned-but-uncited observations (inj>=8, cited=0)`)').toMatch(
+      /inj>=\d/,
+    );
   });
 });
 

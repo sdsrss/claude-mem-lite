@@ -42,7 +42,7 @@ describe('sdk_sessions id-mix invariant trigger (v29)', () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     expect(() =>
-      insert.run(PROD_UUID, PROD_UUID, 'p', new Date().toISOString(), Date.now(), 'active')
+      insert.run(PROD_UUID, PROD_UUID, 'p', new Date().toISOString(), Date.now(), 'active'),
     ).toThrow(/v2\.33\.1 mix pattern/);
   });
 
@@ -56,7 +56,7 @@ describe('sdk_sessions id-mix invariant trigger (v29)', () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     expect(() =>
-      insert.run(TEST_LITERAL, TEST_LITERAL, 'p', new Date().toISOString(), Date.now(), 'active')
+      insert.run(TEST_LITERAL, TEST_LITERAL, 'p', new Date().toISOString(), Date.now(), 'active'),
     ).not.toThrow();
   });
 
@@ -67,7 +67,7 @@ describe('sdk_sessions id-mix invariant trigger (v29)', () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     expect(() =>
-      insert.run(PROD_UUID, null, 'p', new Date().toISOString(), Date.now(), 'active')
+      insert.run(PROD_UUID, null, 'p', new Date().toISOString(), Date.now(), 'active'),
     ).not.toThrow();
   });
 
@@ -78,18 +78,24 @@ describe('sdk_sessions id-mix invariant trigger (v29)', () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     expect(() =>
-      insert.run(PROD_UUID, 'hook-projects--mem-abc123', 'p', new Date().toISOString(), Date.now(), 'active')
+      insert.run(PROD_UUID, 'hook-projects--mem-abc123', 'p', new Date().toISOString(), Date.now(), 'active'),
     ).not.toThrow();
   });
 
   it('blocks UPDATE that would create the production mix pattern', () => {
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, 'hook-proj-abc', 'p', '2026-05-09', ?, 'active')
-    `).run(PROD_UUID, Date.now());
+    `,
+    ).run(PROD_UUID, Date.now());
     expect(() =>
-      db.prepare(`UPDATE sdk_sessions SET memory_session_id = content_session_id WHERE content_session_id = ?`).run(PROD_UUID)
+      db
+        .prepare(
+          `UPDATE sdk_sessions SET memory_session_id = content_session_id WHERE content_session_id = ?`,
+        )
+        .run(PROD_UUID),
     ).toThrow(/v2\.33\.1 mix pattern/);
   });
 });
@@ -128,11 +134,13 @@ describe('auditSessionConsistency (v29)', () => {
     // Captures the historical-data scenario the audit is meant to surface.
     db.exec(`DROP TRIGGER IF EXISTS sdk_sessions_id_mix_check_ai`);
     const uuid = '550e8400-e29b-41d4-a716-446655440000';
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, 'p', '2026-05-09', ?, 'active')
-    `).run(uuid, uuid, Date.now());
+    `,
+    ).run(uuid, uuid, Date.now());
     const result = auditSessionConsistency(db);
     expect(result.id_mix_uuid_shape).toBe(1);
     expect(result.id_mix_other).toBe(0);
@@ -143,11 +151,13 @@ describe('auditSessionConsistency (v29)', () => {
     // Test fixture using insertSession({id:'sess-1'}) writes the same literal
     // 'sess-1' to both columns — by helper convention. Audit reports it for
     // diagnostic transparency but does NOT fail healthy.
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('sess-1', 'sess-1', 'p', '2026-05-09', ?, 'active')
-    `).run(Date.now());
+    `,
+    ).run(Date.now());
     const result = auditSessionConsistency(db);
     expect(result.id_mix_uuid_shape).toBe(0);
     expect(result.id_mix_other).toBe(1);
@@ -158,11 +168,13 @@ describe('auditSessionConsistency (v29)', () => {
     // Old session with NULL memory_session_id — v2.33.1 fingerprint of a
     // SessionStart write that never reached Stop.
     const oldEpoch = Date.now() - 10 * 60_000; // 10 min ago, past 5-min grace
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('cc-old', NULL, 'p', '2026-05-09', ?, 'active')
-    `).run(oldEpoch);
+    `,
+    ).run(oldEpoch);
     const result = auditSessionConsistency(db);
     expect(result.missing_mem_id).toBe(1);
     expect(result.healthy).toBe(false);
@@ -171,11 +183,13 @@ describe('auditSessionConsistency (v29)', () => {
   it('does not flag in-flight sessions inside the grace window', () => {
     // Recent session with NULL memory_session_id — handoff write hasn't
     // populated it yet; legitimate transient state.
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('cc-fresh', NULL, 'p', '2026-05-09', ?, 'active')
-    `).run(Date.now());
+    `,
+    ).run(Date.now());
     const result = auditSessionConsistency(db);
     expect(result.missing_mem_id).toBe(0);
   });
@@ -217,11 +231,11 @@ describe('lesson_retry_stats (v29 / B2)', () => {
     // assertion doesn't rot as real time advances past hardcoded dates (the
     // previous fixed 2026-05-0x dates silently fell outside the window).
     const bucket = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
-    recordRetryAttempt(db, true, bucket(40));  // outside the 30-day window → excluded
+    recordRetryAttempt(db, true, bucket(40)); // outside the 30-day window → excluded
     recordRetryAttempt(db, false, bucket(8));
     recordRetryAttempt(db, true, bucket(1));
     const rows = readRetryStats(db, 30);
     // DESC order, and the 40-days-ago bucket is filtered out by the window.
-    expect(rows.map(r => r.date_bucket)).toEqual([bucket(1), bucket(8)]);
+    expect(rows.map((r) => r.date_bucket)).toEqual([bucket(1), bucket(8)]);
   });
 });

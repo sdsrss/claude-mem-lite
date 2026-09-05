@@ -71,10 +71,17 @@ export function hasEscalatableCorpus(db, project, min = AUTO_DEEP_MIN_CORPUS) {
   try {
     const where = [liveObsFilterSql('')];
     const params = [];
-    if (project) { where.push('project = ?'); params.push(project); }
-    const row = db.prepare(`SELECT COUNT(*) AS c FROM observations WHERE ${where.join(' AND ')}`).get(...params);
+    if (project) {
+      where.push('project = ?');
+      params.push(project);
+    }
+    const row = db
+      .prepare(`SELECT COUNT(*) AS c FROM observations WHERE ${where.join(' AND ')}`)
+      .get(...params);
     return (row?.c ?? 0) >= min;
-  } catch { return true; } // on any error, don't suppress escalation (fail open)
+  } catch {
+    return true;
+  } // on any error, don't suppress escalation (fail open)
 }
 
 /**
@@ -95,7 +102,9 @@ export function autoDeepLlmReady(env = process.env, injectedLlm) {
   // escalation by default; the burst/latency cost is bounded by the auto
   // provider (fail-fast + throttle) and a failed rewrite degrades to baseline.
   // Kill switch honors the common disable spellings, not just the exact '0'.
-  const off = String(env.CLAUDE_MEM_AUTO_DEEP_CLI ?? '').trim().toLowerCase();
+  const off = String(env.CLAUDE_MEM_AUTO_DEEP_CLI ?? '')
+    .trim()
+    .toLowerCase();
   return !(off === '0' || off === 'false' || off === 'no' || off === 'off');
 }
 
@@ -142,7 +151,11 @@ export function autoDeepLlmReady(env = process.env, injectedLlm) {
  * @param {number} [opts.minCorpus=AUTO_DEEP_MIN_CORPUS]  corpus-size floor (when db given)
  * @returns {boolean}
  */
-export function shouldEscalateToDeep(results, _ctx, { minResults = AUTO_DEEP_MIN_RESULTS, db, project = null, minCorpus = AUTO_DEEP_MIN_CORPUS } = {}) {
+export function shouldEscalateToDeep(
+  results,
+  _ctx,
+  { minResults = AUTO_DEEP_MIN_RESULTS, db, project = null, minCorpus = AUTO_DEEP_MIN_CORPUS } = {},
+) {
   const n = Array.isArray(results) ? results.length : 0;
   if (n >= minResults) return false;
   // Count is weak. If a db was supplied, also require an escalatable corpus —
@@ -181,7 +194,7 @@ const INJECTION_GUARD =
 
 export const REWRITE_SYSTEM =
   'You reformulate a memory-search query into search variants that bridge the gap ' +
-  'between a user\'s wording and the technical terms a stored memory actually uses.\n' +
+  "between a user's wording and the technical terms a stored memory actually uses.\n" +
   'Output STRICT JSON only, no prose: {"variants": ["v1", "v2", "v3"]}\n' +
   '  - v1: the same intent in concrete keyword / technical-term form\n' +
   '  - v2: concept expansion — synonyms and closely related terms\n' +
@@ -236,20 +249,24 @@ export function assembleVariants(query, parsed, { max = MAX_VARIANTS } = {}) {
 // so it must be fail-fast (short timeout, no retry), throttled (bound bursts),
 // and cached (skip repeat rewrites). The EXPLICIT deep=true path stays patient.
 
-export const AUTO_DEEP_TIMEOUT_MS = 5000;   // fail-fast budget for the auto path; no retry
-export const AUTO_DEEP_THROTTLE_MS = 3000;  // min gap between auto LLM rewrites, per process (bounds spawn rate)
-const REWRITE_CACHE_MAX = 256;              // LRU cap for the query→variants cache
+export const AUTO_DEEP_TIMEOUT_MS = 5000; // fail-fast budget for the auto path; no retry
+export const AUTO_DEEP_THROTTLE_MS = 3000; // min gap between auto LLM rewrites, per process (bounds spawn rate)
+const REWRITE_CACHE_MAX = 256; // LRU cap for the query→variants cache
 
 let _lastAutoLlmAt = 0;
 const _rewriteCache = new Map(); // normalized query → variants (string[]); successes only
 
 /** Reset auto-path throttle + cache. Test-only; production state is per-process. */
-export function _resetAutoDeepState() { _lastAutoLlmAt = 0; _rewriteCache.clear(); }
+export function _resetAutoDeepState() {
+  _lastAutoLlmAt = 0;
+  _rewriteCache.clear();
+}
 
 function cacheGet(key) {
   if (!_rewriteCache.has(key)) return null;
   const v = _rewriteCache.get(key);
-  _rewriteCache.delete(key); _rewriteCache.set(key, v); // LRU bump
+  _rewriteCache.delete(key);
+  _rewriteCache.set(key, v); // LRU bump
   return v.slice();
 }
 function cacheSet(key, variants) {
@@ -330,7 +347,8 @@ export async function rewriteQuery(query, { llm = defaultLLM, retries = 1, cache
       parsed = null;
     }
     const variants = assembleVariants(original, parsed);
-    if (variants.length > 1) { // got at least one real rewrite
+    if (variants.length > 1) {
+      // got at least one real rewrite
       if (cache) cacheSet(key, variants); // cache successes only — failures retry next time
       return variants;
     }
@@ -357,8 +375,7 @@ export function rrfFuseN(rankedLists, k = RRF_K) {
   // convention) plus an rrfScore field. rrfAccumulate already keeps each id's
   // best-ranked row, so query-dependent fields (notably the FTS snippet) come from
   // the strongest variant rather than first-seen (F10).
-  return rrfAccumulate(rankedLists, k)
-    .map(({ row, score }) => ({ ...row, score: -score, rrfScore: score }));
+  return rrfAccumulate(rankedLists, k).map(({ row, score }) => ({ ...row, score: -score, rrfScore: score }));
 }
 
 // Build the searchObservationsHybrid ctx for one variant. Mirrors the
@@ -403,7 +420,8 @@ function defaultRerankText(db, rows) {
     const ids = rows.map((r) => r.id);
     const ph = ids.map(() => '?').join(',');
     const found = new Map(
-      db.prepare(`SELECT id, narrative, title, subtitle FROM observations WHERE id IN (${ph})`)
+      db
+        .prepare(`SELECT id, narrative, title, subtitle FROM observations WHERE id IN (${ph})`)
         .all(...ids)
         .map((o) => [o.id, o.narrative || [o.title, o.subtitle].filter(Boolean).join(' — ')]),
     );
@@ -435,7 +453,20 @@ function defaultRerankText(db, rows) {
  * @param {(db:Database, rows:Array)=>Map} [deps.rerankTextFn]  id→text builder for the rerank prompt
  * @returns {Promise<{results: Array, variants: string[], reranked: boolean}>}
  */
-export async function deepSearch(db, params, { llm, searchFn = defaultSearchFn, rrfK = RRF_K, auto = false, rerank = false, rerankLlm, rerankTopK = RERANK_TOPK, rerankTextFn = defaultRerankText } = {}) {
+export async function deepSearch(
+  db,
+  params,
+  {
+    llm,
+    searchFn = defaultSearchFn,
+    rrfK = RRF_K,
+    auto = false,
+    rerank = false,
+    rerankLlm,
+    rerankTopK = RERANK_TOPK,
+    rerankTextFn = defaultRerankText,
+  } = {},
+) {
   const query = String(params?.query ?? '').trim();
   if (!query) return { results: [], variants: [], reranked: false };
 
@@ -446,8 +477,11 @@ export async function deepSearch(db, params, { llm, searchFn = defaultSearchFn, 
   let retries = 1;
   let cache = false;
   if (!rewriteLlm) {
-    if (auto) { rewriteLlm = makeAutoLlm(); retries = 0; cache = true; }
-    else rewriteLlm = defaultLLM;
+    if (auto) {
+      rewriteLlm = makeAutoLlm();
+      retries = 0;
+      cache = true;
+    } else rewriteLlm = defaultLLM;
   }
   const variants = await rewriteQuery(query, { llm: rewriteLlm, retries, cache });
   const lists = variants.map((v, i) => {
@@ -457,7 +491,13 @@ export async function deepSearch(db, params, { llm, searchFn = defaultSearchFn, 
     // swallowed into an empty result (F5). Only rewrite variants are best-effort.
     let list;
     if (i === 0) list = searchFn(db, v, params) || [];
-    else { try { list = searchFn(db, v, params) || []; } catch { list = []; } }
+    else {
+      try {
+        list = searchFn(db, v, params) || [];
+      } catch {
+        list = [];
+      }
+    }
     // rrfFuseN fuses by array index as rank, so each list MUST already be in
     // composite-score order. searchObservationsHybrid appends downweighted
     // concept(×0.7)/PRF(×0.6) expansion rows to the TAIL unsorted and, on the
@@ -501,7 +541,10 @@ export async function deepSearch(db, params, { llm, searchFn = defaultSearchFn, 
       // (server.mjs also skips its context re-rank/re-sort when reranked, so the LLM
       // judgement is the final order — the re-stamp keeps score honest regardless.)
       const scores = top.map((r) => r.score).sort((a, b) => a - b);
-      head.forEach((r, i) => { r.score = scores[i]; r.rrfScore = -scores[i]; });
+      head.forEach((r, i) => {
+        r.score = scores[i];
+        r.rrfScore = -scores[i];
+      });
       ordered = [...head, ...fused.slice(k)];
       reranked = true;
     }

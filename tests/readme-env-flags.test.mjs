@@ -19,13 +19,14 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FLAG_RE = /(?:CLAUDE_MEM|MEM|OPENROUTER|ANTHROPIC)_[A-Z0-9_]+/;
 
 // Reads of the form `process.env.X`, `process.env['X']`, `env.X`, `env['X']`.
-const ENV_READ_RE = /(?:process\.env|env)\s*[.[]\s*['"]?\b((?:CLAUDE_MEM|MEM|OPENROUTER|ANTHROPIC)_[A-Z0-9_]+)/g;
+const ENV_READ_RE =
+  /(?:process\.env|env)\s*[.[]\s*['"]?\b((?:CLAUDE_MEM|MEM|OPENROUTER|ANTHROPIC)_[A-Z0-9_]+)/g;
 
 function shippedSourceFiles() {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   return pkg.files
-    .filter(f => /\.(mjs|js|sh)$/.test(f))
-    .map(f => join(ROOT, f))
+    .filter((f) => /\.(mjs|js|sh)$/.test(f))
+    .map((f) => join(ROOT, f))
     .filter(existsSync);
 }
 
@@ -81,9 +82,7 @@ describe('README environment-variable reference', () => {
       'MEM_NO_AUTO_ADOPT_FILE',
     ]);
 
-    const stale = [...mentioned]
-      .filter(n => !referenced.has(n) && !ALLOWED_UNREAD.has(n))
-      .sort();
+    const stale = [...mentioned].filter((n) => !referenced.has(n) && !ALLOWED_UNREAD.has(n)).sort();
 
     expect(stale, `README documents flags no shipped file references:\n${stale.join('\n')}`).toEqual([]);
   });

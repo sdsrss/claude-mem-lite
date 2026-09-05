@@ -110,7 +110,9 @@ export function detectMode() {
 }
 
 /** Reset cached mode (for testing). */
-export function _resetMode() { _mode = null; }
+export function _resetMode() {
+  _mode = null;
+}
 
 // ─── CLI Path ────────────────────────────────────────────────────────────────
 
@@ -174,15 +176,22 @@ export function flattenForCLI(input) {
  * @param {number} [opts.maxTokens=500] Max tokens in response
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
-export async function callHaiku(prompt, { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {}) {
+export async function callHaiku(
+  prompt,
+  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+) {
   if (!prompt) return null;
 
   const mode = detectMode();
 
   // CLI is terminal — no provider to fall back to.
   if (mode === 'cli') {
-    try { return callHaikuCLI(prompt, { timeout }); }
-    catch (e) { debugCatch(e, 'callHaiku'); return null; }
+    try {
+      return callHaikuCLI(prompt, { timeout });
+    } catch (e) {
+      debugCatch(e, 'callHaiku');
+      return null;
+    }
   }
 
   // Keyed provider (api/openrouter): attempt it, then degrade to the CLI on any
@@ -196,17 +205,22 @@ export async function callHaiku(prompt, { timeout = 10000, maxTokens = 500, temp
     // log label that lied under CLAUDE_MEM_MODEL=sonnet. Two copies of an HTTP client
     // means every proxy fix has to land twice, on the path where missing the proxy is
     // the difference between 1.4s and 13.5s.
-    primary = mode === 'api'
-      ? await callModelAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature })
-      : await callOpenRouterAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature });
+    primary =
+      mode === 'api'
+        ? await callModelAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature })
+        : await callOpenRouterAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature });
   } catch (e) {
     debugCatch(e, `callHaiku:${mode}`);
   }
   if (primary) return primary;
 
   debugLog('WARN', 'haiku-client', `${mode} call failed, falling back to claude CLI`);
-  try { return callHaikuCLI(prompt, { timeout }); }
-  catch (e) { debugCatch(e, 'callHaiku:cli-fallback'); return null; }
+  try {
+    return callHaikuCLI(prompt, { timeout });
+  } catch (e) {
+    debugCatch(e, 'callHaiku:cli-fallback');
+    return null;
+  }
 }
 
 /**
@@ -240,7 +254,10 @@ export async function callHaikuJSON(prompt, opts) {
  * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
  * @returns {Promise<object|null>} Parsed JSON or null
  */
-export async function callHaikuJSONAsync(prompt, { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {}) {
+export async function callHaikuJSONAsync(
+  prompt,
+  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+) {
   return callModelJSONAsync(prompt, resolveModel().cli, { timeout, maxTokens, temperature });
 }
 
@@ -258,32 +275,45 @@ export async function callHaikuJSONAsync(prompt, { timeout = 10000, maxTokens = 
  * @param {number} [opts.maxTokens=1000] Max tokens in response
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
-export async function callLLMWithModel(prompt, model = 'haiku', { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {}) {
+export async function callLLMWithModel(
+  prompt,
+  model = 'haiku',
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
   const mode = detectMode();
 
   // CLI is terminal — no provider to fall back to.
   if (mode === 'cli') {
-    try { return callModelCLI(prompt, resolvedModel, { timeout }); }
-    catch (e) { debugCatch(e, `callLLMWithModel:${resolvedModel}`); return null; }
+    try {
+      return callModelCLI(prompt, resolvedModel, { timeout });
+    } catch (e) {
+      debugCatch(e, `callLLMWithModel:${resolvedModel}`);
+      return null;
+    }
   }
 
   // Keyed provider (api/openrouter): attempt it, then degrade to the CLI on any
   // failure so a region-blocked / out-of-credit key still produces output.
   let primary = null;
   try {
-    primary = mode === 'api'
-      ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-      : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+    primary =
+      mode === 'api'
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
   } catch (e) {
     debugCatch(e, `callLLMWithModel:${mode}:${resolvedModel}`);
   }
   if (primary) return primary;
 
   debugLog('WARN', 'haiku-client', `${mode} call failed, falling back to claude CLI (${resolvedModel})`);
-  try { return callModelCLI(prompt, resolvedModel, { timeout }); }
-  catch (e) { debugCatch(e, `callLLMWithModel:cli-fallback:${resolvedModel}`); return null; }
+  try {
+    return callModelCLI(prompt, resolvedModel, { timeout });
+  } catch (e) {
+    debugCatch(e, `callLLMWithModel:cli-fallback:${resolvedModel}`);
+    return null;
+  }
 }
 
 /**
@@ -302,7 +332,11 @@ export async function callLLMWithModel(prompt, model = 'haiku', { timeout = 1500
  * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
-export async function callLLMWithModelAsync(prompt, model = 'haiku', { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {}) {
+export async function callLLMWithModelAsync(
+  prompt,
+  model = 'haiku',
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
   const mode = detectMode();
@@ -312,15 +346,20 @@ export async function callLLMWithModelAsync(prompt, model = 'haiku', { timeout =
 
   let primary = null;
   try {
-    primary = mode === 'api'
-      ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-      : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+    primary =
+      mode === 'api'
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
   } catch (e) {
     debugCatch(e, `callLLMWithModelAsync:${mode}:${resolvedModel}`);
   }
   if (primary) return primary;
 
-  debugLog('WARN', 'haiku-client', `${mode} call failed, falling back to async claude CLI (${resolvedModel})`);
+  debugLog(
+    'WARN',
+    'haiku-client',
+    `${mode} call failed, falling back to async claude CLI (${resolvedModel})`,
+  );
   return callModelCLIAsync(prompt, resolvedModel, { timeout });
 }
 
@@ -349,7 +388,11 @@ export async function callModelJSON(prompt, model = 'haiku', opts) {
  * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
  * @returns {Promise<object|null>}
  */
-export async function callModelJSONAsync(prompt, model = 'haiku', { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {}) {
+export async function callModelJSONAsync(
+  prompt,
+  model = 'haiku',
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
   const mode = detectMode();
@@ -363,9 +406,10 @@ export async function callModelJSONAsync(prompt, model = 'haiku', { timeout = 15
   // failure — NOT the blocking execFileSync callModelCLI that callModelJSON uses.
   let primary = null;
   try {
-    primary = mode === 'api'
-      ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-      : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+    primary =
+      mode === 'api'
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
   } catch (e) {
     debugCatch(e, `callModelJSONAsync:${mode}:${resolvedModel}`);
   }
@@ -413,13 +457,17 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     };
     const apiProxy = httpConnectProxyFor(apiUrl);
     const res = apiProxy
-      ? await postViaConnectProxy(apiProxy, apiUrl, { headers: apiHeaders, body: JSON.stringify(body), timeout })
+      ? await postViaConnectProxy(apiProxy, apiUrl, {
+          headers: apiHeaders,
+          body: JSON.stringify(body),
+          timeout,
+        })
       : await fetch(apiUrl, {
-        method: 'POST',
-        headers: apiHeaders,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+          method: 'POST',
+          headers: apiHeaders,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
     if (!res.ok) {
       debugLog('WARN', `${model}-api`, `HTTP ${res.status}`);
@@ -460,12 +508,12 @@ const HEADLESS_FLAG = '--no-session-persistence';
 let _headlessFlagOk = true;
 
 /** @internal test hook — module-level compat state must not leak across cases. */
-export function _resetHeadlessFlag() { _headlessFlagOk = true; }
+export function _resetHeadlessFlag() {
+  _headlessFlagOk = true;
+}
 
 function claudeArgs(modelName) {
-  return _headlessFlagOk
-    ? ['-p', '--model', modelName, HEADLESS_FLAG]
-    : ['-p', '--model', modelName];
+  return _headlessFlagOk ? ['-p', '--model', modelName, HEADLESS_FLAG] : ['-p', '--model', modelName];
 }
 
 // A retry is only ever worth it when the diagnostic NAMES the token it rejected —
@@ -480,7 +528,8 @@ function claudeArgs(modelName) {
 // Deliberately NOT keyed on exit code alone either: a non-zero exit is also the
 // normal shape of an overload/auth failure.
 const FLAG_TOKEN = /no-session-persistence/;
-const PARSE_REJECTION = /(unknown|unrecognized|unsupported|invalid|unexpected)[^\n]{0,40}(option|argument|flag|switch)/i;
+const PARSE_REJECTION =
+  /(unknown|unrecognized|unsupported|invalid|unexpected)[^\n]{0,40}(option|argument|flag|switch)/i;
 
 // Below this many ms left, a retry can only spawn a process and immediately kill
 // it — worse than returning the original failure.
@@ -541,7 +590,11 @@ export function execClaudeCliSync(modelName, { input, timeout }) {
     if (remaining < RETRY_MIN_BUDGET_MS) throw e;
     const out = execFileSync(getClaudePath(), ['-p', '--model', modelName], { ...opts, timeout: remaining });
     _headlessFlagOk = false;
-    debugLog('WARN', 'cli-compat', `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`);
+    debugLog(
+      'WARN',
+      'cli-compat',
+      `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`,
+    );
     return out;
   }
 }
@@ -590,75 +643,90 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
   // a number ONLY when the child exited on its own; a timeout/SIGKILL or a spawn
   // error reports null, which is what keeps either from being mistaken for an
   // argument-parse rejection and costing a second full-budget spawn.
-  const attempt = (args, budget) => new Promise((resolve) => {
-    let child;
-    try {
-      // Same headless-tax flags + flag-compat retry as callModelCLI (rationale there).
-      child = spawn(getClaudePath(), args, {
-        env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
-        cwd: '/tmp',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      debugCatch(e, `${model}-cli-async`);
-      resolve({ result: null, stderr: '', stdout: '', code: null });
-      return;
-    }
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const done = (val) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(val);
-    };
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
-      const t = stdout.trim();
-      // Salvage fenced-or-bare JSON from partial stdout (mirrors callModelCLI). A raw
-      // brace check would discard a complete-but-```json-fenced payload (#8605);
-      // parseJsonFromLLM strips fences before validating, and the caller re-parses
-      // the returned text the same way.
-      if (t && parseJsonFromLLM(t) !== null) { done({ result: { text: t }, stderr, stdout, code: null }); return; }
-      done({ result: null, stderr, stdout, code: null });
-    }, budget);
-    child.stdout?.setEncoding('utf8'); // decode multi-byte UTF-8 (CJK) across chunk boundaries
-    child.stdout?.on('data', (d) => { stdout += d; });
-    // Keep draining stderr so a chatty child can't block on a full pipe, but keep
-    // a bounded head of it — the flag-compat probe needs the parser's complaint.
-    // Slice AFTER appending: checking the length first lets one arbitrarily large
-    // chunk through whole, which is the shape a single big stderr write takes.
-    child.stderr?.setEncoding?.('utf8');
-    child.stderr?.on('data', (d) => { stderr = (stderr + d).slice(0, 4096); });
-    child.on('error', (e) => { debugCatch(e, `${model}-cli-async`); done({ result: null, stderr: '', stdout: '', code: null }); });
-    child.on('close', (code) => {
-      const t = stdout.trim();
-      // Parity with callModelCLI: execFileSync THROWS on a non-zero exit, so the
-      // sync leg only ever returns such output when parseJsonFromLLM accepts it
-      // (its catch-salvage). Without the same gate, a CLI that prints a
-      // diagnostic to stdout and dies — auth failure, overload banner, wrapper
-      // error — has that diagnostic returned as the model's ANSWER. rerank is the
-      // first caller to consume the raw {text}: extractRanked's last resort
-      // matches any bracketed number list in prose, so a `[1]` inside a stack
-      // frame becomes a ranking and silently reorders search results. The
-      // flag-compat probe below reads stderr/stdout/code directly, not `result`,
-      // so nulling here does not cost it its retry.
-      if (t && typeof code === 'number' && code !== 0 && parseJsonFromLLM(t) === null) {
-        done({ result: null, stderr, stdout, code });
+  const attempt = (args, budget) =>
+    new Promise((resolve) => {
+      let child;
+      try {
+        // Same headless-tax flags + flag-compat retry as callModelCLI (rationale there).
+        child = spawn(getClaudePath(), args, {
+          env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
+          cwd: '/tmp',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        debugCatch(e, `${model}-cli-async`);
+        resolve({ result: null, stderr: '', stdout: '', code: null });
         return;
       }
-      done({ result: t ? { text: t } : null, stderr, stdout, code });
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const done = (val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(val);
+      };
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* already gone */
+        }
+        const t = stdout.trim();
+        // Salvage fenced-or-bare JSON from partial stdout (mirrors callModelCLI). A raw
+        // brace check would discard a complete-but-```json-fenced payload (#8605);
+        // parseJsonFromLLM strips fences before validating, and the caller re-parses
+        // the returned text the same way.
+        if (t && parseJsonFromLLM(t) !== null) {
+          done({ result: { text: t }, stderr, stdout, code: null });
+          return;
+        }
+        done({ result: null, stderr, stdout, code: null });
+      }, budget);
+      child.stdout?.setEncoding('utf8'); // decode multi-byte UTF-8 (CJK) across chunk boundaries
+      child.stdout?.on('data', (d) => {
+        stdout += d;
+      });
+      // Keep draining stderr so a chatty child can't block on a full pipe, but keep
+      // a bounded head of it — the flag-compat probe needs the parser's complaint.
+      // Slice AFTER appending: checking the length first lets one arbitrarily large
+      // chunk through whole, which is the shape a single big stderr write takes.
+      child.stderr?.setEncoding?.('utf8');
+      child.stderr?.on('data', (d) => {
+        stderr = (stderr + d).slice(0, 4096);
+      });
+      child.on('error', (e) => {
+        debugCatch(e, `${model}-cli-async`);
+        done({ result: null, stderr: '', stdout: '', code: null });
+      });
+      child.on('close', (code) => {
+        const t = stdout.trim();
+        // Parity with callModelCLI: execFileSync THROWS on a non-zero exit, so the
+        // sync leg only ever returns such output when parseJsonFromLLM accepts it
+        // (its catch-salvage). Without the same gate, a CLI that prints a
+        // diagnostic to stdout and dies — auth failure, overload banner, wrapper
+        // error — has that diagnostic returned as the model's ANSWER. rerank is the
+        // first caller to consume the raw {text}: extractRanked's last resort
+        // matches any bracketed number list in prose, so a `[1]` inside a stack
+        // frame becomes a ranking and silently reorders search results. The
+        // flag-compat probe below reads stderr/stdout/code directly, not `result`,
+        // so nulling here does not cost it its retry.
+        if (t && typeof code === 'number' && code !== 0 && parseJsonFromLLM(t) === null) {
+          done({ result: null, stderr, stdout, code });
+          return;
+        }
+        done({ result: t ? { text: t } : null, stderr, stdout, code });
+      });
+      // EPIPE guard: the child may exit before we finish writing stdin.
+      child.stdin?.on('error', () => {});
+      try {
+        child.stdin?.write(payload);
+        child.stdin?.end();
+      } catch (e) {
+        debugCatch(e, `${model}-cli-async:stdin`);
+      }
     });
-    // EPIPE guard: the child may exit before we finish writing stdin.
-    child.stdin?.on('error', () => {});
-    try {
-      child.stdin?.write(payload);
-      child.stdin?.end();
-    } catch (e) {
-      debugCatch(e, `${model}-cli-async:stdin`);
-    }
-  });
 
   const firstArgs = claudeArgs(modelName);
   const first = await attempt(firstArgs, timeout);
@@ -668,9 +736,11 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
   // deep-search escalations). Gating on the exit code before `first.result` also
   // covers a CLI that prints its usage banner to stdout and exits non-zero —
   // otherwise that banner is returned as the model's answer and nothing retries.
-  const rejected = firstArgs.includes(HEADLESS_FLAG)
-    && typeof first.code === 'number' && first.code !== 0
-    && _isUnknownFlagError(`${first.stderr}\n${first.stdout.slice(0, 4096)}`);
+  const rejected =
+    firstArgs.includes(HEADLESS_FLAG) &&
+    typeof first.code === 'number' &&
+    first.code !== 0 &&
+    _isUnknownFlagError(`${first.stderr}\n${first.stdout.slice(0, 4096)}`);
   if (!rejected) return first.result;
   // The rejection is instantaneous (the child dies in argv parsing), so the retry
   // normally gets nearly the whole budget; spend only what is left of it.
@@ -684,7 +754,11 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
   // twin caches on any non-throwing run; this now means the same thing.
   if (second.code === 0) {
     _headlessFlagOk = false;
-    debugLog('WARN', `${model}-cli-async`, `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`);
+    debugLog(
+      'WARN',
+      `${model}-cli-async`,
+      `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`,
+    );
   }
   return second.result;
 }
@@ -698,7 +772,11 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
 // `cache_control` field has no OpenAI-format equivalent and is omitted.
 // `tier` is the resolved model tier ('haiku'|'sonnet'); OPENROUTER_MODEL can
 // override the resulting slug entirely (see resolveOpenRouterModel).
-async function callOpenRouterAPI(prompt, tier, { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE }) {
+async function callOpenRouterAPI(
+  prompt,
+  tier,
+  { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE },
+) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
@@ -715,7 +793,7 @@ async function callOpenRouterAPI(prompt, tier, { timeout, maxTokens, temperature
     const url = 'https://openrouter.ai/api/v1/chat/completions';
     const reqHeaders = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
       // Optional OpenRouter attribution headers (ignored by the API if absent).
       'X-Title': 'claude-mem-lite',
     };

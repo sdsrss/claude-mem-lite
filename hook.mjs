@@ -23,9 +23,16 @@ import { join } from 'path';
 import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import {
-  inferProject, detectBashSignificance,
-  extractFilePaths, isRelatedToEpisode,
-  makeEntryDesc, scrubSecrets, stripPrivate, EDIT_TOOLS, debugCatch, debugLog,
+  inferProject,
+  detectBashSignificance,
+  extractFilePaths,
+  isRelatedToEpisode,
+  makeEntryDesc,
+  scrubSecrets,
+  stripPrivate,
+  EDIT_TOOLS,
+  debugCatch,
+  debugLog,
   formatErrorRecallHints,
   MAX_HOOK_STDIN_BYTES,
 } from './utils.mjs';
@@ -39,21 +46,41 @@ import { readHookStdin } from './lib/hook-stdin.mjs';
 // (argument-less) lock — a different mutex with a different staleness policy.
 import { acquireLock as acquireProcLock } from './lib/proc-lock.mjs';
 import {
-  readEpisodeRaw, episodeFile,
-  acquireLock, releaseLock, readEpisode, writeEpisode,
-  createEpisode, addFileToEpisode, planEpisodeFlush,
-  writePendingEntry, mergePendingEntries, episodeHasSignificantContent, explainSignificance,
+  readEpisodeRaw,
+  episodeFile,
+  acquireLock,
+  releaseLock,
+  readEpisode,
+  writeEpisode,
+  createEpisode,
+  addFileToEpisode,
+  planEpisodeFlush,
+  writePendingEntry,
+  mergePendingEntries,
+  episodeHasSignificantContent,
+  explainSignificance,
 } from './hook-episode.mjs';
 import { DB_DIR } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
-  RUNTIME_DIR, EPISODE_BUFFER_SIZE, EPISODE_TIME_GAP_MS,
-  SESSION_EXPIRY_MS, STALE_SESSION_MS, STALE_LOCK_MS, AUTO_MAINTAIN_LOCK,
+  RUNTIME_DIR,
+  EPISODE_BUFFER_SIZE,
+  EPISODE_TIME_GAP_MS,
+  SESSION_EXPIRY_MS,
+  STALE_SESSION_MS,
+  STALE_LOCK_MS,
+  AUTO_MAINTAIN_LOCK,
   STALE_EPISODE_BUFFER_AGE_MS,
-  HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT,
-  sessionFile, getSessionId, createSessionId, openDb,
-  spawnBackground, sweepOrphanEpisodeFiles, sweepStaleProjectMarkers,
+  HANDOFF_EXPIRY_CLEAR,
+  HANDOFF_EXPIRY_EXIT,
+  sessionFile,
+  getSessionId,
+  createSessionId,
+  openDb,
+  spawnBackground,
+  sweepOrphanEpisodeFiles,
+  sweepStaleProjectMarkers,
 } from './hook-shared.mjs';
 import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
 import { readFastSummarySource, insertFastSummary, FAST_SUMMARY_LIMITS } from './lib/fast-summary.mjs';
@@ -62,7 +89,21 @@ import { recordHookError } from './lib/hook-telemetry.mjs';
 import { queueHookContext, queueHookSystemMessage, flushHookStdout } from './lib/hook-stdout.mjs';
 import { shouldRecallOnFailure } from './lib/tool-refusal.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
-import { cleanupBroken, decayAndMarkIdle, boostAccessed, demotePinned, resolveDefaultMaintainOps, markAutoCompressible, selectFuzzyDedupeIds, stampDedupSuperseded, hardDeleteCandidateCount, purgeStale, recoverOrphanedChildren, recoverBuriedLessons, sweepDeferredWorkOrphans } from './lib/maintain-core.mjs';
+import {
+  cleanupBroken,
+  decayAndMarkIdle,
+  boostAccessed,
+  demotePinned,
+  resolveDefaultMaintainOps,
+  markAutoCompressible,
+  selectFuzzyDedupeIds,
+  stampDedupSuperseded,
+  hardDeleteCandidateCount,
+  purgeStale,
+  recoverOrphanedChildren,
+  recoverBuriedLessons,
+  sweepDeferredWorkOrphans,
+} from './lib/maintain-core.mjs';
 import { snapshotDb } from './lib/db-backup.mjs';
 import {
   extractCitationsFromTranscript,
@@ -90,8 +131,21 @@ import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from '
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
-import { buildAndSaveHandoff, detectContinuationIntent, renderHandoffInjection, pickHandoffToInject, extractUnfinishedSummary } from './hook-handoff.mjs';
-import { loadCiteBackForEpisode, extractCiteBackSignals, buildUnsavedBugfixHint, countUnsavedBugfixShape, buildCiteRecallNudge as libBuildCiteRecallNudge, nextCiteLowStreak } from './lib/cite-back-hint.mjs';
+import {
+  buildAndSaveHandoff,
+  detectContinuationIntent,
+  renderHandoffInjection,
+  pickHandoffToInject,
+  extractUnfinishedSummary,
+} from './hook-handoff.mjs';
+import {
+  loadCiteBackForEpisode,
+  extractCiteBackSignals,
+  buildUnsavedBugfixHint,
+  countUnsavedBugfixShape,
+  buildCiteRecallNudge as libBuildCiteRecallNudge,
+  nextCiteLowStreak,
+} from './lib/cite-back-hint.mjs';
 import { citeRecallPathFor } from './lib/cite-recall-path.mjs';
 import { detectUnpersistedDecision } from './lib/persist-reminder.mjs';
 // plugin-cache-guard.mjs loaded dynamically — pre-2.31.2 installs that auto-upgraded
@@ -100,8 +154,11 @@ import { detectUnpersistedDecision } from './lib/persist-reminder.mjs';
 let _cacheGuardCache = null;
 async function loadCacheGuard() {
   if (_cacheGuardCache !== null) return _cacheGuardCache;
-  try { _cacheGuardCache = await import('./plugin-cache-guard.mjs'); }
-  catch { _cacheGuardCache = {}; }
+  try {
+    _cacheGuardCache = await import('./plugin-cache-guard.mjs');
+  } catch {
+    _cacheGuardCache = {};
+  }
   return _cacheGuardCache;
 }
 // Audit 2026-09-02 P1-8. `hook.mjs` is ONE entry point for seven events, so every static
@@ -147,7 +204,15 @@ const event = process.argv[2];
 // `tests/audit-findings-20260814.test.mjs` scans BOTH detached spawners
 // (spawnBackground here, spawn(node,[HOOK_PATH,…]) in lib/save-enrich.mjs) and
 // reds when a spawned event is missing from this list.
-const BG_EVENTS = new Set(['llm-episode', 'llm-summary', 'auto-compress', 'llm-optimize', 'auto-maintain', 'enrich-save', 'update-check']);
+const BG_EVENTS = new Set([
+  'llm-episode',
+  'llm-summary',
+  'auto-compress',
+  'llm-optimize',
+  'auto-maintain',
+  'enrich-save',
+  'update-check',
+]);
 
 // Respect Claude Code plugin disable state even when legacy settings.json hooks remain.
 // install.mjs writes direct hooks into ~/.claude/settings.json, so disabling the plugin
@@ -203,9 +268,15 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
           if (db) {
             try {
               for (const sub of planEpisodeFlush(ep)) saveEpisodeImmediate(sub, db);
-              try { unlinkSync(join(RUNTIME_DIR, `ep-${inferProject()}.json`)); } catch {}
+              try {
+                unlinkSync(join(RUNTIME_DIR, `ep-${inferProject()}.json`));
+              } catch {}
             } finally {
-              try { db.close(); } catch { /* already gone */ }
+              try {
+                db.close();
+              } catch {
+                /* already gone */
+              }
             }
           }
         }
@@ -214,7 +285,11 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
       // it owns its own flush: a receipt queued before the signal arrived was
       // delivered by the pre-v3.70 inline write and would otherwise be dropped here
       // (pre-tag review NOTE N1).
-      try { flushHookStdout(); } catch { /* never change the exit code for a receipt */ }
+      try {
+        flushHookStdout();
+      } catch {
+        /* never change the exit code for a receipt */
+      }
       process.exit(0);
     });
   });
@@ -250,7 +325,11 @@ function flushEpisode(episode, hookEventName = 'PostToolUse') {
   try {
     flushEpisodeWithDb(db, episode, hookEventName);
   } finally {
-    try { db.close(); } catch { /* already closed / gone */ }
+    try {
+      db.close();
+    } catch {
+      /* already closed / gone */
+    }
   }
 }
 
@@ -330,7 +409,8 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
   // artifact stores, and a defect here is invisible from the outside (the symptom is an
   // absent field, which reads exactly like "there was nothing to record").
   const carryReads = !['0', 'off', 'false', 'no'].includes(
-    String(process.env.CLAUDE_MEM_READS_CARRY ?? '').toLowerCase());
+    String(process.env.CLAUDE_MEM_READS_CARRY ?? '').toLowerCase(),
+  );
   const willPersist = !carryReads || subs.some((s) => episodeHasSignificantContent(s));
 
   // Collect Read file paths tracked by post-tool-use.sh
@@ -344,7 +424,9 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       const raw = readFileSync(readsCollect, 'utf8');
       const paths = [...new Set(raw.split('\n').filter(Boolean))];
       episode.filesRead = paths;
-      try { unlinkSync(readsCollect); } catch {}
+      try {
+        unlinkSync(readsCollect);
+      } catch {}
     } catch {
       episode.filesRead = episode.filesRead || [];
     }
@@ -380,7 +462,10 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       // keep the rest. The asymmetry is safe: each group's immediate obs is persisted
       // BEFORE its flush-file write, so re-flushing the whole buffer would re-emit
       // already-saved groups as duplicate observations.
-      if (subs.length === 1) { writefail = true; break; }
+      if (subs.length === 1) {
+        writefail = true;
+        break;
+      }
       continue;
     }
     if (r === 'significant') anySignificant = true;
@@ -443,11 +528,15 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       // The older comment here claimed a line-based parser made two objects safe
       // as long as each got its own line; the 2.1.233 bundle has no such parser.
       queueHookContext(hookEventName, lines.join('\n'));
-    } catch { /* never block on receipt */ }
+    } catch {
+      /* never block on receipt */
+    }
   }
 
   // Remove episode buffer AFTER spawning background workers to prevent concurrent overwrites
-  try { unlinkSync(episodeFile()); } catch {}
+  try {
+    unlinkSync(episodeFile());
+  } catch {}
 }
 
 // Save one episode-shaped object: immediate rule-based observation (if
@@ -495,7 +584,9 @@ function flushEpisodeGroup(ep, db) {
   if (isSignificant && !process.env.CLAUDE_MEM_SKIP_EPISODE_LLM) {
     spawnBackground('llm-episode', flushFile);
   } else {
-    try { unlinkSync(flushFile); } catch {}
+    try {
+      unlinkSync(flushFile);
+    } catch {}
   }
   return isSignificant ? 'significant' : 'insignificant';
 }
@@ -507,10 +598,16 @@ function flushEpisodeGroup(ep, db) {
 
 async function handlePostToolUse() {
   let raw;
-  try { raw = await readStdin(); } catch { return; }
+  try {
+    raw = await readStdin();
+  } catch {
+    return;
+  }
 
   let hookData;
-  try { hookData = JSON.parse(raw.text); } catch {
+  try {
+    hookData = JSON.parse(raw.text);
+  } catch {
     // Truncated JSON — try to salvage tool_name from the prefix
     if (raw.truncated) {
       debugLog('WARN', 'postToolUse', 'stdin truncated at 256KB, attempting salvage');
@@ -542,13 +639,13 @@ async function handlePostToolUse() {
 
   // Skip noise (source of truth: skip-tools.mjs)
   if (SKIP_TOOLS.has(tool_name)) return;
-  if (SKIP_PREFIXES.some(p => tool_name.startsWith(p))) return;
+  if (SKIP_PREFIXES.some((p) => tool_name.startsWith(p))) return;
 
   // Shadow skill-adoption telemetry. mem_use is pre-filtered above, so the Skill tool is
   // the only visible adoption signal (v1). Placed before the resp-length gate because a
   // skill load's response shape varies. Never throws.
   if (tool_name === 'Skill') {
-    const ti = typeof tool_input === 'string' ? tryParseJson(tool_input) : (tool_input || {});
+    const ti = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
     // hookData.session_id (CC UUID) pairs this adoption to the would-be reco from the
     // UserPromptSubmit hook earlier in the same session (matched precision, B1).
     // Lazy: only a `Skill` tool call needs this module, which is a small fraction of
@@ -556,17 +653,19 @@ async function handlePostToolUse() {
     try {
       const { recordSkillAdoption } = await import('./registry-recommend.mjs');
       recordSkillAdoption('Skill', ti, inferProject(), hookData.session_id);
-    } catch { /* telemetry only — never blocks capture */ }
+    } catch {
+      /* telemetry only — never blocks capture */
+    }
   }
 
   const resp = normalizeToolResponse(tool_response);
   if (!resp || resp.length < 10) return;
 
-  const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : (tool_input || {});
+  const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   const files = extractFilePaths(toolInput);
 
   // Tier 1 B: Detect significant Bash commands
-  const bashSig = (tool_name === 'Bash') ? detectBashSignificance(toolInput, resp) : null;
+  const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
 
   // Build episode entry
   const entry = {
@@ -578,8 +677,7 @@ async function handlePostToolUse() {
     // isHardError gates the bugfix-shape save-nudge (lib/cite-back-hint.mjs): a real
     // failure fingerprint, not just "error" appearing in search/log output.
     isHardError: bashSig?.isHardError || false,
-    isSignificant: EDIT_TOOLS.has(tool_name) ||
-                   bashSig?.isSignificant || false,
+    isSignificant: EDIT_TOOLS.has(tool_name) || bashSig?.isSignificant || false,
     bashSig: bashSig || null,
     // CC UUID from hook stdin — lets flushEpisode split a buffer shared by
     // concurrent same-project sessions into per-session observations. Null for
@@ -593,7 +691,10 @@ async function handlePostToolUse() {
 
   // Lazy DB: only opened when needed (error recall or file history)
   let db = null;
-  const getDb = () => { if (!db) db = openDb(); return db; };
+  const getDb = () => {
+    if (!db) db = openDb();
+    return db;
+  };
 
   // Tier 2 G: Error-triggered recall. Gated on isHardError (genuine failure
   // fingerprint), NOT isError — the loose gate fired "Related memories found for
@@ -607,7 +708,10 @@ async function handlePostToolUse() {
   }
 
   if (!acquireLock()) {
-    if (db) try { db.close(); } catch {}
+    if (db)
+      try {
+        db.close();
+      } catch {}
     writePendingEntry(entry, sessionId, project);
     return;
   }
@@ -642,10 +746,12 @@ async function handlePostToolUse() {
     // File history injection moved to PreToolUse hook (scripts/pre-tool-recall.js)
 
     writeEpisode(episode);
-
   } finally {
     releaseLock();
-    if (db) try { db.close(); } catch {}
+    if (db)
+      try {
+        db.close();
+      } catch {}
   }
 }
 
@@ -699,7 +805,9 @@ function triggerErrorRecall(db, toolInput, response, opts = {}) {
       // PostToolUse. Both receipts vanished. Queue; one envelope is written at exit.
       queueHookContext(eventName, out);
     }
-  } catch (e) { debugCatch(e, 'triggerErrorRecall'); }
+  } catch (e) {
+    debugCatch(e, 'triggerErrorRecall');
+  }
 }
 
 /**
@@ -745,9 +853,17 @@ async function handlePostToolFailure() {
   if (String(process.env.CLAUDE_MEM_ERROR_RECALL_ON_FAILURE || '').toLowerCase() === 'off') return;
 
   let raw;
-  try { raw = await readStdin(); } catch { return; }
+  try {
+    raw = await readStdin();
+  } catch {
+    return;
+  }
   let hookData;
-  try { hookData = JSON.parse(raw.text); } catch { return; }
+  try {
+    hookData = JSON.parse(raw.text);
+  } catch {
+    return;
+  }
 
   const { tool_name, tool_input, error, is_interrupt } = hookData || {};
   // The manifest matcher already scopes this to Bash. Re-checking is not redundancy for
@@ -781,7 +897,7 @@ async function handlePostToolFailure() {
   const verdict = shouldRecallOnFailure({ error, is_interrupt });
   if (!verdict.ok) return;
 
-  const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : (tool_input || {});
+  const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   if (typeof toolInput?.command !== 'string' || !toolInput.command) return;
 
   let db = null;
@@ -805,7 +921,10 @@ async function handlePostToolFailure() {
     // No flushHookStdout() here: the single flush after the event switch owns writing
     // the envelope, and two flush points is how a process ends up emitting two JSON
     // documents — the degradation that made BOTH receipts vanish in v3.68.
-    if (db) try { db.close(); } catch {}
+    if (db)
+      try {
+        db.close();
+      } catch {}
   }
 }
 
@@ -845,7 +964,9 @@ async function readStopHookInput() {
     if (typeof hookData?.transcript_path === 'string' && hookData.transcript_path.length > 0) {
       transcriptPath = hookData.transcript_path;
     }
-  } catch { /* stdin unavailable — fall back to local session id */ }
+  } catch {
+    /* stdin unavailable — fall back to local session id */
+  }
   return { ccSessionId, transcriptPath };
 }
 
@@ -877,7 +998,12 @@ function flushEpisodeAtStop(sessionId, project) {
       claimDb = openDb();
       try {
         const episode = claimDb ? JSON.parse(readFileSync(claimFile, 'utf8')) : null;
-        if (episode && episode.entries && episode.entries.length > 0 && episodeHasSignificantContent(episode)) {
+        if (
+          episode &&
+          episode.entries &&
+          episode.entries.length > 0 &&
+          episodeHasSignificantContent(episode)
+        ) {
           if (!episode.sessionId) episode.sessionId = sessionId;
           if (!episode.project) episode.project = project;
           // Split by CC session before saving — parity with flushEpisode's non-contended path
@@ -902,16 +1028,28 @@ function flushEpisodeAtStop(sessionId, project) {
         }
       } finally {
         if (claimDb) {
-          try { unlinkSync(claimFile); } catch {}
-          try { claimDb.close(); } catch { /* already gone */ }
+          try {
+            unlinkSync(claimFile);
+          } catch {}
+          try {
+            claimDb.close();
+          } catch {
+            /* already gone */
+          }
         } else {
           // Nothing was (or could be) persisted — restore the buffer under its real name
           // so the next fire retries it. If even the rename fails, the claim file stays
           // and the 1h orphan sweep collects it, which is the pre-B1 behaviour.
-          try { renameSync(claimFile, epFile); } catch { /* leave it for sweepOrphanEpisodeFiles */ }
+          try {
+            renameSync(claimFile, epFile);
+          } catch {
+            /* leave it for sweepOrphanEpisodeFiles */
+          }
         }
       }
-    } catch (e) { debugCatch(e, 'handleStop-fallback'); }
+    } catch (e) {
+      debugCatch(e, 'handleStop-fallback');
+    }
   }
 }
 
@@ -923,16 +1061,21 @@ function flushEpisodeAtStop(sessionId, project) {
  * user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
  */
 function markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot }) {
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ?
     WHERE content_session_id = ? AND status = 'active'
-  `).run(new Date().toISOString(), Date.now(), sessionId);
+  `,
+  ).run(new Date().toISOString(), Date.now(), sessionId);
   // Save handoff snapshot for cross-session continuity.
   // sessionId = mem-internal (query key); ccSessionId = CC UUID (scope key for
   // parallel-safe row identity). Without the split, CC UUID-based queries miss
   // user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
-  try { buildAndSaveHandoff(db, sessionId, project, 'exit', episodeSnapshot, ccSessionId || sessionId); }
-  catch (e) { debugCatch(e, 'handleStop-handoff'); }
+  try {
+    buildAndSaveHandoff(db, sessionId, project, 'exit', episodeSnapshot, ccSessionId || sessionId);
+  } catch (e) {
+    debugCatch(e, 'handleStop-handoff');
+  }
 }
 
 /** Fast summary baseline — ensures a summary exists even if the background LLM fails. */
@@ -942,9 +1085,9 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
   // mirrors handleSessionStart line 795 hasSummary guard). Uses mem-internal sessionId
   // as the WHERE key per the top-of-file dual-id invariant (#7789).
   try {
-    const existingSummary = db.prepare(
-      'SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1'
-    ).get(sessionId);
+    const existingSummary = db
+      .prepare('SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1')
+      .get(sessionId);
     if (!existingSummary) {
       const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
 
@@ -967,7 +1110,9 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
           if (s.uncertain) notesParts.push(`Uncertain: ${s.uncertain}`);
           structuredNotes = notesParts.join('\n');
         }
-      } catch (e) { debugCatch(e, 'handleStop-structured-extract'); }
+      } catch (e) {
+        debugCatch(e, 'handleStop-structured-extract');
+      }
 
       const finalCompleted = structuredCompleted || obsCompleted;
       const finalRemaining = structuredNotDone;
@@ -975,13 +1120,22 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
 
       if (fastRequestRaw || finalCompleted || finalRemaining) {
         insertFastSummary(db, {
-          sessionId, project, now: new Date(),
-          values: { request: fastRequestRaw, completed: finalCompleted, remaining: finalRemaining, notes: finalNotes },
+          sessionId,
+          project,
+          now: new Date(),
+          values: {
+            request: fastRequestRaw,
+            completed: finalCompleted,
+            remaining: finalRemaining,
+            notes: finalNotes,
+          },
           limits: FAST_SUMMARY_LIMITS.stop,
         });
       }
     }
-  } catch (e) { debugCatch(e, 'handleStop-fast-summary'); }
+  } catch (e) {
+    debugCatch(e, 'handleStop-fast-summary');
+  }
 }
 
 /** Scan the transcript for `#NN` citations, bump access_count, and run citation decay. */
@@ -1007,8 +1161,11 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
       // parent is then parsed once and stays memoized for every scanner after it:
       // still one parent parse per Stop, the property the tail comment was protecting.
       let sub = { injected: new Set(), cited: new Set(), files: 0 };
-      try { sub = collectSubagentSurface(transcriptPath); }
-      catch (e) { debugCatch(e, 'handleStop-subagent-collect'); }
+      try {
+        sub = collectSubagentSurface(transcriptPath);
+      } catch (e) {
+        debugCatch(e, 'handleStop-subagent-collect');
+      }
 
       const ids = extractCitationsFromTranscript(transcriptPath);
       if (ids.size > 0) {
@@ -1019,12 +1176,18 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // tier via boostAccessed. The population to credit — all seven faces, and why
         // extractAllInjected alone is the wrong five — lives in the builder.
         const relevant = buildCitationRelevanceSet({
-          transcriptPath, runtimeDir: RUNTIME_DIR, project,
-          sessionId: ccSessionId, subagentInjected: sub.injected,
+          transcriptPath,
+          runtimeDir: RUNTIME_DIR,
+          project,
+          sessionId: ccSessionId,
+          subagentInjected: sub.injected,
         });
         const n = bumpCitationAccess(db, ids, project, relevant);
-        debugLog('DEBUG', 'handleStop',
-          `citations: ${ids.size} ids scanned, ${relevant.size} relevant, ${n} obs bumped`);
+        debugLog(
+          'DEBUG',
+          'handleStop',
+          `citations: ${ids.size} ids scanned, ${relevant.size} relevant, ${n} obs bumped`,
+        );
       }
 
       // v32 citation-decay: tighter feedback loop on top of P4. Re-scan
@@ -1070,7 +1233,9 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // miss can evict anything. The first ground is untouched and is why
         // the policy stays.
         const keyCtxIds = extractInjectedFromKeyContext({
-          runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId,
+          runtimeDir: RUNTIME_DIR,
+          project,
+          sessionId: ccSessionId,
         });
         // D#177: `sub.injected` counts toward the entry gate when the face is admitted.
         // Without this a session whose ONLY injection was a dispatched agent's prompt
@@ -1079,7 +1244,8 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // level and gated out at another, which is how UPS went unmetered for a whole
         // minor version.
         const subDecayOn = !['0', 'off', 'false', 'no'].includes(
-          String(process.env.CLAUDE_MEM_SUBAGENT_DECAY ?? '').toLowerCase());
+          String(process.env.CLAUDE_MEM_SUBAGENT_DECAY ?? '').toLowerCase(),
+        );
         if (injected.size > 0 || keyCtxIds.size > 0 || (subDecayOn && sub.injected.size > 0)) {
           // Text-floor gate: skip decay on tool-only Stops. Without this,
           // a turn that ends on tool_use locks every injected obs as
@@ -1089,7 +1255,11 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
           // session with zero main-thread text gets a free pass — the
           // next Stop in the same session will re-evaluate.
           if (!hasMainThreadAssistantText(transcriptPath)) {
-            debugLog('DEBUG', 'handleStop', `citation-decay: skipped (no main-thread assistant text yet, injected=${injected.size})`);
+            debugLog(
+              'DEBUG',
+              'handleStop',
+              `citation-decay: skipped (no main-thread assistant text yet, injected=${injected.size})`,
+            );
           } else {
             const citedMain = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
             for (const id of citeBackIds) citedMain.add(id);
@@ -1158,7 +1328,11 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
             // streaks / adoption denominators. Fallback keeps legacy
             // stdin-less invocations on the old key.
             const r = applyCitationDecay(db, project, decayInjected, decayCited, ccSessionId || sessionId);
-            debugLog('DEBUG', 'handleStop', `citation-decay: touched=${r.touched} promoted=${r.promoted} demoted=${r.demoted}`);
+            debugLog(
+              'DEBUG',
+              'handleStop',
+              `citation-decay: touched=${r.touched} promoted=${r.promoted} demoted=${r.demoted}`,
+            );
             // R1: persist this session's invocation→cite funnel row. touched =
             // obs resolved this run (denominator), promoted = obs cited this run
             // (numerator). Idempotent (touched is 0 on re-fire) + best-effort.
@@ -1174,8 +1348,13 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
             // keyctx rides along for VISIBILITY only — it is a separate
             // telemetry table, so recording it here cannot widen the decay
             // denominator the way v3.66.0's union did.
-            recordCitationSurfaces(db, project, ccSessionId || sessionId,
-              { ...injectedBySurface, keyctx: keyCtxIds }, citedMain);
+            recordCitationSurfaces(
+              db,
+              project,
+              ccSessionId || sessionId,
+              { ...injectedBySurface, keyctx: keyCtxIds },
+              citedMain,
+            );
             // P1 (D#78): per-edge attribution. The session cooldown file
             // (keyed by CC session id) records which FILE each obs was
             // injected for; resolve those (obs,file) edges as hit/miss with
@@ -1191,15 +1370,24 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
               if (ccSessionId) {
                 const edges = readPreRecallFileEdges(RUNTIME_DIR, ccSessionId);
                 if (edges.length > 0) {
-                  const er = resolveEdgeAttribution(db, project, edges, citedMain, ccSessionId,
-                    { mainInjectedIds: injected });
-                  debugLog('DEBUG', 'handleStop', `edge-attribution: edges=${er.touchedEdges} hits=${er.hits} misses=${er.misses}`);
+                  const er = resolveEdgeAttribution(db, project, edges, citedMain, ccSessionId, {
+                    mainInjectedIds: injected,
+                  });
+                  debugLog(
+                    'DEBUG',
+                    'handleStop',
+                    `edge-attribution: edges=${er.touchedEdges} hits=${er.hits} misses=${er.misses}`,
+                  );
                 }
               }
-            } catch (e) { debugCatch(e, 'handleStop-edge-attribution'); }
+            } catch (e) {
+              debugCatch(e, 'handleStop-edge-attribution');
+            }
           }
         }
-      } catch (e) { debugCatch(e, 'handleStop-citation-decay'); }
+      } catch (e) {
+        debugCatch(e, 'handleStop-citation-decay');
+      }
 
       // Persist cite-recall ratio for the next SessionStart to surface as
       // feedback. This block re-scans the transcript rather than threading the
@@ -1220,25 +1408,35 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // Carry the consecutive-low-cite streak forward so the SessionStart
         // nag can self-silence after the project has ignored it N times.
         let priorStreak = 0;
-        try { priorStreak = JSON.parse(readFileSync(dest, 'utf8')).lowStreak || 0; } catch {}
+        try {
+          priorStreak = JSON.parse(readFileSync(dest, 'utf8')).lowStreak || 0;
+        } catch {}
         const lowStreak = nextCiteLowStreak(priorStreak, stats);
         // G3: finalized-in-conversation + zero deliberate persistence →
         // decisionSignal rides the payload; next SessionStart reminds once.
         let decisionSignal = null;
         try {
-          const promptRows = db.prepare(`
+          const promptRows = db
+            .prepare(
+              `
             SELECT prompt_text FROM user_prompts
             WHERE content_session_id = ? ORDER BY prompt_number ASC LIMIT 200
-          `).all(sessionId);
+          `,
+            )
+            .all(sessionId);
           const d = detectUnpersistedDecision({
             prompts: promptRows.map((r) => r.prompt_text),
             transcriptPath,
           });
           if (d.fire) decisionSignal = d.signal;
-        } catch (e) { debugCatch(e, 'handleStop-persist-reminder'); }
+        } catch (e) {
+          debugCatch(e, 'handleStop-persist-reminder');
+        }
         const payload = { ...stats, ...bugfixStats, lowStreak, decisionSignal, project, savedAt: Date.now() };
         writeFileSync(dest, JSON.stringify(payload), { mode: 0o600 });
-      } catch (e) { debugCatch(e, 'handleStop-cite-recall-persist'); }
+      } catch (e) {
+        debugCatch(e, 'handleStop-cite-recall-persist');
+      }
 
       // D#152: the `subagent` face. Recorded in its OWN
       // recordCitationSurfaces call because it carries a different `cited`
@@ -1277,15 +1475,27 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
           // collectSubagentSurface call here would re-parse every sidechain file and,
           // worse, could disagree with the set the decay loop above just scored.
           if (sub.injected.size > 0) {
-            recordCitationSurfaces(db, project, ccSessionId || sessionId,
-              { subagent: sub.injected }, sub.cited);
-            debugLog('DEBUG', 'handleStop',
-              `subagent-face: files=${sub.files} injected=${sub.injected.size} cited=${sub.cited.size}`);
+            recordCitationSurfaces(
+              db,
+              project,
+              ccSessionId || sessionId,
+              { subagent: sub.injected },
+              sub.cited,
+            );
+            debugLog(
+              'DEBUG',
+              'handleStop',
+              `subagent-face: files=${sub.files} injected=${sub.injected.size} cited=${sub.cited.size}`,
+            );
           }
         }
-      } catch (e) { debugCatch(e, 'handleStop-subagent-face'); }
+      } catch (e) {
+        debugCatch(e, 'handleStop-subagent-face');
+      }
     }
-  } catch (e) { debugCatch(e, 'handleStop-citation-track'); }
+  } catch (e) {
+    debugCatch(e, 'handleStop-citation-track');
+  }
 }
 
 async function handleStop() {
@@ -1328,7 +1538,9 @@ async function handleStop() {
   if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) spawnBackground('llm-summary', sessionId, project);
 
   // Clean session file AFTER spawning background
-  try { unlinkSync(sessionFile()); } catch {}
+  try {
+    unlinkSync(sessionFile());
+  } catch {}
 }
 
 // ─── SessionStart Handler + CLAUDE.md Persistence (Tier 1 A, E) ─────────────
@@ -1356,16 +1568,20 @@ function gcStalePreRecallCooldowns() {
       // D#120: the injected-ids marker is also per-session now — same growth
       // shape as the cooldown files, same 24h GC (dedup window is 5 min).
       const isCooldown = name.startsWith('pre-recall-cooldown-') && name.endsWith('.json');
-      const isInjectedMarker = name.startsWith('.claude-mem-injected-')
-        || name.startsWith('.claude-mem-keyctx-'); // D#123 Key Context marker — same per-session growth, same 24h GC
+      const isInjectedMarker =
+        name.startsWith('.claude-mem-injected-') || name.startsWith('.claude-mem-keyctx-'); // D#123 Key Context marker — same per-session growth, same 24h GC
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);
         const st = statSync(p);
         if (now - st.mtimeMs > PRE_RECALL_COOLDOWN_STALE_MS) unlinkSync(p);
-      } catch { /* silent per-entry */ }
+      } catch {
+        /* silent per-entry */
+      }
     }
-  } catch { /* silent — RUNTIME_DIR may not exist on first run */ }
+  } catch {
+    /* silent — RUNTIME_DIR may not exist on first run */
+  }
 }
 
 // ─── SessionStart phase helpers ──────────────────────────────────────────────
@@ -1380,24 +1596,30 @@ function runSessionStartDbMutations(db, { sessionId, project, prevSessionId, now
 
   db.transaction(() => {
     // Ensure session exists in DB (INSERT OR IGNORE avoids race condition)
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
+    `,
+    ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
 
     // Complete previous session if this is a mid-session restart (/clear, /compact, crash)
     if (prevSessionId) {
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ?
         WHERE content_session_id = ? AND status = 'active'
-      `).run(now.toISOString(), now.getTime(), prevSessionId);
+      `,
+      ).run(now.toISOString(), now.getTime(), prevSessionId);
     }
 
     // Stale session cleanup: mark 24h+ active sessions as abandoned
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE sdk_sessions SET status = 'abandoned'
       WHERE status = 'active' AND started_at_epoch < ?
-    `).run(staleSessionCutoff);
+    `,
+    ).run(staleSessionCutoff);
 
     // The two auto-compress marking passes that used to run here moved to the 24h
     // auto-maintain worker (audit 2026-08-22, P2-11): they are maintenance, and every
@@ -1428,13 +1650,19 @@ function markAutoCompressibleIfDue(db, project) {
   try {
     const last = JSON.parse(readFileSync(gate, 'utf8'));
     if (Date.now() - last.epoch < 24 * 3600000) return;
-  } catch { /* no gate file → due */ }
+  } catch {
+    /* no gate file → due */
+  }
   try {
     const marked = markAutoCompressible(db, project);
-    if (marked.aged > 0) debugLog('DEBUG', 'auto-maintain', `auto-compressed ${marked.aged} old observations`);
-    if (marked.noise > 0) debugLog('DEBUG', 'auto-maintain', `auto-compressed ${marked.noise} LOW_SIGNAL noise (7d window)`);
+    if (marked.aged > 0)
+      debugLog('DEBUG', 'auto-maintain', `auto-compressed ${marked.aged} old observations`);
+    if (marked.noise > 0)
+      debugLog('DEBUG', 'auto-maintain', `auto-compressed ${marked.noise} LOW_SIGNAL noise (7d window)`);
     writeFileSync(gate, JSON.stringify({ epoch: Date.now() }));
-  } catch (e) { debugCatch(e, 'auto-maintain-mark-compressible'); }
+  } catch (e) {
+    debugCatch(e, 'auto-maintain-mark-compressible');
+  }
 }
 
 function runSessionStartAutoMaintain(db, project) {
@@ -1492,24 +1720,32 @@ function runSessionStartAutoMaintain(db, project) {
       // before recoverChildrenOf existed are hidden + queue-less (unreachable). Resurface
       // them so normal decay/GC handles them on merit. Non-destructive (un-hide only).
       const orphansRecovered = recoverOrphanedChildren(db, mctx);
-      if (orphansRecovered > 0) debugLog('DEBUG', 'auto-maintain', `recovered ${orphansRecovered} orphaned compression children`);
+      if (orphansRecovered > 0)
+        debugLog('DEBUG', 'auto-maintain', `recovered ${orphansRecovered} orphaned compression children`);
 
       // Heal lesson rows citation-decay buried at importance 0 under the old floor=0.
       // Non-destructive (0→1 on lesson-bearing rows only); idempotent no-op once none remain.
       const lessonsHealed = recoverBuriedLessons(db, mctx);
-      if (lessonsHealed > 0) debugLog('DEBUG', 'auto-maintain', `healed ${lessonsHealed} lesson rows buried at importance 0`);
+      if (lessonsHealed > 0)
+        debugLog('DEBUG', 'auto-maintain', `healed ${lessonsHealed} lesson rows buried at importance 0`);
 
       // Heal deferred_work rows whose closing obs / source prompt was deleted while FK was OFF
       // (dangling ref foreign_key_check flags). Applies the ON DELETE SET NULL the FK would.
       const deferredHealed = sweepDeferredWorkOrphans(db, mctx);
-      if (deferredHealed > 0) debugLog('DEBUG', 'auto-maintain', `healed ${deferredHealed} deferred-work rows with dangling references`);
+      if (deferredHealed > 0)
+        debugLog(
+          'DEBUG',
+          'auto-maintain',
+          `healed ${deferredHealed} deferred-work rows with dangling references`,
+        );
 
       const { decayed, idleMarked } = decayAndMarkIdle(db, mctx);
       if (decayed > 0) debugLog('DEBUG', 'auto-maintain', `decayed ${decayed} stale observations`);
       if (idleMarked > 0) debugLog('DEBUG', 'auto-maintain', `marked ${idleMarked} idle as pending-purge`);
 
       const boosted = boostAccessed(db, mctx);
-      if (boosted > 0) debugLog('DEBUG', 'auto-maintain', `boosted ${boosted} frequently-accessed observations`);
+      if (boosted > 0)
+        debugLog('DEBUG', 'auto-maintain', `boosted ${boosted} frequently-accessed observations`);
 
       // Auto-dedup (exact): merge identical-title observations within 1h.
       // Catches rapid duplicate writes (same hook firing twice, race conditions).
@@ -1522,7 +1758,9 @@ function runSessionStartAutoMaintain(db, project) {
       // and the string 'auto-dedup' write clobbered numeric supersession chains that
       // citation-tracker decay hand-off and timeline re-anchoring both follow. The
       // UPDATE repeats the guard so a concurrent writer can't re-stamp a chain.
-      const dupPairs = db.prepare(`
+      const dupPairs = db
+        .prepare(
+          `
         SELECT a.id as keep_id, b.id as remove_id
         FROM observations a
         JOIN observations b ON a.title = b.title AND a.project = b.project
@@ -1531,9 +1769,11 @@ function runSessionStartAutoMaintain(db, project) {
           AND ${liveObsFilterSql('a')}
           AND ${liveObsFilterSql('b')}
         LIMIT 20
-      `).all();
+      `,
+        )
+        .all();
       if (dupPairs.length > 0) {
-        const removeIds = dupPairs.map(p => p.remove_id);
+        const removeIds = dupPairs.map((p) => p.remove_id);
         stampDedupSuperseded(db, removeIds, 'auto-dedup');
         debugLog('DEBUG', 'auto-maintain', `auto-deduped ${dupPairs.length} near-identical observations`);
       }
@@ -1554,26 +1794,36 @@ function runSessionStartAutoMaintain(db, project) {
       if (!process.env.CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY) {
         const SCAN_LIMIT = 500;
         const FUZZY_MAX_MERGES = 20;
-        const recent = db.prepare(`
+        const recent = db
+          .prepare(
+            `
           SELECT id, title, importance, created_at_epoch, narrative, text
           FROM observations
           WHERE ${liveObsFilterSql('')}
             AND created_at_epoch > ?
             AND title IS NOT NULL AND title != ''
           ORDER BY created_at_epoch DESC LIMIT ${SCAN_LIMIT}
-        `).all(STALE_AGE);
+        `,
+          )
+          .all(STALE_AGE);
         if (recent.length >= 2) {
           // audit #8: supersede only when title AND body match — title-only (a word-SET
           // metric) collapsed distinct observations sharing a title token-set. The
           // selection is the shared pure core in lib/maintain-core (unit-tested there).
-          const rows = recent.map(r => ({
-            id: r.id, title: r.title, importance: r.importance,
+          const rows = recent.map((r) => ({
+            id: r.id,
+            title: r.title,
+            importance: r.importance,
             body: (r.narrative && r.narrative.trim()) || (r.text && r.text.trim()) || '',
           }));
           const fuzzyRemoveIds = selectFuzzyDedupeIds(rows, { maxMerges: FUZZY_MAX_MERGES });
           if (fuzzyRemoveIds.length > 0) {
             stampDedupSuperseded(db, fuzzyRemoveIds, 'auto-dedup-fuzzy');
-            debugLog('DEBUG', 'auto-maintain', `fuzzy auto-deduped ${fuzzyRemoveIds.length} near-identical observations`);
+            debugLog(
+              'DEBUG',
+              'auto-maintain',
+              `fuzzy auto-deduped ${fuzzyRemoveIds.length} near-identical observations`,
+            );
           }
         }
       }
@@ -1606,7 +1856,12 @@ function runSessionStartAutoMaintain(db, project) {
       const demotedPinned = resolveDefaultMaintainOps().includes('demote_pinned')
         ? demotePinned(db, mctx)
         : 0;
-      if (demotedPinned > 0) debugLog('DEBUG', 'auto-maintain', `demoted ${demotedPinned} pinned-but-uncited observations (no lesson → 1, lesson → 2)`);
+      if (demotedPinned > 0)
+        debugLog(
+          'DEBUG',
+          'auto-maintain',
+          `demoted ${demotedPinned} pinned-but-uncited observations (no lesson → 1, lesson → 2)`,
+        );
 
       // Orphan sweep: remove `ep-flush-*` / `pending-*` runtime files older
       // than 1h. handleLLMEpisode normally unlinks its own tmpFile on every
@@ -1623,11 +1878,18 @@ function runSessionStartAutoMaintain(db, project) {
       try {
         const swept = sweepOrphanEpisodeFiles(RUNTIME_DIR, {
           onSweep: (name, kind) => {
-            if (kind === 'buffer') debugLog('DEBUG', 'auto-maintain', `discarding abandoned episode buffer ${name} (>7d; would otherwise flush mis-dated on revisit)`);
+            if (kind === 'buffer')
+              debugLog(
+                'DEBUG',
+                'auto-maintain',
+                `discarding abandoned episode buffer ${name} (>7d; would otherwise flush mis-dated on revisit)`,
+              );
           },
         });
         if (swept > 0) debugLog('DEBUG', 'auto-maintain', `swept ${swept} orphan ep-flush/pending file(s)`);
-      } catch (e) { debugCatch(e, 'auto-maintain-orphan-sweep'); }
+      } catch (e) {
+        debugCatch(e, 'auto-maintain-orphan-sweep');
+      }
 
       // GC expired session_handoffs: the consume-DELETE (handleSessionStart) only removes
       // the single handoff a continuation reads back; an 'exit'/'compact' that is never
@@ -1635,20 +1897,28 @@ function runSessionStartAutoMaintain(db, project) {
       // expiry but nothing reaped the rows. Delete past-expiry rows with a +1d margin so a
       // still-readable handoff is never raced away. 'clear' 6h+1d, 'exit'/other 7d+1d.
       try {
-        const gc = db.prepare(`
+        const gc = db
+          .prepare(
+            `
           DELETE FROM session_handoffs
           WHERE (type = 'clear' AND created_at_epoch < ?)
              OR (type != 'clear' AND created_at_epoch < ?)
-        `).run(Date.now() - HANDOFF_EXPIRY_CLEAR - DAY_MS, Date.now() - HANDOFF_EXPIRY_EXIT - DAY_MS);
+        `,
+          )
+          .run(Date.now() - HANDOFF_EXPIRY_CLEAR - DAY_MS, Date.now() - HANDOFF_EXPIRY_EXIT - DAY_MS);
         if (gc.changes > 0) debugLog('DEBUG', 'auto-maintain', `gc'd ${gc.changes} expired session_handoffs`);
-      } catch (e) { debugCatch(e, 'auto-maintain-handoff-gc'); }
+      } catch (e) {
+        debugCatch(e, 'auto-maintain-handoff-gc');
+      }
 
       // Mark maintenance as done (24h gate) — even though compression runs in background
       writeFileSync(maintainFile, JSON.stringify({ epoch: Date.now() }));
       // Weekly summary grouping runs in background to avoid blocking SessionStart
       if (!process.env.CLAUDE_MEM_SKIP_COMPRESS) spawnBackground('auto-compress');
       if (!process.env.CLAUDE_MEM_SKIP_OPTIMIZE) spawnBackground('llm-optimize');
-    } catch (e) { debugCatch(e, 'auto-maintain'); }
+    } catch (e) {
+      debugCatch(e, 'auto-maintain');
+    }
   }
 }
 
@@ -1665,7 +1935,9 @@ function scheduleSessionStartAutoMaintain(project) {
     try {
       const last = JSON.parse(readFileSync(file, 'utf8'));
       return Date.now() - last.epoch >= 24 * 3600000;
-    } catch { return true; }   // no gate file → due
+    } catch {
+      return true;
+    } // no gate file → due
   };
   const maintainDue = due(join(RUNTIME_DIR, 'last-auto-maintain.json'));
   const markingDue = Boolean(project) && due(markCompressibleGateFile(project));
@@ -1714,14 +1986,24 @@ function handleAutoMaintain(project) {
   try {
     const db = openDb();
     if (!db) return;
-    try { runSessionStartAutoMaintain(db, project); }
-    finally { try { db.close(); } catch { /* ignore */ } }
+    try {
+      runSessionStartAutoMaintain(db, project);
+    } finally {
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+    }
   } finally {
     release();
   }
 }
 
-function saveHandoffAndFastSummary(db, { prevSessionId, prevProject, project, ccSessionId, episodeSnapshot, now }) {
+function saveHandoffAndFastSummary(
+  db,
+  { prevSessionId, prevProject, project, ccSessionId, episodeSnapshot, now },
+) {
   // Shared clear handoff reference — queried once, used by fast summary + working state
   let prevClearHandoff = null;
 
@@ -1732,15 +2014,27 @@ function saveHandoffAndFastSummary(db, { prevSessionId, prevProject, project, cc
     // the stored row so UserPromptSubmit can read its own handoff back.
     // Legacy/test paths (no stdin) fall back to prevSessionId for both.
     const handoffScopeId = ccSessionId || prevSessionId;
-    try { buildAndSaveHandoff(db, prevSessionId, prevProject || project, 'clear', episodeSnapshot, handoffScopeId); }
-    catch (e) { debugCatch(e, 'session-start-handoff'); }
+    try {
+      buildAndSaveHandoff(
+        db,
+        prevSessionId,
+        prevProject || project,
+        'clear',
+        episodeSnapshot,
+        handoffScopeId,
+      );
+    } catch (e) {
+      debugCatch(e, 'session-start-handoff');
+    }
 
     // Read the just-saved handoff for downstream consumers (fast summary remaining, working state).
     // Session-scoped read to avoid picking up a parallel session's clear handoff.
     try {
-      prevClearHandoff = db.prepare(
-        'SELECT working_on, unfinished, key_files FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?'
-      ).get(prevProject || project, 'clear', handoffScopeId);
+      prevClearHandoff = db
+        .prepare(
+          'SELECT working_on, unfinished, key_files FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?',
+        )
+        .get(prevProject || project, 'clear', handoffScopeId);
     } catch {}
 
     // Generate session summary for previous session (background Haiku — richer version)
@@ -1750,7 +2044,10 @@ function saveHandoffAndFastSummary(db, { prevSessionId, prevProject, project, cc
     // Background llm-summary will produce a richer Haiku version later;
     // context injection query (ORDER BY created_at_epoch DESC) auto-prefers latest.
     try {
-      const { request: fastRequestRaw, completed: fastCompletedRaw } = readFastSummarySource(db, prevSessionId);
+      const { request: fastRequestRaw, completed: fastCompletedRaw } = readFastSummarySource(
+        db,
+        prevSessionId,
+      );
 
       // Infer remaining_items from handoff unfinished (already built above at line 476)
       let fastRemainingRaw = '';
@@ -1759,18 +2056,25 @@ function saveHandoffAndFastSummary(db, { prevSessionId, prevProject, project, cc
       }
       // Fallback: episode errors
       if (!fastRemainingRaw && episodeSnapshot?.entries) {
-        const errors = episodeSnapshot.entries.filter(e => e.isError).map(e => e.desc).filter(Boolean);
+        const errors = episodeSnapshot.entries
+          .filter((e) => e.isError)
+          .map((e) => e.desc)
+          .filter(Boolean);
         if (errors.length > 0) fastRemainingRaw = errors.join('; ');
       }
 
       if (fastRequestRaw || fastCompletedRaw) {
         insertFastSummary(db, {
-          sessionId: prevSessionId, project: prevProject || project, now,
+          sessionId: prevSessionId,
+          project: prevProject || project,
+          now,
           values: { request: fastRequestRaw, completed: fastCompletedRaw, remaining: fastRemainingRaw },
           limits: FAST_SUMMARY_LIMITS.sessionStart,
         });
       }
-    } catch (e) { debugCatch(e, 'session-start-fast-summary'); }
+    } catch (e) {
+      debugCatch(e, 'session-start-fast-summary');
+    }
   }
 }
 
@@ -1786,7 +2090,9 @@ function cleanStaleLockFiles() {
         const age = Date.now() - (info.ts || 0);
         let stale = age > STALE_LOCK_MS;
         if (!stale && info.pid) {
-          try { process.kill(info.pid, 0); } catch (killErr) {
+          try {
+            process.kill(info.pid, 0);
+          } catch (killErr) {
             stale = killErr.code === 'ESRCH';
           }
         }
@@ -1807,31 +2113,46 @@ function buildFallbackFastSummary(db, { project, now, prevSessionId }) {
   // Skipped when prevSessionId is set (already handled above).
   if (!prevSessionId) {
     try {
-      const recentSession = db.prepare(`
+      const recentSession = db
+        .prepare(
+          `
         SELECT content_session_id, project FROM sdk_sessions
         WHERE project = ? AND status = 'completed' AND completed_at_epoch > ?
         ORDER BY completed_at_epoch DESC LIMIT 1
-      `).get(project, Date.now() - 120000); // within last 2 minutes
+      `,
+        )
+        .get(project, Date.now() - 120000); // within last 2 minutes
 
       if (recentSession) {
-        const hasSummary = db.prepare(`
+        const hasSummary = db
+          .prepare(
+            `
           SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1
-        `).get(recentSession.content_session_id);
+        `,
+          )
+          .get(recentSession.content_session_id);
 
         if (!hasSummary) {
-          const { request: frRaw, completed: fcRaw } = readFastSummarySource(db, recentSession.content_session_id);
+          const { request: frRaw, completed: fcRaw } = readFastSummarySource(
+            db,
+            recentSession.content_session_id,
+          );
           if (frRaw || fcRaw) {
             // No remaining_items on this path: an /exit restart has no handoff and no
             // episode snapshot to infer one from. It was a bare '' in the SQL before.
             insertFastSummary(db, {
-              sessionId: recentSession.content_session_id, project, now,
+              sessionId: recentSession.content_session_id,
+              project,
+              now,
               values: { request: frRaw, completed: fcRaw },
               limits: FAST_SUMMARY_LIMITS.exitRestart,
             });
           }
         }
       }
-    } catch (e) { debugCatch(e, 'session-start-exit-fast-summary'); }
+    } catch (e) {
+      debugCatch(e, 'session-start-exit-fast-summary');
+    }
   }
 }
 
@@ -1872,7 +2193,9 @@ async function buildStartupDashboardText(db, project) {
           const parsed = JSON.parse(raw);
           detail = parsed.reason || detail;
           repair = parsed.repair || '';
-        } catch { /* corrupt flag — surface the fact only */ }
+        } catch {
+          /* corrupt flag — surface the fact only */
+        }
         const nudgeLines = [
           '⚠️ [claude-mem-lite] Hook dependencies failed to install on the last SessionStart.',
           `   Reason: ${detail}`,
@@ -1882,9 +2205,14 @@ async function buildStartupDashboardText(db, project) {
         const nudge = nudgeLines.join('\n');
         dashboardText = dashboardText ? `${nudge}\n${dashboardText}` : nudge;
       }
-    } catch (e) { debugCatch(e, 'session-start-deps-flag'); }
+    } catch (e) {
+      debugCatch(e, 'session-start-deps-flag');
+    }
     return dashboardText || '';
-  } catch (e) { debugCatch(e, 'session-start-dashboard'); return ''; }
+  } catch (e) {
+    debugCatch(e, 'session-start-dashboard');
+    return '';
+  }
 }
 
 async function handleSessionStart() {
@@ -1894,12 +2222,25 @@ async function handleSessionStart() {
   // P2-15: the per-PROJECT half of the same problem — markers written once per
   // project and never revisited (session-/cite-recall-/skill cooldowns). Same
   // SessionStart cadence, 30d gate, named family list (hook-shared.mjs).
-  try { sweepStaleProjectMarkers(RUNTIME_DIR); } catch { /* best-effort */ }
+  try {
+    sweepStaleProjectMarkers(RUNTIME_DIR);
+  } catch {
+    /* best-effort */
+  }
   // Bound the shadow-recommendation log (daily JSONL shards, no GC at write time).
-  try { const { gcOldShadowShards } = await import('./registry-recommend.mjs'); gcOldShadowShards(); } catch { /* best-effort, never blocks SessionStart */ }
+  try {
+    const { gcOldShadowShards } = await import('./registry-recommend.mjs');
+    gcOldShadowShards();
+  } catch {
+    /* best-effort, never blocks SessionStart */
+  }
   // Same for the opt-in metrics sink, which lives under DB_DIR. Runs even when
   // metrics are disabled, so shards left by a since-toggled-off run still get pruned.
-  try { gcOldMetricShards(DB_DIR); } catch { /* best-effort */ }
+  try {
+    gcOldMetricShards(DB_DIR);
+  } catch {
+    /* best-effort */
+  }
 
   // Plugin cache self-heal: Claude Code auto-updates the marketplace plugin can
   // re-populate cache/<ver>/hooks/hooks.json, reintroducing duplicate hook
@@ -1923,10 +2264,16 @@ async function handleSessionStart() {
         reason: 'Auto-healed by hook.mjs session-start — install.mjs-managed hooks active in settings.json',
       });
       if (cleared.length > 0) {
-        debugLog('DEBUG', 'session-start', `auto-healed stale plugin cache hooks.json in version(s): ${cleared.join(', ')}`);
+        debugLog(
+          'DEBUG',
+          'session-start',
+          `auto-healed stale plugin cache hooks.json in version(s): ${cleared.join(', ')}`,
+        );
       }
     }
-  } catch (e) { debugCatch(e, 'session-start-cache-heal'); }
+  } catch (e) {
+    debugCatch(e, 'session-start-cache-heal');
+  }
 
   // Auto-adopt + migrate (v3.13 CLAUDE.md-steering). silentAutoAdopt is now an
   // IDEMPOTENT per-session sync, so it runs on EVERY SessionStart — not gated by
@@ -1957,7 +2304,9 @@ async function handleSessionStart() {
         debugLog('DEBUG', 'session-start-auto-adopt', `skipped project=${project} reason=${r.reason}`);
       }
     }
-  } catch (e) { debugCatch(e, 'session-start-auto-adopt'); }
+  } catch (e) {
+    debugCatch(e, 'session-start-auto-adopt');
+  }
 
   // Read CC real session_id from hook stdin — used to scope handoff rows so parallel
   // sessions for the same project don't clobber each other (see docs/bug.txt).
@@ -1968,7 +2317,9 @@ async function handleSessionStart() {
     if (typeof hookData?.session_id === 'string' && hookData.session_id.length > 0) {
       ccSessionId = hookData.session_id;
     }
-  } catch { /* stdin unavailable — legacy behavior */ }
+  } catch {
+    /* stdin unavailable — legacy behavior */
+  }
 
   // Snapshot episode BEFORE flush for handoff extraction
   const episodeSnapshot = readEpisodeRaw();
@@ -1988,10 +2339,20 @@ async function handleSessionStart() {
       let stale = false;
       try {
         stale = Date.now() - statSync(episodeFile()).mtimeMs > STALE_EPISODE_BUFFER_AGE_MS;
-      } catch { /* no buffer file — readEpisode() returns null below */ }
+      } catch {
+        /* no buffer file — readEpisode() returns null below */
+      }
       if (stale) {
-        debugLog('INFO', 'session-start', `discarding stale episode buffer (>${STALE_EPISODE_BUFFER_AGE_MS}ms): ${episodeFile()}`);
-        try { unlinkSync(episodeFile()); } catch { /* best-effort */ }
+        debugLog(
+          'INFO',
+          'session-start',
+          `discarding stale episode buffer (>${STALE_EPISODE_BUFFER_AGE_MS}ms): ${episodeFile()}`,
+        );
+        try {
+          unlinkSync(episodeFile());
+        } catch {
+          /* best-effort */
+        }
       } else {
         const prevEpisode = readEpisode();
         if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
@@ -2084,14 +2445,20 @@ async function handleSessionStart() {
       // block — see lib/hook-stdout.mjs for the bundle evidence.
       if (banner) queueHookSystemMessage(String(banner));
       updateCheckDue = isUpdateCheckDue();
-    } catch (e) { debugCatch(e, 'session-start-update'); }
+    } catch (e) {
+      debugCatch(e, 'session-start-update');
+    }
 
     // Queued into the same single envelope a leftover episode receipt may also
     // be contributing to (flushEpisode runs earlier in this very process after
     // /clear or /compact). Written once, at the dispatcher's exit.
     if (stdoutParts.length) queueHookContext('SessionStart', stdoutParts.join('\n\n'));
     if (updateCheckDue) {
-      try { spawnBackground('update-check'); } catch (e) { debugCatch(e, 'session-start-update-spawn'); }
+      try {
+        spawnBackground('update-check');
+      } catch (e) {
+        debugCatch(e, 'session-start-update-spawn');
+      }
     }
 
     // D#123 (review C-1): persist the Key Context ids ACTUALLY rendered above so
@@ -2131,11 +2498,16 @@ async function handleSessionStart() {
         runtimeDir: RUNTIME_DIR,
         hasPriorData: hasPreV270Data(db, project),
       });
-    } catch (e) { debugCatch(e, 'session-start-v270-banner'); }
+    } catch (e) {
+      debugCatch(e, 'session-start-v270-banner');
+    }
 
     // Pre-load TF-IDF vocabulary cache for this session (from DB, ~1ms)
-    try { getVocabulary(db); } catch (e) { debugCatch(e, 'session-start-vocab'); }
-
+    try {
+      getVocabulary(db);
+    } catch (e) {
+      debugCatch(e, 'session-start-vocab');
+    }
   } finally {
     db.close();
   }
@@ -2152,14 +2524,18 @@ async function handlePreCompactDispatch() {
   try {
     const raw = await readStdin();
     hookData = JSON.parse(raw.text);
-  } catch { /* stdin unavailable — emit anyway with whatever we can infer */ }
+  } catch {
+    /* stdin unavailable — emit anyway with whatever we can infer */
+  }
 
   const db = openDb();
   if (!db) return;
   try {
     await preCompactEntry(db, hookData);
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 }
 
@@ -2167,10 +2543,18 @@ async function handlePreCompactDispatch() {
 
 async function handleUserPrompt() {
   let raw;
-  try { raw = await readStdin(); } catch { return; }
+  try {
+    raw = await readStdin();
+  } catch {
+    return;
+  }
 
   let hookData;
-  try { hookData = JSON.parse(raw.text); } catch { return; }
+  try {
+    hookData = JSON.parse(raw.text);
+  } catch {
+    return;
+  }
 
   const rawPrompt = hookData.prompt || hookData.user_prompt;
   if (!rawPrompt || typeof rawPrompt !== 'string') return;
@@ -2203,17 +2587,21 @@ async function handleUserPrompt() {
     const now = new Date();
 
     // Ensure session exists (INSERT OR IGNORE avoids race condition)
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
+    `,
+    ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
 
     // T4-P2-D: atomic increment+read via UPDATE ... RETURNING (SQLite 3.35+).
     // Previously UPDATE + SELECT as two statements; parallel prompts could read a stale
     // counter and emit duplicate prompt_number values. better-sqlite3 ships a modern SQLite.
-    const bumped = db.prepare(
-      'UPDATE sdk_sessions SET prompt_counter = COALESCE(prompt_counter, 0) + 1 WHERE content_session_id = ? RETURNING prompt_counter'
-    ).get(sessionId);
+    const bumped = db
+      .prepare(
+        'UPDATE sdk_sessions SET prompt_counter = COALESCE(prompt_counter, 0) + 1 WHERE content_session_id = ? RETURNING prompt_counter',
+      )
+      .get(sessionId);
     const promptNumber = bumped?.prompt_counter || 1;
 
     // Claude Code's real session_id (CC UUID) from hook stdin. Persisted on the
@@ -2221,14 +2609,15 @@ async function handleUserPrompt() {
     // CC session — getSessionId() is project-scoped (no CC-UUID), so without this
     // concurrent/within-TTL same-project sessions merge each other's prompts (D#26).
     // Also scopes handoff-row injection below. Null (legacy) when stdin lacks session_id.
-    const ccSessionId = typeof hookData.session_id === 'string' && hookData.session_id.length > 0
-      ? hookData.session_id
-      : null;
+    const ccSessionId =
+      typeof hookData.session_id === 'string' && hookData.session_id.length > 0 ? hookData.session_id : null;
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, cc_session_id, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
+    ).run(
       sessionId,
       // Scrub BEFORE the 10k slice: a secret straddling char 10000 would otherwise
       // be cut to a sub-6-char head that scrubSecrets's value-length floor no longer
@@ -2237,7 +2626,8 @@ async function handleUserPrompt() {
       scrubSecrets(promptText).slice(0, 10000),
       promptNumber,
       ccSessionId,
-      now.toISOString(), now.getTime()
+      now.toISOString(),
+      now.getTime(),
     );
 
     // Cross-session handoff injection (first 3 prompts window, before semantic memory).
@@ -2246,7 +2636,8 @@ async function handleUserPrompt() {
     // cc_session's own prompts instead (the current one is already inserted above); legacy null cc
     // id falls back to the shared counter.
     const windowPos = ccSessionId
-      ? (db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE cc_session_id = ?').get(ccSessionId)?.c || promptNumber)
+      ? db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE cc_session_id = ?').get(ccSessionId)?.c ||
+        promptNumber
       : promptNumber;
     if (windowPos <= 3) {
       try {
@@ -2262,231 +2653,254 @@ async function handleUserPrompt() {
             // produced 1 persisted handoff.
             try {
               db.prepare(
-                'DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?'
+                'DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?',
               ).run(project, picked.type, picked.session_id);
             } catch {}
           }
         }
-      } catch (e) { debugCatch(e, 'handleUserPrompt-handoff'); }
+      } catch (e) {
+        debugCatch(e, 'handleUserPrompt-handoff');
+      }
     }
 
     // Semantic memory injection: search past observations for the user's prompt.
     // P0 short-circuit on user-explicit "ignore memory" / "不要用记忆" override
     // (mirrors CC built-in memoryTypes.ts:215). Skip both Key Context lookup
     // and the <memory-context> emission for this turn.
-    if (!detectMemOverride(promptText)) try {
-      // D#123 (review C-1): the exclude-set is the Key Context ids ACTUALLY
-      // rendered at SessionStart — read from the marker handleSessionStart wrote,
-      // not re-derived from a query. The old query-mirroring set excluded rows
-      // that were never shown (quiet/adopted projects render no Key Context at
-      // all), blanking the same-project <memory-context> leg outright. Missing
-      // or other-session marker → empty set: unknown injections must fail open
-      // (inject, maybe duplicate) rather than fail closed (suppress).
-      const keyContextIds = [];
+    if (!detectMemOverride(promptText))
       try {
-        // `keyCtxRaw`, not `raw`: this function already binds `raw` to the stdin payload
-        // ~120 lines up, and a second `raw` holding a marker FILE's contents reads as that
-        // one (audit 2026-09-02 P2-17 — the one hit in the tree worth a rename).
-        const keyCtxRaw = readFileSync(join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)), 'utf8');
-        const { ids, session } = JSON.parse(keyCtxRaw);
-        if (Array.isArray(ids) && !(session && ccSessionId && session !== ccSessionId)) {
-          keyContextIds.push(...ids);
-        }
-        // The marker's validity is session-lifetime but gcStalePreRecallCooldowns sweeps it
-        // by AGE. Stamping it on read makes that sweep mean "24h with no prompt in this
-        // session" instead of "24h since the render" — otherwise a session running past a
-        // day loses its own exclude-set and re-injects what Key Context is still showing.
-        touchKeyContextMarker({ runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId });
-      } catch { /* no marker — nothing was injected, exclude nothing */ }
-      const pathAInjectedIds = [];
-
-      // Read IDs already injected by user-prompt-search.js to avoid duplicate injection
-      try {
-        // D#120: the marker file is session-keyed (no ccSessionId → legacy
-        // project-keyed name), so a concurrent session's write can no longer
-        // replace this session's payload between the UPS write and this read.
-        const injectedFile = join(RUNTIME_DIR, injectedIdsFileName(project, ccSessionId));
-        // The freshness + same-session gate is lib/injected-ids.mjs's (audit 2026-09-02
-        // P1-2); this was the third hand-typed copy of it. THE 10 s WINDOW STAYS HERE and
-        // is passed in: the two writers gate on DEDUP_STALE_MS (5 min) and this reader on
-        // 10 s ("same prompt cycle"), and that disagreement is a real open question
-        // (P1-2's second half — the 10 s window still accepts the PREVIOUS prompt's
-        // marker), not a copy-paste slip to be normalised away by the consolidation.
-        // Legacy payloads without `session` keep the old time-window-only behaviour.
-        const { ids, fresh } = readInjectedMarker(injectedFile,
-          { sessionId: ccSessionId, maxAgeMs: 10000 });
-        if (fresh) {
-          // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
-          //
-          // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
-          // `mergeCrossHookInjected` (pre-tool-recall.js) `.map(String)`s the whole union,
-          // so once PreToolUse has emitted one row in the window every id is a STRING.
-          // Both consumers below test `new Set(excludeIds).has(r.id)` against a NUMBER out
-          // of SQLite, so from that moment the exclude suppresses nothing.
-          //
-          // Coercing with Number() here would make it work — and that is a real behaviour
-          // change, not a type repair, which is why it is not done as a drive-by.
-          //
-          // GET THE SIDE RIGHT. The marker is WRITTEN by `user-prompt-search.js` (the
-          // `fyi` face) and `pre-tool-recall.js` (`pretool`); it is READ here, in
-          // handleUserPrompt, which is the `ups` face. So the gated population is
-          // `ups ∩ (fyi ∪ pretool)`. A first version of this note measured the mirror
-          // image — `fyi ∩ (pretool ∪ ups)` — and published 18.0%, the number for a
-          // mechanism that is not this one. The pre-tag review caught it.
-          //
-          // Measured 2026-09-02T12:12Z over 99 transcripts, one walk, as an UPPER bound
-          // (session-level, ignoring the marker's stale window): a working exclude would
-          // drop at most 23 of 256 `ups` (session, id) pairs — 9.0% — across 14 of 71
-          // sessions, and 3 of 24 on task_imperative (12.5%). By attachments rather than
-          // pairs it is 29 of 332 (8.7%).
-          //
-          // Still not repaired at 9.0%, and the corrected number strengthens the case
-          // rather than weakening it: this path ALREADY has a working suppressor.
-          // `shouldSkipByDedup` (prompt-search-utils.mjs) String-normalises both sides, so
-          // it functions, and it skips the whole injection at >=0.8 overlap. Turning this
-          // one on adds a second, finer-grained suppressor on a face that is already
-          // suppressed, with the direction unknown — the freed slot is sometimes refilled
-          // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
-          // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
-          //
-          // The ruler that settles it is now BUILT and sits at the bottom of this same
-          // function: `lib/patha-exclude-meter.mjs`, off unless CLAUDE_MEM_METRICS=1. It
-          // does not persist the marker for an offline replay — reconstructing per-prompt
-          // exclude sets that way needs a file that rotates after DEDUP_STALE_MS, and the
-          // replay would then run against a drifted database. Both arms run at this read
-          // instead. What is still missing is elapsed time, not a method. D#213.
-          // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
-          for (const id of ids) { keyContextIds.push(id); pathAInjectedIds.push(id); }
-        }
-      } catch { /* file may not exist — that's fine */ }
-
-      // Phase-2 task-imperative (EXPERIMENTAL, default OFF — CLAUDE_MEM_TASK_IMPERATIVE):
-      // the single highest-value lesson relevant to THIS prompt, delivered at the prompt
-      // position under an imperative template. Excluded from the <memory-context> list so it
-      // is never injected twice. Channel-isolation measure (efficacy arm U, 2026-06-29):
-      // task-prompt 6-8/8 vs PreToolUse hook 0/8.
-      //
-      // The default flip is ABANDONED (D#137, 2026-08-16). rankImperativeCandidates requires
-      // identifier overlap between the prompt and the lesson body/title, and over the last 400
-      // real prompts that gate opened 76 times = 19.0% (CJK prompts 57/352 = 16.2%, ASCII
-      // 19/48 = 39.6%). With 88% of prompts on this install in Chinese, the emitter fires
-      // roughly once every six prompts — the canary can never accumulate n, because the
-      // ceiling is the gate's DESIGN (precision-first symbol anchoring), not a defect.
-      // Reviving the flip needs a CJK-viable anchor proven in A/B without a precision loss;
-      // until then this stays experimental and off.
-      const taskImperativeOn = process.env.CLAUDE_MEM_TASK_IMPERATIVE === 'on'
-        || process.env.CLAUDE_MEM_TASK_IMPERATIVE === '1';
-      // ── D#214 arm B (counterfactual), computed BEFORE the delivered arm ─────────
-      // Ordering is the whole correctness argument, so it is stated where the order is:
-      // arm A's search legitimately bumps `injection_count` on every row it delivers,
-      // and that column feeds `noisePenaltyClause`. Running the counterfactual AFTER it
-      // — as the first version did — lets arm A push a row across the >=4 noise gate and
-      // then attributes the resulting difference to the repair. The pre-tag review
-      // reproduced that: a marker id for a row the query never matches, where the honest
-      // answer is `suppressed 0 / refilled 0`, reported `refilled: 1, setChanged: true`.
-      //
-      // So arm B runs first, on the same handle, with `counterfactual: true` — it writes
-      // nothing and emits no `inject` metric row, so arm A afterwards sees exactly the
-      // state arm B saw. Both arms, one state, and neither one perturbs the other.
-      //
-      // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
-      // repaired system would not have made into arm B's exclude, so on any prompt where
-      // the pick changed, the delta described a system that does not exist.
-      // Lazy on "the marker carried ids", NOT on the metrics env. Gating the import on
-      // `CLAUDE_MEM_METRICS === '1'` would read cheaper still, and would put a second copy
-      // of `pathAMeterEnabled`'s own predicate here — the twin shape this meter's tests
-      // exist to pin. `pathAMeterEnabled()` stays the only place that predicate lives; the
-      // module still stops loading on every OTHER event, which is what P1-8 is about.
-      let pathAMeterEnabled, coerceMarkerIds, recordPathAExclude;
-      if (pathAInjectedIds.length > 0) {
-        ({ pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } = await import('./lib/patha-exclude-meter.mjs'));
-      }
-      const meterCoerced = (pathAMeterEnabled && pathAMeterEnabled())
-        ? [...coerceMarkerIds(pathAInjectedIds)]
-        : null;
-      let meterArmB = null;
-      if (meterCoerced) {
+        // D#123 (review C-1): the exclude-set is the Key Context ids ACTUALLY
+        // rendered at SessionStart — read from the marker handleSessionStart wrote,
+        // not re-derived from a query. The old query-mirroring set excluded rows
+        // that were never shown (quiet/adopted projects render no Key Context at
+        // all), blanking the same-project <memory-context> leg outright. Missing
+        // or other-session marker → empty set: unknown injections must fail open
+        // (inject, maybe duplicate) rather than fail closed (suppress).
+        const keyContextIds = [];
         try {
-          const pickB = taskImperativeOn
-            ? selectImperativeLesson(db, promptText, project, [...pathAInjectedIds, ...meterCoerced])
-            : null;
-          const excludeB = pickB ? [...keyContextIds, pickB.id] : keyContextIds;
-          meterArmB = {
-            rows: searchRelevantMemories(db, promptText, project, [...excludeB, ...meterCoerced], { counterfactual: true }),
-            pick: pickB ? pickB.id : null,
-          };
-        } catch (e) {
-          debugCatch(e, 'patha-exclude-meter-armB');
-          meterArmB = { error: String(e?.message || 'unknown') };
+          // `keyCtxRaw`, not `raw`: this function already binds `raw` to the stdin payload
+          // ~120 lines up, and a second `raw` holding a marker FILE's contents reads as that
+          // one (audit 2026-09-02 P2-17 — the one hit in the tree worth a rename).
+          const keyCtxRaw = readFileSync(
+            join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)),
+            'utf8',
+          );
+          const { ids, session } = JSON.parse(keyCtxRaw);
+          if (Array.isArray(ids) && !(session && ccSessionId && session !== ccSessionId)) {
+            keyContextIds.push(...ids);
+          }
+          // The marker's validity is session-lifetime but gcStalePreRecallCooldowns sweeps it
+          // by AGE. Stamping it on read makes that sweep mean "24h with no prompt in this
+          // session" instead of "24h since the render" — otherwise a session running past a
+          // day loses its own exclude-set and re-injects what Key Context is still showing.
+          touchKeyContextMarker({ runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId });
+        } catch {
+          /* no marker — nothing was injected, exclude nothing */
         }
-      }
+        const pathAInjectedIds = [];
 
-      // Exclude only ids path-A (user-prompt-search.js) already injected — NOT the
-      // SessionStart Key Context set, which overlaps the high-value lesson pool and
-      // would suppress the pick. The chosen id is excluded from the <memory-context>
-      // block below instead.
-      const imperativePick = taskImperativeOn
-        ? selectImperativeLesson(db, promptText, project, pathAInjectedIds)
-        : null;
-      const contextExclude = imperativePick ? [...keyContextIds, imperativePick.id] : keyContextIds;
-
-      const memories = searchRelevantMemories(db, promptText, project, contextExclude);
-      if (memories.length > 0) {
-        const lines = ['<memory-context relevance="high">'];
-        for (const m of memories) lines.push(formatMemoryLine(m));
-        lines.push('</memory-context>');
-        process.stdout.write(lines.join('\n') + '\n');
-      }
-      // HIGH-1 (full audit 2026-07-16): surface FTS-matched events — the canonical
-      // store for promoted bugfix/decision/lesson memories that persistHaikuSummary
-      // upgrade-deletes out of observations. Without this leg they are unreachable at
-      // prompt time. Separate E#-tagged block so it doesn't perturb observation
-      // ranking and citation extractors (bare-`#` anchored) never read an event id as
-      // an obs id. Nested try so an events failure can't suppress the imperative pick.
-      try {
-        // upsFtsQuery, not the raw prompt (audit ALGO-1). lib/ups-query.mjs declares
-        // itself "the ONE query-cap definition for the UserPromptSubmit event", and both
-        // OTHER legs of this same event go through it — but this leg, wired in v3.48
-        // before that module existed, handed searchInjectableEvents the whole prompt and
-        // let it call the uncapped sanitizeFtsQuery. Measured here: a 250KB CJK prompt
-        // (path B's stdin cap is 256KB) costs 356ms uncapped against 5.5ms capped, all of
-        // it synchronous, before the model sees the turn.
-        const events = searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project });
-        if (events.length > 0) {
-          const elines = ['<memory-context relevance="events">'];
-          for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);
-          elines.push('</memory-context>');
-          process.stdout.write(elines.join('\n') + '\n');
-        }
-      } catch (e) { debugCatch(e, 'handleUserPrompt-events'); }
-      if (imperativePick) {
-        // Guard the write on a non-empty return — formatTaskImperative yields '' for a
-        // lesson that strips to empty (e.g. "."), which would otherwise emit a bare line.
-        const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
-        if (imperativeLine) process.stdout.write(imperativeLine + '\n');
-      }
-
-      // D#214's ruler, second half: arm B was computed above, before anything was
-      // delivered; this only shapes the row and appends it. Kept after every
-      // `process.stdout.write` so the metric append is never in front of the injection,
-      // and so a throw here cannot corrupt what was already emitted.
-      //
-      // `meterCoerced` being non-null is the gate — it is null unless
-      // CLAUDE_MEM_METRICS=1 AND the marker carried ids, which is what keeps both the
-      // counterfactual search and the second lesson selection off a stock install.
-      try {
-        if (meterCoerced) {
-          recordPathAExclude(DB_DIR, {
-            markerIds: pathAInjectedIds,
-            emitted: memories,
-            after: meterArmB,
-            imperativeArm: taskImperativeOn ? 'on' : 'off',
-            imperativeBefore: imperativePick ? imperativePick.id : null,
-            imperativeAfter: meterArmB ? (meterArmB.pick ?? null) : null,
+        // Read IDs already injected by user-prompt-search.js to avoid duplicate injection
+        try {
+          // D#120: the marker file is session-keyed (no ccSessionId → legacy
+          // project-keyed name), so a concurrent session's write can no longer
+          // replace this session's payload between the UPS write and this read.
+          const injectedFile = join(RUNTIME_DIR, injectedIdsFileName(project, ccSessionId));
+          // The freshness + same-session gate is lib/injected-ids.mjs's (audit 2026-09-02
+          // P1-2); this was the third hand-typed copy of it. THE 10 s WINDOW STAYS HERE and
+          // is passed in: the two writers gate on DEDUP_STALE_MS (5 min) and this reader on
+          // 10 s ("same prompt cycle"), and that disagreement is a real open question
+          // (P1-2's second half — the 10 s window still accepts the PREVIOUS prompt's
+          // marker), not a copy-paste slip to be normalised away by the consolidation.
+          // Legacy payloads without `session` keep the old time-window-only behaviour.
+          const { ids, fresh } = readInjectedMarker(injectedFile, {
+            sessionId: ccSessionId,
+            maxAgeMs: 10000,
           });
+          if (fresh) {
+            // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
+            //
+            // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
+            // `mergeCrossHookInjected` (pre-tool-recall.js) `.map(String)`s the whole union,
+            // so once PreToolUse has emitted one row in the window every id is a STRING.
+            // Both consumers below test `new Set(excludeIds).has(r.id)` against a NUMBER out
+            // of SQLite, so from that moment the exclude suppresses nothing.
+            //
+            // Coercing with Number() here would make it work — and that is a real behaviour
+            // change, not a type repair, which is why it is not done as a drive-by.
+            //
+            // GET THE SIDE RIGHT. The marker is WRITTEN by `user-prompt-search.js` (the
+            // `fyi` face) and `pre-tool-recall.js` (`pretool`); it is READ here, in
+            // handleUserPrompt, which is the `ups` face. So the gated population is
+            // `ups ∩ (fyi ∪ pretool)`. A first version of this note measured the mirror
+            // image — `fyi ∩ (pretool ∪ ups)` — and published 18.0%, the number for a
+            // mechanism that is not this one. The pre-tag review caught it.
+            //
+            // Measured 2026-09-02T12:12Z over 99 transcripts, one walk, as an UPPER bound
+            // (session-level, ignoring the marker's stale window): a working exclude would
+            // drop at most 23 of 256 `ups` (session, id) pairs — 9.0% — across 14 of 71
+            // sessions, and 3 of 24 on task_imperative (12.5%). By attachments rather than
+            // pairs it is 29 of 332 (8.7%).
+            //
+            // Still not repaired at 9.0%, and the corrected number strengthens the case
+            // rather than weakening it: this path ALREADY has a working suppressor.
+            // `shouldSkipByDedup` (prompt-search-utils.mjs) String-normalises both sides, so
+            // it functions, and it skips the whole injection at >=0.8 overlap. Turning this
+            // one on adds a second, finer-grained suppressor on a face that is already
+            // suppressed, with the direction unknown — the freed slot is sometimes refilled
+            // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
+            // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
+            //
+            // The ruler that settles it is now BUILT and sits at the bottom of this same
+            // function: `lib/patha-exclude-meter.mjs`, off unless CLAUDE_MEM_METRICS=1. It
+            // does not persist the marker for an offline replay — reconstructing per-prompt
+            // exclude sets that way needs a file that rotates after DEDUP_STALE_MS, and the
+            // replay would then run against a drifted database. Both arms run at this read
+            // instead. What is still missing is elapsed time, not a method. D#213.
+            // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
+            for (const id of ids) {
+              keyContextIds.push(id);
+              pathAInjectedIds.push(id);
+            }
+          }
+        } catch {
+          /* file may not exist — that's fine */
         }
-      } catch (e) { debugCatch(e, 'patha-exclude-meter'); }
-    } catch (e) { debugCatch(e, 'handleUserPrompt-memory'); }
+
+        // Phase-2 task-imperative (EXPERIMENTAL, default OFF — CLAUDE_MEM_TASK_IMPERATIVE):
+        // the single highest-value lesson relevant to THIS prompt, delivered at the prompt
+        // position under an imperative template. Excluded from the <memory-context> list so it
+        // is never injected twice. Channel-isolation measure (efficacy arm U, 2026-06-29):
+        // task-prompt 6-8/8 vs PreToolUse hook 0/8.
+        //
+        // The default flip is ABANDONED (D#137, 2026-08-16). rankImperativeCandidates requires
+        // identifier overlap between the prompt and the lesson body/title, and over the last 400
+        // real prompts that gate opened 76 times = 19.0% (CJK prompts 57/352 = 16.2%, ASCII
+        // 19/48 = 39.6%). With 88% of prompts on this install in Chinese, the emitter fires
+        // roughly once every six prompts — the canary can never accumulate n, because the
+        // ceiling is the gate's DESIGN (precision-first symbol anchoring), not a defect.
+        // Reviving the flip needs a CJK-viable anchor proven in A/B without a precision loss;
+        // until then this stays experimental and off.
+        const taskImperativeOn =
+          process.env.CLAUDE_MEM_TASK_IMPERATIVE === 'on' || process.env.CLAUDE_MEM_TASK_IMPERATIVE === '1';
+        // ── D#214 arm B (counterfactual), computed BEFORE the delivered arm ─────────
+        // Ordering is the whole correctness argument, so it is stated where the order is:
+        // arm A's search legitimately bumps `injection_count` on every row it delivers,
+        // and that column feeds `noisePenaltyClause`. Running the counterfactual AFTER it
+        // — as the first version did — lets arm A push a row across the >=4 noise gate and
+        // then attributes the resulting difference to the repair. The pre-tag review
+        // reproduced that: a marker id for a row the query never matches, where the honest
+        // answer is `suppressed 0 / refilled 0`, reported `refilled: 1, setChanged: true`.
+        //
+        // So arm B runs first, on the same handle, with `counterfactual: true` — it writes
+        // nothing and emits no `inject` metric row, so arm A afterwards sees exactly the
+        // state arm B saw. Both arms, one state, and neither one perturbs the other.
+        //
+        // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
+        // repaired system would not have made into arm B's exclude, so on any prompt where
+        // the pick changed, the delta described a system that does not exist.
+        // Lazy on "the marker carried ids", NOT on the metrics env. Gating the import on
+        // `CLAUDE_MEM_METRICS === '1'` would read cheaper still, and would put a second copy
+        // of `pathAMeterEnabled`'s own predicate here — the twin shape this meter's tests
+        // exist to pin. `pathAMeterEnabled()` stays the only place that predicate lives; the
+        // module still stops loading on every OTHER event, which is what P1-8 is about.
+        let pathAMeterEnabled, coerceMarkerIds, recordPathAExclude;
+        if (pathAInjectedIds.length > 0) {
+          ({ pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } =
+            await import('./lib/patha-exclude-meter.mjs'));
+        }
+        const meterCoerced =
+          pathAMeterEnabled && pathAMeterEnabled() ? [...coerceMarkerIds(pathAInjectedIds)] : null;
+        let meterArmB = null;
+        if (meterCoerced) {
+          try {
+            const pickB = taskImperativeOn
+              ? selectImperativeLesson(db, promptText, project, [...pathAInjectedIds, ...meterCoerced])
+              : null;
+            const excludeB = pickB ? [...keyContextIds, pickB.id] : keyContextIds;
+            meterArmB = {
+              rows: searchRelevantMemories(db, promptText, project, [...excludeB, ...meterCoerced], {
+                counterfactual: true,
+              }),
+              pick: pickB ? pickB.id : null,
+            };
+          } catch (e) {
+            debugCatch(e, 'patha-exclude-meter-armB');
+            meterArmB = { error: String(e?.message || 'unknown') };
+          }
+        }
+
+        // Exclude only ids path-A (user-prompt-search.js) already injected — NOT the
+        // SessionStart Key Context set, which overlaps the high-value lesson pool and
+        // would suppress the pick. The chosen id is excluded from the <memory-context>
+        // block below instead.
+        const imperativePick = taskImperativeOn
+          ? selectImperativeLesson(db, promptText, project, pathAInjectedIds)
+          : null;
+        const contextExclude = imperativePick ? [...keyContextIds, imperativePick.id] : keyContextIds;
+
+        const memories = searchRelevantMemories(db, promptText, project, contextExclude);
+        if (memories.length > 0) {
+          const lines = ['<memory-context relevance="high">'];
+          for (const m of memories) lines.push(formatMemoryLine(m));
+          lines.push('</memory-context>');
+          process.stdout.write(lines.join('\n') + '\n');
+        }
+        // HIGH-1 (full audit 2026-07-16): surface FTS-matched events — the canonical
+        // store for promoted bugfix/decision/lesson memories that persistHaikuSummary
+        // upgrade-deletes out of observations. Without this leg they are unreachable at
+        // prompt time. Separate E#-tagged block so it doesn't perturb observation
+        // ranking and citation extractors (bare-`#` anchored) never read an event id as
+        // an obs id. Nested try so an events failure can't suppress the imperative pick.
+        try {
+          // upsFtsQuery, not the raw prompt (audit ALGO-1). lib/ups-query.mjs declares
+          // itself "the ONE query-cap definition for the UserPromptSubmit event", and both
+          // OTHER legs of this same event go through it — but this leg, wired in v3.48
+          // before that module existed, handed searchInjectableEvents the whole prompt and
+          // let it call the uncapped sanitizeFtsQuery. Measured here: a 250KB CJK prompt
+          // (path B's stdin cap is 256KB) costs 356ms uncapped against 5.5ms capped, all of
+          // it synchronous, before the model sees the turn.
+          const events = searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project });
+          if (events.length > 0) {
+            const elines = ['<memory-context relevance="events">'];
+            for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);
+            elines.push('</memory-context>');
+            process.stdout.write(elines.join('\n') + '\n');
+          }
+        } catch (e) {
+          debugCatch(e, 'handleUserPrompt-events');
+        }
+        if (imperativePick) {
+          // Guard the write on a non-empty return — formatTaskImperative yields '' for a
+          // lesson that strips to empty (e.g. "."), which would otherwise emit a bare line.
+          const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
+          if (imperativeLine) process.stdout.write(imperativeLine + '\n');
+        }
+
+        // D#214's ruler, second half: arm B was computed above, before anything was
+        // delivered; this only shapes the row and appends it. Kept after every
+        // `process.stdout.write` so the metric append is never in front of the injection,
+        // and so a throw here cannot corrupt what was already emitted.
+        //
+        // `meterCoerced` being non-null is the gate — it is null unless
+        // CLAUDE_MEM_METRICS=1 AND the marker carried ids, which is what keeps both the
+        // counterfactual search and the second lesson selection off a stock install.
+        try {
+          if (meterCoerced) {
+            recordPathAExclude(DB_DIR, {
+              markerIds: pathAInjectedIds,
+              emitted: memories,
+              after: meterArmB,
+              imperativeArm: taskImperativeOn ? 'on' : 'off',
+              imperativeBefore: imperativePick ? imperativePick.id : null,
+              imperativeAfter: meterArmB ? (meterArmB.pick ?? null) : null,
+            });
+          }
+        } catch (e) {
+          debugCatch(e, 'patha-exclude-meter');
+        }
+      } catch (e) {
+        debugCatch(e, 'handleUserPrompt-memory');
+      }
   } finally {
     db.close();
   }
@@ -2521,7 +2935,9 @@ async function handleEnrichSave(rawId) {
     recordMetric(DB_DIR, { event: 'enrich_save', id, enriched: false, reason: 'worker-error' });
     debugCatch(e, 'enrich-save');
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 }
 
@@ -2538,7 +2954,10 @@ function handleAutoCompress() {
 
   try {
     const compressCutoff = Date.now() - 60 * DAY_MS; // 60 days
-    const compressCandidates = selectCompressionCandidates(db, { cutoff: compressCutoff, includeAutoMarked: true });
+    const compressCandidates = selectCompressionCandidates(db, {
+      cutoff: compressCutoff,
+      includeAutoMarked: true,
+    });
     if (compressCandidates.length < 3) return;
 
     const groups = groupByProjectWeek(compressCandidates);
@@ -2550,7 +2969,11 @@ function handleAutoCompress() {
       totalCompressed += compressGroupTxn(proj, obs);
     }
     if (totalCompressed > 0) {
-      debugLog('DEBUG', 'auto-compress', `auto-compressed ${totalCompressed} observations into weekly summaries`);
+      debugLog(
+        'DEBUG',
+        'auto-compress',
+        `auto-compressed ${totalCompressed} observations into weekly summaries`,
+      );
     }
   } catch (e) {
     debugCatch(e, 'auto-compress');
@@ -2579,7 +3002,11 @@ function readStdin() {
 }
 
 function tryParseJson(str) {
-  try { return JSON.parse(str); } catch { return {}; }
+  try {
+    return JSON.parse(str);
+  } catch {
+    return {};
+  }
 }
 
 // Strip ANSI escape codes and extract readable text from tool responses.
@@ -2622,19 +3049,45 @@ function normalizeToolResponse(toolResponse) {
 
 try {
   switch (event) {
-    case 'post-tool-use':    await handlePostToolUse(); break;
+    case 'post-tool-use':
+      await handlePostToolUse();
+      break;
     // Host-flagged tool failures arrive on their own event; PostToolUse never sees them.
-    case 'post-tool-failure': await handlePostToolFailure(); break;
-    case 'session-start':    await handleSessionStart(); break;
-    case 'pre-compact':      await handlePreCompactDispatch(); break;
-    case 'stop':             await handleStop(); break;
-    case 'user-prompt':      await handleUserPrompt(); break;
-    case 'llm-episode':      await handleLLMEpisode(); break;
-    case 'llm-summary':      await handleLLMSummary(); break;
-    case 'auto-compress':    handleAutoCompress(); break;
-    case 'enrich-save':      await handleEnrichSave(process.argv[3]); break;
-    case 'auto-maintain':    handleAutoMaintain(process.argv[3]); break;
-    case 'llm-optimize':   { const { handleLLMOptimize } = await import('./hook-optimize.mjs'); await handleLLMOptimize(); break; }
+    case 'post-tool-failure':
+      await handlePostToolFailure();
+      break;
+    case 'session-start':
+      await handleSessionStart();
+      break;
+    case 'pre-compact':
+      await handlePreCompactDispatch();
+      break;
+    case 'stop':
+      await handleStop();
+      break;
+    case 'user-prompt':
+      await handleUserPrompt();
+      break;
+    case 'llm-episode':
+      await handleLLMEpisode();
+      break;
+    case 'llm-summary':
+      await handleLLMSummary();
+      break;
+    case 'auto-compress':
+      handleAutoCompress();
+      break;
+    case 'enrich-save':
+      await handleEnrichSave(process.argv[3]);
+      break;
+    case 'auto-maintain':
+      handleAutoMaintain(process.argv[3]);
+      break;
+    case 'llm-optimize': {
+      const { handleLLMOptimize } = await import('./hook-optimize.mjs');
+      await handleLLMOptimize();
+      break;
+    }
     // Detached update refresh spawned by handleSessionStart (audit P3d) — does the
     // GitHub fetch off the SessionStart critical path, writing update-state.json so
     // the NEXT session's cached banner is fresh.
@@ -2648,7 +3101,11 @@ try {
     // self-installer back on in the same release that resurrects the worker. The
     // module default and the installer's own guards are unchanged — install.mjs
     // still passes allowInstall:true for the explicit, user-invoked update.
-    case 'update-check':     { const { checkForUpdate } = await import('./hook-update.mjs'); await checkForUpdate({ allowInstall: false }); break; }
+    case 'update-check': {
+      const { checkForUpdate } = await import('./hook-update.mjs');
+      await checkForUpdate({ allowInstall: false });
+      break;
+    }
   }
 } catch (err) {
   // Log fatal errors (ungated) with structured format. ERR_DLOPEN_FAILED (an
@@ -2668,6 +3125,10 @@ try {
 // Single stdout write for the whole process (lib/hook-stdout.mjs). Runs after the
 // catch too: a handler that queued a receipt and then threw should still deliver
 // what it had, and Claude Code only ever reads one JSON document from here.
-try { flushHookStdout(); } catch { /* a receipt must never change the exit code */ }
+try {
+  flushHookStdout();
+} catch {
+  /* a receipt must never change the exit code */
+}
 
 process.exit(0);

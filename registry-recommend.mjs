@@ -37,22 +37,23 @@ export function getRecommendMode() {
     warnedUnimplemented = true;
     // stderr, once: hook stdout is a parsed envelope and must not carry this.
     process.stderr.write(
-      `[claude-mem-lite] CLAUDE_MEM_RECOMMEND_MODE=${requested} is not implemented `
-      + '(live injection is Phase 2); running in shadow mode — nothing is injected. '
-      + 'Set shadow or off to silence this.\n');
+      `[claude-mem-lite] CLAUDE_MEM_RECOMMEND_MODE=${requested} is not implemented ` +
+        '(live injection is Phase 2); running in shadow mode — nothing is injected. ' +
+        'Set shadow or off to silence this.\n',
+    );
   }
   return 'shadow';
 }
 
 // Provisional gate thresholds — calibrated from shadow data before Phase 2 (spec §8).
 // relevance is raw bm25 (negative; more negative = better). Candidate must clear |floor|.
-export const RECO_BM25_FLOOR = -1.5;     // floor stays on raw bm25 (absolute topical relevance)
+export const RECO_BM25_FLOOR = -1.5; // floor stays on raw bm25 (absolute topical relevance)
 // Margin is measured in COMPOSITE space (the metric that orders + selects the winner), NOT raw
 // bm25 — see applyGate. composite = bm25*0.4 - priors, so the scale is ~0.4x raw; 0.5 raw ≈ 0.2
 // composite is the principled starting point. Final value comes from `recommend-stats --sweep`
 // after dogfood (D#47); DEFAULT_SWEEP_MARGINS is likewise on the composite scale.
-export const RECO_MARGIN = 0.2;          // require candidates[1].composite_score - candidates[0].composite_score >= this
-const RECO_COOLDOWN_MS = 300_000;        // 5 min, mirrors T4 SKILL_COOLDOWN_MS (internal)
+export const RECO_MARGIN = 0.2; // require candidates[1].composite_score - candidates[0].composite_score >= this
+const RECO_COOLDOWN_MS = 300_000; // 5 min, mirrors T4 SKILL_COOLDOWN_MS (internal)
 
 // Lazy runtime-path resolution: read CLAUDE_MEM_DIR at call time (mirrors schema.mjs:13
 // DB_DIR formula) so tests sandbox via env without ESM-cache gymnastics, and prod reads
@@ -72,9 +73,12 @@ export function fetchInstalledSkillCandidates(rdb, promptText, limit = 10) {
   // match sitting past the top-N is sliced off → the gate sees no candidate → spurious
   // no_candidate BLOCK (the −0.15 installed composite bonus is negligible vs the bm25 spread).
   // A wide headroom lets the composite-best installed skill actually survive to the gate.
-  try { rows = searchResources(rdb, promptText, { type: 'skill', limit: Math.max(limit * 5, 50) }); }
-  catch { return []; }
-  return rows.filter(r => r.quality_tier === 'installed').slice(0, limit);
+  try {
+    rows = searchResources(rdb, promptText, { type: 'skill', limit: Math.max(limit * 5, 50) });
+  } catch {
+    return [];
+  }
+  return rows.filter((r) => r.quality_tier === 'installed').slice(0, limit);
 }
 
 /**
@@ -83,14 +87,17 @@ export function fetchInstalledSkillCandidates(rdb, promptText, limit = 10) {
  * like "latest"); shorter tags ("qa","go","db") require an exact token to avoid noise.
  */
 export function intentMatch(promptText, candidate) {
-  const tags = String(candidate.intent_tags || '').toLowerCase().split(/[,\s]+/).filter(Boolean);
+  const tags = String(candidate.intent_tags || '')
+    .toLowerCase()
+    .split(/[,\s]+/)
+    .filter(Boolean);
   if (tags.length === 0) return false;
   const tokens = String(promptText).toLowerCase().split(TOKEN_SPLIT).filter(Boolean);
   // CJK bridge: intent_tags are English, but Chinese has no word boundaries, so a pure-中文
   // prompt ("写测试") tokenizes to one CJK run that never prefix-matches "test". Inject the
   // English equivalents of any CJK_INTENT_MAP phrase present so 中文 prompts can clear gate 3.
   for (const en of cjkIntentTokens(promptText)) tokens.push(en);
-  return tags.some(tag => tokens.some(tok => (tag.length >= 3 ? tok.startsWith(tag) : tok === tag)));
+  return tags.some((tag) => tokens.some((tok) => (tag.length >= 3 ? tok.startsWith(tag) : tok === tag)));
 }
 
 /**
@@ -98,7 +105,8 @@ export function intentMatch(promptText, candidate) {
  * Gates in order: absolute floor → top1/top2 margin → intent token match → session cooldown.
  */
 export function applyGate(candidates, promptText, cooldownSet) {
-  if (!candidates || candidates.length === 0) return { verdict: 'BLOCK', reason: 'no_candidate', candidate: null };
+  if (!candidates || candidates.length === 0)
+    return { verdict: 'BLOCK', reason: 'no_candidate', candidate: null };
   const top = candidates[0];
   if (!(top.relevance <= RECO_BM25_FLOOR)) return { verdict: 'BLOCK', reason: 'below_floor', candidate: top };
   if (candidates.length >= 2) {
@@ -112,20 +120,26 @@ export function applyGate(candidates, promptText, cooldownSet) {
     if (!(margin >= RECO_MARGIN)) return { verdict: 'BLOCK', reason: 'low_margin', candidate: top };
   }
   if (!intentMatch(promptText, top)) return { verdict: 'BLOCK', reason: 'intent_mismatch', candidate: top };
-  if (cooldownSet && cooldownSet.has(String(top.name).toLowerCase())) return { verdict: 'BLOCK', reason: 'cooldown', candidate: top };
+  if (cooldownSet && cooldownSet.has(String(top.name).toLowerCase()))
+    return { verdict: 'BLOCK', reason: 'cooldown', candidate: top };
   return { verdict: 'PASS', reason: 'pass', candidate: top };
 }
 
-function recoCooldownFile(project) { return join(recoRuntimeDir(), `.skill-reco-cooldown-${project}`); }
+function recoCooldownFile(project) {
+  return join(recoRuntimeDir(), `.skill-reco-cooldown-${project}`);
+}
 
 /** Read live (non-expired) cooldown entries for a project: {nameLower: epochMs}. */
 export function getRecoCooldown(project) {
   try {
     const data = JSON.parse(readFileSync(recoCooldownFile(project), 'utf8'));
-    const now = Date.now(); const cleaned = {};
+    const now = Date.now();
+    const cleaned = {};
     for (const [k, v] of Object.entries(data)) if (now - v < RECO_COOLDOWN_MS) cleaned[k] = v;
     return cleaned;
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 /** Stamp a skill name into the project's cooldown (atomic tmp+rename, mirrors T4). */
@@ -138,18 +152,26 @@ export function setRecoCooldown(project, name) {
     const tmp = recoCooldownFile(project) + `.tmp-${process.pid}`;
     writeFileSync(tmp, JSON.stringify(data));
     renameSync(tmp, recoCooldownFile(project));
-  } catch { /* silent — cooldown best-effort */ }
+  } catch {
+    /* silent — cooldown best-effort */
+  }
 }
 
-function today() { return new Date().toISOString().slice(0, 10); }
-function shadowDir() { return join(recoRuntimeDir(), 'recommendations'); }
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+function shadowDir() {
+  return join(recoRuntimeDir(), 'recommendations');
+}
 
 function appendShadow(row) {
   try {
     const dir = shadowDir();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     appendFileSync(join(dir, `${today()}.jsonl`), JSON.stringify(row) + '\n', { mode: 0o600 });
-  } catch { /* shadow sink must never crash the hook */ }
+  } catch {
+    /* shadow sink must never crash the hook */
+  }
 }
 
 /**
@@ -166,16 +188,31 @@ export function gcOldShadowShards(retainDays = 90) {
   return gcDailyShards(shadowDir(), retainDays);
 }
 
-export function logShadowReco(project, rec) { appendShadow({ ts: new Date().toISOString(), kind: 'reco', project, ...rec }); }
-export function logShadowAdoption(project, rec) { appendShadow({ ts: new Date().toISOString(), kind: 'adopt', project, ...rec }); }
+export function logShadowReco(project, rec) {
+  appendShadow({ ts: new Date().toISOString(), kind: 'reco', project, ...rec });
+}
+export function logShadowAdoption(project, rec) {
+  appendShadow({ ts: new Date().toISOString(), kind: 'adopt', project, ...rec });
+}
 
 /** Yield parsed shadow rows from the last `days` daily shards. */
 export function* readShadowLog(days = 7) {
   for (let i = 0; i < days; i++) {
     const d = new Date(Date.now() - i * DAY_MS).toISOString().slice(0, 10);
     let raw;
-    try { raw = readFileSync(join(shadowDir(), `${d}.jsonl`), 'utf8'); } catch { continue; }
-    for (const line of raw.split('\n')) { if (!line) continue; try { yield JSON.parse(line); } catch { /* skip malformed */ } }
+    try {
+      raw = readFileSync(join(shadowDir(), `${d}.jsonl`), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      try {
+        yield JSON.parse(line);
+      } catch {
+        /* skip malformed */
+      }
+    }
   }
 }
 
@@ -193,33 +230,63 @@ const lc = (s) => String(s ?? '').toLowerCase();
  */
 export function computeFunnel(days = 7) {
   const stats = { reco: 0, pass: 0, blockByReason: {}, adopt: 0, passSkills: {}, adoptSkills: {} };
-  const bump = (obj, k) => { if (k) obj[k] = (obj[k] || 0) + 1; };
+  const bump = (obj, k) => {
+    if (k) obj[k] = (obj[k] || 0) + 1;
+  };
   const bySession = new Map();
-  const sess = (id) => { let e = bySession.get(id); if (!e) { e = { pass: new Set(), adopt: new Set() }; bySession.set(id, e); } return e; };
+  const sess = (id) => {
+    let e = bySession.get(id);
+    if (!e) {
+      e = { pass: new Set(), adopt: new Set() };
+      bySession.set(id, e);
+    }
+    return e;
+  };
   for (const row of readShadowLog(days)) {
     if (row.kind === 'reco') {
       stats.reco++;
-      if (row.verdict === 'PASS') { stats.pass++; bump(stats.passSkills, row.skill); if (row.session) sess(row.session).pass.add(lc(row.skill)); }
-      else bump(stats.blockByReason, row.reason);
+      if (row.verdict === 'PASS') {
+        stats.pass++;
+        bump(stats.passSkills, row.skill);
+        if (row.session) sess(row.session).pass.add(lc(row.skill));
+      } else bump(stats.blockByReason, row.reason);
     } else if (row.kind === 'adopt') {
-      stats.adopt++; bump(stats.adoptSkills, row.skill);
+      stats.adopt++;
+      bump(stats.adoptSkills, row.skill);
       if (row.session) sess(row.session).adopt.add(lc(row.skill));
     }
   }
   stats.sessions = bySession.size;
-  let mPass = 0, mAdopt = 0;
-  const passSessions = {}, hitSessions = {}, baseSessions = {};
+  let mPass = 0,
+    mAdopt = 0;
+  const passSessions = {},
+    hitSessions = {},
+    baseSessions = {};
   for (const { pass, adopt } of bySession.values()) {
-    for (const sk of pass) { mPass++; passSessions[sk] = (passSessions[sk] || 0) + 1; if (adopt.has(sk)) { mAdopt++; hitSessions[sk] = (hitSessions[sk] || 0) + 1; } }
+    for (const sk of pass) {
+      mPass++;
+      passSessions[sk] = (passSessions[sk] || 0) + 1;
+      if (adopt.has(sk)) {
+        mAdopt++;
+        hitSessions[sk] = (hitSessions[sk] || 0) + 1;
+      }
+    }
     for (const sk of adopt) baseSessions[sk] = (baseSessions[sk] || 0) + 1;
   }
   stats.matched = { pass: mPass, adopt: mAdopt, precision: mPass ? mAdopt / mPass : null };
   stats.lift = {};
   for (const sk of Object.keys(passSessions)) {
-    const ps = passSessions[sk], hs = hitSessions[sk] || 0;
+    const ps = passSessions[sk],
+      hs = hitSessions[sk] || 0;
     const baseRate = stats.sessions ? (baseSessions[sk] || 0) / stats.sessions : 0;
     const adoptGivenPass = ps ? hs / ps : 0;
-    stats.lift[sk] = { passSessions: ps, hitSessions: hs, adoptGivenPass, baseRate, lift: baseRate > 0 ? adoptGivenPass / baseRate : null };
+    stats.lift[sk] = {
+      passSessions: ps,
+      hitSessions: hs,
+      adoptGivenPass,
+      baseRate,
+      lift: baseRate > 0 ? adoptGivenPass / baseRate : null,
+    };
   }
   return stats;
 }
@@ -246,9 +313,9 @@ export function replayGate(row, floor, margin) {
   // existed (they age out of the 7d sweep window). Single-candidate rows (no rel2/composite2) skip
   // the margin gate either way. NOTE: sweep `margin` is on the COMPOSITE scale for new rows.
   if (Number.isFinite(row.composite1) && Number.isFinite(row.composite2)) {
-    if (!((row.composite2 - row.composite1) >= margin)) return 'BLOCK';
+    if (!(row.composite2 - row.composite1 >= margin)) return 'BLOCK';
   } else if (Number.isFinite(row.rel2)) {
-    if (!((row.rel2 - r1) >= margin)) return 'BLOCK';
+    if (!(row.rel2 - r1 >= margin)) return 'BLOCK';
   }
   if (!row.intentTop) return 'BLOCK';
   if (row.cooldownTop) return 'BLOCK';
@@ -271,29 +338,41 @@ export function computeSweep(days = 7, floors = DEFAULT_SWEEP_FLOORS, margins = 
     }
   }
   const grid = [];
-  for (const floor of floors) for (const margin of margins) {
-    let pass = 0;
-    // Matched precision MUST dedup (session, skill) exactly like computeFunnel (mPass/mAdopt
-    // via per-session Sets). Counting raw reco rows here inflated matchPass by every repeat
-    // recommendation of the same skill in one session, so the sweep's precision silently
-    // disagreed with the funnel headline and was biased toward frequently-recommended skills —
-    // corrupting the exact (floor,margin) signal the sweep exists to inform. `pass` stays a raw
-    // volume count (it is not a precision denominator).
-    const passBySession = new Map(); // session -> Set<skillLower> that PASSED at this cell
-    for (const r of recos) {
-      if (replayGate(r, floor, margin) !== 'PASS') continue;
-      pass++;
-      if (!r.session) continue;
-      if (!passBySession.has(r.session)) passBySession.set(r.session, new Set());
-      passBySession.get(r.session).add(lc(r.skill));
+  for (const floor of floors)
+    for (const margin of margins) {
+      let pass = 0;
+      // Matched precision MUST dedup (session, skill) exactly like computeFunnel (mPass/mAdopt
+      // via per-session Sets). Counting raw reco rows here inflated matchPass by every repeat
+      // recommendation of the same skill in one session, so the sweep's precision silently
+      // disagreed with the funnel headline and was biased toward frequently-recommended skills —
+      // corrupting the exact (floor,margin) signal the sweep exists to inform. `pass` stays a raw
+      // volume count (it is not a precision denominator).
+      const passBySession = new Map(); // session -> Set<skillLower> that PASSED at this cell
+      for (const r of recos) {
+        if (replayGate(r, floor, margin) !== 'PASS') continue;
+        pass++;
+        if (!r.session) continue;
+        if (!passBySession.has(r.session)) passBySession.set(r.session, new Set());
+        passBySession.get(r.session).add(lc(r.skill));
+      }
+      let matchPass = 0,
+        matchAdopt = 0;
+      for (const [session, skills] of passBySession) {
+        const adopted = adoptBySession.get(session);
+        for (const sk of skills) {
+          matchPass++;
+          if (adopted?.has(sk)) matchAdopt++;
+        }
+      }
+      grid.push({
+        floor,
+        margin,
+        pass,
+        matchPass,
+        matchAdopt,
+        precision: matchPass ? matchAdopt / matchPass : null,
+      });
     }
-    let matchPass = 0, matchAdopt = 0;
-    for (const [session, skills] of passBySession) {
-      const adopted = adoptBySession.get(session);
-      for (const sk of skills) { matchPass++; if (adopted?.has(sk)) matchAdopt++; }
-    }
-    grid.push({ floor, margin, pass, matchPass, matchAdopt, precision: matchPass ? matchAdopt / matchPass : null });
-  }
   return grid;
 }
 
@@ -305,7 +384,11 @@ export function recommendSkill(rdb, promptText, project, opts = {}) {
   const mode = getRecommendMode();
   if (mode === 'off') return { verdict: 'OFF', reason: 'off', candidate: null };
   let candidates = [];
-  try { candidates = fetchInstalledSkillCandidates(rdb, promptText); } catch { /* ignore */ }
+  try {
+    candidates = fetchInstalledSkillCandidates(rdb, promptText);
+  } catch {
+    /* ignore */
+  }
   const cooldownSet = new Set(Object.keys(getRecoCooldown(project)));
   const result = applyGate(candidates, promptText, cooldownSet);
   // Eager replay vector (B3): applyGate short-circuits, so a row that BLOCKed at below_floor
@@ -316,14 +399,16 @@ export function recommendSkill(rdb, promptText, project, opts = {}) {
     // session id (B1): the cross-hook key that lets PostToolUse adoptions be paired with
     // this reco in the SAME session — without it, precision is only a global name-set join.
     session: opts.sessionId ?? null,
-    mode, verdict: result.verdict, reason: result.reason,
+    mode,
+    verdict: result.verdict,
+    reason: result.reason,
     // join key MUST be the Skill-tool invocation slug (e.g. 'superpowers:test-driven-development'),
     // NOT the registry short name ('superpowers-tdd') — adoption rows log toolInput.skill (the slug),
     // so logging top.name made in-session matched precision a guaranteed 0 for every namespaced skill.
-    skill: top ? (top.invocation_name || top.name) : null,
-    relevance: top ? top.relevance : null,                    // floor replay (absolute bm25)
-    rel2: candidates[1] ? candidates[1].relevance : null,     // legacy margin replay (pre-composite rows)
-    composite1: top ? top.composite_score : null,             // margin replay (composite — the live gate metric)
+    skill: top ? top.invocation_name || top.name : null,
+    relevance: top ? top.relevance : null, // floor replay (absolute bm25)
+    rel2: candidates[1] ? candidates[1].relevance : null, // legacy margin replay (pre-composite rows)
+    composite1: top ? top.composite_score : null, // margin replay (composite — the live gate metric)
     composite2: candidates[1] ? candidates[1].composite_score : null,
     intentTop: top ? intentMatch(promptText, top) : false,
     cooldownTop: top ? cooldownSet.has(String(top.name).toLowerCase()) : false,
@@ -351,11 +436,17 @@ export function recordSkillAdoption(toolName, toolInput, project, sessionId = nu
 
 /** Human-readable funnel for `registry recommend-stats`. */
 export function formatFunnel(s) {
-  const blocks = Object.entries(s.blockByReason).sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `    ${k}: ${v}`).join('\n') || '    (none)';
-  const overlap = Object.keys(s.passSkills).filter(k => s.adoptSkills[k])
-    .map(k => `${k}(pass ${s.passSkills[k]}/adopt ${s.adoptSkills[k]})`).join(', ') || '(none)';
-  const passRate = s.reco ? (100 * s.pass / s.reco).toFixed(1) : '0.0';
+  const blocks =
+    Object.entries(s.blockByReason)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `    ${k}: ${v}`)
+      .join('\n') || '    (none)';
+  const overlap =
+    Object.keys(s.passSkills)
+      .filter((k) => s.adoptSkills[k])
+      .map((k) => `${k}(pass ${s.passSkills[k]}/adopt ${s.adoptSkills[k]})`)
+      .join(', ') || '(none)';
+  const passRate = s.reco ? ((100 * s.pass) / s.reco).toFixed(1) : '0.0';
   const lines = [
     'shadow recommendation funnel:',
     `  reco=${s.reco}  pass=${s.pass} (${passRate}% of reco)  adopt=${s.adopt}`,
@@ -364,8 +455,10 @@ export function formatFunnel(s) {
   ];
   // B2: session-paired matched precision + targeting lift (the flip-decision metrics).
   if (typeof s.sessions === 'number') {
-    const mp = s.matched && s.matched.pass
-      ? `${s.matched.adopt}/${s.matched.pass} (${(100 * s.matched.precision).toFixed(0)}%)` : 'n/a';
+    const mp =
+      s.matched && s.matched.pass
+        ? `${s.matched.adopt}/${s.matched.pass} (${(100 * s.matched.precision).toFixed(0)}%)`
+        : 'n/a';
     // v3.42 F5: lift = adoptGivenPass / baseRate is a ratio over `passSessions` observations.
     // Below LIFT_MIN_PASS_SESSIONS the numerator is 1-2 sessions of noise (a single
     // pass→adopt yields lift 7.0 at passSessions=1) — displaying it top-ranked next to a
@@ -374,13 +467,21 @@ export function formatFunnel(s) {
     const finite = Object.entries(s.lift || {}).filter(([, v]) => Number.isFinite(v.lift));
     const shown = finite.filter(([, v]) => (v.passSessions || 0) >= LIFT_MIN_PASS_SESSIONS);
     const suppressed = finite.length - shown.length;
-    const liftRows = shown
-      .sort((a, b) => b[1].lift - a[1].lift).slice(0, 5)
-      .map(([k, v]) => `${k}(lift ${v.lift.toFixed(2)}; ${v.hitSessions}/${v.passSessions} pass→adopt vs base ${(100 * v.baseRate).toFixed(0)}%)`)
-      .join(', ') || '(none)';
-    const suppressNote = suppressed > 0 ? ` [${suppressed} hidden: passSessions<${LIFT_MIN_PASS_SESSIONS}]` : '';
+    const liftRows =
+      shown
+        .sort((a, b) => b[1].lift - a[1].lift)
+        .slice(0, 5)
+        .map(
+          ([k, v]) =>
+            `${k}(lift ${v.lift.toFixed(2)}; ${v.hitSessions}/${v.passSessions} pass→adopt vs base ${(100 * v.baseRate).toFixed(0)}%)`,
+        )
+        .join(', ') || '(none)';
+    const suppressNote =
+      suppressed > 0 ? ` [${suppressed} hidden: passSessions<${LIFT_MIN_PASS_SESSIONS}]` : '';
     lines.push(`  sessions=${s.sessions}  matched precision (in-session PASS→adopt): ${mp}`);
-    lines.push(`  targeting lift (>1 = gate beats organic base rate, min n=${LIFT_MIN_PASS_SESSIONS}): ${liftRows}${suppressNote}`);
+    lines.push(
+      `  targeting lift (>1 = gate beats organic base rate, min n=${LIFT_MIN_PASS_SESSIONS}): ${liftRows}${suppressNote}`,
+    );
   }
   return lines.join('\n');
 }
@@ -394,7 +495,9 @@ export function formatSweep(grid) {
   const lines = ['gate threshold sweep (floor × margin → pass / matched precision):'];
   for (const g of grid) {
     const prec = Number.isFinite(g.precision) ? `${(100 * g.precision).toFixed(0)}%` : 'n/a';
-    lines.push(`  floor=${g.floor} margin=${g.margin}: pass=${g.pass}  matched=${g.matchAdopt}/${g.matchPass}  prec=${prec}`);
+    lines.push(
+      `  floor=${g.floor} margin=${g.margin}: pass=${g.pass}  matched=${g.matchAdopt}/${g.matchPass}  prec=${prec}`,
+    );
   }
   return lines.join('\n');
 }

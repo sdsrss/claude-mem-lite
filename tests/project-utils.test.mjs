@@ -4,8 +4,14 @@ import { resolveProject, _resetProjectCache } from '../project-utils.mjs';
 
 describe('resolveProject', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _resetProjectCache(); });
-  afterEach(() => { db.close(); _resetProjectCache(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _resetProjectCache();
+  });
+  afterEach(() => {
+    db.close();
+    _resetProjectCache();
+  });
 
   it('returns null/undefined unchanged', () => {
     expect(resolveProject(db, null)).toBe(null);

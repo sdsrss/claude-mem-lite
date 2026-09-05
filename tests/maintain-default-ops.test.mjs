@@ -44,7 +44,12 @@ import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
-import { DEFAULT_MAINTAIN_OPS, resolveDefaultMaintainOps, demotePinned, PINNED_INJ_THRESHOLD } from '../lib/maintain-core.mjs';
+import {
+  DEFAULT_MAINTAIN_OPS,
+  resolveDefaultMaintainOps,
+  demotePinned,
+  PINNED_INJ_THRESHOLD,
+} from '../lib/maintain-core.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 const REPO = resolve(import.meta.dirname, '..');
@@ -73,18 +78,23 @@ const baseEnv = (extra = {}) => ({
 // Seed one row that is BOTH demote-eligible and boost-eligible. Kept fresh
 // (created_at = now) so the 30-day decay / stale-purge ops cannot touch it and the
 // only two ops in play are boost and demote_pinned.
-function seedPinnedRow({ title = 'Pinned but never cited', lesson = null, importance = 2, accessCount = 9 } = {}) {
+function seedPinnedRow({
+  title = 'Pinned but never cited',
+  lesson = null,
+  importance = 2,
+  accessCount = 9,
+} = {}) {
   const db = new Database(join(dir, 'claude-mem-lite.db'));
   const now = Date.now();
   db.prepare(
-    "INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)"
-    + " VALUES ('s-pin','s-pin','projPin',?,?,'active')",
+    'INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)' +
+      " VALUES ('s-pin','s-pin','projPin',?,?,'active')",
   ).run(new Date(now).toISOString(), now);
   db.prepare(
-    "INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,"
-    + " files_read, files_modified, importance, related_ids, access_count, injection_count, cited_count,"
-    + " lesson_learned, created_at, created_at_epoch)"
-    + " VALUES ('s-pin','projPin','','change',?,'','','','','[]','[]',?,'[]',?,9,0,?,?,?)",
+    'INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,' +
+      ' files_read, files_modified, importance, related_ids, access_count, injection_count, cited_count,' +
+      ' lesson_learned, created_at, created_at_epoch)' +
+      " VALUES ('s-pin','projPin','','change',?,'','','','','[]','[]',?,'[]',?,9,0,?,?,?)",
   ).run(title, importance, accessCount, lesson, new Date(now).toISOString(), now);
   db.close();
 }
@@ -93,38 +103,54 @@ function importanceOf(title = 'Pinned but never cited') {
   const db = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
   try {
     return db.prepare('SELECT importance FROM observations WHERE title = ?').get(title).importance;
-  } finally { db.close(); }
+  } finally {
+    db.close();
+  }
 }
 
 const importanceOfPinnedRow = () => importanceOf();
 
 function runCli(args, extraEnv = {}) {
   return execFileSync(process.execPath, [CLI, ...args], {
-    cwd: REPO, env: baseEnv(extraEnv), stdio: 'pipe', encoding: 'utf8', timeout: 60_000,
+    cwd: REPO,
+    env: baseEnv(extraEnv),
+    stdio: 'pipe',
+    encoding: 'utf8',
+    timeout: 60_000,
   });
 }
 
 function callMcp(name, args, extraEnv = {}) {
-  const reqs = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
-  ].join('\n') + '\n';
+  const reqs =
+    [
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
+    ].join('\n') + '\n';
   const raw = execFileSync(process.execPath, [SERVER], {
-    env: baseEnv(extraEnv), input: reqs, encoding: 'utf8', timeout: 60_000,
+    env: baseEnv(extraEnv),
+    input: reqs,
+    encoding: 'utf8',
+    timeout: 60_000,
   });
   for (const line of raw.split('\n').filter(Boolean)) {
     try {
       const m = JSON.parse(line);
       if (m.id === 2) return m.result?.content?.[0]?.text || JSON.stringify(m.error);
-    } catch { /* server also logs non-JSON lines */ }
+    } catch {
+      /* server also logs non-JSON lines */
+    }
   }
   return '';
 }
 
 function runAutoMaintain(extraEnv = {}) {
   return execFileSync(process.execPath, [HOOK, 'auto-maintain', 'projPin'], {
-    cwd: REPO, env: baseEnv(extraEnv), stdio: 'pipe', encoding: 'utf8', timeout: 60_000,
+    cwd: REPO,
+    env: baseEnv(extraEnv),
+    stdio: 'pipe',
+    encoding: 'utf8',
+    timeout: 60_000,
   });
 }
 
@@ -139,13 +165,17 @@ function runAutoMaintain(extraEnv = {}) {
 describe('demote_pinned: default op set and opt-out parsing (pure)', () => {
   it('the shared default set contains demote_pinned, ordered after boost', () => {
     expect(DEFAULT_MAINTAIN_OPS).toContain('demote_pinned');
-    expect(DEFAULT_MAINTAIN_OPS.indexOf('demote_pinned'))
-      .toBeGreaterThan(DEFAULT_MAINTAIN_OPS.indexOf('boost'));
+    expect(DEFAULT_MAINTAIN_OPS.indexOf('demote_pinned')).toBeGreaterThan(
+      DEFAULT_MAINTAIN_OPS.indexOf('boost'),
+    );
   });
 
   it('the opt-out drops demote_pinned from the default set and nothing else', () => {
-    expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: '1' }))
-      .toEqual(['cleanup', 'decay', 'boost']);
+    expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: '1' })).toEqual([
+      'cleanup',
+      'decay',
+      'boost',
+    ]);
     expect(resolveDefaultMaintainOps({})).toEqual([...DEFAULT_MAINTAIN_OPS]);
   });
 
@@ -153,12 +183,16 @@ describe('demote_pinned: default op set and opt-out parsing (pure)', () => {
     // First cut compared `=== '1'`, so `=true` silently got the new behaviour — the same
     // class of surprise the opt-out exists to prevent.
     for (const on of ['1', 'true', 'yes', ' 1 ', 'ON']) {
-      expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: on }))
-        .toEqual(['cleanup', 'decay', 'boost']);
+      expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: on })).toEqual([
+        'cleanup',
+        'decay',
+        'boost',
+      ]);
     }
     for (const off of ['', '0', 'false', 'no', 'off']) {
-      expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: off }))
-        .toEqual([...DEFAULT_MAINTAIN_OPS]);
+      expect(resolveDefaultMaintainOps({ CLAUDE_MEM_SKIP_DEMOTE_PINNED: off })).toEqual([
+        ...DEFAULT_MAINTAIN_OPS,
+      ]);
     }
   });
 });
@@ -228,13 +262,25 @@ describe('demote_pinned copy matches the shipped behaviour', () => {
 // three ops of interference between the change and the assertion.
 describe('demotePinned floor (maintain-core, in-process)', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-1', project: 'p' }); });
-  afterEach(() => { db?.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'p' });
+  });
+  afterEach(() => {
+    db?.close();
+  });
 
-  const pinned = (extra) => insertObs(db, {
-    project: 'p', type: 'change', importance: 3, injectionCount: 8, citedCount: 0, ...extra,
-  }).lastInsertRowid;
-  const impOf = (id) => db.prepare('SELECT importance FROM observations WHERE id = ?').get(Number(id)).importance;
+  const pinned = (extra) =>
+    insertObs(db, {
+      project: 'p',
+      type: 'change',
+      importance: 3,
+      injectionCount: 8,
+      citedCount: 0,
+      ...extra,
+    }).lastInsertRowid;
+  const impOf = (id) =>
+    db.prepare('SELECT importance FROM observations WHERE id = ?').get(Number(id)).importance;
   const run = () => demotePinned(db, { projectFilter: 'AND project = ?', baseParams: ['p'] });
 
   it('floors a lesson-bearing row at 2 and a lessonless row at 1', () => {
@@ -278,8 +324,13 @@ describe('demotePinned floor (maintain-core, in-process)', () => {
     insertSession(db, { id: 'sess-2', project: 'other' });
     const mine = pinned({ title: 'Pinned in the target project' });
     const theirs = insertObs(db, {
-      sessionId: 'sess-2', project: 'other', type: 'change', importance: 3,
-      title: 'Pinned in a different project', injectionCount: 40, citedCount: 0,
+      sessionId: 'sess-2',
+      project: 'other',
+      type: 'change',
+      importance: 3,
+      title: 'Pinned in a different project',
+      injectionCount: 40,
+      citedCount: 0,
     }).lastInsertRowid;
 
     expect(run()).toBe(1);
@@ -301,7 +352,13 @@ describe('demote_pinned is in the default maintenance set on all three faces', (
     runCli(['stats']);
     seedPinnedRow();
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('CLI `maintain execute` with no --ops lands the row at importance 1', () => {
     expect(importanceOfPinnedRow()).toBe(2);
@@ -368,10 +425,10 @@ describe('demote_pinned is in the default maintenance set on all three faces', (
     const db = new Database(join(dir, 'claude-mem-lite.db'));
     const old = Date.now() - 10 * 86400000;
     db.prepare(
-      "INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,"
-      + " facts, files_read, files_modified, importance, related_ids, access_count, injection_count, cited_count,"
-      + " created_at, created_at_epoch)"
-      + " VALUES ('s-pin','projPin','','change','Modified hook.mjs, server.mjs','','','','[]','[]','[]',3,'[]',0,9,0,?,?)",
+      'INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,' +
+        ' facts, files_read, files_modified, importance, related_ids, access_count, injection_count, cited_count,' +
+        ' created_at, created_at_epoch)' +
+        " VALUES ('s-pin','projPin','','change','Modified hook.mjs, server.mjs','','','','[]','[]','[]',3,'[]',0,9,0,?,?)",
     ).run(new Date(old).toISOString(), old);
     db.close();
 
@@ -380,15 +437,23 @@ describe('demote_pinned is in the default maintenance set on all three faces', (
     // Both 24h gates must be cleared or the second pass is a no-op and the case proves
     // nothing — the hiding happens on the run AFTER the demotion.
     for (const f of ['last-auto-maintain.json', 'last-mark-compressible-projPin.json']) {
-      try { rmSync(join(runtime, f)); } catch { /* not written */ }
+      try {
+        rmSync(join(runtime, f));
+      } catch {
+        /* not written */
+      }
     }
     runAutoMaintain();
 
     const check = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
-    const row = check.prepare("SELECT importance, compressed_into FROM observations WHERE title = 'Modified hook.mjs, server.mjs'").get();
+    const row = check
+      .prepare(
+        "SELECT importance, compressed_into FROM observations WHERE title = 'Modified hook.mjs, server.mjs'",
+      )
+      .get();
     check.close();
-    expect(row.importance).toBe(1);          // demoted — no lesson, so floor 1
-    expect(row.compressed_into).toBeNull();  // but NOT hidden
+    expect(row.importance).toBe(1); // demoted — no lesson, so floor 1
+    expect(row.compressed_into).toBeNull(); // but NOT hidden
   });
 
   // v3.76.1: the scan forecast and the op drifted the moment demotePinned gained a second

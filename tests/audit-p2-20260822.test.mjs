@@ -30,25 +30,41 @@ describe('P2-1 — auto-dedup stamping never re-stamps an already-superseded row
     // observations.memory_session_id is a real FK — seed the session or every INSERT below
     // fails with "FOREIGN KEY constraint failed" rather than exercising the guard.
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('p2-sess', 'p2-mem', 'p2--proj', ?, ?, 'active')
-    `).run(new Date(now).toISOString(), now);
+    `,
+    ).run(new Date(now).toISOString(), now);
   });
 
   afterEach(() => {
-    try { db.close(); } catch { /* already closed */ }
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   function seed({ title, supersededAt = null, supersededBy = null }) {
-    return Number(db.prepare(`
+    return Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
         concepts, facts, files_read, files_modified, importance, compressed_into, access_count,
         superseded_at, superseded_by, created_at, created_at_epoch)
       VALUES ('p2-mem', 'p2--proj', ?, 'bugfix', ?, '', '', '', '', '[]', '[]', 2, NULL, 0, ?, ?, ?, ?)
-    `).run(`${title} body`, title, supersededAt, supersededBy,
-      new Date().toISOString(), Date.now()).lastInsertRowid);
+    `,
+        )
+        .run(`${title} body`, title, supersededAt, supersededBy, new Date().toISOString(), Date.now())
+        .lastInsertRowid,
+    );
   }
 
   const readRow = (id) =>
@@ -62,7 +78,7 @@ describe('P2-1 — auto-dedup stamping never re-stamps an already-superseded row
     const oldId = seed({
       title: 'Vector rebuild drops the alias column',
       supersededAt: Date.now() - 1000,
-      supersededBy: String(correctionId),   // mirrors lib/save-observation.mjs supersedes write
+      supersededBy: String(correctionId), // mirrors lib/save-observation.mjs supersedes write
     });
 
     // The pass selected `oldId` while it was still live; by the time it stamps, the user's
@@ -70,8 +86,9 @@ describe('P2-1 — auto-dedup stamping never re-stamps an already-superseded row
     const changed = stampDedupSuperseded(db, [oldId], 'auto-dedup-fuzzy');
 
     expect(changed, 'guard let the stamp through').toBe(0);
-    expect(String(readRow(oldId).superseded_by), 'numeric supersession chain was clobbered')
-      .toBe(String(correctionId));
+    expect(String(readRow(oldId).superseded_by), 'numeric supersession chain was clobbered').toBe(
+      String(correctionId),
+    );
   });
 
   // Positive control: the guard must not break the feature it protects.
@@ -121,8 +138,13 @@ describe('P2-1 — auto-dedup stamping never re-stamps an already-superseded row
     const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
     const src = readFileSync(join(repo, 'hook.mjs'), 'utf8');
 
-    const inlineStamps = [...src.matchAll(/UPDATE observations SET superseded_at[^`]*superseded_by\s*=\s*'auto-dedup/g)];
-    expect(inlineStamps.map(m => m[0]), 'hook.mjs re-inlined a dedup UPDATE instead of calling stampDedupSuperseded').toEqual([]);
+    const inlineStamps = [
+      ...src.matchAll(/UPDATE observations SET superseded_at[^`]*superseded_by\s*=\s*'auto-dedup/g),
+    ];
+    expect(
+      inlineStamps.map((m) => m[0]),
+      'hook.mjs re-inlined a dedup UPDATE instead of calling stampDedupSuperseded',
+    ).toEqual([]);
 
     expect(src).toContain("stampDedupSuperseded(db, removeIds, 'auto-dedup')");
     expect(src).toContain("stampDedupSuperseded(db, fuzzyRemoveIds, 'auto-dedup-fuzzy')");
@@ -158,8 +180,16 @@ describe('P2-10 — the type-quality table has one source', () => {
   });
 
   afterEach(() => {
-    try { db.close(); } catch { /* already closed */ }
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   // FAILS IF: the generator emits a different weight, drops a type, or changes the ELSE —
@@ -167,8 +197,7 @@ describe('P2-10 — the type-quality table has one source', () => {
   // differences are not.
   it('the generated CASE evaluates identically to the literal it replaced', async () => {
     const { TYPE_QUALITY_CASE } = await import('../scoring-sql.mjs');
-    const types = ['decision', 'discovery', 'bugfix', 'feature', 'refactor', 'change',
-      'note', '', null];
+    const types = ['decision', 'discovery', 'bugfix', 'feature', 'refactor', 'change', 'note', '', null];
 
     for (const t of types) {
       db.prepare('DELETE FROM o').run();
@@ -205,7 +234,9 @@ describe('P2-10 — the type-quality table has one source', () => {
       const src = readFileSync(join(repo, f), 'utf8');
       const localTable = src.match(/(?:const|let)\s+\w+\s*=\s*\{[^}]*decision\s*:\s*1\.5[^}]*\}/);
       expect(localTable?.[0], `${f} re-declares the type-quality table locally`).toBeUndefined();
-      expect(src, `${f} does not import the shared table`).toMatch(/TYPE_QUALITY.*from '\.\/scoring-sql\.mjs'/s);
+      expect(src, `${f} does not import the shared table`).toMatch(
+        /TYPE_QUALITY.*from '\.\/scoring-sql\.mjs'/s,
+      );
     }
   });
 });
@@ -226,27 +257,59 @@ describe('P2-11 — auto-compress marking runs on the maintain cadence, not ever
     db = new Database(join(dir, 'mark.db'));
     initSchema(db);
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('mk-sess', 'mk-mem', ?, ?, ?, 'active')
-    `).run(PROJECT, new Date(now).toISOString(), now);
+    `,
+    ).run(PROJECT, new Date(now).toISOString(), now);
   });
 
   afterEach(() => {
-    try { db.close(); } catch { /* already closed */ }
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
-  function seedObs({ title, ageDays, importance = 1, lesson = null, facts = '[]',
-    injectionCount = 0, project = PROJECT }) {
+  function seedObs({
+    title,
+    ageDays,
+    importance = 1,
+    lesson = null,
+    facts = '[]',
+    injectionCount = 0,
+    project = PROJECT,
+  }) {
     const epoch = Date.now() - ageDays * 86400000;
-    return Number(db.prepare(`
+    return Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
         concepts, facts, files_read, files_modified, importance, compressed_into, access_count,
         injection_count, lesson_learned, created_at, created_at_epoch)
       VALUES ('mk-mem', ?, ?, 'change', ?, '', '', '', ?, '[]', '[]', ?, NULL, 0, ?, ?, ?, ?)
-    `).run(project, `${title} body`, title, facts, importance, injectionCount, lesson,
-      new Date(epoch).toISOString(), epoch).lastInsertRowid);
+    `,
+        )
+        .run(
+          project,
+          `${title} body`,
+          title,
+          facts,
+          importance,
+          injectionCount,
+          lesson,
+          new Date(epoch).toISOString(),
+          epoch,
+        ).lastInsertRowid,
+    );
   }
 
   const compressedInto = (id) =>
@@ -260,7 +323,7 @@ describe('P2-11 — auto-compress marking runs on the maintain cadence, not ever
     const res = markAutoCompressible(db, PROJECT);
 
     expect(res.aged).toBe(1);
-    expect(compressedInto(old)).toBe(-1);           // COMPRESSED_AUTO
+    expect(compressedInto(old)).toBe(-1); // COMPRESSED_AUTO
     expect(compressedInto(recent)).toBeNull();
   });
 
@@ -318,13 +381,16 @@ describe('P2-11 — auto-compress marking runs on the maintain cadence, not ever
 
     const dbMutations = src.slice(
       src.indexOf('function runSessionStartDbMutations'),
-      src.indexOf('function runSessionStartAutoMaintain'));
-    expect(dbMutations, 'SessionStart still runs a compress-marking UPDATE every boot')
-      .not.toMatch(/UPDATE observations SET compressed_into/);
+      src.indexOf('function runSessionStartAutoMaintain'),
+    );
+    expect(dbMutations, 'SessionStart still runs a compress-marking UPDATE every boot').not.toMatch(
+      /UPDATE observations SET compressed_into/,
+    );
 
     const autoMaintain = src.slice(src.indexOf('function runSessionStartAutoMaintain'));
-    expect(autoMaintain, 'auto-maintain does not run the marking')
-      .toMatch(/markAutoCompressibleIfDue\(db, project\)/);
+    expect(autoMaintain, 'auto-maintain does not run the marking').toMatch(
+      /markAutoCompressibleIfDue\(db, project\)/,
+    );
 
     // v3.75.1: the marking must sit BEFORE the global `shouldMaintain` block, on its own
     // per-project gate. Inside it — where v3.75.0 put it — one global 24h stamp meant
@@ -333,7 +399,9 @@ describe('P2-11 — auto-compress marking runs on the maintain cadence, not ever
     const gateAt = autoMaintain.indexOf('let shouldMaintain');
     expect(markAt, 'marking call not found in auto-maintain').toBeGreaterThan(-1);
     expect(gateAt, 'global gate not found in auto-maintain').toBeGreaterThan(-1);
-    expect(markAt, 'the marking is back inside the GLOBAL 24h gate — that is the v3.75.0 regression')
-      .toBeLessThan(gateAt);
+    expect(
+      markAt,
+      'the marking is back inside the GLOBAL 24h gate — that is the v3.75.0 regression',
+    ).toBeLessThan(gateAt);
   });
 });

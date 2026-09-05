@@ -40,9 +40,10 @@ describe('plugin manifests', () => {
   it('declares plugin-mode session hooks in hooks/hooks.json', () => {
     const hooks = readJson('hooks/hooks.json');
     const sessionHooks = hooks.hooks?.SessionStart?.[0]?.hooks ?? [];
-    expect(sessionHooks.map(h => h.command)).toContain('bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"');
+    expect(sessionHooks.map((h) => h.command)).toContain('bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"');
     // v2.84: Node hook entries routed through hook-launcher.mjs for self-heal.
-    expect(sessionHooks.map(h => h.command)).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs session-start');
+    expect(sessionHooks.map((h) => h.command)).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs session-start',
+    );
   });
 });
-

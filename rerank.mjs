@@ -42,7 +42,12 @@ export function extractRanked(raw) {
   if (obj && Array.isArray(obj.ranked)) return obj.ranked; // {"ranked":[...]}
   const m = text.match(/\[\s*\d+(?:\s*,\s*\d+)*\s*\]/); // prose-wrapped [..]
   if (m) {
-    try { const a = JSON.parse(m[0]); if (Array.isArray(a)) return a; } catch { /* fall through */ }
+    try {
+      const a = JSON.parse(m[0]);
+      if (Array.isArray(a)) return a;
+    } catch {
+      /* fall through */
+    }
   }
   return null;
 }
@@ -50,9 +55,16 @@ export function extractRanked(raw) {
 // Reorder candidate session ids per the LLM's chosen 1-based order; any failure →
 // original order ("never worse than baseline"). { order: sid[], parsed: bool }.
 export async function llmRerankOrder(query, cand /* [{sid,text}] */, llm) {
-  const prompt = buildRerankPrompt(query, cand.map((c) => c.text));
+  const prompt = buildRerankPrompt(
+    query,
+    cand.map((c) => c.text),
+  );
   let raw;
-  try { raw = await llm(prompt); } catch { raw = null; }
+  try {
+    raw = await llm(prompt);
+  } catch {
+    raw = null;
+  }
   const order = extractRanked(raw);
   if (!order) return { order: cand.map((c) => c.sid), parsed: false };
   const seen = new Set();
@@ -64,7 +76,9 @@ export async function llmRerankOrder(query, cand /* [{sid,text}] */, llm) {
       out.push(cand[idx].sid);
     }
   }
-  cand.forEach((c, i) => { if (!seen.has(i)) out.push(c.sid); }); // append omitted, original order
+  cand.forEach((c, i) => {
+    if (!seen.has(i)) out.push(c.sid);
+  }); // append omitted, original order
   return { order: out, parsed: true };
 }
 

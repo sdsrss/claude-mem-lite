@@ -26,9 +26,10 @@ describe('isStaleMemProcess — legacy artifacts', () => {
 
 describe('isStaleMemProcess — must NOT flag', () => {
   it('vitest workers running from a checkout named claude-mem-lite (the CI false-red)', () => {
-    const line = '12505 /opt/hostedtoolcache/node/22.23.2/x64/bin/node '
-      + '--require /home/runner/work/claude-mem-lite/claude-mem-lite/node_modules/vitest/suppress-warnings.cjs '
-      + '/home/runner/work/claude-mem-lite/claude-mem-lite/node_modules/vitest/dist/workers/forks.js';
+    const line =
+      '12505 /opt/hostedtoolcache/node/22.23.2/x64/bin/node ' +
+      '--require /home/runner/work/claude-mem-lite/claude-mem-lite/node_modules/vitest/suppress-warnings.cjs ' +
+      '/home/runner/work/claude-mem-lite/claude-mem-lite/node_modules/vitest/dist/workers/forks.js';
     expect(isStaleMemProcess(line, V)).toBe(false);
   });
 
@@ -44,9 +45,10 @@ describe('isStaleMemProcess — must NOT flag', () => {
   // fix for this check tripped it, because the commit message text — sitting in a
   // live bash process's argv — contained the word "chroma". Anything that takes a
   // program as an argument can quote us.
-  it('a shell whose ARGUMENTS merely mention chroma (the fix\'s own commit)', () => {
-    const line = '2 /bin/bash -c git commit -m "the legacy clause was meant for '
-      + 'the pre-v2.20 chroma worker under ~/.claude-mem/"';
+  it("a shell whose ARGUMENTS merely mention chroma (the fix's own commit)", () => {
+    const line =
+      '2 /bin/bash -c git commit -m "the legacy clause was meant for ' +
+      'the pre-v2.20 chroma worker under ~/.claude-mem/"';
     expect(isStaleMemProcess(line, V)).toBe(false);
   });
 
@@ -64,9 +66,12 @@ describe('isStaleMemProcess — must NOT flag', () => {
   });
 
   it('the CURRENT plugin-cache launcher', () => {
-    expect(isStaleMemProcess(
-      `999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/${V}/scripts/launch.mjs`, V,
-    )).toBe(false);
+    expect(
+      isStaleMemProcess(
+        `999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/${V}/scripts/launch.mjs`,
+        V,
+      ),
+    ).toBe(false);
   });
 
   it('a dev-install launcher with no version segment', () => {
@@ -75,9 +80,12 @@ describe('isStaleMemProcess — must NOT flag', () => {
 
   // Drives the end-of-token anchor: a backup/adjacent file is not a running script.
   it('a path that merely CONTAINS an old server.mjs (a .bak, not an executed script)', () => {
-    expect(isStaleMemProcess(
-      '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs.bak', V,
-    )).toBe(false);
+    expect(
+      isStaleMemProcess(
+        '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs.bak',
+        V,
+      ),
+    ).toBe(false);
   });
 
   it('an empty line', () => {
@@ -87,20 +95,26 @@ describe('isStaleMemProcess — must NOT flag', () => {
 
 describe('isStaleMemProcess — version-mismatched plugin cache', () => {
   it('flags an OLD cache version still serving the MCP server', () => {
-    expect(isStaleMemProcess(
-      '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs', V,
-    )).toBe(true);
+    expect(
+      isStaleMemProcess('999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs', V),
+    ).toBe(true);
   });
 
   it('flags an old cache launcher', () => {
-    expect(isStaleMemProcess(
-      '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/scripts/launch.mjs', V,
-    )).toBe(true);
+    expect(
+      isStaleMemProcess(
+        '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/scripts/launch.mjs',
+        V,
+      ),
+    ).toBe(true);
   });
 
   it('cannot judge a mismatch when the running version is unknown', () => {
-    expect(isStaleMemProcess(
-      '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs', '',
-    )).toBe(false);
+    expect(
+      isStaleMemProcess(
+        '999 node /home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/3.66.1/server.mjs',
+        '',
+      ),
+    ).toBe(false);
   });
 });

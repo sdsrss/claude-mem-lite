@@ -34,7 +34,10 @@ import { envNumber } from '../lib/env-number.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('envNumber — the contract lib/cli-flags.mjs already has for CLI flags', () => {
-  const capture = () => { const seen = []; return { warn: (m) => seen.push(m), seen }; };
+  const capture = () => {
+    const seen = [];
+    return { warn: (m) => seen.push(m), seen };
+  };
 
   it('returns the parsed value for a well-formed number', () => {
     expect(envNumber('7', { name: 'X', defaultValue: 3 })).toBe(7);
@@ -63,8 +66,10 @@ describe('envNumber — the contract lib/cli-flags.mjs already has for CLI flags
   it('falls back LOUDLY on the values that used to become NaN', () => {
     for (const bad of ['abc', '2abc', 'NaN', 'Infinity', '-Infinity', 'null', '1,5']) {
       const c = capture();
-      expect(envNumber(bad, { name: 'CLAUDE_MEM_X', defaultValue: 3, warn: c.warn }),
-        `"${bad}" did not fall back`).toBe(3);
+      expect(
+        envNumber(bad, { name: 'CLAUDE_MEM_X', defaultValue: 3, warn: c.warn }),
+        `"${bad}" did not fall back`,
+      ).toBe(3);
       expect(c.seen.length, `"${bad}" fell back without warning`).toBe(1);
       expect(c.seen[0]).toContain('CLAUDE_MEM_X');
       expect(c.seen[0]).toContain(bad);
@@ -116,7 +121,11 @@ const SWEEP_EXT = /\.(mjs|js)$/;
 
 function walk(dir, out = []) {
   let entries;
-  try { entries = readdirSync(dir); } catch { return out; }
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
   for (const e of entries) {
     const p = join(dir, e);
     if (statSync(p).isDirectory()) walk(p, out);
@@ -163,7 +172,10 @@ export function sweepFiles() {
  * @returns {string}
  */
 export function stripComments(src) {
-  return src.split('\n').map((l) => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l)).join('\n');
+  return src
+    .split('\n')
+    .map((l) => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l))
+    .join('\n');
 }
 
 /** An env read, either syntactically or by this repo's env-name convention. */
@@ -260,15 +272,19 @@ describe('no numeric env parse may fold its own fallback into the parse', () => 
     // The first cut caught only the folded form. The v3.94.0 pre-tag review reverted
     // lib/cite-back-hint.mjs's three sites to these two shapes and the whole tree stayed
     // green, so these are the shapes most likely to be written here again, not exotica.
-    expect(findFoldedEnvParses('const a = Number(process.env.CLAUDE_MEM_X) || 3;'),
-      'trailing-default form missed').toHaveLength(1);
+    expect(
+      findFoldedEnvParses('const a = Number(process.env.CLAUDE_MEM_X) || 3;'),
+      'trailing-default form missed',
+    ).toHaveLength(1);
     expect(findFoldedEnvParses('const a = Number(env.CLAUDE_MEM_X) ?? 3;')).toHaveLength(1);
-    expect(findFoldedEnvParses(
-      'const a = env.CLAUDE_MEM_X !== undefined ? Number(env.CLAUDE_MEM_X) : 3;'),
-    'ternary form missed').toHaveLength(1);
-    expect(findFoldedEnvParses(
-      'const { CLAUDE_MEM_X } = process.env; const a = Number(CLAUDE_MEM_X || 3);'),
-    'destructured env missed — name-convention arm not firing').toHaveLength(1);
+    expect(
+      findFoldedEnvParses('const a = env.CLAUDE_MEM_X !== undefined ? Number(env.CLAUDE_MEM_X) : 3;'),
+      'ternary form missed',
+    ).toHaveLength(1);
+    expect(
+      findFoldedEnvParses('const { CLAUDE_MEM_X } = process.env; const a = Number(CLAUDE_MEM_X || 3);'),
+      'destructured env missed — name-convention arm not firing',
+    ).toHaveLength(1);
   });
 
   it('a code line containing a glob is not blanked by the comment stripper', () => {
@@ -276,7 +292,8 @@ describe('no numeric env parse may fold its own fallback into the parse', () => 
     // string both contain a slash immediately followed by a star, and a regex-based
     // block-comment stripper read that as an opener and swallowed to the next star-slash.
     // Driven on the two real shapes, taken from vitest.config.mjs and secret-scrub.mjs.
-    const glob = "const exclude = ['**/node_modules/**'];\nconst a = Number(process.env.CLAUDE_MEM_X || 3);\n";
+    const glob =
+      "const exclude = ['**/node_modules/**'];\nconst a = Number(process.env.CLAUDE_MEM_X || 3);\n";
     expect(stripComments(glob).split('\n')[0], 'a glob line was blanked').toContain('node_modules');
     expect(findFoldedEnvParses(glob), 'offender after a glob line is invisible').toHaveLength(1);
 
@@ -301,8 +318,12 @@ describe('no numeric env parse may fold its own fallback into the parse', () => 
     // Premise assertion: a sweep over an empty or mis-rooted file list passes vacuously.
     const files = sweepFiles();
     expect(files.length).toBeGreaterThan(80);
-    for (const must of ['scripts/user-prompt-search.js', 'lib/relevance-floor.mjs',
-      'lib/cite-back-hint.mjs', 'benchmark/adoption-rankers.mjs']) {
+    for (const must of [
+      'scripts/user-prompt-search.js',
+      'lib/relevance-floor.mjs',
+      'lib/cite-back-hint.mjs',
+      'benchmark/adoption-rankers.mjs',
+    ]) {
       expect(files, `sweep does not reach ${must}`).toContain(join(ROOT, must));
     }
   });
@@ -330,22 +351,30 @@ function seed() {
   dirs.push(dir);
   const db = new Database(join(dir, 'claude-mem-lite.db'));
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc-seed','mem-seed', ?, datetime('now'), ?)`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc-seed','mem-seed', ?, datetime('now'), ?)`,
+  ).run(PROJECT, Date.now());
   const base = Date.now();
   let target;
   db.transaction(() => {
     target = saveObservation(db, {
-      content: 'refreshSessionToken threw after every deploy because the rotated signing key '
-        + 'was read once at module load instead of per call',
-      type: 'bugfix', importance: 3, project: PROJECT,
+      content:
+        'refreshSessionToken threw after every deploy because the rotated signing key ' +
+        'was read once at module load instead of per call',
+      type: 'bugfix',
+      importance: 3,
+      project: PROJECT,
       lesson_learned: 'read refreshSessionToken signing keys per call, not at module load',
       now: new Date(base),
     });
     for (let i = 1; i < 12; i++) {
       saveObservation(db, {
         content: `unrelated cleanup pass ${i} over the deploy scripts and their logging`,
-        type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 10 * 60_000),
+        type: 'change',
+        importance: 1,
+        project: PROJECT,
+        now: new Date(base - i * 10 * 60_000),
       });
     }
   })();
@@ -369,10 +398,23 @@ function runHook(dir, extraEnv, sessionId) {
     });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 20_000);
-    proc.on('close', () => { clearTimeout(killer); done({ stdout, stderr }); });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    const killer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }, 20_000);
+    proc.on('close', () => {
+      clearTimeout(killer);
+      done({ stdout, stderr });
+    });
     proc.stdin.write(JSON.stringify({ session_id: sessionId, prompt: PROMPT, cwd: '/x/envnum' }));
     proc.stdin.end();
   });
@@ -380,13 +422,21 @@ function runHook(dir, extraEnv, sessionId) {
 
 describe('a malformed numeric env must not silence the UserPromptSubmit face', () => {
   afterEach(() => {
-    for (const d of dirs.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const d of dirs.splice(0)) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('injects with the knob unset — the premise every case below rests on', async () => {
     const { dir, targetId } = seed();
     const { stdout } = await runHook(dir, {}, 'env-baseline');
-    expect(stdout, 'baseline injects nothing — the cases below would pass vacuously').toContain(`#${targetId}`);
+    expect(stdout, 'baseline injects nothing — the cases below would pass vacuously').toContain(
+      `#${targetId}`,
+    );
   });
 
   it('still injects with CLAUDE_MEM_UPS_MAX_RESULTS set to garbage', async () => {
@@ -400,15 +450,19 @@ describe('a malformed numeric env must not silence the UserPromptSubmit face', (
 
   it('still injects with every UPS numeric knob set to garbage at once', async () => {
     const { dir, targetId } = seed();
-    const { stdout } = await runHook(dir, {
-      CLAUDE_MEM_UPS_MAX_RESULTS: 'abc',
-      CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT: 'abc',
-      CLAUDE_MEM_UPS_BM25_MIN: 'abc',
-      CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP: 'abc',
-      CLAUDE_MEM_UPS_TOP_MIN: 'abc',
-      CLAUDE_MEM_UPS_OR_BM25_MIN: 'abc',
-      CLAUDE_MEM_UPS_FLOOR_REF_CORPUS: 'abc',
-    }, 'env-garbage-all');
+    const { stdout } = await runHook(
+      dir,
+      {
+        CLAUDE_MEM_UPS_MAX_RESULTS: 'abc',
+        CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT: 'abc',
+        CLAUDE_MEM_UPS_BM25_MIN: 'abc',
+        CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP: 'abc',
+        CLAUDE_MEM_UPS_TOP_MIN: 'abc',
+        CLAUDE_MEM_UPS_OR_BM25_MIN: 'abc',
+        CLAUDE_MEM_UPS_FLOOR_REF_CORPUS: 'abc',
+      },
+      'env-garbage-all',
+    );
     expect(stdout).toContain(`#${targetId}`);
   });
 
@@ -421,23 +475,32 @@ describe('a malformed numeric env must not silence the UserPromptSubmit face', (
     // A range bound is a behaviour change; it has to be read off the consumer, not
     // reasoned about from the name.
     const { dir } = seed();
-    const { stderr } = await runHook(dir, {
-      CLAUDE_MEM_UPS_FLOOR_REF_CORPUS: '1',
-      CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT: '0',
-      CLAUDE_MEM_UPS_MAX_RESULTS: '0',
-      // The POSITIVE premise, and it is load-bearing: every other assertion here is a
-      // `not.toContain`, which a process that died before parsing any env satisfies just
-      // as well as one that accepted all three. The pre-tag review proved it — with
-      // `process.exit(0)` at the top of the hook, four of the five e2e cases went red and
-      // this one stayed green. A garbage knob cannot be swapped for one of the three above
-      // (MAX_RESULTS='0' makes stdout empty by design, so stdout is no use here); a fourth
-      // one that MUST warn is what shows the process reached env parsing at all.
-      CLAUDE_MEM_UPS_BM25_MIN: 'zzz',
-    }, 'env-low');
-    expect(stderr, 'the hook never reached env parsing — the negative assertions below are vacuous')
-      .toContain('CLAUDE_MEM_UPS_BM25_MIN');
-    for (const knob of ['CLAUDE_MEM_UPS_FLOOR_REF_CORPUS', 'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT',
-      'CLAUDE_MEM_UPS_MAX_RESULTS']) {
+    const { stderr } = await runHook(
+      dir,
+      {
+        CLAUDE_MEM_UPS_FLOOR_REF_CORPUS: '1',
+        CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT: '0',
+        CLAUDE_MEM_UPS_MAX_RESULTS: '0',
+        // The POSITIVE premise, and it is load-bearing: every other assertion here is a
+        // `not.toContain`, which a process that died before parsing any env satisfies just
+        // as well as one that accepted all three. The pre-tag review proved it — with
+        // `process.exit(0)` at the top of the hook, four of the five e2e cases went red and
+        // this one stayed green. A garbage knob cannot be swapped for one of the three above
+        // (MAX_RESULTS='0' makes stdout empty by design, so stdout is no use here); a fourth
+        // one that MUST warn is what shows the process reached env parsing at all.
+        CLAUDE_MEM_UPS_BM25_MIN: 'zzz',
+      },
+      'env-low',
+    );
+    expect(
+      stderr,
+      'the hook never reached env parsing — the negative assertions below are vacuous',
+    ).toContain('CLAUDE_MEM_UPS_BM25_MIN');
+    for (const knob of [
+      'CLAUDE_MEM_UPS_FLOOR_REF_CORPUS',
+      'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT',
+      'CLAUDE_MEM_UPS_MAX_RESULTS',
+    ]) {
       expect(stderr, `${knob} rejected a value the code documents as meaningful`).not.toContain(knob);
     }
   });

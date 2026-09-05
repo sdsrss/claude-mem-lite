@@ -12,9 +12,9 @@ describe('schema v36 — events_fts_au scoped to title, body', () => {
   it('fresh DB creates events_fts_au scoped to title, body', () => {
     const db = new Database(':memory:');
     initSchema(db);
-    const row = db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`
-    ).get();
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`)
+      .get();
     expect(row).toBeTruthy();
     expect(SCOPED.test(row.sql)).toBe(true);
     db.close();
@@ -38,9 +38,9 @@ describe('schema v36 — events_fts_au scoped to title, body', () => {
 
     initSchema(db);
 
-    const row = db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`
-    ).get();
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`)
+      .get();
     expect(SCOPED.test(row.sql)).toBe(true);
     db.close();
   });
@@ -50,7 +50,7 @@ describe('schema v36 — events_fts_au scoped to title, body', () => {
     initSchema(db);
     db.prepare(
       `INSERT INTO events (project, event_type, title, body, created_at_epoch)
-       VALUES ('p', 'bugfix', 'alpha term', 'gamma body', 1)`
+       VALUES ('p', 'bugfix', 'alpha term', 'gamma body', 1)`,
     ).run();
 
     expect(db.prepare(`SELECT rowid FROM events_fts WHERE events_fts MATCH 'alpha'`).all().length).toBe(1);
@@ -70,12 +70,14 @@ describe('schema v36 — events_fts_au scoped to title, body', () => {
     initSchema(db);
     db.prepare(
       `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
-       VALUES ('p', 'bugfix', 'hello world', 'some body', 1, 1)`
+       VALUES ('p', 'bugfix', 'hello world', 'some body', 1, 1)`,
     ).run();
 
     // Citation-decay / access-count style bumps on non-FTS columns.
     for (let i = 0; i < 5; i++) {
-      db.prepare(`UPDATE events SET importance = importance + 1, accessed_count = accessed_count + 1 WHERE project = 'p'`).run();
+      db.prepare(
+        `UPDATE events SET importance = importance + 1, accessed_count = accessed_count + 1 WHERE project = 'p'`,
+      ).run();
     }
 
     // External-content FTS5 integrity check must pass and the row still matches once.

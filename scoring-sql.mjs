@@ -34,12 +34,12 @@ import { DAY_MS } from './lib/time-constants.mjs';
 
 /** Recency half-life per observation type (in milliseconds) */
 export const DECAY_HALF_LIFE_BY_TYPE = {
-  decision:  90 * DAY_MS,  // 90 days — architectural decisions persist
-  discovery: 60 * DAY_MS,  // 60 days — learned patterns last
-  feature:   30 * DAY_MS,  // 30 days — feature work is mid-range
-  bugfix:    14 * DAY_MS,  // 14 days — bugs are usually one-off
-  refactor:  14 * DAY_MS,  // 14 days — code cleanup
-  change:     7 * DAY_MS,  //  7 days — routine changes decay fast
+  decision: 90 * DAY_MS, // 90 days — architectural decisions persist
+  discovery: 60 * DAY_MS, // 60 days — learned patterns last
+  feature: 30 * DAY_MS, // 30 days — feature work is mid-range
+  bugfix: 14 * DAY_MS, // 14 days — bugs are usually one-off
+  refactor: 14 * DAY_MS, // 14 days — code cleanup
+  change: 7 * DAY_MS, //  7 days — routine changes decay fast
 };
 export const DEFAULT_DECAY_HALF_LIFE_MS = 14 * DAY_MS;
 
@@ -58,7 +58,16 @@ export const SESS_BM25 = 'bm25(session_summaries_fts, 5, 3, 3, 3, 2, 1, 1)';
 export const EVT_BM25 = 'bm25(events_fts, 5, 2)';
 
 /** FTS5 columns for observations (must match BM25 weight order) */
-export const OBS_FTS_COLUMNS = ['title', 'subtitle', 'narrative', 'text', 'facts', 'concepts', 'lesson_learned', 'search_aliases'];
+export const OBS_FTS_COLUMNS = [
+  'title',
+  'subtitle',
+  'narrative',
+  'text',
+  'facts',
+  'concepts',
+  'lesson_learned',
+  'search_aliases',
+];
 
 /** SQL CASE for type-differentiated recency decay half-lives (milliseconds) */
 export const TYPE_DECAY_CASE = `(
@@ -101,7 +110,9 @@ export const TYPE_QUALITY_DEFAULT = 1.0;
  */
 export const TYPE_QUALITY_CASE = `(
   CASE o.type
-${Object.entries(TYPE_QUALITY).map(([t, w]) => `    WHEN '${t}' THEN ${w.toFixed(1)}`).join('\n')}
+${Object.entries(TYPE_QUALITY)
+  .map(([t, w]) => `    WHEN '${t}' THEN ${w.toFixed(1)}`)
+  .join('\n')}
     ELSE ${TYPE_QUALITY_DEFAULT.toFixed(1)}
   END
 )`;
@@ -234,8 +245,8 @@ export function citeFactorClause(alias = 'o') {
 }
 
 export function citeFactorJs(row) {
-  const cited = (row && typeof row.cited_count === 'number') ? row.cited_count : 0;
-  const streak = (row && typeof row.uncited_streak === 'number') ? row.uncited_streak : 0;
+  const cited = row && typeof row.cited_count === 'number' ? row.cited_count : 0;
+  const streak = row && typeof row.uncited_streak === 'number' ? row.uncited_streak : 0;
   const raw = 1.0 + CITE_FACTOR_PER_CITE * cited - CITE_FACTOR_PER_STREAK * streak;
   return Math.max(CITE_FACTOR_MIN, Math.min(CITE_FACTOR_MAX, raw));
 }

@@ -4,20 +4,47 @@
 import { basename, join } from 'path';
 import { existsSync, readFileSync, unlinkSync, readdirSync, statSync } from 'fs';
 import {
-  jaccardSimilarity, truncate, clampImportance, computeRuleImportance,
-  inferProject, parseJsonFromLLM, scrubSecrets,
-  computeMinHash, estimateJaccardFromMinHash, cjkBigrams, EDIT_TOOLS, LOW_SIGNAL_TITLE, debugCatch, debugLog, OBS_BM25,
-  getCurrentBranch, notLowSignalTitleClause,
+  jaccardSimilarity,
+  truncate,
+  clampImportance,
+  computeRuleImportance,
+  inferProject,
+  parseJsonFromLLM,
+  scrubSecrets,
+  computeMinHash,
+  estimateJaccardFromMinHash,
+  cjkBigrams,
+  EDIT_TOOLS,
+  LOW_SIGNAL_TITLE,
+  debugCatch,
+  debugLog,
+  OBS_BM25,
+  getCurrentBranch,
+  notLowSignalTitleClause,
 } from './utils.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
 import { vecTextForRow } from './tfidf.mjs';
-import { insertObservationRow, insertObservationFiles, insertObservationVector, upsertObservationVector, normalizeScope, SCOPE_PROMPT_LEGEND } from './lib/observation-write.mjs';
+import {
+  insertObservationRow,
+  insertObservationFiles,
+  insertObservationVector,
+  upsertObservationVector,
+  normalizeScope,
+  SCOPE_PROMPT_LEGEND,
+} from './lib/observation-write.mjs';
 import { DEDUP_JACCARD_THRESHOLD, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
-  RUNTIME_DIR, DEDUP_WINDOW_MS, RELATED_OBS_WINDOW_MS, ORPHAN_EPISODE_AGE_MS,
-  sessionFile, getSessionId, openDb, callLLM, sleep,
+  RUNTIME_DIR,
+  DEDUP_WINDOW_MS,
+  RELATED_OBS_WINDOW_MS,
+  ORPHAN_EPISODE_AGE_MS,
+  sessionFile,
+  getSessionId,
+  openDb,
+  callLLM,
+  sleep,
 } from './hook-shared.mjs';
 import { EVENT_TYPES, saveEvent } from './lib/activity.mjs';
 import { isNoiseObservation, capNoiseImportance, isLowYieldChangeObs } from './lib/low-signal-patterns.mjs';
@@ -56,9 +83,7 @@ export function retractPreSavedObs(db, obsId, where) {
   // either; nesting under persistHaikuSummary's transaction is safe (better-sqlite3 uses
   // savepoints).
   return db.transaction(() => {
-    const live = db.prepare(
-      `SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
-    ).get(obsId);
+    const live = db.prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`).get(obsId);
     if (!live) {
       debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
       return false;
@@ -119,13 +144,15 @@ export function recordRetryAttempt(db, recovered, bucket = dateBucketUtc()) {
   // IGNORE and the UPDATE; ON CONFLICT collapses this to one statement
   // that runs entirely under the writer lock with no observable middle
   // state. SQLite ≥3.24 supports the syntax (better-sqlite3 ships ≥3.30).
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO lesson_retry_stats (date_bucket, attempts, recovered)
     VALUES (?, 1, ?)
     ON CONFLICT(date_bucket) DO UPDATE SET
       attempts = attempts + 1,
       recovered = recovered + excluded.recovered
-  `).run(bucket, recovered ? 1 : 0);
+  `,
+  ).run(bucket, recovered ? 1 : 0);
 }
 
 /**
@@ -135,10 +162,12 @@ export function recordRetryAttempt(db, recovered, bucket = dateBucketUtc()) {
  */
 export function readRetryStats(db, days = 30) {
   const cutoff = new Date(Date.now() - days * DAY_MS);
-  return db.prepare(
-    `SELECT date_bucket, attempts, recovered FROM lesson_retry_stats
-     WHERE date_bucket >= ? ORDER BY date_bucket DESC`
-  ).all(dateBucketUtc(cutoff));
+  return db
+    .prepare(
+      `SELECT date_bucket, attempts, recovered FROM lesson_retry_stats
+     WHERE date_bucket >= ? ORDER BY date_bucket DESC`,
+    )
+    .all(dateBucketUtc(cutoff));
 }
 
 // ─── Save Observation to DB ─────────────────────────────────────────────────
@@ -156,18 +185,29 @@ function buildFtsTextField(obs) {
   if (!conceptsText && !factsText && !aliasesText) {
     const raw = (obs.title || '') + ' ' + (obs.narrative || '');
     // Extract file basenames (without extension) as searchable terms
-    const fileNames = [...new Set(
-      [...raw.matchAll(/\b([\w.-]+\.(?:mjs|js|ts|tsx|jsx|py|rs|go|vue|css|html|json|yaml|yml|md|sh|sql|toml|cfg))\b/g)]
-        .map(m => m[1].replace(/\.[^.]+$/, ''))
-    )];
+    const fileNames = [
+      ...new Set(
+        [
+          ...raw.matchAll(
+            /\b([\w.-]+\.(?:mjs|js|ts|tsx|jsx|py|rs|go|vue|css|html|json|yaml|yml|md|sh|sql|toml|cfg))\b/g,
+          ),
+        ].map((m) => m[1].replace(/\.[^.]+$/, '')),
+      ),
+    ];
     // Extract error keywords from "→ ERROR: ..." patterns
-    const errorTerms = raw.split(/→ ERROR[: ]+/).slice(1)
-      .map(s => s.split(/[;{[\]"\\|→\n]/)[0].trim())
-      .filter(t => t.length >= 4 && t.length <= 50);
+    const errorTerms = raw
+      .split(/→ ERROR[: ]+/)
+      .slice(1)
+      .map((s) => s.split(/[;{[\]"\\|→\n]/)[0].trim())
+      .filter((t) => t.length >= 4 && t.length <= 50);
     fallbackText = [...fileNames, ...errorTerms].join(' ');
   }
 
-  return { conceptsText, factsText, textField: [conceptsText, factsText, aliasesText, bigramText, fallbackText].filter(Boolean).join(' ') };
+  return {
+    conceptsText,
+    factsText,
+    textField: [conceptsText, factsText, aliasesText, bigramText, fallbackText].filter(Boolean).join(' '),
+  };
 }
 
 // TF-IDF vector text. Must mirror the FTS-searchable content so the vector arm and
@@ -178,8 +218,11 @@ export function buildVecText(obs) {
   // Single source (V-F1): map the camelCase obs onto vecTextForRow's row shape so save and
   // every rebuild path encode the identical field set (title/narrative/concepts/lesson/aliases).
   return vecTextForRow({
-    title: obs.title, narrative: obs.narrative, concepts: obs.concepts,
-    lesson_learned: obs.lessonLearned, search_aliases: obs.searchAliases,
+    title: obs.title,
+    narrative: obs.narrative,
+    concepts: obs.concepts,
+    lesson_learned: obs.lessonLearned,
+    search_aliases: obs.searchAliases,
   });
 }
 
@@ -197,10 +240,12 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
     const project = projectOverride || inferProject();
     const sessionId = sessionIdOverride || getSessionId();
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
+    `,
+    ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
 
     // P0: write-side noise block — LOW_SIGNAL title with no recoverable signal
     // (no lesson, importance<2, empty facts, thin narrative) is dropped before
@@ -232,20 +277,28 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
     // enter the 7-day accelerated auto-compress window in hook.mjs.
     const capped = capNoiseImportance(obs);
     if (capped !== (obs.importance ?? 1)) {
-      debugLog('DEBUG', 'saveObservation', `capped imp ${obs.importance}→${capped}: ${truncate(obs.title || '', 60)}`);
+      debugLog(
+        'DEBUG',
+        'saveObservation',
+        `capped imp ${obs.importance}→${capped}: ${truncate(obs.title || '', 60)}`,
+      );
       obs.importance = capped;
     }
 
     // Three-tier dedup — returns null (not throw) for dedup hits
     // Tier 1 (fast): 5-min Jaccard on titles
     const fiveMinAgo = now.getTime() - DEDUP_WINDOW_MS;
-    const recent = db.prepare(`
+    const recent = db
+      .prepare(
+        `
       SELECT title FROM observations
       WHERE project = ? AND created_at_epoch > ?
       ORDER BY created_at_epoch DESC LIMIT 10
-    `).all(project, fiveMinAgo);
+    `,
+      )
+      .all(project, fiveMinAgo);
 
-    if (obs.title && recent.some(r => jaccardSimilarity(r.title, obs.title) > DEDUP_JACCARD_THRESHOLD)) {
+    if (obs.title && recent.some((r) => jaccardSimilarity(r.title, obs.title) > DEDUP_JACCARD_THRESHOLD)) {
       return null; // dedup: Jaccard title match
     }
 
@@ -258,19 +311,27 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
       const sevenDaysAgo = now.getTime() - 7 * DAY_MS;
       const threeDaysAgo = now.getTime() - 3 * DAY_MS;
       // Phase 1: exact title match within 7 days
-      const exactDup = db.prepare(`
+      const exactDup = db
+        .prepare(
+          `
         SELECT 1 FROM observations
         WHERE project = ? AND title = ? AND created_at_epoch > ? AND created_at_epoch <= ?
         LIMIT 1
-      `).get(project, obs.title, sevenDaysAgo, fiveMinAgo);
+      `,
+        )
+        .get(project, obs.title, sevenDaysAgo, fiveMinAgo);
       if (exactDup) return null; // dedup: exact title match
       // Phase 2: Jaccard similarity for near-duplicates (3-day window)
-      const extRecent = db.prepare(`
+      const extRecent = db
+        .prepare(
+          `
         SELECT title FROM observations
         WHERE project = ? AND created_at_epoch > ? AND created_at_epoch <= ?
         ORDER BY created_at_epoch DESC LIMIT 60
-      `).all(project, threeDaysAgo, fiveMinAgo);
-      if (extRecent.some(r => jaccardSimilarity(r.title, obs.title) > AUTO_MERGE_THRESHOLD)) {
+      `,
+        )
+        .all(project, threeDaysAgo, fiveMinAgo);
+      if (extRecent.some((r) => jaccardSimilarity(r.title, obs.title) > AUTO_MERGE_THRESHOLD)) {
         return null; // dedup: low-signal Jaccard match (stricter cutoff for degraded titles)
       }
     }
@@ -279,13 +340,17 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
     const minhashSig = computeMinHash((obs.title || '') + ' ' + (obs.narrative || ''));
     if (minhashSig) {
       const sevenDaysAgo = now.getTime() - RELATED_OBS_WINDOW_MS;
-      const recentSigs = db.prepare(`
+      const recentSigs = db
+        .prepare(
+          `
         SELECT minhash_sig FROM observations
         WHERE project = ? AND created_at_epoch > ? AND minhash_sig IS NOT NULL
         ORDER BY created_at_epoch DESC LIMIT 200
-      `).all(project, sevenDaysAgo);
+      `,
+        )
+        .all(project, sevenDaysAgo);
 
-      if (recentSigs.some(r => estimateJaccardFromMinHash(minhashSig, r.minhash_sig) > 0.8)) {
+      if (recentSigs.some((r) => estimateJaccardFromMinHash(minhashSig, r.minhash_sig) > 0.8)) {
         return null; // dedup: MinHash similarity match
       }
     }
@@ -309,14 +374,24 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
     // Column list single-sourced in lib/observation-write (shared with manual mem_save).
     const savedId = db.transaction(() => {
       const id = insertObservationRow(db, {
-        memory_session_id: sessionId, project, text: safe.text, type: obs.type,
-        title: safe.title, subtitle: safe.subtitle, narrative: safe.narrative,
-        concepts: safe.concepts, facts: safe.facts,
+        memory_session_id: sessionId,
+        project,
+        text: safe.text,
+        type: obs.type,
+        title: safe.title,
+        subtitle: safe.subtitle,
+        narrative: safe.narrative,
+        concepts: safe.concepts,
+        facts: safe.facts,
         files_read: JSON.stringify(obs.filesRead || []),
         files_modified: JSON.stringify(obs.files || []),
-        importance: obs.importance ?? 1, minhash_sig: minhashSig,
-        lesson_learned: safe.lesson_learned, search_aliases: safe.search_aliases,
-        branch: getCurrentBranch(), created_at: now.toISOString(), created_at_epoch: now.getTime(),
+        importance: obs.importance ?? 1,
+        minhash_sig: minhashSig,
+        lesson_learned: safe.lesson_learned,
+        search_aliases: safe.search_aliases,
+        branch: getCurrentBranch(),
+        created_at: now.toISOString(),
+        created_at_epoch: now.getTime(),
         // P3 (D#78): re-validate at the write boundary — saveObservation is also
         // reached by immediate-save / manual callers whose scope never saw the
         // handleLLMEpisode whitelist.
@@ -385,17 +460,19 @@ export function persistHaikuSummary(db, summary, ctx) {
     // rule-inferred type; now that Haiku has classified it as an event type,
     // we must remove the stale observations row before inserting the event.
     // Atomic via better-sqlite3 transaction: either both succeed or neither.
-    const insertEvent = () => saveEvent(db, {
-      project: ctx.project,
-      event_type: summary.type,
-      title: summary.title,
-      body: summary.lesson_learned || summary.narrative || null,
-      file_paths: (Array.isArray(summary.files_modified) && summary.files_modified.length > 0)
-        ? summary.files_modified
-        : null,
-      importance: summary.importance ?? 1,
-      created_at_epoch: Date.now(),
-    });
+    const insertEvent = () =>
+      saveEvent(db, {
+        project: ctx.project,
+        event_type: summary.type,
+        title: summary.title,
+        body: summary.lesson_learned || summary.narrative || null,
+        file_paths:
+          Array.isArray(summary.files_modified) && summary.files_modified.length > 0
+            ? summary.files_modified
+            : null,
+        importance: summary.importance ?? 1,
+        created_at_epoch: Date.now(),
+      });
 
     if (ctx.preSavedObsId) {
       const id = db.transaction(() => {
@@ -413,75 +490,112 @@ export function persistHaikuSummary(db, summary, ctx) {
 
   // Fallthrough: memdir-compatible / legacy types use the observations path.
   // Map the Haiku/plan field names to saveObservation's expected shape.
-  const id = saveObservation({
-    type: summary.type,
-    title: summary.title,
-    subtitle: summary.subtitle || '',
-    narrative: summary.narrative || '',
-    concepts: summary.concepts || [],
-    facts: summary.facts || [],
-    files: summary.files_modified || [],
-    filesRead: summary.files_read || [],
-    importance: summary.importance ?? 1,
-    lessonLearned: summary.lesson_learned || null,
-    searchAliases: summary.search_aliases || null,
-    scope: summary.scope ?? null,
-  }, ctx.project, ctx.session_id, db);
+  const id = saveObservation(
+    {
+      type: summary.type,
+      title: summary.title,
+      subtitle: summary.subtitle || '',
+      narrative: summary.narrative || '',
+      concepts: summary.concepts || [],
+      facts: summary.facts || [],
+      files: summary.files_modified || [],
+      filesRead: summary.files_read || [],
+      importance: summary.importance ?? 1,
+      lessonLearned: summary.lesson_learned || null,
+      searchAliases: summary.search_aliases || null,
+      scope: summary.scope ?? null,
+    },
+    ctx.project,
+    ctx.session_id,
+    db,
+  );
   return { table: 'observations', id };
 }
 
 // ─── Related Observation Linking ─────────────────────────────────────────────
 
 function linkRelatedObservations(db, savedId, obs, episode) {
-  const newObs = db.prepare(`
+  const newObs = db
+    .prepare(
+      `
     SELECT id, title, files_modified, related_ids FROM observations WHERE id = ?
-  `).get(savedId);
+  `,
+    )
+    .get(savedId);
   if (!newObs) return;
 
   const candidates = new Set();
 
   // Strategy 1: FTS5 title similarity (cross-session)
   if (obs.title) {
-    const titleTokens = obs.title.replace(/[^a-zA-Z0-9_\s-]/g, ' ').split(/\s+/)
-      .filter(t => t.length > 2).slice(0, 5);
+    const titleTokens = obs.title
+      .replace(/[^a-zA-Z0-9_\s-]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length > 2)
+      .slice(0, 5);
     if (titleTokens.length > 0) {
-      const ftsQuery = titleTokens.map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+      const ftsQuery = titleTokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
       try {
-        const ftsMatches = db.prepare(`
+        const ftsMatches = db
+          .prepare(
+            `
           SELECT o.id FROM observations_fts
           JOIN observations o ON observations_fts.rowid = o.id
           WHERE observations_fts MATCH ? AND o.id != ? AND o.project = ?
           ORDER BY ${OBS_BM25}
           LIMIT 5
-        `).all(ftsQuery, newObs.id, episode.project);
+        `,
+          )
+          .all(ftsQuery, newObs.id, episode.project);
         for (const m of ftsMatches) candidates.add(m.id);
-      } catch (e) { debugCatch(e, 'linkRelated-fts'); }
+      } catch (e) {
+        debugCatch(e, 'linkRelated-fts');
+      }
     }
   }
 
   // Strategy 2: file overlap (any session, recent observations)
   let newFiles;
-  try { newFiles = JSON.parse(newObs.files_modified || '[]'); } catch (e) { debugCatch(e, 'linkRelated-newFiles'); newFiles = []; }
-  if (!Array.isArray(newFiles) || !newFiles.every(f => typeof f === 'string')) newFiles = [];
+  try {
+    newFiles = JSON.parse(newObs.files_modified || '[]');
+  } catch (e) {
+    debugCatch(e, 'linkRelated-newFiles');
+    newFiles = [];
+  }
+  if (!Array.isArray(newFiles) || !newFiles.every((f) => typeof f === 'string')) newFiles = [];
   if (newFiles.length > 0) {
-    const recentObs = db.prepare(`
+    const recentObs = db
+      .prepare(
+        `
       SELECT id, files_modified FROM observations
       WHERE id != ? AND created_at_epoch > ? AND project = ?
       ORDER BY created_at_epoch DESC LIMIT 50
-    `).all(newObs.id, Date.now() - RELATED_OBS_WINDOW_MS, episode.project);
+    `,
+      )
+      .all(newObs.id, Date.now() - RELATED_OBS_WINDOW_MS, episode.project);
     for (const r of recentObs) {
       let rFiles;
-      try { rFiles = JSON.parse(r.files_modified || '[]'); } catch (e) { debugCatch(e, 'linkRelated-rFiles'); rFiles = []; }
-      if (!Array.isArray(rFiles) || !rFiles.every(f => typeof f === 'string')) rFiles = [];
-      if (rFiles.some(f => newFiles.includes(f))) candidates.add(r.id);
+      try {
+        rFiles = JSON.parse(r.files_modified || '[]');
+      } catch (e) {
+        debugCatch(e, 'linkRelated-rFiles');
+        rFiles = [];
+      }
+      if (!Array.isArray(rFiles) || !rFiles.every((f) => typeof f === 'string')) rFiles = [];
+      if (rFiles.some((f) => newFiles.includes(f))) candidates.add(r.id);
     }
   }
 
   // Apply bidirectional links (max 5 related)
   if (candidates.size > 0) {
     let newRelated;
-    try { newRelated = JSON.parse(newObs.related_ids || '[]'); } catch (e) { debugCatch(e, 'linkRelated-newRelated'); newRelated = []; }
-    if (!Array.isArray(newRelated) || !newRelated.every(id => Number.isInteger(id))) newRelated = [];
+    try {
+      newRelated = JSON.parse(newObs.related_ids || '[]');
+    } catch (e) {
+      debugCatch(e, 'linkRelated-newRelated');
+      newRelated = [];
+    }
+    if (!Array.isArray(newRelated) || !newRelated.every((id) => Number.isInteger(id))) newRelated = [];
 
     for (const relId of [...candidates].slice(0, 5)) {
       if (newRelated.includes(relId)) continue;
@@ -490,16 +604,27 @@ function linkRelatedObservations(db, savedId, obs, episode) {
       const rel = db.prepare('SELECT related_ids FROM observations WHERE id = ?').get(relId);
       if (rel) {
         let relRelated;
-        try { relRelated = JSON.parse(rel.related_ids || '[]'); } catch (e) { debugCatch(e, 'linkRelated-relRelated'); relRelated = []; }
-        if (!Array.isArray(relRelated) || !relRelated.every(id => Number.isInteger(id))) relRelated = [];
+        try {
+          relRelated = JSON.parse(rel.related_ids || '[]');
+        } catch (e) {
+          debugCatch(e, 'linkRelated-relRelated');
+          relRelated = [];
+        }
+        if (!Array.isArray(relRelated) || !relRelated.every((id) => Number.isInteger(id))) relRelated = [];
         if (!relRelated.includes(newObs.id)) {
           relRelated.push(newObs.id);
-          db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(JSON.stringify(relRelated.slice(-10)), relId);
+          db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(
+            JSON.stringify(relRelated.slice(-10)),
+            relId,
+          );
         }
       }
     }
 
-    db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(JSON.stringify(newRelated.slice(-10)), newObs.id);
+    db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(
+      JSON.stringify(newRelated.slice(-10)),
+      newObs.id,
+    );
   }
 }
 
@@ -509,13 +634,13 @@ function linkRelatedObservations(db, savedId, obs, episode) {
 
 export function buildDegradedTitle(episode) {
   const files = (episode.files || []).filter(Boolean);
-  const hasError = episode.entries.some(e => e.isError);
-  const hasEdit = episode.entries.some(e => EDIT_TOOLS.has(e.tool));
+  const hasError = episode.entries.some((e) => e.isError);
+  const hasEdit = episode.entries.some((e) => EDIT_TOOLS.has(e.tool));
 
   // Extract a short error hint from the first error entry's desc
   let errorHint = '';
   if (hasError) {
-    const errEntry = episode.entries.find(e => e.isError);
+    const errEntry = episode.entries.find((e) => e.isError);
     if (errEntry?.desc) {
       // Extract meaningful error text from "cmd → ERROR: ..." format
       const errMatch = errEntry.desc.match(/→ ERROR: (.{3,80})/);
@@ -534,12 +659,12 @@ export function buildDegradedTitle(episode) {
   }
 
   if (files.length > 0) {
-    const uniqueNames = [...new Set(files.map(f => basename(f)))];
+    const uniqueNames = [...new Set(files.map((f) => basename(f)))];
     const names = uniqueNames.slice(0, 3).join(', ');
     const suffix = uniqueNames.length > 3 ? ` +${uniqueNames.length - 3} more` : '';
     if (hasError) {
       // Include the triggering command for richer context: "Error: dispatch.mjs — npm test failed"
-      const errEntry = episode.entries.find(e => e.isError);
+      const errEntry = episode.entries.find((e) => e.isError);
       const cmd = errEntry?.desc?.match(/^(.{3,30}?) →/)?.[1]?.trim();
       const cmdHint = cmd ? ` — ${cmd}` : '';
       return `Error: ${names}${suffix}${errorHint || cmdHint}`;
@@ -549,7 +674,8 @@ export function buildDegradedTitle(episode) {
   }
   // No files: strip raw output (JSON, arrays, long tails) from Bash descriptions
   const desc = episode.entries[0]?.desc || '(no description)';
-  return desc.replace(/ → (?:ERROR: )?[[{].*$/, hasError ? ' (error)' : '')
+  return desc
+    .replace(/ → (?:ERROR: )?[[{].*$/, hasError ? ' (error)' : '')
     .replace(/ → .*---EXIT:\d+$/, hasError ? ' (error)' : '')
     .replace(/\t/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -586,20 +712,19 @@ export function saveEpisodeImmediate(episode, externalDb, scope = 'saveEpisodeIm
  * @returns {object} Observation object ready for saveObservation()
  */
 export function buildImmediateObservation(episode) {
-  const hasError = episode.entries.some(e => e.isError);
-  const hasEdit = episode.entries.some(e => EDIT_TOOLS.has(e.tool));
-  const readCount = episode.entries.filter(e => e.tool === 'Read' || e.tool === 'Grep').length;
+  const hasError = episode.entries.some((e) => e.isError);
+  const hasEdit = episode.entries.some((e) => EDIT_TOOLS.has(e.tool));
+  const readCount = episode.entries.filter((e) => e.tool === 'Read' || e.tool === 'Grep').length;
   const isReviewPattern = !hasEdit && !hasError && readCount >= 5;
   const inferredType = hasError ? 'bugfix' : hasEdit ? 'change' : 'discovery';
-  const fileList = (episode.files || []).map(f => basename(f)).join(', ') || '(multiple)';
+  const fileList = (episode.files || []).map((f) => basename(f)).join(', ') || '(multiple)';
 
   // Review/research episodes: use a descriptive title with file count
   let title;
   if (isReviewPattern) {
-    const allFiles = [...new Set([
-      ...(episode.files || []),
-      ...(episode.filesRead || []),
-    ])].map(f => basename(f));
+    const allFiles = [...new Set([...(episode.files || []), ...(episode.filesRead || [])])].map((f) =>
+      basename(f),
+    );
     const names = allFiles.slice(0, 4).join(', ');
     const suffix = allFiles.length > 4 ? ` +${allFiles.length - 4} more` : '';
     title = truncate(`Reviewed ${allFiles.length} files: ${names}${suffix}`, 120);
@@ -656,7 +781,7 @@ export function buildImmediateObservation(episode) {
     type: inferredType,
     title,
     subtitle: fileList,
-    narrative: episode.entries.map(e => e.desc).join('; '),
+    narrative: episode.entries.map((e) => e.desc).join('; '),
     concepts: [],
     facts: [],
     files: [...modifiedFiles],
@@ -713,7 +838,8 @@ export function hasEnrichmentContent(parsed) {
   if (!parsed || typeof parsed !== 'object') return false;
   if (typeof parsed.lesson_learned === 'string' && !isLowSignalLesson(parsed.lesson_learned)) return true;
   if (typeof parsed.narrative === 'string' && parsed.narrative.trim().length > 0) return true;
-  if (Array.isArray(parsed.facts) && parsed.facts.some(f => typeof f === 'string' && f.trim().length > 0)) return true;
+  if (Array.isArray(parsed.facts) && parsed.facts.some((f) => typeof f === 'string' && f.trim().length > 0))
+    return true;
   return false;
 }
 
@@ -732,12 +858,13 @@ export function hasEnrichmentContent(parsed) {
 // Module-private: the only call site is the retry branch below. Same D#207 reasoning as
 // MEMORY_INPUT_GUARD — exported by habit, never imported.
 function buildLessonRetryPrompt(episode, firstPass) {
-  const actionList = episode.entries.map((e, i) =>
-    `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`
-  ).join('\n');
-  const typeHint = firstPass.type === 'bugfix'
-    ? 'For this bugfix: what was the root cause + how to spot it next time? Example: "FTS5 trigger fires on any UPDATE — wrap access_count writes in try/catch."'
-    : 'For this decision: what tradeoff was made + why? Example: "Chose single-source module over schema column because 1 drift point, not 4."';
+  const actionList = episode.entries
+    .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)
+    .join('\n');
+  const typeHint =
+    firstPass.type === 'bugfix'
+      ? 'For this bugfix: what was the root cause + how to spot it next time? Example: "FTS5 trigger fires on any UPDATE — wrap access_count writes in try/catch."'
+      : 'For this decision: what tradeoff was made + why? Example: "Chose single-source module over schema column because 1 drift point, not 4."';
 
   const system = `${typeHint}
 
@@ -762,22 +889,28 @@ export async function handleLLMEpisode() {
   try {
     episode = JSON.parse(readFileSync(tmpFile, 'utf8'));
   } catch {
-    try { unlinkSync(tmpFile); } catch {}
+    try {
+      unlinkSync(tmpFile);
+    } catch {}
     return;
   }
 
   if (!episode.entries || episode.entries.length === 0) {
-    try { unlinkSync(tmpFile); } catch {}
+    try {
+      unlinkSync(tmpFile);
+    } catch {}
     return;
   }
 
   // Rate-limit background LLM calls to avoid competing with active sessions
   if (!process.env.CLAUDE_MEM_NO_DELAY) {
     const sessionActive = existsSync(sessionFile());
-    const delayMs = sessionActive
-      ? 2000 + Math.random() * 3000
-      : 500 + Math.random() * 1000;
-    debugLog('DEBUG', 'llm-episode', `delay: ${Math.round(delayMs)}ms (session ${sessionActive ? 'active' : 'ended'})`);
+    const delayMs = sessionActive ? 2000 + Math.random() * 3000 : 500 + Math.random() * 1000;
+    debugLog(
+      'DEBUG',
+      'llm-episode',
+      `delay: ${Math.round(delayMs)}ms (session ${sessionActive ? 'active' : 'ended'})`,
+    );
     await sleep(delayMs);
   }
 
@@ -786,14 +919,13 @@ export async function handleLLMEpisode() {
   // before any cleanup, leaking the tmp file (which is then retried and crashes
   // forever). Guard defensively, mirroring buildImmediateObservation's `|| []`.
   const episodeFiles = Array.isArray(episode.files) ? episode.files : [];
-  const fileList = episodeFiles.map(f => basename(f)).join(', ') || '(multiple)';
+  const fileList = episodeFiles.map((f) => basename(f)).join(', ') || '(multiple)';
 
   // Defense-in-depth (cso F#4): split static instructions (system) from
   // per-call data (user). Episode descriptions and file paths come from tool
   // events; treating them as a separate role + boundary marker reduces the
   // attack surface for memory poisoning via crafted file content.
-  const SHARED_OBS_SCHEMA_TAIL =
-    `${MEMORY_INPUT_GUARD}
+  const SHARED_OBS_SCHEMA_TAIL = `${MEMORY_INPUT_GUARD}
 type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
 Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
 importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.
@@ -814,9 +946,9 @@ Action: ${e.desc}
 Error: ${e.isError ? 'yes' : 'no'}`;
     prompt = { system, user };
   } else {
-    const actionList = episode.entries.map((e, i) =>
-      `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`
-    ).join('\n');
+    const actionList = episode.entries
+      .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)
+      .join('\n');
 
     const system = `Summarize this coding episode as ONE coherent observation. Return ONLY valid JSON, no markdown fences.
 
@@ -861,7 +993,12 @@ ${actionList}`;
     // with neither a usable title nor content still falls through to
     // buildImmediateObservation, which infers type/importance from the episode.
     const titleUsable = parsed && typeof parsed.title === 'string' && !!parsed.title;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (titleUsable || hasEnrichmentContent(parsed))) {
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (titleUsable || hasEnrichmentContent(parsed))
+    ) {
       // Synthesize a rule-based title when Haiku's is unusable (crash-safe, and the
       // lesson survives). Only the title degrades; every other field is kept.
       if (!titleUsable) parsed.title = buildDegradedTitle(episode);
@@ -879,11 +1016,16 @@ ${actionList}`;
         if (episode.savedId) {
           const ddb = openDb();
           if (ddb) {
-            try { retractPreSavedObs(ddb, episode.savedId, 'low-value-discard'); }
-            finally { ddb.close(); }
+            try {
+              retractPreSavedObs(ddb, episode.savedId, 'low-value-discard');
+            } finally {
+              ddb.close();
+            }
           }
         }
-        try { unlinkSync(tmpFile); } catch {}
+        try {
+          unlinkSync(tmpFile);
+        } catch {}
         return;
       }
 
@@ -904,9 +1046,11 @@ ${actionList}`;
       // episode. Opt-out: CLAUDE_MEM_NO_LESSON_RETRY=1.
       let retryAttempted = false;
       let retryRecovered = false;
-      if (isLessonLowSignal &&
-          (parsed.type === 'bugfix' || parsed.type === 'decision') &&
-          !process.env.CLAUDE_MEM_NO_LESSON_RETRY) {
+      if (
+        isLessonLowSignal &&
+        (parsed.type === 'bugfix' || parsed.type === 'decision') &&
+        !process.env.CLAUDE_MEM_NO_LESSON_RETRY
+      ) {
         retryAttempted = true;
         // The first callLLM released its slot in the finally above; this lesson
         // retry is a SECOND LLM call and must re-acquire the semaphore or it
@@ -924,11 +1068,18 @@ ${actionList}`;
             if (!retryIsLow) {
               lessonLearned = retryLesson.slice(0, 500);
               retryRecovered = true;
-              debugLog('DEBUG', 'llm-episode', `lesson-retry: recovered ${retryLesson.length}-char lesson for ${parsed.type}`);
+              debugLog(
+                'DEBUG',
+                'llm-episode',
+                `lesson-retry: recovered ${retryLesson.length}-char lesson for ${parsed.type}`,
+              );
             }
           }
-        } catch (e) { debugCatch(e, 'lesson-retry'); }
-        finally { if (retrySlot) releaseLLMSlot(); }
+        } catch (e) {
+          debugCatch(e, 'lesson-retry');
+        } finally {
+          if (retrySlot) releaseLLMSlot();
+        }
       }
       // v2.57.x B2: persist retry outcome counters. The retry path costs
       // 1 extra Haiku call per bugfix/decision episode; if recovered/attempts
@@ -941,9 +1092,15 @@ ${actionList}`;
         try {
           const cdb = openDb();
           if (cdb) {
-            try { recordRetryAttempt(cdb, retryRecovered); } finally { cdb.close(); }
+            try {
+              recordRetryAttempt(cdb, retryRecovered);
+            } finally {
+              cdb.close();
+            }
           }
-        } catch (e) { debugCatch(e, 'retry-stats-write'); }
+        } catch (e) {
+          debugCatch(e, 'retry-stats-write');
+        }
       }
 
       const searchAliases = Array.isArray(parsed.search_aliases)
@@ -982,9 +1139,10 @@ ${actionList}`;
         // to schema.mjs). Haiku's OWN importance can still reach 3 (genuine judgment); only the
         // path heuristic is capped. The isLessonLowSignal branch still floors no-lesson
         // non-decision autos at ≤1; manual mem_save uses a different path and is unaffected.
-        importance: isLessonLowSignal && !retryRecovered && parsed.type !== 'decision'
-          ? Math.min(ruleImportance, 1)
-          : Math.max(Math.min(ruleImportance, 2), clampImportance(parsed.importance)),
+        importance:
+          isLessonLowSignal && !retryRecovered && parsed.type !== 'decision'
+            ? Math.min(ruleImportance, 1)
+            : Math.max(Math.min(ruleImportance, 2), clampImportance(parsed.importance)),
         lessonLearned,
         searchAliases,
         // P3 (D#78): lesson applicability scope — whitelist-validated, invalid → null.
@@ -1004,11 +1162,16 @@ ${actionList}`;
         if (episode.savedId) {
           const ddb = openDb();
           if (ddb) {
-            try { retractPreSavedObs(ddb, episode.savedId, 'low-yield-change-drop'); }
-            finally { ddb.close(); }
+            try {
+              retractPreSavedObs(ddb, episode.savedId, 'low-yield-change-drop');
+            } finally {
+              ddb.close();
+            }
           }
         }
-        try { unlinkSync(tmpFile); } catch {}
+        try {
+          unlinkSync(tmpFile);
+        } catch {}
         return;
       }
     }
@@ -1019,14 +1182,21 @@ ${actionList}`;
     // If pre-saved observation exists, LLM degraded mode doesn't need to overwrite — keep pre-saved data
     if (episode.savedId) {
       debugLog('DEBUG', 'llm-episode', `LLM failed but pre-saved obs #${episode.savedId} exists, keeping`);
-      try { unlinkSync(tmpFile); } catch {}
+      try {
+        unlinkSync(tmpFile);
+      } catch {}
       return;
     }
     obs = buildImmediateObservation(episode);
   }
 
   const db = openDb();
-  if (!db) { try { unlinkSync(tmpFile); } catch {} return; }
+  if (!db) {
+    try {
+      unlinkSync(tmpFile);
+    } catch {}
+    return;
+  }
 
   try {
     let savedId;
@@ -1073,31 +1243,42 @@ ${actionList}`;
         // tombstone: `changes` is 1, nothing looks wrong, and the row it landed on is
         // excluded from every read face by liveObsFilterSql. Same clause as those read
         // faces, so "what the update may touch" and "what a query may return" cannot drift.
-        const upgraded = db.prepare(`
+        const upgraded = db
+          .prepare(
+            `
           UPDATE observations SET type=?, title=?, subtitle=?,
             narrative=COALESCE(NULLIF(?, ''), narrative), concepts=?, facts=?,
             text=?, importance=?, files_read=?, minhash_sig=?, lesson_learned=?, search_aliases=?,
             scope=COALESCE(?, scope)
           WHERE id = ? AND ${liveObsFilterSql('')}
-        `).run(
-          obs.type, safe.title, safe.subtitle,
-          safe.narrative,
-          safe.concepts, safe.facts, safe.text,
-          obs.importance,
-          JSON.stringify(obs.filesRead || []),
-          minhashSig,
-          safe.lesson_learned,
-          safe.search_aliases,
-          normalizeScope(obs.scope),
-          episode.savedId
-        ).changes;
+        `,
+          )
+          .run(
+            obs.type,
+            safe.title,
+            safe.subtitle,
+            safe.narrative,
+            safe.concepts,
+            safe.facts,
+            safe.text,
+            obs.importance,
+            JSON.stringify(obs.filesRead || []),
+            minhashSig,
+            safe.lesson_learned,
+            safe.search_aliases,
+            normalizeScope(obs.scope),
+            episode.savedId,
+          ).changes;
 
         if (upgraded === 0) {
           // The pre-saved row is gone or tombstoned. Dropping the enrichment here is the
           // silent-loss shape this repository keeps paying for, so save it as a fresh row
           // and let the normal dedup path decide whether it merges into the keeper.
-          debugLog('DEBUG', 'llm-episode',
-            `pre-saved obs #${episode.savedId} no longer live — saving enrichment as a fresh row`);
+          debugLog(
+            'DEBUG',
+            'llm-episode',
+            `pre-saved obs #${episode.savedId} no longer live — saving enrichment as a fresh row`,
+          );
           const result = persistHaikuSummary(db, obsToSummary(obs), {
             project: episode.project,
             session_id: episode.sessionId,
@@ -1112,10 +1293,18 @@ ${actionList}`;
           // Update TF-IDF vector with enriched content. SQL + text derivation are
           // lib/observation-write.mjs's (audit 2026-09-02 P1-4); `gate: false` keeps this
           // path's prior behaviour, which never consulted vectorsEnabled().
-          upsertObservationVector(db, savedId, {
-            title: obs.title, narrative: obs.narrative, concepts: conceptsText,
-            lesson_learned: safe.lesson_learned, search_aliases: safe.search_aliases,
-          }, { gate: false, scope: 'handleLLMEpisode-vector' });
+          upsertObservationVector(
+            db,
+            savedId,
+            {
+              title: obs.title,
+              narrative: obs.narrative,
+              concepts: conceptsText,
+              lesson_learned: safe.lesson_learned,
+              search_aliases: safe.search_aliases,
+            },
+            { gate: false, scope: 'handleLLMEpisode-vector' },
+          );
         }
       }
     } else {
@@ -1133,13 +1322,17 @@ ${actionList}`;
     if (savedId && savedTable === 'observations') {
       try {
         linkRelatedObservations(db, savedId, obs, episode);
-      } catch (e) { debugCatch(e, 'relatedObsLinking'); }
+      } catch (e) {
+        debugCatch(e, 'relatedObsLinking');
+      }
     }
   } finally {
     db.close();
   }
 
-  try { unlinkSync(tmpFile); } catch {}
+  try {
+    unlinkSync(tmpFile);
+  } catch {}
 }
 
 // ─── Background: LLM Session Summary ────────────────────────────────────────
@@ -1174,17 +1367,31 @@ export async function handleLLMSummary() {
     pending = readdirSync(RUNTIME_DIR)
       .filter((f) => f.startsWith('ep-flush-'))
       .filter((f) => {
-        try { return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff; } catch { return false; }
+        try {
+          return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff;
+        } catch {
+          return false;
+        }
       });
-  } catch { pending = []; }
+  } catch {
+    pending = [];
+  }
 
   for (let i = 0; i < flushTimeout && pending.length > 0; i++) {
     await sleep(1000);
     pending = pending.filter((f) => existsSync(join(RUNTIME_DIR, f)));
-    debugLog('DEBUG', 'llm-summary', `waiting for ${pending.length} flush file(s) (${i + 1}/${flushTimeout})`);
+    debugLog(
+      'DEBUG',
+      'llm-summary',
+      `waiting for ${pending.length} flush file(s) (${i + 1}/${flushTimeout})`,
+    );
   }
   if (pending.length > 0) {
-    debugLog('DEBUG', 'llm-summary', `gave up waiting on ${pending.length} flush file(s) after ${flushTimeout}s: ${pending.join(', ')}`);
+    debugLog(
+      'DEBUG',
+      'llm-summary',
+      `gave up waiting on ${pending.length} flush file(s) after ${flushTimeout}s: ${pending.join(', ')}`,
+    );
   }
 
   const db = openDb();
@@ -1197,29 +1404,38 @@ export async function handleLLMSummary() {
     // Exclude LOW_SIGNAL hook-llm fallback titles ("Error: files +2 more: ...",
     // "Modified X", "Worked on X", etc.) from the Haiku summary input — they
     // pollute the `completed` field and mislead session-resume context.
-    const recentObs = db.prepare(`
+    const recentObs = db
+      .prepare(
+        `
       SELECT id, type, title, narrative
       FROM observations
       WHERE memory_session_id = ?
         AND ${notLowSignalTitleClause('')}
       ORDER BY created_at_epoch DESC
       LIMIT 30
-    `).all(sessionId);
+    `,
+      )
+      .all(sessionId);
 
     if (recentObs.length < 1) return;
 
-    const obsList = recentObs.map((o, i) =>
-      `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`
-    ).join('\n');
+    const obsList = recentObs
+      .map(
+        (o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`,
+      )
+      .join('\n');
 
     // Include user prompts for richer context
-    const userPrompts = db.prepare(`
+    const userPrompts = db
+      .prepare(
+        `
       SELECT prompt_text FROM user_prompts
       WHERE content_session_id = ? ORDER BY prompt_number ASC LIMIT 10
-    `).all(sessionId).map(p => truncate(p.prompt_text, 300));
-    const promptCtx = userPrompts.length > 0
-      ? `\nUser requests: ${userPrompts.join(' → ')}\n`
-      : '';
+    `,
+      )
+      .all(sessionId)
+      .map((p) => truncate(p.prompt_text, 300));
+    const promptCtx = userPrompts.length > 0 ? `\nUser requests: ${userPrompts.join(' → ')}\n` : '';
 
     // cso F#4: split system/user. The userPrompts content (line 921) is the
     // single highest-leakage path for memory poisoning — putting it in the
@@ -1253,9 +1469,12 @@ ${obsList}`;
     // ("Too many parameter values") out of this try/finally and drops the WHOLE summary incl.
     // lessons + key_decisions. Join array items; non-strings → ''. (lessons/key_decisions are
     // JSON.stringify'd separately below.)
-    const asText = v => Array.isArray(v)
-      ? v.filter(x => typeof x === 'string' && x.trim()).join('; ')
-      : (typeof v === 'string' ? v : '');
+    const asText = (v) =>
+      Array.isArray(v)
+        ? v.filter((x) => typeof x === 'string' && x.trim()).join('; ')
+        : typeof v === 'string'
+          ? v
+          : '';
 
     // Persist when ANY meaningful field is present — not just `request`. Gating on `request`
     // alone dropped the whole INSERT/UPDATE (losing the session's highest-value fields:
@@ -1264,24 +1483,35 @@ ${obsList}`;
     // empty request: INSERT writes '' and the UPDATE COALESCE(NULLIF(?, ''), request) preserves
     // the prior value. Use asText in the gate so a non-string / empty-array field can't falsely
     // trigger it.
-    const hasSummaryContent = llmParsed && (
-      asText(llmParsed.request) || asText(llmParsed.completed) || asText(llmParsed.remaining_items) || asText(llmParsed.next_steps) ||
-      (Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0) ||
-      (Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0)
-    );
+    const hasSummaryContent =
+      llmParsed &&
+      (asText(llmParsed.request) ||
+        asText(llmParsed.completed) ||
+        asText(llmParsed.remaining_items) ||
+        asText(llmParsed.next_steps) ||
+        (Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0) ||
+        (Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0));
     if (hasSummaryContent) {
       const now = new Date();
-      const lessonsJson = Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0
-        ? JSON.stringify(llmParsed.lessons) : null;
-      const decisionsJson = Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0
-        ? JSON.stringify(llmParsed.key_decisions) : null;
+      const lessonsJson =
+        Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0
+          ? JSON.stringify(llmParsed.lessons)
+          : null;
+      const decisionsJson =
+        Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0
+          ? JSON.stringify(llmParsed.key_decisions)
+          : null;
 
       // Upgrade existing fast summary instead of creating a duplicate
-      const existingFast = db.prepare(`
+      const existingFast = db
+        .prepare(
+          `
         SELECT id FROM session_summaries
         WHERE memory_session_id = ? AND notes = 'fast'
         LIMIT 1
-      `).get(sessionId);
+      `,
+        )
+        .get(sessionId);
 
       if (existingFast) {
         // Preserve structural-extractor content (completed / remaining_items written
@@ -1306,7 +1536,8 @@ ${obsList}`;
           lessons: lessonsJson,
           key_decisions: decisionsJson,
         });
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE session_summaries
           SET request = COALESCE(NULLIF(?, ''), request),
               investigated = COALESCE(NULLIF(?, ''), investigated),
@@ -1320,13 +1551,19 @@ ${obsList}`;
               created_at = ?,
               created_at_epoch = ?
           WHERE id = ?
-        `).run(
-          safe.request, safe.investigated, safe.learned,
-          safe.completed, safe.next_steps,
+        `,
+        ).run(
+          safe.request,
+          safe.investigated,
+          safe.learned,
+          safe.completed,
+          safe.next_steps,
           safe.remaining_items,
-          safe.lessons, safe.key_decisions,
-          now.toISOString(), now.getTime(),
-          existingFast.id
+          safe.lessons,
+          safe.key_decisions,
+          now.toISOString(),
+          now.getTime(),
+          existingFast.id,
         );
       } else {
         const safe = scrubRecord('session_summaries', {
@@ -1339,16 +1576,24 @@ ${obsList}`;
           lessons: lessonsJson,
           key_decisions: decisionsJson,
         });
-        db.prepare(`
+        db.prepare(
+          `
           INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, lessons, key_decisions, created_at, created_at_epoch)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '', ?, ?, ?, ?)
-        `).run(
-          sessionId, project,
-          safe.request, safe.investigated, safe.learned,
-          safe.completed, safe.next_steps,
+        `,
+        ).run(
+          sessionId,
+          project,
+          safe.request,
+          safe.investigated,
+          safe.learned,
+          safe.completed,
+          safe.next_steps,
           safe.remaining_items,
-          safe.lessons, safe.key_decisions,
-          now.toISOString(), now.getTime()
+          safe.lessons,
+          safe.key_decisions,
+          now.toISOString(),
+          now.getTime(),
         );
       }
     }
@@ -1369,12 +1614,27 @@ ${obsList}`;
 // the observations INSERT path scrubs all configured text fields.
 export const __insertObservationForTest = (db, obs) => {
   const safe = scrubRecord('observations', obs);
-  db.prepare(`INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, minhash_sig, lesson_learned, search_aliases, branch, created_at, created_at_epoch)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    obs.session_id, obs.project, safe.text, 'change',
-    safe.title, safe.subtitle, safe.narrative,
-    safe.concepts, safe.facts, obs.files_read, obs.files_modified,
-    obs.importance, obs.minhash_sig, safe.lesson_learned, safe.search_aliases,
-    obs.branch, new Date().toISOString(), Date.now(),
+  db.prepare(
+    `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, minhash_sig, lesson_learned, search_aliases, branch, created_at, created_at_epoch)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    obs.session_id,
+    obs.project,
+    safe.text,
+    'change',
+    safe.title,
+    safe.subtitle,
+    safe.narrative,
+    safe.concepts,
+    safe.facts,
+    obs.files_read,
+    obs.files_modified,
+    obs.importance,
+    obs.minhash_sig,
+    safe.lesson_learned,
+    safe.search_aliases,
+    obs.branch,
+    new Date().toISOString(),
+    Date.now(),
   );
 };

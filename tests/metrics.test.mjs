@@ -5,7 +5,13 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync, writeFileSy
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  recordMetric, readMetrics, aggregateMetrics, formatSummary, timed, DEFAULT_WINDOW_DAYS, gcOldMetricShards,
+  recordMetric,
+  readMetrics,
+  aggregateMetrics,
+  formatSummary,
+  timed,
+  DEFAULT_WINDOW_DAYS,
+  gcOldMetricShards,
 } from '../lib/metrics.mjs';
 import { gcDailyShards } from '../lib/shard-gc.mjs';
 
@@ -15,8 +21,12 @@ import { gcDailyShards } from '../lib/shard-gc.mjs';
 // shard name, and that a caller may hand it a path that does not exist.
 describe('gcDailyShards (the shared sweep)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'shard-gc-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'shard-gc-'));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
 
   it('deletes by the DATE IN THE FILENAME, not by mtime', () => {
     // A shard rewritten today is still that day's shard. Both files are created now, so
@@ -32,7 +42,13 @@ describe('gcDailyShards (the shared sweep)', () => {
   it('only treats YYYY-MM-DD.jsonl as a shard', () => {
     const old = new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10);
     writeFileSync(join(tmp, `${old}.jsonl`), '{}\n');
-    for (const name of [`${old}.json`, `${old}.jsonl.bak`, `x-${old}.jsonl`, '2026-1-2.jsonl', 'latest.jsonl']) {
+    for (const name of [
+      `${old}.json`,
+      `${old}.jsonl.bak`,
+      `x-${old}.jsonl`,
+      '2026-1-2.jsonl',
+      'latest.jsonl',
+    ]) {
       writeFileSync(join(tmp, name), 'keep');
     }
     expect(gcDailyShards(tmp, 90)).toBe(1);
@@ -50,8 +66,12 @@ describe('gcDailyShards (the shared sweep)', () => {
 
 describe('gcOldMetricShards', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'metrics-gc-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'metrics-gc-'));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
 
   it('prunes shards older than retainDays, keeps recent + non-shard files', () => {
     const dir = join(tmp, 'metrics');
@@ -138,7 +158,11 @@ describe('timed() wrapper', () => {
   });
 
   it('re-throws and records error on exception', () => {
-    expect(() => timed(tmp, 'save', () => { throw new Error('boom'); })).toThrow('boom');
+    expect(() =>
+      timed(tmp, 'save', () => {
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
     const rows = [...readMetrics(tmp)];
     expect(rows[0].error).toBe('boom');
   });
@@ -188,7 +212,10 @@ describe('aggregateMetrics', () => {
     recordMetric(tmp, { event: 'inject', durationMs: 5 });
     const files = readdirSync(join(tmp, 'metrics'));
     const path = join(tmp, 'metrics', files[0]);
-    writeFileSync(path, readFileSync(path, 'utf8') + 'this-is-not-json\n{"valid":true,"event":"save","durationMs":7}\n');
+    writeFileSync(
+      path,
+      readFileSync(path, 'utf8') + 'this-is-not-json\n{"valid":true,"event":"save","durationMs":7}\n',
+    );
     const agg = aggregateMetrics(tmp);
     expect(agg.inject.count).toBe(1);
     expect(agg.save.count).toBe(1);
@@ -199,7 +226,10 @@ describe('aggregateMetrics', () => {
     mkdirSync(metricsDir, { recursive: true });
     // Write a 30-day-old file
     const oldDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    writeFileSync(join(metricsDir, `${oldDate}.jsonl`), JSON.stringify({ event: 'old', durationMs: 1 }) + '\n');
+    writeFileSync(
+      join(metricsDir, `${oldDate}.jsonl`),
+      JSON.stringify({ event: 'old', durationMs: 1 }) + '\n',
+    );
     // And a recent one via recordMetric
     recordMetric(tmp, { event: 'recent', durationMs: 2 });
     const agg = aggregateMetrics(tmp, 7);
@@ -219,7 +249,7 @@ describe('formatSummary', () => {
 
   it('renders one line per event sorted alphabetically', () => {
     const agg = {
-      save:   { count: 10, errors: 0, p50: 5, p95: 8, p99: 9, firstTs: 'a', lastTs: 'b' },
+      save: { count: 10, errors: 0, p50: 5, p95: 8, p99: 9, firstTs: 'a', lastTs: 'b' },
       inject: { count: 50, errors: 2, p50: 1, p95: 3, p99: 4, firstTs: 'a', lastTs: 'b' },
     };
     const text = formatSummary(agg);

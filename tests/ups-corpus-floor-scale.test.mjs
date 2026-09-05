@@ -37,9 +37,23 @@ function dbWith(n) {
 
 describe('corpusFloorScale', () => {
   let dbs = [];
-  beforeEach(() => { dbs = []; });
-  afterEach(() => { for (const d of dbs) { try { d.close(); } catch { /* already closed */ } } });
-  const open = (n) => { const d = dbWith(n); dbs.push(d); return d; };
+  beforeEach(() => {
+    dbs = [];
+  });
+  afterEach(() => {
+    for (const d of dbs) {
+      try {
+        d.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  });
+  const open = (n) => {
+    const d = dbWith(n);
+    dbs.push(d);
+    return d;
+  };
 
   it('is exactly 1.0 at and above the calibration corpus — established installs unchanged', () => {
     expect(corpusFloorScale(open(584))).toBe(1);
@@ -123,8 +137,12 @@ describe('corpusFloorScale', () => {
     }
   });
 
-  it('fails safe to 1.0 (today\'s behavior) when the corpus probe throws', () => {
-    const broken = { prepare() { throw new Error('no such table: observations'); } };
+  it("fails safe to 1.0 (today's behavior) when the corpus probe throws", () => {
+    const broken = {
+      prepare() {
+        throw new Error('no such table: observations');
+      },
+    };
     expect(corpusFloorScale(broken)).toBe(1);
   });
 
@@ -132,7 +150,10 @@ describe('corpusFloorScale', () => {
     const db = open(2000);
     let sawCount = false;
     const realPrepare = db.prepare.bind(db);
-    db.prepare = (sql) => { if (/count\(\*\)/i.test(sql)) sawCount = true; return realPrepare(sql); };
+    db.prepare = (sql) => {
+      if (/count\(\*\)/i.test(sql)) sawCount = true;
+      return realPrepare(sql);
+    };
     expect(corpusFloorScale(db)).toBe(1);
     expect(sawCount, 'took the COUNT path on a large corpus').toBe(false);
   });

@@ -11,7 +11,7 @@ const TWO_HOURS_MS = 2 * 3600000;
 
 /** Active window = 2x decay half-life per type (ms) */
 export const ACTIVE_WINDOWS = Object.fromEntries(
-  Object.entries(DECAY_HALF_LIFE_BY_TYPE).map(([type, hl]) => [type, hl * 2])
+  Object.entries(DECAY_HALF_LIFE_BY_TYPE).map(([type, hl]) => [type, hl * 2]),
 );
 const DEFAULT_ACTIVE_WINDOW_MS = DECAY_HALF_LIFE_BY_TYPE.change * 2;
 

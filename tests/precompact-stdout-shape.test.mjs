@@ -57,7 +57,11 @@ describe('handlePreCompact writes bare text, not an envelope', () => {
   afterEach(() => {
     spy.mockRestore();
     db.close();
-    try { rmSync(runtimeDir, { recursive: true, force: true }); } catch { /* gone */ }
+    try {
+      rmSync(runtimeDir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
   });
 
   it('emits a bare <claude-mem-context> block that is not parseable as JSON', () => {
@@ -69,14 +73,17 @@ describe('handlePreCompact writes bare text, not an envelope', () => {
 
     // Premise: an empty render writes nothing, and every assertion below would then
     // pass over an empty array. This is the case that keeps the suite from going vacuous.
-    expect(written.length, 'PreCompact emitted nothing — the shape assertions are vacuous')
-      .toBeGreaterThan(0);
+    expect(written.length, 'PreCompact emitted nothing — the shape assertions are vacuous').toBeGreaterThan(
+      0,
+    );
 
     const out = written.join('');
     expect(out).toContain('<claude-mem-context>');
-    expect(out.trim().startsWith('{'),
-      'stdout starts with { — the host would parse it as an envelope and hand the '
-      + 'summarizer literal JSON as its custom instructions').toBe(false);
+    expect(
+      out.trim().startsWith('{'),
+      'stdout starts with { — the host would parse it as an envelope and hand the ' +
+        'summarizer literal JSON as its custom instructions',
+    ).toBe(false);
     // The whole stdout becomes newCustomInstructions verbatim, so a stray JSON document
     // anywhere in it is the same defect one line further down.
     expect(out).not.toContain('hookSpecificOutput');
@@ -85,15 +92,16 @@ describe('handlePreCompact writes bare text, not an envelope', () => {
   it('the source does not reach for the envelope writer', () => {
     const src = readFileSync(join(ROOT, 'hook-precompact.mjs'), 'utf8');
     for (const banned of ['hook-stdout', 'queueHookContext', 'flushHookStdout']) {
-      expect(src.includes(banned),
-        `hook-precompact.mjs now references ${banned}. PreCompact's output is read as RAW `
-        + 'stdout by executePreCompactHooks and becomes the compaction summarizer\'s '
-        + 'customInstructions — an envelope there ships JSON as instructions. See the '
-        + 'corrections block at the top of lib/hook-stdout.mjs.').toBe(false);
+      expect(
+        src.includes(banned),
+        `hook-precompact.mjs now references ${banned}. PreCompact's output is read as RAW ` +
+          "stdout by executePreCompactHooks and becomes the compaction summarizer's " +
+          'customInstructions — an envelope there ships JSON as instructions. See the ' +
+          'corrections block at the top of lib/hook-stdout.mjs.',
+      ).toBe(false);
     }
     // Self-check: the matcher must be able to say yes, or a renamed export would make
     // this pass by finding nothing rather than by the invariant holding.
-    expect(readFileSync(join(ROOT, 'scripts/pre-tool-recall.js'), 'utf8'))
-      .toContain('queueHookContext');
+    expect(readFileSync(join(ROOT, 'scripts/pre-tool-recall.js'), 'utf8')).toContain('queueHookContext');
   });
 });

@@ -30,9 +30,14 @@ function withRealDeps(root) {
   const pkgDir = join(root, 'node_modules', 'better-sqlite3');
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
-  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }));
-  writeFileSync(join(pkgDir, 'index.js'),
-    `module.exports = require(${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3'))});\n`);
+  writeFileSync(
+    join(pkgDir, 'package.json'),
+    JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }),
+  );
+  writeFileSync(
+    join(pkgDir, 'index.js'),
+    `module.exports = require(${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3'))});\n`,
+  );
   return root;
 }
 
@@ -41,9 +46,14 @@ function withBrokenDeps(root) {
   const pkgDir = join(root, 'node_modules', 'better-sqlite3');
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
-  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }));
-  writeFileSync(join(pkgDir, 'index.js'),
-    'throw new Error("Could not locate the bindings file. Tried: fixture-stale-abi");\n');
+  writeFileSync(
+    join(pkgDir, 'package.json'),
+    JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }),
+  );
+  writeFileSync(
+    join(pkgDir, 'index.js'),
+    'throw new Error("Could not locate the bindings file. Tried: fixture-stale-abi");\n',
+  );
   return root;
 }
 
@@ -57,7 +67,10 @@ function makePluginVersion(version, { deps = 'real' } = {}) {
   writeFileSync(join(root, 'scripts', 'launch.mjs'), '// launcher\n');
   for (const f of ['cli.mjs', 'server.mjs', 'hook.mjs']) writeFileSync(join(root, f), '// x\n');
   mkdirSync(join(root, 'hooks'), { recursive: true });
-  writeFileSync(join(root, 'hooks', 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: '*', hooks: [] }] } }));
+  writeFileSync(
+    join(root, 'hooks', 'hooks.json'),
+    JSON.stringify({ hooks: { SessionStart: [{ matcher: '*', hooks: [] }] } }),
+  );
   if (deps === 'real') withRealDeps(root);
   else if (deps === 'broken') withBrokenDeps(root);
   else writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version }));
@@ -77,9 +90,16 @@ function makeManagedInstall({ deps = 'real' } = {}) {
 
 function enablePlugin() {
   mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
-  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-    enabledPlugins: { 'claude-mem-lite@sdsrss': true },
-  }, null, 2));
+  writeFileSync(
+    join(home, '.claude', 'settings.json'),
+    JSON.stringify(
+      {
+        enabledPlugins: { 'claude-mem-lite@sdsrss': true },
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 function run(cmd, extraEnv = {}) {
@@ -90,7 +110,10 @@ function run(cmd, extraEnv = {}) {
   Object.assign(env, extraEnv);
   try {
     const stdout = execFileSync(process.execPath, [INSTALL_PATH, cmd], {
-      encoding: 'utf8', env, timeout: 90000, stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+      env,
+      timeout: 90000,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     return { code: 0, stdout };
   } catch (e) {
@@ -105,7 +128,11 @@ beforeEach(() => {
   mkdirSync(join(home, '.claude'), { recursive: true });
 });
 afterEach(() => {
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
 });
 
 // Each `it` here spawns install.mjs, and on a 2-core CI runner a pile of those
@@ -212,11 +239,14 @@ describe('status: the plugin manifest doing its job is not two failures', () => 
 // from a healthy npm-shape install by those two facts alone, so both now open it.
 describe('an EMPTY plugin manifest is not the healthy plugin shape', () => {
   function emptyTheManifest(version) {
-    writeFileSync(join(pluginCacheDir(version), 'hooks', 'hooks.json'), JSON.stringify({
-      description: 'claude-mem-lite hooks',
-      _note: 'Auto-cleared by hook-update.mjs post-install — prevents double hook registration',
-      hooks: {},
-    }));
+    writeFileSync(
+      join(pluginCacheDir(version), 'hooks', 'hooks.json'),
+      JSON.stringify({
+        description: 'claude-mem-lite hooks',
+        _note: 'Auto-cleared by hook-update.mjs post-install — prevents double hook registration',
+        hooks: {},
+      }),
+    );
   }
 
   it('status goes RED, names the state, and prints a repair', () => {
@@ -251,7 +281,9 @@ describe('an EMPTY plugin manifest is not the healthy plugin shape', () => {
     makePluginVersion('3.95.0');
     mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
     enablePlugin();
-    expect(run('status').stdout, 'fixture was not green to begin with').toMatch(/✓ Hooks: provided by the plugin manifest/);
+    expect(run('status').stdout, 'fixture was not green to begin with').toMatch(
+      /✓ Hooks: provided by the plugin manifest/,
+    );
 
     rmSync(join(pluginCacheDir('3.95.0'), 'hooks', 'hooks.json'));
     expect(run('status').stdout).toMatch(/registers NO hooks \(no-manifest\)/);

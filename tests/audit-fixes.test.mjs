@@ -49,7 +49,9 @@ function rpc(proc, id, method, params) {
             proc.stdout.off('data', onData);
             return resolve(msg);
           }
-        } catch { /* non-JSON frame */ }
+        } catch {
+          /* non-JSON frame */
+        }
       }
       buf = lines[lines.length - 1];
     };
@@ -107,9 +109,13 @@ let testDb;
 
 vi.mock('../schema.mjs', async (importOriginal) => {
   const original = await importOriginal();
-  const stub = () => new Proxy(testDb, {
-    get(t, p) { if (p === 'close') return () => {}; return t[p]; },
-  });
+  const stub = () =>
+    new Proxy(testDb, {
+      get(t, p) {
+        if (p === 'close') return () => {};
+        return t[p];
+      },
+    });
   // Stub EVERY exported opener, not just ensureDb: mem-cli routes through
   // ensureDbWithWalRecovery since the WAL-recovery hoist, and an unstubbed
   // opener silently escapes to the REAL ~/.claude-mem-lite DB (this exact
@@ -128,18 +134,30 @@ function captureStdout(fn) {
   let output = '';
   const origOut = process.stdout.write;
   const origErr = process.stderr.write;
-  process.stdout.write = (s) => { output += s; return true; };
-  process.stderr.write = (s) => { output += s; return true; };
+  process.stdout.write = (s) => {
+    output += s;
+    return true;
+  };
+  process.stderr.write = (s) => {
+    output += s;
+    return true;
+  };
   try {
     const res = fn();
     if (res && typeof res.then === 'function') {
-      return res.then(() => { process.stdout.write = origOut; process.stderr.write = origErr; return output; });
+      return res.then(() => {
+        process.stdout.write = origOut;
+        process.stderr.write = origErr;
+        return output;
+      });
     }
   } catch (err) {
-    process.stdout.write = origOut; process.stderr.write = origErr;
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
     throw err;
   }
-  process.stdout.write = origOut; process.stderr.write = origErr;
+  process.stdout.write = origOut;
+  process.stderr.write = origErr;
   return output;
 }
 
@@ -154,12 +172,14 @@ describe('P0-1: CLI save --lesson persists lesson_learned', () => {
     })();
     insertSession(testDb, { id: 'p01-sess', project: 'test--probe', memoryId: 'p01-mem' });
   });
-  afterEach(() => { testDb.close(); });
+  afterEach(() => {
+    testDb.close();
+  });
 
   it('writes lesson_learned column when --lesson is passed', async () => {
-    const output = await captureStdout(() => run([
-      'save', 'root cause X; fix is Y', '--type', 'bugfix', '--lesson', 'always grep usage first',
-    ]));
+    const output = await captureStdout(() =>
+      run(['save', 'root cause X; fix is Y', '--type', 'bugfix', '--lesson', 'always grep usage first']),
+    );
     expect(output).toContain('💡lesson captured');
     const row = testDb.prepare('SELECT * FROM observations ORDER BY id DESC LIMIT 1').get();
     expect(row.type).toBe('bugfix');
@@ -167,18 +187,18 @@ describe('P0-1: CLI save --lesson persists lesson_learned', () => {
   });
 
   it('accepts --lesson-learned alias (mirrors cmdUpdate)', async () => {
-    await captureStdout(() => run([
-      'save', 'content', '--type', 'bugfix', '--lesson-learned', 'alias works',
-    ]));
+    await captureStdout(() =>
+      run(['save', 'content', '--type', 'bugfix', '--lesson-learned', 'alias works']),
+    );
     const row = testDb.prepare('SELECT * FROM observations ORDER BY id DESC LIMIT 1').get();
     expect(row.lesson_learned).toBe('alias works');
   });
 
   it('rejects --lesson exceeding 500 chars (mirrors MCP memSaveSchema)', async () => {
     const longLesson = 'A'.repeat(501);
-    const output = await captureStdout(() => run([
-      'save', 'probe', '--type', 'bugfix', '--lesson', longLesson,
-    ]));
+    const output = await captureStdout(() =>
+      run(['save', 'probe', '--type', 'bugfix', '--lesson', longLesson]),
+    );
     expect(output).toContain('too long');
     const count = testDb.prepare('SELECT COUNT(*) as c FROM observations').get().c;
     expect(count).toBe(0);
@@ -206,10 +226,22 @@ describe('MCP audit fixes (stdio)', () => {
   });
 
   afterEach(async () => {
-    try { proc.stdin.end(); } catch { /* already closed */ }
-    try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    try {
+      proc.stdin.end();
+    } catch {
+      /* already closed */
+    }
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      /* already exited */
+    }
     await new Promise((r) => setTimeout(r, 50));
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function callTool(name, args) {
@@ -223,7 +255,8 @@ describe('MCP audit fixes (stdio)', () => {
     const r = await callTool('mem_search', { query: 'AUDITKW', sort: 'relevance', limit: 5 });
     const i = await callTool('mem_search', { query: 'AUDITKW', sort: 'importance', limit: 5 });
 
-    const parseIds = (resp) => [...(resp.result?.content?.[0]?.text || '').matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+    const parseIds = (resp) =>
+      [...(resp.result?.content?.[0]?.text || '').matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
     const timeIds = parseIds(t);
     const relIds = parseIds(r);
     const impIds = parseIds(i);
@@ -252,7 +285,12 @@ describe('MCP audit fixes (stdio)', () => {
     await initialize(proc);
     const noTier = await callTool('mem_search', { query: 'AUDITKW', project: 'audit--probe', limit: 5 });
     expect(noTier.result?.content?.[0]?.text || '').toMatch(/AUDITKW/); // sanity: findable without tier
-    const withTier = await callTool('mem_search', { query: 'AUDITKW', tier: 'working', project: 'audit--probe', limit: 5 });
+    const withTier = await callTool('mem_search', {
+      query: 'AUDITKW',
+      tier: 'working',
+      project: 'audit--probe',
+      limit: 5,
+    });
     const text = withTier.result?.content?.[0]?.text || '';
     expect(text).not.toMatch(/No results/);
     expect(text).toMatch(/#1\b/); // id=1 (created now → working tier) is returned
@@ -344,7 +382,7 @@ describe('MCP audit fixes (stdio)', () => {
   // P2-7: obs ID passed with source=session should hint switching source.
   // Post-#8127: explicit `source` still forces all tokens to that bucket; the "no records
   // found in source(s) [session]" error is generalized and the probe hint still fires.
-  it('P2-7: mem_get source=session with an obs ID hints to try source=\'obs\'', async () => {
+  it("P2-7: mem_get source=session with an obs ID hints to try source='obs'", async () => {
     await initialize(proc);
     const resp = await callTool('mem_get', { ids: [1], source: 'session' });
     const text = resp.result?.content?.[0]?.text || '';
@@ -434,10 +472,22 @@ describe('MCP T2 audit fixes (stdio)', () => {
   });
 
   afterEach(async () => {
-    try { proc.stdin.end(); } catch { /* already closed */ }
-    try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    try {
+      proc.stdin.end();
+    } catch {
+      /* already closed */
+    }
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      /* already exited */
+    }
     await new Promise((r) => setTimeout(r, 50));
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function callTool(name, args) {
@@ -474,7 +524,7 @@ describe('MCP T2 audit fixes (stdio)', () => {
     expect(text).toMatch(/Purged 3 stale observations/);
 
     const db = new Database(join(tmp, 'claude-mem-lite.db'));
-    const remaining = db.prepare("SELECT title FROM observations").all();
+    const remaining = db.prepare('SELECT title FROM observations').all();
     db.close();
     expect(remaining).toHaveLength(1);
     expect(remaining[0].title).toBe('LIVE CONTROL');
@@ -485,7 +535,9 @@ describe('MCP T2 audit fixes (stdio)', () => {
     expect(readdirSync(tmp).filter((n) => n.includes('.pre-maintain-')).length).toBe(0);
 
     const resp = await callTool('mem_maintain', {
-      action: 'execute', operations: ['purge_stale'], confirm: true,
+      action: 'execute',
+      operations: ['purge_stale'],
+      confirm: true,
     });
     expect(resp.result?.content?.[0]?.text || '').toMatch(/Purged 3 stale observations/);
 
@@ -581,7 +633,9 @@ describe('T2 CLI fixes', () => {
     })();
     insertSession(testDb, { id: 't2-sess', project: 'test--probe', memoryId: 't2-mem' });
   });
-  afterEach(() => { testDb.close(); });
+  afterEach(() => {
+    testDb.close();
+  });
 
   // T2-P1-C
   it('T2-P1-C: optimize --max 0 is rejected (not swallowed by || 15)', async () => {
@@ -635,9 +689,14 @@ describe('T2 CLI fixes', () => {
   it('T2-P0-A CLI parity: maintain purge_stale without --confirm previews only', async () => {
     // Seed a pending-purge row.
     insertObs(testDb, {
-      sessionId: 't2-mem', project: 'test--probe', type: 'change',
-      title: 'CLI PURGEABLE', text: 'stale', importance: 1,
-      epochOffset: -60 * 86_400_000, compressedInto: COMPRESSED_PENDING_PURGE,
+      sessionId: 't2-mem',
+      project: 'test--probe',
+      type: 'change',
+      title: 'CLI PURGEABLE',
+      text: 'stale',
+      importance: 1,
+      epochOffset: -60 * 86_400_000,
+      compressedInto: COMPRESSED_PENDING_PURGE,
     });
     const output = await captureStdout(() => run(['maintain', 'execute', '--ops', 'purge_stale']));
     expect(output).toMatch(/purge_stale preview \(no --confirm\)/);
@@ -650,13 +709,18 @@ describe('T2 CLI fixes', () => {
 
   it('T2-P0-A CLI parity: maintain purge_stale --confirm actually deletes', async () => {
     insertObs(testDb, {
-      sessionId: 't2-mem', project: 'test--probe', type: 'change',
-      title: 'CLI PURGEABLE 2', text: 'stale', importance: 1,
-      epochOffset: -60 * 86_400_000, compressedInto: COMPRESSED_PENDING_PURGE,
+      sessionId: 't2-mem',
+      project: 'test--probe',
+      type: 'change',
+      title: 'CLI PURGEABLE 2',
+      text: 'stale',
+      importance: 1,
+      epochOffset: -60 * 86_400_000,
+      compressedInto: COMPRESSED_PENDING_PURGE,
     });
-    const output = await captureStdout(() => run([
-      'maintain', 'execute', '--ops', 'purge_stale', '--confirm',
-    ]));
+    const output = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'purge_stale', '--confirm']),
+    );
     expect(output).toMatch(/Purged 1 stale observations/);
     const row = testDb.prepare("SELECT id FROM observations WHERE title = 'CLI PURGEABLE 2'").get();
     expect(row).toBeUndefined();
@@ -668,13 +732,18 @@ describe('T2 CLI fixes', () => {
     // DELETE. fail() sets exitCode but does NOT throw, so the fix needs an explicit
     // return — without it execution falls through to the purge with the bad value.
     insertObs(testDb, {
-      sessionId: 't2-mem', project: 'test--probe', type: 'change',
-      title: 'CLI NEG RETAIN', text: 'stale', importance: 1,
-      epochOffset: -60 * 86_400_000, compressedInto: COMPRESSED_PENDING_PURGE,
+      sessionId: 't2-mem',
+      project: 'test--probe',
+      type: 'change',
+      title: 'CLI NEG RETAIN',
+      text: 'stale',
+      importance: 1,
+      epochOffset: -60 * 86_400_000,
+      compressedInto: COMPRESSED_PENDING_PURGE,
     });
-    const output = await captureStdout(() => run([
-      'maintain', 'execute', '--ops', 'purge_stale', '--confirm', '--retain-days', '-5',
-    ]));
+    const output = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'purge_stale', '--confirm', '--retain-days', '-5']),
+    );
     expect(output).toContain('--retain-days must be an integer in [7, 365]');
     expect(output).not.toMatch(/Purged \d+ stale/);
     // Row must survive — the invalid run never reached the DELETE.
@@ -688,37 +757,51 @@ describe('T2 CLI fixes', () => {
     // the pre-txn snapshot guard (counts only PRE-EXISTING pending rows) skipped the backup →
     // permanent loss of notable memories. Purge now runs first (matching the auto-maintain hook).
     insertObs(testDb, {
-      sessionId: 't2-mem', project: 'test--probe', type: 'decision',
-      title: 'MARKED THIS RUN', text: 'x', narrative: 'rationale',
-      importance: 1, epochOffset: -60 * 86_400_000, // old, never accessed/injected → mark-idle marks it
+      sessionId: 't2-mem',
+      project: 'test--probe',
+      type: 'decision',
+      title: 'MARKED THIS RUN',
+      text: 'x',
+      narrative: 'rationale',
+      importance: 1,
+      epochOffset: -60 * 86_400_000, // old, never accessed/injected → mark-idle marks it
     });
-    const out1 = await captureStdout(() => run([
-      'maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7',
-    ]));
+    const out1 = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7']),
+    );
     expect(out1).toMatch(/Purged 0 stale observations/); // purge ran first, nothing pre-existing pending
-    const row = testDb.prepare("SELECT compressed_into FROM observations WHERE title = 'MARKED THIS RUN'").get();
-    expect(row).toBeDefined();                                  // SURVIVED (pre-fix: deleted same run)
+    const row = testDb
+      .prepare("SELECT compressed_into FROM observations WHERE title = 'MARKED THIS RUN'")
+      .get();
+    expect(row).toBeDefined(); // SURVIVED (pre-fix: deleted same run)
     expect(row.compressed_into).toBe(COMPRESSED_PENDING_PURGE); // marked, to be purged on a LATER run
 
     // Next run: the row is now PRE-EXISTING pending → purge deletes it (with the snapshot guard live).
-    const out2 = await captureStdout(() => run([
-      'maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7',
-    ]));
+    const out2 = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7']),
+    );
     expect(out2).toMatch(/Purged 1 stale observations/);
-    expect(testDb.prepare("SELECT id FROM observations WHERE title = 'MARKED THIS RUN'").get()).toBeUndefined();
+    expect(
+      testDb.prepare("SELECT id FROM observations WHERE title = 'MARKED THIS RUN'").get(),
+    ).toBeUndefined();
   });
 
   it('MED-2: invalid --retain-days rejects atomically — a cleanup hard-delete in the same command does NOT commit', async () => {
     // The retain-days range check used to live INSIDE db.transaction() with a bare `return`,
     // so cleanup/decay had already mutated and the transaction COMMITTED despite exit 1.
     insertObs(testDb, {
-      sessionId: 't2-mem', project: 'test--probe', type: 'change',
-      title: '', text: 'broken', narrative: '', importance: 1, // cleanupBroken candidate
+      sessionId: 't2-mem',
+      project: 'test--probe',
+      type: 'change',
+      title: '',
+      text: 'broken',
+      narrative: '',
+      importance: 1, // cleanupBroken candidate
       epochOffset: -60 * 86_400_000,
     });
-    const output = await captureStdout(() => run([
-      'maintain', 'execute', '--ops', 'cleanup,purge_stale', '--confirm', '--retain-days', '3',
-    ]));
+    const output = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'cleanup,purge_stale', '--confirm', '--retain-days', '3']),
+    );
     expect(output).toContain('--retain-days must be an integer in [7, 365]');
     expect(output).not.toMatch(/Cleaned up \d+ broken/); // cleanup never ran — validated before the txn
     const broken = testDb.prepare("SELECT id FROM observations WHERE title = '' AND narrative = ''").get();
@@ -790,7 +873,11 @@ function runHookCmd(event, { home, stdin = '', cwd = home }) {
     });
     return { stdout, exitCode: 0 };
   } catch (e) {
-    return { stdout: e.stdout?.toString() || '', stderr: e.stderr?.toString() || '', exitCode: e.status ?? 1 };
+    return {
+      stdout: e.stdout?.toString() || '',
+      stderr: e.stderr?.toString() || '',
+      exitCode: e.status ?? 1,
+    };
   }
 }
 
@@ -810,7 +897,11 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('preserves pending-purge rows aged 34 days (within 37d cutoff) across SessionStart', () => {
@@ -821,10 +912,12 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
     //   A: 40 days old → must be purged under fixed 37d cutoff (older than 37d)
     //   B: 34 days old → must SURVIVE (newer than 37d cutoff, even though marked)
     //   C: 20 days old → not even eligible for marking yet; sanity control
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('t4-ret-sess', 't4-ret-mem', ?, ?, ?, 'active')
-    `).run((project_ => project_)('audit--t4'), new Date().toISOString(), now);
+    `,
+    ).run(((project_) => project_)('audit--t4'), new Date().toISOString(), now);
 
     const insertObsRaw = db.prepare(`
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
@@ -832,9 +925,30 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
         created_at, created_at_epoch)
       VALUES ('t4-ret-mem', ?, ?, 'change', ?, '', '', '', '', '[]', '[]', 1, ?, 0, ?, ?)
     `);
-    insertObsRaw.run('audit--t4', 'row A body', 'row A (40d)', PENDING_PURGE_MARKER, new Date(now - 40 * DAY_MS).toISOString(), now - 40 * DAY_MS);
-    insertObsRaw.run('audit--t4', 'row B body', 'row B (34d)', PENDING_PURGE_MARKER, new Date(now - 34 * DAY_MS).toISOString(), now - 34 * DAY_MS);
-    insertObsRaw.run('audit--t4', 'row C body', 'row C (20d, unmarked)', null, new Date(now - 20 * DAY_MS).toISOString(), now - 20 * DAY_MS);
+    insertObsRaw.run(
+      'audit--t4',
+      'row A body',
+      'row A (40d)',
+      PENDING_PURGE_MARKER,
+      new Date(now - 40 * DAY_MS).toISOString(),
+      now - 40 * DAY_MS,
+    );
+    insertObsRaw.run(
+      'audit--t4',
+      'row B body',
+      'row B (34d)',
+      PENDING_PURGE_MARKER,
+      new Date(now - 34 * DAY_MS).toISOString(),
+      now - 34 * DAY_MS,
+    );
+    insertObsRaw.run(
+      'audit--t4',
+      'row C body',
+      'row C (20d, unmarked)',
+      null,
+      new Date(now - 20 * DAY_MS).toISOString(),
+      now - 20 * DAY_MS,
+    );
     db.close();
 
     // SessionStart schedules the auto-maintain cycle; MED-4 runs it in a detached
@@ -845,12 +959,17 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const titles = db2.prepare('SELECT title FROM observations ORDER BY created_at_epoch ASC').all().map(r => r.title);
+      const titles = db2
+        .prepare('SELECT title FROM observations ORDER BY created_at_epoch ASC')
+        .all()
+        .map((r) => r.title);
       // After the fix: A is deleted; B (34d, marked) survives; C (20d, unmarked) survives.
       expect(titles).not.toContain('row A (40d)');
       expect(titles).toContain('row B (34d)');
       expect(titles).toContain('row C (20d, unmarked)');
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 
   it('recovers children of a purged keeper instead of orphaning them (hook → shared purgeStale)', () => {
@@ -859,10 +978,12 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
     // a now-deleted id. Routing through purgeStale recovers them first.
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('t4-orph-sess', 't4-ret-mem', 'audit--t4', ?, ?, 'active')
-    `).run(new Date().toISOString(), now);
+    `,
+    ).run(new Date().toISOString(), now);
 
     const insertObsRaw = db.prepare(`
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
@@ -870,21 +991,39 @@ describe('T4-P1-A: auto-maintain 7-day retention (hook.mjs)', () => {
       VALUES ('t4-ret-mem', 'audit--t4', ?, 'change', ?, '', '', '', '', '[]', '[]', 1, ?, 0, ?, ?)
     `);
     // keeper: pending-purge, 40d → will be deleted; child points at it and must be recovered.
-    const keeperId = Number(insertObsRaw.run('keeper body', 'doomed keeper (40d)', PENDING_PURGE_MARKER, new Date(now - 40 * DAY_MS).toISOString(), now - 40 * DAY_MS).lastInsertRowid);
+    const keeperId = Number(
+      insertObsRaw.run(
+        'keeper body',
+        'doomed keeper (40d)',
+        PENDING_PURGE_MARKER,
+        new Date(now - 40 * DAY_MS).toISOString(),
+        now - 40 * DAY_MS,
+      ).lastInsertRowid,
+    );
     insertObsRaw.run('child body', 'child of keeper', keeperId, new Date(now).toISOString(), now);
     db.close();
 
-    runHookCmd('session-start', { home: tmpHome, cwd: projDir, stdin: JSON.stringify({ session_id: 'cc-t4-orph' }) });
+    runHookCmd('session-start', {
+      home: tmpHome,
+      cwd: projDir,
+      stdin: JSON.stringify({ session_id: 'cc-t4-orph' }),
+    });
     runHookCmd('auto-maintain', { home: tmpHome, cwd: projDir });
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const keeperGone = !db2.prepare('SELECT 1 FROM observations WHERE title = ?').get('doomed keeper (40d)');
-      const child = db2.prepare('SELECT compressed_into FROM observations WHERE title = ?').get('child of keeper');
+      const keeperGone = !db2
+        .prepare('SELECT 1 FROM observations WHERE title = ?')
+        .get('doomed keeper (40d)');
+      const child = db2
+        .prepare('SELECT compressed_into FROM observations WHERE title = ?')
+        .get('child of keeper');
       expect(keeperGone).toBe(true);
       expect(child).toBeDefined();
       expect(child.compressed_into).toBeNull(); // recovered, NOT left dangling at the deleted keeper id
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 });
 
@@ -898,17 +1037,23 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('supersedes near-identical titles (Jaccard ≥ 0.95) and leaves unrelated rows untouched', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('fuzzy-sess', 'fuzzy-mem', 'audit--t4', ?, ?, 'active')
-    `).run(new Date().toISOString(), now);
+    `,
+    ).run(new Date().toISOString(), now);
 
     const insertObsRaw = db.prepare(`
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
@@ -920,8 +1065,16 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
     // Ages must stay under 7 days — the SessionStart "noise-compress" pass
     // (line 658+) hides any 'Modified %' title older than 7d before fuzzy
     // dedup runs, so the realistic catch window is 0–7d.
-    insertObsRaw.run('Modified server.mjs, mem-cli.mjs', new Date(now - 5 * DAY_MS).toISOString(), now - 5 * DAY_MS);
-    insertObsRaw.run('Modified mem-cli.mjs, server.mjs', new Date(now - 3 * DAY_MS).toISOString(), now - 3 * DAY_MS);
+    insertObsRaw.run(
+      'Modified server.mjs, mem-cli.mjs',
+      new Date(now - 5 * DAY_MS).toISOString(),
+      now - 5 * DAY_MS,
+    );
+    insertObsRaw.run(
+      'Modified mem-cli.mjs, server.mjs',
+      new Date(now - 3 * DAY_MS).toISOString(),
+      now - 3 * DAY_MS,
+    );
     // Control row — different content, must survive untouched
     insertObsRaw.run('Modified hook.mjs', new Date(now - 4 * DAY_MS).toISOString(), now - 4 * DAY_MS);
     db.close();
@@ -932,26 +1085,34 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const rows = db2.prepare('SELECT title, superseded_at, superseded_by FROM observations ORDER BY created_at_epoch ASC').all();
+      const rows = db2
+        .prepare('SELECT title, superseded_at, superseded_by FROM observations ORDER BY created_at_epoch ASC')
+        .all();
       // Exactly one of the two near-duplicates is superseded; the other survives as keeper.
-      const dupRows = rows.filter(r => r.title.startsWith('Modified server.mjs') || r.title.startsWith('Modified mem-cli.mjs'));
+      const dupRows = rows.filter(
+        (r) => r.title.startsWith('Modified server.mjs') || r.title.startsWith('Modified mem-cli.mjs'),
+      );
       expect(dupRows.length).toBe(2);
-      const superseded = dupRows.filter(r => r.superseded_at !== null);
+      const superseded = dupRows.filter((r) => r.superseded_at !== null);
       expect(superseded.length).toBe(1);
       expect(superseded[0].superseded_by).toBe('auto-dedup-fuzzy');
       // Control row must be untouched
-      const ctrl = rows.find(r => r.title === 'Modified hook.mjs');
+      const ctrl = rows.find((r) => r.title === 'Modified hook.mjs');
       expect(ctrl.superseded_at).toBeNull();
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 
   it('respects CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY env opt-out', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('fuzzy-skip-sess', 'fuzzy-skip-mem', 'audit--t4', ?, ?, 'active')
-    `).run(new Date().toISOString(), now);
+    `,
+    ).run(new Date().toISOString(), now);
 
     const insertObsRaw = db.prepare(`
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
@@ -984,14 +1145,18 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
         },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } catch { /* ignore non-zero exit; we only assert DB state */ }
+    } catch {
+      /* ignore non-zero exit; we only assert DB state */
+    }
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
       const rows = db2.prepare('SELECT title, superseded_at FROM observations').all();
       // Both rows untouched when fuzzy-dedup is skipped
-      expect(rows.every(r => r.superseded_at === null)).toBe(true);
-    } finally { db2.close(); }
+      expect(rows.every((r) => r.superseded_at === null)).toBe(true);
+    } finally {
+      db2.close();
+    }
   });
 });
 
@@ -1003,7 +1168,11 @@ describe('T4-P1-B: pre-skill-bridge emits JSON hookSpecificOutput', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('wraps skill content in JSON hookSpecificOutput instead of plain-text stdout', () => {
@@ -1029,8 +1198,12 @@ describe('T4-P1-B: pre-skill-bridge emits JSON hookSpecificOutput', () => {
       source TEXT,
       capability_summary TEXT
     )`);
-    rdb.prepare(`INSERT INTO resources (name, type, status, invocation_name, local_path)
-                 VALUES (?, 'skill', 'active', ?, ?)`).run('t4-probe', 't4-probe', managedDir);
+    rdb
+      .prepare(
+        `INSERT INTO resources (name, type, status, invocation_name, local_path)
+                 VALUES (?, 'skill', 'active', ?, ?)`,
+      )
+      .run('t4-probe', 't4-probe', managedDir);
     rdb.close();
 
     const input = JSON.stringify({ tool_input: { skill: 't4-probe' } });
@@ -1061,7 +1234,11 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('running Stop twice for the same session produces at most one fast summary', () => {
@@ -1070,19 +1247,25 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
 
     // Seed: one active session + one user_prompt + one observation.
     const sessId = 'hook-audit--t4-' + randomUUID().slice(0, 8);
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, 'audit--t4', ?, ?, 'active')
-    `).run(sessId, sessId, new Date(now).toISOString(), now);
-    db.prepare(`
+    `,
+    ).run(sessId, sessId, new Date(now).toISOString(), now);
+    db.prepare(
+      `
       INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
       VALUES (?, 'initial probe prompt for dedup test', 1, ?, ?)
-    `).run(sessId, new Date(now).toISOString(), now);
-    db.prepare(`
+    `,
+    ).run(sessId, new Date(now).toISOString(), now);
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
         files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES (?, 'audit--t4', 'obs body', 'change', 'T4 stop probe obs', '', '', '', '', '[]', '[]', 1, ?, ?)
-    `).run(sessId, new Date(now).toISOString(), now);
+    `,
+    ).run(sessId, new Date(now).toISOString(), now);
     db.close();
 
     // Write session file so hook.mjs getSessionId() returns the same id on both runs.
@@ -1102,9 +1285,13 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const count = db2.prepare('SELECT COUNT(*) AS c FROM session_summaries WHERE memory_session_id = ?').get(sessId).c;
+      const count = db2
+        .prepare('SELECT COUNT(*) AS c FROM session_summaries WHERE memory_session_id = ?')
+        .get(sessId).c;
       expect(count).toBeLessThanOrEqual(1);
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 });
 
@@ -1118,7 +1305,11 @@ describe('T4-P2-D: prompt_counter is atomic per prompt', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('sequential UserPromptSubmit events produce distinct monotonic prompt_number values', () => {
@@ -1134,9 +1325,14 @@ describe('T4-P2-D: prompt_counter is atomic per prompt', () => {
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const numbers = db2.prepare(`SELECT prompt_number FROM user_prompts ORDER BY id ASC`).all().map(r => r.prompt_number);
+      const numbers = db2
+        .prepare(`SELECT prompt_number FROM user_prompts ORDER BY id ASC`)
+        .all()
+        .map((r) => r.prompt_number);
       expect(numbers).toEqual([1, 2, 3]);
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 });
 
@@ -1150,7 +1346,11 @@ describe('handleUserPrompt: secret scrub runs BEFORE the 10k prompt slice', () =
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('does not persist a secret value straddling the 10000-char prompt_text cut', () => {
@@ -1164,7 +1364,8 @@ describe('handleUserPrompt: secret scrub runs BEFORE the 10k prompt slice', () =
     const pad = 'x'.repeat(9974);
     const prompt = `${pad} AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE done`;
     runHookCmd('user-prompt', {
-      home: tmpHome, cwd: projDir,
+      home: tmpHome,
+      cwd: projDir,
       stdin: JSON.stringify({ prompt, session_id: 'cc-scrub' }),
     });
 
@@ -1174,7 +1375,9 @@ describe('handleUserPrompt: secret scrub runs BEFORE the 10k prompt slice', () =
       expect(row).toBeTruthy();
       // A credential key directly followed by an alphanumeric char = unscrubbed secret head.
       expect(row.prompt_text).not.toMatch(/ACCESS_KEY=[A-Za-z0-9]/);
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 });
 
@@ -1194,7 +1397,11 @@ describe('P0: handleUserPrompt honors memory-override directive', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('emits <memory-context> for a normal prompt and suppresses it on "ignore memory"', () => {
@@ -1206,16 +1413,22 @@ describe('P0: handleUserPrompt honors memory-override directive', () => {
     // both BM25 corpus diversity (mirrors memory-inject.test.mjs:14-20) and
     // the Key Context exclusion slots.
     insertObs(db, {
-      sessionId: 'cc-p0-override', project: 'audit--t4', type: 'bugfix',
+      sessionId: 'cc-p0-override',
+      project: 'audit--t4',
+      type: 'bugfix',
       title: 'Fixed dispatch race condition',
       narrative: 'Lock contention in episode flush',
       text: 'dispatch race condition lock contention episode flush',
-      importance: 3, epochOffset: -3600_000,
+      importance: 3,
+      epochOffset: -3600_000,
     });
     for (let i = 900; i <= 920; i++) {
       insertObs(db, {
-        sessionId: 'cc-p0-override', project: 'audit--t4', type: 'change',
-        title: `Updated config file ${i}`, text: `config yaml settings update number ${i}`,
+        sessionId: 'cc-p0-override',
+        project: 'audit--t4',
+        type: 'change',
+        title: `Updated config file ${i}`,
+        text: `config yaml settings update number ${i}`,
         importance: 2,
       });
     }
@@ -1227,7 +1440,8 @@ describe('P0: handleUserPrompt honors memory-override directive', () => {
     // against the seeded title ("Fixed dispatch race condition"). Confirms
     // that memory injection runs in the absence of an override directive.
     const normal = runHookCmd('user-prompt', {
-      home: tmpHome, cwd: projDir,
+      home: tmpHome,
+      cwd: projDir,
       stdin: baseStdin('dispatch race condition'),
     });
     expect(normal.exitCode).toBe(0);
@@ -1236,7 +1450,8 @@ describe('P0: handleUserPrompt honors memory-override directive', () => {
     // Override path (EN): same query intent but with explicit ignore directive.
     // Must produce zero <memory-context> emission.
     const overrideEn = runHookCmd('user-prompt', {
-      home: tmpHome, cwd: projDir,
+      home: tmpHome,
+      cwd: projDir,
       stdin: baseStdin('ignore memory dispatch race condition'),
     });
     expect(overrideEn.exitCode).toBe(0);
@@ -1244,7 +1459,8 @@ describe('P0: handleUserPrompt honors memory-override directive', () => {
 
     // Override path (CN): parallel for 中文 directive.
     const overrideCn = runHookCmd('user-prompt', {
-      home: tmpHome, cwd: projDir,
+      home: tmpHome,
+      cwd: projDir,
       stdin: baseStdin('不要用记忆，dispatch race condition'),
     });
     expect(overrideCn.exitCode).toBe(0);
@@ -1282,25 +1498,48 @@ describe('MCP T3 audit fixes (stdio)', () => {
     insertSession(db, { id: 't3-sess', project: 'audit--t3', memoryId: 't3-mem' });
     // Seed 2 observations — one with branch, access_count, and a lesson to verify export completeness.
     insertObs(db, {
-      sessionId: 't3-mem', project: 'audit--t3', type: 'bugfix',
-      title: 'T3 seed row 1', text: 'seed one', importance: 2,
-      epochOffset: -1000, accessCount: 7, branch: 'main',
+      sessionId: 't3-mem',
+      project: 'audit--t3',
+      type: 'bugfix',
+      title: 'T3 seed row 1',
+      text: 'seed one',
+      importance: 2,
+      epochOffset: -1000,
+      accessCount: 7,
+      branch: 'main',
       lessonLearned: 'export must include branch & access_count',
     });
     insertObs(db, {
-      sessionId: 't3-mem', project: 'audit--t3', type: 'change',
-      title: 'T3 seed row 2', text: 'seed two', importance: 1,
-      epochOffset: 0, branch: 'feature/probe',
+      sessionId: 't3-mem',
+      project: 'audit--t3',
+      type: 'change',
+      title: 'T3 seed row 2',
+      text: 'seed two',
+      importance: 1,
+      epochOffset: 0,
+      branch: 'feature/probe',
     });
     db.close();
     proc = startServer(tmp);
   });
 
   afterEach(async () => {
-    try { proc.stdin.end(); } catch { /* already closed */ }
-    try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    try {
+      proc.stdin.end();
+    } catch {
+      /* already closed */
+    }
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      /* already exited */
+    }
     await new Promise((r) => setTimeout(r, 50));
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function callTool(name, args) {
@@ -1377,14 +1616,16 @@ describe('MCP T3 audit fixes (stdio)', () => {
     const resp = await callTool('mem_export', { project: 'audit--t3', limit: 10, format: 'jsonl' });
     const text = resp.result?.content?.[0]?.text || '';
     // Extract JSONL lines (skip the "Exported N" header).
-    const lines = text.split('\n').filter(l => l.startsWith('{'));
+    const lines = text.split('\n').filter((l) => l.startsWith('{'));
     expect(lines.length).toBeGreaterThan(0);
     const row = JSON.parse(lines[0]);
     expect(row).toHaveProperty('branch');
     expect(row).toHaveProperty('access_count');
     expect(row).toHaveProperty('memory_session_id');
     // At least one row must have a concrete branch value (seeded).
-    const hasBranch = lines.map(l => JSON.parse(l)).some(r => r.branch === 'main' || r.branch === 'feature/probe');
+    const hasBranch = lines
+      .map((l) => JSON.parse(l))
+      .some((r) => r.branch === 'main' || r.branch === 'feature/probe');
     expect(hasBranch).toBe(true);
   });
 });
@@ -1417,16 +1658,27 @@ function seedPrefixAnchorDb(dir) {
   // One prompt placed exactly at obs #3's epoch → nearest-obs should be #3.
   const nowMs = Date.now();
   const obs3Epoch = nowMs - 2 * 86_400_000; // i=2 → id=3 (1-indexed autoincrement)
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
     VALUES (?, ?, ?, ?, ?)
-  `).run('anchor-sess', 'prompt near obs 3', 1, new Date(obs3Epoch).toISOString(), obs3Epoch);
+  `,
+  ).run('anchor-sess', 'prompt near obs 3', 1, new Date(obs3Epoch).toISOString(), obs3Epoch);
   // One session_summary placed at obs #5's epoch → nearest-obs should be #5.
   const obs5Epoch = nowMs - 4 * 86_400_000;
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run('anchor-mem', 'anchor--probe', 'summary near obs 5', 'done', new Date(obs5Epoch).toISOString(), obs5Epoch);
+  `,
+  ).run(
+    'anchor-mem',
+    'anchor--probe',
+    'summary near obs 5',
+    'done',
+    new Date(obs5Epoch).toISOString(),
+    obs5Epoch,
+  );
   db.close();
   return dbPath;
 }
@@ -1441,10 +1693,22 @@ describe('T-anchor-prefix: mem_timeline prefix anchor parity (stdio)', () => {
   });
 
   afterEach(async () => {
-    try { proc.stdin.end(); } catch { /* already closed */ }
-    try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    try {
+      proc.stdin.end();
+    } catch {
+      /* already closed */
+    }
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      /* already exited */
+    }
     await new Promise((r) => setTimeout(r, 50));
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function callTool(name, args) {
@@ -1524,17 +1788,23 @@ describe('v2.56.0 #4: injection_count protects from auto-maintain decay/mark-idl
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('preserves obs with injection_count > 0 from being marked pending-purge', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('inj-prot-sess', 'inj-prot-mem', 'audit--t4', ?, ?, 'active')
-    `).run(new Date().toISOString(), now);
+    `,
+    ).run(new Date().toISOString(), now);
 
     // Three obs, all 35d old (>30d STALE_AGE), all imp=1, all access_count=0:
     //   A: injection_count=8 → MUST survive (proven via injection)
@@ -1553,7 +1823,11 @@ describe('v2.56.0 #4: injection_count protects from auto-maintain decay/mark-idl
     insertObs.run('C: injected x1 (must survive)', 1, oldEpoch, oldIso, oldEpoch);
     db.close();
 
-    runHookCmd('session-start', { home: tmpHome, cwd: projDir, stdin: JSON.stringify({ session_id: 'cc-inj-uuid' }) });
+    runHookCmd('session-start', {
+      home: tmpHome,
+      cwd: projDir,
+      stdin: JSON.stringify({ session_id: 'cc-inj-uuid' }),
+    });
     // P2-11: the compress-marking passes moved off the SessionStart transaction onto the
     // 24h auto-maintain cadence, so the marking that used to happen inside the call above
     // is now driven explicitly — the same shape MED-4 already established here.
@@ -1561,8 +1835,10 @@ describe('v2.56.0 #4: injection_count protects from auto-maintain decay/mark-idl
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
-      const rows = db2.prepare('SELECT title, compressed_into, importance FROM observations ORDER BY title').all();
-      const byTitle = Object.fromEntries(rows.map(r => [r.title, r]));
+      const rows = db2
+        .prepare('SELECT title, compressed_into, importance FROM observations ORDER BY title')
+        .all();
+      const byTitle = Object.fromEntries(rows.map((r) => [r.title, r]));
 
       // A and C: must NOT be compressed/marked — injection_count > 0 protects
       expect(byTitle['A: injected x8 (must survive)'].compressed_into).toBeNull();
@@ -1574,17 +1850,21 @@ describe('v2.56.0 #4: injection_count protects from auto-maintain decay/mark-idl
       // no longer null, not the specific marker, since order between the two
       // gates is implementation detail.
       expect(byTitle['B: never injected (must be marked)'].compressed_into).not.toBeNull();
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 
   it('preserves obs with injection_count > 0 from importance decay', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('inj-decay-sess', 'inj-decay-mem', 'audit--t4', ?, ?, 'active')
-    `).run(new Date().toISOString(), now);
+    `,
+    ).run(new Date().toISOString(), now);
 
     // Two obs, both 35d old, both imp=2, both access_count=0:
     //   A: injection_count=5 → MUST stay imp=2 (proven via injection)
@@ -1601,16 +1881,22 @@ describe('v2.56.0 #4: injection_count protects from auto-maintain decay/mark-idl
     insertObs.run('B-decay: never injected (must decay to 1)', 0, null, oldIso, oldEpoch);
     db.close();
 
-    runHookCmd('session-start', { home: tmpHome, cwd: projDir, stdin: JSON.stringify({ session_id: 'cc-decay-uuid' }) });
+    runHookCmd('session-start', {
+      home: tmpHome,
+      cwd: projDir,
+      stdin: JSON.stringify({ session_id: 'cc-decay-uuid' }),
+    });
     runHookCmd('auto-maintain', { home: tmpHome, cwd: projDir }); // MED-4: decay/mark-idle runs in the worker
 
     const db2 = new Database(dbPath, { readonly: true });
     try {
       const rows = db2.prepare('SELECT title, importance FROM observations ORDER BY title').all();
-      const byTitle = Object.fromEntries(rows.map(r => [r.title, r]));
+      const byTitle = Object.fromEntries(rows.map((r) => [r.title, r]));
 
       expect(byTitle['A-decay: injected x5 (must keep imp=2)'].importance).toBe(2);
       expect(byTitle['B-decay: never injected (must decay to 1)'].importance).toBe(1);
-    } finally { db2.close(); }
+    } finally {
+      db2.close();
+    }
   });
 });

@@ -9,7 +9,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { readTranscriptEntries, _resetTranscriptCache, TRANSCRIPT_CACHE_MAX_BYTES, transcriptCacheBudgetBytes, TRANSCRIPT_ENTRY_HEAP_FACTOR } from '../lib/transcript-scan.mjs';
+import {
+  readTranscriptEntries,
+  _resetTranscriptCache,
+  TRANSCRIPT_CACHE_MAX_BYTES,
+  transcriptCacheBudgetBytes,
+  TRANSCRIPT_ENTRY_HEAP_FACTOR,
+} from '../lib/transcript-scan.mjs';
 
 let dir, tx;
 
@@ -25,7 +31,13 @@ beforeEach(() => {
   tx = join(dir, 'session.jsonl');
   _resetTranscriptCache();
 });
-afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+afterEach(() => {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* gone */
+  }
+});
 
 describe('readTranscriptEntries', () => {
   it('parses one record per non-empty line and drops the unparsable ones', () => {
@@ -60,7 +72,7 @@ describe('readTranscriptEntries', () => {
     const first = readTranscriptEntries(tx);
     expect(first[0].message.content[0].text).toBe('before');
     const sizeBefore = statSync(tx).size;
-    writeFileSync(tx, `${line('affter')}\n`);   // same length, different bytes
+    writeFileSync(tx, `${line('affter')}\n`); // same length, different bytes
     expect(statSync(tx).size).toBe(sizeBefore);
     expect(readTranscriptEntries(tx)[0].message.content[0].text).toBe('affter');
   });

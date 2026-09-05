@@ -21,14 +21,29 @@ import { rebuildVocabulary, _resetVocabCache } from '../tfidf.mjs';
 
 // D#207: join(), never new URL('../X.mjs', import.meta.url).
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', 'tmp', '.tmp', 'tasks', 'docs', 'tests', 'benchmark', 'experiment']);
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'coverage',
+  'tmp',
+  '.tmp',
+  'tasks',
+  'docs',
+  'tests',
+  'benchmark',
+  'experiment',
+]);
 
 function walkShipped(dir, out = []) {
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
     const full = join(dir, name);
     let st;
-    try { st = statSync(full); } catch { continue; }
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
     if (st.isDirectory()) walkShipped(full, out);
     else if (/\.mjs$/.test(name)) out.push(full);
   }
@@ -54,8 +69,10 @@ describe('observation_vectors has one writer (plus one declared exception)', () 
     for (const f of walkShipped(REPO)) {
       const rel = relative(REPO, f);
       if (ALLOWED.has(rel)) continue;
-      const src = readFileSync(f, 'utf8').split('\n')
-        .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
+      const src = readFileSync(f, 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
+        .join('\n');
       if (WRITE_RE.test(src)) offenders.push(rel);
     }
     expect(offenders).toEqual([]);
@@ -65,10 +82,13 @@ describe('observation_vectors has one writer (plus one declared exception)', () 
     // Without the first arm a regex that matched nothing would report a clean tree; without
     // the second, the allowlist could rot into two names that no longer write anything —
     // and the rule would then be guarding an empty set while reading as enforced.
-    expect('db.prepare("INSERT OR REPLACE INTO observation_vectors (observation_id) VALUES (?)")')
-      .toMatch(WRITE_RE);
+    expect('db.prepare("INSERT OR REPLACE INTO observation_vectors (observation_id) VALUES (?)")').toMatch(
+      WRITE_RE,
+    );
     for (const rel of ALLOWED) {
-      expect(readFileSync(join(REPO, rel), 'utf8'), `${rel} is allowlisted but writes nothing`).toMatch(WRITE_RE);
+      expect(readFileSync(join(REPO, rel), 'utf8'), `${rel} is allowlisted but writes nothing`).toMatch(
+        WRITE_RE,
+      );
     }
   });
 });
@@ -84,7 +104,10 @@ describe('lib/ does not depend on the hook layer', () => {
   const HOOK_IMPORT_RE = /(?:from|import\()\s*['"]\.\.\/(hook-[a-z-]+\.mjs)['"]/g;
 
   it('the detector fires on a hook import and not on a sibling lib import', () => {
-    const fires = (s) => { HOOK_IMPORT_RE.lastIndex = 0; return HOOK_IMPORT_RE.test(s); };
+    const fires = (s) => {
+      HOOK_IMPORT_RE.lastIndex = 0;
+      return HOOK_IMPORT_RE.test(s);
+    };
     expect(fires("import { x } from '../hook-optimize.mjs';")).toBe(true);
     expect(fires("const m = await import('../hook-llm.mjs');")).toBe(true);
     expect(fires("import { y } from './observation-write.mjs';")).toBe(false);
@@ -93,8 +116,10 @@ describe('lib/ does not depend on the hook layer', () => {
   it('no lib module imports a hook-layer module at all', () => {
     const offenders = [];
     for (const f of walkShipped(join(REPO, 'lib'))) {
-      const src = readFileSync(f, 'utf8').split('\n')
-        .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
+      const src = readFileSync(f, 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
+        .join('\n');
       HOOK_IMPORT_RE.lastIndex = 0;
       for (const m of src.matchAll(HOOK_IMPORT_RE)) {
         offenders.push(`${relative(REPO, f)} -> ${m[1]}`);
@@ -106,8 +131,18 @@ describe('lib/ does not depend on the hook layer', () => {
 
 describe('upsertObservationVector behaviour', () => {
   let db;
-  beforeEach(() => { _resetVocabCache(); db = createTestDb(); });
-  afterEach(() => { _resetVocabCache(); try { db.close(); } catch { /* closed */ } });
+  beforeEach(() => {
+    _resetVocabCache();
+    db = createTestDb();
+  });
+  afterEach(() => {
+    _resetVocabCache();
+    try {
+      db.close();
+    } catch {
+      /* closed */
+    }
+  });
 
   // Via the helper, not hand-written SQL: its parameter names do NOT mirror the columns
   // (`sessionId`, not `memory_session_id`) and it returns a better-sqlite3 result, so the
@@ -121,10 +156,30 @@ describe('upsertObservationVector behaviour', () => {
   const VEC_TEXT = 'database schema migration';
   const seed = () => {
     insertSession(db, { id: 'sess-1', project: 'p' });
-    const first = insertObs(db, { sessionId: 'sess-1', project: 'p', title: 'database schema migration', narrative: 'alter table add column' });
-    insertObs(db, { sessionId: 'sess-1', project: 'p', title: 'database schema fix', narrative: 'schema migration update' });
-    insertObs(db, { sessionId: 'sess-1', project: 'p', title: 'search query optimization', narrative: 'FTS5 BM25 ranking search' });
-    insertObs(db, { sessionId: 'sess-1', project: 'p', title: 'another schema discussion', narrative: 'database migration ownership' });
+    const first = insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      title: 'database schema migration',
+      narrative: 'alter table add column',
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      title: 'database schema fix',
+      narrative: 'schema migration update',
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      title: 'search query optimization',
+      narrative: 'FTS5 BM25 ranking search',
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      title: 'another schema discussion',
+      narrative: 'database migration ownership',
+    });
     return Number(first.lastInsertRowid);
   };
   const vectorRow = (id) => db.prepare('SELECT * FROM observation_vectors WHERE observation_id = ?').get(id);
@@ -148,13 +203,18 @@ describe('upsertObservationVector behaviour', () => {
       // must JOIN ON A SPACE, and joining on anything else still writes a row. A mutation
       // to `.join('')` survived the first version of this case, which only checked that a
       // row existed.
-      expect(Buffer.compare(fromArray.vector, fromString.vector), 'array and string forms must embed identically').toBe(0);
+      expect(
+        Buffer.compare(fromArray.vector, fromString.vector),
+        'array and string forms must embed identically',
+      ).toBe(0);
 
       db.prepare('DELETE FROM observation_vectors').run();
       const row = db.prepare('SELECT * FROM observations WHERE id = ?').get(id);
       expect(upsertObservationVector(db, id, row, { vocab })).toBe(true);
       expect(vectorRow(id)).toBeTruthy();
-    } finally { delete process.env.CLAUDE_MEM_VECTORS; }
+    } finally {
+      delete process.env.CLAUDE_MEM_VECTORS;
+    }
   });
 
   it('stamps created_at_epoch from `at` when given — compress-core needs the median date', () => {
@@ -165,7 +225,9 @@ describe('upsertObservationVector behaviour', () => {
       const at = 1_600_000_000_000;
       expect(upsertObservationVector(db, id, VEC_TEXT, { vocab, at })).toBe(true);
       expect(vectorRow(id).created_at_epoch).toBe(at);
-    } finally { delete process.env.CLAUDE_MEM_VECTORS; }
+    } finally {
+      delete process.env.CLAUDE_MEM_VECTORS;
+    }
   });
 
   it('writes to created_at_epoch, not to any other column name', () => {
@@ -176,10 +238,15 @@ describe('upsertObservationVector behaviour', () => {
       const id = seed();
       const vocab = rebuildVocabulary(db);
       upsertObservationVector(db, id, VEC_TEXT, { vocab, at: 42 });
-      const cols = db.prepare('PRAGMA table_info(observation_vectors)').all().map(c => c.name);
+      const cols = db
+        .prepare('PRAGMA table_info(observation_vectors)')
+        .all()
+        .map((c) => c.name);
       expect(cols).toContain('created_at_epoch');
       expect(vectorRow(id).created_at_epoch).toBe(42);
-    } finally { delete process.env.CLAUDE_MEM_VECTORS; }
+    } finally {
+      delete process.env.CLAUDE_MEM_VECTORS;
+    }
   });
 
   it('gate:true respects CLAUDE_MEM_VECTORS, gate:false ignores it', () => {
@@ -208,11 +275,16 @@ describe('upsertObservationVector behaviour', () => {
       const id = seed();
       const vocab = rebuildVocabulary(db);
       expect(vocab, 'vocabulary must build or the failing statement is never reached').toBeTruthy();
-      expect(upsertObservationVector(db, id, VEC_TEXT, { vocab }), 'premise: the write works before we break it').toBe(true);
+      expect(
+        upsertObservationVector(db, id, VEC_TEXT, { vocab }),
+        'premise: the write works before we break it',
+      ).toBe(true);
 
       db.exec('DROP TABLE observation_vectors');
       expect(() => upsertObservationVector(db, id, VEC_TEXT, { vocab })).not.toThrow();
       expect(upsertObservationVector(db, id, VEC_TEXT, { vocab })).toBe(false);
-    } finally { delete process.env.CLAUDE_MEM_VECTORS; }
+    } finally {
+      delete process.env.CLAUDE_MEM_VECTORS;
+    }
   });
 });

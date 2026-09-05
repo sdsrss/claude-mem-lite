@@ -7,13 +7,13 @@ describe('stripPrivate', () => {
   });
 
   it('replaces multiple blocks independently (non-greedy)', () => {
-    expect(stripPrivate('a <private>x</private> b <private>y</private> c'))
-      .toBe('a [redacted] b [redacted] c');
+    expect(stripPrivate('a <private>x</private> b <private>y</private> c')).toBe(
+      'a [redacted] b [redacted] c',
+    );
   });
 
   it('handles multiline content inside the block', () => {
-    expect(stripPrivate('pre\n<private>line1\nline2\nline3</private>\npost'))
-      .toBe('pre\n[redacted]\npost');
+    expect(stripPrivate('pre\n<private>line1\nline2\nline3</private>\npost')).toBe('pre\n[redacted]\npost');
   });
 
   it('is case-insensitive on the tag name', () => {
@@ -62,8 +62,7 @@ describe('stripPrivate', () => {
   });
 
   it('preserves surrounding punctuation around the block', () => {
-    expect(stripPrivate('Compare X with <private>token123</private>.'))
-      .toBe('Compare X with [redacted].');
+    expect(stripPrivate('Compare X with <private>token123</private>.')).toBe('Compare X with [redacted].');
   });
 });
 
@@ -82,17 +81,17 @@ describe('stripPrivate — linearity and semantic equivalence', () => {
 
   it('agrees with the original regex on adversarial and nested tag arrangements', () => {
     const cases = [
-      '<private>a<private>b</private>',            // earliest opener claims the close
+      '<private>a<private>b</private>', // earliest opener claims the close
       '<private>a</private></private><private>b</private>', // stray close between blocks
       '<private></private></private>',
       '</private><private>x</private>',
       '<private>x</PRIVATE>y<PRIVATE>z</private>', // mixed case on both ends
       '<private><private><private>x</private>',
-      '<private>x</private><private>',             // trailing unclosed opener
+      '<private>x</private><private>', // trailing unclosed opener
       'no tags at all',
       '<notprivate>x</notprivate>',
-      '<private/>x</private>',                     // self-closing form matches neither tag
-      '<private >x</private>',                     // space before `>` is not a tag
+      '<private/>x</private>', // self-closing form matches neither tag
+      '<private >x</private>', // space before `>` is not a tag
       '',
       '<',
     ];
@@ -104,7 +103,7 @@ describe('stripPrivate — linearity and semantic equivalence', () => {
   it('agrees with the original regex across randomized tag soup', () => {
     // Deterministic PRNG so a failure is reproducible from the seed alone.
     let seed = 0x5eed1234;
-    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
     const pieces = ['<private>', '</private>', '<PRIVATE>', '</Private>', 'a', ' ', '\n', '<', '>', 'xy'];
     for (let iter = 0; iter < 500; iter++) {
       let s = '';
@@ -118,7 +117,7 @@ describe('stripPrivate — linearity and semantic equivalence', () => {
     // Both shapes measured 456-891ms before the rewrite. The second one exists because it
     // defeats the naive fix ("bail out when there is no closing tag") — it HAS one.
     const inputs = [
-      '<private>'.repeat(28000),                 // ~252KB, the hook stdin cap
+      '<private>'.repeat(28000), // ~252KB, the hook stdin cap
       '</private>' + '<private>'.repeat(28000),
     ];
     for (const input of inputs) {

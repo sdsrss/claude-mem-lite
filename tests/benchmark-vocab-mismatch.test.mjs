@@ -18,14 +18,14 @@ const suite = JSON.parse(readFileSync(new URL('test-queries-vocab-mismatch.json'
 
 describe('vocab-mismatch benchmark suite', () => {
   it('ground-truth integrity: every relevant_id references a real corpus obs, both tiers present', () => {
-    const ids = new Set(corpus.observations.map(o => o.id));
+    const ids = new Set(corpus.observations.map((o) => o.id));
     const bad = [];
     for (const q of suite.queries) {
       for (const id of q.relevant_ids) if (!ids.has(id)) bad.push(`${q.id}:${id}`);
     }
     expect(bad).toEqual([]);
     expect(suite.queries.length).toBeGreaterThanOrEqual(10);
-    const cats = new Set(suite.queries.map(q => q.category));
+    const cats = new Set(suite.queries.map((q) => q.category));
     expect(cats.has('vocab_mismatch_synonym')).toBe(true);
     expect(cats.has('vocab_mismatch_paraphrase')).toBe(true);
   });
@@ -47,7 +47,7 @@ describe('vocab-mismatch benchmark suite', () => {
     expect(r.metrics.recall_at_10).toBeGreaterThan(0.15);
     expect(r.metrics.recall_at_10).toBeLessThan(0.65);
     // The path actually returned ids for most queries (not a broken/empty path).
-    const nonEmpty = r.perQuery.filter(q => q.result_ids.length > 0).length;
+    const nonEmpty = r.perQuery.filter((q) => q.result_ids.length > 0).length;
     expect(nonEmpty).toBeGreaterThan(suite.queries.length / 2);
     db.close();
   });

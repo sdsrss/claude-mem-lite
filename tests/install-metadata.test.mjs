@@ -31,10 +31,12 @@ describe('install-metadata.mjs — resource metadata contract', () => {
   });
 
   it('every key is `<type>:<name>` with a known type and a non-empty name', () => {
-    const bad = entries.map(([k]) => k).filter((k) => {
-      const sep = k.indexOf(':');
-      return sep <= 0 || !KNOWN_TYPES.has(k.slice(0, sep)) || k.slice(sep + 1).length === 0;
-    });
+    const bad = entries
+      .map(([k]) => k)
+      .filter((k) => {
+        const sep = k.indexOf(':');
+        return sep <= 0 || !KNOWN_TYPES.has(k.slice(0, sep)) || k.slice(sep + 1).length === 0;
+      });
     expect(bad).toEqual([]);
   });
 
@@ -73,7 +75,9 @@ describe('install-metadata.mjs — resource metadata contract', () => {
   it('every MARKETING_ON_REQUEST key exists and was flipped to on_request at load', () => {
     const missing = [...MARKETING_ON_REQUEST].filter((k) => !RESOURCE_METADATA[k]);
     expect(missing).toEqual([]);
-    const notFlipped = [...MARKETING_ON_REQUEST].filter((k) => RESOURCE_METADATA[k]?.recommendation_mode !== 'on_request');
+    const notFlipped = [...MARKETING_ON_REQUEST].filter(
+      (k) => RESOURCE_METADATA[k]?.recommendation_mode !== 'on_request',
+    );
     expect(notFlipped).toEqual([]);
   });
 

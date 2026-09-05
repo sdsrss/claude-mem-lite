@@ -30,7 +30,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '../..');
 const KEEP = process.argv.includes('--keep'); // leave the workdir for debugging
 const log = (m) => process.stdout.write(`[smoke] ${m}\n`);
-const fail = (m) => { process.stderr.write(`[smoke] FAIL: ${m}\n`); process.exit(1); };
+const fail = (m) => {
+  process.stderr.write(`[smoke] FAIL: ${m}\n`);
+  process.exit(1);
+};
 
 // Run a command; inherit stderr so npm/native build errors stay visible, capture
 // stdout for assertions. Throws (non-zero exit) propagate as a failed smoke run.
@@ -56,8 +59,8 @@ try {
   // canonical pack name (scope '@' dropped, '/' → '-').
   const packOut = JSON.parse(packJson);
   const packInfo = Array.isArray(packOut) ? packOut[0] : Object.values(packOut)[0];
-  const packName = packInfo.filename
-    || `${packInfo.name.replace(/^@/, '').replace(/\//g, '-')}-${packInfo.version}.tgz`;
+  const packName =
+    packInfo.filename || `${packInfo.name.replace(/^@/, '').replace(/\//g, '-')}-${packInfo.version}.tgz`;
   const tgz = join(work, packName);
   log(`packed ${packName}`);
 
@@ -70,7 +73,9 @@ try {
   if (existsSync(join(REPO_ROOT, 'npm-shrinkwrap.json'))) {
     const entries = sh('tar', ['-tzf', tgz]);
     if (!entries.includes('package/npm-shrinkwrap.json')) {
-      fail('repo has npm-shrinkwrap.json but the packed tarball does not — packlist dropped it (files[] entry missing?)');
+      fail(
+        'repo has npm-shrinkwrap.json but the packed tarball does not — packlist dropped it (files[] entry missing?)',
+      );
     }
     log('shrinkwrap OK — npm-shrinkwrap.json is in the tarball');
   }
@@ -111,29 +116,40 @@ try {
   //     the block stops happening, the job fails loudly rather than silently
   //     testing nothing.
   const probe = join(work, 'probe.mjs');
-  writeFileSync(probe, [
-    "import { createRequire } from 'node:module';",
-    `const require = createRequire(${JSON.stringify(join(installDir, 'package.json'))});`,
-    "const Database = require('better-sqlite3');",
-    "const db = new Database(':memory:');",
-    "db.exec('CREATE TABLE t(x)'); db.prepare('INSERT INTO t VALUES (1)').run();",
-    "const n = db.prepare('SELECT count(*) AS c FROM t').get().c; db.close();",
-    "if (n !== 1) { console.error('bad count', n); process.exit(3); }",
-    "process.stdout.write('native-ok');",
-  ].join('\n'));
+  writeFileSync(
+    probe,
+    [
+      "import { createRequire } from 'node:module';",
+      `const require = createRequire(${JSON.stringify(join(installDir, 'package.json'))});`,
+      "const Database = require('better-sqlite3');",
+      "const db = new Database(':memory:');",
+      "db.exec('CREATE TABLE t(x)'); db.prepare('INSERT INTO t VALUES (1)').run();",
+      "const n = db.prepare('SELECT count(*) AS c FROM t').get().c; db.close();",
+      "if (n !== 1) { console.error('bad count', n); process.exit(3); }",
+      "process.stdout.write('native-ok');",
+    ].join('\n'),
+  );
   // Unlike sh(), the probe swallows stderr: its FIRST run is EXPECTED to fail
   // under the npm >= 12 block, and an expected failure should not dump a full
   // Node error stack into the smoke log.
   const tryProbe = () => {
     try {
-      return execFileSync('node', [probe], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: installDir,
-      }) === 'native-ok';
-    } catch { return false; }
+      return (
+        execFileSync('node', [probe], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          cwd: installDir,
+        }) === 'native-ok'
+      );
+    } catch {
+      return false;
+    }
   };
   let healed = false;
   if (!tryProbe()) {
-    log('binding unusable after npm install (npm >= 12 script block or ABI drift) — exercising the shipped heal …');
+    log(
+      'binding unusable after npm install (npm >= 12 script block or ABI drift) — exercising the shipped heal …',
+    );
     const healSrc = [
       `const m = await import(${JSON.stringify(pathToFileURL(join(installDir, 'node_modules', 'claude-mem-lite', 'lib', 'binding-probe.mjs')).href)});`,
       `const r = await m.ensureBetterSqlite3Working(${JSON.stringify(installDir)});`,
@@ -145,9 +161,13 @@ try {
     healed = true;
     log(`heal OK — ensureBetterSqlite3Working reported "${action}", re-probe passed`);
   } else if (expectBlock) {
-    fail('SMOKE_EXPECT_SCRIPT_BLOCK=1 but the binding compiled on plain npm install — the script block did not occur, so the heal path was NOT exercised. npm default changed or the runner pre-allows scripts; update the CI job.');
+    fail(
+      'SMOKE_EXPECT_SCRIPT_BLOCK=1 but the binding compiled on plain npm install — the script block did not occur, so the heal path was NOT exercised. npm default changed or the runner pre-allows scripts; update the CI job.',
+    );
   }
-  log(`native OK — better-sqlite3 opened :memory: and round-tripped a row${healed ? ' (via shipped heal)' : ''}`);
+  log(
+    `native OK — better-sqlite3 opened :memory: and round-tripped a row${healed ? ' (via shipped heal)' : ''}`,
+  );
 
   // 3c. Full runtime path: real import chain → schema init → DB open → query,
   //     against a fresh sandboxed data dir. `stats` reads the DB and exits 0 on

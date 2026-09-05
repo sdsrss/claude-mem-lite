@@ -8,9 +8,19 @@ import { describe, test, expect } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
 import {
-  cleanupBroken, decayAndMarkIdle, boostAccessed, demotePinned,
-  mergeDuplicates, purgeStale, purgeStalePreview, recoverChildrenOf, recoverOrphanedChildren,
-  recoverBuriedLessons, selectFuzzyDedupeIds, maintenanceStats, hardDeleteCandidateCount,
+  cleanupBroken,
+  decayAndMarkIdle,
+  boostAccessed,
+  demotePinned,
+  mergeDuplicates,
+  purgeStale,
+  purgeStalePreview,
+  recoverChildrenOf,
+  recoverOrphanedChildren,
+  recoverBuriedLessons,
+  selectFuzzyDedupeIds,
+  maintenanceStats,
+  hardDeleteCandidateCount,
   sweepDeferredWorkOrphans,
 } from '../lib/maintain-core.mjs';
 
@@ -18,7 +28,8 @@ const DAY = 86400000;
 const OLD = -40 * DAY; // past the 30-day stale gate
 const ctx = (staleAge) => ({ projectFilter: '', baseParams: [], staleAge, opCap: 1000 });
 const get = (db, id, col) => db.prepare(`SELECT ${col} AS v FROM observations WHERE id = ?`).get(id).v;
-const add = (db, o) => Number(insertObs(db, { sessionId: 'sess-1', project: 'proj-a', epochOffset: OLD, ...o }).lastInsertRowid);
+const add = (db, o) =>
+  Number(insertObs(db, { sessionId: 'sess-1', project: 'proj-a', epochOffset: OLD, ...o }).lastInsertRowid);
 
 function freshDb() {
   const db = createTestDb();
@@ -29,9 +40,9 @@ function freshDb() {
 describe('hardDeleteCandidateCount (MED-2 pre-maintenance snapshot guard)', () => {
   test('counts pending-purge and/or broken rows per selected ops; 0 when none', () => {
     const db = freshDb();
-    add(db, { title: 'live' });                                          // neither
+    add(db, { title: 'live' }); // neither
     add(db, { title: 'doomed', compressedInto: COMPRESSED_PENDING_PURGE }); // purge candidate
-    add(db, { title: '', narrative: '' });                              // broken candidate
+    add(db, { title: '', narrative: '' }); // broken candidate
 
     expect(hardDeleteCandidateCount(db, ctx(), { purge: true })).toBe(1);
     expect(hardDeleteCandidateCount(db, ctx(), { cleanup: true })).toBe(1);
@@ -52,17 +63,17 @@ describe('recoverOrphanedChildren (self-heal legacy orphans — keeper deleted p
   test('resurfaces children whose keeper no longer exists; leaves valid keepers + negative sentinels alone', () => {
     const db = freshDb();
     const keeper = add(db, { title: 'live keeper' });
-    const validChild = add(db, { title: 'valid child', compressedInto: keeper });    // keeper exists → stay hidden
-    const orphan = add(db, { title: 'orphaned child', compressedInto: 88888 });       // keeper gone → resurface
-    const autoMarked = add(db, { title: 'auto', compressedInto: -1 });                // COMPRESSED_AUTO sentinel
+    const validChild = add(db, { title: 'valid child', compressedInto: keeper }); // keeper exists → stay hidden
+    const orphan = add(db, { title: 'orphaned child', compressedInto: 88888 }); // keeper gone → resurface
+    const autoMarked = add(db, { title: 'auto', compressedInto: -1 }); // COMPRESSED_AUTO sentinel
     const pendingPurge = add(db, { title: 'pending', compressedInto: COMPRESSED_PENDING_PURGE }); // -2 sentinel
 
     const recovered = recoverOrphanedChildren(db, ctx());
 
-    expect(recovered).toBe(1);                                       // only the orphan
-    expect(get(db, orphan, 'compressed_into')).toBeNull();           // resurfaced to live
-    expect(get(db, validChild, 'compressed_into')).toBe(keeper);     // untouched (keeper exists)
-    expect(get(db, autoMarked, 'compressed_into')).toBe(-1);         // sentinel untouched
+    expect(recovered).toBe(1); // only the orphan
+    expect(get(db, orphan, 'compressed_into')).toBeNull(); // resurfaced to live
+    expect(get(db, validChild, 'compressed_into')).toBe(keeper); // untouched (keeper exists)
+    expect(get(db, autoMarked, 'compressed_into')).toBe(-1); // sentinel untouched
     expect(get(db, pendingPurge, 'compressed_into')).toBe(COMPRESSED_PENDING_PURGE); // sentinel untouched
     db.close();
   });
@@ -79,8 +90,19 @@ describe('recoverOrphanedChildren (self-heal legacy orphans — keeper deleted p
     const db = freshDb();
     insertSession(db, { id: 'sess-b', project: 'proj-b' });
     add(db, { title: 'orphan a', compressedInto: 66666 }); // proj-a (add default)
-    Number(insertObs(db, { sessionId: 'sess-b', project: 'proj-b', epochOffset: OLD, title: 'orphan b', compressedInto: 55555 }).lastInsertRowid);
-    const recovered = recoverOrphanedChildren(db, { projectFilter: 'AND project = ?', baseParams: ['proj-a'] });
+    Number(
+      insertObs(db, {
+        sessionId: 'sess-b',
+        project: 'proj-b',
+        epochOffset: OLD,
+        title: 'orphan b',
+        compressedInto: 55555,
+      }).lastInsertRowid,
+    );
+    const recovered = recoverOrphanedChildren(db, {
+      projectFilter: 'AND project = ?',
+      baseParams: ['proj-a'],
+    });
     expect(recovered).toBe(1); // only the proj-a orphan
     db.close();
   });
@@ -93,13 +115,25 @@ describe('sweepDeferredWorkOrphans (P3-5: heal FK orphans left by FK-OFF deletes
   // firing (createTestDb runs FK ON, which would otherwise reject a dangling ref at insert time).
   const addDefer = (db, o) => {
     db.pragma('foreign_keys = OFF');
-    const id = Number(db.prepare(`
+    const id = Number(
+      db
+        .prepare(
+          `
       INSERT INTO deferred_work (project, title, status, created_at_epoch, closed_at_epoch, closed_by_obs_id, source_prompt_id)
       VALUES (@project, @title, @status, @created_at_epoch, @closed_at_epoch, @closed_by_obs_id, @source_prompt_id)
-    `).run({
-      project: 'proj-a', title: 't', status: 'open', created_at_epoch: 1,
-      closed_at_epoch: null, closed_by_obs_id: null, source_prompt_id: null, ...o,
-    }).lastInsertRowid);
+    `,
+        )
+        .run({
+          project: 'proj-a',
+          title: 't',
+          status: 'open',
+          created_at_epoch: 1,
+          closed_at_epoch: null,
+          closed_by_obs_id: null,
+          source_prompt_id: null,
+          ...o,
+        }).lastInsertRowid,
+    );
     db.pragma('foreign_keys = ON');
     return id;
   };
@@ -110,16 +144,16 @@ describe('sweepDeferredWorkOrphans (P3-5: heal FK orphans left by FK-OFF deletes
     const liveObs = add(db, { title: 'live obs' });
     const valid = addDefer(db, { status: 'done', closed_at_epoch: 5, closed_by_obs_id: liveObs }); // obs exists → keep
     const orphanObs = addDefer(db, { status: 'done', closed_at_epoch: 6, closed_by_obs_id: 99999 }); // obs gone → null
-    const orphanPrompt = addDefer(db, { source_prompt_id: 88888 });                                  // prompt gone → null
+    const orphanPrompt = addDefer(db, { source_prompt_id: 88888 }); // prompt gone → null
 
     const healed = sweepDeferredWorkOrphans(db, ctx());
 
-    expect(healed).toBe(2);                                        // two dangling refs
-    expect(defer(db, orphanObs, 'closed_by_obs_id')).toBeNull();  // dangling ref dropped
-    expect(defer(db, orphanObs, 'status')).toBe('done');          // closure NOT reopened
-    expect(defer(db, orphanObs, 'closed_at_epoch')).toBe(6);      // closed_at preserved
+    expect(healed).toBe(2); // two dangling refs
+    expect(defer(db, orphanObs, 'closed_by_obs_id')).toBeNull(); // dangling ref dropped
+    expect(defer(db, orphanObs, 'status')).toBe('done'); // closure NOT reopened
+    expect(defer(db, orphanObs, 'closed_at_epoch')).toBe(6); // closed_at preserved
     expect(defer(db, orphanPrompt, 'source_prompt_id')).toBeNull();
-    expect(defer(db, valid, 'closed_by_obs_id')).toBe(liveObs);   // valid ref untouched
+    expect(defer(db, valid, 'closed_by_obs_id')).toBe(liveObs); // valid ref untouched
     db.close();
   });
 
@@ -135,7 +169,9 @@ describe('sweepDeferredWorkOrphans (P3-5: heal FK orphans left by FK-OFF deletes
     const db = freshDb();
     addDefer(db, { project: 'proj-a', closed_by_obs_id: 66666 });
     addDefer(db, { project: 'proj-b', closed_by_obs_id: 55555 });
-    expect(sweepDeferredWorkOrphans(db, { projectFilter: 'AND project = ?', baseParams: ['proj-a'] })).toBe(1);
+    expect(sweepDeferredWorkOrphans(db, { projectFilter: 'AND project = ?', baseParams: ['proj-a'] })).toBe(
+      1,
+    );
     db.close();
   });
 });
@@ -143,18 +179,28 @@ describe('sweepDeferredWorkOrphans (P3-5: heal FK orphans left by FK-OFF deletes
 describe('recoverBuriedLessons (heal lesson rows citation-decay buried at importance 0)', () => {
   test('lifts a lesson-bearing imp-0 row to 1; leaves non-lesson imp-0 + higher-imp rows alone', () => {
     const db = freshDb();
-    const buriedLesson = add(db, { title: 'buried', importance: 0, lessonLearned: 'root cause + fix', injectionCount: 5 });
-    const buriedNoise  = add(db, { title: 'noise', importance: 0, lessonLearned: null, injectionCount: 5 });
-    const noneLesson   = add(db, { title: 'none-str', importance: 0, lessonLearned: 'none', injectionCount: 5 });
-    const liveLesson   = add(db, { title: 'live', importance: 2, lessonLearned: 'still useful' });
+    const buriedLesson = add(db, {
+      title: 'buried',
+      importance: 0,
+      lessonLearned: 'root cause + fix',
+      injectionCount: 5,
+    });
+    const buriedNoise = add(db, { title: 'noise', importance: 0, lessonLearned: null, injectionCount: 5 });
+    const noneLesson = add(db, {
+      title: 'none-str',
+      importance: 0,
+      lessonLearned: 'none',
+      injectionCount: 5,
+    });
+    const liveLesson = add(db, { title: 'live', importance: 2, lessonLearned: 'still useful' });
 
     const healed = recoverBuriedLessons(db, ctx());
 
-    expect(healed).toBe(1);                       // only the buried lesson row
+    expect(healed).toBe(1); // only the buried lesson row
     expect(get(db, buriedLesson, 'importance')).toBe(1);
-    expect(get(db, buriedNoise, 'importance')).toBe(0);   // non-lesson exhaust stays buried
-    expect(get(db, noneLesson, 'importance')).toBe(0);    // literal 'none' is not a lesson
-    expect(get(db, liveLesson, 'importance')).toBe(2);    // untouched
+    expect(get(db, buriedNoise, 'importance')).toBe(0); // non-lesson exhaust stays buried
+    expect(get(db, noneLesson, 'importance')).toBe(0); // literal 'none' is not a lesson
+    expect(get(db, liveLesson, 'importance')).toBe(2); // untouched
     db.close();
   });
 
@@ -168,7 +214,12 @@ describe('recoverBuriedLessons (heal lesson rows citation-decay buried at import
 
   test('never un-hides a compressed row (compressed_into set) even if it carries a lesson', () => {
     const db = freshDb();
-    const hidden = add(db, { title: 'compressed', importance: 0, lessonLearned: 'fix', compressedInto: COMPRESSED_PENDING_PURGE });
+    const hidden = add(db, {
+      title: 'compressed',
+      importance: 0,
+      lessonLearned: 'fix',
+      compressedInto: COMPRESSED_PENDING_PURGE,
+    });
     expect(recoverBuriedLessons(db, ctx())).toBe(0);
     expect(get(db, hidden, 'importance')).toBe(0);
     db.close();
@@ -179,7 +230,12 @@ describe('recoverBuriedLessons (heal lesson rows citation-decay buried at import
     // alone would miss it. The injection surfaces filter superseded_at IS NULL; this must too,
     // or a superseded duplicate gets re-injected via user-prompt-search after healing.
     const db = freshDb();
-    const superseded = add(db, { title: 'de-dup loser', importance: 0, lessonLearned: 'fix', supersededAt: Date.now() });
+    const superseded = add(db, {
+      title: 'de-dup loser',
+      importance: 0,
+      lessonLearned: 'fix',
+      supersededAt: Date.now(),
+    });
     expect(recoverBuriedLessons(db, ctx())).toBe(0);
     expect(get(db, superseded, 'importance')).toBe(0);
     db.close();
@@ -189,7 +245,16 @@ describe('recoverBuriedLessons (heal lesson rows citation-decay buried at import
     const db = freshDb();
     add(db, { title: 'lesson a', importance: 0, lessonLearned: 'fix', injectionCount: 2 }); // proj-a (add default)
     insertSession(db, { id: 'sess-b', project: 'proj-b' });
-    Number(insertObs(db, { sessionId: 'sess-b', project: 'proj-b', title: 'lesson b', importance: 0, lessonLearned: 'fix', injectionCount: 2 }).lastInsertRowid);
+    Number(
+      insertObs(db, {
+        sessionId: 'sess-b',
+        project: 'proj-b',
+        title: 'lesson b',
+        importance: 0,
+        lessonLearned: 'fix',
+        injectionCount: 2,
+      }).lastInsertRowid,
+    );
     const healed = recoverBuriedLessons(db, { projectFilter: 'AND project = ?', baseParams: ['proj-a'] });
     expect(healed).toBe(1); // only the proj-a lesson
     db.close();
@@ -237,17 +302,17 @@ describe('decayAndMarkIdle (injection protection — the drift fix)', () => {
   test('protects injected rows; decays/marks only never-injected stale rows', () => {
     const db = freshDb();
     const A = add(db, { title: 'injected imp2', importance: 2, injectionCount: 8 }); // protected from decay
-    const B = add(db, { title: 'stale imp3', importance: 3, injectionCount: 0 });    // decays 3->2
+    const B = add(db, { title: 'stale imp3', importance: 3, injectionCount: 0 }); // decays 3->2
     const C = add(db, { title: 'injected imp1', importance: 1, injectionCount: 8 }); // protected from mark-idle
-    const D = add(db, { title: 'idle imp1', importance: 1, injectionCount: 0 });     // marked pending-purge
+    const D = add(db, { title: 'idle imp1', importance: 1, injectionCount: 0 }); // marked pending-purge
 
     const { decayed, idleMarked } = decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY));
 
     expect(decayed).toBe(1);
     expect(idleMarked).toBe(1);
-    expect(get(db, A, 'importance')).toBe(2);                  // injection protected
-    expect(get(db, B, 'importance')).toBe(2);                  // decayed 3->2
-    expect(get(db, C, 'compressed_into')).toBeNull();          // injection protected
+    expect(get(db, A, 'importance')).toBe(2); // injection protected
+    expect(get(db, B, 'importance')).toBe(2); // decayed 3->2
+    expect(get(db, C, 'compressed_into')).toBeNull(); // injection protected
     expect(get(db, D, 'compressed_into')).toBe(COMPRESSED_PENDING_PURGE);
   });
 
@@ -262,23 +327,28 @@ describe('decayAndMarkIdle (injection protection — the drift fix)', () => {
 
     const { decayed, idleMarked } = decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY));
 
-    expect(decayed).toBe(1);    // the imp-2 row stepped down
+    expect(decayed).toBe(1); // the imp-2 row stepped down
     expect(idleMarked).toBe(1); // ONLY the pre-existing imp-1, not the freshly-decayed one
-    expect(get(db, two, 'importance')).toBe(1);                  // decayed 2->1
-    expect(get(db, two, 'compressed_into')).toBeNull();          // NOT marked this pass (grace cycle)
+    expect(get(db, two, 'importance')).toBe(1); // decayed 2->1
+    expect(get(db, two, 'compressed_into')).toBeNull(); // NOT marked this pass (grace cycle)
     expect(get(db, one, 'compressed_into')).toBe(COMPRESSED_PENDING_PURGE);
   });
 
   test('v3.23: never marks a lesson-bearing imp-1 row idle — lessons are not auto-GC-able', () => {
     const db = freshDb();
     const noLesson = add(db, { title: 'idle no lesson', importance: 1, injectionCount: 0 });
-    const withLesson = add(db, { title: 'idle but has lesson', importance: 1, injectionCount: 0, lessonLearned: 'strip the query string before parsing the branch name' });
+    const withLesson = add(db, {
+      title: 'idle but has lesson',
+      importance: 1,
+      injectionCount: 0,
+      lessonLearned: 'strip the query string before parsing the branch name',
+    });
 
     const { idleMarked } = decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY));
 
-    expect(idleMarked).toBe(1);                                          // only the no-lesson row
+    expect(idleMarked).toBe(1); // only the no-lesson row
     expect(get(db, noLesson, 'compressed_into')).toBe(COMPRESSED_PENDING_PURGE);
-    expect(get(db, withLesson, 'compressed_into')).toBeNull();          // lesson protected from purge
+    expect(get(db, withLesson, 'compressed_into')).toBeNull(); // lesson protected from purge
   });
 });
 
@@ -292,7 +362,7 @@ describe('maintenanceStats (scan preview must match what execute does)', () => {
   test('stale count excludes injection-protected rows (parity with decay mark-idle)', () => {
     const db = freshDb();
     add(db, { title: 'idle never injected', importance: 1, injectionCount: 0 }); // decay marks idle → stale
-    add(db, { title: 'idle but injected', importance: 1, injectionCount: 8 });   // decay PROTECTS → not stale
+    add(db, { title: 'idle but injected', importance: 1, injectionCount: 8 }); // decay PROTECTS → not stale
 
     const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
     expect(stats.stale).toBe(1); // only the never-injected row (was 2 pre-fix)
@@ -307,14 +377,14 @@ describe('maintenanceStats (scan preview must match what execute does)', () => {
     // cleanupBroken (:153) refuse to touch a lesson-bearing row ("lessons never auto-GC"),
     // but the scan stat counted them → "Stale: N"/"Broken: N" over-forecast what execute does.
     const db = freshDb();
-    add(db, { title: 'stale plain', importance: 1, injectionCount: 0 });                                // decay marks idle → stale
-    add(db, { title: 'stale w/ lesson', importance: 1, injectionCount: 0, lessonLearned: 'keep me' });  // decay PROTECTS → not stale
+    add(db, { title: 'stale plain', importance: 1, injectionCount: 0 }); // decay marks idle → stale
+    add(db, { title: 'stale w/ lesson', importance: 1, injectionCount: 0, lessonLearned: 'keep me' }); // decay PROTECTS → not stale
     // importance:2 keeps these out of the stale bucket (imp=1) so they isolate the broken stat.
-    add(db, { title: '', narrative: '', importance: 2 });                                               // cleanup deletes → broken
-    add(db, { title: '', narrative: '', importance: 2, lessonLearned: 'synthesized lesson' });          // cleanup PROTECTS → not broken
+    add(db, { title: '', narrative: '', importance: 2 }); // cleanup deletes → broken
+    add(db, { title: '', narrative: '', importance: 2, lessonLearned: 'synthesized lesson' }); // cleanup PROTECTS → not broken
 
     const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
-    expect(stats.stale).toBe(1);  // only the lesson-less stale row (was 2 pre-fix)
+    expect(stats.stale).toBe(1); // only the lesson-less stale row (was 2 pre-fix)
     expect(stats.broken).toBe(1); // only the lesson-less broken row (was 2 pre-fix)
 
     // Parity: scan forecast == what execute actually touches.
@@ -390,7 +460,10 @@ describe('execute ops', () => {
     const A = add(db, { title: 'A keeper' });
     const B = add(db, { title: 'B dup of A' });
     const C = add(db, { title: 'C dup of B' });
-    mergeDuplicates(db, [[A, B], [B, C]]);
+    mergeDuplicates(db, [
+      [A, B],
+      [B, C],
+    ]);
     // A survives live; B and C collapse DIRECTLY onto the single live keeper A.
     // Pre-fix C->B (the hidden middle): if B is later purgeStale-deleted, C's keeper
     // vanishes and C is unrecoverable. Direct C->A keeps C safe under later purges.
@@ -403,7 +476,10 @@ describe('execute ops', () => {
     const db = freshDb();
     const A = add(db, { title: 'A' });
     const B = add(db, { title: 'B' });
-    mergeDuplicates(db, [[A, B], [B, A]]);
+    mergeDuplicates(db, [
+      [A, B],
+      [B, A],
+    ]);
     const aLive = get(db, A, 'compressed_into') === null;
     const bLive = get(db, B, 'compressed_into') === null;
     expect(aLive !== bLive, 'exactly one of A/B must remain live').toBe(true); // pre-fix: BOTH hidden
@@ -417,8 +493,8 @@ describe('execute ops', () => {
     const D = add(db, { title: 'D keeper' });
     const E = add(db, { title: 'E dup of D' });
     const F = add(db, { title: 'F dup of E' });
-    mergeDuplicates(db, [[D, E]]);          // E now hidden into D
-    mergeDuplicates(db, [[E, F]]);          // keeper E is hidden -> must NOT orphan F
+    mergeDuplicates(db, [[D, E]]); // E now hidden into D
+    mergeDuplicates(db, [[E, F]]); // keeper E is hidden -> must NOT orphan F
     expect(get(db, F, 'compressed_into')).toBeNull(); // F stays live (pre-fix: F->E hidden)
   });
 
@@ -437,11 +513,14 @@ describe('execute ops', () => {
   test('purgeStale recovers children of a purged keeper instead of orphaning them', () => {
     const db = freshDb();
     // A keeper that absorbed a dup, later marked idle (compressed_into=PENDING_PURGE).
-    const keeper = add(db, { title: 'idle keeper marked for purge', compressedInto: COMPRESSED_PENDING_PURGE });
+    const keeper = add(db, {
+      title: 'idle keeper marked for purge',
+      compressedInto: COMPRESSED_PENDING_PURGE,
+    });
     const child = add(db, { title: 'dup merged into the keeper', compressedInto: keeper });
     expect(purgeStale(db, ctx(0), Date.now() - 30 * DAY)).toBe(1); // keeper deleted
     expect(exists(db, keeper)).toBe(0);
-    expect(exists(db, child)).toBe(1);                  // child survives (pre-fix: orphaned)
+    expect(exists(db, child)).toBe(1); // child survives (pre-fix: orphaned)
     expect(get(db, child, 'compressed_into')).toBeNull(); // recovered: un-hidden, reachable again
   });
 
@@ -449,9 +528,9 @@ describe('execute ops', () => {
     const db = freshDb();
     const emptyKeeper = add(db, { title: '', narrative: '' }); // empty-content but a cluster keeper
     const child = add(db, { title: 'dup merged into empty keeper', compressedInto: emptyKeeper });
-    expect(cleanupBroken(db, ctx(0))).toBe(1);          // empty keeper deleted
+    expect(cleanupBroken(db, ctx(0))).toBe(1); // empty keeper deleted
     expect(exists(db, emptyKeeper)).toBe(0);
-    expect(exists(db, child)).toBe(1);                  // child survives (pre-fix: orphaned)
+    expect(exists(db, child)).toBe(1); // child survives (pre-fix: orphaned)
     expect(get(db, child, 'compressed_into')).toBeNull();
   });
 });

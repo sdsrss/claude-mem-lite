@@ -31,22 +31,78 @@ beforeAll(() => {
   // ratio banding is meaningless — production tables hold thousands of rows on
   // each leg. 12 unrelated rows per table is enough to restore stable IDF.
   for (let i = 0; i < 12; i++) {
-    insE.run('test', 'feature', `background event ${i} shipping widget ${i}`, `assorted release notes entry ${i} for the widget pipeline`, 1, Date.now() - 50000 - i * 1000);
-    insertObs(db, { sessionId: 'xs-1', type: 'discovery', title: `background obs ${i} widget housekeeping`, text: `regular housekeeping entry ${i} covering widget chores and small tweaks`, importance: 1, epochOffset: -60000 - i * 1000 });
+    insE.run(
+      'test',
+      'feature',
+      `background event ${i} shipping widget ${i}`,
+      `assorted release notes entry ${i} for the widget pipeline`,
+      1,
+      Date.now() - 50000 - i * 1000,
+    );
+    insertObs(db, {
+      sessionId: 'xs-1',
+      type: 'discovery',
+      title: `background obs ${i} widget housekeeping`,
+      text: `regular housekeeping entry ${i} covering widget chores and small tweaks`,
+      importance: 1,
+      epochOffset: -60000 - i * 1000,
+    });
   }
 
   // ── Scenario A (MED-1): the best answer is ONE event; obs only graze the keyword.
   // Event: exact title hit on "zephyrlock" (EVT_BM25 title weight 5).
-  insE.run('test', 'bugfix', 'zephyrlock deadlock root cause and fix', 'zephyrlock mutex ordering fixed by lock hierarchy', 2, Date.now() - 1000);
+  insE.run(
+    'test',
+    'bugfix',
+    'zephyrlock deadlock root cause and fix',
+    'zephyrlock mutex ordering fixed by lock hierarchy',
+    2,
+    Date.now() - 1000,
+  );
   // Obs: body-only incidental mentions (weak raw BM25), ≥2 rows so the source is
   // multi-hit and its best is pinned to -1 by within-source normalization.
-  insertObs(db, { sessionId: 'xs-1', type: 'discovery', title: 'unrelated refactor notes', text: 'touched the queue near the zephyrlock call site', importance: 1, epochOffset: -2000 });
-  insertObs(db, { sessionId: 'xs-1', type: 'discovery', title: 'weekly cleanup log', text: 'saw zephyrlock mentioned in a comment', importance: 1, epochOffset: -3000 });
+  insertObs(db, {
+    sessionId: 'xs-1',
+    type: 'discovery',
+    title: 'unrelated refactor notes',
+    text: 'touched the queue near the zephyrlock call site',
+    importance: 1,
+    epochOffset: -2000,
+  });
+  insertObs(db, {
+    sessionId: 'xs-1',
+    type: 'discovery',
+    title: 'weekly cleanup log',
+    text: 'saw zephyrlock mentioned in a comment',
+    importance: 1,
+    epochOffset: -3000,
+  });
 
   // ── Scenario B (MED-5 preserved): strong obs page; ONE incidental event.
-  insertObs(db, { sessionId: 'xs-1', type: 'bugfix', title: 'quartzgate race fixed in scheduler', text: 'quartzgate race condition eliminated with barrier', importance: 3, epochOffset: -1500 });
-  insertObs(db, { sessionId: 'xs-1', type: 'bugfix', title: 'quartzgate follow-up: barrier ordering', text: 'quartzgate barrier order hardened', importance: 2, epochOffset: -2500 });
-  insE.run('test', 'refactor', 'sprint retro notes', 'one attendee mentioned quartzgate in passing', 1, Date.now() - 3500);
+  insertObs(db, {
+    sessionId: 'xs-1',
+    type: 'bugfix',
+    title: 'quartzgate race fixed in scheduler',
+    text: 'quartzgate race condition eliminated with barrier',
+    importance: 3,
+    epochOffset: -1500,
+  });
+  insertObs(db, {
+    sessionId: 'xs-1',
+    type: 'bugfix',
+    title: 'quartzgate follow-up: barrier ordering',
+    text: 'quartzgate barrier order hardened',
+    importance: 2,
+    epochOffset: -2500,
+  });
+  insE.run(
+    'test',
+    'refactor',
+    'sprint retro notes',
+    'one attendee mentioned quartzgate in passing',
+    1,
+    Date.now() - 3500,
+  );
 });
 
 async function search(query) {
@@ -64,8 +120,8 @@ describe('cross-source ranking direction (real pipeline)', () => {
   test('MED-5 preserved: an incidental lone event stays below a strong obs page', async () => {
     const rows = await search('quartzgate');
     expect(rows.length).toBeGreaterThanOrEqual(3);
-    expect(rows[0].source).toBe('obs');   // strong obs page leads
+    expect(rows[0].source).toBe('obs'); // strong obs page leads
     const eventIdx = rows.findIndex((r) => r.source === 'event');
-    expect(eventIdx).toBeGreaterThan(0);  // the passing mention does not take the top slot
+    expect(eventIdx).toBeGreaterThan(0); // the passing mention does not take the top slot
   });
 });

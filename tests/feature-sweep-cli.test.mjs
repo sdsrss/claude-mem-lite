@@ -49,10 +49,34 @@ const REPO_CLAUDE_MD = join(REPO, 'CLAUDE.md');
 //       to this array would go green with zero coverage for `foo`; with it, the only
 //       way to green is an `itCmd('foo', …)` case that really drives the command.
 const EXPECTED_CLI_COMMANDS = [
-  'search', 'recent', 'recall', 'get', 'timeline', 'save', 'stats', 'context',
-  'browse', 'citation-stats', 'delete', 'update', 'export', 'restore', 'compress',
-  'maintain', 'optimize', 'fts-check', 'registry', 'import', 'import-jsonl',
-  'enrich', 'activity', 'adopt', 'unadopt', 'memdir-audit', 'defer', 'help',
+  'search',
+  'recent',
+  'recall',
+  'get',
+  'timeline',
+  'save',
+  'stats',
+  'context',
+  'browse',
+  'citation-stats',
+  'delete',
+  'update',
+  'export',
+  'restore',
+  'compress',
+  'maintain',
+  'optimize',
+  'fts-check',
+  'registry',
+  'import',
+  'import-jsonl',
+  'enrich',
+  'activity',
+  'adopt',
+  'unadopt',
+  'memdir-audit',
+  'defer',
+  'help',
 ];
 
 // Every per-command case registers through itCmd so the coverage guard reads the
@@ -77,7 +101,11 @@ function runCli(args, { cwd = WORK_DIR, env = {} } = {}) {
   for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
   try {
     const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
-      cwd, env: merged, encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd,
+      env: merged,
+      encoding: 'utf8',
+      timeout: 20000,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (e) {
@@ -92,7 +120,10 @@ function runCli(args, { cwd = WORK_DIR, env = {} } = {}) {
 /** Run and require exit 0, surfacing stderr in the failure message. */
 function ok(args, opts) {
   const r = runCli(args, opts);
-  expect(r.exitCode, `\`${args.join(' ')}\` exited ${r.exitCode}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`).toBe(0);
+  expect(
+    r.exitCode,
+    `\`${args.join(' ')}\` exited ${r.exitCode}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
+  ).toBe(0);
   return r;
 }
 
@@ -101,14 +132,23 @@ const jsonOf = (r) => JSON.parse(r.stdout);
 /** Open the sandbox DB read-only-ish for independent verification of writes. */
 function withDb(fn) {
   const db = new Database(join(DATA_DIR, 'claude-mem-lite.db'));
-  try { return fn(db); } finally { try { db.close(); } catch { /* already closed */ } }
+  try {
+    return fn(db);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
 /** Backdate every row of a project so age-gated commands (compress/maintain) engage. */
 function ageProject(project, days) {
   return withDb((db) => {
     const epoch = Date.now() - days * 86400000;
-    return db.prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
+    return db
+      .prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
       .run(epoch, new Date(epoch).toISOString(), project).changes;
   });
 }
@@ -121,11 +161,35 @@ const savedId = (r) => {
 
 /** Write a minimal but real Claude Code transcript (prompt + tool_use + tool_result). */
 function writeTranscript(path, sessionId) {
-  writeFileSync(path, [
-    JSON.stringify({ type: 'user', sessionId, timestamp: '2026-08-01T10:00:00.000Z', message: { role: 'user', content: 'look into the retry backoff' } }),
-    JSON.stringify({ type: 'assistant', sessionId, timestamp: '2026-08-01T10:00:01.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: '/p/retry.mjs' } }] } }),
-    JSON.stringify({ type: 'user', sessionId, timestamp: '2026-08-01T10:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'contents' }] } }),
-  ].join('\n') + '\n');
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId,
+        timestamp: '2026-08-01T10:00:00.000Z',
+        message: { role: 'user', content: 'look into the retry backoff' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        timestamp: '2026-08-01T10:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: '/p/retry.mjs' } }],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId,
+        timestamp: '2026-08-01T10:00:02.000Z',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'contents' }],
+        },
+      }),
+    ].join('\n') + '\n',
+  );
 }
 
 /** A local SKILL.md the registry can import without touching the network. */
@@ -197,21 +261,50 @@ beforeAll(() => {
 
   // ── Seed: three distinct observations in the default project. Distinct wording
   // matters — `save` dedups near-identical text within a 5 minute window.
-  SEED_BUGFIX_ID = savedId(ok([
-    'save', 'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-    '--type', 'bugfix', '--importance', '3',
-    '--lesson', SEED_LESSON, '--files', 'lib/widget-cache.mjs',
-  ]));
-  SEED_DECISION_ID = savedId(ok([
-    'save', 'Chose a write-through widget layer over read-through for predictable latency',
-    '--type', 'decision', '--importance', '2',
-  ]));
-  SEED_DISCOVERY_ID = savedId(ok([
-    'save', 'Discovered the retry backoff timer resets on every redirect hop',
-    '--type', 'discovery', '--importance', '2',
-  ]));
+  SEED_BUGFIX_ID = savedId(
+    ok([
+      'save',
+      'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      SEED_LESSON,
+      '--files',
+      'lib/widget-cache.mjs',
+    ]),
+  );
+  SEED_DECISION_ID = savedId(
+    ok([
+      'save',
+      'Chose a write-through widget layer over read-through for predictable latency',
+      '--type',
+      'decision',
+      '--importance',
+      '2',
+    ]),
+  );
+  SEED_DISCOVERY_ID = savedId(
+    ok([
+      'save',
+      'Discovered the retry backoff timer resets on every redirect hop',
+      '--type',
+      'discovery',
+      '--importance',
+      '2',
+    ]),
+  );
 
-  const deferAdd = ok(['defer', 'add', 'Benchmark the widget cache under load', '--priority', '3', '--detail', 'needs a load fixture first']);
+  const deferAdd = ok([
+    'defer',
+    'add',
+    'Benchmark the widget cache under load',
+    '--priority',
+    '3',
+    '--detail',
+    'needs a load fixture first',
+  ]);
   SEED_DEFER_ID = Number(deferAdd.stdout.match(/Deferred as D#(\d+)/)[1]);
 }, 60000);
 
@@ -225,7 +318,11 @@ afterAll(() => {
       expect(readFileSync(REPO_CLAUDE_MD, 'utf8')).toBe(repoClaudeMdSnapshot);
     }
   } finally {
-    try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(ROOT, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   }
 });
 
@@ -235,17 +332,17 @@ describe('CLI feature sweep: read commands', () => {
   itCmd('search', () => {
     const all = jsonOf(ok(['search', 'widget', '--project', PROJECT, '--json']));
     expect(all.total).toBeGreaterThanOrEqual(2);
-    expect(all.results.map(r => r.id)).toContain(SEED_BUGFIX_ID);
+    expect(all.results.map((r) => r.id)).toContain(SEED_BUGFIX_ID);
 
     // --type must actually narrow, not be silently dropped.
     const narrowed = jsonOf(ok(['search', 'widget', '--project', PROJECT, '--type', 'decision', '--json']));
-    expect(narrowed.results.map(r => r.id)).toEqual([SEED_DECISION_ID]);
+    expect(narrowed.results.map((r) => r.id)).toEqual([SEED_DECISION_ID]);
     expect(narrowed.results.length).toBeLessThan(all.results.length);
   });
 
   itCmd('recent', () => {
     const data = jsonOf(ok(['recent', '2', '--project', PROJECT, '--json']));
-    expect(data.project).toBe(PROJECT);   // pins inferProject()'s <parent>--<dir> shape
+    expect(data.project).toBe(PROJECT); // pins inferProject()'s <parent>--<dir> shape
     expect(data.limit).toBe(2);
     expect(data.results).toHaveLength(2);
     expect(typeof data.results[0].id).toBe('number');
@@ -281,17 +378,30 @@ describe('CLI feature sweep: read commands', () => {
     // and the window around the middle one is fully determined: WHICH row lands in
     // `before` vs `after` is asserted, not just that both are arrays. A before/after
     // inversion (or a window leg dropping its project filter) fails here.
-    const data = jsonOf(ok(['timeline', '--anchor', String(SEED_DECISION_ID), '--before', '1', '--after', '1', '--project', PROJECT, '--json']));
+    const data = jsonOf(
+      ok([
+        'timeline',
+        '--anchor',
+        String(SEED_DECISION_ID),
+        '--before',
+        '1',
+        '--after',
+        '1',
+        '--project',
+        PROJECT,
+        '--json',
+      ]),
+    );
     expect(data.anchor.id).toBe(SEED_DECISION_ID);
-    expect(data.before.map(r => r.id)).toEqual([SEED_BUGFIX_ID]);
-    expect(data.after.map(r => r.id)).toEqual([SEED_DISCOVERY_ID]);
+    expect(data.before.map((r) => r.id)).toEqual([SEED_BUGFIX_ID]);
+    expect(data.after.map((r) => r.id)).toEqual([SEED_DISCOVERY_ID]);
   });
 
   itCmd('stats', () => {
     const data = jsonOf(ok(['stats', '--days', '30', '--json']));
     expect(data.days).toBe(30);
     expect(data.totals.observations).toBeGreaterThanOrEqual(3);
-    const types = data.type_distribution.map(t => t.type);
+    const types = data.type_distribution.map((t) => t.type);
     expect(types).toEqual(expect.arrayContaining(['bugfix', 'decision', 'discovery']));
     expect(data.tier_distribution).toHaveProperty('working');
     // Data dir must name the sandbox, never the live DB (D#92 chain).
@@ -303,7 +413,7 @@ describe('CLI feature sweep: read commands', () => {
     expect(r.stdout).toContain('<claude-mem-context>');
     expect(r.stdout).toContain('</claude-mem-context>');
     expect(r.stdout).toContain('Fixed the widget cache invalidation race');
-    expect(r.stdout).toContain(`D#${SEED_DEFER_ID}`);   // deferred work section is wired
+    expect(r.stdout).toContain(`D#${SEED_DEFER_ID}`); // deferred work section is wired
   });
 
   itCmd('browse', () => {
@@ -328,20 +438,24 @@ describe('CLI feature sweep: read commands', () => {
     // alongside cited_count), which seeded the section's own gate and so could not observe
     // that D#179/D#198 had stopped the loop producing that state; the row is left at its
     // saved importance so only what the promote branch writes can put it in the array.
-    const atRisk = savedId(ok(['save', 'Row parked in the citation decay queue by the sweep', '--project', 'sweep-citation']));
-    const promotedId = savedId(ok(['save', 'Row promoted by repeated citation in the sweep', '--project', 'sweep-citation']));
+    const atRisk = savedId(
+      ok(['save', 'Row parked in the citation decay queue by the sweep', '--project', 'sweep-citation']),
+    );
+    const promotedId = savedId(
+      ok(['save', 'Row promoted by repeated citation in the sweep', '--project', 'sweep-citation']),
+    );
     withDb((db) => {
       db.prepare('UPDATE observations SET uncited_streak = 3 WHERE id = ?').run(atRisk);
       db.prepare('UPDATE observations SET cited_count = 2, uncited_streak = 0 WHERE id = ?').run(promotedId);
     });
 
     const data = jsonOf(ok(['citation-stats', '--json']));
-    expect(data.window_days).toBe(7);                  // documented default
-    expect(data.decay_queue.map(r => r.id)).toContain(atRisk);
-    expect(data.decay_queue.find(r => r.id === atRisk).uncited_streak).toBe(3);
-    expect(data.decay_queue.map(r => r.id)).not.toContain(promotedId);   // streak 0 → not at risk
-    expect(data.promoted.map(r => r.id)).toEqual([promotedId]);
-    expect(data.per_project.find(p => p.project === 'sweep-citation').at_risk).toBe(1);
+    expect(data.window_days).toBe(7); // documented default
+    expect(data.decay_queue.map((r) => r.id)).toContain(atRisk);
+    expect(data.decay_queue.find((r) => r.id === atRisk).uncited_streak).toBe(3);
+    expect(data.decay_queue.map((r) => r.id)).not.toContain(promotedId); // streak 0 → not at risk
+    expect(data.promoted.map((r) => r.id)).toEqual([promotedId]);
+    expect(data.per_project.find((p) => p.project === 'sweep-citation').at_risk).toBe(1);
     expect(data.funnel).toHaveProperty('window');
     // --days must reach the window, not be dropped.
     expect(jsonOf(ok(['citation-stats', '--days', '14', '--json'])).window_days).toBe(14);
@@ -353,7 +467,7 @@ describe('CLI feature sweep: read commands', () => {
 
     // (a) The router's command set has not drifted from the pinned list.
     const routerSet = readFileSync(CLI_PATH, 'utf8').match(/const CLI_COMMANDS = new Set\(\[([^\]]*)\]\)/)[1];
-    const routed = [...routerSet.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    const routed = [...routerSet.matchAll(/'([^']+)'/g)].map((m) => m[1]);
     expect(routed.sort()).toEqual([...EXPECTED_CLI_COMMANDS].sort());
 
     // (a2) …and the pinned list has not drifted from what this file actually EXERCISES.
@@ -365,7 +479,9 @@ describe('CLI feature sweep: read commands', () => {
 
     // (b) Every routed command is documented in help. `help` documents the others,
     // not itself — that single exemption is the whole allowance.
-    const undocumented = routed.filter(c => c !== 'help' && !new RegExp(`^\\s{2}${c}\\b`, 'm').test(r.stdout));
+    const undocumented = routed.filter(
+      (c) => c !== 'help' && !new RegExp(`^\\s{2}${c}\\b`, 'm').test(r.stdout),
+    );
     expect(undocumented).toEqual([]);
   });
 });
@@ -374,20 +490,51 @@ describe('CLI feature sweep: read commands', () => {
 
 describe('CLI feature sweep: write commands', () => {
   itCmd('save', () => {
-    const r = ok(['save', 'Traced a flaky upload to an unclosed multipart stream', '--type', 'bugfix', '--importance', '3', '--project', 'sweep-save', '--lesson', 'Close the stream in a finally block']);
+    const r = ok([
+      'save',
+      'Traced a flaky upload to an unclosed multipart stream',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--project',
+      'sweep-save',
+      '--lesson',
+      'Close the stream in a finally block',
+    ]);
     const id = savedId(r);
     expect(r.stdout).toContain('[bugfix]');
     expect(r.stdout).toContain('project: sweep-save');
     // Verify the row actually landed, with the flags applied.
-    const row = withDb(db => db.prepare('SELECT type, importance, project, lesson_learned FROM observations WHERE id = ?').get(id));
-    expect(row).toMatchObject({ type: 'bugfix', importance: 3, project: 'sweep-save', lesson_learned: 'Close the stream in a finally block' });
+    const row = withDb((db) =>
+      db.prepare('SELECT type, importance, project, lesson_learned FROM observations WHERE id = ?').get(id),
+    );
+    expect(row).toMatchObject({
+      type: 'bugfix',
+      importance: 3,
+      project: 'sweep-save',
+      lesson_learned: 'Close the stream in a finally block',
+    });
   });
 
   itCmd('update', () => {
-    const id = savedId(ok(['save', 'Initial note about the nightly export job schedule', '--project', 'sweep-update']));
-    const r = ok(['update', String(id), '--title', 'Nightly export job window moved', '--importance', '3', '--lesson', 'Coordinate window changes with the data team']);
+    const id = savedId(
+      ok(['save', 'Initial note about the nightly export job schedule', '--project', 'sweep-update']),
+    );
+    const r = ok([
+      'update',
+      String(id),
+      '--title',
+      'Nightly export job window moved',
+      '--importance',
+      '3',
+      '--lesson',
+      'Coordinate window changes with the data team',
+    ]);
     expect(r.stdout).toContain(`Updated #${id}`);
-    const row = withDb(db => db.prepare('SELECT title, importance, lesson_learned FROM observations WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db.prepare('SELECT title, importance, lesson_learned FROM observations WHERE id = ?').get(id),
+    );
     expect(row).toMatchObject({
       title: 'Nightly export job window moved',
       importance: 3,
@@ -396,45 +543,94 @@ describe('CLI feature sweep: write commands', () => {
   });
 
   itCmd('delete', () => {
-    const id = savedId(ok(['save', 'Scratch row created only to be deleted by the sweep', '--project', 'sweep-delete']));
+    const id = savedId(
+      ok(['save', 'Scratch row created only to be deleted by the sweep', '--project', 'sweep-delete']),
+    );
 
     const preview = ok(['delete', String(id)]);
     expect(preview.stdout).toContain('will be deleted');
     expect(preview.stdout).toContain('Run with --confirm');
-    expect(withDb(db => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c)).toBe(1);
+    expect(withDb((db) => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c)).toBe(1);
 
     const confirmed = ok(['delete', String(id), '--confirm']);
     expect(confirmed.stdout).toContain('Deleted 1 observation');
-    expect(withDb(db => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c)).toBe(0);
+    expect(withDb((db) => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c)).toBe(0);
   });
 
   itCmd('defer', () => {
-    const added = ok(['defer', 'add', 'Split the retry helper out of the transport module', '--priority', '2', '--detail', 'blocked on the transport refactor', '--project', 'sweep-defer']);
+    const added = ok([
+      'defer',
+      'add',
+      'Split the retry helper out of the transport module',
+      '--priority',
+      '2',
+      '--detail',
+      'blocked on the transport refactor',
+      '--project',
+      'sweep-defer',
+    ]);
     const id = Number(added.stdout.match(/Deferred as D#(\d+)/)[1]);
 
     const list = ok(['defer', 'list', '--project', 'sweep-defer']);
     expect(list.stdout).toContain('Split the retry helper');
     expect(list.stdout).toContain(`D#${id}`);
 
-    const dropped = ok(['defer', 'drop', `D#${id}`, '--reason', 'covered elsewhere', '--project', 'sweep-defer']);
+    const dropped = ok([
+      'defer',
+      'drop',
+      `D#${id}`,
+      '--reason',
+      'covered elsewhere',
+      '--project',
+      'sweep-defer',
+    ]);
     expect(dropped.stdout).toContain(`Dropped D#${id}`);
     expect(ok(['defer', 'list', '--project', 'sweep-defer']).stdout).toContain('No open deferred items');
   });
 
   itCmd('activity', () => {
-    const saved = jsonOf(ok(['activity', 'save', '--type', 'lesson', 'Sweep activity event', '--body', 'event body text', '--project', 'sweep-activity']));
+    const saved = jsonOf(
+      ok([
+        'activity',
+        'save',
+        '--type',
+        'lesson',
+        'Sweep activity event',
+        '--body',
+        'event body text',
+        '--project',
+        'sweep-activity',
+      ]),
+    );
     expect(saved).toMatchObject({ ok: true });
     expect(typeof saved.id).toBe('number');
 
     const shown = jsonOf(ok(['activity', 'show', String(saved.id)]));
-    expect(shown).toMatchObject({ id: saved.id, event_type: 'lesson', title: 'Sweep activity event', body: 'event body text', project: 'sweep-activity' });
+    expect(shown).toMatchObject({
+      id: saved.id,
+      event_type: 'lesson',
+      title: 'Sweep activity event',
+      body: 'event body text',
+      project: 'sweep-activity',
+    });
     // `show` reads back through the same module that wrote — cross-check the row in the
     // sandbox DB independently, so a write that never reaches `events` cannot pass.
-    const row = withDb(db => db.prepare('SELECT event_type, title, body, project FROM events WHERE id = ?').get(saved.id));
-    expect(row).toMatchObject({ event_type: 'lesson', title: 'Sweep activity event', body: 'event body text', project: 'sweep-activity' });
+    const row = withDb((db) =>
+      db.prepare('SELECT event_type, title, body, project FROM events WHERE id = ?').get(saved.id),
+    );
+    expect(row).toMatchObject({
+      event_type: 'lesson',
+      title: 'Sweep activity event',
+      body: 'event body text',
+      project: 'sweep-activity',
+    });
 
-    expect(ok(['activity', 'search', 'Sweep activity', '--project', 'sweep-activity']).stdout).toContain(`#${saved.id} [lesson]`);
-    expect(ok(['activity', 'recent', '5', '--project', 'sweep-activity']).stdout).toContain('Sweep activity event');
+    expect(ok(['activity', 'search', 'Sweep activity', '--project', 'sweep-activity']).stdout).toContain(
+      `#${saved.id} [lesson]`,
+    );
+    expect(ok(['activity', 'recent', '5', '--project', 'sweep-activity']).stdout).toContain(
+      'Sweep activity event',
+    );
   });
 });
 
@@ -443,31 +639,53 @@ describe('CLI feature sweep: write commands', () => {
 describe('CLI feature sweep: data commands', () => {
   itCmd('export', () => {
     const r = ok(['export', '--project', PROJECT, '--format', 'jsonl']);
-    const rows = r.stdout.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+    const rows = r.stdout
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
     expect(rows.length).toBeGreaterThanOrEqual(3);
-    expect(rows.map(o => o.id)).toContain(SEED_BUGFIX_ID);
-    const seeded = rows.find(o => o.id === SEED_BUGFIX_ID);
+    expect(rows.map((o) => o.id)).toContain(SEED_BUGFIX_ID);
+    const seeded = rows.find((o) => o.id === SEED_BUGFIX_ID);
     expect(seeded.project).toBe(PROJECT);
     expect(seeded.lesson_learned).toBe(SEED_LESSON);
     expect(seeded.title).toContain('widget cache invalidation race');
   });
 
   itCmd('restore', () => {
-    const id = savedId(ok(['save', 'Round-trip probe for the export and restore pair', '--type', 'decision', '--project', 'sweep-restore']));
+    const id = savedId(
+      ok([
+        'save',
+        'Round-trip probe for the export and restore pair',
+        '--type',
+        'decision',
+        '--project',
+        'sweep-restore',
+      ]),
+    );
     const dump = join(ROOT, 'restore.jsonl');
     writeFileSync(dump, ok(['export', '--project', 'sweep-restore', '--format', 'jsonl']).stdout);
     ok(['delete', String(id), '--confirm']);
-    expect(withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-restore'").get().c)).toBe(0);
+    expect(
+      withDb((db) => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-restore'").get().c),
+    ).toBe(0);
 
     const dry = ok(['restore', dump, '--dry-run']);
     expect(dry.stdout).toMatch(/Restore \(dry-run\): 1 would be restored/);
-    expect(withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-restore'").get().c)).toBe(0);
+    expect(
+      withDb((db) => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-restore'").get().c),
+    ).toBe(0);
 
     const real = ok(['restore', dump]);
     expect(real.stdout).toMatch(/Restore: 1 restored/);
-    const back = withDb(db => db.prepare("SELECT title, type FROM observations WHERE project='sweep-restore'").all());
+    const back = withDb((db) =>
+      db.prepare("SELECT title, type FROM observations WHERE project='sweep-restore'").all(),
+    );
     expect(back).toHaveLength(1);
-    expect(back[0]).toMatchObject({ type: 'decision', title: 'Round-trip probe for the export and restore pair' });
+    expect(back[0]).toMatchObject({
+      type: 'decision',
+      title: 'Round-trip probe for the export and restore pair',
+    });
 
     // Missing file is a real error, not a silent no-op.
     const missing = runCli(['restore', join(ROOT, 'no-such-dump.jsonl')]);
@@ -516,7 +734,8 @@ describe('CLI feature sweep: maintenance commands', () => {
       'Renamed the changelog heading ahead of the quarterly audit',
       'Bumped the linter rule covering trailing commas in vendor files',
       'Removed an obsolete screenshot from the onboarding docs folder',
-    ]) ok(['save', text, '--importance', '1', '--project', 'sweep-compress']);
+    ])
+      ok(['save', text, '--importance', '1', '--project', 'sweep-compress']);
     expect(ageProject('sweep-compress', 60)).toBe(3);
 
     const preview = ok(['compress', '--project', 'sweep-compress']);
@@ -524,14 +743,38 @@ describe('CLI feature sweep: maintenance commands', () => {
     expect(preview.stdout).toContain('Compressable groups (≥3 obs): 1');
     expect(preview.stdout).toContain('Observations to compress: 3');
     // Preview must not mutate.
-    expect(withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)=0").get().c)).toBe(3);
+    expect(
+      withDb(
+        (db) =>
+          db
+            .prepare(
+              "SELECT COUNT(*) c FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)=0",
+            )
+            .get().c,
+      ),
+    ).toBe(3);
 
     const executed = ok(['compress', '--execute', '--project', 'sweep-compress']);
     expect(executed.stdout).toMatch(/Compressed 3 observations into 1 weekly summar/);
     // All three originals now point at a summary row, and exactly one uncompressed
     // row remains in the project: the weekly summary itself.
-    expect(withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)!=0").get().c)).toBe(3);
-    const survivors = withDb(db => db.prepare("SELECT id, title FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)=0").all());
+    expect(
+      withDb(
+        (db) =>
+          db
+            .prepare(
+              "SELECT COUNT(*) c FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)!=0",
+            )
+            .get().c,
+      ),
+    ).toBe(3);
+    const survivors = withDb((db) =>
+      db
+        .prepare(
+          "SELECT id, title FROM observations WHERE project='sweep-compress' AND COALESCE(compressed_into,0)=0",
+        )
+        .all(),
+    );
     expect(survivors).toHaveLength(1);
     expect(ok(['compress', '--project', 'sweep-compress']).stdout).toContain('No candidates for compression');
   });
@@ -541,15 +784,17 @@ describe('CLI feature sweep: maintenance commands', () => {
       'Tidied the stale feature flag list inside the deployment runbook',
       'Archived the legacy migration notes from the operations wiki space',
       'Dropped an unused gradle task from the android build configuration',
-    ]) ok(['save', text, '--importance', '1', '--project', 'sweep-maintain']);
+    ])
+      ok(['save', text, '--importance', '1', '--project', 'sweep-maintain']);
 
     const before = ok(['maintain', 'scan', '--project', 'sweep-maintain']);
     expect(before.stdout).toContain('Total active: 3');
     expect(before.stdout).toMatch(/Stale \(>30d, imp=1, no access, never injected\): 0/);
 
     expect(ageProject('sweep-maintain', 90)).toBe(3);
-    expect(ok(['maintain', 'scan', '--project', 'sweep-maintain']).stdout)
-      .toMatch(/Stale \(>30d, imp=1, no access, never injected\): 3/);
+    expect(ok(['maintain', 'scan', '--project', 'sweep-maintain']).stdout).toMatch(
+      /Stale \(>30d, imp=1, no access, never injected\): 3/,
+    );
 
     const executed = ok(['maintain', 'execute', '--ops', 'decay', '--project', 'sweep-maintain']);
     expect(executed.stdout).toMatch(/marked 3 idle as pending-purge/);
@@ -565,46 +810,50 @@ describe('CLI feature sweep: maintenance commands', () => {
     expect(after.stdout).not.toMatch(/compressed originals/);
   });
 
-  itCmd('optimize', () => {
-    // Preview is the documented default and needs no LLM. `--run` is exercised too:
-    // with CLAUDE_CODE_PATH pointing nowhere it must degrade, not spawn or hang.
-    const preview = ok(['optimize', '--project', PROJECT]);
-    expect(preview.stdout).toContain('LLM Optimization Preview');
+  itCmd(
+    'optimize',
+    () => {
+      // Preview is the documented default and needs no LLM. `--run` is exercised too:
+      // with CLAUDE_CODE_PATH pointing nowhere it must degrade, not spawn or hang.
+      const preview = ok(['optimize', '--project', PROJECT]);
+      expect(preview.stdout).toContain('LLM Optimization Preview');
 
-    // The headline "Total: N items" must be the sum of the four per-task figures printed
-    // right above it (optimizePreview: reenrich + clusterMerge + smartCompress + 1 when
-    // the normalize gate is open AND has ≥5 concepts, which is exactly when that line
-    // renders a non-zero count). A Total computed over a different scope — e.g. dropping
-    // the --project filter on one leg — fails here; asserting "N parses as an integer"
-    // could not.
-    const num = (re) => {
-      const m = preview.stdout.match(re);
-      expect(m, `no line matching ${re} in:\n${preview.stdout}`).toBeTruthy();
-      return Number(m[1]);
-    };
-    const reenrich = num(/^\s*Re-enrich candidates: (\d+)/m);
-    // Same spelling as the MCP surface (audit 2026-08-14 F2 converged the CLI onto it);
-    // tests/audit-findings-20260814.test.mjs pins that the two agree.
-    const clusterMerge = num(/^\s*Cluster-merge candidates: (\d+) clusters/m);
-    const smartCompress = num(/^\s*Smart-compress candidates: (\d+) clusters/m);
-    const normalizeLine = preview.stdout.match(/^\s*Normalize: (?:(\d+) unique concepts|gate closed .*)$/m);
-    expect(normalizeLine, `no parseable Normalize line in:\n${preview.stdout}`).toBeTruthy();
-    const normalizeUnits = Number(normalizeLine[1] || 0) > 0 ? 1 : 0;
-    const total = num(/^\s*Total: (\d+) items$/m);
-    expect(total).toBe(reenrich + normalizeUnits + clusterMerge + smartCompress);
-    expect(preview.stdout).toContain('Run with --run to execute');
+      // The headline "Total: N items" must be the sum of the four per-task figures printed
+      // right above it (optimizePreview: reenrich + clusterMerge + smartCompress + 1 when
+      // the normalize gate is open AND has ≥5 concepts, which is exactly when that line
+      // renders a non-zero count). A Total computed over a different scope — e.g. dropping
+      // the --project filter on one leg — fails here; asserting "N parses as an integer"
+      // could not.
+      const num = (re) => {
+        const m = preview.stdout.match(re);
+        expect(m, `no line matching ${re} in:\n${preview.stdout}`).toBeTruthy();
+        return Number(m[1]);
+      };
+      const reenrich = num(/^\s*Re-enrich candidates: (\d+)/m);
+      // Same spelling as the MCP surface (audit 2026-08-14 F2 converged the CLI onto it);
+      // tests/audit-findings-20260814.test.mjs pins that the two agree.
+      const clusterMerge = num(/^\s*Cluster-merge candidates: (\d+) clusters/m);
+      const smartCompress = num(/^\s*Smart-compress candidates: (\d+) clusters/m);
+      const normalizeLine = preview.stdout.match(/^\s*Normalize: (?:(\d+) unique concepts|gate closed .*)$/m);
+      expect(normalizeLine, `no parseable Normalize line in:\n${preview.stdout}`).toBeTruthy();
+      const normalizeUnits = Number(normalizeLine[1] || 0) > 0 ? 1 : 0;
+      const total = num(/^\s*Total: (\d+) items$/m);
+      expect(total).toBe(reenrich + normalizeUnits + clusterMerge + smartCompress);
+      expect(preview.stdout).toContain('Run with --run to execute');
 
-    // The --run arm must DEGRADE (candidates picked up, every LLM call refused because
-    // CLAUDE_CODE_PATH points nowhere), not quietly find nothing to do. The preview just
-    // proved there is work queued, so `skipped` has to be non-zero: "0 processed, 0
-    // skipped" — the shape an empty work queue and a never-invoked task both produce —
-    // now fails.
-    expect(reenrich).toBeGreaterThan(0);
-    const executed = ok(['optimize', '--run', '--project', PROJECT, '--max', '1']);
-    expect(executed.stdout).toContain('Running LLM optimization');
-    expect(executed.stdout).toMatch(/Re-enrich: 0 processed, [1-9]\d* skipped/);
-    expect(executed.stdout + executed.stderr).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
-  }, 40000);
+      // The --run arm must DEGRADE (candidates picked up, every LLM call refused because
+      // CLAUDE_CODE_PATH points nowhere), not quietly find nothing to do. The preview just
+      // proved there is work queued, so `skipped` has to be non-zero: "0 processed, 0
+      // skipped" — the shape an empty work queue and a never-invoked task both produce —
+      // now fails.
+      expect(reenrich).toBeGreaterThan(0);
+      const executed = ok(['optimize', '--run', '--project', PROJECT, '--max', '1']);
+      expect(executed.stdout).toContain('Running LLM optimization');
+      expect(executed.stdout).toMatch(/Re-enrich: 0 processed, [1-9]\d* skipped/);
+      expect(executed.stdout + executed.stderr).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
+    },
+    40000,
+  );
 
   itCmd('fts-check', () => {
     const check = ok(['fts-check', 'check']);
@@ -624,7 +873,18 @@ describe('CLI feature sweep: maintenance commands', () => {
 describe('CLI feature sweep: registry commands', () => {
   itCmd('registry', () => {
     const skill = writeSkill('sweep-registry-skill');
-    const imported = ok(['registry', 'import', '--name', 'sweep-registry-skill', '--resource-type', 'skill', '--local-path', skill, '--use-cases', 'exercising the registry surface']);
+    const imported = ok([
+      'registry',
+      'import',
+      '--name',
+      'sweep-registry-skill',
+      '--resource-type',
+      'skill',
+      '--local-path',
+      skill,
+      '--use-cases',
+      'exercising the registry surface',
+    ]);
     expect(imported.stdout).toMatch(/Imported: skill:sweep-registry-skill \(id=\d+\)/);
 
     expect(ok(['registry', 'list']).stdout).toContain('sweep-registry-skill');
@@ -644,42 +904,66 @@ describe('CLI feature sweep: registry commands', () => {
 
     expect(ok(['registry', 'reindex']).stdout).toMatch(/FTS5 reindexed\. \d+ active resources/);
 
-    expect(ok(['registry', 'remove', '--name', 'sweep-registry-skill', '--resource-type', 'skill']).stdout)
-      .toContain('Removed: skill:sweep-registry-skill');
+    expect(
+      ok(['registry', 'remove', '--name', 'sweep-registry-skill', '--resource-type', 'skill']).stdout,
+    ).toContain('Removed: skill:sweep-registry-skill');
     // Positive post-removal assertion: the documented zero-result line, not a negative
     // coupled to the exact "  [✓] S " row prefix (which would go green on a mere
     // formatting change while the row was still being returned).
-    expect(ok(['registry', 'search', 'sweep-registry-skill']).stdout)
-      .toContain('No matching resources for: "sweep-registry-skill"');
+    expect(ok(['registry', 'search', 'sweep-registry-skill']).stdout).toContain(
+      'No matching resources for: "sweep-registry-skill"',
+    );
   });
 
-  itCmd('enrich', () => {
-    const unknown = runCli(['enrich', 'no-such-resource-xyzzy']);
-    expect(unknown.exitCode).toBe(1);
-    expect(unknown.stdout + unknown.stderr).toContain('Resource not found: no-such-resource-xyzzy');
+  itCmd(
+    'enrich',
+    () => {
+      const unknown = runCli(['enrich', 'no-such-resource-xyzzy']);
+      expect(unknown.exitCode).toBe(1);
+      expect(unknown.stdout + unknown.stderr).toContain('Resource not found: no-such-resource-xyzzy');
 
-    // With a resource pending enrichment and no reachable LLM, --all must report an
-    // honest failure count and exit 0 — not hang, not spawn a real `claude`. The fixture
-    // has to live under the managed dir or the P1-3 confinement gate refuses it before
-    // the enricher is reached, and this case would be asserting the wrong thing.
-    const skill = writeManagedSkill('sweep-enrich-skill');
-    ok(['registry', 'import', '--name', 'sweep-enrich-skill', '--resource-type', 'skill', '--local-path', skill]);
-    const all = ok(['enrich', '--all']);
-    expect(all.stdout).toMatch(/Done: 0 enriched, [1-9]\d* failed\./);
-    expect(all.stdout, 'a managed path must not be refused').not.toMatch(/Refused/);
-    ok(['registry', 'remove', '--name', 'sweep-enrich-skill', '--resource-type', 'skill']);
+      // With a resource pending enrichment and no reachable LLM, --all must report an
+      // honest failure count and exit 0 — not hang, not spawn a real `claude`. The fixture
+      // has to live under the managed dir or the P1-3 confinement gate refuses it before
+      // the enricher is reached, and this case would be asserting the wrong thing.
+      const skill = writeManagedSkill('sweep-enrich-skill');
+      ok([
+        'registry',
+        'import',
+        '--name',
+        'sweep-enrich-skill',
+        '--resource-type',
+        'skill',
+        '--local-path',
+        skill,
+      ]);
+      const all = ok(['enrich', '--all']);
+      expect(all.stdout).toMatch(/Done: 0 enriched, [1-9]\d* failed\./);
+      expect(all.stdout, 'a managed path must not be refused').not.toMatch(/Refused/);
+      ok(['registry', 'remove', '--name', 'sweep-enrich-skill', '--resource-type', 'skill']);
 
-    // The other side of the same gate, on the shipped CLI: a resource whose local_path
-    // sits outside the managed dir is refused rather than read. tests/registry-enrich-
-    // confinement.test.mjs owns the detail; this one pins that the sweep's own surface
-    // routes it, since `enrich` is the command this case is named after.
-    const outside = writeSkill('sweep-enrich-outside');
-    ok(['registry', 'import', '--name', 'sweep-enrich-outside', '--resource-type', 'skill', '--local-path', outside]);
-    const refused = ok(['enrich', '--all']);
-    expect(refused.stdout).toMatch(/Refused 1: local_path outside the managed directory/);
-    expect(refused.stdout).toMatch(/Done: 0 enriched, 0 failed\./);
-    ok(['registry', 'remove', '--name', 'sweep-enrich-outside', '--resource-type', 'skill']);
-  }, 40000);
+      // The other side of the same gate, on the shipped CLI: a resource whose local_path
+      // sits outside the managed dir is refused rather than read. tests/registry-enrich-
+      // confinement.test.mjs owns the detail; this one pins that the sweep's own surface
+      // routes it, since `enrich` is the command this case is named after.
+      const outside = writeSkill('sweep-enrich-outside');
+      ok([
+        'registry',
+        'import',
+        '--name',
+        'sweep-enrich-outside',
+        '--resource-type',
+        'skill',
+        '--local-path',
+        outside,
+      ]);
+      const refused = ok(['enrich', '--all']);
+      expect(refused.stdout).toMatch(/Refused 1: local_path outside the managed directory/);
+      expect(refused.stdout).toMatch(/Done: 0 enriched, 0 failed\./);
+      ok(['registry', 'remove', '--name', 'sweep-enrich-outside', '--resource-type', 'skill']);
+    },
+    40000,
+  );
 });
 
 // ─── Project-adoption surfaces (cwd-scoped filesystem writes) ───────────────
@@ -694,14 +978,14 @@ describe('CLI feature sweep: adoption commands', () => {
     const dry = ok(['adopt', '--dry-run'], { cwd: ADOPT_DIR });
     expect(dry.stdout).toContain('[adopt --dry-run]');
     expect(dry.stdout).toContain(ADOPT_DIR);
-    expect(readFileSync(claudeMd(), 'utf8')).toBe(userContent);   // dry-run wrote nothing
+    expect(readFileSync(claudeMd(), 'utf8')).toBe(userContent); // dry-run wrote nothing
     expect(existsSync(join(ADOPT_DIR, '.claude', 'plugin_claude_mem_lite.md'))).toBe(false);
 
     const applied = ok(['adopt'], { cwd: ADOPT_DIR });
     expect(applied.stdout).toMatch(/\[adopt\].*→ (created|updated)/);
     const md = readFileSync(claudeMd(), 'utf8');
     expect((md.match(/<!-- claude-mem-lite:begin/g) || []).length).toBe(1);
-    expect(md).toContain('use tabs');                              // user content preserved
+    expect(md).toContain('use tabs'); // user content preserved
     expect(existsSync(join(ADOPT_DIR, '.claude', 'plugin_claude_mem_lite.md'))).toBe(true);
 
     expect(ok(['adopt', '--status'], { cwd: ADOPT_DIR }).stdout).toMatch(/CLAUDE\.md:\s+✓ adopted/);
@@ -718,20 +1002,23 @@ describe('CLI feature sweep: adoption commands', () => {
 
     const dry = ok(['unadopt', '--dry-run'], { cwd: UNADOPT_DIR });
     expect(dry.stdout).toContain(UNADOPT_DIR);
-    expect(readFileSync(md_, 'utf8')).toContain('<!-- claude-mem-lite:begin');   // dry-run is read-only
+    expect(readFileSync(md_, 'utf8')).toContain('<!-- claude-mem-lite:begin'); // dry-run is read-only
 
     const removed = ok(['unadopt'], { cwd: UNADOPT_DIR });
     expect(removed.stdout).toMatch(/\[unadopt\].*→ removed/);
     const md = readFileSync(md_, 'utf8');
     expect(md).not.toContain('<!-- claude-mem-lite:begin');
-    expect(md).toContain('use tabs');                              // user content survives
+    expect(md).toContain('use tabs'); // user content survives
     expect(existsSync(join(UNADOPT_DIR, '.claude', 'plugin_claude_mem_lite.md'))).toBe(false);
   });
 
   itCmd('memdir-audit', () => {
     const memdir = join(ROOT, 'memdir');
     mkdirSync(memdir, { recursive: true });
-    writeFileSync(join(memdir, 'feedback_good.md'), '# Good\n\n**Why:** it matters\n\n**How to apply:** do this\n');
+    writeFileSync(
+      join(memdir, 'feedback_good.md'),
+      '# Good\n\n**Why:** it matters\n\n**How to apply:** do this\n',
+    );
     writeFileSync(join(memdir, 'project_bad.md'), '# Bad\n\njust prose, no contract sections\n');
 
     // Documented non-zero: exit 1 when any file breaks the body-structure contract.

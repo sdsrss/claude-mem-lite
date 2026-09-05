@@ -21,15 +21,25 @@ beforeEach(() => {
   // every insert here fails on the constraint rather than on its subject.
   for (const id of ['s1', 's2', 's3', 's4']) insertSession(db, { id, project: 'p' });
 });
-afterEach(() => { try { db.close(); } catch { /* closed */ } });
+afterEach(() => {
+  try {
+    db.close();
+  } catch {
+    /* closed */
+  }
+});
 
 function seedPrompt(sessionId, n, text) {
-  db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
-              VALUES (?, ?, ?, ?, ?)`).run(sessionId, n, text, NOW.toISOString(), NOW.getTime() + n);
+  db.prepare(
+    `INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
+              VALUES (?, ?, ?, ?, ?)`,
+  ).run(sessionId, n, text, NOW.toISOString(), NOW.getTime() + n);
 }
 function seedObs(sessionId, title, epoch, compressedInto = null) {
-  db.prepare(`INSERT INTO observations (memory_session_id, project, type, title, created_at, created_at_epoch, compressed_into)
-              VALUES (?, 'p', 'discovery', ?, ?, ?, ?)`).run(sessionId, title, NOW.toISOString(), epoch, compressedInto);
+  db.prepare(
+    `INSERT INTO observations (memory_session_id, project, type, title, created_at, created_at_epoch, compressed_into)
+              VALUES (?, 'p', 'discovery', ?, ?, ?, ?)`,
+  ).run(sessionId, title, NOW.toISOString(), epoch, compressedInto);
 }
 
 describe('readFastSummarySource', () => {
@@ -61,7 +71,9 @@ describe('insertFastSummary', () => {
 
   it('writes every column the three call sites used to spell out by hand', () => {
     insertFastSummary(db, {
-      sessionId: 's1', project: 'proj', now: NOW,
+      sessionId: 's1',
+      project: 'proj',
+      now: NOW,
       values: { request: 'req', completed: 'done', remaining: 'left', notes: 'why' },
       limits: FAST_SUMMARY_LIMITS.stop,
     });
@@ -80,7 +92,9 @@ describe('insertFastSummary', () => {
 
   it("defaults notes to 'fast', which is what two of the three call sites hardcoded", () => {
     insertFastSummary(db, {
-      sessionId: 's2', project: 'proj', now: NOW,
+      sessionId: 's2',
+      project: 'proj',
+      now: NOW,
       values: { request: 'req', completed: 'done' },
       limits: FAST_SUMMARY_LIMITS.sessionStart,
     });
@@ -91,8 +105,15 @@ describe('insertFastSummary', () => {
 
   it('truncates per the limits it was given, not a limit of its own', () => {
     insertFastSummary(db, {
-      sessionId: 's3', project: 'proj', now: NOW,
-      values: { request: 'r'.repeat(500), completed: 'c'.repeat(900), remaining: 'm'.repeat(900), notes: 'n'.repeat(900) },
+      sessionId: 's3',
+      project: 'proj',
+      now: NOW,
+      values: {
+        request: 'r'.repeat(500),
+        completed: 'c'.repeat(900),
+        remaining: 'm'.repeat(900),
+        notes: 'n'.repeat(900),
+      },
       limits: FAST_SUMMARY_LIMITS.stop,
     });
     const r = row('s3');
@@ -115,7 +136,9 @@ describe('insertFastSummary', () => {
     const secret = 'gh' + 'p_' + 'B'.repeat(36);
     const limits = { ...FAST_SUMMARY_LIMITS.sessionStart, completed: 20 };
     insertFastSummary(db, {
-      sessionId: 's4', project: 'proj', now: NOW,
+      sessionId: 's4',
+      project: 'proj',
+      now: NOW,
       values: { request: 'req', completed: 'prefix ' + secret },
       limits,
     });

@@ -1,7 +1,14 @@
 // tests/registry-retriever.test.mjs
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRegistryTestDb } from './test-helpers.mjs';
-import { buildEnhancedQuery, buildQueryFromText, filterByProjectDomain, retrieveResources, searchResources, cjkIntentTokens } from '../registry-retriever.mjs';
+import {
+  buildEnhancedQuery,
+  buildQueryFromText,
+  filterByProjectDomain,
+  retrieveResources,
+  searchResources,
+  cjkIntentTokens,
+} from '../registry-retriever.mjs';
 import { upsertResource } from '../registry.mjs';
 
 describe('cjkIntentTokens', () => {
@@ -12,7 +19,7 @@ describe('cjkIntentTokens', () => {
   });
   it('dedupes when multiple CJK keys map to the same English intent', () => {
     const out = cjkIntentTokens('写测试和单元测试'); // 测试→test, 单元测试→test
-    expect(out.filter(x => x === 'test').length).toBe(1);
+    expect(out.filter((x) => x === 'test').length).toBe(1);
   });
   it('returns [] for a pure-English prompt (no CJK keys can match)', () => {
     expect(cjkIntentTokens('just refactor and deploy this')).toEqual([]);
@@ -21,11 +28,37 @@ describe('cjkIntentTokens', () => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function insertResource(db, { name, type = 'skill', source = 'preinstalled', domainTags = '', techStack = '', stars = 0, intentTags = '', keywords = '' }) {
-  db.prepare(`
+function insertResource(
+  db,
+  {
+    name,
+    type = 'skill',
+    source = 'preinstalled',
+    domainTags = '',
+    techStack = '',
+    stars = 0,
+    intentTags = '',
+    keywords = '',
+  },
+) {
+  db.prepare(
+    `
     INSERT INTO resources (name, type, source, file_hash, status, local_path, domain_tags, tech_stack, repo_stars, capability_summary, trigger_patterns, keywords, intent_tags, use_cases)
     VALUES (?, ?, ?, 'hash', 'active', '/tmp/test', ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(name, type, source, domainTags, techStack, stars, name, name, keywords || name, intentTags || name, name);
+  `,
+  ).run(
+    name,
+    type,
+    source,
+    domainTags,
+    techStack,
+    stars,
+    name,
+    name,
+    keywords || name,
+    intentTags || name,
+    name,
+  );
 }
 
 // ─── buildEnhancedQuery ───────────────────────────────────────────────────────
@@ -118,11 +151,7 @@ describe('filterByProjectDomain', () => {
   });
 
   it('passes universal resources (empty domain_tags)', () => {
-    const results = [
-      { domain_tags: '' },
-      { domain_tags: null },
-      { domain_tags: 'testing quality' },
-    ];
+    const results = [{ domain_tags: '' }, { domain_tags: null }, { domain_tags: 'testing quality' }];
     const filtered = filterByProjectDomain(results, ['python']);
     expect(filtered.length).toBe(3); // all pass
   });
@@ -134,23 +163,19 @@ describe('filterByProjectDomain', () => {
       { name: 'testing-tool', domain_tags: 'testing quality' },
     ];
     const filtered = filterByProjectDomain(results, ['python', 'django']);
-    expect(filtered.map(r => r.name)).toContain('python-tool');
-    expect(filtered.map(r => r.name)).toContain('testing-tool');
-    expect(filtered.map(r => r.name)).not.toContain('react-tool');
+    expect(filtered.map((r) => r.name)).toContain('python-tool');
+    expect(filtered.map((r) => r.name)).toContain('testing-tool');
+    expect(filtered.map((r) => r.name)).not.toContain('react-tool');
   });
 
   it('checks tech_stack column for overlap', () => {
-    const results = [
-      { name: 'prisma-tool', domain_tags: 'prisma', tech_stack: 'typescript node' },
-    ];
+    const results = [{ name: 'prisma-tool', domain_tags: 'prisma', tech_stack: 'typescript node' }];
     const filtered = filterByProjectDomain(results, ['typescript']);
     expect(filtered.length).toBe(1);
   });
 
   it('passes resources with only functional tags', () => {
-    const results = [
-      { name: 'review-tool', domain_tags: 'review quality code-review' },
-    ];
+    const results = [{ name: 'review-tool', domain_tags: 'review quality code-review' }];
     const filtered = filterByProjectDomain(results, ['python']);
     expect(filtered.length).toBe(1);
   });
@@ -166,7 +191,9 @@ describe('retrieveResources', () => {
     insertResource(db, { name: 'react-design', domainTags: 'react javascript frontend' });
     insertResource(db, { name: 'python-debugger', type: 'agent', domainTags: 'python debugging' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns empty array for null query', () => {
     expect(retrieveResources(db, null)).toEqual([]);
@@ -181,7 +208,7 @@ describe('retrieveResources', () => {
 
   it('respects type filter', () => {
     const skills = retrieveResources(db, 'superpowers OR react OR python', { type: 'agent' });
-    expect(skills.every(r => r.type === 'agent')).toBe(true);
+    expect(skills.every((r) => r.type === 'agent')).toBe(true);
   });
 
   it('respects limit', () => {
@@ -194,7 +221,7 @@ describe('retrieveResources', () => {
       projectDomains: ['python'],
     });
     // react-design should be filtered out
-    expect(results.map(r => r.name)).not.toContain('react-design');
+    expect(results.map((r) => r.name)).not.toContain('react-design');
   });
 
   it('handles FTS5 syntax errors gracefully', () => {
@@ -214,10 +241,14 @@ describe('retrieveResources', () => {
     };
     // Filler docs (no "widgetscan" term) → raise the term's IDF so BM25 separates the two.
     for (let i = 0; i < 6; i++) insert(`filler-${i}`, 'community', `alpha beta gamma delta topic${i}`);
-    insert('weak-installed', 'installed', 'general helper that can also widgetscan among many other unrelated capabilities here');
+    insert(
+      'weak-installed',
+      'installed',
+      'general helper that can also widgetscan among many other unrelated capabilities here',
+    );
     insert('strong-community', 'community', 'widgetscan widgetscan widgetscan widgetscan dedicated tool');
 
-    const results = retrieveResources(db, 'widgetscan', { limit: 5 }).map(r => r.name);
+    const results = retrieveResources(db, 'widgetscan', { limit: 5 }).map((r) => r.name);
     const iStrong = results.indexOf('strong-community');
     const iWeak = results.indexOf('weak-installed');
     expect(iStrong).toBeGreaterThanOrEqual(0);
@@ -234,7 +265,9 @@ describe('searchResources', () => {
     insertResource(db, { name: 'superpowers-debugging', domainTags: 'debugging quality' });
     insertResource(db, { name: 'frontend-design', domainTags: 'react frontend javascript' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns empty for empty text', () => {
     expect(searchResources(db, '')).toEqual([]);
@@ -266,31 +299,47 @@ describe('searchResources', () => {
 // FTS text columns via UPSERT and silently drop the resource out of search.
 describe('upsertResource preserve-on-empty (partial re-import keeps search metadata)', () => {
   let db;
-  beforeEach(() => { db = createRegistryTestDb(); });
-  afterEach(() => { try { db.close(); } catch {} });
+  beforeEach(() => {
+    db = createRegistryTestDb();
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   it('a partial re-import keeps prior keywords searchable and preserves untouched columns', () => {
     upsertResource(db, {
-      name: 'kube-deploy', type: 'skill', source: 'user', local_path: '',
+      name: 'kube-deploy',
+      type: 'skill',
+      source: 'user',
+      local_path: '',
       capability_summary: 'deploy to kubernetes',
-      keywords: 'kubectl helm rollout', intent_tags: 'deploy',
-      domain_tags: 'devops', trigger_patterns: 'ship to k8s',
+      keywords: 'kubectl helm rollout',
+      intent_tags: 'deploy',
+      domain_tags: 'devops',
+      trigger_patterns: 'ship to k8s',
     });
-    expect(searchResources(db, 'kubectl').some(r => r.name === 'kube-deploy')).toBe(true);
+    expect(searchResources(db, 'kubectl').some((r) => r.name === 'kube-deploy')).toBe(true);
 
     // Partial re-import: only capability_summary provided; upsertResource defaults the rest to ''
     // (mem-cli's `registry import` does exactly this — every unspecified flag becomes '').
     upsertResource(db, {
-      name: 'kube-deploy', type: 'skill', source: 'user', local_path: '',
+      name: 'kube-deploy',
+      type: 'skill',
+      source: 'user',
+      local_path: '',
       capability_summary: 'deploy to kubernetes (v2)',
     });
 
     // Still findable by the ORIGINAL keyword — not blanked.
-    expect(searchResources(db, 'kubectl').some(r => r.name === 'kube-deploy')).toBe(true);
-    const row = db.prepare("SELECT capability_summary, keywords, intent_tags FROM resources WHERE name='kube-deploy'").get();
+    expect(searchResources(db, 'kubectl').some((r) => r.name === 'kube-deploy')).toBe(true);
+    const row = db
+      .prepare("SELECT capability_summary, keywords, intent_tags FROM resources WHERE name='kube-deploy'")
+      .get();
     expect(row.capability_summary).toBe('deploy to kubernetes (v2)'); // the edited field took effect
-    expect(row.keywords).toBe('kubectl helm rollout');                // preserved, not blanked
-    expect(row.intent_tags).toBe('deploy');                           // preserved, not blanked
+    expect(row.keywords).toBe('kubectl helm rollout'); // preserved, not blanked
+    expect(row.intent_tags).toBe('deploy'); // preserved, not blanked
   });
 
   // Audit 2026-07-17 L1: file_hash was the last unprotected column in this UPSERT — a
@@ -298,15 +347,24 @@ describe('upsertResource preserve-on-empty (partial re-import keeps search metad
   // forcing a redundant re-index and false drift reports until the next full scan.
   it('a partial re-import preserves file_hash (change-detection anchor) when not supplied', () => {
     upsertResource(db, {
-      name: 'kube-deploy', type: 'skill', source: 'user', local_path: '/x/SKILL.md',
-      file_hash: 'abc123', capability_summary: 'deploy to kubernetes',
+      name: 'kube-deploy',
+      type: 'skill',
+      source: 'user',
+      local_path: '/x/SKILL.md',
+      file_hash: 'abc123',
+      capability_summary: 'deploy to kubernetes',
     });
     // Partial re-import: file_hash omitted → upsertResource passes null
     upsertResource(db, {
-      name: 'kube-deploy', type: 'skill', source: 'user', local_path: '',
+      name: 'kube-deploy',
+      type: 'skill',
+      source: 'user',
+      local_path: '',
       capability_summary: 'deploy to kubernetes (v2)',
     });
-    const row = db.prepare("SELECT file_hash, capability_summary FROM resources WHERE name='kube-deploy'").get();
+    const row = db
+      .prepare("SELECT file_hash, capability_summary FROM resources WHERE name='kube-deploy'")
+      .get();
     expect(row.capability_summary).toBe('deploy to kubernetes (v2)');
     expect(row.file_hash).toBe('abc123'); // preserved, not nulled
   });

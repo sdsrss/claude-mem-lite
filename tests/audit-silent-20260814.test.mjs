@@ -23,7 +23,16 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, rmSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  chmodSync,
+  rmSync,
+} from 'fs';
 import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -54,7 +63,7 @@ beforeAll(() => {
   }
   Object.assign(BASE_ENV, {
     HOME: HOME_DIR,
-    CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'),   // no LLM spend, no network
+    CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'), // no LLM spend, no network
     ANTHROPIC_API_KEY: '',
     OPENROUTER_API_KEY: '',
     CLAUDE_MEM_SKIP_UPDATE: '1',
@@ -66,13 +75,17 @@ beforeAll(() => {
     CLAUDE_MEM_SKIP_REPOS: '1',
     CLAUDE_MEM_NO_DELAY: '1',
   });
-  delete BASE_ENV.CLAUDE_PROJECT_DIR;   // cwd is the only project source
+  delete BASE_ENV.CLAUDE_PROJECT_DIR; // cwd is the only project source
   delete BASE_ENV.PWD;
 });
 
 afterAll(async () => {
-  await new Promise((r) => setTimeout(r, 300));   // let any detached worker settle
-  try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+  await new Promise((r) => setTimeout(r, 300)); // let any detached worker settle
+  try {
+    rmSync(ROOT, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 /** A sandbox dir under ROOT (cwd / data dir), created on demand. */
@@ -87,16 +100,27 @@ function fire(cmd, args, { cwd, stdin = '', env = {}, timeout = 30000 } = {}) {
     const childEnv = { ...BASE_ENV, ...env };
     for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
     const child = spawn(cmd, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
+    let stdout = '',
+      stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error(`${cmd} ${args.join(' ')} did not exit within ${timeout}ms`));
     }, timeout);
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
-    child.stdin.on('error', () => {});   // a hook that returns before reading stdin: EPIPE is fine
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+    child.stdin.on('error', () => {}); // a hook that returns before reading stdin: EPIPE is fine
     child.stdin.end(stdin);
   });
 }
@@ -122,14 +146,20 @@ describe('B2 — recall does not serve, or re-promote, a superseded observation'
   /** A retracted row and its replacement, both linked to the same file. */
   function seedSupersededPair() {
     const stale = insertObs(db, {
-      sessionId: 'sess-b2', type: 'bugfix', importance: 3, epochOffset: -60000,
+      sessionId: 'sess-b2',
+      type: 'bugfix',
+      importance: 3,
+      epochOffset: -60000,
       title: 'retry backoff must reset per hop',
       lessonLearned: 'Reset the backoff on every redirect hop',
       filesModified: '["/repo/src/transport.mjs"]',
-      supersededAt: Date.now(), supersededBy: 999,
+      supersededAt: Date.now(),
+      supersededBy: 999,
     });
     const live = insertObs(db, {
-      sessionId: 'sess-b2', type: 'bugfix', importance: 3,
+      sessionId: 'sess-b2',
+      type: 'bugfix',
+      importance: 3,
       title: 'retry backoff must persist across hops',
       lessonLearned: 'Carry the backoff across redirect hops, never reset it',
       filesModified: '["/repo/src/transport.mjs"]',
@@ -144,8 +174,9 @@ describe('B2 — recall does not serve, or re-promote, a superseded observation'
     const { staleId, liveId } = seedSupersededPair();
     const { rows } = recallByFile(db, '/repo/src/transport.mjs');
     expect(rows.map((r) => r.id)).toEqual([liveId]);
-    expect(rows.map((r) => r.lesson_learned).join('\n'))
-      .not.toContain('Reset the backoff on every redirect hop');
+    expect(rows.map((r) => r.lesson_learned).join('\n')).not.toContain(
+      'Reset the backoff on every redirect hop',
+    );
 
     // The single-row result above is only evidence of FILTERING if the file really had two
     // candidate rows to filter, one of them tombstoned. `staleId !== liveId` used to stand
@@ -153,11 +184,15 @@ describe('B2 — recall does not serve, or re-promote, a superseded observation'
     // FAILS IF: the fixture stops posing the question — the stale row loses its
     // filesModified link (the junction query returns one row), or its supersededAt /
     // the live row's null superseded_at drifts.
-    const linked = db.prepare(`
+    const linked = db
+      .prepare(
+        `
       SELECT o.id, o.superseded_at FROM observations o
       JOIN observation_files f ON f.obs_id = o.id
       WHERE f.filename = ? ORDER BY o.id
-    `).all('/repo/src/transport.mjs');
+    `,
+      )
+      .all('/repo/src/transport.mjs');
     expect(linked.map((r) => r.id)).toEqual([staleId, liveId]);
     expect(linked.find((r) => r.id === staleId).superseded_at).toBeTruthy();
     expect(linked.find((r) => r.id === liveId).superseded_at).toBeNull();
@@ -172,7 +207,8 @@ describe('B2 — recall does not serve, or re-promote, a superseded observation'
   it('leaves the retracted row cold while the replacement is warmed', () => {
     const { staleId, liveId } = seedSupersededPair();
     recallByFile(db, 'transport.mjs');
-    const read = (id) => db.prepare('SELECT access_count, last_accessed_at FROM observations WHERE id = ?').get(id);
+    const read = (id) =>
+      db.prepare('SELECT access_count, last_accessed_at FROM observations WHERE id = ?').get(id);
     expect(read(staleId).access_count || 0).toBe(0);
     expect(read(staleId).last_accessed_at).toBeNull();
     expect(read(liveId).access_count).toBe(1);
@@ -198,33 +234,57 @@ describe('B2 — recall does not serve, or re-promote, a superseded observation'
     const cwd = sandboxDir('work', 'b2');
     const target = join(cwd, 'transport.mjs');
     writeFileSync(target, 'export const transport = 1;\n');
-    const run = (args) => fire(process.execPath, [CLI_PATH, ...args], { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const run = (args) =>
+      fire(process.execPath, [CLI_PATH, ...args], { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
 
-    const first = await run(['save', 'Traced the redirect backoff reset to every hop of the chain',
-      '--type', 'bugfix', '--importance', '3', '--files', target,
-      '--lesson', 'RETRACTED reset the backoff on every redirect hop']);
+    const first = await run([
+      'save',
+      'Traced the redirect backoff reset to every hop of the chain',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--files',
+      target,
+      '--lesson',
+      'RETRACTED reset the backoff on every redirect hop',
+    ]);
     expect(first.code, first.stderr).toBe(0);
     const staleId = Number(first.stdout.match(/#(\d+)/)[1]);
 
-    const second = await run(['save', 'Corrected the redirect backoff rule after re-reading the RFC',
-      '--type', 'bugfix', '--importance', '3', '--files', target,
-      '--lesson', 'CURRENT carry the backoff across redirect hops',
-      '--supersedes', String(staleId)]);
+    const second = await run([
+      'save',
+      'Corrected the redirect backoff rule after re-reading the RFC',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--files',
+      target,
+      '--lesson',
+      'CURRENT carry the backoff across redirect hops',
+      '--supersedes',
+      String(staleId),
+    ]);
     expect(second.code, second.stderr).toBe(0);
 
     // The retraction really landed — otherwise this case would pass on a store where the
     // stale row was simply never marked.
     const raw = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
     try {
-      expect(raw.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(staleId).superseded_at)
-        .toBeTruthy();
-    } finally { raw.close(); }
+      expect(
+        raw.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(staleId).superseded_at,
+      ).toBeTruthy();
+    } finally {
+      raw.close();
+    }
 
     const recalled = await run(['recall', target]);
     expect(recalled.code, recalled.stderr).toBe(0);
     expect(recalled.stdout).toContain('CURRENT carry the backoff across redirect hops');
-    expect(recalled.stdout, 'a retracted lesson must not be served as current')
-      .not.toContain('RETRACTED reset the backoff on every redirect hop');
+    expect(recalled.stdout, 'a retracted lesson must not be served as current').not.toContain(
+      'RETRACTED reset the backoff on every redirect hop',
+    );
   }, 60000);
 });
 
@@ -276,7 +336,9 @@ function installedRegistries() {
     return {
       isMemHook,
       installOut: out,
-      installHome, dataDir, cwd,
+      installHome,
+      dataDir,
+      cwd,
       settingsHooks: JSON.parse(readFileSync(join(installHome, '.claude', 'settings.json'), 'utf8')).hooks,
       manifestHooks: JSON.parse(readFileSync(join(REPO, 'hooks', 'hooks.json'), 'utf8')).hooks,
     };
@@ -324,7 +386,8 @@ describe('B3 — install.mjs and hooks/hooks.json register the same hook events'
 
   let installHome;
   beforeAll(async () => {
-    ({ isMemHook, settingsHooks, manifestHooks, installOut, installHome, dataDir, cwd } = await installedRegistries());
+    ({ isMemHook, settingsHooks, manifestHooks, installOut, installHome, dataDir, cwd } =
+      await installedRegistries());
   }, 180000);
 
   // FAILS IF: either registry gains or loses an event the other has — e.g. deleting
@@ -334,8 +397,10 @@ describe('B3 — install.mjs and hooks/hooks.json register the same hook events'
   it('both registries cover the same event set', () => {
     const installEvents = Object.keys(registryShape(settingsHooks)).sort();
     const manifestEvents = Object.keys(registryShape(manifestHooks)).sort();
-    expect(installEvents.length, `no mem hooks in the generated settings.json:\n${installOut.stdout}`)
-      .toBeGreaterThan(5);
+    expect(
+      installEvents.length,
+      `no mem hooks in the generated settings.json:\n${installOut.stdout}`,
+    ).toBeGreaterThan(5);
     expect(installEvents).toEqual(manifestEvents);
     expect(installEvents).toContain('PreCompact');
   });
@@ -353,7 +418,9 @@ describe('B3 — install.mjs and hooks/hooks.json register the same hook events'
       expect(installShape[event], `${event} missing from the settings.json install`).toEqual(manifestRows);
     }
     // …and the exclusion really is only that one bootstrap line.
-    const excluded = Object.values(manifestShape).flat().filter((r) => PLUGIN_ONLY.includes(r));
+    const excluded = Object.values(manifestShape)
+      .flat()
+      .filter((r) => PLUGIN_ONLY.includes(r));
     expect(excluded).toEqual(PLUGIN_ONLY);
   });
 
@@ -362,18 +429,30 @@ describe('B3 — install.mjs and hooks/hooks.json register the same hook events'
   // FAILS IF: the registered PreCompact command points at a wrong path/subcommand, or
   // the entry is absent (the lookup below finds nothing and reds before spawning).
   it('the registered PreCompact command emits the memory block it exists to preserve', async () => {
-    const seeded = await fire(process.execPath, [CLI_PATH, 'save',
-      'Traced the compaction memory loss to the missing PreCompact registration',
-      '--type', 'discovery', '--importance', '3',
-      '--lesson', 'Compaction drops context unless PreCompact re-emits it'],
-    { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const seeded = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'Traced the compaction memory loss to the missing PreCompact registration',
+        '--type',
+        'discovery',
+        '--importance',
+        '3',
+        '--lesson',
+        'Compaction drops context unless PreCompact re-emits it',
+      ],
+      { cwd, env: { CLAUDE_MEM_DIR: dataDir } },
+    );
     expect(seeded.code, seeded.stderr).toBe(0);
 
     const command = (settingsHooks.PreCompact || [])
       .flatMap((cfg) => (cfg.hooks || []).map((h) => h.command))
       .find((c) => /pre-compact/.test(c));
-    expect(command, `no PreCompact command in the generated settings.json: ${JSON.stringify(settingsHooks.PreCompact)}`)
-      .toBeTruthy();
+    expect(
+      command,
+      `no PreCompact command in the generated settings.json: ${JSON.stringify(settingsHooks.PreCompact)}`,
+    ).toBeTruthy();
 
     const r = await fire('/bin/sh', ['-c', command], {
       cwd,
@@ -421,10 +500,15 @@ describe('B6 — post-tool-recall is registered, and inert unless CLAUDE_MEM_SAL
   // `find` returns undefined on both sides), or wired under a matcher that never fires on
   // an edit.
   it('is registered as a PostToolUse hook in BOTH registries, on the edit tools', () => {
-    for (const [label, hooks] of [['hooks/hooks.json', manifestHooks], ['settings.json install', settingsHooks]]) {
+    for (const [label, hooks] of [
+      ['hooks/hooks.json', manifestHooks],
+      ['settings.json install', settingsHooks],
+    ]) {
       const hit = registeredCommand(hooks, 'PostToolUse', 'scripts/post-tool-recall.js');
-      expect(hit, `${label} does not register scripts/post-tool-recall.js:\n${JSON.stringify(hooks.PostToolUse)}`)
-        .toBeTruthy();
+      expect(
+        hit,
+        `${label} does not register scripts/post-tool-recall.js:\n${JSON.stringify(hooks.PostToolUse)}`,
+      ).toBeTruthy();
       // The pre-edit half is matched on Edit|Write|NotebookEdit|Read; the post-edit half
       // only makes sense where an edit happened, so Read is deliberately absent.
       expect(hit.matcher, `${label} matcher`).toBe('Edit|Write|NotebookEdit');
@@ -438,16 +522,29 @@ describe('B6 — post-tool-recall is registered, and inert unless CLAUDE_MEM_SAL
   // without emitting, so the envelope assertion reds.
   it('the registered command emits the post-edit nudge under bind salience', async () => {
     writeFileSync(target, 'export function writeWidget() {\n  invalidateWidgetCache();\n}\n');
-    const saved = await fire(process.execPath, [CLI_PATH, 'save',
-      'Fixed the widget cache invalidation race',
-      '--type', 'bugfix', '--importance', '3', '--files', target,
-      '--lesson', 'Always call invalidateWidgetCache after a write, never on read'],
-    { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const saved = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'Fixed the widget cache invalidation race',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--files',
+        target,
+        '--lesson',
+        'Always call invalidateWidgetCache after a write, never on read',
+      ],
+      { cwd, env: { CLAUDE_MEM_DIR: dataDir } },
+    );
     expect(saved.code, saved.stderr).toBe(0);
     const id = Number(saved.stdout.match(/#(\d+)/)[1]);
 
     const stdin = JSON.stringify({
-      session_id: SESSION, tool_name: 'Edit',
+      session_id: SESSION,
+      tool_name: 'Edit',
       tool_input: { file_path: target, old_string: 'invalidateWidgetCache()', new_string: 'noop()' },
     });
     const bindEnv = { HOME: installHome, CLAUDE_MEM_DIR: dataDir, CLAUDE_MEM_SALIENCE: 'bind' };
@@ -476,12 +573,15 @@ describe('B6 — post-tool-recall is registered, and inert unless CLAUDE_MEM_SAL
   // the same stdin then emits the same envelope with no env var set.
   it('the registered command stays silent at default salience', async () => {
     const stdin = JSON.stringify({
-      session_id: SESSION, tool_name: 'Edit',
+      session_id: SESSION,
+      tool_name: 'Edit',
       tool_input: { file_path: target, old_string: 'invalidateWidgetCache()', new_string: 'noop()' },
     });
     const postCmd = registeredCommand(settingsHooks, 'PostToolUse', 'scripts/post-tool-recall.js');
     const off = await fire('/bin/sh', ['-c', postCmd.command], {
-      cwd, stdin, env: { HOME: installHome, CLAUDE_MEM_DIR: dataDir },
+      cwd,
+      stdin,
+      env: { HOME: installHome, CLAUDE_MEM_DIR: dataDir },
     });
     expect(off.code, off.stderr).toBe(0);
     expect(off.stdout, 'an opt-in surface must add nothing to the default hook chain').toBe('');
@@ -501,12 +601,18 @@ describe('B6 — post-tool-recall is registered, and inert unless CLAUDE_MEM_SAL
 describe('B1 — an unopenable DB is recorded, and does not destroy the episode buffer', () => {
   let dataDir, cwd, project, runtimeDir;
 
-  const post = (payload) => fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
-    cwd, stdin: JSON.stringify(payload), env: { CLAUDE_MEM_DIR: dataDir },
-  });
-  const stop = () => fire(process.execPath, [HOOK_PATH, 'stop'], {
-    cwd, stdin: JSON.stringify({ session_id: 'cc-b1' }), env: { CLAUDE_MEM_DIR: dataDir },
-  });
+  const post = (payload) =>
+    fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
+      cwd,
+      stdin: JSON.stringify(payload),
+      env: { CLAUDE_MEM_DIR: dataDir },
+    });
+  const stop = () =>
+    fire(process.execPath, [HOOK_PATH, 'stop'], {
+      cwd,
+      stdin: JSON.stringify({ session_id: 'cc-b1' }),
+      env: { CLAUDE_MEM_DIR: dataDir },
+    });
 
   const episodeFile = () => join(runtimeDir, `ep-${project}.json`);
   const hookErrorRecords = () => {
@@ -514,7 +620,12 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
     if (!existsSync(dir)) return [];
     return readdirSync(dir)
       .filter((f) => f.endsWith('.jsonl'))
-      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)));
+      .flatMap((f) =>
+        readFileSync(join(dir, f), 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l)),
+      );
   };
 
   /**
@@ -526,12 +637,17 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
   async function bufferTwoEntries() {
     const payloads = [
       {
-        session_id: 'cc-b1', tool_name: 'Write',
-        tool_input: { file_path: join(cwd, 'db-schema.sql'), content: 'CREATE TABLE widgets (id INTEGER);\n' },
+        session_id: 'cc-b1',
+        tool_name: 'Write',
+        tool_input: {
+          file_path: join(cwd, 'db-schema.sql'),
+          content: 'CREATE TABLE widgets (id INTEGER);\n',
+        },
         tool_response: `File created successfully at: ${join(cwd, 'db-schema.sql')}`,
       },
       {
-        session_id: 'cc-b1', tool_name: 'Edit',
+        session_id: 'cc-b1',
+        tool_name: 'Edit',
         tool_input: { file_path: join(cwd, 'widget-cache.mjs'), old_string: 'a', new_string: 'b' },
         tool_response: 'The file has been updated successfully with the new content applied.',
       },
@@ -570,7 +686,9 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
     expect(r.stdout, 'a broken DB must not put anything on the host-visible channel').toBe('');
     expect(r.stderr).not.toMatch(/SQLITE_CANTOPEN|at Object\.<anonymous>/);
 
-    expect(existsSync(episodeFile()), 'the episode buffer was destroyed by a flush that saved nothing').toBe(true);
+    expect(existsSync(episodeFile()), 'the episode buffer was destroyed by a flush that saved nothing').toBe(
+      true,
+    );
     expect(JSON.parse(readFileSync(episodeFile(), 'utf8')).entries).toHaveLength(2);
   }, 60000);
 
@@ -585,8 +703,9 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
     const records = hookErrorRecords();
     const dbOpen = records.filter((x) => /db-open/.test(x.scope));
     expect(dbOpen.length, `no db-open record was written:\n${JSON.stringify(records)}`).toBeGreaterThan(0);
-    expect(dbOpen[0].msg, 'the record must name the failure, else it is unactionable')
-      .toMatch(/unable to open|SQLITE_CANTOPEN|directory/i);
+    expect(dbOpen[0].msg, 'the record must name the failure, else it is unactionable').toMatch(
+      /unable to open|SQLITE_CANTOPEN|directory/i,
+    );
   }, 60000);
 
   // The counter-case, and the reason neither assertion above can be satisfied by "never
@@ -607,7 +726,9 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
     try {
       const row = db.prepare('SELECT COUNT(*) AS c FROM observations').get();
       expect(row.c, 'the flush persisted nothing').toBeGreaterThan(0);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
 
     expect(hookErrorRecords().filter((x) => /db-open/.test(x.scope))).toEqual([]);
   }, 60000);
@@ -632,9 +753,10 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
 describe('F1 — PostToolUse error-recall serves neither retracted nor compressed rows', () => {
   const HARD_FAIL = {
     command: 'quicksilver migrate --compaction-flag',
-    response: 'Error: quicksilver migration failed\n'
-      + 'TypeError: compaction segment is undefined\n'
-      + '    at migrateQuicksilver (/srv/app/migrate.mjs:88:11)\n',
+    response:
+      'Error: quicksilver migration failed\n' +
+      'TypeError: compaction segment is undefined\n' +
+      '    at migrateQuicksilver (/srv/app/migrate.mjs:88:11)\n',
   };
 
   /**
@@ -645,17 +767,32 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
   async function seedAndFire(slug, { supersede = false, mark = null } = {}) {
     const dataDir = sandboxDir('data-' + slug);
     const cwd = sandboxDir('work', slug);
-    const run = (args) => fire(process.execPath, [CLI_PATH, ...args], { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const run = (args) =>
+      fire(process.execPath, [CLI_PATH, ...args], { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
 
-    const first = await run(['save', 'The quicksilver migration kept failing on the compaction segment',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'RETRACTED-ADVICE run quicksilver migrate with the compaction flag disabled']);
+    const first = await run([
+      'save',
+      'The quicksilver migration kept failing on the compaction segment',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'RETRACTED-ADVICE run quicksilver migrate with the compaction flag disabled',
+    ]);
     expect(first.code, first.stderr).toBe(0);
     const staleId = Number(first.stdout.match(/#(\d+)/)[1]);
 
-    const secondArgs = ['save', 'Re-tested quicksilver: the compaction flag was never the migration failure cause',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'CURRENT-ADVICE leave the compaction flag on; the migration failure was a stale segment index'];
+    const secondArgs = [
+      'save',
+      'Re-tested quicksilver: the compaction flag was never the migration failure cause',
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'CURRENT-ADVICE leave the compaction flag on; the migration failure was a stale segment index',
+    ];
     if (supersede) secondArgs.push('--supersedes', String(staleId));
     const second = await run(secondArgs);
     expect(second.code, second.stderr).toBe(0);
@@ -668,14 +805,19 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
       // The tombstone really landed — otherwise the case would pass on a store where the
       // stale row was simply never marked, proving nothing.
       const col = mark ? mark.col : 'superseded_at';
-      expect(raw.prepare(`SELECT ${col} AS v FROM observations WHERE id = ?`).get(staleId).v,
-        `${col} was not set on the stale row`).toBeTruthy();
-    } finally { raw.close(); }
+      expect(
+        raw.prepare(`SELECT ${col} AS v FROM observations WHERE id = ?`).get(staleId).v,
+        `${col} was not set on the stale row`,
+      ).toBeTruthy();
+    } finally {
+      raw.close();
+    }
 
     const r = await fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-' + slug, tool_name: 'Bash',
+        session_id: 'cc-' + slug,
+        tool_name: 'Bash',
         tool_input: { command: HARD_FAIL.command },
         tool_response: HARD_FAIL.response,
       }),
@@ -684,8 +826,16 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
     expect(r.code, `post-tool-use exited ${r.code}\n${r.stderr}`).toBe(0);
 
     // stdout is one JSON envelope per line (episode receipt + error-recall each parse alone).
-    const block = r.stdout.split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    const block = r.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
       .map((e) => e?.hookSpecificOutput?.additionalContext)
       .find((c) => typeof c === 'string' && c.includes('Related memories found for this error'));
     return { staleId, liveId, block, stdout: r.stdout };
@@ -700,14 +850,17 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
 
     // The surface fired at all — "no envelope" must not be able to satisfy this case.
     expect(block, `no error-recall envelope on stdout:\n${stdout}`).toBeTruthy();
-    expect(block, 'the replacement lesson must still be inlined for the model')
-      .toContain('CURRENT-ADVICE leave the compaction flag on');
+    expect(block, 'the replacement lesson must still be inlined for the model').toContain(
+      'CURRENT-ADVICE leave the compaction flag on',
+    );
     expect(block).toContain(`#${liveId}`);
 
-    expect(block, 'a retracted lesson was injected into the model context verbatim')
-      .not.toContain('RETRACTED-ADVICE');
-    expect(block, 'the retracted row must not even be offered as a mem_get pointer')
-      .not.toContain(`#${staleId}`);
+    expect(block, 'a retracted lesson was injected into the model context verbatim').not.toContain(
+      'RETRACTED-ADVICE',
+    );
+    expect(block, 'the retracted row must not even be offered as a mem_get pointer').not.toContain(
+      `#${staleId}`,
+    );
   }, 90000);
 
   // FAILS IF: only `superseded_at` is added and `compressed_into` is left out — the
@@ -715,13 +868,12 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
   // points at a row that `maintain execute --ops purge_stale` is about to delete.
   it('a compressed / purge-marked original is not served either', async () => {
     const { staleId, liveId, block, stdout } = await seedAndFire('f1comp', {
-      mark: { col: 'compressed_into', value: -2 },   // COMPRESSED_PENDING_PURGE
+      mark: { col: 'compressed_into', value: -2 }, // COMPRESSED_PENDING_PURGE
     });
 
     expect(block, `no error-recall envelope on stdout:\n${stdout}`).toBeTruthy();
     expect(block).toContain(`#${liveId}`);
-    expect(block, 'a row queued for purge must not be handed to the model')
-      .not.toContain('RETRACTED-ADVICE');
+    expect(block, 'a row queued for purge must not be handed to the model').not.toContain('RETRACTED-ADVICE');
     expect(block).not.toContain(`#${staleId}`);
   }, 90000);
 });
@@ -751,17 +903,26 @@ describe('F4 — handoff key_decisions excludes a retracted decision', () => {
   beforeEach(() => {
     db = createTestDb();
     insertSession(db, { id: SESSION, project: PROJECT });
-    db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
-                VALUES (?, ?, ?, datetime('now'), ?)`)
-      .run(SESSION, 'work out the cross-region write ordering', 1, Date.now());
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+                VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(SESSION, 'work out the cross-region write ordering', 1, Date.now());
 
     insertObs(db, {
-      sessionId: SESSION, project: PROJECT, type: 'decision', importance: 3,
-      epochOffset: -60000, title: RETRACTED,
-      supersededAt: Date.now(), supersededBy: 999,
+      sessionId: SESSION,
+      project: PROJECT,
+      type: 'decision',
+      importance: 3,
+      epochOffset: -60000,
+      title: RETRACTED,
+      supersededAt: Date.now(),
+      supersededBy: 999,
     });
     insertObs(db, {
-      sessionId: SESSION, project: PROJECT, type: 'decision', importance: 3,
+      sessionId: SESSION,
+      project: PROJECT,
+      type: 'decision',
+      importance: 3,
       title: CURRENT,
     });
   });
@@ -778,8 +939,9 @@ describe('F4 — handoff key_decisions excludes a retracted decision', () => {
     const row = handoffRow();
     expect(row, 'no handoff row was written — the case would prove nothing').toBeTruthy();
     expect(row.key_decisions, 'the surviving decision must still be handed off').toContain(CURRENT);
-    expect(row.key_decisions, 'a retracted decision was handed off as standing policy')
-      .not.toContain(RETRACTED);
+    expect(row.key_decisions, 'a retracted decision was handed off as standing policy').not.toContain(
+      RETRACTED,
+    );
   });
 
   // The surface half: what the next session's UserPromptSubmit block actually renders.
@@ -796,8 +958,9 @@ describe('F4 — handoff key_decisions excludes a retracted decision', () => {
     expect(block).toContain('## Key Decisions');
     const section = block.split('## Key Decisions')[1].split(/\n##\s|<\/session-handoff>/)[0];
     expect(section, 'the surviving decision must still be rendered').toContain(CURRENT);
-    expect(section, 'a retracted decision was rendered to the next session as standing policy')
-      .not.toContain(RETRACTED);
+    expect(section, 'a retracted decision was rendered to the next session as standing policy').not.toContain(
+      RETRACTED,
+    );
   });
 
   // Scope guard: `completed` is the session's own history, not standing policy, so the
@@ -808,8 +971,9 @@ describe('F4 — handoff key_decisions excludes a retracted decision', () => {
   it('the session history still records the decision that was later overturned', () => {
     buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
     const row = handoffRow();
-    expect(row.completed, 'the session did make that decision; its own history must say so')
-      .toContain(RETRACTED);
+    expect(row.completed, 'the session did make that decision; its own history must say so').toContain(
+      RETRACTED,
+    );
     expect(row.completed).toContain(CURRENT);
   });
 });

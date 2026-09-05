@@ -18,7 +18,9 @@ import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 describe('isQuietHooks()', () => {
   let original;
-  beforeEach(() => { original = process.env.MEM_QUIET_HOOKS; });
+  beforeEach(() => {
+    original = process.env.MEM_QUIET_HOOKS;
+  });
   afterEach(() => {
     if (original === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = original;
@@ -140,7 +142,9 @@ describe('server.mjs instructions-mode stderr trace', () => {
       const r = await runServer(env);
       expect(r.stderr).toContain('[mem] instructions: BASE+VERBOSE reason=none');
     } finally {
-      try { rmSync(fresh, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(fresh, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -156,7 +160,9 @@ describe('server.mjs instructions-mode stderr trace', () => {
       const r = await runServer(env);
       expect(r.stderr).toContain('[mem] instructions: BASE reason=env:MEM_QUIET_HOOKS=1');
     } finally {
-      try { rmSync(fresh, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(fresh, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -184,8 +190,12 @@ describe('server.mjs instructions-mode stderr trace', () => {
       const r = await runServer(env);
       expect(r.stderr).toContain('[mem] instructions: BASE reason=adopted:steering');
     } finally {
-      try { rmSync(fresh, { recursive: true, force: true }); } catch {}
-      try { rmSync(fakeHome, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(fresh, { recursive: true, force: true });
+      } catch {}
+      try {
+        rmSync(fakeHome, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -201,7 +211,9 @@ describe('server.mjs instructions-mode stderr trace', () => {
       const r = await runServer(env);
       expect(r.stderr).not.toMatch(/\[mem\] instructions:/);
     } finally {
-      try { rmSync(fresh, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(fresh, { recursive: true, force: true });
+      } catch {}
     }
   });
 });
@@ -255,8 +267,10 @@ describe('buildSessionContextLines — QUIET_HOOKS gating', () => {
 
   afterEach(() => {
     db.close();
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
     rmSync(tmpHome, { recursive: true, force: true });
     if (original === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = original;

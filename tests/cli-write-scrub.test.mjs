@@ -33,25 +33,45 @@ function initDb(dataDir) {
 function runCli(args, dataDir) {
   try {
     const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
-      encoding: 'utf8', timeout: 15000,
-      env: { ...process.env, CLAUDE_MEM_DIR: dataDir, CLAUDE_PROJECT_DIR: dataDir, CLAUDE_MEM_HOOK_RUNNING: undefined },
+      encoding: 'utf8',
+      timeout: 15000,
+      env: {
+        ...process.env,
+        CLAUDE_MEM_DIR: dataDir,
+        CLAUDE_PROJECT_DIR: dataDir,
+        CLAUDE_MEM_HOOK_RUNNING: undefined,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (e) {
-    return { stdout: e.stdout?.toString() || '', stderr: e.stderr?.toString() || '', exitCode: e.status ?? 1 };
+    return {
+      stdout: e.stdout?.toString() || '',
+      stderr: e.stderr?.toString() || '',
+      exitCode: e.status ?? 1,
+    };
   }
 }
 
 describe('CLI write-path secret scrubbing', () => {
   let dir;
-  beforeEach(() => { dir = makeTmpDir(); });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  beforeEach(() => {
+    dir = makeTmpDir();
+  });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   it('update --concepts scrubs secrets before persisting (parity with mem_update)', () => {
     const db = initDb(dir);
     insertSession(db, { id: 'ws', project: 'wsproj', memoryId: 'ws' });
-    const id = Number(insertObs(db, { sessionId: 'ws', project: 'wsproj', title: 'obs', text: 'body' }).lastInsertRowid);
+    const id = Number(
+      insertObs(db, { sessionId: 'ws', project: 'wsproj', title: 'obs', text: 'body' }).lastInsertRowid,
+    );
     db.close();
 
     const r = runCli(['update', String(id), '--concepts', `leaked ${SECRET} token`], dir);
@@ -69,11 +89,19 @@ describe('CLI write-path secret scrubbing', () => {
   it('restore scrubs subtitle/concepts/facts/search_aliases from a backup file', () => {
     // Simulate an unscrubbed/older backup (e.g. made before a SECRET_PATTERNS entry existed):
     // restore re-scrubs title/narrative/lesson via saveObservation but not the signal fields.
-    const backup = [{
-      type: 'bugfix', title: 'restored row', narrative: 'narrative body', project: 'rp',
-      created_at_epoch: Date.now() - 86400000,
-      subtitle: `sub ${SECRET}`, concepts: `con ${SECRET}`, facts: `fac ${SECRET}`, search_aliases: `alias ${SECRET}`,
-    }];
+    const backup = [
+      {
+        type: 'bugfix',
+        title: 'restored row',
+        narrative: 'narrative body',
+        project: 'rp',
+        created_at_epoch: Date.now() - 86400000,
+        subtitle: `sub ${SECRET}`,
+        concepts: `con ${SECRET}`,
+        facts: `fac ${SECRET}`,
+        search_aliases: `alias ${SECRET}`,
+      },
+    ];
     const bfile = join(dir, 'backup.json');
     writeFileSync(bfile, JSON.stringify(backup));
     initDb(dir).close();
@@ -82,7 +110,11 @@ describe('CLI write-path secret scrubbing', () => {
     expect(r.exitCode).toBe(0);
 
     const db = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
-    const row = db.prepare("SELECT subtitle, concepts, facts, search_aliases FROM observations WHERE title = 'restored row'").get();
+    const row = db
+      .prepare(
+        "SELECT subtitle, concepts, facts, search_aliases FROM observations WHERE title = 'restored row'",
+      )
+      .get();
     db.close();
     expect(row, 'restored row missing').toBeTruthy();
     for (const f of ['subtitle', 'concepts', 'facts', 'search_aliases']) {

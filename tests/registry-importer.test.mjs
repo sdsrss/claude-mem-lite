@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { discoverFromTree, parseFrontmatter, extractKeywords, importFromGitHub } from '../registry-importer.mjs';
+import {
+  discoverFromTree,
+  parseFrontmatter,
+  extractKeywords,
+  importFromGitHub,
+} from '../registry-importer.mjs';
 import { createRegistryTestDb } from './test-helpers.mjs';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -21,20 +26,20 @@ const MOCK_TREE = {
 describe('discoverFromTree', () => {
   it('discovers skills from flat layout', () => {
     const results = discoverFromTree(MOCK_TREE, '');
-    const names = results.map(r => r.name);
+    const names = results.map((r) => r.name);
     expect(names).toContain('humanizer');
   });
 
   it('discovers agents', () => {
     const results = discoverFromTree(MOCK_TREE, '');
-    const agents = results.filter(r => r.type === 'agent');
+    const agents = results.filter((r) => r.type === 'agent');
     expect(agents.length).toBeGreaterThanOrEqual(1);
-    expect(agents.some(a => a.name === 'reviewer')).toBe(true);
+    expect(agents.some((a) => a.name === 'reviewer')).toBe(true);
   });
 
   it('discovers plugin-nested skills', () => {
     const results = discoverFromTree(MOCK_TREE, '');
-    const names = results.map(r => r.name);
+    const names = results.map((r) => r.name);
     expect(names).toContain('tdd/tdd-workflow');
   });
 
@@ -58,7 +63,8 @@ describe('discoverFromTree', () => {
 
 describe('parseFrontmatter', () => {
   it('extracts name and description', () => {
-    const content = '---\nname: humanizer\nversion: 2.3.0\ndescription: |\n  Remove AI writing patterns\n---\n# Body';
+    const content =
+      '---\nname: humanizer\nversion: 2.3.0\ndescription: |\n  Remove AI writing patterns\n---\n# Body';
     const { frontmatter, body } = parseFrontmatter(content);
     expect(frontmatter.name).toBe('humanizer');
     expect(frontmatter.version).toBe('2.3.0');
@@ -115,12 +121,26 @@ describe('importFromGitHub', () => {
   });
 
   it('imports a single skill from mocked tree and content', async () => {
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 42, forks_count: 5, updated_at: '2026-01-01' }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\nname: test-skill\ndescription: A test skill\n---\n# Test\nDoes testing.') });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ stargazers_count: 42, forks_count: 5, updated_at: '2026-01-01' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () =>
+          Promise.resolve('---\nname: test-skill\ndescription: A test skill\n---\n# Test\nDoes testing.'),
+      });
 
-    const results = await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch, managedDir: TMP });
+    const results = await importFromGitHub(db, 'https://github.com/user/repo', {
+      fetchFn: mockFetch,
+      managedDir: TMP,
+    });
 
     expect(results.length).toBe(1);
     expect(results[0].name).toBe('test-skill');
@@ -138,12 +158,29 @@ describe('importFromGitHub', () => {
     // 404'd on the non-existent 'main' ref instead of importing. Fix: fall back to
     // repoMeta.default_branch when the URL didn't specify /tree/<branch>.
     const mockFetch = vi.fn(async (u) => {
-      if (u.includes('/git/trees/main')) return { ok: false, status: 404 };            // 'main' does not exist
-      if (u.includes('/git/trees/master')) return { ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) };
-      if (u.includes('raw.githubusercontent.com')) return { ok: true, text: () => Promise.resolve('---\nname: master-skill\ndescription: d\n---\n# T\nbody') };
-      return { ok: true, json: () => Promise.resolve({ stargazers_count: 3, forks_count: 0, updated_at: '2026-01-01', default_branch: 'master' }) }; // repo metadata
+      if (u.includes('/git/trees/main')) return { ok: false, status: 404 }; // 'main' does not exist
+      if (u.includes('/git/trees/master'))
+        return { ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) };
+      if (u.includes('raw.githubusercontent.com'))
+        return {
+          ok: true,
+          text: () => Promise.resolve('---\nname: master-skill\ndescription: d\n---\n# T\nbody'),
+        };
+      return {
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            stargazers_count: 3,
+            forks_count: 0,
+            updated_at: '2026-01-01',
+            default_branch: 'master',
+          }),
+      }; // repo metadata
     });
-    const results = await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch, managedDir: TMP });
+    const results = await importFromGitHub(db, 'https://github.com/user/repo', {
+      fetchFn: mockFetch,
+      managedDir: TMP,
+    });
     expect(results.length).toBe(1);
     expect(results[0].name).toBe('master-skill');
   });
@@ -153,13 +190,22 @@ describe('importFromGitHub', () => {
     // re-import (changed upstream content → new file_hash) downgraded any tier that
     // enrichment had promoted (verified/installed → community), silently lowering the
     // resource's BM25 composite rank (tier is a 1.0/2.0/3.0 multiplier).
-    const importOnce = (content, stars) => importFromGitHub(db, 'https://github.com/user/repo', {
-      managedDir: TMP,
-      fetchFn: vi.fn()
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: stars, forks_count: 1, updated_at: '2026-01-01' }) })
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
-        .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(content) }),
-    });
+    const importOnce = (content, stars) =>
+      importFromGitHub(db, 'https://github.com/user/repo', {
+        managedDir: TMP,
+        fetchFn: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({ stargazers_count: stars, forks_count: 1, updated_at: '2026-01-01' }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+          })
+          .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(content) }),
+      });
 
     await importOnce('---\nname: tiered-skill\ndescription: v1\n---\n# v1', 10);
     // Simulate enrichment promoting the tier.
@@ -173,12 +219,22 @@ describe('importFromGitHub', () => {
   });
 
   it('uses repo name for root SKILL.md', async () => {
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\ndescription: Root skill\n---\n# Root') });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('---\ndescription: Root skill\n---\n# Root'),
+      });
 
-    const results = await importFromGitHub(db, 'https://github.com/user/my-tool', { fetchFn: mockFetch, managedDir: TMP });
+    const results = await importFromGitHub(db, 'https://github.com/user/my-tool', {
+      fetchFn: mockFetch,
+      managedDir: TMP,
+    });
 
     expect(results.length).toBe(1);
     // Root skill without explicit name should use repo name
@@ -186,51 +242,84 @@ describe('importFromGitHub', () => {
   });
 
   it('returns empty for repo with no skills', async () => {
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'src/index.js', type: 'blob' }] }) });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'src/index.js', type: 'blob' }] }),
+      });
 
-    const results = await importFromGitHub(db, 'https://github.com/user/empty', { fetchFn: mockFetch, managedDir: TMP });
+    const results = await importFromGitHub(db, 'https://github.com/user/empty', {
+      fetchFn: mockFetch,
+      managedDir: TMP,
+    });
     expect(results).toEqual([]);
   });
 
   it('rejects invalid GitHub URL', async () => {
-    await expect(importFromGitHub(db, 'https://gitlab.com/foo/bar', { managedDir: TMP }))
-      .rejects.toThrow('Invalid GitHub URL');
+    await expect(importFromGitHub(db, 'https://gitlab.com/foo/bar', { managedDir: TMP })).rejects.toThrow(
+      'Invalid GitHub URL',
+    );
   });
 
   it('skips unchanged resources (hash dedup)', async () => {
     const content = '---\nname: dup\n---\n# Dup';
     // First import
-    const mockFetch1 = vi.fn()
+    const mockFetch1 = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
       .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(content) });
     await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch1, managedDir: TMP });
 
     // Second import with same content
-    const mockFetch2 = vi.fn()
+    const mockFetch2 = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
       .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(content) });
-    const results2 = await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch2, managedDir: TMP });
+    const results2 = await importFromGitHub(db, 'https://github.com/user/repo', {
+      fetchFn: mockFetch2,
+      managedDir: TMP,
+    });
     expect(results2).toEqual([]); // skipped, same hash
   });
 
   it('re-imports when content changes', async () => {
     // First import
-    const mockFetch1 = vi.fn()
+    const mockFetch1 = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
       .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\nname: evolving\n---\n# V1') });
     await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch1, managedDir: TMP });
 
     // Second import with different content
-    const mockFetch2 = vi.fn()
+    const mockFetch2 = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 10 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\nname: evolving\n---\n# V2 updated') });
-    const results2 = await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch2, managedDir: TMP });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('---\nname: evolving\n---\n# V2 updated'),
+      });
+    const results2 = await importFromGitHub(db, 'https://github.com/user/repo', {
+      fetchFn: mockFetch2,
+      managedDir: TMP,
+    });
     expect(results2.length).toBe(1);
     expect(results2[0].name).toBe('evolving');
 
@@ -239,20 +328,34 @@ describe('importFromGitHub', () => {
   });
 
   it('throws on 404 repo', async () => {
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce({ ok: false, status: 404 });
+    const mockFetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 404 });
 
-    await expect(importFromGitHub(db, 'https://github.com/user/missing', { fetchFn: mockFetch, managedDir: TMP }))
-      .rejects.toThrow('Repository not found');
+    await expect(
+      importFromGitHub(db, 'https://github.com/user/missing', { fetchFn: mockFetch, managedDir: TMP }),
+    ).rejects.toThrow('Repository not found');
   });
 
   it('sets repo_forks and repo_updated_at', async () => {
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 10, forks_count: 3, updated_at: '2026-03-01T00:00:00Z' }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'skills/myskill/SKILL.md', type: 'blob' }] }) })
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\nname: myskill\ndescription: A skill\n---\n# My Skill') });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ stargazers_count: 10, forks_count: 3, updated_at: '2026-03-01T00:00:00Z' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'skills/myskill/SKILL.md', type: 'blob' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('---\nname: myskill\ndescription: A skill\n---\n# My Skill'),
+      });
 
-    const results = await importFromGitHub(db, 'https://github.com/user/repo', { fetchFn: mockFetch, managedDir: TMP });
+    const results = await importFromGitHub(db, 'https://github.com/user/repo', {
+      fetchFn: mockFetch,
+      managedDir: TMP,
+    });
     expect(results.length).toBe(1);
 
     const row = db.prepare("SELECT * FROM resources WHERE name = 'myskill'").get();
@@ -286,22 +389,29 @@ describe('importFromGitHub data-dir relocation (D#29)', () => {
     mkdirSync(homeTmp, { recursive: true });
     mkdirSync(ccDir, { recursive: true });
     tracked.push(homeTmp, ccDir);
-    process.env.HOME = homeTmp;          // pre-fix would write here; keeps the test off the real FS
-    process.env.CLAUDE_MEM_DIR = ccDir;  // post-fix the default managed dir follows this
+    process.env.HOME = homeTmp; // pre-fix would write here; keeps the test off the real FS
+    process.env.CLAUDE_MEM_DIR = ccDir; // post-fix the default managed dir follows this
     vi.resetModules();
     const { importFromGitHub: relocatedImport } = await import('../registry-importer.mjs');
     const db = createRegistryTestDb();
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ stargazers_count: 1 }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }) })
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('---\nname: reloc-skill\ndescription: x\n---\n# R') });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tree: [{ path: 'SKILL.md', type: 'blob' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('---\nname: reloc-skill\ndescription: x\n---\n# R'),
+      });
 
     // NO managedDir override → exercises the module default (the production path).
     const results = await relocatedImport(db, 'https://github.com/user/repo', { fetchFn: mockFetch });
     expect(results.length).toBe(1);
     const row = db.prepare("SELECT local_path FROM resources WHERE name = 'reloc-skill'").get();
-    expect(row.local_path.startsWith(join(ccDir, 'managed'))).toBe(true);  // relocated data dir
-    expect(row.local_path.startsWith(homeTmp)).toBe(false);                // NOT the homedir
+    expect(row.local_path.startsWith(join(ccDir, 'managed'))).toBe(true); // relocated data dir
+    expect(row.local_path.startsWith(homeTmp)).toBe(false); // NOT the homedir
     db.close();
   });
 });

@@ -21,20 +21,12 @@ const ROOT = resolve(new URL('..', import.meta.url).pathname);
 
 // Modules that run from ~/.claude-mem-lite/ — every transitive static/dynamic
 // import from any of these must be copied by install.mjs / hook-update.mjs.
-const ENTRY_MODULES = [
-  'cli.mjs',
-  'hook.mjs',
-  'server.mjs',
-  'mem-cli.mjs',
-  'install.mjs',
-];
+const ENTRY_MODULES = ['cli.mjs', 'hook.mjs', 'server.mjs', 'mem-cli.mjs', 'install.mjs'];
 
 function stripComments(src) {
   // Strip `// ...` line comments and `/* ... */` block comments so the
   // import regex doesn't false-fire on example strings inside docblocks.
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|\s)\/\/[^\n]*/g, '$1');
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/g, '$1');
 }
 
 function extractLocalImports(sourcePath) {
@@ -104,10 +96,14 @@ test('scripts/launch.mjs transitive .mjs imports are all shipped (under scripts/
       continue;
     }
     if (!mod.startsWith('scripts/') && !shipped.has(mod)) {
-      errors.push(`${mod} — reachable from scripts/launch.mjs but neither under scripts/ nor in SOURCE_FILES`);
+      errors.push(
+        `${mod} — reachable from scripts/launch.mjs but neither under scripts/ nor in SOURCE_FILES`,
+      );
     }
   }
-  expect(errors, `\nscripts/launch.mjs companion-file invariant broken:\n  ${errors.join('\n  ')}\n`).toEqual([]);
+  expect(errors, `\nscripts/launch.mjs companion-file invariant broken:\n  ${errors.join('\n  ')}\n`).toEqual(
+    [],
+  );
 });
 
 test('package.json files array ships source-files.mjs and every SOURCE_FILES entry', () => {
@@ -122,8 +118,11 @@ test('package.json files array ships source-files.mjs and every SOURCE_FILES ent
   // install.mjs copies them to INSTALL_DIR so `npm install` can run there —
   // a DIRECTORY install does honor package-lock.json.
   const NOT_PACKED_VIA_FILES = new Set(['package.json', 'package-lock.json']);
-  const missingFromPkg = SOURCE_FILES.filter(f => !files.has(f) && !NOT_PACKED_VIA_FILES.has(f));
-  expect(missingFromPkg, `\npackage.json files missing SOURCE_FILES entries:\n  ${missingFromPkg.join('\n  ')}\n`).toEqual([]);
+  const missingFromPkg = SOURCE_FILES.filter((f) => !files.has(f) && !NOT_PACKED_VIA_FILES.has(f));
+  expect(
+    missingFromPkg,
+    `\npackage.json files missing SOURCE_FILES entries:\n  ${missingFromPkg.join('\n  ')}\n`,
+  ).toEqual([]);
 });
 
 // Signed-but-unshipped bricks the npm shape. verifyReleaseFiles fail-CLOSES on a
@@ -138,9 +137,13 @@ test('package.json files array ships every RELEASE_SIGNED_FILES entry', () => {
   // Same carve-out as the SOURCE_FILES assertion above: npm packs package.json
   // implicitly and refuses to pack package-lock.json at all.
   const NOT_PACKED_VIA_FILES = new Set(['package.json', 'package-lock.json']);
-  const signedButUnshipped = RELEASE_SIGNED_FILES
-    .filter(f => !files.has(f) && !NOT_PACKED_VIA_FILES.has(f));
-  expect(signedButUnshipped, `\nsigned but missing from package.json files[]:\n  ${signedButUnshipped.join('\n  ')}\n`).toEqual([]);
+  const signedButUnshipped = RELEASE_SIGNED_FILES.filter(
+    (f) => !files.has(f) && !NOT_PACKED_VIA_FILES.has(f),
+  );
+  expect(
+    signedButUnshipped,
+    `\nsigned but missing from package.json files[]:\n  ${signedButUnshipped.join('\n  ')}\n`,
+  ).toEqual([]);
 });
 
 // Drift guard for the lockless-registry-install fix: npm refuses to pack
@@ -160,7 +163,9 @@ test('release workflow generates npm-shrinkwrap before smoke and publish', () =>
   // workflow step loudly rather than silently unlocking installs). The entry
   // is harmless in dev where the file never exists.
   const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
-  expect(pkg.files, 'files[] must list npm-shrinkwrap.json or npm pack drops it').toContain('npm-shrinkwrap.json');
+  expect(pkg.files, 'files[] must list npm-shrinkwrap.json or npm pack drops it').toContain(
+    'npm-shrinkwrap.json',
+  );
 });
 
 // v3.85.1: the release's headline change — both shipped `ci-gate.mjs` invocations running
@@ -175,10 +180,11 @@ test('release workflow generates npm-shrinkwrap before smoke and publish', () =>
 // is satisfied by a comment or a usage line, which is precisely how two of that review's
 // mutations walked past ci-gate.mjs's own source-scanning assertions.
 test('both shipped ci-gate invocations run in strict mode', () => {
-  const activeGateLines = (p) => readFileSync(resolve(ROOT, p), 'utf8')
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => !l.startsWith('#') && l.startsWith('run: node benchmark/ci-gate.mjs'));
+  const activeGateLines = (p) =>
+    readFileSync(resolve(ROOT, p), 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => !l.startsWith('#') && l.startsWith('run: node benchmark/ci-gate.mjs'));
 
   // publish.yml: unconditionally strict. This is the tag path — a stale baseline here means
   // the comparison guarding the release is untrustworthy, which is the whole argument.
@@ -219,11 +225,12 @@ test('ci-gate rejects unknown flags instead of silently ignoring them', () => {
 // job only tells you that a week later, in mail nobody expected. Fail here instead.
 test('weekly sandbox workflow points at phase scripts that exist', () => {
   const wf = readFileSync(resolve(ROOT, '.github/workflows/sandbox-install.yml'), 'utf8');
-  const referenced = [...wf.matchAll(/tests\/sandbox\/(phase[A-Z][A-Za-z-]*\.mjs)/g)]
-    .map(m => m[1]);
+  const referenced = [...wf.matchAll(/tests\/sandbox\/(phase[A-Z][A-Za-z-]*\.mjs)/g)].map((m) => m[1]);
   expect(new Set(referenced)).toEqual(new Set(['phaseA-plugin.mjs', 'phaseB-npm.mjs', 'phaseC-update.mjs']));
   for (const f of new Set(referenced)) {
-    expect(existsSync(resolve(ROOT, 'tests/sandbox', f)), `${f} referenced by the workflow but missing`).toBe(true);
+    expect(existsSync(resolve(ROOT, 'tests/sandbox', f)), `${f} referenced by the workflow but missing`).toBe(
+      true,
+    );
   }
 });
 

@@ -4,7 +4,17 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, readdirSync, statSync, unlinkSync, chmodSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  renameSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  chmodSync,
+} from 'fs';
 import { inferProject, debugCatch } from './utils.mjs';
 import { CITE_RECALL_FILE_PREFIX } from './lib/cite-recall-path.mjs';
 import { ensureDbWithWalRecovery, DB_DIR } from './schema.mjs';
@@ -19,7 +29,13 @@ import { recordHookError } from './lib/hook-telemetry.mjs';
 // of `hook-shared.mjs` is unchanged; those four imports now live with the moved code.
 export { callLLM } from './lib/llm-call.mjs';
 export { isQuietHooks, isAdoptedHere, effectiveQuiet } from './lib/quiet-scope.mjs';
-export { HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE, HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS } from './lib/handoff-constants.mjs';
+export {
+  HANDOFF_EXPIRY_CLEAR,
+  HANDOFF_EXPIRY_EXIT,
+  HANDOFF_ANCHOR_MAX_AGE,
+  HANDOFF_MATCH_THRESHOLD,
+  CONTINUE_KEYWORDS,
+} from './lib/handoff-constants.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -33,10 +49,10 @@ export const SCRIPT_PATH = process.argv[1];
 
 // Timing constants
 export const EPISODE_BUFFER_SIZE = 10;
-export const EPISODE_TIME_GAP_MS = 5 * 60 * 1000;       // 5 min
-export const SESSION_EXPIRY_MS = 12 * 60 * 60 * 1000;    // 12h
-export const STALE_SESSION_MS = 24 * 60 * 60 * 1000;     // 24h
-export const STALE_LOCK_MS = 30000;                       // 30s
+export const EPISODE_TIME_GAP_MS = 5 * 60 * 1000; // 5 min
+export const SESSION_EXPIRY_MS = 12 * 60 * 60 * 1000; // 12h
+export const STALE_SESSION_MS = 24 * 60 * 60 * 1000; // 24h
+export const STALE_LOCK_MS = 30000; // 30s
 
 // The background-maintenance mutex, defined HERE next to the sweeper policy it has to
 // escape. cleanStaleLockFiles() below unlinks any `*.lock` older than STALE_LOCK_MS
@@ -47,8 +63,8 @@ export const STALE_LOCK_MS = 30000;                       // 30s
 // built its own path from a literal, so renaming the lock left it green with the hazard
 // back. proc-lock's own staleness policy (age OR provably-dead pid) is the correct one.
 export const AUTO_MAINTAIN_LOCK = 'auto-maintain.proclock';
-export const DEDUP_WINDOW_MS = 5 * 60 * 1000;            // 5 min (title dedup)
-export const RELATED_OBS_WINDOW_MS = 7 * DAY_MS;       // 7 days
+export const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 min (title dedup)
+export const RELATED_OBS_WINDOW_MS = 7 * DAY_MS; // 7 days
 export const FALLBACK_OBS_WINDOW_MS = RELATED_OBS_WINDOW_MS; // same window
 // Candidate rows the SessionStart Key Context surface considers (hook-context.mjs
 // keyObs; each of the two sections then renders at most 5). The user-prompt
@@ -114,9 +130,22 @@ export const STALE_EPISODE_BUFFER_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // from accumulating across crashes; equivalent to the manual path in
 // `node install.mjs cleanup` but age-gated so concurrent in-flight workers / active
 // read sessions are never raced.
-export function sweepOrphanEpisodeFiles(runtimeDir, { ageMs = ORPHAN_EPISODE_AGE_MS, readsAgeMs = ORPHAN_READS_AGE_MS, bufferAgeMs = STALE_EPISODE_BUFFER_AGE_MS, now = Date.now(), onSweep = () => {} } = {}) {
+export function sweepOrphanEpisodeFiles(
+  runtimeDir,
+  {
+    ageMs = ORPHAN_EPISODE_AGE_MS,
+    readsAgeMs = ORPHAN_READS_AGE_MS,
+    bufferAgeMs = STALE_EPISODE_BUFFER_AGE_MS,
+    now = Date.now(),
+    onSweep = () => {},
+  } = {},
+) {
   let entries;
-  try { entries = readdirSync(runtimeDir); } catch { return 0; }
+  try {
+    entries = readdirSync(runtimeDir);
+  } catch {
+    return 0;
+  }
   const cutoff = now - ageMs;
   const readsCutoff = now - readsAgeMs;
   const bufferCutoff = now - bufferAgeMs;
@@ -158,11 +187,17 @@ export function sweepOrphanEpisodeFiles(runtimeDir, { ageMs = ORPHAN_EPISODE_AGE
       // residue name ends in `.tmp-<pid>`, never `.json`.
       const fileCutoff = isReads ? readsCutoff : isStaleBuffer ? bufferCutoff : cutoff;
       if (statSync(full).mtimeMs < fileCutoff) {
-        try { onSweep(f, isStaleBuffer ? 'buffer' : isReads ? 'reads' : isCrashResidue ? 'residue' : 'episode'); } catch { /* logging must never block the sweep */ }
+        try {
+          onSweep(f, isStaleBuffer ? 'buffer' : isReads ? 'reads' : isCrashResidue ? 'residue' : 'episode');
+        } catch {
+          /* logging must never block the sweep */
+        }
         unlinkSync(full);
         count++;
       }
-    } catch { /* concurrent unlink / permission — ignore */ }
+    } catch {
+      /* concurrent unlink / permission — ignore */
+    }
   }
   return count;
 }
@@ -187,10 +222,10 @@ export const STALE_PROJECT_MARKER_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Regenerated on demand; safe to lose at any time.
 export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
-  'session-',                 // project → memory-session-id pointer
-  CITE_RECALL_FILE_PREFIX,    // last session's cite-recall snapshot (nudge input)
-  '.skill-cooldown-',         // suggestion throttle timestamp
-  '.skill-reco-cooldown-',    // recommendation throttle timestamp
+  'session-', // project → memory-session-id pointer
+  CITE_RECALL_FILE_PREFIX, // last session's cite-recall snapshot (nudge input)
+  '.skill-cooldown-', // suggestion throttle timestamp
+  '.skill-reco-cooldown-', // recommendation throttle timestamp
 ]);
 
 // Records of a completed side effect — never age out. `ep-`/`ep-flush-`/
@@ -255,19 +290,26 @@ export function sentinelPrefixesFromShell(shellSource) {
  * @param {{ageMs?: number, now?: number, gcPrefixes?: string[], preservedPrefixes?: string[]}} [opts]
  * @returns {number}
  */
-export function sweepStaleProjectMarkers(runtimeDir, {
-  ageMs = STALE_PROJECT_MARKER_AGE_MS,
-  now = Date.now(),
-  gcPrefixes = GC_PROJECT_MARKER_PREFIXES,
-  preservedPrefixes = GC_PRESERVED_MARKER_PREFIXES,
-  env = process.env,
-} = {}) {
+export function sweepStaleProjectMarkers(
+  runtimeDir,
+  {
+    ageMs = STALE_PROJECT_MARKER_AGE_MS,
+    now = Date.now(),
+    gcPrefixes = GC_PROJECT_MARKER_PREFIXES,
+    preservedPrefixes = GC_PRESERVED_MARKER_PREFIXES,
+    env = process.env,
+  } = {},
+) {
   // Kill switch (naming mirrors SKIP_COMPRESS / SKIP_OPTIMIZE / SKIP_SAVE_ENRICH):
   // this is the only sweep that deletes files a user might want to inspect, so a
   // released default that reclaims state needs a documented way back out.
   if (env.CLAUDE_MEM_SKIP_MARKER_GC === '1') return 0;
   let entries;
-  try { entries = readdirSync(runtimeDir); } catch { return 0; }
+  try {
+    entries = readdirSync(runtimeDir);
+  } catch {
+    return 0;
+  }
   const cutoff = now - ageMs;
   let count = 0;
   for (const f of entries) {
@@ -277,8 +319,13 @@ export function sweepStaleProjectMarkers(runtimeDir, {
     if (!gcPrefixes.some((p) => f.startsWith(p))) continue;
     const full = join(runtimeDir, f);
     try {
-      if (statSync(full).mtimeMs < cutoff) { unlinkSync(full); count++; }
-    } catch { /* concurrent unlink / permission / directory — ignore */ }
+      if (statSync(full).mtimeMs < cutoff) {
+        unlinkSync(full);
+        count++;
+      }
+    } catch {
+      /* concurrent unlink / permission / directory — ignore */
+    }
   }
   return count;
 }
@@ -351,7 +398,9 @@ export function spawnBackground(bgEvent, ...extraArgs) {
       stdio: 'ignore',
       env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1' },
     });
-    child.on('error', (err) => { debugCatch(err, 'spawnBackground'); });
+    child.on('error', (err) => {
+      debugCatch(err, 'spawnBackground');
+    });
     child.on('exit', () => {});
     child.unref();
   } catch (err) {
@@ -361,5 +410,6 @@ export function spawnBackground(bgEvent, ...extraArgs) {
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
-export function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
+export function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}

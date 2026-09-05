@@ -24,20 +24,34 @@ import { memdirPath, removePluginSection, removePluginDoc, isAdopted as memdirIs
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
 
-function slugSnake(slug) { return String(slug).replace(/[^a-zA-Z0-9]/g, '_'); }
+function slugSnake(slug) {
+  return String(slug).replace(/[^a-zA-Z0-9]/g, '_');
+}
 
-export function claudeMdPath(cwd) { return join(cwd, 'CLAUDE.md'); }
-function dotClaudeDir(cwd) { return join(cwd, '.claude'); }
-export function detailDocPath(cwd, slug) { return join(dotClaudeDir(cwd), `plugin_${slugSnake(slug)}.md`); }
-function stateFilePath(cwd, slug) { return join(dotClaudeDir(cwd), `.plugin_${slugSnake(slug)}_state.json`); }
+export function claudeMdPath(cwd) {
+  return join(cwd, 'CLAUDE.md');
+}
+function dotClaudeDir(cwd) {
+  return join(cwd, '.claude');
+}
+export function detailDocPath(cwd, slug) {
+  return join(dotClaudeDir(cwd), `plugin_${slugSnake(slug)}.md`);
+}
+function stateFilePath(cwd, slug) {
+  return join(dotClaudeDir(cwd), `.plugin_${slugSnake(slug)}_state.json`);
+}
 
 // First line of the detail doc — an invisible (in rendered markdown) marker that
 // lets us distinguish our generated copy from a user's same-named file.
-function managedByMarker(slug) { return `<!-- managed-by: ${slug} -->`; }
+function managedByMarker(slug) {
+  return `<!-- managed-by: ${slug} -->`;
+}
 
 // ─── Sentinel rendering & parsing ────────────────────────────────────────────
 
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Slug-scoped so stripping our block never disturbs another plugin's block
 // (e.g. code-graph-mcp's `<!-- code-graph-mcp:begin -->`) sitting in the same
@@ -45,15 +59,23 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // are `\r?\n` (not bare `\n`) so a CLAUDE.md re-saved with Windows CRLF endings
 // still matches — otherwise the block read as "absent" and a fresh LF copy got
 // appended every SessionStart, growing the file without bound (review C1/H2).
-function blockBody(esc) { return `<!-- ${esc}:begin (v\\d+) -->\\r?\\n([\\s\\S]*?)\\r?\\n<!-- ${esc}:end -->`; }
-function blockRegex(slug) { return new RegExp(blockBody(escapeRe(slug))); }
-function blockRegexG(slug) { return new RegExp(blockBody(escapeRe(slug)), 'g'); }
+function blockBody(esc) {
+  return `<!-- ${esc}:begin (v\\d+) -->\\r?\\n([\\s\\S]*?)\\r?\\n<!-- ${esc}:end -->`;
+}
+function blockRegex(slug) {
+  return new RegExp(blockBody(escapeRe(slug)));
+}
+function blockRegexG(slug) {
+  return new RegExp(blockBody(escapeRe(slug)), 'g');
+}
 
 function renderBlock(slug, version, body) {
   return `<!-- ${slug}:begin ${version} -->\n${body}\n<!-- ${slug}:end -->`;
 }
 
-function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
+function sha256(s) {
+  return createHash('sha256').update(s).digest('hex');
+}
 
 // `atomicWriteFileSync`, not a local temp+rename (audit 2026-09-02 P0-5). The local twin
 // renamed onto the PATH; when a project's CLAUDE.md is a symlink into a dotfiles repo
@@ -71,7 +93,12 @@ function writeState(cwd, slug, state) {
 
 function clearState(cwd, slug) {
   const p = stateFilePath(cwd, slug);
-  if (existsSync(p)) try { unlinkSync(p); } catch { /* best-effort */ }
+  if (existsSync(p))
+    try {
+      unlinkSync(p);
+    } catch {
+      /* best-effort */
+    }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -110,9 +137,11 @@ export function isAdopted(cwd, slug) {
  * removed it. removeManaged cleans all three pieces, so sweep on any of them.
  */
 export function hasResidue(cwd, slug) {
-  return readBlock(cwd, slug).body !== null
-    || existsSync(detailDocPath(cwd, slug))
-    || existsSync(stateFilePath(cwd, slug));
+  return (
+    readBlock(cwd, slug).body !== null ||
+    existsSync(detailDocPath(cwd, slug)) ||
+    existsSync(stateFilePath(cwd, slug))
+  );
 }
 
 /**
@@ -131,7 +160,11 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
   const dp = detailDocPath(cwd, slug);
   if (!existsSync(dp)) return true;
   let cur;
-  try { cur = readFileSync(dp, 'utf8'); } catch { return true; }
+  try {
+    cur = readFileSync(dp, 'utf8');
+  } catch {
+    return true;
+  }
   return cur !== `${managedByMarker(slug)}\n${doc}`;
 }
 
@@ -227,21 +260,32 @@ export function removeManaged(cwd, slug) {
       // unadopt fully restores the pre-adopt state — mirrors the emptied-.claude/
       // cleanup below ("unadopt leaves no trace").
       if (raw.trim() === '') {
-        try { unlinkSync(p); } catch { atomicWrite(p, raw); }
+        try {
+          unlinkSync(p);
+        } catch {
+          atomicWrite(p, raw);
+        }
       } else {
         atomicWrite(p, raw);
       }
     }
   }
   const dp = detailDocPath(cwd, slug);
-  if (existsSync(dp)) try { unlinkSync(dp); } catch { /* best-effort */ }
+  if (existsSync(dp))
+    try {
+      unlinkSync(dp);
+    } catch {
+      /* best-effort */
+    }
   clearState(cwd, slug);
   // Drop an emptied .claude/ so unadopt leaves no trace (skips if it holds
   // anything else — e.g. settings.local.json).
   try {
     const dir = dotClaudeDir(cwd);
     if (existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir);
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
   return { action };
 }
 

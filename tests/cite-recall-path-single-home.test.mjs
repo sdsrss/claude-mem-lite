@@ -18,7 +18,11 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { citeRecallPathFor, citeRecallProjectKey, CITE_RECALL_FILE_PREFIX } from '../lib/cite-recall-path.mjs';
+import {
+  citeRecallPathFor,
+  citeRecallProjectKey,
+  CITE_RECALL_FILE_PREFIX,
+} from '../lib/cite-recall-path.mjs';
 import { buildCiteRecallNudge } from '../lib/cite-back-hint.mjs';
 import { GC_PROJECT_MARKER_PREFIXES } from '../hook-shared.mjs';
 import { walkShipped, sweepShipped } from './shipped-tree.mjs';
@@ -46,7 +50,13 @@ beforeEach(() => {
   runtimeDir = join(mkdtempSync(join(tmpdir(), 'mem-citerecall-')), 'runtime');
   mkdirSync(runtimeDir, { recursive: true });
 });
-afterEach(() => { try { rmSync(dirname(runtimeDir), { recursive: true, force: true }); } catch { /* ignore */ } });
+afterEach(() => {
+  try {
+    rmSync(dirname(runtimeDir), { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+});
 
 describe('cite-recall path — one definition', () => {
   it('sanitizes and caps the project key', () => {
@@ -86,10 +96,14 @@ describe('cite-recall path — one definition', () => {
     // the copy had lived in; the v3.92.0 review added a third derivation to
     // `lib/edge-attribution.mjs` and all five cases stayed green. The N+1th copy is exactly
     // what a "one home" rule is for, and it is the one a name list cannot see.
-    expect(sweepShipped(SANITIZE_RULE, PATH_ALLOWED),
-      'a shipped file re-derives the cite-recall sanitize rule').toEqual([]);
-    expect(sweepShipped(/`cite-recall-\$\{/, PATH_ALLOWED),
-      'a shipped file rebuilds the cite-recall filename').toEqual([]);
+    expect(
+      sweepShipped(SANITIZE_RULE, PATH_ALLOWED),
+      'a shipped file re-derives the cite-recall sanitize rule',
+    ).toEqual([]);
+    expect(
+      sweepShipped(/`cite-recall-\$\{/, PATH_ALLOWED),
+      'a shipped file rebuilds the cite-recall filename',
+    ).toEqual([]);
   });
 
   it('the two known consumers import the shared definition', () => {
@@ -99,7 +113,9 @@ describe('cite-recall path — one definition', () => {
       expect(read(rel), `${rel} must import the shared definition`).toMatch(/cite-recall-path\.mjs'/);
     }
     // hook-shared.mjs takes only the prefix, so it is checked on the literal, not the rule.
-    expect(read('hook-shared.mjs'), 'hook-shared.mjs must not re-type the prefix').not.toMatch(/'cite-recall-'/);
+    expect(read('hook-shared.mjs'), 'hook-shared.mjs must not re-type the prefix').not.toMatch(
+      /'cite-recall-'/,
+    );
   });
 
   it('the scan can say NO', () => {

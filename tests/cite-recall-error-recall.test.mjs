@@ -22,19 +22,41 @@ import { execFileSync } from 'child_process';
 const SCRIPT = resolve(new URL('..', import.meta.url).pathname, 'benchmark/cite-recall.mjs');
 
 function runCiteRecall(dir, startISO, endISO) {
-  const out = execFileSync('node', [SCRIPT, `--dir=${dir}`, '--json', `--start=${startISO}`, `--end=${endISO}`], { encoding: 'utf8' });
+  const out = execFileSync(
+    'node',
+    [SCRIPT, `--dir=${dir}`, '--json', `--start=${startISO}`, `--end=${endISO}`],
+    { encoding: 'utf8' },
+  );
   return Object.fromEntries((JSON.parse(out).per_hook || []).map((h) => [h.hook, h]));
 }
 
 describe('cite-recall :error-recall bucket (D#51)', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cite-err-')); });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cite-err-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   // PostToolUse:Bash error-recall attachment (real shape: stdout carries the hint block,
   // a co-located episode-flush line trips the loose [mem] marker in the wild).
-  const errRecall = (T, body) => ({ timestamp: T, sessionId: 's1', type: 'attachment', attachment: { hookName: 'PostToolUse:Bash', command: 'node "/x/post-tool-use.sh"', stdout: body } });
-  const cite = (T, text) => ({ timestamp: T, sessionId: 's1', type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  const errRecall = (T, body) => ({
+    timestamp: T,
+    sessionId: 's1',
+    type: 'attachment',
+    attachment: { hookName: 'PostToolUse:Bash', command: 'node "/x/post-tool-use.sh"', stdout: body },
+  });
+  const cite = (T, text) => ({
+    timestamp: T,
+    sessionId: 's1',
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] },
+  });
 
   it('routes error-recall #NN to :error-recall with row-anchored extraction; excludes foreign/quoted/bare ids', () => {
     const now = Date.now();
@@ -49,24 +71,33 @@ describe('cite-recall :error-recall bucket (D#51)', () => {
     // A2: a FOREIGN (code-graph) PostToolUse:Bash attachment containing [mem] + code-comment
     // #NN, plus a grepped `<memory-context` literal — neither is a real mem injection.
     const foreign = {
-      timestamp: T, sessionId: 's1', type: 'attachment',
+      timestamp: T,
+      sessionId: 's1',
+      type: 'attachment',
       attachment: {
-        hookName: 'PostToolUse:Bash', command: 'node "/x/code-graph/hook.mjs"',
-        stdout: '[code-graph] AST view (ran alongside [mem]):\nlib/x.mjs:16  // #123 / #45678 at a word boundary\n<memory-context relevance="high"> (grepped source literal, not an inject)',
+        hookName: 'PostToolUse:Bash',
+        command: 'node "/x/code-graph/hook.mjs"',
+        stdout:
+          '[code-graph] AST view (ran alongside [mem]):\nlib/x.mjs:16  // #123 / #45678 at a word boundary\n<memory-context relevance="high"> (grepped source literal, not an inject)',
       },
     };
-    writeFileSync(join(dir, 't.jsonl'), [
-      errRecall(T, block),
-      foreign,
-      cite(T, 'I looked at #3860 and applied it.'),
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      join(dir, 't.jsonl'),
+      [errRecall(T, block), foreign, cite(T, 'I looked at #3860 and applied it.')]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
-    const byHook = runCiteRecall(dir, new Date(now - 3600000).toISOString(), new Date(now + 3600000).toISOString());
+    const byHook = runCiteRecall(
+      dir,
+      new Date(now - 3600000).toISOString(),
+      new Date(now + 3600000).toISOString(),
+    );
     const er = byHook['PostToolUse:Bash:error-recall'];
 
     expect(er).toBeDefined();
-    expect(er.inject_unique).toBe(2);              // #3860 + #8736 only
-    expect(er.cited_unique).toBe(1);               // #3860 cited
+    expect(er.inject_unique).toBe(2); // #3860 + #8736 only
+    expect(er.cited_unique).toBe(1); // #3860 cited
     // #9999 (quoted in a body), #123/#45678 (foreign code comment), and the bare
     // mem_get(ids=[3860,8736]) numbers must NOT create their own generic bucket. A
     // grepped `<memory-context` literal in foreign Bash output must not fabricate a
@@ -86,12 +117,16 @@ describe('cite-recall :error-recall bucket (D#51)', () => {
       '[claude-mem-lite] Related memories found for this error:',
       '  #4242 [decision] pick option D over B',
     ].join('\n'); // note: no `[mem]` line — old loose-marker gate would skip this entirely
-    writeFileSync(join(dir, 't.jsonl'), [
-      errRecall(T, block),
-      cite(T, 'per #4242 I chose D'),
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      join(dir, 't.jsonl'),
+      [errRecall(T, block), cite(T, 'per #4242 I chose D')].map((e) => JSON.stringify(e)).join('\n'),
+    );
 
-    const byHook = runCiteRecall(dir, new Date(now - 3600000).toISOString(), new Date(now + 3600000).toISOString());
+    const byHook = runCiteRecall(
+      dir,
+      new Date(now - 3600000).toISOString(),
+      new Date(now + 3600000).toISOString(),
+    );
     const er = byHook['PostToolUse:Bash:error-recall'];
     expect(er).toBeDefined();
     expect(er.inject_unique).toBe(1);

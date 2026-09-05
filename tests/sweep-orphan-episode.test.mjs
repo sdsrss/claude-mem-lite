@@ -19,7 +19,9 @@ describe('sweepOrphanEpisodeFiles', () => {
   });
 
   afterEach(() => {
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {}
   });
 
   function writeWithMtime(name, ageMs) {
@@ -38,7 +40,7 @@ describe('sweepOrphanEpisodeFiles', () => {
 
   it('returns 0 when no sweep-eligible files exist (unrelated file + fresh reads survive)', () => {
     writeWithMtime('not-an-episode.json', 99 * 3600 * 1000); // never a sweep target
-    writeWithMtime('reads-foo.txt', 2 * 3600 * 1000);        // reads tracker, but < 24h → active
+    writeWithMtime('reads-foo.txt', 2 * 3600 * 1000); // reads tracker, but < 24h → active
     expect(sweepOrphanEpisodeFiles(dir)).toBe(0);
     expect(existsSync(join(dir, 'not-an-episode.json'))).toBe(true);
     expect(existsSync(join(dir, 'reads-foo.txt'))).toBe(true);
@@ -46,7 +48,7 @@ describe('sweepOrphanEpisodeFiles', () => {
 
   it('sweeps reads-*.txt older than the 24h floor but keeps active (< 24h) ones', () => {
     const abandoned = writeWithMtime('reads-old.txt', 25 * 3600 * 1000); // 25h → abandoned
-    const active = writeWithMtime('reads-active.txt', 12 * 3600 * 1000);  // 12h → long read session
+    const active = writeWithMtime('reads-active.txt', 12 * 3600 * 1000); // 12h → long read session
     expect(sweepOrphanEpisodeFiles(dir)).toBe(1);
     expect(existsSync(abandoned)).toBe(false);
     expect(existsSync(active)).toBe(true);
@@ -83,7 +85,7 @@ describe('sweepOrphanEpisodeFiles', () => {
   it('only matches known prefixes (ep-flush/pending/reads) — no over-broad sweep', () => {
     writeWithMtime('ep-flush-orphan.json', 99 * 3600 * 1000);
     writeWithMtime('pending-orphan.json', 99 * 3600 * 1000);
-    writeWithMtime('reads-baz.txt', 99 * 3600 * 1000);       // abandoned tracker → swept (>24h)
+    writeWithMtime('reads-baz.txt', 99 * 3600 * 1000); // abandoned tracker → swept (>24h)
     writeWithMtime('cite-recall-foo.json', 99 * 3600 * 1000); // cite-recall lives forever
     writeWithMtime('session-bar', 99 * 3600 * 1000);
 
@@ -177,14 +179,22 @@ describe('sweepOrphanEpisodeFiles', () => {
       writeWithMtime('ep-dead-project.json', 8 * 24 * 3600 * 1000);
       writeWithMtime('ep-flush-old.json', 2 * 3600 * 1000);
       const seen = [];
-      sweepOrphanEpisodeFiles(dir, { onSweep: (name, kind) => seen.push([name, kind, existsSync(join(dir, name))]) });
+      sweepOrphanEpisodeFiles(dir, {
+        onSweep: (name, kind) => seen.push([name, kind, existsSync(join(dir, name))]),
+      });
       expect(seen).toContainEqual(['ep-dead-project.json', 'buffer', true]);
       expect(seen).toContainEqual(['ep-flush-old.json', 'episode', true]);
     });
 
     it('a throwing onSweep does not abort the sweep', () => {
       writeWithMtime('ep-dead-project.json', 8 * 24 * 3600 * 1000);
-      expect(sweepOrphanEpisodeFiles(dir, { onSweep: () => { throw new Error('logger down'); } })).toBe(1);
+      expect(
+        sweepOrphanEpisodeFiles(dir, {
+          onSweep: () => {
+            throw new Error('logger down');
+          },
+        }),
+      ).toBe(1);
       expect(readdirSync(dir)).toEqual([]);
     });
 

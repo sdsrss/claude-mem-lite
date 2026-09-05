@@ -20,7 +20,7 @@ describe('v26 schema migration', () => {
   it('observations table has injection_count (default 0) + last_injected_at (NULL)', () => {
     const db = createTestDb();
     const cols = db.prepare('PRAGMA table_info(observations)').all();
-    const byName = new Map(cols.map(c => [c.name, c]));
+    const byName = new Map(cols.map((c) => [c.name, c]));
     expect(byName.has('injection_count')).toBe(true);
     expect(byName.has('last_injected_at')).toBe(true);
 
@@ -37,9 +37,9 @@ describe('v26 schema migration', () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
     const res = insertObs(db, { title: 'noise test', type: 'bugfix' });
-    const row = db.prepare(
-      'SELECT injection_count, last_injected_at FROM observations WHERE id = ?'
-    ).get(res.lastInsertRowid);
+    const row = db
+      .prepare('SELECT injection_count, last_injected_at FROM observations WHERE id = ?')
+      .get(res.lastInsertRowid);
     expect(row.injection_count).toBe(0);
     expect(row.last_injected_at).toBeNull();
   });
@@ -69,9 +69,12 @@ describe('noisePenaltyClause SQL', () => {
       type: 'bugfix',
       accessCount: access_count,
     });
-    db.prepare('UPDATE observations SET injection_count = ? WHERE id = ?')
-      .run(injection_count, res.lastInsertRowid);
-    const row = db.prepare(`SELECT ${noisePenaltyClause('o')} as p FROM observations o WHERE id = ?`)
+    db.prepare('UPDATE observations SET injection_count = ? WHERE id = ?').run(
+      injection_count,
+      res.lastInsertRowid,
+    );
+    const row = db
+      .prepare(`SELECT ${noisePenaltyClause('o')} as p FROM observations o WHERE id = ?`)
       .get(res.lastInsertRowid);
     return row.p;
   }
@@ -112,13 +115,17 @@ describe('noisePenaltyClause SQL', () => {
     // COALESCE is defense-in-depth for partial migrations / concurrent upgrades.
     // The NOT NULL DEFAULT 0 migration makes NULL unreachable via normal inserts,
     // but we verify the expression handles NULL inputs correctly in isolation.
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT (CASE
         WHEN COALESCE(NULL, 0) >= 8 AND COALESCE(NULL, 0) > COALESCE(NULL, 0) * 5 THEN 0.2
         WHEN COALESCE(NULL, 0) >= 4 AND COALESCE(NULL, 0) > COALESCE(NULL, 0) * 3 THEN 0.5
         ELSE 1.0
       END) as p
-    `).get();
+    `,
+      )
+      .get();
     expect(row.p).toBeCloseTo(1.0);
   });
 });
@@ -144,19 +151,21 @@ describe('hook-memory searchRelevantMemories → injection_count bump', () => {
     });
     const obsId = Number(obs.lastInsertRowid);
 
-    const before = db.prepare('SELECT injection_count, access_count FROM observations WHERE id = ?')
+    const before = db
+      .prepare('SELECT injection_count, access_count FROM observations WHERE id = ?')
       .get(obsId);
     expect(before.injection_count).toBe(0);
     expect(before.access_count).toBe(5);
 
     const results = searchRelevantMemories(db, 'FTS5 trigger race condition', 'test');
     expect(results.length).toBeGreaterThan(0);
-    expect(results.some(r => r.id === obsId)).toBe(true);
+    expect(results.some((r) => r.id === obsId)).toBe(true);
 
-    const after = db.prepare('SELECT injection_count, access_count, last_injected_at FROM observations WHERE id = ?')
+    const after = db
+      .prepare('SELECT injection_count, access_count, last_injected_at FROM observations WHERE id = ?')
       .get(obsId);
-    expect(after.injection_count).toBe(1);       // bumped
-    expect(after.access_count).toBe(5);          // UNCHANGED — the key P0 fix
+    expect(after.injection_count).toBe(1); // bumped
+    expect(after.access_count).toBe(5); // UNCHANGED — the key P0 fix
     expect(after.last_injected_at).toBeGreaterThan(0);
   });
 
@@ -201,14 +210,16 @@ describe('hook-memory searchRelevantMemories → injection_count bump', () => {
       importance: 2,
       epochOffset: -1000,
     });
-    db.prepare('UPDATE observations SET injection_count = 25, access_count = 1 WHERE id = ?')
-      .run(noisy.lastInsertRowid);
-    db.prepare('UPDATE observations SET injection_count = 1, access_count = 5 WHERE id = ?')
-      .run(clean.lastInsertRowid);
+    db.prepare('UPDATE observations SET injection_count = 25, access_count = 1 WHERE id = ?').run(
+      noisy.lastInsertRowid,
+    );
+    db.prepare('UPDATE observations SET injection_count = 1, access_count = 5 WHERE id = ?').run(
+      clean.lastInsertRowid,
+    );
 
     const results = searchRelevantMemories(db, 'database migration approach', 'test');
-    const cleanRank = results.findIndex(r => r.id === Number(clean.lastInsertRowid));
-    const noisyRank = results.findIndex(r => r.id === Number(noisy.lastInsertRowid));
+    const cleanRank = results.findIndex((r) => r.id === Number(clean.lastInsertRowid));
+    const noisyRank = results.findIndex((r) => r.id === Number(noisy.lastInsertRowid));
 
     // Clean obs must appear and outrank the noisy one
     expect(cleanRank).toBeGreaterThanOrEqual(0);

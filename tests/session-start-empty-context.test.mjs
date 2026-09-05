@@ -24,7 +24,8 @@ function runSessionStart(sessionId) {
   try {
     return execFileSync(process.execPath, [HOOK_PATH, 'session-start'], {
       input: JSON.stringify({ session_id: sessionId, source: 'startup', cwd: projDir }),
-      timeout: 20000, encoding: 'utf8',
+      timeout: 20000,
+      encoding: 'utf8',
       env: { ...env, HOME: tmpHome, CLAUDE_PROJECT_DIR: projDir },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -68,7 +69,11 @@ describe('SessionStart <claude-mem-context> wrapper', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('emits no wrapper at all when there is nothing to put in it', () => {
@@ -82,15 +87,22 @@ describe('SessionStart <claude-mem-context> wrapper', () => {
   it('still emits the wrapper as soon as there is content', () => {
     const db = new Database(dbPath);
     const now = Date.now();
-    db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-                VALUES ('seed-cc', 'seed-mem', 'work--fresh', ?, ?, 'active')`)
-      .run(new Date(now).toISOString(), now);
-    db.prepare(`
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+                VALUES ('seed-cc', 'seed-mem', 'work--fresh', ?, ?, 'active')`,
+    ).run(new Date(now).toISOString(), now);
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,
                                 facts, files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES ('seed-mem', 'work--fresh', ?, 'bugfix', ?, '', '', '', '', '[]', '[]', 3, ?, ?)
-    `).run('Retry budget was shared across shards so one hot shard starved the rest',
-      'Retry budget was shared across shards', new Date(now).toISOString(), now);
+    `,
+    ).run(
+      'Retry budget was shared across shards so one hot shard starved the rest',
+      'Retry budget was shared across shards',
+      new Date(now).toISOString(),
+      now,
+    );
     db.close();
 
     const stdout = runSessionStart('cc-nonempty-1');

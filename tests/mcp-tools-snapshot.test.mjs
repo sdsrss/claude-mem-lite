@@ -11,27 +11,50 @@ import { describe, it, expect } from 'vitest';
 import { tools } from '../tool-schemas.mjs';
 
 const CORE_TOOLS = [
-  'mem_search', 'mem_recent', 'mem_timeline', 'mem_get', 'mem_save', 'mem_recall',
-  'mem_defer', 'mem_defer_list', 'mem_defer_drop',
+  'mem_search',
+  'mem_recent',
+  'mem_timeline',
+  'mem_get',
+  'mem_save',
+  'mem_recall',
+  'mem_defer',
+  'mem_defer_list',
+  'mem_defer_drop',
 ];
 
 describe('MCP tools surface', () => {
   it('exposes exactly 9 core tools via tools/list', () => {
-    const exposed = tools.filter(t => !t.hidden).map(t => t.name).sort();
+    const exposed = tools
+      .filter((t) => !t.hidden)
+      .map((t) => t.name)
+      .sort();
     expect(exposed).toEqual([...CORE_TOOLS].sort());
   });
 
   it('registers all known hidden tools by exact name', () => {
-    const hidden = tools.filter(t => t.hidden === true).map(t => t.name).sort();
-    expect(hidden).toEqual([
-      'mem_browse', 'mem_compress', 'mem_delete', 'mem_export',
-      'mem_fts_check', 'mem_maintain', 'mem_optimize', 'mem_registry',
-      'mem_stats', 'mem_update', 'mem_use',
-    ].sort());
+    const hidden = tools
+      .filter((t) => t.hidden === true)
+      .map((t) => t.name)
+      .sort();
+    expect(hidden).toEqual(
+      [
+        'mem_browse',
+        'mem_compress',
+        'mem_delete',
+        'mem_export',
+        'mem_fts_check',
+        'mem_maintain',
+        'mem_optimize',
+        'mem_registry',
+        'mem_stats',
+        'mem_update',
+        'mem_use',
+      ].sort(),
+    );
   });
 
   it('has no accidental duplicates in the registered set', () => {
-    const names = tools.map(t => t.name);
+    const names = tools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
   });
 
@@ -73,7 +96,7 @@ describe('MCP tools surface', () => {
   });
 
   it('core tool name/order is stable (inline snapshot)', () => {
-    const exposed = tools.filter(t => !t.hidden).map(t => t.name);
+    const exposed = tools.filter((t) => !t.hidden).map((t) => t.name);
     expect(exposed).toMatchInlineSnapshot(`
       [
         "mem_search",

@@ -28,18 +28,19 @@ import {
 import { formatSubagentContext } from '../lib/task-imperative.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
-const writeJsonl = (path, entries) =>
-  writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
+const writeJsonl = (path, entries) => writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
 
 // The subagent's own first turn: the task prompt with our block appended.
 const promptTurn = (...idLessons) => ({
   type: 'user',
   isSidechain: true,
   message: {
-    content: [{
-      type: 'text',
-      text: 'Do the thing.\n' + idLessons.map(([id, l]) => formatSubagentContext(l, id)).join('\n'),
-    }],
+    content: [
+      {
+        type: 'text',
+        text: 'Do the thing.\n' + idLessons.map(([id, l]) => formatSubagentContext(l, id)).join('\n'),
+      },
+    ],
   },
 });
 const subagentCite = (text) => ({
@@ -50,8 +51,14 @@ const subagentCite = (text) => ({
 
 describe('findSubagentTranscripts — the layout that blocked D#152', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'sub-face-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'sub-face-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('derives <session>/subagents/ from the parent transcript path', () => {
     const parent = join(tmp, 'sess-a.jsonl');
@@ -104,11 +111,17 @@ describe('collectSubagentSurface — injected from the prompt, cited from the si
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'sub-face2-'));
     parent = join(tmp, 'sess-c.jsonl');
-    writeJsonl(parent, [{ type: 'assistant', message: { content: [{ type: 'text', text: 'parent turn' }] } }]);
+    writeJsonl(parent, [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'parent turn' }] } },
+    ]);
     dir = join(tmp, 'sess-c', 'subagents');
     mkdirSync(dir, { recursive: true });
   });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('unions injected ids across every dispatched subagent', () => {
     writeJsonl(join(dir, 'agent-a-1.jsonl'), [promptTurn([11, 'first lesson'])]);
@@ -253,13 +266,24 @@ describe('subagent face round-trips into citation_surface_log', () => {
     writeJsonl(parent, [{ type: 'assistant', message: { content: [{ type: 'text', text: 'parent' }] } }]);
   });
   afterEach(() => {
-    try { db.close(); } catch {}
-    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    try {
+      db.close();
+    } catch {}
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
   });
 
-  const mk = (title) => Number(insertObs(db, {
-    sessionId: 'sess-sub', project: 'p1', type: 'bugfix', title, importance: 2,
-  }).lastInsertRowid);
+  const mk = (title) =>
+    Number(
+      insertObs(db, {
+        sessionId: 'sess-sub',
+        project: 'p1',
+        type: 'bugfix',
+        title,
+        importance: 2,
+      }).lastInsertRowid,
+    );
 
   it('records injected/cited under its own surface row, readable by the funnel', () => {
     const usedId = mk('lesson the subagent applied');

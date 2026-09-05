@@ -20,9 +20,12 @@ import { openDb } from '../hook-shared.mjs';
 import { extractCjkKeywords, cjkBigrams } from '../nlp.mjs';
 import { CJK_STOP_WORDS } from './../stop-words.mjs';
 
-const args = Object.fromEntries(process.argv.slice(2).map((a) => {
-  const m = a.match(/^--([^=]+)(?:=(.*))?$/); return m ? [m[1], m[2] ?? true] : [a, true];
-}));
+const args = Object.fromEntries(
+  process.argv.slice(2).map((a) => {
+    const m = a.match(/^--([^=]+)(?:=(.*))?$/);
+    return m ? [m[1], m[2] ?? true] : [a, true];
+  }),
+);
 const JSON_MODE = !!args.json;
 const N_EX = parseInt(args.examples || '12', 10);
 
@@ -40,7 +43,8 @@ function isNoiseBigram(bg) {
 // also land here — this is an UPPER bound on artifacts, not an exact count.
 function isStraddleSuspect(bg) {
   if (bg.length !== 2 || isNoiseBigram(bg)) return false;
-  const a = CJK_STOP_WORDS.has(bg[0]), b = CJK_STOP_WORDS.has(bg[1]);
+  const a = CJK_STOP_WORDS.has(bg[0]),
+    b = CJK_STOP_WORDS.has(bg[1]);
   return (a && !b) || (!a && b);
 }
 
@@ -48,18 +52,20 @@ const db = openDb();
 const rows = db.prepare('SELECT DISTINCT prompt_text FROM user_prompts WHERE prompt_text IS NOT NULL').all();
 db.close();
 
-let totalCjk = 0;          // queries with ≥2 CJK chars
+let totalCjk = 0; // queries with ≥2 CJK chars
 let bigramPathEngaged = 0; // ZERO dictionary keyword match → bigram fallback (the ceiling)
-let withStraddle = 0;      // engaged AND ≥1 straddle-suspect bigram in required set
+let withStraddle = 0; // engaged AND ≥1 straddle-suspect bigram in required set
 const straddleExamples = [];
 
 for (const { prompt_text: q } of rows) {
   if (!q || !hasCjk2(q)) continue;
   totalCjk++;
   const keywords = extractCjkKeywords(q);
-  if (keywords.length > 0) continue;          // dictionary rescued it — leak can't bite
+  if (keywords.length > 0) continue; // dictionary rescued it — leak can't bite
   bigramPathEngaged++;
-  const required = cjkBigrams(q).split(' ').filter((b) => b && !isNoiseBigram(b));
+  const required = cjkBigrams(q)
+    .split(' ')
+    .filter((b) => b && !isNoiseBigram(b));
   const suspects = required.filter(isStraddleSuspect);
   if (suspects.length > 0) {
     withStraddle++;
@@ -69,23 +75,36 @@ for (const { prompt_text: q } of rows) {
   }
 }
 
-const pct = (n, d) => d === 0 ? '  n/a' : (100 * n / d).toFixed(1) + '%';
+const pct = (n, d) => (d === 0 ? '  n/a' : ((100 * n) / d).toFixed(1) + '%');
 
 if (JSON_MODE) {
-  console.log(JSON.stringify({
-    corpus: rows.length, totalCjk, bigramPathEngaged, withStraddle,
-    bigramPathEngagedPctOfCjk: totalCjk ? bigramPathEngaged / totalCjk : null,
-    withStraddlePctOfCjk: totalCjk ? withStraddle / totalCjk : null,
-    examples: straddleExamples,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        corpus: rows.length,
+        totalCjk,
+        bigramPathEngaged,
+        withStraddle,
+        bigramPathEngagedPctOfCjk: totalCjk ? bigramPathEngaged / totalCjk : null,
+        withStraddlePctOfCjk: totalCjk ? withStraddle / totalCjk : null,
+        examples: straddleExamples,
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(0);
 }
 
 console.log('D#31 — CJK straddle-bigram PREVALENCE probe (READ-ONLY, user_prompts corpus)\n');
 console.log(`  distinct prompts scanned ............ ${rows.length}`);
 console.log(`  with ≥2 CJK chars ................... ${totalCjk}  (${pct(totalCjk, rows.length)} of corpus)`);
-console.log(`  bigram path ENGAGED (0 dict kw) ..... ${bigramPathEngaged}  (${pct(bigramPathEngaged, totalCjk)} of CJK)  ← leak ceiling`);
-console.log(`  …of those, ≥1 straddle SUSPECT ...... ${withStraddle}  (${pct(withStraddle, totalCjk)} of CJK)  ← upper bound on real bite`);
+console.log(
+  `  bigram path ENGAGED (0 dict kw) ..... ${bigramPathEngaged}  (${pct(bigramPathEngaged, totalCjk)} of CJK)  ← leak ceiling`,
+);
+console.log(
+  `  …of those, ≥1 straddle SUSPECT ...... ${withStraddle}  (${pct(withStraddle, totalCjk)} of CJK)  ← upper bound on real bite`,
+);
 console.log('');
 console.log('  NOTE: straddle SUSPECT over-counts — genuine one-stop-char compounds (有效/目的)');
 console.log('        land in the same bucket. The true artifact rate is ≤ this number.\n');

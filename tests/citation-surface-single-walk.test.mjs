@@ -32,10 +32,12 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-const { extractInjectedBySurface, extractAllInjected } =
-  await import('../lib/citation-tracker.mjs');
+const { extractInjectedBySurface, extractAllInjected } = await import('../lib/citation-tracker.mjs');
 
-const att = (command, stdout) => ({ type: 'attachment', attachment: { type: 'hook_success', command, stdout } });
+const att = (command, stdout) => ({
+  type: 'attachment',
+  attachment: { type: 'hook_success', command, stdout },
+});
 const ALL_FOUR = [
   att('node /x/scripts/pre-tool-recall.js', '  #101 [bugfix] a\n'),
   att('node /x/hook.mjs user-prompt', '<memory-context>\n- [decision] b (#202)\n</memory-context>\n'),
@@ -51,7 +53,11 @@ describe('extractInjectedBySurface reads the transcript once', () => {
     realWriteFileSync(path, ALL_FOUR.map((e) => JSON.stringify(e)).join('\n'));
     readCounts = [];
   });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   const readsOfTranscript = () => readCounts.filter((p) => p === path).length;
 

@@ -18,9 +18,11 @@ describe('scrubSecrets — category gaps closed (audit MED-6)', () => {
   });
 
   it('scrubs PGP and ENCRYPTED private key blocks', () => {
-    const pgp = '-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF...secret...\n-----END PGP PRIVATE KEY BLOCK-----';
+    const pgp =
+      '-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF...secret...\n-----END PGP PRIVATE KEY BLOCK-----';
     expect(scrubSecrets(pgp)).not.toContain('lQOYBF');
-    const enc = '-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFDjBA...secret...\n-----END ENCRYPTED PRIVATE KEY-----';
+    const enc =
+      '-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFDjBA...secret...\n-----END ENCRYPTED PRIVATE KEY-----';
     expect(scrubSecrets(enc)).not.toContain('MIIFDjBA');
     // RSA still works (no regression)
     const rsa = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIB...\n-----END RSA PRIVATE KEY-----';
@@ -29,7 +31,9 @@ describe('scrubSecrets — category gaps closed (audit MED-6)', () => {
 
   it('scrubs prefixed/suffixed JSON secret keys (x_api_key, aws_secret_access_key)', () => {
     expect(scrubSecrets('{"x_api_key": "abcdef123456ghijkl"}')).not.toContain('abcdef123456');
-    expect(scrubSecrets('{"aws_secret_access_key": "wJalrXUtnFEMI1234567890"}')).not.toContain('wJalrXUtnFEMI');
+    expect(scrubSecrets('{"aws_secret_access_key": "wJalrXUtnFEMI1234567890"}')).not.toContain(
+      'wJalrXUtnFEMI',
+    );
     expect(scrubSecrets('{"my_password": "hunter2hunter2"}')).not.toContain('hunter2hunter2');
   });
 
@@ -129,10 +133,7 @@ describe('scrubRecord — session_handoffs fields', () => {
     // String-level scrub of a JSON.stringify(array) can rewrite quoted values
     // and break downstream JSON.parse. Element-level scrub belongs upstream
     // of the JSON.stringify call. This test guards the contract.
-    const keyFilesJson = JSON.stringify([
-      `src/foo-${SECRET}.mjs`,
-      'src/normal.mjs',
-    ]);
+    const keyFilesJson = JSON.stringify([`src/foo-${SECRET}.mjs`, 'src/normal.mjs']);
     const matchKeywordsJson = JSON.stringify([SECRET, 'normal']);
     const out = scrubRecord('session_handoffs', {
       key_files: keyFilesJson,
@@ -160,9 +161,9 @@ describe('scrubRecord — contract & edge cases', () => {
   it('does not mutate the input row (returns a copy)', () => {
     const row = { title: `failed: ${SECRET}` };
     const out = scrubRecord('observations', row);
-    expect(out).not.toBe(row);                      // different object
-    expect(row.title).toContain(SECRET);            // input untouched
-    expect(out.title).not.toContain(SECRET);        // output scrubbed
+    expect(out).not.toBe(row); // different object
+    expect(row.title).toContain(SECRET); // input untouched
+    expect(out.title).not.toContain(SECRET); // output scrubbed
   });
 
   it('failsafe path skips inherited (prototype-chain) properties', () => {
@@ -182,23 +183,36 @@ describe('scrubRecord — contract & edge cases', () => {
 
 describe('end-to-end UPDATE leak check via in-memory DB', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   it('UPDATE on observations does not persist secrets via direct prepare', () => {
-    db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-                VALUES (?, ?, ?, ?, ?, 'active')`)
-      .run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
-    const ins = db.prepare(`INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+                VALUES (?, ?, ?, ?, ?, 'active')`,
+    ).run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
+    const ins = db
+      .prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
       .run('s1', 'p1', 'clean', 'change', 'Clean title', '', 1, new Date().toISOString(), Date.now());
     const id = ins.lastInsertRowid;
 
     const safe = scrubRecord('observations', {
-      title: `failed: ${SECRET}`, narrative: POISONED,
-      concepts: POISONED, facts: POISONED,
+      title: `failed: ${SECRET}`,
+      narrative: POISONED,
+      concepts: POISONED,
+      facts: POISONED,
     });
-    db.prepare(`UPDATE observations SET title=?, narrative=?, concepts=?, facts=? WHERE id=?`)
-      .run(safe.title, safe.narrative, safe.concepts, safe.facts, id);
+    db.prepare(`UPDATE observations SET title=?, narrative=?, concepts=?, facts=? WHERE id=?`).run(
+      safe.title,
+      safe.narrative,
+      safe.concepts,
+      safe.facts,
+      id,
+    );
 
     const row = db.prepare('SELECT * FROM observations WHERE id=?').get(id);
     for (const k of ['title', 'narrative', 'concepts', 'facts']) {
@@ -209,26 +223,39 @@ describe('end-to-end UPDATE leak check via in-memory DB', () => {
 
 describe('end-to-end leak check via in-memory DB', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   it('hook-llm INSERT path does not persist secrets', async () => {
     const hookLlm = await import('../hook-llm.mjs');
     // sdk_sessions row is required for FK on observations.memory_session_id
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
+    `,
+    ).run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
 
     hookLlm.__insertObservationForTest(db, {
-      session_id: 's1', project: 'p1',
-      title: `failed: ${SECRET}`, narrative: POISONED,
-      text: POISONED, subtitle: '',
-      concepts: POISONED, facts: POISONED, files_read: '[]', files_modified: '[]',
-      importance: 1, minhash_sig: '', lesson_learned: POISONED, search_aliases: '',
+      session_id: 's1',
+      project: 'p1',
+      title: `failed: ${SECRET}`,
+      narrative: POISONED,
+      text: POISONED,
+      subtitle: '',
+      concepts: POISONED,
+      facts: POISONED,
+      files_read: '[]',
+      files_modified: '[]',
+      importance: 1,
+      minhash_sig: '',
+      lesson_learned: POISONED,
+      search_aliases: '',
       branch: '',
     });
     const row = db.prepare('SELECT * FROM observations LIMIT 1').get();
-    for (const k of ['title','narrative','text','concepts','facts','lesson_learned']) {
+    for (const k of ['title', 'narrative', 'text', 'concepts', 'facts', 'lesson_learned']) {
       expect(row[k], `${k} leaked`).not.toContain(SECRET);
     }
   });
@@ -239,7 +266,7 @@ describe('end-to-end leak check via in-memory DB', () => {
 // (the whole reason the bare-high-entropy pattern was deliberately NOT added).
 describe('scrubSecrets — provider-prefixed credentials (D#32 safe subset)', () => {
   // 32-hex / 22-/43-char bodies are fixed-length sentinels, not real keys.
-  const HEX32 = '0123456789abcdef0123456789abcdef';     // 32 hex
+  const HEX32 = '0123456789abcdef0123456789abcdef'; // 32 hex
   const SENDGRID = `SG.${'aBcDeFgHiJkLmNoPqRsTuV'}.${'0123456789012345678901234567890123456789012'}`; // SG.<22>.<43>
 
   it('scrubs SendGrid SG.<22>.<43> keys', () => {
@@ -260,12 +287,12 @@ describe('scrubSecrets — provider-prefixed credentials (D#32 safe subset)', ()
 
   // The asymmetric-loss negatives: a bare-hex pattern would have eaten all of
   // these. Each is a real shape this repo stores/emits and must pass through.
-  it('does NOT scrub this repo\'s own hash-shaped data (no bare-token pattern)', () => {
-    const gitSha40   = '0123456789abcdef0123456789abcdef01234567';                       // 40-hex git SHA
-    const md5        = '5d41402abc4b2a76b9719d911017c592';                               // 32-hex MD5
-    const sha256     = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'; // 64-hex
-    const uuid       = '550e8400-e29b-41d4-a716-446655440000';
-    const shortSha   = '434c32d';
+  it("does NOT scrub this repo's own hash-shaped data (no bare-token pattern)", () => {
+    const gitSha40 = '0123456789abcdef0123456789abcdef01234567'; // 40-hex git SHA
+    const md5 = '5d41402abc4b2a76b9719d911017c592'; // 32-hex MD5
+    const sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'; // 64-hex
+    const uuid = '550e8400-e29b-41d4-a716-446655440000';
+    const shortSha = '434c32d';
     const minhashSig = '12,8841,290,77123,4,99021,1532,66,40021,3'; // comma-joined ints
     for (const v of [gitSha40, md5, sha256, uuid, shortSha, minhashSig]) {
       expect(scrubSecrets(`commit ${v} landed`), `over-scrubbed ${v}`).toContain(v);
@@ -305,8 +332,7 @@ describe('scrubSecrets — quoted credential values (audit #2a)', () => {
   it('does NOT over-scrub a bare noun in prose just because the value is quoted', () => {
     expect(scrubSecrets('the bearer: "alicewashere"')).toBe('the bearer: "alicewashere"');
     expect(scrubSecrets('the token: "somemarkervalue"')).toBe('the token: "somemarkervalue"');
-    expect(scrubSecrets('Decision: keep the token: "opaque-by-design" here'))
-      .toContain('opaque-by-design');
+    expect(scrubSecrets('Decision: keep the token: "opaque-by-design" here')).toContain('opaque-by-design');
   });
   it('STILL scrubs a structured key / env var even mid-prose (quoted)', () => {
     expect(scrubSecrets('see api_key: "realsecret123"')).not.toContain('realsecret123');
@@ -342,18 +368,13 @@ describe('scrubSecrets — bare-noun `=` assignment scrubs even mid-prose (round
   // exists to protect is `:` ("the token: alice") — an `=` is config assignment, not
   // prose. Split the noun patterns: `=` always scrubs, `:` keeps the prose guard.
   it('scrubs password=/token=/secret= even when preceded by a prose word', () => {
-    expect(scrubSecrets('Config has password=hunter2supersecret in env'))
-      .not.toContain('hunter2supersecret');
-    expect(scrubSecrets('never commit password=mysecretvalue123'))
-      .not.toContain('mysecretvalue123');
-    expect(scrubSecrets('we set token=abc123def456ghi for the call'))
-      .not.toContain('abc123def456ghi');
-    expect(scrubSecrets('the secret=topsecretpayload99 leaked'))
-      .not.toContain('topsecretpayload99');
+    expect(scrubSecrets('Config has password=hunter2supersecret in env')).not.toContain('hunter2supersecret');
+    expect(scrubSecrets('never commit password=mysecretvalue123')).not.toContain('mysecretvalue123');
+    expect(scrubSecrets('we set token=abc123def456ghi for the call')).not.toContain('abc123def456ghi');
+    expect(scrubSecrets('the secret=topsecretpayload99 leaked')).not.toContain('topsecretpayload99');
   });
   it('scrubs a quoted bare-noun `=` assignment even mid-prose', () => {
-    expect(scrubSecrets('config has password="realquotedsecret" set'))
-      .not.toContain('realquotedsecret');
+    expect(scrubSecrets('config has password="realquotedsecret" set')).not.toContain('realquotedsecret');
   });
   // The `:` prose protection MUST survive the split (these stay unscrubbed).
   it('still does NOT scrub bare nouns in `:` prose (split preserves #8283)', () => {
@@ -369,8 +390,7 @@ describe('scrubSecrets — bare-noun `=` assignment scrubs even mid-prose (round
 
 describe('scrubSecrets / scrubRecord — <private> stripped on persistence (audit #2c)', () => {
   it('scrubSecrets strips <private>...</private> blocks', () => {
-    expect(scrubSecrets('before <private>topsecret stuff</private> after'))
-      .not.toContain('topsecret stuff');
+    expect(scrubSecrets('before <private>topsecret stuff</private> after')).not.toContain('topsecret stuff');
   });
   it('scrubRecord (the persistence chokepoint) strips <private> from text fields', () => {
     const out = scrubRecord('observations', {
@@ -388,7 +408,9 @@ describe('scrubSecrets / scrubRecord — <private> stripped on persistence (audi
 
 describe('saveObservation — derived title scrubs BEFORE truncation (#secret-title-leak)', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   // A secret that straddles the 100-char title-truncation boundary must not leak
   // its head into the title. Pre-fix, `content.slice(0, 100)` truncated the AWS
@@ -414,7 +436,7 @@ describe('scrubSecrets — quoted-key + passphrase (round-5 #8805 sibling)', () 
 
   it('scrubs single-quoted / mixed-quoted credential keys (Python dict reprs, single-quoted JS/JSON)', () => {
     expect(scrubSecrets(`{'api_key': '${V}'}`)).not.toContain(V);
-    expect(scrubSecrets(`{"api_key": '${V}'}`)).not.toContain(V);   // mixed quotes
+    expect(scrubSecrets(`{"api_key": '${V}'}`)).not.toContain(V); // mixed quotes
     expect(scrubSecrets(`{'access_token':'${V}'}`)).not.toContain(V);
     expect(scrubSecrets(`{'client_secret':'${V}'}`)).not.toContain(V);
     expect(scrubSecrets(`{'private_key':'${V}'}`)).not.toContain(V);
@@ -433,12 +455,16 @@ describe('scrubSecrets — quoted-key + passphrase (round-5 #8805 sibling)', () 
     // bare "token" is excluded from the quoted-key noun set, so a numeric count survives
     expect(scrubSecrets(`{'token_count': 123456}`)).toBe(`{'token_count': 123456}`);
     expect(scrubSecrets(`{'name': 'alice smith'}`)).toBe(`{'name': 'alice smith'}`);
-    expect(scrubSecrets('the token: opaque wisdom of the ancients')).toBe('the token: opaque wisdom of the ancients');
+    expect(scrubSecrets('the token: opaque wisdom of the ancients')).toBe(
+      'the token: opaque wisdom of the ancients',
+    );
     expect(scrubSecrets('I forgot my password yesterday')).toBe('I forgot my password yesterday');
   });
 
   it('scrubs a quoted-key secret through the scrubRecord persistence chokepoint', () => {
-    const rec = scrubRecord('observations', { narrative: `API failed. Response: {'access_token': '${V}', 'expires': 3600}` });
+    const rec = scrubRecord('observations', {
+      narrative: `API failed. Response: {'access_token': '${V}', 'expires': 3600}`,
+    });
     expect(rec.narrative).not.toContain(V);
   });
 });
@@ -522,10 +548,13 @@ describe('scrubSecrets — mid-prose password scrubs credentials, not English', 
   it('STILL scrubs a credential-shaped value mid-prose (the leak this closed)', () => {
     expect(scrubSecrets('Deployed with password: hunter2correct')).toBe('Deployed with password: ***');
     expect(scrubSecrets('the db password: S3cretValue')).not.toContain('S3cretValue');
-    expect(scrubSecrets('rotate the passphrase: correct-horse-battery-staple'))
-      .not.toContain('correct-horse-battery-staple');
+    expect(scrubSecrets('rotate the passphrase: correct-horse-battery-staple')).not.toContain(
+      'correct-horse-battery-staple',
+    );
     expect(scrubSecrets('note the password: Tr0ub4dor here')).not.toContain('Tr0ub4dor');
-    expect(scrubSecrets('set password: aVeryLongOpaqueSecretToken')).not.toContain('aVeryLongOpaqueSecretToken');
+    expect(scrubSecrets('set password: aVeryLongOpaqueSecretToken')).not.toContain(
+      'aVeryLongOpaqueSecretToken',
+    );
   });
 
   it('scrubs a QUOTED value mid-prose regardless of shape (quoting IS the signal)', () => {

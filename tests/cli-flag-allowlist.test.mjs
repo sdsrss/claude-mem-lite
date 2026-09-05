@@ -37,7 +37,8 @@ describe('KNOWN_CLI_FLAGS', () => {
     const haystack = cliSources()
       .map((f) => readFileSync(f, 'utf8'))
       .join('\n')
-      .split(listLiteral[0]).join('');
+      .split(listLiteral[0])
+      .join('');
 
     // Flag names that reach a reader as STRING LITERALS inside a list, rather than as a
     // property access: `rejectBareStringFlags(flags, ['name', 'resource-type', …])` and
@@ -48,7 +49,10 @@ describe('KNOWN_CLI_FLAGS', () => {
     // because those words occur in ordinary code. Only names declared at a real flag-list
     // call site count now.
     const declaredInLists = new Set();
-    for (const re of [/rejectBareStringFlags\([^,]+,\s*\[([^\]]*)\]/g, /for \(const \w+ of \[([^\]]*)\]\)/g]) {
+    for (const re of [
+      /rejectBareStringFlags\([^,]+,\s*\[([^\]]*)\]/g,
+      /for \(const \w+ of \[([^\]]*)\]\)/g,
+    ]) {
       for (const m of haystack.matchAll(re)) {
         for (const lit of m[1].matchAll(/['"]([^'"]+)['"]/g)) declaredInLists.add(lit[1]);
       }
@@ -58,16 +62,23 @@ describe('KNOWN_CLI_FLAGS', () => {
     for (const flag of KNOWN_CLI_FLAGS) {
       const camel = flag.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       const forms = [
-        `flags['${flag}']`, `flags["${flag}"]`, `flags.${flag}`,
-        `flags['${camel}']`, `flags["${camel}"]`, `flags.${camel}`,
-        `--${flag}`,               // raw-argv readers (doctor --prompts-limit) + help text
+        `flags['${flag}']`,
+        `flags["${flag}"]`,
+        `flags.${flag}`,
+        `flags['${camel}']`,
+        `flags["${camel}"]`,
+        `flags.${camel}`,
+        `--${flag}`, // raw-argv readers (doctor --prompts-limit) + help text
       ];
       if (declaredInLists.has(flag)) continue;
       if (!forms.some((f) => haystack.includes(f))) unread.push(flag);
     }
 
-    expect(unread, `allowlisted but no CLI command reads them — each one silences the `
-      + `"ignored, it had no effect" warning for a flag that really is ignored`).toEqual([]);
+    expect(
+      unread,
+      `allowlisted but no CLI command reads them — each one silences the ` +
+        `"ignored, it had no effect" warning for a flag that really is ignored`,
+    ).toEqual([]);
   });
 
   it('warns (not silently accepts) on a flag no command reads', async () => {
@@ -88,16 +99,25 @@ describe('KNOWN_CLI_FLAGS', () => {
     // derivation the first case uses, against a synthetic allowlist.
     const common = readFileSync(join(ROOT, 'cli', 'common.mjs'), 'utf8');
     const listLiteral = common.match(/KNOWN_CLI_FLAGS = new Set\(\[[\s\S]*?\]\);/);
-    const haystack = cliSources().map((f) => readFileSync(f, 'utf8')).join('\n')
-      .split(listLiteral[0]).join('');
+    const haystack = cliSources()
+      .map((f) => readFileSync(f, 'utf8'))
+      .join('\n')
+      .split(listLiteral[0])
+      .join('');
     const declaredInLists = new Set();
-    for (const re of [/rejectBareStringFlags\([^,]+,\s*\[([^\]]*)\]/g, /for \(const \w+ of \[([^\]]*)\]\)/g]) {
+    for (const re of [
+      /rejectBareStringFlags\([^,]+,\s*\[([^\]]*)\]/g,
+      /for \(const \w+ of \[([^\]]*)\]\)/g,
+    ]) {
       for (const m of haystack.matchAll(re)) {
         for (const lit of m[1].matchAll(/['"]([^'"]+)['"]/g)) declaredInLists.add(lit[1]);
       }
     }
-    const isVouchedFor = (flag) => declaredInLists.has(flag)
-      || [`flags['${flag}']`, `flags["${flag}"]`, `flags.${flag}`, `--${flag}`].some((f) => haystack.includes(f));
+    const isVouchedFor = (flag) =>
+      declaredInLists.has(flag) ||
+      [`flags['${flag}']`, `flags["${flag}"]`, `flags.${flag}`, `--${flag}`].some((f) =>
+        haystack.includes(f),
+      );
     for (const bogus of ['observations', 'error', 'count', 'message', 'level']) {
       expect(isVouchedFor(bogus), `bogus flag "${bogus}" vouched for itself`).toBe(false);
     }

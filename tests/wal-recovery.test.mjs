@@ -83,8 +83,8 @@ function plantCorruptWal(dir) {
   live.pragma('wal_checkpoint(TRUNCATE)');
   live.exec('CREATE TABLE _wal_probe_marker(x TEXT)');
   const wal = readFileSync(dbPath + '-wal'); // snapshot while the handle is still open
-  live.close();                              // close checkpoints — main file is rewritten
-  writeFileSync(dbPath, PRISTINE_DB);        // …so restore the pre-CREATE baseline
+  live.close(); // close checkpoints — main file is rewritten
+  writeFileSync(dbPath, PRISTINE_DB); // …so restore the pre-CREATE baseline
   rmSync(dbPath + '-shm', { force: true });
 
   const bigEndian = wal.readUInt32BE(0) === 0x377f0683;
@@ -132,25 +132,41 @@ function runServer(dir, { timeoutMs = 20000 } = {}) {
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    let stderr = '', stdout = '', settled = false;
+    let stderr = '',
+      stdout = '',
+      settled = false;
     const finish = (exitCode, served) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
       resolvePromise({ exitCode, stderr, stdout, served });
     };
     const timer = setTimeout(() => finish(null, false), timeoutMs);
-    child.stderr.on('data', (d) => { stderr += d; });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
     child.stdout.on('data', (d) => {
       stdout += d;
       if (/"serverInfo"|"protocolVersion"/.test(stdout)) finish(null, true);
     });
     child.on('exit', (code) => finish(code, /"serverInfo"|"protocolVersion"/.test(stdout)));
-    child.stdin.write(JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'wal-test', version: '0.0.0' } },
-    }) + '\n');
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'wal-test', version: '0.0.0' },
+        },
+      }) + '\n',
+    );
   });
 }
 
@@ -159,14 +175,18 @@ function runServer(dir, { timeoutMs = 20000 } = {}) {
 describe('file-backed WAL semantics', () => {
   it('ensureDb() on a real file yields journal_mode=wal', () => {
     const dir = fixtureDir('jm');
-    const out = execFileSync(process.execPath, [
-      '-e',
-      `import('${resolve(import.meta.dirname, '../schema.mjs')}').then(m => {
+    const out = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `import('${resolve(import.meta.dirname, '../schema.mjs')}').then(m => {
          const db = m.ensureDb();
          process.stdout.write(String(db.pragma('journal_mode', { simple: true })));
          db.close();
        })`,
-    ], { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' });
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
     expect(out.trim()).toBe('wal');
     expect(existsSync(join(dir, DB_NAME))).toBe(true);
   });
@@ -195,12 +215,16 @@ describe('corruption recovery branch', () => {
     const corrupt = fixtureDir('sig');
     const badPath = plantCorruptWal(corrupt);
     let err = null;
-    try { new Database(badPath).prepare('SELECT name FROM sqlite_master').all(); }
-    catch (e) { err = e; }
+    try {
+      new Database(badPath).prepare('SELECT name FROM sqlite_master').all();
+    } catch (e) {
+      err = e;
+    }
     expect(err, 'planted WAL must make the open fail').toBeTruthy();
     // Same regex server.mjs:79 gates the rm on.
-    expect(`${err.code || ''} ${err.message || ''}`)
-      .toMatch(/SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i);
+    expect(`${err.code || ''} ${err.message || ''}`).toMatch(
+      /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i,
+    );
   });
 
   // This asserts the BRANCH was entered — not any filesystem byte-state, which is SQLite
@@ -222,10 +246,12 @@ describe('corruption recovery branch', () => {
 
     const { stderr, exitCode } = await runServer(dir);
 
-    expect(stderr, 'server must enter the corruption-recovery arm')
-      .toContain('DB corruption detected, attempting WAL recovery');
-    expect(stderr, 'must NOT take the transient fail-fast arm that preserves the WAL')
-      .not.toContain('Left WAL/SHM intact');
+    expect(stderr, 'server must enter the corruption-recovery arm').toContain(
+      'DB corruption detected, attempting WAL recovery',
+    );
+    expect(stderr, 'must NOT take the transient fail-fast arm that preserves the WAL').not.toContain(
+      'Left WAL/SHM intact',
+    );
     expect(exitCode).toBe(1);
   }, 30000);
 });
@@ -245,15 +271,22 @@ describe('non-corruption open failure', () => {
     // version, which trips schema.mjs's forward-version guard — a throw with NO corruption
     // signature, exactly the class the fail-fast arm exists for.
     const kid = join(dir, 'seed-forward.mjs');
-    writeFileSync(kid, [
-      `import Database from ${JSON.stringify(resolve(import.meta.dirname, '../node_modules/better-sqlite3/lib/index.js'))};`,
-      `const d = new Database(${JSON.stringify(dbPath)});`,
-      `d.pragma('journal_mode = WAL');`,
-      `d.pragma('wal_checkpoint(TRUNCATE)');`,
-      `d.prepare('UPDATE schema_version SET version = ?').run(${CURRENT_SCHEMA_VERSION + 5});`,
-      `process.kill(process.pid, 'SIGKILL');`,
-    ].join('\n'));
-    try { execFileSync(process.execPath, [kid]); } catch { /* SIGKILL is expected */ }
+    writeFileSync(
+      kid,
+      [
+        `import Database from ${JSON.stringify(resolve(import.meta.dirname, '../node_modules/better-sqlite3/lib/index.js'))};`,
+        `const d = new Database(${JSON.stringify(dbPath)});`,
+        `d.pragma('journal_mode = WAL');`,
+        `d.pragma('wal_checkpoint(TRUNCATE)');`,
+        `d.prepare('UPDATE schema_version SET version = ?').run(${CURRENT_SCHEMA_VERSION + 5});`,
+        `process.kill(process.pid, 'SIGKILL');`,
+      ].join('\n'),
+    );
+    try {
+      execFileSync(process.execPath, [kid]);
+    } catch {
+      /* SIGKILL is expected */
+    }
 
     const { exitCode, stderr, served } = await runServer(dir);
 
@@ -268,8 +301,9 @@ describe('non-corruption open failure', () => {
     expect(served, 'server must not come up on a forward-version DB').toBe(false);
     expect(exitCode).toBe(1);
     expect(stderr).toContain('Left WAL/SHM intact');
-    expect(stderr, 'the WAL-delete recovery arm must NOT run for a non-corruption error')
-      .not.toContain('DB corruption detected');
+    expect(stderr, 'the WAL-delete recovery arm must NOT run for a non-corruption error').not.toContain(
+      'DB corruption detected',
+    );
     expect(stderr).toMatch(/DB schema is v\d+/);
   }, 30000);
 });
@@ -285,9 +319,11 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
   it('ensureDbWithWalRecovery enters the recovery arm and tags a failed retry', () => {
     const dir = fixtureDir('shared-fn');
     plantCorruptWal(dir);
-    const out = execFileSync(process.execPath, [
-      '-e',
-      `import('${resolve(import.meta.dirname, '../schema.mjs')}').then((m) => {
+    const out = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `import('${resolve(import.meta.dirname, '../schema.mjs')}').then((m) => {
          const msgs = [];
          try {
            const db = m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x) });
@@ -297,7 +333,9 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
            console.log(JSON.stringify({ opened: false, attempted: !!e.walRecoveryAttempted, msgs }));
          }
        })`,
-    ], { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' });
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
     const r = JSON.parse(out.trim());
     expect(r.msgs.some((m) => m.includes('DB corruption detected, attempting WAL recovery'))).toBe(true);
     // Same pinned outcome as the server-process test above: this fixture's
@@ -313,9 +351,11 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
     const plantedWalSize = readFileSync(dbPath + '-wal').length;
     expect(plantedWalSize).toBeGreaterThan(1000); // real frames on disk
 
-    const out = execFileSync(process.execPath, [
-      '-e',
-      `Promise.all([import('${resolve(import.meta.dirname, '../hook-shared.mjs')}'), import('node:fs')]).then(([m, fs]) => {
+    const out = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `Promise.all([import('${resolve(import.meta.dirname, '../hook-shared.mjs')}'), import('node:fs')]).then(([m, fs]) => {
          const db = m.openDb();
          if (db) { try { db.close(); } catch {} }
          const p = ${JSON.stringify(dbPath + '-wal')};
@@ -324,7 +364,9 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
            walSize: fs.existsSync(p) ? fs.statSync(p).size : -1,
          }));
        })`,
-    ], { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' });
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
     const r = JSON.parse(out.trim());
     // Contract unchanged for callers: unrecoverable → null, hooks degrade.
     expect(r.isNull).toBe(true);

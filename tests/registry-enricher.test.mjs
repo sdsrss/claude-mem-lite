@@ -4,7 +4,9 @@ import { createRegistryTestDb } from './test-helpers.mjs';
 
 describe('buildEnrichPrompt', () => {
   it('includes skill content and existing metadata', () => {
-    const prompt = buildEnrichPrompt('humanizer', '# Humanizer\nRemove AI patterns', { intent_tags: 'writing' });
+    const prompt = buildEnrichPrompt('humanizer', '# Humanizer\nRemove AI patterns', {
+      intent_tags: 'writing',
+    });
     expect(prompt).toContain('humanizer');
     expect(prompt).toContain('Remove AI patterns');
     expect(prompt).toContain('writing');
@@ -26,12 +28,14 @@ describe('buildEnrichPrompt', () => {
 describe('applyEnrichment', () => {
   it('fills empty fields from LLM result', () => {
     const db = createRegistryTestDb();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name,
         capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
       VALUES ('test-skill', 'skill', 'github', 'hash', 'active', '/tmp', 'test-skill',
         '', '', '', '', '', '', '')
-    `).run();
+    `,
+    ).run();
 
     applyEnrichment(db, 'test-skill', 'skill', {
       capability_summary: 'Removes AI writing patterns from text',
@@ -53,12 +57,14 @@ describe('applyEnrichment', () => {
 
   it('does not overwrite existing non-empty fields', () => {
     const db = createRegistryTestDb();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name,
         capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
       VALUES ('curated', 'skill', 'preinstalled', 'hash', 'active', '/tmp', 'curated',
         'Existing summary', 'existing triggers', 'existing kw', 'existing intents', '', '', '')
-    `).run();
+    `,
+    ).run();
 
     applyEnrichment(db, 'curated', 'skill', {
       capability_summary: 'New summary from LLM',
@@ -76,12 +82,14 @@ describe('applyEnrichment', () => {
 
   it('does not upgrade quality_tier for non-community resources', () => {
     const db = createRegistryTestDb();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name,
         capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack, quality_tier)
       VALUES ('installed-skill', 'skill', 'preinstalled', 'hash', 'active', '/tmp', 'installed-skill',
         '', '', '', '', '', '', '', 'installed')
-    `).run();
+    `,
+    ).run();
 
     applyEnrichment(db, 'installed-skill', 'skill', {
       capability_summary: 'test',

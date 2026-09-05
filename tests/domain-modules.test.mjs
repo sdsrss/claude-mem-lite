@@ -5,16 +5,41 @@ import { describe, it, expect } from 'vitest';
 
 // Backward-compatible re-exports from utils.mjs
 import {
-  scrubSecrets, truncate, typeIcon, fmtDate, fmtTime, isoWeekKey,
-  computeMinHash, estimateJaccardFromMinHash, jaccardSimilarity,
-  detectBashSignificance, extractErrorKeywords, extractFilePaths, stripTestSuffix,
+  scrubSecrets,
+  truncate,
+  typeIcon,
+  fmtDate,
+  fmtTime,
+  isoWeekKey,
+  computeMinHash,
+  estimateJaccardFromMinHash,
+  jaccardSimilarity,
+  detectBashSignificance,
+  extractErrorKeywords,
+  extractFilePaths,
+  stripTestSuffix,
 } from '../utils.mjs';
 
 // Direct imports from new domain modules
 import { scrubSecrets as directScrub, SECRET_PATTERNS as directPatterns } from '../secret-scrub.mjs';
-import { truncate as directTrunc, typeIcon as directIcon, fmtDate as directFmtDate, fmtTime as directFmtTime, isoWeekKey as directIsoWeek } from '../format-utils.mjs';
-import { computeMinHash as directMinHash, estimateJaccardFromMinHash as directEstJaccard, jaccardSimilarity as directJaccard } from '../hash-utils.mjs';
-import { detectBashSignificance as directBash, extractErrorKeywords as directErrKw, extractFilePaths as directPaths, stripTestSuffix as directStrip } from '../bash-utils.mjs';
+import {
+  truncate as directTrunc,
+  typeIcon as directIcon,
+  fmtDate as directFmtDate,
+  fmtTime as directFmtTime,
+  isoWeekKey as directIsoWeek,
+} from '../format-utils.mjs';
+import {
+  computeMinHash as directMinHash,
+  estimateJaccardFromMinHash as directEstJaccard,
+  jaccardSimilarity as directJaccard,
+} from '../hash-utils.mjs';
+import {
+  detectBashSignificance as directBash,
+  extractErrorKeywords as directErrKw,
+  extractFilePaths as directPaths,
+  stripTestSuffix as directStrip,
+} from '../bash-utils.mjs';
 
 describe('domain module re-exports', () => {
   it('backward-compatible utils.mjs re-exports match direct imports', () => {
@@ -90,9 +115,9 @@ describe('format-utils.mjs', () => {
   });
 
   it('typeIcon returns correct icons', () => {
-    expect(directIcon('decision')).toBe('\uD83D\uDFE1');  // yellow circle
-    expect(directIcon('bugfix')).toBe('\uD83D\uDD34');     // red circle
-    expect(directIcon('unknown')).toBe('\u26AA');           // white circle
+    expect(directIcon('decision')).toBe('\uD83D\uDFE1'); // yellow circle
+    expect(directIcon('bugfix')).toBe('\uD83D\uDD34'); // red circle
+    expect(directIcon('unknown')).toBe('\u26AA'); // white circle
   });
 
   it('fmtDate formats ISO dates', () => {
@@ -125,7 +150,7 @@ describe('hash-utils.mjs', () => {
     const sig = directMinHash('this is a test string with enough words');
     expect(sig).not.toBeNull();
     expect(typeof sig).toBe('string');
-    expect(sig.length).toBe(64 * 8);  // 64 hashes * 8 hex chars each
+    expect(sig.length).toBe(64 * 8); // 64 hashes * 8 hex chars each
   });
 
   it('computeMinHash returns null for short text', () => {

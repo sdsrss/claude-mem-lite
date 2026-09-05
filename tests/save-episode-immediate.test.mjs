@@ -11,8 +11,17 @@ import { saveEpisodeImmediate } from '../hook-llm.mjs';
 
 describe('saveEpisodeImmediate (audit #6 — shutdown durability)', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 's1', project: 'p1', memoryId: 's1' }); });
-  afterEach(() => { try { db.close(); } catch { /* already closed */ } });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 's1', project: 'p1', memoryId: 's1' });
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  });
 
   it('persists a rule-based observation for a significant (file-edit) episode', () => {
     // saveObservation deliberately drops LOW_SIGNAL synthetic titles in BOTH the
@@ -22,9 +31,11 @@ describe('saveEpisodeImmediate (audit #6 — shutdown durability)', () => {
     process.env.CLAUDE_MEM_KEEP_LOW_SIGNAL = '1';
     try {
       const episode = {
-        project: 'p1', sessionId: 's1',
+        project: 'p1',
+        sessionId: 's1',
         entries: [{ tool: 'Edit', isError: false, file: 'src/auth.mjs' }],
-        files: ['src/auth.mjs'], filesRead: [],
+        files: ['src/auth.mjs'],
+        filesRead: [],
       };
       const id = saveEpisodeImmediate(episode, db);
       expect(id).toBeTruthy();
@@ -38,9 +49,11 @@ describe('saveEpisodeImmediate (audit #6 — shutdown durability)', () => {
 
   it('returns null and saves nothing for an insignificant episode (single read)', () => {
     const episode = {
-      project: 'p1', sessionId: 's1',
+      project: 'p1',
+      sessionId: 's1',
       entries: [{ tool: 'Read', isError: false, file: 'README.md' }],
-      files: ['README.md'], filesRead: ['README.md'],
+      files: ['README.md'],
+      filesRead: ['README.md'],
     };
     const before = db.prepare('SELECT COUNT(*) c FROM observations').get().c;
     expect(saveEpisodeImmediate(episode, db)).toBeNull();

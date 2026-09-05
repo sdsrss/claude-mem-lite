@@ -41,7 +41,14 @@ export function vectorsEnabled() {
 
 const VOCAB_STOP_WORDS = new Set([
   ...BASE_STOP_WORDS,
-  'now','only','still','here','there','up','out','am',
+  'now',
+  'only',
+  'still',
+  'here',
+  'there',
+  'up',
+  'out',
+  'am',
 ]);
 
 // ─── Porter Stemmer ──────────────────────────────────────────────────────────
@@ -53,13 +60,36 @@ const VOCAB_STOP_WORDS = new Set([
 // extractPRFTerms in search-scoring.mjs, audit P2-24 2026-07-24).
 
 const step2map = {
-  ational:'ate', tional:'tion', enci:'ence', anci:'ance', izer:'ize',
-  abli:'able', alli:'al', entli:'ent', eli:'e', ousli:'ous', ization:'ize',
-  ation:'ate', ator:'ate', alism:'al', iveness:'ive', fulness:'ful',
-  ousness:'ous', aliti:'al', iviti:'ive', biliti:'ble', logi:'log',
+  ational: 'ate',
+  tional: 'tion',
+  enci: 'ence',
+  anci: 'ance',
+  izer: 'ize',
+  abli: 'able',
+  alli: 'al',
+  entli: 'ent',
+  eli: 'e',
+  ousli: 'ous',
+  ization: 'ize',
+  ation: 'ate',
+  ator: 'ate',
+  alism: 'al',
+  iveness: 'ive',
+  fulness: 'ful',
+  ousness: 'ous',
+  aliti: 'al',
+  iviti: 'ive',
+  biliti: 'ble',
+  logi: 'log',
 };
 const step3map = {
-  icate:'ic', ative:'', alize:'al', iciti:'ic', ical:'ic', ful:'', ness:'',
+  icate: 'ic',
+  ative: '',
+  alize: 'al',
+  iciti: 'ic',
+  ical: 'ic',
+  ful: '',
+  ness: '',
 };
 
 function consonant(word, i) {
@@ -70,7 +100,8 @@ function consonant(word, i) {
 }
 
 function measure(word) {
-  let m = 0, prev = true; // start assuming consonant context
+  let m = 0,
+    prev = true; // start assuming consonant context
   for (let i = 0; i < word.length; i++) {
     const c = consonant(word, i);
     if (!c && prev) m++;
@@ -91,8 +122,13 @@ function endsDouble(word) {
 
 function cvc(word) {
   const l = word.length;
-  return l >= 3 && consonant(word, l - 1) && !consonant(word, l - 2) && consonant(word, l - 3)
-    && !/[wxy]/.test(word[l - 1]);
+  return (
+    l >= 3 &&
+    consonant(word, l - 1) &&
+    !consonant(word, l - 2) &&
+    consonant(word, l - 3) &&
+    !/[wxy]/.test(word[l - 1])
+  );
 }
 
 export function porterStem(w) {
@@ -109,9 +145,11 @@ export function porterStem(w) {
   if (word.endsWith('eed')) {
     if (measure(word.slice(0, -3)) > 0) word = word.slice(0, -1);
   } else if (word.endsWith('ed') && hasVowel(word.slice(0, -2))) {
-    word = word.slice(0, -2); step1b2 = true;
+    word = word.slice(0, -2);
+    step1b2 = true;
   } else if (word.endsWith('ing') && hasVowel(word.slice(0, -3))) {
-    word = word.slice(0, -3); step1b2 = true;
+    word = word.slice(0, -3);
+    step1b2 = true;
   }
   if (step1b2) {
     if (word.endsWith('at') || word.endsWith('bl') || word.endsWith('iz')) word += 'e';
@@ -143,8 +181,27 @@ export function porterStem(w) {
   }
 
   // Step 4
-  const step4suffixes = ['al','ance','ence','er','ic','able','ible','ant','ement','ment',
-    'ent','ion','ou','ism','ate','iti','ous','ive','ize'];
+  const step4suffixes = [
+    'al',
+    'ance',
+    'ence',
+    'er',
+    'ic',
+    'able',
+    'ible',
+    'ant',
+    'ement',
+    'ment',
+    'ent',
+    'ion',
+    'ou',
+    'ism',
+    'ate',
+    'iti',
+    'ous',
+    'ive',
+    'ize',
+  ];
   for (const suffix of step4suffixes) {
     if (word.endsWith(suffix)) {
       const stem = word.slice(0, -suffix.length);
@@ -218,7 +275,9 @@ export function tokenize(text) {
 let _vocabCache = null;
 
 /** Reset vocabulary cache (for testing). */
-export function _resetVocabCache() { _vocabCache = null; }
+export function _resetVocabCache() {
+  _vocabCache = null;
+}
 
 /**
  * Canonical TF-IDF vector text for an observation ROW (snake_case DB fields). Single source for
@@ -228,9 +287,10 @@ export function _resetVocabCache() { _vocabCache = null; }
  */
 export function vecTextForRow(row) {
   if (!row) return '';
-  const concepts = Array.isArray(row.concepts) ? row.concepts.join(' ') : (row.concepts || '');
+  const concepts = Array.isArray(row.concepts) ? row.concepts.join(' ') : row.concepts || '';
   return [row.title || '', row.narrative || '', concepts, row.lesson_learned || '', row.search_aliases || '']
-    .filter(Boolean).join(' ');
+    .filter(Boolean)
+    .join(' ');
 }
 
 /**
@@ -239,10 +299,14 @@ export function vecTextForRow(row) {
  * @returns {{ terms: Map<string, {index: number, idf: number}>, version: string, dim: number } | null}
  */
 export function buildVocabulary(db, { dim = VOCAB_DIM } = {}) {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT title, narrative, concepts, lesson_learned, search_aliases FROM observations
     WHERE ${liveObsFilterSql('')}
-  `).all();
+  `,
+    )
+    .all();
 
   const N = rows.length;
   if (N === 0) return null;
@@ -253,7 +317,13 @@ export function buildVocabulary(db, { dim = VOCAB_DIM } = {}) {
     // V-F2: include lesson_learned + search_aliases so terms living only there get a vocab
     // dimension (else computeVector silently drops them — the exact paraphrase-bridge terms
     // search_aliases exists to carry). Mirrors vecTextForRow's field set.
-    const text = [row.title || '', row.narrative || '', row.concepts || '', row.lesson_learned || '', row.search_aliases || ''].join(' ');
+    const text = [
+      row.title || '',
+      row.narrative || '',
+      row.concepts || '',
+      row.lesson_learned || '',
+      row.search_aliases || '',
+    ].join(' ');
     const docTerms = new Set(tokenize(text));
     for (const term of docTerms) {
       df.set(term, (df.get(term) || 0) + 1);
@@ -299,7 +369,7 @@ export function buildVocabulary(db, { dim = VOCAB_DIM } = {}) {
   });
 
   // Version hash for staleness detection
-  const termList = sortedTerms.map(e => e.term).join(',');
+  const termList = sortedTerms.map((e) => e.term).join(',');
   const version = createHash('md5').update(termList).digest('hex').slice(0, 12);
 
   const vocab = { terms, version, dim };
@@ -317,7 +387,7 @@ export function rebuildVocabulary(db, opts) {
   if (!vocab) return null;
 
   const insertStmt = db.prepare(
-    'INSERT INTO vocab_state (term, term_index, idf, version, created_at_epoch) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO vocab_state (term, term_index, idf, version, created_at_epoch) VALUES (?, ?, ?, ?, ?)',
   );
   const now = Date.now();
   db.transaction(() => {
@@ -331,7 +401,9 @@ export function rebuildVocabulary(db, opts) {
     // vocab_version at query time, so stale rows were dead storage.
     try {
       db.prepare('DELETE FROM observation_vectors WHERE vocab_version != ?').run(vocab.version);
-    } catch { /* table missing on legacy DBs — non-critical */ }
+    } catch {
+      /* table missing on legacy DBs — non-critical */
+    }
   })();
 
   _vocabCache = vocab;
@@ -356,9 +428,9 @@ export function getVocabulary(db) {
 
   // Try loading from persisted vocab_state
   try {
-    const rows = db.prepare(
-      'SELECT term, term_index, idf, version FROM vocab_state ORDER BY term_index'
-    ).all();
+    const rows = db
+      .prepare('SELECT term, term_index, idf, version FROM vocab_state ORDER BY term_index')
+      .all();
     if (rows.length > 0) {
       const terms = new Map();
       for (const r of rows) {
@@ -368,7 +440,9 @@ export function getVocabulary(db) {
       _vocabCache = vocab;
       return vocab;
     }
-  } catch { /* table may not exist in old/test DBs */ }
+  } catch {
+    /* table may not exist in old/test DBs */
+  }
 
   // Fallback: compute and persist (first run)
   return rebuildVocabulary(db);
@@ -439,49 +513,66 @@ export function cosineSimilarity(a, b) {
 const VECTOR_TIME_WINDOW_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 const VECTOR_MIN_RESULTS = 50; // fallback to full scan if time-window yields fewer
 
-export function vectorSearch(db, queryVec, { project, type, vocabVersion, limit = VECTOR_SCAN_LIMIT, minCosine = MIN_COSINE_SIMILARITY }) {
+export function vectorSearch(
+  db,
+  queryVec,
+  { project, type, vocabVersion, limit = VECTOR_SCAN_LIMIT, minCosine = MIN_COSINE_SIMILARITY },
+) {
   if (!queryVec) return [];
 
   const now = Date.now();
 
-  const wheres = [
-    liveObsFilterSql('o'),
-    'ov.vocab_version = ?',
-  ];
+  const wheres = [liveObsFilterSql('o'), 'ov.vocab_version = ?'];
   const params = [vocabVersion];
 
-  if (project) { wheres.push('o.project = ?'); params.push(project); }
-  if (type) { wheres.push('o.type = ?'); params.push(type); }
+  if (project) {
+    wheres.push('o.project = ?');
+    params.push(project);
+  }
+  if (type) {
+    wheres.push('o.type = ?');
+    params.push(type);
+  }
 
   // Time-window prefilter: try 90 days first, fallback to full if too few results
   const timeWheres = [...wheres, 'o.created_at_epoch > ?'];
   const timeParams = [...params, now - VECTOR_TIME_WINDOW_MS, limit];
 
-  let rows = db.prepare(`
+  let rows = db
+    .prepare(
+      `
     SELECT ov.observation_id, ov.vector
     FROM observation_vectors ov
     JOIN observations o ON ov.observation_id = o.id
     WHERE ${timeWheres.join(' AND ')}
     ORDER BY o.created_at_epoch DESC
     LIMIT ?
-  `).all(...timeParams);
+  `,
+    )
+    .all(...timeParams);
 
   // Fallback: if time-window yields too few, scan without time constraint
   if (rows.length < VECTOR_MIN_RESULTS) {
     const fallbackParams = [...params, limit];
-    rows = db.prepare(`
+    rows = db
+      .prepare(
+        `
       SELECT ov.observation_id, ov.vector
       FROM observation_vectors ov
       JOIN observations o ON ov.observation_id = o.id
       WHERE ${wheres.join(' AND ')}
       ORDER BY o.created_at_epoch DESC
       LIMIT ?
-    `).all(...fallbackParams);
+    `,
+      )
+      .all(...fallbackParams);
   }
 
   const results = [];
   for (const row of rows) {
-    const vec = new Float32Array(row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength));
+    const vec = new Float32Array(
+      row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength),
+    );
     const sim = cosineSimilarity(queryVec, vec);
     if (sim > minCosine) results.push({ id: row.observation_id, similarity: sim });
   }
@@ -502,6 +593,5 @@ export function rrfMerge(bm25Results, vectorResults, k = RRF_K) {
   // Thin 2-list adapter over the shared RRF core (lib/rrf.mjs). Emits the minimal
   // { id, rrfScore } shape this module's callers (search-engine.mjs) expect; the
   // accumulator's best-rank row tracking is irrelevant here and ignored.
-  return rrfAccumulate([bm25Results, vectorResults], k)
-    .map(({ id, score }) => ({ id, rrfScore: score }));
+  return rrfAccumulate([bm25Results, vectorResults], k).map(({ id, score }) => ({ id, rrfScore: score }));
 }

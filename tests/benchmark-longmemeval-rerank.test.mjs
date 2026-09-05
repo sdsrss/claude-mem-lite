@@ -9,7 +9,9 @@ import { fileURLToPath } from 'url';
 import { llmRerankOrder, rerankEval, extractRanked } from '../benchmark/longmemeval-rerank.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SAMPLE = JSON.parse(readFileSync(join(__dirname, '../benchmark/fixtures/longmemeval-sample.json'), 'utf8'));
+const SAMPLE = JSON.parse(
+  readFileSync(join(__dirname, '../benchmark/fixtures/longmemeval-sample.json'), 'utf8'),
+);
 const byId = (id) => SAMPLE.find((e) => e.question_id === id);
 const cand = [
   { sid: 'a', text: 'alpha' },
@@ -46,11 +48,14 @@ describe('llmRerankOrder', () => {
 describe('extractRanked — robust to bare arrays and {text} envelopes', () => {
   it('accepts a {ranked:[...]} object', () => expect(extractRanked({ ranked: [2, 1] })).toEqual([2, 1]));
   it('accepts a direct array', () => expect(extractRanked([3, 1, 2])).toEqual([3, 1, 2]));
-  it('parses {text} with {"ranked":[...]}', () => expect(extractRanked({ text: '{"ranked":[2,1,3]}' })).toEqual([2, 1, 3]));
+  it('parses {text} with {"ranked":[...]}', () =>
+    expect(extractRanked({ text: '{"ranked":[2,1,3]}' })).toEqual([2, 1, 3]));
   it('parses {text} with a BARE array (the real claude-haiku shape that the old code dropped)', () =>
     expect(extractRanked({ text: '[2,1,3]' })).toEqual([2, 1, 3]));
-  it('parses {text} with a fenced bare array', () => expect(extractRanked({ text: '```json\n[3,2,1]\n```' })).toEqual([3, 2, 1]));
-  it('extracts a prose-wrapped array', () => expect(extractRanked({ text: 'Best order: [3,1,2] by relevance.' })).toEqual([3, 1, 2]));
+  it('parses {text} with a fenced bare array', () =>
+    expect(extractRanked({ text: '```json\n[3,2,1]\n```' })).toEqual([3, 2, 1]));
+  it('extracts a prose-wrapped array', () =>
+    expect(extractRanked({ text: 'Best order: [3,1,2] by relevance.' })).toEqual([3, 1, 2]));
   it('returns null when nothing is recoverable', () => {
     expect(extractRanked(null)).toBeNull();
     expect(extractRanked({ text: '' })).toBeNull();
@@ -78,7 +83,12 @@ describe('rerankEval (end-to-end with stub LLM)', () => {
   });
 
   it('an oracle stub promotes the gold session to rank 1 (reaches the ceiling)', async () => {
-    const r = await rerankEval(byId('q-lexical-db'), { turns: 'user', topK: 10, ks: [1, 5], llm: promote('ClickHouse') });
+    const r = await rerankEval(byId('q-lexical-db'), {
+      turns: 'user',
+      topK: 10,
+      ks: [1, 5],
+      llm: promote('ClickHouse'),
+    });
     expect(r.rerank['1']).toBe(1);
     expect(r.gold).toEqual(['s-analytics']);
   });
@@ -89,13 +99,23 @@ describe('rerankEval (end-to-end with stub LLM)', () => {
       const idx = lines.findIndex((l) => l.toLowerCase().includes('clickhouse'));
       return { text: `[${idx + 1}]` };
     };
-    const r = await rerankEval(byId('q-lexical-db'), { turns: 'user', topK: 10, ks: [1, 5], llm: promoteText });
+    const r = await rerankEval(byId('q-lexical-db'), {
+      turns: 'user',
+      topK: 10,
+      ks: [1, 5],
+      llm: promoteText,
+    });
     expect(r.rerank['1']).toBe(1);
     expect(r.parsed).toBe(true);
   });
 
   it('never worse than baseline when the LLM fails (null → fallback)', async () => {
-    const r = await rerankEval(byId('q-lexical-migration'), { turns: 'user', topK: 10, ks: [1, 5], llm: () => null });
+    const r = await rerankEval(byId('q-lexical-migration'), {
+      turns: 'user',
+      topK: 10,
+      ks: [1, 5],
+      llm: () => null,
+    });
     expect(r.rerank).toEqual(r.base);
     expect(r.parsed).toBe(false);
   });

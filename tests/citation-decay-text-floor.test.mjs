@@ -8,18 +8,22 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import {
-  hasMainThreadAssistantText,
-} from '../lib/citation-tracker.mjs';
+import { hasMainThreadAssistantText } from '../lib/citation-tracker.mjs';
 
 describe('hasMainThreadAssistantText', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'text-floor-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'text-floor-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -33,7 +37,10 @@ describe('hasMainThreadAssistantText', () => {
 
   it('returns false when assistant turn is tool-only', () => {
     const path = writeTranscript([
-      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'x' } }] } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'x' } }] },
+      },
     ]);
     expect(hasMainThreadAssistantText(path)).toBe(false);
   });
@@ -54,7 +61,11 @@ describe('hasMainThreadAssistantText', () => {
 
   it('ignores sidechain (subagent) text', () => {
     const path = writeTranscript([
-      { type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'subagent reply' }] } },
+      {
+        type: 'assistant',
+        isSidechain: true,
+        message: { content: [{ type: 'text', text: 'subagent reply' }] },
+      },
     ]);
     expect(hasMainThreadAssistantText(path)).toBe(false);
   });
@@ -68,9 +79,7 @@ describe('hasMainThreadAssistantText', () => {
   });
 
   it('ignores user messages even if they carry text', () => {
-    const path = writeTranscript([
-      { type: 'user', message: { content: [{ type: 'text', text: 'hello' }] } },
-    ]);
+    const path = writeTranscript([{ type: 'user', message: { content: [{ type: 'text', text: 'hello' }] } }]);
     expect(hasMainThreadAssistantText(path)).toBe(false);
   });
 
@@ -91,8 +100,14 @@ describe('hasMainThreadAssistantText', () => {
 
   it('returns true when only one of many assistant turns has text', () => {
     const path = writeTranscript([
-      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'x' } }] } },
-      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'y' } }] } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'x' } }] },
+      },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'y' } }] },
+      },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } },
     ]);
     expect(hasMainThreadAssistantText(path)).toBe(true);

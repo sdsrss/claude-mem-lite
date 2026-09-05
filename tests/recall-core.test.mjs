@@ -23,8 +23,11 @@ describe('recall-core', () => {
   // hand-rolls the derivation again.
   it('matches a Windows-shaped path against a bare-basename junction entry', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'hook-memory null deref', lessonLearned: 'guard the deref',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'hook-memory null deref',
+      lessonLearned: 'guard the deref',
       filesModified: '["hook-memory.mjs"]',
     });
     const { filename, rows } = recallByFile(db, 'C:\\proj\\src\\hook-memory.mjs');
@@ -35,8 +38,11 @@ describe('recall-core', () => {
 
   it('does not collide across the path boundary (utils.mjs must not match bash-utils.mjs)', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'bash-utils regex fix', lessonLearned: 'anchor the suffix',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'bash-utils regex fix',
+      lessonLearned: 'anchor the suffix',
       filesModified: '["src/bash-utils.mjs"]',
     });
     expect(recallByFile(db, 'utils.mjs').rows).toEqual([]);
@@ -44,8 +50,11 @@ describe('recall-core', () => {
 
   it('matches by basename against full-path junction entries', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'utils fix', lessonLearned: 'check CJK boundary',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'utils fix',
+      lessonLearned: 'check CJK boundary',
       filesModified: '["/repo/src/utils.mjs"]',
     });
     const { filename, rows } = recallByFile(db, '/somewhere/else/utils.mjs');
@@ -56,12 +65,18 @@ describe('recall-core', () => {
 
   it('escapes LIKE wildcards in filenames (underscore must not match any-char)', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'underscore file', filesModified: '["my_file.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'underscore file',
+      filesModified: '["my_file.mjs"]',
     });
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'wildcard trap', filesModified: '["myxfile.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'wildcard trap',
+      filesModified: '["myxfile.mjs"]',
     });
     const { rows } = recallByFile(db, 'my_file.mjs');
     expect(rows).toHaveLength(1);
@@ -70,27 +85,39 @@ describe('recall-core', () => {
 
   it('filters low-signal titles by default, includes them with includeNoise', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'change', importance: 1,
-      title: 'Modified noisy.mjs', filesModified: '["noisy.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'change',
+      importance: 1,
+      title: 'Modified noisy.mjs',
+      filesModified: '["noisy.mjs"]',
     });
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'real noisy.mjs lesson', filesModified: '["noisy.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'real noisy.mjs lesson',
+      filesModified: '["noisy.mjs"]',
     });
     const def = recallByFile(db, 'noisy.mjs');
-    expect(def.rows.map(r => r.title)).toEqual(['real noisy.mjs lesson']);
+    expect(def.rows.map((r) => r.title)).toEqual(['real noisy.mjs lesson']);
     const all = recallByFile(db, 'noisy.mjs', { includeNoise: true });
     expect(all.rows).toHaveLength(2);
   });
 
   it('bumps access_count and last_accessed_at on recalled rows only', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'bumped', filesModified: '["bump.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'bumped',
+      filesModified: '["bump.mjs"]',
     });
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'untouched', filesModified: '["other.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'untouched',
+      filesModified: '["other.mjs"]',
     });
     const { rows } = recallByFile(db, 'bump.mjs');
     const bumped = db.prepare('SELECT access_count FROM observations WHERE id = ?').get(rows[0].id);
@@ -102,27 +129,46 @@ describe('recall-core', () => {
   it('respects limit and excludes compressed rows', () => {
     for (let i = 0; i < 5; i++) {
       insertObs(db, {
-        sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-        title: `many ${i}`, filesModified: '["many.mjs"]',
+        sessionId: 'sess-rc',
+        type: 'bugfix',
+        importance: 2,
+        title: `many ${i}`,
+        filesModified: '["many.mjs"]',
       });
     }
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'bugfix', importance: 2,
-      title: 'compressed away', filesModified: '["many.mjs"]', compressedInto: 1,
+      sessionId: 'sess-rc',
+      type: 'bugfix',
+      importance: 2,
+      title: 'compressed away',
+      filesModified: '["many.mjs"]',
+      compressedInto: 1,
     });
     const { rows } = recallByFile(db, 'many.mjs', { limit: 3 });
     expect(rows).toHaveLength(3);
-    expect(rows.every(r => r.title !== 'compressed away')).toBe(true);
+    expect(rows.every((r) => r.title !== 'compressed away')).toBe(true);
   });
 
   it('returns the column superset both surfaces need (importance + epoch included)', () => {
     insertObs(db, {
-      sessionId: 'sess-rc', type: 'decision', importance: 3,
-      title: 'cols probe', filesModified: '["cols.mjs"]',
+      sessionId: 'sess-rc',
+      type: 'decision',
+      importance: 3,
+      title: 'cols probe',
+      filesModified: '["cols.mjs"]',
     });
     const { rows } = recallByFile(db, 'cols.mjs');
     const r = rows[0];
-    for (const k of ['id', 'type', 'title', 'lesson_learned', 'importance', 'created_at', 'created_at_epoch', 'project']) {
+    for (const k of [
+      'id',
+      'type',
+      'title',
+      'lesson_learned',
+      'importance',
+      'created_at',
+      'created_at_epoch',
+      'project',
+    ]) {
       expect(k in r, `column ${k}`).toBe(true);
     }
   });
@@ -142,8 +188,11 @@ describe('countRecallableByFile', () => {
 
   it('agrees with recallByFile on what matches', () => {
     insertObs(db, {
-      sessionId: 'sess-cr', type: 'bugfix', importance: 3,
-      title: 'retry storm on duplicate deliveries', lessonLearned: 'dedupe on the provider event id',
+      sessionId: 'sess-cr',
+      type: 'bugfix',
+      importance: 3,
+      title: 'retry storm on duplicate deliveries',
+      lessonLearned: 'dedupe on the provider event id',
       filesModified: '["src/payments/webhook.ts"]',
     });
     expect(countRecallableByFile(db, 'src/payments/webhook.ts')).toBe(1);
@@ -156,11 +205,19 @@ describe('countRecallableByFile', () => {
   });
 
   it('does NOT bump access_count or last_accessed_at (recallByFile does)', () => {
-    const id = Number(insertObs(db, {
-      sessionId: 'sess-cr', type: 'bugfix', importance: 3,
-      title: 'counter probe', filesModified: '["probe.mjs"]',
-    }).lastInsertRowid);
-    const read = () => db.prepare('SELECT COALESCE(access_count,0) AS c, last_accessed_at AS t FROM observations WHERE id = ?').get(id);
+    const id = Number(
+      insertObs(db, {
+        sessionId: 'sess-cr',
+        type: 'bugfix',
+        importance: 3,
+        title: 'counter probe',
+        filesModified: '["probe.mjs"]',
+      }).lastInsertRowid,
+    );
+    const read = () =>
+      db
+        .prepare('SELECT COALESCE(access_count,0) AS c, last_accessed_at AS t FROM observations WHERE id = ?')
+        .get(id);
 
     const before = read();
     countRecallableByFile(db, 'probe.mjs');
@@ -177,8 +234,11 @@ describe('countRecallableByFile', () => {
 
   it('excludes superseded and low-signal rows, so the hint cannot over-promise', () => {
     insertObs(db, {
-      sessionId: 'sess-cr', type: 'bugfix', importance: 2,
-      title: 'Modified promise.mjs', filesModified: '["promise.mjs"]',
+      sessionId: 'sess-cr',
+      type: 'bugfix',
+      importance: 2,
+      title: 'Modified promise.mjs',
+      filesModified: '["promise.mjs"]',
     });
     expect(countRecallableByFile(db, 'promise.mjs')).toBe(0);
   });

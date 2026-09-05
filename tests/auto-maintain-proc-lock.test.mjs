@@ -48,14 +48,16 @@ function seedRow(importance = 1) {
   initSchema(db);
   const old = Date.now() - 45 * 86400000;
   db.prepare(
-    "INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)"
-    + " VALUES ('s1','s1',?,?,?,'active')",
+    'INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)' +
+      " VALUES ('s1','s1',?,?,?,'active')",
   ).run(PROJECT, new Date(old).toISOString(), old);
-  const id = db.prepare(
-    "INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,"
-    + " facts, files_read, files_modified, importance, related_ids, access_count, injection_count, created_at, created_at_epoch)"
-    + " VALUES ('s1', ?, 'stale body', 'change', 'stale row', '', '', '', '', '[]', '[]', ?, '[]', 0, 0, ?, ?)",
-  ).run(PROJECT, importance, new Date(old).toISOString(), old).lastInsertRowid;
+  const id = db
+    .prepare(
+      'INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,' +
+        ' facts, files_read, files_modified, importance, related_ids, access_count, injection_count, created_at, created_at_epoch)' +
+        " VALUES ('s1', ?, 'stale body', 'change', 'stale row', '', '', '', '', '[]', '[]', ?, '[]', 0, 0, ?, ?)",
+    )
+    .run(PROJECT, importance, new Date(old).toISOString(), old).lastInsertRowid;
   db.close();
   return id;
 }
@@ -109,7 +111,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try {
+    rmSync(dataDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
 });
 
 describe('auto-maintain — cross-process mutex', () => {
@@ -182,7 +188,7 @@ describe('auto-maintain — cross-process mutex', () => {
     expect(importanceOf(id)).toBe(1);
 
     rmSync(gateFile, { force: true });
-    holdLock();          // the peer is mid-pass, exactly as during a real overlap
+    holdLock(); // the peer is mid-pass, exactly as during a real overlap
     runAutoMaintain();
     expect(compressedInto(id)).toBe(0);
     expect(importanceOf(id)).toBe(1);

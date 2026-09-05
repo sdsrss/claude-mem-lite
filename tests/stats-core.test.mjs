@@ -22,8 +22,10 @@ function seed(db) {
   ins.run('ms1', 'proj-a', 'bugfix', 'fixed the warp core leak', 2, now - 2000);
   ins.run('ms1', 'proj-a', 'decision', 'chose sqlite over postgres', 3, now - 3000);
   ins.run('ms2', 'proj-b', 'feature', 'added pagination cursor', 1, now - 4000);
-  db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_text, created_at, created_at_epoch)
-              VALUES ('cs1', 'how do I fix the flux capacitor', datetime('now'), ?)`).run(now - 500);
+  db.prepare(
+    `INSERT INTO user_prompts (content_session_id, prompt_text, created_at, created_at_epoch)
+              VALUES ('cs1', 'how do I fix the flux capacitor', datetime('now'), ?)`,
+  ).run(now - 500);
   return now;
 }
 
@@ -82,10 +84,17 @@ describe('computeStatsFeed', () => {
       const now = seed(db);
       const mine = computeStatsFeed(db, { currentProject: 'proj-a', days: 30, now });
       const stranger = computeStatsFeed(db, { currentProject: 'nobody--here', days: 30, now });
-      expect(mine.tierMap, `the current project made no difference to tiering: ${JSON.stringify(mine.tierMap)}`)
-        .not.toEqual(stranger.tierMap);
+      expect(
+        mine.tierMap,
+        `the current project made no difference to tiering: ${JSON.stringify(mine.tierMap)}`,
+      ).not.toEqual(stranger.tierMap);
       // And an explicit --project filter still wins over the ambient current project.
-      const filtered = computeStatsFeed(db, { project: 'proj-a', currentProject: 'nobody--here', days: 30, now });
+      const filtered = computeStatsFeed(db, {
+        project: 'proj-a',
+        currentProject: 'nobody--here',
+        days: 30,
+        now,
+      });
       expect(filtered.tierMap).toEqual(computeStatsFeed(db, { project: 'proj-a', days: 30, now }).tierMap);
     } finally {
       db.close();
@@ -96,8 +105,9 @@ describe('computeStatsFeed', () => {
     // The MCP server has no CLI-layer resolver (it runs where Claude Code started it), so the
     // default must stay inferProject() — the fix threads a value in from the CLI only.
     const cli = readFileSync(join(ROOT, 'mem-cli.mjs'), 'utf8');
-    expect(cli, 'cmdStats must hand computeStatsFeed the DB-aware current project')
-      .toMatch(/computeStatsFeed\(db, \{[^}]*currentProject/);
+    expect(cli, 'cmdStats must hand computeStatsFeed the DB-aware current project').toMatch(
+      /computeStatsFeed\(db, \{[^}]*currentProject/,
+    );
   });
 
   it('both surfaces (server.mjs + mem-cli.mjs) import the shared feed — no inline twin left', () => {

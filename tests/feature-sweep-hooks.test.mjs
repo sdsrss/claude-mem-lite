@@ -112,10 +112,16 @@ function registeredEntries() {
         const cmd = h.command || '';
         // `node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" <entry> [event]`
         const viaLauncher = cmd.match(/hook-launcher\.mjs"\s+(\S+)(?:\s+(\S+))?/);
-        if (viaLauncher) { out.add(viaLauncher[2] ? `${viaLauncher[1]} ${viaLauncher[2]}` : viaLauncher[1]); continue; }
+        if (viaLauncher) {
+          out.add(viaLauncher[2] ? `${viaLauncher[1]} ${viaLauncher[2]}` : viaLauncher[1]);
+          continue;
+        }
         // `bash "${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"`
         const viaBash = cmd.match(/\$\{CLAUDE_PLUGIN_ROOT\}\/(scripts\/[\w.-]+\.sh)/);
-        if (viaBash) { out.add(viaBash[1]); continue; }
+        if (viaBash) {
+          out.add(viaBash[1]);
+          continue;
+        }
         throw new Error(`unrecognized hook command shape in hooks.json: ${cmd}`);
       }
     }
@@ -170,15 +176,26 @@ function childEnv(extra = {}) {
 function fire(cmd, args, { cwd, stdin = '', env = {}, timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd, env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
+    let stdout = '',
+      stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error(`${cmd} ${args.join(' ')} did not exit within ${timeout}ms`));
     }, timeout);
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
     // A hook that returns before reading stdin closes the pipe first — EPIPE here is the
     // hook doing its job, not a failure.
     child.stdin.on('error', () => {});
@@ -208,13 +225,22 @@ async function seedObs(cwd, text, flags = []) {
 /** Open the sandbox memory DB for verification independent of the hook's own read path. */
 function withDb(fn) {
   const db = new Database(join(DATA_DIR, 'claude-mem-lite.db'));
-  try { return fn(db); } finally { try { db.close(); } catch { /* already closed */ } }
+  try {
+    return fn(db);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 /** Backdate a project's rows so the age-gated workers (compress / maintain) engage. */
 function ageProject(project, days) {
   return withDb((db) => {
     const epoch = Date.now() - days * 86400000;
-    return db.prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
+    return db
+      .prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
       .run(epoch, new Date(epoch).toISOString(), project).changes;
   });
 }
@@ -236,7 +262,8 @@ const STACK_TRACE = /^\s+at .+:\d+:\d+|^\w*(?:Type|Reference|Syntax|Range)Error:
  * @returns {object[]} the parsed envelopes, for content assertions in the caller.
  */
 function expectHookStdout(out, { event = null, plainAllowed = false, label }) {
-  const jsonLines = [], plainLines = [];
+  const jsonLines = [],
+    plainLines = [];
   for (const line of out.split('\n')) {
     if (line === '') continue;
     // An envelope that does not START its line is invisible — and takes the rest of the
@@ -256,8 +283,8 @@ function expectHookStdout(out, { event = null, plainAllowed = false, label }) {
   // compliant while the host was actually discarding both. See lib/hook-stdout.mjs.
   expect(
     jsonLines.length,
-    `${label}: ${jsonLines.length} JSON envelopes on one stdout — the host JSON.parses the whole `
-    + `thing, so this degrades to plain text and every envelope is lost:\n${out}`,
+    `${label}: ${jsonLines.length} JSON envelopes on one stdout — the host JSON.parses the whole ` +
+      `thing, so this degrades to plain text and every envelope is lost:\n${out}`,
   ).toBeLessThanOrEqual(1);
   if (jsonLines.length === 1) {
     expect(
@@ -272,7 +299,9 @@ function expectHookStdout(out, { event = null, plainAllowed = false, label }) {
   const parsed = [];
   for (const line of jsonLines) {
     let obj;
-    try { obj = JSON.parse(line); } catch (e) {
+    try {
+      obj = JSON.parse(line);
+    } catch (e) {
       throw new Error(`${label}: stdout line is not parseable JSON (${e.message}):\n${line}`, { cause: e });
     }
     expect(obj.hookSpecificOutput?.hookEventName, `${label}: wrong hookEventName in ${line}`).toBe(event);
@@ -297,10 +326,18 @@ const MALFORMED = [
   // shares the hole and none of the four shapes above reaches it.
   ['valid JSON that is null', 'null'],
   ['valid JSON that is a scalar', '42'],
-  ['unexpected types', JSON.stringify({
-    session_id: [], tool_name: 42, tool_input: 'not-an-object', tool_response: { a: 1 },
-    prompt: { b: 2 }, transcript_path: 17, source: false,
-  })],
+  [
+    'unexpected types',
+    JSON.stringify({
+      session_id: [],
+      tool_name: 42,
+      tool_input: 'not-an-object',
+      tool_response: { a: 1 },
+      prompt: { b: 2 },
+      transcript_path: 17,
+      source: false,
+    }),
+  ],
 ];
 
 /**
@@ -313,11 +350,15 @@ const MALFORMED = [
  */
 async function expectMalformedResilience(label, spec, run) {
   const slug = label.replace(/[^a-z0-9]/gi, '').slice(0, 24);
-  const results = await Promise.all(MALFORMED.map(([name, payload], i) =>
-    run(payload, workDir(`mal-${slug}-${i}`)).then((r) => [name, r])));
+  const results = await Promise.all(
+    MALFORMED.map(([name, payload], i) => run(payload, workDir(`mal-${slug}-${i}`)).then((r) => [name, r])),
+  );
   for (const [name, r] of results) {
     const where = `${label} — ${name}`;
-    expect(r.code, `${where}: exited ${r.code} (a non-zero hook exit degrades the host session)\nstdout: ${r.stdout}\nstderr: ${r.stderr}`).toBe(0);
+    expect(
+      r.code,
+      `${where}: exited ${r.code} (a non-zero hook exit degrades the host session)\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
+    ).toBe(0);
     expect(STACK_TRACE.test(r.stdout), `${where}: stack trace reached stdout:\n${r.stdout}`).toBe(false);
     expectHookStdout(r.stdout, { ...spec, label: where });
   }
@@ -353,14 +394,14 @@ beforeAll(() => {
     CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'),
     ANTHROPIC_API_KEY: '',
     OPENROUTER_API_KEY: '',
-    CLAUDE_MEM_SKIP_UPDATE: '1',        // no GitHub release fetch (banner + update-check)
-    CLAUDE_MEM_SKIP_EPISODE_LLM: '1',   // no detached llm-episode worker on a flush
-    CLAUDE_MEM_SKIP_COMPRESS: '1',      // no detached auto-compress from SessionStart
-    CLAUDE_MEM_SKIP_OPTIMIZE: '1',      // no detached llm-optimize from SessionStart
-    CLAUDE_MEM_SKIP_MAINTAIN: '1',      // no detached auto-maintain from SessionStart
-    CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',   // no detached enrich-save from a CLI seed
+    CLAUDE_MEM_SKIP_UPDATE: '1', // no GitHub release fetch (banner + update-check)
+    CLAUDE_MEM_SKIP_EPISODE_LLM: '1', // no detached llm-episode worker on a flush
+    CLAUDE_MEM_SKIP_COMPRESS: '1', // no detached auto-compress from SessionStart
+    CLAUDE_MEM_SKIP_OPTIMIZE: '1', // no detached llm-optimize from SessionStart
+    CLAUDE_MEM_SKIP_MAINTAIN: '1', // no detached auto-maintain from SessionStart
+    CLAUDE_MEM_SKIP_SAVE_ENRICH: '1', // no detached enrich-save from a CLI seed
     CLAUDE_MEM_SKIP_REPOS: '1',
-    CLAUDE_MEM_NO_DELAY: '1',           // background workers skip their 0.5-5s jitter
+    CLAUDE_MEM_NO_DELAY: '1', // background workers skip their 0.5-5s jitter
   });
   // See isolation contract #2: cwd must be the ONLY project source.
   delete BASE_ENV.CLAUDE_PROJECT_DIR;
@@ -378,7 +419,11 @@ afterAll(async () => {
       expect(readFileSync(REPO_CLAUDE_MD, 'utf8')).toBe(repoClaudeMdSnapshot);
     }
   } finally {
-    try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(ROOT, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   }
 });
 
@@ -388,7 +433,9 @@ describe('hook feature sweep: registered surface', () => {
   it('every event hook.mjs dispatches has a sweep case', () => {
     // Parsed out of hook.mjs's own switch, so adding `case 'foo':` without an
     // itHook('hook.mjs foo', …) case fails here — and cannot be silenced by editing a list.
-    const dispatched = dispatchedEvents().map((e) => `hook.mjs ${e}`).sort();
+    const dispatched = dispatchedEvents()
+      .map((e) => `hook.mjs ${e}`)
+      .sort();
     const swept = [...SWEPT].filter((s) => s.startsWith('hook.mjs ')).sort();
     expect(swept).toEqual(dispatched);
   });
@@ -402,9 +449,10 @@ describe('hook feature sweep: registered surface', () => {
     // …and there must still be exactly one of them. FAILS IF: a second entry is added to
     // UNSWEPT_BY_DESIGN (e.g. moving 'scripts/post-tool-use.sh' there and deleting its case,
     // which every other guard in this describe accepts silently).
-    expect(UNSWEPT_BY_DESIGN.size,
-      `the sweep's exclusion list grew to [${[...UNSWEPT_BY_DESIGN].join(', ')}] — each name in it is a registered hook entry point NOBODY fires here`)
-      .toBe(UNSWEPT_COUNT);
+    expect(
+      UNSWEPT_BY_DESIGN.size,
+      `the sweep's exclusion list grew to [${[...UNSWEPT_BY_DESIGN].join(', ')}] — each name in it is a registered hook entry point NOBODY fires here`,
+    ).toBe(UNSWEPT_COUNT);
     expect([...UNSWEPT_BY_DESIGN]).toEqual(['scripts/setup.sh']);
   });
 
@@ -412,8 +460,9 @@ describe('hook feature sweep: registered surface', () => {
     const dispatched = dispatchedEvents();
     for (const surface of SWEPT) {
       if (surface.startsWith('hook.mjs ')) {
-        expect(dispatched, `sweep case "${surface}" names an event hook.mjs does not dispatch`)
-          .toContain(surface.slice('hook.mjs '.length));
+        expect(dispatched, `sweep case "${surface}" names an event hook.mjs does not dispatch`).toContain(
+          surface.slice('hook.mjs '.length),
+        );
       } else {
         expect(existsSync(join(REPO, surface)), `sweep case "${surface}" names a missing file`).toBe(true);
       }
@@ -429,17 +478,29 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const cwd = workDir(NAME);
     const project = projectOf(NAME);
     const TITLE = 'Fixed the widget cache invalidation race in lib/widget-cache.mjs';
-    await seedObs(cwd, TITLE, ['--type', 'bugfix', '--importance', '3',
-      '--lesson', 'Invalidate the widget cache on write, never on read']);
-    await cli(['activity', 'save', '--type', 'lesson', 'Session start sweep event', '--body', 'event body'], cwd);
+    await seedObs(cwd, TITLE, [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'Invalidate the widget cache on write, never on read',
+    ]);
+    await cli(
+      ['activity', 'save', '--type', 'lesson', 'Session start sweep event', '--body', 'event body'],
+      cwd,
+    );
 
     const r = await hookEvent('session-start', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-session', source: 'startup' }),
+      cwd,
+      stdin: JSON.stringify({ session_id: 'cc-hooksweep-session', source: 'startup' }),
     });
     expect(r.code, `session-start exited ${r.code}\n${r.stderr}`).toBe(0);
 
     const envelopes = expectHookStdout(r.stdout, {
-      event: 'SessionStart', plainAllowed: false, label: 'hook.mjs session-start',
+      event: 'SessionStart',
+      plainAllowed: false,
+      label: 'hook.mjs session-start',
     });
     // The startup dashboard rides the JSON channel and must name the one event seeded above
     // (a dashboard computed over the wrong project — or over the live DB — says "0 entries"
@@ -458,12 +519,17 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     expect(ctx).toContain('Session start sweep event');
     expect(ctx).toContain('Fixed the widget cache invalidation race');
     // Nothing may ride outside the envelope on this surface.
-    expect(r.stdout.trim().split('\n').filter((l) => l.trim() && !l.startsWith('{')))
-      .toEqual([]);
+    expect(
+      r.stdout
+        .trim()
+        .split('\n')
+        .filter((l) => l.trim() && !l.startsWith('{')),
+    ).toEqual([]);
 
     // Side effects landed in the SANDBOX, under the project derived from the sandbox cwd.
-    expect(withDb((db) => db.prepare('SELECT status FROM sdk_sessions WHERE project = ?').get(project)))
-      .toMatchObject({ status: 'active' });
+    expect(
+      withDb((db) => db.prepare('SELECT status FROM sdk_sessions WHERE project = ?').get(project)),
+    ).toMatchObject({ status: 'active' });
     expect(existsSync(join(RUNTIME_DIR, `session-${project}`))).toBe(true);
     // SessionStart auto-adopts, which writes <cwd>/CLAUDE.md — here, and never the repo's
     // (afterAll asserts the negative half).
@@ -480,8 +546,14 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const NAME = 'hs-uprompt';
     const cwd = workDir(NAME);
     const LESSON = 'Invalidate the widget cache on write, never on read';
-    const targetId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-      ['--type', 'bugfix', '--importance', '3', '--lesson', LESSON]);
+    const targetId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      LESSON,
+    ]);
     // handleUserPrompt excludes ONLY ids actually rendered somewhere (the path-A
     // UPS marker and the SessionStart keyctx marker — D#123: exclusion mirrors
     // real injections, never a DB query). This sandbox has neither marker for
@@ -494,11 +566,13 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
       'Documented the nightly export window change',
       'Split the retry helper out of the transport module',
       'Trimmed the onboarding screenshot set',
-    ]) await cli(['save', filler, '--type', 'decision', '--importance', '2'], cwd);
+    ])
+      await cli(['save', filler, '--type', 'decision', '--importance', '2'], cwd);
 
     const PROMPT = 'why does the widget cache invalidation race happen and how do we fix it';
     const r = await hookEvent('user-prompt', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-prompt', prompt: PROMPT }),
+      cwd,
+      stdin: JSON.stringify({ session_id: 'cc-hooksweep-prompt', prompt: PROMPT }),
     });
     expect(r.code, `user-prompt exited ${r.code}\n${r.stderr}`).toBe(0);
     expectHookStdout(r.stdout, { event: null, plainAllowed: true, label: 'hook.mjs user-prompt' });
@@ -510,11 +584,17 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     expect(r.stdout).toContain(LESSON);
 
     // …and the prompt is persisted to the sandbox DB under the cwd-derived project.
-    const prompt = withDb((db) => db.prepare(`
+    const prompt = withDb((db) =>
+      db
+        .prepare(
+          `
       SELECT p.prompt_text, s.project FROM user_prompts p
       JOIN sdk_sessions s ON s.content_session_id = p.content_session_id
       WHERE p.prompt_text = ?
-    `).get(PROMPT));
+    `,
+        )
+        .get(PROMPT),
+    );
     expect(prompt).toMatchObject({ prompt_text: PROMPT, project: projectOf(NAME) });
 
     await expectMalformedResilience(
@@ -528,8 +608,14 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const NAME = 'hs-posttool';
     const cwd = workDir(NAME);
     const project = projectOf(NAME);
-    const recallId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-      ['--type', 'bugfix', '--importance', '3', '--lesson', 'Invalidate the widget cache on write, never on read']);
+    const recallId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'Invalidate the widget cache on write, never on read',
+    ]);
 
     // (a) A failing test command is a hard error → error-triggered recall, delivered on the
     // JSON channel (MED-3: it used to be a raw multi-line write that corrupted a co-emitted
@@ -537,14 +623,18 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const errFire = await hookEvent('post-tool-use', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-post', tool_name: 'Bash',
+        session_id: 'cc-hooksweep-post',
+        tool_name: 'Bash',
         tool_input: { command: 'node --test widget-cache.test.mjs' },
-        tool_response: 'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\nnpm ERR! Test failed. See above for more details.',
+        tool_response:
+          'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\nnpm ERR! Test failed. See above for more details.',
       }),
     });
     expect(errFire.code, `post-tool-use exited ${errFire.code}\n${errFire.stderr}`).toBe(0);
     const [recall] = expectHookStdout(errFire.stdout, {
-      event: 'PostToolUse', plainAllowed: false, label: 'hook.mjs post-tool-use (error recall)',
+      event: 'PostToolUse',
+      plainAllowed: false,
+      label: 'hook.mjs post-tool-use (error recall)',
     });
     expect(recall, `no error-recall envelope emitted:\n${errFire.stdout}`).toBeTruthy();
     expect(recall.hookSpecificOutput.additionalContext).toContain('Related memories found for this error');
@@ -554,13 +644,18 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const editFire = await hookEvent('post-tool-use', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-post', tool_name: 'Edit',
-        tool_input: { file_path: join(cwd, 'widget-cache.mjs'), old_string: 'readPath()', new_string: 'writePath()' },
+        session_id: 'cc-hooksweep-post',
+        tool_name: 'Edit',
+        tool_input: {
+          file_path: join(cwd, 'widget-cache.mjs'),
+          old_string: 'readPath()',
+          new_string: 'writePath()',
+        },
         tool_response: 'The file has been updated successfully with the new content applied.',
       }),
     });
     expect(editFire.code).toBe(0);
-    expect(editFire.stdout).toBe('');   // buffering is silent; only a flush emits a receipt
+    expect(editFire.stdout).toBe(''); // buffering is silent; only a flush emits a receipt
 
     const episode = JSON.parse(readFileSync(join(RUNTIME_DIR, `ep-${project}.json`), 'utf8'));
     expect(episode.project).toBe(project);
@@ -585,21 +680,31 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const NAME = 'hs-postfail';
     const cwd = workDir(NAME);
     const project = projectOf(NAME);
-    const recallId = await seedObs(cwd, 'ENOENT on package.json means the build ran from the wrong cwd',
-      ['--type', 'bugfix', '--importance', '3', '--lesson', 'Run the build from the package root, not from scripts/']);
+    const recallId = await seedObs(cwd, 'ENOENT on package.json means the build ran from the wrong cwd', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'Run the build from the package root, not from scripts/',
+    ]);
 
     const fire = await hookEvent('post-tool-failure', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-postfail', tool_name: 'Bash',
+        session_id: 'cc-hooksweep-postfail',
+        tool_name: 'Bash',
         tool_input: { command: 'node scripts/build.mjs' },
         tool_use_id: 'toolu_sweep_d170',
-        error: "Error: ENOENT: no such file or directory, open '/app/package.json'\n    at Object.openSync (node:fs:596:3)",
+        error:
+          "Error: ENOENT: no such file or directory, open '/app/package.json'\n    at Object.openSync (node:fs:596:3)",
       }),
     });
     expect(fire.code, `post-tool-failure exited ${fire.code}\n${fire.stderr}`).toBe(0);
     const [recall] = expectHookStdout(fire.stdout, {
-      event: 'PostToolUseFailure', plainAllowed: false, label: 'hook.mjs post-tool-failure',
+      event: 'PostToolUseFailure',
+      plainAllowed: false,
+      label: 'hook.mjs post-tool-failure',
     });
     expect(recall, `no error-recall envelope emitted:\n${fire.stdout}`).toBeTruthy();
     expect(recall.hookSpecificOutput.additionalContext).toContain('Related memories found for this error');
@@ -616,9 +721,11 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const refused = await hookEvent('post-tool-failure', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-postfail', tool_name: 'Bash',
+        session_id: 'cc-hooksweep-postfail',
+        tool_name: 'Bash',
         tool_input: { command: 'node scripts/build.mjs' },
-        error: '[claudemd] §11 memory-hint: refused — the ENOENT probe on package.json was blocked before it ran.\nError: command not executed.',
+        error:
+          '[claudemd] §11 memory-hint: refused — the ENOENT probe on package.json was blocked before it ran.\nError: command not executed.',
       }),
     });
     expect(refused.code).toBe(0);
@@ -627,8 +734,10 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     // This path deliberately does NOT feed the episode buffer (scope: episode entries
     // flow into LLM summarisation and the save-nudge, unmeasured under an influx of
     // failures). The buffer must therefore hold nothing from either fire above.
-    expect(existsSync(join(RUNTIME_DIR, `ep-${project}.json`)),
-      'post-tool-failure must not write an episode entry').toBe(false);
+    expect(
+      existsSync(join(RUNTIME_DIR, `ep-${project}.json`)),
+      'post-tool-failure must not write an episode entry',
+    ).toBe(false);
 
     await expectMalformedResilience(
       'hook.mjs post-tool-failure',
@@ -648,8 +757,12 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const post = await hookEvent('post-tool-use', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-stop', tool_name: 'Write',
-        tool_input: { file_path: schemaFile, content: 'CREATE TABLE widgets (id INTEGER, cache_epoch INTEGER);\n' },
+        session_id: 'cc-hooksweep-stop',
+        tool_name: 'Write',
+        tool_input: {
+          file_path: schemaFile,
+          content: 'CREATE TABLE widgets (id INTEGER, cache_epoch INTEGER);\n',
+        },
         tool_response: `File created successfully at: ${schemaFile}`,
       }),
     });
@@ -657,7 +770,11 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     expect(existsSync(join(RUNTIME_DIR, `ep-${project}.json`))).toBe(true);
 
     const r = await hookEvent('stop', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-stop', transcript_path: join(ROOT, 'no-such-transcript.jsonl') }),
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-hooksweep-stop',
+        transcript_path: join(ROOT, 'no-such-transcript.jsonl'),
+      }),
     });
     expect(r.code, `stop exited ${r.code}\n${r.stderr}`).toBe(0);
     // Stop's schema rejects hookSpecificOutput at the root (v2.33.4) — silence is the contract.
@@ -667,29 +784,38 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     // Functional: the buffered episode was flushed to a readable observation, and the
     // session was closed out.
     expect(existsSync(join(RUNTIME_DIR, `ep-${project}.json`))).toBe(false);
-    const row = withDb((db) => db.prepare(
-      'SELECT title, type, importance, files_modified FROM observations WHERE project = ?').get(project));
+    const row = withDb((db) =>
+      db
+        .prepare('SELECT title, type, importance, files_modified FROM observations WHERE project = ?')
+        .get(project),
+    );
     expect(row, `Stop did not flush an observation for ${project}`).toBeTruthy();
     expect(row.title).toBe('Modified db-schema.sql');
     expect(row.files_modified).toContain('db-schema.sql');
-    expect(withDb((db) => db.prepare('SELECT status FROM sdk_sessions WHERE project = ?').get(project)))
-      .toMatchObject({ status: 'completed' });
+    expect(
+      withDb((db) => db.prepare('SELECT status FROM sdk_sessions WHERE project = ?').get(project)),
+    ).toMatchObject({ status: 'completed' });
 
-    await expectMalformedResilience(
-      'hook.mjs stop',
-      { event: null, plainAllowed: false },
-      (stdin, malCwd) => hookEvent('stop', { cwd: malCwd, stdin }),
+    await expectMalformedResilience('hook.mjs stop', { event: null, plainAllowed: false }, (stdin, malCwd) =>
+      hookEvent('stop', { cwd: malCwd, stdin }),
     );
   });
 
   itHook('hook.mjs pre-compact', async () => {
     const NAME = 'hs-precompact';
     const cwd = workDir(NAME);
-    await seedObs(cwd, 'Traced the retry backoff reset to every redirect hop',
-      ['--type', 'discovery', '--importance', '3', '--lesson', 'Reset the backoff only on a fresh request, not per hop']);
+    await seedObs(cwd, 'Traced the retry backoff reset to every redirect hop', [
+      '--type',
+      'discovery',
+      '--importance',
+      '3',
+      '--lesson',
+      'Reset the backoff only on a fresh request, not per hop',
+    ]);
 
     const r = await hookEvent('pre-compact', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-compact', trigger: 'auto' }),
+      cwd,
+      stdin: JSON.stringify({ session_id: 'cc-hooksweep-compact', trigger: 'auto' }),
     });
     expect(r.code, `pre-compact exited ${r.code}\n${r.stderr}`).toBe(0);
     expectHookStdout(r.stdout, { event: null, plainAllowed: true, label: 'hook.mjs pre-compact' });
@@ -750,13 +876,20 @@ describe('hook flush: the reads-file is consumed, not accumulated (D#175)', () =
     for (const p of [readA, readB]) {
       const r = await bashPrefilter({
         cwd,
-        stdin: JSON.stringify({ session_id: 'cc-readslice-1', tool_name: 'Read', tool_input: { file_path: p } }),
+        stdin: JSON.stringify({
+          session_id: 'cc-readslice-1',
+          tool_name: 'Read',
+          tool_input: { file_path: p },
+        }),
       });
       expect(r.code, `post-tool-use.sh exited ${r.code}\n${r.stderr}`).toBe(0);
     }
     // Both halves of the seed asserted before anything downstream runs: a silently absent
     // reads file would make every later assertion in this case vacuous.
-    expect(existsSync(readsFile), 'the bash prefilter wrote no reads file — the rest of this case would assert nothing').toBe(true);
+    expect(
+      existsSync(readsFile),
+      'the bash prefilter wrote no reads file — the rest of this case would assert nothing',
+    ).toBe(true);
     expect(readFileSync(readsFile, 'utf8').split('\n').filter(Boolean)).toEqual([readA, readB]);
 
     /** Buffer one significant Write, then Stop — the real flush path. */
@@ -766,7 +899,8 @@ describe('hook flush: the reads-file is consumed, not accumulated (D#175)', () =
       const post = await hookEvent('post-tool-use', {
         cwd,
         stdin: JSON.stringify({
-          session_id: session, tool_name: 'Write',
+          session_id: session,
+          tool_name: 'Write',
           tool_input: { file_path: schemaFile, content: 'CREATE TABLE widgets (id INTEGER);\n' },
           tool_response: `File created successfully at: ${schemaFile}`,
         }),
@@ -775,14 +909,22 @@ describe('hook flush: the reads-file is consumed, not accumulated (D#175)', () =
       expect(existsSync(join(RUNTIME_DIR, `ep-${project}.json`))).toBe(true);
 
       const stop = await hookEvent('stop', {
-        cwd, stdin: JSON.stringify({ session_id: session, transcript_path: join(ROOT, 'no-such-transcript.jsonl') }),
+        cwd,
+        stdin: JSON.stringify({
+          session_id: session,
+          transcript_path: join(ROOT, 'no-such-transcript.jsonl'),
+        }),
       });
       expect(stop.code, `stop exited ${stop.code}\n${stop.stderr}`).toBe(0);
       expect(existsSync(join(RUNTIME_DIR, `ep-${project}.json`))).toBe(false);
 
-      const row = withDb((db) => db.prepare(
-        'SELECT title, files_read, files_modified FROM observations WHERE project = ? AND files_modified LIKE ? ORDER BY id DESC LIMIT 1',
-      ).get(project, `%${schemaFile.split('/').pop()}%`));
+      const row = withDb((db) =>
+        db
+          .prepare(
+            'SELECT title, files_read, files_modified FROM observations WHERE project = ? AND files_modified LIKE ? ORDER BY id DESC LIMIT 1',
+          )
+          .get(project, `%${schemaFile.split('/').pop()}%`),
+      );
       expect(row, `no observation flushed for ${schemaFile}`).toBeTruthy();
       return row;
     }
@@ -792,7 +934,10 @@ describe('hook flush: the reads-file is consumed, not accumulated (D#175)', () =
     expect(JSON.parse(first.files_read)).toEqual([readA, readB]);
 
     // … and consumed the file rather than reading it in place.
-    expect(existsSync(readsFile), 'the flush left reads-<project>.txt in place — filesRead would accumulate across flushes').toBe(false);
+    expect(
+      existsSync(readsFile),
+      'the flush left reads-<project>.txt in place — filesRead would accumulate across flushes',
+    ).toBe(false);
     // The rename target too: a collect copy left behind is an unswept per-flush file that
     // grows forever and leaks captured paths, and the emptiness assertion below cannot see it.
     expect(readsResidue(), 'the flush left reads-file residue in RUNTIME_DIR').toEqual([]);
@@ -802,8 +947,10 @@ describe('hook flush: the reads-file is consumed, not accumulated (D#175)', () =
     // is empty rather than inheriting round 1's.
     const second = await writeThenFlush('cc-readslice-2', join(cwd, 'beta-schema.sql'));
     expect(second.files_modified).toContain('beta-schema.sql');
-    expect(JSON.parse(second.files_read),
-      'the second flush inherited the first flush\'s Reads — filesRead is no longer a per-flush slice, and D#171\'s closure rationale is void').toEqual([]);
+    expect(
+      JSON.parse(second.files_read),
+      "the second flush inherited the first flush's Reads — filesRead is no longer a per-flush slice, and D#171's closure rationale is void",
+    ).toEqual([]);
     expect(readsResidue()).toEqual([]);
   }, 60000);
 });
@@ -844,27 +991,35 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
   async function bufferThenFlush(cwd, session, { significant, env = {}, schemaFile }) {
     const stdin = significant
       ? JSON.stringify({
-        session_id: session, tool_name: 'Write',
-        tool_input: { file_path: schemaFile, content: 'CREATE TABLE widgets (id INTEGER);\n' },
-        tool_response: `File created successfully at: ${schemaFile}`,
-      })
+          session_id: session,
+          tool_name: 'Write',
+          tool_input: { file_path: schemaFile, content: 'CREATE TABLE widgets (id INTEGER);\n' },
+          tool_response: `File created successfully at: ${schemaFile}`,
+        })
       : JSON.stringify({
-        session_id: session, tool_name: 'Bash',
-        tool_input: { command: 'echo hello from the harness' },
-        tool_response: 'hello from the harness\n',
-      });
+          session_id: session,
+          tool_name: 'Bash',
+          tool_input: { command: 'echo hello from the harness' },
+          tool_response: 'hello from the harness\n',
+        });
     const post = await hookEvent('post-tool-use', { cwd, stdin, env });
     expect(post.code, `post-tool-use exited ${post.code}\n${post.stderr}`).toBe(0);
     const stop = await hookEvent('stop', {
-      cwd, env,
+      cwd,
+      env,
       stdin: JSON.stringify({ session_id: session, transcript_path: join(ROOT, 'no-such-transcript.jsonl') }),
     });
     expect(stop.code, `stop exited ${stop.code}\n${stop.stderr}`).toBe(0);
   }
 
-  const rowFor = (project, schemaFile) => withDb((db) => db.prepare(
-    'SELECT title, files_read, files_modified FROM observations WHERE project = ? AND files_modified LIKE ? ORDER BY id DESC LIMIT 1',
-  ).get(project, `%${schemaFile.split('/').pop()}%`));
+  const rowFor = (project, schemaFile) =>
+    withDb((db) =>
+      db
+        .prepare(
+          'SELECT title, files_read, files_modified FROM observations WHERE project = ? AND files_modified LIKE ? ORDER BY id DESC LIMIT 1',
+        )
+        .get(project, `%${schemaFile.split('/').pop()}%`),
+    );
 
   it('CLAUDE_MEM_READS_CARRY=0: the insignificant flush consumes and discards them (pre-D#178)', async () => {
     const NAME = 'hs-readseat-off';
@@ -876,16 +1031,25 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
     const env = { CLAUDE_MEM_READS_CARRY: '0' };
 
     await seedReads(cwd, 'cc-off-1', [readA, readB]);
-    expect(existsSync(readsFile), 'the bash prefilter wrote no reads file — every later assertion would be vacuous').toBe(true);
+    expect(
+      existsSync(readsFile),
+      'the bash prefilter wrote no reads file — every later assertion would be vacuous',
+    ).toBe(true);
 
     await bufferThenFlush(cwd, 'cc-off-1', { significant: false, env });
-    expect(existsSync(readsFile), 'the off switch did not switch anything off: the insignificant flush left the reads file').toBe(false);
+    expect(
+      existsSync(readsFile),
+      'the off switch did not switch anything off: the insignificant flush left the reads file',
+    ).toBe(false);
 
     const schema = join(cwd, 'alpha-schema.sql');
     await bufferThenFlush(cwd, 'cc-off-2', { significant: true, schemaFile: schema, env });
     const row = rowFor(project, schema);
     expect(row, 'no observation flushed for the significant episode').toBeTruthy();
-    expect(JSON.parse(row.files_read), 'the off switch did not restore the old behavior: the reads survived the insignificant flush').toEqual([]);
+    expect(
+      JSON.parse(row.files_read),
+      'the off switch did not restore the old behavior: the reads survived the insignificant flush',
+    ).toEqual([]);
   }, 60000);
 
   // The reorder put `planEpisodeFlush` ABOVE the collection, and its multi-session branch
@@ -904,17 +1068,24 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
     const readB = join(cwd, 'beta-config.mjs');
 
     await seedReads(cwd, 'cc-multi-1', [readA, readB]);
-    expect(existsSync(readsFile), 'the bash prefilter wrote no reads file — the case would assert nothing').toBe(true);
+    expect(
+      existsSync(readsFile),
+      'the bash prefilter wrote no reads file — the case would assert nothing',
+    ).toBe(true);
 
     // Two DIFFERENT session ids buffered into the one per-project episode file, so
     // planEpisodeFlush takes its multi-session branch on the flush below.
     const schemaA = join(cwd, 'alpha-schema.sql');
     const schemaB = join(cwd, 'beta-schema.sql');
-    for (const [session, file] of [['cc-multi-1', schemaA], ['cc-multi-2', schemaB]]) {
+    for (const [session, file] of [
+      ['cc-multi-1', schemaA],
+      ['cc-multi-2', schemaB],
+    ]) {
       const post = await hookEvent('post-tool-use', {
         cwd,
         stdin: JSON.stringify({
-          session_id: session, tool_name: 'Write',
+          session_id: session,
+          tool_name: 'Write',
           tool_input: { file_path: file, content: 'CREATE TABLE widgets (id INTEGER);\n' },
           tool_response: `File created successfully at: ${file}`,
         }),
@@ -922,7 +1093,11 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
       expect(post.code, `post-tool-use exited ${post.code}\n${post.stderr}`).toBe(0);
     }
     const stop = await hookEvent('stop', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-multi-1', transcript_path: join(ROOT, 'no-such-transcript.jsonl') }),
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-multi-1',
+        transcript_path: join(ROOT, 'no-such-transcript.jsonl'),
+      }),
     });
     expect(stop.code, `stop exited ${stop.code}\n${stop.stderr}`).toBe(0);
 
@@ -931,9 +1106,10 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
     for (const schema of [schemaA, schemaB]) {
       const row = rowFor(project, schema);
       expect(row, `no observation flushed for ${schema}`).toBeTruthy();
-      expect(JSON.parse(row.files_read),
-        `${schema.split('/').pop()}'s sub-episode lost the collected reads — planEpisodeFlush now runs before the collect, so every sub needs the write-back`)
-        .toEqual([readA, readB]);
+      expect(
+        JSON.parse(row.files_read),
+        `${schema.split('/').pop()}'s sub-episode lost the collected reads — planEpisodeFlush now runs before the collect, so every sub needs the write-back`,
+      ).toEqual([readA, readB]);
     }
   }, 60000);
 
@@ -957,9 +1133,15 @@ describe('hook flush: an insignificant flush does not destroy accumulated Reads 
     await bufferThenFlush(cwd, 'cc-on-2', { significant: true, schemaFile: schema, env });
     const row = rowFor(project, schema);
     expect(row, 'no observation flushed for the significant episode').toBeTruthy();
-    expect(JSON.parse(row.files_read), 'the carried reads did not reach the saved observation').toEqual([readA, readB]);
+    expect(JSON.parse(row.files_read), 'the carried reads did not reach the saved observation').toEqual([
+      readA,
+      readB,
+    ]);
     // …and the significant flush DID consume: the carry is a deferral, not a leak.
-    expect(existsSync(readsFile), 'the significant flush left the reads file in place — it would accumulate forever').toBe(false);
+    expect(
+      existsSync(readsFile),
+      'the significant flush left the reads file in place — it would accumulate forever',
+    ).toBe(false);
   }, 60000);
 });
 
@@ -977,32 +1159,61 @@ describe('hook feature sweep: hook.mjs background workers', () => {
   function expectSilentWorker(label, r) {
     expect(r.code, `${label} exited ${r.code}\n${r.stderr}`).toBe(0);
     expect(r.stdout, `${label} wrote to stdout; background workers are stdio:'ignore'`).toBe('');
-    expect(r.stdout + r.stderr, `${label} attempted network I/O`).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
+    expect(r.stdout + r.stderr, `${label} attempted network I/O`).not.toMatch(
+      /ENOTFOUND|ETIMEDOUT|fetch failed/,
+    );
     expectHookStdout(r.stdout, { event: null, plainAllowed: false, label });
   }
 
   itHook('hook.mjs llm-episode', async () => {
     const NAME = 'hs-episode';
     const cwd = workDir(NAME);
-    const savedId = await seedObs(cwd, 'Immediate observation the episode worker upgrades', ['--type', 'change', '--importance', '1']);
+    const savedId = await seedObs(cwd, 'Immediate observation the episode worker upgrades', [
+      '--type',
+      'change',
+      '--importance',
+      '1',
+    ]);
     mkdirSync(RUNTIME_DIR, { recursive: true });
     const flushFile = join(RUNTIME_DIR, 'ep-flush-hooksweep.json');
-    writeFileSync(flushFile, JSON.stringify({
-      sessionId: 'hook-hooksweep-episode', project: projectOf(NAME), savedId,
-      entries: [{
-        tool: 'Edit', desc: 'transport.mjs: split the retry helper out of the transport module',
-        files: [join(cwd, 'transport.mjs')], ts: Date.now(), isError: false, isSignificant: true,
-      }],
-      files: [join(cwd, 'transport.mjs')], filesRead: [], startedAt: Date.now(), lastAt: Date.now(),
-    }));
+    writeFileSync(
+      flushFile,
+      JSON.stringify({
+        sessionId: 'hook-hooksweep-episode',
+        project: projectOf(NAME),
+        savedId,
+        entries: [
+          {
+            tool: 'Edit',
+            desc: 'transport.mjs: split the retry helper out of the transport module',
+            files: [join(cwd, 'transport.mjs')],
+            ts: Date.now(),
+            isError: false,
+            isSignificant: true,
+          },
+        ],
+        files: [join(cwd, 'transport.mjs')],
+        filesRead: [],
+        startedAt: Date.now(),
+        lastAt: Date.now(),
+      }),
+    );
 
     // Fired exactly as spawnBackground('llm-episode', flushFile) does — the flush file is
     // argv[3], and without it the worker is a no-op.
-    const r = await fire(process.execPath, [HOOK_PATH, 'llm-episode', flushFile], { cwd, env: WITH_MOCK_LLM, timeout: 60000 });
+    const r = await fire(process.execPath, [HOOK_PATH, 'llm-episode', flushFile], {
+      cwd,
+      env: WITH_MOCK_LLM,
+      timeout: 60000,
+    });
     expectSilentWorker('hook.mjs llm-episode', r);
     // Functional: the pre-saved row is upgraded IN PLACE from the LLM answer, and the flush
     // file is consumed (a leaked one is retried forever — the v2.x guard in handleLLMEpisode).
-    const row = withDb((db) => db.prepare('SELECT title, narrative, lesson_learned, concepts FROM observations WHERE id = ?').get(savedId));
+    const row = withDb((db) =>
+      db
+        .prepare('SELECT title, narrative, lesson_learned, concepts FROM observations WHERE id = ?')
+        .get(savedId),
+    );
     expect(row.title).toBe('Mock single observation');
     expect(row.narrative).toBe('Mock narrative from LLM extraction describing what happened.');
     expect(row.lesson_learned).toContain('Mock lesson');
@@ -1025,26 +1236,44 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     // prompts, so the fixture is a completed session with one of each.
     withDb((db) => {
       const now = Date.now();
-      db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-                  VALUES (?, ?, ?, ?, ?, 'completed')`).run(SESSION, SESSION, project, new Date(now).toISOString(), now);
-      db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
-                  VALUES (?, ?, ?, ?, ?)`).run(SESSION, 'trace the widget cache invalidation race', 1, new Date(now).toISOString(), now);
-      db.prepare(`INSERT INTO observations (memory_session_id, project, type, title, narrative, text, importance, created_at, created_at_epoch)
-                  VALUES (?, ?, 'bugfix', ?, ?, ?, 2, ?, ?)`).run(
-        SESSION, project, 'Fixed the widget cache invalidation race',
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+                  VALUES (?, ?, ?, ?, ?, 'completed')`,
+      ).run(SESSION, SESSION, project, new Date(now).toISOString(), now);
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+                  VALUES (?, ?, ?, ?, ?)`,
+      ).run(SESSION, 'trace the widget cache invalidation race', 1, new Date(now).toISOString(), now);
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, type, title, narrative, text, importance, created_at, created_at_epoch)
+                  VALUES (?, ?, 'bugfix', ?, ?, ?, 2, ?, ?)`,
+      ).run(
+        SESSION,
+        project,
+        'Fixed the widget cache invalidation race',
         'Traced the race to a read-path invalidation and moved it to the write path.',
         'Traced the race to a read-path invalidation and moved it to the write path.',
-        new Date(now).toISOString(), now);
+        new Date(now).toISOString(),
+        now,
+      );
     });
 
     // handleLLMSummary takes its session id + project from argv — fired the way
     // spawnBackground('llm-summary', sessionId, project) does.
-    const r = await fire(process.execPath, [HOOK_PATH, 'llm-summary', SESSION, project],
-      { cwd, env: WITH_MOCK_LLM, timeout: 60000 });
+    const r = await fire(process.execPath, [HOOK_PATH, 'llm-summary', SESSION, project], {
+      cwd,
+      env: WITH_MOCK_LLM,
+      timeout: 60000,
+    });
     expectSilentWorker('hook.mjs llm-summary', r);
     // Functional: the session now has a persisted summary built from the LLM answer.
-    const summary = withDb((db) => db.prepare(
-      'SELECT request, completed, next_steps, project FROM session_summaries WHERE memory_session_id = ?').get(SESSION));
+    const summary = withDb((db) =>
+      db
+        .prepare(
+          'SELECT request, completed, next_steps, project FROM session_summaries WHERE memory_session_id = ?',
+        )
+        .get(SESSION),
+    );
     expect(summary, 'llm-summary wrote no session_summaries row').toBeTruthy();
     expect(summary).toMatchObject({
       request: 'Mock session request description',
@@ -1065,15 +1294,21 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     const cwd = workDir(NAME);
     // A wide-scope re-enrich candidate: bugfix, no lesson, narrative > 100 chars
     // (hook-optimize.mjs findReenrichCandidates). The daily worker passes scope 'wide'.
-    const id = await seedObs(cwd,
+    const id = await seedObs(
+      cwd,
       'Reworked the queue drain sequence so the flush waits for in-flight acknowledgements before closing the socket, which removed the intermittent truncation on shutdown.',
-      ['--type', 'bugfix', '--project', 'hooksweep-optimize']);
-    expect(withDb((db) => db.prepare('SELECT optimized_at FROM observations WHERE id = ?').get(id)).optimized_at).toBeNull();
+      ['--type', 'bugfix', '--project', 'hooksweep-optimize'],
+    );
+    expect(
+      withDb((db) => db.prepare('SELECT optimized_at FROM observations WHERE id = ?').get(id)).optimized_at,
+    ).toBeNull();
 
     const r = await hookEvent('llm-optimize', { cwd, stdin: '', env: WITH_MOCK_LLM, timeout: 60000 });
     expectSilentWorker('hook.mjs llm-optimize', r);
     // Functional: the candidate was re-enriched and stamped, so a later pass skips it.
-    const row = withDb((db) => db.prepare('SELECT lesson_learned, concepts, optimized_at FROM observations WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db.prepare('SELECT lesson_learned, concepts, optimized_at FROM observations WHERE id = ?').get(id),
+    );
     expect(row.lesson_learned).toContain('Mock lesson');
     expect(row.concepts).toContain('mock-concept');
     expect(typeof row.optimized_at).toBe('number');
@@ -1088,15 +1323,28 @@ describe('hook feature sweep: hook.mjs background workers', () => {
   itHook('hook.mjs enrich-save', async () => {
     const NAME = 'hs-enrich';
     const cwd = workDir(NAME);
-    const id = await seedObs(cwd, 'Traced a flaky upload to an unclosed multipart stream in the uploader',
-      ['--type', 'bugfix', '--project', 'hooksweep-enrich']);
-    expect(withDb((db) => db.prepare('SELECT lesson_learned, search_aliases FROM observations WHERE id = ?').get(id)))
-      .toMatchObject({ lesson_learned: null, search_aliases: null });
+    const id = await seedObs(cwd, 'Traced a flaky upload to an unclosed multipart stream in the uploader', [
+      '--type',
+      'bugfix',
+      '--project',
+      'hooksweep-enrich',
+    ]);
+    expect(
+      withDb((db) =>
+        db.prepare('SELECT lesson_learned, search_aliases FROM observations WHERE id = ?').get(id),
+      ),
+    ).toMatchObject({ lesson_learned: null, search_aliases: null });
 
-    const r = await fire(process.execPath, [HOOK_PATH, 'enrich-save', String(id)], { cwd, env: WITH_MOCK_LLM, timeout: 60000 });
+    const r = await fire(process.execPath, [HOOK_PATH, 'enrich-save', String(id)], {
+      cwd,
+      env: WITH_MOCK_LLM,
+      timeout: 60000,
+    });
     expectSilentWorker('hook.mjs enrich-save', r);
     // Functional: the fill-only-empty backfill landed on the row the id names.
-    const row = withDb((db) => db.prepare('SELECT lesson_learned, search_aliases FROM observations WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db.prepare('SELECT lesson_learned, search_aliases FROM observations WHERE id = ?').get(id),
+    );
     expect(row.lesson_learned).toContain('Mock distilled lesson');
     expect(row.search_aliases).toContain('mock alias one');
 
@@ -1106,7 +1354,8 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     await expectMalformedResilience(
       'hook.mjs enrich-save',
       { event: null, plainAllowed: false },
-      (stdin, malCwd) => fire(process.execPath, [HOOK_PATH, 'enrich-save', String(id)], { cwd: malCwd, stdin, env: BG }),
+      (stdin, malCwd) =>
+        fire(process.execPath, [HOOK_PATH, 'enrich-save', String(id)], { cwd: malCwd, stdin, env: BG }),
     );
   });
 
@@ -1119,13 +1368,16 @@ describe('hook feature sweep: hook.mjs background workers', () => {
       'Renamed the changelog heading ahead of the quarterly audit',
       'Bumped the linter rule covering trailing commas in vendor files',
       'Removed an obsolete screenshot from the onboarding docs folder',
-    ]) await cli(['save', text, '--importance', '1', '--project', P], cwd);
+    ])
+      await cli(['save', text, '--importance', '1', '--project', P], cwd);
     expect(ageProject(P, 90)).toBe(3);
 
     const r = await hookEvent('auto-compress', { cwd, stdin: '', env: BG, timeout: 60000 });
     expectSilentWorker('hook.mjs auto-compress', r);
     // Functional: the three originals now point at one weekly summary row.
-    const rows = withDb((db) => db.prepare('SELECT id, title, compressed_into FROM observations WHERE project = ?').all(P));
+    const rows = withDb((db) =>
+      db.prepare('SELECT id, title, compressed_into FROM observations WHERE project = ?').all(P),
+    );
     const compressed = rows.filter((o) => o.compressed_into);
     const survivors = rows.filter((o) => !o.compressed_into);
     expect(compressed).toHaveLength(3);
@@ -1144,15 +1396,22 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     const NAME = 'hs-maintain';
     const cwd = workDir(NAME);
     const P = 'hooksweep-maintain';
-    const id = await seedObs(cwd, 'Stale row awaiting the idle decay sweep in maintenance', ['--importance', '1', '--project', P]);
+    const id = await seedObs(cwd, 'Stale row awaiting the idle decay sweep in maintenance', [
+      '--importance',
+      '1',
+      '--project',
+      P,
+    ]);
     expect(ageProject(P, 90)).toBe(1);
 
     const r = await hookEvent('auto-maintain', { cwd, stdin: '', env: BG, timeout: 60000 });
     expectSilentWorker('hook.mjs auto-maintain', r);
     // Functional: the idle row is marked pending-purge, and the 24h gate file is stamped so
     // the next SessionStart does not re-run the sweep.
-    expect(withDb((db) => db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(id)).compressed_into)
-      .toBe(COMPRESSED_PENDING_PURGE);
+    expect(
+      withDb((db) => db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(id))
+        .compressed_into,
+    ).toBe(COMPRESSED_PENDING_PURGE);
     const gate = JSON.parse(readFileSync(join(RUNTIME_DIR, 'last-auto-maintain.json'), 'utf8'));
     expect(Date.now() - gate.epoch).toBeLessThan(120000);
 
@@ -1175,14 +1434,17 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     // an observable question offline, which is what this case previously could not answer.
     const fetchLog = join(ROOT, 'update-check-fetches.txt');
     const offlineFetch = join(ROOT, 'offline-fetch.cjs');
-    writeFileSync(offlineFetch, [
-      "const fs = require('fs');",
-      'globalThis.fetch = async (url) => {',
-      "  try { fs.appendFileSync(process.env.SWEEP_FETCH_LOG, String(url) + '\\n'); } catch { /* best-effort */ }",
-      "  throw new Error('offline: this sweep refuses every fetch');",
-      '};',
-      '',
-    ].join('\n'));
+    writeFileSync(
+      offlineFetch,
+      [
+        "const fs = require('fs');",
+        'globalThis.fetch = async (url) => {',
+        "  try { fs.appendFileSync(process.env.SWEEP_FETCH_LOG, String(url) + '\\n'); } catch { /* best-effort */ }",
+        "  throw new Error('offline: this sweep refuses every fetch');",
+        '};',
+        '',
+      ].join('\n'),
+    );
     // The blanked proxy vars are part of the network boundary, not hygiene: when a
     // proxy is configured hook-update takes the CONNECT tunnel, which does NOT go
     // through globalThis.fetch — so on a proxy-bound developer machine this stub
@@ -1190,7 +1452,10 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     const OFFLINE = {
       SWEEP_FETCH_LOG: fetchLog,
       NODE_OPTIONS: `--require "${offlineFetch}"`,
-      HTTPS_PROXY: '', https_proxy: '', HTTP_PROXY: '', http_proxy: '',
+      HTTPS_PROXY: '',
+      https_proxy: '',
+      HTTP_PROXY: '',
+      http_proxy: '',
     };
 
     // This event is spawned in production as `spawnBackground('update-check')`, i.e. with
@@ -1208,21 +1473,31 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     // then records the GitHub URLs and the state file appears.
     const r = await hookEvent('update-check', { cwd, stdin: '', env: OFFLINE, timeout: 60000 });
     expectSilentWorker('hook.mjs update-check', r);
-    expect(existsSync(fetchLog), 'update-check attempted a release lookup despite CLAUDE_MEM_SKIP_UPDATE=1').toBe(false);
-    expect(existsSync(stateFile), 'update-check wrote update-state.json despite CLAUDE_MEM_SKIP_UPDATE=1').toBe(false);
+    expect(
+      existsSync(fetchLog),
+      'update-check attempted a release lookup despite CLAUDE_MEM_SKIP_UPDATE=1',
+    ).toBe(false);
+    expect(
+      existsSync(stateFile),
+      'update-check wrote update-state.json despite CLAUDE_MEM_SKIP_UPDATE=1',
+    ).toBe(false);
 
     // (b) The behavioral arm: flag CLEARED, so the handler runs its real no-release path.
     const live = await hookEvent('update-check', {
-      cwd, stdin: '', timeout: 60000,
-      env: { ...OFFLINE, CLAUDE_MEM_SKIP_UPDATE: undefined },   // childEnv drops undefined keys
+      cwd,
+      stdin: '',
+      timeout: 60000,
+      env: { ...OFFLINE, CLAUDE_MEM_SKIP_UPDATE: undefined }, // childEnv drops undefined keys
     });
     expectSilentWorker('hook.mjs update-check (offline)', live);
 
     // It reached hook-update's release lookup — the releases/latest call first, then the
     // tags fallback the null result triggers. FAILS IF: the dispatch case is deleted or
     // stops calling checkForUpdate (no file at all), or the lookup changes endpoint.
-    expect(existsSync(fetchLog),
-      'update-check made no release lookup at all — the handler never ran (deleted case? recursion guard?)').toBe(true);
+    expect(
+      existsSync(fetchLog),
+      'update-check made no release lookup at all — the handler never ran (deleted case? recursion guard?)',
+    ).toBe(true);
     const urls = readFileSync(fetchLog, 'utf8').trim().split('\n');
     expect(urls[0]).toBe('https://api.github.com/repos/sdsrss/claude-mem-lite/releases/latest');
     expect(urls[1]).toMatch(/^https:\/\/api\.github\.com\/repos\/sdsrss\/claude-mem-lite\/tags\b/);
@@ -1231,12 +1506,16 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     // with a timestamp from this run. FAILS IF: the no-release path stops stamping lastCheck
     // — every session would then re-fetch, the 24h throttle silently dead.
     const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-    expect(Date.now() - new Date(state.lastCheck).getTime(),
-      `update-state.json carries no fresh lastCheck: ${JSON.stringify(state)}`).toBeLessThan(120000);
+    expect(
+      Date.now() - new Date(state.lastCheck).getTime(),
+      `update-state.json carries no fresh lastCheck: ${JSON.stringify(state)}`,
+    ).toBeLessThan(120000);
     // No install may have been attempted off a failed lookup (the worker CAN install when it
     // is not in plugin mode, and this arm runs with CLAUDE_PLUGIN_ROOT unset).
-    expect(existsSync(join(HOME_DIR, '.claude-mem-lite', 'package.json')),
-      'a failed release lookup still touched the install dir').toBe(false);
+    expect(
+      existsSync(join(HOME_DIR, '.claude-mem-lite', 'package.json')),
+      'a failed release lookup still touched the install dir',
+    ).toBe(false);
 
     await expectMalformedResilience(
       'hook.mjs update-check',
@@ -1258,19 +1537,29 @@ describe('hook feature sweep: standalone hook scripts', () => {
     writeFileSync(target, 'export function writeWidget() {\n  invalidateWidgetCache();\n}\n');
     const LESSON = 'Always call invalidateWidgetCache after a write, never on read';
     const id = await seedObs(cwd, 'Fixed the widget cache invalidation race', [
-      '--type', 'bugfix', '--importance', '3', '--lesson', LESSON, '--files', target,
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      LESSON,
+      '--files',
+      target,
     ]);
 
     const r = await hookScript('pre-tool-recall.js', {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-pretool', tool_name: 'Edit',
+        session_id: 'cc-hooksweep-pretool',
+        tool_name: 'Edit',
         tool_input: { file_path: target, old_string: 'invalidateWidgetCache()', new_string: 'noop()' },
       }),
     });
     expect(r.code, `pre-tool-recall exited ${r.code}\n${r.stderr}`).toBe(0);
     const [envelope] = expectHookStdout(r.stdout, {
-      event: 'PreToolUse', plainAllowed: false, label: 'scripts/pre-tool-recall.js',
+      event: 'PreToolUse',
+      plainAllowed: false,
+      label: 'scripts/pre-tool-recall.js',
     });
     expect(envelope, `no PreToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
     // Functional: the file's own lesson reaches the agent before the edit, with its id.
@@ -1280,7 +1569,9 @@ describe('hook feature sweep: standalone hook scripts', () => {
     expect(ctx).toContain(LESSON);
     // …and the session-scoped cooldown was written to the SANDBOX runtime dir, carrying the
     // ids the episode-flush cite-back hint later reads.
-    const cooldown = JSON.parse(readFileSync(join(RUNTIME_DIR, 'pre-recall-cooldown-cc-hooksweep-pretool.json'), 'utf8'));
+    const cooldown = JSON.parse(
+      readFileSync(join(RUNTIME_DIR, 'pre-recall-cooldown-cc-hooksweep-pretool.json'), 'utf8'),
+    );
     expect(cooldown[target].lessonIds).toContain(id);
     expect(cooldown[target].mode).toBe('edit');
 
@@ -1297,12 +1588,19 @@ describe('hook feature sweep: standalone hook scripts', () => {
     const target = join(cwd, 'widget-cache.mjs');
     writeFileSync(target, 'export function writeWidget() {\n  invalidateWidgetCache();\n}\n');
     const id = await seedObs(cwd, 'Fixed the widget cache invalidation race', [
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'Always call invalidateWidgetCache after a write, never on read', '--files', target,
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'Always call invalidateWidgetCache after a write, never on read',
+      '--files',
+      target,
     ]);
     const BIND = { CLAUDE_MEM_SALIENCE: 'bind' };
     const stdin = JSON.stringify({
-      session_id: 'cc-hooksweep-bind', tool_name: 'Edit',
+      session_id: 'cc-hooksweep-bind',
+      tool_name: 'Edit',
       tool_input: { file_path: target, old_string: 'invalidateWidgetCache()', new_string: 'noop()' },
     });
 
@@ -1317,7 +1615,9 @@ describe('hook feature sweep: standalone hook scripts', () => {
     const r = await hookScript('post-tool-recall.js', { cwd, stdin, env: BIND });
     expect(r.code, `post-tool-recall exited ${r.code}\n${r.stderr}`).toBe(0);
     const [envelope] = expectHookStdout(r.stdout, {
-      event: 'PostToolUse', plainAllowed: false, label: 'scripts/post-tool-recall.js',
+      event: 'PostToolUse',
+      plainAllowed: false,
+      label: 'scripts/post-tool-recall.js',
     });
     expect(envelope, `no PostToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
     expect(envelope.hookSpecificOutput.additionalContext).toContain('dropped `invalidateWidgetCache`');
@@ -1331,7 +1631,8 @@ describe('hook feature sweep: standalone hook scripts', () => {
     await expectMalformedResilience(
       'scripts/post-tool-recall.js',
       { event: 'PostToolUse', plainAllowed: false },
-      (stdinPayload, malCwd) => hookScript('post-tool-recall.js', { cwd: malCwd, stdin: stdinPayload, env: BIND }),
+      (stdinPayload, malCwd) =>
+        hookScript('post-tool-recall.js', { cwd: malCwd, stdin: stdinPayload, env: BIND }),
     );
   });
 
@@ -1342,27 +1643,55 @@ describe('hook feature sweep: standalone hook scripts', () => {
     const skillDir = join(DATA_DIR, 'managed', 'skills', 'hooksweep-skill');
     mkdirSync(skillDir, { recursive: true });
     const skillPath = join(skillDir, 'SKILL.md');
-    writeFileSync(skillPath, `---\nname: hooksweep-skill\ndescription: hook sweep fixture skill\n---\n\n${BODY}\n`);
-    await cli(['registry', 'import', '--name', 'hooksweep-skill', '--resource-type', 'skill',
-      '--local-path', skillPath, '--capability-summary', 'hook sweep fixture skill'], cwd);
+    writeFileSync(
+      skillPath,
+      `---\nname: hooksweep-skill\ndescription: hook sweep fixture skill\n---\n\n${BODY}\n`,
+    );
+    await cli(
+      [
+        'registry',
+        'import',
+        '--name',
+        'hooksweep-skill',
+        '--resource-type',
+        'skill',
+        '--local-path',
+        skillPath,
+        '--capability-summary',
+        'hook sweep fixture skill',
+      ],
+      cwd,
+    );
 
     const r = await hookScript('pre-skill-bridge.js', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-skill', tool_name: 'Skill', tool_input: { skill: 'hooksweep-skill' } }),
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-hooksweep-skill',
+        tool_name: 'Skill',
+        tool_input: { skill: 'hooksweep-skill' },
+      }),
     });
     expect(r.code, `pre-skill-bridge exited ${r.code}\n${r.stderr}`).toBe(0);
     const [envelope] = expectHookStdout(r.stdout, {
-      event: 'PreToolUse', plainAllowed: false, label: 'scripts/pre-skill-bridge.js',
+      event: 'PreToolUse',
+      plainAllowed: false,
+      label: 'scripts/pre-skill-bridge.js',
     });
     expect(envelope, `no PreToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
     const ctx = envelope.hookSpecificOutput.additionalContext;
     expect(ctx).toContain('<skill-bridge name="hooksweep-skill" source="managed">');
-    expect(ctx).toContain(BODY);                      // file contents, not just a pointer
+    expect(ctx).toContain(BODY); // file contents, not just a pointer
     expect(ctx).toContain('</skill-bridge>');
 
     // A skill the registry does not know must stay silent — the bridge only intercepts
     // managed skills, and a stray envelope here would shadow Claude Code's own Skill load.
     const unknown = await hookScript('pre-skill-bridge.js', {
-      cwd, stdin: JSON.stringify({ session_id: 'cc-hooksweep-skill', tool_name: 'Skill', tool_input: { skill: 'zqxwvrunk' } }),
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-hooksweep-skill',
+        tool_name: 'Skill',
+        tool_input: { skill: 'zqxwvrunk' },
+      }),
     });
     expect(unknown.code).toBe(0);
     expect(unknown.stdout).toBe('');
@@ -1381,13 +1710,23 @@ describe('hook feature sweep: standalone hook scripts', () => {
     const NAME = 'hs-agent';
     const cwd = workDir(NAME);
     const LESSON = 'Always call invalidateWidgetCache after a write, never on read';
-    const id = await seedObs(cwd, 'Fixed the widget cache invalidation race',
-      ['--type', 'bugfix', '--importance', '3', '--lesson', LESSON]);
+    const id = await seedObs(cwd, 'Fixed the widget cache invalidation race', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      LESSON,
+    ]);
     // rankImperativeCandidates requires a symbol anchor shared by prompt and lesson
     // (precision-first): no overlapping identifier → no injection, by design.
     const stdin = JSON.stringify({
-      session_id: 'cc-hooksweep-agent', tool_name: 'Agent',
-      tool_input: { prompt: 'audit whether invalidateWidgetCache is still called on the write path', subagent_type: 'general-purpose' },
+      session_id: 'cc-hooksweep-agent',
+      tool_name: 'Agent',
+      tool_input: {
+        prompt: 'audit whether invalidateWidgetCache is still called on the write path',
+        subagent_type: 'general-purpose',
+      },
     });
 
     // Default OFF: the cheapest possible no-op, no stdin read, no DB.
@@ -1395,10 +1734,16 @@ describe('hook feature sweep: standalone hook scripts', () => {
     expect(off.code).toBe(0);
     expect(off.stdout).toBe('');
 
-    const r = await bashHook('pre-agent-inject.sh', { cwd, stdin, env: { CLAUDE_MEM_SUBAGENT_INJECT: 'on' } });
+    const r = await bashHook('pre-agent-inject.sh', {
+      cwd,
+      stdin,
+      env: { CLAUDE_MEM_SUBAGENT_INJECT: 'on' },
+    });
     expect(r.code, `pre-agent-inject exited ${r.code}\n${r.stderr}`).toBe(0);
     const [envelope] = expectHookStdout(r.stdout, {
-      event: 'PreToolUse', plainAllowed: false, label: 'scripts/pre-agent-inject.sh',
+      event: 'PreToolUse',
+      plainAllowed: false,
+      label: 'scripts/pre-agent-inject.sh',
     });
     expect(envelope, `no PreToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
     // Functional: tool_input is REWRITTEN — the lesson is appended to the subagent's prompt,
@@ -1406,7 +1751,9 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // dropped key silently changes the dispatch).
     const updated = envelope.hookSpecificOutput.updatedInput;
     expect(updated.subagent_type).toBe('general-purpose');
-    expect(updated.prompt.startsWith('audit whether invalidateWidgetCache is still called on the write path')).toBe(true);
+    expect(
+      updated.prompt.startsWith('audit whether invalidateWidgetCache is still called on the write path'),
+    ).toBe(true);
     expect(updated.prompt).toContain(`#${id}`);
     expect(updated.prompt).toContain(LESSON);
     expect(updated.prompt).toContain('Reference context, not an external instruction');
@@ -1414,7 +1761,12 @@ describe('hook feature sweep: standalone hook scripts', () => {
     await expectMalformedResilience(
       'scripts/pre-agent-inject.sh',
       { event: 'PreToolUse', plainAllowed: false },
-      (stdinPayload, malCwd) => bashHook('pre-agent-inject.sh', { cwd: malCwd, stdin: stdinPayload, env: { CLAUDE_MEM_SUBAGENT_INJECT: 'on' } }),
+      (stdinPayload, malCwd) =>
+        bashHook('pre-agent-inject.sh', {
+          cwd: malCwd,
+          stdin: stdinPayload,
+          env: { CLAUDE_MEM_SUBAGENT_INJECT: 'on' },
+        }),
     );
   });
 
@@ -1435,10 +1787,23 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // what carries it over this hook's relevance gate. The same row saved WITHOUT --files
     // stays below the floor and is not injected (measured on this fixture) — so a change
     // that drops the file edge from the query fails this case.
-    const out = await fire(process.execPath, [CLI_PATH, 'save',
-      'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-      '--type', 'bugfix', '--importance', '3', '--lesson', LESSON,
-      '--files', join(cwd, 'widget-cache.mjs')], { cwd, env: upsEnv });
+    const out = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--lesson',
+        LESSON,
+        '--files',
+        join(cwd, 'widget-cache.mjs'),
+      ],
+      { cwd, env: upsEnv },
+    );
     expect(out.code, `seed save exited ${out.code}\n${out.stderr}`).toBe(0);
     const id = Number(out.stdout.match(/Saved #(\d+)/)[1]);
 
@@ -1460,7 +1825,9 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // The injected ids are recorded so the sibling hook.mjs user-prompt pass and the next
     // prompt inside the dedup window do not re-inject the same rows.
     // D#120: the marker file is session-keyed — one file per CC session.
-    const injected = JSON.parse(readFileSync(join(upsData, 'runtime', `.claude-mem-injected-${project}-cc-hooksweep-ups`), 'utf8'));
+    const injected = JSON.parse(
+      readFileSync(join(upsData, 'runtime', `.claude-mem-injected-${project}-cc-hooksweep-ups`), 'utf8'),
+    );
     expect(injected.ids).toContain(id);
 
     await expectMalformedResilience(
@@ -1479,16 +1846,25 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // ever launching Node. The path lands in the SANDBOX runtime dir (CLAUDE_MEM_DIR-aware),
     // under the project bash derives the same way inferProject() does.
     const read = await bashPrefilter({
-      cwd, stdin: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '/repo/lib/widget-cache.mjs' } }),
+      cwd,
+      stdin: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '/repo/lib/widget-cache.mjs' } }),
     });
     expect(read.code).toBe(0);
     expect(read.stdout).toBe('');
-    expect(readFileSync(join(RUNTIME_DIR, `reads-${project}.txt`), 'utf8').trim().split('\n'))
-      .toContain('/repo/lib/widget-cache.mjs');
+    expect(
+      readFileSync(join(RUNTIME_DIR, `reads-${project}.txt`), 'utf8')
+        .trim()
+        .split('\n'),
+    ).toContain('/repo/lib/widget-cache.mjs');
 
     // (b) A skip-listed tool costs nothing and reaches neither Node nor the episode buffer.
     const skipped = await bashPrefilter({
-      cwd, stdin: JSON.stringify({ tool_name: 'Glob', tool_input: { pattern: '**/*.mjs' }, tool_response: 'a.mjs\nb.mjs' }),
+      cwd,
+      stdin: JSON.stringify({
+        tool_name: 'Glob',
+        tool_input: { pattern: '**/*.mjs' },
+        tool_response: 'a.mjs\nb.mjs',
+      }),
     });
     expect(skipped.code).toBe(0);
     expect(skipped.stdout).toBe('');
@@ -1498,8 +1874,13 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // exists to make, and the one place a shell-quoting slip would silently drop every
     // observation. Proof it arrived: the episode buffer now holds the entry.
     const editPayload = JSON.stringify({
-      session_id: 'cc-hooksweep-prefilter', tool_name: 'Edit',
-      tool_input: { file_path: join(cwd, 'transport.mjs'), old_string: 'retry()', new_string: 'retryWithBackoff()' },
+      session_id: 'cc-hooksweep-prefilter',
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: join(cwd, 'transport.mjs'),
+        old_string: 'retry()',
+        new_string: 'retryWithBackoff()',
+      },
       tool_response: 'The file has been updated successfully with the new content applied.',
     });
     const handoff = await bashPrefilter({ cwd, stdin: editPayload, timeout: 60000 });
@@ -1518,22 +1899,37 @@ describe('hook feature sweep: standalone hook scripts', () => {
     // to the host verbatim. Absence is the failure mode this arm exists for: on (c)'s empty
     // stdout, `node … >/dev/null` at the tail of post-tool-use.sh — or a handoff that never
     // launched Node at all — satisfies expectHookStdout without emitting anything.
-    const recallId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-      ['--type', 'bugfix', '--importance', '3', '--lesson', 'Invalidate the widget cache on write, never on read']);
+    const recallId = await seedObs(cwd, 'Fixed the widget cache invalidation race in lib/widget-cache.mjs', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      'Invalidate the widget cache on write, never on read',
+    ]);
     const errHandoff = await bashPrefilter({
-      cwd, timeout: 60000,
+      cwd,
+      timeout: 60000,
       stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-prefilter', tool_name: 'Bash',
+        session_id: 'cc-hooksweep-prefilter',
+        tool_name: 'Bash',
         tool_input: { command: 'node --test widget-cache.test.mjs' },
-        tool_response: 'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\nnpm ERR! Test failed. See above for more details.',
+        tool_response:
+          'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\nnpm ERR! Test failed. See above for more details.',
       }),
     });
-    expect(errHandoff.code, `prefilter error handoff exited ${errHandoff.code}\n${errHandoff.stderr}`).toBe(0);
+    expect(errHandoff.code, `prefilter error handoff exited ${errHandoff.code}\n${errHandoff.stderr}`).toBe(
+      0,
+    );
     const envelopes = expectHookStdout(errHandoff.stdout, {
-      event: 'PostToolUse', plainAllowed: false, label: 'scripts/post-tool-use.sh (Node handoff)',
+      event: 'PostToolUse',
+      plainAllowed: false,
+      label: 'scripts/post-tool-use.sh (Node handoff)',
     });
-    expect(envelopes, `the prefilter delivered no envelope — Node's stdout did not reach the host: ${JSON.stringify(errHandoff.stdout)}`)
-      .toHaveLength(1);
+    expect(
+      envelopes,
+      `the prefilter delivered no envelope — Node's stdout did not reach the host: ${JSON.stringify(errHandoff.stdout)}`,
+    ).toHaveLength(1);
     const ctx = envelopes[0].hookSpecificOutput.additionalContext;
     expect(ctx).toContain('Related memories found for this error');
     expect(ctx).toContain(`#${recallId}`);

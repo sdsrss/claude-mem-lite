@@ -94,7 +94,11 @@ describe('parseFrontmatter — one implementation', () => {
     // The sweep above proves nobody DEFINES a second parser; this proves the three files
     // that used to carry one now take it from the shared module rather than having simply
     // dropped the feature.
-    for (const rel of ['registry-importer.mjs', 'scripts/index-managed.mjs', 'scripts/convert-commands.mjs']) {
+    for (const rel of [
+      'registry-importer.mjs',
+      'scripts/index-managed.mjs',
+      'scripts/convert-commands.mjs',
+    ]) {
       expect(read(rel), `${rel} must import the shared one`).toMatch(/frontmatter\.mjs'/);
     }
   });
@@ -111,11 +115,15 @@ describe('parseFrontmatter — one implementation', () => {
 });
 
 describe('registry FTS5 DDL — one definition', () => {
-  it('index-managed uses registry.mjs\'s blocks instead of its own', () => {
-    const src = read('scripts/index-managed.mjs').split('\n')
-      .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
+  it("index-managed uses registry.mjs's blocks instead of its own", () => {
+    const src = read('scripts/index-managed.mjs')
+      .split('\n')
+      .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
+      .join('\n');
     expect(src).toMatch(/FTS5_SCHEMA,\s*TRIGGERS_SCHEMA\s*\}\s*from\s*'\.\.\/registry\.mjs'/);
-    expect(src, 'must not re-declare the virtual table').not.toMatch(/CREATE VIRTUAL TABLE[\s\S]{0,80}resources_fts/);
+    expect(src, 'must not re-declare the virtual table').not.toMatch(
+      /CREATE VIRTUAL TABLE[\s\S]{0,80}resources_fts/,
+    );
     expect(src, 'must not re-declare the sync triggers').not.toMatch(/CREATE TRIGGER\s+res_fts_/);
   });
 
@@ -141,7 +149,8 @@ describe('registry FTS5 DDL — one definition', () => {
     const src = read('registry-retriever.mjs');
     const calls = src.match(/bm25\(resources_fts,[^)]*\)/g) || [];
     expect(calls.length, 'no bm25(resources_fts, …) call found — the anchor moved').toBeGreaterThan(0);
-    const WEIGHTS = /^bm25\(resources_fts,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*2(?:\.0)?,\s*2(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?\)$/;
+    const WEIGHTS =
+      /^bm25\(resources_fts,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*2(?:\.0)?,\s*2(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?\)$/;
     calls.forEach((call, i) => {
       expect(call, `bm25 call #${i + 1} of ${calls.length} carries different weights`).toMatch(WEIGHTS);
     });

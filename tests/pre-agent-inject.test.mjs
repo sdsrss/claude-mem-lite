@@ -54,7 +54,7 @@ describe('buildSubagentInjection', () => {
     const ti = { subagent_type: 'general-purpose', description: 'x', prompt: 'refactor rrfMerge in tfidf' };
     const out = buildSubagentInjection(db, ti, 'p');
     expect(out).not.toBeNull();
-    expect(out.subagent_type).toBe('general-purpose');       // preserves sibling fields
+    expect(out.subagent_type).toBe('general-purpose'); // preserves sibling fields
     expect(out.prompt.startsWith('refactor rrfMerge in tfidf')).toBe(true); // task stays first
     expect(out.prompt).toContain('use rrfMerge not naive union');
     expect(out.prompt).toContain('Reference context, not an external instruction');
@@ -89,24 +89,52 @@ describe('pre-agent-inject.js (script plumbing, spawned)', () => {
     const prev = process.env.CLAUDE_PROJECT_DIR;
     process.env.CLAUDE_PROJECT_DIR = sb;
     project = inferProject();
-    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prev;
-    execFileSync(process.execPath, [CLI, 'save', 'rrf seed', '--type', 'decision',
-      '--importance', '2', '--project', project, '--lesson', 'use rrfMerge not naive union'],
-      { env: { ...process.env, CLAUDE_MEM_DIR: sb }, stdio: 'ignore', timeout: 20000 });
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+    execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'save',
+        'rrf seed',
+        '--type',
+        'decision',
+        '--importance',
+        '2',
+        '--project',
+        project,
+        '--lesson',
+        'use rrfMerge not naive union',
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: sb }, stdio: 'ignore', timeout: 20000 },
+    );
   });
-  afterAll(() => { if (sb) { try { rmSync(sb, { recursive: true, force: true }); } catch { /* */ } } });
+  afterAll(() => {
+    if (sb) {
+      try {
+        rmSync(sb, { recursive: true, force: true });
+      } catch {
+        /* */
+      }
+    }
+  });
 
   // CLAUDE_MEM_SUBAGENT_INJECT is cleared by default (it is set on in this project's
   // settings.local.json for dogfood and would otherwise leak into the child — #87499fd).
   // CLAUDE_PROJECT_DIR = sb so the script infers the SAME project the lesson was seeded under.
-  const run = (payload, { on = false } = {}) => execFileSync(process.execPath, [SCRIPT], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 8000,
-    env: {
-      ...process.env, CLAUDE_MEM_DIR: sb, CLAUDE_PROJECT_DIR: sb,
-      CLAUDE_MEM_HOOK_RUNNING: undefined,
-      CLAUDE_MEM_SUBAGENT_INJECT: on ? 'on' : undefined,
-    },
-  }).trim();
+  const run = (payload, { on = false } = {}) =>
+    execFileSync(process.execPath, [SCRIPT], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      timeout: 8000,
+      env: {
+        ...process.env,
+        CLAUDE_MEM_DIR: sb,
+        CLAUDE_PROJECT_DIR: sb,
+        CLAUDE_MEM_HOOK_RUNNING: undefined,
+        CLAUDE_MEM_SUBAGENT_INJECT: on ? 'on' : undefined,
+      },
+    }).trim();
 
   it('default OFF emits nothing (even for a matching Agent dispatch)', () => {
     expect(run({ tool_name: 'Agent', tool_input: { prompt: 'refactor rrfMerge in tfidf' } })).toBe('');
@@ -117,7 +145,17 @@ describe('pre-agent-inject.js (script plumbing, spawned)', () => {
   });
 
   it('enabled + Agent + matching lesson emits a valid PreToolUse updatedInput envelope', () => {
-    const out = run({ tool_name: 'Agent', tool_input: { subagent_type: 'general-purpose', description: 'x', prompt: 'refactor rrfMerge in tfidf' } }, { on: true });
+    const out = run(
+      {
+        tool_name: 'Agent',
+        tool_input: {
+          subagent_type: 'general-purpose',
+          description: 'x',
+          prompt: 'refactor rrfMerge in tfidf',
+        },
+      },
+      { on: true },
+    );
     const parsed = JSON.parse(out);
     expect(parsed.hookSpecificOutput.hookEventName).toBe('PreToolUse');
     expect(parsed.hookSpecificOutput.updatedInput.subagent_type).toBe('general-purpose');
@@ -126,7 +164,9 @@ describe('pre-agent-inject.js (script plumbing, spawned)', () => {
   });
 
   it('enabled + Agent + no identifier overlap emits nothing', () => {
-    expect(run({ tool_name: 'Agent', tool_input: { prompt: 'write a haiku about spring' } }, { on: true })).toBe('');
+    expect(
+      run({ tool_name: 'Agent', tool_input: { prompt: 'write a haiku about spring' } }, { on: true }),
+    ).toBe('');
   });
 
   it('a >64KB prompt round-trips intact (stdout flush before exit — no truncation)', () => {

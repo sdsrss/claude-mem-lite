@@ -40,7 +40,7 @@ import {
   recordPathAExclude,
 } from '../lib/patha-exclude-meter.mjs';
 
-const rows = (...ids) => ids.map(id => ({ id }));
+const rows = (...ids) => ids.map((id) => ({ id }));
 
 describe('markerTypeSplit — the defect is a type, so the type split is the primary column', () => {
   it('separates the string and number halves of one marker', () => {
@@ -167,7 +167,7 @@ describe('measurePathAExclude — both arms in one call', () => {
     const r = measurePathAExclude({
       markerIds: ['1'],
       emitted: rows(1, 2),
-      after: { rows: rows(2, 7) },   // 1 dropped, 7 pulled in from the pool: one-for-one
+      after: { rows: rows(2, 7) }, // 1 dropped, 7 pulled in from the pool: one-for-one
     });
     expect(r.suppressed).toBe(1);
     expect(r.suppressedIds).toEqual([1]);
@@ -187,7 +187,8 @@ describe('measurePathAExclude — both arms in one call', () => {
 
   it('marks a FAILED arm B as an error, not as no-difference', () => {
     const r = measurePathAExclude({
-      markerIds: ['1'], emitted: rows(1),
+      markerIds: ['1'],
+      emitted: rows(1),
       after: { error: 'db gone' },
     });
     expect(r.armB).toBe('error');
@@ -210,13 +211,19 @@ describe('measurePathAExclude — both arms in one call', () => {
     expect('imperativeChanged' in off).toBe(false);
 
     const on = measurePathAExclude({
-      markerIds: ['1'], emitted: rows(1),
-      imperativeArm: 'on', imperativeBefore: 5, imperativeAfter: 9,
+      markerIds: ['1'],
+      emitted: rows(1),
+      imperativeArm: 'on',
+      imperativeBefore: 5,
+      imperativeAfter: 9,
     });
     expect(on.imperativeChanged).toBe(true);
     const same = measurePathAExclude({
-      markerIds: ['1'], emitted: rows(1),
-      imperativeArm: 'on', imperativeBefore: 5, imperativeAfter: 5,
+      markerIds: ['1'],
+      emitted: rows(1),
+      imperativeArm: 'on',
+      imperativeBefore: 5,
+      imperativeAfter: 5,
     });
     expect(same.imperativeChanged).toBe(false);
   });
@@ -226,7 +233,9 @@ describe('recordPathAExclude — the gate must be able to say no', () => {
   let dir;
   const prev = process.env.CLAUDE_MEM_METRICS;
 
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'patha-meter-')); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'patha-meter-'));
+  });
   afterEach(() => {
     if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS;
     else process.env.CLAUDE_MEM_METRICS = prev;
@@ -237,7 +246,9 @@ describe('recordPathAExclude — the gate must be able to say no', () => {
     delete process.env.CLAUDE_MEM_METRICS;
     expect(pathAMeterEnabled()).toBe(false);
     const out = recordPathAExclude(dir, {
-      markerIds: ['1'], emitted: rows(1), after: { rows: rows() },
+      markerIds: ['1'],
+      emitted: rows(1),
+      after: { rows: rows() },
     });
     expect(out).toBeNull();
     expect(existsSync(join(dir, 'metrics'))).toBe(false);
@@ -256,7 +267,9 @@ describe('recordPathAExclude — the gate must be able to say no', () => {
   it('appends one row carrying both arms when enabled', () => {
     process.env.CLAUDE_MEM_METRICS = '1';
     const out = recordPathAExclude(dir, {
-      markerIds: ['1', 'E9'], emitted: rows(1, 2), after: { rows: rows(2, 7) },
+      markerIds: ['1', 'E9'],
+      emitted: rows(1, 2),
+      after: { rows: rows(2, 7) },
     });
     expect(out).not.toBeNull();
     expect(out.suppressed).toBe(1);

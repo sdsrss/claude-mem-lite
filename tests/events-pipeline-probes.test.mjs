@@ -14,7 +14,7 @@ describe('events pipeline probes (G16)', () => {
     const probes = await runEventsPipelineProbes();
     const failed = probes.filter((p) => !p.pass);
     expect(failed.map((p) => `${p.name}: ${p.detail}`)).toEqual([]);
-    expect(probes.length).toBe(9);   // 6 G16 events probes + 3 D#121 cite/noise banding probes
+    expect(probes.length).toBe(9); // 6 G16 events probes + 3 D#121 cite/noise banding probes
   });
 
   it('TEETH: wiping events_fts turns the reachability probe red (archaeology replay)', async () => {

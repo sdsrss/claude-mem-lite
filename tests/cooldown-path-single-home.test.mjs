@@ -39,7 +39,13 @@ beforeEach(() => {
   runtimeDir = join(mkdtempSync(join(tmpdir(), 'mem-cooldown-')), 'runtime');
   mkdirSync(runtimeDir, { recursive: true });
 });
-afterEach(() => { try { rmSync(runtimeDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+afterEach(() => {
+  try {
+    rmSync(runtimeDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+});
 
 describe('cooldown path — one definition', () => {
   it('sanitizes and caps the session key', () => {
@@ -55,9 +61,12 @@ describe('cooldown path — one definition', () => {
     // the rule and drifted would return empty here — which is exactly how the defect
     // presents in production, silently.
     const sessionId = 'cc/session:99'; // needs sanitizing, so a naive join would differ
-    writeFileSync(cooldownPathFor(runtimeDir, sessionId), JSON.stringify({
-      '/p/scoring-sql.mjs': { ts: Date.now(), obsIds: [4242], lessonIds: [4242] },
-    }));
+    writeFileSync(
+      cooldownPathFor(runtimeDir, sessionId),
+      JSON.stringify({
+        '/p/scoring-sql.mjs': { ts: Date.now(), obsIds: [4242], lessonIds: [4242] },
+      }),
+    );
 
     const edges = readPreRecallFileEdges(runtimeDir, sessionId);
     expect(edges, 'edge-attribution must resolve the same path').toEqual([
@@ -76,18 +85,24 @@ describe('cooldown path — one definition', () => {
     // Anti-vacuity for the case above. If the sanitized and unsanitized names happened to
     // coincide, that test would pass with the readers still drifting.
     const sessionId = 'cc/session:99';
-    writeFileSync(cooldownPathFor(runtimeDir, sessionId), JSON.stringify({
-      '/p/a.mjs': { ts: Date.now(), obsIds: [1] },
-    }));
-    expect(basename(cooldownPathFor(runtimeDir, sessionId)))
-      .not.toContain('/');                                  // the id really was rewritten
+    writeFileSync(
+      cooldownPathFor(runtimeDir, sessionId),
+      JSON.stringify({
+        '/p/a.mjs': { ts: Date.now(), obsIds: [1] },
+      }),
+    );
+    expect(basename(cooldownPathFor(runtimeDir, sessionId))).not.toContain('/'); // the id really was rewritten
     expect(readPreRecallFileEdges(runtimeDir, 'cc-session-98')).toEqual([]);
   });
 
   it('no consumer re-derives the rule', () => {
     // The class guard. Three copies existed because nothing stopped the third; nothing
     // would stop a fourth.
-    for (const rel of ['../scripts/pre-tool-recall.js', '../lib/cite-back-hint.mjs', '../lib/edge-attribution.mjs']) {
+    for (const rel of [
+      '../scripts/pre-tool-recall.js',
+      '../lib/cite-back-hint.mjs',
+      '../lib/edge-attribution.mjs',
+    ]) {
       const src = read(rel);
       expect(src, `${rel} must not re-derive the sanitize rule`).not.toMatch(SANITIZE_RULE);
       expect(src, `${rel} must import the shared definition`).toMatch(/cooldown-path\.mjs'/);

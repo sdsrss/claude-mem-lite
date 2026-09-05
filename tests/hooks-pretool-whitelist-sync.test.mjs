@@ -26,13 +26,17 @@ function loadMatcherTools() {
   const hooksJson = JSON.parse(readFileSync(join(REPO_ROOT, 'hooks/hooks.json'), 'utf8'));
   const preToolUse = hooksJson.hooks?.PreToolUse;
   if (!Array.isArray(preToolUse)) throw new Error('hooks.PreToolUse not an array');
-  const recallEntry = preToolUse.find((e) =>
-    Array.isArray(e.hooks) && e.hooks.some((h) => (h.command || '').includes('pre-tool-recall'))
+  const recallEntry = preToolUse.find(
+    (e) => Array.isArray(e.hooks) && e.hooks.some((h) => (h.command || '').includes('pre-tool-recall')),
   );
   if (!recallEntry) throw new Error('PreToolUse entry for pre-tool-recall not found');
   const matcher = recallEntry.matcher;
   if (typeof matcher !== 'string') throw new Error('matcher missing on pre-tool-recall entry');
-  return matcher.split('|').map((s) => s.trim()).filter(Boolean).sort();
+  return matcher
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
 }
 
 function loadScriptWhitelist() {

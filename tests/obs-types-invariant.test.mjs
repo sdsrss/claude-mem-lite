@@ -67,7 +67,19 @@ describe('obs-types single source of truth', () => {
     // source — scanning it lets an unrelated harness parked there fail this suite with a
     // message pointing at a file nobody touched. Kept in sync with the sibling scanner in
     // tests/time-constants.test.mjs; both are pinned by a probe case below.
-    const SKIP_DIRS = new Set(['node_modules', 'tests', 'benchmark', 'docs', 'coverage', 'tasks', 'tmp', '.tmp', '.git', '.claude', '.claude-plugin']);
+    const SKIP_DIRS = new Set([
+      'node_modules',
+      'tests',
+      'benchmark',
+      'docs',
+      'coverage',
+      'tasks',
+      'tmp',
+      '.tmp',
+      '.git',
+      '.claude',
+      '.claude-plugin',
+    ]);
     const offenders = [];
     const walk = (dir) => {
       for (const name of readdirSync(dir)) {
@@ -88,7 +100,10 @@ describe('obs-types single source of truth', () => {
 
   it('no runtime source file carries a NEW hardcoded copy of the list', () => {
     const offenders = scanOffenders();
-    expect(offenders, `hardcoded obs-type list found in: ${offenders.join(', ')} — import lib/obs-types.mjs instead`).toEqual([]);
+    expect(
+      offenders,
+      `hardcoded obs-type list found in: ${offenders.join(', ')} — import lib/obs-types.mjs instead`,
+    ).toEqual([]);
   });
 
   it('a scratch file under tmp/ cannot turn this scan red (D#168)', () => {
@@ -101,15 +116,30 @@ describe('obs-types single source of truth', () => {
     const dirWasAbsent = !existsSync(dir);
     mkdirSync(dir, { recursive: true });
     try {
-      writeFileSync(probe, "export const T = ['decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change'];\n");
+      writeFileSync(
+        probe,
+        "export const T = ['decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change'];\n",
+      );
       // Precondition: this really is an offender, so a green result means "excluded".
       expect(SIGNATURE.test(readFileSync(probe, 'utf8'))).toBe(true);
-      expect(scanOffenders().filter((f) => f.startsWith('tmp/')),
-        'the walker descended into tmp/ — any scratch file there can now fail this suite').toEqual([]);
+      expect(
+        scanOffenders().filter((f) => f.startsWith('tmp/')),
+        'the walker descended into tmp/ — any scratch file there can now fail this suite',
+      ).toEqual([]);
     } finally {
-      try { rmSync(probe, { force: true }); } catch { /* best-effort */ }
+      try {
+        rmSync(probe, { force: true });
+      } catch {
+        /* best-effort */
+      }
       // Only if this case created it, and only if nothing else landed there meanwhile.
-      if (dirWasAbsent) { try { rmSync(dir, { recursive: false }); } catch { /* not empty — leave it */ } }
+      if (dirWasAbsent) {
+        try {
+          rmSync(dir, { recursive: false });
+        } catch {
+          /* not empty — leave it */
+        }
+      }
     }
   });
 });

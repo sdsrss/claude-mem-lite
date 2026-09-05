@@ -37,8 +37,10 @@ describe('pre-tool-recall project derivation', () => {
       delete process.env.CLAUDE_PROJECT_DIR;
       expect(inferProject()).toBe('somewhere--else');
     } finally {
-      if (saved.p === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved.p;
-      if (saved.w === undefined) delete process.env.PWD; else process.env.PWD = saved.w;
+      if (saved.p === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = saved.p;
+      if (saved.w === undefined) delete process.env.PWD;
+      else process.env.PWD = saved.w;
     }
   });
 
@@ -61,9 +63,15 @@ describe('pre-tool-recall project derivation', () => {
       // A walk would resolve to the work-tree root and yield '<tmpname>--myrepo'.
       expect(inferProject()).toBe('myrepo--sub');
     } finally {
-      if (saved.p === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved.p;
-      if (saved.w === undefined) delete process.env.PWD; else process.env.PWD = saved.w;
-      try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ }
+      if (saved.p === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = saved.p;
+      if (saved.w === undefined) delete process.env.PWD;
+      else process.env.PWD = saved.w;
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
     }
   });
 });

@@ -49,12 +49,15 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
     // Coalescing first keeps the original both-nullish semantics exactly, `0`
     // included.
     const status = e?.status ?? null;
-    const detail = e?.message?.split('\n')[0]
-      || (status !== null ? `npm exited ${status}` : '')
-      || (e?.signal ? `npm killed by ${e.signal}` : '')
-      || 'unknown error';
+    const detail =
+      e?.message?.split('\n')[0] ||
+      (status !== null ? `npm exited ${status}` : '') ||
+      (e?.signal ? `npm killed by ${e.signal}` : '') ||
+      'unknown error';
     process.stderr.write(`[claude-mem-lite] npm install failed in ${ROOT} — ${detail}\n`);
-    process.stderr.write(`[claude-mem-lite] Likely cause: read-only directory, disk full, or network blocked.\n`);
+    process.stderr.write(
+      `[claude-mem-lite] Likely cause: read-only directory, disk full, or network blocked.\n`,
+    );
     process.stderr.write(`[claude-mem-lite] Repair: cd "${ROOT}" && npm install --omit=dev\n`);
     process.exit(1);
   }
@@ -93,14 +96,19 @@ try {
       const probe = probeBindingInFreshProcess(ROOT);
       verify = probe.ok
         ? { ok: true, action: 'verified' }
-        : { ok: false, error: `${probe.error} (another install/repair holds the lock — not rebuilding concurrently; reconnect with /mcp once it finishes)` };
+        : {
+            ok: false,
+            error: `${probe.error} (another install/repair holds the lock — not rebuilding concurrently; reconnect with /mcp once it finishes)`,
+          };
     }
   } finally {
     if (release) release();
   }
   if (!verify.ok) {
     process.stderr.write(`[claude-mem-lite] better-sqlite3 binding unusable: ${verify.error}\n`);
-    process.stderr.write(`[claude-mem-lite] Repair: cd "${ROOT}" && npm rebuild better-sqlite3 --dangerously-allow-all-scripts\n`);
+    process.stderr.write(
+      `[claude-mem-lite] Repair: cd "${ROOT}" && npm rebuild better-sqlite3 --dangerously-allow-all-scripts\n`,
+    );
     process.exit(1);
   }
   if (verify.action === 'rebuilt') {
@@ -118,7 +126,9 @@ try {
 try {
   await import('@modelcontextprotocol/sdk/server/mcp.js');
 } catch (firstErr) {
-  process.stderr.write(`[claude-mem-lite] MCP SDK broken (${firstErr.code || firstErr.message}) — reinstalling...\n`);
+  process.stderr.write(
+    `[claude-mem-lite] MCP SDK broken (${firstErr.code || firstErr.message}) — reinstalling...\n`,
+  );
   try {
     execSync('npm install @modelcontextprotocol/sdk --force --omit=dev --no-audit --no-fund', {
       cwd: ROOT,
@@ -161,7 +171,9 @@ if (process.env.CLAUDE_PLUGIN_ROOT) {
 const dataDir = join(homedir(), '.claude-mem-lite');
 const devServer = join(dataDir, 'server.mjs');
 let useDevServer = false;
-try { useDevServer = existsSync(devServer) && lstatSync(devServer).isSymbolicLink(); } catch {}
+try {
+  useDevServer = existsSync(devServer) && lstatSync(devServer).isSymbolicLink();
+} catch {}
 
 if (useDevServer) {
   await import(pathToFileURL(devServer).href);

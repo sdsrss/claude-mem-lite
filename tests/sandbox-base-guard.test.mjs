@@ -45,27 +45,34 @@ describe('resolveSandboxBase — the refusal is the point', () => {
 
   it('THROWS on the exact shape the documented default produces', () => {
     // $TMPDIR as a Claude Code session sets it.
-    expect(() => resolveSandboxBase({ tmp: `${HOME}/.claude/tmp/claude-1000`, home: HOME }))
-      .toThrow(/under HOME/);
+    expect(() => resolveSandboxBase({ tmp: `${HOME}/.claude/tmp/claude-1000`, home: HOME })).toThrow(
+      /under HOME/,
+    );
   });
 
   it('THROWS even when the offending path came from an explicit SBX_BASE', () => {
     // An override is not an authorisation: the hazard is the location, not the source.
-    expect(() => resolveSandboxBase({ sbxBase: `${HOME}/scratch`, tmp: '/tmp', home: HOME }))
-      .toThrow(/under HOME/);
+    expect(() => resolveSandboxBase({ sbxBase: `${HOME}/scratch`, tmp: '/tmp', home: HOME })).toThrow(
+      /under HOME/,
+    );
   });
 
   it('names the resolved PATH, not the variable — the variable is not what is wrong', () => {
     let msg = '';
-    try { resolveSandboxBase({ tmp: `${HOME}/.claude/tmp`, home: HOME }); } catch (e) { msg = e.message; }
+    try {
+      resolveSandboxBase({ tmp: `${HOME}/.claude/tmp`, home: HOME });
+    } catch (e) {
+      msg = e.message;
+    }
     expect(msg).toContain(`${HOME}/.claude/tmp`);
     expect(msg).toContain(HOME);
     expect(msg, 'the message must carry a usable way out').toContain('SBX_BASE');
   });
 
   it('returns a base outside HOME unchanged — the guard can say yes', () => {
-    expect(resolveSandboxBase({ sbxBase: '/tmp/claude/sbx', tmp: `${HOME}/.claude/tmp`, home: HOME }))
-      .toBe('/tmp/claude/sbx');
+    expect(resolveSandboxBase({ sbxBase: '/tmp/claude/sbx', tmp: `${HOME}/.claude/tmp`, home: HOME })).toBe(
+      '/tmp/claude/sbx',
+    );
     expect(resolveSandboxBase({ tmp: '/var/tmp', home: HOME })).toBe('/var/tmp');
   });
 
@@ -83,7 +90,9 @@ describe('resolveSandboxBase — the refusal is the point', () => {
 
 describe('the HAZARD itself, not the HOME proxy', () => {
   let root;
-  beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'sbxguard-')); });
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'sbxguard-'));
+  });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
   it('returns the NEAREST owning ancestor, not merely some ancestor', () => {
@@ -116,8 +125,7 @@ describe('the HAZARD itself, not the HOME proxy', () => {
     const base = join(pkg, 'tmp', 'sbx');
     mkdirSync(base, { recursive: true });
     expect(isInside('/home/tester', base), 'premise: it is NOT under HOME').toBe(false);
-    expect(() => resolveSandboxBase({ sbxBase: base, home: '/home/tester' }))
-      .toThrow(/owns a node_modules/);
+    expect(() => resolveSandboxBase({ sbxBase: base, home: '/home/tester' })).toThrow(/owns a node_modules/);
   });
 
   it('is not fooled by a symlink pointing into HOME', () => {
@@ -127,7 +135,6 @@ describe('the HAZARD itself, not the HOME proxy', () => {
     mkdirSync(join(home, 'sbx'), { recursive: true });
     const link = join(root, 'link-to-home');
     symlinkSync(home, link);
-    expect(() => resolveSandboxBase({ sbxBase: join(link, 'sbx'), home }))
-      .toThrow(/under HOME/);
+    expect(() => resolveSandboxBase({ sbxBase: join(link, 'sbx'), home })).toThrow(/under HOME/);
   });
 });

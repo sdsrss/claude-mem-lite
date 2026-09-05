@@ -27,7 +27,10 @@ describe('vector-hit fetch column parity (F4)', () => {
 
   it('both vector-hit branches fetch through the one hoisted VEC_HIT_OBS_COLS statement', () => {
     // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to search-engine.mjs.
-    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'search-engine.mjs'), 'utf8');
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'search-engine.mjs'),
+      'utf8',
+    );
     // A20260905-P2-2 hoisted the per-hit `db.prepare()` out of both loops, so the SQL is
     // now written ONCE above the branch split and both arms call the same statement —
     // strictly stronger against the drift this guard exists for than two twin SELECTs.
@@ -62,17 +65,30 @@ describe('vector-hit row shape carries the date keys the FTS row does', () => {
   });
   afterEach(() => {
     db.close();
-    if (prevVec === undefined) delete process.env.CLAUDE_MEM_VECTORS; else process.env.CLAUDE_MEM_VECTORS = prevVec;
+    if (prevVec === undefined) delete process.env.CLAUDE_MEM_VECTORS;
+    else process.env.CLAUDE_MEM_VECTORS = prevVec;
   });
 
   it('a vector-only hit (RRF-merge branch) has created_at and created_at_epoch', async () => {
     // ftsOnly carries BOTH query terms → matches the AND query. vecOnly carries only
     // the shared term → no FTS match, but a strong cosine to the query vector, so it
     // enters results exclusively through the vector-hit constructor.
-    insertObs(db, { title: 'zylphqax quorumbeta rollout', narrative: 'zylphqax quorumbeta staged rollout across the fleet', text: 'zylphqax quorumbeta rollout' });
-    insertObs(db, { title: 'zylphqax capacity note', narrative: 'zylphqax capacity planning across the fleet', text: 'zylphqax capacity note' });
+    insertObs(db, {
+      title: 'zylphqax quorumbeta rollout',
+      narrative: 'zylphqax quorumbeta staged rollout across the fleet',
+      text: 'zylphqax quorumbeta rollout',
+    });
+    insertObs(db, {
+      title: 'zylphqax capacity note',
+      narrative: 'zylphqax capacity planning across the fleet',
+      text: 'zylphqax capacity note',
+    });
     // filler so the shared terms clear the df>=2 vocabulary floor
-    insertObs(db, { title: 'fleet capacity review', narrative: 'capacity planning rollout across the fleet', text: 'fleet capacity review' });
+    insertObs(db, {
+      title: 'fleet capacity review',
+      narrative: 'capacity planning rollout across the fleet',
+      text: 'fleet capacity review',
+    });
 
     const { getVocabulary, _resetVocabCache, computeVector } = await import('../tfidf.mjs');
     const { searchObservationsHybrid } = await import('../search-engine.mjs');
@@ -82,21 +98,30 @@ describe('vector-hit row shape carries the date keys the FTS row does', () => {
     for (const o of db.prepare('SELECT id, title, narrative FROM observations').all()) {
       const vec = computeVector(`${o.title} ${o.narrative}`, vocab);
       if (vec) {
-        db.prepare('INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)')
-          .run(o.id, Buffer.from(vec.buffer), vocab.version, Date.now());
+        db.prepare(
+          'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
+        ).run(o.id, Buffer.from(vec.buffer), vocab.version, Date.now());
       }
     }
 
     const rows = searchObservationsHybrid(db, {
-      ftsQuery: 'zylphqax AND quorumbeta', args: { project: 'test' },
-      epochFrom: null, epochTo: null,
-      perSourceLimit: 10, perSourceOffset: 0, currentProject: 'test', limit: 10,
+      ftsQuery: 'zylphqax AND quorumbeta',
+      args: { project: 'test' },
+      epochFrom: null,
+      epochTo: null,
+      perSourceLimit: 10,
+      perSourceOffset: 0,
+      currentProject: 'test',
+      limit: 10,
     });
 
-    const vecOnly = rows.find(r => r.title === 'zylphqax capacity note');
+    const vecOnly = rows.find((r) => r.title === 'zylphqax capacity note');
     expect(vecOnly, 'vector arm surfaced the row FTS could not match').toBeTruthy();
     expect(vecOnly.created_at, 'vector-hit row must carry created_at like the FTS row').toBeTruthy();
-    expect(typeof vecOnly.created_at_epoch, 'vector-hit row must carry created_at_epoch for --sort time').toBe('number');
+    expect(
+      typeof vecOnly.created_at_epoch,
+      'vector-hit row must carry created_at_epoch for --sort time',
+    ).toBe('number');
   });
 });
 
@@ -110,15 +135,17 @@ describe('vector field-set: lesson/aliases reach vocab + rebuild paths (R3 V-F1/
   });
   afterEach(() => {
     db.close();
-    if (prevVec === undefined) delete process.env.CLAUDE_MEM_VECTORS; else process.env.CLAUDE_MEM_VECTORS = prevVec;
+    if (prevVec === undefined) delete process.env.CLAUDE_MEM_VECTORS;
+    else process.env.CLAUDE_MEM_VECTORS = prevVec;
   });
 
   it('buildVocabulary gives a dimension to a term that appears only in lesson_learned (V-F2)', async () => {
-    for (let i = 0; i < 3; i++) insertObs(db, {
-      title: `database migration note ${i}`,
-      narrative: `narrative about a schema migration rollout number ${i} touching several tables and indexes`,
-      lessonLearned: 'always exercise the redisfailover path before deploy',
-    });
+    for (let i = 0; i < 3; i++)
+      insertObs(db, {
+        title: `database migration note ${i}`,
+        narrative: `narrative about a schema migration rollout number ${i} touching several tables and indexes`,
+        lessonLearned: 'always exercise the redisfailover path before deploy',
+      });
     const { buildVocabulary, _resetVocabCache, tokenize } = await import('../tfidf.mjs');
     _resetVocabCache();
     const vocab = buildVocabulary(db);
@@ -129,8 +156,18 @@ describe('vector field-set: lesson/aliases reach vocab + rebuild paths (R3 V-F1/
 
   it('maintain rebuild_vectors encodes the lesson field, byte-identical to the save path (V-F1)', async () => {
     // target carries a distinctive lesson-only term; 2 sibling docs give it a vocab dimension
-    insertObs(db, { type: 'decision', title: 'coordination service choice', narrative: 'we picked a coordination service for leader election across the cluster nodes reliably', lessonLearned: 'zookeeper session expiry needs careful watch re-registration' });
-    for (let i = 0; i < 2; i++) insertObs(db, { type: 'discovery', title: `zookeeper watch note ${i}`, narrative: `zookeeper ephemeral node and watch semantics explored ${i} for the cluster` });
+    insertObs(db, {
+      type: 'decision',
+      title: 'coordination service choice',
+      narrative: 'we picked a coordination service for leader election across the cluster nodes reliably',
+      lessonLearned: 'zookeeper session expiry needs careful watch re-registration',
+    });
+    for (let i = 0; i < 2; i++)
+      insertObs(db, {
+        type: 'discovery',
+        title: `zookeeper watch note ${i}`,
+        narrative: `zookeeper ephemeral node and watch semantics explored ${i} for the cluster`,
+      });
 
     const { rebuildVectors } = await import('../lib/maintain-core.mjs');
     const { getVocabulary, _resetVocabCache, computeVector } = await import('../tfidf.mjs');
@@ -141,8 +178,19 @@ describe('vector field-set: lesson/aliases reach vocab + rebuild paths (R3 V-F1/
 
     const target = db.prepare("SELECT * FROM observations WHERE title = 'coordination service choice'").get();
     const vocab = getVocabulary(db);
-    const saveVec = computeVector(buildVecText({ title: target.title, narrative: target.narrative, concepts: target.concepts, lessonLearned: target.lesson_learned, searchAliases: target.search_aliases }), vocab);
-    const stored = db.prepare('SELECT vector FROM observation_vectors WHERE observation_id = ?').get(target.id);
+    const saveVec = computeVector(
+      buildVecText({
+        title: target.title,
+        narrative: target.narrative,
+        concepts: target.concepts,
+        lessonLearned: target.lesson_learned,
+        searchAliases: target.search_aliases,
+      }),
+      vocab,
+    );
+    const stored = db
+      .prepare('SELECT vector FROM observation_vectors WHERE observation_id = ?')
+      .get(target.id);
     expect(stored, 'rebuild wrote a vector').toBeTruthy();
     expect(saveVec, 'save-path vector non-null (encodes the lesson term)').toBeTruthy();
     // parity: rebuild must encode the SAME field set as save (incl. lesson) → identical vector bytes

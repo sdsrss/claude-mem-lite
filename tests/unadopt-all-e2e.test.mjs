@@ -20,9 +20,11 @@ let HOME, projA, projB, projC, projGone, BASE_ENV, repoSnapshot;
 function run(args, { cwd, allowFail = false } = {}) {
   try {
     const out = execFileSync('node', [join(REPO, 'cli.mjs'), ...args], {
-      encoding: 'utf8', cwd,
+      encoding: 'utf8',
+      cwd,
       env: { ...BASE_ENV, PWD: cwd, CLAUDE_PROJECT_DIR: cwd },
-      stdio: ['pipe', 'pipe', 'pipe'], timeout: 60000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 60000,
     });
     return { ok: true, out };
   } catch (e) {
@@ -41,7 +43,10 @@ function hasBlock(dir) {
 describe('unadopt --all scans known projects (~/.claude.json)', () => {
   beforeAll(() => {
     HOME = mkdtempSync(join(tmpdir(), 'mem-unadopt-all-'));
-    projA = join(HOME, 'a'); projB = join(HOME, 'b'); projC = join(HOME, 'c'); projGone = join(HOME, 'gone-deleted');
+    projA = join(HOME, 'a');
+    projB = join(HOME, 'b');
+    projC = join(HOME, 'c');
+    projGone = join(HOME, 'gone-deleted');
     repoSnapshot = existsSync(REPO_CLAUDE_MD) ? readFileSync(REPO_CLAUDE_MD, 'utf8') : null;
 
     BASE_ENV = { ...process.env, HOME, CLAUDE_MEM_SKIP_REPOS: '1' };
@@ -50,11 +55,21 @@ describe('unadopt --all scans known projects (~/.claude.json)', () => {
     delete BASE_ENV.PWD;
 
     mkdirSync(join(HOME, '.claude'), { recursive: true });
-    for (const d of [projA, projB, projC]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'CLAUDE.md'), USER_MD); }
+    for (const d of [projA, projB, projC]) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'CLAUDE.md'), USER_MD);
+    }
     // ~/.claude.json lists A, B, C, and a now-deleted path (must be filtered out).
-    writeFileSync(join(HOME, '.claude.json'), JSON.stringify({
-      projects: { [projA]: {}, [projB]: {}, [projC]: {}, [projGone]: {} },
-    }, null, 2));
+    writeFileSync(
+      join(HOME, '.claude.json'),
+      JSON.stringify(
+        {
+          projects: { [projA]: {}, [projB]: {}, [projC]: {}, [projGone]: {} },
+        },
+        null,
+        2,
+      ),
+    );
 
     run(['adopt'], { cwd: projA });
     run(['adopt'], { cwd: projB });
@@ -68,7 +83,11 @@ describe('unadopt --all scans known projects (~/.claude.json)', () => {
 
   afterAll(() => {
     if (repoSnapshot !== null) expect(readFileSync(REPO_CLAUDE_MD, 'utf8')).toBe(repoSnapshot);
-    try { execFileSync('rm', ['-rf', HOME]); } catch { /* best-effort */ }
+    try {
+      execFileSync('rm', ['-rf', HOME]);
+    } catch {
+      /* best-effort */
+    }
   });
 
   it('adopt wrote a managed block into all known projects (C kept block-only)', () => {

@@ -2,34 +2,50 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
 import { extractMatchKeywords, tokenizeHandoff, isSpecificTerm } from '../utils.mjs';
-import { buildAndSaveHandoff, detectContinuationIntent, renderHandoffInjection, pickHandoffToInject } from '../hook-handoff.mjs';
+import {
+  buildAndSaveHandoff,
+  detectContinuationIntent,
+  renderHandoffInjection,
+  pickHandoffToInject,
+} from '../hook-handoff.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
 import * as taskReaderModule from '../lib/task-reader.mjs';
 
 function seedSession(db, sessionId, project) {
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES (?, ?, ?, datetime('now'), ?, 'active')`).run(sessionId, sessionId, project, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES (?, ?, ?, datetime('now'), ?, 'active')`,
+  ).run(sessionId, sessionId, project, Date.now());
 }
 
 function seedPrompt(db, sessionId, text, num) {
-  db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch) VALUES (?, ?, ?, datetime('now'), ?)`).run(sessionId, text, num, Date.now());
+  db.prepare(
+    `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch) VALUES (?, ?, ?, datetime('now'), ?)`,
+  ).run(sessionId, text, num, Date.now());
 }
 
 let _seedObsEpochOffset = 0;
 function seedObservation(db, sessionId, project, title, type, importance, filesModified, narrative) {
-  const epoch = Date.now() + (_seedObsEpochOffset++);
-  db.prepare(`INSERT INTO observations (memory_session_id, project, type, title, importance, files_modified, narrative, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`).run(sessionId, project, type, title, importance, filesModified, narrative || null, epoch);
+  const epoch = Date.now() + _seedObsEpochOffset++;
+  db.prepare(
+    `INSERT INTO observations (memory_session_id, project, type, title, importance, files_modified, narrative, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+  ).run(sessionId, project, type, title, importance, filesModified, narrative || null, epoch);
 }
 
 // ─── Schema Tests ───────────────────────────────────────────────────────────
 
 describe('session_handoffs schema', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('creates session_handoffs table with correct columns', () => {
     const cols = db.prepare(`PRAGMA table_info(session_handoffs)`).all();
-    const names = cols.map(c => c.name);
+    const names = cols.map((c) => c.name);
     expect(names).toContain('project');
     expect(names).toContain('type');
     expect(names).toContain('session_id');
@@ -43,32 +59,48 @@ describe('session_handoffs schema', () => {
   });
 
   it('PRIMARY KEY (project, type, session_id) allows parallel sessions to coexist', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 1000)`).run();
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 1000)`,
+    ).run();
     // Different session_id for same (project, type) must NOT collide — parallel sessions
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's2', 2000)`).run();
-    const rows = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'p1' AND type = 'clear' ORDER BY session_id`).all();
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's2', 2000)`,
+    ).run();
+    const rows = db
+      .prepare(`SELECT * FROM session_handoffs WHERE project = 'p1' AND type = 'clear' ORDER BY session_id`)
+      .all();
     expect(rows.length).toBe(2);
     expect(rows[0].session_id).toBe('s1');
     expect(rows[1].session_id).toBe('s2');
   });
 
   it('rejects duplicate (project, type, session_id)', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 1000)`).run();
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 1000)`,
+    ).run();
     expect(() => {
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 2000)`).run();
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch) VALUES ('p1', 'clear', 's1', 2000)`,
+      ).run();
     }).toThrow(/UNIQUE/);
   });
 
   it('allows UPSERT via ON CONFLICT(project, type, session_id)', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch) VALUES ('p1', 'clear', 's1', 'old', 1000)`).run();
-    db.prepare(`
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch) VALUES ('p1', 'clear', 's1', 'old', 1000)`,
+    ).run();
+    db.prepare(
+      `
       INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
       VALUES ('p1', 'clear', 's1', 'new', 2000)
       ON CONFLICT(project, type, session_id) DO UPDATE SET
         working_on = excluded.working_on,
         created_at_epoch = excluded.created_at_epoch
-    `).run();
-    const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'p1' AND type = 'clear' AND session_id = 's1'`).get();
+    `,
+    ).run();
+    const row = db
+      .prepare(`SELECT * FROM session_handoffs WHERE project = 'p1' AND type = 'clear' AND session_id = 's1'`)
+      .get();
     expect(row.working_on).toBe('new');
     expect(row.created_at_epoch).toBe(2000);
   });
@@ -145,7 +177,7 @@ describe('handoff utility functions', () => {
 
     it('deduplicates terms', () => {
       const kw = extractMatchKeywords('hook hook hook', ['/a/hook.mjs']);
-      const tokens = kw.split(' ').filter(t => t === 'hook');
+      const tokens = kw.split(' ').filter((t) => t === 'hook');
       expect(tokens.length).toBe(1);
     });
 
@@ -159,8 +191,13 @@ describe('handoff utility functions', () => {
 
 describe('buildAndSaveHandoff', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('saves handoff with working_on from prompts', () => {
     seedSession(db, 's1', 'test-proj');
@@ -169,7 +206,9 @@ describe('buildAndSaveHandoff', () => {
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'clear', null);
 
-    const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear'`).get();
+    const row = db
+      .prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear'`)
+      .get();
     expect(row).toBeTruthy();
     expect(row.working_on).toContain('handoff');
     expect(row.working_on).toContain('intent');
@@ -191,7 +230,9 @@ describe('buildAndSaveHandoff', () => {
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
 
-    const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'exit'`).get();
+    const row = db
+      .prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'exit'`)
+      .get();
     expect(row.completed).toContain('Fixed null pointer');
     expect(row.completed).toContain('Added error logging');
   });
@@ -281,7 +322,11 @@ describe('buildAndSaveHandoff', () => {
     seedPrompt(db, 's2', 'session B work', 1);
     buildAndSaveHandoff(db, 's2', 'test-proj', 'clear', null);
 
-    const rows = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear' ORDER BY session_id`).all();
+    const rows = db
+      .prepare(
+        `SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear' ORDER BY session_id`,
+      )
+      .all();
     expect(rows.length).toBe(2);
     expect(rows[0].session_id).toBe('s1');
     expect(rows[0].working_on).toContain('session A work');
@@ -298,7 +343,11 @@ describe('buildAndSaveHandoff', () => {
     seedPrompt(db, 's1', 'updated work', 2);
     buildAndSaveHandoff(db, 's1', 'test-proj', 'clear', null);
 
-    const rows = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear' AND session_id = 's1'`).all();
+    const rows = db
+      .prepare(
+        `SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'clear' AND session_id = 's1'`,
+      )
+      .all();
     expect(rows.length).toBe(1);
     expect(rows[0].working_on).toContain('updated work');
   });
@@ -306,7 +355,15 @@ describe('buildAndSaveHandoff', () => {
   it('populates match_keywords for intent matching', () => {
     seedSession(db, 's1', 'test-proj');
     seedPrompt(db, 's1', 'implement handoff for dispatch system', 1);
-    seedObservation(db, 's1', 'test-proj', 'Added buildAndSaveHandoff', 'change', 1, JSON.stringify(['/proj/hook.mjs']));
+    seedObservation(
+      db,
+      's1',
+      'test-proj',
+      'Added buildAndSaveHandoff',
+      'change',
+      1,
+      JSON.stringify(['/proj/hook.mjs']),
+    );
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
 
@@ -330,17 +387,17 @@ describe('buildAndSaveHandoff', () => {
     buildAndSaveHandoff(db, memInternalId, 'test-proj', 'exit', null, ccUuid);
 
     // Row tagged by scope id (CC UUID) so renderHandoffInjection can scope by it
-    const scoped = db.prepare(
-      `SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'exit' AND session_id = ?`
-    ).get(ccUuid);
+    const scoped = db
+      .prepare(
+        `SELECT * FROM session_handoffs WHERE project = 'test-proj' AND type = 'exit' AND session_id = ?`,
+      )
+      .get(ccUuid);
     expect(scoped).toBeTruthy();
     expect(scoped.working_on).toContain('continue refactor');
     expect(scoped.completed).toContain('Edited hook.mjs');
 
     // And NOT tagged by the query id (would break CC-UUID-scoped reads)
-    const wrongScope = db.prepare(
-      `SELECT * FROM session_handoffs WHERE session_id = ?`
-    ).get(memInternalId);
+    const wrongScope = db.prepare(`SELECT * FROM session_handoffs WHERE session_id = ?`).get(memInternalId);
     expect(wrongScope).toBeUndefined();
   });
 
@@ -373,10 +430,26 @@ describe('buildAndSaveHandoff', () => {
   it('enriches unfinished with observation narratives (full edit history)', () => {
     seedSession(db, 's1', 'test-proj');
     seedPrompt(db, 's1', 'code review and fix issues', 1);
-    seedObservation(db, 's1', 'test-proj', 'Modified hook.mjs', 'change', 1, null,
-      'hook.mjs: "scrubSecrets" → "scrubSecrets, EDIT_TOOLS"');
-    seedObservation(db, 's1', 'test-proj', 'Modified dispatch.mjs', 'change', 1, null,
-      'dispatch.mjs: "score * decay" → "score * -decay"');
+    seedObservation(
+      db,
+      's1',
+      'test-proj',
+      'Modified hook.mjs',
+      'change',
+      1,
+      null,
+      'hook.mjs: "scrubSecrets" → "scrubSecrets, EDIT_TOOLS"',
+    );
+    seedObservation(
+      db,
+      's1',
+      'test-proj',
+      'Modified dispatch.mjs',
+      'change',
+      1,
+      null,
+      'dispatch.mjs: "score * decay" → "score * -decay"',
+    );
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'clear', null);
 
@@ -407,8 +480,13 @@ describe('buildAndSaveHandoff', () => {
 
 describe('buildAndSaveHandoff: meta-trigger filter for working_on', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); seedSession(db, 's1', 'test-proj'); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    seedSession(db, 's1', 'test-proj');
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('filters meta-trigger-only prompts when subject prompts coexist', () => {
     seedPrompt(db, 's1', '继续', 1);
@@ -427,9 +505,16 @@ describe('buildAndSaveHandoff: meta-trigger filter for working_on', () => {
     seedSession(db, 's2-other-session', 'test-proj');
     seedPrompt(db, 's1', '继续前面的工作', 1);
     seedPrompt(db, 's1', '提交代码', 2);
-    seedObservation(db, 's2-other-session', 'test-proj',
+    seedObservation(
+      db,
+      's2-other-session',
+      'test-proj',
       'v2.66 carry-forward: Tier 2 --json + Tier 3 activity delete CLI',
-      'decision', 3, '[]', null);
+      'decision',
+      3,
+      '[]',
+      null,
+    );
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
 
@@ -451,8 +536,16 @@ describe('buildAndSaveHandoff: meta-trigger filter for working_on', () => {
     seedSession(db, 's2', 'test-proj');
     seedPrompt(db, 's1', '继续', 1);
     seedObservation(db, 's2', 'test-proj', 'Modified some-file.mjs', 'change', 3, '[]', null);
-    seedObservation(db, 's2', 'test-proj',
-      'Adopt 5-tier scoring weights for hybrid search', 'decision', 3, '[]', null);
+    seedObservation(
+      db,
+      's2',
+      'test-proj',
+      'Adopt 5-tier scoring weights for hybrid search',
+      'decision',
+      3,
+      '[]',
+      null,
+    );
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
 
@@ -464,8 +557,16 @@ describe('buildAndSaveHandoff: meta-trigger filter for working_on', () => {
   it('cross-project obs are NOT used as fallback', () => {
     seedSession(db, 's2', 'OTHER-proj');
     seedPrompt(db, 's1', '继续', 1);
-    seedObservation(db, 's2', 'OTHER-proj',
-      'wrong-project decision should not leak', 'decision', 3, '[]', null);
+    seedObservation(
+      db,
+      's2',
+      'OTHER-proj',
+      'wrong-project decision should not leak',
+      'decision',
+      3,
+      '[]',
+      null,
+    );
 
     buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
 
@@ -481,21 +582,27 @@ describe('detectContinuationIntent', () => {
   beforeEach(() => {
     db = createTestDb();
     // Use 'exit' type for FTS/keyword tests — Stage 0 auto-match only applies to 'clear'
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'exit', 's1', 'implement handoff', 'handoff dispatch hook schema intent detection', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'exit', 's1', 'implement handoff', 'handoff dispatch hook schema intent detection', ?)`,
+    ).run(Date.now());
   });
 
   it('Stage 0: returns true for session-scoped short prompts with fresh clear handoff', () => {
-    db.prepare(`INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch work', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch work', ?)`,
+    ).run(Date.now());
     // Session-scoped path (currentCcSessionId given) = same user continuing → auto-continue.
     expect(detectContinuationIntent(db, 'hello how are you', 'test-proj', 's2')).toBe(true);
     expect(detectContinuationIntent(db, 'build a new REST API', 'test-proj', 's2')).toBe(true);
   });
 
   it('Stage 0: unscoped short prompt requires continuation keyword or keyword overlap', () => {
-    db.prepare(`INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch work', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch work', ?)`,
+    ).run(Date.now());
     // Unscoped: unrelated short prompt no longer auto-triggers (prevents cross-session noise)
     expect(detectContinuationIntent(db, 'hello how are you', 'test-proj')).toBe(false);
     expect(detectContinuationIntent(db, 'build a new REST API', 'test-proj')).toBe(false);
@@ -506,22 +613,40 @@ describe('detectContinuationIntent', () => {
   });
 
   it('Stage 0: returns false for long unrelated prompt with clear handoff', () => {
-    db.prepare(`INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch hook schema', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch hook schema', ?)`,
+    ).run(Date.now());
     // Long prompt with zero keyword overlap → new task, don't inject stale context
-    expect(detectContinuationIntent(db, 'I want to build a completely new REST API for the customer management system from scratch', 'test-proj')).toBe(false);
+    expect(
+      detectContinuationIntent(
+        db,
+        'I want to build a completely new REST API for the customer management system from scratch',
+        'test-proj',
+      ),
+    ).toBe(false);
   });
 
   it('Stage 0: returns true for long prompt with keyword overlap and clear handoff', () => {
-    db.prepare(`INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch hook schema', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'clear', 's2', 'handoff dispatch hook schema', ?)`,
+    ).run(Date.now());
     // Long prompt that mentions handoff-related terms → same task
-    expect(detectContinuationIntent(db, 'Now lets fix the schema validation issue in the handoff system that was causing problems', 'test-proj')).toBe(true);
+    expect(
+      detectContinuationIntent(
+        db,
+        'Now lets fix the schema validation issue in the handoff system that was causing problems',
+        'test-proj',
+      ),
+    ).toBe(true);
   });
 
   it('Stage 0: expired clear handoff does not auto-match', () => {
-    db.prepare(`INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('test-proj', 'clear', 's2', 'handoff work', ?)`).run(Date.now() - 25000000); // > 6h
+    db.prepare(
+      `INSERT OR REPLACE INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('test-proj', 'clear', 's2', 'handoff work', ?)`,
+    ).run(Date.now() - 25000000); // > 6h
     expect(detectContinuationIntent(db, 'build a new REST API', 'test-proj')).toBe(false);
   });
 
@@ -567,23 +692,35 @@ describe('detectContinuationIntent', () => {
 
   it('respects expiry — expired clear handoff is skipped for FTS and Stage 0', () => {
     const oldDb = createTestDb();
-    oldDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('p', 'clear', 's', 'handoff dispatch hook schema', ?)`).run(Date.now() - 25000000); // > 6 hours ago
+    oldDb
+      .prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('p', 'clear', 's', 'handoff dispatch hook schema', ?)`,
+      )
+      .run(Date.now() - 25000000); // > 6 hours ago
     expect(detectContinuationIntent(oldDb, 'handoff dispatch hook schema', 'p')).toBe(false);
     expect(detectContinuationIntent(oldDb, '继续', 'p')).toBe(true); // keyword always works
   });
 
   it('exit handoff stays valid for 7 days', () => {
     const recentDb = createTestDb();
-    recentDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('p', 'exit', 's', 'handoff dispatch hook schema', ?)`).run(Date.now() - 3 * 86400000); // 3 days ago
+    recentDb
+      .prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('p', 'exit', 's', 'handoff dispatch hook schema', ?)`,
+      )
+      .run(Date.now() - 3 * 86400000); // 3 days ago
     expect(detectContinuationIntent(recentDb, 'handoff dispatch hook schema', 'p')).toBe(true);
   });
 
   it('exit handoff expires after 7 days', () => {
     const oldDb = createTestDb();
-    oldDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-      VALUES ('p', 'exit', 's', 'handoff dispatch hook schema', ?)`).run(Date.now() - 8 * 86400000); // 8 days ago
+    oldDb
+      .prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+      VALUES ('p', 'exit', 's', 'handoff dispatch hook schema', ?)`,
+      )
+      .run(Date.now() - 8 * 86400000); // 8 days ago
     expect(detectContinuationIntent(oldDb, 'handoff dispatch hook schema', 'p')).toBe(false);
   });
 
@@ -592,10 +729,16 @@ describe('detectContinuationIntent', () => {
     let tinyDb;
     beforeEach(() => {
       tinyDb = createTestDb();
-      tinyDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-        VALUES ('p', 'clear', 's-fresh', 'handoff dispatch hook schema', ?)`).run(Date.now());
+      tinyDb
+        .prepare(
+          `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+        VALUES ('p', 'clear', 's-fresh', 'handoff dispatch hook schema', ?)`,
+        )
+        .run(Date.now());
     });
-    afterEach(() => { tinyDb.close(); });
+    afterEach(() => {
+      tinyDb.close();
+    });
 
     it('returns false for empty prompt even with fresh clear handoff', () => {
       expect(detectContinuationIntent(tinyDb, '', 'p')).toBe(false);
@@ -633,10 +776,16 @@ describe('detectContinuationIntent', () => {
     beforeEach(() => {
       scopedDb = createTestDb();
       // Session A's clear handoff, still fresh
-      scopedDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-        VALUES ('p', 'clear', 'cc-A', 'dispatch hook schema intent', ?)`).run(Date.now());
+      scopedDb
+        .prepare(
+          `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+        VALUES ('p', 'clear', 'cc-A', 'dispatch hook schema intent', ?)`,
+        )
+        .run(Date.now());
     });
-    afterEach(() => { scopedDb.close(); });
+    afterEach(() => {
+      scopedDb.close();
+    });
 
     it('short prompt from SAME session passes Stage 0', () => {
       // Current session = cc-A, handoff also = cc-A → your own /clear, continue
@@ -657,12 +806,20 @@ describe('detectContinuationIntent', () => {
       // Clear handoff from cc-A (the beforeEach) is intentionally ignored for cc-B:
       // clear handoffs are inherently "continue my own /clear flow" — never cross-session.
       // Even with strong keyword overlap.
-      expect(detectContinuationIntent(scopedDb, 'dispatch hook schema intent overlap', 'p', 'cc-B')).toBe(false);
+      expect(detectContinuationIntent(scopedDb, 'dispatch hook schema intent overlap', 'p', 'cc-B')).toBe(
+        false,
+      );
 
       // But if cc-A had /exit'd (not /clear), cc-B CAN resume via Stage 2 FTS match.
-      scopedDb.prepare(`INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
-        VALUES ('p', 'exit', 'cc-A', 'dispatch hook schema intent', ?)`).run(Date.now() - 1000);
-      expect(detectContinuationIntent(scopedDb, 'dispatch hook schema intent overlap', 'p', 'cc-B')).toBe(true);
+      scopedDb
+        .prepare(
+          `INSERT INTO session_handoffs (project, type, session_id, match_keywords, created_at_epoch)
+        VALUES ('p', 'exit', 'cc-A', 'dispatch hook schema intent', ?)`,
+        )
+        .run(Date.now() - 1000);
+      expect(detectContinuationIntent(scopedDb, 'dispatch hook schema intent overlap', 'p', 'cc-B')).toBe(
+        true,
+      );
     });
 
     it('null currentCcSessionId requires keyword or overlap (tightened in v2.32.7)', () => {
@@ -682,12 +839,19 @@ describe('detectContinuationIntent', () => {
 
 describe('renderHandoffInjection', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('renders handoff with all sections', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch)
-      VALUES ('p', 'clear', 's1', 'implement feature X', '[change] Did thing A', 'Still need B', '["hook.mjs"]', 'Chose approach Y', 'feature hook', ?)`).run(Date.now() - 60000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch)
+      VALUES ('p', 'clear', 's1', 'implement feature X', '[change] Did thing A', 'Still need B', '["hook.mjs"]', 'Chose approach Y', 'feature hook', ?)`,
+    ).run(Date.now() - 60000);
 
     const result = renderHandoffInjection(db, 'p');
     expect(result).toContain('<session-handoff');
@@ -707,8 +871,10 @@ describe('renderHandoffInjection', () => {
     // user prompt and ended the turn or answered the handoff content instead
     // of the actual new prompt. Fix: always prepend a `[mem]` framing line that
     // explicitly labels the block as previous-session context.
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 's1', '先前怎么没有这个问题？', ?)`).run(Date.now() - 60000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', '先前怎么没有这个问题？', ?)`,
+    ).run(Date.now() - 60000);
 
     const result = renderHandoffInjection(db, 'p');
     const firstLine = result.split('\n', 1)[0];
@@ -722,11 +888,15 @@ describe('renderHandoffInjection', () => {
   });
 
   it('appends session summary when available', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 's1', 'work', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'work', ?)`,
+    ).run(Date.now());
     seedSession(db, 's1', 'p');
-    db.prepare(`INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
-      VALUES ('s1', 'p', 'original request', 'finished stuff', 'do next thing', datetime('now'), ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
+      VALUES ('s1', 'p', 'original request', 'finished stuff', 'do next thing', datetime('now'), ?)`,
+    ).run(Date.now());
 
     const result = renderHandoffInjection(db, 'p');
     expect(result).toContain('<session-summary');
@@ -741,11 +911,15 @@ describe('renderHandoffInjection', () => {
     // failed and the <session-summary> block was always dropped on real resumes. The fallback
     // attaches the most-recent project summary instead.
     const ccUuid = '550e8400-e29b-41d4-a716-446655440000';
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', ?, 'budget refactor', ?)`).run(ccUuid, Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', ?, 'budget refactor', ?)`,
+    ).run(ccUuid, Date.now());
     seedSession(db, 'hook-p-abc12345', 'p'); // mem-internal id, different namespace
-    db.prepare(`INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
-      VALUES ('hook-p-abc12345', 'p', 'req', 'completed the budget refactor', 'wire up the UI', datetime('now'), ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
+      VALUES ('hook-p-abc12345', 'p', 'req', 'completed the budget refactor', 'wire up the UI', datetime('now'), ?)`,
+    ).run(Date.now());
 
     const result = renderHandoffInjection(db, 'p', 'some-other-cc-session');
     expect(result).toContain('<session-summary');
@@ -754,11 +928,15 @@ describe('renderHandoffInjection', () => {
   });
 
   it('renders remaining_items from session summary', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 's1', 'code review', ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'code review', ?)`,
+    ).run(Date.now());
     seedSession(db, 's1', 'p');
-    db.prepare(`INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, remaining_items, created_at, created_at_epoch)
-      VALUES ('s1', 'p', 'full code review', 'fixed dispatch scoring', 'run tests', 'hook.mjs: missing EDIT_TOOLS import; schema.mjs: remaining_items column needed', datetime('now'), ?)`).run(Date.now());
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, remaining_items, created_at, created_at_epoch)
+      VALUES ('s1', 'p', 'full code review', 'fixed dispatch scoring', 'run tests', 'hook.mjs: missing EDIT_TOOLS import; schema.mjs: remaining_items column needed', datetime('now'), ?)`,
+    ).run(Date.now());
 
     const result = renderHandoffInjection(db, 'p');
     expect(result).toContain('Remaining: hook.mjs: missing EDIT_TOOLS import');
@@ -766,9 +944,12 @@ describe('renderHandoffInjection', () => {
   });
 
   it('renders only pending portion of unfinished, not narrative history', () => {
-    const unfinished = 'Edit hook.mjs: add logic; Test failed\n---\nhook.mjs: changed import order\ndispatch.mjs: fixed scoring';
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, unfinished, created_at_epoch)
-      VALUES ('p', 'clear', 's1', 'refactor', ?, ?)`).run(unfinished, Date.now());
+    const unfinished =
+      'Edit hook.mjs: add logic; Test failed\n---\nhook.mjs: changed import order\ndispatch.mjs: fixed scoring';
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, unfinished, created_at_epoch)
+      VALUES ('p', 'clear', 's1', 'refactor', ?, ?)`,
+    ).run(unfinished, Date.now());
 
     const result = renderHandoffInjection(db, 'p');
     // Should show pending entries
@@ -783,8 +964,10 @@ describe('renderHandoffInjection', () => {
     // When no episode pending entries exist, unfinished starts with separator:
     // '\n---\nnarrative...' — extractUnfinishedSummary gets empty pending portion
     const unfinished = '\n---\nhook.mjs: changed imports\ndispatch.mjs: fixed scoring';
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, unfinished, created_at_epoch)
-      VALUES ('p', 'clear', 's1', 'work', ?, ?)`).run(unfinished, Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, unfinished, created_at_epoch)
+      VALUES ('p', 'clear', 's1', 'work', ?, ?)`,
+    ).run(unfinished, Date.now());
 
     const result = renderHandoffInjection(db, 'p');
     expect(result).not.toContain('## Unfinished');
@@ -797,8 +980,10 @@ describe('renderHandoffInjection', () => {
   });
 
   it('shows human-readable age', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'clear', 's1', 'work', ?)`).run(Date.now() - 120000); // 2 minutes ago
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'clear', 's1', 'work', ?)`,
+    ).run(Date.now() - 120000); // 2 minutes ago
 
     const result = renderHandoffInjection(db, 'p');
     expect(result).toContain('age="2m"');
@@ -806,20 +991,26 @@ describe('renderHandoffInjection', () => {
 
   it('returns null for expired handoff', () => {
     // clear handoff expired (> 6 hours)
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'clear', 's1', 'old work', ?)`).run(Date.now() - 25000000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'clear', 's1', 'old work', ?)`,
+    ).run(Date.now() - 25000000);
     expect(renderHandoffInjection(db, 'p')).toBeNull();
   });
 
   it('returns null for expired exit handoff (> 7 days)', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 's1', 'old work', ?)`).run(Date.now() - 8 * 86400000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'old work', ?)`,
+    ).run(Date.now() - 8 * 86400000);
     expect(renderHandoffInjection(db, 'p')).toBeNull();
   });
 
   it('renders non-expired exit handoff', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 's1', 'recent work', ?)`).run(Date.now() - 3 * 86400000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'recent work', ?)`,
+    ).run(Date.now() - 3 * 86400000);
     const result = renderHandoffInjection(db, 'p');
     expect(result).toContain('recent work');
   });
@@ -827,8 +1018,10 @@ describe('renderHandoffInjection', () => {
   // ─── Session scoping for injection ────────────────────────────────────────
   describe('session-scoped injection (currentCcSessionId filter)', () => {
     it('returns clear handoff only when it matches currentCcSessionId', () => {
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'clear', 'cc-A', 'session A work', ?)`).run(Date.now());
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'clear', 'cc-A', 'session A work', ?)`,
+      ).run(Date.now());
       // Same session → inject
       const sameResult = renderHandoffInjection(db, 'p', 'cc-A');
       expect(sameResult).toContain('session A work');
@@ -838,8 +1031,10 @@ describe('renderHandoffInjection', () => {
     });
 
     it('exit handoff from DIFFERENT session IS rendered (new session resumes old one)', () => {
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'exit', 'cc-old', 'old session work', ?)`).run(Date.now() - 3600000);
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'exit', 'cc-old', 'old session work', ?)`,
+      ).run(Date.now() - 3600000);
       // New session picking up an exit handoff from a previous (different) session — allowed
       const result = renderHandoffInjection(db, 'p', 'cc-new');
       expect(result).toContain('old session work');
@@ -847,26 +1042,34 @@ describe('renderHandoffInjection', () => {
 
     it('exit handoff from SAME session is NOT rendered (you exited, you are not yourself)', () => {
       // If currentCcSessionId equals the handoff's session, that session already consumed it
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'exit', 'cc-A', 'own exit work', ?)`).run(Date.now() - 3600000);
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'exit', 'cc-A', 'own exit work', ?)`,
+      ).run(Date.now() - 3600000);
       const result = renderHandoffInjection(db, 'p', 'cc-A');
       expect(result).toBeNull();
     });
 
     it('picks same-session clear over different-session clear', () => {
       // Parallel sessions: B's clear is newer, but A should still see A's own
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'clear', 'cc-A', 'A own work', ?)`).run(Date.now() - 300000);
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'clear', 'cc-B', 'B work', ?)`).run(Date.now() - 60000);
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'clear', 'cc-A', 'A own work', ?)`,
+      ).run(Date.now() - 300000);
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'clear', 'cc-B', 'B work', ?)`,
+      ).run(Date.now() - 60000);
       const result = renderHandoffInjection(db, 'p', 'cc-A');
       expect(result).toContain('A own work');
       expect(result).not.toContain('B work');
     });
 
     it('null currentCcSessionId preserves legacy behavior', () => {
-      db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-        VALUES ('p', 'clear', 's1', 'legacy behavior', ?)`).run(Date.now());
+      db.prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+        VALUES ('p', 'clear', 's1', 'legacy behavior', ?)`,
+      ).run(Date.now());
       expect(renderHandoffInjection(db, 'p')).toContain('legacy behavior');
       expect(renderHandoffInjection(db, 'p', null)).toContain('legacy behavior');
     });
@@ -877,12 +1080,19 @@ describe('renderHandoffInjection', () => {
 
 describe('pickHandoffToInject', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns the same row that renderHandoffInjection would render', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 'cc-old', 'old session work', ?)`).run(Date.now() - 3600000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 'cc-old', 'old session work', ?)`,
+    ).run(Date.now() - 3600000);
     const picked = pickHandoffToInject(db, 'p', 'cc-new');
     expect(picked).not.toBeNull();
     expect(picked.session_id).toBe('cc-old');
@@ -900,23 +1110,35 @@ describe('pickHandoffToInject', () => {
     // Three separate prior exit sessions all still within the 7d window.
     // Pre-fix: any continuation-intent in a new session wiped ALL three.
     // Post-fix: only the picked row gets deleted, other rows remain for later resumes.
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 'cc-A', 'A work', ?)`).run(Date.now() - 3 * 86400000);
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 'cc-B', 'B work', ?)`).run(Date.now() - 2 * 86400000);
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 'cc-C', 'C work (most recent)', ?)`).run(Date.now() - 3600000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 'cc-A', 'A work', ?)`,
+    ).run(Date.now() - 3 * 86400000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 'cc-B', 'B work', ?)`,
+    ).run(Date.now() - 2 * 86400000);
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 'cc-C', 'C work (most recent)', ?)`,
+    ).run(Date.now() - 3600000);
 
     const picked = pickHandoffToInject(db, 'p', 'cc-new');
-    expect(picked.session_id).toBe('cc-C');  // most recent non-expired
+    expect(picked.session_id).toBe('cc-C'); // most recent non-expired
 
     // Simulate the targeted DELETE from hook.mjs handleUserPrompt
-    db.prepare('DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?')
-      .run('p', picked.type, picked.session_id);
+    db.prepare('DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?').run(
+      'p',
+      picked.type,
+      picked.session_id,
+    );
 
-    const remaining = db.prepare(
-      `SELECT session_id FROM session_handoffs WHERE project = 'p' AND type = 'exit' ORDER BY session_id`
-    ).all().map(r => r.session_id);
+    const remaining = db
+      .prepare(
+        `SELECT session_id FROM session_handoffs WHERE project = 'p' AND type = 'exit' ORDER BY session_id`,
+      )
+      .all()
+      .map((r) => r.session_id);
     expect(remaining).toEqual(['cc-A', 'cc-B']);
   });
 });
@@ -925,8 +1147,14 @@ describe('pickHandoffToInject', () => {
 
 describe('T10d: TaskList-sourced Unfinished in buildAndSaveHandoff', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+  });
 
   it('uses TaskList entries when no episode snapshot and no pending work', () => {
     seedSession(db, 's1', 'mem');
@@ -939,7 +1167,9 @@ describe('T10d: TaskList-sourced Unfinished in buildAndSaveHandoff', () => {
 
     buildAndSaveHandoff(db, 's1', 'mem', 'exit', null);
 
-    const row = db.prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`).get();
+    const row = db
+      .prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`)
+      .get();
     // TaskList entries land in the pending portion (before the \n---\n narrative sep)
     const pending = row.unfinished.split('\n---\n')[0];
     expect(pending).toMatch(/Implement Task 1/);
@@ -952,16 +1182,22 @@ describe('T10d: TaskList-sourced Unfinished in buildAndSaveHandoff', () => {
     seedSession(db, 's1', 'mem');
     seedPrompt(db, 's1', 'fix dispatch', 1);
 
-    const taskSpy = vi.spyOn(taskReaderModule, 'readProjectTasks').mockReturnValue([
-      { id: 't1', title: 'Task file entry', status: 'pending', taskListId: 'L', mtime: 0 },
-    ]);
+    const taskSpy = vi
+      .spyOn(taskReaderModule, 'readProjectTasks')
+      .mockReturnValue([
+        { id: 't1', title: 'Task file entry', status: 'pending', taskListId: 'L', mtime: 0 },
+      ]);
 
     buildAndSaveHandoff(db, 's1', 'mem', 'exit', {
-      entries: [{ tool: 'Edit', desc: 'Edit hook.mjs: add dispatch logic', isSignificant: true, isError: false }],
+      entries: [
+        { tool: 'Edit', desc: 'Edit hook.mjs: add dispatch logic', isSignificant: true, isError: false },
+      ],
       files: [],
     });
 
-    const row = db.prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`).get();
+    const row = db
+      .prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`)
+      .get();
     const pending = row.unfinished.split('\n---\n')[0];
     expect(pending).toMatch(/add dispatch logic/);
     expect(pending).not.toMatch(/Task file entry/);
@@ -978,7 +1214,9 @@ describe('T10d: TaskList-sourced Unfinished in buildAndSaveHandoff', () => {
 
     buildAndSaveHandoff(db, 's1', 'mem', 'exit', null);
 
-    const row = db.prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`).get();
+    const row = db
+      .prepare(`SELECT unfinished FROM session_handoffs WHERE project='mem' AND type='exit'`)
+      .get();
     // Pending portion is empty (no episode, no tasks); narrative history remains
     expect(row.unfinished).toContain('add dashboard');
   });
@@ -986,20 +1224,31 @@ describe('T10d: TaskList-sourced Unfinished in buildAndSaveHandoff', () => {
 
 describe('T10d: git_sha_at_handoff capture in buildAndSaveHandoff', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); _seedObsEpochOffset = 0; });
-  afterEach(() => { db.close(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    db = createTestDb();
+    _seedObsEpochOffset = 0;
+  });
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+  });
 
   it('stores current HEAD sha in git_sha_at_handoff column', () => {
     seedSession(db, 's1', 'mem');
     seedPrompt(db, 's1', 'work on refactor', 1);
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'deadbeef1234',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'deadbeef1234',
     });
 
     buildAndSaveHandoff(db, 's1', 'mem', 'exit', null);
 
-    const row = db.prepare(`SELECT git_sha_at_handoff FROM session_handoffs WHERE project='mem' AND type='exit'`).get();
+    const row = db
+      .prepare(`SELECT git_sha_at_handoff FROM session_handoffs WHERE project='mem' AND type='exit'`)
+      .get();
     expect(row.git_sha_at_handoff).toBe('deadbeef1234');
   });
 
@@ -1008,29 +1257,43 @@ describe('T10d: git_sha_at_handoff capture in buildAndSaveHandoff', () => {
     seedPrompt(db, 's1', 'work anywhere', 1);
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: null, headSha: null,
+      changed: [],
+      stashes: [],
+      branch: null,
+      headSha: null,
     });
 
     buildAndSaveHandoff(db, 's1', 'mem', 'exit', null);
 
-    const row = db.prepare(`SELECT git_sha_at_handoff FROM session_handoffs WHERE project='mem' AND type='exit'`).get();
+    const row = db
+      .prepare(`SELECT git_sha_at_handoff FROM session_handoffs WHERE project='mem' AND type='exit'`)
+      .get();
     expect(row.git_sha_at_handoff).toBeNull();
   });
 });
 
 describe('T10d: git-commit anchor in detectContinuationIntent', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+  });
 
   it('returns true when current HEAD matches a stored git_sha_at_handoff', () => {
     // Insert an old exit handoff (24h ago) with a known sha.
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?, ?, ?)`)
-      .run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?, ?, ?)`,
+    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'abc123',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'abc123',
     });
 
     // Prompt alone would NOT match (no overlap, long, no keyword) — anchor decides.
@@ -1039,12 +1302,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
   });
 
   it('returns true even with a tiny prompt when sha matches (anchor beats tiny-prompt guard)', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?)`)
-      .run('mem', 'sX', Date.now(), 'abc123');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?)`,
+    ).run('mem', 'sX', Date.now(), 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'abc123',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'abc123',
     });
 
     // Actually tiny-prompt guard runs FIRST — verify it still rejects < 2 chars.
@@ -1054,12 +1321,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
   });
 
   it('does NOT match when HEAD sha differs from stored git_sha_at_handoff', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?, ?, ?)`)
-      .run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?, ?, ?)`,
+    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'ffff9999', // different sha
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'ffff9999', // different sha
     });
 
     // Long unrelated prompt — no anchor, no Stage 0, no keyword, no FTS overlap
@@ -1068,12 +1339,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
   });
 
   it('does NOT match when git_sha_at_handoff is NULL', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?, ?, NULL)`)
-      .run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?, ?, NULL)`,
+    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: '',  // empty/null
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: '', // empty/null
     });
 
     const result = detectContinuationIntent(db, 'what time is it in Tokyo please tell me now', 'mem', 'sX');
@@ -1081,12 +1356,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
   });
 
   it('anchor is project-scoped: handoff from other project with same sha does NOT match', () => {
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?)`)
-      .run('other-proj', 'sX', Date.now(), 'abc123');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?)`,
+    ).run('other-proj', 'sX', Date.now(), 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'abc123',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'abc123',
     });
 
     const result = detectContinuationIntent(db, 'what time is it in Tokyo please tell me now', 'mem');
@@ -1095,12 +1374,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
 
   it('anchor within 72h age cap still matches (v2.32.7)', () => {
     // 60h old handoff with matching sha — under 72h cap, should anchor
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
-                VALUES (?, 'exit', ?, ?, ?)`)
-      .run('mem', 'sX', Date.now() - 60 * 3600000, 'abc123');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
+                VALUES (?, 'exit', ?, ?, ?)`,
+    ).run('mem', 'sX', Date.now() - 60 * 3600000, 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'abc123',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'abc123',
     });
 
     // Long unrelated prompt — anchor still rescues it within 72h
@@ -1109,12 +1392,16 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
 
   it('anchor older than 72h does NOT match — rest of pipeline decides (v2.32.7)', () => {
     // 80h old handoff with matching sha — over 72h cap, anchor is stale
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff, match_keywords)
-                VALUES (?, 'exit', ?, ?, ?, ?)`)
-      .run('mem', 'sX', Date.now() - 80 * 3600000, 'abc123', 'auth refactor');
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff, match_keywords)
+                VALUES (?, 'exit', ?, ?, ?, ?)`,
+    ).run('mem', 'sX', Date.now() - 80 * 3600000, 'abc123', 'auth refactor');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
-      changed: [], stashes: [], branch: 'main', headSha: 'abc123',
+      changed: [],
+      stashes: [],
+      branch: 'main',
+      headSha: 'abc123',
     });
 
     // Long unrelated prompt + stale anchor → falls through Stage 0/1/2, no match

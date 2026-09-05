@@ -41,9 +41,13 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
   });
 
   it('classifies the ABI-mismatch message (the field failure)', () => {
-    expect(isNativeBindingError(new Error(
-      "The module '/x/better_sqlite3.node'\nwas compiled against a different Node.js version using\nNODE_MODULE_VERSION 127. This version of Node.js requires\nNODE_MODULE_VERSION 137.",
-    ))).toBe(true);
+    expect(
+      isNativeBindingError(
+        new Error(
+          "The module '/x/better_sqlite3.node'\nwas compiled against a different Node.js version using\nNODE_MODULE_VERSION 127. This version of Node.js requires\nNODE_MODULE_VERSION 137.",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('classifies the bindings-not-found message (stale/absent build dir)', () => {
@@ -51,11 +55,17 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
   });
 
   it('classifies "did not self-register" (rebuild landed under an already-dlopen\'d module)', () => {
-    expect(isNativeBindingError(new Error("Module did not self-register: '/x/better_sqlite3.node'."))).toBe(true);
+    expect(isNativeBindingError(new Error("Module did not self-register: '/x/better_sqlite3.node'."))).toBe(
+      true,
+    );
   });
 
   it('does NOT classify a corrupt-DB error — a rebuild cannot fix data corruption', () => {
-    expect(isNativeBindingError(Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' }))).toBe(false);
+    expect(
+      isNativeBindingError(
+        Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' }),
+      ),
+    ).toBe(false);
   });
 
   it('does NOT classify unrelated errors, null, or undefined', () => {
@@ -82,8 +92,15 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
       installDir: '/some/dir',
       argv: ['/usr/bin/node', '/x/cli.mjs', 'save', 'hello'],
       env: {},
-      ensure: async () => { c.ensure++; return { ok: true, action: 'rebuilt' }; },
-      reexec: (argv, env) => { c.reexec++; reexecArgs = { argv, env }; return 0; },
+      ensure: async () => {
+        c.ensure++;
+        return { ok: true, action: 'rebuilt' };
+      },
+      reexec: (argv, env) => {
+        c.reexec++;
+        reexecArgs = { argv, env };
+        return 0;
+      },
       log: (m) => c.logs.push(m),
     });
     expect(r).toEqual({ healed: true, exitCode: 0 });
@@ -112,8 +129,14 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
       installDir: '/some/dir',
       argv: ['node', 'cli.mjs', 'stats'],
       env: { [BINDING_HEAL_GUARD_ENV]: '1' },
-      ensure: async () => { c.ensure++; return { ok: true, action: 'rebuilt' }; },
-      reexec: () => { c.reexec++; return 0; },
+      ensure: async () => {
+        c.ensure++;
+        return { ok: true, action: 'rebuilt' };
+      },
+      reexec: () => {
+        c.reexec++;
+        return 0;
+      },
       log: (m) => c.logs.push(m),
     });
     expect(r.healed).toBe(false);
@@ -128,8 +151,14 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
       installDir: '/some/dir',
       argv: ['node', 'cli.mjs', 'stats'],
       env: {},
-      ensure: async () => { c.ensure++; return { ok: false, error: 'no prebuild, no compiler' }; },
-      reexec: () => { c.reexec++; return 0; },
+      ensure: async () => {
+        c.ensure++;
+        return { ok: false, error: 'no prebuild, no compiler' };
+      },
+      reexec: () => {
+        c.reexec++;
+        return 0;
+      },
       log: (m) => c.logs.push(m),
     });
     expect(r.healed).toBe(false);
@@ -143,7 +172,9 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
       installDir: '/some/dir',
       argv: ['node', 'cli.mjs', 'stats'],
       env: {},
-      ensure: async () => { throw new Error('npm missing'); },
+      ensure: async () => {
+        throw new Error('npm missing');
+      },
       reexec: () => 0,
       log: () => {},
     });
@@ -154,11 +185,19 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
 
 describe('native-binding breakage marker — the unattended-heal trigger', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cml-nbb-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cml-nbb-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('records reason + event + ts, and reads back', () => {
-    recordNativeBindingBreakage(dir, { reason: 'ABI 127 vs 137', event: 'user-prompt', now: 1_700_000_000_000 });
+    recordNativeBindingBreakage(dir, {
+      reason: 'ABI 127 vs 137',
+      event: 'user-prompt',
+      now: 1_700_000_000_000,
+    });
     expect(existsSync(join(dir, NATIVE_BINDING_BROKEN_MARKER))).toBe(true);
     const b = readNativeBindingBreakage(dir);
     expect(b.reason).toContain('127');
@@ -205,8 +244,12 @@ describe('native-binding breakage marker — the unattended-heal trigger', () =>
 // the flag lives there and covers scripts written later for free.
 describe('recordHookError — the standalone hook scripts must arm the heal too', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cml-nbt-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cml-nbt-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('flags a native-binding db-open failure from a standalone script', () => {
     const err = Object.assign(new Error('NODE_MODULE_VERSION 127 vs 137'), { code: 'ERR_DLOPEN_FAILED' });
@@ -222,7 +265,11 @@ describe('recordHookError — the standalone hook scripts must arm the heal too'
   });
 
   it('still writes its JSONL shard (the flag is additive, not a replacement)', () => {
-    recordHookError('skill-bridge:db-open', Object.assign(new Error('x'), { code: 'ERR_DLOPEN_FAILED' }), dir);
+    recordHookError(
+      'skill-bridge:db-open',
+      Object.assign(new Error('x'), { code: 'ERR_DLOPEN_FAILED' }),
+      dir,
+    );
     expect(existsSync(join(dir, 'hook-errors'))).toBe(true);
   });
 });

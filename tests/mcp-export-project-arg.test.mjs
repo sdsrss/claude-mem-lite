@@ -26,11 +26,15 @@ const OTHER = 'export--arg-other';
 function seed() {
   const db = createTestDb();
   const mine = saveObservation(db, {
-    project: MINE, type: 'bugfix', title: 'MINE marker',
+    project: MINE,
+    type: 'bugfix',
+    title: 'MINE marker',
     content: 'a row belonging to the project under test',
   }).id;
   const other = saveObservation(db, {
-    project: OTHER, type: 'bugfix', title: 'OTHER marker',
+    project: OTHER,
+    type: 'bugfix',
+    title: 'OTHER marker',
     content: 'a row belonging to a different project entirely',
   }).id;
   return { db, mine, other };
@@ -38,8 +42,12 @@ function seed() {
 
 async function idsOf(db, args) {
   const res = await handleExportForTest(db, { format: 'jsonl', limit: 100, ...args });
-  return res.content.map((c) => c.text).join('\n').split('\n')
-    .filter((l) => l.trim().startsWith('{')).map((l) => JSON.parse(l).id);
+  return res.content
+    .map((c) => c.text)
+    .join('\n')
+    .split('\n')
+    .filter((l) => l.trim().startsWith('{'))
+    .map((l) => JSON.parse(l).id);
 }
 
 describe('mem_export project argument', () => {

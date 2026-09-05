@@ -89,15 +89,23 @@ export function resolveProject(db, name) {
   if (typeof name !== 'string') return null;
   if (_cache.has(name)) return _cache.get(name);
   // Already a canonical name (contains "--")? Use as-is.
-  if (name.includes('--')) { _cache.set(name, name); return name; }
+  if (name.includes('--')) {
+    _cache.set(name, name);
+    return name;
+  }
 
   // Short name: prefer the canonical "parent--name" form (from inferProject())
   // which typically has far more data than manually-saved short names.
   // 1) Exact suffix match: "mem" → "projects--mem"
-  const suffixed = db.prepare(
-    'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1'
-  ).get(`%--${name}`);
-  if (suffixed) { _cache.set(name, suffixed.project); return suffixed.project; }
+  const suffixed = db
+    .prepare(
+      'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1',
+    )
+    .get(`%--${name}`);
+  if (suffixed) {
+    _cache.set(name, suffixed.project);
+    return suffixed.project;
+  }
 
   // 1.5) Exact-name match: a project literally named "p" (e.g. inferProject() at a
   // filesystem-root cwd yields no "--", or a manually-saved bare name). MUST beat the
@@ -105,16 +113,22 @@ export function resolveProject(db, name) {
   // row and ORDER BY COUNT(*) returns the biggest UNRELATED project, making the exact
   // project permanently unreachable via --project. Ranks below step 1 only, preserving
   // the documented "prefer canonical parent--name over a stray short name" intent.
-  const exact = db.prepare(
-    'SELECT project FROM observations WHERE project = ? LIMIT 1'
-  ).get(name);
-  if (exact) { _cache.set(name, exact.project); return exact.project; }
+  const exact = db.prepare('SELECT project FROM observations WHERE project = ? LIMIT 1').get(name);
+  if (exact) {
+    _cache.set(name, exact.project);
+    return exact.project;
+  }
 
   // 2) Prefix-in-suffix match: "code-graph" → "projects--code-graph-mcp"
-  const prefixed = db.prepare(
-    'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1'
-  ).get(`%--${name}%`);
-  if (prefixed) { _cache.set(name, prefixed.project); return prefixed.project; }
+  const prefixed = db
+    .prepare(
+      'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1',
+    )
+    .get(`%--${name}%`);
+  if (prefixed) {
+    _cache.set(name, prefixed.project);
+    return prefixed.project;
+  }
 
   // 3) Whole-token match: the name is a complete hyphen-delimited component of the base
   // (e.g. "graph" → "projects--code-graph-mcp", "mcp" → "…-mcp"). Steps 1/2 already cover
@@ -123,20 +137,30 @@ export function resolveProject(db, name) {
   // "loop-testing") and returned the highest-COUNT unrelated project, so `--project test`
   // silently queried the wrong project. Require a hyphen boundary: an interior token
   // (`%-name-%`) or a trailing token (`%-name`) so "test" no longer matches "testing".
-  const token = db.prepare(
-    `SELECT project FROM observations
+  const token = db
+    .prepare(
+      `SELECT project FROM observations
        WHERE (project LIKE '%-' || ? || '-%' OR project LIKE '%-' || ?)
-       GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`
-  ).get(name, name);
-  if (token) { _cache.set(name, token.project); return token.project; }
+       GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
+    )
+    .get(name, name);
+  if (token) {
+    _cache.set(name, token.project);
+    return token.project;
+  }
 
   // 4) Fallback: synthesize canonical form from current directory
   const inferred = inferProject();
-  if (inferred.endsWith(`--${name}`)) { _cache.set(name, inferred); return inferred; }
+  if (inferred.endsWith(`--${name}`)) {
+    _cache.set(name, inferred);
+    return inferred;
+  }
 
   _cache.set(name, name);
   return name;
 }
 
 /** Reset cache (for tests). */
-export function _resetProjectCache() { _cache.clear(); }
+export function _resetProjectCache() {
+  _cache.clear();
+}

@@ -62,13 +62,17 @@ function readResourceContent(dirPath) {
   for (const name of candidates) {
     const fp = join(dirPath, name);
     if (existsSync(fp)) {
-      try { return readFileSync(fp, 'utf8'); } catch { continue; }
+      try {
+        return readFileSync(fp, 'utf8');
+      } catch {
+        continue;
+      }
     }
   }
 
   // Fallback: first .md file found
   try {
-    const files = readdirSync(dirPath).filter(f => f.endsWith('.md'));
+    const files = readdirSync(dirPath).filter((f) => f.endsWith('.md'));
     if (files.length > 0) {
       return readFileSync(join(dirPath, files[0]), 'utf8');
     }
@@ -76,7 +80,7 @@ function readResourceContent(dirPath) {
 
   // Last resort: look for .yaml/.yml files (some agents use YAML)
   try {
-    const yamlFiles = readdirSync(dirPath).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+    const yamlFiles = readdirSync(dirPath).filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
     if (yamlFiles.length > 0) {
       return readFileSync(join(dirPath, yamlFiles[0]), 'utf8');
     }
@@ -197,9 +201,10 @@ export function scanAllResources(config = {}) {
   const seen = new Map(); // key: "type:name" -> resource
 
   for (const src of sources) {
-    const resources = src.layout === 'plugins'
-      ? scanPluginsDirectory(src.path, src.source)
-      : scanDirectory(src.path, src.type, src.source);
+    const resources =
+      src.layout === 'plugins'
+        ? scanPluginsDirectory(src.path, src.source)
+        : scanDirectory(src.path, src.type, src.source);
     for (const res of resources) {
       const key = `${res.type}:${res.name}`;
       // User resources override preinstalled (scanned first due to source order)

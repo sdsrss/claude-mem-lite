@@ -24,22 +24,74 @@ import { searchProductionHybrid } from './benchmark.mjs';
 // `script` key is ignored by seedDatabase and only used by the guard for labels.
 function doc(id, script, title, narrative, text) {
   return {
-    id, script, project: 'multiscript', type: 'bugfix', title, narrative, text,
-    concepts: text, facts: '', files_modified: '[]', importance: 2,
-    epoch_offset_days: -1, session_id: `sess-${script}`,
+    id,
+    script,
+    project: 'multiscript',
+    type: 'bugfix',
+    title,
+    narrative,
+    text,
+    concepts: text,
+    facts: '',
+    files_modified: '[]',
+    importance: 2,
+    epoch_offset_days: -1,
+    session_id: `sess-${script}`,
   };
 }
 
 export const MULTISCRIPT_FIXTURES = {
   corpus: [
     doc(90101, 'cjk', '数据库死锁修复', '修复并发写入导致的数据库死锁问题', '数据库死锁 并发 事务 回滚'),
-    doc(90102, 'cyrillic', 'Исправлено состояние гонки', 'Добавлен мьютекс вокруг очереди планировщика', 'состояние гонки мьютекс планировщик очередь'),
-    doc(90103, 'greek', 'Διόρθωση διαρροής μνήμης', 'Ο συλλέκτης απορριμμάτων δεν απελευθέρωνε αναφορές', 'διαρροή μνήμης συλλέκτης απορριμμάτων αναφορές'),
-    doc(90104, 'arabic', 'إصلاح تسرب الذاكرة', 'لم يكن جامع القمامة يحرر المراجع القديمة', 'تسرب الذاكرة جامع القمامة مراجع'),
-    doc(90105, 'hangul', '메모리 누수 수정', '가비지 컬렉터가 오래된 참조를 해제하지 않음', '메모리 누수 가비지 컬렉터 참조'),
-    doc(90106, 'kana', 'メモリリークの修正', 'ガベージコレクタが古い参照を解放しなかった', 'メモリリーク ガベージコレクタ 参照'),
-    doc(90107, 'devanagari', 'स्मृति रिसाव ठीक किया', 'कचरा संग्राहक पुराने संदर्भ जारी नहीं कर रहा था', 'स्मृति रिसाव कचरा संग्राहक संदर्भ'),
-    doc(90108, 'emoji-latin', 'Deploy rocket 🚀 canary pipeline', 'Rolled out the 🚀 canary release pipeline with automatic rollback', 'deploy 🚀 rocket canary pipeline rollback'),
+    doc(
+      90102,
+      'cyrillic',
+      'Исправлено состояние гонки',
+      'Добавлен мьютекс вокруг очереди планировщика',
+      'состояние гонки мьютекс планировщик очередь',
+    ),
+    doc(
+      90103,
+      'greek',
+      'Διόρθωση διαρροής μνήμης',
+      'Ο συλλέκτης απορριμμάτων δεν απελευθέρωνε αναφορές',
+      'διαρροή μνήμης συλλέκτης απορριμμάτων αναφορές',
+    ),
+    doc(
+      90104,
+      'arabic',
+      'إصلاح تسرب الذاكرة',
+      'لم يكن جامع القمامة يحرر المراجع القديمة',
+      'تسرب الذاكرة جامع القمامة مراجع',
+    ),
+    doc(
+      90105,
+      'hangul',
+      '메모리 누수 수정',
+      '가비지 컬렉터가 오래된 참조를 해제하지 않음',
+      '메모리 누수 가비지 컬렉터 참조',
+    ),
+    doc(
+      90106,
+      'kana',
+      'メモリリークの修正',
+      'ガベージコレクタが古い参照を解放しなかった',
+      'メモリリーク ガベージコレクタ 参照',
+    ),
+    doc(
+      90107,
+      'devanagari',
+      'स्मृति रिसाव ठीक किया',
+      'कचरा संग्राहक पुराने संदर्भ जारी नहीं कर रहा था',
+      'स्मृति रिसाव कचरा संग्राहक संदर्भ',
+    ),
+    doc(
+      90108,
+      'emoji-latin',
+      'Deploy rocket 🚀 canary pipeline',
+      'Rolled out the 🚀 canary release pipeline with automatic rollback',
+      'deploy 🚀 rocket canary pipeline rollback',
+    ),
   ],
   queries: [
     { script: 'cjk', query: '数据库死锁', expectId: 90101 },
@@ -83,9 +135,14 @@ async function main() {
     if (!r.found) ok = false;
     console.error(`  ${r.script.padEnd(14)} ${mark}  "${r.query}" → [${r.resultIds.join(',')}]`);
   }
-  console.error(ok ? '\n  PASS — every script retrievable\n' : '\n  FAIL — a script returned zero results (non-Latin regression)\n');
+  console.error(
+    ok
+      ? '\n  PASS — every script retrievable\n'
+      : '\n  FAIL — a script returned zero results (non-Latin regression)\n',
+  );
   process.exit(ok ? 0 : 1);
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
 if (isMain) main();

@@ -60,8 +60,9 @@ describe('extractStructuredSummary — 中文 markers', () => {
   });
 
   it('extracts 未完成 + 下次 variants', () => {
-    expect(extractStructuredSummary('未完成: schema migration\n下次继续: Haiku 稳定性').notDone)
-      .toContain('schema migration');
+    expect(extractStructuredSummary('未完成: schema migration\n下次继续: Haiku 稳定性').notDone).toContain(
+      'schema migration',
+    );
     const both = extractStructuredSummary('未完成: schema migration\n下次继续: Haiku 稳定性');
     expect(both.notDone).toContain('Haiku 稳定性');
   });
@@ -99,12 +100,7 @@ describe('extractStructuredSummary — boundary handling', () => {
   });
 
   it('continues a section across a blank-line if followed by a bullet', () => {
-    const text = [
-      'Not done:',
-      '- first item',
-      '',
-      '- second item after blank',
-    ].join('\n');
+    const text = ['Not done:', '- first item', '', '- second item after blank'].join('\n');
     const r = extractStructuredSummary(text);
     expect(r.notDone).toContain('first item');
     expect(r.notDone).toContain('second item after blank');
@@ -120,8 +116,12 @@ describe('extractStructuredSummary — boundary handling', () => {
 
 describe('extractTailAssistantText', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mem-txr-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'mem-txr-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('returns null on missing path', () => {
     expect(extractTailAssistantText('/no/such/path.jsonl')).toBeNull();
@@ -141,12 +141,17 @@ describe('extractTailAssistantText', () => {
       { type: 'user', message: { content: 'start' } },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'first assistant msg' }] } },
       { type: 'user', message: { content: 'more' } },
-      { type: 'assistant', message: { content: [
-        { type: 'text', text: 'Done: shipped.' },
-        { type: 'text', text: 'Not done: docs.' },
-      ] } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Done: shipped.' },
+            { type: 'text', text: 'Not done: docs.' },
+          ],
+        },
+      },
     ];
-    writeFileSync(p, lines.map(l => JSON.stringify(l)).join('\n'));
+    writeFileSync(p, lines.map((l) => JSON.stringify(l)).join('\n'));
     const tail = extractTailAssistantText(p);
     expect(tail).toContain('Done: shipped.');
     expect(tail).toContain('Not done: docs.');
@@ -163,7 +168,10 @@ describe('extractTailAssistantText', () => {
   it('round-trips with extractStructuredSummary on a realistic tail', () => {
     const tail = '● 做完。\n  - v2.44.0: CI ✅\n\n剩下的 Gap #3 和 Gap #2 数据回填属于下次独立决策。';
     const p = join(dir, 't.jsonl');
-    writeFileSync(p, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: tail }] } }));
+    writeFileSync(
+      p,
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: tail }] } }),
+    );
     const r = extractStructuredSummary(extractTailAssistantText(p));
     expect(r.notDone).toContain('Gap #3');
     expect(r.notDone).toContain('数据回填');

@@ -17,15 +17,17 @@
 // a different code path on a developer machine that has them set.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
-import {
-  httpConnectProxyFor, requestViaConnectProxy, onceViaConnectProxy,
-} from '../lib/proxy-fetch.mjs';
+import { httpConnectProxyFor, requestViaConnectProxy, onceViaConnectProxy } from '../lib/proxy-fetch.mjs';
 
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'];
 
 describe('httpConnectProxyFor (transport selection)', () => {
-  beforeEach(() => { for (const v of PROXY_ENV) vi.stubEnv(v, ''); });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  beforeEach(() => {
+    for (const v of PROXY_ENV) vi.stubEnv(v, '');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('returns null when no proxy var is set — callers keep native fetch', () => {
     expect(httpConnectProxyFor('https://openrouter.ai/x')).toBeNull();
@@ -61,7 +63,14 @@ describe('httpConnectProxyFor (transport selection)', () => {
 
 describe('requestViaConnectProxy (redirect handling)', () => {
   const PROXY = 'http://127.0.0.1:1';
-  const resp = (status, headers = {}) => ({ ok: status < 300, status, headers, text: () => '', json: () => ({}), buffer: () => Buffer.alloc(0) });
+  const resp = (status, headers = {}) => ({
+    ok: status < 300,
+    status,
+    headers,
+    text: () => '',
+    json: () => ({}),
+    buffer: () => Buffer.alloc(0),
+  });
 
   it('returns a non-redirect response untouched, with one transport call', async () => {
     const once = vi.fn(async () => resp(200));
@@ -71,7 +80,8 @@ describe('requestViaConnectProxy (redirect handling)', () => {
   });
 
   it('follows an absolute 302 — the GitHub asset → CDN hop auto-update needs', async () => {
-    const once = vi.fn()
+    const once = vi
+      .fn()
       .mockResolvedValueOnce(resp(302, { location: 'https://cdn.test/blob' }))
       .mockResolvedValueOnce(resp(200));
     const r = await requestViaConnectProxy(PROXY, 'https://github.com/a.tgz', {}, { _once: once });
@@ -80,7 +90,8 @@ describe('requestViaConnectProxy (redirect handling)', () => {
   });
 
   it('resolves a RELATIVE location against the current url', async () => {
-    const once = vi.fn()
+    const once = vi
+      .fn()
       .mockResolvedValueOnce(resp(301, { location: '/moved/here' }))
       .mockResolvedValueOnce(resp(200));
     await requestViaConnectProxy(PROXY, 'https://a.test/deep/path', {}, { _once: once });
@@ -91,35 +102,50 @@ describe('requestViaConnectProxy (redirect handling)', () => {
     const once = vi.fn(async () => resp(302, { location: 'https://a.test/loop' }));
     const r = await requestViaConnectProxy(PROXY, 'https://a.test/x', { maxRedirects: 3 }, { _once: once });
     expect(r.status).toBe(302);
-    expect(once).toHaveBeenCalledTimes(4);   // initial + 3 follows
+    expect(once).toHaveBeenCalledTimes(4); // initial + 3 follows
   });
 
   it('drops Authorization when a redirect crosses to another host', async () => {
-    const once = vi.fn()
+    const once = vi
+      .fn()
       .mockResolvedValueOnce(resp(302, { location: 'https://cdn.test/blob' }))
       .mockResolvedValueOnce(resp(200));
-    await requestViaConnectProxy(PROXY, 'https://github.com/a.tgz',
-      { headers: { Authorization: 'Bearer secret-token', Accept: 'application/json' } }, { _once: once });
+    await requestViaConnectProxy(
+      PROXY,
+      'https://github.com/a.tgz',
+      { headers: { Authorization: 'Bearer secret-token', Accept: 'application/json' } },
+      { _once: once },
+    );
     const secondHeaders = once.mock.calls[1][2].headers;
     expect(secondHeaders.Authorization).toBeUndefined();
     expect(secondHeaders.Accept).toBe('application/json');
   });
 
   it('keeps Authorization on a SAME-host redirect', async () => {
-    const once = vi.fn()
+    const once = vi
+      .fn()
       .mockResolvedValueOnce(resp(302, { location: 'https://github.com/other' }))
       .mockResolvedValueOnce(resp(200));
-    await requestViaConnectProxy(PROXY, 'https://github.com/a.tgz',
-      { headers: { Authorization: 'Bearer t' } }, { _once: once });
+    await requestViaConnectProxy(
+      PROXY,
+      'https://github.com/a.tgz',
+      { headers: { Authorization: 'Bearer t' } },
+      { _once: once },
+    );
     expect(once.mock.calls[1][2].headers.Authorization).toBe('Bearer t');
   });
 
   it('does not replay a POST body after a redirect', async () => {
-    const once = vi.fn()
+    const once = vi
+      .fn()
       .mockResolvedValueOnce(resp(303, { location: 'https://a.test/done' }))
       .mockResolvedValueOnce(resp(200));
-    await requestViaConnectProxy(PROXY, 'https://a.test/x',
-      { method: 'POST', body: '{"a":1}' }, { _once: once });
+    await requestViaConnectProxy(
+      PROXY,
+      'https://a.test/x',
+      { method: 'POST', body: '{"a":1}' },
+      { _once: once },
+    );
     expect(once.mock.calls[1][2].method).toBe('GET');
     expect(once.mock.calls[1][2].body).toBe('');
   });
@@ -127,13 +153,21 @@ describe('requestViaConnectProxy (redirect handling)', () => {
 
 describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () => {
   let server, port;
-  afterEach(() => { if (server) { server.close(); server = null; } });
+  afterEach(() => {
+    if (server) {
+      server.close();
+      server = null;
+    }
+  });
 
   function startProxy(onConnect) {
     return new Promise((resolve) => {
       server = http.createServer();
       server.on('connect', onConnect);
-      server.listen(0, '127.0.0.1', () => { port = server.address().port; resolve(); });
+      server.listen(0, '127.0.0.1', () => {
+        port = server.address().port;
+        resolve();
+      });
     });
   }
 
@@ -143,14 +177,16 @@ describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () =>
       socket.end();
     });
     await expect(
-      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 3000 })
+      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 3000 }),
     ).rejects.toThrow(/407/);
   });
 
   it('rejects on timeout when the proxy accepts but never answers', async () => {
-    await startProxy(() => { /* swallow: never reply */ });
+    await startProxy(() => {
+      /* swallow: never reply */
+    });
     await expect(
-      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 300 })
+      onceViaConnectProxy(`http://127.0.0.1:${port}`, 'https://a.test/x', { timeout: 300 }),
     ).rejects.toThrow(/timeout/i);
   });
 
@@ -158,7 +194,7 @@ describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () =>
     // Port 1 on loopback: connection refused. A caller's try/catch must see a
     // rejection so it can degrade, exactly as a failed fetch would.
     await expect(
-      onceViaConnectProxy('http://127.0.0.1:1', 'https://a.test/x', { timeout: 2000 })
+      onceViaConnectProxy('http://127.0.0.1:1', 'https://a.test/x', { timeout: 2000 }),
     ).rejects.toBeTruthy();
   });
 });

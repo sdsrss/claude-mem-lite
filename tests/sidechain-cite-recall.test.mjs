@@ -34,32 +34,48 @@ const inject = (...idTypes) => ({
   },
 });
 const cite = (text) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-const writeJsonl = (path, entries) => writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+const writeJsonl = (path, entries) => writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
 
 describe('computeThreadCiteRecall (per-file, precise hook-injection methodology)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'thread-cite-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'thread-cite-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('counts injected ∩ cited over the whole file', () => {
     const p = join(tmp, 't.jsonl');
     writeJsonl(p, [inject([10, 'bugfix'], [20, 'decision']), cite('applied #10')]);
     const r = computeThreadCiteRecall(p);
     expect(r.injected).toBe(2);
-    expect(r.recalled).toBe(1);   // only 10 cited
+    expect(r.recalled).toBe(1); // only 10 cited
     expect(r.ratio).toBe(0.5);
   });
 
   it('returns zeros for a missing transcript', () => {
-    expect(computeThreadCiteRecall(join(tmp, 'nope.jsonl')))
-      .toEqual({ injected: 0, cited: 0, recalled: 0, ratio: 0 });
+    expect(computeThreadCiteRecall(join(tmp, 'nope.jsonl'))).toEqual({
+      injected: 0,
+      cited: 0,
+      recalled: 0,
+      ratio: 0,
+    });
   });
 });
 
 describe('aggregateProjectCiteRecall — splits main vs sidechain by FILE LOCATION', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'agg-cite-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'agg-cite-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('top-level *.jsonl = main; <session>/subagents/agent-*.jsonl = sidechain', () => {
     writeJsonl(join(tmp, 'sessMain.jsonl'), [inject([10, 'bugfix']), cite('used #10')]);
@@ -69,8 +85,8 @@ describe('aggregateProjectCiteRecall — splits main vs sidechain by FILE LOCATI
 
     const { main, sidechain } = aggregateProjectCiteRecall(tmp, { cutoff: 0 });
     expect(main).toEqual({ injected: 1, recalled: 1, files: 1 });
-    expect(sidechain.injected).toBe(2);     // 30 + 40, the subagent file's injections
-    expect(sidechain.recalled).toBe(1);     // only 30 cited
+    expect(sidechain.injected).toBe(2); // 30 + 40, the subagent file's injections
+    expect(sidechain.recalled).toBe(1); // only 30 cited
     expect(sidechain.files).toBe(1);
     expect(sidechain.withInjections).toBe(1);
   });
@@ -82,7 +98,7 @@ describe('aggregateProjectCiteRecall — splits main vs sidechain by FILE LOCATI
     writeJsonl(join(subDir, 'agent-xyz.jsonl'), [cite('I think #99 is relevant')]);
     const { sidechain } = aggregateProjectCiteRecall(tmp, { cutoff: 0 });
     expect(sidechain.files).toBe(1);
-    expect(sidechain.injected).toBe(0);     // nothing was injected → nothing to recall
+    expect(sidechain.injected).toBe(0); // nothing was injected → nothing to recall
     expect(sidechain.withInjections).toBe(0);
   });
 
@@ -101,8 +117,14 @@ describe('aggregateProjectCiteRecall — splits main vs sidechain by FILE LOCATI
 // Uses the real formatSubagentContext so the extractor can't drift from the emitter.
 describe('subagent prompt-embedded injection (D#57)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'subagent-inj-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'subagent-inj-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   const userPrompt = (text) => ({ type: 'user', message: { role: 'user', content: text } });
 
@@ -113,8 +135,8 @@ describe('subagent prompt-embedded injection (D#57)', () => {
       cite('per #8802 I recovered referencing rows first'),
     ]);
     const r = computeThreadCiteRecall(p);
-    expect(r.injected).toBe(1);   // #8802 from the appended marker (was 0 before D#57)
-    expect(r.recalled).toBe(1);   // subagent cited it
+    expect(r.injected).toBe(1); // #8802 from the appended marker (was 0 before D#57)
+    expect(r.recalled).toBe(1); // subagent cited it
   });
 
   it('anchors to the "#NN —" tag: a #NN quoted in the lesson body is NOT injected', () => {
@@ -124,8 +146,8 @@ describe('subagent prompt-embedded injection (D#57)', () => {
       cite('done — see #9999'),
     ]);
     const r = computeThreadCiteRecall(p);
-    expect(r.injected).toBe(1);   // only #8802 (the tag), NOT #9999 (quoted in body)
-    expect(r.recalled).toBe(0);   // #8802 uncited; #9999 was never injected
+    expect(r.injected).toBe(1); // only #8802 (the tag), NOT #9999 (quoted in body)
+    expect(r.recalled).toBe(0); // #8802 uncited; #9999 was never injected
   });
 
   it('aggregateProjectCiteRecall surfaces subagent injection instead of a false 0', () => {
@@ -144,8 +166,14 @@ describe('subagent prompt-embedded injection (D#57)', () => {
 
 describe('#8584 emit↔extractor coupling (② error-recall lesson inline)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'coupling-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'coupling-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('extractInjectedFromErrorRecall recovers ids from the lesson-inlined emit', () => {
     const stdout = formatErrorRecallHints([
@@ -153,10 +181,15 @@ describe('#8584 emit↔extractor coupling (② error-recall lesson inline)', () 
       { id: 4343, type: 'decision', title: 'Chose Y', lesson_learned: null },
     ]);
     const p = join(tmp, 't.jsonl');
-    writeJsonl(p, [{ type: 'attachment', attachment: { type: 'hook_success', command: 'bash /abs/scripts/post-tool-use.sh', stdout } }]);
+    writeJsonl(p, [
+      {
+        type: 'attachment',
+        attachment: { type: 'hook_success', command: 'bash /abs/scripts/post-tool-use.sh', stdout },
+      },
+    ]);
     const ids = extractInjectedFromErrorRecall(p);
-    expect(ids.has(4242)).toBe(true);   // top-1, lesson inlined
-    expect(ids.has(4343)).toBe(true);   // pointer row
+    expect(ids.has(4242)).toBe(true); // top-1, lesson inlined
+    expect(ids.has(4343)).toBe(true); // pointer row
   });
 });
 
@@ -165,18 +198,34 @@ describe('#8584 emit↔extractor coupling (② error-recall lesson inline)', () 
 // else it enters the citation-decay denominator and falsely streak-demotes.
 describe('anchored extraction — embedded #NN [type] in a lesson body is NOT injected', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'anchor-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'anchor-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('error-recall: a lesson body quoting #NN [type] does not pollute the injected set', () => {
     const stdout = formatErrorRecallHints([
-      { id: 42, type: 'bugfix', title: 'Real row', lesson_learned: 'root cause was the same as #999 [decision]; see #888 [bugfix]' },
+      {
+        id: 42,
+        type: 'bugfix',
+        title: 'Real row',
+        lesson_learned: 'root cause was the same as #999 [decision]; see #888 [bugfix]',
+      },
     ]);
     const p = join(tmp, 'e.jsonl');
-    writeJsonl(p, [{ type: 'attachment', attachment: { type: 'hook_success', command: 'bash /x/post-tool-use.sh', stdout } }]);
+    writeJsonl(p, [
+      {
+        type: 'attachment',
+        attachment: { type: 'hook_success', command: 'bash /x/post-tool-use.sh', stdout },
+      },
+    ]);
     const ids = extractInjectedFromErrorRecall(p);
-    expect(ids.has(42)).toBe(true);     // the genuine injected row
-    expect(ids.has(999)).toBe(false);   // cross-ref embedded mid-line in the lesson body
+    expect(ids.has(42)).toBe(true); // the genuine injected row
+    expect(ids.has(999)).toBe(false); // cross-ref embedded mid-line in the lesson body
     expect(ids.has(888)).toBe(false);
   });
 
@@ -184,7 +233,12 @@ describe('anchored extraction — embedded #NN [type] in a lesson body is NOT in
     const rows = ['Lessons for foo.mjs:', '  #7 [bugfix] title — body cites #1234 [decision]'].join('\n');
     const stdout = JSON.stringify({ hookSpecificOutput: { additionalContext: rows } });
     const p = join(tmp, 'p.jsonl');
-    writeJsonl(p, [{ type: 'attachment', attachment: { type: 'hook_success', command: 'node /x/scripts/pre-tool-recall.js', stdout } }]);
+    writeJsonl(p, [
+      {
+        type: 'attachment',
+        attachment: { type: 'hook_success', command: 'node /x/scripts/pre-tool-recall.js', stdout },
+      },
+    ]);
     const ids = extractInjectedFromPreToolUse(p);
     expect(ids.has(7)).toBe(true);
     expect(ids.has(1234)).toBe(false);

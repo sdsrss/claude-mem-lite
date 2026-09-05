@@ -49,7 +49,8 @@ const UPS_ATT = {
   attachment: {
     type: 'hook_success',
     command: 'node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
-    stdout: '<memory-context relevance="high">\n- [decision] picked X | Lesson: Y (#202)\n</memory-context>\n',
+    stdout:
+      '<memory-context relevance="high">\n- [decision] picked X | Lesson: Y (#202)\n</memory-context>\n',
   },
 };
 const ERR_ATT = {
@@ -57,7 +58,8 @@ const ERR_ATT = {
   attachment: {
     type: 'hook_success',
     command: 'bash "/home/sds/.claude-mem-lite/scripts/post-tool-use.sh"',
-    stdout: '[claude-mem-lite] Related memories found for this error:\n  #303 [bugfix] EPIPE on forced exit\n',
+    stdout:
+      '[claude-mem-lite] Related memories found for this error:\n  #303 [bugfix] EPIPE on forced exit\n',
   },
 };
 const FYI_ATT = {
@@ -71,8 +73,14 @@ const FYI_ATT = {
 
 describe('extractInjectedBySurface', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-surface-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-surface-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   const writeTranscript = (entries) => {
     const path = join(tmp, 'transcript.jsonl');
@@ -101,7 +109,10 @@ describe('extractInjectedBySurface', () => {
     const path = writeTranscript([PTR_ATT, UPS_ATT, ERR_ATT, FYI_ATT]);
     const bySurface = extractInjectedBySurface(path);
     const union = new Set([
-      ...bySurface.pretool, ...bySurface.ups, ...bySurface.error_recall, ...bySurface.fyi,
+      ...bySurface.pretool,
+      ...bySurface.ups,
+      ...bySurface.error_recall,
+      ...bySurface.fyi,
     ]);
     expect([...extractAllInjected(path)].sort()).toEqual([...union].sort());
   });
@@ -119,10 +130,7 @@ describe('extractInjectedBySurface', () => {
   });
 
   it('honors mainOnly per face (sidechain attachment excluded)', () => {
-    const path = writeTranscript([
-      PTR_ATT,
-      { ...UPS_ATT, isSidechain: true },
-    ]);
+    const path = writeTranscript([PTR_ATT, { ...UPS_ATT, isSidechain: true }]);
     const all = extractInjectedBySurface(path);
     expect([...all.ups]).toEqual([202]);
     const main = extractInjectedBySurface(path, { mainOnly: true });
@@ -137,14 +145,16 @@ describe('extractInjectedBySurface', () => {
   // user-prompt hook output would be counted as an injection and demote a real
   // observation that was never shown.
   it('ignores a user-prompt attachment that carries no <memory-context> block', () => {
-    const path = writeTranscript([{
-      type: 'attachment',
-      attachment: {
-        type: 'hook_success',
-        command: 'node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
-        stdout: '[mem] some other user-prompt output\n- [decision] not a memory line (#777)\n',
+    const path = writeTranscript([
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
+          stdout: '[mem] some other user-prompt output\n- [decision] not a memory line (#777)\n',
+        },
       },
-    }]);
+    ]);
     expect(extractInjectedBySurface(path).ups.size).toBe(0);
     expect(extractAllInjected(path).has(777)).toBe(false);
   });
@@ -171,22 +181,41 @@ describe('recordCitationSurfaces', () => {
     insertSession(db, { id: 'sess-1', project: 'p1' });
     insertSession(db, { id: 'sess-2', project: 'p2' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
-  const obs = (project = 'p1') => Number(insertObs(db, {
-    sessionId: project === 'p1' ? 'sess-1' : 'sess-2',
-    project, type: 'bugfix', title: 't', importance: 2,
-  }).lastInsertRowid);
+  const obs = (project = 'p1') =>
+    Number(
+      insertObs(db, {
+        sessionId: project === 'p1' ? 'sess-1' : 'sess-2',
+        project,
+        type: 'bugfix',
+        title: 't',
+        importance: 2,
+      }).lastInsertRowid,
+    );
   const row = (surface, project = 'p1', session = 'sess-1') =>
-    db.prepare('SELECT * FROM citation_surface_log WHERE project=? AND session_id=? AND surface=?')
+    db
+      .prepare('SELECT * FROM citation_surface_log WHERE project=? AND session_id=? AND surface=?')
       .get(project, session, surface);
 
   it('writes one row per surface with injected/cited counts', () => {
-    const a = obs(), b = obs(), c = obs();
-    recordCitationSurfaces(db, 'p1', 'sess-1', {
-      pretool: new Set([a, b]),
-      ups: new Set([c]),
-    }, new Set([b]));
+    const a = obs(),
+      b = obs(),
+      c = obs();
+    recordCitationSurfaces(
+      db,
+      'p1',
+      'sess-1',
+      {
+        pretool: new Set([a, b]),
+        ups: new Set([c]),
+      },
+      new Set([b]),
+    );
     expect(row('pretool').injected_n).toBe(2);
     expect(row('pretool').cited_n).toBe(1);
     expect(row('ups').injected_n).toBe(1);
@@ -196,10 +225,16 @@ describe('recordCitationSurfaces', () => {
 
   it('counts an obs injected by two faces in BOTH rows (view, not partition)', () => {
     const a = obs();
-    recordCitationSurfaces(db, 'p1', 'sess-1', {
-      pretool: new Set([a]),
-      fyi: new Set([a]),
-    }, new Set([a]));
+    recordCitationSurfaces(
+      db,
+      'p1',
+      'sess-1',
+      {
+        pretool: new Set([a]),
+        fyi: new Set([a]),
+      },
+      new Set([a]),
+    );
     expect(row('pretool').injected_n).toBe(1);
     expect(row('fyi').injected_n).toBe(1);
     expect(row('pretool').cited_n).toBe(1);
@@ -209,14 +244,21 @@ describe('recordCitationSurfaces', () => {
   it('skips ids that are not observations of this project', () => {
     const mine = obs();
     const theirs = obs('p2');
-    recordCitationSurfaces(db, 'p1', 'sess-1', {
-      pretool: new Set([mine, theirs, 999999]), // cross-project + ghost (events id)
-    }, new Set());
+    recordCitationSurfaces(
+      db,
+      'p1',
+      'sess-1',
+      {
+        pretool: new Set([mine, theirs, 999999]), // cross-project + ghost (events id)
+      },
+      new Set(),
+    );
     expect(row('pretool').injected_n).toBe(1);
   });
 
   it('is overwrite-idempotent — a Stop re-fire does not double the counts', () => {
-    const a = obs(), b = obs();
+    const a = obs(),
+      b = obs();
     const sets = { pretool: new Set([a, b]) };
     recordCitationSurfaces(db, 'p1', 'sess-1', sets, new Set([a]));
     recordCitationSurfaces(db, 'p1', 'sess-1', sets, new Set([a]));
@@ -225,7 +267,8 @@ describe('recordCitationSurfaces', () => {
   });
 
   it('absorbs a cross-turn late citation (cited rises, injected unchanged)', () => {
-    const a = obs(), b = obs();
+    const a = obs(),
+      b = obs();
     const sets = { pretool: new Set([a, b]) };
     recordCitationSurfaces(db, 'p1', 'sess-1', sets, new Set());
     expect(row('pretool').cited_n).toBe(0);
@@ -236,10 +279,16 @@ describe('recordCitationSurfaces', () => {
 
   it('writes no row for an empty surface (no telemetry noise)', () => {
     const a = obs();
-    recordCitationSurfaces(db, 'p1', 'sess-1', {
-      pretool: new Set([a]),
-      ups: new Set(),
-    }, new Set());
+    recordCitationSurfaces(
+      db,
+      'p1',
+      'sess-1',
+      {
+        pretool: new Set([a]),
+        ups: new Set(),
+      },
+      new Set(),
+    );
     expect(row('ups')).toBeUndefined();
     expect(db.prepare('SELECT COUNT(*) n FROM citation_surface_log').get().n).toBe(1);
   });
@@ -247,8 +296,11 @@ describe('recordCitationSurfaces', () => {
   it('credits the keeper when an injected id was superseded mid-session (D#61 parity)', () => {
     const keeper = obs();
     const old = obs();
-    db.prepare('UPDATE observations SET superseded_at=?, superseded_by=? WHERE id=?')
-      .run(Date.now(), keeper, old);
+    db.prepare('UPDATE observations SET superseded_at=?, superseded_by=? WHERE id=?').run(
+      Date.now(),
+      keeper,
+      old,
+    );
     recordCitationSurfaces(db, 'p1', 'sess-1', { pretool: new Set([old]) }, new Set([old]));
     // Redirected to the keeper: still exactly one injected, and it counts as cited.
     expect(row('pretool').injected_n).toBe(1);
@@ -272,8 +324,12 @@ describe('recordCitationSurfaces', () => {
   // first session's counts outright rather than accumulate them. Distinct keys
   // must produce distinct rows — this is the same hazard D#60 fixed for
   // applyCitationDecay, one table over.
-  it('does not let a second session erase a first session\'s counts', () => {
-    const a = obs(), b = obs(), c = obs(), d = obs(), e = obs();
+  it("does not let a second session erase a first session's counts", () => {
+    const a = obs(),
+      b = obs(),
+      c = obs(),
+      d = obs(),
+      e = obs();
     // Session A resolves 5 injections, 3 cited.
     recordCitationSurfaces(db, 'p1', 'cc-A', { pretool: new Set([a, b, c, d, e]) }, new Set([a, b, c]));
     // Session B, same project, walks its own (smaller) transcript.
@@ -288,7 +344,8 @@ describe('recordCitationSurfaces', () => {
   // the "no telemetry noise" skip, so a shared key would leave a mixed row set
   // (one face from session A, another from session B) — worse than either.
   it('keeps per-face rows of two sessions independent even when a face is empty in one', () => {
-    const a = obs(), b = obs();
+    const a = obs(),
+      b = obs();
     recordCitationSurfaces(db, 'p1', 'cc-A', { pretool: new Set([a]), ups: new Set([b]) }, new Set([a]));
     recordCitationSurfaces(db, 'p1', 'cc-B', { pretool: new Set([b]), ups: new Set() }, new Set());
     expect(row('ups', 'p1', 'cc-A').injected_n).toBe(1);
@@ -304,9 +361,15 @@ describe('recordCitationSurfaces', () => {
   // — writing it here must not be what widens anything, since the decay
   // denominator is computed before this call and from a different object.
   it('writes keyctx as an ordinary row (promotion-only lives in the decay loop, not here)', () => {
-    const a = obs(), b = obs();
-    const written = recordCitationSurfaces(db, 'p1', 'cc-A',
-      { pretool: new Set([a]), keyctx: new Set([a, b]) }, new Set([a]));
+    const a = obs(),
+      b = obs();
+    const written = recordCitationSurfaces(
+      db,
+      'p1',
+      'cc-A',
+      { pretool: new Set([a]), keyctx: new Set([a, b]) },
+      new Set([a]),
+    );
     expect(row('keyctx', 'p1', 'cc-A').injected_n).toBe(2);
     expect(row('keyctx', 'p1', 'cc-A').cited_n).toBe(1);
     expect(written.keyctx).toEqual({ injected: 2, cited: 1 });
@@ -335,18 +398,34 @@ describe('recordCitationSurfaces', () => {
     // citation-surface-imperative.test.mjs). subagent joined in v3.77
     // (D#152; see citation-surface-subagent.test.mjs — it is a non-attachment
     // face, so it is fed by its own recordCitationSurfaces call at Stop).
-    expect(CITATION_SURFACES).toEqual(['pretool', 'ups', 'error_recall', 'fyi', 'task_imperative', 'keyctx', 'subagent']);
+    expect(CITATION_SURFACES).toEqual([
+      'pretool',
+      'ups',
+      'error_recall',
+      'fyi',
+      'task_imperative',
+      'keyctx',
+      'subagent',
+    ]);
   });
 });
 
 describe('computeSurfaceFunnel', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { try { db.close(); } catch {} });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   const seed = (project, session, surface, inj, cited, agoMs = 0) => {
-    db.prepare(`INSERT INTO citation_surface_log (project, session_id, surface, resolved_at, injected_n, cited_n)
-                VALUES (?, ?, ?, ?, ?, ?)`).run(project, session, surface, Date.now() - agoMs, inj, cited);
+    db.prepare(
+      `INSERT INTO citation_surface_log (project, session_id, surface, resolved_at, injected_n, cited_n)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(project, session, surface, Date.now() - agoMs, inj, cited);
   };
 
   it('aggregates per surface inside the window, sorted by injected volume', () => {
@@ -419,8 +498,10 @@ describe('hook.mjs Stop wiring', () => {
     const end = src.indexOf('handleStop-edge-attribution');
     expect(start, 'gate-block start anchor missing').toBeGreaterThan(0);
     expect(end, 'gate-block end anchor missing').toBeGreaterThan(start);
-    expect(src.slice(start, end), 'recordCitationSurfaces must live inside the text-floor-gated block')
-      .toMatch(/recordCitationSurfaces\(/);
+    expect(
+      src.slice(start, end),
+      'recordCitationSurfaces must live inside the text-floor-gated block',
+    ).toMatch(/recordCitationSurfaces\(/);
   });
 
   // Pre-tag review M-1, pinned at the call site: the aggregate funnel keys on
@@ -453,7 +534,9 @@ describe('hook.mjs Stop wiring', () => {
     // `keyCtxIds.forEach(...)` or a spread sitting next to the correct line.
     // So: between the marker read and the decay call, every line that mentions
     // keyCtxIds at all must be gated on an actual citation.
-    const offending = src.slice(start, end).split('\n')
+    const offending = src
+      .slice(start, end)
+      .split('\n')
       .filter((line) => line.includes('keyCtxIds'))
       .filter((line) => !line.trimStart().startsWith('//'))
       // Only lines that actually FEED `injected` count — reading keyCtxIds.size

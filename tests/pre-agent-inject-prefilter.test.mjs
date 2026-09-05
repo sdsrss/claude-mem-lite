@@ -32,20 +32,33 @@ beforeAll(() => {
   // Fake `node`: records that it ran, with what argv and what stdin. Never loads the
   // real hook, so this test cannot be slowed or flaked by the injection path itself.
   const fake = join(binDir, 'node');
-  writeFileSync(fake, [
-    '#!/usr/bin/env bash',
-    `printf '%s\\n' "$@" > "${join(recordDir, 'argv.txt')}"`,
-    `cat > "${join(recordDir, 'stdin.txt')}"`,
-    '',
-  ].join('\n'));
+  writeFileSync(
+    fake,
+    [
+      '#!/usr/bin/env bash',
+      `printf '%s\\n' "$@" > "${join(recordDir, 'argv.txt')}"`,
+      `cat > "${join(recordDir, 'stdin.txt')}"`,
+      '',
+    ].join('\n'),
+  );
   chmodSync(fake, 0o755);
 });
 
-afterAll(() => { try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* gone */ } });
+afterAll(() => {
+  try {
+    rmSync(sandbox, { recursive: true, force: true });
+  } catch {
+    /* gone */
+  }
+});
 
 function runPrefilter(flag, { payload = PAYLOAD } = {}) {
   for (const f of ['argv.txt', 'stdin.txt']) {
-    try { rmSync(join(recordDir, f)); } catch { /* absent */ }
+    try {
+      rmSync(join(recordDir, f));
+    } catch {
+      /* absent */
+    }
   }
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
   // The maintainer's own shell exports this flag; deleting it is what makes "off"
@@ -57,8 +70,12 @@ function runPrefilter(flag, { payload = PAYLOAD } = {}) {
   return {
     stdout,
     nodeRan: existsSync(join(recordDir, 'argv.txt')),
-    argv: existsSync(join(recordDir, 'argv.txt')) ? readFileSync(join(recordDir, 'argv.txt'), 'utf8').trim().split('\n') : [],
-    forwardedStdin: existsSync(join(recordDir, 'stdin.txt')) ? readFileSync(join(recordDir, 'stdin.txt'), 'utf8') : null,
+    argv: existsSync(join(recordDir, 'argv.txt'))
+      ? readFileSync(join(recordDir, 'argv.txt'), 'utf8').trim().split('\n')
+      : [],
+    forwardedStdin: existsSync(join(recordDir, 'stdin.txt'))
+      ? readFileSync(join(recordDir, 'stdin.txt'), 'utf8')
+      : null,
   };
 }
 

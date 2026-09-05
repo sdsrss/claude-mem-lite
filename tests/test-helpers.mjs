@@ -3,7 +3,13 @@
 
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { RESOURCES_SCHEMA, FTS5_SCHEMA, TRIGGERS_SCHEMA, INVOCATIONS_SCHEMA, PREINSTALLED_SCHEMA } from '../registry.mjs';
+import {
+  RESOURCES_SCHEMA,
+  FTS5_SCHEMA,
+  TRIGGERS_SCHEMA,
+  INVOCATIONS_SCHEMA,
+  PREINSTALLED_SCHEMA,
+} from '../registry.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
 /**
@@ -36,10 +42,12 @@ export function createRegistryTestDb() {
 
 export function insertSession(db, { id, project = 'test', memoryId = null }) {
   const now = new Date();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
     VALUES (?, ?, ?, ?, ?, 'active')
-  `).run(id, memoryId ?? id, project, now.toISOString(), now.getTime());
+  `,
+  ).run(id, memoryId ?? id, project, now.toISOString(), now.getTime());
 }
 
 /**
@@ -49,22 +57,78 @@ export function insertSession(db, { id, project = 'test', memoryId = null }) {
  */
 export function insertPrompt(db, { contentSessionId = 'sess-1', text, promptNumber = 1, epochOffset = 0 }) {
   const now = Date.now() + epochOffset;
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
     VALUES (?, ?, ?, ?, ?)
-  `).run(contentSessionId, text, promptNumber, new Date(now).toISOString(), now);
+  `,
+    )
+    .run(contentSessionId, text, promptNumber, new Date(now).toISOString(), now);
   return result;
 }
 
-export function insertObs(db, { sessionId = 'sess-1', project = 'test', type = 'discovery', title, subtitle = '', text = '', narrative = '', importance = 1, relatedIds = '[]', epochOffset = 0, filesModified = '[]', accessCount = 0, compressedInto = null, lessonLearned = null, searchAliases = null, branch = null, supersededAt = null, supersededBy = null, lastAccessedAt = null, citedCount = 0, uncitedStreak = 0, injectionCount = 0 }) {
+export function insertObs(
+  db,
+  {
+    sessionId = 'sess-1',
+    project = 'test',
+    type = 'discovery',
+    title,
+    subtitle = '',
+    text = '',
+    narrative = '',
+    importance = 1,
+    relatedIds = '[]',
+    epochOffset = 0,
+    filesModified = '[]',
+    accessCount = 0,
+    compressedInto = null,
+    lessonLearned = null,
+    searchAliases = null,
+    branch = null,
+    supersededAt = null,
+    supersededBy = null,
+    lastAccessedAt = null,
+    citedCount = 0,
+    uncitedStreak = 0,
+    injectionCount = 0,
+  },
+) {
   const now = Date.now() + epochOffset;
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, related_ids, access_count, compressed_into, lesson_learned, search_aliases, branch, superseded_at, superseded_by, last_accessed_at, created_at, created_at_epoch)
     VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(sessionId, project, text, type, title, subtitle, narrative, filesModified, importance, relatedIds, accessCount, compressedInto, lessonLearned, searchAliases, branch, supersededAt, supersededBy, lastAccessedAt, new Date(now).toISOString(), now);
+  `,
+    )
+    .run(
+      sessionId,
+      project,
+      text,
+      type,
+      title,
+      subtitle,
+      narrative,
+      filesModified,
+      importance,
+      relatedIds,
+      accessCount,
+      compressedInto,
+      lessonLearned,
+      searchAliases,
+      branch,
+      supersededAt,
+      supersededBy,
+      lastAccessedAt,
+      new Date(now).toISOString(),
+      now,
+    );
   if (citedCount || uncitedStreak || injectionCount) {
-    db.prepare('UPDATE observations SET cited_count = ?, uncited_streak = ?, injection_count = ? WHERE id = ?')
-      .run(citedCount, uncitedStreak, injectionCount, Number(result.lastInsertRowid));
+    db.prepare(
+      'UPDATE observations SET cited_count = ?, uncited_streak = ?, injection_count = ? WHERE id = ?',
+    ).run(citedCount, uncitedStreak, injectionCount, Number(result.lastInsertRowid));
   }
 
   // Also populate observation_files junction table (mirrors saveObservation behavior)
@@ -73,12 +137,16 @@ export function insertObs(db, { sessionId = 'sess-1', project = 'test', type = '
       const files = JSON.parse(filesModified);
       if (Array.isArray(files)) {
         const obsId = Number(result.lastInsertRowid);
-        const insertFile = db.prepare('INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)');
+        const insertFile = db.prepare(
+          'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+        );
         for (const f of files) {
           if (typeof f === 'string' && f.length > 0) insertFile.run(obsId, f);
         }
       }
-    } catch { /* skip malformed JSON */ }
+    } catch {
+      /* skip malformed JSON */
+    }
   }
 
   return result;
@@ -117,7 +185,9 @@ export function insertObs(db, { sessionId = 'sess-1', project = 'test', type = '
  * @returns {Array<{id:number,type:string,title:string,importance:number,lesson_learned:string|null}>}
  */
 export function fileEdgeMatchOnly(db, filePath, project, { minImportance = 2 } = {}) {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT DISTINCT o.id, o.type, o.title, o.importance, o.lesson_learned
     FROM observations o
     JOIN observation_files of2 ON of2.obs_id = o.id
@@ -125,7 +195,9 @@ export function fileEdgeMatchOnly(db, filePath, project, { minImportance = 2 } =
       AND COALESCE(o.importance, 1) >= ?
       AND ${fileMatchClause('of2')}
     ORDER BY o.created_at_epoch DESC
-  `).all(project, minImportance, ...fileMatchParams(filePath));
+  `,
+    )
+    .all(project, minImportance, ...fileMatchParams(filePath));
 }
 
 /**

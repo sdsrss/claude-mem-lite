@@ -14,16 +14,16 @@ describe('initSchema self-heal — version-vs-columns mismatch (D#22)', () => {
     // Simulate the half-migrated state observed in dev during v2.74.0 release:
     // version row reads CURRENT but the latest migration's column is missing.
     db.exec('ALTER TABLE observations DROP COLUMN scope');
-    expect(
-      db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").all()
-    ).toEqual([]);
+    expect(db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").all()).toEqual(
+      [],
+    );
     expect(db.prepare('SELECT version FROM schema_version').get().version).toBe(CURRENT_SCHEMA_VERSION);
 
     initSchema(db); // expected: detects missing column, re-runs migrations idempotently
 
-    expect(
-      db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()
-    ).toEqual({ name: 'scope' });
+    expect(db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()).toEqual(
+      { name: 'scope' },
+    );
     db.close();
   });
 
@@ -32,9 +32,9 @@ describe('initSchema self-heal — version-vs-columns mismatch (D#22)', () => {
     initSchema(db);
     initSchema(db); // second call — should be cheap, no errors
     // Sentinel column still intact, version still pinned.
-    expect(
-      db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()
-    ).toEqual({ name: 'scope' });
+    expect(db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()).toEqual(
+      { name: 'scope' },
+    );
     expect(db.prepare('SELECT version FROM schema_version').get().version).toBe(CURRENT_SCHEMA_VERSION);
     db.close();
   });
@@ -51,7 +51,9 @@ describe('initSchema self-heal — version-vs-columns mismatch (D#22)', () => {
     initSchema(db); // version matches, but the v43 representative is missing
 
     expect(
-      db.prepare("SELECT name FROM pragma_table_info('observation_files') WHERE name='last_cited_session_id'").get()
+      db
+        .prepare("SELECT name FROM pragma_table_info('observation_files') WHERE name='last_cited_session_id'")
+        .get(),
     ).toEqual({ name: 'last_cited_session_id' });
     db.close();
   });
@@ -70,9 +72,9 @@ describe('initSchema self-heal — version-vs-columns mismatch (D#22)', () => {
 
     initSchema(db);
 
-    expect(
-      db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()
-    ).toEqual({ name: 'scope' });
+    expect(db.prepare("SELECT name FROM pragma_table_info('observations') WHERE name='scope'").get()).toEqual(
+      { name: 'scope' },
+    );
     expect(db.prepare('SELECT version FROM schema_version').get().version).toBe(CURRENT_SCHEMA_VERSION);
     db.close();
   });

@@ -1,8 +1,17 @@
-function olsLine(pts) { // pts: [{x,y}] centered externally; returns {a:intercept, b:slope}
+function olsLine(pts) {
+  // pts: [{x,y}] centered externally; returns {a:intercept, b:slope}
   const n = pts.length;
   if (n === 0) return { a: 0, b: 0 };
-  let sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
+  let sx = 0,
+    sy = 0,
+    sxx = 0,
+    sxy = 0;
+  for (const p of pts) {
+    sx += p.x;
+    sy += p.y;
+    sxx += p.x * p.x;
+    sxy += p.x * p.y;
+  }
   const denom = n * sxx - sx * sx;
   if (denom === 0) return { a: sy / n, b: 0 };
   const b = (n * sxy - sx * sy) / denom;
@@ -24,17 +33,35 @@ export function localLinearRdd(points, cutoff) {
 // seeded LCG so bootstrap is deterministic (Math.random is unavailable in this repo's harness)
 export function lcg(seedStr) {
   let s = 2166136261 >>> 0;
-  for (const ch of String(seedStr)) { s ^= ch.charCodeAt(0); s = Math.imul(s, 16777619) >>> 0; }
-  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  for (const ch of String(seedStr)) {
+    s ^= ch.charCodeAt(0);
+    s = Math.imul(s, 16777619) >>> 0;
+  }
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
 }
 
 export function clusterBootstrap(rows, { B = 2000, seedTerms = 'seed' } = {}) {
   const bySession = new Map();
-  for (const r of rows) { if (!bySession.has(r.sessionId)) bySession.set(r.sessionId, []); bySession.get(r.sessionId).push(r.value); }
+  for (const r of rows) {
+    if (!bySession.has(r.sessionId)) bySession.set(r.sessionId, []);
+    bySession.get(r.sessionId).push(r.value);
+  }
   const clusters = [...bySession.values()];
   const K = clusters.length;
   const rand = lcg(seedTerms + ':' + rows.length);
-  const flatMean = (cs) => { let s = 0, n = 0; for (const c of cs) for (const v of c) { s += v; n++; } return n ? s / n : 0; };
+  const flatMean = (cs) => {
+    let s = 0,
+      n = 0;
+    for (const c of cs)
+      for (const v of c) {
+        s += v;
+        n++;
+      }
+    return n ? s / n : 0;
+  };
   const means = [];
   for (let b = 0; b < B; b++) {
     const draw = [];
@@ -48,8 +75,12 @@ export function clusterBootstrap(rows, { B = 2000, seedTerms = 'seed' } = {}) {
 }
 
 const Z = {
-  0.8: 0.8416212336, 0.9: 1.2815515655, 0.95: 1.6448536270,
-  0.975: 1.9599639845, 0.99: 2.3263478740, 0.995: 2.5758293035,
+  0.8: 0.8416212336,
+  0.9: 1.2815515655,
+  0.95: 1.644853627,
+  0.975: 1.9599639845,
+  0.99: 2.326347874,
+  0.995: 2.5758293035,
 };
 function zQuantile(p) {
   const z = Z[Number(p.toFixed(4))];
@@ -57,7 +88,7 @@ function zQuantile(p) {
   return z;
 }
 export function mde(nEvents, sd, { alpha = 0.05, power = 0.8 } = {}) {
-  const zA = zQuantile(1 - alpha / 2);   // two-sided
+  const zA = zQuantile(1 - alpha / 2); // two-sided
   const zB = zQuantile(power);
-  return (zA + zB) * sd / Math.sqrt(Math.max(1, nEvents));
+  return ((zA + zB) * sd) / Math.sqrt(Math.max(1, nEvents));
 }

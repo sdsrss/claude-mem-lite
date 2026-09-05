@@ -1,6 +1,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, statSync, symlinkSync } from 'fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -25,7 +34,10 @@ function makeDataDir(version = '1.0.0') {
   mkdirSync(join(dir, 'runtime'), { recursive: true });
   mkdirSync(join(dir, 'node_modules'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ version }, null, 2));
-  writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ name: 'claude-mem-lite', lockfileVersion: 3 }, null, 2));
+  writeFileSync(
+    join(dir, 'package-lock.json'),
+    JSON.stringify({ name: 'claude-mem-lite', lockfileVersion: 3 }, null, 2),
+  );
   writeFileSync(join(dir, 'server.mjs'), '// server');
   writeFileSync(join(dir, 'hook.mjs'), '// old hook');
   writeFileSync(join(dir, 'node_modules', 'old.txt'), 'old');
@@ -50,7 +62,10 @@ function makeReleaseDir(version = '1.1.0') {
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   mkdirSync(join(dir, 'registry'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ version }, null, 2));
-  writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ name: 'claude-mem-lite', lockfileVersion: 3 }, null, 2));
+  writeFileSync(
+    join(dir, 'package-lock.json'),
+    JSON.stringify({ name: 'claude-mem-lite', lockfileVersion: 3 }, null, 2),
+  );
   writeFileSync(join(dir, 'hook.mjs'), '// new hook');
   writeFileSync(join(dir, 'server.mjs'), '// new server');
   writeFileSync(join(dir, 'cli.mjs'), '#!/usr/bin/env node\n// new cli\n');
@@ -88,7 +103,8 @@ afterEach(() => {
   mockedExecSync.mockReset();
   globalThis.fetch = originalFetch;
   for (const [k, v] of Object.entries(originalProxyEnv)) {
-    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
   delete process.env.CLAUDE_PLUGIN_ROOT;
   delete process.env.CLAUDE_MEM_SKIP_UPDATE;
@@ -121,20 +137,46 @@ describe('hook update lifecycle', () => {
   it('plugin mode only reports available updates and never installs them', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir();
-    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }) });
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }),
+    });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
 
     const result = await checkForUpdate({ force: true });
-    expect(result).toMatchObject({ updateAvailable: true, updated: false, installDeferred: true, to: '1.1.0' });
+    expect(result).toMatchObject({
+      updateAvailable: true,
+      updated: false,
+      installDeferred: true,
+      to: '1.1.0',
+    });
     expect(mockedExecSync).not.toHaveBeenCalled();
-    expect(JSON.parse(readFileSync(join(dataDir, 'runtime', 'update-state.json'), 'utf8')).latestVersion).toBe('1.1.0');
+    expect(
+      JSON.parse(readFileSync(join(dataDir, 'runtime', 'update-state.json'), 'utf8')).latestVersion,
+    ).toBe('1.1.0');
   });
 
   it('manual force check bypasses the throttle window', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir();
-    writeFileSync(join(dataDir, 'runtime', 'update-state.json'), JSON.stringify({ lastCheck: new Date().toISOString(), installedVersion: '1.0.0', updateAvailable: false }, null, 2));
-    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }) });
+    writeFileSync(
+      join(dataDir, 'runtime', 'update-state.json'),
+      JSON.stringify(
+        { lastCheck: new Date().toISOString(), installedVersion: '1.0.0', updateAvailable: false },
+        null,
+        2,
+      ),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }),
+    });
     const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
 
     expect(await checkForUpdate()).toBeNull();
@@ -167,23 +209,26 @@ describe('hook update lifecycle', () => {
   // ~/.local/bin/claude-mem-lite → cli.mjs symlink target loses its +x bit
   // after every auto-update, dying with "Permission denied" on next CLI call.
   // POSIX-only: Windows has no chmod semantics, so the assertion is skipped.
-  it.skipIf(process.platform === 'win32')('staged install marks cli.mjs executable after auto-update', async () => {
-    const dataDir = makeDataDir();
-    const releaseDir = makeReleaseDir();
-    mockedExecSync.mockImplementation((cmd, opts = {}) => {
-      if (String(cmd).startsWith('npm install')) {
-        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
-      }
-      return '';
-    });
-    const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
+  it.skipIf(process.platform === 'win32')(
+    'staged install marks cli.mjs executable after auto-update',
+    async () => {
+      const dataDir = makeDataDir();
+      const releaseDir = makeReleaseDir();
+      mockedExecSync.mockImplementation((cmd, opts = {}) => {
+        if (String(cmd).startsWith('npm install')) {
+          mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+        }
+        return '';
+      });
+      const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
 
-    expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
-    const installedCli = join(dataDir, 'cli.mjs');
-    expect(existsSync(installedCli)).toBe(true);
-    // Any of owner/group/other execute bits proves chmod ran (POSIX mode mask)
-    expect(statSync(installedCli).mode & 0o111).not.toBe(0);
-  });
+      expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
+      const installedCli = join(dataDir, 'cli.mjs');
+      expect(existsSync(installedCli)).toBe(true);
+      // Any of owner/group/other execute bits proves chmod ran (POSIX mode mask)
+      expect(statSync(installedCli).mode & 0o111).not.toBe(0);
+    },
+  );
 
   it('staged install restores prior files when npm install fails', async () => {
     const dataDir = makeDataDir();
@@ -197,14 +242,17 @@ describe('hook update lifecycle', () => {
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
     expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toContain('old hook');
     expect(existsSync(join(dataDir, 'node_modules', 'old.txt'))).toBe(true);
-    expect(readdirSync(dataDir).filter(name => name.startsWith('.update-'))).toHaveLength(0);
+    expect(readdirSync(dataDir).filter((name) => name.startsWith('.update-'))).toHaveLength(0);
   });
 
   it('MED-5: rolls back when the post-install smoke fails (broken install not kept)', async () => {
     const dataDir = makeDataDir();
     const releaseDir = makeReleaseDir();
     mockedExecSync.mockImplementation((cmd, opts = {}) => {
-      if (String(cmd).startsWith('npm install')) { mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true }); return ''; }
+      if (String(cmd).startsWith('npm install')) {
+        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+        return '';
+      }
       // The post-install smoke (node cli.mjs help / node --check) fails → the swapped
       // code does not boot, so the install must be reverted to the prior version.
       if (String(cmd).includes('cli.mjs') || String(cmd).includes('--check')) {
@@ -217,7 +265,7 @@ describe('hook update lifecycle', () => {
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
     // Old version restored, the broken new version reverted, no leftover staging/backup dirs.
     expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toContain('old hook');
-    expect(readdirSync(dataDir).filter(name => name.startsWith('.update-'))).toHaveLength(0);
+    expect(readdirSync(dataDir).filter((name) => name.startsWith('.update-'))).toHaveLength(0);
   });
 
   // D#8 regression: `cli.mjs help` exits without opening the DB, so the smoke
@@ -229,23 +277,27 @@ describe('hook update lifecycle', () => {
   describe('post-install smoke: native binding probe', () => {
     // npm install lays down node_modules/better-sqlite3 in staging so the
     // switched-in tree triggers the probe branch.
-    const installWithBinding = (extra) => (cmd, opts = {}) => {
-      const c = String(cmd);
-      if (c.startsWith('npm install')) {
-        mkdirSync(join(opts.cwd, 'node_modules', 'better-sqlite3'), { recursive: true });
-        return '';
-      }
-      return extra(c);
-    };
+    const installWithBinding =
+      (extra) =>
+      (cmd, opts = {}) => {
+        const c = String(cmd);
+        if (c.startsWith('npm install')) {
+          mkdirSync(join(opts.cwd, 'node_modules', 'better-sqlite3'), { recursive: true });
+          return '';
+        }
+        return extra(c);
+      };
 
     it('probes the binding after the swap and passes a healthy install', async () => {
       const dataDir = makeDataDir();
       const releaseDir = makeReleaseDir();
       let probes = 0;
-      mockedExecSync.mockImplementation(installWithBinding((c) => {
-        if (c.includes('createRequire')) probes++;
-        return '';
-      }));
+      mockedExecSync.mockImplementation(
+        installWithBinding((c) => {
+          if (c.includes('createRequire')) probes++;
+          return '';
+        }),
+      );
       const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
 
       expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
@@ -257,15 +309,20 @@ describe('hook update lifecycle', () => {
       const releaseDir = makeReleaseDir();
       let probes = 0;
       const rebuilds = [];
-      mockedExecSync.mockImplementation(installWithBinding((c) => {
-        if (c.includes('createRequire')) {
-          probes++;
-          if (probes === 1) throw new Error('Could not locate the bindings file');
+      mockedExecSync.mockImplementation(
+        installWithBinding((c) => {
+          if (c.includes('createRequire')) {
+            probes++;
+            if (probes === 1) throw new Error('Could not locate the bindings file');
+            return '';
+          }
+          if (c.startsWith('npm rebuild')) {
+            rebuilds.push(c);
+            return '';
+          }
           return '';
-        }
-        if (c.startsWith('npm rebuild')) { rebuilds.push(c); return ''; }
-        return '';
-      }));
+        }),
+      );
       const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
 
       expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
@@ -276,16 +333,18 @@ describe('hook update lifecycle', () => {
     it('rolls back when the binding stays broken after rebuild', async () => {
       const dataDir = makeDataDir();
       const releaseDir = makeReleaseDir();
-      mockedExecSync.mockImplementation(installWithBinding((c) => {
-        if (c.includes('createRequire')) throw new Error('Could not locate the bindings file');
-        if (c.startsWith('npm rebuild')) return '';
-        return '';
-      }));
+      mockedExecSync.mockImplementation(
+        installWithBinding((c) => {
+          if (c.includes('createRequire')) throw new Error('Could not locate the bindings file');
+          if (c.startsWith('npm rebuild')) return '';
+          return '';
+        }),
+      );
       const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
 
       expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
       expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toContain('old hook');
-      expect(readdirSync(dataDir).filter(name => name.startsWith('.update-'))).toHaveLength(0);
+      expect(readdirSync(dataDir).filter((name) => name.startsWith('.update-'))).toHaveLength(0);
     });
   });
 
@@ -316,7 +375,13 @@ describe('hook update lifecycle', () => {
 
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
     // All five curated hook scripts land
-    for (const name of ['post-tool-use.sh', 'user-prompt-search.js', 'prompt-search-utils.mjs', 'pre-tool-recall.js', 'pre-skill-bridge.js']) {
+    for (const name of [
+      'post-tool-use.sh',
+      'user-prompt-search.js',
+      'prompt-search-utils.mjs',
+      'pre-tool-recall.js',
+      'pre-skill-bridge.js',
+    ]) {
       expect(existsSync(join(dataDir, 'scripts', name))).toBe(true);
     }
     // Dev-only file + nested helper subdir do not land
@@ -395,8 +460,8 @@ describe('hook update lifecycle', () => {
 // (homedir), STATE_DIR = DB_DIR (data).
 describe('code/data dir separation under relocation (D#27)', () => {
   it('getCurrentVersion reads the homedir code dir, not the relocated CLAUDE_MEM_DIR data dir', async () => {
-    const { home } = makeCodeHome('2.0.0');          // real code install → 2.0.0
-    const dataDir = makeDataDir('1.0.0');            // relocated data dir holds a 1.0.0 decoy package.json
+    const { home } = makeCodeHome('2.0.0'); // real code install → 2.0.0
+    const dataDir = makeDataDir('1.0.0'); // relocated data dir holds a 1.0.0 decoy package.json
     const { getCurrentVersion } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     // Pre-fix INSTALL_DIR = DB_DIR = dataDir → would read the 1.0.0 decoy.
     expect(getCurrentVersion()).toBe('2.0.0');
@@ -408,7 +473,7 @@ describe('code/data dir separation under relocation (D#27)', () => {
   // reads the running plugin-cache version from CLAUDE_PLUGIN_ROOT.
   it('getCurrentVersion reads CLAUDE_PLUGIN_ROOT package.json in plugin mode when the code dir has none', async () => {
     const home = makeDir('mem-update-home');
-    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });  // state only, no package.json
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true }); // state only, no package.json
     const pluginRoot = makeDir('mem-plugin-root');
     writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '3.84.0' }, null, 2));
     const { getCurrentVersion } = await loadModule({ HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot });
@@ -424,7 +489,7 @@ describe('code/data dir separation under relocation (D#27)', () => {
   // too. A hybrid install (managed code dir + plugin cache) legitimately carries two
   // different versions — reading the cache's would judge one tree by the other's.
   it('getCurrentVersion prefers the code dir over CLAUDE_PLUGIN_ROOT when BOTH carry a package.json', async () => {
-    const { home } = makeCodeHome('3.70.0');           // managed code install, lagging
+    const { home } = makeCodeHome('3.70.0'); // managed code install, lagging
     const pluginRoot = makeDir('mem-plugin-root');
     writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '3.84.0' }, null, 2));
     const { getCurrentVersion } = await loadModule({ HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot });
@@ -469,11 +534,13 @@ describe('code/data dir separation under relocation (D#27)', () => {
     const pluginRoot = makeDir('mem-plugin-root');
     writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '3.84.0' }, null, 2));
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
+      ok: true,
+      status: 200,
       json: async () => ({ tag_name: 'v3.84.0', tarball_url: 'https://example.com/release.tgz' }),
     });
     const { checkForUpdate, getCachedUpdateBanner } = await loadModule({
-      CLAUDE_PLUGIN_ROOT: pluginRoot, HOME: home,
+      CLAUDE_PLUGIN_ROOT: pluginRoot,
+      HOME: home,
     });
 
     expect(await checkForUpdate({ force: true })).toBeNull();
@@ -486,25 +553,34 @@ describe('code/data dir separation under relocation (D#27)', () => {
     const { home, codeDir } = makeCodeHome('1.0.0');
     writeFileSync(join(codeDir, 'hook.mjs'), '// old hook');
     mkdirSync(join(codeDir, 'node_modules'), { recursive: true });
-    const dataDir = makeDataDir('1.0.0');            // data dir keeps its own hook.mjs that must stay untouched
+    const dataDir = makeDataDir('1.0.0'); // data dir keeps its own hook.mjs that must stay untouched
     const releaseDir = makeReleaseDir('1.1.0');
     mockedExecSync.mockImplementation((cmd, opts = {}) => {
-      if (String(cmd).startsWith('npm install')) mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+      if (String(cmd).startsWith('npm install'))
+        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
       return '';
     });
     const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
 
     // No explicit targetDir → must default to the code dir, not the relocated data dir.
     expect(await installExtractedRelease(releaseDir)).toBe(true);
-    expect(readFileSync(join(codeDir, 'hook.mjs'), 'utf8')).toContain('new hook');   // code dir updated
-    expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toContain('old hook');   // data dir untouched
+    expect(readFileSync(join(codeDir, 'hook.mjs'), 'utf8')).toContain('new hook'); // code dir updated
+    expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toContain('old hook'); // data dir untouched
   });
 
   it('update state still lands in the CLAUDE_MEM_DIR data dir, not the code dir', async () => {
     const { home, codeDir } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
-    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }) });
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ tag_name: 'v1.1.0', tarball_url: 'https://example.com/release.tgz' }),
+    });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
 
     await checkForUpdate({ force: true });
     // State path mirrors hook-shared RUNTIME_DIR (= DB_DIR/runtime) and install.mjs
@@ -523,7 +599,11 @@ describe('rate-limit handling + malformed-response robustness', () => {
     // GitHub 403 → fetchWithTimeout writes rateLimited:true; the !latest branch must not
     // clobber it back to false with a stale in-memory snapshot.
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
 
     const result = await checkForUpdate({ force: true });
     expect(result).toBeNull();
@@ -535,10 +615,15 @@ describe('rate-limit handling + malformed-response robustness', () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
     // 1st call (releases/latest): 200 OK but malformed body {}. 2nd call (tags): valid.
-    globalThis.fetch = vi.fn()
+    globalThis.fetch = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ name: 'v1.1.0' }]) });
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [{ name: 'v1.1.0' }] });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
 
     const result = await checkForUpdate({ force: true });
     expect(result).toMatchObject({ updateAvailable: true, to: '1.1.0' });
@@ -562,11 +647,19 @@ describe('cache hook residue clearing', () => {
       writeFileSync(launcher, '// installed launcher\n');
     }
     mkdirSync(join(home, '.claude'), { recursive: true });
-    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-      hooks: {
-        SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${launcher}" hook.mjs session-start` }] }],
-      },
-    }));
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              matcher: '*',
+              hooks: [{ type: 'command', command: `node "${launcher}" hook.mjs session-start` }],
+            },
+          ],
+        },
+      }),
+    );
   }
 
   it('clears populated hooks.json in every remaining cache version', async () => {
@@ -574,13 +667,20 @@ describe('cache hook residue clearing', () => {
     const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
     for (const v of ['2.28.0', '2.31.0']) {
       mkdirSync(join(cacheBase, v, 'hooks'), { recursive: true });
-      writeFileSync(join(cacheBase, v, 'hooks', 'hooks.json'), JSON.stringify({
-        description: 'original', hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
-      }));
+      writeFileSync(
+        join(cacheBase, v, 'hooks', 'hooks.json'),
+        JSON.stringify({
+          description: 'original',
+          hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+        }),
+      );
     }
     // A third version with already-empty hooks.json should be untouched.
     mkdirSync(join(cacheBase, '2.30.0', 'hooks'), { recursive: true });
-    writeFileSync(join(cacheBase, '2.30.0', 'hooks', 'hooks.json'), JSON.stringify({ description: 'empty', hooks: {} }));
+    writeFileSync(
+      join(cacheBase, '2.30.0', 'hooks', 'hooks.json'),
+      JSON.stringify({ description: 'empty', hooks: {} }),
+    );
     writeManagedHooks(home);
 
     const origHome = process.env.HOME;
@@ -633,9 +733,19 @@ describe('cache hook residue clearing', () => {
     // Control: a settings.json that exists but registers only ANOTHER plugin's hooks
     // must not count as install.mjs-managed ownership of ours.
     mkdirSync(join(home, '.claude'), { recursive: true });
-    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-      hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'node /somewhere/other-plugin/hook.js' }] }] },
-    }));
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Edit',
+              hooks: [{ type: 'command', command: 'node /somewhere/other-plugin/hook.js' }],
+            },
+          ],
+        },
+      }),
+    );
 
     const origHome = process.env.HOME;
     process.env.HOME = home;
@@ -722,7 +832,12 @@ describe('plugin cache pruning', () => {
 });
 
 describe('validateExtractedTarball', () => {
-  function makeTarballDir({ name = 'claude-mem-lite', version = '2.57.0', entries = ['cli.mjs', 'server.mjs', 'hook.mjs'], skipPkg = false } = {}) {
+  function makeTarballDir({
+    name = 'claude-mem-lite',
+    version = '2.57.0',
+    entries = ['cli.mjs', 'server.mjs', 'hook.mjs'],
+    skipPkg = false,
+  } = {}) {
     const dir = makeDir('mem-tarball-validate');
     if (!skipPkg) {
       writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }));
@@ -819,7 +934,7 @@ describe('D#187: plugin-only install detected without CLAUDE_PLUGIN_ROOT', () =>
     const { home, version } = makePluginOnlyHome('3.9.0');
     const dataDir = makeDataDir('1.0.0');
     const { getCurrentVersion } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
-    expect(process.env.CLAUDE_PLUGIN_ROOT).toBeUndefined();  // the condition under test
+    expect(process.env.CLAUDE_PLUGIN_ROOT).toBeUndefined(); // the condition under test
     expect(getCurrentVersion()).toBe(version);
   });
 
@@ -827,12 +942,19 @@ describe('D#187: plugin-only install detected without CLAUDE_PLUGIN_ROOT', () =>
     const { home } = makePluginOnlyHome('3.9.0');
     const dataDir = makeDataDir('1.0.0');
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
+      ok: true,
+      status: 200,
       json: async () => ({ tag_name: 'v9.9.9', tarball_url: 'https://example.invalid/t.tar.gz', assets: [] }),
     });
     const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     const result = await checkForUpdate({ force: true });
-    expect(result).toMatchObject({ pluginMode: true, installDeferred: true, updated: false, from: '3.9.0', to: '9.9.9' });
+    expect(result).toMatchObject({
+      pluginMode: true,
+      installDeferred: true,
+      updated: false,
+      from: '3.9.0',
+      to: '9.9.9',
+    });
     // the conversion-to-hybrid this defect caused, asserted directly
     expect(existsSync(join(home, '.claude-mem-lite', 'hook.mjs'))).toBe(false);
     expect(existsSync(join(home, '.claude-mem-lite', 'server.mjs'))).toBe(false);
@@ -851,7 +973,8 @@ describe('D#187: plugin-only install detected without CLAUDE_PLUGIN_ROOT', () =>
     writeFileSync(join(codeDir, 'hook.mjs'), '// code hook');
     const dataDir = makeDataDir('1.0.0');
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
+      ok: true,
+      status: 200,
       json: async () => ({ tag_name: 'v9.9.9', tarball_url: 'https://example.invalid/t.tar.gz', assets: [] }),
     });
     const { checkForUpdate, getCurrentVersion } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
@@ -872,8 +995,8 @@ describe('isRepairDowngrade (P3-3: signed-release rollback guard)', () => {
 
   it('allows same-or-newer releases (legitimate repair / self-heal)', async () => {
     const { isRepairDowngrade } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
-    expect(isRepairDowngrade('3.43.0', '3.43.0')).toBe(false);   // re-sync same version
-    expect(isRepairDowngrade('3.44.0', '3.43.0')).toBe(false);   // forward
+    expect(isRepairDowngrade('3.43.0', '3.43.0')).toBe(false); // re-sync same version
+    expect(isRepairDowngrade('3.44.0', '3.43.0')).toBe(false); // forward
   });
 
   it('allows through when the local version is unknown (broken install still needs repair)', async () => {
@@ -892,9 +1015,18 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
   it('getCachedUpdateBanner returns the available banner from cached state — no network', async () => {
     const { home } = makeCodeHome('1.0.0'); // non-symlink server.mjs → isDevMode() false
     const dataDir = makeDataDir('1.0.0');
-    seedState(dataDir, { lastCheck: new Date().toISOString(), installedVersion: '1.0.0', latestVersion: '1.2.0', updateAvailable: true });
+    seedState(dataDir, {
+      lastCheck: new Date().toISOString(),
+      installedVersion: '1.0.0',
+      latestVersion: '1.2.0',
+      updateAvailable: true,
+    });
     globalThis.fetch = vi.fn(); // must NOT be called
-    const { getCachedUpdateBanner } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    const { getCachedUpdateBanner } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
     const banner = getCachedUpdateBanner();
     expect(banner).toContain('v1.2.0 available');
     expect(banner).toContain('current: v1.0.0');
@@ -905,7 +1037,11 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
   it('getCachedUpdateBanner returns null when no update is cached', async () => {
     const { home } = makeCodeHome('1.0.0'); // non-symlink server.mjs → isDevMode() false
     const dataDir = makeDataDir('1.0.0');
-    seedState(dataDir, { lastCheck: new Date().toISOString(), installedVersion: '1.0.0', updateAvailable: false });
+    seedState(dataDir, {
+      lastCheck: new Date().toISOString(),
+      installedVersion: '1.0.0',
+      updateAvailable: false,
+    });
     const { getCachedUpdateBanner } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     expect(getCachedUpdateBanner()).toBeNull();
   });
@@ -915,7 +1051,11 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
     const dataDir = makeDataDir('1.0.0');
     const { isUpdateCheckDue } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     expect(isUpdateCheckDue()).toBe(true); // no state file → never checked
-    seedState(dataDir, { lastCheck: new Date().toISOString(), installedVersion: '1.0.0', updateAvailable: false });
+    seedState(dataDir, {
+      lastCheck: new Date().toISOString(),
+      installedVersion: '1.0.0',
+      updateAvailable: false,
+    });
     const { isUpdateCheckDue: due2 } = await loadModule({ CLAUDE_MEM_DIR: dataDir, HOME: home });
     expect(due2()).toBe(false); // just checked → throttled
   });
@@ -932,12 +1072,18 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
     seedState(dataDir, {
-      lastCheck: new Date().toISOString(),   // inside the 24h window → shouldCheck false
-      installedVersion: '1.0.0', latestVersion: '1.2.0', updateAvailable: true,
+      lastCheck: new Date().toISOString(), // inside the 24h window → shouldCheck false
+      installedVersion: '1.0.0',
+      latestVersion: '1.2.0',
+      updateAvailable: true,
     });
     globalThis.fetch = vi.fn();
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
-    const result = await checkForUpdate();   // NOT force — the throttled path
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+    const result = await checkForUpdate(); // NOT force — the throttled path
     expect(result).toMatchObject({ updateAvailable: true, updated: false, from: '1.0.0', to: '1.2.0' });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -947,10 +1093,16 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
     const dataDir = makeDataDir('1.0.0');
     seedState(dataDir, {
       lastCheck: new Date().toISOString(),
-      installedVersion: '1.0.0', latestVersion: '1.2.0', updateAvailable: false,
+      installedVersion: '1.0.0',
+      latestVersion: '1.2.0',
+      updateAvailable: false,
     });
     globalThis.fetch = vi.fn();
-    const { checkForUpdate } = await loadModule({ CLAUDE_MEM_DIR: dataDir, CLAUDE_PLUGIN_ROOT: '/plugin/root', HOME: home });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
     expect(await checkForUpdate()).toBeNull();
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -1023,7 +1175,9 @@ describe('syncDataDirFromCache (plugin-cache → data-dir code sync)', () => {
     makeCacheVersion(home, '2.0.0');
     const { syncDataDirFromCache } = await loadModule({ HOME: home });
     await syncDataDirFromCache();
-    expect(readFileSync(join(codeDir, 'node_modules', 'better-sqlite3', 'index.js'), 'utf8')).toContain('abi-correct');
+    expect(readFileSync(join(codeDir, 'node_modules', 'better-sqlite3', 'index.js'), 'utf8')).toContain(
+      'abi-correct',
+    );
   });
 
   it('no-ops when the data-dir is already at or ahead of the cache version', async () => {
@@ -1032,7 +1186,12 @@ describe('syncDataDirFromCache (plugin-cache → data-dir code sync)', () => {
     makeCacheVersion(home, '2.0.0');
     const { syncDataDirFromCache } = await loadModule({ HOME: home });
     const result = await syncDataDirFromCache();
-    expect(result).toMatchObject({ synced: false, reason: 'data-dir-current', sourceVersion: '2.0.0', dataVersion: '2.0.0' });
+    expect(result).toMatchObject({
+      synced: false,
+      reason: 'data-dir-current',
+      sourceVersion: '2.0.0',
+      dataVersion: '2.0.0',
+    });
     // cli.mjs was never written by the no-op (makeCodeHome doesn't create it)
     expect(existsSync(join(codeDir, 'cli.mjs'))).toBe(false);
   });
@@ -1041,7 +1200,7 @@ describe('syncDataDirFromCache (plugin-cache → data-dir code sync)', () => {
     const { home, codeDir } = makeCodeHome('1.0.0');
     seedBinding(codeDir);
     makeCacheVersion(home, '2.0.0');
-    makeCacheVersion(home, '2.10.0');   // semver, not lexicographic — must win over 2.0.0/2.9.0
+    makeCacheVersion(home, '2.10.0'); // semver, not lexicographic — must win over 2.0.0/2.9.0
     makeCacheVersion(home, '2.9.0');
     const { syncDataDirFromCache } = await loadModule({ HOME: home });
     const result = await syncDataDirFromCache();
@@ -1058,7 +1217,10 @@ describe('syncDataDirFromCache (plugin-cache → data-dir code sync)', () => {
   it('skips a cache version whose package.json name is not claude-mem-lite', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dir = makeCacheVersion(home, '2.0.0');
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'evil-squatter', version: '2.0.0' }, null, 2));
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'evil-squatter', version: '2.0.0' }, null, 2),
+    );
     const { syncDataDirFromCache } = await loadModule({ HOME: home });
     // Only that one (invalid) version exists → no valid version to sync from
     expect(await syncDataDirFromCache()).toMatchObject({ synced: false, reason: 'no-valid-cache-version' });
@@ -1125,7 +1287,10 @@ describe('syncDataDirFromCache (plugin-cache → data-dir code sync)', () => {
     const { home, codeDir } = makeCodeHome('1.0.0');
     const { syncDataDirFromCache } = await loadModule({ HOME: home });
     // sourceDir === targetDir → self-sync guard fires before any version compare
-    expect(await syncDataDirFromCache({ sourceDir: codeDir })).toMatchObject({ synced: false, reason: 'source-is-target' });
+    expect(await syncDataDirFromCache({ sourceDir: codeDir })).toMatchObject({
+      synced: false,
+      reason: 'source-is-target',
+    });
   });
 
   it('honors an explicit sourceDir (launch.mjs passes the running ROOT)', async () => {
@@ -1170,7 +1335,12 @@ describe('release signature verification (P1 supply-chain)', () => {
     const { verifyDownloadedRelease } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
     const { dir, bytes, sig } = makeSignedRelease();
     const { publicKey: otherPub } = generateKeyPairSync('ed25519');
-    const r = verifyDownloadedRelease(dir, bytes, sig, otherPub.export({ type: 'spki', format: 'pem' }).toString());
+    const r = verifyDownloadedRelease(
+      dir,
+      bytes,
+      sig,
+      otherPub.export({ type: 'spki', format: 'pem' }).toString(),
+    );
     expect(r).toMatchObject({ ok: false, reason: 'signature-invalid' });
   });
 
@@ -1179,9 +1349,17 @@ describe('release signature verification (P1 supply-chain)', () => {
     // A real RELEASE_PUBLIC_KEY is now embedded → the default regime VERIFIES.
     // A release carrying a manifest but NO .sig asset is refused (downgrade/strip
     // protection), short-circuiting before any network fetch.
-    const assets = [{ name: 'release-manifest.json', browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json' }];
+    const assets = [
+      {
+        name: 'release-manifest.json',
+        browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json',
+      },
+    ];
     globalThis.fetch = vi.fn(); // must NOT be called — missing sig asset short-circuits
-    expect(await verifyReleaseAuthenticity('/nonexistent', assets)).toMatchObject({ ok: false, action: 'missing-signature' });
+    expect(await verifyReleaseAuthenticity('/nonexistent', assets)).toMatchObject({
+      ok: false,
+      action: 'missing-signature',
+    });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
@@ -1192,14 +1370,20 @@ describe('release signature verification (P1 supply-chain)', () => {
     // both parses and correctly refuses a non-matching signature (guards a corrupt paste).
     const { verifyDownloadedRelease } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
     const { dir, bytes, sig } = makeSignedRelease(); // signed by makeSignedRelease's own key, not the embedded one
-    expect(verifyDownloadedRelease(dir, bytes, sig)).toMatchObject({ ok: false, reason: 'signature-invalid' });
+    expect(verifyDownloadedRelease(dir, bytes, sig)).toMatchObject({
+      ok: false,
+      reason: 'signature-invalid',
+    });
   });
 
   it('verifyReleaseAuthenticity honors the CLAUDE_MEM_SKIP_SIG_VERIFY escape hatch', async () => {
     const mod = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
     process.env.CLAUDE_MEM_SKIP_SIG_VERIFY = '1';
     try {
-      expect(await mod.verifyReleaseAuthenticity('/nonexistent', [])).toMatchObject({ ok: true, action: 'skipped-env' });
+      expect(await mod.verifyReleaseAuthenticity('/nonexistent', [])).toMatchObject({
+        ok: true,
+        action: 'skipped-env',
+      });
     } finally {
       delete process.env.CLAUDE_MEM_SKIP_SIG_VERIFY;
     }
@@ -1230,11 +1414,18 @@ describe('release signature verification (P1 supply-chain)', () => {
     const { verifyReleaseAuthenticity } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
     const { dir, pub, bytes, sig } = makeSignedRelease();
     const assets = [
-      { name: 'release-manifest.json', browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json' },
-      { name: 'release-manifest.json.sig', browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json.sig' },
+      {
+        name: 'release-manifest.json',
+        browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json',
+      },
+      {
+        name: 'release-manifest.json.sig',
+        browser_download_url: 'https://github.com/x/y/releases/download/v1/release-manifest.json.sig',
+      },
     ];
     globalThis.fetch = vi.fn(async (url) => ({
-      ok: true, status: 200,
+      ok: true,
+      status: 200,
       arrayBuffer: async () => (String(url).endsWith('.sig') ? Buffer.from(sig) : Buffer.from(bytes)),
     }));
     const r = await verifyReleaseAuthenticity(dir, assets, pub);
@@ -1247,7 +1438,6 @@ describe('release signature verification (P1 supply-chain)', () => {
     expect(r).toMatchObject({ ok: true, action: 'skipped-no-pubkey' });
   });
 });
-
 
 // A hard kill (SIGKILL / power loss) inside the rename loop leaves the install
 // half-swapped: the try/catch rollback and the MED-5 smoke gate only run on paths
@@ -1266,9 +1456,13 @@ describe('interrupted-swap recovery (audit P2-5)', () => {
     mkdirSync(join(backupDir, 'lib'), { recursive: true });
     writeFileSync(join(backupDir, 'hook.mjs'), '// OLD hook');
     writeFileSync(join(backupDir, 'lib', 'late.mjs'), '// OLD late');
-    writeFileSync(join(backupDir, '.swap-journal.json'), JSON.stringify({
-      backedUp: ['hook.mjs', 'lib/late.mjs'], installed: ['hook.mjs'],
-    }));
+    writeFileSync(
+      join(backupDir, '.swap-journal.json'),
+      JSON.stringify({
+        backedUp: ['hook.mjs', 'lib/late.mjs'],
+        installed: ['hook.mjs'],
+      }),
+    );
 
     expect(recoverInterruptedSwaps(target)).toBe(1);
 
@@ -1285,10 +1479,10 @@ describe('interrupted-swap recovery (audit P2-5)', () => {
     mkdirSync(staging, { recursive: true });
     writeFileSync(join(staging, 'hook.mjs'), '// staged');
 
-    expect(recoverInterruptedSwaps(target)).toBe(0);   // staging alone is not a torn swap
+    expect(recoverInterruptedSwaps(target)).toBe(0); // staging alone is not a torn swap
     expect(existsSync(staging)).toBe(false);
     expect(readFileSync(join(target, 'hook.mjs'), 'utf8')).toBe('// current');
-    expect(recoverInterruptedSwaps(target)).toBe(0);   // idempotent
+    expect(recoverInterruptedSwaps(target)).toBe(0); // idempotent
   });
 
   it('tolerates a backup dir with no journal (killed before the first rename)', async () => {

@@ -46,13 +46,22 @@ beforeEach(() => {
   git('add', 'README.md');
   git('commit', '-qm', 'base');
 });
-afterEach(() => { try { rmSync(repo, { recursive: true, force: true }); } catch { /* ignore */ } });
+afterEach(() => {
+  try {
+    rmSync(repo, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+});
 
 /** Run the shipped guard against the fixture repo's index. @returns {{code:number,out:string}} */
 function runGuard(env = {}) {
   try {
     const out = execFileSync('bash', ['-c', guardSection()], {
-      cwd: repo, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, ...env },
+      cwd: repo,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: { ...process.env, ...env },
     });
     return { code: 0, out };
   } catch (e) {

@@ -8,7 +8,10 @@ import { parseDateBounds } from '../lib/search-core.mjs';
 
 describe('parseDateBounds — date-only bounds are LOCAL calendar days', () => {
   const savedTz = process.env.TZ;
-  afterEach(() => { if (savedTz === undefined) delete process.env.TZ; else process.env.TZ = savedTz; });
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
 
   it('parses date-only --from as local midnight (not UTC midnight)', () => {
     process.env.TZ = 'Asia/Shanghai'; // UTC+8

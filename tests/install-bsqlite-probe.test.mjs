@@ -29,14 +29,22 @@ const PKG_JSON = JSON.stringify(join(REPO_ROOT, 'package.json'));
 // have loaded the addon for unrelated reasons, which would make the assertion
 // vacuous.
 function loadedAfter(body) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+  const r = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
     const { probeBindingInFreshProcess, probeBetterSqlite3Binding } = await import(${PROBE_MOD});
     const result = await (${body});
     const { createRequire } = await import('node:module');
     const req = createRequire(${PKG_JSON});
     const loaded = Object.keys(req.cache).some((k) => k.includes('better_sqlite3.node'));
     console.log(JSON.stringify({ ok: result.ok, loaded }));
-  `], { encoding: 'utf8', timeout: 60_000 });
+  `,
+    ],
+    { encoding: 'utf8', timeout: 60_000 },
+  );
   return JSON.parse(r.stdout.trim());
 }
 
@@ -65,23 +73,28 @@ describe('Bug 3: better-sqlite3 binding probe', () => {
 // so the invariant is asserted structurally instead.
 describe('native binding probe must not dlopen into the calling process', () => {
   it('probeBindingInFreshProcess verifies the binding without loading it here', () => {
-    expect(loadedAfter(`probeBindingInFreshProcess(${JSON.stringify(REPO_ROOT)})`))
-      .toEqual({ ok: true, loaded: false });
+    expect(loadedAfter(`probeBindingInFreshProcess(${JSON.stringify(REPO_ROOT)})`)).toEqual({
+      ok: true,
+      loaded: false,
+    });
   });
 
   // Control: proves the assertion above is not vacuously true. The in-process
   // variant DOES load the addon — that is exactly why it is unfit for the
   // probe→rebuild→verify cycle.
   it('probeBetterSqlite3Binding (in-process variant) does load it — control', () => {
-    expect(loadedAfter(`probeBetterSqlite3Binding(${JSON.stringify(REPO_ROOT)})`))
-      .toEqual({ ok: true, loaded: true });
+    expect(loadedAfter(`probeBetterSqlite3Binding(${JSON.stringify(REPO_ROOT)})`)).toEqual({
+      ok: true,
+      loaded: true,
+    });
   });
 
   it('ensureBetterSqlite3Working leaves the caller clean on the healthy path', () => {
     // scripts/launch.mjs imports the MCP server into this same process right
     // after this call returns.
-    expect(loadedAfter(`(await import(${PROBE_MOD})).ensureBetterSqlite3Working(${JSON.stringify(REPO_ROOT)})`))
-      .toEqual({ ok: true, loaded: false });
+    expect(
+      loadedAfter(`(await import(${PROBE_MOD})).ensureBetterSqlite3Working(${JSON.stringify(REPO_ROOT)})`),
+    ).toEqual({ ok: true, loaded: false });
   });
 
   it('reports a real error string for a directory with no binding', () => {
@@ -100,11 +113,12 @@ describe('native binding probe must not dlopen into the calling process', () => 
 // without truncating the shell command.
 describe('scripts/binding-probe-cli.mjs — the SessionStart probe entry point', () => {
   const CLI = join(REPO_ROOT, 'scripts', 'binding-probe-cli.mjs');
-  const run = (root) => spawnSync(process.execPath, [CLI], {
-    env: { ...process.env, PROBE_ROOT: root },
-    encoding: 'utf8',
-    timeout: 60_000,
-  });
+  const run = (root) =>
+    spawnSync(process.execPath, [CLI], {
+      env: { ...process.env, PROBE_ROOT: root },
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
 
   it('exits 0 on a healthy tree', () => {
     const r = run(REPO_ROOT);
@@ -141,9 +155,17 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
   it('uses the injected verify (not probe) for the POST-rebuild check', async () => {
     const seen = [];
     const result = await ensureBetterSqlite3Working('/some/dir', {
-      probe: async () => { seen.push('probe'); return { ok: false, error: 'stale abi' }; },
-      verify: async () => { seen.push('verify'); return { ok: true }; },
-      rebuild: async () => { seen.push('rebuild'); },
+      probe: async () => {
+        seen.push('probe');
+        return { ok: false, error: 'stale abi' };
+      },
+      verify: async () => {
+        seen.push('verify');
+        return { ok: true };
+      },
+      rebuild: async () => {
+        seen.push('rebuild');
+      },
     });
     expect(result).toEqual({ ok: true, action: 'rebuilt' });
     expect(seen).toEqual(['probe', 'rebuild', 'verify']);
@@ -153,7 +175,10 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
     // Back-compat: every pre-existing caller/test injects `probe` alone.
     let n = 0;
     const result = await ensureBetterSqlite3Working('/some/dir', {
-      probe: async () => { n++; return n === 1 ? { ok: false, error: 'x' } : { ok: true }; },
+      probe: async () => {
+        n++;
+        return n === 1 ? { ok: false, error: 'x' } : { ok: true };
+      },
       rebuild: async () => {},
     });
     expect(result).toEqual({ ok: true, action: 'rebuilt' });
@@ -163,8 +188,13 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
   it('returns {ok:true, action:"verified"} and skips rebuild when first probe passes', async () => {
     const calls = { probe: 0, rebuild: 0 };
     const result = await ensureBetterSqlite3Working('/some/dir', {
-      probe: async () => { calls.probe++; return { ok: true }; },
-      rebuild: async () => { calls.rebuild++; },
+      probe: async () => {
+        calls.probe++;
+        return { ok: true };
+      },
+      rebuild: async () => {
+        calls.rebuild++;
+      },
     });
     expect(result).toEqual({ ok: true, action: 'verified' });
     expect(calls.probe).toBe(1);
@@ -179,7 +209,9 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
         probeCount++;
         return probeCount === 1 ? { ok: false, error: 'bindings missing' } : { ok: true };
       },
-      rebuild: async () => { calls.rebuild++; },
+      rebuild: async () => {
+        calls.rebuild++;
+      },
     });
     expect(result).toEqual({ ok: true, action: 'rebuilt' });
     expect(probeCount).toBe(2);
@@ -189,7 +221,9 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
   it('returns {ok:false, error} when rebuild does not fix the binding', async () => {
     const result = await ensureBetterSqlite3Working('/some/dir', {
       probe: async () => ({ ok: false, error: 'bindings still missing' }),
-      rebuild: async () => { /* noop */ },
+      rebuild: async () => {
+        /* noop */
+      },
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('bindings still missing');
@@ -198,7 +232,9 @@ describe('Bug 3: ensureBetterSqlite3Working — probe → rebuild → re-probe',
   it('reports rebuild error when the rebuild step itself throws', async () => {
     const result = await ensureBetterSqlite3Working('/some/dir', {
       probe: async () => ({ ok: false, error: 'first probe fail' }),
-      rebuild: async () => { throw new Error('npm rebuild crashed'); },
+      rebuild: async () => {
+        throw new Error('npm rebuild crashed');
+      },
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('npm rebuild crashed');
@@ -215,8 +251,13 @@ describe('Bug: npm 12 allow-scripts block defeats the self-heal rebuild', () => 
     const cmds = [];
     let probeCount = 0;
     const result = await ensureBetterSqlite3Working('/some/dir', {
-      probe: async () => { probeCount++; return probeCount === 1 ? { ok: false, error: 'bindings missing' } : { ok: true }; },
-      exec: (cmd) => { cmds.push(cmd); }, // capture; simulate a successful build
+      probe: async () => {
+        probeCount++;
+        return probeCount === 1 ? { ok: false, error: 'bindings missing' } : { ok: true };
+      },
+      exec: (cmd) => {
+        cmds.push(cmd);
+      }, // capture; simulate a successful build
     });
     expect(result).toEqual({ ok: true, action: 'rebuilt' });
     expect(cmds).toHaveLength(1);
@@ -228,8 +269,14 @@ describe('Bug: npm 12 allow-scripts block defeats the self-heal rebuild', () => 
     const cmds = [];
     let probeCount = 0;
     const result = await ensureBetterSqlite3Working('/some/dir', {
-      probe: async () => { probeCount++; return probeCount === 1 ? { ok: false, error: 'x' } : { ok: true }; },
-      exec: (cmd) => { cmds.push(cmd); if (cmd.includes('--dangerously-allow-all-scripts')) throw new Error('unknown flag'); },
+      probe: async () => {
+        probeCount++;
+        return probeCount === 1 ? { ok: false, error: 'x' } : { ok: true };
+      },
+      exec: (cmd) => {
+        cmds.push(cmd);
+        if (cmd.includes('--dangerously-allow-all-scripts')) throw new Error('unknown flag');
+      },
     });
     expect(result).toEqual({ ok: true, action: 'rebuilt' });
     expect(cmds).toEqual([

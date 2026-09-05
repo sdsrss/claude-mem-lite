@@ -38,7 +38,9 @@ let privateKey;
 try {
   privateKey = createPrivateKey(keyPem);
 } catch (e) {
-  process.stderr.write(`[sign-release] FAIL: RELEASE_SIGNING_KEY is not a valid PEM private key: ${e.message}\n`);
+  process.stderr.write(
+    `[sign-release] FAIL: RELEASE_SIGNING_KEY is not a valid PEM private key: ${e.message}\n`,
+  );
   process.exit(1);
 }
 

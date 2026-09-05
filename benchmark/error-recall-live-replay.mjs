@@ -72,7 +72,9 @@ function transcriptDirs() {
     return readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => join(root, d.name));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 const textOf = (c) => {
@@ -89,22 +91,37 @@ function extractShapes() {
   // reporting refusals + empties, and the inflated number then got quoted as the
   // refusal rate in two source files.
   const stats = {
-    files: 0, bashResults: 0, failures: 0, hardErrors: 0,
+    files: 0,
+    bashResults: 0,
+    failures: 0,
+    hardErrors: 0,
     excluded: { refusal: 0, empty: 0, interrupt: 0 },
   };
   const pairs = [];
   for (const dir of transcriptDirs()) {
     let entries = [];
-    try { entries = readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    try {
+      entries = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
     for (const f of entries) {
       stats.files++;
       let lines = [];
-      try { lines = readFileSync(join(dir, f), 'utf8').split('\n'); } catch { continue; }
+      try {
+        lines = readFileSync(join(dir, f), 'utf8').split('\n');
+      } catch {
+        continue;
+      }
       const pending = new Map(); // tool_use_id -> command
       for (const line of lines) {
         if (!line.trim()) continue;
         let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
         const content = ev?.message?.content;
         if (!Array.isArray(content)) continue;
         for (const part of content) {
@@ -185,26 +202,35 @@ const termSets = new Map();
 function rowsFor(term) {
   if (termSets.has(term)) return termSets.get(term);
   let s = new Set();
-  try { s = new Set(termRowsStmt.all(quote(term)).map((r) => r.rowid)); } catch { s = new Set(); }
+  try {
+    s = new Set(termRowsStmt.all(quote(term)).map((r) => r.rowid));
+  } catch {
+    s = new Set();
+  }
   termSets.set(term, s);
   return s;
 }
 const matches = (id, term) => rowsFor(term).has(id);
 
 function assertRulerCanSayNo() {
-  const probe = db.prepare(
-    "SELECT title FROM observations WHERE title IS NOT NULL AND length(title) > 12 LIMIT 1",
-  ).get();
+  const probe = db
+    .prepare('SELECT title FROM observations WHERE title IS NOT NULL AND length(title) > 12 LIMIT 1')
+    .get();
   if (!probe) throw new Error('ruler check: corpus has no titled row to probe with');
   const word = (probe.title.match(/[a-zA-Z]{5,}/) || [])[0];
   if (!word) throw new Error('ruler check: could not derive a probe term from the corpus');
   const hits = rowsFor(word.toLowerCase());
   if (!hits.size) throw new Error(`ruler check: probe term "${word}" matches nothing`);
-  const outside = db.prepare('SELECT id FROM observations LIMIT 2000').all()
-    .map((r) => r.id).find((id) => !hits.has(id));
+  const outside = db
+    .prepare('SELECT id FROM observations LIMIT 2000')
+    .all()
+    .map((r) => r.id)
+    .find((id) => !hits.has(id));
   if (outside === undefined) throw new Error('ruler check: every row matches the probe term');
   if (matches(outside, word.toLowerCase())) {
-    throw new Error('ruler check: the membership predicate is ALWAYS-TRUE — every number below would be meaningless');
+    throw new Error(
+      'ruler check: the membership predicate is ALWAYS-TRUE — every number below would be meaningless',
+    );
   }
 }
 
@@ -218,7 +244,9 @@ function classesFor(shape) {
   const plan = planErrorRecall(shape.cmd, shape.response);
   if (!plan) return null;
   if (plan.terms.slice(0, plan.cmdWords.length).join(' ') !== plan.cmdWords.join(' ')) {
-    throw new Error(`term-class invariant broken: ${JSON.stringify(plan.terms)} / ${JSON.stringify(plan.cmdWords)}`);
+    throw new Error(
+      `term-class invariant broken: ${JSON.stringify(plan.terms)} / ${JSON.stringify(plan.cmdWords)}`,
+    );
   }
   return plan;
 }
@@ -227,7 +255,8 @@ function classesFor(shape) {
 
 function main() {
   const cached = argOf('--shapes');
-  let shapes; let stats = null;
+  let shapes;
+  let stats = null;
   if (cached) {
     shapes = JSON.parse(readFileSync(cached, 'utf8'));
   } else {
@@ -242,18 +271,26 @@ function main() {
   }
   assertRulerCanSayNo();
 
-  const projects = db.prepare(
-    'SELECT project, COUNT(*) n FROM observations GROUP BY project HAVING n >= ? ORDER BY n DESC',
-  ).all(MIN_PROJECT_ROWS);
+  const projects = db
+    .prepare('SELECT project, COUNT(*) n FROM observations GROUP BY project HAVING n >= ? ORDER BY n DESC')
+    .all(MIN_PROJECT_ROWS);
   const now = Date.now();
 
-  let fired = 0; let gated = 0; let named = 0;
-  let cases = 0; let rows = 0; let cmdOnly = 0; let top1CmdOnly = 0;
+  let fired = 0;
+  let gated = 0;
+  let named = 0;
+  let cases = 0;
+  let rows = 0;
+  let cmdOnly = 0;
+  let top1CmdOnly = 0;
   const perProject = new Map();
 
   for (const shape of shapes) {
     const plan = classesFor(shape);
-    if (!plan) { gated++; continue; }
+    if (!plan) {
+      gated++;
+      continue;
+    }
     fired++;
     // How often the FAILURE's own name is in the query at all — the term-side half of
     // D#167, which no injection count can distinguish from a ranking problem.
@@ -261,15 +298,25 @@ function main() {
 
     for (const { project } of projects) {
       const out = selectErrorRecall(db, {
-        cmd: shape.cmd, response: shape.response, project, now, floor: 0,
+        cmd: shape.cmd,
+        response: shape.response,
+        project,
+        now,
+        floor: 0,
       });
       if (!out || !out.rows.length) continue;
       const pp = perProject.get(project) || { cases: 0, rows: 0, cmdOnly: 0, top1: 0 };
-      cases++; pp.cases++;
-      rows += out.rows.length; pp.rows += out.rows.length;
+      cases++;
+      pp.cases++;
+      rows += out.rows.length;
+      pp.rows += out.rows.length;
       const bad = out.rows.filter((r) => !plan.errWords.some((t) => matches(r.id, t)));
-      cmdOnly += bad.length; pp.cmdOnly += bad.length;
-      if (!plan.errWords.some((t) => matches(out.rows[0].id, t))) { top1CmdOnly++; pp.top1++; }
+      cmdOnly += bad.length;
+      pp.cmdOnly += bad.length;
+      if (!plan.errWords.some((t) => matches(out.rows[0].id, t))) {
+        top1CmdOnly++;
+        pp.top1++;
+      }
       perProject.set(project, pp);
     }
   }
@@ -279,30 +326,44 @@ function main() {
   if (stats && argv.includes('--host-failures')) {
     console.log('POPULATION: host-flagged failures — what the PostToolUseFailure hook admits (D#170)');
     const ex = stats.excluded;
-    console.log(`transcripts ${stats.files}  ·  Bash results ${stats.bashResults}  ·  is_error ${stats.failures}`);
-    console.log(`excluded by the gate: tool-chain refusal ${ex.refusal} (${pct(ex.refusal, stats.failures)})`
-      + `  ·  too little text ${ex.empty}  ·  interrupt ${ex.interrupt}`);
+    console.log(
+      `transcripts ${stats.files}  ·  Bash results ${stats.bashResults}  ·  is_error ${stats.failures}`,
+    );
+    console.log(
+      `excluded by the gate: tool-chain refusal ${ex.refusal} (${pct(ex.refusal, stats.failures)})` +
+        `  ·  too little text ${ex.empty}  ·  interrupt ${ex.interrupt}`,
+    );
   } else if (stats) {
-    console.log(`transcripts ${stats.files}  ·  Bash results ${stats.bashResults}  ·  failures ${stats.failures}  ·  reach this surface ${stats.hardErrors} (${pct(stats.hardErrors, stats.failures)})`);
+    console.log(
+      `transcripts ${stats.files}  ·  Bash results ${stats.bashResults}  ·  failures ${stats.failures}  ·  reach this surface ${stats.hardErrors} (${pct(stats.hardErrors, stats.failures)})`,
+    );
   }
-  console.log(`shapes ${shapes.length} (fired ${fired}, gated silent ${gated})  ·  projects ${projects.length}`);
-  console.log(`rerank: ${process.env.CLAUDE_MEM_ERROR_RECALL_RERANK === 'off' ? 'OFF (pre-D#167 flat OR)' : 'on (default)'}`);
+  console.log(
+    `shapes ${shapes.length} (fired ${fired}, gated silent ${gated})  ·  projects ${projects.length}`,
+  );
+  console.log(
+    `rerank: ${process.env.CLAUDE_MEM_ERROR_RECALL_RERANK === 'off' ? 'OFF (pre-D#167 flat OR)' : 'on (default)'}`,
+  );
   console.log('');
   console.log(`firing cases : ${cases}`);
   console.log(`injected rows: ${rows}`);
   console.log(`  matched NO error term (command vocabulary only): ${cmdOnly}  ${pct(cmdOnly, rows)}`);
-  console.log(`  cases whose TOP-1 row is one of those          : ${top1CmdOnly}  ${pct(top1CmdOnly, cases)}`);
+  console.log(
+    `  cases whose TOP-1 row is one of those          : ${top1CmdOnly}  ${pct(top1CmdOnly, cases)}`,
+  );
   console.log('');
   console.log('per project (the small ones are where a removal-based gate collapses):');
-  console.table([...perProject.entries()].map(([p, v]) => ({
-    project: p,
-    obs: projects.find((x) => x.project === p).n,
-    cases: v.cases,
-    rows: v.rows,
-    cmdOnly: v.cmdOnly,
-    cmdOnlyPct: pct(v.cmdOnly, v.rows),
-    top1CmdOnlyPct: pct(v.top1, v.cases),
-  })));
+  console.table(
+    [...perProject.entries()].map(([p, v]) => ({
+      project: p,
+      obs: projects.find((x) => x.project === p).n,
+      cases: v.cases,
+      rows: v.rows,
+      cmdOnly: v.cmdOnly,
+      cmdOnlyPct: pct(v.cmdOnly, v.rows),
+      top1CmdOnlyPct: pct(v.top1, v.cases),
+    })),
+  );
 }
 
 main();

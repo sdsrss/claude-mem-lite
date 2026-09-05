@@ -19,8 +19,17 @@ import { tmpdir } from 'node:os';
 import { readInjectedMarker, mergeInjectedMarker, injectedIdsFileName } from '../lib/injected-ids.mjs';
 
 let dir, file;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'inj-marker-')); file = join(dir, 'marker.json'); });
-afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } });
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'inj-marker-'));
+  file = join(dir, 'marker.json');
+});
+afterEach(() => {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+});
 
 const onDisk = () => JSON.parse(readFileSync(file, 'utf8'));
 const seed = (payload) => writeFileSync(file, JSON.stringify(payload));
@@ -32,7 +41,11 @@ describe('readInjectedMarker — the M-6 same-session gate', () => {
     // Premise first: the same payload IS accepted by its own session, so a `fresh:false`
     // below cannot be the staleness gate or a parse failure wearing this gate's name.
     expect(readInjectedMarker(file, { sessionId: 'other-window', maxAgeMs: W }).fresh).toBe(true);
-    expect(readInjectedMarker(file, { sessionId: 'mine', maxAgeMs: W })).toEqual({ ids: [], count: 0, fresh: false });
+    expect(readInjectedMarker(file, { sessionId: 'mine', maxAgeMs: W })).toEqual({
+      ids: [],
+      count: 0,
+      fresh: false,
+    });
   });
 
   it('accepts a LEGACY payload that carries no session at all', () => {
@@ -74,7 +87,7 @@ describe('mergeInjectedMarker — union vs replace', () => {
     mergeInjectedMarker(file, [2, 'D3'], { sessionId: 's', maxAgeMs: W, mode: 'union' });
     const got = onDisk();
     expect(got.ids.sort()).toEqual(['1', '2', 'D3']);
-    expect(got.count).toBe(5);          // inherited and incremented
+    expect(got.count).toBe(5); // inherited and incremented
     expect(got.session).toBe('s');
   });
 
@@ -84,7 +97,7 @@ describe('mergeInjectedMarker — union vs replace', () => {
     expect(onDisk().ids).toEqual([10, 'P11']); // NOT ['10','P11'] — see D#213
   });
 
-  it('does not inherit another session\'s ids or count, in either mode', () => {
+  it("does not inherit another session's ids or count, in either mode", () => {
     seed({ ids: ['99'], ts: Date.now(), count: 7, session: 'other-window' });
     mergeInjectedMarker(file, [1], { sessionId: 'mine', maxAgeMs: W, mode: 'union' });
     const got = onDisk();
@@ -108,7 +121,7 @@ describe('injectedIdsFileName — one file per session', () => {
   it('separates two sessions in one project and falls back to a project-keyed name', () => {
     const a = injectedIdsFileName('proj', 'sess-a');
     const b = injectedIdsFileName('proj', 'sess-b');
-    expect(a).not.toBe(b);                                  // D#120: not one shared file
+    expect(a).not.toBe(b); // D#120: not one shared file
     expect(injectedIdsFileName('proj')).toBe('.claude-mem-injected-proj');
     // Sanitized and capped, so a session id with path separators cannot escape the dir.
     expect(injectedIdsFileName('proj', '../../etc/passwd')).not.toContain('/');

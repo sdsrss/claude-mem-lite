@@ -13,16 +13,26 @@ import { readFileSync } from 'fs';
 
 describe('summarizeTradeoff (pure verdict logic)', () => {
   const before = {
-    precision_hard_negatives: { recall_at_10: 0.90, precision_at_10: 0.86, ndcg_at_10: 0.97, mrr_at_10: 0.96 },
-    vocab_mismatch_paraphrase: { recall_at_10: 0.33, precision_at_10: 0.20, ndcg_at_10: 0.30, mrr_at_10: 0.40 },
+    precision_hard_negatives: { recall_at_10: 0.9, precision_at_10: 0.86, ndcg_at_10: 0.97, mrr_at_10: 0.96 },
+    vocab_mismatch_paraphrase: { recall_at_10: 0.33, precision_at_10: 0.2, ndcg_at_10: 0.3, mrr_at_10: 0.4 },
   };
 
   it('flags the OR-floor failure mode: recall regression with no compensating gain → REJECT', () => {
     // Treatment leaves the precision suite untouched but craters paraphrase recall
     // (exactly the reverted Item-2 OR-floor behaviour).
     const after = {
-      precision_hard_negatives: { recall_at_10: 0.90, precision_at_10: 0.86, ndcg_at_10: 0.97, mrr_at_10: 0.96 },
-      vocab_mismatch_paraphrase: { recall_at_10: 0.05, precision_at_10: 0.20, ndcg_at_10: 0.10, mrr_at_10: 0.15 },
+      precision_hard_negatives: {
+        recall_at_10: 0.9,
+        precision_at_10: 0.86,
+        ndcg_at_10: 0.97,
+        mrr_at_10: 0.96,
+      },
+      vocab_mismatch_paraphrase: {
+        recall_at_10: 0.05,
+        precision_at_10: 0.2,
+        ndcg_at_10: 0.1,
+        mrr_at_10: 0.15,
+      },
     };
     const r = summarizeTradeoff(before, after);
     expect(r.regressions.length).toBeGreaterThan(0);
@@ -33,8 +43,18 @@ describe('summarizeTradeoff (pure verdict logic)', () => {
 
   it('labels a precision gain with no regression as NET-POSITIVE', () => {
     const after = {
-      precision_hard_negatives: { recall_at_10: 0.90, precision_at_10: 0.92, ndcg_at_10: 0.98, mrr_at_10: 0.96 },
-      vocab_mismatch_paraphrase: { recall_at_10: 0.33, precision_at_10: 0.20, ndcg_at_10: 0.30, mrr_at_10: 0.40 },
+      precision_hard_negatives: {
+        recall_at_10: 0.9,
+        precision_at_10: 0.92,
+        ndcg_at_10: 0.98,
+        mrr_at_10: 0.96,
+      },
+      vocab_mismatch_paraphrase: {
+        recall_at_10: 0.33,
+        precision_at_10: 0.2,
+        ndcg_at_10: 0.3,
+        mrr_at_10: 0.4,
+      },
     };
     const r = summarizeTradeoff(before, after);
     expect(r.gains.length).toBeGreaterThan(0);
@@ -44,8 +64,18 @@ describe('summarizeTradeoff (pure verdict logic)', () => {
 
   it('labels a precision-up / recall-down change as a TRADEOFF (judge worth)', () => {
     const after = {
-      precision_hard_negatives: { recall_at_10: 0.90, precision_at_10: 0.92, ndcg_at_10: 0.98, mrr_at_10: 0.96 },
-      vocab_mismatch_paraphrase: { recall_at_10: 0.20, precision_at_10: 0.20, ndcg_at_10: 0.22, mrr_at_10: 0.30 },
+      precision_hard_negatives: {
+        recall_at_10: 0.9,
+        precision_at_10: 0.92,
+        ndcg_at_10: 0.98,
+        mrr_at_10: 0.96,
+      },
+      vocab_mismatch_paraphrase: {
+        recall_at_10: 0.2,
+        precision_at_10: 0.2,
+        ndcg_at_10: 0.22,
+        mrr_at_10: 0.3,
+      },
     };
     const r = summarizeTradeoff(before, after);
     expect(r.gains.length).toBeGreaterThan(0);
@@ -55,8 +85,18 @@ describe('summarizeTradeoff (pure verdict logic)', () => {
 
   it('labels sub-threshold noise as NEUTRAL', () => {
     const after = {
-      precision_hard_negatives: { recall_at_10: 0.905, precision_at_10: 0.859, ndcg_at_10: 0.97, mrr_at_10: 0.96 },
-      vocab_mismatch_paraphrase: { recall_at_10: 0.335, precision_at_10: 0.20, ndcg_at_10: 0.30, mrr_at_10: 0.40 },
+      precision_hard_negatives: {
+        recall_at_10: 0.905,
+        precision_at_10: 0.859,
+        ndcg_at_10: 0.97,
+        mrr_at_10: 0.96,
+      },
+      vocab_mismatch_paraphrase: {
+        recall_at_10: 0.335,
+        precision_at_10: 0.2,
+        ndcg_at_10: 0.3,
+        mrr_at_10: 0.4,
+      },
     };
     const r = summarizeTradeoff(before, after, { threshold: 0.02 });
     expect(r.regressions.length).toBe(0);
@@ -102,7 +142,9 @@ describe('summarizeTradeoff (pure verdict logic)', () => {
 describe('runSnapshot (integration over both suites)', () => {
   it('produces precision + recall metrics for both the precision and paraphrase suites', () => {
     const db = createTestDb();
-    const corpus = JSON.parse(readFileSync(new URL('../benchmark/fixtures/seed-data.json', import.meta.url), 'utf8'));
+    const corpus = JSON.parse(
+      readFileSync(new URL('../benchmark/fixtures/seed-data.json', import.meta.url), 'utf8'),
+    );
     seedDatabase(db, corpus);
     seedVectors(db);
 
@@ -177,7 +219,10 @@ describe('cross-source direction probes (G5 ②)', () => {
     const constantClamp = (results, sourceKey) => {
       for (const src of ['obs', 'session', 'prompt', 'event']) {
         const srcResults = results.filter((r) => r[sourceKey] === src && r.score);
-        if (srcResults.length === 1) { srcResults[0].score = -0.5; continue; }
+        if (srcResults.length === 1) {
+          srcResults[0].score = -0.5;
+          continue;
+        }
         const maxAbs = Math.max(0, ...srcResults.map((r) => Math.abs(r.score)));
         if (maxAbs > 0) for (const r of srcResults) r.score = r.score / maxAbs;
       }
@@ -225,7 +270,10 @@ describe('composeVerdict (probe → verdict folding)', () => {
   });
 
   it('a probe failure makes the verdict non-NEUTRAL even at zero metric delta', () => {
-    const v = composeVerdict('NEUTRAL — all |Δ| < 0.02', ['multiscript:cjk', 'cross-source:lone-grazing-sinks']);
+    const v = composeVerdict('NEUTRAL — all |Δ| < 0.02', [
+      'multiscript:cjk',
+      'cross-source:lone-grazing-sinks',
+    ]);
     expect(v).toMatch(/^PROBE-FAIL/);
     expect(v).toContain('lone-grazing-sinks');
     expect(v).toContain('NEUTRAL');

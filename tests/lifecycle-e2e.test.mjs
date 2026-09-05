@@ -31,10 +31,12 @@ const USER_CLAUDE_MD = '# myapp\n\nMy own project notes.\n\n## Conventions\n- us
 function run(file, args, { cwd = PROJ, env = {}, allowFail = false } = {}) {
   try {
     const out = execFileSync('node', [join(REPO, file), ...args], {
-      encoding: 'utf8', cwd,
+      encoding: 'utf8',
+      cwd,
       // Re-inject PWD + CLAUDE_PROJECT_DIR so cwd resolution can never escape to the real repo.
       env: { ...BASE_ENV, PWD: cwd, CLAUDE_PROJECT_DIR: cwd, ...env },
-      stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 120000,
     });
     return { ok: true, out };
   } catch (e) {
@@ -44,11 +46,18 @@ function run(file, args, { cwd = PROJ, env = {}, allowFail = false } = {}) {
   }
 }
 
-const readJSON = (p) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
+const readJSON = (p) => {
+  try {
+    return JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+};
 function memHookCount(s) {
   let n = 0;
-  for (const ev of Object.values(s?.hooks || {})) for (const m of ev) for (const h of (m.hooks || []))
-    if (/claude-mem-lite|\.claude-mem-lite/.test(h.command || '')) n++;
+  for (const ev of Object.values(s?.hooks || {}))
+    for (const m of ev)
+      for (const h of m.hooks || []) if (/claude-mem-lite|\.claude-mem-lite/.test(h.command || '')) n++;
   return n;
 }
 function adoptedBlock(dir) {
@@ -63,7 +72,9 @@ function fakeClaudeBin() {
   const binDir = join(HOME, 'bin');
   mkdirSync(binDir, { recursive: true });
   const script = join(binDir, 'claude');
-  writeFileSync(script, `#!/usr/bin/env bash
+  writeFileSync(
+    script,
+    `#!/usr/bin/env bash
 set -euo pipefail
 STATE="${HOME}/.claude/mcp-state.txt"; mkdir -p "${HOME}/.claude"; touch "$STATE"
 [[ "\${1:-}" != "mcp" ]] && exit 0
@@ -75,7 +86,8 @@ case "$cmd" in
        [[ -n "$name" ]] && { grep -v "^$name\\$" "$STATE" > "$STATE.tmp" || true; mv "$STATE.tmp" "$STATE"; } ;;
   list) while IFS= read -r l; do [[ -n "$l" ]] && printf '%s: stdio\\n' "$l"; done < "$STATE" ;;
 esac
-`);
+`,
+  );
   execFileSync('chmod', ['+x', script]);
   return binDir;
 }
@@ -102,9 +114,25 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     // Simulate a prior marketplace install so uninstall has artifacts to sweep.
     mkdirSync(join(pluginsDir(), 'marketplaces', 'sdsrss'), { recursive: true });
     mkdirSync(join(pluginsDir(), 'cache', 'sdsrss'), { recursive: true });
-    writeFileSync(join(pluginsDir(), 'installed_plugins.json'), JSON.stringify({ plugins: { 'claude-mem-lite@sdsrss': [{ version: '3.14.0' }] } }, null, 2));
-    writeFileSync(join(pluginsDir(), 'known_marketplaces.json'), JSON.stringify({ sdsrss: { url: 'https://example.com' } }, null, 2));
-    writeFileSync(settingsPath(), JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': true, 'other@vendor': true }, extraKnownMarketplaces: { sdsrss: { url: 'x' } } }, null, 2));
+    writeFileSync(
+      join(pluginsDir(), 'installed_plugins.json'),
+      JSON.stringify({ plugins: { 'claude-mem-lite@sdsrss': [{ version: '3.14.0' }] } }, null, 2),
+    );
+    writeFileSync(
+      join(pluginsDir(), 'known_marketplaces.json'),
+      JSON.stringify({ sdsrss: { url: 'https://example.com' } }, null, 2),
+    );
+    writeFileSync(
+      settingsPath(),
+      JSON.stringify(
+        {
+          enabledPlugins: { 'claude-mem-lite@sdsrss': true, 'other@vendor': true },
+          extraKnownMarketplaces: { sdsrss: { url: 'x' } },
+        },
+        null,
+        2,
+      ),
+    );
 
     // Fake claude bin on PATH for the WHOLE run so neither install nor uninstall
     // can ever touch the real `claude` CLI / real MCP registration.
@@ -119,7 +147,11 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     if (repoClaudeMdSnapshot !== null) {
       expect(readFileSync(REPO_CLAUDE_MD, 'utf8')).toBe(repoClaudeMdSnapshot);
     }
-    try { rmSync(HOME, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(HOME, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   it('install: data dir, hooks, CLI symlink; preserves unrelated plugin', () => {
@@ -139,10 +171,10 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     expect(a.version).toBe('v1');
     expect(a.raw).toContain('persistent memory');
     expect(a.raw).not.toMatch(/持久记忆/);
-    expect(a.raw).toContain('use tabs');           // pre-existing user content survives
+    expect(a.raw).toContain('use tabs'); // pre-existing user content survives
     expect(a.raw).toContain('My own project notes');
     expect(existsSync(join(PROJ, '.claude', 'plugin_claude_mem_lite.md'))).toBe(true);
-    const markers = readdirSync(join(dataDir, 'runtime')).filter(f => f.startsWith('.auto-adopt-'));
+    const markers = readdirSync(join(dataDir, 'runtime')).filter((f) => f.startsWith('.auto-adopt-'));
     expect(markers.length).toBeGreaterThan(0);
     // DB is lazy-created on first hook use (install does not create it).
     expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(true);
@@ -175,7 +207,9 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     expect(memHookCount(s)).toBe(0);
     expect(s.enabledPlugins?.['claude-mem-lite@sdsrss']).toBeUndefined();
     expect(s.enabledPlugins?.['other@vendor']).toBe(true);
-    expect(readJSON(join(pluginsDir(), 'installed_plugins.json'))?.plugins?.['claude-mem-lite@sdsrss']).toBeUndefined();
+    expect(
+      readJSON(join(pluginsDir(), 'installed_plugins.json'))?.plugins?.['claude-mem-lite@sdsrss'],
+    ).toBeUndefined();
     expect(existsSync(join(pluginsDir(), 'marketplaces', 'sdsrss'))).toBe(false);
     expect(existsSync(join(pluginsDir(), 'cache', 'sdsrss'))).toBe(false);
     // The documented gap: uninstall does NOT unadopt — the project block survives.

@@ -12,8 +12,10 @@ export const RESOURCE_METADATA = {
   'skill:skill-creator': {
     intent_tags: 'skill,create,extend,meta,develop,author',
     domain_tags: 'claude,skill,markdown',
-    capability_summary: 'Guide for creating and authoring new Claude Code skills with proper structure and metadata',
-    trigger_patterns: 'when user wants to create a new skill or extend Claude capabilities with custom workflows',
+    capability_summary:
+      'Guide for creating and authoring new Claude Code skills with proper structure and metadata',
+    trigger_patterns:
+      'when user wants to create a new skill or extend Claude capabilities with custom workflows',
     keywords: 'skill-builder,skill-authoring,skill-template,extend-claude',
     tech_stack: 'claude-code',
     use_cases: 'create skill;extend Claude',
@@ -66,8 +68,10 @@ export const RESOURCE_METADATA = {
   'skill:superpowers-brainstorming': {
     intent_tags: 'brainstorm,design,planning,creative,ideas,explore,requirements',
     domain_tags: 'planning,design',
-    capability_summary: 'Explore user intent requirements and design before implementation through structured brainstorming',
-    trigger_patterns: 'when user needs to brainstorm ideas explore requirements or plan creative solutions before coding',
+    capability_summary:
+      'Explore user intent requirements and design before implementation through structured brainstorming',
+    trigger_patterns:
+      'when user needs to brainstorm ideas explore requirements or plan creative solutions before coding',
     invocation_name: 'superpowers:brainstorming',
     keywords: 'ideation,requirements,creative-thinking,design-session,explore-options',
     tech_stack: 'architecture',
@@ -77,7 +81,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'test,tdd,testing,unittest,spec,coverage,quality,red-green-refactor',
     domain_tags: 'testing,javascript,typescript,python',
     capability_summary: 'Test-driven development workflow with red-green-refactor cycle and quality checks',
-    trigger_patterns: 'when user wants to write tests first or follow TDD methodology for feature development',
+    trigger_patterns:
+      'when user wants to write tests first or follow TDD methodology for feature development',
     invocation_name: 'superpowers:test-driven-development',
     keywords: 'red-green-refactor,test-first,test-driven,unit-tests,spec-writing',
     tech_stack: 'jest,vitest,pytest,es6,pip',
@@ -86,8 +91,10 @@ export const RESOURCE_METADATA = {
   'skill:superpowers-debugging': {
     intent_tags: 'debug,troubleshoot,fix,error,systematic,diagnose,bug,crash,failure',
     domain_tags: 'debugging,error-handling',
-    capability_summary: 'Systematic debugging approach for complex bugs using hypothesis-driven investigation',
-    trigger_patterns: 'when user encounters bugs errors crashes or unexpected behavior that needs systematic debugging',
+    capability_summary:
+      'Systematic debugging approach for complex bugs using hypothesis-driven investigation',
+    trigger_patterns:
+      'when user encounters bugs errors crashes or unexpected behavior that needs systematic debugging',
     invocation_name: 'superpowers:systematic-debugging',
     keywords: 'root-cause,hypothesis-driven,stack-trace,reproduce-bug,isolate-error',
     use_cases: 'debug errors;isolate issues;fix bugs',
@@ -106,7 +113,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'plan,architecture,spec,implementation,blueprint,roadmap,strategy',
     domain_tags: 'planning,architecture',
     capability_summary: 'Write structured implementation plans from specs before touching code',
-    trigger_patterns: 'when user has requirements or specs and needs a multi-step implementation plan before coding',
+    trigger_patterns:
+      'when user has requirements or specs and needs a multi-step implementation plan before coding',
     invocation_name: 'superpowers:writing-plans',
     keywords: 'implementation-plan,task-breakdown,spec-to-plan,step-by-step',
     use_cases: 'architecture design;implementation planning',
@@ -124,7 +132,8 @@ export const RESOURCE_METADATA = {
   'skill:superpowers-verification': {
     intent_tags: 'verify,check,test,complete,quality,validation,evidence',
     domain_tags: 'quality,verification',
-    capability_summary: 'Verify work is complete by running checks and gathering evidence before claiming done',
+    capability_summary:
+      'Verify work is complete by running checks and gathering evidence before claiming done',
     trigger_patterns: 'when user is about to claim work is complete and needs verification before committing',
     invocation_name: 'superpowers:verification-before-completion',
     keywords: 'verify-before-commit,final-check,evidence-based,confirm-passing',
@@ -134,8 +143,10 @@ export const RESOURCE_METADATA = {
   'skill:playwright-skill': {
     intent_tags: 'playwright,browser,automation,test,e2e,screenshot,scrape',
     domain_tags: 'playwright,browser,testing',
-    capability_summary: 'Browser automation with Playwright for testing forms screenshots and web interactions',
-    trigger_patterns: 'when user needs to automate browser interactions test web pages or take screenshots with Playwright',
+    capability_summary:
+      'Browser automation with Playwright for testing forms screenshots and web interactions',
+    trigger_patterns:
+      'when user needs to automate browser interactions test web pages or take screenshots with Playwright',
     invocation_name: 'playwright-skill:playwright-skill',
     keywords: 'playwright-test,browser-script,page-interaction,screenshot',
     tech_stack: 'javascript,node,typescript,chromium,jest,vitest,pytest',
@@ -152,7 +163,8 @@ export const RESOURCE_METADATA = {
   'skill:code-review-expert': {
     intent_tags: 'review,code-review,expert,quality,SOLID,security,architecture',
     domain_tags: 'quality,review,security',
-    capability_summary: 'Expert code review detecting SOLID violations security risks and architectural issues',
+    capability_summary:
+      'Expert code review detecting SOLID violations security risks and architectural issues',
     trigger_patterns: 'when user needs expert-level code review with SOLID analysis and security scanning',
     keywords: 'expert-analysis,deep-review,architectural-review,pattern-violations',
     tech_stack: 'linter,analyzer,diff,pr-review,owasp',
@@ -189,15 +201,18 @@ export const RESOURCE_METADATA = {
   'agent:debugging-toolkit': {
     intent_tags: 'debug,toolkit,error,troubleshoot,fix,diagnose,trace,crash',
     domain_tags: 'debugging,error-handling',
-    capability_summary: 'Debugging toolkit agent with error analysis stack trace investigation and fix suggestions',
-    trigger_patterns: 'when user has errors or crashes and needs automated debugging assistance and fix suggestions',
+    capability_summary:
+      'Debugging toolkit agent with error analysis stack trace investigation and fix suggestions',
+    trigger_patterns:
+      'when user has errors or crashes and needs automated debugging assistance and fix suggestions',
     keywords: 'stack,investigation,suggestions,errors',
     use_cases: 'debug errors;isolate issues;error handling;error tracking',
   },
   'agent:code-refactoring': {
     intent_tags: 'refactor,clean,simplify,restructure,organize,improve,technical-debt',
     domain_tags: 'refactoring,quality',
-    capability_summary: 'Automated code refactoring for cleaner structure reduced complexity and technical debt',
+    capability_summary:
+      'Automated code refactoring for cleaner structure reduced complexity and technical debt',
     trigger_patterns: 'when user wants to refactor code simplify complex logic or reduce technical debt',
     keywords: 'restructure,extract-method,rename,simplify,solid-principles',
     tech_stack: 'linter,analyzer',
@@ -259,8 +274,10 @@ export const RESOURCE_METADATA = {
   'agent:cicd-automation': {
     intent_tags: 'ci,cd,automation,pipeline,deploy,github-actions,workflow',
     domain_tags: 'cicd,devops,deploy',
-    capability_summary: 'CI/CD pipeline automation with GitHub Actions workflow configuration and deploy setup',
-    trigger_patterns: 'when user needs to set up CI/CD pipelines configure GitHub Actions or automate deployments',
+    capability_summary:
+      'CI/CD pipeline automation with GitHub Actions workflow configuration and deploy setup',
+    trigger_patterns:
+      'when user needs to set up CI/CD pipelines configure GitHub Actions or automate deployments',
     keywords: 'ci-pipeline,github-actions,jenkins,build-automation,deploy-pipeline',
     tech_stack: 'ci,cd,pipeline',
     use_cases: 'continuous integration;build pipeline;continuous deployment;release pipeline',
@@ -268,7 +285,8 @@ export const RESOURCE_METADATA = {
   'agent:git-pr-workflows': {
     intent_tags: 'git,pr,pull-request,merge,workflow,branch,commit',
     domain_tags: 'git,workflow',
-    capability_summary: 'Git PR workflow automation with branch management commit strategy and merge handling',
+    capability_summary:
+      'Git PR workflow automation with branch management commit strategy and merge handling',
     trigger_patterns: 'when user needs help with git PR workflows branch management or merge strategies',
     keywords: 'pull-request,pr-template,review-process,branch-strategy',
     tech_stack: 'github',
@@ -294,7 +312,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'error,debug,diagnose,stack-trace,fix,exception,crash,runtime',
     domain_tags: 'debugging,error-handling',
     capability_summary: 'Error diagnosis from stack traces with root cause analysis and fix suggestions',
-    trigger_patterns: 'when user has runtime errors exceptions or stack traces that need diagnosis and fixing',
+    trigger_patterns:
+      'when user has runtime errors exceptions or stack traces that need diagnosis and fixing',
     keywords: 'diagnosis,stack,traces,root,cause',
     use_cases: 'error handling;error tracking;debug errors;isolate issues',
   },
@@ -323,7 +342,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'ui,design,frontend,css,component,layout,responsive',
     domain_tags: 'ui,frontend,css',
     capability_summary: 'UI design agent for frontend component layout and responsive design implementation',
-    trigger_patterns: 'when user needs to design and implement UI components layouts or responsive interfaces',
+    trigger_patterns:
+      'when user needs to design and implement UI components layouts or responsive interfaces',
     tech_stack: 'html,javascript,sass',
     use_cases: 'UI design;component build;layout build;frontend development',
   },
@@ -331,7 +351,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'frontend,react,vue,web,component,spa,interface',
     domain_tags: 'frontend,react,vue,web',
     capability_summary: 'Frontend development agent for React Vue and modern web application building',
-    trigger_patterns: 'when user needs to build frontend applications with React Vue or modern web frameworks',
+    trigger_patterns:
+      'when user needs to build frontend applications with React Vue or modern web frameworks',
     tech_stack: 'html,css,javascript,jsx,vuex',
     use_cases: 'frontend development;component build',
   },
@@ -347,8 +368,10 @@ export const RESOURCE_METADATA = {
     intent_tags: 'component,review,quality,frontend,react,vue,audit',
     domain_tags: 'frontend,review,component',
     capability_summary: 'Frontend component reviewer for quality accessibility and best-practice auditing',
-    trigger_patterns: 'when user wants to review frontend components for quality accessibility and best practices',
-  },  'skill:ab-test-setup': {
+    trigger_patterns:
+      'when user wants to review frontend components for quality accessibility and best practices',
+  },
+  'skill:ab-test-setup': {
     intent_tags: 'ab-test,experiment,cro,conversion,split-test,variant,marketing',
     domain_tags: 'marketing,cro,analytics',
     capability_summary: 'Set up A/B tests with variant design hypothesis tracking and statistical analysis',
@@ -379,7 +402,8 @@ export const RESOURCE_METADATA = {
   'skill:churn-prevention': {
     intent_tags: 'churn,retention,customer,saas,lifecycle,engagement,marketing',
     domain_tags: 'marketing,retention,saas',
-    capability_summary: 'Design churn prevention strategies with retention campaigns and lifecycle engagement',
+    capability_summary:
+      'Design churn prevention strategies with retention campaigns and lifecycle engagement',
     trigger_patterns: 'when user needs to reduce churn or improve customer retention',
     keywords: 'prevention,strategies,campaigns,reduce,improve',
   },
@@ -394,20 +418,23 @@ export const RESOURCE_METADATA = {
     intent_tags: 'competitor,alternatives,comparison,analysis,positioning,marketing',
     domain_tags: 'marketing,seo,competitive',
     capability_summary: 'Create competitor comparison and alternatives pages for SEO and positioning',
-    trigger_patterns: 'when user needs competitor analysis alternative comparison pages or competitive positioning',
+    trigger_patterns:
+      'when user needs competitor analysis alternative comparison pages or competitive positioning',
     keywords: 'pages,alternative',
   },
   'skill:content-strategy': {
     intent_tags: 'content,strategy,blog,editorial,calendar,publishing,marketing',
     domain_tags: 'marketing,content,editorial',
-    capability_summary: 'Plan content strategy with editorial calendars topic clusters and publishing workflows',
+    capability_summary:
+      'Plan content strategy with editorial calendars topic clusters and publishing workflows',
     trigger_patterns: 'when user needs content strategy editorial planning or blog content organization',
     keywords: 'plan,calendars,topic,clusters',
   },
   'skill:copy-editing': {
     intent_tags: 'copy-editing,proofread,writing,grammar,clarity,tone,marketing',
     domain_tags: 'marketing,writing,editing',
-    capability_summary: 'Professional copy editing for marketing content with clarity tone and grammar improvement',
+    capability_summary:
+      'Professional copy editing for marketing content with clarity tone and grammar improvement',
     trigger_patterns: 'when user needs copy editing proofreading or marketing content polishing',
     keywords: 'professional,copy,improvement,proofreading,polishing',
   },
@@ -428,7 +455,8 @@ export const RESOURCE_METADATA = {
   'skill:form-cro': {
     intent_tags: 'form,cro,conversion,optimization,signup,lead,marketing',
     domain_tags: 'marketing,cro,forms',
-    capability_summary: 'Optimize web forms for higher conversion rates with field reduction and UX improvements',
+    capability_summary:
+      'Optimize web forms for higher conversion rates with field reduction and UX improvements',
     trigger_patterns: 'when user needs to optimize forms for better conversion rates',
     keywords: 'optimize,higher,rates,field,reduction,improvements',
   },
@@ -457,8 +485,10 @@ export const RESOURCE_METADATA = {
   'skill:marketing-psychology': {
     intent_tags: 'psychology,persuasion,behavior,neuromarketing,bias,influence,marketing',
     domain_tags: 'marketing,psychology,persuasion',
-    capability_summary: 'Apply marketing psychology principles like scarcity social proof and cognitive biases',
-    trigger_patterns: 'when user wants to apply psychological principles to marketing or conversion optimization',
+    capability_summary:
+      'Apply marketing psychology principles like scarcity social proof and cognitive biases',
+    trigger_patterns:
+      'when user wants to apply psychological principles to marketing or conversion optimization',
     keywords: 'apply,principles,scarcity,social,proof,cognitive',
   },
   'skill:onboarding-cro': {
@@ -492,14 +522,16 @@ export const RESOURCE_METADATA = {
   'skill:popup-cro': {
     intent_tags: 'popup,cro,conversion,lead-capture,exit-intent,modal,marketing',
     domain_tags: 'marketing,cro,popup',
-    capability_summary: 'Design high-converting popups with exit-intent triggers and lead capture optimization',
+    capability_summary:
+      'Design high-converting popups with exit-intent triggers and lead capture optimization',
     trigger_patterns: 'when user needs to create or optimize popups for lead capture or conversion',
     keywords: 'high-converting,popups,triggers,lead,capture',
   },
   'skill:pricing-strategy': {
     intent_tags: 'pricing,strategy,monetization,revenue,tiers,freemium,marketing',
     domain_tags: 'marketing,pricing,business',
-    capability_summary: 'Design pricing strategies with tier structures freemium models and revenue optimization',
+    capability_summary:
+      'Design pricing strategies with tier structures freemium models and revenue optimization',
     trigger_patterns: 'when user needs pricing strategy tier design or monetization planning',
     keywords: 'strategies,tier,structures,optimization',
   },
@@ -507,13 +539,15 @@ export const RESOURCE_METADATA = {
     intent_tags: 'product,positioning,messaging,value-prop,context,differentiation,marketing',
     domain_tags: 'marketing,product,positioning',
     capability_summary: 'Define product positioning messaging and value proposition for marketing context',
-    trigger_patterns: 'when user needs product positioning value proposition or marketing messaging framework',
+    trigger_patterns:
+      'when user needs product positioning value proposition or marketing messaging framework',
     keywords: 'define,value,proposition',
   },
   'skill:programmatic-seo': {
     intent_tags: 'programmatic-seo,automation,pages,templates,scale,marketing',
     domain_tags: 'marketing,seo,automation',
-    capability_summary: 'Build programmatic SEO pages at scale with templates and automated content generation',
+    capability_summary:
+      'Build programmatic SEO pages at scale with templates and automated content generation',
     trigger_patterns: 'when user needs programmatic SEO pages at scale or templated content generation',
     keywords: 'programmatic,templated',
   },
@@ -625,8 +659,10 @@ export const RESOURCE_METADATA = {
   'skill:seo-programmatic': {
     intent_tags: 'seo,programmatic,scale,templates,automation,dynamic,pages',
     domain_tags: 'seo,programmatic,automation',
-    capability_summary: 'Build programmatic SEO with dynamic templates and automated page generation at scale',
-    trigger_patterns: 'when user needs programmatic SEO dynamic page generation or automated content at scale',
+    capability_summary:
+      'Build programmatic SEO with dynamic templates and automated page generation at scale',
+    trigger_patterns:
+      'when user needs programmatic SEO dynamic page generation or automated content at scale',
     use_cases: 'search optimization;meta tags',
   },
   'skill:seo-schema': {
@@ -689,7 +725,8 @@ export const RESOURCE_METADATA = {
   'agent:seo-technical-agent': {
     intent_tags: 'seo,technical,agent,audit,automation,crawl,indexing',
     domain_tags: 'seo,technical,agent',
-    capability_summary: 'Automated technical SEO agent for crawl analysis indexing and site health monitoring',
+    capability_summary:
+      'Automated technical SEO agent for crawl analysis indexing and site health monitoring',
     trigger_patterns: 'when user wants automated technical SEO audits or site health monitoring',
     keywords: 'site,health',
     use_cases: 'search optimization;meta tags',
@@ -712,13 +749,15 @@ export const RESOURCE_METADATA = {
     intent_tags: 'skill-extraction,learning,continuous,autonomous,meta,knowledge',
     domain_tags: 'meta,learning,skills',
     capability_summary: 'Autonomous skill extraction and continuous learning from Claude Code work sessions',
-    trigger_patterns: 'when user wants to extract reusable skills from work sessions or enable continuous learning',
+    trigger_patterns:
+      'when user wants to extract reusable skills from work sessions or enable continuous learning',
     keywords: 'extraction,claude,sessions,extract,reusable',
   },
   'skill:mem-memory': {
     intent_tags: 'memory,save,store,remember,note,record,persist,auto-save',
     domain_tags: 'memory,ai,claude',
-    capability_summary: 'Save content to memory — with explicit content, instructions, or auto-summarize current session',
+    capability_summary:
+      'Save content to memory — with explicit content, instructions, or auto-summarize current session',
     trigger_patterns: 'when user wants to save something to memory or auto-save session highlights',
     invocation_name: 'claude-mem-lite:memory',
     keywords: 'explicit,instructions,auto-summarize,current,session',
@@ -727,7 +766,8 @@ export const RESOURCE_METADATA = {
   'skill:mem-update': {
     intent_tags: 'maintenance,cleanup,deduplicate,decay,optimize,reindex,health',
     domain_tags: 'memory,registry,maintenance',
-    capability_summary: 'Auto-maintain memory and resource registry — deduplicate, merge, decay, cleanup, reindex',
+    capability_summary:
+      'Auto-maintain memory and resource registry — deduplicate, merge, decay, cleanup, reindex',
     trigger_patterns: 'when user wants to clean up memory database or maintain the tool registry',
     invocation_name: 'claude-mem-lite:update',
     keywords: 'auto-maintain,resource,merge,clean,database,maintain',
@@ -736,7 +776,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'import,tools,github,skills,agents,registry,add,discover',
     domain_tags: 'memory,registry,github,tools',
     capability_summary: 'Import skills and agents from GitHub repositories into the tool resource registry',
-    trigger_patterns: 'when user wants to import or add new skills and agents from GitHub to the tool registry',
+    trigger_patterns:
+      'when user wants to import or add new skills and agents from GitHub to the tool registry',
     invocation_name: 'claude-mem-lite:tools',
     keywords: 'repositories,resource',
   },
@@ -780,7 +821,8 @@ export const RESOURCE_METADATA = {
   'skill:design-brief-generator': {
     intent_tags: 'design,brief,generator,creative,project,requirements,visual',
     domain_tags: 'design,creative,project',
-    capability_summary: 'Generate design briefs with creative requirements visual direction and project scope',
+    capability_summary:
+      'Generate design briefs with creative requirements visual direction and project scope',
     trigger_patterns: 'when user needs design briefs creative direction or project visual requirements',
     keywords: 'generate,briefs,direction,scope',
     use_cases: 'UI design;layout build',
@@ -854,7 +896,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'prd,product,requirements,document,spec,features,scope',
     domain_tags: 'product,requirements,planning',
     capability_summary: 'Generate product requirements documents with features scope and specifications',
-    trigger_patterns: 'when user needs to create PRDs product requirements documents or feature specifications',
+    trigger_patterns:
+      'when user needs to create PRDs product requirements documents or feature specifications',
     keywords: 'generate,documents,specifications,prds,feature',
     tech_stack: 'architecture',
   },
@@ -926,7 +969,8 @@ export const RESOURCE_METADATA = {
   'agent:accessibility-compliance': {
     intent_tags: 'accessibility,a11y,compliance,wcag,aria,screen-reader,inclusive',
     domain_tags: 'accessibility,web,compliance',
-    capability_summary: 'Accessibility compliance agent for WCAG auditing ARIA implementation and a11y testing',
+    capability_summary:
+      'Accessibility compliance agent for WCAG auditing ARIA implementation and a11y testing',
     trigger_patterns: 'when user needs accessibility auditing WCAG compliance or ARIA implementation',
     tech_stack: 'http,rest',
     use_cases: 'a11y;screen reader',
@@ -941,7 +985,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'agent,teams,collaboration,multi-agent,roles,delegation',
     domain_tags: 'agents,teams,collaboration',
     capability_summary: 'Agent team management with role delegation and collaborative task execution',
-    trigger_patterns: 'when user needs agent team collaboration role-based delegation or multi-agent teamwork',
+    trigger_patterns:
+      'when user needs agent team collaboration role-based delegation or multi-agent teamwork',
     keywords: 'team,role,collaborative,task,role-based',
   },
   'agent:api-testing-observability': {
@@ -999,7 +1044,8 @@ export const RESOURCE_METADATA = {
   'agent:codebase-cleanup': {
     intent_tags: 'cleanup,codebase,dead-code,lint,hygiene,unused,technical-debt',
     domain_tags: 'quality,cleanup,maintenance',
-    capability_summary: 'Codebase cleanup agent for removing dead code fixing lint issues and reducing tech debt',
+    capability_summary:
+      'Codebase cleanup agent for removing dead code fixing lint issues and reducing tech debt',
     trigger_patterns: 'when user needs codebase cleanup dead code removal or technical debt reduction',
     tech_stack: 'linter,analyzer',
   },
@@ -1054,7 +1100,8 @@ export const RESOURCE_METADATA = {
   'agent:database-cloud-optimization': {
     intent_tags: 'database,cloud,optimization,scaling,cost,performance,tuning',
     domain_tags: 'database,cloud,optimization',
-    capability_summary: 'Cloud database optimization with scaling strategies cost reduction and performance tuning',
+    capability_summary:
+      'Cloud database optimization with scaling strategies cost reduction and performance tuning',
     trigger_patterns: 'when user needs cloud database optimization scaling or cost reduction strategies',
     keywords: 'strategies,reduction',
     tech_stack: 'sql,orm,profiler,benchmark',
@@ -1063,8 +1110,10 @@ export const RESOURCE_METADATA = {
   'agent:deployment-strategies': {
     intent_tags: 'deployment,strategies,blue-green,canary,rollout,zero-downtime',
     domain_tags: 'deployment,devops,strategies',
-    capability_summary: 'Deployment strategy planning with blue-green canary and zero-downtime rollout patterns',
-    trigger_patterns: 'when user needs deployment strategies blue-green canary or zero-downtime rollout planning',
+    capability_summary:
+      'Deployment strategy planning with blue-green canary and zero-downtime rollout patterns',
+    trigger_patterns:
+      'when user needs deployment strategies blue-green canary or zero-downtime rollout planning',
     keywords: 'strategy,patterns',
     tech_stack: 'ci,cd,pipeline',
   },
@@ -1079,15 +1128,19 @@ export const RESOURCE_METADATA = {
   'agent:developer-essentials': {
     intent_tags: 'developer,essentials,tools,productivity,workflow,setup,config',
     domain_tags: 'development,tools,productivity',
-    capability_summary: 'Developer essentials toolkit for productivity tools workflow setup and configuration',
-    trigger_patterns: 'when user needs developer productivity tools workflow optimization or environment setup',
+    capability_summary:
+      'Developer essentials toolkit for productivity tools workflow setup and configuration',
+    trigger_patterns:
+      'when user needs developer productivity tools workflow optimization or environment setup',
     keywords: 'toolkit,configuration,optimization,environment',
   },
   'agent:distributed-debugging': {
     intent_tags: 'distributed,debugging,microservices,tracing,logs,correlation',
     domain_tags: 'debugging,distributed,microservices',
-    capability_summary: 'Distributed system debugging with trace correlation log analysis and microservice diagnosis',
-    trigger_patterns: 'when user needs distributed debugging microservice tracing or cross-service log analysis',
+    capability_summary:
+      'Distributed system debugging with trace correlation log analysis and microservice diagnosis',
+    trigger_patterns:
+      'when user needs distributed debugging microservice tracing or cross-service log analysis',
     keywords: 'trace,microservice,diagnosis,cross-service',
     use_cases: 'debug errors;isolate issues',
   },
@@ -1116,7 +1169,8 @@ export const RESOURCE_METADATA = {
   'agent:framework-migration': {
     intent_tags: 'framework,migration,upgrade,transition,compatibility,breaking-changes',
     domain_tags: 'migration,framework,upgrade',
-    capability_summary: 'Framework migration agent for version upgrades breaking change resolution and transitions',
+    capability_summary:
+      'Framework migration agent for version upgrades breaking change resolution and transitions',
     trigger_patterns: 'when user needs to migrate frameworks upgrade versions or resolve breaking changes',
     keywords: 'version,upgrades,breaking,change,resolution',
     tech_stack: 'alembic,flyway',
@@ -1125,8 +1179,10 @@ export const RESOURCE_METADATA = {
   'agent:frontend-mobile-development': {
     intent_tags: 'frontend,mobile,react-native,flutter,responsive,cross-platform',
     domain_tags: 'frontend,mobile,cross-platform',
-    capability_summary: 'Frontend and mobile development with React Native Flutter and cross-platform patterns',
-    trigger_patterns: 'when user needs mobile app development React Native Flutter or cross-platform frontend',
+    capability_summary:
+      'Frontend and mobile development with React Native Flutter and cross-platform patterns',
+    trigger_patterns:
+      'when user needs mobile app development React Native Flutter or cross-platform frontend',
     keywords: 'react,native,patterns',
     tech_stack: 'html,css,javascript',
     use_cases: 'frontend development;component build',
@@ -1134,7 +1190,8 @@ export const RESOURCE_METADATA = {
   'agent:frontend-mobile-security': {
     intent_tags: 'frontend,mobile,security,xss,csp,csrf,sanitization',
     domain_tags: 'security,frontend,mobile',
-    capability_summary: 'Frontend and mobile security with XSS prevention CSP configuration and CSRF protection',
+    capability_summary:
+      'Frontend and mobile security with XSS prevention CSP configuration and CSRF protection',
     trigger_patterns: 'when user needs frontend security XSS prevention or mobile app security hardening',
     keywords: 'prevention,configuration,protection,hardening',
     tech_stack: 'owasp,cve,html,css,javascript',
@@ -1143,15 +1200,18 @@ export const RESOURCE_METADATA = {
   'agent:full-stack-orchestration': {
     intent_tags: 'fullstack,orchestration,frontend,backend,integration,end-to-end',
     domain_tags: 'fullstack,orchestration,integration',
-    capability_summary: 'Full-stack orchestration agent for coordinating frontend backend and integration layers',
-    trigger_patterns: 'when user needs full-stack orchestration end-to-end integration or frontend-backend coordination',
+    capability_summary:
+      'Full-stack orchestration agent for coordinating frontend backend and integration layers',
+    trigger_patterns:
+      'when user needs full-stack orchestration end-to-end integration or frontend-backend coordination',
     keywords: 'full-stack,coordinating,layers,frontend-backend,coordination',
     use_cases: 'frontend development;component build',
   },
   'agent:functional-programming': {
     intent_tags: 'functional,programming,fp,immutable,pure,monad,composition',
     domain_tags: 'functional,programming,patterns',
-    capability_summary: 'Functional programming patterns with immutability composition and pure function design',
+    capability_summary:
+      'Functional programming patterns with immutability composition and pure function design',
     trigger_patterns: 'when user needs functional programming patterns monads or immutable design help',
     keywords: 'immutability,function,monads',
   },
@@ -1164,7 +1224,8 @@ export const RESOURCE_METADATA = {
   'agent:hr-legal-compliance': {
     intent_tags: 'hr,legal,compliance,policy,gdpr,privacy,regulation',
     domain_tags: 'legal,compliance,hr',
-    capability_summary: 'HR and legal compliance agent for policy generation GDPR and regulatory requirements',
+    capability_summary:
+      'HR and legal compliance agent for policy generation GDPR and regulatory requirements',
     trigger_patterns: 'when user needs HR legal compliance policy generation or GDPR regulatory guidance',
     keywords: 'regulatory,requirements,guidance',
   },
@@ -1172,13 +1233,15 @@ export const RESOURCE_METADATA = {
     intent_tags: 'incident,response,sre,postmortem,alert,escalation,runbook',
     domain_tags: 'sre,incident,devops',
     capability_summary: 'Incident response agent with runbook execution escalation and postmortem analysis',
-    trigger_patterns: 'when user needs incident response runbooks escalation workflows or postmortem analysis',
+    trigger_patterns:
+      'when user needs incident response runbooks escalation workflows or postmortem analysis',
     tech_stack: 'ci,cd,pipeline',
   },
   'agent:julia-development': {
     intent_tags: 'julia,scientific,computing,numerical,data,performance,math',
     domain_tags: 'julia,scientific,computing',
-    capability_summary: 'Julia development agent for scientific computing numerical analysis and data processing',
+    capability_summary:
+      'Julia development agent for scientific computing numerical analysis and data processing',
     trigger_patterns: 'when user is working on Julia projects scientific computing or numerical programming',
   },
   'agent:jvm-languages': {
@@ -1191,7 +1254,8 @@ export const RESOURCE_METADATA = {
   'agent:kubernetes-operations': {
     intent_tags: 'kubernetes,k8s,devops,container,helm,deploy,cluster',
     domain_tags: 'kubernetes,devops,container',
-    capability_summary: 'Kubernetes operations agent for cluster management Helm deployments and container orchestration',
+    capability_summary:
+      'Kubernetes operations agent for cluster management Helm deployments and container orchestration',
     trigger_patterns: 'when user needs Kubernetes cluster management Helm charts or container orchestration',
     keywords: 'operations,deployments,orchestration,charts',
     tech_stack: 'k8s,helm,ci,cd,pipeline',
@@ -1214,13 +1278,15 @@ export const RESOURCE_METADATA = {
     intent_tags: 'multi-platform,cross-platform,desktop,mobile,web,electron,tauri',
     domain_tags: 'cross-platform,desktop,mobile',
     capability_summary: 'Multi-platform app development with Electron Tauri and cross-platform frameworks',
-    trigger_patterns: 'when user needs multi-platform app development Electron Tauri or cross-platform solutions',
+    trigger_patterns:
+      'when user needs multi-platform app development Electron Tauri or cross-platform solutions',
   },
   'agent:observability-monitoring': {
     intent_tags: 'observability,monitoring,logging,metrics,tracing,grafana,prometheus',
     domain_tags: 'observability,monitoring,devops',
     capability_summary: 'Observability stack setup with logging metrics tracing Grafana and Prometheus',
-    trigger_patterns: 'when user needs observability monitoring setup Grafana dashboards or logging infrastructure',
+    trigger_patterns:
+      'when user needs observability monitoring setup Grafana dashboards or logging infrastructure',
     keywords: 'stack,setup,dashboards,infrastructure',
     tech_stack: 'prometheus,grafana,ci,cd,pipeline',
   },
@@ -1243,14 +1309,16 @@ export const RESOURCE_METADATA = {
   'agent:quantitative-trading': {
     intent_tags: 'quant,trading,finance,algorithm,backtest,strategy,market',
     domain_tags: 'finance,trading,quantitative',
-    capability_summary: 'Quantitative trading agent for algorithmic strategies backtesting and market analysis',
+    capability_summary:
+      'Quantitative trading agent for algorithmic strategies backtesting and market analysis',
     trigger_patterns: 'when user needs quantitative trading algorithms backtesting or market analysis tools',
     keywords: 'algorithmic,strategies,backtesting,algorithms',
   },
   'agent:reverse-engineering': {
     intent_tags: 'reverse-engineering,binary,decompile,analysis,disassembly,forensics',
     domain_tags: 'security,reverse-engineering,analysis',
-    capability_summary: 'Reverse engineering agent for binary analysis decompilation and forensic investigation',
+    capability_summary:
+      'Reverse engineering agent for binary analysis decompilation and forensic investigation',
     trigger_patterns: 'when user needs reverse engineering binary analysis or decompilation assistance',
     keywords: 'reverse,engineering,decompilation,forensic,investigation',
     tech_stack: 'owasp,cve',
@@ -1267,7 +1335,8 @@ export const RESOURCE_METADATA = {
   'agent:seo-analysis-monitoring': {
     intent_tags: 'seo,analysis,monitoring,ranking,tracking,serp,keywords',
     domain_tags: 'seo,analysis,monitoring',
-    capability_summary: 'SEO analysis and monitoring agent for ranking tracking SERP analysis and keyword monitoring',
+    capability_summary:
+      'SEO analysis and monitoring agent for ranking tracking SERP analysis and keyword monitoring',
     trigger_patterns: 'when user needs SEO ranking monitoring SERP analysis or keyword tracking',
     tech_stack: 'prometheus,grafana',
     use_cases: 'search optimization;meta tags',
@@ -1298,7 +1367,8 @@ export const RESOURCE_METADATA = {
   'agent:startup-business-analyst': {
     intent_tags: 'startup,business,analysis,strategy,market,competitive,research',
     domain_tags: 'business,startup,analysis',
-    capability_summary: 'Startup business analysis with market research competitive strategy and growth planning',
+    capability_summary:
+      'Startup business analysis with market research competitive strategy and growth planning',
     trigger_patterns: 'when user needs startup business analysis market research or competitive strategy',
   },
   'agent:systems-programming': {
@@ -1311,7 +1381,8 @@ export const RESOURCE_METADATA = {
   'agent:team-collaboration': {
     intent_tags: 'team,collaboration,workflow,communication,project,standup,sprint',
     domain_tags: 'team,collaboration,project',
-    capability_summary: 'Team collaboration agent for project workflows standups and communication optimization',
+    capability_summary:
+      'Team collaboration agent for project workflows standups and communication optimization',
     trigger_patterns: 'when user needs team collaboration workflow optimization or project management setup',
     keywords: 'standups,optimization,setup',
   },
@@ -1327,14 +1398,16 @@ export const RESOURCE_METADATA = {
     intent_tags: 'audit,website,accessibility,performance,seo,security,quality',
     domain_tags: 'audit,web,quality',
     capability_summary: 'Comprehensive website audit covering accessibility performance SEO and security',
-    trigger_patterns: 'when user needs a comprehensive website audit covering accessibility performance and SEO',
+    trigger_patterns:
+      'when user needs a comprehensive website audit covering accessibility performance and SEO',
     tech_stack: 'http,rest,linter,analyzer',
     use_cases: 'code audit;quality assessment;a11y;screen reader',
   },
   'agent:academic-researcher': {
     intent_tags: 'academic,research,paper,literature,citation,review,scholar',
     domain_tags: 'research,academic,paper',
-    capability_summary: 'Academic research agent for literature review paper analysis and citation management',
+    capability_summary:
+      'Academic research agent for literature review paper analysis and citation management',
     trigger_patterns: 'when user needs academic research literature review or paper analysis assistance',
   },
   'agent:code-reviewer': {
@@ -1370,7 +1443,8 @@ export const RESOURCE_METADATA = {
   'agent:decision-helper': {
     intent_tags: 'decision,helper,analysis,pros-cons,evaluate,compare,trade-off',
     domain_tags: 'decision,analysis,evaluation',
-    capability_summary: 'Decision analysis helper with pros/cons evaluation trade-off comparison and recommendations',
+    capability_summary:
+      'Decision analysis helper with pros/cons evaluation trade-off comparison and recommendations',
     trigger_patterns: 'when user needs help making decisions evaluating options or comparing trade-offs',
     keywords: 'proscons,comparison,recommendations,making,decisions,evaluating',
   },
@@ -1383,7 +1457,8 @@ export const RESOURCE_METADATA = {
   'agent:editor': {
     intent_tags: 'editor,writing,proofread,grammar,style,clarity,tone',
     domain_tags: 'writing,editing,quality',
-    capability_summary: 'Writing editor agent for proofreading grammar correction style and clarity improvement',
+    capability_summary:
+      'Writing editor agent for proofreading grammar correction style and clarity improvement',
     trigger_patterns: 'when user needs writing editing proofreading or grammar correction',
     keywords: 'proofreading,correction,improvement',
     tech_stack: 'linter,analyzer',
@@ -1405,7 +1480,8 @@ export const RESOURCE_METADATA = {
   'agent:fullstack-developer': {
     intent_tags: 'fullstack,developer,frontend,backend,web,react,node',
     domain_tags: 'fullstack,web,development',
-    capability_summary: 'Full-stack developer agent for frontend backend and complete web application building',
+    capability_summary:
+      'Full-stack developer agent for frontend backend and complete web application building',
     trigger_patterns: 'when user needs full-stack web development frontend and backend integration',
     keywords: 'full-stack,complete,integration',
     tech_stack: 'http,rest',
@@ -1414,7 +1490,8 @@ export const RESOURCE_METADATA = {
   'agent:meeting-notes': {
     intent_tags: 'meeting,notes,summary,action-items,minutes,transcript,decisions',
     domain_tags: 'meeting,notes,productivity',
-    capability_summary: 'Meeting notes agent for summarizing discussions extracting action items and decisions',
+    capability_summary:
+      'Meeting notes agent for summarizing discussions extracting action items and decisions',
     trigger_patterns: 'when user needs meeting notes summaries action item extraction or minutes generation',
     keywords: 'summarizing,discussions,extracting,action,items',
   },
@@ -1445,21 +1522,24 @@ export const RESOURCE_METADATA = {
   'agent:strategy-advisor': {
     intent_tags: 'strategy,advisor,business,consulting,planning,analysis,recommendation',
     domain_tags: 'strategy,business,consulting',
-    capability_summary: 'Strategy advisor agent for business consulting analysis and strategic recommendations',
+    capability_summary:
+      'Strategy advisor agent for business consulting analysis and strategic recommendations',
     trigger_patterns: 'when user needs strategic business advice consulting analysis or planning guidance',
     keywords: 'strategic,recommendations,advice,guidance',
   },
   'agent:technical-writer': {
     intent_tags: 'technical,writer,documentation,api-docs,guides,tutorials,reference',
     domain_tags: 'documentation,technical-writing,guides',
-    capability_summary: 'Technical writing agent for API docs user guides tutorials and reference documentation',
+    capability_summary:
+      'Technical writing agent for API docs user guides tutorials and reference documentation',
     trigger_patterns: 'when user needs technical writing API documentation user guides or tutorials',
     use_cases: 'write documentation;update README',
   },
   'agent:ux-designer': {
     intent_tags: 'ux,designer,user-experience,wireframe,usability,persona,journey',
     domain_tags: 'ux,design,user-experience',
-    capability_summary: 'UX design agent for wireframing user research persona creation and usability analysis',
+    capability_summary:
+      'UX design agent for wireframing user research persona creation and usability analysis',
     trigger_patterns: 'when user needs UX design wireframing user research or usability analysis',
     keywords: 'wireframing,research,creation',
     use_cases: 'user experience;interaction design',
@@ -1467,7 +1547,8 @@ export const RESOURCE_METADATA = {
   'agent:visualization-expert': {
     intent_tags: 'visualization,charts,graphs,data-viz,d3,dashboard,infographic',
     domain_tags: 'visualization,data,charts',
-    capability_summary: 'Data visualization expert for charts dashboards infographics and interactive displays',
+    capability_summary:
+      'Data visualization expert for charts dashboards infographics and interactive displays',
     trigger_patterns: 'when user needs data visualization charts dashboards or interactive graph creation',
     keywords: 'dashboards,infographics,interactive,displays,graph',
   },
@@ -1486,7 +1567,8 @@ export const RESOURCE_METADATA = {
   'skill:superpowers-receiving-code-review': {
     intent_tags: 'code-review,feedback,receiving,review-response,technical-rigor,verification',
     domain_tags: 'quality,review,workflow',
-    capability_summary: 'Handle received code review feedback with technical rigor and verification before implementing',
+    capability_summary:
+      'Handle received code review feedback with technical rigor and verification before implementing',
     trigger_patterns: 'when receiving code review feedback especially if unclear or technically questionable',
     invocation_name: 'superpowers:receiving-code-review',
     keywords: 'handle,received,technical,rigor,especially,unclear',
@@ -1505,7 +1587,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'finish,branch,merge,pr,cleanup,integrate,complete,development',
     domain_tags: 'git,workflow,integration',
     capability_summary: 'Guide completion of development branches with merge PR or cleanup options',
-    trigger_patterns: 'when implementation is complete tests pass and need to decide how to integrate the work',
+    trigger_patterns:
+      'when implementation is complete tests pass and need to decide how to integrate the work',
     invocation_name: 'superpowers:finishing-a-development-branch',
     keywords: 'completion,branches,options,pass,decide',
     tech_stack: 'github',
@@ -1514,7 +1597,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'skill,write,create,edit,deploy,verify,author,markdown',
     domain_tags: 'skills,meta,authoring',
     capability_summary: 'Create edit and verify Claude Code skills before deployment',
-    trigger_patterns: 'when creating new skills editing existing skills or verifying skills work before deployment',
+    trigger_patterns:
+      'when creating new skills editing existing skills or verifying skills work before deployment',
     invocation_name: 'superpowers:writing-skills',
     keywords: 'claude,deployment,editing,existing,verifying',
     use_cases: 'create skill;extend Claude',
@@ -1531,7 +1615,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'claude,api,anthropic,sdk,build,integration,tool-use,agent-sdk',
     domain_tags: 'anthropic,api,sdk,ai',
     capability_summary: 'Build apps with the Claude API or Anthropic SDK including Agent SDK',
-    trigger_patterns: 'when code imports anthropic sdk or user asks to use Claude API Anthropic SDK or Agent SDK',
+    trigger_patterns:
+      'when code imports anthropic sdk or user asks to use Claude API Anthropic SDK or Agent SDK',
     invocation_name: 'claude-api',
     keywords: 'anthropic-api,claude-sdk,tool-use,messages-api',
     tech_stack: 'rest,openapi',
@@ -1541,7 +1626,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'postgresql,postgres,database,query,optimization,schema,indexing,security,supabase',
     domain_tags: 'postgresql,database,sql,supabase',
     capability_summary: 'PostgreSQL patterns for query optimization schema design indexing and security',
-    trigger_patterns: 'when user needs PostgreSQL query optimization schema design indexing or security patterns',
+    trigger_patterns:
+      'when user needs PostgreSQL query optimization schema design indexing or security patterns',
     invocation_name: 'postgres-patterns',
     tech_stack: 'orm,mysql',
     use_cases: 'database design;schema migration',
@@ -1550,7 +1636,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'multi-model,review,openrouter,gpt,qwen,claude,code-review,architecture',
     domain_tags: 'ai,review,quality',
     capability_summary: 'Multi-model code review via OpenRouter calling Claude GPT Qwen for joint assessment',
-    trigger_patterns: 'when user requests code review architecture review or multi-model multi-angle analysis',
+    trigger_patterns:
+      'when user requests code review architecture review or multi-model multi-angle analysis',
     invocation_name: 'multi-model-reviewer',
     keywords: 'calling,joint,assessment,requests,multi-angle',
     tech_stack: 'diff,pr-review,linter,analyzer',
@@ -1569,7 +1656,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'search,web,perplexity,latest,best-practice,documentation,solution',
     domain_tags: 'search,web,ai',
     capability_summary: 'Web search via Perplexity AI for latest programming resources and solutions',
-    trigger_patterns: 'when needing latest API docs best practices tool recommendations or searching solutions online',
+    trigger_patterns:
+      'when needing latest API docs best practices tool recommendations or searching solutions online',
     invocation_name: 'perplexity-search',
     keywords: 'resources,solutions,needing,docs,recommendations',
     tech_stack: 'http,rest',
@@ -1577,8 +1665,10 @@ export const RESOURCE_METADATA = {
   'skill:claude-code-plugin-dev': {
     intent_tags: 'plugin,claude-code,marketplace,mcp,hooks,commands,develop,publish',
     domain_tags: 'claude,plugin,mcp,development',
-    capability_summary: 'Create and publish Claude Code plugins with correct metadata format and marketplace support',
-    trigger_patterns: 'when building Claude Code plugins getting plugin install errors or packaging MCP servers as plugins',
+    capability_summary:
+      'Create and publish Claude Code plugins with correct metadata format and marketplace support',
+    trigger_patterns:
+      'when building Claude Code plugins getting plugin install errors or packaging MCP servers as plugins',
     invocation_name: 'claude-code-plugin-dev',
     keywords: 'plugin-dev,marketplace,plugin-json,hooks-json,mcp-config',
     tech_stack: 'claude-code,mcp-sdk,json-rpc',
@@ -1587,7 +1677,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'npm,publish,release,cross-platform,binary,github-actions,npx',
     domain_tags: 'npm,release,cicd',
     capability_summary: 'Cross-platform binary build and npm publish via GitHub Actions with npx support',
-    trigger_patterns: 'when user needs to publish npm packages set up cross-platform binary distribution or CI/CD release',
+    trigger_patterns:
+      'when user needs to publish npm packages set up cross-platform binary distribution or CI/CD release',
     invocation_name: 'npm-cross-platform-release',
     keywords: 'github,actions,packages,distribution',
     use_cases: 'deploy to production;release management',
@@ -1596,7 +1687,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'qa,fullstack,automation,test,browser,api,ui,e2e,visual,curl',
     domain_tags: 'testing,qa,browser,web',
     capability_summary: 'Fullstack automated testing: test suite curl API browser function UI visual review',
-    trigger_patterns: 'when user needs fullstack testing QA automation browser testing API testing or UI visual review',
+    trigger_patterns:
+      'when user needs fullstack testing QA automation browser testing API testing or UI visual review',
     invocation_name: 'fullstack-qa',
     keywords: 'suite,function,review',
     tech_stack: 'jest,vitest,pytest,chromium,playwright',
@@ -1604,8 +1696,10 @@ export const RESOURCE_METADATA = {
   'skill:strategic-compact': {
     intent_tags: 'compact,context,memory,compression,preserve,manual,window',
     domain_tags: 'context,workflow,memory',
-    capability_summary: 'Manual context compaction at logical intervals to preserve context through task phases',
-    trigger_patterns: 'when context window is getting full and need strategic compaction to preserve important context',
+    capability_summary:
+      'Manual context compaction at logical intervals to preserve context through task phases',
+    trigger_patterns:
+      'when context window is getting full and need strategic compaction to preserve important context',
     invocation_name: 'strategic-compact',
     keywords: 'compaction,logical,intervals,task,phases,getting',
   },
@@ -1622,7 +1716,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'simplify,refactor,reuse,quality,efficiency,review,clean,code',
     domain_tags: 'quality,refactoring,code',
     capability_summary: 'Review changed code for reuse quality and efficiency then fix any issues found',
-    trigger_patterns: 'when user wants to review and simplify recently changed code for quality and efficiency',
+    trigger_patterns:
+      'when user wants to review and simplify recently changed code for quality and efficiency',
     invocation_name: 'simplify',
     keywords: 'changed,found,recently',
     tech_stack: 'linter,analyzer',
@@ -1632,7 +1727,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'loop,recurring,interval,poll,schedule,repeat,monitor,cron',
     domain_tags: 'automation,workflow,scheduling',
     capability_summary: 'Run a prompt or slash command on a recurring interval for monitoring or polling',
-    trigger_patterns: 'when user wants to set up a recurring task poll for status or run something repeatedly',
+    trigger_patterns:
+      'when user wants to set up a recurring task poll for status or run something repeatedly',
     invocation_name: 'loop',
     keywords: 'prompt,slash,command,polling,task',
   },
@@ -1640,7 +1736,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'feature,development,guided,architecture,codebase,implementation,design',
     domain_tags: 'development,architecture,workflow',
     capability_summary: 'Guided feature development with codebase understanding and architecture focus',
-    trigger_patterns: 'when user needs guided feature development with architecture analysis and codebase understanding',
+    trigger_patterns:
+      'when user needs guided feature development with architecture analysis and codebase understanding',
     invocation_name: 'feature-dev:feature-dev',
     keywords: 'understanding,focus',
   },
@@ -1648,7 +1745,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'memory,search,manage,recall,observations,sessions,prompts,history',
     domain_tags: 'memory,ai,claude,search',
     capability_summary: 'Search and manage project memory including observations sessions and prompts',
-    trigger_patterns: 'when user wants to search memory recall past work manage observations or browse session history',
+    trigger_patterns:
+      'when user wants to search memory recall past work manage observations or browse session history',
     invocation_name: 'claude-mem-lite:mem',
     keywords: 'past,browse,session',
     tech_stack: 'claude-code',
@@ -1750,8 +1848,10 @@ export const RESOURCE_METADATA = {
   'agent:feature-dev-code-architect': {
     intent_tags: 'architecture,design,feature,blueprint,codebase,patterns,conventions,plan',
     domain_tags: 'architecture,development,design',
-    capability_summary: 'Design feature architectures by analyzing codebase patterns with implementation blueprints',
-    trigger_patterns: 'when user needs feature architecture design with codebase analysis and implementation blueprints',
+    capability_summary:
+      'Design feature architectures by analyzing codebase patterns with implementation blueprints',
+    trigger_patterns:
+      'when user needs feature architecture design with codebase analysis and implementation blueprints',
     invocation_name: 'feature-dev:code-architect',
     keywords: 'architectures,analyzing,blueprints',
     use_cases: 'UI design;layout build',
@@ -1759,8 +1859,10 @@ export const RESOURCE_METADATA = {
   'agent:feature-dev-code-reviewer': {
     intent_tags: 'review,bugs,logic,security,quality,conventions,confidence,priority',
     domain_tags: 'quality,review,security',
-    capability_summary: 'Review code for bugs security vulnerabilities and quality with confidence-based filtering',
-    trigger_patterns: 'when user needs focused code review for bugs security issues and high-priority quality problems',
+    capability_summary:
+      'Review code for bugs security vulnerabilities and quality with confidence-based filtering',
+    trigger_patterns:
+      'when user needs focused code review for bugs security issues and high-priority quality problems',
     invocation_name: 'feature-dev:code-reviewer',
     keywords: 'vulnerabilities,confidence-based,filtering,focused,high-priority',
     tech_stack: 'linter,analyzer,diff,pr-review,owasp',
@@ -1769,8 +1871,10 @@ export const RESOURCE_METADATA = {
   'agent:feature-dev-code-explorer': {
     intent_tags: 'explore,analyze,trace,execution,architecture,dependencies,understand,codebase',
     domain_tags: 'architecture,analysis,exploration',
-    capability_summary: 'Deep codebase analysis by tracing execution paths mapping architecture and understanding patterns',
-    trigger_patterns: 'when user needs deep codebase analysis execution path tracing or architecture understanding',
+    capability_summary:
+      'Deep codebase analysis by tracing execution paths mapping architecture and understanding patterns',
+    trigger_patterns:
+      'when user needs deep codebase analysis execution path tracing or architecture understanding',
     invocation_name: 'feature-dev:code-explorer',
     keywords: 'deep,tracing,paths,mapping,understanding,patterns',
     use_cases: 'explore options;investigate approaches',
@@ -1778,8 +1882,10 @@ export const RESOURCE_METADATA = {
   'agent:code-simplifier-agent': {
     intent_tags: 'simplify,refine,clarity,consistency,maintainability,clean,refactor',
     domain_tags: 'quality,refactoring,code',
-    capability_summary: 'Simplify and refine code for clarity consistency and maintainability preserving functionality',
-    trigger_patterns: 'when user wants to simplify code improve clarity or refine for consistency and maintainability',
+    capability_summary:
+      'Simplify and refine code for clarity consistency and maintainability preserving functionality',
+    trigger_patterns:
+      'when user wants to simplify code improve clarity or refine for consistency and maintainability',
     invocation_name: 'code-simplifier:code-simplifier',
     keywords: 'preserving,functionality,improve',
     tech_stack: 'linter,analyzer',
@@ -1789,7 +1895,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'review,plan,standards,major-step,validate,milestone,code-review',
     domain_tags: 'quality,review,workflow',
     capability_summary: 'Review completed project steps against original plan and coding standards',
-    trigger_patterns: 'when a major project step is completed and needs review against plan and coding standards',
+    trigger_patterns:
+      'when a major project step is completed and needs review against plan and coding standards',
     invocation_name: 'superpowers:code-reviewer',
     keywords: 'completed,steps,against,original,major',
     tech_stack: 'linter,analyzer,diff,pr-review',
@@ -1837,8 +1944,10 @@ export const RESOURCE_METADATA = {
   'skill:update-config': {
     intent_tags: 'config,settings,hooks,permissions,env,automation,harness',
     domain_tags: 'claude-code,configuration',
-    capability_summary: 'Configure Claude Code harness via settings.json including hooks permissions and environment variables',
-    trigger_patterns: 'when user wants to configure hooks permissions env vars or automation in Claude Code settings',
+    capability_summary:
+      'Configure Claude Code harness via settings.json including hooks permissions and environment variables',
+    trigger_patterns:
+      'when user wants to configure hooks permissions env vars or automation in Claude Code settings',
     invocation_name: 'update-config',
     keywords: 'settings-json,hook-config,permission-config,env-var,automation-trigger',
     tech_stack: 'claude-code,json',
@@ -1856,7 +1965,8 @@ export const RESOURCE_METADATA = {
   'skill:superpowers-using-superpowers': {
     intent_tags: 'skill,discovery,meta,workflow,find,use,invoke',
     domain_tags: 'claude-code,skill,meta',
-    capability_summary: 'Meta-skill for discovering and using available skills — establishes skill invocation workflow',
+    capability_summary:
+      'Meta-skill for discovering and using available skills — establishes skill invocation workflow',
     trigger_patterns: 'when starting any conversation to establish skill awareness and discovery process',
     invocation_name: 'superpowers:using-superpowers',
     keywords: 'skill-discovery,find-skill,invoke-skill,meta-workflow',
@@ -1878,7 +1988,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'impact,analysis,change,scope,symbol,dependency,risk',
     domain_tags: 'code-graph,ast,refactor',
     capability_summary: 'Analyze the impact scope of changing a symbol before modifying it',
-    trigger_patterns: 'when user needs to understand what will break if a function class or symbol is changed',
+    trigger_patterns:
+      'when user needs to understand what will break if a function class or symbol is changed',
     invocation_name: 'code-graph-mcp:impact',
     keywords: 'impact-analysis,change-scope,ripple-effect,breaking-change',
     tech_stack: 'ast,code-graph',
@@ -1887,7 +1998,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'trace,http,request,route,handler,endpoint,flow',
     domain_tags: 'code-graph,http,api',
     capability_summary: 'Trace a full HTTP request flow from route definition to data layer',
-    trigger_patterns: 'when user needs to follow an HTTP request through route middleware handler to database',
+    trigger_patterns:
+      'when user needs to follow an HTTP request through route middleware handler to database',
     invocation_name: 'code-graph-mcp:trace',
     keywords: 'request-trace,http-flow,route-to-db,endpoint-trace',
     tech_stack: 'http,rest,express,fastify',
@@ -1905,7 +2017,8 @@ export const RESOURCE_METADATA = {
     intent_tags: 'understand,module,architecture,deep-dive,analyze,file',
     domain_tags: 'code-graph,ast,architecture',
     capability_summary: 'Deep dive into a module or file architecture and relationships via AST analysis',
-    trigger_patterns: 'when user needs to deeply understand a module file or component architecture and dependencies',
+    trigger_patterns:
+      'when user needs to deeply understand a module file or component architecture and dependencies',
     invocation_name: 'code-graph-mcp:understand',
     keywords: 'module-analysis,file-architecture,deep-understanding,relationship-map',
     tech_stack: 'ast,code-graph',
@@ -1915,8 +2028,10 @@ export const RESOURCE_METADATA = {
   'agent:code-graph-code-explorer': {
     intent_tags: 'explore,understand,code,ast,knowledge-graph,trace,architecture',
     domain_tags: 'code-graph,ast,analysis',
-    capability_summary: 'Deep code understanding expert using AST knowledge graph for tracing relationships and architecture',
-    trigger_patterns: 'when user needs deep code understanding tracing complex relationships or exploring module architecture',
+    capability_summary:
+      'Deep code understanding expert using AST knowledge graph for tracing relationships and architecture',
+    trigger_patterns:
+      'when user needs deep code understanding tracing complex relationships or exploring module architecture',
     invocation_name: 'code-graph-mcp:code-explorer',
     keywords: 'ast-explore,code-trace,relationship-graph,module-architecture',
     tech_stack: 'ast,code-graph',
@@ -1924,8 +2039,10 @@ export const RESOURCE_METADATA = {
   'agent:general-purpose': {
     intent_tags: 'general,research,search,multi-step,autonomous,complex',
     domain_tags: '',
-    capability_summary: 'General-purpose agent for researching complex questions searching code and executing multi-step tasks',
-    trigger_patterns: 'when task requires autonomous multi-step research code searching or complex investigation',
+    capability_summary:
+      'General-purpose agent for researching complex questions searching code and executing multi-step tasks',
+    trigger_patterns:
+      'when task requires autonomous multi-step research code searching or complex investigation',
     invocation_name: 'general-purpose',
     keywords: 'autonomous-research,code-search,multi-step,investigation',
     recommendation_mode: 'on_request',
@@ -1933,8 +2050,10 @@ export const RESOURCE_METADATA = {
   'agent:explore-agent': {
     intent_tags: 'explore,codebase,search,find,pattern,architecture,quick',
     domain_tags: '',
-    capability_summary: 'Fast agent for exploring codebases — find files by patterns search code for keywords answer architecture questions',
-    trigger_patterns: 'when user needs quick codebase exploration file pattern matching or architecture overview',
+    capability_summary:
+      'Fast agent for exploring codebases — find files by patterns search code for keywords answer architecture questions',
+    trigger_patterns:
+      'when user needs quick codebase exploration file pattern matching or architecture overview',
     invocation_name: 'Explore',
     keywords: 'codebase-explore,file-search,pattern-match,quick-search',
     recommendation_mode: 'on_request',
@@ -1942,8 +2061,10 @@ export const RESOURCE_METADATA = {
   'agent:plan-agent': {
     intent_tags: 'plan,architecture,design,strategy,implementation,trade-off',
     domain_tags: '',
-    capability_summary: 'Software architect agent for designing implementation plans with step-by-step strategies',
-    trigger_patterns: 'when user needs to plan implementation strategy identify critical files or consider architectural trade-offs',
+    capability_summary:
+      'Software architect agent for designing implementation plans with step-by-step strategies',
+    trigger_patterns:
+      'when user needs to plan implementation strategy identify critical files or consider architectural trade-offs',
     invocation_name: 'Plan',
     keywords: 'implementation-plan,architecture-design,strategy,step-by-step',
     recommendation_mode: 'on_request',
@@ -1951,7 +2072,8 @@ export const RESOURCE_METADATA = {
   'agent:claude-code-guide': {
     intent_tags: 'help,guide,claude-code,features,hooks,mcp,api,sdk,ide',
     domain_tags: 'claude-code,documentation',
-    capability_summary: 'Expert guide for Claude Code CLI features hooks slash commands MCP servers and API usage',
+    capability_summary:
+      'Expert guide for Claude Code CLI features hooks slash commands MCP servers and API usage',
     trigger_patterns: 'when user asks about Claude Code features API usage SDK integration or IDE setup',
     invocation_name: 'claude-code-guide',
     keywords: 'claude-code-help,feature-guide,api-docs,mcp-setup',
@@ -1993,12 +2115,12 @@ export const RESOURCE_METADATA = {
     intent_tags: 'think,reason,step-by-step,sequential,analyze,complex,logic',
     domain_tags: '',
     capability_summary: 'Sequential step-by-step reasoning for complex problems requiring structured thought',
-    trigger_patterns: 'when facing complex logical problems that benefit from structured sequential reasoning',
+    trigger_patterns:
+      'when facing complex logical problems that benefit from structured sequential reasoning',
     invocation_name: 'sequential-thinking',
     keywords: 'step-by-step,structured-thought,chain-of-thought,complex-reasoning',
     recommendation_mode: 'on_request',
   },
-
 };
 
 // ─── Marketing / SEO resources → on_request mode ────────────────────────────
@@ -2069,4 +2191,3 @@ for (const key of MARKETING_ON_REQUEST) {
     RESOURCE_METADATA[key].recommendation_mode = 'on_request';
   }
 }
-

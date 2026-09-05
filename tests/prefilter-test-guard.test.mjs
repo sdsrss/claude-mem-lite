@@ -36,7 +36,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
 });
 
 /** Spawn the bash prefilter with a Read payload, exactly as PostToolUse would. */
@@ -127,7 +131,12 @@ describe('post-tool-use.sh — CLAUDE_MEM_TEST_GUARD containment', () => {
     // other never got; asserting the two agree is what stops that recurring silently.
     const cases = [
       { CLAUDE_MEM_TEST_GUARD: '1', CLAUDE_MEM_TEST_REALDIR: realDir, CLAUDE_MEM_TEST_SANDBOX: sandbox },
-      { CLAUDE_MEM_DIR: join(root, 'explicit'), CLAUDE_MEM_TEST_GUARD: '1', CLAUDE_MEM_TEST_REALDIR: realDir, CLAUDE_MEM_TEST_SANDBOX: sandbox },
+      {
+        CLAUDE_MEM_DIR: join(root, 'explicit'),
+        CLAUDE_MEM_TEST_GUARD: '1',
+        CLAUDE_MEM_TEST_REALDIR: realDir,
+        CLAUDE_MEM_TEST_SANDBOX: sandbox,
+      },
       { CLAUDE_MEM_TEST_GUARD: '1', CLAUDE_MEM_TEST_REALDIR: realDir },
       {},
     ];
@@ -137,15 +146,19 @@ describe('post-tool-use.sh — CLAUDE_MEM_TEST_GUARD containment', () => {
       mkdirSync(join(root, 'explicit'), { recursive: true });
 
       // What Node resolves, asked in a subprocess so this test's own env stays clean.
-      const nodeDir = execFileSync(process.execPath, [
-        '-e',
-        "const{resolveDataDir}=await import(process.argv[1]);process.stdout.write(resolveDataDir(process.env.CLAUDE_MEM_DIR));",
-        join(REPO, 'lib', 'resolve-data-dir.mjs'),
-      ], {
-        env: { PATH: process.env.PATH, HOME: fakeHome, TMPDIR: tmpd, ...extra },
-        encoding: 'utf8',
-        stdio: 'pipe',
-      }).trim();
+      const nodeDir = execFileSync(
+        process.execPath,
+        [
+          '-e',
+          'const{resolveDataDir}=await import(process.argv[1]);process.stdout.write(resolveDataDir(process.env.CLAUDE_MEM_DIR));',
+          join(REPO, 'lib', 'resolve-data-dir.mjs'),
+        ],
+        {
+          env: { PATH: process.env.PATH, HOME: fakeHome, TMPDIR: tmpd, ...extra },
+          encoding: 'utf8',
+          stdio: 'pipe',
+        },
+      ).trim();
 
       // What bash resolves, read back from where the reads file actually landed.
       rmSync(join(root, 'probe'), { recursive: true, force: true });
@@ -153,8 +166,12 @@ describe('post-tool-use.sh — CLAUDE_MEM_TEST_GUARD containment', () => {
         rmSync(join(d, 'runtime'), { recursive: true, force: true });
       }
       runPrefilter(extra);
-      const landed = [realDir, sandbox, join(root, 'explicit'), join(tmpd, 'claude-mem-test-fallback')]
-        .filter((d) => readsFilesIn(d).length > 0);
+      const landed = [
+        realDir,
+        sandbox,
+        join(root, 'explicit'),
+        join(tmpd, 'claude-mem-test-fallback'),
+      ].filter((d) => readsFilesIn(d).length > 0);
       expect(landed, `env ${JSON.stringify(extra)} — expected exactly one landing dir`).toHaveLength(1);
       expect(landed[0], `env ${JSON.stringify(extra)}`).toBe(nodeDir);
     }

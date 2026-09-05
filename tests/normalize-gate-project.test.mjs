@@ -13,9 +13,16 @@ describe('normalize gate is per-scope (M-F3)', () => {
   const savedEnv = process.env.CLAUDE_MEM_DIR;
   let dir;
   afterEach(() => {
-    if (savedEnv === undefined) delete process.env.CLAUDE_MEM_DIR; else process.env.CLAUDE_MEM_DIR = savedEnv;
+    if (savedEnv === undefined) delete process.env.CLAUDE_MEM_DIR;
+    else process.env.CLAUDE_MEM_DIR = savedEnv;
     vi.resetModules();
-    if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
+    if (dir) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   });
 
   it('a recent global run gates the unscoped normalize but NOT a project-scoped one', async () => {
@@ -29,7 +36,7 @@ describe('normalize gate is per-scope (M-F3)', () => {
     // A whole-store normalize ran just now → the shared 7-day gate is CLOSED.
     writeFileSync(join(RUNTIME_DIR, 'last-normalize.json'), JSON.stringify({ epoch: Date.now() }));
 
-    expect(shouldRunNormalize()).toBe(false);            // unscoped: correctly gated
-    expect(shouldRunNormalize('project-B')).toBe(true);  // scoped: bypasses the global gate (was false pre-fix)
+    expect(shouldRunNormalize()).toBe(false); // unscoped: correctly gated
+    expect(shouldRunNormalize('project-B')).toBe(true); // scoped: bypasses the global gate (was false pre-fix)
   });
 });

@@ -29,18 +29,27 @@ function runScript(input, env = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    child.stdout.on('data', d => { stdout += d; });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
     child.on('close', () => resolveP({ stdout }));
     child.on('error', reject);
     child.stdin.write(JSON.stringify(input));
     child.stdin.end();
-    setTimeout(() => { child.kill(); reject(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    setTimeout(() => {
+      child.kill();
+      reject(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
 const BIG = '// metrics fixture module\n' + 'export const v = 1;\n'.repeat(500);
 const today = () => new Date().toISOString().slice(0, 10);
-const read = (fp, sid, extra = {}) => ({ tool_name: 'Read', session_id: sid, tool_input: { file_path: fp, ...extra } });
+const read = (fp, sid, extra = {}) => ({
+  tool_name: 'Read',
+  session_id: sid,
+  tool_input: { file_path: fp, ...extra },
+});
 
 describe('pre-tool-recall firing metrics (tier-1)', () => {
   let tmpRoot;
@@ -57,13 +66,21 @@ describe('pre-tool-recall firing metrics (tier-1)', () => {
     db.close();
   });
 
-  afterEach(() => { try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {}
+  });
 
   const env = (extra = {}) => ({ CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, ...extra });
   const metricEvents = () => {
     const p = join(tmpRoot, 'metrics', `${today()}.jsonl`);
     if (!existsSync(p)) return [];
-    return readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l).event);
+    return readFileSync(p, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l).event);
   };
 
   it('records a file_intel event when ① fires (metrics enabled)', async () => {
@@ -88,16 +105,22 @@ describe('pre-tool-recall firing metrics (tier-1)', () => {
     writeFileSync(fp, BIG);
     const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
     insertObs(db, {
-      sessionId: 'mem-m', project: 'parent--metricstest',
-      type: 'bugfix', importance: 2, title: 'm4 FTS regression',
+      sessionId: 'mem-m',
+      project: 'parent--metricstest',
+      type: 'bugfix',
+      importance: 2,
+      title: 'm4 FTS regression',
       lessonLearned: 'Rebuild the FTS index after schema edits to m4.',
       filesModified: '["m4.mjs"]',
     });
     db.close();
     await runScript(read(fp, 's4'), env({ CLAUDE_MEM_METRICS: '1' }));
     const p = join(tmpRoot, 'metrics', `${today()}.jsonl`);
-    const rows = readFileSync(p, 'utf8').trim().split('\n').map(l => JSON.parse(l));
-    const recall = rows.filter(r => r.event === 'pretool_recall');
+    const rows = readFileSync(p, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    const recall = rows.filter((r) => r.event === 'pretool_recall');
     expect(recall.length).toBe(1);
     expect(recall[0].injected).toBe(1);
     expect(recall[0].obs).toBe(1);
@@ -111,7 +134,11 @@ describe('pre-tool-recall firing metrics (tier-1)', () => {
     await runScript(read(fp, 's5'), env({ CLAUDE_MEM_METRICS: '1' })); // no obs seeded → file_intel only
     const p = join(tmpRoot, 'metrics', `${today()}.jsonl`);
     const events = existsSync(p)
-      ? readFileSync(p, 'utf8').trim().split('\n').map(l => JSON.parse(l).event) : [];
+      ? readFileSync(p, 'utf8')
+          .trim()
+          .split('\n')
+          .map((l) => JSON.parse(l).event)
+      : [];
     expect(events).toContain('file_intel');
     expect(events).not.toContain('pretool_recall');
   });

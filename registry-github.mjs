@@ -20,8 +20,10 @@ export function parseGitHubUrl(url) {
   // — so a pasted "HTTPS://GitHub.com/…" (valid, opens in the browser) isn't rejected as
   // "Invalid GitHub URL". The structural host check in the match below is unchanged, so
   // github.com.evil.com / github.com@evil.com still fail.
-  const normalized = clean.replace(/^https?:\/\/github\.com(?=\/|$)/i, m => m.toLowerCase());
-  const match = normalized.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?(?:\/tree\/([^/]+)(\/.*)?)?$/);
+  const normalized = clean.replace(/^https?:\/\/github\.com(?=\/|$)/i, (m) => m.toLowerCase());
+  const match = normalized.match(
+    /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?(?:\/tree\/([^/]+)(\/.*)?)?$/,
+  );
   if (!match) return null;
   const [, owner, repo, branch, pathRaw] = match;
   return {

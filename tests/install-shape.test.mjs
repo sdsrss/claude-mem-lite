@@ -17,11 +17,7 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 
-import {
-  detectInstallShape,
-  listPluginCacheVersions,
-  hasManagedCodeInstall,
-} from '../lib/install-shape.mjs';
+import { detectInstallShape, listPluginCacheVersions, hasManagedCodeInstall } from '../lib/install-shape.mjs';
 
 const REPO = resolve('.');
 let home;
@@ -46,9 +42,14 @@ function withRealDeps(root) {
   const pkgDir = join(root, 'node_modules', 'better-sqlite3');
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
-  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }));
-  writeFileSync(join(pkgDir, 'index.js'),
-    `module.exports = require(${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3'))});\n`);
+  writeFileSync(
+    join(pkgDir, 'package.json'),
+    JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }),
+  );
+  writeFileSync(
+    join(pkgDir, 'index.js'),
+    `module.exports = require(${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3'))});\n`,
+  );
   return root;
 }
 
@@ -56,10 +57,14 @@ function withRealDeps(root) {
 function withBrokenDeps(root) {
   mkdirSync(join(root, 'node_modules', 'better-sqlite3'), { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
-  writeFileSync(join(root, 'node_modules', 'better-sqlite3', 'package.json'),
-    JSON.stringify({ name: 'better-sqlite3', version: '0.0.0', main: 'index.js' }));
-  writeFileSync(join(root, 'node_modules', 'better-sqlite3', 'index.js'),
-    'throw new Error("Could not locate the bindings file. Tried: fixture");\n');
+  writeFileSync(
+    join(root, 'node_modules', 'better-sqlite3', 'package.json'),
+    JSON.stringify({ name: 'better-sqlite3', version: '0.0.0', main: 'index.js' }),
+  );
+  writeFileSync(
+    join(root, 'node_modules', 'better-sqlite3', 'index.js'),
+    'throw new Error("Could not locate the bindings file. Tried: fixture");\n',
+  );
   return root;
 }
 
@@ -82,14 +87,19 @@ function makePluginVersion(h, version, { deps = 'real' } = {}) {
 function makeManagedInstall(h, { deps = 'real' } = {}) {
   const root = join(h, '.claude-mem-lite');
   mkdirSync(root, { recursive: true });
-  for (const f of ['server.mjs', 'hook.mjs', 'cli.mjs', 'mem-cli.mjs']) writeFileSync(join(root, f), '// x\n');
+  for (const f of ['server.mjs', 'hook.mjs', 'cli.mjs', 'mem-cli.mjs'])
+    writeFileSync(join(root, f), '// x\n');
   if (deps === 'real') withRealDeps(root);
   else if (deps === 'broken') withBrokenDeps(root);
   return root;
 }
 
-beforeEach(() => { home = tmp(); });
-afterEach(() => { rmSync(home, { recursive: true, force: true }); });
+beforeEach(() => {
+  home = tmp();
+});
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
 
 describe('hasManagedCodeInstall — is ~/.claude-mem-lite a CODE home, or only a data dir?', () => {
   it('is false for the plugin-only shape (setup.sh makes the data dir, never puts source in it)', () => {
@@ -131,7 +141,9 @@ describe('listPluginCacheVersions', () => {
 
   it('ignores non-version entries in the cache dir', () => {
     makePluginVersion(home, '3.69.1', { deps: 'none' });
-    mkdirSync(join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', 'scratch'), { recursive: true });
+    mkdirSync(join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', 'scratch'), {
+      recursive: true,
+    });
     expect(listPluginCacheVersions({ home }).map((v) => v.version)).toEqual(['3.69.1']);
   });
 });
@@ -140,7 +152,11 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
   it('plugin-only: not managed, and the cache version is a runtime root', () => {
     makePluginVersion(home, '3.69.1');
     mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
-    const shape = detectInstallShape({ home, projectDir: pluginCacheDir(home, '3.69.1'), installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: pluginCacheDir(home, '3.69.1'),
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.managed).toBe(false);
     expect(shape.pluginVersions.map((v) => v.version)).toEqual(['3.69.1']);
     expect(shape.runtimeRoots.map((r) => r.root)).toContain(pluginCacheDir(home, '3.69.1'));
@@ -149,7 +165,11 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
   it('npm-global + managed: BOTH the running CLI dir and ~/.claude-mem-lite are roots', () => {
     const npmGlobal = withRealDeps(join(home, 'npm-global', 'lib', 'node_modules', 'claude-mem-lite'));
     makeManagedInstall(home);
-    const shape = detectInstallShape({ home, projectDir: npmGlobal, installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: npmGlobal,
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.managed).toBe(true);
     const roots = shape.runtimeRoots.map((r) => r.root);
     expect(roots).toContain(npmGlobal);
@@ -159,7 +179,11 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
   it('the plugin cache is a root even when the CLI is invoked from the npm-global package', () => {
     const npmGlobal = withRealDeps(join(home, 'npm-global', 'lib', 'node_modules', 'claude-mem-lite'));
     makePluginVersion(home, '3.69.1');
-    const shape = detectInstallShape({ home, projectDir: npmGlobal, installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: npmGlobal,
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.runtimeRoots.map((r) => r.root)).toEqual(
       expect.arrayContaining([npmGlobal, pluginCacheDir(home, '3.69.1')]),
     );
@@ -168,13 +192,21 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
   it('an UNCERTIFIED dir with no better-sqlite3 is not a root (nothing runs from it)', () => {
     // projectDir here is an arbitrary cwd, not a code home this module vouched for.
     // Contrast with the certified-home cases below, which MUST be reported.
-    const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: join(home, 'nowhere'),
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.runtimeRoots).toEqual([]);
   });
 
   it('a depless plugin cache version IS reported — the plugin runs from it', () => {
     makePluginVersion(home, '3.69.1', { deps: 'none' });
-    const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: join(home, 'nowhere'),
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.runtimeRoots).toHaveLength(1);
     expect(shape.runtimeRoots[0].ownDeps).toBe(false);
   });
@@ -213,7 +245,10 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     // …and the code home nested inside it owns none.
     const managed = join(home, '.claude-mem-lite');
     mkdirSync(managed, { recursive: true });
-    writeFileSync(join(managed, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
+    writeFileSync(
+      join(managed, 'package.json'),
+      JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }),
+    );
     for (const f of ['server.mjs', 'hook.mjs']) writeFileSync(join(managed, f), '// x\n');
 
     const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: managed });
@@ -228,7 +263,10 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     const { probeRuntimeRoots } = await import('../lib/install-shape.mjs');
     const managed = join(home, '.claude-mem-lite');
     mkdirSync(managed, { recursive: true });
-    writeFileSync(join(managed, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
+    writeFileSync(
+      join(managed, 'package.json'),
+      JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }),
+    );
     for (const f of ['server.mjs', 'hook.mjs']) writeFileSync(join(managed, f), '// x\n');
     const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: managed });
     const [r] = probeRuntimeRoots(shape.runtimeRoots);
@@ -258,7 +296,11 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     makePluginVersion(home, '3.69.1');
     makePluginVersion(home, '3.68.1');
     makePluginVersion(home, '3.66.1');
-    const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: join(home, 'nowhere'),
+      installDir: join(home, '.claude-mem-lite'),
+    });
     expect(shape.pluginVersions.map((v) => v.version)).toEqual(['3.69.1', '3.68.1', '3.66.1']);
     const cacheRoots = shape.runtimeRoots.filter((r) => /plugin cache/.test(r.label));
     expect(cacheRoots).toHaveLength(1);
@@ -269,7 +311,9 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     makePluginVersion(home, '3.69.1');
     makePluginVersion(home, '3.68.1');
     const shape = detectInstallShape({
-      home, projectDir: join(home, 'nowhere'), installDir: join(home, '.claude-mem-lite'),
+      home,
+      projectDir: join(home, 'nowhere'),
+      installDir: join(home, '.claude-mem-lite'),
       pluginRoot: pluginCacheDir(home, '3.68.1'),
     });
     const cacheRoots = shape.runtimeRoots.filter((r) => /plugin cache/.test(r.label));
@@ -285,13 +329,16 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     expect(listPluginCacheVersions({ home }).map((v) => v.version)).toEqual(['3.70.0-rc1', '3.69.1']);
   });
 
-  it('probes a tree shared through setup.sh\'s symlink ONCE, but names both homes', () => {
+  it("probes a tree shared through setup.sh's symlink ONCE, but names both homes", () => {
     const data = withRealDeps(join(home, '.claude-mem-lite'));
     for (const f of ['server.mjs', 'hook.mjs']) writeFileSync(join(data, f), '// x\n');
     const cache = pluginCacheDir(home, '3.69.1');
     mkdirSync(join(cache, 'scripts'), { recursive: true });
     writeFileSync(join(cache, 'scripts', 'launch.mjs'), '// launcher\n');
-    writeFileSync(join(cache, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '3.69.1' }));
+    writeFileSync(
+      join(cache, 'package.json'),
+      JSON.stringify({ name: 'claude-mem-lite', version: '3.69.1' }),
+    );
     symlinkSync(join(data, 'node_modules'), join(cache, 'node_modules'));
     const shape = detectInstallShape({ home, projectDir: join(home, 'nowhere'), installDir: data });
     // One tree → one probe → one failure message, not two `cd` paths for one fault.
@@ -305,7 +352,11 @@ describe('detectInstallShape — every tree a runtime surface resolves', () => {
     const npmGlobal = withRealDeps(join(home, 'npm-global', 'lib', 'node_modules', 'claude-mem-lite'));
     makeManagedInstall(home);
     makePluginVersion(home, '3.69.1');
-    const shape = detectInstallShape({ home, projectDir: npmGlobal, installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: npmGlobal,
+      installDir: join(home, '.claude-mem-lite'),
+    });
     const labels = shape.runtimeRoots.map((r) => r.label);
     expect(new Set(labels).size).toBe(labels.length);
     expect(labels.join(' ')).toMatch(/plugin cache/);
@@ -331,7 +382,10 @@ describe('probeRuntimeRoots — the check that must not answer about the wrong t
     const { probeRuntimeRoots } = await import('../lib/install-shape.mjs');
     const a = withRealDeps(join(home, 'npm-global', 'lib', 'node_modules', 'claude-mem-lite'));
     const b = withRealDeps(join(home, 'other'));
-    const results = probeRuntimeRoots([{ label: 'a', root: a }, { label: 'b', root: b }]);
+    const results = probeRuntimeRoots([
+      { label: 'a', root: a },
+      { label: 'b', root: b },
+    ]);
     expect(results.every((r) => r.ok)).toBe(true);
   });
 
@@ -349,7 +403,11 @@ describe('regression guard: the sandbox scenarios that produced this module', ()
   it('plugin-only install exposes NO managed layout to demand entry points from', () => {
     makePluginVersion(home, '3.69.1');
     mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
-    const shape = detectInstallShape({ home, projectDir: pluginCacheDir(home, '3.69.1'), installDir: join(home, '.claude-mem-lite') });
+    const shape = detectInstallShape({
+      home,
+      projectDir: pluginCacheDir(home, '3.69.1'),
+      installDir: join(home, '.claude-mem-lite'),
+    });
     // The plugin ships its own code; demanding ~/.claude-mem-lite/server.mjs here
     // is what produced "3 issue(s) found" on a healthy recommended install.
     expect(shape.managed).toBe(false);

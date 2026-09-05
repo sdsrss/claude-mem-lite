@@ -114,10 +114,10 @@ describe('hook-shared callLLM — provider routing', () => {
 
     expect(out).toBe('cli summary');
     expect(callHaikuMock).not.toHaveBeenCalled();
-    expect(execClaudeCliSyncMock).toHaveBeenCalledWith(
-      'haiku',
-      { input: 'SYS\nsummarize this', timeout: 20000 },
-    );
+    expect(execClaudeCliSyncMock).toHaveBeenCalledWith('haiku', {
+      input: 'SYS\nsummarize this',
+      timeout: 20000,
+    });
     // Drift guard: this leg used to hand-roll its own execFileSync with a
     // duplicated argv+env pair, which is how the headless flags could be pinned
     // at three sites and lost at the fourth. Re-inlining a spawn here fails both

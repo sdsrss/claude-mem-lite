@@ -38,7 +38,13 @@ function mktmp(prefix) {
   return d;
 }
 afterAll(() => {
-  for (const d of tmps.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
+  for (const d of tmps.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  }
 });
 
 let db;
@@ -54,10 +60,12 @@ function seedObs(project) {
   // it once PRAGMA foreign_keys is on, so seed the parent row rather than only the child.
   const sid = `sess-${++seq}`;
   const now = Date.now();
-  db.prepare('INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch) VALUES (?, ?, ?, ?, ?)')
-    .run(sid, sid, project, new Date(now).toISOString(), now);
-  db.prepare("INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch) VALUES (?, ?, 'discovery', 'seed', 'seed', ?, ?)")
-    .run(sid, project, new Date(now).toISOString(), now);
+  db.prepare(
+    'INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch) VALUES (?, ?, ?, ?, ?)',
+  ).run(sid, sid, project, new Date(now).toISOString(), now);
+  db.prepare(
+    "INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch) VALUES (?, ?, 'discovery', 'seed', 'seed', ?, ?)",
+  ).run(sid, project, new Date(now).toISOString(), now);
 }
 
 describe('projectNameFromDir — one naming rule, not two', () => {
@@ -131,8 +139,9 @@ describe('resolveCliProject', () => {
     mkdirSync(pkg, { recursive: true });
     seedObs(projectNameFromDir(root));
     const now = Date.now();
-    db.prepare('INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch) VALUES (?, ?, ?, ?, ?)')
-      .run('cc-1', 'cc-1', projectNameFromDir(pkg), new Date(now).toISOString(), now);
+    db.prepare(
+      'INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch) VALUES (?, ?, ?, ?, ?)',
+    ).run('cc-1', 'cc-1', projectNameFromDir(pkg), new Date(now).toISOString(), now);
     expect(resolveCliProject(db, { dir: pkg })).toBe(projectNameFromDir(pkg));
   });
 
@@ -167,8 +176,9 @@ describe('resolveCliProject', () => {
     mkdirSync(join(root, '.git'));
     const deep = join(root, 'src');
     mkdirSync(deep, { recursive: true });
-    db.prepare("INSERT INTO deferred_work (project, title, priority, status, created_at_epoch) VALUES (?, 'x', 2, 'open', ?)")
-      .run(projectNameFromDir(root), Date.now());
+    db.prepare(
+      "INSERT INTO deferred_work (project, title, priority, status, created_at_epoch) VALUES (?, 'x', 2, 'open', ?)",
+    ).run(projectNameFromDir(root), Date.now());
     expect(resolveCliProject(db, { dir: deep })).toBe(projectNameFromDir(root));
   });
 
@@ -184,8 +194,9 @@ describe('resolveCliProject', () => {
     seedObs(projectNameFromDir(a));
     seedObs(projectNameFromDir(b));
     expect(resolveCliProject(db, { dir: a })).toBe(projectNameFromDir(a));
-    expect(resolveCliProject(db, { dir: b }),
-      'the second directory got the first one\'s cached answer').toBe(projectNameFromDir(b));
+    expect(resolveCliProject(db, { dir: b }), "the second directory got the first one's cached answer").toBe(
+      projectNameFromDir(b),
+    );
     expect(projectNameFromDir(a)).not.toBe(projectNameFromDir(b));
   });
 
@@ -210,7 +221,11 @@ describe('resolveCliProject', () => {
     const deep = join(root, 'src');
     mkdirSync(deep, { recursive: true });
     seedObs(projectNameFromDir(root));
-    const broken = { prepare() { throw new Error('database is locked'); } };
+    const broken = {
+      prepare() {
+        throw new Error('database is locked');
+      },
+    };
     expect(resolveCliProject(broken, { dir: deep })).toBe(projectNameFromDir(deep));
   });
 });
@@ -228,23 +243,25 @@ describe('CLI end to end — a subdirectory reads what the repo root saved', () 
     // PWD must be set explicitly: inferProject() prefers process.env.PWD over cwd, and
     // execFileSync's `cwd` option does NOT update the inherited PWD — without this the
     // child would derive its name from the test runner's directory, not the fixture.
-    const run = (cwd, args) => execFileSync(process.execPath, [CLI, ...args], {
-      cwd,
-      env: {
-        ...process.env,
-        PWD: cwd,
-        CLAUDE_PROJECT_DIR: undefined,
-        CLAUDE_MEM_DIR: dataDir,
-        CLAUDE_MEM_SKIP_UPDATE: '1',
-        MEM_QUIET_HOOKS: '1',
-      },
-      encoding: 'utf8',
-    });
+    const run = (cwd, args) =>
+      execFileSync(process.execPath, [CLI, ...args], {
+        cwd,
+        env: {
+          ...process.env,
+          PWD: cwd,
+          CLAUDE_PROJECT_DIR: undefined,
+          CLAUDE_MEM_DIR: dataDir,
+          CLAUDE_MEM_SKIP_UPDATE: '1',
+          MEM_QUIET_HOOKS: '1',
+        },
+        encoding: 'utf8',
+      });
 
     run(repo, ['save', 'root-level marker observation', '--type', 'discovery']);
     const out = run(deep, ['recent', '5']);
-    expect(out, `a nested cwd could not see what the repo root saved:\n${out}`)
-      .toContain('root-level marker observation');
+    expect(out, `a nested cwd could not see what the repo root saved:\n${out}`).toContain(
+      'root-level marker observation',
+    );
     // And the row really is stored under the repo-root name, not re-homed under the subdir.
     expect(basename(repo)).toBe('myrepo');
   });
@@ -263,23 +280,25 @@ describe('CLI end to end — a subdirectory reads what the repo root saved', () 
     mkdirSync(pkg, { recursive: true });
     const dataDir = join(box, 'data');
     mkdirSync(dataDir, { recursive: true });
-    const run = (cwd, args) => execFileSync(process.execPath, [CLI, ...args], {
-      cwd,
-      env: {
-        ...process.env,
-        PWD: cwd,
-        CLAUDE_PROJECT_DIR: undefined,
-        CLAUDE_MEM_DIR: dataDir,
-        CLAUDE_MEM_SKIP_UPDATE: '1',
-        MEM_QUIET_HOOKS: '1',
-      },
-      encoding: 'utf8',
-    });
+    const run = (cwd, args) =>
+      execFileSync(process.execPath, [CLI, ...args], {
+        cwd,
+        env: {
+          ...process.env,
+          PWD: cwd,
+          CLAUDE_PROJECT_DIR: undefined,
+          CLAUDE_MEM_DIR: dataDir,
+          CLAUDE_MEM_SKIP_UPDATE: '1',
+          MEM_QUIET_HOOKS: '1',
+        },
+        encoding: 'utf8',
+      });
 
     run(repo, ['save', 'root level note alpha', '--type', 'discovery']);
     const saved = run(pkg, ['save', 'package level note beta', '--type', 'discovery']);
-    expect(saved, `the package-level save was absorbed into the enclosing repo:\n${saved}`)
-      .toContain('packages--api');
+    expect(saved, `the package-level save was absorbed into the enclosing repo:\n${saved}`).toContain(
+      'packages--api',
+    );
     expect(saved).not.toContain('monorepo');
   });
 });

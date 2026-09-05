@@ -56,13 +56,17 @@ async function main() {
     const e = JSON.parse(input);
     filePath = e.tool_input?.file_path;
     sessionId = e.session_id || null;
-  } catch { return; }
+  } catch {
+    return;
+  }
   if (!filePath) return;
 
   const cdPath = cooldownPathFor(sessionId);
   if (!existsSync(cdPath)) return;
   let entry;
-  try { entry = JSON.parse(readFileSync(cdPath, 'utf8'))[filePath]; } catch (e) {
+  try {
+    entry = JSON.parse(readFileSync(cdPath, 'utf8'))[filePath];
+  } catch (e) {
     // A corrupt cooldown file (torn concurrent write — audit 2026-08-14 M-6) turns
     // the bind-salience check into a zero-trace no-op; record it so `stats` can see
     // the surface die instead of silently reading zero errors (M-5).
@@ -73,7 +77,11 @@ async function main() {
   if (!idents || typeof idents !== 'object') return;
 
   let post;
-  try { post = readFileSync(filePath, 'utf8'); } catch { return; }
+  try {
+    post = readFileSync(filePath, 'utf8');
+  } catch {
+    return;
+  }
 
   const dropped = [];
   for (const [obsId, tokens] of Object.entries(idents)) {
@@ -83,7 +91,9 @@ async function main() {
 
   const lines = ['[mem] PostToolUse recall — system-injected context, continue your planned action:'];
   for (const d of dropped.slice(0, 3)) {
-    lines.push(`[mem] ⚠ your edit to ${basename(filePath)} dropped \`${d.token}\` flagged by #${d.obsId} — if intentional say so, else re-check before moving on.`);
+    lines.push(
+      `[mem] ⚠ your edit to ${basename(filePath)} dropped \`${d.token}\` flagged by #${d.obsId} — if intentional say so, else re-check before moving on.`,
+    );
   }
   queueHookContext('PostToolUse', lines.join('\n'));
   flushHookStdout();
@@ -101,4 +111,10 @@ process.stdout.on('error', () => {});
 // Record what slips past main()'s early returns before the mandatory swallow —
 // this script had zero telemetry (audit 2026-08-14 M-5). Recorder never throws;
 // the outer catch keeps the exit code 0 regardless.
-main().catch((e) => { try { recordHookError('post-recall:main', e, RUNTIME_DIR); } catch { /* never */ } });
+main().catch((e) => {
+  try {
+    recordHookError('post-recall:main', e, RUNTIME_DIR);
+  } catch {
+    /* never */
+  }
+});

@@ -43,7 +43,11 @@ import { describe, it, expect } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
 import {
-  decayAndMarkIdle, maintenanceStats, purgeStale, boostAccessed, demotePinned,
+  decayAndMarkIdle,
+  maintenanceStats,
+  purgeStale,
+  boostAccessed,
+  demotePinned,
 } from '../lib/maintain-core.mjs';
 import { runIdleCleanup } from '../search-scoring.mjs';
 import { redirectSupersededIds } from '../lib/citation-tracker.mjs';
@@ -53,8 +57,8 @@ const OLD = -40 * DAY;
 const PROJECT = 'proj-a';
 const ctx = (staleAge) => ({ projectFilter: '', baseParams: [], staleAge, opCap: 1000 });
 const get = (db, id, col) => db.prepare(`SELECT ${col} AS v FROM observations WHERE id = ?`).get(id).v;
-const add = (db, o) => Number(insertObs(db,
-  { sessionId: 'sess-1', project: PROJECT, epochOffset: OLD, ...o }).lastInsertRowid);
+const add = (db, o) =>
+  Number(insertObs(db, { sessionId: 'sess-1', project: PROJECT, epochOffset: OLD, ...o }).lastInsertRowid);
 
 function freshDb() {
   const db = createTestDb();
@@ -64,8 +68,11 @@ function freshDb() {
 
 /** Retire `id` exactly as the supersession path does: epoch-ms integer + successor. */
 function retire(db, id, successor) {
-  db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?')
-    .run(Date.now(), successor, id);
+  db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(
+    Date.now(),
+    successor,
+    id,
+  );
 }
 
 describe('decayAndMarkIdle: a tombstone is not auto-marked for purge', () => {
@@ -83,8 +90,9 @@ describe('decayAndMarkIdle: a tombstone is not auto-marked for purge', () => {
 
     // The live twin proves the fixture qualifies; without it, "the tombstone was not
     // marked" could equally mean the fixture never satisfied the predicate at all.
-    expect(get(db, live, 'compressed_into'), 'fixture does not reach mark-idle at all')
-      .toBe(COMPRESSED_PENDING_PURGE);
+    expect(get(db, live, 'compressed_into'), 'fixture does not reach mark-idle at all').toBe(
+      COMPRESSED_PENDING_PURGE,
+    );
     expect(get(db, tomb, 'compressed_into'), 'a retired row was queued for hard delete').toBeNull();
     expect(idleMarked).toBe(1);
     db.close();
@@ -161,8 +169,9 @@ describe('runIdleCleanup (MCP idle timer): the same exemption on the sibling wri
 
     runIdleCleanup(db);
 
-    expect(get(db, live, 'compressed_into'), 'fixture does not reach the mark pass at all')
-      .toBe(COMPRESSED_PENDING_PURGE);
+    expect(get(db, live, 'compressed_into'), 'fixture does not reach the mark pass at all').toBe(
+      COMPRESSED_PENDING_PURGE,
+    );
     // NOT `toBeNull()`. The invariant is "never queued for HARD DELETE", and this function
     // has a second pass that writes COMPRESSED_AUTO (-1) — which still claims the tombstone
     // and is deliberately left doing so. -1 is not deletable: purgeStale's WHERE names
@@ -170,8 +179,9 @@ describe('runIdleCleanup (MCP idle timer): the same exemption on the sibling wri
     // redirectSupersededIds reads no compressed_into at all. So the row stays hidden (it
     // already was, being retired) and its redirect survives. A first draft of this case
     // asserted null, which would have forced the exemption onto a pass that causes no harm.
-    expect(get(db, tomb, 'compressed_into'), 'a retired row was queued for hard delete')
-      .not.toBe(COMPRESSED_PENDING_PURGE);
+    expect(get(db, tomb, 'compressed_into'), 'a retired row was queued for hard delete').not.toBe(
+      COMPRESSED_PENDING_PURGE,
+    );
     db.close();
   });
 });
@@ -183,22 +193,27 @@ describe('why the exemption exists: purge is what destroys the redirect', () => 
     const tomb = add(db, { title: 'the retired original', importance: 1, injectionCount: 0 });
     retire(db, tomb, successor);
 
-    expect(redirectSupersededIds(db, PROJECT, [tomb]), 'redirect not working in the fixture')
-      .toEqual(new Set([successor]));
+    expect(redirectSupersededIds(db, PROJECT, [tomb]), 'redirect not working in the fixture').toEqual(
+      new Set([successor]),
+    );
 
     // MARKING is not the harm — redirectSupersededIds has no compressed_into filter, so a
     // pending-purge tombstone still redirects. DELETION is. This is what separates the two
     // PENDING_PURGE writers from the ops that only move importance.
-    db.prepare('UPDATE observations SET compressed_into = ? WHERE id = ?')
-      .run(COMPRESSED_PENDING_PURGE, tomb);
-    expect(redirectSupersededIds(db, PROJECT, [tomb]),
-      'marking alone already broke the redirect — the premise of the fix is wrong')
-      .toEqual(new Set([successor]));
+    db.prepare('UPDATE observations SET compressed_into = ? WHERE id = ?').run(
+      COMPRESSED_PENDING_PURGE,
+      tomb,
+    );
+    expect(
+      redirectSupersededIds(db, PROJECT, [tomb]),
+      'marking alone already broke the redirect — the premise of the fix is wrong',
+    ).toEqual(new Set([successor]));
 
     expect(purgeStale(db, ctx(), Date.now())).toBe(1);
-    expect(redirectSupersededIds(db, PROJECT, [tomb]),
-      'the successor is somehow still reachable after the row was deleted')
-      .toEqual(new Set([tomb]));
+    expect(
+      redirectSupersededIds(db, PROJECT, [tomb]),
+      'the successor is somehow still reachable after the row was deleted',
+    ).toEqual(new Set([tomb]));
     db.close();
   });
 });

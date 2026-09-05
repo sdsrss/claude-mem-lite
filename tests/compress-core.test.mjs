@@ -20,14 +20,52 @@ describe('selectCompressionCandidates', () => {
   test('returns importance<=1 (incl. decay-floor imp=0), never-accessed, old, uncompressed observations', () => {
     const db = createTestDb();
     seed(db);
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'keep me', importance: 1, epochOffset: OLD });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'keep me',
+      importance: 1,
+      epochOffset: OLD,
+    });
     // imp=0 (citation-decay floor / LLM low-signal filter) is STRICTLY lower value than imp=1
     // and must be a candidate too — `= 1` (exact) left these immortal (audit imp=0 GC fix).
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'floored imp0', importance: 0, epochOffset: OLD });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'too important', importance: 2, epochOffset: OLD });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'accessed', importance: 1, accessCount: 3, epochOffset: OLD });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'too recent', importance: 1, epochOffset: 0 });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'already compressed', importance: 1, epochOffset: OLD, compressedInto: 999 });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'floored imp0',
+      importance: 0,
+      epochOffset: OLD,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'too important',
+      importance: 2,
+      epochOffset: OLD,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'accessed',
+      importance: 1,
+      accessCount: 3,
+      epochOffset: OLD,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'too recent',
+      importance: 1,
+      epochOffset: 0,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'already compressed',
+      importance: 1,
+      epochOffset: OLD,
+      compressedInto: 999,
+    });
 
     const cutoff = Date.now() - 30 * DAY;
     const got = selectCompressionCandidates(db, { cutoff });
@@ -37,8 +75,21 @@ describe('selectCompressionCandidates', () => {
   test('includeAutoMarked folds in auto-compressed (COMPRESSED_AUTO) rows', () => {
     const db = createTestDb();
     seed(db);
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'fresh-null', importance: 1, epochOffset: OLD });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'auto-marked', importance: 1, epochOffset: OLD, compressedInto: COMPRESSED_AUTO });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'fresh-null',
+      importance: 1,
+      epochOffset: OLD,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'auto-marked',
+      importance: 1,
+      epochOffset: OLD,
+      compressedInto: COMPRESSED_AUTO,
+    });
 
     const cutoff = Date.now() - 30 * DAY;
     expect(selectCompressionCandidates(db, { cutoff }).length).toBe(1);
@@ -48,12 +99,34 @@ describe('selectCompressionCandidates', () => {
   test('excludes rows carrying a real lesson_learned — folding into a title-only summary would discard it', () => {
     const db = createTestDb();
     seed(db);
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'noise no lesson', importance: 1, epochOffset: OLD });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'sentinel none', importance: 1, epochOffset: OLD, lessonLearned: 'none' });
-    insertObs(db, { sessionId: 'sess-1', project: 'proj-a', title: 'has real lesson', importance: 1, epochOffset: OLD, lessonLearned: 'strip query string before parsing the branch name' });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'noise no lesson',
+      importance: 1,
+      epochOffset: OLD,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'sentinel none',
+      importance: 1,
+      epochOffset: OLD,
+      lessonLearned: 'none',
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      title: 'has real lesson',
+      importance: 1,
+      epochOffset: OLD,
+      lessonLearned: 'strip query string before parsing the branch name',
+    });
 
     const cutoff = Date.now() - 30 * DAY;
-    const got = selectCompressionCandidates(db, { cutoff }).map((r) => r.title).sort();
+    const got = selectCompressionCandidates(db, { cutoff })
+      .map((r) => r.title)
+      .sort();
     expect(got).toEqual(['noise no lesson', 'sentinel none']); // real-lesson row preserved; 'none' sentinel still compressible
   });
 });
@@ -78,9 +151,20 @@ describe('compressGroup', () => {
     const db = createTestDb();
     seed(db);
     const rows = ['x', 'y', 'z'].map((t) =>
-      insertObs(db, { sessionId: 'sess-1', project: 'proj-a', type: 'bugfix', title: t, importance: 1, epochOffset: OLD })
+      insertObs(db, {
+        sessionId: 'sess-1',
+        project: 'proj-a',
+        type: 'bugfix',
+        title: t,
+        importance: 1,
+        epochOffset: OLD,
+      }),
     );
-    const obs = rows.map((r) => db.prepare('SELECT id, project, type, title, created_at_epoch FROM observations WHERE id = ?').get(Number(r.lastInsertRowid)));
+    const obs = rows.map((r) =>
+      db
+        .prepare('SELECT id, project, type, title, created_at_epoch FROM observations WHERE id = ?')
+        .get(Number(r.lastInsertRowid)),
+    );
 
     const { summaryId, compressed } = compressGroup(db, 'proj-a', obs);
     expect(compressed).toBe(3);
@@ -91,7 +175,9 @@ describe('compressGroup', () => {
     expect(summary.title).toBe('Weekly summary: 3 bugfix observations');
 
     for (const o of obs) {
-      expect(db.prepare('SELECT compressed_into AS c FROM observations WHERE id = ?').get(o.id).c).toBe(summaryId);
+      expect(db.prepare('SELECT compressed_into AS c FROM observations WHERE id = ?').get(o.id).c).toBe(
+        summaryId,
+      );
     }
   });
 
@@ -110,10 +196,19 @@ describe('compressGroup', () => {
       'database query timeout during batch import',
     ];
     const rows = titles.map((t) =>
-      insertObs(db, { sessionId: 'sess-1', project: 'proj-a', type: 'bugfix', title: t, importance: 1, epochOffset: OLD })
+      insertObs(db, {
+        sessionId: 'sess-1',
+        project: 'proj-a',
+        type: 'bugfix',
+        title: t,
+        importance: 1,
+        epochOffset: OLD,
+      }),
     );
     const obs = rows.map((r) =>
-      db.prepare('SELECT id, project, type, title, created_at_epoch FROM observations WHERE id = ?').get(Number(r.lastInsertRowid))
+      db
+        .prepare('SELECT id, project, type, title, created_at_epoch FROM observations WHERE id = ?')
+        .get(Number(r.lastInsertRowid)),
     );
 
     // Pin the vocab cache to this DB's corpus so the test is order-independent.
@@ -123,9 +218,9 @@ describe('compressGroup', () => {
     const { summaryId } = compressGroup(db, 'proj-a', obs);
 
     // 1. A vector row exists for the summary, tagged with the current vocab version.
-    const vrow = db.prepare(
-      'SELECT vocab_version, vector FROM observation_vectors WHERE observation_id = ?'
-    ).get(summaryId);
+    const vrow = db
+      .prepare('SELECT vocab_version, vector FROM observation_vectors WHERE observation_id = ?')
+      .get(summaryId);
     expect(vrow).toBeTruthy();
     expect(vrow.vocab_version).toBe(vocab.version);
     expect(vrow.vector.length).toBeGreaterThan(0);

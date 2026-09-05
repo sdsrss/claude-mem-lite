@@ -110,7 +110,11 @@ function buildAssistantCorpus(file) {
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     if (!line) continue;
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
     const text = assistantProseText(entry);
     if (!text) continue;
     const sid = entry.sessionId || file;
@@ -126,8 +130,14 @@ function buildAssistantCorpus(file) {
  * @param {{ start: number, end: number, project?: string, m?: number, placebo?: 'random'|'cutoff', collectEvents?: boolean }} opts
  * @returns {{ perBucket: Array<{ surface: string, channel: 'action'|'prose', nEvents: number, nSessions: number, effect: number, ci95: [number, number], rdd_jump: number, mde: number }>, events?: Array<{ sessionId: string, surface: string, actionDelta: number, cited: boolean, spec: 'low'|'high', query: string, lessonText: string, outputActions: string, outputProse: string }> }}
  */
-export function computeAdoption(transcriptDir, db, { start, end, project = 'projects--mem', m = 3, placebo, collectEvents = false } = {}) {
-  const files = readdirSync(transcriptDir).filter((n) => n.endsWith('.jsonl')).map((n) => join(transcriptDir, n));
+export function computeAdoption(
+  transcriptDir,
+  db,
+  { start, end, project = 'projects--mem', m = 3, placebo, collectEvents = false } = {},
+) {
+  const files = readdirSync(transcriptDir)
+    .filter((n) => n.endsWith('.jsonl'))
+    .map((n) => join(transcriptDir, n));
   const events = [];
   // Task 9: when collectEvents, build each file's per-session assistant-prose
   // corpus ONCE (not per event) for the cite check below. Keyed by
@@ -138,7 +148,8 @@ export function computeAdoption(transcriptDir, db, { start, end, project = 'proj
   for (const f of files) {
     const assistantCorpus = collectEvents ? buildAssistantCorpus(f) : null;
     for (const e of extractInjectionEvents(f, { start, end })) {
-      if (collectEvents) sessionCorpusByEvent.set(e, assistantCorpus.bySession.get(e.sessionId) ?? assistantCorpus.wholeFile);
+      if (collectEvents)
+        sessionCorpusByEvent.set(e, assistantCorpus.bySession.get(e.sessionId) ?? assistantCorpus.wholeFile);
       events.push(e);
     }
   }
@@ -161,18 +172,29 @@ export function computeAdoption(transcriptDir, db, { start, end, project = 'proj
     // (computed from perEvent, which is built from cosOf() over these
     // swapped .text values) -- a sound estimator's ci95 must bracket 0.
     if (placebo === 'random') {
-      const pool = db.prepare(
-        `SELECT title, lesson_learned FROM observations
-         WHERE lesson_learned IS NOT NULL AND created_at_epoch <= ? ORDER BY id`).all(ev.ts);
+      const pool = db
+        .prepare(
+          `SELECT title, lesson_learned FROM observations
+         WHERE lesson_learned IS NOT NULL AND created_at_epoch <= ? ORDER BY id`,
+        )
+        .all(ev.ts);
       if (pool.length) {
         const rnd = lcg(ev.sessionId + ':' + ev.ts);
-        const pickText = () => { const p = pool[Math.floor(rnd() * pool.length)]; return `${p.title || ''} ${p.lesson_learned || ''}`.trim(); };
+        const pickText = () => {
+          const p = pool[Math.floor(rnd() * pool.length)];
+          return `${p.title || ''} ${p.lesson_learned || ''}`.trim();
+        };
         shown = shown.map((c) => ({ ...c, text: pickText() }));
         nearMiss = nearMiss.map((c) => ({ ...c, text: pickText() }));
       }
     }
     const { proseBag, actionBag } = dualChannelBags(ev.outputWindow);
-    corpus.push(ev.outputWindow.prose, ev.outputWindow.actions, ...shown.map((c) => c.text), ...nearMiss.map((c) => c.text));
+    corpus.push(
+      ev.outputWindow.prose,
+      ev.outputWindow.actions,
+      ...shown.map((c) => c.text),
+      ...nearMiss.map((c) => c.text),
+    );
     resolved.push({ ev, shown, nearMiss, proseBag, actionBag });
   }
   const idf = buildIdf(corpus);
@@ -180,7 +202,10 @@ export function computeAdoption(transcriptDir, db, { start, end, project = 'proj
   // bucket key `${surface}:${channel}` -> { points: RDD input, perEvent: cluster-bootstrap input }
   const buckets = new Map();
   const bk = (surface, channel) => `${surface}:${channel}`;
-  const get = (k) => { if (!buckets.has(k)) buckets.set(k, { points: [], perEvent: [] }); return buckets.get(k); };
+  const get = (k) => {
+    if (!buckets.has(k)) buckets.set(k, { points: [], perEvent: [] });
+    return buckets.get(k);
+  };
 
   // Task 9: collectEvents output, one row per EVENT (not per channel) --
   // populated from the SAME `idf` (built once, above, over the whole run's
@@ -192,7 +217,10 @@ export function computeAdoption(transcriptDir, db, { start, end, project = 'proj
   const outEvents = collectEvents ? [] : null;
   for (const { ev, shown, nearMiss, proseBag, actionBag } of resolved) {
     let actionDelta; // captured from the 'action' channel iteration below
-    for (const [channel, outBag] of [['action', actionBag], ['prose', proseBag]]) {
+    for (const [channel, outBag] of [
+      ['action', actionBag],
+      ['prose', proseBag],
+    ]) {
       const cosOf = (c) => cosine(outBag, textToBag(c.text), idf);
       const cosShown = Math.max(...shown.map(cosOf));
       const nmCos = nearMiss.map(cosOf);
@@ -258,10 +286,13 @@ export function computeAdoption(transcriptDir, db, { start, end, project = 'proj
     // RMS around the bucket's OWN mean, not around zero -- centering on raw
     // zero folds a non-zero adoption signal's magnitude into the "noise" term,
     // inflating sd (and therefore mde, the pre-registered power-gate field).
-    const sd = Math.sqrt(b.perEvent.reduce((s, r) => s + (r.value - mean) ** 2, 0) / Math.max(1, b.perEvent.length));
+    const sd = Math.sqrt(
+      b.perEvent.reduce((s, r) => s + (r.value - mean) ** 2, 0) / Math.max(1, b.perEvent.length),
+    );
     const nSessions = new Set(b.perEvent.map((r) => r.sessionId)).size;
     perBucket.push({
-      surface, channel,
+      surface,
+      channel,
       nEvents: b.perEvent.length,
       nSessions,
       effect: mean, // PRIMARY: cluster-bootstrap mean of control-subtracted deltas (consistent with ci95)
@@ -332,16 +363,18 @@ export function emitLabels(dir, db, { N, out = 'tasks/adoption-handlabel.jsonl',
     i++;
     if (bucket.length) picked.push(bucket.shift());
   }
-  const lines = picked.map((r, idx) => JSON.stringify({
-    id: `${r.sessionId}:${r.surface}:${idx}`,
-    surface: r.surface,
-    query: r.query,
-    lessonText: r.lessonText,
-    outputActions: r.outputActions,
-    outputProse: r.outputProse,
-    delta: r.actionDelta,
-    label: null,
-  }));
+  const lines = picked.map((r, idx) =>
+    JSON.stringify({
+      id: `${r.sessionId}:${r.surface}:${idx}`,
+      surface: r.surface,
+      query: r.query,
+      lessonText: r.lessonText,
+      outputActions: r.outputActions,
+      outputProse: r.outputProse,
+      delta: r.actionDelta,
+      label: null,
+    }),
+  );
   writeFileSync(out, lines.join('\n'));
   return picked.length;
 }
@@ -356,18 +389,27 @@ export function emitLabels(dir, db, { N, out = 'tasks/adoption-handlabel.jsonl',
  * @returns {{ auc: number, nPos: number, nNeg: number }}
  */
 export function scoreLabels(path) {
-  const rows = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  const rows = readFileSync(path, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
     .filter((r) => r.label === 0 || r.label === 1);
   const pos = rows.filter((r) => r.label === 1).map((r) => r.delta);
   const neg = rows.filter((r) => r.label === 0).map((r) => r.delta);
   let wins = 0;
-  for (const p of pos) for (const n of neg) wins += p > n ? 1 : (p === n ? 0.5 : 0);
+  for (const p of pos) for (const n of neg) wins += p > n ? 1 : p === n ? 0.5 : 0;
   const auc = pos.length && neg.length ? wins / (pos.length * neg.length) : NaN;
   return { auc, nPos: pos.length, nNeg: neg.length };
 }
 
 function main() {
-  const args = Object.fromEntries(process.argv.slice(2).map((a) => { const m = a.match(/^--([^=]+)(?:=(.*))?$/); return m ? [m[1], m[2] ?? true] : [a, true]; }));
+  const args = Object.fromEntries(
+    process.argv.slice(2).map((a) => {
+      const m = a.match(/^--([^=]+)(?:=(.*))?$/);
+      return m ? [m[1], m[2] ?? true] : [a, true];
+    }),
+  );
   const dir = args.dir || join(homedir(), '.claude/projects/-mnt-data-ssd-dev-projects-mem');
   const end = args.end ? new Date(args.end).getTime() : Date.now();
   const start = args.start ? new Date(args.start).getTime() : end - 30 * 86400000;
@@ -378,13 +420,25 @@ function main() {
   // entry points, not the main report -- each early-returns before the
   // placebo/computeAdoption report path below (no reason to pay for a
   // second, non-collectEvents computeAdoption run when one of these fires).
-  if (args['floor-check']) { console.log(JSON.stringify(floorCheck(dir, db, { start, end, project: args.project }), null, 2)); return; }
+  if (args['floor-check']) {
+    console.log(JSON.stringify(floorCheck(dir, db, { start, end, project: args.project }), null, 2));
+    return;
+  }
   if (args['emit-labels']) {
-    const k = emitLabels(dir, db, { N: Number(args['emit-labels']), out: args.out, start, end, project: args.project });
+    const k = emitLabels(dir, db, {
+      N: Number(args['emit-labels']),
+      out: args.out,
+      start,
+      end,
+      project: args.project,
+    });
     console.log(`wrote ${k} label rows to ${args.out || 'tasks/adoption-handlabel.jsonl'}`);
     return;
   }
-  if (args['score-labels']) { console.log(JSON.stringify(scoreLabels(args['score-labels']), null, 2)); return; }
+  if (args['score-labels']) {
+    console.log(JSON.stringify(scoreLabels(args['score-labels']), null, 2));
+    return;
+  }
 
   // Null controls (falsification tests, not a normal run mode): --placebo-random
   // neutralizes the PRIMARY effect (swaps candidate text for a random DB
@@ -394,13 +448,25 @@ function main() {
   // --placebo-random wins if both are passed.
   const placebo = args['placebo-random'] ? 'random' : args['placebo-cutoff'] ? 'cutoff' : undefined;
   const res = computeAdoption(dir, db, { start, end, project: args.project, placebo });
-  if (args.json) { console.log(JSON.stringify(res, null, 2)); return; }
-  if (placebo) console.log(`# NULL CONTROL: placebo-${placebo} active -- this run is a falsification test, not a real measurement`);
-  console.log('# adoption-overlap (effect = cluster-bootstrap mean of control-subtracted cosine deltas; rdd_jump = RDD gradient-corrected view, informational for imperative/subagent)');
-  console.log('# NOTE: effect is selection-confounded for top-1 surfaces (imperative/subagent) -- trust floorCheck + hand-label AUC for a GO decision, not effect+CI alone. subagent:* is also a parent-window proxy (see CUTOFF comment above) -- exclude from the subagent default-flip decision.');
+  if (args.json) {
+    console.log(JSON.stringify(res, null, 2));
+    return;
+  }
+  if (placebo)
+    console.log(
+      `# NULL CONTROL: placebo-${placebo} active -- this run is a falsification test, not a real measurement`,
+    );
+  console.log(
+    '# adoption-overlap (effect = cluster-bootstrap mean of control-subtracted cosine deltas; rdd_jump = RDD gradient-corrected view, informational for imperative/subagent)',
+  );
+  console.log(
+    '# NOTE: effect is selection-confounded for top-1 surfaces (imperative/subagent) -- trust floorCheck + hand-label AUC for a GO decision, not effect+CI alone. subagent:* is also a parent-window proxy (see CUTOFF comment above) -- exclude from the subagent default-flip decision.',
+  );
   console.log('  surface:channel        nEv  nSess    effect     95% CI              rdd_jump    MDE');
   for (const r of res.perBucket) {
-    console.log(`  ${(`${r.surface}:${r.channel}`).padEnd(22)} ${String(r.nEvents).padStart(4)} ${String(r.nSessions).padStart(5)}   ${r.effect.toFixed(4).padStart(8)}  [${r.ci95[0].toFixed(4)}, ${r.ci95[1].toFixed(4)}]  ${r.rdd_jump.toFixed(4).padStart(8)}  ${r.mde.toFixed(4)}`);
+    console.log(
+      `  ${`${r.surface}:${r.channel}`.padEnd(22)} ${String(r.nEvents).padStart(4)} ${String(r.nSessions).padStart(5)}   ${r.effect.toFixed(4).padStart(8)}  [${r.ci95[0].toFixed(4)}, ${r.ci95[1].toFixed(4)}]  ${r.rdd_jump.toFixed(4).padStart(8)}  ${r.mde.toFixed(4)}`,
+    );
   }
 }
 

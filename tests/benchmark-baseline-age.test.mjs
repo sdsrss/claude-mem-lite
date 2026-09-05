@@ -14,7 +14,7 @@ import { tmpdir } from 'os';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CI_GATE_PATH = join(__dirname, '..', 'benchmark', 'ci-gate.mjs');
 const REPO_ROOT = join(__dirname, '..');
-const BASELINE_STALE_DAYS = 30;   // mirrors BASELINE_STALE_AGE_DAYS in ci-gate.mjs
+const BASELINE_STALE_DAYS = 30; // mirrors BASELINE_STALE_AGE_DAYS in ci-gate.mjs
 
 describe('benchmark/ci-gate.mjs — stale baseline warning', () => {
   const source = readFileSync(CI_GATE_PATH, 'utf8');
@@ -37,7 +37,7 @@ describe('benchmark/ci-gate.mjs — stale baseline warning', () => {
 
   it('stale-check happens before the benchmark run, so warning is visible even on failure', () => {
     const staleIdx = source.indexOf('STALE BASELINE');
-    const benchmarkExecIdx = source.indexOf('execSync(\'node benchmark/benchmark.mjs');
+    const benchmarkExecIdx = source.indexOf("execSync('node benchmark/benchmark.mjs");
     expect(staleIdx).toBeGreaterThan(0);
     expect(benchmarkExecIdx).toBeGreaterThan(0);
     expect(staleIdx).toBeLessThan(benchmarkExecIdx);
@@ -104,7 +104,9 @@ describe('benchmark/ci-gate.mjs — strict stale-baseline failure (FIX 3c)', () 
   const gateExitCode = (fixture) => {
     try {
       execFileSync('node', ['benchmark/ci-gate.mjs', '--strict', '--skip-matrix', '--baseline', fixture], {
-        cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe',
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        stdio: 'pipe',
       });
       return 0;
     } catch (err) {

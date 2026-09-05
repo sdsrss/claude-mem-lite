@@ -6,29 +6,63 @@
 
 export const SOURCE_FILES = [
   // Entry points and top-level modules
-  'cli.mjs', 'cli-path.mjs', 'server.mjs', 'search-scoring.mjs', 'search-engine.mjs', 'deep-search.mjs', 'rerank.mjs', 'tool-schemas.mjs',
-  'hook.mjs', 'hook-shared.mjs', 'hook-llm.mjs', 'hook-memory.mjs', 'skip-tools.mjs',
-  'hook-semaphore.mjs', 'hook-episode.mjs', 'hook-context.mjs', 'hook-handoff.mjs',
-  'hook-update.mjs', 'hook-optimize.mjs', 'hook-precompact.mjs',
+  'cli.mjs',
+  'cli-path.mjs',
+  'server.mjs',
+  'search-scoring.mjs',
+  'search-engine.mjs',
+  'deep-search.mjs',
+  'rerank.mjs',
+  'tool-schemas.mjs',
+  'hook.mjs',
+  'hook-shared.mjs',
+  'hook-llm.mjs',
+  'hook-memory.mjs',
+  'skip-tools.mjs',
+  'hook-semaphore.mjs',
+  'hook-episode.mjs',
+  'hook-context.mjs',
+  'hook-handoff.mjs',
+  'hook-update.mjs',
+  'hook-optimize.mjs',
+  'hook-precompact.mjs',
   'plugin-cache-guard.mjs',
-  'haiku-client.mjs', 'utils.mjs', 'schema.mjs',
-  'package.json', 'package-lock.json', 'skill.md',
-  'registry.mjs', 'registry-scanner.mjs',
-  'registry-retriever.mjs', 'resource-discovery.mjs',
+  'haiku-client.mjs',
+  'utils.mjs',
+  'schema.mjs',
+  'package.json',
+  'package-lock.json',
+  'skill.md',
+  'registry.mjs',
+  'registry-scanner.mjs',
+  'registry-retriever.mjs',
+  'resource-discovery.mjs',
   // registry-recommend.mjs: statically imported by hook.mjs (PostToolUse adoption probe)
   // and scripts/user-prompt-search.js (UserPromptSubmit shadow recommendation).
   'registry-recommend.mjs',
   // registry-enricher/-github/-importer are dynamically imported by server.mjs
   // (mem_registry tool) and mem-cli.mjs (registry CLI subcommands). Missing
   // them from SOURCE_FILES silently broke those code paths prior to this fix.
-  'registry-enricher.mjs', 'registry-github.mjs', 'registry-importer.mjs',
+  'registry-enricher.mjs',
+  'registry-github.mjs',
+  'registry-importer.mjs',
   // Shared SOURCE_FILES manifest — self-reference so `~/.claude-mem-lite/` can
   // re-run install.mjs (which imports this module) after an auto-update.
   'source-files.mjs',
-  'install.mjs', 'install-metadata.mjs', 'mem-cli.mjs',
-  'tier.mjs', 'tfidf.mjs',
-  'nlp.mjs', 'synonyms.mjs', 'scoring-sql.mjs', 'stop-words.mjs', 'project-utils.mjs',
-  'secret-scrub.mjs', 'format-utils.mjs', 'hash-utils.mjs', 'bash-utils.mjs',
+  'install.mjs',
+  'install-metadata.mjs',
+  'mem-cli.mjs',
+  'tier.mjs',
+  'tfidf.mjs',
+  'nlp.mjs',
+  'synonyms.mjs',
+  'scoring-sql.mjs',
+  'stop-words.mjs',
+  'project-utils.mjs',
+  'secret-scrub.mjs',
+  'format-utils.mjs',
+  'hash-utils.mjs',
+  'bash-utils.mjs',
   // Single source of truth for the CLAUDE_MEM_DIR → data-dir resolver (rejects a
   // stringified "undefined"/"null"/relative env instead of creating a stray dir).
   // Statically imported by schema.mjs / cli.mjs / install.mjs / registry-recommend.mjs
@@ -336,12 +370,7 @@ export const HOOK_SCRIPT_FILES = [
 // listing them here changes ONLY what is signed/verified, not what install materializes.
 // Module-internal (spread into RELEASE_SIGNED_FILES below); not exported — no external
 // consumer, and the signing test asserts coverage via the built manifest, not this list.
-const LAUNCHER_SCRIPT_FILES = [
-  'launch.mjs',
-  'launch-preflight.mjs',
-  'setup.sh',
-  'binding-probe-cli.mjs',
-];
+const LAUNCHER_SCRIPT_FILES = ['launch.mjs', 'launch-preflight.mjs', 'setup.sh', 'binding-probe-cli.mjs'];
 
 // Plugin/marketplace DECLARATION files (audit 2026-08-14 P-2). Not executable
 // themselves, but they NAME what gets executed: hooks/hooks.json declares the
@@ -383,7 +412,7 @@ const PLUGIN_DECLARATION_FILES = [
 // verifyReleaseFiles hashes against.
 export const RELEASE_SIGNED_FILES = [
   ...SOURCE_FILES,
-  ...HOOK_SCRIPT_FILES.map(name => `scripts/${name}`),
-  ...LAUNCHER_SCRIPT_FILES.map(name => `scripts/${name}`),
+  ...HOOK_SCRIPT_FILES.map((name) => `scripts/${name}`),
+  ...LAUNCHER_SCRIPT_FILES.map((name) => `scripts/${name}`),
   ...PLUGIN_DECLARATION_FILES,
 ];

@@ -11,21 +11,36 @@ const UPS_FTS_MARKER = /\[mem\]/;
 const IMP_MARKER = /Memory — a past lesson applies to THIS task\. You must:/;
 const SUBAGENT_MARKER = /surfaced by your operator's claude-mem-lite/;
 
-function ids(text) { const s = new Set(); for (const m of String(text || '').matchAll(ID_RE)) s.add(m[1]); return [...s]; }
-function* jsonl(file) { for (const l of readFileSync(file, 'utf8').split('\n')) if (l) { try { yield JSON.parse(l); } catch { /* skip */ } } }
+function ids(text) {
+  const s = new Set();
+  for (const m of String(text || '').matchAll(ID_RE)) s.add(m[1]);
+  return [...s];
+}
+function* jsonl(file) {
+  for (const l of readFileSync(file, 'utf8').split('\n'))
+    if (l) {
+      try {
+        yield JSON.parse(l);
+      } catch {
+        /* skip */
+      }
+    }
+}
 
 function assistantText(content) {
   if (typeof content === 'string') return { prose: content, actions: '' };
-  let prose = '', actions = '';
-  if (Array.isArray(content)) for (const c of content) {
-    if (c?.type === 'text' && c.text) prose += c.text + '\n';
-    else if (c?.type === 'tool_use') {
-      const i = c.input || {};
-      if (c.name === 'Edit') actions += (i.new_string || '') + '\n';
-      else if (c.name === 'Write') actions += (i.content || '') + '\n';
-      else if (c.name === 'Bash') actions += (i.command || '') + '\n';
+  let prose = '',
+    actions = '';
+  if (Array.isArray(content))
+    for (const c of content) {
+      if (c?.type === 'text' && c.text) prose += c.text + '\n';
+      else if (c?.type === 'tool_use') {
+        const i = c.input || {};
+        if (c.name === 'Edit') actions += (i.new_string || '') + '\n';
+        else if (c.name === 'Write') actions += (i.content || '') + '\n';
+        else if (c.name === 'Bash') actions += (i.command || '') + '\n';
+      }
     }
-  }
   return { prose, actions };
 }
 
@@ -55,7 +70,8 @@ export function extractInjectionEvents(transcriptFile, { start, end }) {
   // Output window: assistant text/actions from just after entries[i] until the
   // next REAL user message — a tool_result relay is skipped, not a boundary.
   function outputWindowAfter(i) {
-    let prose = '', actions = '';
+    let prose = '',
+      actions = '';
     for (let j = i + 1; j < entries.length; j++) {
       const n = entries[j];
       const nRole = n.message?.role || n.type;
@@ -65,7 +81,8 @@ export function extractInjectionEvents(transcriptFile, { start, end }) {
       }
       if (nRole === 'assistant') {
         const a = assistantText(n.message?.content);
-        prose += a.prose; actions += a.actions;
+        prose += a.prose;
+        actions += a.actions;
       }
     }
     return { prose, actions };
@@ -82,14 +99,16 @@ export function extractInjectionEvents(transcriptFile, { start, end }) {
       // clobber lastUserPrompt to '' (Fix 1).
       if (isRealUserMessage(e)) {
         const c = e.message?.content;
-        lastUserPrompt = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x?.text || '').join(' ') : '';
+        lastUserPrompt =
+          typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x?.text || '').join(' ') : '';
       }
       continue;
     }
     let windowCache;
     const getWindow = () => (windowCache ??= outputWindowAfter(i));
 
-    let surface = null, injected = [];
+    let surface = null,
+      injected = [];
     const query = lastUserPrompt;
     if (e.attachment) {
       const text = (e.attachment.stdout || '') + '\n' + (e.attachment.content || '');
@@ -98,9 +117,21 @@ export function extractInjectionEvents(transcriptFile, { start, end }) {
       // not be misattributed to it (Fix 2; mirrors cite-recall.mjs's
       // hook-name guard).
       const hook = e.attachment.hookName || e.attachment.hookEvent || '';
-      if (IMP_MARKER.test(text)) { surface = 'imperative'; injected = ids(text.split('\n').filter((l) => IMP_MARKER.test(l)).join('\n')); }
-      else if (SUBAGENT_MARKER.test(text)) { surface = 'subagent'; injected = ids(text); }
-      else if (UPS_FTS_MARKER.test(text) && hook === 'UserPromptSubmit') { surface = 'ups-fts'; injected = ids(text); }
+      if (IMP_MARKER.test(text)) {
+        surface = 'imperative';
+        injected = ids(
+          text
+            .split('\n')
+            .filter((l) => IMP_MARKER.test(l))
+            .join('\n'),
+        );
+      } else if (SUBAGENT_MARKER.test(text)) {
+        surface = 'subagent';
+        injected = ids(text);
+      } else if (UPS_FTS_MARKER.test(text) && hook === 'UserPromptSubmit') {
+        surface = 'ups-fts';
+        injected = ids(text);
+      }
     }
     if (surface && injected.length > 0) {
       events.push({ sessionId, ts, surface, injectedIds: injected, query, outputWindow: getWindow() });
@@ -123,11 +154,22 @@ export function extractInjectionEvents(transcriptFile, { start, end }) {
     // (v2; see adoption-overlap.mjs's matching CUTOFF disclosure).
     if (!surface && role === 'assistant' && Array.isArray(e.message?.content)) {
       for (const c of e.message.content) {
-        if (c?.type === 'tool_use' && (c.name === 'Agent' || c.name === 'Task') && SUBAGENT_MARKER.test(c.input?.prompt || '')) {
+        if (
+          c?.type === 'tool_use' &&
+          (c.name === 'Agent' || c.name === 'Task') &&
+          SUBAGENT_MARKER.test(c.input?.prompt || '')
+        ) {
           const subQuery = c.input.prompt;
           const subIds = ids(subQuery);
           if (subIds.length > 0) {
-            events.push({ sessionId, ts, surface: 'subagent', injectedIds: subIds, query: subQuery, outputWindow: getWindow() });
+            events.push({
+              sessionId,
+              ts,
+              surface: 'subagent',
+              injectedIds: subIds,
+              query: subQuery,
+              outputWindow: getWindow(),
+            });
           }
         }
       }

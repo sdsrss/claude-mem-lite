@@ -47,8 +47,16 @@ const TOPICAL = '分页接口又报 500 了，边界问题怎么处理';
 const TOPICAL_RECALL = '分页接口又报 500 了，之前那个边界问题是怎么处理的';
 const CONTENTLESS_RECALL = '之前我们在这个项目里都做了些什么来着';
 const TARGET = '分页接口在 offset 超过总数时返回 500，根因是 SQL LIMIT 传了负数';
-const FILLER = ['登录表单校验微调', '会话标记审计', '环境变量加载顺序修复', '错误页文案调整',
-  '令牌刷新窗口调整', '密钥轮换手册草稿', '中间件顺序问题', '配置默认值不一致'];
+const FILLER = [
+  '登录表单校验微调',
+  '会话标记审计',
+  '环境变量加载顺序修复',
+  '错误页文案调整',
+  '令牌刷新窗口调整',
+  '密钥轮换手册草稿',
+  '中间件顺序问题',
+  '配置默认值不一致',
+];
 
 const dirs = [];
 
@@ -58,8 +66,10 @@ function seedCorpus(n = 600) {
   dirs.push(dir);
   const db = new Database(join(dir, 'claude-mem-lite.db'));
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc', 'mem', ?, datetime('now'), ?)`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc', 'mem', ?, datetime('now'), ?)`,
+  ).run(PROJECT, Date.now());
   const base = Date.now();
   // One transaction, not n — `saveObservation` commits per call, so this seed paid 600
   // fsyncs (2019ms unwrapped vs 270ms wrapped, measured 2026-09-02). Identical rows
@@ -67,14 +77,20 @@ function seedCorpus(n = 600) {
   let target;
   db.transaction(() => {
     target = saveObservation(db, {
-      content: TARGET, type: 'bugfix', importance: 3, project: PROJECT,
+      content: TARGET,
+      type: 'bugfix',
+      importance: 3,
+      project: PROJECT,
       lesson_learned: '分页边界要 clamp offset，不要把负数传进 LIMIT',
       now: new Date(base - 600 * 60 * 60 * 1000),
     });
     for (let i = 1; i < n; i++) {
       saveObservation(db, {
         content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
-        type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 60_000),
+        type: 'change',
+        importance: 1,
+        project: PROJECT,
+        now: new Date(base - i * 60_000),
       });
     }
   })();
@@ -86,16 +102,31 @@ function runHook(dir, prompt, sessionId) {
   return new Promise((done) => {
     const proc = spawn(process.execPath, [SCRIPT_PATH], {
       env: {
-        ...process.env, CLAUDE_MEM_DIR: dir, CLAUDE_PROJECT_DIR: '/x/recallintent',
-        PWD: '/x/recallintent', CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1',
+        ...process.env,
+        CLAUDE_MEM_DIR: dir,
+        CLAUDE_PROJECT_DIR: '/x/recallintent',
+        PWD: '/x/recallintent',
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_QUIET_HOOKS: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
     proc.stderr.on('data', () => {});
-    const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 20_000);
-    proc.on('close', () => { clearTimeout(killer); done(stdout); });
+    const killer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }, 20_000);
+    proc.on('close', () => {
+      clearTimeout(killer);
+      done(stdout);
+    });
     proc.stdin.write(JSON.stringify({ session_id: sessionId, prompt, cwd: '/x/recallintent' }));
     proc.stdin.end();
   });
@@ -103,7 +134,13 @@ function runHook(dir, prompt, sessionId) {
 
 describe('UPS recall-intent — relevance before recency', () => {
   afterEach(() => {
-    for (const d of dirs.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const d of dirs.splice(0)) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('both probe prompts really do differ only in recall intent', () => {

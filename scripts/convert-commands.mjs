@@ -89,7 +89,9 @@ function main() {
   console.log(`${DRY_RUN ? '[DRY RUN] ' : ''}Converting commands to skills...`);
   console.log(`Source: ${AGENTS_DIR}\n`);
 
-  let converted = 0, skipped = 0, errors = 0;
+  let converted = 0,
+    skipped = 0,
+    errors = 0;
   const results = [];
 
   for (const pluginName of readdirSync(AGENTS_DIR)) {

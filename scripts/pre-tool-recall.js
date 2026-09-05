@@ -8,7 +8,13 @@ import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
 import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
-import { injectedIdsFileName, injectedIdKey, EVENT_ID_PREFIX, readInjectedMarker, mergeInjectedMarker } from '../lib/injected-ids.mjs';
+import {
+  injectedIdsFileName,
+  injectedIdKey,
+  EVENT_ID_PREFIX,
+  readInjectedMarker,
+  mergeInjectedMarker,
+} from '../lib/injected-ids.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
@@ -102,32 +108,36 @@ const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes (used only for legacy fallback)
 // directive, and Read→Edit re-surfaces the Read-time lesson IDs as a one-line
 // ack nudge at the actual action point. CLAUDE_MEM_SALIENCE=legacy (or 0)
 // restores the pre-v2.98 passive behavior.
-const SALIENCE_LEGACY = process.env.CLAUDE_MEM_SALIENCE === 'legacy'
-  || process.env.CLAUDE_MEM_SALIENCE === '0';
+const SALIENCE_LEGACY =
+  process.env.CLAUDE_MEM_SALIENCE === 'legacy' || process.env.CLAUDE_MEM_SALIENCE === '0';
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
-const ACK_DIRECTIVE = "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
+const ACK_DIRECTIVE =
+  "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
 // v-bind salience forcing-function (#8771 audit: ack ≠ act). Instead of a cheap
 // '#NN applied / n/a' verdict, demand the model bind the lesson to the concrete
 // line it's editing and quote the satisfying edit line. Selected by
 // CLAUDE_MEM_SALIENCE=bind; default stays ACK_DIRECTIVE.
-const BIND_DIRECTIVE = "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
+const BIND_DIRECTIVE =
+  "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
 const ACTIVE_DIRECTIVE = SALIENCE_BIND ? BIND_DIRECTIVE : ACK_DIRECTIVE;
-const STALE_MS = 10 * 60 * 1000;   // 10 minutes cleanup threshold for legacy file
+const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // Feature ① (file intelligence): on the first Read of a file each session, inject
 // its approximate token size + a one-line summary so the agent can decide to read
 // fully, slice, or grep. Read-only (Edit/Write already commit to the file). Default
 // ON; CLAUDE_MEM_FILE_INTEL=0 disables. Files below the token floor stay silent so
 // small reads carry no noise. Env names mirror schema.mjs CLAUDE_MEM_* convention (#8447).
 const FILE_INTEL_OFF = ['0', 'off', 'false', 'no'].includes(
-  String(process.env.CLAUDE_MEM_FILE_INTEL || '').toLowerCase());
+  String(process.env.CLAUDE_MEM_FILE_INTEL || '').toLowerCase(),
+);
 // P2 (D#78): edge-level decay ENFORCEMENT — opt-in (default OFF, shadow-first).
 // When on, a (obs,file) edge whose miss_streak reached K consecutive uncited
 // injections stops firing on this surface; the lesson stays reachable via
 // search / UPS / error-recall. P1 counting (Stop-side attribution) is always
 // on regardless of this flag. Flip only after real-DB cite-rate evidence.
 const EDGE_DECAY_ON = ['1', 'on', 'true', 'yes'].includes(
-  String(process.env.CLAUDE_MEM_EDGE_DECAY || '').toLowerCase());
+  String(process.env.CLAUDE_MEM_EDGE_DECAY || '').toLowerCase(),
+);
 // NaN-checked, not `|| 3`: an explicit K=0 is falsy and would silently become
 // the default instead of clamping to the declared minimum of 1 (review D#78).
 const EDGE_DECAY_K_RAW = parseInt(process.env.CLAUDE_MEM_EDGE_DECAY_K, 10);
@@ -176,22 +186,32 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 // era-confounded. The `(null)` bucket and the face-overall figure ARE, being
 // dominated by legacy rows.
 const SCOPE_FILTER_ON = ['1', 'on', 'true', 'yes'].includes(
-  String(process.env.CLAUDE_MEM_SCOPE_FILTER || '').toLowerCase());
+  String(process.env.CLAUDE_MEM_SCOPE_FILTER || '').toLowerCase(),
+);
 // `min: 1` replaces the old `Math.max(1, parseInt(…) || 800)`. The wrapper made the
 // clamp look like the whole story, but the `|| 800` inside it swallowed an explicit 0 —
 // `CLAUDE_MEM_FILE_INTEL_MIN_TOKENS=0` (a user asking for no floor) landed on 800, not on
 // 1. Same class as the UPS knobs; caught by the widened tree sweep in
 // tests/env-number.test.mjs once it learned the trailing-default shape.
-const FILE_INTEL_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_FILE_INTEL_MIN_TOKENS,
-  { name: 'CLAUDE_MEM_FILE_INTEL_MIN_TOKENS', defaultValue: 800, min: 1, integer: true });
+const FILE_INTEL_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_FILE_INTEL_MIN_TOKENS, {
+  name: 'CLAUDE_MEM_FILE_INTEL_MIN_TOKENS',
+  defaultValue: 800,
+  min: 1,
+  integer: true,
+});
 // Feature ② (repeated-read guard): when the agent does a FULL re-read of a file
 // it already read this session and the file is unchanged (mtime), nudge it to
 // reuse context instead of re-slurping. Read-only; only fires above the floor and
 // never on offset/limit paging. Default ON; CLAUDE_MEM_REREAD_GUARD=0 disables.
 const REREAD_GUARD_OFF = ['0', 'off', 'false', 'no'].includes(
-  String(process.env.CLAUDE_MEM_REREAD_GUARD || '').toLowerCase());
-const REREAD_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_REREAD_MIN_TOKENS,
-  { name: 'CLAUDE_MEM_REREAD_MIN_TOKENS', defaultValue: 600, min: 1, integer: true });
+  String(process.env.CLAUDE_MEM_REREAD_GUARD || '').toLowerCase(),
+);
+const REREAD_MIN_TOKENS = envNumber(process.env.CLAUDE_MEM_REREAD_MIN_TOKENS, {
+  name: 'CLAUDE_MEM_REREAD_MIN_TOKENS',
+  defaultValue: 600,
+  min: 1,
+  integer: true,
+});
 // Stale-cooldown GC moved to hook.mjs::handleSessionStart — running it on every
 // Edit cost 15-30 disk stats per call. SessionStart fires once at session boot,
 // which is enough to keep RUNTIME_DIR from growing unbounded.
@@ -216,13 +236,18 @@ async function bridgeTopLesson(rows, changeText) {
   try {
     ({ extractIdents } = await import('../lib/lesson-idents.mjs'));
     if (!fake) ({ bridgeLesson } = await import('../lib/lesson-bridge.mjs'));
-  } catch { return null; }
+  } catch {
+    return null;
+  }
   for (const r of rows) {
     const lesson = r.lesson_learned;
     if (!lesson) continue;
     if (!extractIdents(lesson).some((id) => changeText.includes(id))) continue;
     let res;
-    if (fake) res = /^n\s*\/?\s*a$/i.test(fake.trim()) ? { ok: false } : { ok: true, check: fake.trim().slice(0, 200) };
+    if (fake)
+      res = /^n\s*\/?\s*a$/i.test(fake.trim())
+        ? { ok: false }
+        : { ok: true, check: fake.trim().slice(0, 200) };
     else res = await bridgeLesson({ lesson, hunk: changeText });
     if (res.ok) return { id: r.id, check: res.check };
     return null; // top bound lesson abstained → fall back to ACK, don't scan further
@@ -233,7 +258,11 @@ async function bridgeTopLesson(rows, changeText) {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function readCooldown(cooldownPath) {
-  try { return JSON.parse(readFileSync(cooldownPath, 'utf8')); } catch { return {}; }
+  try {
+    return JSON.parse(readFileSync(cooldownPath, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 // v2.81: cooldown entries are {ts, lessonIds} objects so the PostToolUse
@@ -266,8 +295,10 @@ function crossHookInjectedFile(project, sessionId) {
 // script held two of the five hand-typed copies. The window stays this script's own
 // constant; only the gate and the write are shared.
 function readCrossHookInjected(project, sessionId) {
-  const { ids } = readInjectedMarker(crossHookInjectedFile(project, sessionId),
-    { sessionId, maxAgeMs: CROSS_HOOK_DEDUP_MS });
+  const { ids } = readInjectedMarker(crossHookInjectedFile(project, sessionId), {
+    sessionId,
+    maxAgeMs: CROSS_HOOK_DEDUP_MS,
+  });
   return new Set(ids.map(String));
 }
 
@@ -275,9 +306,14 @@ function mergeCrossHookInjected(project, newIds, sessionId) {
   if (!newIds || newIds.length === 0) return;
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
-    mergeInjectedMarker(crossHookInjectedFile(project, sessionId), newIds,
-      { sessionId, maxAgeMs: CROSS_HOOK_DEDUP_MS, mode: 'union' });
-  } catch { /* silent — dedup is best-effort */ }
+    mergeInjectedMarker(crossHookInjectedFile(project, sessionId), newIds, {
+      sessionId,
+      maxAgeMs: CROSS_HOOK_DEDUP_MS,
+      mode: 'union',
+    });
+  } catch {
+    /* silent — dedup is best-effort */
+  }
 }
 
 function writeCooldown(cooldownPath, data, isSessionScoped) {
@@ -298,7 +334,9 @@ function writeCooldown(cooldownPath, data, isSessionScoped) {
     // PostToolUse bind-salience check reads back — a torn write turned that
     // check into a zero-trace no-op.
     atomicWriteFileSync(cooldownPath, JSON.stringify(cleaned));
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
@@ -368,7 +406,9 @@ try {
   // rename silently zeroes injection like code-graph's matcher bug.
   if (!filePath) {
     if (toolName && !['Edit', 'Write', 'NotebookEdit', 'Read'].includes(toolName)) {
-      recordHookError('pre-recall:unknown-tool', new Error(`tool_name=${toolName}`), RUNTIME_DIR, { toolName });
+      recordHookError('pre-recall:unknown-tool', new Error(`tool_name=${toolName}`), RUNTIME_DIR, {
+        toolName,
+      });
     } else if (!toolName) {
       recordHookError('pre-recall:no-toolname', new Error('event missing tool_name'), RUNTIME_DIR);
     }
@@ -399,15 +439,17 @@ try {
       // naming the IDs (no lesson bodies — token cost stays minimal), then mark
       // the entry handled so the next Edit is silent again. Entries without a
       // mode field (pre-v2.98) are treated as already handled.
-      const seenIds = (typeof entry === 'object' && Array.isArray(entry.lessonIds))
-        ? entry.lessonIds : [];
+      const seenIds = typeof entry === 'object' && Array.isArray(entry.lessonIds) ? entry.lessonIds : [];
       const wasReadMode = typeof entry === 'object' && entry.mode === 'read';
       if (!isRead && wasReadMode && seenIds.length > 0 && !SALIENCE_LEGACY) {
-        const idList = seenIds.map(id => `#${id}`).join(', ');
-        queueHookContext('PreToolUse', [
-          '[mem] PreToolUse recall — system-injected context, continue your planned action:',
-          `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${ACTIVE_DIRECTIVE}`,
-        ].join('\n'));
+        const idList = seenIds.map((id) => `#${id}`).join(', ');
+        queueHookContext(
+          'PreToolUse',
+          [
+            '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+            `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${ACTIVE_DIRECTIVE}`,
+          ].join('\n'),
+        );
         flushHookStdout();
         cooldown[filePath] = { ...entry, mode: 'edit' };
         writeCooldown(cooldownPath, cooldown, isSessionScoped);
@@ -416,10 +458,13 @@ try {
         // nudge to reuse what's already in context. Read-only; never throws.
         const meta = readFileMeta(filePath);
         if (shouldWarnReread(entry.reread, meta ? meta.mtimeMs : null, isFullRead, REREAD_MIN_TOKENS)) {
-          queueHookContext('PreToolUse', [
-            '[mem] PreToolUse recall — system-injected context, continue your planned action:',
-            buildRereadWarning(basename(filePath), entry.reread.tokens),
-          ].join('\n'));
+          queueHookContext(
+            'PreToolUse',
+            [
+              '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+              buildRereadWarning(basename(filePath), entry.reread.tokens),
+            ].join('\n'),
+          );
           flushHookStdout();
           recordMetric(DATA_DIR, { event: 'reread_warn' }); // tier-1 firing counter (②)
         }
@@ -428,7 +473,7 @@ try {
     }
   } else {
     const ts = entryTimestamp(cooldown[filePath]);
-    if (ts && (now - ts) < COOLDOWN_MS) process.exit(0);
+    if (ts && now - ts < COOLDOWN_MS) process.exit(0);
   }
 
   // Open DB readonly
@@ -481,7 +526,7 @@ try {
     // title isn't a LOW_SIGNAL auto-fallback (those carry pipe-delimited raw
     // output or filename-stubs, no guidance value for the about-to-Edit agent).
     const typeFallback = isRead
-      ? 'AND o.lesson_learned IS NOT NULL AND o.lesson_learned != \'\''
+      ? "AND o.lesson_learned IS NOT NULL AND o.lesson_learned != ''"
       : `AND (
           (o.lesson_learned IS NOT NULL AND o.lesson_learned != '')
           OR (o.type IN ('bugfix', 'decision') AND ${notLowSignalSql})
@@ -513,24 +558,30 @@ try {
     let edgeDecayFilter = '';
     if (EDGE_DECAY_ON) {
       try {
-        const hasCol = db.prepare(
-          `SELECT 1 FROM pragma_table_info('observation_files') WHERE name = 'miss_streak'`
-        ).get();
+        const hasCol = db
+          .prepare(`SELECT 1 FROM pragma_table_info('observation_files') WHERE name = 'miss_streak'`)
+          .get();
         if (hasCol) edgeDecayFilter = `AND of2.miss_streak < ${EDGE_DECAY_K}`;
-      } catch { /* probe failure → unfiltered */ }
+      } catch {
+        /* probe failure → unfiltered */
+      }
     }
     // P3 (D#78): environment-scope filter — same probe discipline (readonly
     // fast-path may hit a pre-v43 DB where observations.scope doesn't exist).
     let scopeFilter = '';
     if (SCOPE_FILTER_ON) {
       try {
-        const hasScope = db.prepare(
-          `SELECT 1 FROM pragma_table_info('observations') WHERE name = 'scope'`
-        ).get();
+        const hasScope = db
+          .prepare(`SELECT 1 FROM pragma_table_info('observations') WHERE name = 'scope'`)
+          .get();
         if (hasScope) scopeFilter = `AND (o.scope IS NULL OR o.scope != 'environment')`;
-      } catch { /* probe failure → unfiltered */ }
+      } catch {
+        /* probe failure → unfiltered */
+      }
     }
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
       FROM observations o
       JOIN observation_files of2 ON of2.obs_id = o.id
@@ -547,7 +598,9 @@ try {
         ${citeFactorClause('o')} DESC,
         o.created_at_epoch DESC
       LIMIT ${obsLimit}
-    `).all(project, cutoff, ...fileParams);
+    `,
+      )
+      .all(project, cutoff, ...fileParams);
 
     // T9: also query the `events` table — after T9, bugfix/lesson/decision/etc.
     // route here instead of observations, so we must read both sources to keep
@@ -573,7 +626,9 @@ try {
     const eventsLimit = (isRead ? 1 : 2) + dedupSlack;
     let eventRows = [];
     try {
-      eventRows = db.prepare(`
+      eventRows = db
+        .prepare(
+          `
         SELECT id, event_type AS type, title, body AS lesson_learned
         FROM events
         WHERE project = ?
@@ -586,8 +641,12 @@ try {
           CASE WHEN body IS NOT NULL AND body != '' THEN 0 ELSE 1 END,
           created_at_epoch DESC
         LIMIT ${eventsLimit}
-      `).all(project, cutoff, `%"${escaped}"%`, `%"${filePathEscaped}"%`);
-    } catch { /* events table may not exist on pre-v2.31 DBs — silent */ }
+      `,
+        )
+        .all(project, cutoff, `%"${escaped}"%`, `%"${filePathEscaped}"%`);
+    } catch {
+      /* events table may not exist on pre-v2.31 DBs — silent */
+    }
 
     // A3 (v2.83): cross-hook dedup. UPS may have already injected some of
     // these obs ids this prompt — re-emitting wastes the PreToolUse slot
@@ -599,16 +658,17 @@ try {
     // feed an event id into observation_files updates.
     // (crossHookSeen is read above, before the two SELECTs — it sizes their LIMITs.)
     const sourcedRows = [
-      ...rows.map(r => ({ ...r, src: 'obs' })),
-      ...eventRows.map(r => ({ ...r, src: 'evt' })),
+      ...rows.map((r) => ({ ...r, src: 'obs' })),
+      ...eventRows.map((r) => ({ ...r, src: 'evt' })),
     ];
     // D#188: compare on the NAMESPACED key, not the bare number. The `src` tag two
     // comments up exists precisely because the two tables share an id space; the
     // predicate that consumed it did not use it, so an observation injected by UPS
     // silently blocked the same-numbered event and vice versa.
-    const dedupedRows = crossHookSeen.size > 0
-      ? sourcedRows.filter(r => !crossHookSeen.has(injectedIdKey(r.id, r.src)))
-      : sourcedRows;
+    const dedupedRows =
+      crossHookSeen.size > 0
+        ? sourcedRows.filter((r) => !crossHookSeen.has(injectedIdKey(r.id, r.src)))
+        : sourcedRows;
 
     // Merge: observations first (they carry richer lesson_learned), then events.
     // Edit/Write caps at 3 total; Read caps at 1 (single most-actionable hit).
@@ -623,7 +683,9 @@ try {
     // throws — fileIntelFor returns null on unreadable/below-threshold files.
     let fileIntelLine = null;
     if (isRead && !FILE_INTEL_OFF) {
-      try { fileIntelLine = fileIntelFor(filePath, { minTokens: FILE_INTEL_MIN_TOKENS }); } catch {}
+      try {
+        fileIntelLine = fileIntelFor(filePath, { minTokens: FILE_INTEL_MIN_TOKENS });
+      } catch {}
     }
     // Tier-1 firing counter (①). recordMetric no-ops unless CLAUDE_MEM_METRICS=1,
     // so default users pay nothing; observers see counts in `doctor` / `stats`.
@@ -647,13 +709,13 @@ try {
       recordMetric(DATA_DIR, {
         event: 'pretool_recall',
         injected: allRows.length,
-        obs: allRows.filter(r => r.src === 'obs').length,
-        evt: allRows.filter(r => r.src === 'evt').length,
+        obs: allRows.filter((r) => r.src === 'obs').length,
+        evt: allRows.filter((r) => r.src === 'evt').length,
         mode: isRead ? 'read' : 'edit',
       });
     }
-    const showFraming = hasLessons || Boolean(fileIntelLine)
-      || (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1');
+    const showFraming =
+      hasLessons || Boolean(fileIntelLine) || (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1');
     if (showFraming) {
       // Framing line mirrors #7758 handoff-injection fix: without an explicit
       // "system-injected, continue" disclaimer, observed turn-end after Edit+reminder
@@ -691,14 +753,14 @@ try {
       for (const r of allRows) {
         const idTag = `${r.src === 'evt' ? EVENT_ID_PREFIX : '#'}${r.id}`;
         if (r.lesson_learned) {
-          const lesson = r.lesson_learned.length > LESSON_MAX
-            ? r.lesson_learned.slice(0, LESSON_MAX - 3) + '...'
-            : r.lesson_learned;
+          const lesson =
+            r.lesson_learned.length > LESSON_MAX
+              ? r.lesson_learned.slice(0, LESSON_MAX - 3) + '...'
+              : r.lesson_learned;
           lines.push(`  ${idTag} [${r.type}] ${neutralizeContextDelimiters(lesson)}`);
         } else {
-          const title = (r.title || '').length > LESSON_MAX
-            ? r.title.slice(0, LESSON_MAX - 3) + '...'
-            : (r.title || '');
+          const title =
+            (r.title || '').length > LESSON_MAX ? r.title.slice(0, LESSON_MAX - 3) + '...' : r.title || '';
           lines.push(`  ${idTag} [${r.type}] ${neutralizeContextDelimiters(title)}`);
         }
       }
@@ -709,9 +771,13 @@ try {
       // via the Read→Edit ack nudge above.
       if (!isRead && !SALIENCE_LEGACY) {
         const changeText = [toolInput?.old_string, toolInput?.new_string, toolInput?.content]
-          .filter(Boolean).join('\n');
+          .filter(Boolean)
+          .join('\n');
         const bridged = await bridgeTopLesson(allRows, changeText);
-        if (bridged) lines.push(`[mem] ⚠ #${bridged.id} → this edit must: ${neutralizeContextDelimiters(bridged.check)}. Confirm your new code satisfies it.`);
+        if (bridged)
+          lines.push(
+            `[mem] ⚠ #${bridged.id} → this edit must: ${neutralizeContextDelimiters(bridged.check)}. Confirm your new code satisfies it.`,
+          );
         else lines.push(`[mem] ⚠ Before this edit: ${ACTIVE_DIRECTIVE}`);
       }
     } else if (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1') {
@@ -727,7 +793,9 @@ try {
       // Read never emitted this (passive). The cooldown write below still runs on
       // every branch, so Read→Edit dedup + cite-back lessonId tracking are intact.
       // (Framing line already pushed above via showFraming.)
-      lines.push(`[mem] No prior lessons for ${fname} — if you solve a non-obvious bug here, run: /lesson --file ${fname} "<root cause + fix>"`);
+      lines.push(
+        `[mem] No prior lessons for ${fname} — if you solve a non-obvious bug here, run: /lesson --file ${fname} "<root cause + fix>"`,
+      );
     }
 
     if (lines.length > 0) {
@@ -746,7 +814,7 @@ try {
     // ② repeated-read guard: record file metadata on the first Read so a later
     // full re-read of the unchanged file can be flagged. Read-only, session-scoped;
     // one stat + bounded read, first-read only.
-    const rereadMeta = (isRead && !REREAD_GUARD_OFF && isSessionScoped) ? readFileMeta(filePath) : null;
+    const rereadMeta = isRead && !REREAD_GUARD_OFF && isSessionScoped ? readFileMeta(filePath) : null;
     // bind salience (component 2): record the identifiers each lesson NAMES that
     // ALSO appear in the current (pre-edit) file, so post-tool-recall.js can flag
     // an edit that drops one. Only under =bind with lessons — keeps the default
@@ -761,18 +829,22 @@ try {
           if (present.length) acc[r.id] = present;
         }
         if (Object.keys(acc).length) lessonIdents = acc;
-      } catch { /* unreadable pre-edit file — skip the diff check */ }
+      } catch {
+        /* unreadable pre-edit file — skip the diff check */
+      }
     }
     cooldown[filePath] = {
       ts: now,
-      lessonIds: allRows.map(r => r.id),
+      lessonIds: allRows.map((r) => r.id),
       // P1 (D#78): observation-sourced ids only — consumed by the Stop-side
       // edge attribution (lib/edge-attribution.mjs). lessonIds stays mixed for
       // the cite-back hint contract.
-      obsIds: allRows.filter(r => r.src === 'obs').map(r => r.id),
+      obsIds: allRows.filter((r) => r.src === 'obs').map((r) => r.id),
       mode: isRead ? 'read' : 'edit',
       ...(lessonIdents ? { lessonIdents } : {}),
-      ...(rereadMeta ? { reread: { mtimeMs: rereadMeta.mtimeMs, tokens: rereadMeta.tokens, full: isFullRead } } : {}),
+      ...(rereadMeta
+        ? { reread: { mtimeMs: rereadMeta.mtimeMs, tokens: rereadMeta.tokens, full: isFullRead } }
+        : {}),
     };
     writeCooldown(cooldownPath, cooldown, isSessionScoped);
     // A3 (v2.83): merge our newly-emitted IDs into the cross-hook injected
@@ -792,14 +864,22 @@ try {
     // pathAInjectedIds; it reaches there, but suppresses nothing, because this
     // function stringifies every id and that consumer compares against a numeric
     // row id. That inertness is a separate live defect — D#193.)
-    mergeCrossHookInjected(project, allRows.map(r => injectedIdKey(r.id, r.src)), sessionId);
+    mergeCrossHookInjected(
+      project,
+      allRows.map((r) => injectedIdKey(r.id, r.src)),
+      sessionId,
+    );
   } catch (e) {
     // Silent failure — never block editing, but record for self-observation.
     recordHookError('pre-recall:query', e, RUNTIME_DIR, { filePath });
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 } catch (e) {
   // Top-level catch — exit 0 no matter what, but record what slipped past.
-  try { recordHookError('pre-recall:top', e, RUNTIME_DIR); } catch {}
+  try {
+    recordHookError('pre-recall:top', e, RUNTIME_DIR);
+  } catch {}
 }

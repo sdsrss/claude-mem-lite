@@ -53,9 +53,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Mirrors the tree knip analyses. `tmp/` and `coverage/` are not in it; `node_modules`
 // and `.git` are far too large to walk and cannot contain our own sources.
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'coverage', 'tmp', '.claude', 'dist', 'build', '.tmp',
-]);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', 'tmp', '.claude', 'dist', 'build', '.tmp']);
 
 /**
  * `new URL(<relative module specifier>, …)`.
@@ -74,7 +72,11 @@ function walk(dir, out = []) {
     let st;
     // A concurrent process can remove a file between readdir and stat; a file that is
     // gone cannot carry a bad path, so skipping it is the right answer.
-    try { st = statSync(full); } catch { continue; }
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
     if (st.isDirectory()) walk(full, out);
     else if (/\.(mjs|js)$/.test(name)) out.push(full);
   }
@@ -97,10 +99,15 @@ function findOffenders(files) {
   const hits = [];
   for (const f of files) {
     let src;
-    try { src = readFileSync(f, 'utf8'); } catch { continue; }
+    try {
+      src = readFileSync(f, 'utf8');
+    } catch {
+      continue;
+    }
     if (!src.includes('new URL')) continue;
     // Blank out comment lines while PRESERVING offsets, so line numbers stay exact.
-    const scannable = src.split('\n')
+    const scannable = src
+      .split('\n')
       .map((line) => (/^\s*(?:\/\/|\*|\/\*)/.test(line) ? ' '.repeat(line.length) : line))
       .join('\n');
     URL_MODULE_PATH.lastIndex = 0;
@@ -145,7 +152,10 @@ describe('D#207 — repo-source paths use join(), not new URL(module)', () => {
     // `URL_MODULE_PATH` is global, so `.test` advances `lastIndex` between calls and a
     // shared regex silently starts skipping matches. Reset before each probe — this is
     // the failure that makes a detector self-check report a false clean.
-    const fires = (s) => { URL_MODULE_PATH.lastIndex = 0; return URL_MODULE_PATH.test(s); };
+    const fires = (s) => {
+      URL_MODULE_PATH.lastIndex = 0;
+      return URL_MODULE_PATH.test(s);
+    };
     for (const s of bad) expect(fires(s), `should flag: ${s}`).toBe(true);
     for (const s of ok) expect(fires(s), `should NOT flag: ${s}`).toBe(false);
   });
@@ -196,7 +206,10 @@ describe('P1-8 — a dynamic import of a repo module destructures its bindings',
       `const { handleLLMOptimize } = ${I}('./hook-optimize.mjs');`,
       `const ns = ${I}('./x.mjs');`,
     ];
-    const fires = (s) => { DYNAMIC_NAMESPACE_ACCESS.lastIndex = 0; return DYNAMIC_NAMESPACE_ACCESS.test(s); };
+    const fires = (s) => {
+      DYNAMIC_NAMESPACE_ACCESS.lastIndex = 0;
+      return DYNAMIC_NAMESPACE_ACCESS.test(s);
+    };
     for (const s of bad) expect(fires(s), `should flag: ${s}`).toBe(true);
     for (const s of ok) expect(fires(s), `should NOT flag: ${s}`).toBe(false);
   });
@@ -205,9 +218,14 @@ describe('P1-8 — a dynamic import of a repo module destructures its bindings',
     const hits = [];
     for (const f of files) {
       let src;
-      try { src = readFileSync(f, 'utf8'); } catch { continue; }
+      try {
+        src = readFileSync(f, 'utf8');
+      } catch {
+        continue;
+      }
       if (!src.includes('await import')) continue;
-      const scannable = src.split('\n')
+      const scannable = src
+        .split('\n')
         .map((line) => (/^\s*(?:\/\/|\*|\/\*)/.test(line) ? ' '.repeat(line.length) : line))
         .join('\n');
       DYNAMIC_NAMESPACE_ACCESS.lastIndex = 0;

@@ -119,7 +119,9 @@ describe('mem_search schema', () => {
       expect(r.data.include_noise).toBe(true);
     }
     // 'false' string coerces to false — not rejected, not truthy
-    expect(parseSchema(memSearchSchema, { query: 'foo', include_noise: 'false' }).data.include_noise).toBe(false);
+    expect(parseSchema(memSearchSchema, { query: 'foo', include_noise: 'false' }).data.include_noise).toBe(
+      false,
+    );
   });
 });
 
@@ -206,7 +208,11 @@ describe('mem_get schema', () => {
   });
 
   it('accepts source and fields', () => {
-    const result = parseSchema(memGetSchema, { ids: [1], source: 'session', fields: ['request', 'completed'] });
+    const result = parseSchema(memGetSchema, {
+      ids: [1],
+      source: 'session',
+      fields: ['request', 'completed'],
+    });
     expect(result.success).toBe(true);
   });
 
@@ -428,11 +434,23 @@ describe('mem_maintain schema', () => {
   });
 
   it('accepts execute with operations', () => {
-    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: ['cleanup', 'decay', 'boost'] }).success).toBe(true);
+    expect(
+      parseSchema(memMaintainSchema, { action: 'execute', operations: ['cleanup', 'decay', 'boost'] })
+        .success,
+    ).toBe(true);
   });
 
   it('accepts execute with dedup and merge_ids', () => {
-    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [[1, 2, 3], [4, 5]] }).success).toBe(true);
+    expect(
+      parseSchema(memMaintainSchema, {
+        action: 'execute',
+        operations: ['dedup'],
+        merge_ids: [
+          [1, 2, 3],
+          [4, 5],
+        ],
+      }).success,
+    ).toBe(true);
   });
 
   it('rejects invalid action', () => {
@@ -440,11 +458,15 @@ describe('mem_maintain schema', () => {
   });
 
   it('rejects invalid operation', () => {
-    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: ['invalid'] }).success).toBe(false);
+    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: ['invalid'] }).success).toBe(
+      false,
+    );
   });
 
   it('rejects merge_ids with single element group', () => {
-    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [[1]] }).success).toBe(false);
+    expect(
+      parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [[1]] }).success,
+    ).toBe(false);
   });
 });
 
@@ -464,20 +486,24 @@ describe('mem_registry schema', () => {
   });
 
   it('accepts import with full metadata', () => {
-    expect(parseSchema(memRegistrySchema, {
-      action: 'import',
-      name: 'my-tool',
-      resource_type: 'skill',
-      repo_url: 'https://github.com/user/repo',
-      intent_tags: 'test,debug',
-      domain_tags: 'javascript',
-      capability_summary: 'A testing tool',
-      trigger_patterns: 'when user wants to test',
-    }).success).toBe(true);
+    expect(
+      parseSchema(memRegistrySchema, {
+        action: 'import',
+        name: 'my-tool',
+        resource_type: 'skill',
+        repo_url: 'https://github.com/user/repo',
+        intent_tags: 'test,debug',
+        domain_tags: 'javascript',
+        capability_summary: 'A testing tool',
+        trigger_patterns: 'when user wants to test',
+      }).success,
+    ).toBe(true);
   });
 
   it('accepts remove action', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'remove', name: 'old-tool', resource_type: 'agent' }).success).toBe(true);
+    expect(
+      parseSchema(memRegistrySchema, { action: 'remove', name: 'old-tool', resource_type: 'agent' }).success,
+    ).toBe(true);
   });
 
   it('accepts reindex action', () => {
@@ -489,15 +515,21 @@ describe('mem_registry schema', () => {
   });
 
   it('rejects invalid resource_type', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'import', name: 'x', resource_type: 'invalid' }).success).toBe(false);
+    expect(
+      parseSchema(memRegistrySchema, { action: 'import', name: 'x', resource_type: 'invalid' }).success,
+    ).toBe(false);
   });
 
   it('accepts search with category filter', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'search', query: 'test', category: 'testing' }).success).toBe(true);
+    expect(
+      parseSchema(memRegistrySchema, { action: 'search', query: 'test', category: 'testing' }).success,
+    ).toBe(true);
   });
 
   it('accepts search with quality filter', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'search', query: 'test', quality: 'installed' }).success).toBe(true);
+    expect(
+      parseSchema(memRegistrySchema, { action: 'search', query: 'test', quality: 'installed' }).success,
+    ).toBe(true);
   });
 
   it('accepts all valid quality enum values', () => {
@@ -507,7 +539,9 @@ describe('mem_registry schema', () => {
   });
 
   it('rejects invalid quality enum value', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'search', query: 'x', quality: 'premium' }).success).toBe(false);
+    expect(parseSchema(memRegistrySchema, { action: 'search', query: 'x', quality: 'premium' }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -517,7 +551,10 @@ describe('memUseSchema', () => {
   it('memUseSchema accepts valid input', () => {
     const schema = z.object(memUseSchema);
     expect(schema.parse({ name: 'humanizer' })).toEqual({ name: 'humanizer' });
-    expect(schema.parse({ name: 'tdd-workflows', type: 'agent' })).toEqual({ name: 'tdd-workflows', type: 'agent' });
+    expect(schema.parse({ name: 'tdd-workflows', type: 'agent' })).toEqual({
+      name: 'tdd-workflows',
+      type: 'agent',
+    });
   });
 
   it('memUseSchema rejects missing name', () => {
@@ -712,13 +749,21 @@ describe('LLM string coercion (preprocess)', () => {
   });
 
   it('coerces string retain_days in mem_maintain', () => {
-    const r = parseSchema(memMaintainSchema, { action: 'execute', operations: ['purge_stale'], retain_days: '30' });
+    const r = parseSchema(memMaintainSchema, {
+      action: 'execute',
+      operations: ['purge_stale'],
+      retain_days: '30',
+    });
     expect(r.success).toBe(true);
     expect(r.data.retain_days).toBe(30);
   });
 
   it('coerces string ids inside merge_ids groups', () => {
-    const r = parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [['1', '2', '3']] });
+    const r = parseSchema(memMaintainSchema, {
+      action: 'execute',
+      operations: ['dedup'],
+      merge_ids: [['1', '2', '3']],
+    });
     expect(r.success).toBe(true);
     expect(r.data.merge_ids).toEqual([[1, 2, 3]]);
   });

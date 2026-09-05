@@ -23,8 +23,13 @@ import { OBS_BM25, notLowSignalTitleClause } from '../scoring-sql.mjs';
 import { liveObsFilterSql, recencyDecaySql } from '../lib/inject-search-core.mjs';
 import { corpusFloorScale } from '../lib/relevance-floor.mjs';
 import {
-  selectErrorRecall, errorRecallSql, errorRecallFtsQuery, ERROR_RECALL_LIMIT,
-  errorRecallBm25Floor, DEFAULT_ERROR_RECALL_BM25_FLOOR, CALIBRATED_ERROR_RECALL_BM25_FLOOR,
+  selectErrorRecall,
+  errorRecallSql,
+  errorRecallFtsQuery,
+  ERROR_RECALL_LIMIT,
+  errorRecallBm25Floor,
+  DEFAULT_ERROR_RECALL_BM25_FLOOR,
+  CALIBRATED_ERROR_RECALL_BM25_FLOOR,
 } from '../lib/error-recall-core.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,9 +39,13 @@ const PROJECT = 'p-main';
 function withRerank(value, fn) {
   const KEY = 'CLAUDE_MEM_ERROR_RECALL_RERANK';
   const saved = process.env[KEY];
-  if (value === undefined) delete process.env[KEY]; else process.env[KEY] = value;
-  try { return fn(); } finally {
-    if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved;
+  if (value === undefined) delete process.env[KEY];
+  else process.env[KEY] = value;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
   }
 }
 
@@ -73,9 +82,15 @@ const SESSION_INSERT_SQL = `INSERT INTO sdk_sessions (content_session_id, memory
 function insertObs(db, { title, text, project = PROJECT, ageDays = 1, type = 'bugfix', extra = {} }) {
   const ts = Date.now() - ageDays * DAY;
   const cols = {
-    memory_session_id: 'm1', project, type, title, text,
-    created_at: new Date(ts).toISOString(), created_at_epoch: ts,
-    lesson_learned: `lesson for ${title}`, importance: 2,
+    memory_session_id: 'm1',
+    project,
+    type,
+    title,
+    text,
+    created_at: new Date(ts).toISOString(),
+    created_at_epoch: ts,
+    lesson_learned: `lesson for ${title}`,
+    importance: 2,
     ...extra,
   };
   const keys = Object.keys(cols);
@@ -92,8 +107,10 @@ function insertObs(db, { title, text, project = PROJECT, ageDays = 1, type = 'bu
 function seed() {
   const db = new Database(':memory:');
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-              VALUES ('s1','m1',?,datetime('now'),?,'active')`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+              VALUES ('s1','m1',?,datetime('now'),?,'active')`,
+  ).run(PROJECT, Date.now());
 
   // Background rows with DISJOINT vocabulary. Without them every row in the fixture
   // shares the query's terms, so df = N, FTS5's IDF collapses to 0 and EVERY row
@@ -125,10 +142,14 @@ function seed() {
   // carry identical text (identical bm25) and differ only in age, so any change to the
   // half-life that reorders 3-day-old against 40-day-old flips their order here.
   insertObs(db, {
-    title: 'ENOENT tie-break recent', text: 'enoent module resolution failed npm build path tie', ageDays: 3,
+    title: 'ENOENT tie-break recent',
+    text: 'enoent module resolution failed npm build path tie',
+    ageDays: 3,
   });
   insertObs(db, {
-    title: 'ENOENT tie-break older', text: 'enoent module resolution failed npm build path tie', ageDays: 40,
+    title: 'ENOENT tie-break older',
+    text: 'enoent module resolution failed npm build path tie',
+    ageDays: 40,
   });
 
   const decoys = {
@@ -149,12 +170,14 @@ function seed() {
     }),
     // liveObsFilterSql: superseded row
     superseded: insertObs(db, {
-      title: 'ENOENT superseded decoy', text: 'enoent module npm build',
+      title: 'ENOENT superseded decoy',
+      text: 'enoent module npm build',
       extra: { superseded_at: Date.now(), superseded_by: 1 },
     }),
     // liveObsFilterSql: compressed row
     compressed: insertObs(db, {
-      title: 'ENOENT compressed decoy', text: 'enoent module npm build',
+      title: 'ENOENT compressed decoy',
+      text: 'enoent module npm build',
       extra: { compressed_into: 1 },
     }),
     // notLowSignalTitleClause: degraded title AND no lesson. The lesson matters:
@@ -163,16 +186,19 @@ function seed() {
     // would be excluded by nothing and this assertion would fail against correct
     // code — as the first version of this fixture did.
     lowSignal: insertObs(db, {
-      title: 'Modified package.json', text: 'enoent module npm build',
+      title: 'Modified package.json',
+      text: 'enoent module npm build',
       extra: { lesson_learned: null },
     }),
     // The escape itself, asserted below so the clause is pinned in BOTH directions.
     lowSignalWithLesson: insertObs(db, {
-      title: 'Modified lockfile after enoent', text: 'enoent module npm build',
+      title: 'Modified lockfile after enoent',
+      text: 'enoent module npm build',
     }),
     // project scoping
     otherProject: insertObs(db, {
-      title: 'ENOENT in another project', text: 'enoent module npm build',
+      title: 'ENOENT in another project',
+      text: 'enoent module npm build',
       project: 'p-other',
     }),
   };
@@ -201,36 +227,50 @@ describe('error-recall core — extraction equivalence', () => {
     // floor). A deep-equal here would fail on the extra key and say nothing about
     // whether the shared columns drifted.
     for (const key of Object.keys(control[0])) {
-      expect(extracted.map((r) => r[key]), `column ${key} drifted`).toEqual(control.map((r) => r[key]));
+      expect(
+        extracted.map((r) => r[key]),
+        `column ${key} drifted`,
+      ).toEqual(control.map((r) => r[key]));
     }
   });
 
   it('exposes undecayed bm25_raw for the relevance floor to gate on', () => {
     const { db } = seed();
     const plan = planErrorRecall('npm run build', NPM_ENOENT_OUT);
-    const rows = db.prepare(errorRecallSql()).all({ q: errorRecallFtsQuery(plan.terms), project: PROJECT, now: Date.now() });
+    const rows = db
+      .prepare(errorRecallSql())
+      .all({ q: errorRecallFtsQuery(plan.terms), project: PROJECT, now: Date.now() });
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) expect(Number.isFinite(r.bm25_raw), `bm25_raw=${r.bm25_raw}`).toBe(true);
     // FTS5 bm25() is negative-better; the floor compares magnitudes, so a sign flip
     // here would invert every floor comparison downstream.
-    expect(rows.every((r) => r.bm25_raw <= 0), 'bm25 is expected negative-better').toBe(true);
+    expect(
+      rows.every((r) => r.bm25_raw <= 0),
+      'bm25 is expected negative-better',
+    ).toBe(true);
   });
 
   it('guards are not vacuous — every decoy class is actually excluded', () => {
     const { db, decoys } = seed();
     const plan = planErrorRecall('npm run build', NPM_ENOENT_OUT);
-    const rows = db.prepare(errorRecallSql(50)).all({ q: errorRecallFtsQuery(plan.terms), project: PROJECT, now: Date.now() });
+    const rows = db
+      .prepare(errorRecallSql(50))
+      .all({ q: errorRecallFtsQuery(plan.terms), project: PROJECT, now: Date.now() });
     const ids = new Set(rows.map((r) => r.id));
 
     // Each decoy shares the query terms, so its absence can only come from its guard.
     expect(ids.has(decoys.superseded), 'superseded row leaked into an injection surface').toBe(false);
-    expect(ids.has(decoys.compressed), 'compressed row leaked — its mem_get pointer would dangle').toBe(false);
+    expect(ids.has(decoys.compressed), 'compressed row leaked — its mem_get pointer would dangle').toBe(
+      false,
+    );
     expect(ids.has(decoys.lowSignal), 'low-signal title without a lesson leaked').toBe(false);
     expect(ids.has(decoys.otherProject), 'cross-project row leaked').toBe(false);
     // Opposite direction: the lessonEscape is real, not an accident of the fixture.
     // Without this, tightening the clause to title-only would pass unnoticed.
-    expect(ids.has(decoys.lowSignalWithLesson),
-      'lessonEscape must admit a LOW_SIGNAL title that carries a real lesson').toBe(true);
+    expect(
+      ids.has(decoys.lowSignalWithLesson),
+      'lessonEscape must admit a LOW_SIGNAL title that carries a real lesson',
+    ).toBe(true);
     expect(rows.length, 'the live in-project rows must still be reachable').toBeGreaterThan(0);
   });
 
@@ -239,7 +279,9 @@ describe('error-recall core — extraction equivalence', () => {
     const plan = planErrorRecall('npm run build', NPM_ENOENT_OUT);
     const fts = errorRecallFtsQuery(plan.terms);
     expect(ERROR_RECALL_LIMIT).toBe(3);
-    expect(db.prepare(errorRecallSql()).all({ q: fts, project: PROJECT, now: Date.now() }).length).toBeLessThanOrEqual(3);
+    expect(
+      db.prepare(errorRecallSql()).all({ q: fts, project: PROJECT, now: Date.now() }).length,
+    ).toBeLessThanOrEqual(3);
     expect(db.prepare(errorRecallSql(1)).all({ q: fts, project: PROJECT, now: Date.now() }).length).toBe(1);
   });
 
@@ -266,7 +308,11 @@ describe('error-recall core — gate', () => {
   it('returns null (do not inject) when no error term survives', () => {
     const { db } = seed();
     // Output whose only error-ish tokens are stop words → planErrorRecall gates.
-    const out = selectErrorRecall(db, { cmd: 'npm run build', response: 'Error: it failed', project: PROJECT });
+    const out = selectErrorRecall(db, {
+      cmd: 'npm run build',
+      response: 'Error: it failed',
+      project: PROJECT,
+    });
     expect(planErrorRecall('npm run build', 'Error: it failed')).toBeNull();
     expect(out).toBeNull();
   });
@@ -284,17 +330,26 @@ describe('error-recall core — relevance floor (SET-LEVEL, default OFF)', () =>
   const FLOOR_ENV = 'CLAUDE_MEM_ERROR_RECALL_BM25_MIN';
   const withEnv = (v, fn) => {
     const saved = process.env[FLOOR_ENV];
-    if (v === undefined) delete process.env[FLOOR_ENV]; else process.env[FLOOR_ENV] = v;
-    try { return fn(); } finally {
-      if (saved === undefined) delete process.env[FLOOR_ENV]; else process.env[FLOOR_ENV] = saved;
+    if (v === undefined) delete process.env[FLOOR_ENV];
+    else process.env[FLOOR_ENV] = v;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env[FLOOR_ENV];
+      else process.env[FLOOR_ENV] = saved;
     }
   };
-  const select = (db, extra = {}) => selectErrorRecall(db, {
-    cmd: 'npm run build', response: NPM_ENOENT_OUT, project: PROJECT, ...extra,
-  });
-  const controlRows = (db, now) => db.prepare(PRE_EXTRACTION_SQL).all(
-    errorRecallFtsQuery(planErrorRecall('npm run build', NPM_ENOENT_OUT).terms), PROJECT, now,
-  );
+  const select = (db, extra = {}) =>
+    selectErrorRecall(db, {
+      cmd: 'npm run build',
+      response: NPM_ENOENT_OUT,
+      project: PROJECT,
+      ...extra,
+    });
+  const controlRows = (db, now) =>
+    db
+      .prepare(PRE_EXTRACTION_SQL)
+      .all(errorRecallFtsQuery(planErrorRecall('npm run build', NPM_ENOENT_OUT).terms), PROJECT, now);
 
   it('is OFF by default — nothing is suppressed, and with the rerank off the statement is the pre-floor one', () => {
     // 0 is a measured decision, not an oversight (see the core docblock: the per-row
@@ -345,8 +400,9 @@ describe('error-recall core — relevance floor (SET-LEVEL, default OFF)', () =>
     const mags = all.rows.map((r) => Math.abs(r.bm25_raw));
     const top = mags[0];
     const weakest = Math.min(...mags);
-    expect(weakest, 'fixture must contain a row weaker than the top one, else this is vacuous')
-      .toBeLessThan(top);
+    expect(weakest, 'fixture must contain a row weaker than the top one, else this is vacuous').toBeLessThan(
+      top,
+    );
 
     // A floor between the weakest and the top row: per-row would drop the weak rows,
     // set-level keeps every one of them.
@@ -360,17 +416,17 @@ describe('error-recall core — relevance floor (SET-LEVEL, default OFF)', () =>
     // above already compensated for this ramp; this one did not.
     const scale = corpusFloorScale(db);
     expect(scale, 'ramp must be active here, else the descaling below is untested').toBeLessThan(1);
-    const between = ((weakest + top) / 2) / scale;
+    const between = (weakest + top) / 2 / scale;
     const out = select(db, { now, floor: between });
-    expect(out.floor, 'applied floor must land between the weakest and the top row')
-      .toBeGreaterThan(weakest);
+    expect(out.floor, 'applied floor must land between the weakest and the top row').toBeGreaterThan(weakest);
     expect(out.floor).toBeLessThan(top);
 
     expect(out.rows.map((r) => r.id)).toEqual(all.rows.map((r) => r.id));
     // Compare against the APPLIED floor, not the argument — the argument is pre-ramp.
-    expect(out.rows.some((r) => Math.abs(r.bm25_raw) < out.floor),
-      'a sub-floor row must have survived, or this does not distinguish the two shapes')
-      .toBe(true);
+    expect(
+      out.rows.some((r) => Math.abs(r.bm25_raw) < out.floor),
+      'a sub-floor row must have survived, or this does not distinguish the two shapes',
+    ).toBe(true);
   });
 
   it('floor 0 is an EXACT revert to the pre-floor statement, not an approximate one', () => {
@@ -400,8 +456,10 @@ describe('error-recall core — relevance floor (SET-LEVEL, default OFF)', () =>
     const now = Date.now();
     for (const junk of [null, NaN, '', 'abc', -1]) {
       const out = withEnv('10.5', () => select(db, { now, floor: junk }));
-      expect(out.floor, 'junk floor must fall back to the configured value, got ' + out.floor)
-        .toBeGreaterThan(0);
+      expect(
+        out.floor,
+        'junk floor must fall back to the configured value, got ' + out.floor,
+      ).toBeGreaterThan(0);
     }
     // An explicit 0 IS honoured — that is the documented off switch.
     expect(withEnv('10.5', () => select(db, { now, floor: 0 })).floor).toBe(0);
@@ -419,8 +477,9 @@ describe('error-recall core — relevance floor (SET-LEVEL, default OFF)', () =>
     });
     const out = withEnv('10.5', () => select(db));
     expect(out, 'gate must open').toBeTruthy();
-    expect(out.floor, 'floor must be scaled below its configured value on a tiny corpus')
-      .toBeLessThan(CALIBRATED_ERROR_RECALL_BM25_FLOOR);
+    expect(out.floor, 'floor must be scaled below its configured value on a tiny corpus').toBeLessThan(
+      CALIBRATED_ERROR_RECALL_BM25_FLOOR,
+    );
     expect(out.rows.length, 'a fresh install must not be silenced by the floor').toBeGreaterThan(0);
   });
 });
@@ -438,13 +497,17 @@ describe('error-recall core — wiring', () => {
     // default and the env var rather than by a literal frozen into the caller.
     const call = src.match(/selectErrorRecall\(db,\s*\{[\s\S]*?\}\);/);
     expect(call, 'could not locate the call site to inspect its arguments').toBeTruthy();
-    expect(call[0], 'hook must not pin a floor — that would bypass the env switch')
-      .not.toMatch(/\bfloor\s*:/);
-    expect(call[0], 'hook must not pin a limit — ERROR_RECALL_LIMIT is the contract')
-      .not.toMatch(/\blimit\s*:/);
+    expect(call[0], 'hook must not pin a floor — that would bypass the env switch').not.toMatch(
+      /\bfloor\s*:/,
+    );
+    expect(call[0], 'hook must not pin a limit — ERROR_RECALL_LIMIT is the contract').not.toMatch(
+      /\blimit\s*:/,
+    );
     // The re-inlining regression this guard exists to catch: the FROM/JOIN pair of
     // this surface's statement reappearing inside hook.mjs.
-    expect(src).not.toMatch(/FROM\s+observations_fts\s*\n\s*JOIN\s+observations\s+o\s+ON\s+observations_fts\.rowid/);
+    expect(src).not.toMatch(
+      /FROM\s+observations_fts\s*\n\s*JOIN\s+observations\s+o\s+ON\s+observations_fts\.rowid/,
+    );
   });
 });
 
@@ -459,14 +522,21 @@ describe('error-recall core — wiring', () => {
 // anything: before it existed, the reranked and flat orders coincided on this fixture
 // and the whole feature measured as a no-op.
 describe('error-recall core — error-first rerank (D#167, default ON)', () => {
-  const select = (db, extra = {}) => selectErrorRecall(db, {
-    cmd: 'npm run build', response: NPM_ENOENT_OUT, project: PROJECT, floor: 0, ...extra,
-  });
+  const select = (db, extra = {}) =>
+    selectErrorRecall(db, {
+      cmd: 'npm run build',
+      response: NPM_ENOENT_OUT,
+      project: PROJECT,
+      floor: 0,
+      ...extra,
+    });
   const matchesAnErrorTerm = (db, id) => {
     const plan = planErrorRecall('npm run build', NPM_ENOENT_OUT);
-    return plan.errWords.some((t) => db.prepare(
-      'SELECT 1 ok FROM observations WHERE id = ? AND (lower(title) LIKE ? OR lower(text) LIKE ?)',
-    ).get(id, `%${t}%`, `%${t}%`));
+    return plan.errWords.some((t) =>
+      db
+        .prepare('SELECT 1 ok FROM observations WHERE id = ? AND (lower(title) LIKE ? OR lower(text) LIKE ?)')
+        .get(id, `%${t}%`, `%${t}%`),
+    );
   };
 
   it('the fixture can SEE the rerank — flat OR puts a command-only row first', () => {
@@ -477,18 +547,21 @@ describe('error-recall core — error-first rerank (D#167, default ON)', () => {
     const now = Date.now();
     const flat = withRerank('off', () => select(db, { now }));
     expect(flat.rows[0].id, 'flat OR must lead with the command-only decoy').toBe(decoys.cmdOnly);
-    expect(matchesAnErrorTerm(db, decoys.cmdOnly),
-      'the decoy must genuinely carry no error term, or it is not a decoy').toBeFalsy();
+    expect(
+      matchesAnErrorTerm(db, decoys.cmdOnly),
+      'the decoy must genuinely carry no error term, or it is not a decoy',
+    ).toBeFalsy();
   });
 
   it('demotes the command-only row out of the lead', () => {
     const { db, decoys } = seed();
     const now = Date.now();
     const out = select(db, { now });
-    expect(out.rows[0].id, 'command-only row must not lead once the rerank is on')
-      .not.toBe(decoys.cmdOnly);
-    expect(matchesAnErrorTerm(db, out.rows[0].id),
-      'the new lead must actually mention the failure').toBeTruthy();
+    expect(out.rows[0].id, 'command-only row must not lead once the rerank is on').not.toBe(decoys.cmdOnly);
+    expect(
+      matchesAnErrorTerm(db, out.rows[0].id),
+      'the new lead must actually mention the failure',
+    ).toBeTruthy();
   });
 
   it('tops up a SHORT primary without duplicating it', () => {
@@ -510,12 +583,14 @@ describe('error-recall core — error-first rerank (D#167, default ON)', () => {
     }
     const only = insertObs(db, {
       title: 'ENOENT on package.json means the cwd is wrong',
-      text: 'enoent syscall open package.json npm build path', ageDays: 6,
+      text: 'enoent syscall open package.json npm build path',
+      ageDays: 6,
     });
     for (let i = 0; i < 3; i++) {
       insertObs(db, {
         title: `npm build pipeline note ${i}`,
-        text: 'npm run build npm build run pipeline cadence', ageDays: 0.1 + i,
+        text: 'npm run build npm build run pipeline cadence',
+        ageDays: 0.1 + i,
       });
     }
     const now = Date.now();
@@ -574,10 +649,10 @@ describe('error-recall core — error-first rerank (D#167, default ON)', () => {
     for (const bad of [0, -1, null, 0.5, NaN, Infinity]) {
       const on = select(db, { now, limit: bad });
       const off = withRerank('off', () => select(db, { now, limit: bad }));
-      expect(on.rows.length, `limit=${String(bad)}: rerank changed the row count`)
-        .toBe(off.rows.length);
-      expect(on.rows.length, `limit=${String(bad)}: must fall back to the default cap`)
-        .toBe(ERROR_RECALL_LIMIT);
+      expect(on.rows.length, `limit=${String(bad)}: rerank changed the row count`).toBe(off.rows.length);
+      expect(on.rows.length, `limit=${String(bad)}: must fall back to the default cap`).toBe(
+        ERROR_RECALL_LIMIT,
+      );
     }
   });
 
@@ -589,8 +664,9 @@ describe('error-recall core — error-first rerank (D#167, default ON)', () => {
     // Anything else — including junk — leaves the measured default in place, rather
     // than a typo silently reverting the surface.
     for (const v of [undefined, '', 'on', 'yes', 'false', '0']) {
-      expect(withRerank(v, () => select(db, { now })).rows[0].id, `value=${String(v)}`)
-        .not.toBe(decoys.cmdOnly);
+      expect(withRerank(v, () => select(db, { now })).rows[0].id, `value=${String(v)}`).not.toBe(
+        decoys.cmdOnly,
+      );
     }
   });
 
@@ -603,7 +679,9 @@ describe('error-recall core — error-first rerank (D#167, default ON)', () => {
     expect(out.errorFirstQuery).toContain('"npm"');
     expect(out.errorFirstQuery).toContain('"enoent"');
     expect(out.errorFirstQuery).toMatch(/\)\s*AND\s*\(/);
-    expect(withRerank('off', () => select(db)).errorFirstQuery,
-      'and it must be null when the rerank did not run').toBeNull();
+    expect(
+      withRerank('off', () => select(db)).errorFirstQuery,
+      'and it must be null when the rerank did not run',
+    ).toBeNull();
   });
 });

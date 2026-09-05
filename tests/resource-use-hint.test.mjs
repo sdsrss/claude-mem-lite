@@ -28,7 +28,9 @@ describe('resourceUseHint', () => {
     const h = resourceUseHint(r, ctx);
     expect(h.isManaged).toBe(true);
     expect(h.portablePath).toBe('~/.claude-mem-lite/managed/repo/my-skill');
-    expect(h.howToUse).toBe('Read("~/.claude-mem-lite/managed/repo/my-skill/SKILL.md") or mem_use(name="my-skill")');
+    expect(h.howToUse).toBe(
+      'Read("~/.claude-mem-lite/managed/repo/my-skill/SKILL.md") or mem_use(name="my-skill")',
+    );
   });
 
   it('a managed .md path is used as-is, not suffixed again', () => {
@@ -43,7 +45,12 @@ describe('resourceUseHint', () => {
   it('THE DRIFT: a non-managed resource yields NO path, on both faces', () => {
     // The exact divergence. Under the CLI's old expression this returned the absolute
     // local_path and the caller printed a `Path:` line for it.
-    const r = { name: 'plugin-skill', type: 'skill', local_path: '/home/tester/.claude/skills/x', invocation_name: 'ns:x' };
+    const r = {
+      name: 'plugin-skill',
+      type: 'skill',
+      local_path: '/home/tester/.claude/skills/x',
+      invocation_name: 'ns:x',
+    };
     const h = resourceUseHint(r, ctx);
     expect(h.isManaged).toBe(false);
     expect(h.portablePath).toBe('');
@@ -70,8 +77,11 @@ describe('resourceUseHint', () => {
   });
 
   it('a missing local_path is not managed and does not throw', () => {
-    expect(resourceUseHint({ name: 'n', type: 'skill' }, ctx))
-      .toEqual({ isManaged: false, portablePath: '', howToUse: 'mem_use(name="n")' });
+    expect(resourceUseHint({ name: 'n', type: 'skill' }, ctx)).toEqual({
+      isManaged: false,
+      portablePath: '',
+      howToUse: 'mem_use(name="n")',
+    });
   });
 });
 
@@ -86,13 +96,15 @@ describe('neither face keeps a private copy of the rule', () => {
   });
 
   it.each(['mem-cli.mjs', 'server.mjs'])('%s no longer builds the invocation string itself', (rel) => {
-    expect(read(rel), `${rel} still constructs Agent(subagent_type=…) for a registry hit`)
-      .not.toMatch(/Agent\(subagent_type="\$\{r\.invocation_name\}"\)/);
+    expect(read(rel), `${rel} still constructs Agent(subagent_type=…) for a registry hit`).not.toMatch(
+      /Agent\(subagent_type="\$\{r\.invocation_name\}"\)/,
+    );
   });
 
   it('the scan can say NO', () => {
     // `not.toMatch` passes against a pattern matching nothing. This is the line that shipped.
-    expect('howToUse = `Agent(subagent_type="${r.invocation_name}")`;')
-      .toMatch(/Agent\(subagent_type="\$\{r\.invocation_name\}"\)/);
+    expect('howToUse = `Agent(subagent_type="${r.invocation_name}")`;').toMatch(
+      /Agent\(subagent_type="\$\{r\.invocation_name\}"\)/,
+    );
   });
 });

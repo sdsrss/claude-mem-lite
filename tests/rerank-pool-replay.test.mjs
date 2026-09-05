@@ -51,7 +51,11 @@ const prompts = (...texts) => texts.map((text) => ({ text, project: 'p' }));
 
 describe('self-check 1: the twin patch must apply, and must differ from shipped', () => {
   it('rewrites the declaration it was pointed at', () => {
-    const { out, previous } = patchConst('const RERANK_POOL_SAME_PROJECT = 30;\n', 'RERANK_POOL_SAME_PROJECT', 10);
+    const { out, previous } = patchConst(
+      'const RERANK_POOL_SAME_PROJECT = 30;\n',
+      'RERANK_POOL_SAME_PROJECT',
+      10,
+    );
     expect(previous).toBe(30);
     expect(out).toContain('const RERANK_POOL_SAME_PROJECT = 10;');
   });
@@ -61,10 +65,12 @@ describe('self-check 1: the twin patch must apply, and must differ from shipped'
     // value while sweeping the other is a legitimate no-op replacement, and the first
     // version reported it as "constant not found" — a true failure with a false cause,
     // which sends the reader to the wrong file.
-    expect(() => patchConst('const SOMETHING_ELSE = 30;\n', 'RERANK_POOL_SAME_PROJECT', 10))
-      .toThrow(/not found in hook-memory\.mjs/);
-    expect(() => patchConst('const RERANK_POOL_SAME_PROJECT = 30;\n', 'RERANK_POOL_SAME_PROJECT', 30))
-      .not.toThrow();
+    expect(() => patchConst('const SOMETHING_ELSE = 30;\n', 'RERANK_POOL_SAME_PROJECT', 10)).toThrow(
+      /not found in hook-memory\.mjs/,
+    );
+    expect(() =>
+      patchConst('const RERANK_POOL_SAME_PROJECT = 30;\n', 'RERANK_POOL_SAME_PROJECT', 30),
+    ).not.toThrow();
   });
 
   it('THROWS when the twin would be identical to shipped in BOTH arms', () => {
@@ -117,8 +123,7 @@ describe('self-check 3: shipped-vs-shipped must report zero', () => {
     // replay prints is noise, not a pool effect.
     let call = 0;
     const flaky = () => (call++ % 2 === 0 ? [{ id: 1 }] : [{ id: 2 }]);
-    expect(() => assertRulerCanSayNo(DB, prompts('q1', 'q2'), flaky))
-      .toThrow(/not deterministic/);
+    expect(() => assertRulerCanSayNo(DB, prompts('q1', 'q2'), flaky)).toThrow(/not deterministic/);
   });
 });
 
@@ -127,9 +132,12 @@ describe('self-check 4: the nonEmptyToEmpty counterexample gate', () => {
     // A constructed non-prefix corpus: q2's wide arm returns nothing while its narrow
     // arm returns a row. Without such a case the gate can only ever be observed at 0,
     // which is indistinguishable from a gate that cannot count.
-    const r = compare(DB, prompts('q1', 'q2'),
-      arm({ q1: [1], q2: [7] }),      // narrow
-      arm({ q1: [1, 2], q2: [] }));   // wide
+    const r = compare(
+      DB,
+      prompts('q1', 'q2'),
+      arm({ q1: [1], q2: [7] }), // narrow
+      arm({ q1: [1, 2], q2: [] }),
+    ); // wide
     expect(r.nonEmptyToEmpty).toBe(1);
     expect(counterexampleGate('subset', r.nonEmptyToEmpty)).toBe(true);
   });
@@ -138,17 +146,18 @@ describe('self-check 4: the nonEmptyToEmpty counterexample gate', () => {
     // `emptyWide <= emptyNarrow` does not establish monotonicity: two prompts moving
     // OFF empty hide one moving ONTO it. Here 2 move off, 1 moves on, so the aggregate
     // improves while a real counterexample exists.
-    const r = compare(DB, prompts('a', 'b', 'c'),
+    const r = compare(
+      DB,
+      prompts('a', 'b', 'c'),
       arm({ a: [], b: [], c: [9] }),
-      arm({ a: [1], b: [2], c: [] }));
-    expect(r.emptyWide).toBeLessThan(r.emptyNarrow);   // the reassuring aggregate
-    expect(r.nonEmptyToEmpty).toBe(1);                 // the refutation it hides
+      arm({ a: [1], b: [2], c: [] }),
+    );
+    expect(r.emptyWide).toBeLessThan(r.emptyNarrow); // the reassuring aggregate
+    expect(r.nonEmptyToEmpty).toBe(1); // the refutation it hides
   });
 
   it('reports zero when the wide arm really is a superset', () => {
-    const r = compare(DB, prompts('q1', 'q2'),
-      arm({ q1: [1], q2: [] }),
-      arm({ q1: [1, 2], q2: [5] }));
+    const r = compare(DB, prompts('q1', 'q2'), arm({ q1: [1], q2: [] }), arm({ q1: [1, 2], q2: [5] }));
     expect(r.nonEmptyToEmpty).toBe(0);
     expect(counterexampleGate('subset', r.nonEmptyToEmpty)).toBe(false);
   });
@@ -190,19 +199,23 @@ describe('argument validation: the NaN hole', () => {
 
 describe('costCompare refuses to report a ratio it cannot measure', () => {
   it('THROWS when every timed call throws', () => {
-    const boom = () => { throw new Error('nope'); };
-    expect(() => costCompare(DB, prompts('q1'), boom, boom))
-      .toThrow(/no cost measurement exists/);
+    const boom = () => {
+      throw new Error('nope');
+    };
+    expect(() => costCompare(DB, prompts('q1'), boom, boom)).toThrow(/no cost measurement exists/);
   });
 
   it('commits both arms or neither — a throwing wide arm leaves no orphan narrow time', () => {
     // The bias review N7 caught: incrementing the denominator after both calls left the
     // narrow arm's time in the numerator with no matching denominator.
     const good = arm({ q1: [1], q2: [2] });
-    const halfBroken = (_db, text) => { if (text === 'q2') throw new Error('nope'); return [{ id: 1 }]; };
+    const halfBroken = (_db, text) => {
+      if (text === 'q2') throw new Error('nope');
+      return [{ id: 1 }];
+    };
     const c = costCompare(DB, prompts('q1', 'q2'), good, halfBroken);
-    expect(c.threw).toBe(2);   // q2 throws on both passes
-    expect(c.n).toBe(2);       // q1 commits on both passes
+    expect(c.threw).toBe(2); // q2 throws on both passes
+    expect(c.n).toBe(2); // q1 commits on both passes
     expect(Number.isFinite(c.ratio)).toBe(true);
   });
 });
@@ -219,12 +232,24 @@ describe('costCompare refuses to report a ratio it cannot measure', () => {
 describe('self-check 5: the metric sink is shut, and the guard can see it open', () => {
   const withTmp = (fn) => {
     const dir = mkdtempSync(join(tmpdir(), 'rerank-sink-test-'));
-    try { return fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+    try {
+      return fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   };
 
   it('callArm passes the shipped counterfactual option — the whole fix, in one place', () => {
     let seen;
-    callArm((...args) => { seen = args; return []; }, 'DB', 'text', 'proj');
+    callArm(
+      (...args) => {
+        seen = args;
+        return [];
+      },
+      'DB',
+      'text',
+      'proj',
+    );
     expect(seen[4]).toEqual({ counterfactual: true });
   });
 
@@ -241,10 +266,12 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     // guard silently watched the wrong filename (its other failure mode) this stays green
     // for the wrong reason — which is why the shard name comes from recordMetric itself.
     withTmp((dir) => {
-      expect(() => assertNoMetricWrite(metricShardPath(dir), () => {
-        recordMetric(dir, { event: 'inject', durationMs: 1 });
-        return true;
-      })).toThrow(/grew .*bytes/);
+      expect(() =>
+        assertNoMetricWrite(metricShardPath(dir), () => {
+          recordMetric(dir, { event: 'inject', durationMs: 1 });
+          return true;
+        }),
+      ).toThrow(/grew .*bytes/);
     });
   });
 
@@ -253,7 +280,9 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     // queries that sanitize to nothing. A probe on one of those writes nothing whatever
     // the flag says, so "the shard did not grow" would certify a sink never approached.
     withTmp((dir) => {
-      expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow(/never reached the metric block/);
+      expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow(
+        /never reached the metric block/,
+      );
     });
   });
 
@@ -269,7 +298,7 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
 
       process.env.CLAUDE_MEM_METRICS = '0';
       withTmp((dir) => {
-        expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow();  // throwing path
+        expect(() => assertNoMetricWrite(metricShardPath(dir), () => false)).toThrow(); // throwing path
       });
       expect(process.env.CLAUDE_MEM_METRICS).toBe('0');
     } finally {
@@ -286,10 +315,19 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     // there. (The mutation that was run used the literal `zzz-wrong.jsonl`, which is why
     // it killed; that is a weaker fact than this assertion.)
     const src = readFileSync(join(REPO, 'benchmark/rerank-pool-replay.mjs'), 'utf8');
-    const body = src.slice(src.indexOf('export function metricShardPath'),
-      src.indexOf('export function metricsDirSize'));
+    const body = src.slice(
+      src.indexOf('export function metricShardPath'),
+      src.indexOf('export function metricsDirSize'),
+    );
     expect(body).toContain('recordMetric(tmp');
-    for (const forbidden of ['toISOString', 'getFullYear', 'getMonth', 'padStart', 'slice(0, 10)', 'slice(0,10)']) {
+    for (const forbidden of [
+      'toISOString',
+      'getFullYear',
+      'getMonth',
+      'padStart',
+      'slice(0, 10)',
+      'slice(0,10)',
+    ]) {
       expect(body, `metricShardPath derives the date itself via ${forbidden}`).not.toContain(forbidden);
     }
   });
@@ -299,8 +337,12 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
       const shard = metricShardPath(dir);
       const prev = process.env.CLAUDE_MEM_METRICS;
       process.env.CLAUDE_MEM_METRICS = '1';
-      try { recordMetric(dir, { event: 'inject' }); }
-      finally { if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = prev; }
+      try {
+        recordMetric(dir, { event: 'inject' });
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS;
+        else process.env.CLAUDE_MEM_METRICS = prev;
+      }
       // If this ever fails, the guard has been watching a file nothing writes — the exact
       // vacuous pass the throwaway-dir design exists to prevent.
       expect(existsSync(shard)).toBe(true);
@@ -317,13 +359,22 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     try {
       delete process.env.CLAUDE_MEM_METRICS;
       process.env.TMPDIR = join(REPO, 'no', 'such', 'dir', 'anywhere');
-      for (const fn of [() => metricShardPath('/nope'), () => assertNoMetricWrite('/nope/x.jsonl', () => true)]) {
-        try { fn(); } catch { /* expected: ENOENT from mkdtemp */ }
+      for (const fn of [
+        () => metricShardPath('/nope'),
+        () => assertNoMetricWrite('/nope/x.jsonl', () => true),
+      ]) {
+        try {
+          fn();
+        } catch {
+          /* expected: ENOENT from mkdtemp */
+        }
         expect('CLAUDE_MEM_METRICS' in process.env).toBe(false);
       }
     } finally {
-      if (originalTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = originalTmp;
-      if (original === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = original;
+      if (originalTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmp;
+      if (original === undefined) delete process.env.CLAUDE_MEM_METRICS;
+      else process.env.CLAUDE_MEM_METRICS = original;
     }
   });
 
@@ -336,12 +387,16 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     // whole-directory before/after cannot be defeated by call form.
     withTmp((dir) => {
       const before = metricsDirSize(dir);
-      expect(before).toBe(0);                       // premise: nothing there yet
-      expect(runLevelGrowth(dir, before)).toBe(0);  // and the gate agrees
+      expect(before).toBe(0); // premise: nothing there yet
+      expect(runLevelGrowth(dir, before)).toBe(0); // and the gate agrees
       const prev = process.env.CLAUDE_MEM_METRICS;
       process.env.CLAUDE_MEM_METRICS = '1';
-      try { recordMetric(dir, { event: 'inject', durationMs: 1 }); }
-      finally { if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS; else process.env.CLAUDE_MEM_METRICS = prev; }
+      try {
+        recordMetric(dir, { event: 'inject', durationMs: 1 });
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS;
+        else process.env.CLAUDE_MEM_METRICS = prev;
+      }
       expect(runLevelGrowth(dir, before)).toBeGreaterThan(0);
     });
   });
@@ -365,6 +420,6 @@ describe('self-check 5: the metric sink is shut, and the guard can see it open',
     // the call form, not the semantics, which is what the cases above are for.
     const src = readFileSync(join(REPO, 'benchmark/rerank-pool-replay.mjs'), 'utf8');
     expect(src.match(/\b(?:narrow|wide)\(\s*db\b/g)).toBe(null);
-    expect(src.match(/\bfn\(\s*db\b/g)).toHaveLength(1);   // callArm's own body, and only it
+    expect(src.match(/\bfn\(\s*db\b/g)).toHaveLength(1); // callArm's own body, and only it
   });
 });

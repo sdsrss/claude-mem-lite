@@ -46,18 +46,23 @@ function seedPair(db, baseOverrides, variantOverrides) {
 // Path A — passive injection. Scores read from the return value (pre injection_count bump).
 function injectScores(db) {
   const rows = searchRelevantMemories(db, TERM, PROJECT);
-  return new Map(rows.map(r => [r.id, r.score]));
+  return new Map(rows.map((r) => [r.id, r.score]));
 }
 
 // Path B — explicit search (FULL_SCORE). Scores are negative (BM25 ASC); ratio of two
 // negatives is the positive multiplier ratio. projectFilter=null activates project boost.
 function searchScores(db, { projectFilter = PROJECT, currentProject = PROJECT } = {}) {
   const rows = searchObservationsHybrid(db, {
-    ftsQuery: TERM, args: { project: projectFilter },
-    epochFrom: null, epochTo: null,
-    perSourceLimit: 10, perSourceOffset: 0, currentProject, limit: 10,
+    ftsQuery: TERM,
+    args: { project: projectFilter },
+    epochFrom: null,
+    epochTo: null,
+    perSourceLimit: 10,
+    perSourceOffset: 0,
+    currentProject,
+    limit: 10,
   });
-  return new Map(rows.map(r => [r.id, r.score]));
+  return new Map(rows.map((r) => [r.id, r.score]));
 }
 
 const ratio = (m, variantId, baseId) => m.get(variantId) / m.get(baseId);
@@ -112,7 +117,11 @@ describe('Path A — passive injection scoring (hook-memory searchRelevantMemori
     // from Path B (which DOES decay) so a later "add decay to injection" or
     // "unify the scorers" edit fails loudly. created_at_epoch is non-FTS → testable.
     const db = freshDb();
-    const { baseId: fresh, variantId: old } = seedPair(db, { epochOffset: 0 }, { epochOffset: -30 * 86400000 });
+    const { baseId: fresh, variantId: old } = seedPair(
+      db,
+      { epochOffset: 0 },
+      { epochOffset: -30 * 86400000 },
+    );
     const m = injectScores(db);
     expect(ratio(m, old, fresh)).toBeCloseTo(1.0, 3);
     db.close();
@@ -123,7 +132,9 @@ describe('Path A — passive injection scoring (hook-memory searchRelevantMemori
     // Both rows must be decision+imp2 so only the project axis varies: same-project full
     // weight vs cross-project transferable-decision discount.
     const same = Number(insertObs(db, { ...SHARED, type: 'decision', importance: 2 }).lastInsertRowid);
-    const cross = Number(insertObs(db, { ...SHARED, type: 'decision', importance: 2, project: 'other-proj' }).lastInsertRowid);
+    const cross = Number(
+      insertObs(db, { ...SHARED, type: 'decision', importance: 2, project: 'other-proj' }).lastInsertRowid,
+    );
     const m = injectScores(db);
     expect(ratio(m, cross, same)).toBeCloseTo(0.4, 4);
     db.close();
@@ -168,7 +179,11 @@ describe('Path B — explicit search scoring (searchObservationsHybrid FULL_SCOR
     // left unguarded — a change to the half-life table or the decay constant now
     // fails here instead of silently shifting Path B ranking.
     const db = freshDb();
-    const { baseId: fresh, variantId: aged } = seedPair(db, { epochOffset: 0 }, { epochOffset: -30 * 86400000 });
+    const { baseId: fresh, variantId: aged } = seedPair(
+      db,
+      { epochOffset: 0 },
+      { epochOffset: -30 * 86400000 },
+    );
     const m = searchScores(db);
     expect(ratio(m, aged, fresh)).toBeCloseTo(0.75, 2);
     db.close();
@@ -201,7 +216,7 @@ describe('intentional divergence between the two scoring paths', () => {
     dbB.close();
 
     expect(injRatio).toBeCloseTo(1 / 0.6, 4); // ≈1.6667 binary
-    expect(searchRatio).toBeCloseTo(1.5, 4);  // linear
+    expect(searchRatio).toBeCloseTo(1.5, 4); // linear
     expect(injRatio).not.toBeCloseTo(searchRatio, 3);
   });
 });

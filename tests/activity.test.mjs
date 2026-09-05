@@ -58,8 +58,20 @@ describe('activity store', () => {
   test('recentEvents sorts DESC by created', () => {
     const db = createTestDb();
     const t0 = Date.now();
-    saveEvent(db, { project: 'mem', event_type: 'observation', title: 'old', importance: 1, created_at_epoch: t0 - 1000 });
-    saveEvent(db, { project: 'mem', event_type: 'observation', title: 'new', importance: 1, created_at_epoch: t0 });
+    saveEvent(db, {
+      project: 'mem',
+      event_type: 'observation',
+      title: 'old',
+      importance: 1,
+      created_at_epoch: t0 - 1000,
+    });
+    saveEvent(db, {
+      project: 'mem',
+      event_type: 'observation',
+      title: 'new',
+      importance: 1,
+      created_at_epoch: t0,
+    });
     const hits = recentEvents(db, { project: 'mem', limit: 2 });
     expect(hits[0].title).toBe('new');
   });
@@ -162,7 +174,11 @@ describe('cmdActivity CLI: --type validation', () => {
   }
 
   function teardownDir() {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 
   test('activity save --type bogus rejects with non-zero exit', () => {
@@ -180,7 +196,17 @@ describe('cmdActivity CLI: --type validation', () => {
   test('activity save --type lesson --files a,b stores array and round-trips via show', () => {
     setupDir();
     try {
-      const save = runCli(['activity', 'save', '--type', 'lesson', 'ci unit test title', '--files', 'a.mjs,b.mjs', '--importance', '2']);
+      const save = runCli([
+        'activity',
+        'save',
+        '--type',
+        'lesson',
+        'ci unit test title',
+        '--files',
+        'a.mjs,b.mjs',
+        '--importance',
+        '2',
+      ]);
       expect(save.exitCode).toBe(0);
       const parsed = JSON.parse(save.stdout.trim());
       expect(parsed.ok).toBe(true);

@@ -2,22 +2,36 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { extractInjectedFromPreToolUse, extractCitationsFromTranscript, applyCitationDecay, redirectSupersededIds } from '../lib/citation-tracker.mjs';
+import {
+  extractInjectedFromPreToolUse,
+  extractCitationsFromTranscript,
+  applyCitationDecay,
+  redirectSupersededIds,
+} from '../lib/citation-tracker.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 describe('extractInjectedFromPreToolUse', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-decay-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-decay-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 't.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
   function preToolAttachment(injectedIdsWithTypes) {
-    const lines = ['[mem] PreToolUse recall — system-injected context, continue your planned action:', '[mem] Lessons for foo.js:'];
+    const lines = [
+      '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+      '[mem] Lessons for foo.js:',
+    ];
     for (const { id, type, body } of injectedIdsWithTypes) {
       lines.push(`  #${id} [${type}] ${body || 'placeholder lesson body'}`);
     }
@@ -40,7 +54,10 @@ describe('extractInjectedFromPreToolUse', () => {
 
   it('extracts injected IDs from pre-tool-recall attachment stdout', () => {
     const path = writeTranscript([
-      preToolAttachment([{ id: 42, type: 'bugfix' }, { id: 7556, type: 'decision' }]),
+      preToolAttachment([
+        { id: 42, type: 'bugfix' },
+        { id: 7556, type: 'decision' },
+      ]),
     ]);
     const ids = extractInjectedFromPreToolUse(path);
     expect(ids.has(42)).toBe(true);
@@ -74,7 +91,17 @@ describe('extractInjectedFromPreToolUse', () => {
       },
     });
     const path = writeTranscript([
-      { type: 'attachment', attachment: { type: 'hook_success', hookName: 'PreToolUse:Edit', command: 'pre-tool-recall.js', stdout, stderr: '', exitCode: 0 } },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          hookName: 'PreToolUse:Edit',
+          command: 'pre-tool-recall.js',
+          stdout,
+          stderr: '',
+          exitCode: 0,
+        },
+      },
     ]);
     const ids = extractInjectedFromPreToolUse(path);
     expect(ids.size).toBe(0);
@@ -92,19 +119,33 @@ describe('extractInjectedFromPreToolUse', () => {
 
 describe('extractCitationsFromTranscript — mainOnly option', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-side-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-side-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 't.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
   it('default behavior unchanged: includes sidechain (existing callers)', () => {
     const path = writeTranscript([
-      { type: 'assistant', isSidechain: true,  message: { content: [{ type: 'text', text: 'sub-agent saw #100' }] } },
-      { type: 'assistant', isSidechain: false, message: { content: [{ type: 'text', text: 'main cited #200' }] } },
+      {
+        type: 'assistant',
+        isSidechain: true,
+        message: { content: [{ type: 'text', text: 'sub-agent saw #100' }] },
+      },
+      {
+        type: 'assistant',
+        isSidechain: false,
+        message: { content: [{ type: 'text', text: 'main cited #200' }] },
+      },
     ]);
     const ids = extractCitationsFromTranscript(path);
     expect(ids.has(100)).toBe(true);
@@ -113,8 +154,16 @@ describe('extractCitationsFromTranscript — mainOnly option', () => {
 
   it('with {mainOnly:true}: drops sidechain text', () => {
     const path = writeTranscript([
-      { type: 'assistant', isSidechain: true,  message: { content: [{ type: 'text', text: 'sub-agent saw #100' }] } },
-      { type: 'assistant', isSidechain: false, message: { content: [{ type: 'text', text: 'main cited #200' }] } },
+      {
+        type: 'assistant',
+        isSidechain: true,
+        message: { content: [{ type: 'text', text: 'sub-agent saw #100' }] },
+      },
+      {
+        type: 'assistant',
+        isSidechain: false,
+        message: { content: [{ type: 'text', text: 'main cited #200' }] },
+      },
     ]);
     const ids = extractCitationsFromTranscript(path, { mainOnly: true });
     expect(ids.has(100)).toBe(false);
@@ -124,7 +173,10 @@ describe('extractCitationsFromTranscript — mainOnly option', () => {
 
   it('with {mainOnly:true}: treats missing isSidechain as main thread', () => {
     const path = writeTranscript([
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'no isSidechain field → assume main, count #300' }] } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'no isSidechain field → assume main, count #300' }] },
+      },
     ]);
     const ids = extractCitationsFromTranscript(path, { mainOnly: true });
     expect(ids.has(300)).toBe(true);
@@ -137,7 +189,11 @@ describe('applyCitationDecay', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   function makeObs(overrides = {}) {
     const id = insertObs(db, {
@@ -149,16 +205,22 @@ describe('applyCitationDecay', () => {
       ...overrides,
     }).lastInsertRowid;
     // Post-INSERT updates for citation-decay columns (not in insertObs yet)
-    if (overrides.uncited_streak !== undefined || overrides.cited_count !== undefined || overrides.last_decided_session_id !== undefined) {
-      db.prepare(`
+    if (
+      overrides.uncited_streak !== undefined ||
+      overrides.cited_count !== undefined ||
+      overrides.last_decided_session_id !== undefined
+    ) {
+      db.prepare(
+        `
         UPDATE observations
         SET uncited_streak = ?, cited_count = ?, last_decided_session_id = ?
         WHERE id = ?
-      `).run(
+      `,
+      ).run(
         overrides.uncited_streak ?? 0,
         overrides.cited_count ?? 0,
         overrides.last_decided_session_id ?? null,
-        id
+        id,
       );
     }
     return id;
@@ -190,9 +252,13 @@ describe('applyCitationDecay', () => {
     const atCap = makeObs({ importance: 3 });
     const atFloor = makeObs({ importance: 1, uncited_streak: 2 });
 
-    applyCitationDecay(db, 'p',
+    applyCitationDecay(
+      db,
+      'p',
       new Set([promote, streakOnly, demote, atCap, atFloor]),
-      new Set([promote, atCap]), 'sess-1');
+      new Set([promote, atCap]),
+      'sess-1',
+    );
 
     const imp = (id) => db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance;
     expect(imp(promote), 'promote branch must not raise importance').toBe(2);
@@ -203,19 +269,27 @@ describe('applyCitationDecay', () => {
 
     // The behaviour signals the loop DOES own must still move, or "no importance
     // write" would be trivially satisfiable by disabling the loop altogether.
-    const r = db.prepare('SELECT cited_count, uncited_streak, demoted_at, decay_seen_count FROM observations WHERE id=?').get(promote);
+    const r = db
+      .prepare(
+        'SELECT cited_count, uncited_streak, demoted_at, decay_seen_count FROM observations WHERE id=?',
+      )
+      .get(promote);
     expect(r.cited_count).toBe(1);
     expect(r.uncited_streak).toBe(0);
     expect(r.decay_seen_count).toBe(1);
     const d = db.prepare('SELECT uncited_streak, demoted_at FROM observations WHERE id=?').get(demote);
-    expect(d.uncited_streak).toBe(0);          // streak still rolls over at the threshold
-    expect(d.demoted_at).toBeGreaterThan(0);   // …and is still stamped
+    expect(d.uncited_streak).toBe(0); // streak still rolls over at the threshold
+    expect(d.demoted_at).toBeGreaterThan(0); // …and is still stamped
   });
 
   it('cited obs gets cited_count += 1, streak reset to 0, importance untouched', () => {
     const id = makeObs({ importance: 2, uncited_streak: 1, cited_count: 0 });
     applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');
-    const row = db.prepare('SELECT importance, cited_count, uncited_streak, last_decided_session_id, decay_seen_count FROM observations WHERE id=?').get(id);
+    const row = db
+      .prepare(
+        'SELECT importance, cited_count, uncited_streak, last_decided_session_id, decay_seen_count FROM observations WHERE id=?',
+      )
+      .get(id);
     expect(row.importance).toBe(2); // D#179: unchanged — the loop's output is cited_count/streak
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
@@ -270,10 +344,12 @@ describe('applyCitationDecay', () => {
     // agree on resolutions 1 and 2, so an endpoint-only assertion after an even
     // number of cycles would be weak evidence.
     expect(seen).toEqual([1, 2, 0, 1, 2, 0]);
-    const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
-    expect(row.uncited_streak).toBe(0);          // recovered without a citation
-    expect(row.demoted_at).toBeGreaterThan(0);   // rollover stamped here too
-    expect(row.importance).toBe(2);              // still never a population change
+    const row = db
+      .prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(id);
+    expect(row.uncited_streak).toBe(0); // recovered without a citation
+    expect(row.demoted_at).toBeGreaterThan(0); // rollover stamped here too
+    expect(row.importance).toBe(2); // still never a population change
   });
 
   it('importance cap: cited at importance=3 stays at 3', () => {
@@ -294,7 +370,9 @@ describe('applyCitationDecay', () => {
     const id = makeObs({ importance: 2, uncited_streak: 2 });
     const before = Date.now();
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
-    const r = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
+    const r = db
+      .prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(id);
     expect(r.importance).toBe(2); // D#179/D#198: the rollover no longer lowers importance
     expect(r.uncited_streak).toBe(0);
     // v33: demoted_at gets a real timestamp on the rollover branch
@@ -338,12 +416,20 @@ describe('applyCitationDecay', () => {
     const id100 = makeObs({ importance: 2, uncited_streak: 0 });
     const id200 = makeObs({ importance: 2, uncited_streak: 0 });
     applyCitationDecay(db, 'p', new Set([id100, id200]), new Set([id100]), 'sess-1');
-    const a = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id100);
-    const b = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id200);
+    const a = db
+      .prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?')
+      .get(id100);
+    const b = db
+      .prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?')
+      .get(id200);
     // D#179: both keep importance 2 — the two branches are told apart by
     // cited_count / uncited_streak, which is now the loop's entire output.
-    expect(a.importance).toBe(2);  expect(a.cited_count).toBe(1);  expect(a.uncited_streak).toBe(0);
-    expect(b.importance).toBe(2);  expect(b.cited_count).toBe(0);  expect(b.uncited_streak).toBe(1);
+    expect(a.importance).toBe(2);
+    expect(a.cited_count).toBe(1);
+    expect(a.uncited_streak).toBe(0);
+    expect(b.importance).toBe(2);
+    expect(b.cited_count).toBe(0);
+    expect(b.uncited_streak).toBe(1);
   });
 
   it('idempotency: running twice for same session is a no-op the second time', () => {
@@ -358,14 +444,22 @@ describe('applyCitationDecay', () => {
 
   it('cross-project IDs silently ignored (no rows touched)', () => {
     insertSession(db, { id: 'sess-2', project: 'other' });
-    const id = insertObs(db, { sessionId: 'sess-2', project: 'other', type: 'bugfix', title: 't', importance: 2 }).lastInsertRowid;
+    const id = insertObs(db, {
+      sessionId: 'sess-2',
+      project: 'other',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
+    }).lastInsertRowid;
     applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
-    expect(db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id).importance).toBe(2);
+    expect(
+      db.prepare('SELECT importance, uncited_streak FROM observations WHERE id=?').get(id).importance,
+    ).toBe(2);
   });
 
   it('returns summary { promoted, demoted, touched } for telemetry', () => {
     const a = makeObs({ importance: 2 });
-    const b = makeObs({ importance: 2, uncited_streak: 2 });  // will demote
+    const b = makeObs({ importance: 2, uncited_streak: 2 }); // will demote
     const result = applyCitationDecay(db, 'p', new Set([a, b]), new Set([a]), 'sess-1');
     expect(result).toEqual({ promoted: 1, demoted: 1, touched: 2 });
   });
@@ -377,13 +471,18 @@ describe('applyCitationDecay', () => {
       const result = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');
       expect(result).toEqual({ promoted: 0, demoted: 0, touched: 0 });
       expect(db.prepare('SELECT importance FROM observations WHERE id=?').get(id).importance).toBe(2);
-    } finally { delete process.env.MEM_DISABLE_CITATION_DECAY; }
+    } finally {
+      delete process.env.MEM_DISABLE_CITATION_DECAY;
+    }
   });
 
   it('null/empty injected set → no-op', () => {
     const id = makeObs({ importance: 2 });
     applyCitationDecay(db, 'p', new Set(), new Set([id]), 'sess-1');
-    expect(db.prepare('SELECT importance, last_decided_session_id FROM observations WHERE id=?').get(id).importance).toBe(2);
+    expect(
+      db.prepare('SELECT importance, last_decided_session_id FROM observations WHERE id=?').get(id)
+        .importance,
+    ).toBe(2);
   });
 
   it('session dedup: same obs injected twice in one session resolves once', () => {
@@ -405,13 +504,34 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   function makeObs(overrides = {}) {
-    const id = insertObs(db, { sessionId: 'sess-1', project: 'p', type: 'bugfix', title: 't', importance: 2, ...overrides }).lastInsertRowid;
-    if (overrides.uncited_streak !== undefined || overrides.cited_count !== undefined || overrides.last_decided_session_id !== undefined) {
-      db.prepare(`UPDATE observations SET uncited_streak = ?, cited_count = ?, last_decided_session_id = ? WHERE id = ?`)
-        .run(overrides.uncited_streak ?? 0, overrides.cited_count ?? 0, overrides.last_decided_session_id ?? null, id);
+    const id = insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
+      ...overrides,
+    }).lastInsertRowid;
+    if (
+      overrides.uncited_streak !== undefined ||
+      overrides.cited_count !== undefined ||
+      overrides.last_decided_session_id !== undefined
+    ) {
+      db.prepare(
+        `UPDATE observations SET uncited_streak = ?, cited_count = ?, last_decided_session_id = ? WHERE id = ?`,
+      ).run(
+        overrides.uncited_streak ?? 0,
+        overrides.cited_count ?? 0,
+        overrides.last_decided_session_id ?? null,
+        id,
+      );
     }
     return id;
   }
@@ -421,14 +541,20 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     // later. Pre-fix, the turn-1 uncited resolution froze the verdict (last_decided=S),
     // and the turn-3 citation was skipped as an idempotent no-op → signal lost.
     const id = makeObs({ importance: 2, uncited_streak: 0 });
-    const r1 = applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');   // turn 1: not yet cited
+    const r1 = applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1'); // turn 1: not yet cited
     expect(r1).toEqual({ promoted: 0, demoted: 0, touched: 1 });
-    expect(db.prepare('SELECT uncited_streak, importance FROM observations WHERE id=?').get(id).uncited_streak).toBe(1);
+    expect(
+      db.prepare('SELECT uncited_streak, importance FROM observations WHERE id=?').get(id).uncited_streak,
+    ).toBe(1);
 
     const r2 = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // turn 3: now cited
     expect(r2.promoted).toBe(1);
     expect(r2.touched).toBe(0); // already in the injected denominator from turn 1 — not re-counted
-    const row = db.prepare('SELECT importance, cited_count, uncited_streak, decay_seen_count, last_cited_session_id FROM observations WHERE id=?').get(id);
+    const row = db
+      .prepare(
+        'SELECT importance, cited_count, uncited_streak, decay_seen_count, last_cited_session_id FROM observations WHERE id=?',
+      )
+      .get(id);
     expect(row.importance).toBe(2); // D#179: untouched
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
@@ -444,14 +570,18 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     const id = makeObs({ importance: 2, uncited_streak: 2 }); // one more uncited → rollover
     const r1 = applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');
     expect(r1.demoted).toBe(1);
-    const mid = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
-    expect(mid.importance).toBe(2);              // not lowered
-    expect(mid.demoted_at).toBeGreaterThan(0);   // rollover stamped
+    const mid = db
+      .prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(id);
+    expect(mid.importance).toBe(2); // not lowered
+    expect(mid.demoted_at).toBeGreaterThan(0); // rollover stamped
 
     const r2 = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // late cite
     expect(r2.promoted).toBe(1);
-    const row = db.prepare('SELECT importance, cited_count, uncited_streak, demoted_at FROM observations WHERE id=?').get(id);
-    expect(row.importance).toBe(2);   // still untouched by either branch
+    const row = db
+      .prepare('SELECT importance, cited_count, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(id);
+    expect(row.importance).toBe(2); // still untouched by either branch
     expect(row.demoted_at).toBeNull(); // the undo
     expect(row.cited_count).toBe(1);
     expect(row.uncited_streak).toBe(0);
@@ -461,8 +591,8 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     // The "climb" this used to watch on importance is now watched on cited_count,
     // which is the counter the idempotency key actually guards.
     const id = makeObs({ importance: 1, uncited_streak: 0 });
-    applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1');        // uncited
-    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');    // upgrade → promote
+    applyCitationDecay(db, 'p', new Set([id]), new Set(), 'sess-1'); // uncited
+    applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1'); // upgrade → promote
     const after1 = db.prepare('SELECT importance, cited_count FROM observations WHERE id=?').get(id);
     expect(after1.importance).toBe(1);
     expect(after1.cited_count).toBe(1);
@@ -480,7 +610,11 @@ describe('applyCitationDecay — cross-turn late citation (uncited→cited upgra
     const id = makeObs({ importance: 2, uncited_streak: 0 });
     const r = applyCitationDecay(db, 'p', new Set([id]), new Set([id]), 'sess-1');
     expect(r).toEqual({ promoted: 1, demoted: 0, touched: 1 });
-    const row = db.prepare('SELECT decay_seen_count, last_cited_session_id, last_decided_session_id FROM observations WHERE id=?').get(id);
+    const row = db
+      .prepare(
+        'SELECT decay_seen_count, last_cited_session_id, last_decided_session_id FROM observations WHERE id=?',
+      )
+      .get(id);
     expect(row.decay_seen_count).toBe(1);
     expect(row.last_cited_session_id).toBe('sess-1');
     expect(row.last_decided_session_id).toBe('sess-1');
@@ -495,27 +629,41 @@ describe('Stop hook integration — fixture transcript composition', () => {
     tmp = mkdtempSync(join(tmpdir(), 'cite-int-'));
   });
   afterEach(() => {
-    try { db.close(); } catch {}
-    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    try {
+      db.close();
+    } catch {}
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
   });
 
   function makeObs(overrides = {}) {
     const result = insertObs(db, {
-      sessionId: 'sess-int', project: 'p', type: 'bugfix', title: 't', importance: 2,
+      sessionId: 'sess-int',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
       ...overrides,
     });
     const id = result.lastInsertRowid;
     // Apply the citation-decay defaults via raw update (test-helpers doesn't know about new columns).
-    if (overrides.uncited_streak !== undefined || overrides.cited_count !== undefined || overrides.last_decided_session_id !== undefined) {
-      db.prepare(`
+    if (
+      overrides.uncited_streak !== undefined ||
+      overrides.cited_count !== undefined ||
+      overrides.last_decided_session_id !== undefined
+    ) {
+      db.prepare(
+        `
         UPDATE observations
         SET uncited_streak = ?, cited_count = ?, last_decided_session_id = ?
         WHERE id = ?
-      `).run(
+      `,
+      ).run(
         overrides.uncited_streak ?? 0,
         overrides.cited_count ?? 0,
         overrides.last_decided_session_id ?? null,
-        id
+        id,
       );
     }
     return id;
@@ -524,23 +672,34 @@ describe('Stop hook integration — fixture transcript composition', () => {
   it('fixture transcript with one injected #ID and a citation → promotion', () => {
     const id = makeObs({ importance: 2 });
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, [
-      // PreToolUse mem injection
-      JSON.stringify({
-        type: 'attachment',
-        attachment: {
-          type: 'hook_success', hookName: 'PreToolUse:Read',
-          command: 'pre-tool-recall.js',
-          stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: `  #${id} [bugfix] sample` } }),
-          stderr: '', exitCode: 0,
-        },
-      }),
-      // Assistant cites it (main thread)
-      JSON.stringify({
-        type: 'assistant', isSidechain: false,
-        message: { content: [{ type: 'text', text: `applied #${id}, all good` }] },
-      }),
-    ].join('\n'));
+    writeFileSync(
+      path,
+      [
+        // PreToolUse mem injection
+        JSON.stringify({
+          type: 'attachment',
+          attachment: {
+            type: 'hook_success',
+            hookName: 'PreToolUse:Read',
+            command: 'pre-tool-recall.js',
+            stdout: JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                additionalContext: `  #${id} [bugfix] sample`,
+              },
+            }),
+            stderr: '',
+            exitCode: 0,
+          },
+        }),
+        // Assistant cites it (main thread)
+        JSON.stringify({
+          type: 'assistant',
+          isSidechain: false,
+          message: { content: [{ type: 'text', text: `applied #${id}, all good` }] },
+        }),
+      ].join('\n'),
+    );
 
     const injected = extractInjectedFromPreToolUse(path);
     const cited = extractCitationsFromTranscript(path, { mainOnly: true });
@@ -557,28 +716,48 @@ describe('Stop hook integration — fixture transcript composition', () => {
     const id = makeObs({ importance: 2, uncited_streak: 0 });
     const path = join(tmp, 'transcript.jsonl');
     const hint = `[mem] ⚠ Cite-back: edited 1 file(s) with 1 prior lesson(s) this session. Save now if any was the root cause:\n  • foo.mjs ← #${id} — /lesson --file foo.mjs "<root cause + fix>"`;
-    writeFileSync(path, [
-      // PreToolUse injected the lesson…
-      JSON.stringify({
-        type: 'attachment',
-        attachment: {
-          type: 'hook_success', hookName: 'PreToolUse:Edit', command: 'pre-tool-recall.js',
-          stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: `  #${id} [bugfix] sample` } }),
-          stderr: '', exitCode: 0,
-        },
-      }),
-      // …PostToolUse cite-back hint fired (agent edited the warned file)…
-      JSON.stringify({
-        type: 'attachment',
-        attachment: {
-          type: 'hook_success', hookName: 'PostToolUse', command: 'hook.mjs post-tool-use',
-          stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: hint } }),
-          stderr: '', exitCode: 0,
-        },
-      }),
-      // …but the assistant produced text WITHOUT citing #NN.
-      JSON.stringify({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'text', text: 'fixed the bug, no explicit cite' }] } }),
-    ].join('\n'));
+    writeFileSync(
+      path,
+      [
+        // PreToolUse injected the lesson…
+        JSON.stringify({
+          type: 'attachment',
+          attachment: {
+            type: 'hook_success',
+            hookName: 'PreToolUse:Edit',
+            command: 'pre-tool-recall.js',
+            stdout: JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                additionalContext: `  #${id} [bugfix] sample`,
+              },
+            }),
+            stderr: '',
+            exitCode: 0,
+          },
+        }),
+        // …PostToolUse cite-back hint fired (agent edited the warned file)…
+        JSON.stringify({
+          type: 'attachment',
+          attachment: {
+            type: 'hook_success',
+            hookName: 'PostToolUse',
+            command: 'hook.mjs post-tool-use',
+            stdout: JSON.stringify({
+              hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: hint },
+            }),
+            stderr: '',
+            exitCode: 0,
+          },
+        }),
+        // …but the assistant produced text WITHOUT citing #NN.
+        JSON.stringify({
+          type: 'assistant',
+          isSidechain: false,
+          message: { content: [{ type: 'text', text: 'fixed the bug, no explicit cite' }] },
+        }),
+      ].join('\n'),
+    );
 
     // Replicate the Stop handler union.
     const injected = extractInjectedFromPreToolUse(path);
@@ -589,30 +768,43 @@ describe('Stop hook integration — fixture transcript composition', () => {
 
     const result = applyCitationDecay(db, 'p', injected, cited, 'sess-int');
     expect(result.promoted).toBe(1);
-    const rb = db.prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?').get(id);
-    expect(rb.cited_count).toBe(1);   // D#179: cite-back credits the counter…
-    expect(rb.importance).toBe(2);    // …and leaves the population gate alone
+    const rb = db
+      .prepare('SELECT importance, cited_count, uncited_streak FROM observations WHERE id=?')
+      .get(id);
+    expect(rb.cited_count).toBe(1); // D#179: cite-back credits the counter…
+    expect(rb.importance).toBe(2); // …and leaves the population gate alone
   });
 
   it('fixture transcript: injection from sidechain agent does NOT promote main', () => {
     const id = makeObs({ importance: 2 });
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, [
-      JSON.stringify({
-        type: 'attachment',
-        attachment: {
-          type: 'hook_success', hookName: 'PreToolUse:Read',
-          command: 'pre-tool-recall.js',
-          stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: `  #${id} [bugfix] sample` } }),
-          stderr: '', exitCode: 0,
-        },
-      }),
-      // Only the sub-agent cites it — main thread silent
-      JSON.stringify({
-        type: 'assistant', isSidechain: true,
-        message: { content: [{ type: 'text', text: `sub-agent used #${id}` }] },
-      }),
-    ].join('\n'));
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({
+          type: 'attachment',
+          attachment: {
+            type: 'hook_success',
+            hookName: 'PreToolUse:Read',
+            command: 'pre-tool-recall.js',
+            stdout: JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                additionalContext: `  #${id} [bugfix] sample`,
+              },
+            }),
+            stderr: '',
+            exitCode: 0,
+          },
+        }),
+        // Only the sub-agent cites it — main thread silent
+        JSON.stringify({
+          type: 'assistant',
+          isSidechain: true,
+          message: { content: [{ type: 'text', text: `sub-agent used #${id}` }] },
+        }),
+      ].join('\n'),
+    );
 
     const injected = extractInjectedFromPreToolUse(path);
     const cited = extractCitationsFromTranscript(path, { mainOnly: true });
@@ -629,15 +821,26 @@ describe('applyCitationDecay — the removed adoption-rate gate (D#204)', () => 
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   // makeObs + raw set of the citation-decay history columns (incl. decay_seen_count,
   // which insertObs doesn't know about) so we can simulate a project's prior
   // citation history.
   function makeObs({ importance = 2, uncited_streak = 0, cited_count = 0, decay_seen_count = 0 } = {}) {
-    const id = insertObs(db, { sessionId: 'sess-1', project: 'p', type: 'bugfix', title: 't', importance }).lastInsertRowid;
-    db.prepare(`UPDATE observations SET uncited_streak = ?, cited_count = ?, decay_seen_count = ? WHERE id = ?`)
-      .run(uncited_streak, cited_count, decay_seen_count, id);
+    const id = insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance,
+    }).lastInsertRowid;
+    db.prepare(
+      `UPDATE observations SET uncited_streak = ?, cited_count = ?, decay_seen_count = ? WHERE id = ?`,
+    ).run(uncited_streak, cited_count, decay_seen_count, id);
     return id;
   }
 
@@ -650,18 +853,22 @@ describe('applyCitationDecay — the removed adoption-rate gate (D#204)', () => 
   it('a ~0 cite-rate project (the old suppression band) rolls over like any other', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 0 });
     const r = applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-    const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+    const row = db
+      .prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(target);
     expect(row.demoted_at).toBeGreaterThan(0); // used to be NULL under suppression
-    expect(row.uncited_streak).toBe(0);        // used to be capped at 2, forever
+    expect(row.uncited_streak).toBe(0); // used to be capped at 2, forever
     expect(row.importance).toBe(2);
-    expect(r.demoted).toBe(1);                 // used to be 0
+    expect(r.demoted).toBe(1); // used to be 0
     expect(r.touched).toBe(1);
   });
 
   it('an adopting project (cite-rate well over the old threshold) is indistinguishable', () => {
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 5 });
     applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
-    const row = db.prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?').get(target);
+    const row = db
+      .prepare('SELECT importance, uncited_streak, demoted_at FROM observations WHERE id=?')
+      .get(target);
     expect(row.demoted_at).toBeGreaterThan(0);
     expect(row.uncited_streak).toBe(0);
     expect(row.importance).toBe(2);
@@ -682,7 +889,10 @@ describe('applyCitationDecay — the removed adoption-rate gate (D#204)', () => 
     const target = makeObs({ importance: 2, uncited_streak: 2, decay_seen_count: 20, cited_count: 3 });
     const realWrite = process.stderr.write.bind(process.stderr);
     let captured = '';
-    process.stderr.write = (chunk) => { captured += String(chunk); return true; };
+    process.stderr.write = (chunk) => {
+      captured += String(chunk);
+      return true;
+    };
     process.env.CLAUDE_MEM_CITATION_ADOPTION_THRESHOLD = '0.5';
     try {
       applyCitationDecay(db, 'p', new Set([target]), new Set(), 'sess-1');
@@ -714,30 +924,43 @@ describe('regression: extractor + decay defensive paths (D#21)', () => {
     insertSession(db, { id: 'sess-r', project: 'p' });
   });
   afterEach(() => {
-    try { db.close(); } catch {}
-    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    try {
+      db.close();
+    } catch {}
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
   });
 
   it('extractInjectedFromPreToolUse: falls back to raw-text scan when stdout is not JSON', () => {
     const path = join(tmp, 't.jsonl');
-    writeFileSync(path, JSON.stringify({
-      type: 'attachment',
-      attachment: {
-        type: 'hook_success',
-        hookName: 'PreToolUse:Read',
-        command: 'pre-tool-recall.js',
-        stdout: '[mem] Lessons for foo.js:\n  #404 [bugfix] raw-text fallback path',
-        stderr: '',
-        exitCode: 0,
-      },
-    }));
+    writeFileSync(
+      path,
+      JSON.stringify({
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          hookName: 'PreToolUse:Read',
+          command: 'pre-tool-recall.js',
+          stdout: '[mem] Lessons for foo.js:\n  #404 [bugfix] raw-text fallback path',
+          stderr: '',
+          exitCode: 0,
+        },
+      }),
+    );
     const ids = extractInjectedFromPreToolUse(path);
     expect(ids.has(404)).toBe(true);
     expect(ids.size).toBe(1);
   });
 
   it('applyCitationDecay: silently skips IDs that are not in observations (events-table ID case)', () => {
-    const realId = insertObs(db, { sessionId: 'sess-r', project: 'p', type: 'bugfix', title: 't', importance: 2 }).lastInsertRowid;
+    const realId = insertObs(db, {
+      sessionId: 'sess-r',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
+    }).lastInsertRowid;
     const ghostId = 99999999;
     const result = applyCitationDecay(db, 'p', new Set([realId, ghostId]), new Set(), 'sess-r');
     expect(result.touched).toBe(1);
@@ -758,16 +981,35 @@ describe('applyCitationDecay — superseded keeper redirect (D#61)', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   function obs(over = {}) {
-    return insertObs(db, { sessionId: 'sess-1', project: 'p', type: 'bugfix', title: 't', importance: 2, ...over }).lastInsertRowid;
+    return insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      importance: 2,
+      ...over,
+    }).lastInsertRowid;
   }
   function supersede(oldId, keeperId) {
-    db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?')
-      .run(Date.now(), keeperId, oldId);
+    db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(
+      Date.now(),
+      keeperId,
+      oldId,
+    );
   }
-  const row = (id) => db.prepare('SELECT importance, cited_count, uncited_streak, decay_seen_count FROM observations WHERE id=?').get(id);
+  const row = (id) =>
+    db
+      .prepare(
+        'SELECT importance, cited_count, uncited_streak, decay_seen_count FROM observations WHERE id=?',
+      )
+      .get(id);
 
   it('citing a mid-session-superseded lesson credits the keeper', () => {
     const oldId = obs();
@@ -795,9 +1037,15 @@ describe('applyCitationDecay — superseded keeper redirect (D#61)', () => {
 
   it('non-numeric / self-referential superseded_by credits nobody and does not throw', () => {
     const a = obs();
-    db.prepare(`UPDATE observations SET superseded_at = ?, superseded_by = 'sess-string-junk' WHERE id = ?`).run(Date.now(), a);
+    db.prepare(
+      `UPDATE observations SET superseded_at = ?, superseded_by = 'sess-string-junk' WHERE id = ?`,
+    ).run(Date.now(), a);
     const b = obs();
-    db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(Date.now(), b, b);
+    db.prepare('UPDATE observations SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(
+      Date.now(),
+      b,
+      b,
+    );
     const r = applyCitationDecay(db, 'p', new Set([a, b]), new Set([a, b]), 'sess-1');
     expect(r.promoted).toBe(0);
     expect(r.touched).toBe(0);
@@ -823,12 +1071,12 @@ describe('applyCitationDecay — superseded keeper redirect (D#61)', () => {
 describe('redirectSupersededIds copy-on-bail contract (D#139)', () => {
   // FAILS IF: `if (!db || !project) return new Set(src)` becomes `return src` —
   // the caller's own Set is handed back and a downstream .add() mutates it.
-  it('the no-db bail-out returns a copy, not the caller\'s Set', () => {
+  it("the no-db bail-out returns a copy, not the caller's Set", () => {
     const input = new Set([1, 2]);
     const out = redirectSupersededIds(null, 'p1', input);
     expect(out).not.toBe(input);
     out.add(999);
-    expect([...input], 'caller\'s Set was mutated through the returned alias').toEqual([1, 2]);
+    expect([...input], "caller's Set was mutated through the returned alias").toEqual([1, 2]);
   });
 
   it('the no-project bail-out returns a copy too', () => {
@@ -843,10 +1091,14 @@ describe('redirectSupersededIds copy-on-bail contract (D#139)', () => {
   // prepare() throws is the real shape here (closed/corrupt DB mid-Stop).
   it('the prepare-failure bail-out returns a copy', () => {
     const input = new Set([42]);
-    const brokenDb = { prepare() { throw new Error('database connection is closed'); } };
+    const brokenDb = {
+      prepare() {
+        throw new Error('database connection is closed');
+      },
+    };
     const out = redirectSupersededIds(brokenDb, 'p1', input);
     expect(out).not.toBe(input);
-    expect([...out]).toEqual([42]);   // contents preserved: bail-out is pass-through
+    expect([...out]).toEqual([42]); // contents preserved: bail-out is pass-through
     out.add(43);
     expect([...input]).toEqual([42]);
   });

@@ -17,10 +17,17 @@ import { envNumber } from '../lib/env-number.mjs';
 // Same parse as the live ranker's, through the same helper — a ruler that read a
 // malformed knob as NaN would score `cand.filter(c => c.runningVar >= NaN)` = [] and
 // report a face as producing nothing, which is a measurement, not a crash.
-const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS,
-  { name: 'CLAUDE_MEM_UPS_MAX_RESULTS', defaultValue: 3, min: 0, integer: true });
-const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
-  { name: 'CLAUDE_MEM_UPS_TOP_MIN', defaultValue: 50, min: 0 });
+const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS, {
+  name: 'CLAUDE_MEM_UPS_MAX_RESULTS',
+  defaultValue: 3,
+  min: 0,
+  integer: true,
+});
+const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN, {
+  name: 'CLAUDE_MEM_UPS_TOP_MIN',
+  defaultValue: 50,
+  min: 0,
+});
 
 /**
  * Pure, DB-free split of already-scored candidates into `shown` (floor-crossing, capped at
@@ -48,7 +55,10 @@ export function splitShownNearMiss(cand, { floor, cap, m }) {
  */
 export function replayCandidates(surface, db, event, { m = 3, project } = {}) {
   if (surface === 'ups-fts') {
-    const { rows } = searchByFts(db, event.query, project, MAX_RESULTS + m, null, { nowT: event.ts, epochTo: event.ts });
+    const { rows } = searchByFts(db, event.query, project, MAX_RESULTS + m, null, {
+      nowT: event.ts,
+      epochTo: event.ts,
+    });
     const cand = rows.map((r) => ({
       id: String(r.id),
       text: `${r.title || ''} ${r.lesson_learned || ''}`.trim(),
@@ -61,8 +71,11 @@ export function replayCandidates(surface, db, event, { m = 3, project } = {}) {
     // returns {id, lesson_learned, importance, overlap, score} — no title column, so `text`
     // here is lesson_learned only; this is narrower than the generic "title + lesson_learned"
     // description above but matches what the seam actually returns).
-    const ranked = rankImperativeCandidates(db, event.query, project, [], { epochTo: event.ts })
-      .map((r) => ({ id: String(r.id), text: `${r.lesson_learned || ''}`.trim(), runningVar: r.score }));
+    const ranked = rankImperativeCandidates(db, event.query, project, [], { epochTo: event.ts }).map((r) => ({
+      id: String(r.id),
+      text: `${r.lesson_learned || ''}`.trim(),
+      runningVar: r.score,
+    }));
     return { shown: ranked.slice(0, 1), nearMiss: ranked.slice(1, 1 + m) };
   }
   throw new Error(`replayCandidates: unknown surface ${surface}`);

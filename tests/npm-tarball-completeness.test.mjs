@@ -20,13 +20,7 @@ const ROOT = resolve(new URL('..', import.meta.url).pathname);
 const PKG = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
 const FILES = new Set(PKG.files);
 
-const ENTRY_MODULES = [
-  'cli.mjs',
-  'hook.mjs',
-  'server.mjs',
-  'mem-cli.mjs',
-  'install.mjs',
-];
+const ENTRY_MODULES = ['cli.mjs', 'hook.mjs', 'server.mjs', 'mem-cli.mjs', 'install.mjs'];
 
 function extractLocalImports(sourcePath) {
   const src = readFileSync(sourcePath, 'utf8');
@@ -93,8 +87,6 @@ test('every slash command in commands/ ships in the npm tarball (v2.32.3 code-re
   // commands/*.md on disk must appear in package.json.files.
   const commandsDir = resolve(ROOT, 'commands');
   const onDisk = readdirSync(commandsDir).filter((f) => f.endsWith('.md'));
-  const missing = onDisk
-    .map((f) => `commands/${f}`)
-    .filter((p) => !FILES.has(p));
+  const missing = onDisk.map((f) => `commands/${f}`).filter((p) => !FILES.has(p));
   expect(missing, `\npackage.json "files" missing slash commands:\n  ${missing.join('\n  ')}\n`).toEqual([]);
 });

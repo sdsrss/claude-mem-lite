@@ -24,15 +24,50 @@ describe('lib/recent-core fetchRecent', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'alpha' });
     insertSession(db, { id: 'sess-2', project: 'beta' });
-    insertObs(db, { sessionId: 'sess-1', project: 'alpha', type: 'bugfix', title: 'alpha-bugfix-live', epochOffset: -1 * 3600000 });
-    insertObs(db, { sessionId: 'sess-1', project: 'alpha', type: 'decision', title: 'alpha-decision-old', epochOffset: -10 * 86400000 });
-    insertObs(db, { sessionId: 'sess-1', project: 'alpha', type: 'discovery', title: 'alpha-compressed', compressedInto: 999, epochOffset: -2 * 3600000 });
-    insertObs(db, { sessionId: 'sess-1', project: 'alpha', type: 'discovery', title: 'alpha-superseded', supersededAt: Date.now(), supersededBy: 1, epochOffset: -3 * 3600000 });
-    insertObs(db, { sessionId: 'sess-2', project: 'beta', type: 'bugfix', title: 'beta-bugfix-live', epochOffset: -4 * 3600000 });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'alpha',
+      type: 'bugfix',
+      title: 'alpha-bugfix-live',
+      epochOffset: -1 * 3600000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'alpha',
+      type: 'decision',
+      title: 'alpha-decision-old',
+      epochOffset: -10 * 86400000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'alpha',
+      type: 'discovery',
+      title: 'alpha-compressed',
+      compressedInto: 999,
+      epochOffset: -2 * 3600000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'alpha',
+      type: 'discovery',
+      title: 'alpha-superseded',
+      supersededAt: Date.now(),
+      supersededBy: 1,
+      epochOffset: -3 * 3600000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-2',
+      project: 'beta',
+      type: 'bugfix',
+      title: 'beta-bugfix-live',
+      epochOffset: -4 * 3600000,
+    });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
-  const titles = (rows) => rows.map(r => r.title);
+  const titles = (rows) => rows.map((r) => r.title);
 
   it('excludes compressed and superseded rows (the recurring WHERE-clause defect)', () => {
     const rows = fetchRecent(db, { limit: 50 });
@@ -74,7 +109,16 @@ describe('lib/recent-core fetchRecent', () => {
 
   it('returns the column superset both surfaces render (importance + project)', () => {
     const row = fetchRecent(db, { project: 'alpha', limit: 1 })[0];
-    for (const col of ['id', 'type', 'title', 'subtitle', 'importance', 'project', 'created_at', 'created_at_epoch']) {
+    for (const col of [
+      'id',
+      'type',
+      'title',
+      'subtitle',
+      'importance',
+      'project',
+      'created_at',
+      'created_at_epoch',
+    ]) {
       expect(row, `missing column ${col}`).toHaveProperty(col);
     }
   });
@@ -86,14 +130,23 @@ describe('mem_recent (MCP) is backed by the shared core', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
     insertObs(db, { sessionId: 'sess-1', project: 'test', type: 'bugfix', title: 'mcp-live-row' });
-    insertObs(db, { sessionId: 'sess-1', project: 'test', type: 'bugfix', title: 'mcp-superseded-row', supersededAt: Date.now(), supersededBy: 1 });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: 'mcp-superseded-row',
+      supersededAt: Date.now(),
+      supersededBy: 1,
+    });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('renders exactly the rows fetchRecent returns (no second query shape)', async () => {
     const res = await handleRecentForTest(db, { project: 'test', limit: 50 });
     const text = res.content[0].text;
-    const coreTitles = fetchRecent(db, { project: 'test', limit: 50 }).map(r => r.title);
+    const coreTitles = fetchRecent(db, { project: 'test', limit: 50 }).map((r) => r.title);
     expect(coreTitles).toEqual(['mcp-live-row']);
     for (const t of coreTitles) expect(text).toContain(t);
     expect(text).not.toContain('mcp-superseded-row');

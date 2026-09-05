@@ -39,7 +39,7 @@ export function handlePreCompact({ db, project, sessionId, runtimeDir = RUNTIME_
       runtimeDir,
       project,
       sessionId: sessionId || null,
-      ids: rendered ? (collector.keyContextIds || []) : [],
+      ids: rendered ? collector.keyContextIds || [] : [],
     });
   } catch (e) {
     debugCatch(e, 'handlePreCompact');

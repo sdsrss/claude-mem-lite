@@ -18,12 +18,13 @@ const REFUSALS = {
   seccomp: 'apply-seccomp: unshare(CLONE_NEWUSER): Invalid argument',
   spec: '§8 SAFETY (immutable): denied dangerous Bash invocation:\n  - rm -rf with unvalidated $S',
   claudemd: '[claudemd] §11 memory-hint: your prompt matches MEMORY.md tags.',
-  codeGraph: '[code-graph] Raw `grep` on indexed source — denied; the AST-aware equivalent already ran for you:',
+  codeGraph:
+    '[code-graph] Raw `grep` on indexed source — denied; the AST-aware equivalent already ran for you:',
   noTool: '<tool_use_error>Error: No such tool available: Bash.',
   coordinator: 'Bash is not available to you as the coordinator — run it in a subagent',
   userNo: "The user doesn't want to take this action right now.",
   permission: 'Claude requested permissions to use Bash, but you have not granted it yet.',
-  excluded: "命令里有 ;，而它匹配了 sandbox.excludedCommands —— 请拆成多次 Bash 调用",
+  excluded: '命令里有 ;，而它匹配了 sandbox.excludedCommands —— 请拆成多次 Bash 调用',
   // The family review found missing. The marker is a section CITATION, not the one
   // section that happened to be found first — the §7 shape alone was 13 of 135 firing
   // cases, and it injects: its own boilerplate becomes the query, so a blocked `git
@@ -44,8 +45,9 @@ const REFUSALS = {
 // collision the sentinels have to survive.
 const REAL_FAILURES = {
   enoent: "Error: ENOENT: no such file or directory, open '/x/package.json'",
-  permDenied: "sh: ./deploy.sh: Permission denied",
-  dockerDenied: 'Error response from daemon: pull access denied for acme/api, repository does not exist or may require authorisation',
+  permDenied: 'sh: ./deploy.sh: Permission denied',
+  dockerDenied:
+    'Error response from daemon: pull access denied for acme/api, repository does not exist or may require authorisation',
   http403: 'HTTP 403 Forbidden — access denied by the upstream API gateway',
   npmPerm: 'npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied, mkdir /usr/lib/node_modules',
   psql: 'psql: error: connection to server failed: FATAL:  permission denied for database "app"',
@@ -75,8 +77,7 @@ describe('tool-refusal — real program failures are NOT swallowed', () => {
     // Four of the nine real failures above say "denied" or "permission" in a program's
     // own voice. This asserts the fixture actually contains that collision, so the case
     // above is not vacuously green on a set of failures no loose pattern would match.
-    const colliding = Object.values(REAL_FAILURES)
-      .filter((t) => /denied|permission|not available/i.test(t));
+    const colliding = Object.values(REAL_FAILURES).filter((t) => /denied|permission|not available/i.test(t));
     expect(colliding.length).toBeGreaterThanOrEqual(4);
     for (const t of colliding) expect(isToolChainRefusal(t)).toBe(false);
   });
@@ -85,8 +86,10 @@ describe('tool-refusal — real program failures are NOT swallowed', () => {
 describe('tool-refusal — the two non-text gates', () => {
   it('an interrupt is not a program failure', () => {
     // The host's own flag, and the only discriminator here that is not pattern matching.
-    expect(shouldRecallOnFailure({ error: REAL_FAILURES.enoent, is_interrupt: true }))
-      .toEqual({ ok: false, reason: 'interrupt' });
+    expect(shouldRecallOnFailure({ error: REAL_FAILURES.enoent, is_interrupt: true })).toEqual({
+      ok: false,
+      reason: 'interrupt',
+    });
     // Only the boolean true — a stray truthy string must not silence a real failure.
     expect(shouldRecallOnFailure({ error: REAL_FAILURES.enoent, is_interrupt: 'false' }).ok).toBe(true);
   });
@@ -122,9 +125,10 @@ describe('tool-refusal — the sentinel list itself', () => {
     // which also means the REFUSALS fixture cannot fall behind the list.
     const texts = Object.values(REFUSALS);
     for (const re of REFUSAL_SENTINELS) {
-      expect(texts.some((t) => re.test(t)),
-        `sentinel ${re.source} matches none of the refusal fixtures — add the shape it was written for`)
-        .toBe(true);
+      expect(
+        texts.some((t) => re.test(t)),
+        `sentinel ${re.source} matches none of the refusal fixtures — add the shape it was written for`,
+      ).toBe(true);
     }
   });
 

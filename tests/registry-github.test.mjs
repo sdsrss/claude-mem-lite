@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseGitHubUrl, buildTreeUrl, buildContentUrl, buildRepoUrl, buildHeaders } from '../registry-github.mjs';
+import {
+  parseGitHubUrl,
+  buildTreeUrl,
+  buildContentUrl,
+  buildRepoUrl,
+  buildHeaders,
+} from '../registry-github.mjs';
 
 describe('parseGitHubUrl', () => {
   it('parses standard repo URL', () => {
@@ -36,26 +42,54 @@ describe('parseGitHubUrl', () => {
   it('strips a copy-pasted query string / fragment so it does not leak into branch', () => {
     // A browser-copied "?tab=…" or "#section" must not become part of the branch
     // ("main?recursive=1#x") and corrupt the GitHub API URL → confusing 404.
-    expect(parseGitHubUrl('https://github.com/user/repo/tree/main?recursive=1#x'))
-      .toEqual({ owner: 'user', repo: 'repo', branch: 'main', path: '' });
-    expect(parseGitHubUrl('https://github.com/user/repo/tree/main#readme'))
-      .toEqual({ owner: 'user', repo: 'repo', branch: 'main', path: '' });
-    expect(parseGitHubUrl('https://github.com/user/repo?tab=readme'))
-      .toEqual({ owner: 'user', repo: 'repo', branch: 'main', path: '' });
-    expect(parseGitHubUrl('https://github.com/user/repo/tree/dev/skills/foo?ref=abc'))
-      .toEqual({ owner: 'user', repo: 'repo', branch: 'dev', path: 'skills/foo' });
+    expect(parseGitHubUrl('https://github.com/user/repo/tree/main?recursive=1#x')).toEqual({
+      owner: 'user',
+      repo: 'repo',
+      branch: 'main',
+      path: '',
+    });
+    expect(parseGitHubUrl('https://github.com/user/repo/tree/main#readme')).toEqual({
+      owner: 'user',
+      repo: 'repo',
+      branch: 'main',
+      path: '',
+    });
+    expect(parseGitHubUrl('https://github.com/user/repo?tab=readme')).toEqual({
+      owner: 'user',
+      repo: 'repo',
+      branch: 'main',
+      path: '',
+    });
+    expect(parseGitHubUrl('https://github.com/user/repo/tree/dev/skills/foo?ref=abc')).toEqual({
+      owner: 'user',
+      repo: 'repo',
+      branch: 'dev',
+      path: 'skills/foo',
+    });
   });
 
   it('treats scheme + host as case-insensitive (RFC 3986) but preserves path case', () => {
     // A pasted "HTTPS://GitHub.com/…" is a valid URL that opens in the browser; rejecting
     // it as "Invalid GitHub URL" is wrong. Scheme + host are case-insensitive; the path
     // (owner / repo / branch / dir) is case-SENSITIVE on GitHub and must be preserved.
-    expect(parseGitHubUrl('HTTPS://GitHub.com/anthropics/skills'))
-      .toEqual({ owner: 'anthropics', repo: 'skills', branch: 'main', path: '' });
-    expect(parseGitHubUrl('https://GITHUB.COM/user/repo/tree/main'))
-      .toEqual({ owner: 'user', repo: 'repo', branch: 'main', path: '' });
-    expect(parseGitHubUrl('HTTPS://GitHub.com/Anthropic-AI/My_Repo/tree/Feature/Src/File'))
-      .toEqual({ owner: 'Anthropic-AI', repo: 'My_Repo', branch: 'Feature', path: 'Src/File' });
+    expect(parseGitHubUrl('HTTPS://GitHub.com/anthropics/skills')).toEqual({
+      owner: 'anthropics',
+      repo: 'skills',
+      branch: 'main',
+      path: '',
+    });
+    expect(parseGitHubUrl('https://GITHUB.COM/user/repo/tree/main')).toEqual({
+      owner: 'user',
+      repo: 'repo',
+      branch: 'main',
+      path: '',
+    });
+    expect(parseGitHubUrl('HTTPS://GitHub.com/Anthropic-AI/My_Repo/tree/Feature/Src/File')).toEqual({
+      owner: 'Anthropic-AI',
+      repo: 'My_Repo',
+      branch: 'Feature',
+      path: 'Src/File',
+    });
   });
 
   it('rejects host-spoofing / SSRF lookalikes', () => {
@@ -70,18 +104,19 @@ describe('parseGitHubUrl', () => {
 
 describe('URL builders', () => {
   it('buildTreeUrl returns correct API URL', () => {
-    expect(buildTreeUrl('user', 'repo', 'main'))
-      .toBe('https://api.github.com/repos/user/repo/git/trees/main?recursive=1');
+    expect(buildTreeUrl('user', 'repo', 'main')).toBe(
+      'https://api.github.com/repos/user/repo/git/trees/main?recursive=1',
+    );
   });
 
   it('buildContentUrl returns correct raw URL', () => {
-    expect(buildContentUrl('user', 'repo', 'main', 'skills/foo/SKILL.md'))
-      .toBe('https://raw.githubusercontent.com/user/repo/main/skills/foo/SKILL.md');
+    expect(buildContentUrl('user', 'repo', 'main', 'skills/foo/SKILL.md')).toBe(
+      'https://raw.githubusercontent.com/user/repo/main/skills/foo/SKILL.md',
+    );
   });
 
   it('buildRepoUrl returns correct API URL', () => {
-    expect(buildRepoUrl('user', 'repo'))
-      .toBe('https://api.github.com/repos/user/repo');
+    expect(buildRepoUrl('user', 'repo')).toBe('https://api.github.com/repos/user/repo');
   });
 });
 

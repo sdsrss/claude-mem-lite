@@ -133,9 +133,9 @@ describe('hook stdout contract — one writer (D#154)', () => {
     const src = stripComments(readFileSync(join(REPO, entry), 'utf8'));
     expect(
       ENVELOPE_LITERAL.test(src),
-      `${entry} constructs a hookSpecificOutput literal. Route it through ${WRITER} `
-      + `(queueHookContext / queueHookUpdatedInput, then flushHookStdout) so a second emit `
-      + `merges into one document instead of appending a second one the host cannot read.`,
+      `${entry} constructs a hookSpecificOutput literal. Route it through ${WRITER} ` +
+        `(queueHookContext / queueHookUpdatedInput, then flushHookStdout) so a second emit ` +
+        `merges into one document instead of appending a second one the host cannot read.`,
     ).toBe(false);
   });
 
@@ -143,11 +143,13 @@ describe('hook stdout contract — one writer (D#154)', () => {
   // if it does not eat a real construction. Both halves checked, because the whole guard
   // rests on this one regex.
   it('the structural matcher fires on BOTH construction forms and spares a comment', () => {
-    const literalForm = 'process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "X" } }))';
+    const literalForm =
+      'process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "X" } }))';
     // Assignment form. Caught by the v3.80.0 pre-tag review as an unguarded door: it is
     // the shape lib/hook-stdout.mjs itself uses, so it is the shape a reverting author
     // would most plausibly copy.
-    const assignForm = 'const out = { suppressOutput: true };\nout.hookSpecificOutput = { hookEventName: "X" };';
+    const assignForm =
+      'const out = { suppressOutput: true };\nout.hookSpecificOutput = { hookEventName: "X" };';
     const discussed = '// we used to write hookSpecificOutput: here\n/* hookSpecificOutput = */ const x = 1;';
     expect(ENVELOPE_LITERAL.test(stripComments(literalForm))).toBe(true);
     expect(ENVELOPE_LITERAL.test(stripComments(assignForm))).toBe(true);
@@ -180,9 +182,9 @@ describe('hook stdout contract — every registered entry has behavioural covera
     const labels = sweepLabels();
     expect(
       labels.some((l) => l.includes(stem)),
-      `${entry} is registered in hooks/hooks.json but no expectHookStdout label in `
-      + `tests/feature-sweep-hooks.test.mjs mentions "${stem}" — its stdout shape is `
-      + `unguarded. Labels found: ${labels.join(', ')}`,
+      `${entry} is registered in hooks/hooks.json but no expectHookStdout label in ` +
+        `tests/feature-sweep-hooks.test.mjs mentions "${stem}" — its stdout shape is ` +
+        `unguarded. Labels found: ${labels.join(', ')}`,
     ).toBe(true);
   });
 });

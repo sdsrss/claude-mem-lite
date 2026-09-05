@@ -13,10 +13,21 @@ import { join } from 'path';
 import { effectiveQuiet, isAdoptedHere, isQuietHooks } from '../lib/quiet-scope.mjs';
 import * as hookShared from '../hook-shared.mjs';
 import { callLLM } from '../lib/llm-call.mjs';
-import { HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE, HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS } from '../lib/handoff-constants.mjs';
+import {
+  HANDOFF_EXPIRY_CLEAR,
+  HANDOFF_EXPIRY_EXIT,
+  HANDOFF_ANCHOR_MAX_AGE,
+  HANDOFF_MATCH_THRESHOLD,
+  CONTINUE_KEYWORDS,
+} from '../lib/handoff-constants.mjs';
 import { writePluginSection, removePluginSection, memdirPath } from '../memdir.mjs';
 import { writeManaged, removeManaged } from '../claudemd.mjs';
-import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from '../adopt-content.mjs';
+import {
+  PLUGIN_SLUG,
+  CURRENT_SENTINEL_VERSION,
+  buildClaudeMdBlock,
+  getDetailDoc,
+} from '../adopt-content.mjs';
 import { buildServerInstructions } from '../search-scoring.mjs';
 import { buildSessionContextLines } from '../hook-context.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
@@ -41,17 +52,22 @@ describe('isAdoptedHere / effectiveQuiet', () => {
     delete process.env.MEM_QUIET_HOOKS;
   });
   afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
-    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS; else process.env.MEM_QUIET_HOOKS = origQuiet;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
+    else process.env.MEM_QUIET_HOOKS = origQuiet;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('isAdoptedHere reflects the new CLAUDE.md managed block', () => {
     expect(isAdoptedHere()).toBe(false);
     writeManaged(fakeCwd, {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION,
-      block: buildClaudeMdBlock(), doc: getDetailDoc(),
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      block: buildClaudeMdBlock(),
+      doc: getDetailDoc(),
     });
     expect(isAdoptedHere()).toBe(true);
     removeManaged(fakeCwd, PLUGIN_SLUG);
@@ -62,7 +78,9 @@ describe('isAdoptedHere / effectiveQuiet', () => {
     expect(isAdoptedHere()).toBe(false);
     const memdir = memdirPath(fakeCwd);
     writePluginSection(memdir, {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION, contentLine: 'x',
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      contentLine: 'x',
     });
     expect(isAdoptedHere()).toBe(true);
     removePluginSection(memdir, PLUGIN_SLUG);
@@ -77,7 +95,9 @@ describe('isAdoptedHere / effectiveQuiet', () => {
 
   it('effectiveQuiet = true when adopted (no env)', () => {
     writePluginSection(memdirPath(fakeCwd), {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION, contentLine: 'x',
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      contentLine: 'x',
     });
     expect(effectiveQuiet()).toBe(true);
   });
@@ -90,7 +110,9 @@ describe('isAdoptedHere / effectiveQuiet', () => {
   it('env and adoption combine OR — either path works independently', () => {
     process.env.MEM_QUIET_HOOKS = '1';
     writePluginSection(memdirPath(fakeCwd), {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION, contentLine: 'x',
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      contentLine: 'x',
     });
     expect(effectiveQuiet()).toBe(true);
   });
@@ -109,9 +131,12 @@ describe('Phase D conditional trim — buildServerInstructions via effectiveQuie
     delete process.env.MEM_QUIET_HOOKS;
   });
   afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
-    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS; else process.env.MEM_QUIET_HOOKS = origQuiet;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
+    else process.env.MEM_QUIET_HOOKS = origQuiet;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -122,7 +147,9 @@ describe('Phase D conditional trim — buildServerInstructions via effectiveQuie
 
   it('produces slim instructions when adopted (no env)', () => {
     writePluginSection(memdirPath(fakeCwd), {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION, contentLine: 'x',
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      contentLine: 'x',
     });
     const instr = buildServerInstructions(effectiveQuiet());
     expect(instr).not.toContain('WHEN TO USE');
@@ -145,21 +172,34 @@ describe('Phase D conditional trim — buildSessionContextLines via effectiveQui
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'bugfix',
-      title: 'Fix pagination boundary', importance: 3,
-      lessonLearned: 'always pin cursor', filesModified: JSON.stringify(['pagination.mjs']),
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: 'Fix pagination boundary',
+      importance: 3,
+      lessonLearned: 'always pin cursor',
+      filesModified: JSON.stringify(['pagination.mjs']),
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'decision',
-      title: 'Adopt pattern', importance: 3,
-      lessonLearned: 'sentinel + hash', filesModified: '[]',
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'decision',
+      title: 'Adopt pattern',
+      importance: 3,
+      lessonLearned: 'sentinel + hash',
+      filesModified: '[]',
     });
   });
   afterEach(() => {
-    try { db.close(); } catch {}
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
-    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS; else process.env.MEM_QUIET_HOOKS = origQuiet;
+    try {
+      db.close();
+    } catch {}
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
+    else process.env.MEM_QUIET_HOOKS = origQuiet;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -171,7 +211,9 @@ describe('Phase D conditional trim — buildSessionContextLines via effectiveQui
 
   it('drops File Lessons + Key Context once adopted (sentinel present)', () => {
     writePluginSection(memdirPath(fakeCwd), {
-      slug: PLUGIN_SLUG, version: CURRENT_SENTINEL_VERSION, contentLine: 'x',
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      contentLine: 'x',
     });
     const out = buildSessionContextLines(db, 'test', new Date());
     expect(out).not.toContain('### File Lessons');
@@ -227,13 +269,24 @@ describe('hook-shared re-exports the lib originals, not copies of them', () => {
     // D#207: join(), not new URL('../x.mjs', …) — that form blinds knip to the module.
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hook-shared.mjs'), 'utf8');
     const RELOCATED = [
-      'HANDOFF_EXPIRY_CLEAR', 'HANDOFF_EXPIRY_EXIT', 'HANDOFF_ANCHOR_MAX_AGE',
-      'HANDOFF_MATCH_THRESHOLD', 'CONTINUE_KEYWORDS',
-      'isQuietHooks', 'isAdoptedHere', 'effectiveQuiet', 'callLLM',
+      'HANDOFF_EXPIRY_CLEAR',
+      'HANDOFF_EXPIRY_EXIT',
+      'HANDOFF_ANCHOR_MAX_AGE',
+      'HANDOFF_MATCH_THRESHOLD',
+      'CONTINUE_KEYWORDS',
+      'isQuietHooks',
+      'isAdoptedHere',
+      'effectiveQuiet',
+      'callLLM',
     ];
-    const declared = RELOCATED.filter((n) => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|function|async function)\\s+${n}\\b`, 'm').test(src));
+    const declared = RELOCATED.filter((n) =>
+      new RegExp(`^\\s*(?:export\\s+)?(?:const|let|function|async function)\\s+${n}\\b`, 'm').test(src),
+    );
     expect(declared, 'these are declared in hook-shared.mjs instead of re-exported from lib/').toEqual([]);
     // The sweep must be able to fire, or an empty result means nothing.
-    expect(/^\s*(?:export\s+)?const\s+RUNTIME_DIR\b/m.test(src), 'detector fires on a name hook-shared really does declare').toBe(true);
+    expect(
+      /^\s*(?:export\s+)?const\s+RUNTIME_DIR\b/m.test(src),
+      'detector fires on a name hook-shared really does declare',
+    ).toBe(true);
   });
 });

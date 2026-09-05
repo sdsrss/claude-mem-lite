@@ -31,7 +31,11 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.CLAUDE_MEM_RUNTIME_DIR;
   delete process.env.CLAUDE_MEM_DIR;
-  try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try {
+    rmSync(sandbox, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 describe('resolveRuntimeDir', () => {
@@ -122,18 +126,21 @@ describe('the rule has one home', () => {
   const INLINE_ALLOWED = new Set(['scripts/hook-launcher.mjs']);
 
   /** Non-comment source lines of a shipped module, with 1-based numbers. */
-  const codeLines = (file) => readFileSync(file, 'utf8').split('\n')
-    .map((text, i) => ({ text, line: i + 1 }))
-    .filter(({ text }) => !/^\s*(?:\/\/|\*|\/\*)/.test(text));
+  const codeLines = (file) =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .map((text, i) => ({ text, line: i + 1 }))
+      .filter(({ text }) => !/^\s*(?:\/\/|\*|\/\*)/.test(text));
 
   /** Every constructing line in the shipped tree that carries no stays-put marker. */
   function unmarkedConstructions() {
     const out = [];
     for (const file of walkShipped()) {
       for (const { text, line } of codeLines(file)) {
-        const constructs = CONSTRUCT_RE.test(text)
-          || (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text))
-          || INVERSE_RE.test(text);
+        const constructs =
+          CONSTRUCT_RE.test(text) ||
+          (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text)) ||
+          INVERSE_RE.test(text);
         if (constructs && !MARKER_RE.test(text)) out.push(`${relShipped(file)}:${line}`);
       }
     }
@@ -168,12 +175,15 @@ describe('the rule has one home', () => {
     // A marker that stops matching is a stale exemption, and a stale exemption is how an
     // allowlist becomes a raised baseline that quietly re-admits the defect.
     const all = markers();
-    expect(all.length, 'premise: the tree must actually carry markers, or this asserts nothing')
-      .toBeGreaterThan(5);
+    expect(
+      all.length,
+      'premise: the tree must actually carry markers, or this asserts nothing',
+    ).toBeGreaterThan(5);
     for (const { where, reason, text } of all) {
-      const constructs = CONSTRUCT_RE.test(text)
-        || (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text))
-        || INVERSE_RE.test(text);
+      const constructs =
+        CONSTRUCT_RE.test(text) ||
+        (CONSTRUCT_ALT_RE.test(text) && /runtime/.test(text)) ||
+        INVERSE_RE.test(text);
       expect(constructs, `${where} is marked stays-put but no longer builds a runtime path`).toBe(true);
       expect(reason.length, `${where} carries no reason`).toBeGreaterThan(10);
     }
@@ -195,7 +205,8 @@ describe('the rule has one home', () => {
       "gcOldMetricShards(resolve(NB_RUNTIME_DIR, '..'));",
     ];
     for (const f of fires) {
-      const hit = CONSTRUCT_RE.test(f) || (CONSTRUCT_ALT_RE.test(f) && /runtime/.test(f)) || INVERSE_RE.test(f);
+      const hit =
+        CONSTRUCT_RE.test(f) || (CONSTRUCT_ALT_RE.test(f) && /runtime/.test(f)) || INVERSE_RE.test(f);
       expect(hit, `sweep is blind to: ${f}`).toBe(true);
     }
     const quiet = [
@@ -205,7 +216,8 @@ describe('the rule has one home', () => {
       "const d = join(DB_DIR, 'metrics');",
     ];
     for (const q of quiet) {
-      const hit = CONSTRUCT_RE.test(q) || (CONSTRUCT_ALT_RE.test(q) && /runtime/.test(q)) || INVERSE_RE.test(q);
+      const hit =
+        CONSTRUCT_RE.test(q) || (CONSTRUCT_ALT_RE.test(q) && /runtime/.test(q)) || INVERSE_RE.test(q);
       expect(hit, `sweep falsely fires on: ${q}`).toBe(false);
     }
     // …and the marker must be what silences it, not the shape.
@@ -213,8 +225,10 @@ describe('the rule has one home', () => {
     expect(MARKER_RE.test("const d = join(X, 'runtime'); // runtime-dir:stays-put —")).toBe(false);
 
     for (const rel of INLINE_ALLOWED) {
-      expect(readFileSync(join(process.cwd(), rel), 'utf8'),
-        `${rel} is allowlisted but no longer carries the inline rule`).toMatch(INLINE_RE);
+      expect(
+        readFileSync(join(process.cwd(), rel), 'utf8'),
+        `${rel} is allowlisted but no longer carries the inline rule`,
+      ).toMatch(INLINE_RE);
     }
   });
 });

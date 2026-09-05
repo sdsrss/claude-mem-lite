@@ -31,11 +31,17 @@ function countLines(raw) {
 }
 
 export class UserEditedError extends Error {
-  constructor(message) { super(message); this.name = 'UserEditedError'; }
+  constructor(message) {
+    super(message);
+    this.name = 'UserEditedError';
+  }
 }
 
 export class BudgetExceededError extends Error {
-  constructor(message) { super(message); this.name = 'BudgetExceededError'; }
+  constructor(message) {
+    super(message);
+    this.name = 'BudgetExceededError';
+  }
 }
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
@@ -58,7 +64,9 @@ export function memdirPath(projectCwd) {
   return join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
 }
 
-function memoryFile(memdir) { return join(memdir, 'MEMORY.md'); }
+function memoryFile(memdir) {
+  return join(memdir, 'MEMORY.md');
+}
 
 function slugSnake(slug) {
   return String(slug).replace(/[^a-zA-Z0-9]/g, '_');
@@ -78,18 +86,13 @@ function sentinelRegex(slug) {
   // Escape regex metacharacters in the slug. In practice plugin slugs are
   // [a-z0-9-], but guard against '.', '+' etc. from arbitrary other plugins.
   const esc = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(
-    `<!-- ${esc}:begin (v\\d+) -->\\s*\\n([\\s\\S]*?)<!-- ${esc}:end -->`,
-  );
+  return new RegExp(`<!-- ${esc}:begin (v\\d+) -->\\s*\\n([\\s\\S]*?)<!-- ${esc}:end -->`);
 }
 
 function renderSentinel(slug, version, contentLine) {
-  return [
-    `<!-- ${slug}:begin ${version} -->`,
-    SECTION_HEADER,
-    contentLine,
-    `<!-- ${slug}:end -->`,
-  ].join('\n');
+  return [`<!-- ${slug}:begin ${version} -->`, SECTION_HEADER, contentLine, `<!-- ${slug}:end -->`].join(
+    '\n',
+  );
 }
 
 function canonicalBody(contentLine) {
@@ -99,7 +102,9 @@ function canonicalBody(contentLine) {
   return `${SECTION_HEADER}\n${contentLine}\n`;
 }
 
-function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
+function sha256(s) {
+  return createHash('sha256').update(s).digest('hex');
+}
 
 // Third byte-identical copy of the same temp+rename, all three missing the same lstat
 // (audit 2026-09-02 P0-5). MEMORY.md under a memory dir is a prime symlink candidate —
@@ -109,7 +114,11 @@ function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
 function readState(memdir, slug) {
   const p = stateFile(memdir, slug);
   if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+  try {
+    return JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function writeState(memdir, slug, state) {
@@ -118,7 +127,12 @@ function writeState(memdir, slug, state) {
 
 function clearState(memdir, slug) {
   const p = stateFile(memdir, slug);
-  if (existsSync(p)) try { unlinkSync(p); } catch { /* best-effort */ }
+  if (existsSync(p))
+    try {
+      unlinkSync(p);
+    } catch {
+      /* best-effort */
+    }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -238,10 +252,16 @@ export function writePluginSection(memdir, { slug, version, contentLine, force =
  */
 export function removePluginSection(memdir, slug, { force = false } = {}) {
   const path = memoryFile(memdir);
-  if (!existsSync(path)) { clearState(memdir, slug); return { action: 'absent' }; }
+  if (!existsSync(path)) {
+    clearState(memdir, slug);
+    return { action: 'absent' };
+  }
   const raw = readFileSync(path, 'utf8');
   const match = raw.match(sentinelRegex(slug));
-  if (!match) { clearState(memdir, slug); return { action: 'absent' }; }
+  if (!match) {
+    clearState(memdir, slug);
+    return { action: 'absent' };
+  }
 
   // Only remove a block we have a state sidecar for (proof we wrote it), unless forced.
   if (!readState(memdir, slug) && !force) {
@@ -295,7 +315,11 @@ export function writePluginDoc(memdir, slug, markdown) {
 export function removePluginDoc(memdir, slug) {
   const path = docFile(memdir, slug);
   if (!existsSync(path)) return;
-  try { unlinkSync(path); } catch { /* best-effort */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ─── P2: body-structure audit ────────────────────────────────────────────────
@@ -362,14 +386,18 @@ export function auditMemdir(memdir) {
   if (!memdir || !existsSync(memdir)) return result;
 
   let entries;
-  try { entries = readdirSync(memdir); } catch { return result; }
+  try {
+    entries = readdirSync(memdir);
+  } catch {
+    return result;
+  }
 
   // Two selection paths (2026-07-24 audit P2):
   //   1. legacy filename prefix — feedback_*/project_* audited, user_*/reference_* skipped
   //   2. kebab-case (current harness) — frontmatter type ∈ {feedback, project}
   // Path 2 needs the file content; read once and reuse for the body check.
   const candidates = entries
-    .filter(n => n.endsWith('.md') && n !== 'MEMORY.md' && !n.startsWith('.'))
+    .filter((n) => n.endsWith('.md') && n !== 'MEMORY.md' && !n.startsWith('.'))
     .sort();
   let total = 0;
   for (const name of candidates) {
@@ -377,7 +405,11 @@ export function auditMemdir(memdir) {
     if (!legacyAudit && SKIP_FILE_RE.test(name)) continue;
 
     let raw = null;
-    try { raw = readFileSync(join(memdir, name), 'utf8'); } catch { /* unreadable */ }
+    try {
+      raw = readFileSync(join(memdir, name), 'utf8');
+    } catch {
+      /* unreadable */
+    }
 
     if (!legacyAudit) {
       // Frontmatter decides; unreadable or untyped files carry no Why/How contract.

@@ -46,18 +46,14 @@ describe('schema warm-start FK enforcement (regression)', () => {
       filesModified: JSON.stringify(['schema.mjs']),
     });
     const obsId = Number(obs.lastInsertRowid);
-    expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(obsId).c
-    ).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(obsId).c).toBe(1);
 
     openWarmStart(db); // common warm-start path — pre-fix leaves FK OFF on this handle
 
     db.prepare('DELETE FROM observations WHERE id = ?').run(obsId);
 
     // ON DELETE CASCADE must remove the junction row. Pre-fix (FK OFF) it lingers as an orphan.
-    expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(obsId).c
-    ).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(obsId).c).toBe(0);
   });
 });
 
@@ -90,7 +86,9 @@ describe('one-shot orphan junction cleanup on version-bump migration (regression
 
     insertSession(db, { id: 'sess-keep' });
     const valid = insertObs(db, {
-      sessionId: 'sess-keep', title: 'keep me', filesModified: JSON.stringify(['keep.mjs']),
+      sessionId: 'sess-keep',
+      title: 'keep me',
+      filesModified: JSON.stringify(['keep.mjs']),
     });
     const validId = Number(valid.lastInsertRowid);
 
@@ -102,11 +100,9 @@ describe('one-shot orphan junction cleanup on version-bump migration (regression
     reMigrate(db);
 
     expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id IN (999001, 999002)').get().c
+      db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id IN (999001, 999002)').get().c,
     ).toBe(0);
-    expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(validId).c
-    ).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = ?').get(validId).c).toBe(1);
   });
 
   // Guards that bumping the schema version re-triggers the companion v28
@@ -119,7 +115,7 @@ describe('one-shot orphan junction cleanup on version-bump migration (regression
     const valid = insertObs(db, { sessionId: 'sess-vec', title: 'vec keep' });
     const validId = Number(valid.lastInsertRowid);
     const insVec = db.prepare(
-      'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)'
+      'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
     );
     insVec.run(validId, Buffer.from([1, 2, 3]), 'v-test', 1);
     insVec.run(999100, Buffer.from([4, 5, 6]), 'v-test', 1); // orphan
@@ -128,10 +124,10 @@ describe('one-shot orphan junction cleanup on version-bump migration (regression
     reMigrate(db);
 
     expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = 999100').get().c
+      db.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = 999100').get().c,
     ).toBe(0);
     expect(
-      db.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = ?').get(validId).c
+      db.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = ?').get(validId).c,
     ).toBe(1);
   });
 });

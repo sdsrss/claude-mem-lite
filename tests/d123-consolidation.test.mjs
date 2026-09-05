@@ -83,33 +83,50 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
     db.pragma('journal_mode = WAL');
     initSchema(db);
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, 'd123-mem', ?, ?, ?, 'active')
-    `).run(CC_SESSION, PROJECT, new Date(now).toISOString(), now);
+    `,
+    ).run(CC_SESSION, PROJECT, new Date(now).toISOString(), now);
     db.close();
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   function seed(db, { title, epoch, importance = 2, lesson = null, files = null }) {
-    return Number(db.prepare(`
+    return Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, type, title, narrative,
         lesson_learned, files_modified, importance, compressed_into, created_at, created_at_epoch)
       VALUES ('d123-mem', ?, 'bugfix', ?, ?, ?, ?, ?, 0, ?, ?)
-    `).run(
-      PROJECT, title, title, lesson, files, importance,
-      new Date(epoch).toISOString(), epoch,
-    ).lastInsertRowid);
+    `,
+        )
+        .run(PROJECT, title, title, lesson, files, importance, new Date(epoch).toISOString(), epoch)
+        .lastInsertRowid,
+    );
   }
 
   function fireHook(event, extraEnv = {}) {
     return execFileSync(process.execPath, [HOOK_PATH, event], {
       input: JSON.stringify({ session_id: CC_SESSION, prompt: PROMPT }),
-      timeout: 20000, encoding: 'utf8',
-      env: { ...BASE_ENV, HOME: tmpHome, CLAUDE_PROJECT_DIR: projDir, CLAUDE_MEM_HOOK_RUNNING: undefined, ...extraEnv },
+      timeout: 20000,
+      encoding: 'utf8',
+      env: {
+        ...BASE_ENV,
+        HOME: tmpHome,
+        CLAUDE_PROJECT_DIR: projDir,
+        CLAUDE_MEM_HOOK_RUNNING: undefined,
+        ...extraEnv,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   }
@@ -129,12 +146,18 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
       seed(db, { title: `unrelated live filler ${i}`, epoch: now - (i + 2) * 60000 });
     }
     const targetId = seed(db, { title: 'Zebra quantum flux dedup ledger target', epoch: now - 60000 });
-    const controlId = seed(db, { title: 'zebra quantum flux control marker', epoch: now - 40 * 60000, importance: 1 });
+    const controlId = seed(db, {
+      title: 'zebra quantum flux control marker',
+      epoch: now - 40 * 60000,
+      importance: 1,
+    });
     db.close();
 
     const out = fireHook('user-prompt');
     expect(out, 'control line must appear — proves the injection path fired').toContain(`(#${controlId})`);
-    expect(out, 'nothing was rendered at SessionStart — target must NOT be suppressed').toContain(`(#${targetId})`);
+    expect(out, 'nothing was rendered at SessionStart — target must NOT be suppressed').toContain(
+      `(#${targetId})`,
+    );
   });
 
   // FAILS IF: the marker is ignored — an id genuinely rendered at SessionStart
@@ -143,13 +166,19 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
     const db = new Database(dbPath);
     const now = Date.now();
     const targetId = seed(db, { title: 'Zebra quantum flux dedup ledger target', epoch: now - 60000 });
-    const controlId = seed(db, { title: 'zebra quantum flux control marker', epoch: now - 40 * 60000, importance: 1 });
+    const controlId = seed(db, {
+      title: 'zebra quantum flux control marker',
+      epoch: now - 40 * 60000,
+      importance: 1,
+    });
     db.close();
     writeFileSync(markerPath(), JSON.stringify({ ids: [targetId], ts: Date.now(), session: CC_SESSION }));
 
     const out = fireHook('user-prompt');
     expect(out, 'control line must appear — proves the injection path fired').toContain(`(#${controlId})`);
-    expect(out, 'target was rendered at SessionStart — must NOT be re-injected').not.toContain(`(#${targetId})`);
+    expect(out, 'target was rendered at SessionStart — must NOT be re-injected').not.toContain(
+      `(#${targetId})`,
+    );
   });
 
   // FAILS IF: the session gate is dropped (another session's marker suppresses
@@ -160,8 +189,10 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
     const now = Date.now();
     const targetId = seed(db, { title: 'Zebra quantum flux dedup ledger target', epoch: now - 60000 });
     db.close();
-    writeFileSync(join(runtimeDir, keyContextIdsFileName(PROJECT, 'cc-other')),
-      JSON.stringify({ ids: [targetId], ts: Date.now(), session: 'cc-other' }));
+    writeFileSync(
+      join(runtimeDir, keyContextIdsFileName(PROJECT, 'cc-other')),
+      JSON.stringify({ ids: [targetId], ts: Date.now(), session: 'cc-other' }),
+    );
     // Same-name marker written by another session (legacy overwrite shape).
     writeFileSync(markerPath(), JSON.stringify({ ids: [targetId], ts: Date.now(), session: 'cc-other' }));
 
@@ -177,20 +208,31 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
     const db = new Database(dbPath);
     const now = Date.now();
     const targetId = seed(db, {
-      title: 'Zebra quantum flux dedup ledger target', epoch: now - 60000, importance: 3,
-      lesson: 'zebra quantum flux: always flush the ledger', files: JSON.stringify(['lib/zebra.mjs']),
+      title: 'Zebra quantum flux dedup ledger target',
+      epoch: now - 60000,
+      importance: 3,
+      lesson: 'zebra quantum flux: always flush the ledger',
+      files: JSON.stringify(['lib/zebra.mjs']),
     });
-    const controlId = seed(db, { title: 'zebra quantum flux control marker', epoch: now - 40 * 60000, importance: 1 });
+    const controlId = seed(db, {
+      title: 'zebra quantum flux control marker',
+      epoch: now - 40 * 60000,
+      importance: 1,
+    });
     db.close();
 
     const startOut = fireHook('session-start', { MEM_QUIET_HOOKS: undefined });
-    expect(startOut, 'session-start must render the target in Key Context/File Lessons').toContain(`(#${targetId})`);
+    expect(startOut, 'session-start must render the target in Key Context/File Lessons').toContain(
+      `(#${targetId})`,
+    );
     expect(existsSync(markerPath()), 'session-start must write the keyctx marker').toBe(true);
     const marker = JSON.parse(readFileSync(markerPath(), 'utf8'));
     expect(marker.ids, 'marker must carry the rendered id').toContain(targetId);
 
     const out = fireHook('user-prompt', { MEM_QUIET_HOOKS: undefined });
     expect(out, 'control line must appear — proves the injection path fired').toContain(`(#${controlId})`);
-    expect(out, 'target was rendered at session-start — must NOT be re-injected').not.toContain(`(#${targetId})`);
+    expect(out, 'target was rendered at session-start — must NOT be re-injected').not.toContain(
+      `(#${targetId})`,
+    );
   });
 });

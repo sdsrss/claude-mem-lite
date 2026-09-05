@@ -56,13 +56,22 @@ const PROJECT = 'x--coldstart';
 const PROMPT = '登录页面的中文错误提示又乱码了，之前是怎么修的';
 const OFF_TOPIC = '请帮我生成本季度的集群入口拓扑示意图并导出为矢量文件';
 
-const TARGET_TEXT = '登录页面的中文错误提示乱码，根因是手写 res.end 时响应头缺少 charset，浏览器按 latin1 解码';
+const TARGET_TEXT =
+  '登录页面的中文错误提示乱码，根因是手写 res.end 时响应头缺少 charset，浏览器按 latin1 解码';
 const TARGET_LESSON = '手写 res.end 时必须显式设置 Content-Type charset';
 // Topically clustered filler: a real first-week corpus shares vocabulary with the
 // target (same project, same feature area), which RAISES df and so LOWERS the IDF the
 // floors are compared against. Distinct filler would understate the problem.
-const FILLER = ['登录表单校验微调', '会话标记审计', '环境变量加载顺序修复', '错误页文案调整',
-  '令牌刷新窗口调整', '密钥轮换手册草稿', '中间件顺序问题', '配置默认值不一致'];
+const FILLER = [
+  '登录表单校验微调',
+  '会话标记审计',
+  '环境变量加载顺序修复',
+  '错误页文案调整',
+  '令牌刷新窗口调整',
+  '密钥轮换手册草稿',
+  '中间件顺序问题',
+  '配置默认值不一致',
+];
 
 const dirs = [];
 
@@ -72,8 +81,10 @@ function seedCorpus(n) {
   dirs.push(dir);
   const db = new Database(join(dir, 'claude-mem-lite.db'));
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc-seed', 'mem-seed', ?, datetime('now'), ?)`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc-seed', 'mem-seed', ?, datetime('now'), ?)`,
+  ).run(PROJECT, Date.now());
   const base = Date.now();
   // Production pipeline, not a raw INSERT: CJK bigram expansion happens here, and a
   // corpus seeded without it cannot be searched the way a real one can.
@@ -88,13 +99,20 @@ function seedCorpus(n) {
   let target;
   db.transaction(() => {
     target = saveObservation(db, {
-      content: TARGET_TEXT, type: 'bugfix', importance: 3, project: PROJECT,
-      lesson_learned: TARGET_LESSON, now: new Date(base),
+      content: TARGET_TEXT,
+      type: 'bugfix',
+      importance: 3,
+      project: PROJECT,
+      lesson_learned: TARGET_LESSON,
+      now: new Date(base),
     });
     for (let i = 1; i < n; i++) {
       saveObservation(db, {
         content: `第 ${i} 次会话处理了${FILLER[i % FILLER.length]}，顺带调整了一些配置`,
-        type: 'change', importance: 1, project: PROJECT, now: new Date(base - i * 10 * 60_000),
+        type: 'change',
+        importance: 1,
+        project: PROJECT,
+        now: new Date(base - i * 10 * 60_000),
       });
     }
   })();
@@ -122,10 +140,21 @@ function runHook(dir, prompt, sessionId) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
     proc.stderr.on('data', () => {});
-    const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* already gone */ } }, 15_000);
-    proc.on('close', () => { clearTimeout(killer); done(stdout); });
+    const killer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }, 15_000);
+    proc.on('close', () => {
+      clearTimeout(killer);
+      done(stdout);
+    });
     proc.stdin.write(JSON.stringify({ session_id: sessionId, prompt, cwd: '/x/coldstart' }));
     proc.stdin.end();
   });
@@ -133,7 +162,13 @@ function runHook(dir, prompt, sessionId) {
 
 describe('cold-start UPS injection — the floors must not silence a first-week corpus', () => {
   afterEach(() => {
-    for (const d of dirs.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const d of dirs.splice(0)) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('the probe prompt carries no identifier the bypass could rescue', () => {

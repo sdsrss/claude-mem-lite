@@ -17,8 +17,12 @@ describe('resolveDataDir', () => {
   // IS its subject, and the containment guard exists precisely to stop that default from
   // being handed to anything else in a test run. Turning it off here keeps these cases
   // measuring the resolver rather than the guard — and the guard gets its own cases below.
-  beforeEach(() => { vi.stubEnv('CLAUDE_MEM_TEST_GUARD', 'off'); });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  beforeEach(() => {
+    vi.stubEnv('CLAUDE_MEM_TEST_GUARD', 'off');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   test('unset (undefined arg) falls back to the homedir default', () => {
     expect(resolveDataDir(undefined)).toBe(DEFAULT);
@@ -58,7 +62,9 @@ describe('resolveDataDir — test-run containment (CLAUDE_MEM_TEST_GUARD)', () =
     vi.stubEnv('CLAUDE_MEM_TEST_SANDBOX', SANDBOX);
     vi.stubEnv('CLAUDE_MEM_TEST_REALDIR', REAL);
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   test('redirects the live data dir to the run sandbox', () => {
     expect(resolveDataDir(REAL)).toBe(SANDBOX);
@@ -75,7 +81,11 @@ describe('resolveDataDir — test-run containment (CLAUDE_MEM_TEST_GUARD)', () =
     // Isolated fixtures live in three shapes across this suite — os.tmpdir(), a
     // hardcoded /tmp, and tests/.tmp-* inside the repo. An earlier version of the
     // guard redirected anything outside os.tmpdir() and broke all three.
-    for (const dir of ['/tmp/cjk-prec-test-123', '/var/folders/xx/T/vitest-1', '/repo/tests/.tmp-prompt-search-dir']) {
+    for (const dir of [
+      '/tmp/cjk-prec-test-123',
+      '/var/folders/xx/T/vitest-1',
+      '/repo/tests/.tmp-prompt-search-dir',
+    ]) {
       expect(resolveDataDir(dir)).toBe(dir);
     }
   });
@@ -89,18 +99,25 @@ describe('resolveDataDir — test-run containment (CLAUDE_MEM_TEST_GUARD)', () =
   // env and never set CLAUDE_MEM_DIR. Everything above would pass with the run-level env
   // never reaching a child. This spawns one the way the e2e suites do.
   test('follows a subprocess that inherited the ambient env', () => {
-    vi.unstubAllEnvs();                       // use the real run-level env, not fixtures
+    vi.unstubAllEnvs(); // use the real run-level env, not fixtures
     const childEnv = { ...process.env };
-    delete childEnv.CLAUDE_MEM_DIR;           // the mistake being guarded against
-    const out = execFileSync(process.execPath, [
-      '--input-type=module', '-e',
-      `import {resolveDataDir} from ${JSON.stringify(pathToFileURL(resolve(import.meta.dirname, '../lib/resolve-data-dir.mjs')).href)};`
-      + 'process.stdout.write(resolveDataDir(process.env.CLAUDE_MEM_DIR));',
-    ], { env: childEnv, encoding: 'utf8' });
+    delete childEnv.CLAUDE_MEM_DIR; // the mistake being guarded against
+    const out = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import {resolveDataDir} from ${JSON.stringify(pathToFileURL(resolve(import.meta.dirname, '../lib/resolve-data-dir.mjs')).href)};` +
+          'process.stdout.write(resolveDataDir(process.env.CLAUDE_MEM_DIR));',
+      ],
+      { env: childEnv, encoding: 'utf8' },
+    );
     expect(process.env.CLAUDE_MEM_TEST_SANDBOX, 'global-setup did not export a sandbox').toBeTruthy();
     expect(out).toBe(process.env.CLAUDE_MEM_TEST_SANDBOX);
     expect(out).not.toBe(process.env.CLAUDE_MEM_TEST_REALDIR);
   });
 });
 
-function DEFAULT_FOR_GUARD() { return join(homedir(), '.claude-mem-lite'); }
+function DEFAULT_FOR_GUARD() {
+  return join(homedir(), '.claude-mem-lite');
+}

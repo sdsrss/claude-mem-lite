@@ -40,9 +40,13 @@ describe('plugin-cache-guard', () => {
         });
         const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '3.95.0');
         expect(pluginCacheHookEvents(root)).toEqual({
-          ok: true, events: ['SessionStart', 'Stop'], reason: null,
+          ok: true,
+          events: ['SessionStart', 'Stop'],
+          reason: null,
         });
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('says NO for a manifest cleared to {} — the shape that shipped as all-green', () => {
@@ -55,7 +59,9 @@ describe('plugin-cache-guard', () => {
         });
         const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '3.95.0');
         expect(pluginCacheHookEvents(root)).toEqual({ ok: false, events: [], reason: 'empty' });
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('says NO for a missing manifest and for an unparseable one', () => {
@@ -67,7 +73,9 @@ describe('plugin-cache-guard', () => {
         mkdirSync(join(root, 'hooks'), { recursive: true });
         writeFileSync(join(root, 'hooks', 'hooks.json'), '{ not json');
         expect(pluginCacheHookEvents(root)).toEqual({ ok: false, events: [], reason: 'unreadable' });
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 
@@ -76,7 +84,9 @@ describe('plugin-cache-guard', () => {
       const home = makeHome();
       try {
         expect(scanPluginCacheHookPollution({ home })).toEqual([]);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('detects populated hooks.json across multiple versions', () => {
@@ -84,9 +94,11 @@ describe('plugin-cache-guard', () => {
       try {
         writeCacheHooks(home, '2.28.0', { hooks: { SessionStart: [{ matcher: '*', hooks: [] }] } });
         writeCacheHooks(home, '2.30.0', { hooks: { UserPromptSubmit: [{ matcher: '*', hooks: [] }] } });
-        writeCacheHooks(home, '2.31.0', { hooks: {} });  // cleared — should not appear
+        writeCacheHooks(home, '2.31.0', { hooks: {} }); // cleared — should not appear
         expect(scanPluginCacheHookPollution({ home })).toEqual(['2.28.0', '2.30.0']);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('ignores malformed hooks.json', () => {
@@ -96,7 +108,9 @@ describe('plugin-cache-guard', () => {
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'hooks.json'), 'not-json');
         expect(scanPluginCacheHookPollution({ home })).toEqual([]);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 
@@ -115,7 +129,9 @@ describe('plugin-cache-guard', () => {
         expect(after._note).toContain('test-reason');
         expect(after._note).toContain('2.28.0');
         expect(after.description).toBe('old');
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('leaves already-cleared hooks.json untouched', () => {
@@ -126,7 +142,9 @@ describe('plugin-cache-guard', () => {
         const cleared = clearPluginCacheHooks({ home });
         expect(cleared).toEqual([]);
         expect(readFileSync(path, 'utf8')).toBe(before);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 
@@ -135,29 +153,54 @@ describe('plugin-cache-guard', () => {
       const home = makeHome();
       try {
         expect(hasInstallManagedHooks({ home })).toBe(false);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('returns true when settings.json hooks reference claude-mem-lite path', () => {
       const home = makeHome();
       try {
         mkdirSync(join(home, '.claude'), { recursive: true });
-        writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-          hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${home}/.claude-mem-lite/hook.mjs" session-start` }] }] },
-        }));
+        writeFileSync(
+          join(home, '.claude', 'settings.json'),
+          JSON.stringify({
+            hooks: {
+              SessionStart: [
+                {
+                  matcher: '*',
+                  hooks: [
+                    { type: 'command', command: `node "${home}/.claude-mem-lite/hook.mjs" session-start` },
+                  ],
+                },
+              ],
+            },
+          }),
+        );
         expect(hasInstallManagedHooks({ home })).toBe(true);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('returns false when settings.json has unrelated hooks only', () => {
       const home = makeHome();
       try {
         mkdirSync(join(home, '.claude'), { recursive: true });
-        writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-          hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'node /tmp/other-tool/hook.mjs' }] }] },
-        }));
+        writeFileSync(
+          join(home, '.claude', 'settings.json'),
+          JSON.stringify({
+            hooks: {
+              SessionStart: [
+                { matcher: '*', hooks: [{ type: 'command', command: 'node /tmp/other-tool/hook.mjs' }] },
+              ],
+            },
+          }),
+        );
         expect(hasInstallManagedHooks({ home })).toBe(false);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 
@@ -168,9 +211,12 @@ describe('plugin-cache-guard', () => {
   describe('hasLiveInstallManagedHooks', () => {
     function writeSettings(home, command) {
       mkdirSync(join(home, '.claude'), { recursive: true });
-      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-        hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command }] }] },
-      }));
+      writeFileSync(
+        join(home, '.claude', 'settings.json'),
+        JSON.stringify({
+          hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command }] }] },
+        }),
+      );
     }
 
     it('returns true when the managed entry names a launcher that exists', () => {
@@ -182,7 +228,9 @@ describe('plugin-cache-guard', () => {
         writeSettings(home, `node "${launcher}" hook.mjs session-start`);
         expect(hasInstallManagedHooks({ home })).toBe(true);
         expect(hasLiveInstallManagedHooks({ home })).toBe(true);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('says NO when the managed entry names a launcher that was deleted', () => {
@@ -193,7 +241,9 @@ describe('plugin-cache-guard', () => {
         // The string test still passes — that is precisely the trap.
         expect(hasInstallManagedHooks({ home })).toBe(true);
         expect(hasLiveInstallManagedHooks({ home })).toBe(false);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('resolves an unquoted legacy command path too', () => {
@@ -205,7 +255,9 @@ describe('plugin-cache-guard', () => {
         mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
         writeFileSync(launcher, '// installed\n');
         expect(hasLiveInstallManagedHooks({ home })).toBe(true);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('keeps the string answer when no path can be parsed out of the command', () => {
@@ -216,7 +268,9 @@ describe('plugin-cache-guard', () => {
         writeSettings(home, 'run-mem-hook --plugin .claude-mem-lite/ session-start');
         expect(hasInstallManagedHooks({ home })).toBe(true);
         expect(hasLiveInstallManagedHooks({ home })).toBe(true);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('stays false on a plugin-only install (nothing of ours in settings.json)', () => {
@@ -224,7 +278,9 @@ describe('plugin-cache-guard', () => {
       try {
         writeSettings(home, 'node /tmp/other-tool/hook.mjs');
         expect(hasLiveInstallManagedHooks({ home })).toBe(false);
-      } finally { rmSync(home, { recursive: true, force: true }); }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 });

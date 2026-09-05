@@ -27,8 +27,16 @@ const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 describe('debugCatch sampling path dependencies', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'catch-deps-')); });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'catch-deps-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   // One child process, one blocked specifier, one question: does the post-mortem trail
   // survive when the DB layer cannot be loaded? Run as a subprocess because the block
@@ -39,34 +47,46 @@ describe('debugCatch sampling path dependencies', () => {
     // the CI matrix's node-20 leg while passing locally on 24. register() has been
     // available since 20.6.
     const hooks = join(dir, 'hooks.mjs');
-    writeFileSync(hooks, `
+    writeFileSync(
+      hooks,
+      `
       export async function resolve(specifier, context, next) {
         if (specifier.endsWith(${JSON.stringify(blockedSuffix)})) {
           throw new Error('BLOCKED ' + specifier);
         }
         return next(specifier, context);
       }
-    `);
+    `,
+    );
     const blocker = join(dir, 'blocker.mjs');
-    writeFileSync(blocker, `
+    writeFileSync(
+      blocker,
+      `
       import { register } from 'node:module';
       import { pathToFileURL } from 'node:url';
       register(pathToFileURL(${JSON.stringify(hooks)}).href);
-    `);
-    execFileSync(process.execPath, [
-      '--import', blocker,
-      '--input-type=module',
-      '-e', `
+    `,
+    );
+    execFileSync(
+      process.execPath,
+      [
+        '--import',
+        blocker,
+        '--input-type=module',
+        '-e',
+        `
         import { debugCatch } from ${JSON.stringify(join(REPO, 'utils.mjs'))};
         debugCatch(new Error('probe'), 'sampler-dep-probe');
         await new Promise((r) => setTimeout(r, 600));
       `,
-    ], {
-      cwd: REPO,
-      env: { ...process.env, CLAUDE_MEM_CATCH_SAMPLE: '1', CLAUDE_MEM_DIR: dir, CLAUDE_MEM_DEBUG: '' },
-      stdio: 'pipe',
-      timeout: 30_000,
-    });
+      ],
+      {
+        cwd: REPO,
+        env: { ...process.env, CLAUDE_MEM_CATCH_SAMPLE: '1', CLAUDE_MEM_DIR: dir, CLAUDE_MEM_DEBUG: '' },
+        stdio: 'pipe',
+        timeout: 30_000,
+      },
+    );
     const errDir = join(dir, 'errors');
     return existsSync(errDir) ? readdirSync(errDir) : [];
   };

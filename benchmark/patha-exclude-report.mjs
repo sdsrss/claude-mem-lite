@@ -111,7 +111,10 @@ export function aggregatePathAExclude(rows) {
 
     const regime = classifyMarkerRegime(row);
     if (regime === 'legacy') agg.legacy++;
-    else { agg.regimeTotal++; agg.regime[regime]++; }
+    else {
+      agg.regimeTotal++;
+      agg.regime[regime]++;
+    }
 
     if (row.imperativeArm === 'on') {
       agg.imperative.on++;
@@ -187,15 +190,23 @@ export function formatPathAReport(agg, { days = DEFAULT_WINDOW_DAYS, metricsEnab
   const span = agg.firstTs && agg.lastTs ? `${agg.firstTs.slice(0, 16)}Z → ${agg.lastTs.slice(0, 16)}Z` : '—';
   L.push(`  rows ${agg.total} · ${span}`);
   if (agg.legacy > 0) {
-    L.push(`  legacy (pre-B5 schema, no markerCoercibleStrings): ${agg.legacy} — excluded from the regime split;`);
+    L.push(
+      `  legacy (pre-B5 schema, no markerCoercibleStrings): ${agg.legacy} — excluded from the regime split;`,
+    );
     L.push('    their `inert` was computed on the superseded rule and cannot be recomputed from the row.');
   }
 
   L.push('');
   L.push(`  Marker regime (n=${agg.regimeTotal}):`);
-  L.push(`    inert  (a coercible id arrived as a string — the defect)   ${String(agg.regime.inert).padStart(5)}  ${pct(agg.regime.inert, agg.regimeTotal)}`);
-  L.push(`    working (excludable ids, all numeric — exclude worked)     ${String(agg.regime.working).padStart(5)}  ${pct(agg.regime.working, agg.regimeTotal)}`);
-  L.push(`    nothing-excludable (P/D/E only, or empty)                  ${String(agg.regime['nothing-excludable']).padStart(5)}  ${pct(agg.regime['nothing-excludable'], agg.regimeTotal)}`);
+  L.push(
+    `    inert  (a coercible id arrived as a string — the defect)   ${String(agg.regime.inert).padStart(5)}  ${pct(agg.regime.inert, agg.regimeTotal)}`,
+  );
+  L.push(
+    `    working (excludable ids, all numeric — exclude worked)     ${String(agg.regime.working).padStart(5)}  ${pct(agg.regime.working, agg.regimeTotal)}`,
+  );
+  L.push(
+    `    nothing-excludable (P/D/E only, or empty)                  ${String(agg.regime['nothing-excludable']).padStart(5)}  ${pct(agg.regime['nothing-excludable'], agg.regimeTotal)}`,
+  );
 
   L.push('');
   L.push(`  Arm B: ok ${agg.armB.ok} · skipped ${agg.armB.skipped} · error ${agg.armB.error}`);
@@ -205,27 +216,41 @@ export function formatPathAReport(agg, { days = DEFAULT_WINDOW_DAYS, metricsEnab
   }
 
   L.push('');
-  L.push(`  Measured population (arm-B-ok prompts): ${agg.okPrompts} · delivered by arm A: ${agg.emittedRows} rows`);
-  L.push(`    set changed        ${String(agg.setChangedPrompts).padStart(5)}  ${pct(agg.setChangedPrompts, agg.okPrompts)} of prompts`);
-  L.push(`    rows freed         ${String(agg.suppressedRows).padStart(5)}  over ${agg.suppressedPrompts} prompt(s)`);
-  L.push(`    rows refilled      ${String(agg.refilledRows).padStart(5)}  over ${agg.refilledPrompts} prompt(s)`);
+  L.push(
+    `  Measured population (arm-B-ok prompts): ${agg.okPrompts} · delivered by arm A: ${agg.emittedRows} rows`,
+  );
+  L.push(
+    `    set changed        ${String(agg.setChangedPrompts).padStart(5)}  ${pct(agg.setChangedPrompts, agg.okPrompts)} of prompts`,
+  );
+  L.push(
+    `    rows freed         ${String(agg.suppressedRows).padStart(5)}  over ${agg.suppressedPrompts} prompt(s)`,
+  );
+  L.push(
+    `    rows refilled      ${String(agg.refilledRows).padStart(5)}  over ${agg.refilledPrompts} prompt(s)`,
+  );
   L.push(`    net delivered      ${(agg.netRows >= 0 ? '+' : '') + agg.netRows}`);
 
   L.push('');
   if (agg.verdict === 'DECIDABLE') {
     L.push('  DECISION COLUMN (D#216) — a freed slot is either refilled from the pool or lost:');
-    L.push(`    refilled / freed   ${agg.refilledRows} / ${agg.suppressedRows}  = ${pct(agg.refilledRows, agg.suppressedRows)}`);
+    L.push(
+      `    refilled / freed   ${agg.refilledRows} / ${agg.suppressedRows}  = ${pct(agg.refilledRows, agg.suppressedRows)}`,
+    );
     L.push(`    pure loss          ${agg.pureLossPrompts} prompt(s) freed a slot and got nothing back`);
   } else {
     L.push('  NO-POPULATION: nothing was ever freed, so there is no refill ratio to quote.');
-    L.push(`    This is a statement about the sample, not about the repair: ${agg.regime.inert} of ${agg.regimeTotal}`);
+    L.push(
+      `    This is a statement about the sample, not about the repair: ${agg.regime.inert} of ${agg.regimeTotal}`,
+    );
     L.push('    prompts were in the inert regime at all, and a working exclude can only drop a row');
     L.push('    that was both in the marker and in what arm A delivered.');
   }
 
   L.push('');
   const imp = agg.imperative;
-  L.push(`  task_imperative face: arm on ${imp.on} / off ${imp.off} · gate opened ${imp.gateOpen} · pick changed ${imp.changed}`);
+  L.push(
+    `  task_imperative face: arm on ${imp.on} / off ${imp.off} · gate opened ${imp.gateOpen} · pick changed ${imp.changed}`,
+  );
   if (imp.on > 0 && imp.gateOpen === 0) {
     L.push('    the flag was on but the gate never selected a lesson — no comparison was made.');
   }
@@ -255,18 +280,36 @@ export function readPathARows(dbDir, days = DEFAULT_WINDOW_DAYS) {
  * @param {(rows:object[])=>object} aggregate
  */
 export function assertCanSeeSuppression(aggregate) {
-  const probe = aggregate([{
-    event: PATHA_EXCLUDE_EVENT, markerTotal: 2, markerStrings: 2, markerNumbers: 0,
-    markerCoercible: 2, markerCoercibleStrings: 2, inert: true,
-    emitted: 3, suppressed: 2, suppressedIds: [11, 12],
-    imperativeArm: 'off',
-    armB: 'ok', delivered: 2, refilled: 1, refilledIds: [13], net: -1, setChanged: true,
-  }]);
+  const probe = aggregate([
+    {
+      event: PATHA_EXCLUDE_EVENT,
+      markerTotal: 2,
+      markerStrings: 2,
+      markerNumbers: 0,
+      markerCoercible: 2,
+      markerCoercibleStrings: 2,
+      inert: true,
+      emitted: 3,
+      suppressed: 2,
+      suppressedIds: [11, 12],
+      imperativeArm: 'off',
+      armB: 'ok',
+      delivered: 2,
+      refilled: 1,
+      refilledIds: [13],
+      net: -1,
+      setChanged: true,
+    },
+  ]);
   if (probe.suppressedRows !== 2 || probe.refilledRows !== 1) {
-    throw new Error(`self-check failed: aggregator cannot see suppression (got suppressedRows=${probe.suppressedRows}, refilledRows=${probe.refilledRows}, want 2/1)`);
+    throw new Error(
+      `self-check failed: aggregator cannot see suppression (got suppressedRows=${probe.suppressedRows}, refilledRows=${probe.refilledRows}, want 2/1)`,
+    );
   }
   if (probe.verdict !== 'DECIDABLE' || probe.refillRatio === null) {
-    throw new Error(`self-check failed: suppression present but verdict=${probe.verdict}, refillRatio=${probe.refillRatio}`);
+    throw new Error(
+      `self-check failed: suppression present but verdict=${probe.verdict}, refillRatio=${probe.refillRatio}`,
+    );
   }
 }
 
@@ -277,17 +320,30 @@ export function assertCanSeeSuppression(aggregate) {
  * @param {(rows:object[])=>object} aggregate
  */
 export function assertErrorArmIsNotAZero(aggregate) {
-  const probe = aggregate([{
-    event: PATHA_EXCLUDE_EVENT, markerTotal: 1, markerStrings: 0, markerNumbers: 1,
-    markerCoercible: 1, markerCoercibleStrings: 0, inert: false,
-    emitted: 2, suppressed: 0, suppressedIds: [],
-    imperativeArm: 'off', armB: 'error', armBError: 'probe',
-  }]);
+  const probe = aggregate([
+    {
+      event: PATHA_EXCLUDE_EVENT,
+      markerTotal: 1,
+      markerStrings: 0,
+      markerNumbers: 1,
+      markerCoercible: 1,
+      markerCoercibleStrings: 0,
+      inert: false,
+      emitted: 2,
+      suppressed: 0,
+      suppressedIds: [],
+      imperativeArm: 'off',
+      armB: 'error',
+      armBError: 'probe',
+    },
+  ]);
   if (probe.armB.error !== 1) {
     throw new Error(`self-check failed: error arm not counted (got ${probe.armB.error})`);
   }
   if (probe.okPrompts !== 0) {
-    throw new Error(`self-check failed: an armB error row entered the measured population (okPrompts=${probe.okPrompts}, want 0)`);
+    throw new Error(
+      `self-check failed: an armB error row entered the measured population (okPrompts=${probe.okPrompts}, want 0)`,
+    );
   }
 }
 

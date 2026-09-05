@@ -12,7 +12,10 @@ describe('adoption-estimator', () => {
   });
 
   it('clusterBootstrap CI includes 0 for a null effect, excludes it for a strong one', () => {
-    const nullRows = Array.from({ length: 40 }, (_, i) => ({ sessionId: `s${i % 8}`, value: (i % 2 ? 0.05 : -0.05) }));
+    const nullRows = Array.from({ length: 40 }, (_, i) => ({
+      sessionId: `s${i % 8}`,
+      value: i % 2 ? 0.05 : -0.05,
+    }));
     const nullCi = clusterBootstrap(nullRows, { seedTerms: 'null' }).ci95;
     expect(nullCi[0]).toBeLessThanOrEqual(0);
     expect(nullCi[1]).toBeGreaterThanOrEqual(0);
@@ -26,7 +29,7 @@ describe('adoption-estimator', () => {
   });
 
   it('mde default case matches the pinned z-table exactly', () => {
-    const expected = (1.9599639845 + 0.8416212336) * 0.2 / Math.sqrt(100);
+    const expected = ((1.9599639845 + 0.8416212336) * 0.2) / Math.sqrt(100);
     expect(mde(100, 0.2, {})).toBeCloseTo(expected, 10);
   });
 

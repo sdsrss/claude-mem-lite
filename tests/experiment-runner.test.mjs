@@ -63,8 +63,18 @@ describe('seedArmDb', () => {
     const d = mkdtempSync(join(tmpdir(), 'exp-seed-'));
     try {
       const shuffledPool = [
-        { type: 'discovery', title: 'unrelated CSS grid quirk', content: 'flexbox vs grid gap', importance: 1 },
-        { type: 'discovery', title: 'unrelated webpack chunk', content: 'splitChunks cacheGroups', importance: 1 },
+        {
+          type: 'discovery',
+          title: 'unrelated CSS grid quirk',
+          content: 'flexbox vs grid gap',
+          importance: 1,
+        },
+        {
+          type: 'discovery',
+          title: 'unrelated webpack chunk',
+          content: 'splitChunks cacheGroups',
+          importance: 1,
+        },
       ];
       const s = seedArmDb(join(d, 's.db'), ARMS.shuffled, TASK, { shuffledPool });
       expect(s.seeded).toBe(2);
@@ -91,7 +101,14 @@ describe('runTrial', () => {
       runCheck: async () => ({ exitCode: 0 }),
     };
     const r = await runTrial({ task: TASK, arm: ARMS.treatment, trial: 1 }, deps);
-    expect(r).toMatchObject({ taskId: 'fk-cascade', arm: 'treatment', trial: 1, recurred: false, tokens: 400, toolCalls: 1 });
+    expect(r).toMatchObject({
+      taskId: 'fk-cascade',
+      arm: 'treatment',
+      trial: 1,
+      recurred: false,
+      tokens: 400,
+      toolCalls: 1,
+    });
     expect(r.wallClockMs).toBeGreaterThan(0);
   });
 
@@ -99,7 +116,12 @@ describe('runTrial', () => {
     let cleaned = false;
     const deps = {
       now: () => 1,
-      prepareSandbox: async () => ({ cwd: '/s', cleanup: async () => { cleaned = true; } }),
+      prepareSandbox: async () => ({
+        cwd: '/s',
+        cleanup: async () => {
+          cleaned = true;
+        },
+      }),
       seedDb: async () => null,
       claudeRunner: async () => ({ result: {}, events: [] }),
       runCheck: async () => ({ exitCode: 1 }),

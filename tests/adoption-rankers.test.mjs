@@ -51,16 +51,37 @@ function seed(db, rows) {
   insertSession(db, { id: 'mem-s1', project: 'p' });
   const ins = db.prepare(
     `INSERT INTO observations (memory_session_id, project, type, title, lesson_learned, importance, created_at, created_at_epoch)
-     VALUES (?,?,?,?,?,?,?,?)`);
-  for (const r of rows) ins.run('mem-s1', 'p', 'bugfix', r.title, r.lesson, r.importance ?? 2, new Date(r.epoch).toISOString(), r.epoch);
+     VALUES (?,?,?,?,?,?,?,?)`,
+  );
+  for (const r of rows)
+    ins.run(
+      'mem-s1',
+      'p',
+      'bugfix',
+      r.title,
+      r.lesson,
+      r.importance ?? 2,
+      new Date(r.epoch).toISOString(),
+      r.epoch,
+    );
 }
 
 describe('replayCandidates', () => {
   it('imperative: shown=[argmax], near-miss=next by score', () => {
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate for merge', importance: 3, epoch: 1_700_000_000_000 },
-      { title: 'merge helper', lesson: 'the merge helper needs rrfAccumulate too', importance: 1, epoch: 1_700_000_100_000 },
+      {
+        title: 'rrfAccumulate',
+        lesson: 'call rrfAccumulate for merge',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
+      {
+        title: 'merge helper',
+        lesson: 'the merge helper needs rrfAccumulate too',
+        importance: 1,
+        epoch: 1_700_000_100_000,
+      },
     ]);
     const ev = { ts: 1_750_000_000_000, query: 'fix rrfAccumulate merge', surface: 'imperative' };
     const { shown, nearMiss } = replayCandidates('imperative', db, ev, { m: 3, project: 'p' });
@@ -72,7 +93,12 @@ describe('replayCandidates', () => {
   it('subagent surface shares the imperative ranker (alias dispatch)', () => {
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate for merge', importance: 3, epoch: 1_700_000_000_000 },
+      {
+        title: 'rrfAccumulate',
+        lesson: 'call rrfAccumulate for merge',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
     ]);
     const ev = { ts: 1_750_000_000_000, query: 'fix rrfAccumulate merge', surface: 'subagent' };
     const { shown } = replayCandidates('subagent', db, ev, { m: 3, project: 'p' });
@@ -83,8 +109,18 @@ describe('replayCandidates', () => {
   it('ups-fts: dispatches to searchByFts with the documented args and buckets by the 50 floor', () => {
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate merge dedup', lesson: 'use rrfAccumulate for the merge dedup path', importance: 3, epoch: 1_749_000_000_000 },
-      { title: 'unrelated topic entirely', lesson: 'nothing to do with any of this at all', importance: 1, epoch: 1_749_000_100_000 },
+      {
+        title: 'rrfAccumulate merge dedup',
+        lesson: 'use rrfAccumulate for the merge dedup path',
+        importance: 3,
+        epoch: 1_749_000_000_000,
+      },
+      {
+        title: 'unrelated topic entirely',
+        lesson: 'nothing to do with any of this at all',
+        importance: 1,
+        epoch: 1_749_000_100_000,
+      },
     ]);
     const ev = { ts: 1_750_000_000_000, query: 'rrfAccumulate merge dedup', surface: 'ups-fts' };
     const { shown, nearMiss } = replayCandidates('ups-fts', db, ev, { m: 3, project: 'p' });

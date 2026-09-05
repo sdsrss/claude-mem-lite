@@ -39,9 +39,15 @@ beforeEach(() => {
 });
 
 const base = (extra = {}) => ({
-  memory_session_id: 'sess-1', project: PROJECT, text: 'body', type: 'change',
-  title: 'a row', narrative: 'body', created_at: new Date().toISOString(),
-  created_at_epoch: Date.now(), ...extra,
+  memory_session_id: 'sess-1',
+  project: PROJECT,
+  text: 'body',
+  type: 'change',
+  title: 'a row',
+  narrative: 'body',
+  created_at: new Date().toISOString(),
+  created_at_epoch: Date.now(),
+  ...extra,
 });
 const impOf = (id) => db.prepare('SELECT importance AS v FROM observations WHERE id = ?').get(id).v;
 
@@ -100,8 +106,10 @@ describe('applyObsUpdate never writes a NULL importance', () => {
 describe('doctor --session-audit reports rows that arrived NULL by another route', () => {
   it('counts them and fails the audit', () => {
     const id = insertObservationRow(db, base({ importance: 2 }));
-    expect(auditSessionConsistency(db).obs_importance_null,
-      'the counter is non-zero on a clean DB — it is measuring something else').toBe(0);
+    expect(
+      auditSessionConsistency(db).obs_importance_null,
+      'the counter is non-zero on a clean DB — it is measuring something else',
+    ).toBe(0);
 
     // Only reachable by writing around the cores — which is exactly the population this
     // backstop exists for. Doubles as the ruler self-check: the count CAN be non-zero.
@@ -128,13 +136,15 @@ describe('the divergence this closes, pinned as it stands today', () => {
     const forCli = mk();
 
     runIdleCleanup(db);
-    expect(db.prepare('SELECT compressed_into v FROM observations WHERE id = ?').get(forMcp).v,
-      'runIdleCleanup started marking NULL-importance rows')
-      .not.toBe(COMPRESSED_PENDING_PURGE);
+    expect(
+      db.prepare('SELECT compressed_into v FROM observations WHERE id = ?').get(forMcp).v,
+      'runIdleCleanup started marking NULL-importance rows',
+    ).not.toBe(COMPRESSED_PENDING_PURGE);
 
     decayAndMarkIdle(db, { projectFilter: '', baseParams: [], staleAge: Date.now() - 30 * DAY, opCap: 1000 });
-    expect(db.prepare('SELECT compressed_into v FROM observations WHERE id = ?').get(forCli).v,
-      'decayAndMarkIdle stopped treating NULL as importance 1')
-      .toBe(COMPRESSED_PENDING_PURGE);
+    expect(
+      db.prepare('SELECT compressed_into v FROM observations WHERE id = ?').get(forCli).v,
+      'decayAndMarkIdle stopped treating NULL as importance 1',
+    ).toBe(COMPRESSED_PENDING_PURGE);
   });
 });

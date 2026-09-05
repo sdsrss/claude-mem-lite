@@ -146,8 +146,10 @@ export function writeTwin(obsLimit, sessLimit) {
   const a = patchConst(src, 'KEYCTX_POOL_OBS', obsLimit);
   const b = patchConst(a.out, 'KEYCTX_POOL_SESS', sessLimit);
   if (a.previous === obsLimit && b.previous === sessLimit) {
-    throw new Error(`twin is identical to shipped (${obsLimit}/${sessLimit}) — the comparison `
-      + 'would report 0 differences for reasons that have nothing to do with the pools.');
+    throw new Error(
+      `twin is identical to shipped (${obsLimit}/${sessLimit}) — the comparison ` +
+        'would report 0 differences for reasons that have nothing to do with the pools.',
+    );
   }
   writeFileSync(TWIN_URL, b.out);
   return { obs: a.previous, sess: b.previous };
@@ -182,11 +184,18 @@ export function patchDropPoints(src) {
   let out = src;
   for (const [anchor, label] of DROP_POINTS) {
     if (!out.includes(anchor)) {
-      throw new Error(`drop-point anchor gone: ${label} ("${anchor}"). The selection loop `
-        + 'moved; refusing to report an attribution over gates that may never fire.');
+      throw new Error(
+        `drop-point anchor gone: ${label} ("${anchor}"). The selection loop ` +
+          'moved; refusing to report an attribution over gates that may never fire.',
+      );
     }
-    out = out.replace(anchor, anchor.replace(/continue;$/,
-      `{ globalThis.__KEYCTX_TRACE.push([c._kind, c.id, '${label}']); continue; }`));
+    out = out.replace(
+      anchor,
+      anchor.replace(
+        /continue;$/,
+        `{ globalThis.__KEYCTX_TRACE.push([c._kind, c.id, '${label}']); continue; }`,
+      ),
+    );
   }
   const sel = 'totalTokens += c.cost;';
   if (!out.includes(sel)) throw new Error('drop-point anchor gone: the selection commit');
@@ -209,13 +218,19 @@ function largestObsPool(db, projects, computeAdaptiveWindows) {
  */
 export function inertNotice(shippedObs, wideObs, maxPool) {
   if (shippedObs === wideObs) {
-    return `obs arm is INERT: twin bound (${wideObs}) equals shipped. Any "0 newly reachable" `
-      + 'below is arithmetic, not a measurement.';
+    return (
+      `obs arm is INERT: twin bound (${wideObs}) equals shipped. Any "0 newly reachable" ` +
+      'below is arithmetic, not a measurement.'
+    );
   }
   if (Math.min(shippedObs, wideObs) >= maxPool) {
-    return `obs arm is INERT: both bounds (${shippedObs}, ${wideObs}) are at or above the largest `
-      + `pool (${maxPool}), so both select every candidate. Widening past the pool cannot show `
-      + 'an effect; use --wide-obs below ' + maxPool + ' to compare arms that differ.';
+    return (
+      `obs arm is INERT: both bounds (${shippedObs}, ${wideObs}) are at or above the largest ` +
+      `pool (${maxPool}), so both select every candidate. Widening past the pool cannot show ` +
+      'an effect; use --wide-obs below ' +
+      maxPool +
+      ' to compare arms that differ.'
+    );
   }
   return null;
 }
@@ -246,19 +261,27 @@ export function summarizeCost(samples) {
 export function assertCannotWrite(db) {
   let wrote = false;
   try {
-    db.prepare('UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1 WHERE id = -1').run();
+    db.prepare(
+      'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1 WHERE id = -1',
+    ).run();
     wrote = true;
-  } catch { /* expected: SQLITE_READONLY */ }
+  } catch {
+    /* expected: SQLITE_READONLY */
+  }
   if (wrote) throw new Error('SELF-CHECK FAILED: the database handle accepted a write. Refusing to run.');
 }
 
 /** Projects with enough rows for the pool bound to be capable of biting. */
 export function loadProjects(db, minRows) {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT project, COUNT(*) AS n FROM observations
     WHERE ${liveObsFilterSql('')}
     GROUP BY project HAVING n >= ? ORDER BY n DESC
-  `).all(minRows);
+  `,
+    )
+    .all(minRows);
 }
 
 /**
@@ -270,17 +293,25 @@ export function loadProjects(db, minRows) {
 export function poolSizes(db, project, computeAdaptiveWindows) {
   const now = Date.now();
   const w = computeAdaptiveWindows(db, project);
-  const obs = db.prepare(`
+  const obs = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM observations
     WHERE project = ? AND ${liveObsFilterSql('')} AND ${notLowSignalTitleClause('')}
       AND ((created_at_epoch > ? AND importance >= 1)
         OR (created_at_epoch > ? AND importance >= 2)
         OR (created_at_epoch > ? AND importance >= 3))
-  `).get(project, now - w.tier1, now - w.tier2, now - w.tier3).c;
-  const sess = db.prepare(`
+  `,
+    )
+    .get(project, now - w.tier1, now - w.tier2, now - w.tier3).c;
+  const sess = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM session_summaries
     WHERE project = ? AND created_at_epoch > ?
-  `).get(project, now - w.sessWindow).c;
+  `,
+    )
+    .get(project, now - w.sessWindow).c;
   return { obs, sess };
 }
 
@@ -292,24 +323,40 @@ export function poolSizes(db, project, computeAdaptiveWindows) {
  * arguing for the change rather than pricing it.
  */
 export function compare(db, projects, narrow, wide, budget) {
-  let n = 0, threw = 0, changedObs = 0, changedBlock = 0, top1 = 0;
-  let gained = 0, displaced = 0, sessGained = 0, sessDisplaced = 0;
+  let n = 0,
+    threw = 0,
+    changedObs = 0,
+    changedBlock = 0,
+    top1 = 0;
+  let gained = 0,
+    displaced = 0,
+    sessGained = 0,
+    sessDisplaced = 0;
   const rows = [];
   for (const { project } of projects) {
     let a, b;
-    try { a = narrow(db, project, budget); b = wide(db, project, budget); } catch { threw++; continue; }
+    try {
+      a = narrow(db, project, budget);
+      b = wide(db, project, budget);
+    } catch {
+      threw++;
+      continue;
+    }
     n++;
-    const ai = a.observations.map((o) => o.id), bi = b.observations.map((o) => o.id);
+    const ai = a.observations.map((o) => o.id),
+      bi = b.observations.map((o) => o.id);
     // Summaries are INJECTED CONTENT too. A first version of this function scored only
     // `observations`, and the sess-only arm therefore printed "selection differs 0/11"
     // over a block that had grown by 1051 tokens of session summaries — a headline that
     // says "this change does nothing" about a change that more than doubles what
     // SessionStart emits. Both halves are counted, and the obs-only figure is kept
     // beside the block figure rather than replaced by it.
-    const as = a.summaries.map((s) => s.id), bs = b.summaries.map((s) => s.id);
+    const as = a.summaries.map((s) => s.id),
+      bs = b.summaries.map((s) => s.id);
     const g = bi.filter((x) => !ai.includes(x)).length;
     const d = ai.filter((x) => !bi.includes(x)).length;
-    gained += g; displaced += d;
+    gained += g;
+    displaced += d;
     sessGained += bs.filter((x) => !as.includes(x)).length;
     sessDisplaced += as.filter((x) => !bs.includes(x)).length;
     const obsDiff = JSON.stringify(ai) !== JSON.stringify(bi);
@@ -318,12 +365,31 @@ export function compare(db, projects, narrow, wide, budget) {
     if (obsDiff || sessDiff) changedBlock++;
     if (ai[0] !== bi[0]) top1++;
     rows.push({
-      project, narrowN: ai.length, wideN: bi.length, gained: g, displaced: d,
-      narrowTokens: a.totalTokens, wideTokens: b.totalTokens,
-      sessNarrow: as.length, sessWide: bs.length, changed: obsDiff || sessDiff,
+      project,
+      narrowN: ai.length,
+      wideN: bi.length,
+      gained: g,
+      displaced: d,
+      narrowTokens: a.totalTokens,
+      wideTokens: b.totalTokens,
+      sessNarrow: as.length,
+      sessWide: bs.length,
+      changed: obsDiff || sessDiff,
     });
   }
-  return { n, threw, changedObs, changedBlock, changed: changedBlock, top1, gained, displaced, sessGained, sessDisplaced, rows };
+  return {
+    n,
+    threw,
+    changedObs,
+    changedBlock,
+    changed: changedBlock,
+    top1,
+    gained,
+    displaced,
+    sessGained,
+    sessDisplaced,
+    rows,
+  };
 }
 
 /**
@@ -334,8 +400,10 @@ export function compare(db, projects, narrow, wide, budget) {
 export function assertRulerCanSayNo(db, projects, wide, budget) {
   const { changed } = compare(db, projects, wide, wide, budget);
   if (changed !== 0) {
-    throw new Error(`SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} projects with a `
-      + 'different selection. The replay is not deterministic. Refusing to report.');
+    throw new Error(
+      `SELF-CHECK FAILED: shipped-vs-shipped reported ${changed} projects with a ` +
+        'different selection. The replay is not deterministic. Refusing to report.',
+    );
   }
 }
 
@@ -353,9 +421,11 @@ export function assertCanSeeDisplacement(cmp = compare) {
   const fake = (ids) => () => ({ observations: ids.map((id) => ({ id })), summaries: [], totalTokens: 0 });
   const r = cmp(null, [{ project: 'p' }], fake([1, 2]), fake([2, 3]), 0);
   if (r.displaced !== 1 || r.gained !== 1) {
-    throw new Error(`SELF-CHECK FAILED: displacement counter reported gained=${r.gained} `
-      + `displaced=${r.displaced} on a case constructed to be 1/1. The number that would `
-      + 'argue against widening cannot be trusted to appear.');
+    throw new Error(
+      `SELF-CHECK FAILED: displacement counter reported gained=${r.gained} ` +
+        `displaced=${r.displaced} on a case constructed to be 1/1. The number that would ` +
+        'argue against widening cannot be trusted to appear.',
+    );
   }
 }
 
@@ -369,9 +439,11 @@ export function assertCanSeeDisplacement(cmp = compare) {
  */
 export function assertInertConsistent(notice, changedObs) {
   if (notice && changedObs > 0) {
-    throw new Error(`SELF-CHECK FAILED: printed an INERT notice ("${notice}") and then found `
-      + `${changedObs} projects whose observation selection differs. Both cannot be true; the `
-      + 'pool-size input to that notice is wrong. Refusing to report.');
+    throw new Error(
+      `SELF-CHECK FAILED: printed an INERT notice ("${notice}") and then found ` +
+        `${changedObs} projects whose observation selection differs. Both cannot be true; the ` +
+        'pool-size input to that notice is wrong. Refusing to report.',
+    );
   }
 }
 
@@ -385,17 +457,21 @@ const TRACE_LABELS = new Set([...DROP_POINTS.map(([, l]) => l), 'SELECTED']);
 
 export function assertTraceWellFormed(trace, where = 'trace') {
   if (!Array.isArray(trace) || trace.length === 0) {
-    throw new Error(`SELF-CHECK FAILED: ${where} produced no records. The instrumentation did `
-      + 'not run, so every drop reason below would be "not-in-pool" by default.');
+    throw new Error(
+      `SELF-CHECK FAILED: ${where} produced no records. The instrumentation did ` +
+        'not run, so every drop reason below would be "not-in-pool" by default.',
+    );
   }
   const seen = new Set();
   for (const [kind, id, label] of trace) {
     if (!TRACE_LABELS.has(label)) throw new Error(`SELF-CHECK FAILED: ${where} unknown label "${label}".`);
     const key = `${kind}:${id}`;
     if (seen.has(key)) {
-      throw new Error(`SELF-CHECK FAILED: ${where} recorded ${key} twice. A candidate resolves `
-        + 'through exactly one gate; a duplicate means the loop was re-entered or an anchor '
-        + 'was patched into a path that runs more than once.');
+      throw new Error(
+        `SELF-CHECK FAILED: ${where} recorded ${key} twice. A candidate resolves ` +
+          'through exactly one gate; a duplicate means the loop was re-entered or an anchor ' +
+          'was patched into a path that runs more than once.',
+      );
     }
     seen.add(key);
   }
@@ -417,14 +493,20 @@ async function main() {
   // A non-numeric bound writes `const KEYCTX_POOL_OBS = NaN;`, `LIMIT NaN` returns no
   // rows, and the run then prints a complete report in which one arm selected nothing —
   // a number that looks like a finding and is garbage. Same hole rerank-pool-replay had.
-  for (const [flag, v] of [['--wide-obs', wideObs], ['--wide-sess', wideSess],
-    ['--min-rows', minRows], ['--budget', budget]]) {
+  for (const [flag, v] of [
+    ['--wide-obs', wideObs],
+    ['--wide-sess', wideSess],
+    ['--min-rows', minRows],
+    ['--budget', budget],
+  ]) {
     if (!Number.isInteger(v) || v < 1) {
       throw new Error(`${flag} must be a positive integer, got "${arg(flag)}". Refusing to run.`);
     }
   }
 
-  const db = new Database(process.env.CLAUDE_MEM_DB_PATH || join(DB_DIR, 'claude-mem-lite.db'), { readonly: true });
+  const db = new Database(process.env.CLAUDE_MEM_DB_PATH || join(DB_DIR, 'claude-mem-lite.db'), {
+    readonly: true,
+  });
   assertCannotWrite(db);
 
   const shipped = writeTwin(wideObs, wideSess);
@@ -433,7 +515,11 @@ async function main() {
     ({ selectWithTokenBudget: narrow, computeAdaptiveWindows } = await import(SHIPPED_URL.href));
     ({ selectWithTokenBudget: wide } = await import(`${TWIN_URL.href}?v=${Date.now()}`));
   } finally {
-    try { unlinkSync(TWIN_URL); } catch { /* already gone */ }
+    try {
+      unlinkSync(TWIN_URL);
+    } catch {
+      /* already gone */
+    }
   }
 
   const projects = loadProjects(db, minRows);
@@ -441,8 +527,10 @@ async function main() {
   // A zero here would make inertNotice fire on every run, including runs that then report a
   // real difference. Cheap, and it is the input a unit test cannot reach.
   if (projects.length > 0 && maxPool <= 0) {
-    throw new Error(`SELF-CHECK FAILED: ${projects.length} projects cleared the ${minRows}-row `
-      + 'floor but the largest candidate pool measured 0. poolSizes disagrees with loadProjects.');
+    throw new Error(
+      `SELF-CHECK FAILED: ${projects.length} projects cleared the ${minRows}-row ` +
+        'floor but the largest candidate pool measured 0. poolSizes disagrees with loadProjects.',
+    );
   }
 
   if (has('--population')) {
@@ -451,18 +539,33 @@ async function main() {
     // moment shipped became 200 — the reference has to be a parameter.
     const refObs = Number(arg('--ref-obs', String(shipped.obs)));
     const refSess = Number(arg('--ref-sess', String(shipped.sess)));
-    for (const [flag, v] of [['--ref-obs', refObs], ['--ref-sess', refSess]]) {
+    for (const [flag, v] of [
+      ['--ref-obs', refObs],
+      ['--ref-sess', refSess],
+    ]) {
       if (!Number.isInteger(v) || v < 1) throw new Error(`${flag} must be a positive integer.`);
     }
-    const out = projects.map(({ project, n }) => ({ project, live: n, ...poolSizes(db, project, computeAdaptiveWindows) }));
-    if (asJson) { console.log(JSON.stringify({ refObs, refSess, maxPool, rows: out }, null, 2)); return; }
-    const ref = refObs === shipped.obs && refSess === shipped.sess
-      ? `shipped LIMITs ${shipped.obs}/${shipped.sess}` : `reference bounds ${refObs}/${refSess} (shipped is ${shipped.obs}/${shipped.sess})`;
+    const out = projects.map(({ project, n }) => ({
+      project,
+      live: n,
+      ...poolSizes(db, project, computeAdaptiveWindows),
+    }));
+    if (asJson) {
+      console.log(JSON.stringify({ refObs, refSess, maxPool, rows: out }, null, 2));
+      return;
+    }
+    const ref =
+      refObs === shipped.obs && refSess === shipped.sess
+        ? `shipped LIMITs ${shipped.obs}/${shipped.sess}`
+        : `reference bounds ${refObs}/${refSess} (shipped is ${shipped.obs}/${shipped.sess})`;
     console.log(`\n─── Key Context pool population (${ref}) ───`);
     console.log('  project                     live   obsPool  sessPool   truncated');
     for (const r of out) {
-      const t = [r.obs > refObs ? 'obs' : null, r.sess > refSess ? 'sess' : null].filter(Boolean).join('+') || '—';
-      console.log(`  ${r.project.padEnd(26)}${String(r.live).padStart(5)}${String(r.obs).padStart(10)}${String(r.sess).padStart(10)}   ${t}`);
+      const t =
+        [r.obs > refObs ? 'obs' : null, r.sess > refSess ? 'sess' : null].filter(Boolean).join('+') || '—';
+      console.log(
+        `  ${r.project.padEnd(26)}${String(r.live).padStart(5)}${String(r.obs).padStart(10)}${String(r.sess).padStart(10)}   ${t}`,
+      );
     }
     const to = out.filter((r) => r.obs > refObs).length;
     const ts = out.filter((r) => r.sess > refSess).length;
@@ -476,7 +579,10 @@ async function main() {
     const project = arg('--project', projects[0]?.project);
     const src = readFileSync(SHIPPED_URL, 'utf8');
     const arms = {};
-    for (const [label, limit] of [['narrow', shipped.obs], ['wide', wideObs]]) {
+    for (const [label, limit] of [
+      ['narrow', shipped.obs],
+      ['wide', wideObs],
+    ]) {
       const patched = patchDropPoints(patchConst(src, 'KEYCTX_POOL_OBS', limit).out);
       const url = pathToFileURL(join(REPO_ROOT, `.tmp-keyctx-why-${limit}.mjs`));
       writeFileSync(url, patched);
@@ -484,33 +590,62 @@ async function main() {
         const m = await import(`${url.href}?v=${Date.now()}`);
         globalThis.__KEYCTX_TRACE = [];
         arms[label] = { sel: m.selectWithTokenBudget(db, project, budget), trace: globalThis.__KEYCTX_TRACE };
-      } finally { try { unlinkSync(url); } catch { /* gone */ } }
+      } finally {
+        try {
+          unlinkSync(url);
+        } catch {
+          /* gone */
+        }
+      }
     }
     // Label by BOUND, never by "narrow"/"wide" prose. The documented way to re-derive the
     // pre-v3.87.0 baseline is `--wide-obs 50`, i.e. the twin is the NARROWER arm — and a
     // first version of this mode hard-coded headings assuming the opposite, so every line
     // contradicted its own data column (a row marked "unreachable at the narrower bound"
     // printed `typecap`, which means it was in the pool and a gate dropped it).
-    for (const [k, set] of [['narrow', arms.narrow], ['wide', arms.wide]]) {
+    for (const [k, set] of [
+      ['narrow', arms.narrow],
+      ['wide', arms.wide],
+    ]) {
       assertTraceWellFormed(set.trace, `${k} arm`);
     }
-    const loBound = Math.min(shipped.obs, wideObs), hiBound = Math.max(shipped.obs, wideObs);
+    const loBound = Math.min(shipped.obs, wideObs),
+      hiBound = Math.max(shipped.obs, wideObs);
     const loArm = shipped.obs <= wideObs ? arms.narrow : arms.wide;
     const hiArm = shipped.obs <= wideObs ? arms.wide : arms.narrow;
     const loIds = loArm.sel.observations.map((o) => o.id);
     const hiIds = hiArm.sel.observations.map((o) => o.id);
-    const why = (trace, id) => (trace.find((t) => t[0] === 'obs' && t[1] === id) || [,, 'not-in-pool'])[2];
-    const info = db.prepare('SELECT id, type, importance, title, lesson_learned IS NOT NULL AS les FROM observations WHERE id = ?');
+    const why = (trace, id) => (trace.find((t) => t[0] === 'obs' && t[1] === id) || [, , 'not-in-pool'])[2];
+    const info = db.prepare(
+      'SELECT id, type, importance, title, lesson_learned IS NOT NULL AS les FROM observations WHERE id = ?',
+    );
     const stamp = new Date().toISOString();
-    const rows = (ids) => ids.map((id) => {
-      const o = info.get(id);
-      return { id, type: o?.type, importance: o?.importance, lesson: !!o?.les,
-        [`at${loBound}`]: why(loArm.trace, id), [`at${hiBound}`]: why(hiArm.trace, id), title: o?.title };
-    });
+    const rows = (ids) =>
+      ids.map((id) => {
+        const o = info.get(id);
+        return {
+          id,
+          type: o?.type,
+          importance: o?.importance,
+          lesson: !!o?.les,
+          [`at${loBound}`]: why(loArm.trace, id),
+          [`at${hiBound}`]: why(hiArm.trace, id),
+          title: o?.title,
+        };
+      });
     const gained = rows(hiIds.filter((x) => !loIds.includes(x)));
     const displaced = rows(loIds.filter((x) => !hiIds.includes(x)));
     const notice = inertNotice(shipped.obs, wideObs, maxPool);
-    if (asJson) { console.log(JSON.stringify({ project, stamp, shipped, wideObs, loBound, hiBound, notice, gained, displaced }, null, 2)); return; }
+    if (asJson) {
+      console.log(
+        JSON.stringify(
+          { project, stamp, shipped, wideObs, loBound, hiBound, notice, gained, displaced },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     console.log(`\n─── Why rows moved: ${project}, obs ${loBound} vs ${hiBound}, budget ${budget} ───`);
     console.log(`  measured ${stamp}   (shipped is ${shipped.obs}; twin is ${wideObs})`);
     // This is the only mode whose output IS a row list, so an empty one reads hardest as
@@ -518,11 +653,17 @@ async function main() {
     if (notice) console.log(`\n  !! ${notice}`);
     for (const [label, set] of [
       [`ONLY IN THE ${hiBound}-ARM — unreachable under LIMIT ${loBound}`, gained],
-      [`ONLY IN THE ${loBound}-ARM — kept at ${loBound}, dropped once the pool widened to ${hiBound}`, displaced]]) {
+      [
+        `ONLY IN THE ${loBound}-ARM — kept at ${loBound}, dropped once the pool widened to ${hiBound}`,
+        displaced,
+      ],
+    ]) {
       console.log(`\n  ${label} — ${set.length}:`);
       for (const r of set) {
-        console.log(`    #${r.id} imp=${r.importance} type=${String(r.type).padEnd(9)} lesson=${r.lesson ? 'y' : 'n'}`
-          + `  at${loBound}=${String(r[`at${loBound}`]).padEnd(12)} at${hiBound}=${r[`at${hiBound}`]}`);
+        console.log(
+          `    #${r.id} imp=${r.importance} type=${String(r.type).padEnd(9)} lesson=${r.lesson ? 'y' : 'n'}` +
+            `  at${loBound}=${String(r[`at${loBound}`]).padEnd(12)} at${hiBound}=${r[`at${hiBound}`]}`,
+        );
         console.log(`        "${String(r.title || '').slice(0, 86)}"`);
       }
     }
@@ -550,12 +691,17 @@ async function main() {
     // narrower side; a first version reported cost(twin)/cost(shipped) and therefore printed
     // 0.42x for a widening that costs ~2.4x — and `hook-context.mjs` says "re-derive with
     // --cost", so a reader following the instruction would have concluded it got faster.
-    const loBound = Math.min(shipped.obs, wideObs), hiBound = Math.max(shipped.obs, wideObs);
+    const loBound = Math.min(shipped.obs, wideObs),
+      hiBound = Math.max(shipped.obs, wideObs);
     const loFn = shipped.obs <= wideObs ? narrow : wide;
     const hiFn = shipped.obs <= wideObs ? wide : narrow;
-    time(loFn); time(hiFn); // warm
+    time(loFn);
+    time(hiFn); // warm
     const samples = [];
-    for (const order of [['narrow', 'wide'], ['wide', 'narrow']]) {
+    for (const order of [
+      ['narrow', 'wide'],
+      ['wide', 'narrow'],
+    ]) {
       const s = {};
       for (const k of order) s[k] = time(k === 'narrow' ? loFn : hiFn);
       samples.push(s);
@@ -564,14 +710,26 @@ async function main() {
     // v3.85.1's sibling defect was a --cost path that returned above its self-checks.
     runSelfChecks(db, projects, wide, budget);
     const sum = summarizeCost(samples);
-    if (asJson) { console.log(JSON.stringify({ project, iters, loBound, hiBound, ...sum, notice }, null, 2)); return; }
+    if (asJson) {
+      console.log(JSON.stringify({ project, iters, loBound, hiBound, ...sum, notice }, null, 2));
+      return;
+    }
     console.log(`\n─── Key Context selection cost: ${project}, obs ${loBound} vs ${hiBound} ───`);
     console.log(`  ${iters} iterations/arm, ${sum.passes} passes with the arm order reversed, one process`);
-    if (notice) console.log(`\n  ${notice.replace('Any "0 newly reachable" below is arithmetic, not a measurement.', 'The two arms are the same code path, so expect a ratio near 1.00x.')}`);
-    console.log(`\n  LIMIT ${String(loBound).padEnd(4)} ${sum.narrow.map((x) => x.toFixed(3)).join(' , ')} ms/call`);
-    console.log(`  LIMIT ${String(hiBound).padEnd(4)} ${sum.wide.map((x) => x.toFixed(3)).join(' , ')} ms/call`);
-    console.log(`  RATIO RANGE (cost of widening ${loBound} -> ${hiBound}): ${sum.ratioMin.toFixed(2)}x - ${sum.ratioMax.toFixed(2)}x`);
-    console.log('\n  QUOTE THE RATIO RANGE, NEVER THE ABSOLUTE ms. The sibling ruler\'s six runs on one');
+    if (notice)
+      console.log(
+        `\n  ${notice.replace('Any "0 newly reachable" below is arithmetic, not a measurement.', 'The two arms are the same code path, so expect a ratio near 1.00x.')}`,
+      );
+    console.log(
+      `\n  LIMIT ${String(loBound).padEnd(4)} ${sum.narrow.map((x) => x.toFixed(3)).join(' , ')} ms/call`,
+    );
+    console.log(
+      `  LIMIT ${String(hiBound).padEnd(4)} ${sum.wide.map((x) => x.toFixed(3)).join(' , ')} ms/call`,
+    );
+    console.log(
+      `  RATIO RANGE (cost of widening ${loBound} -> ${hiBound}): ${sum.ratioMin.toFixed(2)}x - ${sum.ratioMax.toFixed(2)}x`,
+    );
+    console.log("\n  QUOTE THE RATIO RANGE, NEVER THE ABSOLUTE ms. The sibling ruler's six runs on one");
     console.log('  machine spread 3.04 -> 1.80 ms/prompt while its ratio held; a reviewer re-measuring');
     console.log('  this face read both arms ~2.6x higher than its author did, with the ratio intact.');
     return;
@@ -585,8 +743,13 @@ async function main() {
   // calls are two populations and a contradiction check across them proves nothing.
   assertInertConsistent(inert, r.changedObs);
 
-  if (asJson) { console.log(JSON.stringify({ ...r, shipped, wideObs, wideSess, budget }, null, 2)); return; }
-  console.log(`\n─── Key Context pool replay: shipped ${shipped.obs}/${shipped.sess} vs ${wideObs}/${wideSess} (budget ${budget}) ───`);
+  if (asJson) {
+    console.log(JSON.stringify({ ...r, shipped, wideObs, wideSess, budget }, null, 2));
+    return;
+  }
+  console.log(
+    `\n─── Key Context pool replay: shipped ${shipped.obs}/${shipped.sess} vs ${wideObs}/${wideSess} (budget ${budget}) ───`,
+  );
   console.log(`  projects replayed:       ${r.n}${r.threw ? `  (${r.threw} threw)` : ''}`);
   console.log(`  INJECTED BLOCK differs:  ${r.changedBlock}/${r.n}   (observations or summaries)`);
   console.log(`  observation set differs: ${r.changedObs}/${r.n}`);
@@ -595,10 +758,12 @@ async function main() {
   console.log(`  sess newly reachable:    ${r.sessGained}    displaced: ${r.sessDisplaced}`);
   console.log('\n  project                     obs n->n   +new  -lost   tokens n->n   sess n->n');
   for (const x of r.rows) {
-    console.log(`  ${x.project.padEnd(26)}${String(x.narrowN).padStart(4)}->${String(x.wideN).padEnd(4)}`
-      + `${String(x.gained).padStart(6)}${String(x.displaced).padStart(7)}`
-      + `${String(x.narrowTokens).padStart(9)}->${String(x.wideTokens).padEnd(6)}`
-      + `${String(x.sessNarrow).padStart(6)}->${x.sessWide}`);
+    console.log(
+      `  ${x.project.padEnd(26)}${String(x.narrowN).padStart(4)}->${String(x.wideN).padEnd(4)}` +
+        `${String(x.gained).padStart(6)}${String(x.displaced).padStart(7)}` +
+        `${String(x.narrowTokens).padStart(9)}->${String(x.wideTokens).padEnd(6)}` +
+        `${String(x.sessNarrow).padStart(6)}->${x.sessWide}`,
+    );
   }
   console.log(`\n  SNAPSHOT — measured ${new Date().toISOString()}. selectWithTokenBudget reads`);
   console.log('  Date.now() for its adaptive windows, so these pools SLIDE and decay with the');
@@ -614,5 +779,8 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => { console.error(err.message); process.exit(1); });
+  main().catch((err) => {
+    console.error(err.message);
+    process.exit(1);
+  });
 }

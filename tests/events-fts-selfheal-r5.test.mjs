@@ -9,15 +9,37 @@ import { createTestDb, insertSession } from './test-helpers.mjs';
 import { ensureEventsFTS } from '../schema.mjs';
 
 let db;
-afterEach(() => { try { db?.close(); } catch { /* already closed */ } });
+afterEach(() => {
+  try {
+    db?.close();
+  } catch {
+    /* already closed */
+  }
+});
 
 const addEvent = (d, { title, body = '', project = 'p', event_type = 'bugfix' }) =>
-  d.prepare(`INSERT INTO events (project, event_type, title, body, importance, created_at_epoch) VALUES (?, ?, ?, ?, 2, ?)`)
+  d
+    .prepare(
+      `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch) VALUES (?, ?, ?, ?, 2, ?)`,
+    )
     .run(project, event_type, title, body, Date.now());
 
-const ftsCols = (d) => d.prepare(`PRAGMA table_info(events_fts)`).all().map((c) => c.name);
-const triggerNames = (d) => d.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'events%'`).all().map((r) => r.name);
-const ftsHits = (d, q) => d.prepare(`SELECT e.title FROM events_fts JOIN events e ON e.id = events_fts.rowid WHERE events_fts MATCH ?`).all(q);
+const ftsCols = (d) =>
+  d
+    .prepare(`PRAGMA table_info(events_fts)`)
+    .all()
+    .map((c) => c.name);
+const triggerNames = (d) =>
+  d
+    .prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'events%'`)
+    .all()
+    .map((r) => r.name);
+const ftsHits = (d, q) =>
+  d
+    .prepare(
+      `SELECT e.title FROM events_fts JOIN events e ON e.id = events_fts.rowid WHERE events_fts MATCH ?`,
+    )
+    .all(q);
 
 describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
   it('is a no-op on a healthy DB — 4 columns, canonical triggers only, no wrong-named events_* set', () => {
@@ -25,8 +47,8 @@ describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
     insertSession(db, { id: 's', project: 'p' });
     addEvent(db, { title: 'zebracrossing healthy' });
 
-    ensureEventsFTS(db);          // second pass over an already-correct schema
-    ensureEventsFTS(db);          // idempotent
+    ensureEventsFTS(db); // second pass over an already-correct schema
+    ensureEventsFTS(db); // idempotent
 
     expect(ftsCols(db)).toEqual(['title', 'body', 'event_type', 'project']);
     const trigs = triggerNames(db).sort();
@@ -48,7 +70,7 @@ describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
     db.exec(`DROP TRIGGER IF EXISTS events_fts_au`);
     db.exec(`DROP TABLE IF EXISTS events_fts`);
     db.exec(`CREATE VIRTUAL TABLE events_fts USING fts5(title, body, content='events', content_rowid='id')`);
-    expect(ftsCols(db)).toEqual(['title', 'body']);   // drifted narrow
+    expect(ftsCols(db)).toEqual(['title', 'body']); // drifted narrow
 
     ensureEventsFTS(db);
 

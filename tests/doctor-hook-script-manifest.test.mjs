@@ -92,8 +92,11 @@ function doctorOn({ scriptsDir = 'copy', omitScripts = [], pluginOnly = false } 
   try {
     out = execFileSync(process.execPath, [INSTALLER, 'doctor', '--json'], {
       env: {
-        ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'),
-        CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1',
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_QUIET_HOOKS: '1',
       },
       encoding: 'utf8',
     });
@@ -111,7 +114,10 @@ const HOOK_LABEL = /^Hook scripts:/;
 function hookLines(report) {
   return (report.checks || []).filter((c) => HOOK_LABEL.test(c.message || ''));
 }
-const msg = (report) => hookLines(report).map((c) => c.message).join(' ');
+const msg = (report) =>
+  hookLines(report)
+    .map((c) => c.message)
+    .join(' ');
 
 // Eight doctor subprocesses total, computed once — a 2-core runner cannot afford one spawn
 // per assertion (lesson: the execFileSync suites that timed out at default budget).
@@ -130,30 +136,42 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
   }, 420_000);
 
   afterAll(() => {
-    for (const h of homes.splice(0)) { try { rmSync(h, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('reports a clean hook-script set when every manifest entry is present', () => {
-    expect(hookLines(complete).length, `no hook-script line at all:\n${JSON.stringify(complete.checks, null, 1)}`)
-      .toBeGreaterThan(0);
+    expect(
+      hookLines(complete).length,
+      `no hook-script line at all:\n${JSON.stringify(complete.checks, null, 1)}`,
+    ).toBeGreaterThan(0);
     expect(hookLines(complete).every((c) => c.level === 'ok')).toBe(true);
   });
 
   it('a missing scripts/ directory is an issue, not silence', () => {
     // The documented failure: a tarball published without scripts/. Every hook command
     // names an absolute path under it, so nothing fires — and doctor used to say nothing.
-    expect(hookLines(noDir).length, `absent scripts/ said nothing:\n${JSON.stringify(noDir.checks, null, 1)}`)
-      .toBeGreaterThan(0);
+    expect(
+      hookLines(noDir).length,
+      `absent scripts/ said nothing:\n${JSON.stringify(noDir.checks, null, 1)}`,
+    ).toBeGreaterThan(0);
     expect(hookLines(noDir).some((c) => c.level === 'warn' || c.level === 'fail')).toBe(true);
-    expect(noDir.issues,
-      `an absent scripts/ dir added no issue (${noDir.issues} vs complete ${complete.issues})`)
-      .toBeGreaterThan(complete.issues);
+    expect(
+      noDir.issues,
+      `an absent scripts/ dir added no issue (${noDir.issues} vs complete ${complete.issues})`,
+    ).toBeGreaterThan(complete.issues);
   });
 
   it('a missing ENTRY hook script is an issue and is named', () => {
-    expect(noEntry.issues,
-      `an absent hook entry script added no issue (${noEntry.issues} vs ${complete.issues})`)
-      .toBeGreaterThan(complete.issues);
+    expect(
+      noEntry.issues,
+      `an absent hook entry script added no issue (${noEntry.issues} vs ${complete.issues})`,
+    ).toBeGreaterThan(complete.issues);
     expect(msg(noEntry)).toContain(ENTRY_SCRIPT);
   });
 
@@ -162,9 +180,10 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     // `./prompt-search-utils.mjs` against the install dir — ERR_MODULE_NOT_FOUND on every
     // user prompt. Copying the benign "reachable via realpath" branch from the managed-files
     // check to here would make this go green-with-no-issue; that must stay red.
-    expect(noHelper.issues,
-      `an absent hook-script helper added no issue (${noHelper.issues} vs ${complete.issues})`)
-      .toBeGreaterThan(complete.issues);
+    expect(
+      noHelper.issues,
+      `an absent hook-script helper added no issue (${noHelper.issues} vs ${complete.issues})`,
+    ).toBeGreaterThan(complete.issues);
     expect(msg(noHelper)).toContain(HELPER_SCRIPT);
   });
 
@@ -187,10 +206,11 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     expect(commands.length, 'no command strings found — the manifest shape changed').toBeGreaterThan(5);
 
     const invoked = HOOK_SCRIPT_FILES.filter((n) => commands.some((c) => c.includes(`scripts/${n}`)));
-    expect([...HOOK_SCRIPT_ENTRY_POINTS].sort(),
-      'HOOK_SCRIPT_ENTRY_POINTS drifted from the hook commands in hooks/hooks.json — '
-      + 'classify the new script (entry = named by a command, helper = only imported)')
-      .toEqual(invoked.sort());
+    expect(
+      [...HOOK_SCRIPT_ENTRY_POINTS].sort(),
+      'HOOK_SCRIPT_ENTRY_POINTS drifted from the hook commands in hooks/hooks.json — ' +
+        'classify the new script (entry = named by a command, helper = only imported)',
+    ).toEqual(invoked.sort());
     // And the set must never name a file the manifest does not ship.
     for (const name of HOOK_SCRIPT_ENTRY_POINTS) expect(HOOK_SCRIPT_FILES).toContain(name);
   });
@@ -202,10 +222,12 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     // reader the wrong consequence. Omitting one of EACH makes the pairing observable.
     const m = msg(noBoth);
     expect(noBoth.issues).toBeGreaterThan(complete.issues);
-    expect(m, `entry script not reported as a dead command:\n${m}`)
-      .toMatch(new RegExp(`hook entry \\(${ENTRY_SCRIPT.replace('.', '\\.')}\\)`));
-    expect(m, `imported helper not reported as a resolution failure:\n${m}`)
-      .toMatch(new RegExp(`imported helper \\(${HELPER_SCRIPT.replace('.', '\\.')}\\)`));
+    expect(m, `entry script not reported as a dead command:\n${m}`).toMatch(
+      new RegExp(`hook entry \\(${ENTRY_SCRIPT.replace('.', '\\.')}\\)`),
+    );
+    expect(m, `imported helper not reported as a resolution failure:\n${m}`).toMatch(
+      new RegExp(`imported helper \\(${HELPER_SCRIPT.replace('.', '\\.')}\\)`),
+    );
   });
 
   it('names the install shape it inspected, so a wrong shape reading is visible', () => {
@@ -214,8 +236,10 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     // a dangling link as a plain absent directory.
     expect(msg(devLinked)).toMatch(/symlinked to the repo/);
     expect(msg(complete)).toMatch(/copy install/);
-    expect(msg(dangling), `a dangling scripts/ symlink was reported as merely absent:\n${msg(dangling)}`)
-      .toMatch(/dangling symlink/);
+    expect(
+      msg(dangling),
+      `a dangling scripts/ symlink was reported as merely absent:\n${msg(dangling)}`,
+    ).toMatch(/dangling symlink/);
     expect(dangling.issues, 'a dangling scripts/ symlink raised no issue').toBeGreaterThan(complete.issues);
   });
 
@@ -225,8 +249,10 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     // correct one — the same false alarm the managed-files check already had to gate.
     // Nothing covered this branch: forcing skipScripts=false kept every test green.
     expect(hookLines(pluginOnly).length, 'no hook-script line on a plugin-only install').toBeGreaterThan(0);
-    expect(hookLines(pluginOnly).every((c) => c.level === 'ok'),
-      `plugin-only install was graded against the managed layout:\n${msg(pluginOnly)}`).toBe(true);
+    expect(
+      hookLines(pluginOnly).every((c) => c.level === 'ok'),
+      `plugin-only install was graded against the managed layout:\n${msg(pluginOnly)}`,
+    ).toBe(true);
     expect(msg(pluginOnly)).toMatch(/n\/a|plugin-only/);
   });
 
@@ -235,8 +261,9 @@ describe('doctor — HOOK_SCRIPT_FILES manifest coverage', () => {
     // is on the DIRECTORY, so every entry lstats as a plain file. Judged by issue count so
     // no wording is load-bearing.
     expect(hookLines(devLinked).length, 'no hook-script line at all').toBeGreaterThan(0);
-    expect(devLinked.issues,
-      `a symlinked dev scripts/ dir was counted as drift (${devLinked.issues} vs copy-install ${complete.issues})`)
-      .toBe(complete.issues);
+    expect(
+      devLinked.issues,
+      `a symlinked dev scripts/ dir was counted as drift (${devLinked.issues} vs copy-install ${complete.issues})`,
+    ).toBe(complete.issues);
   });
 });

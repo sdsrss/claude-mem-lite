@@ -4,8 +4,12 @@ import { runBenchmark } from '../lib/doctor-benchmark.mjs';
 
 describe('doctor --benchmark', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   test('reports L2 MCP instructions byte count', () => {
     const result = runBenchmark(db, { skipHookLatency: true });
@@ -31,12 +35,7 @@ describe('doctor --benchmark', () => {
         project: 'test',
       });
     }
-    const prompts = [
-      'what did we decide about auth',
-      'a',
-      '继续',
-      'refactor the logger',
-    ];
+    const prompts = ['what did we decide about auth', 'a', '继续', 'refactor the logger'];
     const result = runBenchmark(db, { prompts, project: 'test', skipHookLatency: true });
     expect(result.prompt_count).toBe(4);
     expect(result.injection_rate).toBeGreaterThanOrEqual(0);

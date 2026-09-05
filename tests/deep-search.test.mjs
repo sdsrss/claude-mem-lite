@@ -97,7 +97,9 @@ describe('rewriteQuery — robust parse + retry + fallback (#8731 / #8605)', () 
 
   it('falls back to [original] on null (parse failure) and on throw', async () => {
     expect(await rewriteQuery('q', { llm: stubLLM(null) })).toEqual(['q']);
-    const thrower = async () => { throw new Error('network'); };
+    const thrower = async () => {
+      throw new Error('network');
+    };
     expect(await rewriteQuery('q', { llm: thrower })).toEqual(['q']);
   });
 
@@ -112,7 +114,7 @@ describe('rrfFuseN', () => {
   it('preserves order for a single list (baseline-equivalence floor)', () => {
     const list = [{ id: 5 }, { id: 9 }, { id: 1 }];
     const fused = rrfFuseN([list]);
-    expect(fused.map(r => r.id)).toEqual([5, 9, 1]);
+    expect(fused.map((r) => r.id)).toEqual([5, 9, 1]);
   });
 
   it('rewards items ranked highly across multiple lists', () => {
@@ -120,7 +122,12 @@ describe('rrfFuseN', () => {
     const b = [{ id: 3 }, { id: 1 }, { id: 9 }];
     const fused = rrfFuseN([a, b]);
     // id:1 (ranks 1,2) and id:3 (ranks 3,1) outrank singletons id:2, id:9.
-    expect(fused.slice(0, 2).map(r => r.id).sort()).toEqual([1, 3]);
+    expect(
+      fused
+        .slice(0, 2)
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([1, 3]);
   });
 
   it('keeps the row from the variant that ranked an id highest (F10 — best snippet)', () => {
@@ -128,7 +135,7 @@ describe('rrfFuseN', () => {
     const b = [{ id: 1, snippet: 'from-B-rank0' }, { id: 9 }]; // id:1 at index 0 (best)
     const fused = rrfFuseN([a, b]);
     // First-seen (old behavior) would keep 'from-A-rank1'; best-rank keeps rank-0 row.
-    expect(fused.find(r => r.id === 1).snippet).toBe('from-B-rank0');
+    expect(fused.find((r) => r.id === 1).snippet).toBe('from-B-rank0');
   });
 });
 
@@ -136,9 +143,18 @@ describe('rrfFuseN', () => {
 
 function makeSeed() {
   const mk = (id, title, narrative) => ({
-    id, session_id: 's1', project: 'proj-a', text: `${title} ${narrative}`,
-    type: 'bugfix', title, narrative, facts: '', concepts: '', files_modified: '[]',
-    importance: 2, epoch_offset_days: -1,
+    id,
+    session_id: 's1',
+    project: 'proj-a',
+    text: `${title} ${narrative}`,
+    type: 'bugfix',
+    title,
+    narrative,
+    facts: '',
+    concepts: '',
+    files_modified: '[]',
+    importance: 2,
+    epoch_offset_days: -1,
   });
   // 3 Kubernetes obs (relevant) deliberately never use the words "container" or
   // "orchestration"; 2 database distractors. So the literal query misses the
@@ -147,8 +163,16 @@ function makeSeed() {
   // matching weak query tokens (zqxjv9471kpw / container / orchestration).
   return {
     observations: [
-      mk(1, 'kubernetes pod scheduling', 'kubernetes scheduler assigns pods across worker nodes in the cluster'),
-      mk(2, 'kubernetes cluster autoscaler', 'cluster autoscaler grows kubernetes node pools under pod pressure'),
+      mk(
+        1,
+        'kubernetes pod scheduling',
+        'kubernetes scheduler assigns pods across worker nodes in the cluster',
+      ),
+      mk(
+        2,
+        'kubernetes cluster autoscaler',
+        'cluster autoscaler grows kubernetes node pools under pod pressure',
+      ),
       mk(3, 'kubernetes ingress routing', 'kubernetes ingress routes traffic to pods via service endpoints'),
       mk(4, 'database migration script', 'update database schema add user table columns and index'),
       mk(5, 'database query optimization', 'optimize slow database query with index on large table scan'),
@@ -173,9 +197,12 @@ function baselineCtx(query, project) {
   return {
     ftsQuery: sanitizeFtsQuery(query),
     args: { project: undefined, obs_type: undefined, include_noise: false },
-    epochFrom: null, epochTo: null,
-    perSourceLimit: 20, perSourceOffset: 0,
-    currentProject: project ?? null, limit: 10,
+    epochFrom: null,
+    epochTo: null,
+    perSourceLimit: 20,
+    perSourceOffset: 0,
+    currentProject: project ?? null,
+    limit: 10,
   };
 }
 
@@ -188,16 +215,20 @@ describe('deepSearch — fusion over real hybrid search', () => {
 
     const llm = stubLLM({ variants: ['kubernetes pods', 'kubernetes cluster nodes'] });
     const { results, variants } = await deepSearch(
-      db, { query: 'container orchestration platform', project: 'proj-a', limit: 10 }, { llm },
+      db,
+      { query: 'container orchestration platform', project: 'proj-a', limit: 10 },
+      { llm },
     );
-    const got = results.map(r => r.id);
-    const hits = K8S_IDS.filter(id => got.includes(id)).length;
+    const got = results.map((r) => r.id);
+    const hits = K8S_IDS.filter((id) => got.includes(id)).length;
     expect(variants[0]).toBe('container orchestration platform');
     expect(hits).toBeGreaterThanOrEqual(2); // rewrite bridged the vocab gap
 
     // Baseline (the same single query, no rewrite) should recover fewer.
-    const baseHits = K8S_IDS.filter(
-      id => searchObservationsHybrid(db, baselineCtx('container orchestration platform', 'proj-a')).map(r => r.id).includes(id),
+    const baseHits = K8S_IDS.filter((id) =>
+      searchObservationsHybrid(db, baselineCtx('container orchestration platform', 'proj-a'))
+        .map((r) => r.id)
+        .includes(id),
     ).length;
     expect(hits).toBeGreaterThan(baseHits);
     db.close();
@@ -211,20 +242,24 @@ describe('deepSearch — fusion over real hybrid search', () => {
 
     // A query that DOES hit, so baseline is non-trivial.
     const q = 'kubernetes pods cluster';
-    const baseIds = searchObservationsHybrid(db, baselineCtx(q, 'proj-a')).slice(0, 10).map(r => r.id);
+    const baseIds = searchObservationsHybrid(db, baselineCtx(q, 'proj-a'))
+      .slice(0, 10)
+      .map((r) => r.id);
 
     // Rewrite returns nothing usable → variants collapse to [original].
     const llm = stubLLM({ variants: [] });
     const { results, variants } = await deepSearch(db, { query: q, project: 'proj-a', limit: 10 }, { llm });
     expect(variants).toEqual([q]);
-    expect(results.map(r => r.id)).toEqual(baseIds); // identical order, identical set
+    expect(results.map((r) => r.id)).toEqual(baseIds); // identical order, identical set
     db.close();
   });
 });
 
 describe('deepSearch — error handling (F5: never-worse in the error dimension)', () => {
   it('propagates an engine error on the ORIGINAL query (does not swallow to empty)', async () => {
-    const throwing = () => { throw new Error('db corrupt'); };
+    const throwing = () => {
+      throw new Error('db corrupt');
+    };
     await expect(
       deepSearch(null, { query: 'q' }, { llm: stubLLM({ variants: [] }), searchFn: throwing }),
     ).rejects.toThrow('db corrupt');
@@ -232,11 +267,17 @@ describe('deepSearch — error handling (F5: never-worse in the error dimension)
 
   it('swallows an error on a REWRITE variant but keeps the original-query results', async () => {
     let call = 0;
-    const searchFn = () => { call++; if (call === 1) return [{ id: 1 }]; throw new Error('variant fail'); };
+    const searchFn = () => {
+      call++;
+      if (call === 1) return [{ id: 1 }];
+      throw new Error('variant fail');
+    };
     const { results } = await deepSearch(
-      null, { query: 'q' }, { llm: stubLLM({ variants: ['rewrite'] }), searchFn },
+      null,
+      { query: 'q' },
+      { llm: stubLLM({ variants: ['rewrite'] }), searchFn },
     );
-    expect(results.map(r => r.id)).toEqual([1]); // original survived; bad rewrite ignored
+    expect(results.map((r) => r.id)).toEqual([1]); // original survived; bad rewrite ignored
   });
 });
 
@@ -281,22 +322,30 @@ describe('autoDeepLlmReady — LLM availability gate for AUTO escalation', () =>
 });
 
 describe('D#40 auto-path safety — throttle + rewrite cache + no-retry', () => {
-  beforeEach(() => { _resetAutoDeepState(); });
+  beforeEach(() => {
+    _resetAutoDeepState();
+  });
 
   it('makeThrottled fires the wrapped llm at most once per interval', async () => {
     let calls = 0;
-    const stub = async () => { calls++; return { variants: ['a', 'b'] }; };
+    const stub = async () => {
+      calls++;
+      return { variants: ['a', 'b'] };
+    };
     const throttled = makeThrottled(stub, { intervalMs: 10000 });
     const r1 = await throttled({ user: 'q' });
     const r2 = await throttled({ user: 'q' });
-    expect(calls).toBe(1);                 // second call throttled
+    expect(calls).toBe(1); // second call throttled
     expect(r1).toEqual({ variants: ['a', 'b'] });
-    expect(r2).toBeNull();                 // throttled → null → degrades to baseline
+    expect(r2).toBeNull(); // throttled → null → degrades to baseline
   });
 
   it('makeThrottled fires again after _resetAutoDeepState clears the clock', async () => {
     let n = 0;
-    const stub = async () => { n++; return { variants: ['a', 'b'] }; };
+    const stub = async () => {
+      n++;
+      return { variants: ['a', 'b'] };
+    };
     const throttled = makeThrottled(stub, { intervalMs: 10000 });
     await throttled({ user: 'q' });
     _resetAutoDeepState();
@@ -306,35 +355,47 @@ describe('D#40 auto-path safety — throttle + rewrite cache + no-retry', () => 
 
   it('rewriteQuery caches a successful rewrite when cache=true (no repeat llm call)', async () => {
     let n = 0;
-    const llm = async () => { n++; return { variants: ['kw form', 'concept'] }; };
+    const llm = async () => {
+      n++;
+      return { variants: ['kw form', 'concept'] };
+    };
     const a = await rewriteQuery('same q', { llm, cache: true });
     const b = await rewriteQuery('same q', { llm, cache: true });
-    expect(n).toBe(1);                     // second served from cache
+    expect(n).toBe(1); // second served from cache
     expect(b).toEqual(a);
   });
 
   it('rewriteQuery does not consult the cache when cache=false (default)', async () => {
     let n = 0;
-    const llm = async () => { n++; return { variants: ['kw form', 'concept'] }; };
+    const llm = async () => {
+      n++;
+      return { variants: ['kw form', 'concept'] };
+    };
     await rewriteQuery('q2', { llm });
     await rewriteQuery('q2', { llm });
-    expect(n).toBe(2);                     // no cache → called twice
+    expect(n).toBe(2); // no cache → called twice
   });
 
   it('rewriteQuery does not cache a failed rewrite (allows retry on a later call)', async () => {
     let n = 0;
-    const llm = async () => { n++; return { variants: [] }; }; // never usable
+    const llm = async () => {
+      n++;
+      return { variants: [] };
+    }; // never usable
     // retries:0 → one attempt per call, so a cached failure would show as n=1.
     const a = await rewriteQuery('q3', { llm, cache: true, retries: 0 });
     const b = await rewriteQuery('q3', { llm, cache: true, retries: 0 });
     expect(a).toEqual(['q3']);
     expect(b).toEqual(['q3']);
-    expect(n).toBe(2);                     // failure not cached → second call re-attempts
+    expect(n).toBe(2); // failure not cached → second call re-attempts
   });
 
   it('rewriteQuery retries=0 makes exactly one llm attempt (fail-fast)', async () => {
     let n = 0;
-    const llm = async () => { n++; return { variants: [] }; };
+    const llm = async () => {
+      n++;
+      return { variants: [] };
+    };
     const r = await rewriteQuery('q4', { llm, retries: 0 });
     expect(n).toBe(1);
     expect(r).toEqual(['q4']);
@@ -405,7 +466,8 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
   }
 
   it('weak count on a NEAR-EMPTY corpus does NOT escalate when db is passed', () => {
-    const db = createTestDb(); _resetVocabCache();
+    const db = createTestDb();
+    _resetVocabCache();
     seedCorpus(db, 2); // below AUTO_DEEP_MIN_CORPUS (10)
     // 0 results = weak by count, but corpus too small → suppressed.
     expect(shouldEscalateToDeep([], {}, { db })).toBe(false);
@@ -413,14 +475,16 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
   });
 
   it('weak count on a LARGE-ENOUGH corpus still escalates when db is passed', () => {
-    const db = createTestDb(); _resetVocabCache();
+    const db = createTestDb();
+    _resetVocabCache();
     seedCorpus(db, 12); // >= AUTO_DEEP_MIN_CORPUS
     expect(shouldEscalateToDeep([], {}, { db })).toBe(true);
     db.close();
   });
 
   it('strong count never escalates regardless of corpus (count gate wins first)', () => {
-    const db = createTestDb(); _resetVocabCache();
+    const db = createTestDb();
+    _resetVocabCache();
     seedCorpus(db, 50);
     const rows = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
     expect(shouldEscalateToDeep(rows, {}, { db })).toBe(false);
@@ -434,10 +498,11 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
   });
 
   it('project scopes the folded-in corpus count', () => {
-    const db = createTestDb(); _resetVocabCache();
+    const db = createTestDb();
+    _resetVocabCache();
     seedCorpus(db, 12, 'proj-x');
     seedCorpus(db, 2, 'proj-y');
-    expect(shouldEscalateToDeep([], {}, { db, project: 'proj-x' })).toBe(true);  // 12 >= 10
+    expect(shouldEscalateToDeep([], {}, { db, project: 'proj-x' })).toBe(true); // 12 >= 10
     expect(shouldEscalateToDeep([], {}, { db, project: 'proj-y' })).toBe(false); // 2 < 10
     db.close();
   });
@@ -446,7 +511,8 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
     // server.mjs / mem-cli.mjs do `shouldEscalateToDeep(rows, ctx) && hasEscalatableCorpus(db, project)`.
     // Passing db into shouldEscalateToDeep too must give the SAME verdict — double-gating
     // with the same predicate is never a regression.
-    const db = createTestDb(); _resetVocabCache();
+    const db = createTestDb();
+    _resetVocabCache();
     seedCorpus(db, 2);
     const external = shouldEscalateToDeep([], {}) && hasEscalatableCorpus(db, null);
     const folded = shouldEscalateToDeep([], {}, { db });
@@ -537,7 +603,8 @@ describe('mem_search auto-escalation (MCP, default-on)', () => {
       expect(res.escalated).toBe(false);
       expect(llm.calls()).toBe(0);
     } finally {
-      if (prev === undefined) delete process.env.CLAUDE_MEM_AUTO_DEEP; else process.env.CLAUDE_MEM_AUTO_DEEP = prev;
+      if (prev === undefined) delete process.env.CLAUDE_MEM_AUTO_DEEP;
+      else process.env.CLAUDE_MEM_AUTO_DEEP = prev;
     }
     db.close();
   });
@@ -580,18 +647,38 @@ describe('mem_search auto-escalation (MCP, default-on)', () => {
     // session_summaries has FK on memory_session_id → sdk_sessions
     insertSession(db, { id: 'sess-cross-1', project: 'proj-a' });
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run('sess-cross-1', 'proj-a', 'zqxjv9471kpw session one', 'done', new Date(now).toISOString(), now);
-    db.prepare(`
+    `,
+    ).run('sess-cross-1', 'proj-a', 'zqxjv9471kpw session one', 'done', new Date(now).toISOString(), now);
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run('sess-cross-1', 'proj-a', 'zqxjv9471kpw session two', 'done', new Date(now + 1).toISOString(), now + 1);
-    db.prepare(`
+    `,
+    ).run(
+      'sess-cross-1',
+      'proj-a',
+      'zqxjv9471kpw session two',
+      'done',
+      new Date(now + 1).toISOString(),
+      now + 1,
+    );
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run('sess-cross-1', 'proj-a', 'zqxjv9471kpw session three', 'done', new Date(now + 2).toISOString(), now + 2);
+    `,
+    ).run(
+      'sess-cross-1',
+      'proj-a',
+      'zqxjv9471kpw session three',
+      'done',
+      new Date(now + 2).toISOString(),
+      now + 2,
+    );
 
     // Rebuild FTS so the new rows are findable
     db.exec(`INSERT INTO session_summaries_fts(session_summaries_fts) VALUES('rebuild')`);
@@ -633,7 +720,10 @@ describe('CLI cmdSearch auto-escalation (D#39)', () => {
       // --json lets us parse total directly without text parsing.
       let stdout = '';
       const origWrite = process.stdout.write;
-      process.stdout.write = (str) => { stdout += str; return true; };
+      process.stdout.write = (str) => {
+        stdout += str;
+        return true;
+      };
       try {
         await cmdSearchForTest(db, ['zqxjv9471kpw', '--json'], { llm });
       } finally {
@@ -650,8 +740,8 @@ describe('CLI cmdSearch auto-escalation (D#39)', () => {
     expect(parsed.total).toBeGreaterThan(0);
     expect(parsed.results.length).toBeGreaterThan(0);
     // The kubernetes obs ids 1,2,3 should appear in the fused results.
-    const ids = parsed.results.map(r => r.id);
-    expect(ids.some(id => [1, 2, 3].includes(id))).toBe(true);
+    const ids = parsed.results.map((r) => r.id);
+    expect(ids.some((id) => [1, 2, 3].includes(id))).toBe(true);
     expect(llm.calls()).toBe(1);
     db.close();
   });
@@ -665,7 +755,10 @@ describe('CLI cmdSearch auto-escalation (D#39)', () => {
     try {
       let stdout = '';
       const origWrite = process.stdout.write;
-      process.stdout.write = (str) => { stdout += str; return true; };
+      process.stdout.write = (str) => {
+        stdout += str;
+        return true;
+      };
       try {
         await cmdSearchForTest(db, ['zqxjv9471kpw', '--json'], { llm });
       } finally {
@@ -690,7 +783,10 @@ describe('CLI cmdSearch auto-escalation (D#39)', () => {
     try {
       let stdout = '';
       const origWrite = process.stdout.write;
-      process.stdout.write = (str) => { stdout += str; return true; };
+      process.stdout.write = (str) => {
+        stdout += str;
+        return true;
+      };
       try {
         await cmdSearchForTest(db, ['zqxjv9471kpw', '--json', '--no-deep'], { llm });
       } finally {
@@ -729,13 +825,15 @@ describe('hasEscalatableCorpus — corpus-size guard', () => {
       s.add(key);
       sessionCreated.set(db, s);
     }
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO observations
         (memory_session_id, project, text, type, title, created_at, created_at_epoch,
          superseded_at, compressed_into)
       VALUES (?, ?, 'text', 'bugfix', 'title', '2026-01-01', 1000000,
               ?, ?)
-    `).run(`sess-guard-${project}`, project, superseded ? 1 : null, compressedInto);
+    `,
+    ).run(`sess-guard-${project}`, project, superseded ? 1 : null, compressedInto);
   }
 
   it('returns false when live obs count is below AUTO_DEEP_MIN_CORPUS', () => {
@@ -802,9 +900,18 @@ describe('corpus guard integration — escalation suppressed on near-empty store
     const db = createTestDb();
     _resetVocabCache();
     const tinyMk = (id, title, narrative) => ({
-      id, session_id: 's1', project: 'proj-tiny', text: `${title} ${narrative}`,
-      type: 'bugfix', title, narrative, facts: '', concepts: '', files_modified: '[]',
-      importance: 2, epoch_offset_days: -1,
+      id,
+      session_id: 's1',
+      project: 'proj-tiny',
+      text: `${title} ${narrative}`,
+      type: 'bugfix',
+      title,
+      narrative,
+      facts: '',
+      concepts: '',
+      files_modified: '[]',
+      importance: 2,
+      epoch_offset_days: -1,
     });
     seedDatabase(db, {
       observations: [
@@ -861,8 +968,15 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
     const db = seededDb();
     const rewrite = stubLLM({ variants: [] }); // collapse to single query → fused candidates
     let rerankCalls = 0;
-    const rerankLlm = async (p) => { rerankCalls++; return identityRerank(p); };
-    const res = await handleSearchForTest(db, { query: 'kubernetes', deep: true, rerank: true }, { llm: rewrite, rerankLlm });
+    const rerankLlm = async (p) => {
+      rerankCalls++;
+      return identityRerank(p);
+    };
+    const res = await handleSearchForTest(
+      db,
+      { query: 'kubernetes', deep: true, rerank: true },
+      { llm: rewrite, rerankLlm },
+    );
     expect(res.reranked).toBe(true);
     expect(rerankCalls).toBe(1);
     expect(res.results.length).toBeGreaterThan(1);
@@ -873,9 +987,16 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
     const db = seededDb();
     const rewrite = stubLLM({ variants: ['kubernetes pods', 'k8s cluster scheduling'] });
     let rerankCalls = 0;
-    const rerankLlm = async (p) => { rerankCalls++; return identityRerank(p); };
+    const rerankLlm = async (p) => {
+      rerankCalls++;
+      return identityRerank(p);
+    };
     // deep omitted → weak query auto-escalates; rerank must NOT fire on the auto path.
-    const res = await handleSearchForTest(db, { query: 'zqxjv9471kpw', rerank: true }, { llm: rewrite, rerankLlm });
+    const res = await handleSearchForTest(
+      db,
+      { query: 'zqxjv9471kpw', rerank: true },
+      { llm: rewrite, rerankLlm },
+    );
     expect(res.escalated).toBe(true);
     expect(res.reranked).toBe(false);
     expect(rerankCalls).toBe(0);
@@ -886,8 +1007,15 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
     const db = seededDb();
     const rewrite = stubLLM({ variants: [] });
     let rerankCalls = 0;
-    const rerankLlm = async (p) => { rerankCalls++; return identityRerank(p); };
-    const res = await handleSearchForTest(db, { query: 'kubernetes', deep: true }, { llm: rewrite, rerankLlm });
+    const rerankLlm = async (p) => {
+      rerankCalls++;
+      return identityRerank(p);
+    };
+    const res = await handleSearchForTest(
+      db,
+      { query: 'kubernetes', deep: true },
+      { llm: rewrite, rerankLlm },
+    );
     expect(res.reranked).toBe(false);
     expect(rerankCalls).toBe(0);
     db.close();
@@ -896,7 +1024,11 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
   it('surfaces the rerank in the MCP text blob when reranked', async () => {
     const db = seededDb();
     const rewrite = stubLLM({ variants: [] });
-    const res = await handleSearchForTest(db, { query: 'kubernetes', deep: true, rerank: true }, { llm: rewrite, rerankLlm: identityRerank });
+    const res = await handleSearchForTest(
+      db,
+      { query: 'kubernetes', deep: true, rerank: true },
+      { llm: rewrite, rerankLlm: identityRerank },
+    );
     expect(res.content[0].text).toContain('LLM-reranked');
     db.close();
   });

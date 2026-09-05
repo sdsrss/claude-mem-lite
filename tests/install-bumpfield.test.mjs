@@ -51,7 +51,9 @@ describe('bumpJsonField', () => {
   });
 
   afterEach(() => {
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {}
   });
 
   it('returns {changed:false} and does not rewrite when value unchanged', () => {
@@ -122,7 +124,9 @@ describe('install.mjs unknown-command handling', () => {
   it('names the unknown command and exits non-zero', async () => {
     const { execFileSync } = await import('child_process');
     const { resolve } = await import('path');
-    let stderr = '', stdout = '', exitCode = 0;
+    let stderr = '',
+      stdout = '',
+      exitCode = 0;
     // npm_command=exec / npm_lifecycle_event leak in via `npx vitest run` — install.mjs's
     // IS_NPX detection (`process.env.npm_command === 'exec'`) would then enter the auto-install
     // branch instead of the unknown-command branch. Scrub them so the test exercises the
@@ -133,7 +137,10 @@ describe('install.mjs unknown-command handling', () => {
     delete env.npm_lifecycle_script;
     try {
       execFileSync(process.execPath, [resolve('install.mjs'), 'frobnicate'], {
-        encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000, env,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5000,
+        env,
       });
     } catch (e) {
       stdout = e.stdout?.toString() || '';
@@ -169,7 +176,9 @@ describe('install.mjs cleanup --dry-run', () => {
     let exitCode = 0;
     try {
       stdout = execFileSync(process.execPath, [resolve('install.mjs'), 'cleanup', '--dry-run'], {
-        encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5000,
         env: { ...process.env, HOME: home },
       });
     } catch (e) {
@@ -184,6 +193,8 @@ describe('install.mjs cleanup --dry-run', () => {
     // The stale dir must still exist after a dry-run pass.
     expect(existsSync(stale)).toBe(true);
 
-    try { rmSync(home, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(home, { recursive: true, force: true });
+    } catch {}
   });
 });

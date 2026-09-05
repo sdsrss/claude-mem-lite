@@ -40,8 +40,10 @@ const NPM_ENOENT_OUT = [
   'npm ERR! errno -2',
   "npm ERR! enoent ENOENT: no such file or directory, open '/x/package.json'",
 ].join('\n');
-const PY_TRACEBACK_HEAD = 'Traceback (most recent call last):\n  File "train.py", line 42, in <module>\n    main()';
-const NPM_BUILD_OUT = "Error: Cannot find module './lib/observation-write.mjs'\n    at Module._resolveFilename";
+const PY_TRACEBACK_HEAD =
+  'Traceback (most recent call last):\n  File "train.py", line 42, in <module>\n    main()';
+const NPM_BUILD_OUT =
+  "Error: Cannot find module './lib/observation-write.mjs'\n    at Module._resolveFilename";
 
 // The line filter is the TRIGGER's own pattern list OR'd with the prose one, so
 // "isHardError fired but the extractor found nothing" is closed by construction rather
@@ -50,8 +52,10 @@ const NPM_BUILD_OUT = "Error: Cannot find module './lib/observation-write.mjs'\n
 // filter alone does not match.
 describe('planErrorRecall — the selection filter is a superset of the trigger', () => {
   const reaches = (cmd, out) => {
-    expect(detectBashSignificance({ command: cmd }, out).isHardError,
-      'precondition: this shape must reach the surface, else the case proves nothing').toBe(true);
+    expect(
+      detectBashSignificance({ command: cmd }, out).isHardError,
+      'precondition: this shape must reach the surface, else the case proves nothing',
+    ).toBe(true);
   };
 
   it('npm ENOENT queries the ERROR, not the command topic', () => {
@@ -71,7 +75,8 @@ describe('planErrorRecall — the selection filter is a superset of the trigger'
     // Both are panics; only the second happens to contain the substring "error"
     // (in "runtime error"). Before this filter, the first was silenced and the second
     // was not — the same trigger/selection divergence, relocated to panic wording.
-    const NIL_MAP = 'panic: assignment to entry in nil map\n\ngoroutine 1 [running]:\nmain.main()\n\t/app/main.go:12 +0x1d\nexit status 2';
+    const NIL_MAP =
+      'panic: assignment to entry in nil map\n\ngoroutine 1 [running]:\nmain.main()\n\t/app/main.go:12 +0x1d\nexit status 2';
     const RUNTIME = 'panic: runtime error: index out of range [3] with length 2\n\ngoroutine 1 [running]:';
     reaches('go run main.go', NIL_MAP);
     reaches('go test ./...', RUNTIME);
@@ -142,8 +147,10 @@ describe('planErrorRecall — the failure NAMER', () => {
     ].join('\n');
     const terms = planErrorRecall('python3 x.py', chained).terms;
     expect(terms).toContain('valueerror');
-    expect(terms, 'a second name must not jump the queue — it evicts a scanned term for a duplicate class name')
-      .not.toContain('modulenotfounderror');
+    expect(
+      terms,
+      'a second name must not jump the queue — it evicts a scanned term for a duplicate class name',
+    ).not.toContain('modulenotfounderror');
   });
 });
 
@@ -186,9 +193,16 @@ describe('planErrorRecall — term-selection internals that mutation showed were
     // Golden list. Membership-only assertions let the two arrays swap places while the
     // suite stays green, and with >6 candidates that silently changes WHICH terms the
     // 6-cap keeps — i.e. it changes the query without changing any test.
-    const out = 'FAIL tests/scope-label.test.mjs\nAssertionError: expected observation-write.mjs to be defined';
-    expect(planErrorRecall('npx vitest run tests/scope-label.test.mjs', out).terms)
-      .toEqual(['npx', 'vitest', 'run', 'assertionerror', 'fail', 'tests']);
+    const out =
+      'FAIL tests/scope-label.test.mjs\nAssertionError: expected observation-write.mjs to be defined';
+    expect(planErrorRecall('npx vitest run tests/scope-label.test.mjs', out).terms).toEqual([
+      'npx',
+      'vitest',
+      'run',
+      'assertionerror',
+      'fail',
+      'tests',
+    ]);
     // THE PRICE OF THE NAMER, recorded rather than smoothed over. This list used to end
     // `fail, tests, scope-label.test.mjs`; prepending the failure's name evicted the
     // tail, and the tail was the most discriminative token in it — a filename has far
@@ -206,7 +220,10 @@ describe('planErrorRecall — term-selection internals that mutation showed were
 
   it('dedups ACROSS command and error classes so a repeat cannot burn a cap slot', () => {
     // 'build' appears in both the command and the error line; it must occupy one slot.
-    const terms = planErrorRecall('npm run build', 'Error: build failed while bundling build.config.mjs').terms;
+    const terms = planErrorRecall(
+      'npm run build',
+      'Error: build failed while bundling build.config.mjs',
+    ).terms;
     expect(terms.filter((t) => t === 'build')).toHaveLength(1);
     expect(terms).toEqual(['npm', 'run', 'build', 'while', 'bundling']);
   });
@@ -225,7 +242,10 @@ describe('planErrorRecall — term selection deliberately unchanged', () => {
   });
 
   it('KEEPS command words — they carry domain anchoring, not just BM25 noise', () => {
-    const plan = planErrorRecall('npx vitest run tests/scope-label.test.mjs', 'FAIL tests/scope-label.test.mjs\nError: expected 2 to be 3');
+    const plan = planErrorRecall(
+      'npx vitest run tests/scope-label.test.mjs',
+      'FAIL tests/scope-label.test.mjs\nError: expected 2 to be 3',
+    );
     expect(plan).not.toBeNull();
     // `vitest` is exactly the anchor whose removal cost #8725 in the replay.
     expect(plan.terms).toContain('vitest');
@@ -239,7 +259,9 @@ describe('planErrorRecall — term selection deliberately unchanged', () => {
   });
 
   it('caps the query so one noisy stack frame cannot explode the OR-query', () => {
-    const noisy = Array.from({ length: 40 }, (_, i) => `Error: distinctToken${i}Failure at frame${i}`).join('\n');
+    const noisy = Array.from({ length: 40 }, (_, i) => `Error: distinctToken${i}Failure at frame${i}`).join(
+      '\n',
+    );
     const plan = planErrorRecall('cmd', noisy);
     expect(plan).not.toBeNull();
     expect(plan.terms.length).toBeLessThanOrEqual(6);
@@ -285,12 +307,17 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     }
     Object.assign(BASE_ENV, {
       HOME: HOME_DIR,
-      CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'),   // no LLM spend, no network
-      ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '',
-      CLAUDE_MEM_SKIP_UPDATE: '1', CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
-      CLAUDE_MEM_SKIP_COMPRESS: '1', CLAUDE_MEM_SKIP_OPTIMIZE: '1',
-      CLAUDE_MEM_SKIP_MAINTAIN: '1', CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
-      CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_NO_DELAY: '1',
+      CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'), // no LLM spend, no network
+      ANTHROPIC_API_KEY: '',
+      OPENROUTER_API_KEY: '',
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
+      CLAUDE_MEM_SKIP_COMPRESS: '1',
+      CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+      CLAUDE_MEM_SKIP_MAINTAIN: '1',
+      CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
+      CLAUDE_MEM_SKIP_REPOS: '1',
+      CLAUDE_MEM_NO_DELAY: '1',
       CLAUDE_MEM_DIR: dataDir,
     });
     delete BASE_ENV.CLAUDE_PROJECT_DIR;
@@ -299,39 +326,90 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     // Two rows that COMPETE: one matches the command's words, one matches the failure.
     // The whole point of the change is which of them a failed `npm run build` recalls,
     // so a test that seeds only one of them cannot tell the fix from the defect.
-    const decoy = await fire(process.execPath, [CLI_PATH, 'save',
-      'Recovering an npm run build that fails during the bundle step',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'npm run build recovery: clear the cache before rebuilding'], { cwd });
+    const decoy = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'Recovering an npm run build that fails during the bundle step',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--lesson',
+        'npm run build recovery: clear the cache before rebuilding',
+      ],
+      { cwd },
+    );
     expect(decoy.code, decoy.stderr).toBe(0);
     baitCommandTopicId = Number(decoy.stdout.match(/#(\d+)/)[1]);
-    const real = await fire(process.execPath, [CLI_PATH, 'save',
-      'A missing package.json makes the launcher die with ENOENT on syscall open',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'ENOENT from syscall open means the manifest is absent, not that a dependency is missing'], { cwd });
+    const real = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'A missing package.json makes the launcher die with ENOENT on syscall open',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--lesson',
+        'ENOENT from syscall open means the manifest is absent, not that a dependency is missing',
+      ],
+      { cwd },
+    );
     expect(real.code, real.stderr).toBe(0);
     baitErrorTopicId = Number(real.stdout.match(/#(\d+)/)[1]);
-    const vitestRow = await fire(process.execPath, [CLI_PATH, 'save',
-      'A vitest suite that fails only on the shared sqlite temp file',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'vitest fail: run the suite alone, the shared temp file races'], { cwd });
+    const vitestRow = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'A vitest suite that fails only on the shared sqlite temp file',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--lesson',
+        'vitest fail: run the suite alone, the shared temp file races',
+      ],
+      { cwd },
+    );
     expect(vitestRow.code, vitestRow.stderr).toBe(0);
   });
 
   afterAll(async () => {
     await new Promise((r) => setTimeout(r, 300));
-    try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(ROOT, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   function fire(cmd, args, { cwd: dir, stdin = '', timeout = 30000 } = {}) {
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, { cwd: dir, env: BASE_ENV, stdio: ['pipe', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '';
-      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeout);
-      child.stdout.on('data', (d) => { stdout += d; });
-      child.stderr.on('data', (d) => { stderr += d; });
-      child.on('error', (e) => { clearTimeout(timer); reject(e); });
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      let stdout = '',
+        stderr = '';
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('timeout'));
+      }, timeout);
+      child.stdout.on('data', (d) => {
+        stdout += d;
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d;
+      });
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr });
+      });
       child.stdin.on('error', () => {});
       child.stdin.end(stdin);
     });
@@ -341,13 +419,23 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     const r = await fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
       cwd,
       stdin: JSON.stringify({
-        session_id: 'cc-errgate', tool_name: 'Bash',
-        tool_input: { command }, tool_response: response,
+        session_id: 'cc-errgate',
+        tool_name: 'Bash',
+        tool_input: { command },
+        tool_response: response,
       }),
     });
     expect(r.code, `post-tool-use exited ${r.code}\n${r.stderr}`).toBe(0);
-    const block = r.stdout.split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    const block = r.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
       .map((e) => e?.hookSpecificOutput?.additionalContext)
       .find((c) => typeof c === 'string' && c.includes('Related memories found for this error'));
     return { block, stdout: r.stdout };
@@ -362,15 +450,17 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     // The load-bearing assertion. That row's text carries no `npm`, `run` or `build`,
     // so the old command-word-only query could not reach it at all — its presence here
     // is only possible because `enoent`/`syscall` now enter the query.
-    expect(block, 'the ENOENT/syscall row is the one that explains this failure')
-      .toContain(`#${baitErrorTopicId}`);
+    expect(block, 'the ENOENT/syscall row is the one that explains this failure').toContain(
+      `#${baitErrorTopicId}`,
+    );
     // The command-topic row is still recalled, and that is CORRECT, not a leak: command
     // words are kept on purpose (they carry domain anchoring — measured, see the commit
     // body), so the OR-query legitimately still matches it. Asserting its presence also
     // keeps the case honest — it proves the seeded store is reachable at all, so the
     // assertion above cannot pass on an empty or misrouted DB.
-    expect(block, 'the command-topic row remains reachable — command words are retained')
-      .toContain(`#${baitCommandTopicId}`);
+    expect(block, 'the command-topic row remains reachable — command words are retained').toContain(
+      `#${baitCommandTopicId}`,
+    );
   }, 40000);
 
   it('still injects for a failure that DOES carry error signal (the gate is not a mute button)', async () => {

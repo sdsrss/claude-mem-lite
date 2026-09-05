@@ -14,7 +14,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
-import { SUBPROCESS_TIMEOUT_MS, DEFAULT_SUBPROCESS_TIMEOUT_MS, resolveSubprocessTimeout } from './test-helpers.mjs';
+import {
+  SUBPROCESS_TIMEOUT_MS,
+  DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  resolveSubprocessTimeout,
+} from './test-helpers.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const TESTS_DIR = join(REPO, 'tests');
@@ -73,12 +77,9 @@ describe('subprocess timeout budget', () => {
     // A 0ms or NaN timer would abort every subprocess wait instantly — the override must
     // not be able to produce one by accident.
     for (const bad of [undefined, '', 'abc', '0', '-1', null]) {
-      expect(resolveSubprocessTimeout(bad), `raw=${JSON.stringify(bad)}`)
-        .toBe(DEFAULT_SUBPROCESS_TIMEOUT_MS);
+      expect(resolveSubprocessTimeout(bad), `raw=${JSON.stringify(bad)}`).toBe(DEFAULT_SUBPROCESS_TIMEOUT_MS);
     }
-    expect(SUBPROCESS_TIMEOUT_MS).toBe(
-      resolveSubprocessTimeout(process.env.MEM_TEST_SUBPROCESS_TIMEOUT_MS),
-    );
+    expect(SUBPROCESS_TIMEOUT_MS).toBe(resolveSubprocessTimeout(process.env.MEM_TEST_SUBPROCESS_TIMEOUT_MS));
   });
 
   it('no suite reinstates a hard-coded subprocess timeout literal', () => {
@@ -95,8 +96,7 @@ describe('subprocess timeout budget', () => {
     expect(scanned, 'the scan found no test files — it is measuring nothing').toBeGreaterThan(100);
     expect(
       offenders,
-      'import SUBPROCESS_TIMEOUT_MS from ./test-helpers.mjs instead of a literal:\n'
-        + offenders.join('\n'),
+      'import SUBPROCESS_TIMEOUT_MS from ./test-helpers.mjs instead of a literal:\n' + offenders.join('\n'),
     ).toEqual([]);
   });
 

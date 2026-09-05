@@ -30,11 +30,10 @@ afterEach(() => {
 });
 
 function runLauncher(root, args, env = {}) {
-  return spawnSync(
-    process.execPath,
-    [join(root, 'scripts', 'hook-launcher.mjs'), ...args],
-    { encoding: 'utf8', env: { ...process.env, CLAUDE_MEM_DIR: root, ...env } },
-  );
+  return spawnSync(process.execPath, [join(root, 'scripts', 'hook-launcher.mjs'), ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_MEM_DIR: root, ...env },
+  });
 }
 
 describe('hook-launcher self-heal', () => {
@@ -127,13 +126,13 @@ describe('hook-launcher self-heal', () => {
     writeFileSync(
       join(root, 'install.mjs'),
       `import { writeFileSync, mkdirSync } from 'fs';\n` +
-      `import { join, dirname } from 'path';\n` +
-      `import { fileURLToPath } from 'url';\n` +
-      `const __dirname = dirname(fileURLToPath(import.meta.url));\n` +
-      `const target = join(__dirname, 'missing-local.mjs');\n` +
-      `mkdirSync(dirname(target), { recursive: true });\n` +
-      `writeFileSync(target, 'process.stdout.write("HEALED-OK\\\\n");\\n');\n` +
-      `process.exit(0);\n`,
+        `import { join, dirname } from 'path';\n` +
+        `import { fileURLToPath } from 'url';\n` +
+        `const __dirname = dirname(fileURLToPath(import.meta.url));\n` +
+        `const target = join(__dirname, 'missing-local.mjs');\n` +
+        `mkdirSync(dirname(target), { recursive: true });\n` +
+        `writeFileSync(target, 'process.stdout.write("HEALED-OK\\\\n");\\n');\n` +
+        `process.exit(0);\n`,
     );
     writeFileSync(join(root, 'entry.mjs'), "import './missing-local.mjs';\n");
 
@@ -203,13 +202,13 @@ describe('hook-launcher self-heal', () => {
     writeFileSync(
       join(root, 'install.mjs'),
       `import { writeFileSync, mkdirSync } from 'fs';\n` +
-      `import { join, dirname } from 'path';\n` +
-      `import { fileURLToPath } from 'url';\n` +
-      `const __dirname = dirname(fileURLToPath(import.meta.url));\n` +
-      `const target = join(__dirname, 'missing-local.mjs');\n` +
-      `mkdirSync(dirname(target), { recursive: true });\n` +
-      `writeFileSync(target, 'process.stdout.write("HEALED-OK\\\\n");\\n');\n` +
-      `process.exit(0);\n`,
+        `import { join, dirname } from 'path';\n` +
+        `import { fileURLToPath } from 'url';\n` +
+        `const __dirname = dirname(fileURLToPath(import.meta.url));\n` +
+        `const target = join(__dirname, 'missing-local.mjs');\n` +
+        `mkdirSync(dirname(target), { recursive: true });\n` +
+        `writeFileSync(target, 'process.stdout.write("HEALED-OK\\\\n");\\n');\n` +
+        `process.exit(0);\n`,
     );
     writeFileSync(join(root, 'entry.mjs'), "import './missing-local.mjs';\n");
     const r = runLauncher(root, ['entry.mjs']);
@@ -240,18 +239,21 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
   // 15s-capped hook, and its stdout would corrupt the SessionStart JSON
   // envelope), so it cannot be observed through the launcher's own streams —
   // the stub records itself on disk and the test waits for that.
-  const stubInstaller = (root, { exitCode = 0, clearsMarker = true } = {}) => writeFileSync(
-    join(root, 'install.mjs'),
-    `import { writeFileSync, unlinkSync } from 'fs';\n` +
-    `writeFileSync(${JSON.stringify(RAN(root))}, process.argv[2] || '');\n` +
-    (clearsMarker && exitCode === 0
-      ? `try { unlinkSync(${JSON.stringify(BROKEN(root))}); } catch {}\n`
-      : '') +
-    `process.exit(${exitCode});\n`,
-  );
+  const stubInstaller = (root, { exitCode = 0, clearsMarker = true } = {}) =>
+    writeFileSync(
+      join(root, 'install.mjs'),
+      `import { writeFileSync, unlinkSync } from 'fs';\n` +
+        `writeFileSync(${JSON.stringify(RAN(root))}, process.argv[2] || '');\n` +
+        (clearsMarker && exitCode === 0
+          ? `try { unlinkSync(${JSON.stringify(BROKEN(root))}); } catch {}\n`
+          : '') +
+        `process.exit(${exitCode});\n`,
+    );
   // Synchronous poll — the assertions are about a DETACHED child, so the test
   // has to wait for the filesystem rather than for the launcher's exit.
-  const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  const sleepSync = (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  };
   const waitFor = (pred, ms = 5000) => {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
@@ -282,8 +284,8 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     writeFileSync(
       join(root, 'install.mjs'),
       `import { writeFileSync } from 'fs';\n` +
-      `writeFileSync(${JSON.stringify(RAN(root))}, 'slow');\n` +
-      `setTimeout(() => process.exit(0), 8000);\n`,   // outlives the 15s cap's useful budget
+        `writeFileSync(${JSON.stringify(RAN(root))}, 'slow');\n` +
+        `setTimeout(() => process.exit(0), 8000);\n`, // outlives the 15s cap's useful budget
     );
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-OK\\n");\n');
     writeBroken(root);
@@ -303,9 +305,9 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     writeFileSync(
       join(root, 'install.mjs'),
       `import { writeFileSync } from 'fs';\n` +
-      `console.log('  ✓ better-sqlite3 binding rebuilt');\n` +
-      `writeFileSync(${JSON.stringify(RAN(root))}, 'x');\n` +
-      `process.exit(0);\n`,
+        `console.log('  ✓ better-sqlite3 binding rebuilt');\n` +
+        `writeFileSync(${JSON.stringify(RAN(root))}, 'x');\n` +
+        `process.exit(0);\n`,
     );
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write(JSON.stringify({ok:true}) + "\\n");\n');
     writeBroken(root);
@@ -340,13 +342,13 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     const first = runLauncher(root, ['entry.mjs', 'session-start']);
     expect(first.status).toBe(0);
     expect(waitFor(() => existsSync(RAN(root)))).toBe(true);
-    expect(existsSync(BROKEN(root))).toBe(true);     // unresolved → next session retries
+    expect(existsSync(BROKEN(root))).toBe(true); // unresolved → next session retries
     expect(existsSync(COOLDOWN(root))).toBe(true);
     rmSync(RAN(root), { force: true });
 
     const second = runLauncher(root, ['entry.mjs', 'session-start']);
     expect(second.status).toBe(0);
-    expect(existsSync(RAN(root))).toBe(false);       // suppressed by the cooldown
+    expect(existsSync(RAN(root))).toBe(false); // suppressed by the cooldown
   });
 
   it('drops a stale cooldown once the binding is healthy again', () => {
@@ -355,7 +357,7 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     stubInstaller(root);
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-OK\\n");\n');
     mkdirSync(join(root, 'runtime'), { recursive: true });
-    writeFileSync(COOLDOWN(root), String(Date.now()));   // recent heal, no breakage
+    writeFileSync(COOLDOWN(root), String(Date.now())); // recent heal, no breakage
 
     runLauncher(root, ['entry.mjs', 'session-start']);
     expect(existsSync(COOLDOWN(root))).toBe(false);
@@ -374,10 +376,10 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     writeFileSync(
       join(root, 'entry.mjs'),
       `import { writeFileSync, mkdirSync } from 'fs';\n` +
-      `import { join } from 'path';\n` +
-      `mkdirSync(join(process.env.CLAUDE_MEM_DIR, 'runtime'), { recursive: true });\n` +
-      `writeFileSync(join(process.env.CLAUDE_MEM_DIR, 'runtime', 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));\n` +
-      `process.stdout.write("ENTRY-OK\\n");\n`,
+        `import { join } from 'path';\n` +
+        `mkdirSync(join(process.env.CLAUDE_MEM_DIR, 'runtime'), { recursive: true });\n` +
+        `writeFileSync(join(process.env.CLAUDE_MEM_DIR, 'runtime', 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));\n` +
+        `process.stdout.write("ENTRY-OK\\n");\n`,
     );
 
     const r = runLauncher(root, ['entry.mjs', 'session-start']);
@@ -404,7 +406,10 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-OK\\n");\n');
     const altRuntime = join(root, 'alt-runtime');
     mkdirSync(altRuntime, { recursive: true });
-    writeFileSync(join(altRuntime, 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));
+    writeFileSync(
+      join(altRuntime, 'native-binding-broken'),
+      JSON.stringify({ reason: 'abi', ts: Date.now() }),
+    );
 
     const r = runLauncher(root, ['entry.mjs', 'session-start'], { CLAUDE_MEM_RUNTIME_DIR: altRuntime });
     expect(r.status).toBe(0);
@@ -425,7 +430,7 @@ describe('hook-launcher swap barrier (audit P2-4)', () => {
   it('skips the fire (exit 0, entry never imported) while a swap is in progress', () => {
     const root = makeInstall('cml-launcher-swap');
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-RAN\\n");\n');
-    writeMarker(root, { pid: process.pid, ts: Date.now() });   // live holder
+    writeMarker(root, { pid: process.pid, ts: Date.now() }); // live holder
     const r = runLauncher(root, ['entry.mjs']);
     expect(r.status).toBe(0);
     expect(r.stdout).not.toContain('ENTRY-RAN');
@@ -443,7 +448,7 @@ describe('hook-launcher swap barrier (audit P2-4)', () => {
   it('runs normally when the marker names a dead pid', () => {
     const root = makeInstall('cml-launcher-swap-dead');
     writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-RAN\\n");\n');
-    writeMarker(root, { pid: 0x7ffffffe, ts: Date.now() });   // not a live process
+    writeMarker(root, { pid: 0x7ffffffe, ts: Date.now() }); // not a live process
     const r = runLauncher(root, ['entry.mjs']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('ENTRY-RAN');

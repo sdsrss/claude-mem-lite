@@ -81,7 +81,9 @@ function transcriptDirs() {
     return readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => join(root, d.name));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 const textOf = (c) => {
@@ -107,7 +109,11 @@ function isSkipped(tool) {
  */
 function eventsFromTranscript(path) {
   let lines = [];
-  try { lines = readFileSync(path, 'utf8').split('\n'); } catch { return []; }
+  try {
+    lines = readFileSync(path, 'utf8').split('\n');
+  } catch {
+    return [];
+  }
   const out = [];
   const pending = new Map(); // tool_use_id -> {tool, input, ts}
   let cwd = null;
@@ -117,7 +123,11 @@ function eventsFromTranscript(path) {
   for (const line of lines) {
     if (!line.trim()) continue;
     let ev;
-    try { ev = JSON.parse(line); } catch { continue; }
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
     if (typeof ev?.cwd === 'string') cwd = ev.cwd;
     if (typeof ev?.sessionId === 'string') session = ev.sessionId;
     const ts = ev?.timestamp ? Date.parse(ev.timestamp) : null;
@@ -156,8 +166,13 @@ function eventsFromTranscript(path) {
         // handlePostToolUse's own floor: `!resp || resp.length < 10`.
         if (response.length < 10) continue;
         out.push({
-          kind: 'tool', ts, session, cwd,
-          tool: call.tool, input: call.input, response,
+          kind: 'tool',
+          ts,
+          session,
+          cwd,
+          tool: call.tool,
+          input: call.input,
+          response,
         });
       }
     }
@@ -172,7 +187,11 @@ export function collectEvents({ since = null, projectFilter = null } = {}) {
   let files = 0;
   for (const dir of transcriptDirs()) {
     let entries = [];
-    try { entries = readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    try {
+      entries = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
     for (const f of entries) {
       files++;
       for (const ev of eventsFromTranscript(join(dir, f))) {
@@ -237,13 +256,15 @@ export function replayProject(events, project, { forceSignificance = null } = {}
     for (const [k, v] of consumed) if (!cfPending.has(k)) cfPending.set(k, v);
     episode.filesRead = [...consumed.keys()];
     const subs = planEpisodeFlush(episode);
-    const significant = forceSignificance === null
-      ? subs.some((s) => explainSignificance(s).significant)
-      : forceSignificance;
+    const significant =
+      forceSignificance === null ? subs.some((s) => explainSignificance(s).significant) : forceSignificance;
     const ages = [...consumed.values()].map((t) => ts - t);
 
     // Landing arms. Only a significant flush saves anything at all.
-    let lands = false, landedReads = 0, landsCf = false, landedReadsCf = 0;
+    let lands = false,
+      landedReads = 0,
+      landsCf = false,
+      landedReadsCf = 0;
     let cfAgeMs = 0;
     // Distinct paths the counterfactual hands to THIS flush. Production collects with
     // `[...new Set(...)]`, so a path read once in each of two carried-over windows is
@@ -258,20 +279,34 @@ export function replayProject(events, project, { forceSignificance = null } = {}
       cfAgeMs = cfPending.size ? ts - Math.min(...cfPending.values()) : 0;
       for (const sub of subs) {
         const now = landing(sub, episode.filesRead);
-        if (now.lands) { lands = true; landedReads = Math.max(landedReads, now.reads); }
+        if (now.lands) {
+          lands = true;
+          landedReads = Math.max(landedReads, now.reads);
+        }
         const cf = landing(sub, cfPaths);
-        if (cf.lands) { landsCf = true; landedReadsCf = Math.max(landedReadsCf, cf.reads); }
+        if (cf.lands) {
+          landsCf = true;
+          landedReadsCf = Math.max(landedReadsCf, cf.reads);
+        }
       }
       cfPending = new Map();
     }
 
     flushes.push({
-      ts, reason, project, significant,
+      ts,
+      reason,
+      project,
+      significant,
       entries: episode.entries.length,
       subs: subs.length,
       readsConsumed: consumed.size,
       maxReadAgeMs: ages.length ? Math.max(...ages) : 0,
-      lands, landedReads, landsCf, landedReadsCf, cfAgeMs, cfDelivered,
+      lands,
+      landedReads,
+      landsCf,
+      landedReadsCf,
+      cfAgeMs,
+      cfDelivered,
     });
     episode = null;
   };
@@ -282,7 +317,10 @@ export function replayProject(events, project, { forceSignificance = null } = {}
       if (!readsPending.has(ev.path)) readsPending.set(ev.path, ev.ts);
       continue;
     }
-    if (ev.kind === 'stop') { doFlush(ev.ts, 'stop'); continue; }
+    if (ev.kind === 'stop') {
+      doFlush(ev.ts, 'stop');
+      continue;
+    }
 
     const files = extractFilePaths(ev.input || {});
     if (episode) {
@@ -340,14 +378,21 @@ export function aggregate(flushes) {
     landedWithReadsCf: 0,
   };
   for (const f of flushes) {
-    if (f.significant) t.significant++; else t.insignificant++;
+    if (f.significant) t.significant++;
+    else t.insignificant++;
     t.readsConsumed += f.readsConsumed;
     if (f.readsConsumed > 0) t.flushesWithReads++;
     if (f.significant) {
       t.readsDelivered += f.readsConsumed;
       if (f.readsConsumed === 0) t.significantWithZeroReads++;
-      if (f.lands) { t.landed++; if (f.landedReads > 0) t.landedWithReads++; }
-      if (f.landsCf) { t.landedCf++; if (f.landedReadsCf > 0) t.landedWithReadsCf++; }
+      if (f.lands) {
+        t.landed++;
+        if (f.landedReads > 0) t.landedWithReads++;
+      }
+      if (f.landsCf) {
+        t.landedCf++;
+        if (f.landedReadsCf > 0) t.landedWithReadsCf++;
+      }
     } else {
       t.readsDestroyed += f.readsConsumed;
     }
@@ -445,15 +490,27 @@ export function assertRulerCanSayNo(byProject) {
 export function meterAgreement(flushes, { dataDir } = {}) {
   const dir = join(dataDir || resolveDataDir(), 'metrics');
   let files = [];
-  try { files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { return null; }
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+  } catch {
+    return null;
+  }
   const byDay = new Map();
   for (const f of files) {
     let lines = [];
-    try { lines = readFileSync(join(dir, f), 'utf8').split('\n'); } catch { continue; }
+    try {
+      lines = readFileSync(join(dir, f), 'utf8').split('\n');
+    } catch {
+      continue;
+    }
     for (const line of lines) {
       if (!line.includes('episode_significance')) continue;
       let row;
-      try { row = JSON.parse(line); } catch { continue; }
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
       if (row.event !== 'episode_significance') continue;
       const day = String(row.ts).slice(0, 10);
       if (!byDay.has(day)) byDay.set(day, { n: 0, insig: 0 });
@@ -464,10 +521,14 @@ export function meterAgreement(flushes, { dataDir } = {}) {
   }
   if (byDay.size === 0) return null;
   const days = new Set(byDay.keys());
-  let meterN = 0, meterInsig = 0, replayN = 0, replayInsig = 0;
+  let meterN = 0,
+    meterInsig = 0,
+    replayN = 0,
+    replayInsig = 0;
   for (const day of days) {
     const d = byDay.get(day);
-    meterN += d.n; meterInsig += d.insig;
+    meterN += d.n;
+    meterInsig += d.insig;
   }
   for (const f of flushes) {
     const day = new Date(f.ts).toISOString().slice(0, 10);
@@ -480,8 +541,12 @@ export function meterAgreement(flushes, { dataDir } = {}) {
   const replayShare = replayInsig / replayN;
   const gapPp = Math.abs(meterShare - replayShare) * 100;
   return {
-    days: [...days].sort(), meterN, replayN,
-    meterShare, replayShare, gapPp,
+    days: [...days].sort(),
+    meterN,
+    replayN,
+    meterShare,
+    replayShare,
+    gapPp,
     agree: gapPp <= MODEL_TOLERANCE_PP,
   };
 }
@@ -522,35 +587,61 @@ function main() {
   if (argv.includes('--json')) {
     console.log(JSON.stringify({ total, carryForward: cf, perProject, meter, files }, null, 2));
   } else {
-    console.error(`\n─── Episode-flush replay (${files} transcripts, ${byProject.size} projects${sinceRaw ? `, since ${sinceRaw}` : ''}) ───`);
-    console.error(`  flushes            ${total.flushes}  (insignificant ${total.insignificant} = ${pct(total.insignificantShare)})`);
+    console.error(
+      `\n─── Episode-flush replay (${files} transcripts, ${byProject.size} projects${sinceRaw ? `, since ${sinceRaw}` : ''}) ───`,
+    );
+    console.error(
+      `  flushes            ${total.flushes}  (insignificant ${total.insignificant} = ${pct(total.insignificantShare)})`,
+    );
     console.error(`  Read paths seen    ${readsSeen}  → ${total.readsConsumed} distinct consumed by a flush`);
-    console.error(`  DESTROYED          ${total.readsDestroyed}  = ${pct(total.destroyedShare)} of consumed reads (insignificant flush ate them)`);
-    console.error(`  delivered today    ${total.readsDelivered}  to ${total.significant} significant flushes`);
-    console.error(`  significant flushes with files_read = []: ${total.significantWithZeroReads}/${total.significant} = ${pct(total.significant ? total.significantWithZeroReads / total.significant : 0)}`);
+    console.error(
+      `  DESTROYED          ${total.readsDestroyed}  = ${pct(total.destroyedShare)} of consumed reads (insignificant flush ate them)`,
+    );
+    console.error(
+      `  delivered today    ${total.readsDelivered}  to ${total.significant} significant flushes`,
+    );
+    console.error(
+      `  significant flushes with files_read = []: ${total.significantWithZeroReads}/${total.significant} = ${pct(total.significant ? total.significantWithZeroReads / total.significant : 0)}`,
+    );
     console.error(`\n─── Counterfactual: insignificant flush does NOT consume (D#178 fix a/b) ───`);
-    console.error(`  reads delivered    ${total.readsDelivered} → ${cf.delivered}  (×${total.readsDelivered ? (cf.delivered / total.readsDelivered).toFixed(2) : '∞'})`);
+    console.error(
+      `  reads delivered    ${total.readsDelivered} → ${cf.delivered}  (×${total.readsDelivered ? (cf.delivered / total.readsDelivered).toFixed(2) : '∞'})`,
+    );
     console.error(`  significant flushes still empty: ${cf.stillZero}/${total.significant}`);
     // Per DELIVERY, and of the OLDEST read in each — so this overstates the typical read's
     // staleness and understates nothing. Quoting it as "the median read waits N" would be
     // the wrong unit.
-    console.error(`  age of the oldest carried read, per delivering flush: median ${mins(cf.medianCarriedAgeMs)}, p90 ${mins(cf.p90CarriedAgeMs)}`);
-    console.error(`\n─── Observation level (past the two write-side noise gates; DB dedup NOT modelled, so these are upper bounds) ───`);
+    console.error(
+      `  age of the oldest carried read, per delivering flush: median ${mins(cf.medianCarriedAgeMs)}, p90 ${mins(cf.p90CarriedAgeMs)}`,
+    );
+    console.error(
+      `\n─── Observation level (past the two write-side noise gates; DB dedup NOT modelled, so these are upper bounds) ───`,
+    );
     console.error(`  observations landed          ${total.landed}  (now)   ${total.landedCf}  (fixed)`);
-    console.error(`  …of them carrying ≥1 read    ${total.landedWithReads} = ${pct(total.landed ? total.landedWithReads / total.landed : 0)}   →   ${total.landedWithReadsCf} = ${pct(total.landedCf ? total.landedWithReadsCf / total.landedCf : 0)}`);
+    console.error(
+      `  …of them carrying ≥1 read    ${total.landedWithReads} = ${pct(total.landed ? total.landedWithReads / total.landed : 0)}   →   ${total.landedWithReadsCf} = ${pct(total.landedCf ? total.landedWithReadsCf / total.landedCf : 0)}`,
+    );
     console.error(`\n─── Self-checks ───`);
-    console.error(`  1 can-say-no      ${canSayNo.problems.length === 0 ? 'PASS' : 'FAIL — ' + canSayNo.problems.join('; ')}`);
+    console.error(
+      `  1 can-say-no      ${canSayNo.problems.length === 0 ? 'PASS' : 'FAIL — ' + canSayNo.problems.join('; ')}`,
+    );
     if (meter) {
-      console.error(`  2 meter agreement ${meter.agree ? 'PASS' : 'FAIL'} — live episode_significance ${pct(meter.meterShare ?? 0)} insignificant (n=${meter.meterN}) vs replay ${pct(meter.replayShare ?? 0)} (n=${meter.replayN}) over ${meter.days.length} metered day(s), gap ${meter.gapPp === null ? 'n/a' : meter.gapPp.toFixed(1) + 'pp'} (tolerance ${MODEL_TOLERANCE_PP}pp)`);
+      console.error(
+        `  2 meter agreement ${meter.agree ? 'PASS' : 'FAIL'} — live episode_significance ${pct(meter.meterShare ?? 0)} insignificant (n=${meter.meterN}) vs replay ${pct(meter.replayShare ?? 0)} (n=${meter.replayN}) over ${meter.days.length} metered day(s), gap ${meter.gapPp === null ? 'n/a' : meter.gapPp.toFixed(1) + 'pp'} (tolerance ${MODEL_TOLERANCE_PP}pp)`,
+      );
     } else {
       console.error(`  2 meter agreement SKIP — no episode_significance rows in the metrics sink, so the`);
       console.error(`                          flush MODEL is unchecked here. Set CLAUDE_MEM_METRICS=1 and`);
       console.error(`                          re-run after some real sessions to give this check teeth.`);
     }
-    console.error(`  3 reachability    ${emptyProjects.length === 0 ? 'PASS' : 'FAIL — projects with events but zero flushes: ' + emptyProjects.join(', ')}`);
+    console.error(
+      `  3 reachability    ${emptyProjects.length === 0 ? 'PASS' : 'FAIL — projects with events but zero flushes: ' + emptyProjects.join(', ')}`,
+    );
     console.error('\n  Top projects by reads destroyed:');
     for (const p of perProject.sort((a, b) => b.readsDestroyed - a.readsDestroyed).slice(0, 8)) {
-      console.error(`    ${p.project.padEnd(32)} destroyed ${String(p.readsDestroyed).padStart(5)} / ${String(p.readsConsumed).padStart(5)} = ${pct(p.destroyedShare)}   flushes ${p.flushes}`);
+      console.error(
+        `    ${p.project.padEnd(32)} destroyed ${String(p.readsDestroyed).padStart(5)} / ${String(p.readsConsumed).padStart(5)} = ${pct(p.destroyedShare)}   flushes ${p.flushes}`,
+      );
     }
     console.error('');
   }

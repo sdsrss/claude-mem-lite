@@ -31,7 +31,8 @@ function collectMjs(dir, out = []) {
 
 // Static `import ... from '<spec>'`, bare `import '<spec>'`, `export ... from '<spec>'`
 // (capture 1), and lazy `import('<spec>')` with a literal specifier (capture 2).
-const SPEC_RE = /(?:^|[\s;}])(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+const SPEC_RE =
+  /(?:^|[\s;}])(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 /** Path-like specifiers only — bare ones ('node:fs', 'better-sqlite3') are package resolution. */
 function pathSpecs(source) {
@@ -45,7 +46,7 @@ function pathSpecs(source) {
   return specs;
 }
 
-const relativeSpecs = (source) => pathSpecs(source).filter(s => s.spec.startsWith('.'));
+const relativeSpecs = (source) => pathSpecs(source).filter((s) => s.spec.startsWith('.'));
 
 /** @param {boolean} includeLazy Follow `await import()` edges too. */
 function buildGraph(files, includeLazy) {
@@ -66,8 +67,10 @@ function buildGraph(files, includeLazy) {
 
 /** Iterative DFS with an explicit stack; returns every cycle found as a node path. */
 function findCycles(graph) {
-  const WHITE = 0, GREY = 1, BLACK = 2;
-  const color = new Map([...graph.keys()].map(k => [k, WHITE]));
+  const WHITE = 0,
+    GREY = 1,
+    BLACK = 2;
+  const color = new Map([...graph.keys()].map((k) => [k, WHITE]));
   const cycles = [];
 
   for (const root of graph.keys()) {
@@ -110,7 +113,7 @@ const KNOWN_LAZY_CYCLES = [
   // cycle that only an await-import keeps off the load path.
 ];
 
-const fmt = (cycles) => cycles.map(c => c.map(f => relative(ROOT, f)).join(' -> ')).sort();
+const fmt = (cycles) => cycles.map((c) => c.map((f) => relative(ROOT, f)).join(' -> ')).sort();
 
 describe('module import graph', () => {
   const files = collectMjs(ROOT);
@@ -156,8 +159,9 @@ describe('module import graph', () => {
       if (rel.startsWith('tests/') || rel.startsWith('benchmark/') || rel.includes('preflight')) continue;
       for (const { spec } of relativeSpecs(readFileSync(file, 'utf8'))) {
         const base = resolve(dirname(file), spec);
-        const hit = [base, `${base}.mjs`, `${base}.js`, join(base, 'index.mjs')]
-          .some(c => existsSync(c) && statSync(c).isFile());
+        const hit = [base, `${base}.mjs`, `${base}.js`, join(base, 'index.mjs')].some(
+          (c) => existsSync(c) && statSync(c).isFile(),
+        );
         if (!hit) broken.push(`${rel} -> ${spec}`);
       }
     }
@@ -167,7 +171,7 @@ describe('module import graph', () => {
   it('project-utils.mjs does not import from the utils.mjs barrel', () => {
     // Direct assertion on the specific trap: utils.mjs re-exports project-utils.mjs,
     // so project-utils.mjs must stay a leaf.
-    const deps = (fullGraph.get(join(ROOT, 'project-utils.mjs')) || []).map(f => relative(ROOT, f));
+    const deps = (fullGraph.get(join(ROOT, 'project-utils.mjs')) || []).map((f) => relative(ROOT, f));
     expect(deps).not.toContain('utils.mjs');
   });
 });

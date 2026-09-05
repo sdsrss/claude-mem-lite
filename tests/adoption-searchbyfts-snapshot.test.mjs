@@ -12,9 +12,19 @@ import { searchByFts } from '../scripts/user-prompt-search.js';
 function seed(db, rows) {
   const ins = db.prepare(
     `INSERT INTO observations (memory_session_id, project, type, title, lesson_learned, importance, created_at, created_at_epoch)
-     VALUES (?,?,?,?,?,?,?,?)`);
-  for (const r of rows) ins.run('mem-s1', r.project ?? 'p', r.type ?? 'bugfix', r.title, r.lesson, r.importance ?? 2,
-    new Date(r.epoch).toISOString(), r.epoch);
+     VALUES (?,?,?,?,?,?,?,?)`,
+  );
+  for (const r of rows)
+    ins.run(
+      'mem-s1',
+      r.project ?? 'p',
+      r.type ?? 'bugfix',
+      r.title,
+      r.lesson,
+      r.importance ?? 2,
+      new Date(r.epoch).toISOString(),
+      r.epoch,
+    );
 }
 
 // LOOKBACK_MS (60 days, scripts/user-prompt-search.js) applies independently of
@@ -28,7 +38,9 @@ describe('searchByFts offline-replay options', () => {
   it('no-options behavior is unchanged (characterization)', () => {
     const db = createTestDb();
     insertSession(db, { id: 'mem-s1', project: 'p' });
-    seed(db, [{ title: 'rrf merge dedup', lesson: 'use rrfAccumulate for merge', epoch: Date.now() - 5 * 86400000 }]);
+    seed(db, [
+      { title: 'rrf merge dedup', lesson: 'use rrfAccumulate for merge', epoch: Date.now() - 5 * 86400000 },
+    ]);
     const { rows, mode } = searchByFts(db, 'rrf merge', 'p', 5, null);
     expect(mode).toBeTruthy();
     expect(rows[0]).toHaveProperty('relevance');

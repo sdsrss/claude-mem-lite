@@ -12,20 +12,31 @@ describe('browse tier grouping', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('groups observations by tier', () => {
     insertSession(db, { id: 'sess-old', project: 'test' });
     insertObs(db, { title: 'recent work', type: 'change', epochOffset: -HOUR });
-    insertObs(db, { title: 'active decision', type: 'decision', epochOffset: -30 * DAY, sessionId: 'sess-old' });
+    insertObs(db, {
+      title: 'active decision',
+      type: 'decision',
+      epochOffset: -30 * DAY,
+      sessionId: 'sess-old',
+    });
     insertObs(db, { title: 'old compressed', type: 'change', compressedInto: -1 });
 
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const params = tierSqlParams(ctx);
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT *, ${TIER_CASE_SQL} as tier FROM observations
-    `).all(...params);
+    `,
+      )
+      .all(...params);
 
     const tiers = { working: [], active: [], archive: [] };
     for (const r of rows) tiers[r.tier].push(r);
@@ -44,11 +55,15 @@ describe('browse tier grouping', () => {
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const params = tierSqlParams(ctx);
 
-    const archiveCount = db.prepare(`
+    const archiveCount = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM (
         SELECT ${TIER_CASE_SQL} as tier FROM observations
       ) WHERE tier = 'archive'
-    `).get(...params);
+    `,
+      )
+      .get(...params);
 
     expect(archiveCount.c).toBeGreaterThanOrEqual(3);
   });
@@ -61,11 +76,15 @@ describe('browse tier grouping', () => {
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const params = tierSqlParams(ctx);
 
-    const workingOnly = db.prepare(`
+    const workingOnly = db
+      .prepare(
+        `
       SELECT * FROM (
         SELECT *, ${TIER_CASE_SQL} as tier FROM observations
       ) WHERE tier = 'working'
-    `).all(...params);
+    `,
+      )
+      .all(...params);
 
     for (const r of workingOnly) {
       expect(r.tier).toBe('working');
@@ -75,9 +94,13 @@ describe('browse tier grouping', () => {
   it('empty database produces no rows', () => {
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const params = tierSqlParams(ctx);
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT *, ${TIER_CASE_SQL} as tier FROM observations
-    `).all(...params);
+    `,
+      )
+      .all(...params);
     expect(rows).toHaveLength(0);
   });
 });
@@ -93,19 +116,33 @@ describe('mem_search tier filtering (computeTier post-filter)', () => {
     insertSession(db, { id: 'sess-1' });
     insertSession(db, { id: 'sess-old' });
     insertObs(db, { title: 'recent bugfix', type: 'bugfix', text: 'auth token error', epochOffset: -HOUR });
-    insertObs(db, { title: 'old decision', type: 'decision', text: 'auth token architecture', epochOffset: -60 * DAY, sessionId: 'sess-old' });
-    insertObs(db, { title: 'ancient change', type: 'change', text: 'auth token refactor', epochOffset: -30 * DAY, sessionId: 'sess-old' });
+    insertObs(db, {
+      title: 'old decision',
+      type: 'decision',
+      text: 'auth token architecture',
+      epochOffset: -60 * DAY,
+      sessionId: 'sess-old',
+    });
+    insertObs(db, {
+      title: 'ancient change',
+      type: 'change',
+      text: 'auth token refactor',
+      epochOffset: -30 * DAY,
+      sessionId: 'sess-old',
+    });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('computeTier correctly classifies test data', () => {
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const rows = db.prepare('SELECT * FROM observations ORDER BY created_at_epoch DESC').all();
 
-    const classified = rows.map(r => ({ title: r.title, tier: computeTier(r, ctx) }));
-    expect(classified.find(r => r.title === 'recent bugfix').tier).toBe('working');
-    expect(classified.find(r => r.title === 'old decision').tier).toBe('active');
-    expect(classified.find(r => r.title === 'ancient change').tier).toBe('archive');
+    const classified = rows.map((r) => ({ title: r.title, tier: computeTier(r, ctx) }));
+    expect(classified.find((r) => r.title === 'recent bugfix').tier).toBe('working');
+    expect(classified.find((r) => r.title === 'old decision').tier).toBe('active');
+    expect(classified.find((r) => r.title === 'ancient change').tier).toBe('archive');
   });
 });
 
@@ -123,18 +160,24 @@ describe('mem_stats tier distribution query', () => {
     insertObs(db, { title: 'active', type: 'decision', epochOffset: -30 * DAY, sessionId: 'sess-old' });
     insertObs(db, { title: 'archive', type: 'change', compressedInto: -1, sessionId: 'sess-old' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('CTE tier distribution returns correct counts', () => {
     const ctx = { now: NOW, currentProject: 'test', currentSessionId: 'sess-1' };
     const params = tierSqlParams(ctx);
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT tier, COUNT(*) as c FROM (
         SELECT ${TIER_CASE_SQL} as tier FROM observations
       ) GROUP BY tier ORDER BY tier
-    `).all(...params);
+    `,
+      )
+      .all(...params);
 
-    const dist = Object.fromEntries(rows.map(r => [r.tier, r.c]));
+    const dist = Object.fromEntries(rows.map((r) => [r.tier, r.c]));
     expect(dist.working).toBeGreaterThanOrEqual(1);
     expect(dist.active).toBeGreaterThanOrEqual(1);
     expect(dist.archive).toBeGreaterThanOrEqual(1);

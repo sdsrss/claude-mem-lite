@@ -58,7 +58,11 @@
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { detectBashSignificance } from '../bash-utils.mjs';
-import { selectErrorRecall, ERROR_RECALL_LIMIT, CALIBRATED_ERROR_RECALL_BM25_FLOOR } from '../lib/error-recall-core.mjs';
+import {
+  selectErrorRecall,
+  ERROR_RECALL_LIMIT,
+  CALIBRATED_ERROR_RECALL_BM25_FLOOR,
+} from '../lib/error-recall-core.mjs';
 
 const PROJECT = 'bench-proj';
 const DAY = 86400000;
@@ -92,11 +96,7 @@ const OUT = {
     '    at selectErrorRecall (/repo/lib/error-recall-core.mjs:88:20)',
   ].join('\n'),
   commandNotFound: 'bash: line 1: shellcheck: command not found',
-  goPanic: [
-    'panic: assignment to entry in nil map',
-    '',
-    'goroutine 1 [running]:',
-  ].join('\n'),
+  goPanic: ['panic: assignment to entry in nil map', '', 'goroutine 1 [running]:'].join('\n'),
   segfault: 'Segmentation fault (core dumped)',
 };
 
@@ -112,11 +112,17 @@ const CASES = [
     cmd: 'npm run build',
     output: OUT.npmEnoent,
     relevant: [
-      ['ENOENT on package.json means the cwd is wrong', 'enoent package.json open syscall wrong working directory npm'],
+      [
+        'ENOENT on package.json means the cwd is wrong',
+        'enoent package.json open syscall wrong working directory npm',
+      ],
       ['npm ERR! enoent after a plugin relocation', 'enoent errno npm install path moved plugin cache'],
     ],
     negative: [
-      ['v3.66.0 released: npm publish and signed release green', 'npm run build release publish version bump tag ci green'],
+      [
+        'v3.66.0 released: npm publish and signed release green',
+        'npm run build release publish version bump tag ci green',
+      ],
       ['npm run build now emits the bundled manifest', 'npm run build manifest bundle output artifacts'],
     ],
   },
@@ -125,7 +131,10 @@ const CASES = [
     cmd: 'python train.py --epochs 3',
     output: OUT.pyTraceback,
     relevant: [
-      ['ValueError shape mismatch comes from the unbatched tensor', 'traceback valueerror shape mismatch tensor batch dimension train'],
+      [
+        'ValueError shape mismatch comes from the unbatched tensor',
+        'traceback valueerror shape mismatch tensor batch dimension train',
+      ],
     ],
     negative: [
       ['train.py gained a --epochs flag', 'python train.py epochs flag argument parser added'],
@@ -137,11 +146,20 @@ const CASES = [
     cmd: 'npm run build',
     output: OUT.cannotFindModule,
     relevant: [
-      ['A new lib module must be registered in SOURCE_FILES and package.json#files', 'cannot find module observation-write source_files package.json files manifest missing registration'],
-      ['ERR_MODULE_NOT_FOUND after auto-update means a missing manifest entry', 'module not found resolve filename auto-update manifest tarball'],
+      [
+        'A new lib module must be registered in SOURCE_FILES and package.json#files',
+        'cannot find module observation-write source_files package.json files manifest missing registration',
+      ],
+      [
+        'ERR_MODULE_NOT_FOUND after auto-update means a missing manifest entry',
+        'module not found resolve filename auto-update manifest tarball',
+      ],
     ],
     negative: [
-      ['v3.66.0 released: npm publish and signed release green (dup topic)', 'npm run build release publish signed tag'],
+      [
+        'v3.66.0 released: npm publish and signed release green (dup topic)',
+        'npm run build release publish signed tag',
+      ],
     ],
   },
   {
@@ -149,21 +167,28 @@ const CASES = [
     cmd: 'npx vitest run tests/scope-filter.test.mjs',
     output: OUT.vitestAssertion,
     relevant: [
-      ['Tests that assert an empty result need a decoy row', 'assertionerror expected received empty result decoy vacuous assertion test'],
+      [
+        'Tests that assert an empty result need a decoy row',
+        'assertionerror expected received empty result decoy vacuous assertion test',
+      ],
     ],
-    negative: [
-      ['vitest upgraded to 4.1.6', 'vitest run upgrade version dependency bump'],
-    ],
+    negative: [['vitest upgraded to 4.1.6', 'vitest run upgrade version dependency bump']],
   },
   {
     name: 'type-error',
     cmd: 'node hook.mjs post-tool-use',
     output: OUT.typeError,
     relevant: [
-      ['selectErrorRecall returns null when the gate closes — callers must check', 'typeerror cannot read properties undefined rows null gate caller check'],
+      [
+        'selectErrorRecall returns null when the gate closes — callers must check',
+        'typeerror cannot read properties undefined rows null gate caller check',
+      ],
     ],
     negative: [
-      ['hook.mjs post-tool-use fast path skips low-value tools', 'node hook post-tool-use prefilter skip tools bash'],
+      [
+        'hook.mjs post-tool-use fast path skips low-value tools',
+        'node hook post-tool-use prefilter skip tools bash',
+      ],
     ],
   },
   {
@@ -171,22 +196,24 @@ const CASES = [
     cmd: 'shellcheck scripts/setup.sh',
     output: OUT.commandNotFound,
     relevant: [
-      ['shellcheck is not installed by default; doctor should report it', 'command not found shellcheck install missing binary doctor check'],
+      [
+        'shellcheck is not installed by default; doctor should report it',
+        'command not found shellcheck install missing binary doctor check',
+      ],
     ],
-    negative: [
-      ['scripts/setup.sh gained a self-heal branch', 'scripts setup.sh self heal branch install'],
-    ],
+    negative: [['scripts/setup.sh gained a self-heal branch', 'scripts setup.sh self heal branch install']],
   },
   {
     name: 'go-panic',
     cmd: 'go run ./cmd/server',
     output: OUT.goPanic,
     relevant: [
-      ['nil map assignment panics — initialise before write', 'panic assignment entry nil map initialise make goroutine'],
+      [
+        'nil map assignment panics — initialise before write',
+        'panic assignment entry nil map initialise make goroutine',
+      ],
     ],
-    negative: [
-      ['go run wrapper added to the Makefile', 'go run cmd server makefile wrapper target'],
-    ],
+    negative: [['go run wrapper added to the Makefile', 'go run cmd server makefile wrapper target']],
   },
   // ── NO-GOOD-MATCH cases ──────────────────────────────────────────────────
   // Real failures for which the corpus holds NOTHING that explains them. This is the
@@ -209,9 +236,7 @@ const CASES = [
       'RuntimeError: CUDA driver initialization failed',
     ].join('\n'),
     relevant: [],
-    negative: [
-      ['train.py gained a --device flag', 'python train.py device flag argument parser'],
-    ],
+    negative: [['train.py gained a --device flag', 'python train.py device flag argument parser']],
   },
   {
     name: 'no-match-registry-401',
@@ -221,9 +246,7 @@ const CASES = [
       'npm ERR! 401 Unauthorized - PUT https://registry.npmjs.org/some-pkg',
     ].join('\n'),
     relevant: [],
-    negative: [
-      ['npm publish runs from CI on tag push', 'npm publish access public release ci tag workflow'],
-    ],
+    negative: [['npm publish runs from CI on tag push', 'npm publish access public release ci tag workflow']],
   },
 ];
 
@@ -246,9 +269,9 @@ function assertReachable(c) {
   const sig = detectBashSignificance(c.cmd, c.output);
   if (!sig.isHardError) {
     throw new Error(
-      `case "${c.name}" has isHardError=false — triggerErrorRecall is never called for it. `
-      + 'Scoring it would measure a path that does not exist (see #10731). '
-      + 'Trigger-面 coverage is D#151, a different lever.',
+      `case "${c.name}" has isHardError=false — triggerErrorRecall is never called for it. ` +
+        'Scoring it would measure a path that does not exist (see #10731). ' +
+        'Trigger-面 coverage is D#151, a different lever.',
     );
   }
 }
@@ -256,11 +279,13 @@ function assertReachable(c) {
 let seq = 0;
 function insert(db, title, text, { ageDays = 3, project = PROJECT } = {}) {
   const ts = Date.now() - ageDays * DAY;
-  return db.prepare(
-    `INSERT INTO observations (memory_session_id, project, type, title, text, narrative,
+  return db
+    .prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, text, narrative,
        created_at, created_at_epoch, lesson_learned, importance)
      VALUES ('m1', ?, 'bugfix', ?, ?, ?, ?, ?, ?, 2)`,
-  ).run(project, title, text, text, new Date(ts).toISOString(), ts, `lesson ${++seq}`).lastInsertRowid;
+    )
+    .run(project, title, text, text, new Date(ts).toISOString(), ts, `lesson ${++seq}`).lastInsertRowid;
 }
 
 /**
@@ -268,13 +293,28 @@ function insert(db, title, text, { ageDays = 3, project = PROJECT } = {}) {
  * to any case so filler rows cannot become accidental hits — they exist to raise N.
  */
 function seedFiller(db, n) {
-  const words = ['ledger', 'quasar', 'meridian', 'basalt', 'kestrel', 'lumen', 'tundra',
-    'obsidian', 'cadence', 'zephyr', 'granite', 'harbor', 'ivory', 'juniper'];
+  const words = [
+    'ledger',
+    'quasar',
+    'meridian',
+    'basalt',
+    'kestrel',
+    'lumen',
+    'tundra',
+    'obsidian',
+    'cadence',
+    'zephyr',
+    'granite',
+    'harbor',
+    'ivory',
+    'juniper',
+  ];
   const insertMany = db.transaction((count) => {
     for (let i = 0; i < count; i++) {
       const w = words[i % words.length];
-      insert(db, `${w} note ${i}`, `${w} ${words[(i + 3) % words.length]} routine maintenance note ${i}`,
-        { ageDays: 5 + (i % 60) });
+      insert(db, `${w} note ${i}`, `${w} ${words[(i + 3) % words.length]} routine maintenance note ${i}`, {
+        ageDays: 5 + (i % 60),
+      });
     }
   });
   insertMany(n);
@@ -284,8 +324,10 @@ function seedFiller(db, n) {
 export function seedSuite({ filler = 600 } = {}) {
   const db = new Database(':memory:');
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-              VALUES ('s1','m1',?,datetime('now'),?,'active')`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+              VALUES ('s1','m1',?,datetime('now'),?,'active')`,
+  ).run(PROJECT, Date.now());
 
   seedFiller(db, filler);
 
@@ -308,11 +350,18 @@ export function runErrorRecallSuite({ filler = 600, selectOpts = {} } = {}) {
   const { db, truth } = seedSuite({ filler });
   const now = Date.now();
   const rows = [];
-  let injTotal = 0; let relTotal = 0; let negTotal = 0; let injectingCases = 0;
+  let injTotal = 0;
+  let relTotal = 0;
+  let negTotal = 0;
+  let injectingCases = 0;
 
   for (const c of CASES) {
     const sel = selectErrorRecall(db, {
-      cmd: c.cmd, response: c.output, project: PROJECT, now, ...selectOpts,
+      cmd: c.cmd,
+      response: c.output,
+      project: PROJECT,
+      now,
+      ...selectOpts,
     });
     const got = sel ? sel.rows.map((r) => r.id) : [];
     const t = truth.get(c.name);
@@ -324,7 +373,9 @@ export function runErrorRecallSuite({ filler = 600, selectOpts = {} } = {}) {
     // two diverge exactly when a floor suppresses a set — so they are named apart and
     // the summary column is labelled `inj-cases`, not `fired`.
     if (got.length) injectingCases++;
-    injTotal += got.length; relTotal += rel; negTotal += neg;
+    injTotal += got.length;
+    relTotal += rel;
+    negTotal += neg;
     rows.push({
       case: c.name,
       fired: sel !== null,
@@ -373,7 +424,9 @@ export function runErrorRecallSuite({ filler = 600, selectOpts = {} } = {}) {
   };
 }
 
-function pct(x) { return x === null ? '   —  ' : `${(x * 100).toFixed(1)}%`.padStart(6); }
+function pct(x) {
+  return x === null ? '   —  ' : `${(x * 100).toFixed(1)}%`.padStart(6);
+}
 
 /**
  * Score-distribution probe for calibrating a floor — the same shape of measurement
@@ -395,7 +448,12 @@ export function probeScores({ filler = 600, limit = 12 } = {}) {
       // remnant (n=4, min 10.69) as if it were the population (n=19, min 8.33).
       // Caught in pre-release review; the calibration table in error-recall-core's
       // docblock was, for a while, not reproducible from the shipped tool.
-      cmd: c.cmd, response: c.output, project: PROJECT, now, limit, floor: 0,
+      cmd: c.cmd,
+      response: c.output,
+      project: PROJECT,
+      now,
+      limit,
+      floor: 0,
     });
     if (!sel) continue;
     // Record what the gate actually used, so the caller can assert it structurally
@@ -415,7 +473,9 @@ export function probeScores({ filler = 600, limit = 12 } = {}) {
     return { n: s.length, min: s[0], p25: q(0.25), median: q(0.5), p75: q(0.75), max: s[s.length - 1] };
   };
   return {
-    relevant: stat(byClass.relevant), negative: stat(byClass.negative), filler: stat(byClass.filler),
+    relevant: stat(byClass.relevant),
+    negative: stat(byClass.negative),
+    filler: stat(byClass.filler),
     appliedFloor,
   };
 }
@@ -434,8 +494,8 @@ function main() {
     // applied cannot be fooled that way.
     if (d.appliedFloor !== 0) {
       console.error(
-        `\n  ✗ PROBE CONTAMINATED: probeScores ran with floor=${d.appliedFloor}, not 0.`
-        + '\n    It is characterising rows that already survived the gate being calibrated.\n',
+        `\n  ✗ PROBE CONTAMINATED: probeScores ran with floor=${d.appliedFloor}, not 0.` +
+          '\n    It is characterising rows that already survived the gate being calibrated.\n',
       );
       process.exitCode = 1;
     }
@@ -443,9 +503,13 @@ function main() {
     console.log('class       n    min    p25    med    p75    max');
     for (const [k, s] of Object.entries(d)) {
       if (k === 'appliedFloor') continue;
-      if (!s) { console.log(k.padEnd(10), '   0      —'); continue; }
+      if (!s) {
+        console.log(k.padEnd(10), '   0      —');
+        continue;
+      }
       console.log(
-        k.padEnd(10), String(s.n).padStart(3),
+        k.padEnd(10),
+        String(s.n).padStart(3),
         ...[s.min, s.p25, s.median, s.p75, s.max].map((x) => x.toFixed(2).padStart(6)),
       );
     }
@@ -465,9 +529,15 @@ function main() {
     for (const f of [0, 5, 8, 9, 10, 10.5, 11, 11.2, 12, 15, 20, 25]) {
       const t = runErrorRecallSuite({ selectOpts: { floor: f } }).totals;
       console.log(
-        String(f).padStart(6), String(t.injected).padStart(5), String(t.relevant).padStart(5),
-        String(t.negative).padStart(5), String(t.filler).padStart(6),
-        pct(t.precision), pct(t.hitRate), pct(t.correctSilence), String(t.wastedRows).padStart(6),
+        String(f).padStart(6),
+        String(t.injected).padStart(5),
+        String(t.relevant).padStart(5),
+        String(t.negative).padStart(5),
+        String(t.filler).padStart(6),
+        pct(t.precision),
+        pct(t.hitRate),
+        pct(t.correctSilence),
+        String(t.wastedRows).padStart(6),
       );
     }
     console.log('\n  Pick the largest floor that holds hit-rate; report the recall cost if any.\n');
@@ -481,20 +551,35 @@ function main() {
     // the default is 0, so comparing against it would print two identical rows.
     const before = runErrorRecallSuite({ selectOpts: { floor: 0 } });
     const after = runErrorRecallSuite({ selectOpts: { floor: CALIBRATED_ERROR_RECALL_BM25_FLOOR } });
-    const row = (label, t) => console.log(
-      label.padEnd(10), String(t.injectingCases).padStart(5), String(t.injected).padStart(5),
-      String(t.relevant).padStart(5), String(t.negative).padStart(5), String(t.filler).padStart(6),
-      pct(t.precision), pct(t.hitRate),
+    const row = (label, t) =>
+      console.log(
+        label.padEnd(10),
+        String(t.injectingCases).padStart(5),
+        String(t.injected).padStart(5),
+        String(t.relevant).padStart(5),
+        String(t.negative).padStart(5),
+        String(t.filler).padStart(6),
+        pct(t.precision),
+        pct(t.hitRate),
+      );
+    console.log(
+      `\n─── error-recall: floor OFF vs ${CALIBRATED_ERROR_RECALL_BM25_FLOOR} (calibrated; shipped default is OFF) ───`,
     );
-    console.log(`\n─── error-recall: floor OFF vs ${CALIBRATED_ERROR_RECALL_BM25_FLOOR} (calibrated; shipped default is OFF) ───`);
     console.log('       inj-cases   inj   rel   neg  filler  P@inj hit-rate');
     row('before', before.totals);
     row('after', after.totals);
-    const b = before.totals; const a = after.totals;
+    const b = before.totals;
+    const a = after.totals;
     console.log(`\n  injected  ${b.injected} → ${a.injected} (${a.injected - b.injected})`);
-    console.log(`  filler    ${b.filler} → ${a.filler} (${a.filler - b.filler})  ← true off-topic false positives`);
-    console.log(`  negative  ${b.negative} → ${a.negative} (${a.negative - b.negative})  ← topical-but-unrequested (#8858: NOT this lever's target)`);
-    console.log(`  relevant  ${b.relevant} → ${a.relevant} (${a.relevant - b.relevant})  ← recall cost, must be reported even at 0`);
+    console.log(
+      `  filler    ${b.filler} → ${a.filler} (${a.filler - b.filler})  ← true off-topic false positives`,
+    );
+    console.log(
+      `  negative  ${b.negative} → ${a.negative} (${a.negative - b.negative})  ← topical-but-unrequested (#8858: NOT this lever's target)`,
+    );
+    console.log(
+      `  relevant  ${b.relevant} → ${a.relevant} (${a.relevant - b.relevant})  ← recall cost, must be reported even at 0`,
+    );
     console.log(`  precision ${(b.precision * 100).toFixed(1)}% → ${(a.precision * 100).toFixed(1)}%`);
     console.log(`  hit-rate  ${(b.hitRate * 100).toFixed(1)}% → ${(a.hitRate * 100).toFixed(1)}%`);
     if (a.injected === b.injected) {
@@ -513,7 +598,10 @@ function main() {
   }
 
   const res = runErrorRecallSuite();
-  if (json) { console.log(JSON.stringify(res, null, 2)); return; }
+  if (json) {
+    console.log(JSON.stringify(res, null, 2));
+    return;
+  }
 
   console.log('\n─── error-recall calibration suite ───');
   console.log('case                 fired  inj  rel  neg  fill   P@inj');
@@ -539,7 +627,9 @@ function main() {
     String(t.filler).padStart(5),
     pct(t.precision),
   );
-  console.log(`\n  precision = relevant ÷ injected = ${t.relevant}/${t.injected} = ${(t.precision * 100).toFixed(1)}%`);
+  console.log(
+    `\n  precision = relevant ÷ injected = ${t.relevant}/${t.injected} = ${(t.precision * 100).toFixed(1)}%`,
+  );
   console.log(`  hit-rate  = cases with ≥1 explaining row = ${(t.hitRate * 100).toFixed(1)}%`);
   console.log('  A lever that raises precision while holding hit-rate is a win; one that');
   console.log('  raises precision by dropping hit-rate is trading recall for it — say so.\n');

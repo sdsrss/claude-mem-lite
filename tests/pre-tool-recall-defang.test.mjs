@@ -25,13 +25,18 @@ function runScript(input, env = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    child.stdout.on('data', d => { stdout += d; });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
     child.stderr.on('data', () => {});
     child.on('close', () => res({ stdout }));
     child.on('error', rej);
     child.stdin.write(JSON.stringify(input));
     child.stdin.end();
-    setTimeout(() => { child.kill(); rej(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    setTimeout(() => {
+      child.kill();
+      rej(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -54,7 +59,11 @@ describe('pre-tool-recall defang (MED-1)', () => {
   });
 
   afterEach(() => {
-    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function seed({ title, lessonLearned, file }) {
@@ -62,19 +71,25 @@ describe('pre-tool-recall defang (MED-1)', () => {
     db.pragma('foreign_keys = OFF');
     initSchema(db);
     insertObs(db, {
-      sessionId: 'mem-d', project: 'parent--defangtest',
-      type: 'bugfix', importance: 2,
-      title, lessonLearned,
+      sessionId: 'mem-d',
+      project: 'parent--defangtest',
+      type: 'bugfix',
+      importance: 2,
+      title,
+      lessonLearned,
       filesModified: `["${join(projectDir, file)}"]`,
     });
     db.close();
   }
 
   async function recall(file) {
-    const { stdout } = await runScript({
-      tool_name: 'Edit',
-      tool_input: { file_path: join(projectDir, file) },
-    }, { CLAUDE_MEM_DB_PATH: dbPath, CLAUDE_MEM_RUNTIME_DIR: runtimeDir, CLAUDE_PROJECT_DIR: projectDir });
+    const { stdout } = await runScript(
+      {
+        tool_name: 'Edit',
+        tool_input: { file_path: join(projectDir, file) },
+      },
+      { CLAUDE_MEM_DB_PATH: dbPath, CLAUDE_MEM_RUNTIME_DIR: runtimeDir, CLAUDE_PROJECT_DIR: projectDir },
+    );
     return JSON.parse(stdout).hookSpecificOutput.additionalContext;
   }
 

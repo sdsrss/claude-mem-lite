@@ -12,8 +12,8 @@
 // loaded only on the enabled Agent path). Fail-open: never exits non-zero, never blocks
 // a dispatch (a thrown hook would abort the user's subagent).
 
-const ENABLED = process.env.CLAUDE_MEM_SUBAGENT_INJECT === 'on'
-  || process.env.CLAUDE_MEM_SUBAGENT_INJECT === '1';
+const ENABLED =
+  process.env.CLAUDE_MEM_SUBAGENT_INJECT === 'on' || process.env.CLAUDE_MEM_SUBAGENT_INJECT === '1';
 
 // Telemetry via DYNAMIC import so the default-off fast path stays import-free
 // (the file's stated contract). Only ever reached on the enabled path's failure
@@ -30,7 +30,9 @@ async function recordFailure(scope, err, ctx) {
     // the error path, which already dynamic-imports, so the script's zero-import budget on
     // the HAPPY path is untouched.
     recordHookError(scope, err, resolveRuntimeDir(resolveDataDir(process.env.CLAUDE_MEM_DIR)), ctx);
-  } catch { /* never */ }
+  } catch {
+    /* never */
+  }
 }
 
 // The ONE hand-written stdin reader left in the tree, and it stays deliberately (P1-9).
@@ -43,7 +45,14 @@ async function recordFailure(scope, err, ctx) {
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
-    const timer = setTimeout(() => { try { process.stdin.destroy(); } catch { /* */ } resolve(data); }, 1500);
+    const timer = setTimeout(() => {
+      try {
+        process.stdin.destroy();
+      } catch {
+        /* */
+      }
+      resolve(data);
+    }, 1500);
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (c) => {
       data += c;
@@ -51,21 +60,39 @@ function readStdin() {
       // its own (see the no-forced-exit note at the bottom) rather than streaming to
       // the 1.5s timeout. 262144 = MAX_HOOK_STDIN_BYTES (utils.mjs) repeated as a
       // literal ON PURPOSE: the default-off fast path above must stay import-free.
-      if (data.length > 262144) { clearTimeout(timer); try { process.stdin.destroy(); } catch { /* */ } resolve(data.slice(0, 262144)); }
+      if (data.length > 262144) {
+        clearTimeout(timer);
+        try {
+          process.stdin.destroy();
+        } catch {
+          /* */
+        }
+        resolve(data.slice(0, 262144));
+      }
     });
-    process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
-    process.stdin.on('error', () => { clearTimeout(timer); resolve(data); });
+    process.stdin.on('end', () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+    process.stdin.on('error', () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
     process.stdin.resume();
   });
 }
 
 async function main() {
-  if (!ENABLED) return;                             // default: cheapest possible no-op
-  if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;  // recursion guard (background claude -p)
+  if (!ENABLED) return; // default: cheapest possible no-op
+  if (process.env.CLAUDE_MEM_HOOK_RUNNING) return; // recursion guard (background claude -p)
 
   const raw = await readStdin();
   let hook;
-  try { hook = JSON.parse(raw); } catch { return; }
+  try {
+    hook = JSON.parse(raw);
+  } catch {
+    return;
+  }
   if (!hook || typeof hook !== 'object') return;
   if (hook.tool_name !== 'Agent' && hook.tool_name !== 'Task') return;
 
@@ -83,7 +110,12 @@ async function main() {
   const { queueHookUpdatedInput, flushHookStdout } = await import('../lib/hook-stdout.mjs');
 
   let db;
-  try { db = ensureDb(); } catch (e) { await recordFailure('agent-inject:db-open', e); return; }
+  try {
+    db = ensureDb();
+  } catch (e) {
+    await recordFailure('agent-inject:db-open', e);
+    return;
+  }
   try {
     const updatedInput = buildSubagentInjection(db, hook.tool_input, inferProject());
     if (updatedInput) {
@@ -97,8 +129,14 @@ async function main() {
       queueHookUpdatedInput('PreToolUse', updatedInput);
       flushHookStdout();
     }
-  } catch (e) { await recordFailure('agent-inject:query', e); /* never break a dispatch */ } finally {
-    try { db.close(); } catch { /* */ }
+  } catch (e) {
+    await recordFailure('agent-inject:query', e); /* never break a dispatch */
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* */
+    }
   }
 }
 

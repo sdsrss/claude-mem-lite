@@ -8,27 +8,29 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import {
-  encodeProjectPath, memdirPath,
-  readMemoryIndex, writePluginSection, removePluginSection,
-  writePluginDoc, removePluginDoc,
+  encodeProjectPath,
+  memdirPath,
+  readMemoryIndex,
+  writePluginSection,
+  removePluginSection,
+  writePluginDoc,
+  removePluginDoc,
   isAdopted,
   auditMemdir,
-  UserEditedError, BudgetExceededError,
+  UserEditedError,
+  BudgetExceededError,
 } from '../memdir.mjs';
 
 // ─── T5: encodeProjectPath ───────────────────────────────────────────────────
 
 describe('encodeProjectPath', () => {
   it('matches ground-truth for the mem project itself (#7687)', () => {
-    expect(encodeProjectPath('/mnt/data_ssd/dev/projects/mem'))
-      .toBe('-mnt-data-ssd-dev-projects-mem');
+    expect(encodeProjectPath('/mnt/data_ssd/dev/projects/mem')).toBe('-mnt-data-ssd-dev-projects-mem');
   });
 
   it('mangles dots and underscores', () => {
-    expect(encodeProjectPath('/Users/alice/Work/proj.v2'))
-      .toBe('-Users-alice-Work-proj-v2');
-    expect(encodeProjectPath('my_project'))
-      .toBe('my-project');
+    expect(encodeProjectPath('/Users/alice/Work/proj.v2')).toBe('-Users-alice-Work-proj-v2');
+    expect(encodeProjectPath('my_project')).toBe('my-project');
   });
 
   it('mangles CJK and other non-alphanumeric to "-" per Claude Code policy', () => {
@@ -49,8 +51,7 @@ describe('encodeProjectPath', () => {
 describe('memdirPath', () => {
   it('combines home + .claude/projects/<encoded>/memory/', () => {
     const p = memdirPath('/mnt/data_ssd/dev/projects/mem');
-    expect(p).toBe(join(homedir(), '.claude', 'projects',
-      '-mnt-data-ssd-dev-projects-mem', 'memory'));
+    expect(p).toBe(join(homedir(), '.claude', 'projects', '-mnt-data-ssd-dev-projects-mem', 'memory'));
   });
 });
 
@@ -119,9 +120,9 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
     writePluginSection(memdir, { slug, version: 'v1', contentLine: 'original' });
     const path = join(memdir, 'MEMORY.md');
     writeFileSync(path, readFileSync(path, 'utf8').replace('original', 'I-hacked-this'));
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'auto-update' }),
-    ).toThrow(UserEditedError);
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'auto-update' })).toThrow(
+      UserEditedError,
+    );
   });
 
   it('force=true overrides UserEditedError', () => {
@@ -129,7 +130,10 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
     const path = join(memdir, 'MEMORY.md');
     writeFileSync(path, readFileSync(path, 'utf8').replace('original', 'hand-edit'));
     const r = writePluginSection(memdir, {
-      slug, version: 'v1', contentLine: 'auto-update', force: true,
+      slug,
+      version: 'v1',
+      contentLine: 'auto-update',
+      force: true,
     });
     expect(r.action).toBe('updated');
     const body = readFileSync(path, 'utf8');
@@ -140,9 +144,9 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
   it('throws UserEditedError when sentinel exists but state file is missing', () => {
     writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' });
     rmSync(join(memdir, '.plugin_claude_mem_lite_state.json'));
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' }),
-    ).toThrow(UserEditedError);
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' })).toThrow(
+      UserEditedError,
+    );
   });
 
   it('preserves user content outside the sentinel block', () => {
@@ -233,9 +237,9 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
   it('throws BudgetExceededError when inserting into >180 line MEMORY.md', () => {
     const big = Array.from({ length: 200 }, (_, i) => `- line ${i}`).join('\n') + '\n';
     writeFileSync(join(memdir, 'MEMORY.md'), big);
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' }),
-    ).toThrow(BudgetExceededError);
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' })).toThrow(
+      BudgetExceededError,
+    );
   });
 
   it('accepts MEMORY.md at exactly the 180-line boundary (v2.32.3: no off-by-one)', () => {
@@ -243,17 +247,15 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
     // a newline, so a POSIX-correct 180-line file tripped BudgetExceeded.
     const content = Array.from({ length: 180 }, (_, i) => `- line ${i}`).join('\n') + '\n';
     writeFileSync(join(memdir, 'MEMORY.md'), content);
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' }),
-    ).not.toThrow();
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' })).not.toThrow();
   });
 
   it('rejects at exactly 181 lines (the real budget edge)', () => {
     const content = Array.from({ length: 181 }, (_, i) => `- line ${i}`).join('\n') + '\n';
     writeFileSync(join(memdir, 'MEMORY.md'), content);
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' }),
-    ).toThrow(BudgetExceededError);
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'x' })).toThrow(
+      BudgetExceededError,
+    );
   });
 
   it('removePluginSection normalizes leading whitespace after removing the first sentinel', () => {
@@ -278,9 +280,7 @@ describe('sentinel IO (writePluginSection / readMemoryIndex / removePluginSectio
     const filler = Array.from({ length: 200 }, (_, i) => `filler ${i}`).join('\n');
     writeFileSync(path, filler + '\n' + prev);
     // 3) update is still allowed (no new line growth)
-    expect(() =>
-      writePluginSection(memdir, { slug, version: 'v1', contentLine: 'updated' }),
-    ).not.toThrow();
+    expect(() => writePluginSection(memdir, { slug, version: 'v1', contentLine: 'updated' })).not.toThrow();
     expect(readFileSync(path, 'utf8')).toContain('updated');
   });
 });
@@ -388,7 +388,9 @@ describe('auditMemdir', () => {
 
   const FRONT = ['---', 'name: Foo', 'description: bar', 'type: feedback', '---', ''].join('\n');
 
-  function write(name, body) { writeFileSync(join(memdir, name), FRONT + body); }
+  function write(name, body) {
+    writeFileSync(join(memdir, name), FRONT + body);
+  }
 
   it('returns empty result when memdir does not exist', () => {
     const fake = join(tmp, 'does-not-exist');
@@ -401,8 +403,10 @@ describe('auditMemdir', () => {
   });
 
   it('classifies a fully-compliant feedback file as compliant', () => {
-    write('feedback_good.md',
-      'The rule itself.\n\n**Why:** because of past incident X.\n\n**How to apply:** when editing module Y.\n');
+    write(
+      'feedback_good.md',
+      'The rule itself.\n\n**Why:** because of past incident X.\n\n**How to apply:** when editing module Y.\n',
+    );
     const r = auditMemdir(memdir);
     expect(r.compliant).toEqual(['feedback_good.md']);
     expect(r.missingWhy).toEqual([]);
@@ -412,15 +416,16 @@ describe('auditMemdir', () => {
   });
 
   it('classifies a project file with both fields as compliant', () => {
-    write('project_initiative.md',
-      'Decision text.\n**Why:** legal compliance.\n**How to apply:** scope decisions favor compliance.\n');
+    write(
+      'project_initiative.md',
+      'Decision text.\n**Why:** legal compliance.\n**How to apply:** scope decisions favor compliance.\n',
+    );
     const r = auditMemdir(memdir);
     expect(r.compliant).toEqual(['project_initiative.md']);
   });
 
   it('flags missing **Why:** correctly', () => {
-    write('feedback_no_why.md',
-      'A rule.\n**How to apply:** in CI hooks only.\n');
+    write('feedback_no_why.md', 'A rule.\n**How to apply:** in CI hooks only.\n');
     const r = auditMemdir(memdir);
     expect(r.missingWhy).toEqual(['feedback_no_why.md']);
     expect(r.missingHowToApply).toEqual([]);
@@ -428,8 +433,7 @@ describe('auditMemdir', () => {
   });
 
   it('flags missing **How to apply:** correctly', () => {
-    write('project_no_how.md',
-      'A fact.\n**Why:** stakeholder ask.\n');
+    write('project_no_how.md', 'A fact.\n**Why:** stakeholder ask.\n');
     const r = auditMemdir(memdir);
     expect(r.missingHowToApply).toEqual(['project_no_how.md']);
     expect(r.missingWhy).toEqual([]);
@@ -472,8 +476,7 @@ describe('auditMemdir', () => {
   });
 
   it('classifies a mixed memdir into all four buckets in sorted order', () => {
-    write('feedback_b_good.md',
-      '**Why:** reason\n**How to apply:** rule\n');
+    write('feedback_b_good.md', '**Why:** reason\n**How to apply:** rule\n');
     write('feedback_a_no_why.md', '**How to apply:** rule\n');
     write('project_c_no_how.md', '**Why:** reason\n');
     write('project_d_orphan.md', 'orphan\n');
@@ -488,8 +491,7 @@ describe('auditMemdir', () => {
   });
 
   it('tolerates trailing whitespace and bold-marker variants in the field labels', () => {
-    write('feedback_loose.md',
-      '**Why:**   reason here\n**How to apply:** rule\n');
+    write('feedback_loose.md', '**Why:**   reason here\n**How to apply:** rule\n');
     const r = auditMemdir(memdir);
     expect(r.compliant).toEqual(['feedback_loose.md']);
   });
@@ -497,9 +499,18 @@ describe('auditMemdir', () => {
   it('does NOT count fields that appear only inside frontmatter', () => {
     // If a file only has e.g. `description: **Why:** foo` in frontmatter
     // (no body usage), that is NOT compliant — body-structure means body.
-    writeFileSync(join(memdir, 'feedback_frontmatter_only.md'),
-      ['---', 'name: F', 'description: "**Why:** dummy"', 'type: feedback', '---', '',
-       'Body without the structure.\n'].join('\n'));
+    writeFileSync(
+      join(memdir, 'feedback_frontmatter_only.md'),
+      [
+        '---',
+        'name: F',
+        'description: "**Why:** dummy"',
+        'type: feedback',
+        '---',
+        '',
+        'Body without the structure.\n',
+      ].join('\n'),
+    );
     const r = auditMemdir(memdir);
     expect(r.missingBoth).toEqual(['feedback_frontmatter_only.md']);
   });
@@ -511,14 +522,28 @@ describe('auditMemdir', () => {
   // otherwise frontmatter type ∈ {feedback, project} selects the file for audit.
 
   function writeKebab(name, type, body) {
-    writeFileSync(join(memdir, name),
-      ['---', `name: ${name.replace(/\.md$/, '')}`, 'description: "d"', 'metadata: ',
-       '  node_type: memory', `  type: ${type}`, '---', '', body].join('\n'));
+    writeFileSync(
+      join(memdir, name),
+      [
+        '---',
+        `name: ${name.replace(/\.md$/, '')}`,
+        'description: "d"',
+        'metadata: ',
+        '  node_type: memory',
+        `  type: ${type}`,
+        '---',
+        '',
+        body,
+      ].join('\n'),
+    );
   }
 
   it('audits a kebab-case file whose metadata.type is project', () => {
-    writeKebab('ship-runbook.md', 'project',
-      'Release flow.\n**Why:** repeatable releases.\n**How to apply:** follow the 5-file sync.\n');
+    writeKebab(
+      'ship-runbook.md',
+      'project',
+      'Release flow.\n**Why:** repeatable releases.\n**How to apply:** follow the 5-file sync.\n',
+    );
     const r = auditMemdir(memdir);
     expect(r.compliant).toEqual(['ship-runbook.md']);
     expect(r.total).toBe(1);
@@ -531,9 +556,17 @@ describe('auditMemdir', () => {
   });
 
   it('audits a kebab-case file with top-level frontmatter type: feedback', () => {
-    writeFileSync(join(memdir, 'cite-lessons.md'),
-      ['---', 'name: cite-lessons', 'type: feedback', '---', '',
-       '**Why:** decay.\n**How to apply:** cite #NN.\n'].join('\n'));
+    writeFileSync(
+      join(memdir, 'cite-lessons.md'),
+      [
+        '---',
+        'name: cite-lessons',
+        'type: feedback',
+        '---',
+        '',
+        '**Why:** decay.\n**How to apply:** cite #NN.\n',
+      ].join('\n'),
+    );
     const r = auditMemdir(memdir);
     expect(r.compliant).toEqual(['cite-lessons.md']);
   });
@@ -548,8 +581,10 @@ describe('auditMemdir', () => {
 
   it('node_type: memory in frontmatter is not mistaken for the type field', () => {
     // regression guard: the `type:` extractor must not match `node_type:`.
-    writeFileSync(join(memdir, 'only-nodetype.md'),
-      ['---', 'name: x', 'metadata: ', '  node_type: project', '---', '', 'body\n'].join('\n'));
+    writeFileSync(
+      join(memdir, 'only-nodetype.md'),
+      ['---', 'name: x', 'metadata: ', '  node_type: project', '---', '', 'body\n'].join('\n'),
+    );
     const r = auditMemdir(memdir);
     expect(r.total).toBe(0);
   });

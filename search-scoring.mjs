@@ -79,13 +79,17 @@ export function reRankWithContext(db, results, project) {
   if (!results || results.length === 0) return;
   // Get recently active files (last 2 hours, same project) via observation_files junction table
   const twoHoursAgo = Date.now() - 2 * 3600000;
-  const recentFiles = db.prepare(`
+  const recentFiles = db
+    .prepare(
+      `
     SELECT DISTINCT of2.filename FROM observation_files of2
     JOIN observations o ON o.id = of2.obs_id
     WHERE o.project = ? AND o.created_at_epoch > ?
-  `).all(project, twoHoursAgo);
+  `,
+    )
+    .all(project, twoHoursAgo);
 
-  const activeFiles = new Set(recentFiles.map(r => r.filename));
+  const activeFiles = new Set(recentFiles.map((r) => r.filename));
   if (activeFiles.size === 0) return;
 
   // Pre-compute active directories for directory-level matching
@@ -96,13 +100,13 @@ export function reRankWithContext(db, results, project) {
   }
 
   // Batch-fetch observation_files for all obs result IDs
-  const obsResults = results.filter(r => r.source === 'obs' && r.id);
+  const obsResults = results.filter((r) => r.source === 'obs' && r.id);
   if (obsResults.length === 0) return;
-  const obsIds = obsResults.map(r => r.id);
+  const obsIds = obsResults.map((r) => r.id);
   const placeholders = obsIds.map(() => '?').join(',');
-  const fileRows = db.prepare(
-    `SELECT obs_id, filename FROM observation_files WHERE obs_id IN (${placeholders})`
-  ).all(...obsIds);
+  const fileRows = db
+    .prepare(`SELECT obs_id, filename FROM observation_files WHERE obs_id IN (${placeholders})`)
+    .all(...obsIds);
 
   // Build map: obs_id → [filenames]
   const obsFileMap = new Map();
@@ -114,9 +118,9 @@ export function reRankWithContext(db, results, project) {
   for (const result of obsResults) {
     const resultFiles = obsFileMap.get(result.id);
     if (!resultFiles || resultFiles.length === 0) continue;
-    const exactMatches = resultFiles.filter(f => activeFiles.has(f)).length;
+    const exactMatches = resultFiles.filter((f) => activeFiles.has(f)).length;
     // Directory-level: same parent dir but different file (half weight)
-    const dirMatches = resultFiles.filter(f => {
+    const dirMatches = resultFiles.filter((f) => {
       if (activeFiles.has(f)) return false; // already counted as exact
       const lastSlash = f.lastIndexOf('/');
       return lastSlash > 0 && activeDirs.has(f.substring(0, lastSlash));
@@ -124,7 +128,7 @@ export function reRankWithContext(db, results, project) {
     const fileOverlap = (exactMatches + 0.5 * dirMatches) / resultFiles.length;
     // BM25 scores are negative — multiply by >1 makes more negative = better rank
     if (result.score !== null && result.score !== undefined && fileOverlap > 0) {
-      result.score *= (1.0 + 0.3 * fileOverlap);
+      result.score *= 1.0 + 0.3 * fileOverlap;
     }
   }
   // Note: caller re-sorts the main results array after this — no sort needed here
@@ -138,8 +142,18 @@ export function reRankWithContext(db, results, project) {
 /** @type {Set<string>} Common words excluded from PRF term extraction */
 export const PRF_STOP_WORDS = new Set([
   ...BASE_STOP_WORDS,
-  'use', 'used', 'using', 'new', 'added', 'updated',
-  'file', 'files', 'code', 'change', 'changed', 'changes',
+  'use',
+  'used',
+  'using',
+  'new',
+  'added',
+  'updated',
+  'file',
+  'files',
+  'code',
+  'change',
+  'changed',
+  'changes',
 ]);
 
 /**
@@ -155,9 +169,11 @@ export function extractPRFTerms(results, ftsQuery, limit = 3) {
   // query term (e.g. "authenticate" when the user searched "authentication") are also
   // excluded, not just the exact surface form.
   const queryTokens = new Set(
-    ftsQuery.replace(/["()]/g, ' ').split(/\s+/)
-      .map(t => porterStem(t.toLowerCase()))
-      .filter(t => t.length > 1 && t !== 'or' && t !== 'and')
+    ftsQuery
+      .replace(/["()]/g, ' ')
+      .split(/\s+/)
+      .map((t) => porterStem(t.toLowerCase()))
+      .filter((t) => t.length > 1 && t !== 'or' && t !== 'and'),
   );
 
   // Bucket morphological variants by porter STEM so "cache"/"caching"/"cached" jointly
@@ -172,13 +188,16 @@ export function extractPRFTerms(results, ftsQuery, limit = 3) {
   // narratives) made `stemSurfaces[stem] ||= new Map()` read the INHERITED function
   // as truthy, skip the assignment, and crash on sm.get (surfaced 2026-08-16 when
   // the M-2 gate fix first ran PRF over OR-rescued rows).
-  const stemDocCount = Object.create(null);   // stem -> # of top docs it appears in (the >=2 bar)
-  const stemSurfaces = Object.create(null);   // stem -> Map(surface -> total occurrences)
+  const stemDocCount = Object.create(null); // stem -> # of top docs it appears in (the >=2 bar)
+  const stemSurfaces = Object.create(null); // stem -> Map(surface -> total occurrences)
   const docCount = Math.min(results.length, 8);
   for (let i = 0; i < docCount; i++) {
     const r = results[i];
     const text = ((r.title || '') + ' ' + (r.narrative || '')).toLowerCase();
-    const surfaces = text.replace(/[^a-z0-9_-]/g, ' ').split(/\s+/).filter(t => t.length >= 3);
+    const surfaces = text
+      .replace(/[^a-z0-9_-]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length >= 3);
     const docStems = new Set();
     for (const surface of surfaces) {
       // Stop-word filter at BOTH surface and stem level: PRF_STOP_WORDS lists surface
@@ -201,9 +220,13 @@ export function extractPRFTerms(results, ftsQuery, limit = 3) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([stem]) => {
-      let best = null, bestN = -1;
+      let best = null,
+        bestN = -1;
       for (const [surface, n] of stemSurfaces[stem]) {
-        if (n > bestN) { best = surface; bestN = n; }
+        if (n > bestN) {
+          best = surface;
+          bestN = n;
+        }
       }
       return best;
     });
@@ -224,15 +247,22 @@ export function extractPRFTerms(results, ftsQuery, limit = 3) {
 export function expandQueryByConcepts(db, ftsQuery, project) {
   let rows;
   try {
-    rows = db.prepare(`
+    rows = db
+      .prepare(
+        `
       SELECT o.concepts FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND ${liveObsFilterSql('o')}
         AND (? IS NULL OR o.project = ?)
       ORDER BY ${OBS_BM25}
       LIMIT 20
-    `).all(ftsQuery, project ?? null, project ?? null);
-  } catch (e) { debugCatch(e, 'expandQueryByConcepts-fts'); return []; }
+    `,
+      )
+      .all(ftsQuery, project ?? null, project ?? null);
+  } catch (e) {
+    debugCatch(e, 'expandQueryByConcepts-fts');
+    return [];
+  }
 
   if (rows.length === 0) return [];
 
@@ -247,9 +277,11 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
 
   // Filter out terms already present in the query
   const queryTokens = new Set(
-    ftsQuery.replace(/["()]/g, ' ').split(/\s+/)
-      .map(t => t.toLowerCase())
-      .filter(t => t.length > 1 && t !== 'or' && t !== 'and')
+    ftsQuery
+      .replace(/["()]/g, ' ')
+      .split(/\s+/)
+      .map((t) => t.toLowerCase())
+      .filter((t) => t.length > 1 && t !== 'or' && t !== 'and'),
   );
 
   return Object.entries(freq)
@@ -271,12 +303,14 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
 export function autoBoostIfNeeded(db, ids) {
   if (!ids || ids.length === 0) return;
   const placeholders = ids.map(() => '?').join(',');
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE observations SET importance = 2
     WHERE id IN (${placeholders})
       AND COALESCE(importance, 1) = 1
       AND COALESCE(access_count, 0) >= 2
-  `).run(...ids);
+  `,
+  ).run(...ids);
 }
 
 // ─── Idle Cleanup ────────────────────────────────────────────────────────────
@@ -305,7 +339,9 @@ export function runIdleCleanup(db) {
     for (const { types, days } of staleThresholds) {
       const cutoff = Date.now() - days * DAY_MS;
 
-      const marked = db.prepare(`
+      const marked = db
+        .prepare(
+          `
         UPDATE observations SET compressed_into = ${COMPRESSED_PENDING_PURGE}
         WHERE importance <= 1 AND COALESCE(access_count, 0) = 0
           -- injection_count=0, the second half of decayAndMarkIdle's engagement guard
@@ -331,10 +367,14 @@ export function runIdleCleanup(db) {
           -- SAME "lessons never auto-GC" guard; without it a lesson demoted to imp≤1
           -- by citation-decay gets pending-purge'd here and hard-deleted by purgeStale.
           AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
-      `).run(cutoff);
+      `,
+        )
+        .run(cutoff);
       totalMarked += marked.changes;
 
-      const compressed = db.prepare(`
+      const compressed = db
+        .prepare(
+          `
         UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}
         WHERE COALESCE(compressed_into, 0) = 0 AND importance = 1
           -- Same engagement guard as the mark-idle pass above: COMPRESSED_AUTO also hides
@@ -346,7 +386,9 @@ export function runIdleCleanup(db) {
           -- recoverBuriedLessons only re-floors live (compressed_into=0) rows, so a
           -- compressed lesson is unrecoverable. Parity with selectCompressionCandidates.
           AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
-      `).run(cutoff);
+      `,
+        )
+        .run(cutoff);
       totalCompressed += compressed.changes;
     }
   })();

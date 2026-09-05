@@ -27,27 +27,29 @@ function parseBashSkipTools(script) {
   }
 
   // Extract exact matches section — lines between "Exact matches" comment and next comment or prefix section
-  const exactMatch = script.match(
-    /# Exact matches[^\n]*\n([\s\S]*?)(?=\n\s*# Prefix|\n\s*\*\))/
-  );
+  const exactMatch = script.match(/# Exact matches[^\n]*\n([\s\S]*?)(?=\n\s*# Prefix|\n\s*\*\))/);
   if (exactMatch) {
     // Extract tool names: everything before the closing )
     const block = exactMatch[1];
     // Remove line continuations, whitespace, and the trailing )
     const cleaned = block.replace(/\\\n/g, '').replace(/\s+/g, '');
     // Remove trailing ) and extract pipe-separated names
-    const names = cleaned.replace(/\)[\s\S]*$/, '').split('|').filter(Boolean);
+    const names = cleaned
+      .replace(/\)[\s\S]*$/, '')
+      .split('|')
+      .filter(Boolean);
     for (const name of names) {
       exactTools.add(name);
     }
   }
 
   // Extract prefix filters section
-  const prefixMatch = script.match(
-    /# Prefix filters\n\s*(.*?)\)/
-  );
+  const prefixMatch = script.match(/# Prefix filters\n\s*(.*?)\)/);
   if (prefixMatch) {
-    const patterns = prefixMatch[1].split('|').map(p => p.trim()).filter(Boolean);
+    const patterns = prefixMatch[1]
+      .split('|')
+      .map((p) => p.trim())
+      .filter(Boolean);
     for (const pattern of patterns) {
       // Convert bash glob "foo*" to prefix "foo"
       if (pattern.endsWith('*')) {
@@ -64,18 +66,27 @@ describe('skip-tools consistency', () => {
 
   it('bash exact tools match SKIP_TOOLS set', () => {
     const nodeTools = new Set(SKIP_TOOLS);
-    const missingInBash = [...nodeTools].filter(t => !bashExactTools.has(t));
-    const extraInBash = [...bashExactTools].filter(t => !nodeTools.has(t));
+    const missingInBash = [...nodeTools].filter((t) => !bashExactTools.has(t));
+    const extraInBash = [...bashExactTools].filter((t) => !nodeTools.has(t));
 
-    expect(missingInBash, `Tools in skip-tools.mjs but not in post-tool-use.sh: ${missingInBash.join(', ')}`).toEqual([]);
-    expect(extraInBash, `Tools in post-tool-use.sh but not in skip-tools.mjs: ${extraInBash.join(', ')}`).toEqual([]);
+    expect(
+      missingInBash,
+      `Tools in skip-tools.mjs but not in post-tool-use.sh: ${missingInBash.join(', ')}`,
+    ).toEqual([]);
+    expect(
+      extraInBash,
+      `Tools in post-tool-use.sh but not in skip-tools.mjs: ${extraInBash.join(', ')}`,
+    ).toEqual([]);
   });
 
   it('bash prefix patterns match SKIP_PREFIXES', () => {
     const nodePrefixes = [...SKIP_PREFIXES].sort();
     const sortedBashPrefixes = [...bashPrefixes].sort();
 
-    expect(sortedBashPrefixes, 'Prefix patterns in post-tool-use.sh must match SKIP_PREFIXES in skip-tools.mjs').toEqual(nodePrefixes);
+    expect(
+      sortedBashPrefixes,
+      'Prefix patterns in post-tool-use.sh must match SKIP_PREFIXES in skip-tools.mjs',
+    ).toEqual(nodePrefixes);
   });
 
   it('SKIP_TOOLS is non-empty', () => {

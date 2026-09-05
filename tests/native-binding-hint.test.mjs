@@ -13,8 +13,12 @@ import {
 
 describe('nativeBindingHintDue', () => {
   let dir;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cml-nbh-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cml-nbh-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('is due on first call and records a marker', () => {
     expect(nativeBindingHintDue(dir, 1_000_000)).toBe(true);
@@ -63,7 +67,9 @@ describe('formatHookError', () => {
 
   it('collapses ERR_DLOPEN_FAILED to a short WARN rebuild hint', () => {
     const err = Object.assign(
-      new Error('The module ... was compiled against a different Node.js version using NODE_MODULE_VERSION 127. This version requires 137.'),
+      new Error(
+        'The module ... was compiled against a different Node.js version using NODE_MODULE_VERSION 127. This version requires 137.',
+      ),
       { code: 'ERR_DLOPEN_FAILED' },
     );
     const line = formatHookError(err, 'stop', { now: NOW });

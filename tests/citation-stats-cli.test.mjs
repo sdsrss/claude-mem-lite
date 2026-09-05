@@ -8,20 +8,28 @@ function captureStdout(fn) {
   let output = '';
   const origOut = process.stdout.write;
   const origErr = process.stderr.write;
-  process.stdout.write = (str) => { output += str; return true; };
-  process.stderr.write = (str) => { output += str; return true; };
+  process.stdout.write = (str) => {
+    output += str;
+    return true;
+  };
+  process.stderr.write = (str) => {
+    output += str;
+    return true;
+  };
   try {
     const result = fn();
     if (result && typeof result.then === 'function') {
-      return result.then(() => {
-        process.stdout.write = origOut;
-        process.stderr.write = origErr;
-        return output;
-      }).catch((err) => {
-        process.stdout.write = origOut;
-        process.stderr.write = origErr;
-        throw err;
-      });
+      return result
+        .then(() => {
+          process.stdout.write = origOut;
+          process.stderr.write = origErr;
+          return output;
+        })
+        .catch((err) => {
+          process.stdout.write = origOut;
+          process.stderr.write = origErr;
+          throw err;
+        });
     }
   } catch (err) {
     process.stdout.write = origOut;
@@ -37,17 +45,22 @@ function captureStdout(fn) {
 function captureStdoutOnly(fn) {
   let output = '';
   const original = process.stdout.write;
-  process.stdout.write = (str) => { output += str; return true; };
+  process.stdout.write = (str) => {
+    output += str;
+    return true;
+  };
   try {
     const result = fn();
     if (result && typeof result.then === 'function') {
-      return result.then(() => {
-        process.stdout.write = original;
-        return output;
-      }).catch((err) => {
-        process.stdout.write = original;
-        throw err;
-      });
+      return result
+        .then(() => {
+          process.stdout.write = original;
+          return output;
+        })
+        .catch((err) => {
+          process.stdout.write = original;
+          throw err;
+        });
     }
   } catch (err) {
     process.stdout.write = original;
@@ -63,12 +76,13 @@ vi.mock('../schema.mjs', async (importOriginal) => {
   // Proxy intercepts close() so the CLI can't close our test DB. Stub BOTH
   // openers — mem-cli routes through ensureDbWithWalRecovery since the
   // WAL-recovery hoist; an unstubbed opener escapes to the real user DB.
-  const stub = () => new Proxy(testDb, {
-    get(target, prop) {
-      if (prop === 'close') return () => {};
-      return target[prop];
-    },
-  });
+  const stub = () =>
+    new Proxy(testDb, {
+      get(target, prop) {
+        if (prop === 'close') return () => {};
+        return target[prop];
+      },
+    });
   return { ...original, ensureDb: stub, ensureDbWithWalRecovery: stub };
 });
 
@@ -91,7 +105,9 @@ describe('citation-stats CLI', () => {
   });
 
   afterEach(() => {
-    try { testDb.close(); } catch {}
+    try {
+      testDb.close();
+    } catch {}
   });
 
   function obs(overrides) {
@@ -105,7 +121,8 @@ describe('citation-stats CLI', () => {
     });
     const id = result.lastInsertRowid;
     // The 3 v32 columns aren't accepted by insertObs — patch via raw UPDATE.
-    testDb.prepare('UPDATE observations SET uncited_streak=?, cited_count=?, injection_count=? WHERE id=?')
+    testDb
+      .prepare('UPDATE observations SET uncited_streak=?, cited_count=?, injection_count=? WHERE id=?')
       .run(overrides.uncited_streak ?? 0, overrides.cited_count ?? 0, overrides.injection_count ?? 0, id);
     return id;
   }
@@ -136,16 +153,20 @@ describe('citation-stats CLI', () => {
     // so a bare `not.toContain` fails for a reason that has nothing to do with this gate.
     const section = output.slice(output.search(/Recently cited/i));
     const recentlyCited = section.slice(0, section.search(/\nRecently rolled over/i) + 1);
-    expect(recentlyCited, 'section did not terminate — the sibling caption moved')
-      .not.toMatch(/Recently rolled over/i);
+    expect(recentlyCited, 'section did not terminate — the sibling caption moved').not.toMatch(
+      /Recently rolled over/i,
+    );
     // Under the old gate this row was invisible (importance 1 < 3) though the loop had
     // credited it twice — the structural emptiness the fix is about.
-    expect(recentlyCited, `#${cited} cited by the loop but below the old importance gate`)
-      .toContain('loopcited');
+    expect(recentlyCited, `#${cited} cited by the loop but below the old importance gate`).toContain(
+      'loopcited',
+    );
     // And a high-importance row that has since missed its citations is NOT "recently
     // cited"; the old gate listed it. Guards the fix against being a pure widening.
-    expect(recentlyCited, `#${stale} has a live uncited streak and must not read as recently cited`)
-      .not.toContain('staleimp');
+    expect(
+      recentlyCited,
+      `#${stale} has a live uncited streak and must not read as recently cited`,
+    ).not.toContain('staleimp');
   });
 
   it('reports per-project cite stats', async () => {
@@ -161,13 +182,16 @@ describe('citation-stats CLI', () => {
     obs({ title: 'survivor', importance: 2, cited_count: 9 });
     testDb.prepare('UPDATE observations SET decay_seen_count = 10 WHERE project = ?').run('p1');
     // But citation_log (GC-durable) holds the honest history: 5 cited of 100 injected = 5%.
-    testDb.prepare('INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)')
+    testDb
+      .prepare(
+        'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)',
+      )
       .run('p1', 'hist1', Date.now(), 100, 5);
     const output = await captureStdout(() => run(['citation-stats']));
-    expect(output).toContain('funnel');     // honest rate labelled
-    expect(output).toContain('surviving');  // biased rate labelled
-    expect(output).toContain('5.0%');       // honest funnel rate 5/100
-    expect(output).toContain('90.0%');      // survivorship rate 9/10
+    expect(output).toContain('funnel'); // honest rate labelled
+    expect(output).toContain('surviving'); // biased rate labelled
+    expect(output).toContain('5.0%'); // honest funnel rate 5/100
+    expect(output).toContain('90.0%'); // survivorship rate 9/10
   });
 
   it('--json flag emits machine-readable output', async () => {
@@ -180,7 +204,13 @@ describe('citation-stats CLI', () => {
 
   it('--days flag sets window for per-project cite rate', async () => {
     // Create old obs (outside 7-day window)
-    obs({ title: 'old', importance: 2, cited_count: 5, injection_count: 10, epochOffset: -10 * 86400 * 1000 });
+    obs({
+      title: 'old',
+      importance: 2,
+      cited_count: 5,
+      injection_count: 10,
+      epochOffset: -10 * 86400 * 1000,
+    });
     // Create recent obs (inside window)
     obs({ title: 'new_recent', importance: 2, cited_count: 1, injection_count: 2, epochOffset: 0 });
 
@@ -206,7 +236,8 @@ describe('citation-stats CLI', () => {
     const fresh = obs({ title: 'just demoted', importance: 1 });
     testDb.prepare('UPDATE observations SET demoted_at = ? WHERE id = ?').run(Date.now(), fresh);
     const stale = obs({ title: 'stale demoted', importance: 0 });
-    testDb.prepare('UPDATE observations SET demoted_at = ? WHERE id = ?')
+    testDb
+      .prepare('UPDATE observations SET demoted_at = ? WHERE id = ?')
       .run(Date.now() - 60 * 86400 * 1000, stale); // 60d ago, outside default 7d window
     const output = await captureStdout(() => run(['citation-stats']));
     expect(output).toMatch(/Recently rolled over/);
@@ -226,9 +257,11 @@ describe('citation-stats CLI', () => {
   });
 
   it('renders the per-session invocation→cite funnel section', async () => {
-    testDb.prepare(
-      'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)'
-    ).run('p1', 'fs1', Date.now(), 9, 6);
+    testDb
+      .prepare(
+        'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)',
+      )
+      .run('p1', 'fs1', Date.now(), 9, 6);
     const output = await captureStdout(() => run(['citation-stats']));
     expect(output).toMatch(/funnel/i);
     expect(output).toContain('9');
@@ -236,9 +269,11 @@ describe('citation-stats CLI', () => {
   });
 
   it('--json includes funnel trend object', async () => {
-    testDb.prepare(
-      'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)'
-    ).run('p1', 'fs1', Date.now(), 9, 6);
+    testDb
+      .prepare(
+        'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?,?,?,?,?)',
+      )
+      .run('p1', 'fs1', Date.now(), 9, 6);
     const output = await captureStdoutOnly(() => run(['citation-stats', '--json']));
     const parsed = JSON.parse(output);
     expect(parsed.funnel).toBeDefined();
@@ -250,10 +285,12 @@ describe('citation-stats CLI', () => {
   // (b) say out loud that the faces overlap — a reader who sums them and
   // compares to the funnel total would otherwise conclude the numbers are broken.
   const seedSurface = (surface, inj, cited, session = 'fs1') =>
-    testDb.prepare(
-      `INSERT INTO citation_surface_log (project, session_id, surface, resolved_at, injected_n, cited_n)
-       VALUES (?,?,?,?,?,?)`
-    ).run('p1', session, surface, Date.now(), inj, cited);
+    testDb
+      .prepare(
+        `INSERT INTO citation_surface_log (project, session_id, surface, resolved_at, injected_n, cited_n)
+       VALUES (?,?,?,?,?,?)`,
+      )
+      .run('p1', session, surface, Date.now(), inj, cited);
 
   it('renders the per-injection-face section with each face rate', async () => {
     seedSurface('pretool', 20, 2);
@@ -277,7 +314,7 @@ describe('citation-stats CLI', () => {
     seedSurface('task_imperative', 12, 3);
     const output = await captureStdout(() => run(['citation-stats']));
     expect(output).toMatch(/task-imperative.*inj\s+12\s+cited\s+3\s+25\.0%/);
-    expect(output).not.toMatch(/task_imperative/);   // the raw key must not reach the user
+    expect(output).not.toMatch(/task_imperative/); // the raw key must not reach the user
   });
 
   it('labels keyctx as promotion-only (it can never demote)', async () => {
@@ -333,8 +370,8 @@ describe('citation-stats CLI', () => {
     testDb.prepare('DROP TABLE citation_surface_log').run();
     const output = await captureStdout(() => run(['citation-stats']));
     expect(output).toMatch(/UNAVAILABLE/);
-    expect(output).toMatch(/citation_surface_log/);       // names the actual failure
-    expect(output).toMatch(/fts-check/);                  // and the repair
+    expect(output).toMatch(/citation_surface_log/); // names the actual failure
+    expect(output).toMatch(/fts-check/); // and the repair
     expect(output).not.toMatch(/no rows in this window yet/i);
   });
 

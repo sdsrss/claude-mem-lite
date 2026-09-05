@@ -2,9 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, insertSession, insertPrompt } from './test-helpers.mjs';
 import { computeTier } from '../tier.mjs';
 import {
-  buildSearchFtsQuery, parseDateBounds, parseDuration, computePerSourceWindow,
-  effectiveObsFtsQuery, searchSessionsFts, searchPromptsFts, searchEventsFts,
-  normalizeCrossSourceScores, applyUserSort, applyTierFilter,
+  buildSearchFtsQuery,
+  parseDateBounds,
+  parseDuration,
+  computePerSourceWindow,
+  effectiveObsFtsQuery,
+  searchSessionsFts,
+  searchPromptsFts,
+  searchEventsFts,
+  normalizeCrossSourceScores,
+  applyUserSort,
+  applyTierFilter,
 } from '../lib/search-core.mjs';
 
 // Single-source search core (D#34): cmdSearch (CLI) and mem_search (MCP)
@@ -152,10 +160,15 @@ describe('search-core', () => {
     });
     afterEach(() => db.close());
 
-    const addSummary = ({ request, project = 'test', epochOffset = 0 }) => db.prepare(`
+    const addSummary = ({ request, project = 'test', epochOffset = 0 }) =>
+      db
+        .prepare(
+          `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
       VALUES ('sess-sc', ?, ?, '', ?, ?)
-    `).run(project, request, new Date(Date.now() + epochOffset).toISOString(), Date.now() + epochOffset);
+    `,
+        )
+        .run(project, request, new Date(Date.now() + epochOffset).toISOString(), Date.now() + epochOffset);
 
     it('searchSessionsFts matches FTS and respects project filter', () => {
       addSummary({ request: 'fix the zanzibar cache' });
@@ -171,7 +184,11 @@ describe('search-core', () => {
     it('searchSessionsFts boosts the inferred current project 2x', () => {
       addSummary({ request: 'zanzibar here' });
       addSummary({ request: 'zanzibar there', project: 'other' });
-      const boosted = searchSessionsFts(db, { ftsQuery: 'zanzibar', projectBoost: 'test', perSourceLimit: 10 });
+      const boosted = searchSessionsFts(db, {
+        ftsQuery: 'zanzibar',
+        projectBoost: 'test',
+        perSourceLimit: 10,
+      });
       const testRow = boosted.find((r) => r.project === 'test');
       const otherRow = boosted.find((r) => r.project === 'other');
       // ORDER BY score ascending (more negative = better): boosted row wins
@@ -201,22 +218,34 @@ describe('search-core', () => {
     });
 
     // P1-3: events are the canonical event-typed store, previously unreachable by mem_search.
-    const addEvent = ({ title, body = '', project = 'test', event_type = 'bugfix', epochOffset = 0, superseded = false }) => db.prepare(`
+    const addEvent = ({
+      title,
+      body = '',
+      project = 'test',
+      event_type = 'bugfix',
+      epochOffset = 0,
+      superseded = false,
+    }) =>
+      db
+        .prepare(
+          `
       INSERT INTO events (project, event_type, title, body, importance, created_at_epoch, superseded_at_epoch)
       VALUES (?, ?, ?, ?, 2, ?, ?)
-    `).run(project, event_type, title, body, Date.now() + epochOffset, superseded ? Date.now() : null);
+    `,
+        )
+        .run(project, event_type, title, body, Date.now() + epochOffset, superseded ? Date.now() : null);
 
     it('searchEventsFts matches FTS, respects project filter, excludes superseded', () => {
       addEvent({ title: 'fix the zanzibar cache bug' });
       addEvent({ title: 'zanzibar elsewhere', project: 'other' });
       addEvent({ title: 'zanzibar retired', superseded: true });
       const all = searchEventsFts(db, { ftsQuery: 'zanzibar', perSourceLimit: 10 });
-      expect(all).toHaveLength(2);                        // superseded row excluded
+      expect(all).toHaveLength(2); // superseded row excluded
       const scoped = searchEventsFts(db, { ftsQuery: 'zanzibar', project: 'test', perSourceLimit: 10 });
       expect(scoped).toHaveLength(1);
       expect(scoped[0].project).toBe('test');
       expect(scoped[0].event_type).toBe('bugfix');
-      expect(scoped[0].score).toBeLessThan(0);           // BM25 negative scale
+      expect(scoped[0].score).toBeLessThan(0); // BM25 negative scale
     });
 
     it('searchEventsFts matches body text (the distilled lesson) + boosts current project 2x', () => {
@@ -225,7 +254,7 @@ describe('search-core', () => {
       const rows = searchEventsFts(db, { ftsQuery: 'zanzibar', projectBoost: 'test', perSourceLimit: 10 });
       const testRow = rows.find((r) => r.project === 'test');
       const otherRow = rows.find((r) => r.project === 'other');
-      expect(testRow).toBeTruthy();                                          // body-only match surfaced
+      expect(testRow).toBeTruthy(); // body-only match surfaced
       expect(Math.abs(testRow.score)).toBeGreaterThan(Math.abs(otherRow.score)); // 2x current-project boost
     });
   });
@@ -233,32 +262,42 @@ describe('search-core', () => {
   describe('normalizeCrossSourceScores', () => {
     it('scales each source to [-1, 0] independently, honoring the sourceKey dialect', () => {
       const results = [
-        { _source: 'obs', score: -40 }, { _source: 'obs', score: -20 },
-        { _source: 'session', score: -6 }, { _source: 'session', score: -3 },
+        { _source: 'obs', score: -40 },
+        { _source: 'obs', score: -20 },
+        { _source: 'session', score: -6 },
+        { _source: 'session', score: -3 },
       ];
       normalizeCrossSourceScores(results, '_source');
       expect(results.map((r) => r.score)).toEqual([-1, -0.5, -1, -0.5]);
     });
 
     it('normalizes the events source too (event in the loop)', () => {
-      const results = [{ source: 'event', score: -30 }, { source: 'event', score: -15 }];
+      const results = [
+        { source: 'event', score: -30 },
+        { source: 'event', score: -15 },
+      ];
       normalizeCrossSourceScores(results, 'source');
       expect(results.map((r) => r.score)).toEqual([-1, -0.5]);
     });
 
     it('clamps a weak single-row source low, not to the neutral mid (audit 2026-07-17 MED-1)', () => {
-      const results = [{ source: 'prompt', score: -0.2 }, { source: 'obs', score: -10 }, { source: 'obs', score: -5 }];
+      const results = [
+        { source: 'prompt', score: -0.2 },
+        { source: 'obs', score: -10 },
+        { source: 'obs', score: -5 },
+      ];
       normalizeCrossSourceScores(results, 'source');
       // ratio 0.2/10 = 0.02 < 0.1 → weak band, sinks below the neutral mid
       expect(results[0].score).toBe(-0.25);
-      expect(results[1].score).toBe(-1);   // obs still normalized within-source
+      expect(results[1].score).toBe(-1); // obs still normalized within-source
       expect(results[2].score).toBe(-0.5);
     });
 
     it('a lone large-magnitude event no longer outranks strong obs matches (MED-5)', () => {
       const results = [
         { source: 'event', score: -30 }, // single event match, weaker than the obs page max
-        { source: 'obs', score: -40 }, { source: 'obs', score: -20 },
+        { source: 'obs', score: -40 },
+        { source: 'obs', score: -20 },
       ];
       normalizeCrossSourceScores(results, 'source');
       // Mirror the pipeline's ascending (most-negative-first) merge sort.
@@ -275,8 +314,9 @@ describe('search-core', () => {
     // by within-source max-normalization regardless of absolute strength).
     it('a lone event that IS the global-strongest raw match ranks first (MED-1)', () => {
       const results = [
-        { source: 'event', score: -32 },                    // exact title hit — global raw max
-        { source: 'obs', score: -1.2 }, { source: 'obs', score: -0.8 }, // weak body-only matches
+        { source: 'event', score: -32 }, // exact title hit — global raw max
+        { source: 'obs', score: -1.2 },
+        { source: 'obs', score: -0.8 }, // weak body-only matches
       ];
       normalizeCrossSourceScores(results, 'source');
       results.sort((a, b) => a.score - b.score);
@@ -292,31 +332,35 @@ describe('search-core', () => {
     it('bands a lone vector-scaled obs hit neutrally, not sunk by an incomparable BM25 ratio (P2-12)', () => {
       const results = [
         { source: 'obs', score: -0.024, scoreScale: 'vector' }, // lone RRF-fused obs hit
-        { source: 'session', score: -6 }, { source: 'session', score: -3 },
+        { source: 'session', score: -6 },
+        { source: 'session', score: -3 },
       ];
       normalizeCrossSourceScores(results, 'source');
       expect(results[0].score).toBe(-0.5); // neutral mid, NOT the -0.25 the raw ratio gives
-      expect(results[1].score).toBe(-1);   // BM25 sessions still normalized within-source
+      expect(results[1].score).toBe(-1); // BM25 sessions still normalized within-source
       expect(results[2].score).toBe(-0.5);
     });
 
     it('excludes vector-scaled rows from globalMaxAbs so BM25 lone-hit ratios stay meaningful (P2-12)', () => {
       const results = [
-        { source: 'obs', score: -0.03, scoreScale: 'vector' }, { source: 'obs', score: -0.02, scoreScale: 'vector' },
+        { source: 'obs', score: -0.03, scoreScale: 'vector' },
+        { source: 'obs', score: -0.02, scoreScale: 'vector' },
         { source: 'session', score: -5 }, // lone BM25 session
-        { source: 'event', score: -5 }, { source: 'event', score: -1 },
+        { source: 'event', score: -5 },
+        { source: 'event', score: -1 },
       ];
       normalizeCrossSourceScores(results, 'source');
       // globalMaxAbs must be 5 (events), NOT distorted by the tiny vector scores → session
       // ratio 5/5 = 1 → -1.05, not sunk. (If vector rows counted, max still 5 here, but the
       // guarantee is they never BECOME the reference.)
-      expect(results.find(r => r.source === 'session').score).toBe(-1.05);
+      expect(results.find((r) => r.source === 'session').score).toBe(-1.05);
     });
 
     it('a comparable (≥0.5× global max) lone hit lands between neutral and best (MED-1)', () => {
       const results = [
         { source: 'session', score: -6 },
-        { source: 'obs', score: -10 }, { source: 'obs', score: -2 },
+        { source: 'obs', score: -10 },
+        { source: 'obs', score: -2 },
       ];
       normalizeCrossSourceScores(results, 'source');
       // ratio 6/10 = 0.6 → -0.75: above the neutral mid, below the obs best
@@ -328,13 +372,14 @@ describe('search-core', () => {
     // 0-score row to the neutral mid, floating it above weakly-matched real FTS hits.
     it('a lone score-0 row (CJK LIKE fallback) is left at 0 and sinks (L3)', () => {
       const results = [
-        { source: 'prompt', score: 0 },  // LIKE-fallback row — zero confidence
-        { source: 'obs', score: -4 }, { source: 'obs', score: -1 },
+        { source: 'prompt', score: 0 }, // LIKE-fallback row — zero confidence
+        { source: 'obs', score: -4 },
+        { source: 'obs', score: -1 },
       ];
       normalizeCrossSourceScores(results, 'source');
       results.sort((a, b) => a.score - b.score);
       expect(results.find((r) => r.source === 'prompt').score).toBe(0); // untouched
-      expect(results[results.length - 1].source).toBe('prompt');        // sorts last
+      expect(results[results.length - 1].source).toBe('prompt'); // sorts last
     });
   });
 
@@ -373,30 +418,50 @@ describe('search-core', () => {
     afterEach(() => db.close());
 
     it('filters obs rows by computed tier and passes non-obs rows through', () => {
-      const freshId = Number(db.prepare(`
+      const freshId = Number(
+        db
+          .prepare(
+            `
         INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES ('sess-sc', 'test', 't', 'bugfix', 'fresh obs', '', '', '', '', '[]', '[]', 2, ?, ?)
-      `).run(new Date().toISOString(), Date.now()).lastInsertRowid);
+      `,
+          )
+          .run(new Date().toISOString(), Date.now()).lastInsertRowid,
+      );
       const results = [
         { source: 'obs', id: freshId },
         { source: 'session', id: 999 }, // non-obs passes through regardless of tier
-        { source: 'obs', id: 424242 },  // unknown obs id is dropped
+        { source: 'obs', id: 424242 }, // unknown obs id is dropped
       ];
       const ctx = { now: Date.now(), currentProject: 'test', currentSessionId: '' };
-      const full = db.prepare('SELECT id, compressed_into, superseded_at, memory_session_id, project, importance, last_accessed_at, created_at_epoch, type FROM observations WHERE id = ?').get(freshId);
+      const full = db
+        .prepare(
+          'SELECT id, compressed_into, superseded_at, memory_session_id, project, importance, last_accessed_at, created_at_epoch, type FROM observations WHERE id = ?',
+        )
+        .get(freshId);
       const freshTier = computeTier(full, ctx);
 
-      const kept = applyTierFilter(db, results, { tier: freshTier, sourceKey: 'source', currentProject: 'test' });
+      const kept = applyTierFilter(db, results, {
+        tier: freshTier,
+        sourceKey: 'source',
+        currentProject: 'test',
+      });
       expect(kept.map((r) => r.id)).toEqual([freshId, 999]);
 
       const otherTier = freshTier === 'archive' ? 'working' : 'archive';
-      const dropped = applyTierFilter(db, results, { tier: otherTier, sourceKey: 'source', currentProject: 'test' });
+      const dropped = applyTierFilter(db, results, {
+        tier: otherTier,
+        sourceKey: 'source',
+        currentProject: 'test',
+      });
       expect(dropped.map((r) => r.id)).toEqual([999]);
     });
 
     it('returns input unchanged when there are no obs rows', () => {
       const results = [{ _source: 'prompt', id: 1 }];
-      expect(applyTierFilter(db, results, { tier: 'working', sourceKey: '_source', currentProject: 'test' })).toBe(results);
+      expect(
+        applyTierFilter(db, results, { tier: 'working', sourceKey: '_source', currentProject: 'test' }),
+      ).toBe(results);
     });
   });
 });

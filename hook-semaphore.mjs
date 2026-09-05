@@ -2,7 +2,15 @@
 // Limits concurrent claude -p calls to prevent resource contention
 
 import { join } from 'path';
-import { readFileSync, unlinkSync, readdirSync, openSync, closeSync, writeSync, constants as fsConstants } from 'fs';
+import {
+  readFileSync,
+  unlinkSync,
+  readdirSync,
+  openSync,
+  closeSync,
+  writeSync,
+  constants as fsConstants,
+} from 'fs';
 import { RUNTIME_DIR } from './hook-shared.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 
@@ -32,7 +40,7 @@ export const LLM_SEM_TIMEOUT = BG_LLM_TIMEOUT_MS + 15000; // 60s max wait
 // refreshing — a heartbeat would buy nothing this margin doesn't.
 export const LLM_SEM_STALE_MS = BG_LLM_TIMEOUT_MS * 2 + 30000; // 120s
 
-export const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+export const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Does THIS process currently hold the (single, pid-named) slot?
 //
@@ -65,7 +73,9 @@ let localHeldAt = 0;
  * `_resetHeadlessFlag` hooks in haiku-client.mjs.
  * @param {number} ts epoch ms, or 0 for "not held"
  */
-export function _setLocalHeldAt(ts) { localHeldAt = ts; }
+export function _setLocalHeldAt(ts) {
+  localHeldAt = ts;
+}
 
 /**
  * Acquire a file-based semaphore slot for LLM calls.
@@ -105,12 +115,17 @@ export async function acquireLLMSlot() {
       // here re-hits the same EEXIST every iteration, a synchronous tight loop that
       // pins a core until the 30s deadline (the age-based cleanup below is unreachable
       // on this path — it only runs after a successful create).
-      try { unlinkSync(slotFile); } catch {}
+      try {
+        unlinkSync(slotFile);
+      } catch {}
       await sleepMs(50 + Math.random() * 100);
       continue;
     }
 
-    if (!created) { await sleepMs(200 + Math.random() * 800); continue; }
+    if (!created) {
+      await sleepMs(200 + Math.random() * 800);
+      continue;
+    }
 
     // Count all active semaphore files (including ours) and clean stale ones
     let active = 0;
@@ -129,28 +144,45 @@ export async function acquireLLMSlot() {
           // the pid-reuse case the age check exists for.
           if (info.pid) {
             let alive;
-            try { process.kill(info.pid, 0); alive = true; } catch (killErr) {
+            try {
+              process.kill(info.pid, 0);
+              alive = true;
+            } catch (killErr) {
               // EPERM = process exists but belongs to another user → alive.
               alive = killErr.code !== 'ESRCH';
             }
-            if (!alive) { try { unlinkSync(fp); } catch {} continue; }
+            if (!alive) {
+              try {
+                unlinkSync(fp);
+              } catch {}
+              continue;
+            }
           }
           if (age > LLM_SEM_STALE_MS) {
-            try { unlinkSync(fp); } catch {}
+            try {
+              unlinkSync(fp);
+            } catch {}
             continue;
           }
           active++;
         } catch {
           // Corrupt/unreadable semaphore file — treat as stale and remove
-          try { unlinkSync(fp); } catch {}
+          try {
+            unlinkSync(fp);
+          } catch {}
         }
       }
     } catch {}
 
-    if (active <= LLM_SEM_MAX) { localHeldAt = Date.now(); return true; } // Slot acquired
+    if (active <= LLM_SEM_MAX) {
+      localHeldAt = Date.now();
+      return true;
+    } // Slot acquired
 
     // Too many concurrent — release our slot and back off
-    try { unlinkSync(slotFile); } catch {}
+    try {
+      unlinkSync(slotFile);
+    } catch {}
     await sleepMs(200 + Math.random() * 800);
   }
   return false; // Timed out
@@ -161,5 +193,7 @@ export async function acquireLLMSlot() {
  */
 export function releaseLLMSlot() {
   localHeldAt = 0;
-  try { unlinkSync(join(RUNTIME_DIR, `llm-sem-${process.pid}`)); } catch {}
+  try {
+    unlinkSync(join(RUNTIME_DIR, `llm-sem-${process.pid}`));
+  } catch {}
 }

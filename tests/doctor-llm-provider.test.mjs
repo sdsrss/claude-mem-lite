@@ -18,9 +18,13 @@ import { llmProviderStatus } from '../lib/llm-provider-probe.mjs';
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
 
 describe('llmProviderStatus', () => {
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
-  function noProxy() { for (const v of PROXY_ENV) vi.stubEnv(v, ''); }
+  function noProxy() {
+    for (const v of PROXY_ENV) vi.stubEnv(v, '');
+  }
 
   it('reports the CLI provider without probing anything when no key is set', async () => {
     noProxy();
@@ -86,7 +90,11 @@ describe('llmProviderStatus', () => {
   it('never throws when the probe itself blows up — doctor must always finish', async () => {
     noProxy();
     vi.stubEnv('OPENROUTER_API_KEY', 'or-test');
-    const s = await llmProviderStatus({ _probe: async () => { throw new Error('boom'); } });
+    const s = await llmProviderStatus({
+      _probe: async () => {
+        throw new Error('boom');
+      },
+    });
     expect(s.level).toBe('warn');
     expect(s.message).toMatch(/boom/);
   });

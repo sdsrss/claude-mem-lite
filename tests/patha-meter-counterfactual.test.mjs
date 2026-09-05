@@ -51,16 +51,24 @@ function seed() {
     ['sqlite fts5 tokenizer notes', 'fts5 rowid match tokenizer behaviour on constraint'],
   ]) {
     const r = insertObs(db, {
-      sessionId: 's1', project: 'p1', type: 'bugfix', importance: 3,
-      title, narrative: text, text, lessonLearned: 'lesson ' + title,
+      sessionId: 's1',
+      project: 'p1',
+      type: 'bugfix',
+      importance: 3,
+      title,
+      narrative: text,
+      text,
+      lessonLearned: 'lesson ' + title,
     });
     ids.push(Number(r.lastInsertRowid));
   }
   return { db, ids };
 }
 
-const countsOf = (db, ids) => ids.map(id =>
-  db.prepare('SELECT COALESCE(injection_count, 0) c FROM observations WHERE id = ?').get(id).c);
+const countsOf = (db, ids) =>
+  ids.map(
+    (id) => db.prepare('SELECT COALESCE(injection_count, 0) c FROM observations WHERE id = ?').get(id).c,
+  );
 
 describe('counterfactual: true — arm B leaves no trace in the store', () => {
   it('a NORMAL call bumps injection_count (the premise; without it the next case is vacuous)', () => {
@@ -69,7 +77,10 @@ describe('counterfactual: true — arm B leaves no trace in the store', () => {
     const got = searchRelevantMemories(db, 'sqlite fts5 rowid match trap', 'p1', []);
     expect(got.length, 'premise: the query must actually return rows').toBeGreaterThan(0);
     const after = countsOf(db, ids);
-    expect(after.some(c => c > 0), 'a delivered call MUST record the delivery').toBe(true);
+    expect(
+      after.some((c) => c > 0),
+      'a delivered call MUST record the delivery',
+    ).toBe(true);
     db.close();
   });
 
@@ -83,16 +94,17 @@ describe('counterfactual: true — arm B leaves no trace in the store', () => {
     // And it is the same answer a delivered call would have given — a flag that changed
     // the result would make the two arms incomparable, which is worse than the bump.
     const real = searchRelevantMemories(db, q, 'p1', [], { counterfactual: true });
-    expect(real.map(r => r.id)).toEqual(cf.map(r => r.id));
+    expect(real.map((r) => r.id)).toEqual(cf.map((r) => r.id));
     db.close();
   });
 
   it('does not touch last_injected_at either', () => {
     const { db, ids } = seed();
     searchRelevantMemories(db, 'sqlite fts5 rowid match trap', 'p1', [], { counterfactual: true });
-    const stamps = ids.map(id =>
-      db.prepare('SELECT last_injected_at FROM observations WHERE id = ?').get(id).last_injected_at);
-    expect(stamps.every(s => s === null || s === undefined)).toBe(true);
+    const stamps = ids.map(
+      (id) => db.prepare('SELECT last_injected_at FROM observations WHERE id = ?').get(id).last_injected_at,
+    );
+    expect(stamps.every((s) => s === null || s === undefined)).toBe(true);
     db.close();
   });
 });
@@ -100,7 +112,9 @@ describe('counterfactual: true — arm B leaves no trace in the store', () => {
 describe('counterfactual: true — arm B emits no `inject` metric row', () => {
   let dir;
   const prev = process.env.CLAUDE_MEM_METRICS;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'patha-cf-')); });
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'patha-cf-'));
+  });
   afterEach(() => {
     if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS;
     else process.env.CLAUDE_MEM_METRICS = prev;
@@ -122,7 +136,8 @@ describe('counterfactual: true — arm B emits no `inject` metric row', () => {
     const sink = join(DB_DIR, 'metrics');
     const linesIn = () => {
       if (!sink || !existsSync(sink)) return 0;
-      return readdirSync(sink).filter(f => f.endsWith('.jsonl'))
+      return readdirSync(sink)
+        .filter((f) => f.endsWith('.jsonl'))
         .reduce((n, f) => n + readFileSync(join(sink, f), 'utf8').split('\n').filter(Boolean).length, 0);
     };
 
@@ -136,7 +151,7 @@ describe('counterfactual: true — arm B emits no `inject` metric row', () => {
     expect(
       afterDelivered,
       'premise: a delivered call writes an `inject` row to an observable sink — without ' +
-      'this the counterfactual assertion below proves nothing',
+        'this the counterfactual assertion below proves nothing',
     ).toBeGreaterThan(start);
 
     searchRelevantMemories(db, q, 'p1', [], { counterfactual: true });
@@ -197,8 +212,9 @@ describe('the WIRING: hook.mjs must use the flag, and must run arm B FIRST', () 
   it('that gate check can say NO', () => {
     // Both arms. Without them the assertions above pass on any text that happens to
     // contain the two tokens somewhere in the statement.
-    expect(meterCoercedAssignment('const meterCoerced = [...coerceMarkerIds(ids)];'))
-      .not.toMatch(/pathAMeterEnabled\(\)/);
+    expect(meterCoercedAssignment('const meterCoerced = [...coerceMarkerIds(ids)];')).not.toMatch(
+      /pathAMeterEnabled\(\)/,
+    );
     expect(meterCoercedAssignment('const x = 1;')).toBe('');
   });
 

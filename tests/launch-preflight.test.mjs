@@ -16,7 +16,11 @@ function tmp() {
 
 afterEach(() => {
   while (created.length) {
-    try { rmSync(created.pop(), { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(created.pop(), { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 });
 
@@ -35,10 +39,7 @@ describe('detectMissingImports', () => {
 
   it('reports missing relative imports', () => {
     const d = tmp();
-    writeFileSync(
-      join(d, 'server.mjs'),
-      `import { x } from './foo.mjs';\nimport { y } from './bar.mjs';\n`,
-    );
+    writeFileSync(join(d, 'server.mjs'), `import { x } from './foo.mjs';\nimport { y } from './bar.mjs';\n`);
     writeFileSync(join(d, 'foo.mjs'), 'export const x = 1;');
     expect(detectMissingImports(d)).toEqual(['bar.mjs']);
   });
@@ -61,10 +62,7 @@ describe('detectMissingImports', () => {
 
   it('catches dynamic imports too', () => {
     const d = tmp();
-    writeFileSync(
-      join(d, 'server.mjs'),
-      `const m = await import('./registry-importer.mjs');\n`,
-    );
+    writeFileSync(join(d, 'server.mjs'), `const m = await import('./registry-importer.mjs');\n`);
     expect(detectMissingImports(d)).toEqual(['registry-importer.mjs']);
   });
 
@@ -151,9 +149,9 @@ describe('resolveLaunchEntry', () => {
     const d = tmp();
     writeFileSync(join(d, 'server.mjs'), `import './missing.mjs';\n`);
     const warns = [];
-    expect(() =>
-      resolveLaunchEntry({ primaryRoot: d, fallbackRoot: d, warn: (m) => warns.push(m) }),
-    ).toThrow(/Install incomplete/);
+    expect(() => resolveLaunchEntry({ primaryRoot: d, fallbackRoot: d, warn: (m) => warns.push(m) })).toThrow(
+      /Install incomplete/,
+    );
     expect(warns).toHaveLength(0);
   });
 
@@ -162,7 +160,6 @@ describe('resolveLaunchEntry', () => {
     const f = tmp();
     writeFileSync(join(p, 'server.mjs'), `import './a.mjs';\n`);
     writeFileSync(join(f, 'server.mjs'), `import './b.mjs';\n`);
-    expect(() => resolveLaunchEntry({ primaryRoot: p, fallbackRoot: f }))
-      .toThrow(/Install incomplete/);
+    expect(() => resolveLaunchEntry({ primaryRoot: p, fallbackRoot: f })).toThrow(/Install incomplete/);
   });
 });

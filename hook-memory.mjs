@@ -1,7 +1,18 @@
 // claude-mem-lite — Semantic Memory Injection
 // Search past observations for relevant memories to inject as context at user-prompt time.
 
-import { relaxFtsQueryToOr, debugCatch, truncate, OBS_BM25, notLowSignalTitleClause, noisePenaltyClause, tokenizeHandoff, HANDOFF_STOP_WORDS, extractCjkKeywords, neutralizeContextDelimiters } from './utils.mjs';
+import {
+  relaxFtsQueryToOr,
+  debugCatch,
+  truncate,
+  OBS_BM25,
+  notLowSignalTitleClause,
+  noisePenaltyClause,
+  tokenizeHandoff,
+  HANDOFF_STOP_WORDS,
+  extractCjkKeywords,
+  neutralizeContextDelimiters,
+} from './utils.mjs';
 import { upsFtsQuery } from './lib/ups-query.mjs';
 import { citeFactorJs, TYPE_QUALITY, TYPE_QUALITY_DEFAULT } from './scoring-sql.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -160,10 +171,14 @@ function getCrossProjectBoost() {
 }
 function extractQueryTerms(text) {
   if (!text) return [];
-  const ascii = tokenizeHandoff(text).filter(t => !HANDOFF_STOP_WORDS.has(t));
+  const ascii = tokenizeHandoff(text).filter((t) => !HANDOFF_STOP_WORDS.has(t));
   let cjk = [];
-  try { cjk = extractCjkKeywords(text) || []; } catch { /* CJK extraction best-effort */ }
-  return [...new Set([...ascii, ...cjk.map(t => String(t).toLowerCase())])];
+  try {
+    cjk = extractCjkKeywords(text) || [];
+  } catch {
+    /* CJK extraction best-effort */
+  }
+  return [...new Set([...ascii, ...cjk.map((t) => String(t).toLowerCase())])];
 }
 // v2.41: hay spans every FTS column whose BM25 weight is >=5 in OBS_BM25
 // (title=10, subtitle=5, narrative=5, lesson_learned=8). Pre-v2.41 was only
@@ -176,7 +191,8 @@ const COVERAGE_NARRATIVE_PREFIX = 400;
 function candidateCoverage(row, queryTerms) {
   if (queryTerms.length === 0) return 1.0;
   const narrativeHead = (row.narrative || '').slice(0, COVERAGE_NARRATIVE_PREFIX);
-  const hay = `${row.title || ''} ${row.subtitle || ''} ${row.lesson_learned || ''} ${narrativeHead}`.toLowerCase();
+  const hay =
+    `${row.title || ''} ${row.subtitle || ''} ${row.lesson_learned || ''} ${narrativeHead}`.toLowerCase();
   let hits = 0;
   for (const t of queryTerms) {
     if (/[^ -~]/.test(t)) {
@@ -190,7 +206,6 @@ function candidateCoverage(row, queryTerms) {
   }
   return hits / queryTerms.length;
 }
-
 
 // P1: stale-obs verify-before-use threshold. An injected obs older than this
 // AND carrying file paths is flagged so Claude is reminded to grep/Read the
@@ -217,15 +232,19 @@ export function formatMemoryLine(obs) {
   // citation-decay denominator (its promote/demote loop was silently dead).
   const lessonTag = obs.lesson_learned ? ` | Lesson: ${truncate(obs.lesson_learned, 200)}` : '';
   let staleHint = '';
-  if (typeof obs.created_at_epoch === 'number'
-    && Date.now() - obs.created_at_epoch > STALE_OBS_THRESHOLD_MS
-    && hasFilePaths(obs.files_modified)) {
+  if (
+    typeof obs.created_at_epoch === 'number' &&
+    Date.now() - obs.created_at_epoch > STALE_OBS_THRESHOLD_MS &&
+    hasFilePaths(obs.files_modified)
+  ) {
     staleHint = ' [verify-before-use]';
   }
   // Defang any literal block-delimiter tag in title/lesson so it can't prematurely close
   // the <memory-context> block this line is injected into (parity with hook-context's
   // <claude-mem-context> defense).
-  return neutralizeContextDelimiters(`- [${obs.type}] ${truncate(obs.title, 80)}${lessonTag} (#${obs.id})${staleHint}`);
+  return neutralizeContextDelimiters(
+    `- [${obs.type}] ${truncate(obs.title, 80)}${lessonTag} (#${obs.id})${staleHint}`,
+  );
 }
 
 function hasFilePaths(filesModified) {
@@ -268,7 +287,13 @@ function hasFilePaths(filesModified) {
  *   BOTH arms to see one store state, which is achieved by ordering (arm B first, and
  *   it writes nothing) rather than by isolation.
  */
-export function searchRelevantMemories(db, userPrompt, project, excludeIds = [], { counterfactual = false } = {}) {
+export function searchRelevantMemories(
+  db,
+  userPrompt,
+  project,
+  excludeIds = [],
+  { counterfactual = false } = {},
+) {
   // Min-length guard is English-centric: 5 chars ≈ one short English word. A CJK
   // query is meaningful at 2 chars (状态/架构) and most real Chinese queries are
   // 2-4 chars (状态管理, 召回率, 熔断降级) — the bare `.length < 5` silently
@@ -290,7 +315,10 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
   // v2.41 metrics: record timing + candidate/filter/return counts per call.
   // Gated by CLAUDE_MEM_METRICS=1 — no-op when disabled (zero hot-path cost).
   const _t0 = Date.now();
-  let _candidates = 0, _aboveThreshold = 0, _returned = 0, _orFired = false;
+  let _candidates = 0,
+    _aboveThreshold = 0,
+    _returned = 0,
+    _orFired = false;
   const _emit = () => {
     if (counterfactual) return;
     try {
@@ -302,7 +330,9 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
         returned: _returned,
         orFallback: _orFired,
       });
-    } catch { /* metric record must not crash the caller */ }
+    } catch {
+      /* metric record must not crash the caller */
+    }
   };
 
   try {
@@ -350,7 +380,7 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
     // Count original search terms (AND-separated groups), not expanded synonym tokens.
     const queryTokenCount = ftsQuery.includes(' AND ')
       ? ftsQuery.split(' AND ').length
-      : ftsQuery.split(/\s+/).filter(t => t && !t.startsWith('(') && !t.endsWith(')')).length;
+      : ftsQuery.split(/\s+/).filter((t) => t && !t.startsWith('(') && !t.endsWith(')')).length;
     // CJK-dominant queries bypass the token-count gate: a single CJK word becomes
     // 2-N overlapping bigrams (优化召回率 → 优化/召回/回率), inflating
     // queryTokenCount past the gate, so the AND-too-strict query never gets the OR
@@ -369,8 +399,12 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
         // (The two bare catches further down, around the per-row access bumps, are
         // deliberately left bare: they are write-path and per-row, so logging them would
         // flood the debug stream on the same corruption this one reports once.)
-        try { rows = selectStmt.all(orQuery, project, cutoff); usedOrFallback = true; }
-        catch (e) { debugCatch(e, 'injectMemory:orFallback'); }
+        try {
+          rows = selectStmt.all(orQuery, project, cutoff);
+          usedOrFallback = true;
+        } catch (e) {
+          debugCatch(e, 'injectMemory:orFallback');
+        }
       }
     }
 
@@ -403,11 +437,17 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
         if (orQuery && (queryIsCjkDominant || queryTokenCount <= orFallbackMaxTokens)) {
           // Same reasoning as the same-project OR fallback above: a fault here silently
           // drops the cross-project half of the injection.
-          try { crossRows = crossStmt.all(orQuery, project, cutoff); crossUsedOr = true; }
-          catch (e) { debugCatch(e, 'injectMemory:crossOrFallback'); }
+          try {
+            crossRows = crossStmt.all(orQuery, project, cutoff);
+            crossUsedOr = true;
+          } catch (e) {
+            debugCatch(e, 'injectMemory:crossOrFallback');
+          }
         }
       }
-    } catch (e) { debugCatch(e, 'crossProjectSearch'); }
+    } catch (e) {
+      debugCatch(e, 'crossProjectSearch');
+    }
 
     // Merge and score: same-project full weight, cross-project (default 0.7x).
     // v2.41: cross-project penalty is env-overridable via MEM_CROSS_PROJECT_BOOST
@@ -419,40 +459,48 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
     // OR-fallback results get 0.4x penalty — they matched individual words, not the full intent
     // v26 P0: noise_penalty (from SQL) shrinks high-inject/low-cite rows.
     const crossPenalty = getCrossProjectBoost();
-    const allRows = [...rows.map(r => ({ ...r, _or: usedOrFallback })), ...crossRows.map(r => ({ ...r, _or: crossUsedOr }))];
+    const allRows = [
+      ...rows.map((r) => ({ ...r, _or: usedOrFallback })),
+      ...crossRows.map((r) => ({ ...r, _or: crossUsedOr })),
+    ];
     const scored = allRows
-      .filter(r => !excludeSet.has(r.id))
-      .map(r => {
+      .filter((r) => !excludeSet.has(r.id))
+      .map((r) => {
         const crossProjectPenalty = r.project === project ? 1.0 : crossPenalty;
         const orFallbackPenalty = r._or ? 0.4 : 1.0;
         const noisePenalty = typeof r.noise_penalty === 'number' ? r.noise_penalty : 1.0;
         const citeFactor = citeFactorJs(r);
         return {
           ...r,
-          score: Math.abs(r.relevance)
-            * (TYPE_QUALITY[r.type] || TYPE_QUALITY_DEFAULT)
-            * (r.lesson_learned ? 1.5 : 1.0)
-            * (r.importance >= 2 ? 1.0 : 0.6)
-            * crossProjectPenalty
-            * orFallbackPenalty
-            * noisePenalty
-            * citeFactor,
+          score:
+            Math.abs(r.relevance) *
+            (TYPE_QUALITY[r.type] || TYPE_QUALITY_DEFAULT) *
+            (r.lesson_learned ? 1.5 : 1.0) *
+            (r.importance >= 2 ? 1.0 : 0.6) *
+            crossProjectPenalty *
+            orFallbackPenalty *
+            noisePenalty *
+            citeFactor,
         };
       })
       .sort((a, b) => b.score - a.score);
 
     // Adaptive threshold: scales with corpus size to filter noise.
     // Each result must individually exceed the threshold (not just the top one).
-    const obsCount = db.prepare(
-      `SELECT COUNT(*) as c FROM observations WHERE project = ? AND ${liveObsFilterSql('')}`,
-    ).get(project)?.c || 0;
+    const obsCount =
+      db
+        .prepare(`SELECT COUNT(*) as c FROM observations WHERE project = ? AND ${liveObsFilterSql('')}`)
+        .get(project)?.c || 0;
     const { TINY, SMALL, MEDIUM, LARGE } = BM25_THRESHOLD;
     const threshold = obsCount < 5 ? TINY : obsCount < 100 ? SMALL : obsCount < 500 ? MEDIUM : LARGE;
     _candidates = scored.length;
     _orFired = usedOrFallback || crossUsedOr;
-    const aboveThreshold = scored.filter(r => r.score >= threshold);
+    const aboveThreshold = scored.filter((r) => r.score >= threshold);
     _aboveThreshold = aboveThreshold.length;
-    if (aboveThreshold.length === 0) { _emit(); return []; }
+    if (aboveThreshold.length === 0) {
+      _emit();
+      return [];
+    }
 
     // v27: term-coverage filter — drop candidates whose title+lesson_learned
     // covers <threshold of the query's significant terms. Skipped for
@@ -463,8 +511,13 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
     if (coverageThreshold > 0) {
       const queryTerms = extractQueryTerms(userPrompt);
       if (queryTerms.length >= COVERAGE_MIN_QUERY_TERMS) {
-        coverageFiltered = aboveThreshold.filter(r => candidateCoverage(r, queryTerms) >= coverageThreshold);
-        if (coverageFiltered.length === 0) { _emit(); return []; }
+        coverageFiltered = aboveThreshold.filter(
+          (r) => candidateCoverage(r, queryTerms) >= coverageThreshold,
+        );
+        if (coverageFiltered.length === 0) {
+          _emit();
+          return [];
+        }
       }
     }
 
@@ -499,10 +552,12 @@ export function searchRelevantMemories(db, userPrompt, project, excludeIds = [],
     if (!counterfactual) {
       const now = Date.now();
       const bumpStmt = db.prepare(
-        'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?'
+        'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?',
       );
       for (const r of result) {
-        try { bumpStmt.run(now, r.id); } catch {}
+        try {
+          bumpStmt.run(now, r.id);
+        } catch {}
       }
     }
 
@@ -613,7 +668,9 @@ export function rankImperativeCandidates(db, userPrompt, project, excludeIds = [
   // guaranteed one. There are zero such collisions live, so it changes no behaviour here;
   // it makes the guarantee hold on corpora nobody has seen.
   try {
-    rows = db.prepare(`
+    rows = db
+      .prepare(
+        `
       SELECT id, title, lesson_learned, importance
       FROM observations
       WHERE project = ?
@@ -625,12 +682,18 @@ export function rankImperativeCandidates(db, userPrompt, project, excludeIds = [
         AND (? IS NULL OR created_at_epoch <= ?)
       ORDER BY importance DESC, created_at_epoch DESC, id DESC
       LIMIT ${IMPERATIVE_POOL_BACKSTOP}
-    `).all(project, epochTo, epochTo);
-  } catch { return []; }
+    `,
+      )
+      .all(project, epochTo, epochTo);
+  } catch {
+    return [];
+  }
   const out = [];
   for (const r of rows) {
     if (exclude.has(r.id)) continue;
-    const overlap = extractIdents(`${r.lesson_learned} ${r.title || ''}`).filter((id) => promptIdents.has(id)).length;
+    const overlap = extractIdents(`${r.lesson_learned} ${r.title || ''}`).filter((id) =>
+      promptIdents.has(id),
+    ).length;
     if (overlap === 0) continue;
     const score = (r.importance || 2) * overlap;
     out.push({ id: r.id, lesson_learned: r.lesson_learned, importance: r.importance || 2, overlap, score });

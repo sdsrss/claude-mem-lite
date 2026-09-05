@@ -38,7 +38,9 @@ describe('secret-scrub R4 — Authorization header schemes (HIGH)', () => {
     expect(out).toBe('Authorization: Basic ***');
   });
   it('scrubs Authorization: token <opaque> (GitHub scheme)', () => {
-    expect(scrubSecrets('Authorization: token abcdefOPAQUEnotaknownprefix1234')).toBe('Authorization: token ***');
+    expect(scrubSecrets('Authorization: token abcdefOPAQUEnotaknownprefix1234')).toBe(
+      'Authorization: token ***',
+    );
   });
   it('still scrubs Authorization: Bearer (no regression)', () => {
     expect(scrubSecrets('Authorization: Bearer abcdef123456ghijkl')).toBe('Authorization: Bearer ***');
@@ -48,7 +50,9 @@ describe('secret-scrub R4 — Authorization header schemes (HIGH)', () => {
 describe('secret-scrub R4 — labeled git-SHA over-scrub (MED)', () => {
   const sha40 = '0123456789abcdef0123456789abcdef01234567';
   it('preserves a labeled git SHA / checksum (was corrupted to ***)', () => {
-    expect(scrubSecrets(`The fix landed in commit hash: ${sha40}`)).toBe(`The fix landed in commit hash: ${sha40}`);
+    expect(scrubSecrets(`The fix landed in commit hash: ${sha40}`)).toBe(
+      `The fix landed in commit hash: ${sha40}`,
+    );
     expect(scrubSecrets(`blob hash=${sha40}`)).toBe(`blob hash=${sha40}`);
   });
   it('still scrubs credential-noun hex assignments (no regression)', () => {
@@ -83,7 +87,9 @@ describe('secret-scrub R4 — provider-prefix gaps (MED)', () => {
   });
   it('scrubs the Slack incoming-webhook URL secret', () => {
     const tail = 'X'.repeat(24);
-    const out = scrubSecrets('post to https://hooks.slack.com/services/' + 'T00000000/B00000000/' + tail + ' now');
+    const out = scrubSecrets(
+      'post to https://hooks.slack.com/services/' + 'T00000000/B00000000/' + tail + ' now',
+    );
     expect(out).not.toContain(tail);
   });
   it('still scrubs the already-covered GitHub/Slack prefixes (no regression)', () => {
@@ -107,8 +113,11 @@ describe('secret-scrub R4 — space-separated --password flag (MED)', () => {
 
 describe('secret-scrub R4 — no over-scrub of ordinary prose/data', () => {
   it('leaves normal sentences, hex colors, and bare SHAs intact', () => {
-    expect(scrubSecrets('the color is #ff0000 and the build passed')).toBe('the color is #ff0000 and the build passed');
-    expect(scrubSecrets('commit 0123456789abcdef0123456789abcdef01234567 landed'))
-      .toBe('commit 0123456789abcdef0123456789abcdef01234567 landed');
+    expect(scrubSecrets('the color is #ff0000 and the build passed')).toBe(
+      'the color is #ff0000 and the build passed',
+    );
+    expect(scrubSecrets('commit 0123456789abcdef0123456789abcdef01234567 landed')).toBe(
+      'commit 0123456789abcdef0123456789abcdef01234567 landed',
+    );
   });
 });

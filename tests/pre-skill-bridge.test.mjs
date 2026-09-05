@@ -16,7 +16,11 @@ const SCRIPT_PATH = resolve(import.meta.dirname, '../scripts/pre-skill-bridge.js
 // script honors CLAUDE_MEM_RUNTIME_DIR, so redirect it to a throwaway dir.
 const TMP_RUNTIME = join(tmpdir(), `pre-skill-bridge-rt-${randomUUID()}`);
 mkdirSync(TMP_RUNTIME, { recursive: true });
-afterAll(() => { try { rmSync(TMP_RUNTIME, { recursive: true, force: true }); } catch {} });
+afterAll(() => {
+  try {
+    rmSync(TMP_RUNTIME, { recursive: true, force: true });
+  } catch {}
+});
 
 function runScript(inputStr, env = {}) {
   return new Promise((resolve, reject) => {
@@ -26,13 +30,20 @@ function runScript(inputStr, env = {}) {
     });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', d => { stdout += d; });
-    child.stderr.on('data', d => { stderr += d; });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
     child.on('close', (code) => resolve({ stdout, stderr, code }));
     child.on('error', reject);
     child.stdin.write(inputStr);
     child.stdin.end();
-    setTimeout(() => { child.kill(); reject(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    setTimeout(() => {
+      child.kill();
+      reject(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -60,17 +71,29 @@ describe('pre-skill-bridge', () => {
   describe('managed skill resolution (DB-level)', () => {
     it('matches managed paths only', () => {
       const db = createRegistryTestDb();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('humanizer', 'skill', 'preinstalled', 'hash', 'active', '/home/.claude-mem-lite/managed/skills/humanizer/SKILL.md', 'humanizer', 'Remove AI writing', '', '', '', '', '', '')
-      `).run();
-      db.prepare(`
+      `,
+      ).run();
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('brainstorming', 'skill', 'preinstalled', 'hash', 'active', '/home/.claude/plugins/cache/superpowers/skills/brainstorming/SKILL.md', 'superpowers:brainstorming', '', '', '', '', '', '', '')
-      `).run();
+      `,
+      ).run();
 
-      const managed = db.prepare(`SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`).get('humanizer', 'humanizer');
-      const native = db.prepare(`SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`).get('brainstorming', 'brainstorming');
+      const managed = db
+        .prepare(
+          `SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`,
+        )
+        .get('humanizer', 'humanizer');
+      const native = db
+        .prepare(
+          `SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`,
+        )
+        .get('brainstorming', 'brainstorming');
 
       expect(managed).toBeTruthy();
       expect(native).toBeUndefined();
@@ -79,12 +102,18 @@ describe('pre-skill-bridge', () => {
 
     it('matches by invocation_name', () => {
       const db = createRegistryTestDb();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('my-humanizer', 'skill', 'user', 'hash', 'active', '/home/.claude-mem-lite/managed/skills/humanizer/SKILL.md', 'humanizer', '', '', '', '', '', '', '')
-      `).run();
+      `,
+      ).run();
 
-      const row = db.prepare(`SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`).get('humanizer', 'humanizer');
+      const row = db
+        .prepare(
+          `SELECT name FROM resources WHERE (name = ? OR invocation_name = ?) AND local_path LIKE '%managed%' AND status = 'active'`,
+        )
+        .get('humanizer', 'humanizer');
       expect(row).toBeTruthy();
       expect(row.name).toBe('my-humanizer');
       db.close();
@@ -106,10 +135,14 @@ describe('pre-skill-bridge', () => {
       const skillPath = join(skillDir, 'SKILL.md');
       writeFileSync(skillPath, '# Reloc Skill\nRELOCATED_CONTENT_MARKER');
       const rdb = ensureRegistryDb(join(ccDir, 'resource-registry.db'));
-      rdb.prepare(`
+      rdb
+        .prepare(
+          `
         INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
         VALUES ('reloc-skill', 'skill', 'github', 'h', 'active', ?, 'reloc-skill', '', '', '', '', '', '', '')
-      `).run(skillPath);
+      `,
+        )
+        .run(skillPath);
       rdb.close();
       try {
         // emptyHome ensures the pre-fix homedir-based REGISTRY_DB_PATH points at a nonexistent DB

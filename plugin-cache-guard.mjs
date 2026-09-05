@@ -36,7 +36,9 @@ export function scanPluginCacheHookPollution(opts) {
     try {
       const h = JSON.parse(readFileSync(p, 'utf8'));
       if (h.hooks && Object.keys(h.hooks).length > 0) polluted.push(ver);
-    } catch { /* ignore unreadable cache entries */ }
+    } catch {
+      /* ignore unreadable cache entries */
+    }
   }
   return polluted.sort();
 }
@@ -53,13 +55,22 @@ export function clearPluginCacheHooks(opts) {
     try {
       const h = JSON.parse(readFileSync(p, 'utf8'));
       if (!h.hooks || Object.keys(h.hooks).length === 0) continue;
-      writeFileSync(p, JSON.stringify({
-        description: h.description || `${plugin} hooks`,
-        _note: `${reason} (cache ver: ${ver})`,
-        hooks: {},
-      }, null, 2) + '\n');
+      writeFileSync(
+        p,
+        JSON.stringify(
+          {
+            description: h.description || `${plugin} hooks`,
+            _note: `${reason} (cache ver: ${ver})`,
+            hooks: {},
+          },
+          null,
+          2,
+        ) + '\n',
+      );
       cleared.push(ver);
-    } catch { /* ignore unwritable cache entries */ }
+    } catch {
+      /* ignore unwritable cache entries */
+    }
   }
   return cleared.sort();
 }
@@ -89,9 +100,7 @@ export function pluginCacheHookEvents(root) {
     return { ok: false, events: [], reason: 'unreadable' };
   }
   const events = Object.keys(parsed?.hooks || {});
-  return events.length > 0
-    ? { ok: true, events, reason: null }
-    : { ok: false, events: [], reason: 'empty' };
+  return events.length > 0 ? { ok: true, events, reason: null } : { ok: false, events: [], reason: 'empty' };
 }
 
 export function hasInstallManagedHooks(opts) {
@@ -103,7 +112,9 @@ export function hasInstallManagedHooks(opts) {
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
     const serialized = JSON.stringify(s.hooks || {});
     return serialized.includes(`.${plugin}/`) || serialized.includes(`/${plugin}/`);
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 /** Every `command` string under settings.json `hooks`, in registration order. */
@@ -111,12 +122,16 @@ function settingsHookCommands(home) {
   const settingsPath = join(home, '.claude', 'settings.json');
   if (!existsSync(settingsPath)) return [];
   let s;
-  try { s = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { return []; }
+  try {
+    s = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  } catch {
+    return [];
+  }
   const out = [];
   for (const matchers of Object.values(s?.hooks || {})) {
     if (!Array.isArray(matchers)) continue;
     for (const m of matchers) {
-      for (const h of (Array.isArray(m?.hooks) ? m.hooks : [])) {
+      for (const h of Array.isArray(m?.hooks) ? m.hooks : []) {
         if (typeof h?.command === 'string') out.push(h.command);
       }
     }
@@ -167,8 +182,9 @@ export function hasLiveInstallManagedHooks(opts) {
   if (!hasInstallManagedHooks(opts)) return false;
   const home = opts?.home || homedir();
   const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  const managed = settingsHookCommands(home)
-    .filter(c => c.includes(`.${plugin}/`) || c.includes(`/${plugin}/`));
+  const managed = settingsHookCommands(home).filter(
+    (c) => c.includes(`.${plugin}/`) || c.includes(`/${plugin}/`),
+  );
   let checked = 0;
   for (const c of managed) {
     for (const p of commandPaths(c)) {

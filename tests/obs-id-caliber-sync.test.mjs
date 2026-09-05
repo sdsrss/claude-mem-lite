@@ -109,9 +109,9 @@ describe('observation-id caliber — one owner', () => {
     const src = stripComments(readFileSync(join(REPO, rel), 'utf8'));
     expect(
       HAND_CALIBER.test(src),
-      `${rel} hand-writes an observation-id digit caliber. Import OBS_ID_DIGITS / `
-      + `citationIdRe() from ${OWNER} instead — a benchmark whose caliber differs from `
-      + `the extractor's measures a different population than the one it audits.`,
+      `${rel} hand-writes an observation-id digit caliber. Import OBS_ID_DIGITS / ` +
+        `citationIdRe() from ${OWNER} instead — a benchmark whose caliber differs from ` +
+        `the extractor's measures a different population than the one it audits.`,
     ).toBe(false);
   });
 

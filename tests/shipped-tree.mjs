@@ -22,8 +22,16 @@ export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 // text would otherwise trip its own sweep; `tasks` holds working copies of shipped files
 // (`tasks/bak-*/`) that are not shipped. Everything a user actually installs is in scope.
 const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'coverage', 'tmp', '.tmp',
-  'tasks', 'docs', 'tests', 'benchmark', 'experiment',
+  'node_modules',
+  '.git',
+  'coverage',
+  'tmp',
+  '.tmp',
+  'tasks',
+  'docs',
+  'tests',
+  'benchmark',
+  'experiment',
 ]);
 
 /**
@@ -36,7 +44,11 @@ export function walkShipped(dir = REPO, out = []) {
     if (SKIP_DIRS.has(name)) continue;
     const full = join(dir, name);
     let st;
-    try { st = statSync(full); } catch { continue; }
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
     if (st.isDirectory()) walkShipped(full, out);
     else if (/\.(mjs|js)$/.test(name)) out.push(full);
   }
@@ -54,8 +66,10 @@ export function relShipped(file) {
  * Deliberately line-based: a trailing `// …` after real code keeps the code.
  */
 export function sourceWithoutComments(file) {
-  return readFileSync(file, 'utf8').split('\n')
-    .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n');
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
+    .join('\n');
 }
 
 /**

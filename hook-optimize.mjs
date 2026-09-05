@@ -9,9 +9,17 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
-  truncate, debugLog, debugCatch, COMPRESSED_AUTO,
-  computeMinHash, estimateJaccardFromMinHash, jaccardSimilarity, clampImportance, cjkBigrams,
-  notLowSignalTitleClause, scrubSecrets,
+  truncate,
+  debugLog,
+  debugCatch,
+  COMPRESSED_AUTO,
+  computeMinHash,
+  estimateJaccardFromMinHash,
+  jaccardSimilarity,
+  clampImportance,
+  cjkBigrams,
+  notLowSignalTitleClause,
+  scrubSecrets,
 } from './utils.mjs';
 import { callModelJSONAsync, BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
@@ -201,12 +209,16 @@ export async function executeReenrich(db, limit = 10, { scope = 'narrow', projec
   const candidates = findReenrichCandidates(db, limit, { scope, project });
   if (candidates.length === 0) return { processed: 0, skipped: 0 };
 
-  let processed = 0, skipped = 0;
+  let processed = 0,
+    skipped = 0;
   const validTypes = OBS_TYPE_SET;
 
   for (const cand of candidates) {
     const gotSlot = await acquireLLMSlot();
-    if (!gotSlot) { skipped++; continue; }
+    if (!gotSlot) {
+      skipped++;
+      continue;
+    }
 
     try {
       if (scope === 'scopes') {
@@ -223,15 +235,25 @@ Lesson: ${truncate(cand.lesson_learned || '(none)', 300)}
 
 JSON: {"scope":"file|module|project|environment"}
 scope: ${SCOPE_PROMPT_LEGEND}`;
-        const parsed = await callModelJSONAsync(scopePrompt, 'haiku', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 60 });
+        const parsed = await callModelJSONAsync(scopePrompt, 'haiku', {
+          timeout: BG_LLM_TIMEOUT_MS,
+          maxTokens: 60,
+        });
         const scopeValue = normalizeScope(parsed && parsed.scope);
-        if (!scopeValue) { skipped++; continue; }
+        if (!scopeValue) {
+          skipped++;
+          continue;
+        }
         // `AND scope IS NULL` is the fill-only-empty guard: a save-enrich worker or
         // an episode upgrade can land between candidate selection and this write,
         // and a classifier round-trip is long enough for that to be real.
-        const res = db.prepare('UPDATE observations SET scope = ? WHERE id = ? AND scope IS NULL')
+        const res = db
+          .prepare('UPDATE observations SET scope = ? WHERE id = ? AND scope IS NULL')
           .run(scopeValue, cand.id);
-        if (res.changes === 0) { skipped++; continue; }
+        if (res.changes === 0) {
+          skipped++;
+          continue;
+        }
         // No rebuildVector: scope is a filter column, absent from the FTS text
         // field and from vecTextForRow — a rebuild here would be a no-op write.
         processed++;
@@ -251,11 +273,18 @@ Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
 JSON: {"search_aliases":["alt phrasing","synonym","spelled-out jargon","CJK term if the domain word has one"],"scope":"file|module|project|environment"}
 Give 3-6 aliases: words a user might search for the SAME concept but that are NOT already in the title (synonyms, the spelled-out form of an acronym, the jargon term for a described symptom, a CJK translation of a key domain term).
 scope: ${SCOPE_PROMPT_LEGEND}`;
-        const parsed = await callModelJSONAsync(aliasPrompt, 'haiku', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 300 });
-        const aliasArr = parsed && Array.isArray(parsed.search_aliases)
-          ? parsed.search_aliases.filter((a) => typeof a === 'string' && a.trim().length > 0)
-          : [];
-        if (!aliasArr.length) { skipped++; continue; }
+        const parsed = await callModelJSONAsync(aliasPrompt, 'haiku', {
+          timeout: BG_LLM_TIMEOUT_MS,
+          maxTokens: 300,
+        });
+        const aliasArr =
+          parsed && Array.isArray(parsed.search_aliases)
+            ? parsed.search_aliases.filter((a) => typeof a === 'string' && a.trim().length > 0)
+            : [];
+        if (!aliasArr.length) {
+          skipped++;
+          continue;
+        }
         const searchAliases = aliasArr.slice(0, 6).join(' ');
         const aliasBigrams = cjkBigrams(searchAliases);
         const appendedText = [cand.text || '', searchAliases, aliasBigrams].filter(Boolean).join(' ');
@@ -263,8 +292,9 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // scope rides this call for free (D#135 P3). COALESCE, not a plain set:
         // an omitted or off-enum value normalizes to null and must not erase a
         // classification an earlier face already wrote.
-        db.prepare(`UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope) WHERE id = ?`)
-          .run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
+        db.prepare(
+          `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope) WHERE id = ?`,
+        ).run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
         // Refresh the TF-IDF vector from the just-updated FTS text so the new
         // aliases reach the vector arm too — the narrow/wide branch rebuilds, this
         // one must as well. No-ops when the vector arm is off / vocab unbuilt.
@@ -284,8 +314,14 @@ lesson_learned: State what was learned. If routine, write "none".
 search_aliases: 2-6 alternative search terms (include CJK if applicable).
 scope: ${SCOPE_PROMPT_LEGEND}`;
 
-      const parsed = await callModelJSONAsync(prompt, 'haiku', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 500 });
-      if (!parsed || !parsed.title) { skipped++; continue; }
+      const parsed = await callModelJSONAsync(prompt, 'haiku', {
+        timeout: BG_LLM_TIMEOUT_MS,
+        maxTokens: 500,
+      });
+      if (!parsed || !parsed.title) {
+        skipped++;
+        continue;
+      }
 
       // Auto-hide on importance:0 targets fully-degraded NARROW rows (this branch predates
       // the wide-scope widening). A wide candidate has a substantive narrative (>100 chars)
@@ -294,15 +330,16 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // hide a real observation until manual surgery. In wide scope, fall through and let
       // clampImportance floor it to 1 (kept visible, low-ranked) instead of hiding.
       if ((parsed.importance === 0 || parsed.importance === '0') && scope !== 'wide') {
-        db.prepare(`UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ? WHERE id = ?`)
-          .run(Date.now(), cand.id);
+        db.prepare(
+          `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ? WHERE id = ?`,
+        ).run(Date.now(), cand.id);
         processed++;
         continue;
       }
 
       // Enrichment ("add a lesson") must not reclassify a specific type down to the generic
       // 'change' (lower TYPE_QUALITY + faster decay); keep the stored type on that downgrade.
-      let type = validTypes.has(parsed.type) ? parsed.type : (cand.type || 'change');
+      let type = validTypes.has(parsed.type) ? parsed.type : cand.type || 'change';
       if (type === 'change' && cand.type && cand.type !== 'change') type = cand.type;
       const concepts = Array.isArray(parsed.concepts) ? parsed.concepts.slice(0, 10) : [];
       const facts = Array.isArray(parsed.facts) ? parsed.facts.slice(0, 10) : [];
@@ -312,17 +349,21 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // sets optimized_at, locking the row out of any future re-enrich (:88), so the loss is
       // permanent. Keep the candidate's existing value when the LLM returned nothing. (Narrow
       // candidates are all-null on these by their WHERE, so cand.* is falsy → no-op there.)
-      const conceptsText = concepts.length ? concepts.join(' ') : (cand.concepts || '');
-      const factsText = facts.length ? facts.join(' ') : (cand.facts || '');
+      const conceptsText = concepts.length ? concepts.join(' ') : cand.concepts || '';
+      const factsText = facts.length ? facts.join(' ') : cand.facts || '';
       // Scrub BEFORE truncate so a secret straddling the cut can't leave a sub-6-char
       // head that scrubSecrets's value-length floor no longer matches (the scrubRecord
       // below would then miss it too). Mirrors the hook-llm save-path fix.
-      const lessonLearned = typeof parsed.lesson_learned === 'string'
-        && parsed.lesson_learned.toLowerCase() !== 'none'
-        && parsed.lesson_learned.trim().length > 0
-        ? scrubSecrets(parsed.lesson_learned).slice(0, 500) : null;
-      const searchAliases = Array.isArray(parsed.search_aliases) && parsed.search_aliases.length
-        ? parsed.search_aliases.slice(0, 6).join(' ') : (cand.search_aliases || null);
+      const lessonLearned =
+        typeof parsed.lesson_learned === 'string' &&
+        parsed.lesson_learned.toLowerCase() !== 'none' &&
+        parsed.lesson_learned.trim().length > 0
+          ? scrubSecrets(parsed.lesson_learned).slice(0, 500)
+          : null;
+      const searchAliases =
+        Array.isArray(parsed.search_aliases) && parsed.search_aliases.length
+          ? parsed.search_aliases.slice(0, 6).join(' ')
+          : cand.search_aliases || null;
       const title = truncate(scrubSecrets(parsed.title || ''), 120);
       const narrative = truncate(scrubSecrets(parsed.narrative || cand.narrative || ''), 500);
       // Floor at the stored importance: re-enrich adds a lesson, it must never silently downgrade
@@ -337,26 +378,47 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // Scrub LLM-output text fields at the UPDATE boundary. type is an
       // enum, importance is numeric, minhash_sig is hash bytes.
       const safe = scrubRecord('observations', {
-        title, narrative,
+        title,
+        narrative,
         concepts: conceptsText,
         facts: factsText,
         text: textField,
         lesson_learned: lessonLearned,
         search_aliases: searchAliases,
       });
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
           text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
           scope=COALESCE(?, scope)
         WHERE id = ?
-      `).run(type, safe.title, safe.narrative, safe.concepts, safe.facts, safe.text,
-        importance, safe.lesson_learned, safe.search_aliases, minhashSig, Date.now(),
+      `,
+      ).run(
+        type,
+        safe.title,
+        safe.narrative,
+        safe.concepts,
+        safe.facts,
+        safe.text,
+        importance,
+        safe.lesson_learned,
+        safe.search_aliases,
+        minhashSig,
+        Date.now(),
         // COALESCE (mirrors the hook-llm upgrade path): a re-enrich that omits
         // scope, or emits an off-enum value, must never blank an existing label —
         // and THIS update stamps optimized_at, so the loss would be permanent.
-        normalizeScope(parsed.scope), cand.id);
+        normalizeScope(parsed.scope),
+        cand.id,
+      );
 
-      rebuildVector(db, cand.id, { title, narrative, concepts: conceptsText, lesson_learned: safe.lesson_learned, search_aliases: safe.search_aliases });
+      rebuildVector(db, cand.id, {
+        title,
+        narrative,
+        concepts: conceptsText,
+        lesson_learned: safe.lesson_learned,
+        search_aliases: safe.search_aliases,
+      });
 
       processed++;
     } catch (e) {
@@ -441,9 +503,12 @@ Rules:
 - Include CJK ↔ English equivalents if present
 - Skip terms that have no synonyms in the list`;
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 1000 });
+    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+      timeout: BG_LLM_TIMEOUT_MS,
+      maxTokens: 1000,
+    });
     if (!parsed?.groups || !Array.isArray(parsed.groups)) return [];
-    return parsed.groups.filter(g => g.canonical && Array.isArray(g.aliases) && g.aliases.length > 0);
+    return parsed.groups.filter((g) => g.canonical && Array.isArray(g.aliases) && g.aliases.length > 0);
   } catch (e) {
     debugCatch(e, 'normalize-identify');
     return [];
@@ -467,12 +532,16 @@ export function applyNormalization(db, groups, { project = null } = {}) {
   // concepts/search_aliases of EVERY project's observations — the exact cross-project
   // contamination the --project flag was added to prevent. NULL → all projects (legacy
   // unscoped run), matching the search-engine `(? IS NULL OR project = ?)` idiom.
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT id, title, narrative, concepts, search_aliases, lesson_learned FROM observations
     WHERE COALESCE(compressed_into, 0) = 0
       AND concepts IS NOT NULL AND concepts != ''
       AND (? IS NULL OR project = ?)
-  `).all(project, project);
+  `,
+    )
+    .all(project, project);
 
   let updated = 0;
   const updateStmt = db.prepare(`
@@ -482,16 +551,21 @@ export function applyNormalization(db, groups, { project = null } = {}) {
   for (const row of rows) {
     const terms = row.concepts.split(/\s+/);
     let changed = false;
-    const newTerms = terms.map(t => {
+    const newTerms = terms.map((t) => {
       const canonical = aliasMap.get(t.toLowerCase());
-      if (canonical && canonical !== t) { changed = true; return canonical; }
+      if (canonical && canonical !== t) {
+        changed = true;
+        return canonical;
+      }
       return t;
     });
 
     if (changed) {
       const uniqueConcepts = [...new Set(newTerms)].join(' ');
       const existingAliases = row.search_aliases || '';
-      const originalTerms = terms.filter(t => aliasMap.has(t.toLowerCase()) && aliasMap.get(t.toLowerCase()) !== t);
+      const originalTerms = terms.filter(
+        (t) => aliasMap.has(t.toLowerCase()) && aliasMap.get(t.toLowerCase()) !== t,
+      );
       const newAliases = [existingAliases, ...originalTerms].filter(Boolean).join(' ');
       // Defense-in-depth scrub. Canonical concept names come from LLM output
       // (identifySynonymGroups via Sonnet); existing values are already
@@ -503,7 +577,13 @@ export function applyNormalization(db, groups, { project = null } = {}) {
       updateStmt.run(safe.concepts, safe.search_aliases, Date.now(), row.id);
       // V-F3: normalize mutated concepts + search_aliases (both vector fields) — rebuild the
       // vector so it reflects the canonicalized terms (no-op when the vector arm is disabled).
-      rebuildVector(db, row.id, { title: row.title, narrative: row.narrative, concepts: safe.concepts, search_aliases: safe.search_aliases, lesson_learned: row.lesson_learned });
+      rebuildVector(db, row.id, {
+        title: row.title,
+        narrative: row.narrative,
+        concepts: safe.concepts,
+        search_aliases: safe.search_aliases,
+        lesson_learned: row.lesson_learned,
+      });
       updated++;
     }
   }
@@ -526,7 +606,13 @@ export async function executeNormalize(db, force = false, { project } = {}) {
   // Only the UNSCOPED (whole-store) run advances the shared 7-day gate. A project-scoped run
   // must not reset the global timer (it never consulted it — shouldRunNormalize(project) is
   // always open), or one `--project X` run would silently block the next global normalize.
-  if (!project) { try { writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now() })); } catch { /* best-effort */ } }
+  if (!project) {
+    try {
+      writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now() }));
+    } catch {
+      /* best-effort */
+    }
+  }
 
   return { processed: result.updated, groups: groups.length };
 }
@@ -596,9 +682,12 @@ export async function executeMergeCluster(db, cluster) {
   if (!gotSlot) return { merged: false };
 
   try {
-    const obsDescriptions = cluster.map((o, i) =>
-      `${i + 1}. [${o.type || 'change'}] "${truncate(o.title, 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}`
-    ).join('\n');
+    const obsDescriptions = cluster
+      .map(
+        (o, i) =>
+          `${i + 1}. [${o.type || 'change'}] "${truncate(o.title, 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}`,
+      )
+      .join('\n');
 
     const prompt = `These observations from a code memory database may be about the same topic. Should they be merged into a single observation?
 
@@ -609,18 +698,22 @@ Return ONLY valid JSON:
 - If they should NOT be merged: {"should_merge":false}
 - If they SHOULD be merged: {"should_merge":true,"merged_title":"≤120 char comprehensive title","merged_narrative":"comprehensive ≤800 char summary preserving all key details","merged_concepts":["kw1","kw2"],"merged_facts":["specific fact 1"],"merged_lesson":"synthesized non-obvious lesson or null","importance":2}`;
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 1000 });
+    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+      timeout: BG_LLM_TIMEOUT_MS,
+      maxTokens: 1000,
+    });
     if (!parsed || !parsed.should_merge) return { merged: false };
 
     // Keeper = highest importance, then highest access_count. Previously access_count
     // alone, so a critical (importance=3) but never-accessed observation lost the keeper
     // role to a trivial (importance=1) accessed one and was compressed away.
     const keeper = cluster.reduce((best, o) => {
-      const oi = o.importance || 1, bi = best.importance || 1;
+      const oi = o.importance || 1,
+        bi = best.importance || 1;
       if (oi !== bi) return oi > bi ? o : best;
       return (o.access_count || 0) > (best.access_count || 0) ? o : best;
     }, cluster[0]);
-    const others = cluster.filter(o => o.id !== keeper.id);
+    const others = cluster.filter((o) => o.id !== keeper.id);
     // Floor the merged importance at the cluster max — merging must never silently
     // downgrade the ranking of the most-important member (the LLM default is 2). The keeper
     // is selected by importance-first, so keeper.importance IS the cluster max by construction.
@@ -631,8 +724,8 @@ Return ONLY valid JSON:
     // Preserve-on-empty (mirror the merged_lesson guard below + the re-enrich path): the merge
     // overwrites the keeper in place, so a partial LLM response that omits these must fall back to
     // the keeper's own values, not blank its live concepts/facts (findMergeCandidates now selects them).
-    const conceptsText = concepts.length ? concepts.join(' ') : (keeper.concepts || '');
-    const factsText = facts.length ? facts.join(' ') : (keeper.facts || '');
+    const conceptsText = concepts.length ? concepts.join(' ') : keeper.concepts || '';
+    const factsText = facts.length ? facts.join(' ') : keeper.facts || '';
     // Scrub BEFORE truncate (see re-enrich note): keep the boundary cut on
     // already-scrubbed text so a straddling secret can't leak a sub-floor head.
     const title = truncate(scrubSecrets(parsed.merged_title || ''), 120);
@@ -647,13 +740,16 @@ Return ONLY valid JSON:
     // (a tombstoned/retired lesson can't resurrect onto the keeper). The union is scrubbed then
     // capped at 500 chars like a single lesson, so an unusually long union may truncate trailing
     // members — still strictly better than the prior unconditional null (partial > total loss).
-    let lessonLearned = typeof parsed.merged_lesson === 'string'
-      && parsed.merged_lesson.trim().length > 0
-      ? scrubSecrets(parsed.merged_lesson).slice(0, 500) : null;
+    let lessonLearned =
+      typeof parsed.merged_lesson === 'string' && parsed.merged_lesson.trim().length > 0
+        ? scrubSecrets(parsed.merged_lesson).slice(0, 500)
+        : null;
     if (!lessonLearned) {
-      const memberLessons = [...new Set(cluster
-        .map(o => (o.lesson_learned || '').trim())
-        .filter(l => l && l.toLowerCase() !== 'none'))];
+      const memberLessons = [
+        ...new Set(
+          cluster.map((o) => (o.lesson_learned || '').trim()).filter((l) => l && l.toLowerCase() !== 'none'),
+        ),
+      ];
       if (memberLessons.length) lessonLearned = scrubSecrets(memberLessons.join(' — ')).slice(0, 500);
     }
 
@@ -665,7 +761,8 @@ Return ONLY valid JSON:
     // Scrub LLM-output cluster-merge text fields at the UPDATE boundary.
     // importance is numeric; minhash_sig is hash bytes.
     const safe = scrubRecord('observations', {
-      title, narrative,
+      title,
+      narrative,
       concepts: conceptsText,
       facts: factsText,
       text: textField,
@@ -679,9 +776,9 @@ Return ONLY valid JSON:
       // the other members at a tombstoned keeper is precisely the "buried behind a hidden
       // parent" loss that mergeDuplicates' docblock enumerates (lib/maintain-core.mjs), and
       // it is what that function's own isLive gate exists to prevent. Same predicate here.
-      const keeperLive = db.prepare(
-        `SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`
-      ).get(keeper.id);
+      const keeperLive = db
+        .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
+        .get(keeper.id);
       if (!keeperLive) return false;
 
       // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
@@ -691,27 +788,43 @@ Return ONLY valid JSON:
       // would otherwise destroy its original text irreversibly (HIGH-3 data loss).
       // Column list is derived from the live schema (minus id/compressed_into) so
       // it stays correct as migrations add columns; names are internal identifiers.
-      const snapCols = db.prepare(`PRAGMA table_info(observations)`).all()
-        .map(c => c.name).filter(c => c !== 'id' && c !== 'compressed_into');
+      const snapCols = db
+        .prepare(`PRAGMA table_info(observations)`)
+        .all()
+        .map((c) => c.name)
+        .filter((c) => c !== 'id' && c !== 'compressed_into');
       const snapColList = snapCols.join(', ');
       db.prepare(
         `INSERT INTO observations (${snapColList}, compressed_into)
-         SELECT ${snapColList}, ? FROM observations WHERE id = ?`
+         SELECT ${snapColList}, ? FROM observations WHERE id = ?`,
       ).run(keeper.id, keeper.id);
 
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
           importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?
         WHERE id = ?
-      `).run(safe.title, safe.narrative, safe.concepts, safe.facts, safe.text,
-        importance, safe.lesson_learned, minhashSig, Date.now(), keeper.id);
+      `,
+      ).run(
+        safe.title,
+        safe.narrative,
+        safe.concepts,
+        safe.facts,
+        safe.text,
+        importance,
+        safe.lesson_learned,
+        minhashSig,
+        Date.now(),
+        keeper.id,
+      );
 
-      const otherIds = others.map(o => o.id);
+      const otherIds = others.map((o) => o.id);
       const ph = otherIds.map(() => '?').join(',');
       // Live guard on the members too: one already compressed into ANOTHER summary S during
       // the LLM window would be re-pointed here, silently dropping a row out of S's child set.
-      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`)
-        .run(keeper.id, ...otherIds);
+      db.prepare(
+        `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
+      ).run(keeper.id, ...otherIds);
       return true;
     })();
     if (!mergeApplied) {
@@ -719,7 +832,13 @@ Return ONLY valid JSON:
       return { merged: false };
     }
 
-    rebuildVector(db, keeper.id, { title, narrative, concepts: conceptsText, lesson_learned: lessonLearned, search_aliases: keeper.search_aliases });
+    rebuildVector(db, keeper.id, {
+      title,
+      narrative,
+      concepts: conceptsText,
+      lesson_learned: lessonLearned,
+      search_aliases: keeper.search_aliases,
+    });
 
     debugLog('DEBUG', 'llm-optimize', `merged ${cluster.length} observations into #${keeper.id}`);
     return { merged: true, keeperId: keeper.id, mergedCount: others.length };
@@ -792,10 +911,12 @@ export function clusterForCompression(candidates, db) {
     if (obs.length < 3) continue;
 
     let vocab;
-    try { vocab = getVocabulary(db); } catch {}
+    try {
+      vocab = getVocabulary(db);
+    } catch {}
 
     if (vocab) {
-      const vectors = obs.map(o => {
+      const vectors = obs.map((o) => {
         const text = [o.title || '', o.narrative || ''].join(' ');
         return computeVector(text, vocab);
       });
@@ -816,7 +937,7 @@ export function clusterForCompression(candidates, db) {
         }
 
         if (cluster.length >= 3) {
-          const sorted = cluster.map(c => c.obs).sort((a, b) => a.created_at_epoch - b.created_at_epoch);
+          const sorted = cluster.map((c) => c.obs).sort((a, b) => a.created_at_epoch - b.created_at_epoch);
           let subCluster = [sorted[0]];
           for (let k = 1; k < sorted.length; k++) {
             if (sorted[k].created_at_epoch - subCluster[0].created_at_epoch > COMPRESS_TIME_SPLIT_MS) {
@@ -855,9 +976,12 @@ export async function executeSmartCompressCluster(db, observations, project) {
   if (!gotSlot) return { compressed: false };
 
   try {
-    const obsDescriptions = observations.map((o, i) =>
-      `${i + 1}. [${o.type || 'change'}] "${truncate(o.title || '(untitled)', 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}${o.lesson_learned ? ` | Lesson: ${truncate(o.lesson_learned, 200)}` : ''}`
-    ).join('\n');
+    const obsDescriptions = observations
+      .map(
+        (o, i) =>
+          `${i + 1}. [${o.type || 'change'}] "${truncate(o.title || '(untitled)', 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}${o.lesson_learned ? ` | Lesson: ${truncate(o.lesson_learned, 200)}` : ''}`,
+      )
+      .join('\n');
 
     const prompt = `Summarize these related code memory observations into ONE comprehensive summary. Preserve all important decisions, lessons, and specific facts. Return ONLY valid JSON.
 
@@ -866,7 +990,10 @@ ${obsDescriptions}
 
 JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive summary ≤800 chars preserving key decisions and lessons","concepts":["kw1","kw2"],"facts":["all specific facts preserved"],"lesson_learned":"most important synthesized lesson or 'none'","search_aliases":["alt search 1","alt search 2"]}`;
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 1000 });
+    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+      timeout: BG_LLM_TIMEOUT_MS,
+      maxTokens: 1000,
+    });
     if (!parsed || !parsed.title) return { compressed: false };
 
     // Scrub BEFORE truncate (see re-enrich note): boundary cut on scrubbed text.
@@ -876,25 +1003,29 @@ JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive sum
     const facts = Array.isArray(parsed.facts) ? parsed.facts.slice(0, 10) : [];
     const conceptsText = concepts.join(' ');
     const factsText = facts.join(' ');
-    const lessonLearned = typeof parsed.lesson_learned === 'string'
-      && parsed.lesson_learned.toLowerCase() !== 'none'
-      && parsed.lesson_learned.trim().length > 0
-      ? scrubSecrets(parsed.lesson_learned).slice(0, 500) : null;
+    const lessonLearned =
+      typeof parsed.lesson_learned === 'string' &&
+      parsed.lesson_learned.toLowerCase() !== 'none' &&
+      parsed.lesson_learned.trim().length > 0
+        ? scrubSecrets(parsed.lesson_learned).slice(0, 500)
+        : null;
     const searchAliases = Array.isArray(parsed.search_aliases)
-      ? parsed.search_aliases.slice(0, 6).join(' ') : null;
+      ? parsed.search_aliases.slice(0, 6).join(' ')
+      : null;
 
     const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
     const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
 
-    const epochs = observations.map(o => o.created_at_epoch).sort((a, b) => a - b);
+    const epochs = observations.map((o) => o.created_at_epoch).sort((a, b) => a - b);
     const medianEpoch = epochs[Math.floor(epochs.length / 2)];
 
     const summaryId = db.transaction(() => {
       const sessionId = `compress-${project}`;
       const now = new Date();
-      db.prepare(`INSERT OR IGNORE INTO sdk_sessions
+      db.prepare(
+        `INSERT OR IGNORE INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-        VALUES (?,?,?,?,?,'active')`
+        VALUES (?,?,?,?,?,'active')`,
       ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
 
       // Defense-in-depth: title/narrative/etc. are LLM-generated compression
@@ -908,32 +1039,52 @@ JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive sum
         lesson_learned: lessonLearned,
         search_aliases: searchAliases,
       });
-      const result = db.prepare(`INSERT INTO observations
+      const result = db
+        .prepare(
+          `INSERT INTO observations
         (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
          files_read, files_modified, importance, lesson_learned, search_aliases, optimized_at,
          created_at, created_at_epoch)
-        VALUES (?,?,?,?,?,'',?,?,?,'[]','[]',2,?,?,?,?,?)`
-      ).run(sessionId, project, safe.text, 'discovery', safe.title, safe.narrative,
-        safe.concepts, safe.facts, safe.lesson_learned, safe.search_aliases, Date.now(),
-        new Date(medianEpoch).toISOString(), medianEpoch);
+        VALUES (?,?,?,?,?,'',?,?,?,'[]','[]',2,?,?,?,?,?)`,
+        )
+        .run(
+          sessionId,
+          project,
+          safe.text,
+          'discovery',
+          safe.title,
+          safe.narrative,
+          safe.concepts,
+          safe.facts,
+          safe.lesson_learned,
+          safe.search_aliases,
+          Date.now(),
+          new Date(medianEpoch).toISOString(),
+          medianEpoch,
+        );
 
       const sId = Number(result.lastInsertRowid);
 
-      const obsIds = observations.map(o => o.id);
+      const obsIds = observations.map((o) => o.id);
       const ph = obsIds.map(() => '?').join(',');
       // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
       // by a Sonnet round-trip, so a member may already be compressed into another summary or
       // tombstoned. Re-pointing it here would silently remove a row from that summary's child
       // set. Members that lost liveness stay where they are; the summary still lands.
-      db.prepare(`UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`)
-        .run(sId, ...obsIds);
+      db.prepare(
+        `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
+      ).run(sId, ...obsIds);
 
       return sId;
     })();
 
     rebuildVector(db, summaryId, { title, narrative, concepts: conceptsText });
 
-    debugLog('DEBUG', 'llm-optimize', `smart-compressed ${observations.length} observations into #${summaryId}`);
+    debugLog(
+      'DEBUG',
+      'llm-optimize',
+      `smart-compressed ${observations.length} observations into #${summaryId}`,
+    );
     return { compressed: true, summaryId, count: observations.length };
   } catch (e) {
     debugCatch(e, 'smart-compress');
@@ -1043,14 +1194,18 @@ export function optimizePreview(db, { project, detail = false } = {}) {
  * @param {string} [opts.project] Filter all tasks to a single project. Opt-in;
  *   absence preserves the prior all-projects default.
  */
-export async function optimizeRun(db, { tasks, maxItems = 15, force = false, reenrichScope = 'narrow', project } = {}) {
+export async function optimizeRun(
+  db,
+  { tasks, maxItems = 15, force = false, reenrichScope = 'narrow', project } = {},
+) {
   const allTasks = ['re-enrich', 'normalize', 'cluster-merge', 'smart-compress'];
   const selectedTasks = tasks && tasks.length > 0 ? tasks : allTasks;
   // Single-task mode: give that task the full budget. Distribution only makes sense
   // when multiple tasks compete for the same pool.
-  const budget = selectedTasks.length === 1
-    ? { reenrich: maxItems, normalize: maxItems, clusterMerge: maxItems, smartCompress: maxItems }
-    : distributeBudget(maxItems);
+  const budget =
+    selectedTasks.length === 1
+      ? { reenrich: maxItems, normalize: maxItems, clusterMerge: maxItems, smartCompress: maxItems }
+      : distributeBudget(maxItems);
   const results = {};
 
   for (const task of selectedTasks) {
@@ -1088,18 +1243,26 @@ export async function optimizeRun(db, { tasks, maxItems = 15, force = false, ree
             // Cap is budget.reenrich, so the daily pass adds at most that many cheap
             // classification calls and an empty pool still costs nothing.
             const half = Math.max(1, Math.floor(budget.reenrich / 2));
-            const aliasBudget = Math.min(half, findReenrichCandidates(db, half, { scope: 'aliases', project }).length);
+            const aliasBudget = Math.min(
+              half,
+              findReenrichCandidates(db, half, { scope: 'aliases', project }).length,
+            );
             const scopesBudget = Math.min(
               budget.reenrich,
               findReenrichCandidates(db, budget.reenrich, { scope: 'scopes', project }).length,
             );
-            const mainRes = await executeReenrich(db, budget.reenrich - aliasBudget, { scope: reenrichScope, project });
-            const aliasRes = aliasBudget > 0
-              ? await executeReenrich(db, aliasBudget, { scope: 'aliases', project })
-              : { processed: 0, skipped: 0 };
-            const scopesRes = scopesBudget > 0
-              ? await executeReenrich(db, scopesBudget, { scope: 'scopes', project })
-              : { processed: 0, skipped: 0 };
+            const mainRes = await executeReenrich(db, budget.reenrich - aliasBudget, {
+              scope: reenrichScope,
+              project,
+            });
+            const aliasRes =
+              aliasBudget > 0
+                ? await executeReenrich(db, aliasBudget, { scope: 'aliases', project })
+                : { processed: 0, skipped: 0 };
+            const scopesRes =
+              scopesBudget > 0
+                ? await executeReenrich(db, scopesBudget, { scope: 'scopes', project })
+                : { processed: 0, skipped: 0 };
             results.reenrich = {
               processed: (mainRes.processed || 0) + (aliasRes.processed || 0) + (scopesRes.processed || 0),
               skipped: (mainRes.skipped || 0) + (aliasRes.skipped || 0) + (scopesRes.skipped || 0),

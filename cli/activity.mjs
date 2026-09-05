@@ -16,7 +16,7 @@ import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
 
 function formatActivityResults(rows) {
   if (!rows || rows.length === 0) return '(no events)';
-  return rows.map(r => `#${r.id} [${r.event_type}] ${r.title}`).join('\n');
+  return rows.map((r) => `#${r.id} [${r.event_type}] ${r.title}`).join('\n');
 }
 
 export async function cmdActivity(db, args) {
@@ -27,7 +27,8 @@ export async function cmdActivity(db, args) {
   }
 
   const { positional, flags } = parseArgs(args.slice(1));
-  const { saveEvent, searchEvents, recentEvents, getEvent, EVENT_TYPES, promoteInsightEvents } = await import('../lib/activity.mjs');
+  const { saveEvent, searchEvents, recentEvents, getEvent, EVENT_TYPES, promoteInsightEvents } =
+    await import('../lib/activity.mjs');
   const VALID_EVENT_TYPES = new Set(EVENT_TYPES);
   // `save` CREATES a row, so it keeps plain inferProject(): the DB-aware fallback is a read
   // affordance, and applying it to a write absorbs a not-yet-born subproject's first event
@@ -35,7 +36,9 @@ export async function cmdActivity(db, args) {
   // operates on rows that already exist, where falling back is what finds them.
   const project = flags.project
     ? resolveProject(db, flags.project)
-    : (sub === 'save' ? inferProject() : cliProject(db));
+    : sub === 'save'
+      ? inferProject()
+      : cliProject(db);
 
   if (sub === 'save') {
     // Reject value-less string flags before they reach saveEvent as a boolean `true`
@@ -54,16 +57,23 @@ export async function cmdActivity(db, args) {
     const body = flags.body || null;
     // Accept both --file (singular, backward compat) and --files (plural,
     // comma-split, preferred — matches cmdSave). Merge both sources.
-    const filesFromPlural = flags.files && typeof flags.files === 'string'
-      ? flags.files.split(',').map(s => s.trim()).filter(Boolean)
-      : [];
+    const filesFromPlural =
+      flags.files && typeof flags.files === 'string'
+        ? flags.files
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
     const filesFromSingular = flags.file && typeof flags.file === 'string' ? [flags.file] : [];
     const file_paths_merged = [...filesFromSingular, ...filesFromPlural];
     const file_paths = file_paths_merged.length > 0 ? file_paths_merged : null;
     const rawImp = flags.importance !== undefined ? parseInt(flags.importance, 10) : 2;
     // isNumericToken first (mirrors cmdSave): bare parseInt coerces "3xyz"→3 and would
     // persist a wrong importance that silently skews ranking. Float literals truncate (#8277).
-    if (flags.importance !== undefined && (!isNumericToken(flags.importance) || isNaN(rawImp) || rawImp < 1 || rawImp > 3)) {
+    if (
+      flags.importance !== undefined &&
+      (!isNumericToken(flags.importance) || isNaN(rawImp) || rawImp < 1 || rawImp > 3)
+    ) {
       fail(`[mem] Invalid importance "${flags.importance}". Must be 1, 2, or 3.`);
       return;
     }
@@ -101,9 +111,10 @@ export async function cmdActivity(db, args) {
     // through parseIntFlag so garbage ("2abc"), negatives (SQLite LIMIT -1 = UNLIMITED
     // full-table dump), and uncapped huge values warn + clamp to default/max, matching
     // the search/recent/browse siblings.
-    const limit = positional.length > 0
-      ? parseIntFlag(positional[0], { name: 'count', defaultValue: 20, max: 1000 })
-      : parseIntFlag(flags.limit, { name: '--limit', defaultValue: 20, max: 1000 });
+    const limit =
+      positional.length > 0
+        ? parseIntFlag(positional[0], { name: 'count', defaultValue: 20, max: 1000 })
+        : parseIntFlag(flags.limit, { name: '--limit', defaultValue: 20, max: 1000 });
     const type = flags.type || null;
     if (type !== null && !VALID_EVENT_TYPES.has(type)) {
       fail(`[mem] activity recent: invalid --type "${type}". Valid: ${[...VALID_EVENT_TYPES].join(', ')}`);
@@ -142,18 +153,21 @@ export async function cmdActivity(db, args) {
       fail('[mem] Usage: claude-mem-lite activity delete <id1,id2,...> [--confirm]');
       return;
     }
-    const ids = idStr.split(',')
-      .map(s => s.trim())
+    const ids = idStr
+      .split(',')
+      .map((s) => s.trim())
       .filter(Boolean)
-      .map(s => parseInt(s, 10))
-      .filter(n => Number.isInteger(n) && n > 0);
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isInteger(n) && n > 0);
     if (ids.length === 0) {
       fail('[mem] activity delete: no valid IDs provided (must be positive integers)');
       return;
     }
 
     const placeholders = ids.map(() => '?').join(',');
-    const rows = db.prepare(`SELECT id, event_type, title FROM events WHERE id IN (${placeholders})`).all(...ids);
+    const rows = db
+      .prepare(`SELECT id, event_type, title FROM events WHERE id IN (${placeholders})`)
+      .all(...ids);
     if (rows.length === 0) {
       fail(`[mem] activity delete: no events found for ID(s) ${ids.join(', ')}`);
       return;
@@ -166,7 +180,7 @@ export async function cmdActivity(db, args) {
         const titleStr = (r.title || '').slice(0, 100);
         out(`  #${r.id} [${r.event_type}] ${titleStr}`);
       }
-      const missingIds = ids.filter(i => !rows.some(r => r.id === i));
+      const missingIds = ids.filter((i) => !rows.some((r) => r.id === i));
       if (missingIds.length > 0) {
         out(`[mem] Note: ${missingIds.length} ID(s) not found and will be skipped: ${missingIds.join(', ')}`);
       }
@@ -192,11 +206,15 @@ export async function cmdActivity(db, args) {
     const execute = flags.execute === true || flags.execute === 'true';
     const r = promoteInsightEvents(db, { project: projectFilter, minImportance: minImp, execute });
     if (!execute) {
-      out(`[mem] Preview: ${r.eligible} insight-bearing event(s) (body + importance>=${minImp})${projectFilter ? ` in ${projectFilter}` : ' across all projects'} would be promoted to searchable observations.`);
+      out(
+        `[mem] Preview: ${r.eligible} insight-bearing event(s) (body + importance>=${minImp})${projectFilter ? ` in ${projectFilter}` : ' across all projects'} would be promoted to searchable observations.`,
+      );
       out('[mem] Run with --execute to apply. Source events are kept (marked promoted).');
       return;
     }
-    out(`[mem] Promoted ${r.promoted} event(s) to observations${r.deduped ? ` (${r.deduped} already had an equivalent observation)` : ''}.`);
+    out(
+      `[mem] Promoted ${r.promoted} event(s) to observations${r.deduped ? ` (${r.deduped} already had an equivalent observation)` : ''}.`,
+    );
     return;
   }
 

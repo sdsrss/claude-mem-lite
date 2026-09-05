@@ -9,7 +9,14 @@ import { sanitizeFtsQuery, estimateTokens, cjkBigrams } from '../utils.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { computePerSourceWindow } from '../lib/search-core.mjs';
 import { deepSearch } from '../deep-search.mjs';
-import { computeVector, rebuildVocabulary, _resetVocabCache, VOCAB_DIM, MIN_COSINE_SIMILARITY, RRF_K } from '../tfidf.mjs';
+import {
+  computeVector,
+  rebuildVocabulary,
+  _resetVocabCache,
+  VOCAB_DIM,
+  MIN_COSINE_SIMILARITY,
+  RRF_K,
+} from '../tfidf.mjs';
 import { OBS_BM25, TYPE_QUALITY_CASE, noisePenaltyClause, citeFactorClause } from '../scoring-sql.mjs';
 import { recencyDecaySql, liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { createTestDb } from '../tests/test-helpers.mjs';
@@ -32,7 +39,7 @@ export function seedDatabase(db, data) {
   for (const obs of data.observations) {
     if (!sessionIds.has(obs.session_id)) {
       sessionIds.add(obs.session_id);
-      const epoch = now + (obs.epoch_offset_days * 86400000);
+      const epoch = now + obs.epoch_offset_days * 86400000;
       insertSession.run(obs.session_id, obs.session_id, obs.project, new Date(epoch).toISOString(), epoch);
     }
   }
@@ -46,7 +53,7 @@ export function seedDatabase(db, data) {
 
   const obsTransaction = db.transaction(() => {
     for (const obs of data.observations) {
-      const epoch = now + (obs.epoch_offset_days * 86400000);
+      const epoch = now + obs.epoch_offset_days * 86400000;
       // Mirror the production write path (lib/save-observation.mjs, hook-llm.mjs::
       // buildFtsTextField): the indexed text = content + space-separated CJK
       // bigrams, because unicode61 indexes a whole CJK run as ONE token while the
@@ -55,12 +62,24 @@ export function seedDatabase(db, data) {
       // (#8826: build the corpus through the real save path). cjkBigrams is '' for
       // pure-Latin text, so English fixtures are byte-identical.
       const baseText = obs.text || '';
-      const bigrams = cjkBigrams([obs.title, obs.narrative, baseText, obs.concepts].filter(Boolean).join(' '));
+      const bigrams = cjkBigrams(
+        [obs.title, obs.narrative, baseText, obs.concepts].filter(Boolean).join(' '),
+      );
       const ftsText = bigrams ? `${baseText} ${bigrams}` : baseText;
       insertObs.run(
-        obs.id, obs.session_id, obs.project, ftsText, obs.type,
-        obs.title, obs.narrative, obs.facts, obs.concepts, obs.files_modified,
-        new Date(epoch).toISOString(), epoch, obs.importance
+        obs.id,
+        obs.session_id,
+        obs.project,
+        ftsText,
+        obs.type,
+        obs.title,
+        obs.narrative,
+        obs.facts,
+        obs.concepts,
+        obs.files_modified,
+        new Date(epoch).toISOString(),
+        epoch,
+        obs.importance,
       );
     }
   });
@@ -76,16 +95,29 @@ export function seedDatabase(db, data) {
 
     const sessTransaction = db.transaction(() => {
       for (const sess of data.sessions) {
-        const epoch = now + (sess.epoch_offset_days * 86400000);
+        const epoch = now + sess.epoch_offset_days * 86400000;
         // Ensure the session exists
         if (!sessionIds.has(sess.session_id)) {
           sessionIds.add(sess.session_id);
-          insertSession.run(sess.session_id, sess.session_id, sess.project, new Date(epoch).toISOString(), epoch);
+          insertSession.run(
+            sess.session_id,
+            sess.session_id,
+            sess.project,
+            new Date(epoch).toISOString(),
+            epoch,
+          );
         }
         insertSummary.run(
-          sess.id, sess.session_id, sess.project, sess.request,
-          sess.investigated, sess.learned, sess.completed, sess.next_steps,
-          new Date(epoch).toISOString(), epoch
+          sess.id,
+          sess.session_id,
+          sess.project,
+          sess.request,
+          sess.investigated,
+          sess.learned,
+          sess.completed,
+          sess.next_steps,
+          new Date(epoch).toISOString(),
+          epoch,
         );
       }
     });
@@ -108,19 +140,26 @@ export function seedVectors(db, { dim } = {}) {
   const vocab = rebuildVocabulary(db, dim ? { dim } : undefined);
   if (!vocab) return { vectors: 0, vocabVersion: null, dim: dim ?? VOCAB_DIM };
 
-  const obs = db.prepare(`
+  const obs = db
+    .prepare(
+      `
     SELECT id, title, narrative, concepts FROM observations
     WHERE ${liveObsFilterSql('')}
-  `).all();
+  `,
+    )
+    .all();
   const ins = db.prepare(
-    'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)'
+    'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
   );
   const now = Date.now();
   let n = 0;
   db.transaction(() => {
     for (const o of obs) {
       const vec = computeVector([o.title, o.narrative, o.concepts].filter(Boolean).join(' '), vocab);
-      if (vec) { ins.run(o.id, Buffer.from(vec.buffer), vocab.version, now); n++; }
+      if (vec) {
+        ins.run(o.id, Buffer.from(vec.buffer), vocab.version, now);
+        n++;
+      }
     }
   })();
   return { vectors: n, vocabVersion: vocab.version, dim: vocab.dim };
@@ -133,7 +172,11 @@ export function seedVectors(db, { dim } = {}) {
 // the production MIN_COSINE_SIMILARITY / RRF_K defaults). Requires seedVectors first.
 // Exported so external benchmark adapters (e.g. longmemeval.mjs) drive the exact
 // same production hybrid path instead of re-assembling ctx and drifting from it.
-export function searchProductionHybrid(db, query, { limit = 10, project = null, obsType = null, minCosine, rrfK } = {}) {
+export function searchProductionHybrid(
+  db,
+  query,
+  { limit = 10, project = null, obsType = null, minCosine, rrfK } = {},
+) {
   const ftsQuery = sanitizeFtsQuery(query);
   // Fidelity: use the SAME candidate-pool window the production CLI/MCP path uses
   // (lib/search-core.mjs computePerSourceWindow) instead of a hardcoded max(limit,20).
@@ -170,9 +213,13 @@ export function searchProductionHybrid(db, query, { limit = 10, project = null, 
   // hybrid path negates RRF/vector scores to "negative = better" — search-engine.mjs
   // :437/:450 — matching reRankWithContext's BM25 assumption, so wiring it would be
   // safe if the data ever existed; it doesn't.)
-  return rows.slice(0, limit).map(r => ({
-    id: r.id, type: r.type, title: r.title, project: r.project,
-    score: r.score ?? 0, importance: r.importance,
+  return rows.slice(0, limit).map((r) => ({
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    project: r.project,
+    score: r.score ?? 0,
+    importance: r.importance,
     // narrative isn't in the hybrid result shape; approximate injection size from
     // title + subtitle/lesson. Secondary metric, not used for ranking.
     tokens: estimateTokens((r.title || '') + ' ' + (r.subtitle || r.lesson_learned || '')),
@@ -220,44 +267,46 @@ const MULT_EXPR = {
   // timestamp and per-type half-life as search-engine FULL_SCORE — the previous
   // hand-copy was unclamped, created-only, constant-half-life while the mode doc
   // above claims FULL_SCORE fidelity.
-  decay:      recencyDecaySql({ tsExpr: 'MAX(o.created_at_epoch, COALESCE(o.last_accessed_at, o.created_at_epoch))' }),
+  decay: recencyDecaySql({
+    tsExpr: 'MAX(o.created_at_epoch, COALESCE(o.last_accessed_at, o.created_at_epoch))',
+  }),
   // type imports the real TYPE_QUALITY_CASE (no hardcoded copy — #8770); lesson
   // mirrors search-engine.mjs FULL_SCORE's inline boost (no exported constant —
   // keep in sync). Both added so `hybrid` mirrors the full production chain.
-  type:       TYPE_QUALITY_CASE,
-  project:    '(CASE WHEN ? IS NOT NULL AND o.project = ? THEN 2.0 ELSE 1.0 END)',
+  type: TYPE_QUALITY_CASE,
+  project: '(CASE WHEN ? IS NOT NULL AND o.project = ? THEN 2.0 ELSE 1.0 END)',
   importance: '(0.5 + 0.5 * COALESCE(o.importance, 1))',
-  access:     '(1.0 + 0.1 * LN(1 + COALESCE(o.access_count, 0)))',
-  lesson:     "(1.0 + 0.3 * (o.lesson_learned IS NOT NULL AND o.lesson_learned NOT IN ('', 'none')))",
+  access: '(1.0 + 0.1 * LN(1 + COALESCE(o.access_count, 0)))',
+  lesson: "(1.0 + 0.3 * (o.lesson_learned IS NOT NULL AND o.lesson_learned NOT IN ('', 'none')))",
   // noise/cite import the real clauses (no hardcoded copies) — D#121: FULL_SCORE
   // gained both in v3.63 M-3; without them here the matrix scored a stale chain.
-  noise:      noisePenaltyClause('o'),
-  cite:       citeFactorClause('o'),
+  noise: noisePenaltyClause('o'),
+  cite: citeFactorClause('o'),
 };
 const MULT_PARAMS = {
-  decay:      (now)         => [now],
-  type:       ()            => [],
-  project:    (_now, project)=> [project, project],
-  importance: ()            => [],
-  access:     ()            => [],
-  lesson:     ()            => [],
-  noise:      ()            => [],
-  cite:       ()            => [],
+  decay: (now) => [now],
+  type: () => [],
+  project: (_now, project) => [project, project],
+  importance: () => [],
+  access: () => [],
+  lesson: () => [],
+  noise: () => [],
+  cite: () => [],
 };
 // NOTE: decay must precede project in every term list so the bound params
 // (decay → [now], project → [project, project]) stay aligned with the `?`
 // placeholders. type/importance/access/lesson contribute no params.
 const MODE_TERMS = {
-  hybrid:        ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
-  bm25_only:     [],
-  no_decay:      ['type', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
-  no_type:       ['decay', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
-  no_project:    ['decay', 'type', 'importance', 'access', 'lesson', 'noise', 'cite'],
+  hybrid: ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
+  bm25_only: [],
+  no_decay: ['type', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
+  no_type: ['decay', 'project', 'importance', 'access', 'lesson', 'noise', 'cite'],
+  no_project: ['decay', 'type', 'importance', 'access', 'lesson', 'noise', 'cite'],
   no_importance: ['decay', 'type', 'project', 'access', 'lesson', 'noise', 'cite'],
-  no_access:     ['decay', 'type', 'project', 'importance', 'lesson', 'noise', 'cite'],
-  no_lesson:     ['decay', 'type', 'project', 'importance', 'access', 'noise', 'cite'],
-  no_noise:      ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'cite'],
-  no_cite:       ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'noise'],
+  no_access: ['decay', 'type', 'project', 'importance', 'lesson', 'noise', 'cite'],
+  no_lesson: ['decay', 'type', 'project', 'importance', 'access', 'noise', 'cite'],
+  no_noise: ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'cite'],
+  no_cite: ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'noise'],
 };
 
 function searchObservations(db, query, options = {}) {
@@ -286,9 +335,10 @@ function searchObservations(db, query, options = {}) {
   // production by construction. On a fixture with no search_aliases data the
   // 8th weight is inert, so existing numbers are unchanged.
   const baseBm25 = OBS_BM25;
-  const scoreExpr = terms.length === 0
-    ? `${baseBm25} as score`
-    : `${baseBm25} * ${terms.map((t) => MULT_EXPR[t]).join(' * ')} as score`;
+  const scoreExpr =
+    terms.length === 0
+      ? `${baseBm25} as score`
+      : `${baseBm25} * ${terms.map((t) => MULT_EXPR[t]).join(' * ')} as score`;
 
   const scoreParams = terms.flatMap((t) => MULT_PARAMS[t](now, project));
 
@@ -308,15 +358,21 @@ function searchObservations(db, query, options = {}) {
   const params = [...scoreParams, ftsQuery, project, project, obsType, obsType, limit];
   const rows = db.prepare(sql).all(...params);
 
-  return rows.map(r => ({
-    id: r.id, type: r.type, title: r.title, project: r.project,
-    score: r.score, importance: r.importance,
-    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || ''))
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    project: r.project,
+    score: r.score,
+    importance: r.importance,
+    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || '')),
   }));
 }
 
 function searchRecency(db, { limit, project, obsType }) {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.importance, o.narrative
     FROM observations o
     WHERE COALESCE(o.compressed_into, 0) = 0
@@ -324,22 +380,32 @@ function searchRecency(db, { limit, project, obsType }) {
       AND (? IS NULL OR o.type = ?)
     ORDER BY o.created_at_epoch DESC
     LIMIT ?
-  `).all(project, project, obsType, obsType, limit);
-  return rows.map(r => ({
-    id: r.id, type: r.type, title: r.title, project: r.project,
-    score: 0, importance: r.importance,
-    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || ''))
+  `,
+    )
+    .all(project, project, obsType, obsType, limit);
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    project: r.project,
+    score: 0,
+    importance: r.importance,
+    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || '')),
   }));
 }
 
 function searchRandom(db, query, { limit, project, obsType }) {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT o.id, o.type, o.title, o.project, o.importance, o.narrative
     FROM observations o
     WHERE COALESCE(o.compressed_into, 0) = 0
       AND (? IS NULL OR o.project = ?)
       AND (? IS NULL OR o.type = ?)
-  `).all(project, project, obsType, obsType);
+  `,
+    )
+    .all(project, project, obsType, obsType);
   // Deterministic shuffle: seed = hash(query) so repeated runs reproduce.
   let seed = 0;
   for (let i = 0; i < query.length; i++) seed = (seed * 31 + query.charCodeAt(i)) | 0;
@@ -349,10 +415,14 @@ function searchRandom(db, query, { limit, project, obsType }) {
     const j = seed % (i + 1);
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  return shuffled.slice(0, limit).map(r => ({
-    id: r.id, type: r.type, title: r.title, project: r.project,
-    score: 0, importance: r.importance,
-    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || ''))
+  return shuffled.slice(0, limit).map((r) => ({
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    project: r.project,
+    score: 0,
+    importance: r.importance,
+    tokens: estimateTokens((r.title || '') + ' ' + (r.narrative || '')),
   }));
 }
 
@@ -360,15 +430,15 @@ function searchRandom(db, query, { limit, project, obsType }) {
 
 export function computeRecallAtK(results, relevantIds, k = 10) {
   if (!relevantIds || relevantIds.length === 0) return 0;
-  const topK = results.slice(0, k).map(r => r.id);
-  const hits = topK.filter(id => relevantIds.includes(id)).length;
+  const topK = results.slice(0, k).map((r) => r.id);
+  const hits = topK.filter((id) => relevantIds.includes(id)).length;
   return hits / relevantIds.length;
 }
 
 export function computePrecisionAtK(results, relevantIds, k = 10) {
   const topK = results.slice(0, k);
   if (topK.length === 0) return 0;
-  const hits = topK.filter(r => relevantIds.includes(r.id)).length;
+  const hits = topK.filter((r) => relevantIds.includes(r.id)).length;
   return hits / topK.length;
 }
 
@@ -484,7 +554,7 @@ export function runBenchmark(db, queries, mode = 'hybrid') {
       precision_at_10: round(precision),
       ndcg_at_10: round(ndcg),
       mrr: round(mrr),
-      result_ids: searchResults.map(r => r.id),
+      result_ids: searchResults.map((r) => r.id),
       relevant_ids: q.relevant_ids,
       tokens,
     });
@@ -529,7 +599,16 @@ function round(v) {
 // doesn't beat recency-only is broken.
 
 const BASELINE_MODES = ['hybrid', 'bm25_only', 'recency', 'random'];
-const ABLATION_MODES = ['no_decay', 'no_type', 'no_project', 'no_importance', 'no_access', 'no_lesson', 'no_noise', 'no_cite'];
+const ABLATION_MODES = [
+  'no_decay',
+  'no_type',
+  'no_project',
+  'no_importance',
+  'no_access',
+  'no_lesson',
+  'no_noise',
+  'no_cite',
+];
 
 /**
  * Deterministically partition a query fixture into train + eval splits so the
@@ -576,9 +655,7 @@ export function runBenchmarkMatrix(db, queries, options = {}) {
   const wasQueryOnly = db.pragma('query_only', { simple: true });
   db.pragma('query_only = ON');
   try {
-    const modes = includeAblations
-      ? [...BASELINE_MODES, ...ABLATION_MODES]
-      : BASELINE_MODES;
+    const modes = includeAblations ? [...BASELINE_MODES, ...ABLATION_MODES] : BASELINE_MODES;
     for (const mode of modes) {
       matrix.modes[mode] = runBenchmark(db, queries, mode);
     }
@@ -637,7 +714,7 @@ function perQueryDelta(higher, lower) {
     });
   }
   // Sort by ndcg_delta DESC — biggest lifts first. Ties broken by mrr_delta.
-  out.sort((a, b) => (b.ndcg_delta - a.ndcg_delta) || (b.mrr_delta - a.mrr_delta));
+  out.sort((a, b) => b.ndcg_delta - a.ndcg_delta || b.mrr_delta - a.mrr_delta);
   return out;
 }
 
@@ -677,9 +754,18 @@ export function runVectorSweep(db, queries, opts = {}) {
     seedVectors(db, { dim });
     for (const minCosine of minCosines) {
       for (const rrfK of rrfKs) {
-        let R = 0, P = 0, N = 0, M = 0;
+        let R = 0,
+          P = 0,
+          N = 0,
+          M = 0;
         for (const q of queries) {
-          const res = searchProductionHybrid(db, q.query, { limit: 10, project: q.project, obsType: q.type, minCosine, rrfK });
+          const res = searchProductionHybrid(db, q.query, {
+            limit: 10,
+            project: q.project,
+            obsType: q.type,
+            minCosine,
+            rrfK,
+          });
           R += computeRecallAtK(res, q.relevant_ids, 10);
           P += computePrecisionAtK(res, q.relevant_ids, 10);
           N += computeNDCG(res, q.relevant_ids, 10);
@@ -687,19 +773,24 @@ export function runVectorSweep(db, queries, opts = {}) {
         }
         const n = queries.length;
         rows.push({
-          dim, minCosine, rrfK,
-          recall_at_10: round(R / n), precision_at_10: round(P / n),
-          ndcg_at_10: round(N / n), mrr_at_10: round(M / n),
+          dim,
+          minCosine,
+          rrfK,
+          recall_at_10: round(R / n),
+          precision_at_10: round(P / n),
+          ndcg_at_10: round(N / n),
+          mrr_at_10: round(M / n),
         });
       }
     }
   }
   // Best config by nDCG (ties → higher MRR). `pinnedIsBest` tells you whether the
   // current production defaults are already the sweep optimum on this fixture.
-  const sorted = rows.slice().sort((a, b) => (b.ndcg_at_10 - a.ndcg_at_10) || (b.mrr_at_10 - a.mrr_at_10));
+  const sorted = rows.slice().sort((a, b) => b.ndcg_at_10 - a.ndcg_at_10 || b.mrr_at_10 - a.mrr_at_10);
   const best = sorted[0];
   const pinned = { dim: VOCAB_DIM, minCosine: MIN_COSINE_SIMILARITY, rrfK: RRF_K };
-  const pinnedIsBest = !!best && best.dim === pinned.dim && best.minCosine === pinned.minCosine && best.rrfK === pinned.rrfK;
+  const pinnedIsBest =
+    !!best && best.dim === pinned.dim && best.minCosine === pinned.minCosine && best.rrfK === pinned.rrfK;
   return { rows, best, pinned, pinnedIsBest };
 }
 
@@ -720,8 +811,12 @@ export async function runDeepSearch(db, queries, rewritesByQuery, { rrfK } = {})
     return Array.isArray(variants) && variants.length ? { variants } : null;
   };
 
-  let baseR = 0, baseNd = 0, baseMrr = 0;
-  let deepR = 0, deepNd = 0, deepMrr = 0;
+  let baseR = 0,
+    baseNd = 0,
+    baseMrr = 0;
+  let deepR = 0,
+    deepNd = 0,
+    deepMrr = 0;
   const perQuery = [];
   // Baseline = the SAME deep-search pipeline forced to one query (no-rewrite llm),
   // so baseline and deep differ ONLY in variant count — never in project regime,
@@ -736,24 +831,43 @@ export async function runDeepSearch(db, queries, rewritesByQuery, { rrfK } = {})
   const noRewriteLlm = async () => null;
   for (const q of queries) {
     const { results: base } = await deepSearch(
-      db, { query: q.query, project: q.project, type: q.type, limit: 10 }, { llm: noRewriteLlm, rrfK },
+      db,
+      { query: q.query, project: q.project, type: q.type, limit: 10 },
+      { llm: noRewriteLlm, rrfK },
     );
     const { results: deep, variants } = await deepSearch(
-      db, { query: q.query, project: q.project, type: q.type, limit: 10 }, { llm: fakeLLM, rrfK },
+      db,
+      { query: q.query, project: q.project, type: q.type, limit: 10 },
+      { llm: fakeLLM, rrfK },
     );
     const bR = computeRecallAtK(base, q.relevant_ids, 10);
     const dR = computeRecallAtK(deep, q.relevant_ids, 10);
-    baseR += bR; baseNd += computeNDCG(base, q.relevant_ids, 10); baseMrr += computeMRR(base, q.relevant_ids);
-    deepR += dR; deepNd += computeNDCG(deep, q.relevant_ids, 10); deepMrr += computeMRR(deep, q.relevant_ids);
+    baseR += bR;
+    baseNd += computeNDCG(base, q.relevant_ids, 10);
+    baseMrr += computeMRR(base, q.relevant_ids);
+    deepR += dR;
+    deepNd += computeNDCG(deep, q.relevant_ids, 10);
+    deepMrr += computeMRR(deep, q.relevant_ids);
     perQuery.push({
-      id: q.id, query: q.query,
-      baseline_recall_at_10: round(bR), deep_recall_at_10: round(dR),
-      recall_delta: round(dR - bR), variant_count: variants.length,
+      id: q.id,
+      query: q.query,
+      baseline_recall_at_10: round(bR),
+      deep_recall_at_10: round(dR),
+      recall_delta: round(dR - bR),
+      variant_count: variants.length,
     });
   }
   const n = queries.length || 1;
-  const baseline = { recall_at_10: round(baseR / n), ndcg_at_10: round(baseNd / n), mrr_at_10: round(baseMrr / n) };
-  const deepM = { recall_at_10: round(deepR / n), ndcg_at_10: round(deepNd / n), mrr_at_10: round(deepMrr / n) };
+  const baseline = {
+    recall_at_10: round(baseR / n),
+    ndcg_at_10: round(baseNd / n),
+    mrr_at_10: round(baseMrr / n),
+  };
+  const deepM = {
+    recall_at_10: round(deepR / n),
+    ndcg_at_10: round(deepNd / n),
+    mrr_at_10: round(deepMrr / n),
+  };
   return {
     queryCount: queries.length,
     baseline,
@@ -776,9 +890,12 @@ async function main() {
   // vocab-mismatch suite so it never dilutes the main baseline / CI gate.
   const cliArgv = process.argv.slice(2);
   const qFlagIdx = cliArgv.indexOf('--queries');
-  const queriesPath = qFlagIdx >= 0 && cliArgv[qFlagIdx + 1]
-    ? (isAbsolute(cliArgv[qFlagIdx + 1]) ? cliArgv[qFlagIdx + 1] : join(__dirname, cliArgv[qFlagIdx + 1]))
-    : join(__dirname, 'fixtures', 'test-queries.json');
+  const queriesPath =
+    qFlagIdx >= 0 && cliArgv[qFlagIdx + 1]
+      ? isAbsolute(cliArgv[qFlagIdx + 1])
+        ? cliArgv[qFlagIdx + 1]
+        : join(__dirname, cliArgv[qFlagIdx + 1])
+      : join(__dirname, 'fixtures', 'test-queries.json');
 
   const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
   const queryData = JSON.parse(readFileSync(queriesPath, 'utf-8'));
@@ -803,27 +920,41 @@ async function main() {
   // fake llm). Defaults to the vocab-mismatch fixture (the set the rewrites file
   // matches) unless --queries overrode it; --rewrites overrides the rewrites path.
   if (deepSearchMode) {
-    const dqPath = qFlagIdx >= 0 && cliArgv[qFlagIdx + 1]
-      ? queriesPath
-      : join(__dirname, 'fixtures', 'test-queries-vocab-mismatch.json');
+    const dqPath =
+      qFlagIdx >= 0 && cliArgv[qFlagIdx + 1]
+        ? queriesPath
+        : join(__dirname, 'fixtures', 'test-queries-vocab-mismatch.json');
     const rFlagIdx = cliArgv.indexOf('--rewrites');
-    const rewritesPath = rFlagIdx >= 0 && cliArgv[rFlagIdx + 1]
-      ? (isAbsolute(cliArgv[rFlagIdx + 1]) ? cliArgv[rFlagIdx + 1] : join(__dirname, cliArgv[rFlagIdx + 1]))
-      : join(__dirname, 'fixtures', 'rewrites-vocab-mismatch.json');
+    const rewritesPath =
+      rFlagIdx >= 0 && cliArgv[rFlagIdx + 1]
+        ? isAbsolute(cliArgv[rFlagIdx + 1])
+          ? cliArgv[rFlagIdx + 1]
+          : join(__dirname, cliArgv[rFlagIdx + 1])
+        : join(__dirname, 'fixtures', 'rewrites-vocab-mismatch.json');
     const dQueries = JSON.parse(readFileSync(dqPath, 'utf8')).queries;
     const rewritesFile = JSON.parse(readFileSync(rewritesPath, 'utf8'));
     const rewritesByQuery = rewritesFile.rewrites || rewritesFile;
 
     const seeded = seedVectors(db);
-    console.error(`Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`);
+    console.error(
+      `Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`,
+    );
     console.error('Running deep-search benchmark (recorded rewrites, deterministic fake llm)...');
     const res = await runDeepSearch(db, dQueries, rewritesByQuery);
     console.log(JSON.stringify(res, null, 2));
     console.error('\n─── Deep Search (LLM multi-query/HyDE, recorded rewrites) ───');
-    console.error(`  baseline (single-query): R@10=${res.baseline.recall_at_10}  nDCG=${res.baseline.ndcg_at_10}  MRR=${res.baseline.mrr_at_10}`);
-    console.error(`  deep     (multi + RRF):  R@10=${res.deep.recall_at_10}  nDCG=${res.deep.ndcg_at_10}  MRR=${res.deep.mrr_at_10}`);
-    console.error(`  Δ:                       R@10=${res.delta.recall_at_10}  nDCG=${res.delta.ndcg_at_10}  MRR=${res.delta.mrr_at_10}`);
-    console.error('  (deterministic ceiling — all rewrites usable. Live Haiku reliability is lower; deep-search keeps the');
+    console.error(
+      `  baseline (single-query): R@10=${res.baseline.recall_at_10}  nDCG=${res.baseline.ndcg_at_10}  MRR=${res.baseline.mrr_at_10}`,
+    );
+    console.error(
+      `  deep     (multi + RRF):  R@10=${res.deep.recall_at_10}  nDCG=${res.deep.ndcg_at_10}  MRR=${res.deep.mrr_at_10}`,
+    );
+    console.error(
+      `  Δ:                       R@10=${res.delta.recall_at_10}  nDCG=${res.delta.ndcg_at_10}  MRR=${res.delta.mrr_at_10}`,
+    );
+    console.error(
+      '  (deterministic ceiling — all rewrites usable. Live Haiku reliability is lower; deep-search keeps the',
+    );
     console.error('   original query as variant[0], so the live number stays >= the single-query baseline.)');
     db.close();
     return;
@@ -835,12 +966,20 @@ async function main() {
     const sweep = runVectorSweep(db, queryData.queries);
     console.log(JSON.stringify(sweep, null, 2));
     console.error('\n─── Vector Sweep (real searchObservationsHybrid) ───');
-    console.error(`  ${'dim'.padStart(5)} ${'minCos'.padStart(7)} ${'rrfK'.padStart(5)} ${'R@10'.padStart(7)} ${'P@10'.padStart(7)} ${'nDCG'.padStart(7)} ${'MRR'.padStart(7)}`);
+    console.error(
+      `  ${'dim'.padStart(5)} ${'minCos'.padStart(7)} ${'rrfK'.padStart(5)} ${'R@10'.padStart(7)} ${'P@10'.padStart(7)} ${'nDCG'.padStart(7)} ${'MRR'.padStart(7)}`,
+    );
     for (const r of sweep.rows) {
-      console.error(`  ${String(r.dim).padStart(5)} ${String(r.minCosine).padStart(7)} ${String(r.rrfK).padStart(5)} ${String(r.recall_at_10).padStart(7)} ${String(r.precision_at_10).padStart(7)} ${String(r.ndcg_at_10).padStart(7)} ${String(r.mrr_at_10).padStart(7)}`);
+      console.error(
+        `  ${String(r.dim).padStart(5)} ${String(r.minCosine).padStart(7)} ${String(r.rrfK).padStart(5)} ${String(r.recall_at_10).padStart(7)} ${String(r.precision_at_10).padStart(7)} ${String(r.ndcg_at_10).padStart(7)} ${String(r.mrr_at_10).padStart(7)}`,
+      );
     }
-    console.error(`\n  Pinned defaults: dim=${sweep.pinned.dim} minCosine=${sweep.pinned.minCosine} rrfK=${sweep.pinned.rrfK}`);
-    console.error(`  Best on fixture: dim=${sweep.best.dim} minCosine=${sweep.best.minCosine} rrfK=${sweep.best.rrfK} (nDCG=${sweep.best.ndcg_at_10})`);
+    console.error(
+      `\n  Pinned defaults: dim=${sweep.pinned.dim} minCosine=${sweep.pinned.minCosine} rrfK=${sweep.pinned.rrfK}`,
+    );
+    console.error(
+      `  Best on fixture: dim=${sweep.best.dim} minCosine=${sweep.best.minCosine} rrfK=${sweep.best.rrfK} (nDCG=${sweep.best.ndcg_at_10})`,
+    );
     console.error(`  → pinned defaults ${sweep.pinnedIsBest ? 'ARE' : 'are NOT'} the fixture optimum`);
     db.close();
     return;
@@ -849,7 +988,9 @@ async function main() {
   // --production-hybrid: run the eval over the real FTS+vector+RRF path.
   if (productionHybridMode) {
     const seeded = seedVectors(db);
-    console.error(`Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`);
+    console.error(
+      `Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`,
+    );
     console.error('Running benchmark on the real searchObservationsHybrid path...');
     const results = runBenchmark(db, queryData.queries, 'production_hybrid');
     console.log(JSON.stringify(results, null, 2));
@@ -872,7 +1013,9 @@ async function main() {
   if (holdoutMode) {
     split = splitFixture(queryData.queries, 0.3, 42);
     evalQueries = split.eval;
-    console.error(`Holdout mode: ${split.train.length} train (vocab build) / ${split.eval.length} eval queries`);
+    console.error(
+      `Holdout mode: ${split.train.length} train (vocab build) / ${split.eval.length} eval queries`,
+    );
   }
 
   if (matrixMode) {
@@ -884,19 +1027,29 @@ async function main() {
     console.error('\n─── Benchmark Matrix ───');
     const head = `  ${'mode'.padEnd(15)} ${'R@10'.padStart(7)} ${'P@10'.padStart(7)} ${'nDCG'.padStart(7)} ${'MRR'.padStart(7)} ${'p95ms'.padStart(7)}`;
     console.error(head);
-    console.error(`  ${'-'.repeat(15)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)}`);
+    console.error(
+      `  ${'-'.repeat(15)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)} ${'-'.repeat(7)}`,
+    );
     const allModes = ablations ? [...BASELINE_MODES, ...ABLATION_MODES] : BASELINE_MODES;
     for (const mode of allModes) {
       const m = matrix.modes[mode].metrics;
-      console.error(`  ${mode.padEnd(15)} ${String(m.recall_at_10).padStart(7)} ${String(m.precision_at_10).padStart(7)} ${String(m.ndcg_at_10).padStart(7)} ${String(m.mrr_at_10).padStart(7)} ${String(m.p95_search_latency_ms).padStart(7)}`);
+      console.error(
+        `  ${mode.padEnd(15)} ${String(m.recall_at_10).padStart(7)} ${String(m.precision_at_10).padStart(7)} ${String(m.ndcg_at_10).padStart(7)} ${String(m.mrr_at_10).padStart(7)} ${String(m.p95_search_latency_ms).padStart(7)}`,
+      );
     }
     console.error('\n─── Lift (Δ recall / Δ precision / Δ nDCG / Δ MRR) ───');
     const dh = matrix.deltas.hybrid_over_bm25;
     const db1 = matrix.deltas.bm25_over_recency;
     const dr = matrix.deltas.recency_over_random;
-    console.error(`  hybrid    over bm25_only: R=${dh.recall_at_10} P=${dh.precision_at_10} nDCG=${dh.ndcg_at_10} MRR=${dh.mrr_at_10}`);
-    console.error(`  bm25_only over recency:   R=${db1.recall_at_10} P=${db1.precision_at_10} nDCG=${db1.ndcg_at_10} MRR=${db1.mrr_at_10}`);
-    console.error(`  recency   over random:    R=${dr.recall_at_10} P=${dr.precision_at_10} nDCG=${dr.ndcg_at_10} MRR=${dr.mrr_at_10}`);
+    console.error(
+      `  hybrid    over bm25_only: R=${dh.recall_at_10} P=${dh.precision_at_10} nDCG=${dh.ndcg_at_10} MRR=${dh.mrr_at_10}`,
+    );
+    console.error(
+      `  bm25_only over recency:   R=${db1.recall_at_10} P=${db1.precision_at_10} nDCG=${db1.ndcg_at_10} MRR=${db1.mrr_at_10}`,
+    );
+    console.error(
+      `  recency   over random:    R=${dr.recall_at_10} P=${dr.precision_at_10} nDCG=${dr.ndcg_at_10} MRR=${dr.mrr_at_10}`,
+    );
     console.error('\n  Read: positive Δ on each row = that layer is doing work. ≈0 = layer is dead weight.');
 
     // Per-query bin summary — answers "is the aggregate 0 because all queries
@@ -905,14 +1058,24 @@ async function main() {
     const hbBins = summarizePerQueryDelta(matrix.perQueryDeltas.hybrid_over_bm25);
     const brBins = summarizePerQueryDelta(matrix.perQueryDeltas.bm25_over_recency);
     console.error('\n─── Per-query Δ bins (n=' + matrix.queryCount + ', threshold=±0.001 nDCG) ───');
-    console.error(`  hybrid    over bm25_only: gained=${hbBins.gained}  neutral=${hbBins.neutral}  lost=${hbBins.lost}`);
-    console.error(`  bm25_only over recency:   gained=${brBins.gained}  neutral=${brBins.neutral}  lost=${brBins.lost}`);
+    console.error(
+      `  hybrid    over bm25_only: gained=${hbBins.gained}  neutral=${hbBins.neutral}  lost=${hbBins.lost}`,
+    );
+    console.error(
+      `  bm25_only over recency:   gained=${brBins.gained}  neutral=${brBins.neutral}  lost=${brBins.lost}`,
+    );
     if (hbBins.gained === 0 && hbBins.lost === 0) {
-      console.error('  → multipliers (decay/project/importance/access) flat on EVERY query — strong dead-weight signal');
+      console.error(
+        '  → multipliers (decay/project/importance/access) flat on EVERY query — strong dead-weight signal',
+      );
     } else if (hbBins.lost > hbBins.gained) {
-      console.error(`  → multipliers HURT more queries (${hbBins.lost}) than they helped (${hbBins.gained}) — directionally wrong`);
+      console.error(
+        `  → multipliers HURT more queries (${hbBins.lost}) than they helped (${hbBins.gained}) — directionally wrong`,
+      );
     } else if (hbBins.gained > 0) {
-      console.error(`  → multipliers help ${hbBins.gained} query/ies — top lift: "${matrix.perQueryDeltas.hybrid_over_bm25[0].query}" (Δ=${matrix.perQueryDeltas.hybrid_over_bm25[0].ndcg_delta})`);
+      console.error(
+        `  → multipliers help ${hbBins.gained} query/ies — top lift: "${matrix.perQueryDeltas.hybrid_over_bm25[0].query}" (Δ=${matrix.perQueryDeltas.hybrid_over_bm25[0].ndcg_delta})`,
+      );
     }
 
     // Per-multiplier ablation summary — answers "which of the 4 multipliers
@@ -924,7 +1087,9 @@ async function main() {
         const d = matrix.deltas[`hybrid_over_${ab}`];
         if (!d) continue;
         const dropped = ab.replace(/^no_/, '');
-        console.error(`  drop ${dropped.padEnd(11)} → ΔR=${d.recall_at_10}  ΔP=${d.precision_at_10}  ΔnDCG=${d.ndcg_at_10}  ΔMRR=${d.mrr_at_10}`);
+        console.error(
+          `  drop ${dropped.padEnd(11)} → ΔR=${d.recall_at_10}  ΔP=${d.precision_at_10}  ΔnDCG=${d.ndcg_at_10}  ΔMRR=${d.mrr_at_10}`,
+        );
       }
       console.error('  Read: large positive Δ = this multiplier earns its keep. ≈0 = drop candidate.');
     }
@@ -953,16 +1118,20 @@ async function main() {
   if (Object.keys(results.byCategory).length > 1) {
     console.error('\n─── By Category ───');
     for (const [cat, m] of Object.entries(results.byCategory)) {
-      console.error(`  ${cat} (${m.count}q): R@10=${m.recall_at_10} P@10=${m.precision_at_10} nDCG=${m.ndcg_at_10} MRR=${m.mrr_at_10}`);
+      console.error(
+        `  ${cat} (${m.count}q): R@10=${m.recall_at_10} P@10=${m.precision_at_10} nDCG=${m.ndcg_at_10} MRR=${m.mrr_at_10}`,
+      );
     }
   }
 
   // Queries with zero recall
-  const zeroRecall = results.perQuery.filter(q => q.recall_at_10 === 0);
+  const zeroRecall = results.perQuery.filter((q) => q.recall_at_10 === 0);
   if (zeroRecall.length > 0) {
     console.error(`\n  ⚠ ${zeroRecall.length} queries with zero recall:`);
     for (const q of zeroRecall) {
-      console.error(`    - ${q.id}: "${q.query}" (expected: [${q.relevant_ids.join(',')}], got: [${q.result_ids.join(',')}])`);
+      console.error(
+        `    - ${q.id}: "${q.query}" (expected: [${q.relevant_ids.join(',')}], got: [${q.result_ids.join(',')}])`,
+      );
     }
   }
 
@@ -970,7 +1139,11 @@ async function main() {
 }
 
 // Run if executed directly
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
 if (isMain) {
-  main().catch((err) => { console.error(err); process.exitCode = 1; });
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
 }

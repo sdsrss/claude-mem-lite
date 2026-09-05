@@ -30,13 +30,21 @@ import { cjkBigrams } from '../utils.mjs';
 let db;
 
 function seedBodyOnlyInText({ title, text }) {
-  db.prepare(`INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`).run(Date.now());
+  db.prepare(
+    `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`,
+  ).run(Date.now());
   // Deliberately omits `narrative` — exactly what import-jsonl and any other caller
   // relying on OBS_DEFAULTS produce.
   return insertObservationRow(db, {
-    memory_session_id: 'mem-1', project: 'p', type: 'change', title, text,
-    importance: 1, created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+    memory_session_id: 'mem-1',
+    project: 'p',
+    type: 'change',
+    title,
+    text,
+    importance: 1,
+    created_at: new Date().toISOString(),
+    created_at_epoch: Date.now(),
   });
 }
 
@@ -46,10 +54,17 @@ describe('applyObsUpdate — body preservation when narrative is empty', () => {
     db.pragma('foreign_keys = ON');
     initSchema(db);
   });
-  afterEach(() => { try { db.close(); } catch { /* already closed */ } });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  });
 
-  const BODY = '{"file_path":"src/CartService.java","old_string":"items.size()",'
-    + '"new_string":"items == null ? 0 : items.size()"}\n---\n[tool_use without result]';
+  const BODY =
+    '{"file_path":"src/CartService.java","old_string":"items.size()",' +
+    '"new_string":"items == null ? 0 : items.size()"}\n---\n[tool_use without result]';
 
   it('an importance-only update keeps the body searchable', () => {
     const id = seedBodyOnlyInText({ title: 'Edit: src/CartService.java', text: BODY });
@@ -58,8 +73,9 @@ describe('applyObsUpdate — body preservation when narrative is empty', () => {
     expect(row.importance).toBe(3);
     expect(row.text).toContain('items == null ? 0 : items.size()');
     // FTS is content='observations', so the search index must carry it too.
-    const hit = db.prepare(
-      `SELECT count(*) AS c FROM observations_fts WHERE observations_fts MATCH 'CartService'`).get();
+    const hit = db
+      .prepare(`SELECT count(*) AS c FROM observations_fts WHERE observations_fts MATCH 'CartService'`)
+      .get();
     expect(hit.c).toBe(1);
   });
 
@@ -91,15 +107,24 @@ describe('applyObsUpdate — body preservation when narrative is empty', () => {
     // blob writes bigram fragments into a user-visible field, irreversibly (update takes
     // no snapshot). Fixture mirrors buildFtsTextField's composition exactly, because a
     // hand-written approximation is what made the first attempt at this guard pass.
-    db.prepare(`INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-                VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+                VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`,
+    ).run(Date.now());
     const title = '重构认证模块';
     const concepts = 'auth jwt refresh';
     const blob = [concepts, cjkBigrams(`${title} `)].filter(Boolean).join(' ');
     const id = insertObservationRow(db, {
-      memory_session_id: 'mem-1', project: 'p', type: 'refactor', title,
-      narrative: '', concepts, text: blob,
-      importance: 2, created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+      memory_session_id: 'mem-1',
+      project: 'p',
+      type: 'refactor',
+      title,
+      narrative: '',
+      concepts,
+      text: blob,
+      importance: 2,
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
     });
     applyObsUpdate(db, id, { importance: 3 });
     const row = db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id);
@@ -109,12 +134,20 @@ describe('applyObsUpdate — body preservation when narrative is empty', () => {
   it('leaves a well-formed row (narrative already set) deriving from narrative', () => {
     // The normal save path: narrative holds the body. The repair must not fire, and the
     // derived text must stay the plain concatenation it has always been.
-    db.prepare(`INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-                VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`).run(Date.now());
+    db.prepare(
+      `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+                VALUES ('cc-1', 'mem-1', 'p', datetime('now'), ?)`,
+    ).run(Date.now());
     const id = insertObservationRow(db, {
-      memory_session_id: 'mem-1', project: 'p', type: 'bugfix', title: 'Shared retry budget',
-      narrative: 'the retry budget was shared across shards', text: 'the retry budget was shared across shards',
-      importance: 2, created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+      memory_session_id: 'mem-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 'Shared retry budget',
+      narrative: 'the retry budget was shared across shards',
+      text: 'the retry budget was shared across shards',
+      importance: 2,
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
     });
     applyObsUpdate(db, id, { importance: 3 });
     const row = db.prepare('SELECT narrative, text FROM observations WHERE id = ?').get(id);

@@ -155,12 +155,14 @@ describe('release signature covers the executable hook scripts (supply-chain gap
       join(root, 'hooks', 'hooks.json'),
       join(root, 'scripts', 'setup.sh'),
       join(root, 'scripts', 'launch.mjs'),
-    ].map((p) => readFileSync(p, 'utf8')).join('\n');
+    ]
+      .map((p) => readFileSync(p, 'utf8'))
+      .join('\n');
     // Extract every scripts/<file>.(mjs|js|sh) token referenced as an executed command.
-    const executed = [...new Set([...raw.matchAll(/scripts\/[\w.-]+\.(?:mjs|js|sh)/g)].map(m => m[0]))];
+    const executed = [...new Set([...raw.matchAll(/scripts\/[\w.-]+\.(?:mjs|js|sh)/g)].map((m) => m[0]))];
     expect(executed.length, 'expected to find executed scripts/* references').toBeGreaterThan(0);
     const manifest = buildReleaseManifest(root, RELEASE_SIGNED_FILES, 'test');
-    const unsigned = executed.filter(rel => !manifest.files[rel]);
+    const unsigned = executed.filter((rel) => !manifest.files[rel]);
     expect(unsigned, `\nexecuted but UNSIGNED scripts:\n  ${unsigned.join('\n  ')}\n`).toEqual([]);
   });
 
@@ -168,6 +170,9 @@ describe('release signature covers the executable hook scripts (supply-chain gap
   // itself referenced in .mcp.json, so the token scan above can't see it. Assert explicitly.
   it('signs scripts/launch-preflight.mjs (imported+executed by the MCP launcher)', () => {
     const manifest = buildReleaseManifest(process.cwd(), RELEASE_SIGNED_FILES, 'test');
-    expect(manifest.files['scripts/launch-preflight.mjs'], 'launch-preflight.mjs missing from signed manifest').toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      manifest.files['scripts/launch-preflight.mjs'],
+      'launch-preflight.mjs missing from signed manifest',
+    ).toMatch(/^[a-f0-9]{64}$/);
   });
 });

@@ -40,7 +40,8 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
   const probes = [];
   const probe = (name, spec, check) => {
     const r = rows(spec);
-    let pass = false, detail = '';
+    let pass = false,
+      detail = '';
     try {
       normalize(r, 'source');
       ({ pass, detail } = check(r));
@@ -55,7 +56,10 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
   // must rank STRICTLY first — band −1.05 beats every normalized −1.
   probe('lone-strongest-ranks-first', { obs: [-8, -4], event: [-12] }, (r) => {
     const first = ranked(r)[0];
-    return { pass: first.source === 'event' && first.score < -1, detail: `first=${first.source}@${first.score}` };
+    return {
+      pass: first.source === 'event' && first.score < -1,
+      detail: `first=${first.source}@${first.score}`,
+    };
   });
 
   // ② ratio ≥ 0.5 band: comparable-to-best lands at −0.75 — above the neutral
@@ -75,7 +79,10 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
   // pre-MED-5 behavior pinned it to −1 = tied with the best).
   probe('lone-grazing-sinks', { obs: [-10, -5], event: [-0.5] }, (r) => {
     const order = ranked(r);
-    return { pass: order[order.length - 1].source === 'event', detail: order.map((x) => `${x.source}@${x.score}`).join(' ') };
+    return {
+      pass: order[order.length - 1].source === 'event',
+      detail: order.map((x) => `${x.source}@${x.score}`).join(' '),
+    };
   });
 
   // ⑤ v3.49 audit L3: a lone score=0 row (prompts CJK LIKE fallback — zero
@@ -83,7 +90,10 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
   probe('zero-score-stays-zero-and-last', { obs: [-10, -5], prompt: [0] }, (r) => {
     const p = r.find((x) => x.source === 'prompt');
     const order = ranked(r);
-    return { pass: p.score === 0 && order[order.length - 1].source === 'prompt', detail: `prompt=${p.score}` };
+    return {
+      pass: p.score === 0 && order[order.length - 1].source === 'prompt',
+      detail: `prompt=${p.score}`,
+    };
   });
 
   // ⑥ Multi-hit source: best pins to −1 (the [-1, 0] normalization contract).
@@ -123,11 +133,16 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
   return probes;
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
 if (isMain) {
   const results = runCrossSourceProbes();
-  for (const p of results) console.error(`  ${p.pass ? '✓' : '✗'} ${p.name}${p.pass ? '' : ` — ${p.detail}`}`);
+  for (const p of results)
+    console.error(`  ${p.pass ? '✓' : '✗'} ${p.name}${p.pass ? '' : ` — ${p.detail}`}`);
   const failed = results.filter((p) => !p.pass);
-  if (failed.length) { console.error(`\n${failed.length} probe(s) FAILED`); process.exit(1); }
+  if (failed.length) {
+    console.error(`\n${failed.length} probe(s) FAILED`);
+    process.exit(1);
+  }
   console.error(`\nall ${results.length} probes pass`);
 }

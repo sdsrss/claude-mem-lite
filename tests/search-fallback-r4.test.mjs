@@ -14,24 +14,38 @@ describe('R4 fix 10 — type-list fallback filters low-signal titles', () => {
   function seed() {
     const db = createTestDb();
     insertSession(db, { id: 's', project: 'p', memoryId: 's' });
-    insertObs(db, { sessionId: 's', project: 'p', type: 'change', title: 'Modified cli.mjs', narrative: '' });        // id 1 — low-signal
-    insertObs(db, { sessionId: 's', project: 'p', type: 'change', title: 'Investigated the token refresh race', narrative: 'real body' }); // id 2 — normal
+    insertObs(db, { sessionId: 's', project: 'p', type: 'change', title: 'Modified cli.mjs', narrative: '' }); // id 1 — low-signal
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'change',
+      title: 'Investigated the token refresh race',
+      narrative: 'real body',
+    }); // id 2 — normal
     return db;
   }
 
   it('a no-FTS-match query + obs_type falls back to type-listing with low-signal filtered out', async () => {
     const db = seed();
-    const res = await handleSearchForTest(db, { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false }, {});
-    const ids = (res.results || []).map(r => r.id);
+    const res = await handleSearchForTest(
+      db,
+      { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false },
+      {},
+    );
+    const ids = (res.results || []).map((r) => r.id);
     db.close();
-    expect(ids).toContain(2);     // fallback fired → the normal change surfaced
+    expect(ids).toContain(2); // fallback fired → the normal change surfaced
     expect(ids).not.toContain(1); // the low-signal "Modified cli.mjs" no longer leads it
   });
 
   it('include_noise=true still surfaces the low-signal row (opt-out preserved)', async () => {
     const db = seed();
-    const res = await handleSearchForTest(db, { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false, include_noise: true }, {});
-    const ids = (res.results || []).map(r => r.id);
+    const res = await handleSearchForTest(
+      db,
+      { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false, include_noise: true },
+      {},
+    );
+    const ids = (res.results || []).map((r) => r.id);
     db.close();
     expect(ids).toContain(1); // explicit opt-in brings the degraded-title row back
   });
@@ -42,12 +56,27 @@ describe('R4 fix 14 — lesson_learned="none" does not earn the ranking boost', 
     const db = createTestDb();
     insertSession(db, { id: 's', project: 'p', memoryId: 's' });
     // Identical rows except lesson: one NULL, one the literal 'none'.
-    insertObs(db, { sessionId: 's', project: 'p', type: 'discovery', title: 'kubernetes scheduling deep dive', narrative: 'kubernetes scheduling', lessonLearned: null });
-    insertObs(db, { sessionId: 's', project: 'p', type: 'discovery', title: 'kubernetes scheduling deep dive', narrative: 'kubernetes scheduling', lessonLearned: 'none' });
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'discovery',
+      title: 'kubernetes scheduling deep dive',
+      narrative: 'kubernetes scheduling',
+      lessonLearned: null,
+    });
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'discovery',
+      title: 'kubernetes scheduling deep dive',
+      narrative: 'kubernetes scheduling',
+      lessonLearned: 'none',
+    });
     const res = await handleSearchForTest(db, { query: 'kubernetes', deep: false }, {});
-    const byId = new Map((res.results || []).map(r => [r.id, r]));
+    const byId = new Map((res.results || []).map((r) => [r.id, r]));
     db.close();
-    const a = byId.get(1), b = byId.get(2);
+    const a = byId.get(1),
+      b = byId.get(2);
     expect(a && b).toBeTruthy();
     // Scores are negative (negative_BM25 × positive multipliers); more-negative ranks first.
     // With the boost removed for 'none', the two rows differ only by a tiny second-order
@@ -60,12 +89,27 @@ describe('R4 fix 14 — lesson_learned="none" does not earn the ranking boost', 
   it('a row with a REAL lesson still earns the boost (no regression)', async () => {
     const db = createTestDb();
     insertSession(db, { id: 's', project: 'p', memoryId: 's' });
-    insertObs(db, { sessionId: 's', project: 'p', type: 'discovery', title: 'kubernetes scheduling deep dive', narrative: 'kubernetes scheduling', lessonLearned: null });
-    insertObs(db, { sessionId: 's', project: 'p', type: 'discovery', title: 'kubernetes scheduling deep dive', narrative: 'kubernetes scheduling', lessonLearned: 'always drain connections before rescheduling pods' });
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'discovery',
+      title: 'kubernetes scheduling deep dive',
+      narrative: 'kubernetes scheduling',
+      lessonLearned: null,
+    });
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'discovery',
+      title: 'kubernetes scheduling deep dive',
+      narrative: 'kubernetes scheduling',
+      lessonLearned: 'always drain connections before rescheduling pods',
+    });
     const res = await handleSearchForTest(db, { query: 'kubernetes', deep: false }, {});
-    const byId = new Map((res.results || []).map(r => [r.id, r]));
+    const byId = new Map((res.results || []).map((r) => [r.id, r]));
     db.close();
-    const a = byId.get(1), c = byId.get(2);
+    const a = byId.get(1),
+      c = byId.get(2);
     expect(a && c).toBeTruthy();
     // More-negative = ranked higher; the real-lesson row keeps its 1.3× boost, so its
     // score is strictly more negative than the lesson-less row's.

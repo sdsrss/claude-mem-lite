@@ -7,12 +7,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { cmdAdopt, cmdUnadopt, silentAutoAdopt, hasAutoAdoptMarker, disableSentinelPath, isAutoAdoptDisabled } from '../adopt-cli.mjs';
+import {
+  cmdAdopt,
+  cmdUnadopt,
+  silentAutoAdopt,
+  hasAutoAdoptMarker,
+  disableSentinelPath,
+  isAutoAdoptDisabled,
+} from '../adopt-cli.mjs';
 import { memdirPath, writePluginSection, isAdopted as memdirIsAdopted } from '../memdir.mjs';
 import { PLUGIN_SLUG } from '../adopt-content.mjs';
 
-function claudeMd(cwd) { return join(cwd, 'CLAUDE.md'); }
-function detailDoc(cwd) { return join(cwd, '.claude', 'plugin_claude_mem_lite.md'); }
+function claudeMd(cwd) {
+  return join(cwd, 'CLAUDE.md');
+}
+function detailDoc(cwd) {
+  return join(cwd, '.claude', 'plugin_claude_mem_lite.md');
+}
 const BEGIN = `<!-- ${PLUGIN_SLUG}:begin v1 -->`;
 
 // Seed a legacy memory-dir sentinel for `cwd` (the pre-v3.13 scheme) so we can
@@ -35,14 +46,18 @@ describe('cmdAdopt / cmdUnadopt (current project, CLAUDE.md scheme)', () => {
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
     logs = [];
-    vi.spyOn(console, 'log').mockImplementation((msg) => { logs.push(String(msg)); });
+    vi.spyOn(console, 'log').mockImplementation((msg) => {
+      logs.push(String(msg));
+    });
     process.exitCode = 0;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
     rmSync(tmpHome, { recursive: true, force: true });
     process.exitCode = 0;
   });
@@ -140,7 +155,9 @@ describe('cmdAdopt / cmdUnadopt (current project, CLAUDE.md scheme)', () => {
     cmdUnadopt(['--dry-run']);
     expect(readFileSync(claudeMd(fakeCwd), 'utf8')).toBe(before);
     expect(existsSync(detailDoc(fakeCwd))).toBe(true);
-    expect(logs.some((l) => l.includes('would-remove') || l.includes('would-clean') || l.includes('--dry-run'))).toBe(true);
+    expect(
+      logs.some((l) => l.includes('would-remove') || l.includes('would-clean') || l.includes('--dry-run')),
+    ).toBe(true);
   });
 });
 
@@ -161,13 +178,17 @@ describe('cmdAdopt --all (legacy-cleanup sweep)', () => {
     process.env.HOME = tmpHome;
     delete process.env.CLAUDE_PROJECT_DIR;
     logs = [];
-    vi.spyOn(console, 'log').mockImplementation((msg) => { logs.push(String(msg)); });
+    vi.spyOn(console, 'log').mockImplementation((msg) => {
+      logs.push(String(msg));
+    });
     process.exitCode = 0;
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
     rmSync(tmpHome, { recursive: true, force: true });
     process.exitCode = 0;
   });
@@ -219,8 +240,10 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
     delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
     rmSync(tmpHome, { recursive: true, force: true });
   });
@@ -247,7 +270,10 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
   it('refreshes when the installed block version drifts', () => {
     silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
     // Simulate an older version installed.
-    const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(`${PLUGIN_SLUG}:begin v1`, `${PLUGIN_SLUG}:begin v0`);
+    const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(
+      `${PLUGIN_SLUG}:begin v1`,
+      `${PLUGIN_SLUG}:begin v0`,
+    );
     writeFileSync(claudeMd(fakeCwd), stale);
     const r = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
     expect(r.action).toBe('refreshed');
@@ -256,7 +282,10 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
 
   it('CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 freezes the block against drift', () => {
     silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
-    const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(`${PLUGIN_SLUG}:begin v1`, `${PLUGIN_SLUG}:begin v0`);
+    const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(
+      `${PLUGIN_SLUG}:begin v1`,
+      `${PLUGIN_SLUG}:begin v0`,
+    );
     writeFileSync(claudeMd(fakeCwd), stale);
     process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
     const r = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
@@ -296,13 +325,17 @@ describe('cmdAdopt --disable / --enable', () => {
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
     logs = [];
-    vi.spyOn(console, 'log').mockImplementation((msg) => { logs.push(String(msg)); });
+    vi.spyOn(console, 'log').mockImplementation((msg) => {
+      logs.push(String(msg));
+    });
     process.exitCode = 0;
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = origCwd;
     rmSync(tmpHome, { recursive: true, force: true });
     process.exitCode = 0;
   });

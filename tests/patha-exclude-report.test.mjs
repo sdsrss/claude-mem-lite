@@ -38,12 +38,22 @@ import {
 const row = (o = {}) => ({
   ts: '2026-09-02T12:00:00.000Z',
   event: PATHA_EXCLUDE_EVENT,
-  markerTotal: 1, markerStrings: 0, markerNumbers: 1,
-  markerCoercible: 1, markerCoercibleStrings: 0,
+  markerTotal: 1,
+  markerStrings: 0,
+  markerNumbers: 1,
+  markerCoercible: 1,
+  markerCoercibleStrings: 0,
   inert: false,
-  emitted: 2, suppressed: 0, suppressedIds: [],
+  emitted: 2,
+  suppressed: 0,
+  suppressedIds: [],
   imperativeArm: 'off',
-  armB: 'ok', delivered: 2, refilledIds: [], refilled: 0, net: 0, setChanged: false,
+  armB: 'ok',
+  delivered: 2,
+  refilledIds: [],
+  refilled: 0,
+  net: 0,
+  setChanged: false,
   ...o,
 });
 
@@ -59,30 +69,53 @@ describe('classifyMarkerRegime', () => {
     // Review finding B5: a marker holding nothing that could ever have been excluded is
     // not an inert exclude — counting it inflates the denominator this column exists to
     // keep honest. `inert: false` in the row is what the shipped meter now writes.
-    expect(classifyMarkerRegime(row({ markerStrings: 1, markerNumbers: 0, markerCoercible: 0, markerCoercibleStrings: 0 })))
-      .toBe('nothing-excludable');
+    expect(
+      classifyMarkerRegime(
+        row({ markerStrings: 1, markerNumbers: 0, markerCoercible: 0, markerCoercibleStrings: 0 }),
+      ),
+    ).toBe('nothing-excludable');
   });
 
   it('calls a marker inert when a coercible id arrived as a string', () => {
-    expect(classifyMarkerRegime(row({ markerStrings: 1, markerNumbers: 0, markerCoercible: 1, markerCoercibleStrings: 1 })))
-      .toBe('inert');
+    expect(
+      classifyMarkerRegime(
+        row({ markerStrings: 1, markerNumbers: 0, markerCoercible: 1, markerCoercibleStrings: 1 }),
+      ),
+    ).toBe('inert');
   });
 
   it('calls an all-numeric marker with excludable ids working', () => {
-    expect(classifyMarkerRegime(row({ markerStrings: 0, markerNumbers: 3, markerCoercible: 3, markerCoercibleStrings: 0 })))
-      .toBe('working');
+    expect(
+      classifyMarkerRegime(
+        row({ markerStrings: 0, markerNumbers: 3, markerCoercible: 3, markerCoercibleStrings: 0 }),
+      ),
+    ).toBe('working');
   });
 
   it('keys inert on markerCoercibleStrings, not on the row is own inert field', () => {
     // Defence against a reader that trusts a stale/mis-computed boolean over the counts.
-    expect(classifyMarkerRegime(row({ markerCoercible: 1, markerCoercibleStrings: 1, inert: false }))).toBe('inert');
-    expect(classifyMarkerRegime(row({ markerCoercible: 0, markerCoercibleStrings: 0, inert: true }))).toBe('nothing-excludable');
+    expect(classifyMarkerRegime(row({ markerCoercible: 1, markerCoercibleStrings: 1, inert: false }))).toBe(
+      'inert',
+    );
+    expect(classifyMarkerRegime(row({ markerCoercible: 0, markerCoercibleStrings: 0, inert: true }))).toBe(
+      'nothing-excludable',
+    );
   });
 });
 
 describe('aggregatePathAExclude', () => {
   it('keeps legacy rows out of the marker-regime denominator', () => {
-    const legacy = { markerTotal: 1, markerStrings: 1, markerCoercible: 0, inert: true, armB: 'ok', emitted: 0, suppressed: 0, refilled: 0, net: 0 };
+    const legacy = {
+      markerTotal: 1,
+      markerStrings: 1,
+      markerCoercible: 0,
+      inert: true,
+      armB: 'ok',
+      emitted: 0,
+      suppressed: 0,
+      refilled: 0,
+      net: 0,
+    };
     const agg = aggregatePathAExclude([legacy, row(), row()]);
     expect(agg.total).toBe(3);
     expect(agg.legacy).toBe(1);
@@ -93,7 +126,14 @@ describe('aggregatePathAExclude', () => {
 
   it('counts an armB error WITHOUT letting it read as a measured zero', () => {
     const agg = aggregatePathAExclude([
-      row({ armB: 'error', armBError: 'boom', delivered: undefined, refilled: undefined, net: undefined, setChanged: undefined }),
+      row({
+        armB: 'error',
+        armBError: 'boom',
+        delivered: undefined,
+        refilled: undefined,
+        net: undefined,
+        setChanged: undefined,
+      }),
       row({ suppressed: 1, suppressedIds: [7], refilled: 1, refilledIds: [9], net: 0, setChanged: true }),
     ]);
     expect(agg.armB.error).toBe(1);
@@ -105,7 +145,15 @@ describe('aggregatePathAExclude', () => {
   });
 
   it('counts a skipped arm separately from an errored one', () => {
-    const agg = aggregatePathAExclude([row({ armB: 'skipped', delivered: undefined, refilled: undefined, net: undefined, setChanged: undefined })]);
+    const agg = aggregatePathAExclude([
+      row({
+        armB: 'skipped',
+        delivered: undefined,
+        refilled: undefined,
+        net: undefined,
+        setChanged: undefined,
+      }),
+    ]);
     expect(agg.armB.skipped).toBe(1);
     expect(agg.armB.error).toBe(0);
     expect(agg.okPrompts).toBe(0);
@@ -182,7 +230,9 @@ describe('formatPathAReport', () => {
   });
 
   it('leads the decidable case with the refill columns D#216 turns on', () => {
-    const agg = aggregatePathAExclude([row({ suppressed: 2, suppressedIds: [1, 2], refilled: 1, refilledIds: [3], net: -1, setChanged: true })]);
+    const agg = aggregatePathAExclude([
+      row({ suppressed: 2, suppressedIds: [1, 2], refilled: 1, refilledIds: [3], net: -1, setChanged: true }),
+    ]);
     const text = formatPathAReport(agg, { days: 7, metricsEnabled: true });
     expect(text).toMatch(/DECIDABLE/);
     expect(text).toMatch(/refilled/);
@@ -190,7 +240,17 @@ describe('formatPathAReport', () => {
   });
 
   it('surfaces the legacy-row count instead of hiding it', () => {
-    const legacy = { markerTotal: 1, markerStrings: 1, markerCoercible: 0, inert: true, armB: 'ok', emitted: 0, suppressed: 0, refilled: 0, net: 0 };
+    const legacy = {
+      markerTotal: 1,
+      markerStrings: 1,
+      markerCoercible: 0,
+      inert: true,
+      armB: 'ok',
+      emitted: 0,
+      suppressed: 0,
+      refilled: 0,
+      net: 0,
+    };
     const text = formatPathAReport(aggregatePathAExclude([legacy, row()]), { days: 7, metricsEnabled: true });
     expect(text).toMatch(/legacy/i);
   });
@@ -203,12 +263,15 @@ describe('readPathARows', () => {
       const mdir = join(dir, 'metrics');
       mkdirSync(mdir, { recursive: true });
       const today = new Date().toISOString().slice(0, 10);
-      writeFileSync(join(mdir, `${today}.jsonl`), [
-        JSON.stringify({ ts: '2026-09-02T00:00:00.000Z', event: 'inject', n: 1 }),
-        JSON.stringify(row({ ts: '2026-09-02T00:00:01.000Z' })),
-        'not json at all',
-        JSON.stringify({ ts: '2026-09-02T00:00:02.000Z', event: 'search', durationMs: 4 }),
-      ].join('\n') + '\n');
+      writeFileSync(
+        join(mdir, `${today}.jsonl`),
+        [
+          JSON.stringify({ ts: '2026-09-02T00:00:00.000Z', event: 'inject', n: 1 }),
+          JSON.stringify(row({ ts: '2026-09-02T00:00:01.000Z' })),
+          'not json at all',
+          JSON.stringify({ ts: '2026-09-02T00:00:02.000Z', event: 'search', durationMs: 4 }),
+        ].join('\n') + '\n',
+      );
       const rows = readPathARows(dir, 7);
       expect(rows).toHaveLength(1);
       expect(rows[0].event).toBe(PATHA_EXCLUDE_EVENT);
@@ -236,7 +299,13 @@ describe('self-checks', () => {
   });
 
   it('assertCanSeeSuppression fires on an aggregator that drops suppression', () => {
-    const blind = (rows) => ({ ...aggregatePathAExclude(rows), suppressedRows: 0, refilledRows: 0, refillRatio: null, verdict: 'NO-POPULATION' });
+    const blind = (rows) => ({
+      ...aggregatePathAExclude(rows),
+      suppressedRows: 0,
+      refilledRows: 0,
+      refillRatio: null,
+      verdict: 'NO-POPULATION',
+    });
     expect(() => assertCanSeeSuppression(blind)).toThrow(/suppress/i);
   });
 

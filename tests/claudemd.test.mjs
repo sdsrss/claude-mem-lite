@@ -7,8 +7,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  writeManaged, removeManaged, isAdopted, needsRefresh, readBlock,
-  migrateLegacyMemoryDir, hasLegacyMemdirSentinel, claudeMdPath, detailDocPath,
+  writeManaged,
+  removeManaged,
+  isAdopted,
+  needsRefresh,
+  readBlock,
+  migrateLegacyMemoryDir,
+  hasLegacyMemdirSentinel,
+  claudeMdPath,
+  detailDocPath,
 } from '../claudemd.mjs';
 import { memdirPath, writePluginSection, writePluginDoc, isAdopted as memdirIsAdopted } from '../memdir.mjs';
 
@@ -29,7 +36,8 @@ describe('claudemd primitives', () => {
     mkdirSync(cwd, { recursive: true });
   });
   afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -119,7 +127,8 @@ describe('migrateLegacyMemoryDir', () => {
     mkdirSync(cwd, { recursive: true });
   });
   afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -144,9 +153,11 @@ describe('migrateLegacyMemoryDir', () => {
     mkdirSync(md, { recursive: true });
     writeFileSync(join(md, 'MEMORY.md'), '## user\n- keep me\n');
     writePluginSection(md, { slug: SLUG, version: 'v1', contentLine: '- legacy' });
-    writeFileSync(join(md, 'MEMORY.md'),
-      readFileSync(join(md, 'MEMORY.md'), 'utf8')
-      + '<!-- code-graph-mcp:begin v1 -->\n- cg\n<!-- code-graph-mcp:end -->\n');
+    writeFileSync(
+      join(md, 'MEMORY.md'),
+      readFileSync(join(md, 'MEMORY.md'), 'utf8') +
+        '<!-- code-graph-mcp:begin v1 -->\n- cg\n<!-- code-graph-mcp:end -->\n',
+    );
     migrateLegacyMemoryDir(cwd, SLUG);
     const mem = readFileSync(join(md, 'MEMORY.md'), 'utf8');
     expect(mem).not.toContain(`${SLUG}:begin`);
@@ -167,7 +178,8 @@ describe('claudemd robustness (review C1/H2/M3)', () => {
     mkdirSync(cwd, { recursive: true });
   });
   afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -178,15 +190,15 @@ describe('claudemd robustness (review C1/H2/M3)', () => {
     // simulate an editor re-saving CLAUDE.md with Windows CRLF endings
     writeFileSync(claudeMdPath(cwd), readFileSync(claudeMdPath(cwd), 'utf8').replace(/\n/g, '\r\n'));
     expect(isAdopted(cwd, SLUG)).toBe(true);
-    expect(needsRefresh(cwd, argsOf())).toBe(false);   // no spurious drift
-    writeManaged(cwd, argsOf());                         // must replace, not append
+    expect(needsRefresh(cwd, argsOf())).toBe(false); // no spurious drift
+    writeManaged(cwd, argsOf()); // must replace, not append
     expect(count(readFileSync(claudeMdPath(cwd), 'utf8'))).toBe(1);
   });
 
   it('H2: writeManaged collapses pre-existing duplicate blocks to one', () => {
     writeManaged(cwd, argsOf());
     const one = readFileSync(claudeMdPath(cwd), 'utf8');
-    writeFileSync(claudeMdPath(cwd), one + '\n' + one);  // inject a duplicate
+    writeFileSync(claudeMdPath(cwd), one + '\n' + one); // inject a duplicate
     writeManaged(cwd, argsOf());
     expect(count(readFileSync(claudeMdPath(cwd), 'utf8'))).toBe(1);
   });
@@ -205,10 +217,12 @@ describe('claudemd robustness (review C1/H2/M3)', () => {
     const md = memdirPath(cwd);
     mkdirSync(md, { recursive: true });
     // sentinel present but NO state sidecar → not provably plugin-written
-    writeFileSync(join(md, 'MEMORY.md'),
-      '<!-- claude-mem-lite:begin v1 -->\n## 插件契约\n- x\n<!-- claude-mem-lite:end -->\n');
+    writeFileSync(
+      join(md, 'MEMORY.md'),
+      '<!-- claude-mem-lite:begin v1 -->\n## 插件契约\n- x\n<!-- claude-mem-lite:end -->\n',
+    );
     writeFileSync(join(md, 'plugin_claude_mem_lite.md'), '# looks user-pasted');
-    const r = migrateLegacyMemoryDir(cwd, SLUG);   // force=false
+    const r = migrateLegacyMemoryDir(cwd, SLUG); // force=false
     expect(r.action).toBe('skipped-foreign');
     expect(existsSync(join(md, 'plugin_claude_mem_lite.md'))).toBe(true); // NOT deleted
   });

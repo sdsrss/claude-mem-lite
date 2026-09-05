@@ -10,7 +10,13 @@ function tmp() {
   dirs.push(d);
   return d;
 }
-afterEach(() => { while (dirs.length) { try { rmSync(dirs.pop(), { recursive: true, force: true }); } catch {} } });
+afterEach(() => {
+  while (dirs.length) {
+    try {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    } catch {}
+  }
+});
 
 describe('proc-lock', () => {
   it('acquires, blocks a second acquire, then re-acquires after release', () => {
@@ -87,14 +93,20 @@ describe('proc-lock', () => {
   it('withLock no-ops (acquired:false) when a peer holds the lock', () => {
     const lock = join(tmp(), 'x.lock');
     const release = acquireLock(lock);
-    const out = withLock(lock, () => { throw new Error('must not run'); });
+    const out = withLock(lock, () => {
+      throw new Error('must not run');
+    });
     expect(out).toEqual({ acquired: false });
     release();
   });
 
   it('withLock releases even when fn throws', () => {
     const lock = join(tmp(), 'x.lock');
-    expect(() => withLock(lock, () => { throw new Error('boom'); })).toThrow('boom');
+    expect(() =>
+      withLock(lock, () => {
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
     expect(existsSync(lock)).toBe(false);
   });
 

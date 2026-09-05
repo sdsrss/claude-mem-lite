@@ -62,8 +62,7 @@ describe('GitHub Actions workflows are hardened', () => {
     // Premise: the matcher found actions at all. A regex that matched nothing would report
     // a fully pinned tree, which is the exact "0 findings reads as clean" failure this repo
     // keeps recording.
-    expect(total, 'no `uses:` found — the matcher is broken, not the tree clean')
-      .toBeGreaterThan(10);
+    expect(total, 'no `uses:` found — the matcher is broken, not the tree clean').toBeGreaterThan(10);
     expect(unpinned).toEqual([]);
   });
 
@@ -83,9 +82,7 @@ describe('GitHub Actions workflows are hardened', () => {
   });
 
   it('every workflow declares a permissions block', () => {
-    const without = workflows.filter(
-      (f) => !/^\s*permissions:/m.test(readFileSync(join(WF_DIR, f), 'utf8')),
-    );
+    const without = workflows.filter((f) => !/^\s*permissions:/m.test(readFileSync(join(WF_DIR, f), 'utf8')));
     expect(without).toEqual([]);
   });
 

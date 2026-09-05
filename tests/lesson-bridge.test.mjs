@@ -7,14 +7,14 @@ describe('buildBridgePrompt', () => {
     const lesson = 'L'.repeat(5000);
     const hunk = 'H'.repeat(5000);
     const p = buildBridgePrompt(lesson, hunk);
-    expect(p).toMatch(/N\/A/);                  // the abstain instruction is present
+    expect(p).toMatch(/N\/A/); // the abstain instruction is present
     // Truncation by substring run — robust to boilerplate (asserting exact global
     // char counts would couple the test to the prompt wording and force the prompt
     // to avoid stray L/H chars; #plan-fix).
-    expect(p).toContain('L'.repeat(600));       // lesson kept up to LESSON_MAX...
-    expect(p).not.toContain('L'.repeat(601));   // ...and not one char more
-    expect(p).toContain('H'.repeat(1200));      // hunk kept up to HUNK_MAX...
-    expect(p).not.toContain('H'.repeat(1201));  // ...and not one char more
+    expect(p).toContain('L'.repeat(600)); // lesson kept up to LESSON_MAX...
+    expect(p).not.toContain('L'.repeat(601)); // ...and not one char more
+    expect(p).toContain('H'.repeat(1200)); // hunk kept up to HUNK_MAX...
+    expect(p).not.toContain('H'.repeat(1201)); // ...and not one char more
   });
   it('is a pure string with no thrown error on empty inputs', () => {
     expect(typeof buildBridgePrompt('', '')).toBe('string');
@@ -26,7 +26,11 @@ describe('bridgeLesson (fail-open)', () => {
   const hunk = 'function recoverChildrenOf(p) { return p.kids; }';
 
   it('returns { ok:true, check } on a one-line model answer', async () => {
-    const r = await bridgeLesson({ lesson, hunk, _callLLM: async () => 'null-check recoverChildrenOf before .kids' });
+    const r = await bridgeLesson({
+      lesson,
+      hunk,
+      _callLLM: async () => 'null-check recoverChildrenOf before .kids',
+    });
     expect(r.ok).toBe(true);
     expect(r.check).toBe('null-check recoverChildrenOf before .kids');
   });
@@ -44,7 +48,13 @@ describe('bridgeLesson (fail-open)', () => {
     expect((await bridgeLesson({ lesson, hunk, _callLLM: async () => '' })).ok).toBe(false);
   });
   it('returns { ok:false } and does NOT throw when callLLM throws (timeout/error)', async () => {
-    const r = await bridgeLesson({ lesson, hunk, _callLLM: async () => { throw new Error('ETIMEDOUT'); } });
+    const r = await bridgeLesson({
+      lesson,
+      hunk,
+      _callLLM: async () => {
+        throw new Error('ETIMEDOUT');
+      },
+    });
     expect(r.ok).toBe(false);
   });
 });

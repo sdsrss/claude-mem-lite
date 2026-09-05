@@ -40,14 +40,26 @@ const att = (command, stdout) => ({
 
 // Each takes a LIST of ids so a face can carry a distinct count (see FACE_SIZES).
 const faceAttachment = {
-  pretool: (ids) => att('node "/home/sds/.claude-mem-lite/scripts/pre-tool-recall.js"',
-    `[mem] Lessons for utils.mjs:\n${ids.map((id) => `  #${id} [bugfix] boundary match beats suffix LIKE\n`).join('')}`),
-  ups: (ids) => att('node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
-    `<memory-context relevance="high">\n${ids.map((id) => `- [decision] picked X | Lesson: Y (#${id})\n`).join('')}</memory-context>\n`),
-  error_recall: (ids) => att('bash "/home/sds/.claude-mem-lite/scripts/post-tool-use.sh"',
-    `[claude-mem-lite] Related memories found for this error:\n${ids.map((id) => `  #${id} [bugfix] EPIPE on forced exit\n`).join('')}`),
-  fyi: (ids) => att('node "/home/sds/.claude-mem-lite/scripts/user-prompt-search.js"',
-    `[mem] FYI — Related memories (continue your task):\n${ids.map((id) => `#${id} 🔴 superseded invariant reopened\n`).join('')}`),
+  pretool: (ids) =>
+    att(
+      'node "/home/sds/.claude-mem-lite/scripts/pre-tool-recall.js"',
+      `[mem] Lessons for utils.mjs:\n${ids.map((id) => `  #${id} [bugfix] boundary match beats suffix LIKE\n`).join('')}`,
+    ),
+  ups: (ids) =>
+    att(
+      'node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
+      `<memory-context relevance="high">\n${ids.map((id) => `- [decision] picked X | Lesson: Y (#${id})\n`).join('')}</memory-context>\n`,
+    ),
+  error_recall: (ids) =>
+    att(
+      'bash "/home/sds/.claude-mem-lite/scripts/post-tool-use.sh"',
+      `[claude-mem-lite] Related memories found for this error:\n${ids.map((id) => `  #${id} [bugfix] EPIPE on forced exit\n`).join('')}`,
+    ),
+  fyi: (ids) =>
+    att(
+      'node "/home/sds/.claude-mem-lite/scripts/user-prompt-search.js"',
+      `[mem] FYI — Related memories (continue your task):\n${ids.map((id) => `#${id} 🔴 superseded invariant reopened\n`).join('')}`,
+    ),
 };
 
 /** Main-thread assistant text — both the text floor and the citation numerator. */
@@ -68,7 +80,9 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   // case (13 of them before this was noticed), invisible because rmSync is
   // best-effort and its failure is swallowed. Same shape as the fix in
   // tests/audit-fixes-20260816.test.mjs.
-  beforeAll(() => { root = mkdtempSync(join(tmpdir(), 'mem-stop-e2e-')); });
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'mem-stop-e2e-'));
+  });
 
   // A fixed grace is a RACE, not a barrier, and the post-tag review observed it
   // lose: handleStop's spawnBackground('llm-summary') is gated by no
@@ -80,7 +94,11 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   afterAll(async () => {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
-      try { rmSync(root, { recursive: true, force: true }); } catch { /* retry */ }
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        /* retry */
+      }
       if (!existsSync(root)) {
         await new Promise((r) => setTimeout(r, 200)); // give a straggler time to recreate
         if (!existsSync(root)) break;
@@ -103,10 +121,12 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     db.pragma('journal_mode = WAL');
     initSchema(db);
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('cc-stop-e2e', 'mem-stop-e2e', ?, ?, ?, 'active')
-    `).run(PROJECT, new Date(now).toISOString(), now);
+    `,
+    ).run(PROJECT, new Date(now).toISOString(), now);
     db.close();
 
     baseEnv = { ...process.env };
@@ -128,7 +148,7 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       CLAUDE_MEM_SKIP_OPTIMIZE: '1',
       CLAUDE_MEM_SKIP_MAINTAIN: '1',
       CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
-      CLAUDE_MEM_SKIP_SUMMARY: '1',   // the detached worker that recreated the sandbox behind cleanup
+      CLAUDE_MEM_SKIP_SUMMARY: '1', // the detached worker that recreated the sandbox behind cleanup
       CLAUDE_MEM_NO_DELAY: '1',
       MEM_QUIET_HOOKS: '1',
       MEM_NO_AUTO_ADOPT: '1',
@@ -157,10 +177,17 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     for (const [face, n] of Object.entries(FACE_SIZES)) {
       ids[face] = [];
       for (let i = 0; i < n; i++) {
-        ids[face].push(Number(stmt.run(
-          PROJECT, `${face} body text ${i}`, `Observation ${i} for the ${face} face`,
-          new Date(now).toISOString(), now,
-        ).lastInsertRowid));
+        ids[face].push(
+          Number(
+            stmt.run(
+              PROJECT,
+              `${face} body text ${i}`,
+              `Observation ${i} for the ${face} face`,
+              new Date(now).toISOString(),
+              now,
+            ).lastInsertRowid,
+          ),
+        );
       }
     }
     db.close();
@@ -170,7 +197,10 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   function runStop(transcriptPath) {
     execFileSync(process.execPath, [HOOK_PATH, 'stop'], {
       input: JSON.stringify({ session_id: 'cc-stop-e2e', transcript_path: transcriptPath }),
-      timeout: 30000, encoding: 'utf8', env: baseEnv, stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 30000,
+      encoding: 'utf8',
+      env: baseEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   }
 
@@ -181,10 +211,14 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     // dependency on that staying true.
     db.pragma('busy_timeout = 2000');
     try {
-      return db.prepare(
-        'SELECT surface, session_id, injected_n, cited_n FROM citation_surface_log WHERE project = ? ORDER BY surface'
-      ).all(PROJECT);
-    } finally { db.close(); }
+      return db
+        .prepare(
+          'SELECT surface, session_id, injected_n, cited_n FROM citation_surface_log WHERE project = ? ORDER BY surface',
+        )
+        .all(PROJECT);
+    } finally {
+      db.close();
+    }
   }
 
   // FAILS IF: the table is never created, the recorder is never reached from
@@ -194,17 +228,22 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('writes one row per injected face, attributed to the right face, with cites counted', () => {
     const ids = seedObservations();
     const transcriptPath = join(home, 'transcript.jsonl');
-    writeFileSync(transcriptPath, [
-      faceAttachment.pretool(ids.pretool),
-      faceAttachment.ups(ids.ups),
-      faceAttachment.error_recall(ids.error_recall),
-      faceAttachment.fyi(ids.fyi),
-      // Cite one obs from TWO different faces. With a single cited face, cited_n
-      // is 1/0/0/0 and any pair of the three zeros can trade places unnoticed.
-      assistantText(
-        `Applying the boundary-match fix from #${ids.pretool[0]}, and #${ids.error_recall[0]} explains the EPIPE.`,
-      ),
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      transcriptPath,
+      [
+        faceAttachment.pretool(ids.pretool),
+        faceAttachment.ups(ids.ups),
+        faceAttachment.error_recall(ids.error_recall),
+        faceAttachment.fyi(ids.fyi),
+        // Cite one obs from TWO different faces. With a single cited face, cited_n
+        // is 1/0/0/0 and any pair of the three zeros can trade places unnoticed.
+        assistantText(
+          `Applying the boundary-match fix from #${ids.pretool[0]}, and #${ids.error_recall[0]} explains the EPIPE.`,
+        ),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     runStop(transcriptPath);
 
@@ -224,10 +263,15 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('a second Stop on the same session overwrites rather than doubling', () => {
     const ids = seedObservations();
     const transcriptPath = join(home, 'transcript.jsonl');
-    writeFileSync(transcriptPath, [
-      faceAttachment.pretool(ids.pretool),
-      assistantText(`Cited #${ids.pretool[0]} while fixing the builder.`),
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      transcriptPath,
+      [
+        faceAttachment.pretool(ids.pretool),
+        assistantText(`Cited #${ids.pretool[0]} while fixing the builder.`),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     runStop(transcriptPath);
     runStop(transcriptPath);
@@ -260,37 +304,62 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     `);
     const subIds = [];
     for (let i = 0; i < 5; i++) {
-      subIds.push(Number(stmt.run(
-        PROJECT, `subagent body text ${i}`, `Observation ${i} for the subagent face`,
-        new Date(now).toISOString(), now,
-      ).lastInsertRowid));
+      subIds.push(
+        Number(
+          stmt.run(
+            PROJECT,
+            `subagent body text ${i}`,
+            `Observation ${i} for the subagent face`,
+            new Date(now).toISOString(),
+            now,
+          ).lastInsertRowid,
+        ),
+      );
     }
     db.close();
 
     const transcriptPath = join(home, 'transcript.jsonl');
-    writeFileSync(transcriptPath, [
-      faceAttachment.pretool(ids.pretool),
-      assistantText(`Main thread applied #${ids.pretool[0]}.`),
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      transcriptPath,
+      [faceAttachment.pretool(ids.pretool), assistantText(`Main thread applied #${ids.pretool[0]}.`)]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     // Two dispatched subagents, matching the real layout.
     const subDir = join(home, 'transcript', 'subagents');
     mkdirSync(subDir, { recursive: true });
-    const promptBlock = (idList) => [
-      '',
-      '---',
-      "[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]",
-      'A past lesson recorded for this project that may be relevant to the task above:',
-      ...idList.map((id) => `  #${id} — a past lesson body.`),
-    ].join('\n');
-    const sidechain = (idList, citeText) => [
-      { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Do the work.\n${promptBlock(idList)}` }] } },
-      { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: citeText }] } },
-    ].map((e) => JSON.stringify(e)).join('\n');
-    writeFileSync(join(subDir, 'agent-explore-aaaa.jsonl'),
-      sidechain(subIds.slice(0, 3), `Used #${subIds[0]} and #${subIds[1]} here.`));
-    writeFileSync(join(subDir, 'agent-review-bbbb.jsonl'),
-      sidechain(subIds.slice(3), 'Nothing applied.'));
+    const promptBlock = (idList) =>
+      [
+        '',
+        '---',
+        "[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]",
+        'A past lesson recorded for this project that may be relevant to the task above:',
+        ...idList.map((id) => `  #${id} — a past lesson body.`),
+      ].join('\n');
+    const sidechain = (idList, citeText) =>
+      [
+        {
+          type: 'user',
+          isSidechain: true,
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: `Do the work.\n${promptBlock(idList)}` }],
+          },
+        },
+        {
+          type: 'assistant',
+          isSidechain: true,
+          message: { role: 'assistant', content: [{ type: 'text', text: citeText }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n');
+    writeFileSync(
+      join(subDir, 'agent-explore-aaaa.jsonl'),
+      sidechain(subIds.slice(0, 3), `Used #${subIds[0]} and #${subIds[1]} here.`),
+    );
+    writeFileSync(join(subDir, 'agent-review-bbbb.jsonl'), sidechain(subIds.slice(3), 'Nothing applied.'));
 
     runStop(transcriptPath);
 
@@ -312,11 +381,17 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('records the subagent face even when no main-thread face injected anything', () => {
     const db = new Database(dbPath);
     const now = Date.now();
-    const subId = Number(db.prepare(`
+    const subId = Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
         concepts, facts, files_read, files_modified, importance, access_count, created_at, created_at_epoch)
       VALUES ('mem-stop-e2e', ?, 'subagent-only body', 'bugfix', 'Subagent-only observation', '', '', '', '', '[]', '[]', 2, 0, ?, ?)
-    `).run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid);
+    `,
+        )
+        .run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid,
+    );
     db.close();
 
     const transcriptPath = join(home, 'transcript.jsonl');
@@ -325,10 +400,31 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
 
     const subDir = join(home, 'transcript', 'subagents');
     mkdirSync(subDir, { recursive: true });
-    writeFileSync(join(subDir, 'agent-only-dddd.jsonl'), [
-      { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.` }] } },
-      { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] } },
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      join(subDir, 'agent-only-dddd.jsonl'),
+      [
+        {
+          type: 'user',
+          isSidechain: true,
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.`,
+              },
+            ],
+          },
+        },
+        {
+          type: 'assistant',
+          isSidechain: true,
+          message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     runStop(transcriptPath);
 
@@ -346,21 +442,48 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('records no subagent row when CLAUDE_MEM_NO_CITATION_TRACK is set', () => {
     const db = new Database(dbPath);
     const now = Date.now();
-    const subId = Number(db.prepare(`
+    const subId = Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
         concepts, facts, files_read, files_modified, importance, access_count, created_at, created_at_epoch)
       VALUES ('mem-stop-e2e', ?, 'opt-out probe body', 'bugfix', 'Opt-out probe observation', '', '', '', '', '[]', '[]', 2, 0, ?, ?)
-    `).run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid);
+    `,
+        )
+        .run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid,
+    );
     db.close();
 
     const transcriptPath = join(home, 'transcript.jsonl');
     writeFileSync(transcriptPath, JSON.stringify(assistantText('Dispatched a subagent.')));
     const subDir = join(home, 'transcript', 'subagents');
     mkdirSync(subDir, { recursive: true });
-    writeFileSync(join(subDir, 'agent-optout-eeee.jsonl'), [
-      { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.` }] } },
-      { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] } },
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      join(subDir, 'agent-optout-eeee.jsonl'),
+      [
+        {
+          type: 'user',
+          isSidechain: true,
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.`,
+              },
+            ],
+          },
+        },
+        {
+          type: 'assistant',
+          isSidechain: true,
+          message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     // Positive control FIRST: without the opt-out this exact fixture records a
     // row, so the assertion below cannot pass because the fixture is inert.
@@ -373,7 +496,9 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
 
     const prev = baseEnv.CLAUDE_MEM_NO_CITATION_TRACK;
     baseEnv.CLAUDE_MEM_NO_CITATION_TRACK = '1';
-    try { runStop(transcriptPath); } finally {
+    try {
+      runStop(transcriptPath);
+    } finally {
       if (prev === undefined) delete baseEnv.CLAUDE_MEM_NO_CITATION_TRACK;
       else baseEnv.CLAUDE_MEM_NO_CITATION_TRACK = prev;
     }
@@ -391,23 +516,55 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('records no subagent row when the main thread produced no assistant text', () => {
     const db = new Database(dbPath);
     const now = Date.now();
-    const subId = Number(db.prepare(`
+    const subId = Number(
+      db
+        .prepare(
+          `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
         concepts, facts, files_read, files_modified, importance, access_count, created_at, created_at_epoch)
       VALUES ('mem-stop-e2e', ?, 'floor-probe body', 'bugfix', 'Text-floor probe observation', '', '', '', '', '[]', '[]', 2, 0, ?, ?)
-    `).run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid);
+    `,
+        )
+        .run(PROJECT, new Date(now).toISOString(), now).lastInsertRowid,
+    );
     db.close();
 
     const transcriptPath = join(home, 'transcript.jsonl');
-    writeFileSync(transcriptPath, JSON.stringify(
-      { type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'text', text: 'go' }] } },
-    ));
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({
+        type: 'user',
+        isSidechain: false,
+        message: { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      }),
+    );
     const subDir = join(home, 'transcript', 'subagents');
     mkdirSync(subDir, { recursive: true });
-    writeFileSync(join(subDir, 'agent-x-cccc.jsonl'), [
-      { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Do it.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.` }] } },
-      { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] } },
-    ].map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      join(subDir, 'agent-x-cccc.jsonl'),
+      [
+        {
+          type: 'user',
+          isSidechain: true,
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Do it.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${subId} — a past lesson body.`,
+              },
+            ],
+          },
+        },
+        {
+          type: 'assistant',
+          isSidechain: true,
+          message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${subId}.` }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
 
     runStop(transcriptPath);
 
@@ -432,11 +589,17 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     function seedOne(title) {
       const db = new Database(dbPath);
       const now = Date.now();
-      const id = Number(db.prepare(`
+      const id = Number(
+        db
+          .prepare(
+            `
         INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative,
           concepts, facts, files_read, files_modified, importance, access_count, created_at, created_at_epoch)
         VALUES ('mem-stop-e2e', ?, ?, 'bugfix', ?, '', '', '', '', '[]', '[]', 2, 0, ?, ?)
-      `).run(PROJECT, `${title} body`, title, new Date(now).toISOString(), now).lastInsertRowid);
+      `,
+          )
+          .run(PROJECT, `${title} body`, title, new Date(now).toISOString(), now).lastInsertRowid,
+      );
       db.close();
       return id;
     }
@@ -445,23 +608,51 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       const db = new Database(dbPath, { readonly: true });
       db.pragma('busy_timeout = 2000');
       try {
-        return db.prepare('SELECT cited_count, uncited_streak, decay_seen_count FROM observations WHERE id = ?').get(id);
-      } finally { db.close(); }
+        return db
+          .prepare('SELECT cited_count, uncited_streak, decay_seen_count FROM observations WHERE id = ?')
+          .get(id);
+      } finally {
+        db.close();
+      }
     };
 
     /** Parent with main-thread text (the floor) but no attachment; one sidechain citing `cited`. */
     function writeFixture(cited, uncited) {
       const transcriptPath = join(home, 'transcript.jsonl');
-      writeFileSync(transcriptPath, [
-        assistantText('Done. Nothing cited here in the main thread.'),
-      ].map((e) => JSON.stringify(e)).join('\n'));
+      writeFileSync(
+        transcriptPath,
+        [assistantText('Done. Nothing cited here in the main thread.')]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
       const subDir = join(home, 'transcript', 'subagents');
       mkdirSync(subDir, { recursive: true });
       const block = [cited, uncited].map((id) => `  #${id} — a past lesson body.`).join('\n');
-      writeFileSync(join(subDir, 'agent-worker-abcd.jsonl'), [
-        { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n${block}` }] } },
-        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${cited}.` }] } },
-      ].map((e) => JSON.stringify(e)).join('\n'));
+      writeFileSync(
+        join(subDir, 'agent-worker-abcd.jsonl'),
+        [
+          {
+            type: 'user',
+            isSidechain: true,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n${block}`,
+                },
+              ],
+            },
+          },
+          {
+            type: 'assistant',
+            isSidechain: true,
+            message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${cited}.` }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
       return transcriptPath;
     }
 
@@ -471,7 +662,11 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       const path = writeFixture(cited, uncited);
 
       baseEnv.CLAUDE_MEM_SUBAGENT_DECAY = '0';
-      try { runStop(path); } finally { delete baseEnv.CLAUDE_MEM_SUBAGENT_DECAY; }
+      try {
+        runStop(path);
+      } finally {
+        delete baseEnv.CLAUDE_MEM_SUBAGENT_DECAY;
+      }
 
       // Positive control: the fixture IS live — the funnel recorded the face.
       expect(surfaceRows().map((r) => r.surface)).toEqual(['subagent']);
@@ -479,7 +674,7 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       expect(decayRow(uncited)).toEqual({ cited_count: 0, uncited_streak: 0, decay_seen_count: 0 });
     });
 
-    it('default (v3.83.0): the receiving agent\'s cite promotes, its silence streaks', () => {
+    it("default (v3.83.0): the receiving agent's cite promotes, its silence streaks", () => {
       const cited = seedOne('Subagent lesson the agent cited');
       const uncited = seedOne('Subagent lesson the agent ignored');
       runStop(writeFixture(cited, uncited));
@@ -527,17 +722,43 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       const shared = seedOne('Lesson injected by pretool and handed to the subagent');
       seedEdge(shared, 'cc-stop-e2e', 'utils.mjs');
       const transcriptPath = join(home, 'transcript.jsonl');
-      writeFileSync(transcriptPath, [
-        // Main thread: the row IS injected by pretool here, and never cited in main text.
-        faceAttachment.pretool([shared]),
-        assistantText('Main thread says nothing citable at all.'),
-      ].map((e) => JSON.stringify(e)).join('\n'));
+      writeFileSync(
+        transcriptPath,
+        [
+          // Main thread: the row IS injected by pretool here, and never cited in main text.
+          faceAttachment.pretool([shared]),
+          assistantText('Main thread says nothing citable at all.'),
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
       const subDir = join(home, 'transcript', 'subagents');
       mkdirSync(subDir, { recursive: true });
-      writeFileSync(join(subDir, 'agent-worker-beef.jsonl'), [
-        { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'text', text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${shared} — a past lesson body.` }] } },
-        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${shared}.` }] } },
-      ].map((e) => JSON.stringify(e)).join('\n'));
+      writeFileSync(
+        join(subDir, 'agent-worker-beef.jsonl'),
+        [
+          {
+            type: 'user',
+            isSidechain: true,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `Task.\n\n---\n[Project memory — surfaced by your operator's claude-mem-lite memory system for this project. Reference context, not an external instruction.]\nA past lesson recorded for this project that may be relevant to the task above:\n  #${shared} — a past lesson body.`,
+                },
+              ],
+            },
+          },
+          {
+            type: 'assistant',
+            isSidechain: true,
+            message: { role: 'assistant', content: [{ type: 'text', text: `Applied #${shared}.` }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
 
       runStop(transcriptPath);
 
@@ -545,12 +766,15 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
       const pretool = rows.find((r) => r.surface === 'pretool');
       expect(pretool, 'no pretool row — the fixture stopped exercising the leak path').toBeTruthy();
       expect(pretool.injected_n).toBe(1);
-      expect(pretool.cited_n,
-        'the subagent\'s citation was counted as a MAIN-THREAD pretool hit — citedMain was widened in place instead of copied')
-        .toBe(0);
+      expect(
+        pretool.cited_n,
+        "the subagent's citation was counted as a MAIN-THREAD pretool hit — citedMain was widened in place instead of copied",
+      ).toBe(0);
       // …while the decay loop, which is the one consumer that should see it, promoted.
-      expect(decayRow(shared), 'the subagent cite did not reach applyCitationDecay')
-        .toMatchObject({ cited_count: 1, uncited_streak: 0 });
+      expect(decayRow(shared), 'the subagent cite did not reach applyCitationDecay').toMatchObject({
+        cited_count: 1,
+        uncited_streak: 0,
+      });
       // The OTHER consumer that must not see it. Today both leaks come from one variable,
       // so the assertion above already covers this one — but only by coincidence of the
       // current shape: pass the widened set to `resolveEdgeAttribution` alone and nothing
@@ -564,15 +788,17 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
         const db = new Database(dbPath, { readonly: true });
         db.pragma('busy_timeout = 2000');
         try {
-          return db.prepare(
-            'SELECT miss_streak, last_cited_session_id FROM observation_files WHERE obs_id = ?',
-          ).get(shared);
-        } finally { db.close(); }
+          return db
+            .prepare('SELECT miss_streak, last_cited_session_id FROM observation_files WHERE obs_id = ?')
+            .get(shared);
+        } finally {
+          db.close();
+        }
       })();
       expect(edge, 'the (obs,file) edge was not seeded — this assertion would prove nothing').toBeTruthy();
-      expect(edge.miss_streak,
-        'a file edge was resolved as a HIT on a citation only the subagent made')
-        .toBe(1);
+      expect(edge.miss_streak, 'a file edge was resolved as a HIT on a citation only the subagent made').toBe(
+        1,
+      );
       expect(edge.last_cited_session_id).toBeNull();
     });
   });
@@ -582,8 +808,10 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
   it('records nothing when the turn produced no main-thread assistant text', () => {
     const ids = seedObservations();
     const transcriptPath = join(home, 'transcript.jsonl');
-    writeFileSync(transcriptPath, [faceAttachment.pretool(ids.pretool)]
-      .map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(
+      transcriptPath,
+      [faceAttachment.pretool(ids.pretool)].map((e) => JSON.stringify(e)).join('\n'),
+    );
 
     runStop(transcriptPath);
 

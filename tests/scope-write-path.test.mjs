@@ -43,7 +43,8 @@ import { callModelJSONAsync } from '../haiku-client.mjs';
 
 const PROJECT = 'scope--test';
 // >100 chars so the substantive-narrative gate (shared by wide/aliases/scopes) opens.
-const SUBSTANTIVE = 'The npm proxy rejected the registry request because HTTPS_PROXY was set but Node built-in fetch ignores it, so the install hung until the agent was passed explicitly.';
+const SUBSTANTIVE =
+  'The npm proxy rejected the registry request because HTTPS_PROXY was set but Node built-in fetch ignores it, so the install hung until the agent was passed explicitly.';
 
 function row(db, id) {
   return db.prepare('SELECT * FROM observations WHERE id = ?').get(id);
@@ -134,7 +135,7 @@ describe('save-enrich writes observations.scope (face B)', () => {
       callJson: async () => ({
         lesson_learned: 'a real transferable lesson about proxies',
         search_aliases: ['proxy alias'],
-        scope: 'GLOBAL',                 // not in the enum — and case variants must not slip through
+        scope: 'GLOBAL', // not in the enum — and case variants must not slip through
       }),
     });
     expect(r.enriched).toBe(true);
@@ -166,7 +167,9 @@ describe('re-enrich narrow/wide/aliases carry scope (face C)', () => {
     insertSession(db, { id: 'sess-1', project: 'test' });
     callModelJSONAsync.mockReset();
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('narrow re-enrich persists the classified scope', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
@@ -195,8 +198,11 @@ describe('re-enrich narrow/wide/aliases carry scope (face C)', () => {
       type: 'bugfix',
       title: 'Fix npm install hang behind proxy',
       narrative: SUBSTANTIVE,
-      concepts: ['npm'], facts: ['f'], importance: 2,
-      lesson_learned: 'a lesson', search_aliases: ['alias'],
+      concepts: ['npm'],
+      facts: ['f'],
+      importance: 2,
+      lesson_learned: 'a lesson',
+      search_aliases: ['alias'],
       // no scope key at all
     });
     expect((await executeReenrich(db, 10)).processed).toBe(1);
@@ -212,8 +218,11 @@ describe('re-enrich narrow/wide/aliases carry scope (face C)', () => {
   it('an omitted scope must NOT blank a classification an earlier face wrote (aliases)', async () => {
     const { executeReenrich, findReenrichCandidates } = await import('../hook-optimize.mjs');
     insertObs(db, {
-      title: 'Fixed the proxy install hang', narrative: SUBSTANTIVE,
-      text: 'npm proxy install hang', type: 'bugfix', importance: 2,
+      title: 'Fixed the proxy install hang',
+      narrative: SUBSTANTIVE,
+      text: 'npm proxy install hang',
+      type: 'bugfix',
+      importance: 2,
       lessonLearned: 'Pass a ProxyAgent dispatcher to built-in fetch',
       searchAliases: null,
     });
@@ -235,8 +244,11 @@ describe('re-enrich narrow/wide/aliases carry scope (face C)', () => {
   it('the aliases pass backfills scope while still touching nothing else', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertObs(db, {
-      title: 'Fixed the proxy install hang', narrative: SUBSTANTIVE,
-      text: 'npm proxy install hang', type: 'bugfix', importance: 2,
+      title: 'Fixed the proxy install hang',
+      narrative: SUBSTANTIVE,
+      text: 'npm proxy install hang',
+      type: 'bugfix',
+      importance: 2,
       lessonLearned: 'Pass a ProxyAgent dispatcher to built-in fetch',
       searchAliases: null,
     });
@@ -266,12 +278,17 @@ describe("re-enrich scope='scopes' (D#135 legacy backfill)", () => {
     insertSession(db, { id: 'sess-1', project: 'test' });
     callModelJSONAsync.mockReset();
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   function legacyRow(over = {}) {
     insertObs(db, {
-      title: 'Fixed the proxy install hang', narrative: SUBSTANTIVE,
-      text: 'npm proxy install hang', type: 'bugfix', importance: 2,
+      title: 'Fixed the proxy install hang',
+      narrative: SUBSTANTIVE,
+      text: 'npm proxy install hang',
+      type: 'bugfix',
+      importance: 2,
       lessonLearned: 'Pass a ProxyAgent dispatcher to built-in fetch',
       searchAliases: 'proxy hang registry timeout',
       ...over,
@@ -382,13 +399,18 @@ describe('optimizeRun gives the scopes backfill a daily slot', () => {
     insertSession(db, { id: 'sess-1', project: 'test' });
     callModelJSONAsync.mockReset();
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('default-scope run classifies a scope-less row (no explicit --scope)', async () => {
     const { optimizeRun } = await import('../hook-optimize.mjs');
     insertObs(db, {
-      title: 'Fixed the proxy install hang', narrative: SUBSTANTIVE,
-      text: 'npm proxy install hang', type: 'bugfix', importance: 2,
+      title: 'Fixed the proxy install hang',
+      narrative: SUBSTANTIVE,
+      text: 'npm proxy install hang',
+      type: 'bugfix',
+      importance: 2,
       lessonLearned: 'Pass a ProxyAgent dispatcher to built-in fetch',
       searchAliases: 'proxy hang registry timeout',
     });
@@ -405,9 +427,14 @@ describe('optimizeRun gives the scopes backfill a daily slot', () => {
     // NOT a scopes candidate.
     insertObs(db, { title: 'Error in utils.mjs', narrative: 'short' });
     callModelJSONAsync.mockResolvedValue({
-      type: 'bugfix', title: 'Fixed sanitizeFtsQuery', narrative: SUBSTANTIVE,
-      concepts: ['fts'], facts: ['f'], importance: 2,
-      lesson_learned: 'escape FTS specials', search_aliases: ['fts crash'],
+      type: 'bugfix',
+      title: 'Fixed sanitizeFtsQuery',
+      narrative: SUBSTANTIVE,
+      concepts: ['fts'],
+      facts: ['f'],
+      importance: 2,
+      lesson_learned: 'escape FTS specials',
+      search_aliases: ['fts crash'],
     });
     const res = await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 6 });
     expect(res.reenrich.byScope.scopes.processed).toBe(0);
@@ -422,9 +449,13 @@ describe('optimizePreview reports the scopes backlog', () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
     insertObs(db, {
-      title: 'Fixed the proxy install hang', narrative: SUBSTANTIVE,
-      text: 'npm proxy install hang', type: 'bugfix', importance: 2,
-      lessonLearned: 'Pass a ProxyAgent dispatcher', searchAliases: 'proxy hang',
+      title: 'Fixed the proxy install hang',
+      narrative: SUBSTANTIVE,
+      text: 'npm proxy install hang',
+      type: 'bugfix',
+      importance: 2,
+      lessonLearned: 'Pass a ProxyAgent dispatcher',
+      searchAliases: 'proxy hang',
     });
     const { optimizePreview } = await import('../hook-optimize.mjs');
     expect(optimizePreview(db).reenrichScopes).toBe(1);

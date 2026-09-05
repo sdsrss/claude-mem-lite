@@ -4,7 +4,17 @@
 // Lightweight: only imports schema.mjs and utils.mjs, no MCP SDK
 
 import { ensureDb, DB_DIR, REGISTRY_DB_PATH } from '../schema.mjs';
-import { relaxFtsQueryToOr, truncate, typeIcon, inferProject, OBS_BM25, notLowSignalTitleClause, stripPrivate, neutralizeContextDelimiters, MAX_UPS_PROMPT_BYTES } from '../utils.mjs';
+import {
+  relaxFtsQueryToOr,
+  truncate,
+  typeIcon,
+  inferProject,
+  OBS_BM25,
+  notLowSignalTitleClause,
+  stripPrivate,
+  neutralizeContextDelimiters,
+  MAX_UPS_PROMPT_BYTES,
+} from '../utils.mjs';
 import { readHookStdin } from '../lib/hook-stdin.mjs';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
@@ -16,7 +26,18 @@ import { writeFileSync, readFileSync, existsSync, renameSync } from 'fs';
 import { join, sep } from 'path';
 import { pathToFileURL } from 'url';
 import Database from 'better-sqlite3';
-import { shouldSkip, computeEffectiveLen, detectIntent, shouldSkipByDedup, extractFiles, extractErrorSignature, extractDeferredRefs, DEDUP_STALE_MS, matchRegistrySkillName, detectMemOverride } from './prompt-search-utils.mjs';
+import {
+  shouldSkip,
+  computeEffectiveLen,
+  detectIntent,
+  shouldSkipByDedup,
+  extractFiles,
+  extractErrorSignature,
+  extractDeferredRefs,
+  DEDUP_STALE_MS,
+  matchRegistrySkillName,
+  detectMemOverride,
+} from './prompt-search-utils.mjs';
 import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { getDeferredByIds } from '../lib/deferred-work.mjs';
 import { recommendSkill } from '../registry-recommend.mjs';
@@ -40,8 +61,7 @@ const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 // two concurrent windows full-replace each other's marker, killing dedup between
 // them and resetting `count` on every alternation. Derived per invocation once
 // the session id is parsed from stdin; no session id → legacy project-keyed file.
-const injectedIdsFileFor = (sessionId) =>
-  join(RUNTIME_DIR, injectedIdsFileName(inferProject(), sessionId));
+const injectedIdsFileFor = (sessionId) => join(RUNTIME_DIR, injectedIdsFileName(inferProject(), sessionId));
 // Per-prompt UPS cap. Cut from 5 → 3 after the 2026-05-09 per-hook recall
 // scan (#8255): UPS contributed 74% of silent injected IDs (131/177) at 26%
 // recall, vs PreToolUse:Read at 94% recall on a tighter file-keyed set.
@@ -53,8 +73,12 @@ const injectedIdsFileFor = (sessionId) =>
 // "inject nothing" — a legitimate way to turn this face off, so it is accepted rather
 // than warned back up to 3 (falling back would INJECT for a user who asked for silence).
 // What is screened is NaN, which produced the same silence from a typo, unasked.
-const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS,
-  { name: 'CLAUDE_MEM_UPS_MAX_RESULTS', defaultValue: 3, min: 0, integer: true });
+const MAX_RESULTS = envNumber(process.env.CLAUDE_MEM_UPS_MAX_RESULTS, {
+  name: 'CLAUDE_MEM_UPS_MAX_RESULTS',
+  defaultValue: 3,
+  min: 0,
+  integer: true,
+});
 const LOOKBACK_MS = 60 * DAY_MS; // 60 days
 
 // v2.56.x: Past-similar-questions fallback row cap. Cut from 3 → 1 after
@@ -66,8 +90,12 @@ const LOOKBACK_MS = 60 * DAY_MS; // 60 days
 // Integer, min 0: bound directly into a SQL `LIMIT ?`, where better-sqlite3 rejects a
 // non-integer outright (`SqliteError: datatype mismatch`). `LIMIT 0` is valid and means
 // "disable the prompt-fallback path", so 0 stays a usable setting.
-const PROMPT_FALLBACK_LIMIT = envNumber(process.env.CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT,
-  { name: 'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT', defaultValue: 1, min: 0, integer: true });
+const PROMPT_FALLBACK_LIMIT = envNumber(process.env.CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT, {
+  name: 'CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT',
+  defaultValue: 1,
+  min: 0,
+  integer: true,
+});
 // Over-fetch factor for that cap. searchByUserPrompts filters rows in JS (cjkPrecisionOk)
 // AFTER the SQL LIMIT, so the LIMIT bounds reachability, not just output width — see the
 // comment at the query. These size the pool only; the function still returns at most
@@ -89,8 +117,11 @@ const PROMPT_FALLBACK_POOL_MAX = 25;
 // is weak.
 // min 0, non-integer: a magnitude floor compared with `Math.abs(relevance) >= …`.
 // NaN here makes that comparison always false, i.e. it drops every row.
-const BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN,
-  { name: 'CLAUDE_MEM_UPS_BM25_MIN', defaultValue: 1e-5, min: 0 });
+const BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN, {
+  name: 'CLAUDE_MEM_UPS_BM25_MIN',
+  defaultValue: 1e-5,
+  min: 0,
+});
 // CJK-weighted minimum length for the prompt. Catches medium-short Latin
 // prompts ("run tests", "fix bug now") that survive `shouldSkip`'s weaker 8-unit
 // floor but carry too few tokens to justify an FTS lookup.
@@ -105,8 +136,11 @@ const PROMPT_MIN_LENGTH = 15;
 // memory at least once, relax gates so short follow-ups still get recall.
 // Detection: injected-ids marker count > 0 within DEDUP_STALE_MS window.
 const FOLLOWUP_PROMPT_MIN_LENGTH = 8;
-const FOLLOWUP_BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP,
-  { name: 'CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP', defaultValue: 5e-6, min: 0 });
+const FOLLOWUP_BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP, {
+  name: 'CLAUDE_MEM_UPS_BM25_MIN_FOLLOWUP',
+  defaultValue: 5e-6,
+  min: 0,
+});
 
 // v2.34.3: top-|rel| sanity gate. BM25_MIN_SCORE filters per-row; this floor
 // gates the entire FTS set. Noise prompts ("today's date", "current time")
@@ -137,8 +171,11 @@ const FOLLOWUP_BM25_MIN_SCORE = envNumber(process.env.CLAUDE_MEM_UPS_BM25_MIN_FO
 // default. The idiom that genuinely swallows a 0 is the OTHER one — `Number(env.X) || D`,
 // parse first then fall back — which is what lib/cite-back-hint.mjs used. Caught by the
 // v3.94.0 pre-tag correctness review. What changed here is NaN screening, nothing else.
-const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
-  { name: 'CLAUDE_MEM_UPS_TOP_MIN', defaultValue: 50, min: 0 });
+const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN, {
+  name: 'CLAUDE_MEM_UPS_TOP_MIN',
+  defaultValue: 50,
+  min: 0,
+});
 
 // v2.43.x: OR-fallback raw BM25 magnitude floor. The composite TOP_REL_FLOOR
 // above gates on `bm25 × importance × type_quality × decay × noise_penalty`.
@@ -164,10 +201,14 @@ const TOP_REL_FLOOR = envNumber(process.env.CLAUDE_MEM_UPS_TOP_MIN,
 // distribution. The existing TOP_REL_FLOOR knob already encodes the
 // "seed-mode: kill absolute floors" semantic for integration tests, so
 // we piggy-back on it rather than introducing a second override env.
-const OR_TOP_BM25_FLOOR = TOP_REL_FLOOR === 0
-  ? 0
-  : envNumber(process.env.CLAUDE_MEM_UPS_OR_BM25_MIN,
-    { name: 'CLAUDE_MEM_UPS_OR_BM25_MIN', defaultValue: 30, min: 0 });
+const OR_TOP_BM25_FLOOR =
+  TOP_REL_FLOOR === 0
+    ? 0
+    : envNumber(process.env.CLAUDE_MEM_UPS_OR_BM25_MIN, {
+        name: 'CLAUDE_MEM_UPS_OR_BM25_MIN',
+        defaultValue: 30,
+        min: 0,
+      });
 
 // ─── Corpus-size normalization of the absolute floors (v3.61.0) ─────────────
 //
@@ -187,7 +228,9 @@ function isFollowUpSession(injectedIdsFile) {
     const { ts, count = 0 } = JSON.parse(raw);
     if (!ts || Date.now() - ts > DEDUP_STALE_MS) return false;
     return count > 0;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 // ─── Explicit-signal gate (v2.57.x) ─────────────────────────────────────────
@@ -239,7 +282,8 @@ function isFollowUpSession(injectedIdsFile) {
 // Bare digitless acronyms (URL, JWT, JSON, HTTP) no longer match — they
 // typically appear alongside intent keywords or files anyway, so the gate
 // catches the prompt via those channels rather than the identifier itself.
-const TECH_IDENTIFIER_RE = /\b(?:[a-z][a-z0-9]*_[a-z0-9_]+|[A-Z][A-Z0-9]*_[A-Z0-9_]+|[A-Z]{2,}[0-9][A-Z0-9_]*|[a-z]{2,}[A-Z][a-zA-Z0-9]+|[a-z]+(?:-[a-z]+){2,})\b/;
+const TECH_IDENTIFIER_RE =
+  /\b(?:[a-z][a-z0-9]*_[a-z0-9_]+|[A-Z][A-Z0-9]*_[A-Z0-9_]+|[A-Z]{2,}[0-9][A-Z0-9_]*|[a-z]{2,}[A-Z][a-zA-Z0-9]+|[a-z]+(?:-[a-z]+){2,})\b/;
 
 // Reviewer #2 (v3.25.0): the kebab (≥3-seg) and camelCase arms above structurally
 // match a handful of ordinary English phrases / product names that are NOT code
@@ -249,10 +293,23 @@ const TECH_IDENTIFIER_RE = /\b(?:[a-z][a-z0-9]*_[a-z0-9_]+|[A-Z][A-Z0-9]*_[A-Z0-
 // 3-segment kebab identifiers (`pre-tool-use`, `user-prompt-search`) are deliberately
 // NOT here — only attested non-identifier prose.
 const IDENTIFIER_STOPWORDS = new Set([
-  'up-to-date', 'out-of-date', 'up-to-speed', 'out-of-the-box', 'state-of-the-art',
-  'end-to-end', 'off-by-one', 'easy-to-use', 'day-to-day', 'step-by-step',
-  'face-to-face', 'one-to-one', 'one-on-one', 'back-to-back', 'side-by-side',
-  'apples-to-apples', 'macos',
+  'up-to-date',
+  'out-of-date',
+  'up-to-speed',
+  'out-of-the-box',
+  'state-of-the-art',
+  'end-to-end',
+  'off-by-one',
+  'easy-to-use',
+  'day-to-day',
+  'step-by-step',
+  'face-to-face',
+  'one-to-one',
+  'one-on-one',
+  'back-to-back',
+  'side-by-side',
+  'apples-to-apples',
+  'macos',
 ]);
 
 // CJK presence channel (Important #2): bilingual users (project memory
@@ -315,8 +372,9 @@ const TECH_IDENTIFIER_RE_G = new RegExp(TECH_IDENTIFIER_RE.source, 'g');
 // All tech-identifier tokens in `text`, lowercased + de-duped (for case-insensitive
 // row matching). Empty array when none — callers treat that as "no bypass candidates".
 export function extractTechIdentifiers(text) {
-  return [...new Set((String(text || '').match(TECH_IDENTIFIER_RE_G) || []).map(s => s.toLowerCase()))]
-    .filter(s => !IDENTIFIER_STOPWORDS.has(s));
+  return [
+    ...new Set((String(text || '').match(TECH_IDENTIFIER_RE_G) || []).map((s) => s.toLowerCase())),
+  ].filter((s) => !IDENTIFIER_STOPWORDS.has(s));
 }
 
 // True when the obs row's title or lesson contains any of `idsLower` as a standalone
@@ -328,7 +386,8 @@ export function rowMatchesIdentifier(row, idsLower) {
   const hay = `${row.title || ''} ${row.lesson_learned || ''}`.toLowerCase();
   const isWordChar = (c) => c !== undefined && /[a-z0-9_]/.test(c);
   return idsLower.some((id) => {
-    let from = 0, i;
+    let from = 0,
+      i;
     while ((i = hay.indexOf(id, from)) >= 0) {
       if (!isWordChar(hay[i - 1]) && !isWordChar(hay[i + id.length])) return true;
       from = i + 1;
@@ -345,8 +404,14 @@ export function rowMatchesIdentifier(row, idsLower) {
 // Each row includes `bm25_raw` (pre-multiplier bm25 magnitude) alongside the
 // composite `relevance`, so callers can distinguish raw-match strength from
 // importance/type/decay inflation.
-export function searchByFts(db, queryText, project, limit, typeFilter,
-                            { nowT = Date.now(), epochTo = null } = {}) {
+export function searchByFts(
+  db,
+  queryText,
+  project,
+  limit,
+  typeFilter,
+  { nowT = Date.now(), epochTo = null } = {},
+) {
   const ftsQuery = upsFtsQuery(queryText);
   if (!ftsQuery) return { rows: [], mode: null };
 
@@ -442,7 +507,7 @@ function searchByFile(db, files, project, limit) {
 
   // Deduplicate by id
   const seen = new Set();
-  return results.filter(r => {
+  return results.filter((r) => {
     if (seen.has(r.id)) return false;
     seen.add(r.id);
     return true;
@@ -491,7 +556,9 @@ function searchByUserPrompts(db, queryText, project, limit) {
   if (rows.length === 0) {
     const orQuery = relaxFtsQueryToOr(ftsQuery);
     if (orQuery) {
-      try { rows = db.prepare(sql).all(orQuery, project, cutoff, poolLimit); } catch {}
+      try {
+        rows = db.prepare(sql).all(orQuery, project, cutoff, poolLimit);
+      } catch {}
     }
   }
 
@@ -499,7 +566,7 @@ function searchByUserPrompts(db, queryText, project, limit) {
   // FTS degrades CJK bigram queries to single-char AND, letting any prose
   // sharing common chars leak through. Drop rows that miss < 20% of query
   // bigrams/keywords as contiguous substrings. Non-CJK queries bypass.
-  return rows.filter(r => cjkPrecisionOk(queryText, r.prompt_text)).slice(0, limit);
+  return rows.filter((r) => cjkPrecisionOk(queryText, r.prompt_text)).slice(0, limit);
 }
 
 function searchRecent(db, project, limit) {
@@ -507,7 +574,9 @@ function searchRecent(db, project, limit) {
   // R1: exclude LOW_SIGNAL degraded titles from "recent" recall intent
   // (e.g. when user asks "what did I do earlier"). Unqualified alias because
   // this query selects directly from observations with no join.
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT id, type, title, lesson_learned
     FROM observations
     WHERE project = ?
@@ -517,7 +586,9 @@ function searchRecent(db, project, limit) {
       AND ${notLowSignalTitleClause('')}
     ORDER BY created_at_epoch DESC
     LIMIT ?
-  `).all(project, cutoff, limit);
+  `,
+    )
+    .all(project, cutoff, limit);
 }
 
 // ─── stdin Reader ───────────────────────────────────────────────────────────
@@ -552,7 +623,10 @@ function formatResults(rows) {
     // Defang replayed obs text before truncation: a poisoned title/lesson carrying tool-XML
     // or a forged authority tag must not render as a live delimiter in this injected block.
     const title = truncate(neutralizeContextDelimiters(r.title || ''), 70);
-    const lesson = !QUIET_HOOKS && r.lesson_learned ? ` — ${truncate(neutralizeContextDelimiters(r.lesson_learned), 50)}` : '';
+    const lesson =
+      !QUIET_HOOKS && r.lesson_learned
+        ? ` — ${truncate(neutralizeContextDelimiters(r.lesson_learned), 50)}`
+        : '';
     lines.push(`#${r.id} ${icon} ${title}${lesson}`);
   }
   return lines.join('\n');
@@ -598,13 +672,21 @@ function loadManagedSkillNames() {
       // homedir literal — under CLAUDE_MEM_DIR relocation the stored local_path lives at
       // DB_DIR/managed, so the old literal matched nothing and dropped every managed skill
       // from injection. Coarse LIKE prefilter; resource names are re-validated downstream.
-      const rows = rdb.prepare(`
+      const rows = rdb
+        .prepare(
+          `
         SELECT name FROM resources
         WHERE status = 'active' AND local_path LIKE ?
-      `).all(`%${join(DB_DIR, 'managed') + sep}%`);
-      return new Set(rows.map(r => r.name.toLowerCase()));
-    } finally { rdb.close(); }
-  } catch { return new Set(); }
+      `,
+        )
+        .all(`%${join(DB_DIR, 'managed') + sep}%`);
+      return new Set(rows.map((r) => r.name.toLowerCase()));
+    } finally {
+      rdb.close();
+    }
+  } catch {
+    return new Set();
+  }
 }
 
 function getSkillCooldown() {
@@ -617,7 +699,9 @@ function getSkillCooldown() {
       if (now - v < SKILL_COOLDOWN_MS) cleaned[k] = v;
     }
     return cleaned;
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 function setSkillCooldown(name) {
@@ -627,7 +711,9 @@ function setSkillCooldown(name) {
     const tmp = SKILL_COOLDOWN_FILE + `.tmp-${process.pid}`;
     writeFileSync(tmp, JSON.stringify(data));
     renameSync(tmp, SKILL_COOLDOWN_FILE);
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
@@ -637,10 +723,18 @@ async function main() {
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
 
   let raw;
-  try { raw = await readStdin(); } catch { return; }
+  try {
+    raw = await readStdin();
+  } catch {
+    return;
+  }
 
   let hookData;
-  try { hookData = JSON.parse(raw); } catch { return; }
+  try {
+    hookData = JSON.parse(raw);
+  } catch {
+    return;
+  }
   // JSON.parse('null'/'42'/'"x"') succeeds with a non-object; dereferencing .prompt on
   // it threw a raw TypeError → unhandled rejection → exit 1 (this was the lone hook
   // script without an exit-0 safety net, violating the "hooks never exit non-zero"
@@ -681,11 +775,12 @@ async function main() {
     if (deferredRefs.length > 0) {
       db = ensureDb();
       const project = inferProject();
-      const openRows = getDeferredByIds(db, deferredRefs)
-        .filter(r => r.status === 'open' && r.project === project);
+      const openRows = getDeferredByIds(db, deferredRefs).filter(
+        (r) => r.status === 'open' && r.project === project,
+      );
       // Namespace dedup ids as "D<id>" (parity with the "P<id>" prompt-corpus
       // convention) so obs ids can't collide in the shared injected-ids file.
-      const dedupIds = openRows.map(r => `D${r.id}`);
+      const dedupIds = openRows.map((r) => `D${r.id}`);
       if (openRows.length > 0 && !shouldSkipByDedup(dedupIds, injectedIdsFile, hookData.session_id)) {
         const lines = ['[mem] Deferred work referenced in prompt (open items, full detail):'];
         for (const r of openRows) {
@@ -705,15 +800,25 @@ async function main() {
         // lib/injected-ids.mjs (audit 2026-09-02 P1-2). `dedupIds` are `D<id>` strings, so
         // the lib's union-side String() is the identity here — same bytes as before.
         try {
-          mergeInjectedMarker(injectedIdsFile, dedupIds,
-            { sessionId: hookData.session_id, maxAgeMs: DEDUP_STALE_MS, mode: 'union' });
+          mergeInjectedMarker(injectedIdsFile, dedupIds, {
+            sessionId: hookData.session_id,
+            maxAgeMs: DEDUP_STALE_MS,
+            mode: 'union',
+          });
         } catch {}
       }
     }
-  } catch { /* deterministic path must never block the main flow */ }
+  } catch {
+    /* deterministic path must never block the main flow */
+  }
 
   // Skip short/confirmation/slash-command/simple-op prompts
-  if (shouldSkip(promptText)) { try { db?.close(); } catch {} return; }
+  if (shouldSkip(promptText)) {
+    try {
+      db?.close();
+    } catch {}
+    return;
+  }
 
   // T3 (v2.31): additional raw-length gate on top of shouldSkip's CJK-weighted
   // effective-length check. Suppresses medium-short Latin prompts ("run tests",
@@ -722,7 +827,12 @@ async function main() {
   // short continuations ("前面那个?", "does it work?") depend on prior context.
   const followUp = isFollowUpSession(injectedIdsFile);
   const promptMinLen = followUp ? FOLLOWUP_PROMPT_MIN_LENGTH : PROMPT_MIN_LENGTH;
-  if (computeEffectiveLen(promptText.trim()) < promptMinLen) { try { db?.close(); } catch {} return; }
+  if (computeEffectiveLen(promptText.trim()) < promptMinLen) {
+    try {
+      db?.close();
+    } catch {}
+    return;
+  }
   const bm25Floor = followUp ? FOLLOWUP_BM25_MIN_SCORE : BM25_MIN_SCORE;
 
   // db may already be open from the deterministic D# path above.
@@ -750,8 +860,8 @@ async function main() {
     // take priority slots in the merged output.
     const errSig = extractErrorSignature(promptText);
     const sigRows = errSig
-      ? searchByFts(db, errSig.signature, project, 2, 'bugfix').rows.filter(r =>
-          typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor
+      ? searchByFts(db, errSig.signature, project, 2, 'bugfix').rows.filter(
+          (r) => typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor,
         )
       : [];
 
@@ -760,7 +870,9 @@ async function main() {
     // safe to call eagerly. errSig + intent already computed above.
     const filesForGate = extractFiles(promptText);
     const signalPresent = hasExplicitSignal(promptText, {
-      errSig, files: filesForGate, intent,
+      errSig,
+      files: filesForGate,
+      intent,
     });
     // Identifier tokens the prompt names (for the precision bypass below). Empty only
     // when CLAUDE_MEM_UPS_IDENTIFIER_BYPASS=0 (bypass is default-on), then it is a no-op.
@@ -816,9 +928,7 @@ async function main() {
       // rows carry a `relevance` column; file-recall rows (searchByFile) have
       // no relevance and are always kept — file-scoped recall is presumed
       // intentional and has its own relevance signal (the file name match).
-      ftsRows = ftsRows.filter(r =>
-        typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor
-      );
+      ftsRows = ftsRows.filter((r) => typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor);
 
       // Identifier-exact-match precision bypass (default on — see IDENTIFIER_BYPASS).
       // Capture rows that exact-match a prompt identifier BEFORE the set-floors below;
@@ -849,13 +959,15 @@ async function main() {
       const bypassFloorOk = (r) => typeof r.relevance === 'number' && Math.abs(r.relevance) >= bm25Floor;
       let bypassRows = [];
       if (IDENTIFIER_BYPASS && promptIdentifiers.length > 0) {
-        const head = ftsPool.slice(0, mainLimit)
+        const head = ftsPool
+          .slice(0, mainLimit)
           .filter(bypassFloorOk)
-          .filter(r => rowMatchesIdentifier(r, promptIdentifiers));
-        const headIds = new Set(head.map(r => r.id));
-        const deep = ftsPool.slice(mainLimit)
+          .filter((r) => rowMatchesIdentifier(r, promptIdentifiers));
+        const headIds = new Set(head.map((r) => r.id));
+        const deep = ftsPool
+          .slice(mainLimit)
           .filter(bypassFloorOk)
-          .filter(r => !headIds.has(r.id) && rowMatchesIdentifier(r, promptIdentifiers))
+          .filter((r) => !headIds.has(r.id) && rowMatchesIdentifier(r, promptIdentifiers))
           .slice(0, IDENTIFIER_BYPASS_DEEP_MAX);
         bypassRows = [...head, ...deep];
       }
@@ -892,13 +1004,13 @@ async function main() {
       // No-op when the bypass is off (bypassRows is []) or when the floors kept the
       // rows anyway (dedup by id). Re-sort so the merged set stays relevance-ordered.
       if (bypassRows.length > 0) {
-        const kept = new Set(ftsRows.map(r => r.id));
+        const kept = new Set(ftsRows.map((r) => r.id));
         for (const r of bypassRows) if (!kept.has(r.id)) ftsRows.push(r);
         ftsRows.sort((a, b) => (a.relevance ?? 0) - (b.relevance ?? 0));
       }
 
       // Merge: FTS results first, then file results, deduplicated
-      const seen = new Set(ftsRows.map(r => r.id));
+      const seen = new Set(ftsRows.map((r) => r.id));
       rows = [...ftsRows];
       for (const r of fileRows) {
         if (!seen.has(r.id)) {
@@ -918,8 +1030,8 @@ async function main() {
 
     // A (v2.32.8): prepend error-signature hits (higher precision), dedup, cap.
     if (sigRows.length > 0) {
-      const sigIds = new Set(sigRows.map(r => r.id));
-      rows = [...sigRows, ...rows.filter(r => !sigIds.has(r.id))].slice(0, MAX_RESULTS);
+      const sigIds = new Set(sigRows.map((r) => r.id));
+      rows = [...sigRows, ...rows.filter((r) => !sigIds.has(r.id))].slice(0, MAX_RESULTS);
     }
 
     // v2.34.5 Gap 1: if observations-based search drew a blank, try the
@@ -937,13 +1049,13 @@ async function main() {
       promptRows = searchByUserPrompts(db, promptText, project, PROMPT_FALLBACK_LIMIT);
     }
 
-    const candidateIds = rows.length > 0
-      ? rows.map(r => r.id)
-      : promptRows.map(r => `P${r.id}`);
+    const candidateIds = rows.length > 0 ? rows.map((r) => r.id) : promptRows.map((r) => `P${r.id}`);
     const dedupSkip = shouldSkipByDedup(candidateIds, injectedIdsFile, hookData.session_id);
 
     const output = !dedupSkip
-      ? (rows.length > 0 ? formatResults(rows) : formatPromptResults(promptRows))
+      ? rows.length > 0
+        ? formatResults(rows)
+        : formatPromptResults(promptRows)
       : null;
     if (output) {
       process.stdout.write(output + '\n');
@@ -954,8 +1066,11 @@ async function main() {
       // reason — stringifying here would flip the D#213 exclude from inert to live, which
       // is a behaviour change with its own ruler and its own decision to make.
       try {
-        mergeInjectedMarker(injectedIdsFile, candidateIds,
-          { sessionId: hookData.session_id, maxAgeMs: DEDUP_STALE_MS, mode: 'replace' });
+        mergeInjectedMarker(injectedIdsFile, candidateIds, {
+          sessionId: hookData.session_id,
+          maxAgeMs: DEDUP_STALE_MS,
+          mode: 'replace',
+        });
       } catch {}
       // v26 P0: bump injection_count for obs-based emits only (prompt-corpus
       // rows have "P<id>" string IDs; skip those — they live in user_prompts).
@@ -966,10 +1081,12 @@ async function main() {
         try {
           const now = Date.now();
           const bumpStmt = db.prepare(
-            'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?'
+            'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?',
           );
           for (const r of rows) {
-            try { bumpStmt.run(now, r.id); } catch {}
+            try {
+              bumpStmt.run(now, r.id);
+            } catch {}
           }
         } catch {}
       }
@@ -990,12 +1107,14 @@ async function main() {
           // untrusted boundary like every other DB-derived string on this surface.
           const safeName = neutralizeContextDelimiters(matched);
           process.stdout.write(
-            `\n[mem] Skill "${safeName}" may apply — invoke via SkillTool or run: claude-mem-lite registry show ${safeName}\n`
+            `\n[mem] Skill "${safeName}" may apply — invoke via SkillTool or run: claude-mem-lite registry show ${safeName}\n`,
           );
           setSkillCooldown(matched);
         }
       }
-    } catch { /* silent — never block on registry failure */ }
+    } catch {
+      /* silent — never block on registry failure */
+    }
 
     // ─── L2: Intent-based skill recommendation (shadow-first, v3.12) ─────
     // Distinct from L1 (explicit-name pointer): fires on intent even when the
@@ -1006,22 +1125,33 @@ async function main() {
         // #8259: explicit-signal presence is the decisive lever for UPS injection
         // quality (UPS cite-recall was 25.8% until gated on it). Logged in shadow so
         // Phase 2 can decide whether live injection gates on it. Shadow measures broadly.
-        const hasSignal = !!(extractErrorSignature(promptText) || extractFiles(promptText).length > 0 || detectIntent(promptText));
+        const hasSignal = !!(
+          extractErrorSignature(promptText) ||
+          extractFiles(promptText).length > 0 ||
+          detectIntent(promptText)
+        );
         const rdb = new Database(REGISTRY_DB_PATH, { readonly: true });
         rdb.pragma('busy_timeout = 500');
         // CC session_id (hook stdin) is the cross-hook pairing key: PostToolUse adoptions
         // in this same session join back to this reco for matched precision (B1).
-        try { recommendSkill(rdb, promptText, inferProject(), { hasSignal, sessionId: hookData.session_id }); }
-        finally { rdb.close(); }
+        try {
+          recommendSkill(rdb, promptText, inferProject(), { hasSignal, sessionId: hookData.session_id });
+        } finally {
+          rdb.close();
+        }
       }
-    } catch { /* silent — never block on recommendation failure */ }
+    } catch {
+      /* silent — never block on recommendation failure */
+    }
   } catch (e) {
     // Hooks must never break Claude Code — swallow, but RECORD: this catch wraps
     // every FTS query on the surface, so a schema/FTS drift here would zero out
     // prompt-time injection with no trace anywhere (audit 2026-08-14 M-5).
     recordHookError('ups:search', e, RUNTIME_DIR);
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 }
 
@@ -1051,5 +1181,11 @@ if (isDirectInvocation(import.meta.url, process.argv[1])) {
   // Last-resort telemetry for anything that escapes main()'s own catches (e.g. a
   // throw between the entry and the guarded body). Recorder never throws; the
   // outer catch keeps the never-non-zero-exit invariant regardless.
-  main().catch((e) => { try { recordHookError('ups:main', e, RUNTIME_DIR); } catch { /* never */ } });
+  main().catch((e) => {
+    try {
+      recordHookError('ups:main', e, RUNTIME_DIR);
+    } catch {
+      /* never */
+    }
+  });
 }

@@ -4,7 +4,16 @@
 // blast radius (must never throw; must never block hook).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync, utimesSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  writeFileSync,
+  mkdirSync,
+  utimesSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { recordHookError, countRecentHookErrors, HOOK_ERROR_RETENTION_MS } from '../lib/hook-telemetry.mjs';
@@ -67,7 +76,9 @@ describe('hook-telemetry — recordHookError', () => {
     expect(() => recordHookError('s2', null, tmp)).not.toThrow();
     expect(() => recordHookError('s3', undefined, tmp)).not.toThrow();
     const dir = join(tmp, 'hook-errors');
-    const lines = readFileSync(join(dir, readdirSync(dir)[0]), 'utf8').trim().split('\n');
+    const lines = readFileSync(join(dir, readdirSync(dir)[0]), 'utf8')
+      .trim()
+      .split('\n');
     expect(lines.length).toBe(3);
     expect(JSON.parse(lines[0]).msg).toBe('string-error');
   });
@@ -89,8 +100,12 @@ describe('hook-telemetry — recordHookError', () => {
 
 describe('hook-telemetry — countRecentHookErrors', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-count-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-count-'));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
 
   it('returns 0 when no log dir exists', () => {
     expect(countRecentHookErrors(tmp, Date.now() - 86400000)).toBe(0);
@@ -102,11 +117,12 @@ describe('hook-telemetry — countRecentHookErrors', () => {
     const now = Date.now();
     const old = new Date(now - 3 * 86400000).toISOString();
     const recent = new Date(now - 100).toISOString();
-    const lines = [
-      JSON.stringify({ ts: old, scope: 'old', msg: 'x' }),
-      JSON.stringify({ ts: recent, scope: 'r1', msg: 'x' }),
-      JSON.stringify({ ts: recent, scope: 'r2', msg: 'x' }),
-    ].join('\n') + '\n';
+    const lines =
+      [
+        JSON.stringify({ ts: old, scope: 'old', msg: 'x' }),
+        JSON.stringify({ ts: recent, scope: 'r1', msg: 'x' }),
+        JSON.stringify({ ts: recent, scope: 'r2', msg: 'x' }),
+      ].join('\n') + '\n';
     writeFileSync(join(dir, '2026-05-23.jsonl'), lines);
     expect(countRecentHookErrors(tmp, now - 86400000)).toBe(2);
     expect(countRecentHookErrors(tmp, now - 5 * 86400000)).toBe(3);
@@ -117,12 +133,10 @@ describe('hook-telemetry — countRecentHookErrors', () => {
     mkdirSync(dir, { recursive: true });
     const now = Date.now();
     const recent = new Date(now - 100).toISOString();
-    const body = [
-      '{not valid json',
-      JSON.stringify({ ts: recent, scope: 'r', msg: 'x' }),
-      '',
-      'another bad line',
-    ].join('\n') + '\n';
+    const body =
+      ['{not valid json', JSON.stringify({ ts: recent, scope: 'r', msg: 'x' }), '', 'another bad line'].join(
+        '\n',
+      ) + '\n';
     writeFileSync(join(dir, '2026-05-23.jsonl'), body);
     expect(countRecentHookErrors(tmp, now - 86400000)).toBe(1);
   });
@@ -143,8 +157,12 @@ describe('hook-telemetry — countRecentHookErrors', () => {
 
 describe('hook-telemetry — retention', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-gc-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-gc-'));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
 
   it('exposes a 14-day retention constant', () => {
     expect(HOOK_ERROR_RETENTION_MS).toBe(14 * 86400000);
@@ -164,7 +182,7 @@ describe('hook-telemetry — retention', () => {
     recordHookError('gc-trigger', new Error('e'), tmp);
     expect(existsSync(stale)).toBe(false);
     // Today's shard remains.
-    const remaining = readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f));
+    const remaining = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f));
     expect(remaining.length).toBe(1);
   });
 });
@@ -178,12 +196,16 @@ describe('hook-telemetry — retention', () => {
 // depending on which directory it landed in.
 describe('hook-telemetry — secret scrubbing (parity with lib/err-sampler.mjs)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-scrub-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'hook-telemetry-scrub-'));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
 
   function readOnlyLine() {
     const dir = join(tmp, 'hook-errors');
-    const files = readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f));
+    const files = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f));
     expect(files.length).toBe(1);
     const lines = readFileSync(join(dir, files[0]), 'utf8').trim().split('\n');
     expect(lines.length).toBe(1);
@@ -199,7 +221,8 @@ describe('hook-telemetry — secret scrubbing (parity with lib/err-sampler.mjs)'
 
   it('redacts a secret carried in the ctx object', () => {
     recordHookError('pre-recall:query', new Error('boom'), tmp, {
-      filePath: '/tmp/x', header: 'Authorization: Bearer sk-ant-api03-XYZ123456789abcdef',
+      filePath: '/tmp/x',
+      header: 'Authorization: Bearer sk-ant-api03-XYZ123456789abcdef',
     });
     const parsed = readOnlyLine();
     expect(parsed.ctx).not.toContain('sk-ant-api03-XYZ123456789abcdef');
@@ -259,7 +282,9 @@ describe('hook-telemetry — secret scrubbing (parity with lib/err-sampler.mjs)'
     }
     const errDir = join(tmp, 'errors');
     const sampled = JSON.parse(
-      readFileSync(join(errDir, readdirSync(errDir)[0]), 'utf8').trim().split('\n')[0],
+      readFileSync(join(errDir, readdirSync(errDir)[0]), 'utf8')
+        .trim()
+        .split('\n')[0],
     );
 
     expect(sampled.msg).toBe(mine.msg);

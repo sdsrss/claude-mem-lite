@@ -33,7 +33,11 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.CLAUDE_MEM_FLUSH_TIMEOUT;
   delete process.env.CLAUDE_MEM_DIR;
-  try { rmSync(root, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 /** Write a flush file and backdate it by `ageMs`. */
@@ -70,14 +74,20 @@ describe('handleLLMSummary flush wait', () => {
     expect(existsSync(orphan), 'premise: the orphan file exists').toBe(true);
     expect(await timeSummary()).toBeLessThan(1000);
     // And it is left alone — reclaiming it is the orphan sweep's job, not this worker's.
-    expect(existsSync(orphan), 'the summary must not delete another worker\'s file').toBe(true);
+    expect(existsSync(orphan), "the summary must not delete another worker's file").toBe(true);
   });
 
   it('DOES wait on a fresh flush file, then stops when it disappears', async () => {
     // The behaviour that must survive the fix: a real in-flight flush still blocks, or the
     // summary reads the DB before the episode worker has written to it.
     const fresh = flushFile('ep-flush-2-live.json');
-    setTimeout(() => { try { rmSync(fresh); } catch { /* ignore */ } }, 1200);
+    setTimeout(() => {
+      try {
+        rmSync(fresh);
+      } catch {
+        /* ignore */
+      }
+    }, 1200);
     const elapsed = await timeSummary();
     expect(elapsed).toBeGreaterThanOrEqual(1000);
     expect(elapsed).toBeLessThan(3000);
@@ -88,7 +98,13 @@ describe('handleLLMSummary flush wait', () => {
     // wait for work this summary will never read. The set is snapshotted at entry, so a
     // latecomer is somebody else's.
     const fresh = flushFile('ep-flush-3-mine.json');
-    setTimeout(() => { try { rmSync(fresh); } catch { /* ignore */ } }, 1100);
+    setTimeout(() => {
+      try {
+        rmSync(fresh);
+      } catch {
+        /* ignore */
+      }
+    }, 1100);
     setTimeout(() => flushFile('ep-flush-4-someone-else.json'), 1150);
     const elapsed = await timeSummary();
     expect(elapsed).toBeLessThan(3000);

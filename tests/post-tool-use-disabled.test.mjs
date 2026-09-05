@@ -13,7 +13,16 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, chmodSync, statSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  chmodSync,
+  statSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
@@ -33,7 +42,11 @@ function sandbox(prefix) {
 afterEach(() => {
   while (sandboxes.length) {
     const d = sandboxes.pop();
-    try { chmodSync(join(d, '.claude', 'settings.json'), 0o600); } catch { /* not every sandbox has one */ }
+    try {
+      chmodSync(join(d, '.claude', 'settings.json'), 0o600);
+    } catch {
+      /* not every sandbox has one */
+    }
     rmSync(d, { recursive: true, force: true });
   }
 });
@@ -68,11 +81,17 @@ function readEvent(settings, { filePath = '/home/user/secret-project/plan.md' } 
 }
 
 const settingsWith = (value) =>
-  JSON.stringify({
-    model: 'opus',
-    enabledPlugins: { 'some-other@vendor': true, [PLUGIN_KEY]: value },
-    hooks: { PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'bash post-tool-use.sh' }] }] },
-  }, null, 2);
+  JSON.stringify(
+    {
+      model: 'opus',
+      enabledPlugins: { 'some-other@vendor': true, [PLUGIN_KEY]: value },
+      hooks: {
+        PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'bash post-tool-use.sh' }] }],
+      },
+    },
+    null,
+    2,
+  );
 
 describe('P3-4 disabled plugin stops appending reads-<project>.txt', () => {
   it('skips the append when the plugin is explicitly disabled', () => {
@@ -110,7 +129,13 @@ describe('P3-4 disabled plugin stops appending reads-<project>.txt', () => {
     chmodSync(sp, 0o000);
     const r = spawnSync('bash', [SCRIPT], {
       input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '/x/y.mjs' } }),
-      env: { ...process.env, HOME: home, CLAUDE_MEM_DIR: memDir, CLAUDE_PROJECT_DIR: '/tmp/org/proj', CLAUDE_MEM_HOOK_RUNNING: '' },
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: memDir,
+        CLAUDE_PROJECT_DIR: '/tmp/org/proj',
+        CLAUDE_MEM_HOOK_RUNNING: '',
+      },
       encoding: 'utf8',
     });
     expect(r.status).toBe(0);
@@ -142,14 +167,15 @@ describe('bash/Node disable-detection parity', () => {
     // (P3-16). It is anchored on the IMPORTED value instead, so the key can live anywhere
     // and only a genuine bash/JS divergence fails.
     expect(PLUGIN_KEY, 'premise: the shared module must export a non-empty key').toBeTruthy();
-    expect(bash, 'post-tool-use.sh must carry the same key literal as lib/plugin-key.mjs')
-      .toContain(PLUGIN_KEY);
+    expect(bash, 'post-tool-use.sh must carry the same key literal as lib/plugin-key.mjs').toContain(
+      PLUGIN_KEY,
+    );
     // hook.mjs must still REACH that key rather than having quietly re-typed one: an
     // inline literal here would satisfy the bash check above while being free to drift.
-    expect(nodeSrc, 'hook.mjs must take the key from the shared module')
-      .toMatch(/from\s+'\.\/lib\/plugin-key\.mjs'/);
-    expect(nodeSrc, 'hook.mjs must not re-type the plugin key')
-      .not.toMatch(/const PLUGIN_KEY\s*=\s*['"]/);
+    expect(nodeSrc, 'hook.mjs must take the key from the shared module').toMatch(
+      /from\s+'\.\/lib\/plugin-key\.mjs'/,
+    );
+    expect(nodeSrc, 'hook.mjs must not re-type the plugin key').not.toMatch(/const PLUGIN_KEY\s*=\s*['"]/);
   });
 
   it('both sides read $HOME/.claude/settings.json (not CLAUDE_CONFIG_DIR)', () => {
@@ -158,7 +184,10 @@ describe('bash/Node disable-detection parity', () => {
     expect(nodeSrc).toMatch(/join\(homedir\(\), '\.claude', 'settings\.json'\)/);
     expect(bash).toMatch(/\$\{?HOME\}?\/\.claude\/settings\.json/);
     // Comments may name the variable to explain why it is not honored; no CODE line may.
-    const bashCode = bash.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const bashCode = bash
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
     expect(bashCode).not.toContain('CLAUDE_CONFIG_DIR');
   });
 });

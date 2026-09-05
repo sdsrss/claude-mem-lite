@@ -43,7 +43,7 @@ test('recentPlans ignores non-.md files', () => {
     writeFileSync(join(root, 'bar.txt'), 'bar');
     writeFileSync(join(root, 'baz.json'), '{}');
     const result = recentPlans({ plansRoot: root, limit: 10 });
-    expect(result.map(r => r.name)).toEqual(['foo']);
+    expect(result.map((r) => r.name)).toEqual(['foo']);
   } finally {
     rmSync(root, { recursive: true });
   }

@@ -37,7 +37,12 @@ function seededDb() {
 describe('lib/get-core.mjs', () => {
   it('OBS_FIELDS matches the observations table (every field is a real column)', () => {
     const db = createTestDb();
-    const cols = new Set(db.prepare("SELECT name FROM pragma_table_info('observations')").all().map((r) => r.name));
+    const cols = new Set(
+      db
+        .prepare("SELECT name FROM pragma_table_info('observations')")
+        .all()
+        .map((r) => r.name),
+    );
     for (const f of OBS_FIELDS) expect(cols.has(f), `OBS_FIELDS names unknown column "${f}"`).toBe(true);
     // Floor pins the OTHER direction (review 2026-08-16): a field silently
     // REMOVED from OBS_FIELDS vanishes from both faces' default `get` render —
@@ -52,15 +57,30 @@ describe('lib/get-core.mjs', () => {
   it('SESSION_DETAIL_FIELDS carries the full render set incl. remaining_items', () => {
     // remaining_items FIRST — it is the audited dead-end field, and the original
     // version of this loop managed to omit it (review 2026-08-16, mutation-verified).
-    for (const f of ['remaining_items', 'request', 'investigated', 'learned', 'completed', 'next_steps', 'notes', 'files_read', 'files_edited', 'project']) {
+    for (const f of [
+      'remaining_items',
+      'request',
+      'investigated',
+      'learned',
+      'completed',
+      'next_steps',
+      'notes',
+      'files_read',
+      'files_edited',
+      'project',
+    ]) {
       expect(SESSION_DETAIL_FIELDS, `session detail lost "${f}"`).toContain(f);
     }
   });
 
   it('fetchObsDetail bumps access_count and returns rows in created order', () => {
     const db = seededDb();
-    const a = Number(insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'older row' }).lastInsertRowid);
-    const b = Number(insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'newer row' }).lastInsertRowid);
+    const a = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'older row' }).lastInsertRowid,
+    );
+    const b = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'newer row' }).lastInsertRowid,
+    );
     const rows = fetchObsDetail(db, [b, a]);
     expect(rows.map((r) => r.id)).toEqual([a, b]);
     const bumped = db.prepare('SELECT access_count FROM observations WHERE id = ?').get(a);
@@ -75,7 +95,9 @@ describe('lib/observation-write.mjs applyObsUpdate', () => {
   // end-to-end — this test pins atomicity + derived rebuild only.
   it('updates fields atomically and rebuilds derived text', () => {
     const db = seededDb();
-    const id = Number(insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'before title' }).lastInsertRowid);
+    const id = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'before title' }).lastInsertRowid,
+    );
     const updated = applyObsUpdate(db, id, { title: 'after title', importance: 3 });
     expect(updated.sort()).toEqual(['importance', 'title']);
     const row = db.prepare('SELECT title, importance, text FROM observations WHERE id = ?').get(id);
@@ -87,7 +109,9 @@ describe('lib/observation-write.mjs applyObsUpdate', () => {
 
   it('returns [] and writes nothing when no fields given', () => {
     const db = seededDb();
-    const id = Number(insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'untouched' }).lastInsertRowid);
+    const id = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'untouched' }).lastInsertRowid,
+    );
     expect(applyObsUpdate(db, id, {})).toEqual([]);
     expect(db.prepare('SELECT title FROM observations WHERE id = ?').get(id).title).toBe('untouched');
     db.close();
@@ -97,7 +121,9 @@ describe('lib/observation-write.mjs applyObsUpdate', () => {
 describe('lib/delete-core.mjs previewDeleteRows', () => {
   it('returns rows + shared preview body lines', () => {
     const db = seededDb();
-    const id = Number(insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'doomed row' }).lastInsertRowid);
+    const id = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'doomed row' }).lastInsertRowid,
+    );
     const { rows, lines } = previewDeleteRows(db, [id, 99999]);
     expect(rows.map((r) => r.id)).toEqual([id]);
     expect(lines).toHaveLength(1);
@@ -113,7 +139,11 @@ describe('lib/browse-core.mjs collectBrowseTiers', () => {
     const db = seededDb();
     insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'fresh row', importance: 2 });
     const { showTiers, tierData, tierCounts, grandTotal } = collectBrowseTiers(db, {
-      project: 'p', tierFilter: null, limit: 5, now: Date.now(), currentSessionId: 's1',
+      project: 'p',
+      tierFilter: null,
+      limit: 5,
+      now: Date.now(),
+      currentSessionId: 's1',
     });
     expect(showTiers).toEqual(['working', 'active', 'archive']);
     expect(grandTotal).toBe(1);
@@ -132,8 +162,21 @@ describe('lib/browse-core.mjs collectBrowseTiers', () => {
 describe('registry.mjs stats + list twins', () => {
   function regDb() {
     const rdb = ensureRegistryDb(':memory:');
-    upsertResource(rdb, { name: 'alpha-skill', type: 'skill', status: 'active', source: 'user', local_path: '/tmp/alpha', capability_summary: 'x'.repeat(120) });
-    upsertResource(rdb, { name: 'beta-agent', type: 'agent', status: 'active', source: 'github', local_path: '/tmp/beta' });
+    upsertResource(rdb, {
+      name: 'alpha-skill',
+      type: 'skill',
+      status: 'active',
+      source: 'user',
+      local_path: '/tmp/alpha',
+      capability_summary: 'x'.repeat(120),
+    });
+    upsertResource(rdb, {
+      name: 'beta-agent',
+      type: 'agent',
+      status: 'active',
+      source: 'github',
+      local_path: '/tmp/beta',
+    });
     rdb.prepare("UPDATE resources SET adopt_count = 5, recommend_count = 9 WHERE name = 'alpha-skill'").run();
     return rdb;
   }
@@ -153,8 +196,12 @@ describe('registry.mjs stats + list twins', () => {
   // truncate 50 vs 80 and `adopt:null` on one face only.
   it('formatRegistryListLine coalesces null counts and truncates at 80', () => {
     const line = formatRegistryListLine({
-      name: 'alpha-skill', type: 'skill', invocation_name: null,
-      recommend_count: null, adopt_count: null, capability_summary: 'y'.repeat(200),
+      name: 'alpha-skill',
+      type: 'skill',
+      invocation_name: null,
+      recommend_count: null,
+      adopt_count: null,
+      capability_summary: 'y'.repeat(200),
     });
     expect(line).toContain('rec:0');
     expect(line).toContain('adopt:0');
@@ -171,15 +218,21 @@ describe('registry.mjs stats + list twins', () => {
   // UTF-16 surrogate at the cut, and ≤80-char summaries pass through untouched.
   it('formatRegistryListLine flattens newlines and never splits a surrogate pair', () => {
     const multiline = formatRegistryListLine({
-      name: 'n', type: 'skill', recommend_count: 1, adopt_count: 1,
+      name: 'n',
+      type: 'skill',
+      recommend_count: 1,
+      adopt_count: 1,
       capability_summary: 'line one\nline two',
     });
     expect(multiline).toContain('line one line two');
     expect(multiline).not.toContain('\n');
 
     const emoji = formatRegistryListLine({
-      name: 'n', type: 'skill', recommend_count: 1, adopt_count: 1,
-      capability_summary: 'x'.repeat(78) + '🚀🚀🚀',   // surrogate pair straddles the cut
+      name: 'n',
+      type: 'skill',
+      recommend_count: 1,
+      adopt_count: 1,
+      capability_summary: 'x'.repeat(78) + '🚀🚀🚀', // surrogate pair straddles the cut
     });
     expect(emoji.isWellFormed(), 'lone surrogate emitted at the truncation cut').toBe(true);
   });
@@ -189,8 +242,16 @@ describe('registry.mjs stats + list twins', () => {
   // (mutation-verified: dropping COALESCE survived every other suite).
   it('listResourcesRanked sorts NULL counts as 0 (adoption desc, then recommendation)', () => {
     const rdb = regDb();
-    upsertResource(rdb, { name: 'gamma-skill', type: 'skill', status: 'active', source: 'user', local_path: '/tmp/gamma' });
-    rdb.prepare("UPDATE resources SET adopt_count = NULL, recommend_count = NULL WHERE name = 'gamma-skill'").run();
+    upsertResource(rdb, {
+      name: 'gamma-skill',
+      type: 'skill',
+      status: 'active',
+      source: 'user',
+      local_path: '/tmp/gamma',
+    });
+    rdb
+      .prepare("UPDATE resources SET adopt_count = NULL, recommend_count = NULL WHERE name = 'gamma-skill'")
+      .run();
     rdb.prepare("UPDATE resources SET adopt_count = 0, recommend_count = 3 WHERE name = 'beta-agent'").run();
     const names = listResourcesRanked(rdb).map((r) => r.name);
     // alpha (5 adopts) first; beta (0 adopts, 3 recs) beats gamma (NULL≡0 adopts, NULL≡0 recs).
@@ -211,23 +272,36 @@ describe('CLI get S#N renders remaining_items (the audited dead-end field)', () 
     try {
       const db = new Database(join(dataDir, 'claude-mem-lite.db'));
       initSchema(db);
-      db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-                  VALUES ('cs1', 'ms1', 'p', datetime('now'), ?, 'active')`).run(Date.now());
-      const sid = Number(db.prepare(`INSERT INTO session_summaries
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+                  VALUES ('cs1', 'ms1', 'p', datetime('now'), ?, 'active')`,
+      ).run(Date.now());
+      const sid = Number(
+        db
+          .prepare(
+            `INSERT INTO session_summaries
           (memory_session_id, project, request, remaining_items, created_at, created_at_epoch)
-          VALUES ('ms1', 'p', 'do the thing', 'finish the widget migration', datetime('now'), ?)`)
-        .run(Date.now()).lastInsertRowid);
+          VALUES ('ms1', 'p', 'do the thing', 'finish the widget migration', datetime('now'), ?)`,
+          )
+          .run(Date.now()).lastInsertRowid,
+      );
       db.close();
 
       const stdout = execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'get', `S#${sid}`], {
-        encoding: 'utf8', timeout: 30000,
+        encoding: 'utf8',
+        timeout: 30000,
         env: { ...process.env, CLAUDE_MEM_DIR: dataDir, MEM_QUIET_HOOKS: '1' },
       });
       expect(stdout).toContain(`S#${sid}`);
-      expect(stdout, 'remaining_items still unrendered on the CLI detail face')
-        .toContain('finish the widget migration');
+      expect(stdout, 'remaining_items still unrendered on the CLI detail face').toContain(
+        'finish the widget migration',
+      );
     } finally {
-      try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      try {
+        rmSync(dataDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
     }
   });
 });

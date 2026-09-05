@@ -9,11 +9,25 @@ import { basename, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import {
-  estimateTokens, truncate, typeIcon, fmtTime, inferProject,
-  debugLog, neutralizeContextDelimiters,
-  DECAY_HALF_LIFE_BY_TYPE, DEFAULT_DECAY_HALF_LIFE_MS, notLowSignalTitleClause,
+  estimateTokens,
+  truncate,
+  typeIcon,
+  fmtTime,
+  inferProject,
+  debugLog,
+  neutralizeContextDelimiters,
+  DECAY_HALF_LIFE_BY_TYPE,
+  DEFAULT_DECAY_HALF_LIFE_MS,
+  notLowSignalTitleClause,
 } from './utils.mjs';
-import { STALE_SESSION_MS, FALLBACK_OBS_WINDOW_MS, RUNTIME_DIR, effectiveQuiet, isQuietHooks, KEY_CONTEXT_LIMIT } from './hook-shared.mjs';
+import {
+  STALE_SESSION_MS,
+  FALLBACK_OBS_WINDOW_MS,
+  RUNTIME_DIR,
+  effectiveQuiet,
+  isQuietHooks,
+  KEY_CONTEXT_LIMIT,
+} from './hook-shared.mjs';
 import { extractUnfinishedSummary } from './hook-handoff.mjs';
 import { recentInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -39,15 +53,21 @@ import { DAY_MS } from './lib/time-constants.mjs';
 // SessionStart. Escape pipes and collapse any CR/LF/tab to a space so one obs
 // stays one row/cell.
 function mdCell(s) {
-  return String(s ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\|/g, '\\|');
+  return String(s ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\|/g, '\\|');
 }
 
 export function computeAdaptiveWindows(db, project) {
   const sevenDaysAgo = Date.now() - 7 * DAY_MS;
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT COUNT(*) as c FROM observations
     WHERE project = ? AND created_at_epoch > ? AND COALESCE(compressed_into, 0) = 0
-  `).get(project, sevenDaysAgo);
+  `,
+    )
+    .get(project, sevenDaysAgo);
   const velocity = (row?.c || 0) / 7; // observations per day
 
   if (velocity > 10) {
@@ -173,7 +193,9 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
   // R1/R3: exclude LOW_SIGNAL degraded titles ("Modified X", "Worked on X",
   // "Reviewed N files:", raw error logs) from the Key Context table at
   // session start — they pollute the visible "Recent" table with noise.
-  const obsPool = db.prepare(`
+  const obsPool = db
+    .prepare(
+      `
     SELECT id, type, title, narrative, importance, created_at_epoch, files_modified, lesson_learned
     FROM observations
     WHERE project = ? AND ${liveObsFilterSql('')}
@@ -185,15 +207,21 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
       )
     ORDER BY created_at_epoch DESC
     LIMIT ${KEYCTX_POOL_OBS}
-  `).all(project, tier1Ago, tier2Ago, tier3Ago);
+  `,
+    )
+    .all(project, tier1Ago, tier2Ago, tier3Ago);
 
-  const sessPool = db.prepare(`
+  const sessPool = db
+    .prepare(
+      `
     SELECT id, request, completed, next_steps, created_at_epoch
     FROM session_summaries
     WHERE project = ? AND created_at_epoch > ?
     ORDER BY created_at_epoch DESC
     LIMIT ${KEYCTX_POOL_SESS}
-  `).all(project, now_ms - windows.sessWindow);
+  `,
+    )
+    .all(project, now_ms - windows.sessWindow);
 
   const selectedObs = [];
   const selectedSess = [];
@@ -201,9 +229,9 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
 
   // Score each candidate: value = recency * type_quality * importance, cost = tokens
   // Recency uses exponential half-life (consistent with server.mjs BM25 scoring)
-  const scoredObs = obsPool.map(o => {
+  const scoredObs = obsPool.map((o) => {
     const halfLifeMs = DECAY_HALF_LIFE_BY_TYPE[o.type] || DEFAULT_DECAY_HALF_LIFE_MS;
-    const recency = 1.0 + Math.exp(-0.693 * (now_ms - o.created_at_epoch) / halfLifeMs);
+    const recency = 1.0 + Math.exp((-0.693 * (now_ms - o.created_at_epoch)) / halfLifeMs);
     const typeQuality = TYPE_QUALITY[o.type] || TYPE_QUALITY_DEFAULT;
     const impBoost = 0.5 + 0.5 * (o.importance || 1);
     const lessonBoost = o.lesson_learned ? 1.3 : 1.0;
@@ -217,8 +245,8 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     return { ...o, value, cost, valueDensity: cost > 0 ? value / Math.sqrt(cost) : 0 };
   });
 
-  const scoredSess = sessPool.map(s => {
-    const recency = 1.0 + Math.exp(-0.693 * (now_ms - s.created_at_epoch) / DEFAULT_DECAY_HALF_LIFE_MS);
+  const scoredSess = sessPool.map((s) => {
+    const recency = 1.0 + Math.exp((-0.693 * (now_ms - s.created_at_epoch)) / DEFAULT_DECAY_HALF_LIFE_MS);
     const value = recency * 1.5; // Session summaries slightly boosted
     const cost = estimateTokens((s.request || '') + (s.completed || '') + (s.next_steps || ''));
     return { ...s, value, cost, valueDensity: cost > 0 ? value / Math.sqrt(cost) : 0 };
@@ -226,8 +254,8 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
 
   // Combine and sort by value density (greedy knapsack)
   const allCandidates = [
-    ...scoredObs.map(o => ({ ...o, _kind: 'obs' })),
-    ...scoredSess.map(s => ({ ...s, _kind: 'sess' })),
+    ...scoredObs.map((o) => ({ ...o, _kind: 'obs' })),
+    ...scoredSess.map((s) => ({ ...s, _kind: 'sess' })),
   ].sort((a, b) => b.valueDensity - a.valueDensity);
 
   const selectedTypes = new Map(); // type → count for diversity constraint
@@ -273,9 +301,20 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
 
     totalTokens += c.cost;
     if (c._kind === 'obs') {
-      selectedObs.push({ id: c.id, type: c.type, title: c.title, created_at: new Date(c.created_at_epoch).toISOString() });
+      selectedObs.push({
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        created_at: new Date(c.created_at_epoch).toISOString(),
+      });
     } else {
-      selectedSess.push({ id: c.id, request: c.request, completed: c.completed, next_steps: c.next_steps, created_at: new Date(c.created_at_epoch).toISOString() });
+      selectedSess.push({
+        id: c.id,
+        request: c.request,
+        completed: c.completed,
+        next_steps: c.next_steps,
+        created_at: new Date(c.created_at_epoch).toISOString(),
+      });
     }
   }
 
@@ -304,15 +343,23 @@ export function cleanupClaudeMdLegacyBlock() {
 
   const claudeMdPath = join(inferProjectDir(), 'CLAUDE.md');
   let content;
-  try { content = readFileSync(claudeMdPath, 'utf8'); } catch {
+  try {
+    content = readFileSync(claudeMdPath, 'utf8');
+  } catch {
     // CLAUDE.md missing — still drop the marker so we don't re-stat every session
-    try { writeFileSync(markerPath, String(Date.now())); } catch {}
+    try {
+      writeFileSync(markerPath, String(Date.now()));
+    } catch {}
     return;
   }
 
   // Helper: drop the marker regardless of exit path (found / not found / write failed).
   // Kept inline so the early-return sites below stay readable.
-  const dropMarker = () => { try { writeFileSync(markerPath, String(Date.now())); } catch {} };
+  const dropMarker = () => {
+    try {
+      writeFileSync(markerPath, String(Date.now()));
+    } catch {}
+  };
 
   const startTag = '<claude-mem-context>';
   const endTag = '</claude-mem-context>';
@@ -350,7 +397,10 @@ export function cleanupClaudeMdLegacyBlock() {
   // Collapse any ≥3 consecutive newlines to two, then ensure exactly one trailing newline.
   const normalized = cleaned.replace(/\n{3,}/g, '\n\n').replace(/\s*$/, '\n');
 
-  if (normalized === content) { dropMarker(); return; }
+  if (normalized === content) {
+    dropMarker();
+    return;
+  }
 
   // atomicWriteFileSync keeps the per-pid temp (two concurrent first-run SessionStarts in
   // one project must not rename each other's half-written temp onto the user's tracked
@@ -393,7 +443,13 @@ export function cleanupClaudeMdLegacyBlock() {
  *   (D#123: the exclude-set must mirror real injections, not the keyObs query).
  * @returns {string} Joined markdown lines (without <claude-mem-context> wrappers)
  */
-export function buildSessionContextLines(db, project, now = new Date(), currentCcSessionId = null, collector = null) {
+export function buildSessionContextLines(
+  db,
+  project,
+  now = new Date(),
+  currentCcSessionId = null,
+  collector = null,
+) {
   if (collector) collector.keyContextIds = [];
   // 1. Token-budgeted observation selection
   const selected = selectWithTokenBudget(db, project, 2000);
@@ -404,7 +460,9 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
   if (observations.length < 3) {
     const fbOneDayAgo = now.getTime() - STALE_SESSION_MS;
     const fbSevenDaysAgo = now.getTime() - FALLBACK_OBS_WINDOW_MS;
-    fallbackObs = db.prepare(`
+    fallbackObs = db
+      .prepare(
+        `
       SELECT id, type, title, project, created_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
@@ -415,28 +473,38 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
         )
       ORDER BY created_at_epoch DESC
       LIMIT 5
-    `).all(fbOneDayAgo, fbSevenDaysAgo);
+    `,
+      )
+      .all(fbOneDayAgo, fbSevenDaysAgo);
   }
 
   // 3. Latest session summary → base summaryLines
-  const latestSummary = db.prepare(`
+  const latestSummary = db
+    .prepare(
+      `
     SELECT request, completed, next_steps, remaining_items, lessons, key_decisions, created_at
     FROM session_summaries
     WHERE project = ?
     ORDER BY created_at_epoch DESC
     LIMIT 1
-  `).get(project);
+  `,
+    )
+    .get(project);
 
   const summaryLines = buildSummaryLines(latestSummary);
 
   // 4. Key context: top high-importance observations split into File Lessons (actionable)
   //    and Key Context (informational). Pushed into summaryLines.
-  const keyObs = db.prepare(`
+  const keyObs = db
+    .prepare(
+      `
     SELECT o.id, o.type, o.title, o.lesson_learned, o.files_modified FROM observations o
     WHERE o.project = ? AND ${liveObsFilterSql('o')}
       AND COALESCE(o.importance, 1) >= 2
     ORDER BY o.created_at_epoch DESC LIMIT ${KEY_CONTEXT_LIMIT}
-  `).all(project);
+  `,
+    )
+    .all(project);
 
   if (keyObs.length > 0) {
     const fileLessons = [];
@@ -457,10 +525,15 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
             fileLessons.push({ id: o.id, line: `- ${fname}: ${truncate(o.lesson_learned, 100)} (#${o.id})` });
             continue;
           }
-        } catch { /* fall through to keyContext */ }
+        } catch {
+          /* fall through to keyContext */
+        }
       }
       const lesson = hasLesson ? ` — ${truncate(o.lesson_learned, 60)}` : '';
-      keyContext.push({ id: o.id, line: `- [${o.type || 'discovery'}] ${truncate(clean, 80)} (#${o.id})${lesson}` });
+      keyContext.push({
+        id: o.id,
+        line: `- [${o.type || 'discovery'}] ${truncate(clean, 80)} (#${o.id})${lesson}`,
+      });
     }
 
     // Phase A (QUIET_HOOKS) + Phase D (adopted sentinel): drop descriptive
@@ -544,18 +617,26 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
   const HANDOFF_TTL_MS = 48 * 60 * 60 * 1000;
   const handoffMinEpoch = Date.now() - HANDOFF_TTL_MS;
   const prevClearHandoff = currentCcSessionId
-    ? db.prepare(`
+    ? db
+        .prepare(
+          `
         SELECT working_on, unfinished, key_files
         FROM session_handoffs
         WHERE project = ? AND type = 'clear' AND session_id = ? AND created_at_epoch > ?
         ORDER BY created_at_epoch DESC LIMIT 1
-      `).get(project, currentCcSessionId, handoffMinEpoch)
-    : db.prepare(`
+      `,
+        )
+        .get(project, currentCcSessionId, handoffMinEpoch)
+    : db
+        .prepare(
+          `
         SELECT working_on, unfinished, key_files
         FROM session_handoffs
         WHERE project = ? AND type = 'clear' AND created_at_epoch > ?
         ORDER BY created_at_epoch DESC LIMIT 1
-      `).get(project, handoffMinEpoch);
+      `,
+        )
+        .get(project, handoffMinEpoch);
 
   const handoffLines = [];
   if (prevClearHandoff) {
@@ -570,8 +651,10 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
     if (prevClearHandoff.key_files) {
       try {
         const files = JSON.parse(prevClearHandoff.key_files);
-        if (files.length > 0) handoffLines.push(`- Key files: ${files.map(f => basename(f)).join(', ')}`);
-      } catch { /* malformed JSON — skip */ }
+        if (files.length > 0) handoffLines.push(`- Key files: ${files.map((f) => basename(f)).join(', ')}`);
+      } catch {
+        /* malformed JSON — skip */
+      }
     }
     handoffLines.push('');
   }
@@ -581,7 +664,9 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
   // ordinal so user can refer to "处理1" / "handle item 1" naturally; D#<id>
   // is the stable handle for tool-layer references (closes_deferred=[N]).
   // Quiet-hooks does NOT suppress: cross-session continuity is the whole point.
-  const deferredItems = db.prepare(`
+  const deferredItems = db
+    .prepare(
+      `
     SELECT id, title, priority,
            ROW_NUMBER() OVER (
              ORDER BY priority DESC, created_at_epoch ASC
@@ -590,16 +675,16 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
     WHERE project = ? AND status = 'open'
     ORDER BY priority DESC, created_at_epoch ASC
     LIMIT 5
-  `).all(project);
+  `,
+    )
+    .all(project);
 
   const deferredLines = [];
   if (deferredItems.length > 0) {
     deferredLines.push('### Deferred Work');
     for (const d of deferredItems) {
       const pTag = d.priority === 3 ? '🔴' : d.priority === 1 ? '⚪' : '🟡';
-      deferredLines.push(
-        `${d.ordinal}. ${pTag} [P${d.priority}] ${truncate(d.title, 120)} (D#${d.id})`
-      );
+      deferredLines.push(`${d.ordinal}. ${pTag} [P${d.priority}] ${truncate(d.title, 120)} (D#${d.id})`);
     }
     deferredLines.push('');
   }
@@ -615,7 +700,9 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
     obsLines.push('|----|------|---|-------|');
     for (const o of obsToShow) {
       const proj = o.project && o.project !== project ? ` (${o.project})` : '';
-      obsLines.push(`| #${o.id} | ${fmtTime(o.created_at)} | ${typeIcon(o.type)} | ${mdCell(truncate(o.title || '(untitled)', 60) + proj)} |`);
+      obsLines.push(
+        `| #${o.id} | ${fmtTime(o.created_at)} | ${typeIcon(o.type)} | ${mdCell(truncate(o.title || '(untitled)', 60) + proj)} |`,
+      );
     }
   }
 
@@ -623,7 +710,9 @@ export function buildSessionContextLines(db, project, now = new Date(), currentC
   // can't prematurely close the <claude-mem-context> block it's wrapped in (mdCell does
   // the same for `|`). One source of truth: both the SessionStart hook and the CLI
   // `context` command consume this return.
-  return neutralizeContextDelimiters([...summaryLines, ...handoffLines, ...deferredLines, ...obsLines].join('\n'));
+  return neutralizeContextDelimiters(
+    [...summaryLines, ...handoffLines, ...deferredLines, ...obsLines].join('\n'),
+  );
 }
 
 /**

@@ -36,9 +36,15 @@ function freshDb(project = 'proj-a') {
   insertSession(db, { id: 'sess-1', project });
   return db;
 }
-const add = (db, o) => Number(insertObs(db, {
-  sessionId: 'sess-1', project: 'proj-a', epochOffset: -40 * DAY, ...o,
-}).lastInsertRowid);
+const add = (db, o) =>
+  Number(
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'proj-a',
+      epochOffset: -40 * DAY,
+      ...o,
+    }).lastInsertRowid,
+  );
 
 // ─── P0-2 · maintain scan / mergeDuplicates ─────────────────────────────────
 
@@ -95,7 +101,7 @@ describe('P0-3 compress candidates: tombstoned text is never re-summarized into 
     const tomb = add(db, { title: 'retracted low-value', importance: 1, accessCount: 0, supersededAt: TOMB });
 
     const got = selectCompressionCandidates(db, { cutoff: Date.now() });
-    expect(got.map(r => r.id)).not.toContain(tomb);
+    expect(got.map((r) => r.id)).not.toContain(tomb);
     expect(got.length).toBe(1); // premise: the live sibling IS a candidate
     db.close();
   });
@@ -105,23 +111,27 @@ describe('P0-3 compress candidates: tombstoned text is never re-summarized into 
     const db = freshDb();
     const auto = add(db, { title: 'auto-marked', importance: 1, compressedInto: COMPRESSED_AUTO });
     const got = selectCompressionCandidates(db, { cutoff: Date.now(), includeAutoMarked: true });
-    expect(got.map(r => r.id)).toContain(auto);
+    expect(got.map((r) => r.id)).toContain(auto);
     db.close();
   });
 
   it('compressGroup does not re-point a row superseded after selection, and reports the real count', async () => {
     const { compressGroup } = await import('../lib/compress-core.mjs');
     const db = freshDb();
-    const a = add(db, { title: 'a' }), b = add(db, { title: 'b' }), c = add(db, { title: 'c' });
-    const obs = db.prepare('SELECT id, project, type, title, created_at, created_at_epoch FROM observations').all();
+    const a = add(db, { title: 'a' }),
+      b = add(db, { title: 'b' }),
+      c = add(db, { title: 'c' });
+    const obs = db
+      .prepare('SELECT id, project, type, title, created_at, created_at_epoch FROM observations')
+      .all();
     // Simulate the window between selection and write.
     db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(TOMB, c);
 
     const { summaryId, compressed } = compressGroup(db, 'proj-a', obs);
-    expect(compressed).toBe(2);                              // NOT obs.length
+    expect(compressed).toBe(2); // NOT obs.length
     expect(col(db, a, 'compressed_into')).toBe(summaryId);
     expect(col(db, b, 'compressed_into')).toBe(summaryId);
-    expect(col(db, c, 'compressed_into')).toBeNull();        // tombstone left alone
+    expect(col(db, c, 'compressed_into')).toBeNull(); // tombstone left alone
     db.close();
   });
 
@@ -132,15 +142,19 @@ describe('P0-3 compress candidates: tombstoned text is never re-summarized into 
     const tomb = add(db, { title: 'dedup loser', importance: 1, accessCount: 0, supersededAt: TOMB });
 
     const got = findSmartCompressCandidates(db, 1);
-    expect(got.map(r => r.id)).not.toContain(tomb);
+    expect(got.map((r) => r.id)).not.toContain(tomb);
     expect(got.length).toBe(1);
     db.close();
   });
 });
 
 describe('P0-3 cluster-merge: keeper liveness is re-checked after the Sonnet round-trip', () => {
-  beforeEach(() => { callModelJSONAsync.mockReset(); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('aborts the merge when the keeper was superseded while the LLM call was in flight', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
@@ -155,14 +169,19 @@ describe('P0-3 cluster-merge: keeper liveness is re-checked after the Sonnet rou
     callModelJSONAsync.mockImplementation(async () => {
       db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(TOMB, keeper);
       return {
-        should_merge: true, merged_title: 'merged', merged_narrative: 'n',
-        merged_concepts: ['x'], merged_facts: ['y'], merged_lesson: 'z', importance: 2,
+        should_merge: true,
+        merged_title: 'merged',
+        merged_narrative: 'n',
+        merged_concepts: ['x'],
+        merged_facts: ['y'],
+        merged_lesson: 'z',
+        importance: 2,
       };
     });
 
     const res = await executeMergeCluster(db, cluster);
     expect(res.merged).toBe(false);
-    expect(col(db, member, 'compressed_into')).toBeNull();   // not buried behind a tombstone
+    expect(col(db, member, 'compressed_into')).toBeNull(); // not buried behind a tombstone
     expect(col(db, keeper, 'title')).toBe('cluster keeper'); // keeper text not overwritten
     db.close();
   });
@@ -175,8 +194,13 @@ describe('P0-3 cluster-merge: keeper liveness is re-checked after the Sonnet rou
     const cluster = db.prepare('SELECT * FROM observations WHERE id IN (?,?)').all(keeper, member);
 
     callModelJSONAsync.mockResolvedValue({
-      should_merge: true, merged_title: 'merged', merged_narrative: 'n',
-      merged_concepts: ['x'], merged_facts: ['y'], merged_lesson: 'z', importance: 2,
+      should_merge: true,
+      merged_title: 'merged',
+      merged_narrative: 'n',
+      merged_concepts: ['x'],
+      merged_facts: ['y'],
+      merged_lesson: 'z',
+      importance: 2,
     });
 
     const res = await executeMergeCluster(db, cluster);
@@ -188,14 +212,26 @@ describe('P0-3 cluster-merge: keeper liveness is re-checked after the Sonnet rou
 
 // ─── P0-4 · MCP idle cleanup ────────────────────────────────────────────────
 
-describe('P0-4 runIdleCleanup carries decayAndMarkIdle\'s injection_count guard', () => {
+describe("P0-4 runIdleCleanup carries decayAndMarkIdle's injection_count guard", () => {
   it('leaves an injected-but-never-accessed row alone on BOTH of its UPDATEs', async () => {
     const { runIdleCleanup } = await import('../search-scoring.mjs');
     const db = freshDb();
     // imp<=1 + access 0 + old + no lesson: matches mark-idle AND auto-compress. The only
     // thing standing between it and disappearance is injection_count.
-    const injected = add(db, { title: 'injected, never clicked', type: 'change', importance: 1, epochOffset: -200 * DAY, injectionCount: 7 });
-    const bare = add(db, { title: 'never injected', type: 'change', importance: 1, epochOffset: -200 * DAY, injectionCount: 0 });
+    const injected = add(db, {
+      title: 'injected, never clicked',
+      type: 'change',
+      importance: 1,
+      epochOffset: -200 * DAY,
+      injectionCount: 7,
+    });
+    const bare = add(db, {
+      title: 'never injected',
+      type: 'change',
+      importance: 1,
+      epochOffset: -200 * DAY,
+      injectionCount: 0,
+    });
 
     runIdleCleanup(db);
 
@@ -245,7 +281,7 @@ describe('P0-6 pre-saved retraction: live guard + child recovery on all three si
 
     expect(retractPreSavedObs(db, row, 'test')).toBe(false);
     expect(col(db, row, 'title')).toBe('pre-saved, since tombstoned'); // premise: still there
-    expect(col(db, child, 'compressed_into')).toBe(row);               // and still hidden
+    expect(col(db, child, 'compressed_into')).toBe(row); // and still hidden
     db.close();
   });
 });

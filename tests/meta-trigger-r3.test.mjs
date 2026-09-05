@@ -7,7 +7,17 @@ import { isMetaTriggerPrompt } from '../utils.mjs';
 
 describe('isMetaTriggerPrompt covers named control phrases (R3 H-M2)', () => {
   it('classifies lesson-named + common continuation phrases as meta', () => {
-    for (const p of ['怎么停了', '停了', '再来一次', 'go on', 'go ahead', 'proceed', 'keep going', 'carry on', 'why did you stop']) {
+    for (const p of [
+      '怎么停了',
+      '停了',
+      '再来一次',
+      'go on',
+      'go ahead',
+      'proceed',
+      'keep going',
+      'carry on',
+      'why did you stop',
+    ]) {
       expect(isMetaTriggerPrompt(p), `"${p}" should be meta`).toBe(true);
     }
   });

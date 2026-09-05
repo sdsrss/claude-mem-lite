@@ -22,7 +22,8 @@ const searchFn = (_db, q) => [{ id: q }];
 describe('deepSearch auto path — non-blocking dispatch + fail-fast + throttle + cache (D#40)', () => {
   beforeEach(() => {
     _resetAutoDeepState();
-    vi.mocked(callModelJSONAsync).mockReset()
+    vi.mocked(callModelJSONAsync)
+      .mockReset()
       .mockResolvedValue({ variants: ['kw form', 'concept exp', 'hyde'] });
   });
 
@@ -48,7 +49,7 @@ describe('deepSearch auto path — non-blocking dispatch + fail-fast + throttle 
     await deepSearch(null, { query: 'first q' }, { auto: true, searchFn });
     const { variants } = await deepSearch(null, { query: 'second q' }, { auto: true, searchFn });
     expect(callModelJSONAsync).toHaveBeenCalledTimes(1); // second throttled
-    expect(variants).toEqual(['second q']);             // never worse than baseline
+    expect(variants).toEqual(['second q']); // never worse than baseline
   });
 
   it('does not retry on the auto path (fail-fast) — an empty rewrite calls the LLM once', async () => {

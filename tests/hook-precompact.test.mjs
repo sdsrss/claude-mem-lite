@@ -14,13 +14,24 @@ describe('handlePreCompact', () => {
   });
 
   it('emits a <claude-mem-context> block on stdout when memory is non-empty', () => {
-    db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-                VALUES (?, ?, ?, ?, ?, 'active')`)
-      .run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
-    db.prepare(`INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run('s1', 'p1', 'used jose JWT lib', 'decision', 'Auth: jose over jsonwebtoken',
-            'edge runtime compat', 2, new Date().toISOString(), Date.now());
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+                VALUES (?, ?, ?, ?, ?, 'active')`,
+    ).run('s1', 's1', 'p1', new Date().toISOString(), Date.now());
+    db.prepare(
+      `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      's1',
+      'p1',
+      'used jose JWT lib',
+      'decision',
+      'Auth: jose over jsonwebtoken',
+      'edge runtime compat',
+      2,
+      new Date().toISOString(),
+      Date.now(),
+    );
 
     handlePreCompact({ db, project: 'p1', sessionId: 's1' });
 

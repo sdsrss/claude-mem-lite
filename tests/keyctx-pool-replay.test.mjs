@@ -34,11 +34,13 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const projects = [{ project: 'p' }];
 // compare() only hands `db` through to the two arms, so the arms are canned answers.
-const arm = (obsIds, sessIds = [], tokens = 0) => () => ({
-  observations: obsIds.map((id) => ({ id })),
-  summaries: sessIds.map((id) => ({ id })),
-  totalTokens: tokens,
-});
+const arm =
+  (obsIds, sessIds = [], tokens = 0) =>
+  () => ({
+    observations: obsIds.map((id) => ({ id })),
+    summaries: sessIds.map((id) => ({ id })),
+    totalTokens: tokens,
+  });
 
 describe('twin patch', () => {
   it('rewrites the exported declaration it was pointed at', () => {
@@ -48,10 +50,10 @@ describe('twin patch', () => {
   });
 
   it('THROWS when the anchor is gone, but NOT when the edit is a no-op', () => {
-    expect(() => patchConst('export const OTHER = 50;\n', 'KEYCTX_POOL_OBS', 200))
-      .toThrow(/not found in hook-context\.mjs/);
-    expect(() => patchConst('export const KEYCTX_POOL_OBS = 50;\n', 'KEYCTX_POOL_OBS', 50))
-      .not.toThrow();
+    expect(() => patchConst('export const OTHER = 50;\n', 'KEYCTX_POOL_OBS', 200)).toThrow(
+      /not found in hook-context\.mjs/,
+    );
+    expect(() => patchConst('export const KEYCTX_POOL_OBS = 50;\n', 'KEYCTX_POOL_OBS', 50)).not.toThrow();
   });
 
   it('THROWS when the twin would be identical to shipped in BOTH bounds', () => {
@@ -90,7 +92,9 @@ describe('shipped-vs-shipped must report zero', () => {
   it('THROWS for a non-deterministic arm', () => {
     let call = 0;
     const flaky = () => ({
-      observations: [{ id: call++ % 2 === 0 ? 1 : 2 }], summaries: [], totalTokens: 0,
+      observations: [{ id: call++ % 2 === 0 ? 1 : 2 }],
+      summaries: [],
+      totalTokens: 0,
     });
     expect(() => assertRulerCanSayNo(null, projects, flaky, 0)).toThrow(/not deterministic/);
   });
@@ -105,10 +109,10 @@ describe('the displacement counter — the number that argues AGAINST widening',
     // The case that was missing: with only the positive assertion above, gutting this
     // guard's throw left all 10 cases green (mutation M5). Its sibling
     // assertRulerCanSayNo already had its negative arm — this is the asymmetry.
-    expect(() => assertCanSeeDisplacement(() => ({ gained: 0, displaced: 0 })))
-      .toThrow(/cannot be trusted to appear/);
-    expect(() => assertCanSeeDisplacement(() => ({ gained: 1, displaced: 0 })))
-      .toThrow(/displaced=0/);
+    expect(() => assertCanSeeDisplacement(() => ({ gained: 0, displaced: 0 }))).toThrow(
+      /cannot be trusted to appear/,
+    );
+    expect(() => assertCanSeeDisplacement(() => ({ gained: 1, displaced: 0 }))).toThrow(/displaced=0/);
   });
 
   it('counts displacement caused by the non-monotone stages', () => {
@@ -161,8 +165,9 @@ describe('drop-point instrumentation — the attribution must not silently lose 
       const broken = src.replace(anchor, '/* moved */');
       expect(() => patchDropPoints(broken)).toThrow(new RegExp(`drop-point anchor gone: ${label}`));
     }
-    expect(() => patchDropPoints(src.replace('totalTokens += c.cost;', '/* moved */')))
-      .toThrow(/the selection commit/);
+    expect(() => patchDropPoints(src.replace('totalTokens += c.cost;', '/* moved */'))).toThrow(
+      /the selection commit/,
+    );
   });
 });
 
@@ -192,8 +197,7 @@ describe('the INERT notice must be falsifiable, not just present', () => {
     // "both bounds are above the largest pool (0)" directly above a report showing 2 of 11
     // projects changing — and the whole suite stayed green, because maxPool's wiring is not
     // reachable from a unit test. An annotation nothing can contradict is worse than none.
-    expect(() => assertInertConsistent('obs arm is INERT: ...', 2))
-      .toThrow(/Both cannot be true/);
+    expect(() => assertInertConsistent('obs arm is INERT: ...', 2)).toThrow(/Both cannot be true/);
   });
 
   it('stays quiet for the two consistent combinations', () => {
@@ -204,7 +208,12 @@ describe('the INERT notice must be falsifiable, not just present', () => {
 
 describe('the drop-reason trace must account for every candidate exactly once', () => {
   it('accepts a well-formed trace and returns the count', () => {
-    expect(assertTraceWellFormed([['obs', 1, 'SELECTED'], ['obs', 2, 'typecap']])).toBe(2);
+    expect(
+      assertTraceWellFormed([
+        ['obs', 1, 'SELECTED'],
+        ['obs', 2, 'typecap'],
+      ]),
+    ).toBe(2);
   });
 
   it('THROWS on an empty trace — instrumentation that did not run', () => {
@@ -214,8 +223,12 @@ describe('the drop-reason trace must account for every candidate exactly once', 
   });
 
   it('THROWS on a duplicate candidate and on an unknown label', () => {
-    expect(() => assertTraceWellFormed([['obs', 1, 'SELECTED'], ['obs', 1, 'budget']]))
-      .toThrow(/recorded obs:1 twice/);
+    expect(() =>
+      assertTraceWellFormed([
+        ['obs', 1, 'SELECTED'],
+        ['obs', 1, 'budget'],
+      ]),
+    ).toThrow(/recorded obs:1 twice/);
     expect(() => assertTraceWellFormed([['obs', 1, 'made-up']])).toThrow(/unknown label "made-up"/);
   });
 
@@ -230,7 +243,10 @@ describe('the drop-reason trace must account for every candidate exactly once', 
 
 describe('cost summary reports a ratio RANGE, not a point', () => {
   it('spans the extremes of the passes', () => {
-    const s = summarizeCost([{ narrow: 1, wide: 2 }, { narrow: 1, wide: 3 }]);
+    const s = summarizeCost([
+      { narrow: 1, wide: 2 },
+      { narrow: 1, wide: 3 },
+    ]);
     expect(s.passes).toBe(2);
     expect(s.ratioMin).toBe(2);
     expect(s.ratioMax).toBe(3);
@@ -239,7 +255,10 @@ describe('cost summary reports a ratio RANGE, not a point', () => {
   it('does not collapse a spread to its mean', () => {
     // The defect this exists to prevent is publishing 2.65x as a point estimate when the
     // same harness on the same machine spans 2.1x-3.8x.
-    const s = summarizeCost([{ narrow: 1, wide: 2 }, { narrow: 1, wide: 4 }]);
+    const s = summarizeCost([
+      { narrow: 1, wide: 2 },
+      { narrow: 1, wide: 4 },
+    ]);
     expect(s.ratioMax - s.ratioMin).toBe(2);
     expect(s.ratioMin).not.toBe(3);
   });

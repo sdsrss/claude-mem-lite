@@ -20,37 +20,41 @@ function freshDb() {
 }
 
 describe('deleteObservations (shared delete-core)', () => {
-  it('strips the deleted id out of other rows\' related_ids', () => {
+  it("strips the deleted id out of other rows' related_ids", () => {
     const db = freshDb();
-    insertObs(db, { title: 'First', text: 'first' });                       // #1
-    insertObs(db, { title: 'Second', text: 'second', relatedIds: '[1]' });   // #2 references #1
-    insertObs(db, { title: 'Third', text: 'third', relatedIds: '[1,3]' });   // #3 references #1 + itself
+    insertObs(db, { title: 'First', text: 'first' }); // #1
+    insertObs(db, { title: 'Second', text: 'second', relatedIds: '[1]' }); // #2 references #1
+    insertObs(db, { title: 'Third', text: 'third', relatedIds: '[1,3]' }); // #3 references #1 + itself
 
     const result = deleteObservations(db, [1]);
 
     expect(result.deleted).toBe(1);
-    expect(JSON.parse(db.prepare('SELECT related_ids FROM observations WHERE id = 2').get().related_ids)).toEqual([]);
-    expect(JSON.parse(db.prepare('SELECT related_ids FROM observations WHERE id = 3').get().related_ids)).toEqual([3]);
+    expect(
+      JSON.parse(db.prepare('SELECT related_ids FROM observations WHERE id = 2').get().related_ids),
+    ).toEqual([]);
+    expect(
+      JSON.parse(db.prepare('SELECT related_ids FROM observations WHERE id = 3').get().related_ids),
+    ).toEqual([3]);
   });
 
   it('recovers rows merged/compressed INTO a deleted keeper (compressed_into → NULL)', () => {
     const db = freshDb();
-    insertObs(db, { title: 'Keeper', text: 'keeper', importance: 3 });       // #1
-    insertObs(db, { title: 'Child', text: 'child', compressedInto: 1 });     // #2 merged into #1
+    insertObs(db, { title: 'Keeper', text: 'keeper', importance: 3 }); // #1
+    insertObs(db, { title: 'Child', text: 'child', compressedInto: 1 }); // #2 merged into #1
 
     const result = deleteObservations(db, [1]);
 
     expect(result.deleted).toBe(1);
     expect(result.recoveredChildren).toBe(1);
     const child = db.prepare('SELECT compressed_into FROM observations WHERE id = 2').get();
-    expect(child).toBeDefined();               // child survived the keeper's deletion
-    expect(child.compressed_into).toBeNull();  // and was resurfaced as live
+    expect(child).toBeDefined(); // child survived the keeper's deletion
+    expect(child.compressed_into).toBeNull(); // and was resurfaced as live
   });
 
   it('does not count a child that is itself being deleted in the same call as recovered', () => {
     const db = freshDb();
-    insertObs(db, { title: 'Keeper', text: 'keeper' });                      // #1
-    insertObs(db, { title: 'Child', text: 'child', compressedInto: 1 });     // #2 merged into #1
+    insertObs(db, { title: 'Keeper', text: 'keeper' }); // #1
+    insertObs(db, { title: 'Child', text: 'child', compressedInto: 1 }); // #2 merged into #1
 
     const result = deleteObservations(db, [1, 2]); // delete keeper AND its child together
 
@@ -61,8 +65,8 @@ describe('deleteObservations (shared delete-core)', () => {
 
   it('leaves a malformed related_ids value untouched (stricter of the two originals)', () => {
     const db = freshDb();
-    insertObs(db, { title: 'First', text: 'first' });                        // #1
-    insertObs(db, { title: 'Bad', text: 'bad', relatedIds: '[1,"x"]' });     // non-integer array
+    insertObs(db, { title: 'First', text: 'first' }); // #1
+    insertObs(db, { title: 'Bad', text: 'bad', relatedIds: '[1,"x"]' }); // non-integer array
 
     deleteObservations(db, [1]);
 
@@ -72,7 +76,7 @@ describe('deleteObservations (shared delete-core)', () => {
 
   it('returns the exact deleted count for the ids that actually existed', () => {
     const db = freshDb();
-    insertObs(db, { title: 'Present', text: 'present' });                    // #1
+    insertObs(db, { title: 'Present', text: 'present' }); // #1
 
     const result = deleteObservations(db, [1, 9999]); // 9999 does not exist
 
@@ -89,7 +93,12 @@ describe('deleteObservations (shared delete-core)', () => {
 
   describe('file-backed DB — snapshot is actually taken', () => {
     let tmp;
-    afterEach(() => { if (tmp) { rmSync(tmp, { recursive: true, force: true }); tmp = null; } });
+    afterEach(() => {
+      if (tmp) {
+        rmSync(tmp, { recursive: true, force: true });
+        tmp = null;
+      }
+    });
 
     it('writes a pre-delete .bak snapshot before the delete', () => {
       tmp = mkdtempSync(join(tmpdir(), 'delete-core-'));

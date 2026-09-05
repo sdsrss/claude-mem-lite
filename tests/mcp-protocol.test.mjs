@@ -28,7 +28,9 @@ let client;
 let transport;
 
 beforeAll(async () => {
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
   mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
 
   transport = new StdioClientTransport({
@@ -47,24 +49,39 @@ beforeAll(async () => {
 }, 15_000);
 
 afterAll(async () => {
-  try { await client?.close(); } catch {}
-  try { await transport?.close(); } catch {}
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    await client?.close();
+  } catch {}
+  try {
+    await transport?.close();
+  } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
 });
 
 // Helper: extract text payload from a tools/call result.
 function textOf(result) {
-  return (result?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  return (result?.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 }
 
 describe('MCP protocol surface', () => {
   it('tools/list exposes exactly the 9 promised core tools', async () => {
     const { tools } = await client.listTools();
-    const names = tools.map(t => t.name).sort();
+    const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      'mem_defer', 'mem_defer_drop', 'mem_defer_list',
-      'mem_get', 'mem_recall', 'mem_recent',
-      'mem_save', 'mem_search', 'mem_timeline',
+      'mem_defer',
+      'mem_defer_drop',
+      'mem_defer_list',
+      'mem_get',
+      'mem_recall',
+      'mem_recent',
+      'mem_save',
+      'mem_search',
+      'mem_timeline',
     ]);
   });
 
@@ -78,7 +95,7 @@ describe('MCP protocol surface', () => {
 
   it('hidden tool mem_stats is callable by exact name despite not being listed', async () => {
     const { tools } = await client.listTools();
-    expect(tools.map(t => t.name)).not.toContain('mem_stats');
+    expect(tools.map((t) => t.name)).not.toContain('mem_stats');
     // Direct call should still work (hidden, not unregistered).
     const res = await client.callTool({ name: 'mem_stats', arguments: {} });
     const text = textOf(res);
@@ -105,7 +122,9 @@ describe('MCP protocol surface', () => {
     // Baseline: read totals from the server's authoritative view.
     const before = await client.callTool({ name: 'mem_stats', arguments: {} });
     const beforeText = textOf(before);
-    const beforeCount = Number((beforeText.match(/Total:\s*([\d,]+)\s*observations/i) || [])[1]?.replace(/,/g, '') || 0);
+    const beforeCount = Number(
+      (beforeText.match(/Total:\s*([\d,]+)\s*observations/i) || [])[1]?.replace(/,/g, '') || 0,
+    );
     expect(beforeCount).toBeGreaterThanOrEqual(3);
 
     // Actual call under test: execute purge_stale WITHOUT confirm.
@@ -120,7 +139,9 @@ describe('MCP protocol surface', () => {
     // Hard assertion: row count is invariant after a no-confirm execute.
     const after = await client.callTool({ name: 'mem_stats', arguments: {} });
     const afterText = textOf(after);
-    const afterCount = Number((afterText.match(/Total:\s*([\d,]+)\s*observations/i) || [])[1]?.replace(/,/g, '') || 0);
+    const afterCount = Number(
+      (afterText.match(/Total:\s*([\d,]+)\s*observations/i) || [])[1]?.replace(/,/g, '') || 0,
+    );
     expect(afterCount).toBe(beforeCount);
   });
 
@@ -140,17 +161,26 @@ describe('MCP protocol surface', () => {
   });
 
   it('mem_save does NOT nudge with a lesson present or for discovery', async () => {
-    const withLesson = textOf(await client.callTool({
-      name: 'mem_save',
-      arguments: { content: 'Fixed a race', title: 'nudge-probe-lesson', type: 'bugfix', lesson_learned: 'Hold the lock until the side-effect commits' },
-    }));
+    const withLesson = textOf(
+      await client.callTool({
+        name: 'mem_save',
+        arguments: {
+          content: 'Fixed a race',
+          title: 'nudge-probe-lesson',
+          type: 'bugfix',
+          lesson_learned: 'Hold the lock until the side-effect commits',
+        },
+      }),
+    );
     expect(withLesson).toContain('lesson captured');
     expect(withLesson).not.toContain('without lesson_learned');
 
-    const discovery = textOf(await client.callTool({
-      name: 'mem_save',
-      arguments: { content: 'Interesting corner', title: 'nudge-probe-discovery', type: 'discovery' },
-    }));
+    const discovery = textOf(
+      await client.callTool({
+        name: 'mem_save',
+        arguments: { content: 'Interesting corner', title: 'nudge-probe-discovery', type: 'discovery' },
+      }),
+    );
     expect(discovery).not.toContain('without lesson_learned');
   });
 
@@ -237,7 +267,7 @@ describe('MCP protocol surface', () => {
         name: 'mem_search',
         arguments: { query: 'explicitpagemarker', type: 'observations', sort: 'time', limit: 3, offset },
       });
-      const ids = [...textOf(res).matchAll(/#(\d+) /g)].map(m => m[1]);
+      const ids = [...textOf(res).matchAll(/#(\d+) /g)].map((m) => m[1]);
       seen.push(...ids);
     }
     // 3 pages × 3 = 9 ids, all distinct (no overlap), covering all 9 (no gap).
@@ -252,7 +282,12 @@ describe('MCP protocol surface', () => {
   it('mem_update rejects an empty/whitespace title (parity with CLI)', async () => {
     const saveRes = await client.callTool({
       name: 'mem_save',
-      arguments: { content: 'parity probe original body', title: 'parity-title-probe', type: 'discovery', importance: 1 },
+      arguments: {
+        content: 'parity probe original body',
+        title: 'parity-title-probe',
+        type: 'discovery',
+        importance: 1,
+      },
     });
     const id = Number((textOf(saveRes).match(/#(\d+)/) || [])[1]);
     expect(id).toBeGreaterThan(0);
@@ -261,7 +296,9 @@ describe('MCP protocol surface', () => {
     try {
       const res = await client.callTool({ name: 'mem_update', arguments: { id, title: '   ' } });
       rejected = res.isError === true;
-    } catch { rejected = true; }
+    } catch {
+      rejected = true;
+    }
     expect(rejected).toBe(true);
 
     const getRes = await client.callTool({ name: 'mem_get', arguments: { ids: String(id) } });
@@ -271,16 +308,26 @@ describe('MCP protocol surface', () => {
   it('mem_update rejects a lesson_learned over 500 chars (parity with CLI)', async () => {
     const saveRes = await client.callTool({
       name: 'mem_save',
-      arguments: { content: 'lesson cap probe body', title: 'lesson-cap-probe', type: 'discovery', importance: 1 },
+      arguments: {
+        content: 'lesson cap probe body',
+        title: 'lesson-cap-probe',
+        type: 'discovery',
+        importance: 1,
+      },
     });
     const id = Number((textOf(saveRes).match(/#(\d+)/) || [])[1]);
     expect(id).toBeGreaterThan(0);
 
     let rejected;
     try {
-      const res = await client.callTool({ name: 'mem_update', arguments: { id, lesson_learned: 'L'.repeat(501) } });
+      const res = await client.callTool({
+        name: 'mem_update',
+        arguments: { id, lesson_learned: 'L'.repeat(501) },
+      });
       rejected = res.isError === true;
-    } catch { rejected = true; }
+    } catch {
+      rejected = true;
+    }
     expect(rejected).toBe(true);
 
     const getRes = await client.callTool({ name: 'mem_get', arguments: { ids: String(id) } });
@@ -300,7 +347,7 @@ describe('mem_get D#N deferred read surface (stdio)', () => {
       name: 'mem_defer',
       arguments: { title: 'stdio deferred read test', detail: DETAIL, priority: 2 },
     });
-    const addedText = added.content?.map(c => c.text).join('\n') || '';
+    const addedText = added.content?.map((c) => c.text).join('\n') || '';
     const m = /D#(\d+)/.exec(addedText);
     expect(m).toBeTruthy();
     deferredId = m[1];
@@ -309,7 +356,7 @@ describe('mem_get D#N deferred read surface (stdio)', () => {
       name: 'mem_get',
       arguments: { ids: [`D#${deferredId}`] },
     });
-    const text = res.content?.map(c => c.text).join('\n') || '';
+    const text = res.content?.map((c) => c.text).join('\n') || '';
     expect(text).toContain(`D#${deferredId}`);
     expect(text).toContain('stdio deferred read test');
     expect(text).toContain(DETAIL);
@@ -317,7 +364,7 @@ describe('mem_get D#N deferred read surface (stdio)', () => {
 
   it('mem_defer_list carries the detail-hint line and per-row age tag (G11)', async () => {
     const res = await client.callTool({ name: 'mem_defer_list', arguments: {} });
-    const text = res.content?.map(c => c.text).join('\n') || '';
+    const text = res.content?.map((c) => c.text).join('\n') || '';
     // Row created in the previous test this session → age is 0d.
     expect(text).toMatch(/\(D#\d+, 0d\)/);
     expect(text).toMatch(/mem_get|get D#/);
@@ -331,13 +378,17 @@ describe('mem_search deferred trailer (stdio)', () => {
   it('keyword search over deferred title reaches the item', async () => {
     await client.callTool({
       name: 'mem_defer',
-      arguments: { title: 'stdio deferred search probe item', detail: 'trailer reachability check', priority: 2 },
+      arguments: {
+        title: 'stdio deferred search probe item',
+        detail: 'trailer reachability check',
+        priority: 2,
+      },
     });
     const res = await client.callTool({
       name: 'mem_search',
       arguments: { query: 'deferred search probe' },
     });
-    const text = res.content?.map(c => c.text).join('\n') || '';
+    const text = res.content?.map((c) => c.text).join('\n') || '';
     expect(text).toContain('stdio deferred search probe item');
     expect(text).toMatch(/D#\d+/);
   });
@@ -347,7 +398,7 @@ describe('mem_search deferred trailer (stdio)', () => {
       name: 'mem_search',
       arguments: { query: 'deferred search probe', obs_type: 'bugfix' },
     });
-    const text = res.content?.map(c => c.text).join('\n') || '';
+    const text = res.content?.map((c) => c.text).join('\n') || '';
     expect(text).not.toContain('stdio deferred search probe item');
   });
 });
@@ -356,7 +407,7 @@ describe('mem_search deferred trailer (stdio)', () => {
 describe('mem_stats names the data dir', () => {
   it('output contains the resolved Data dir path', async () => {
     const res = await client.callTool({ name: 'mem_stats', arguments: {} });
-    const text = res.content?.map(c => c.text).join('\n') || '';
+    const text = res.content?.map((c) => c.text).join('\n') || '';
     expect(text).toMatch(/Data dir: \S+/);
   });
 });

@@ -22,8 +22,12 @@ function doctorWith(env) {
   try {
     out = execFileSync(process.execPath, [INSTALLER, 'doctor', '--json'], {
       env: {
-        ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'),
-        CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1', ...env,
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_QUIET_HOOKS: '1',
+        ...env,
       },
       encoding: 'utf8',
     });
@@ -41,13 +45,22 @@ const flagLines = (report) => (report.checks || []).filter((c) => /RECOMMEND_MOD
 
 describe('doctor — parked env flags', () => {
   afterEach(() => {
-    for (const h of homes.splice(0)) { try { rmSync(h, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('names CLAUDE_MEM_RECOMMEND_MODE=live as accepted-but-not-implemented', () => {
     const report = doctorWith({ CLAUDE_MEM_RECOMMEND_MODE: 'live' });
     const lines = flagLines(report);
-    expect(lines.length, `doctor said nothing about an inert flag:\n${JSON.stringify(report.checks, null, 1)}`).toBe(1);
+    expect(
+      lines.length,
+      `doctor said nothing about an inert flag:\n${JSON.stringify(report.checks, null, 1)}`,
+    ).toBe(1);
     expect(lines[0].level).toBe('warn');
     expect(lines[0].message).toMatch(/not implemented/i);
     expect(lines[0].message).toMatch(/shadow/);

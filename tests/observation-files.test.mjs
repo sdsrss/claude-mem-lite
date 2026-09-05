@@ -7,20 +7,24 @@ import { saveObservation } from '../hook-llm.mjs';
 
 describe('observation_files table schema', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('observation_files table exists after initSchema', () => {
-    const table = db.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='observation_files'"
-    ).get();
+    const table = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observation_files'")
+      .get();
     expect(table).toBeDefined();
   });
 
   it('observation_files has index on filename', () => {
-    const idx = db.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obsfiles_filename'"
-    ).get();
+    const idx = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obsfiles_filename'")
+      .get();
     expect(idx).toBeDefined();
   });
 
@@ -54,8 +58,12 @@ describe('observation_files table schema', () => {
 
 describe('observation_files data migration', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('insertObs populates observation_files from filesModified JSON', () => {
     insertSession(db, { id: 'sess-1' });
@@ -65,7 +73,7 @@ describe('observation_files data migration', () => {
 
     const rows = db.prepare('SELECT * FROM observation_files ORDER BY obs_id, filename').all();
     expect(rows.length).toBe(3); // a.js, b.js, c.js
-    expect(rows.map(r => r.filename)).toEqual(expect.arrayContaining(['src/a.js', 'src/b.js', 'c.js']));
+    expect(rows.map((r) => r.filename)).toEqual(expect.arrayContaining(['src/a.js', 'src/b.js', 'c.js']));
   });
 });
 
@@ -77,7 +85,9 @@ describe('saveObservation populates observation_files', () => {
     db = createTestDb();
     insertSession(db, { id: 'test-sess' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('inserts file rows when saving an observation with files', () => {
     const obs = {
@@ -90,10 +100,10 @@ describe('saveObservation populates observation_files', () => {
     const id = saveObservation(obs, 'test', 'test-sess', db);
     expect(id).not.toBeNull();
 
-    const fileRows = db.prepare(
-      'SELECT filename FROM observation_files WHERE obs_id = ? ORDER BY filename'
-    ).all(id);
-    expect(fileRows.map(r => r.filename)).toEqual(['src/bar.js', 'src/foo.js']);
+    const fileRows = db
+      .prepare('SELECT filename FROM observation_files WHERE obs_id = ? ORDER BY filename')
+      .all(id);
+    expect(fileRows.map((r) => r.filename)).toEqual(['src/bar.js', 'src/foo.js']);
   });
 
   it('handles empty files array without error', () => {
@@ -122,13 +132,17 @@ describe('shipped file-edge match clause uses observation_files', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('finds observation by exact filename match via observation_files', () => {
     // insertObs auto-populates observation_files
     insertObs(db, {
-      type: 'bugfix', title: 'Fix race in hook.mjs',
-      importance: 2, filesModified: '["hook.mjs"]',
+      type: 'bugfix',
+      title: 'Fix race in hook.mjs',
+      importance: 2,
+      filesModified: '["hook.mjs"]',
       epochOffset: -5 * 86400000,
     });
 
@@ -140,8 +154,10 @@ describe('shipped file-edge match clause uses observation_files', () => {
   it('finds observation by basename LIKE match via observation_files', () => {
     // insertObs auto-populates observation_files
     insertObs(db, {
-      type: 'bugfix', title: 'Fix in src/deep/file.mjs',
-      importance: 2, filesModified: '["src/deep/file.mjs"]',
+      type: 'bugfix',
+      title: 'Fix in src/deep/file.mjs',
+      importance: 2,
+      filesModified: '["src/deep/file.mjs"]',
       epochOffset: -5 * 86400000,
     });
 

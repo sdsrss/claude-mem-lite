@@ -69,52 +69,55 @@ import { EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
 function writeTranscript(text) {
   const dir = mkdtempSync(join(tmpdir(), 'd202-'));
   const path = join(dir, 'transcript.jsonl');
-  writeFileSync(path, [
-    JSON.stringify({
-      type: 'user',
-      message: { content: [] },
-      toolUseResult: {},
-      attachments: undefined,
-    }),
-    JSON.stringify({
-      type: 'attachment',
-      attachment: {
-        type: 'hook_success',
-        hookName: 'PreToolUse:Edit',
-        command: 'node /home/u/.claude-mem-lite/scripts/pre-tool-recall.js',
-        stdout: JSON.stringify({
-          suppressOutput: true,
-          hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text },
-        }),
-        stderr: '',
-        exitCode: 0,
-      },
-    }),
-  ].join('\n'));
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({
+        type: 'user',
+        message: { content: [] },
+        toolUseResult: {},
+        attachments: undefined,
+      }),
+      JSON.stringify({
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          hookName: 'PreToolUse:Edit',
+          command: 'node /home/u/.claude-mem-lite/scripts/pre-tool-recall.js',
+          stdout: JSON.stringify({
+            suppressOutput: true,
+            hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text },
+          }),
+          stderr: '',
+          exitCode: 0,
+        },
+      }),
+    ].join('\n'),
+  );
   return path;
 }
 
 describe('D#202 — event-sourced rows are namespaced in the lessons block', () => {
   it('an observation row still enters the injected denominator', () => {
     const path = writeTranscript(
-      '[mem] Lessons for lib/x.mjs:\n  #4242 [bugfix] a real observation lesson\n'
+      '[mem] Lessons for lib/x.mjs:\n  #4242 [bugfix] a real observation lesson\n',
     );
     expect([...extractInjectedFromPreToolUse(path)]).toEqual([4242]);
   });
 
   it('an E#-prefixed event row does NOT enter the observation injected denominator', () => {
     const path = writeTranscript(
-      `[mem] Lessons for lib/x.mjs:\n  ${EVENT_ID_PREFIX}4242 [bugfix] an event body\n`
+      `[mem] Lessons for lib/x.mjs:\n  ${EVENT_ID_PREFIX}4242 [bugfix] an event body\n`,
     );
     expect([...extractInjectedFromPreToolUse(path)]).toEqual([]);
   });
 
   it('a mixed block keeps only the observation id', () => {
     const path = writeTranscript(
-      '[mem] Lessons for lib/x.mjs:\n'
-      + `  ${EVENT_ID_PREFIX}100 [decision] event-sourced\n`
-      + '  #200 [discovery] observation-sourced\n'
-      + `  ${EVENT_ID_PREFIX}300 [change] event-sourced\n`
+      '[mem] Lessons for lib/x.mjs:\n' +
+        `  ${EVENT_ID_PREFIX}100 [decision] event-sourced\n` +
+        '  #200 [discovery] observation-sourced\n' +
+        `  ${EVENT_ID_PREFIX}300 [change] event-sourced\n`,
     );
     expect([...extractInjectedFromPreToolUse(path)]).toEqual([200]);
   });
@@ -126,7 +129,7 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
   it('pre-tool-recall.js prefixes event rows on BOTH render paths', () => {
     const src = readFileSync(join(REPO, 'scripts/pre-tool-recall.js'), 'utf8');
     expect(src, 'the id tag is not derived from r.src').toMatch(
-      /const idTag = `\$\{r\.src === 'evt' \? EVENT_ID_PREFIX : '#'\}\$\{r\.id\}`/
+      /const idTag = `\$\{r\.src === 'evt' \? EVENT_ID_PREFIX : '#'\}\$\{r\.id\}`/,
     );
     // Two render sites — the lesson_learned branch and the title fallback. A fix
     // applied to one of them is the exact shape this repo keeps paying for.
@@ -140,7 +143,7 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
   // lib/events-injection.mjs, whose header even enumerates the extractors it
   // protects — and does not name pre-tool-recall.js, the face that was breaking
   // it. One shared constant, and a check that no face re-invents the literal.
-  it("SWEEP: every event renderer takes the prefix from the shared constant", () => {
+  it('SWEEP: every event renderer takes the prefix from the shared constant', () => {
     const faces = ['lib/events-injection.mjs', 'scripts/pre-tool-recall.js'];
     const problems = [];
     for (const face of faces) {
@@ -169,7 +172,8 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
     const src = readFileSync(join(REPO, 'lib/citation-tracker.mjs'), 'utf8');
     // `\s*` after `new RegExp(`: a formatter moves the template literal onto its own
     // line. The captured type list — what this guard reads — is unaffected (P1-3).
-    const m = /const INJECTED_RE = new RegExp\(\s*`#\(\$\{OBS_ID_DIGITS\}\)\\\\s\+\\\\\[\(([^)]*)\)\\\\\]`/.exec(src);
+    const m =
+      /const INJECTED_RE = new RegExp\(\s*`#\(\$\{OBS_ID_DIGITS\}\)\\\\s\+\\\\\[\(([^)]*)\)\\\\\]`/.exec(src);
     expect(m, 'INJECTED_RE shape changed — re-derive this guard').toBeTruthy();
     const types = m[1].split('|');
     expect(types).not.toContain('event');

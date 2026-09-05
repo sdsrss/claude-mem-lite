@@ -36,9 +36,7 @@ export function detectMissingImports(installRoot) {
 
   // Strip line + block comments so example strings in docblocks (e.g. the very
   // patterns this regex enumerates) can't false-fire as "missing files".
-  src = src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|\s)\/\/[^\n]*/g, '$1');
+  src = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/g, '$1');
 
   const missing = new Set();
   for (const re of [FROM_RE, IMPORT_RE]) {
@@ -62,7 +60,7 @@ export function resolveLaunchEntry({ primaryRoot, fallbackRoot, warn = () => {} 
     if (fallbackMissing.length === 0) {
       warn(
         `[claude-mem-lite] Primary install incomplete at ${primaryRoot} ` +
-        `(missing: ${primaryMissing.join(', ')}). Falling back to ${fallbackRoot}.`,
+          `(missing: ${primaryMissing.join(', ')}). Falling back to ${fallbackRoot}.`,
       );
       return {
         path: join(fallbackRoot, 'server.mjs'),
@@ -75,9 +73,9 @@ export function resolveLaunchEntry({ primaryRoot, fallbackRoot, warn = () => {} 
   const repairCmd = 'npm install -g claude-mem-lite@latest --force';
   const err = new Error(
     `[claude-mem-lite] Install incomplete at ${primaryRoot}\n` +
-    `[claude-mem-lite]   Missing: ${primaryMissing.join(', ')}\n` +
-    `[claude-mem-lite] Repair: ${repairCmd}\n` +
-    `[claude-mem-lite] Or via Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss`,
+      `[claude-mem-lite]   Missing: ${primaryMissing.join(', ')}\n` +
+      `[claude-mem-lite] Repair: ${repairCmd}\n` +
+      `[claude-mem-lite] Or via Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss`,
   );
   err.code = 'INSTALL_INCOMPLETE';
   err.missing = primaryMissing;

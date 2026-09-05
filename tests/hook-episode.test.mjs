@@ -33,13 +33,17 @@ function cleanupEpisodeFiles() {
   const epFile = episodeFile();
   const lf = lockFile();
   for (const f of [epFile, epFile + '.tmp', lf]) {
-    try { unlinkSync(f); } catch {}
+    try {
+      unlinkSync(f);
+    } catch {}
   }
   // Clean pending files
   try {
     for (const f of readdirSync(RUNTIME_DIR)) {
       if (f.startsWith('pending-')) {
-        try { unlinkSync(join(RUNTIME_DIR, f)); } catch {}
+        try {
+          unlinkSync(join(RUNTIME_DIR, f));
+        } catch {}
       }
     }
   } catch {}
@@ -49,7 +53,9 @@ function cleanupEpisodeFiles() {
 
 describe('hook-episode.mjs', () => {
   beforeEach(() => {
-    try { mkdirSync(RUNTIME_DIR, { recursive: true }); } catch {}
+    try {
+      mkdirSync(RUNTIME_DIR, { recursive: true });
+    } catch {}
     cleanupEpisodeFiles();
   });
 
@@ -61,8 +67,15 @@ describe('hook-episode.mjs', () => {
   // ─── planEpisodeFlush ─────────────────────────────────────────────────────
   describe('planEpisodeFlush', () => {
     const mkEntry = (ccSession, file, tool = 'Edit') => ({
-      tool, desc: 'x', files: file ? [file] : [], ts: 1, isError: false,
-      isHardError: false, isSignificant: true, bashSig: null, ccSession,
+      tool,
+      desc: 'x',
+      files: file ? [file] : [],
+      ts: 1,
+      isError: false,
+      isHardError: false,
+      isSignificant: true,
+      bashSig: null,
+      ccSession,
     });
 
     it('single session → returns [episode] (same ref, behavior unchanged)', () => {
@@ -84,21 +97,19 @@ describe('hook-episode.mjs', () => {
     it('two sessions interleaved → one sub-episode each, only its entries', () => {
       const ep = createEpisode('mem-s', 'proj');
       ep.filesRead = ['/read-shared.js'];
-      ep.entries = [
-        mkEntry('cc-A', '/a1.js'), mkEntry('cc-B', '/b1.js'), mkEntry('cc-A', '/a2.js'),
-      ];
+      ep.entries = [mkEntry('cc-A', '/a1.js'), mkEntry('cc-B', '/b1.js'), mkEntry('cc-A', '/a2.js')];
       const out = planEpisodeFlush(ep);
       expect(out).toHaveLength(2);
-      const a = out.find(s => s.entries[0].ccSession === 'cc-A');
-      const b = out.find(s => s.entries[0].ccSession === 'cc-B');
-      expect(a.entries.map(e => e.files[0])).toEqual(['/a1.js', '/a2.js']);
-      expect(b.entries.map(e => e.files[0])).toEqual(['/b1.js']);
+      const a = out.find((s) => s.entries[0].ccSession === 'cc-A');
+      const b = out.find((s) => s.entries[0].ccSession === 'cc-B');
+      expect(a.entries.map((e) => e.files[0])).toEqual(['/a1.js', '/a2.js']);
+      expect(b.entries.map((e) => e.files[0])).toEqual(['/b1.js']);
     });
 
     it('sub-episode files = union of that group entries files', () => {
       const ep = createEpisode('mem-s', 'proj');
       ep.entries = [mkEntry('cc-A', '/a1.js'), mkEntry('cc-B', '/b1.js'), mkEntry('cc-A', '/a1.js')];
-      const a = planEpisodeFlush(ep).find(s => s.entries[0].ccSession === 'cc-A');
+      const a = planEpisodeFlush(ep).find((s) => s.entries[0].ccSession === 'cc-A');
       expect(a.files).toEqual(['/a1.js']); // deduped union
     });
 
@@ -191,25 +202,45 @@ describe('hook-episode.mjs', () => {
 
     it('returns true for episodes with test/build Bash error entries', () => {
       const ep = createEpisode('s', 'p');
-      ep.entries.push({ tool: 'Bash', desc: 'npm test', isError: true, bashSig: { isTest: true, isBuild: false } });
+      ep.entries.push({
+        tool: 'Bash',
+        desc: 'npm test',
+        isError: true,
+        bashSig: { isTest: true, isBuild: false },
+      });
       expect(episodeHasSignificantContent(ep)).toBe(true);
     });
 
     it('returns true for episodes with build error entries', () => {
       const ep = createEpisode('s', 'p');
-      ep.entries.push({ tool: 'Bash', desc: 'npm run build', isError: true, bashSig: { isTest: false, isBuild: true } });
+      ep.entries.push({
+        tool: 'Bash',
+        desc: 'npm run build',
+        isError: true,
+        bashSig: { isTest: false, isBuild: true },
+      });
       expect(episodeHasSignificantContent(ep)).toBe(true);
     });
 
     it('returns false for plain Bash error without test/build (noise reduction)', () => {
       const ep = createEpisode('s', 'p');
-      ep.entries.push({ tool: 'Bash', desc: 'curl api endpoint', isError: true, bashSig: { isTest: false, isBuild: false } });
+      ep.entries.push({
+        tool: 'Bash',
+        desc: 'curl api endpoint',
+        isError: true,
+        bashSig: { isTest: false, isBuild: false },
+      });
       expect(episodeHasSignificantContent(ep)).toBe(false);
     });
 
     it('returns true for plain Bash error followed by an edit (debug cycle)', () => {
       const ep = createEpisode('s', 'p');
-      ep.entries.push({ tool: 'Bash', desc: 'node app.js', isError: true, bashSig: { isTest: false, isBuild: false } });
+      ep.entries.push({
+        tool: 'Bash',
+        desc: 'node app.js',
+        isError: true,
+        bashSig: { isTest: false, isBuild: false },
+      });
       ep.entries.push({ tool: 'Edit', desc: 'fix the bug', isError: false });
       expect(episodeHasSignificantContent(ep)).toBe(true);
     });
@@ -269,7 +300,10 @@ describe('hook-episode.mjs', () => {
     it('returns false for 4 reads of non-important files (below threshold)', () => {
       const ep = {
         files: ['a.js', 'b.js', 'c.js', 'd.js'],
-        entries: Array.from({ length: 4 }, (_, i) => ({ tool: 'Read', files: [`${String.fromCharCode(97+i)}.js`] })),
+        entries: Array.from({ length: 4 }, (_, i) => ({
+          tool: 'Read',
+          files: [`${String.fromCharCode(97 + i)}.js`],
+        })),
       };
       expect(episodeHasSignificantContent(ep)).toBe(false);
     });
@@ -360,7 +394,7 @@ describe('hook-episode.mjs', () => {
       const entry = { tool: 'Bash', desc: 'npm test', files: [], ts: Date.now(), isError: true };
       writePendingEntry(entry, 'sess-1', 'proj');
 
-      const files = readdirSync(RUNTIME_DIR).filter(f => f.startsWith('pending-'));
+      const files = readdirSync(RUNTIME_DIR).filter((f) => f.startsWith('pending-'));
       expect(files.length).toBe(1);
 
       const content = JSON.parse(readFileSync(join(RUNTIME_DIR, files[0]), 'utf8'));
@@ -380,7 +414,7 @@ describe('hook-episode.mjs', () => {
 
       expect(ep.entries.length).toBe(2);
       // Pending files should be cleaned up
-      const remaining = readdirSync(RUNTIME_DIR).filter(f => f.startsWith('pending-'));
+      const remaining = readdirSync(RUNTIME_DIR).filter((f) => f.startsWith('pending-'));
       expect(remaining.length).toBe(0);
     });
 
@@ -393,7 +427,7 @@ describe('hook-episode.mjs', () => {
 
       expect(ep.entries.length).toBe(0);
       // File should still exist (not consumed)
-      const remaining = readdirSync(RUNTIME_DIR).filter(f => f.startsWith('pending-'));
+      const remaining = readdirSync(RUNTIME_DIR).filter((f) => f.startsWith('pending-'));
       expect(remaining.length).toBe(1);
     });
 

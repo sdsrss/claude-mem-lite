@@ -52,7 +52,10 @@ describe('search output surfaces the ~Nt fetch-cost hint', () => {
     insertSession(db, { id: 'sess-1' });
     insertObs(db, {
       title: 'kafka consumer lag fix',
-      narrative: 'investigated kafka consumer group rebalance causing lag spikes; tuned max.poll.interval and session.timeout '.repeat(3),
+      narrative:
+        'investigated kafka consumer group rebalance causing lag spikes; tuned max.poll.interval and session.timeout '.repeat(
+          3,
+        ),
       lessonLearned: 'rebalance storms come from slow poll loops, not broker load',
     });
     return db;
@@ -62,7 +65,7 @@ describe('search output surfaces the ~Nt fetch-cost hint', () => {
     const db = seed();
     const res = await handleSearchForTest(db, { query: 'kafka', deep: false }, {});
     const text = res.content[0].text;
-    expect(text).toMatch(/~\d+t\b/);            // per-row hint present
+    expect(text).toMatch(/~\d+t\b/); // per-row hint present
     expect(text.toLowerCase()).toMatch(/~nt|est\.? tokens|fetch/); // legend explains it
     db.close();
   });
@@ -70,7 +73,10 @@ describe('search output surfaces the ~Nt fetch-cost hint', () => {
   it('CLI search renders a ~Nt token per result', async () => {
     const db = seed();
     const writes = [];
-    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { writes.push(String(s)); return true; });
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
     try {
       await cmdSearchForTest(db, ['kafka', '--no-deep'], {});
     } finally {

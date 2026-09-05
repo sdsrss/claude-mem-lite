@@ -22,12 +22,20 @@ export default function setup() {
   process.env.CLAUDE_MEM_TEST_REALDIR = process.env.CLAUDE_MEM_DIR || join(homedir(), '.claude-mem-lite');
   // Returned teardown runs after the whole suite. A leftover dir is swept by the next
   // run's sweepStaleTestFixtures anyway, so failure here is not worth failing over.
-  const teardown = () => { try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* swept later */ } };
+  const teardown = () => {
+    try {
+      rmSync(sandbox, { recursive: true, force: true });
+    } catch {
+      /* swept later */
+    }
+  };
   try {
     const { removed } = sweepStaleTestFixtures();
     if (removed > 0 && process.env.MEM_TEST_SWEEP_VERBOSE === '1') {
       console.log(`[test-setup] reaped ${removed} stale fixture dir(s)`);
     }
-  } catch { /* never block the suite on cleanup */ }
+  } catch {
+    /* never block the suite on cleanup */
+  }
   return teardown;
 }

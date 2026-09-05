@@ -25,7 +25,9 @@ describe('checkDevDrift', () => {
   });
 
   afterEach(() => {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {}
   });
 
   it('reports drift=false when all files are symlinks (clean dev install)', () => {
@@ -42,7 +44,7 @@ describe('checkDevDrift', () => {
   it('reports drift=true when some files are symlinks and others are plain copies', () => {
     symlinkSync(join(repoDir, 'a.mjs'), join(installDir, 'a.mjs'));
     symlinkSync(join(repoDir, 'b.mjs'), join(installDir, 'b.mjs'));
-    writeFileSync(join(installDir, 'c.mjs'), '// c copy');  // plain file = drift
+    writeFileSync(join(installDir, 'c.mjs'), '// c copy'); // plain file = drift
     const r = checkDevDrift(installDir, ['a.mjs', 'b.mjs', 'c.mjs']);
     expect(r.devMode).toBe(true);
     expect(r.drift).toBe(true);

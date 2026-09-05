@@ -8,11 +8,17 @@ function run(input) {
   return new Promise((res, rej) => {
     const c = spawn('node', [SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
-    c.stdout.on('data', (d) => { out += d; });
+    c.stdout.on('data', (d) => {
+      out += d;
+    });
     c.on('close', (code) => res({ out, code }));
     c.on('error', rej);
-    c.stdin.write(JSON.stringify(input)); c.stdin.end();
-    setTimeout(() => { c.kill(); rej(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    c.stdin.write(JSON.stringify(input));
+    c.stdin.end();
+    setTimeout(() => {
+      c.kill();
+      rej(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -39,8 +45,16 @@ describe('confine-tools (harness-only deny hook)', () => {
   });
   it('survives malformed stdin (exit 0, empty out)', async () => {
     const c = spawn('node', [SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let out = ''; c.stdout.on('data', (d) => { out += d; });
-    const code = await new Promise((r) => { c.on('close', r); c.stdin.write('not json'); c.stdin.end(); });
-    expect(out).toBe(''); expect(code).toBe(0);
+    let out = '';
+    c.stdout.on('data', (d) => {
+      out += d;
+    });
+    const code = await new Promise((r) => {
+      c.on('close', r);
+      c.stdin.write('not json');
+      c.stdin.end();
+    });
+    expect(out).toBe('');
+    expect(code).toBe(0);
   });
 });

@@ -123,7 +123,9 @@ describe('user-prompt-search.js CJK precision filter (subprocess)', () => {
 
   beforeEach(async () => {
     const { mkdirSync, rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
     mkdirSync(DB_DIR, { recursive: true });
     mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
     const Database = (await import('better-sqlite3')).default;
@@ -134,9 +136,13 @@ describe('user-prompt-search.js CJK precision filter (subprocess)', () => {
   });
 
   afterEach(async () => {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
     const { rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
   });
 
   function runScript(promptText) {
@@ -155,14 +161,16 @@ describe('user-prompt-search.js CJK precision filter (subprocess)', () => {
       };
       const proc = spawn(process.execPath, [SCRIPT_PATH], { env });
       let stdout = '';
-      proc.stdout.on('data', d => (stdout += d.toString()));
+      proc.stdout.on('data', (d) => (stdout += d.toString()));
       proc.on('close', () => ok(stdout));
-      proc.stdin.write(JSON.stringify({
-        prompt: promptText,
-        hook_event_name: 'UserPromptSubmit',
-        cwd: '/test/project',
-        session_id: 'test-sess-1',
-      }));
+      proc.stdin.write(
+        JSON.stringify({
+          prompt: promptText,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: '/test/project',
+          session_id: 'test-sess-1',
+        }),
+      );
       proc.stdin.end();
     });
   }
@@ -228,7 +236,9 @@ describe('user-prompt-search.js explicit-signal gate (subprocess)', () => {
 
   beforeEach(async () => {
     const { mkdirSync, rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
     mkdirSync(DB_DIR, { recursive: true });
     mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
     const Database = (await import('better-sqlite3')).default;
@@ -251,9 +261,13 @@ describe('user-prompt-search.js explicit-signal gate (subprocess)', () => {
   });
 
   afterEach(async () => {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
     const { rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
   });
 
   function runScript(promptText, extraEnv = {}) {
@@ -269,14 +283,16 @@ describe('user-prompt-search.js explicit-signal gate (subprocess)', () => {
       };
       const proc = spawn(process.execPath, [SCRIPT_PATH], { env });
       let stdout = '';
-      proc.stdout.on('data', d => (stdout += d.toString()));
+      proc.stdout.on('data', (d) => (stdout += d.toString()));
       proc.on('close', () => ok(stdout));
-      proc.stdin.write(JSON.stringify({
-        prompt: promptText,
-        hook_event_name: 'UserPromptSubmit',
-        cwd: '/test/project',
-        session_id: 'test-sess-1',
-      }));
+      proc.stdin.write(
+        JSON.stringify({
+          prompt: promptText,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: '/test/project',
+          session_id: 'test-sess-1',
+        }),
+      );
       proc.stdin.end();
     });
   }
@@ -351,7 +367,9 @@ describe('user-prompt-search.js CJK channel (subprocess)', () => {
 
   beforeEach(async () => {
     const { mkdirSync, rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
     mkdirSync(DB_DIR, { recursive: true });
     mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
     const Database = (await import('better-sqlite3')).default;
@@ -368,9 +386,13 @@ describe('user-prompt-search.js CJK channel (subprocess)', () => {
   });
 
   afterEach(async () => {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
     const { rmSync } = await import('fs');
-    try { rmSync(DB_DIR, { recursive: true }); } catch {}
+    try {
+      rmSync(DB_DIR, { recursive: true });
+    } catch {}
   });
 
   function runScript(promptText, extraEnv = {}) {
@@ -386,14 +408,16 @@ describe('user-prompt-search.js CJK channel (subprocess)', () => {
       };
       const proc = spawn(process.execPath, [SCRIPT_PATH], { env });
       let stdout = '';
-      proc.stdout.on('data', d => (stdout += d.toString()));
+      proc.stdout.on('data', (d) => (stdout += d.toString()));
       proc.on('close', () => ok(stdout));
-      proc.stdin.write(JSON.stringify({
-        prompt: promptText,
-        hook_event_name: 'UserPromptSubmit',
-        cwd: '/test/project',
-        session_id: 'test-sess-1',
-      }));
+      proc.stdin.write(
+        JSON.stringify({
+          prompt: promptText,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: '/test/project',
+          session_id: 'test-sess-1',
+        }),
+      );
       proc.stdin.end();
     });
   }

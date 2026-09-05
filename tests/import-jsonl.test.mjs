@@ -12,7 +12,9 @@ const FIXTURE = join(__dirname, 'fixtures/sample-claude-jsonl/sample.jsonl');
 
 describe('importJsonl — fixture', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   it('imports 2 user prompts from fixture', async () => {
     const r = await importJsonl(db, FIXTURE, { project: 'proj' });
@@ -58,10 +60,13 @@ describe('importJsonl — fixture', () => {
   it('reports recognized === 0 for non-transcript (export-shaped) input', async () => {
     const tmpPath = join(__dirname, 'fixtures/sample-claude-jsonl/export-shaped.jsonl');
     const fs = await import('fs');
-    fs.writeFileSync(tmpPath, [
-      '{"id":1,"type":"bugfix","title":"obs one","narrative":"body"}',
-      '{"id":2,"type":"decision","title":"obs two","narrative":"body"}',
-    ].join('\n') + '\n');
+    fs.writeFileSync(
+      tmpPath,
+      [
+        '{"id":1,"type":"bugfix","title":"obs one","narrative":"body"}',
+        '{"id":2,"type":"decision","title":"obs two","narrative":"body"}',
+      ].join('\n') + '\n',
+    );
     try {
       const r = await importJsonl(db, tmpPath, { project: 'proj' });
       expect(r.recognized).toBe(0);
@@ -98,13 +103,18 @@ describe('importJsonl — fixture', () => {
     // through the original test pass.
     const tmpPath = join(__dirname, 'fixtures/sample-claude-jsonl/uuid-sess.jsonl');
     const fs = await import('fs');
-    const uuidLines = [
-      '{"type":"user","sessionId":"4dfa195d-8da2-48f2-818b-38a1a7436514","cwd":"/p","message":{"role":"user","content":"hi"},"timestamp":"2026-04-01T12:00:00Z"}',
-    ].join('\n') + '\n';
+    const uuidLines =
+      [
+        '{"type":"user","sessionId":"4dfa195d-8da2-48f2-818b-38a1a7436514","cwd":"/p","message":{"role":"user","content":"hi"},"timestamp":"2026-04-01T12:00:00Z"}',
+      ].join('\n') + '\n';
     fs.writeFileSync(tmpPath, uuidLines);
     try {
       await expect(importJsonl(db, tmpPath, { project: 'proj' })).resolves.toBeDefined();
-      const session = db.prepare("SELECT content_session_id, memory_session_id FROM sdk_sessions WHERE content_session_id = '4dfa195d-8da2-48f2-818b-38a1a7436514'").get();
+      const session = db
+        .prepare(
+          "SELECT content_session_id, memory_session_id FROM sdk_sessions WHERE content_session_id = '4dfa195d-8da2-48f2-818b-38a1a7436514'",
+        )
+        .get();
       expect(session).toBeDefined();
       expect(session.memory_session_id).not.toBe(session.content_session_id);
     } finally {
@@ -119,17 +129,20 @@ describe('importJsonl — fixture', () => {
     // only matched the top-level shape, so every real tool_use orphaned.
     const tmpPath = join(__dirname, 'fixtures/sample-claude-jsonl/wrapped-result.jsonl');
     const fs = await import('fs');
-    const realShape = [
-      '{"type":"user","sessionId":"wrap-1","cwd":"/p","message":{"role":"user","content":"Read foo"},"timestamp":"2026-04-01T13:00:00Z"}',
-      '{"type":"assistant","sessionId":"wrap-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"u1","name":"Read","input":{"file_path":"/p/foo.mjs"}}]},"timestamp":"2026-04-01T13:00:01Z"}',
-      '{"type":"user","sessionId":"wrap-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":"foo file body"}]},"timestamp":"2026-04-01T13:00:02Z"}',
-    ].join('\n') + '\n';
+    const realShape =
+      [
+        '{"type":"user","sessionId":"wrap-1","cwd":"/p","message":{"role":"user","content":"Read foo"},"timestamp":"2026-04-01T13:00:00Z"}',
+        '{"type":"assistant","sessionId":"wrap-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"u1","name":"Read","input":{"file_path":"/p/foo.mjs"}}]},"timestamp":"2026-04-01T13:00:01Z"}',
+        '{"type":"user","sessionId":"wrap-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":"foo file body"}]},"timestamp":"2026-04-01T13:00:02Z"}',
+      ].join('\n') + '\n';
     fs.writeFileSync(tmpPath, realShape);
     try {
       const r = await importJsonl(db, tmpPath, { project: 'proj' });
       expect(r.observations).toBe(1);
       expect(r.orphans).toBe(0);
-      const obs = db.prepare("SELECT text, title FROM observations WHERE memory_session_id = 'import-wrap-1'").get();
+      const obs = db
+        .prepare("SELECT text, title FROM observations WHERE memory_session_id = 'import-wrap-1'")
+        .get();
       expect(obs).toBeDefined();
       expect(obs.text).toContain('foo file body');
     } finally {
@@ -140,16 +153,19 @@ describe('importJsonl — fixture', () => {
   it('writes orphan observation when tool_use has no matching tool_result (truncated)', async () => {
     const tmpPath = join(__dirname, 'fixtures/sample-claude-jsonl/truncated.jsonl');
     const fs = await import('fs');
-    const truncated = [
-      '{"type":"user","sessionId":"trunc-1","cwd":"/p","message":{"role":"user","content":"Read the file"},"timestamp":"2026-04-01T11:00:00Z"}',
-      '{"type":"assistant","sessionId":"trunc-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"orphan","name":"Read","input":{"file_path":"/p/a.mjs"}}]},"timestamp":"2026-04-01T11:00:01Z"}',
-      // no tool_result
-    ].join('\n') + '\n';
+    const truncated =
+      [
+        '{"type":"user","sessionId":"trunc-1","cwd":"/p","message":{"role":"user","content":"Read the file"},"timestamp":"2026-04-01T11:00:00Z"}',
+        '{"type":"assistant","sessionId":"trunc-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"orphan","name":"Read","input":{"file_path":"/p/a.mjs"}}]},"timestamp":"2026-04-01T11:00:01Z"}',
+        // no tool_result
+      ].join('\n') + '\n';
     fs.writeFileSync(tmpPath, truncated);
     try {
       const r = await importJsonl(db, tmpPath, { project: 'proj' });
       expect(r.orphans).toBe(1);
-      const obs = db.prepare("SELECT text FROM observations WHERE memory_session_id = 'import-trunc-1'").get();
+      const obs = db
+        .prepare("SELECT text FROM observations WHERE memory_session_id = 'import-trunc-1'")
+        .get();
       expect(obs.text).toContain('transcript truncated');
       // The reported observation count must equal the rows actually written. `orphans` is
       // a SUBSET of `observations`, not a sibling: before this fix the import reported
@@ -164,8 +180,9 @@ describe('importJsonl — fixture', () => {
       // (see tests/update-preserves-body.test.mjs). Pre-tag review found that reverting
       // this to `narrative: ''` left the ENTIRE suite green, so the ingest half of that
       // fix had no guard at all; the rebuild repair silently masked it.
-      const stored = db.prepare(
-        "SELECT narrative, text FROM observations WHERE memory_session_id = 'import-trunc-1'").get();
+      const stored = db
+        .prepare("SELECT narrative, text FROM observations WHERE memory_session_id = 'import-trunc-1'")
+        .get();
       expect(stored.narrative).toContain('transcript truncated');
       expect(stored.narrative).toBe(stored.text);
     } finally {
@@ -176,7 +193,9 @@ describe('importJsonl — fixture', () => {
 
 describe('importJsonl — oversized-file guard', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   it('rejects a transcript above the size cap before reading it (no OOM)', async () => {
     // Sparse file: logical size > cap, ~0 real disk blocks. statSync sees the
@@ -206,22 +225,35 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'import-cli-'));
     env = {
-      ...process.env, CLAUDE_MEM_DIR: dir, CLAUDE_MEM_SKIP_UPDATE: '1',
-      MEM_QUIET_HOOKS: '1', MEM_NO_AUTO_ADOPT: '1',
-      CLAUDE_PROJECT_DIR: '/x/importcli', PWD: '/x/importcli',
+      ...process.env,
+      CLAUDE_MEM_DIR: dir,
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      MEM_QUIET_HOOKS: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+      CLAUDE_PROJECT_DIR: '/x/importcli',
+      PWD: '/x/importcli',
     };
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('counts an unpaired tool_use as an observation and labels it as a subset', () => {
     // A truncated transcript is the COMMON shape for a cold-start backfill: the newest
     // session is usually still open. Before this release the summary said
     // "+0 observations, 1 orphan tool_use" while writing a row, which reads as a no-op.
     const file = join(dir, 'truncated.jsonl');
-    writeFileSync(file, [
-      '{"type":"user","sessionId":"cli-trunc","cwd":"/p","message":{"role":"user","content":"read the cart service"},"timestamp":"2026-04-01T11:00:00Z"}',
-      '{"type":"assistant","sessionId":"cli-trunc","message":{"role":"assistant","content":[{"type":"tool_use","id":"orphan","name":"Read","input":{"file_path":"/p/cart.mjs"}}]},"timestamp":"2026-04-01T11:00:01Z"}',
-    ].join('\n') + '\n');
+    writeFileSync(
+      file,
+      [
+        '{"type":"user","sessionId":"cli-trunc","cwd":"/p","message":{"role":"user","content":"read the cart service"},"timestamp":"2026-04-01T11:00:00Z"}',
+        '{"type":"assistant","sessionId":"cli-trunc","message":{"role":"assistant","content":[{"type":"tool_use","id":"orphan","name":"Read","input":{"file_path":"/p/cart.mjs"}}]},"timestamp":"2026-04-01T11:00:01Z"}',
+      ].join('\n') + '\n',
+    );
 
     const out = execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     expect(out).toMatch(/\+1 observations \(1 from unpaired tool_use\)/);
@@ -238,8 +270,10 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
     // counting it, an import that DID write a row reports "Nothing new" and the user never
     // looks.
     const file = join(dir, 'orphan-only.jsonl');
-    writeFileSync(file,
-      '{"type":"assistant","sessionId":"cli-orphan","message":{"role":"assistant","content":[{"type":"tool_use","id":"o1","name":"Read","input":{"file_path":"/p/only.mjs"}}]},"timestamp":"2026-04-01T14:00:01Z"}\n');
+    writeFileSync(
+      file,
+      '{"type":"assistant","sessionId":"cli-orphan","message":{"role":"assistant","content":[{"type":"tool_use","id":"o1","name":"Read","input":{"file_path":"/p/only.mjs"}}]},"timestamp":"2026-04-01T14:00:01Z"}\n',
+    );
     const out = execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     expect(out).toMatch(/0 prompts, 1 observations \(1 from unpaired tool_use\)/);
     expect(out).toMatch(/Try: claude-mem-lite recent/);
@@ -248,7 +282,10 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
 
   it('says nothing landed when the file is a valid transcript already imported', () => {
     const file = join(dir, 'twice.jsonl');
-    writeFileSync(file, '{"type":"user","sessionId":"cli-dup","cwd":"/p","message":{"role":"user","content":"a prompt worth importing once"},"timestamp":"2026-04-01T12:00:00Z"}\n');
+    writeFileSync(
+      file,
+      '{"type":"user","sessionId":"cli-dup","cwd":"/p","message":{"role":"user","content":"a prompt worth importing once"},"timestamp":"2026-04-01T12:00:00Z"}\n',
+    );
     execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     const second = execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     expect(second).toMatch(/Nothing new/);
@@ -258,7 +295,9 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
 
 describe('importJsonl — <task-notification> parity with the live writers', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   // hook.mjs handleUserPrompt and scripts/user-prompt-search.js both return on
   // `rawPrompt.startsWith('<task-notification>')` — it is Claude Code protocol, not user
@@ -270,10 +309,13 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
     const dir = mkdtempSync(join(tmpdir(), 'mem-tn-'));
     try {
       const file = join(dir, 'tn.jsonl');
-      writeFileSync(file, [
-        '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"a real question about billing retries"},"timestamp":"2026-04-01T12:00:00Z"}',
-        '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"<task-notification>background task finished</task-notification>"},"timestamp":"2026-04-01T12:00:01Z"}',
-      ].join('\n') + '\n');
+      writeFileSync(
+        file,
+        [
+          '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"a real question about billing retries"},"timestamp":"2026-04-01T12:00:00Z"}',
+          '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"<task-notification>background task finished</task-notification>"},"timestamp":"2026-04-01T12:00:01Z"}',
+        ].join('\n') + '\n',
+      );
 
       const r = await importJsonl(db, file, { project: 'proj' });
       expect(r.prompts).toBe(1);
@@ -282,7 +324,9 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
       const rows = db.prepare('SELECT prompt_text FROM user_prompts').all();
       expect(rows).toHaveLength(1);
       expect(rows[0].prompt_text).toMatch(/billing retries/);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // Driven to failure the other way: the guard must not swallow a prompt that merely
@@ -291,10 +335,14 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
     const dir = mkdtempSync(join(tmpdir(), 'mem-tn-'));
     try {
       const file = join(dir, 'tn2.jsonl');
-      writeFileSync(file,
-        '{"type":"user","sessionId":"tn-2","message":{"role":"user","content":"why does <task-notification> reach the transcript at all"},"timestamp":"2026-04-01T12:00:00Z"}\n');
+      writeFileSync(
+        file,
+        '{"type":"user","sessionId":"tn-2","message":{"role":"user","content":"why does <task-notification> reach the transcript at all"},"timestamp":"2026-04-01T12:00:00Z"}\n',
+      );
       const r = await importJsonl(db, file, { project: 'proj' });
       expect(r.prompts).toBe(1);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

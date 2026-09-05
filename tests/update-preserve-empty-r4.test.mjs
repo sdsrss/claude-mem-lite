@@ -34,8 +34,14 @@ function initDb(dataDir) {
 function runCli(args, dataDir) {
   try {
     const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
-      encoding: 'utf8', timeout: 15000,
-      env: { ...process.env, CLAUDE_MEM_DIR: dataDir, CLAUDE_PROJECT_DIR: dataDir, CLAUDE_MEM_HOOK_RUNNING: undefined },
+      encoding: 'utf8',
+      timeout: 15000,
+      env: {
+        ...process.env,
+        CLAUDE_MEM_DIR: dataDir,
+        CLAUDE_PROJECT_DIR: dataDir,
+        CLAUDE_MEM_HOOK_RUNNING: undefined,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     return { stdout, exitCode: 0 };
@@ -51,14 +57,23 @@ describe('R4 CLI update — explicit empty string does not blank content fields'
     const db = initDb(dir);
     insertSession(db, { id: 'u-sess', project: 'p', memoryId: 'u-sess' });
     insertObs(db, {
-      sessionId: 'u-sess', project: 'p', type: 'bugfix', title: 'keeper',
-      narrative: 'ORIGINAL narrative body', text: 'ORIGINAL narrative body',
-      lessonLearned: 'ORIGINAL lesson learned', searchAliases: null,
+      sessionId: 'u-sess',
+      project: 'p',
+      type: 'bugfix',
+      title: 'keeper',
+      narrative: 'ORIGINAL narrative body',
+      text: 'ORIGINAL narrative body',
+      lessonLearned: 'ORIGINAL lesson learned',
+      searchAliases: null,
     });
     db.exec("UPDATE observations SET concepts = 'origconcept alpha' WHERE id = 1");
     db.close();
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  });
 
   function field(name) {
     const db = new Database(join(dir, 'claude-mem-lite.db'));
@@ -101,7 +116,9 @@ describe('R4 MCP memUpdateSchema — empty content fields rejected (parity with 
     expect(schema.safeParse({ id: 1, concepts: '' }).success).toBe(false);
   });
   it('accepts non-empty content fields (no regression)', () => {
-    expect(schema.safeParse({ id: 1, narrative: 'real', lesson_learned: 'l', concepts: 'a b' }).success).toBe(true);
+    expect(schema.safeParse({ id: 1, narrative: 'real', lesson_learned: 'l', concepts: 'a b' }).success).toBe(
+      true,
+    );
   });
   it('still accepts an update that omits the content fields', () => {
     expect(schema.safeParse({ id: 1, importance: 2 }).success).toBe(true);

@@ -38,20 +38,39 @@ function seed() {
   const db = new Database(join(dir, 'claude-mem-lite.db'));
   initSchema(db);
   const now = Date.now();
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc', 'mem', 'p--proj', datetime('now'), ?)`).run(now);
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc', 'mem', 'p--proj', datetime('now'), ?)`,
+  ).run(now);
   const ins = db.prepare(`
     INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts,
                               facts, files_read, files_modified, importance, lesson_learned,
                               superseded_at, superseded_by, created_at, created_at_epoch)
     VALUES ('mem', 'p--proj', ?, 'bugfix', ?, '', ?, '', '', '[]', '[]', 3, ?, ?, ?, ?, ?)`);
-  const retracted = Number(ins.run('OAuth callback loops forever because the state param is dropped',
-    'OAuth callback loops forever', 'OAuth callback loops forever because the state param is dropped',
-    BAD, now, 2, new Date(now).toISOString(), now).lastInsertRowid);
-  const keeper = Number(ins.run('OAuth callback loop: persist the state param in the session store',
-    'OAuth callback loop: persist the state param', 'OAuth callback loop: persist the state param in the session store',
-    'Persist the OAuth state param; never disable validation', null, null,
-    new Date(now).toISOString(), now).lastInsertRowid);
+  const retracted = Number(
+    ins.run(
+      'OAuth callback loops forever because the state param is dropped',
+      'OAuth callback loops forever',
+      'OAuth callback loops forever because the state param is dropped',
+      BAD,
+      now,
+      2,
+      new Date(now).toISOString(),
+      now,
+    ).lastInsertRowid,
+  );
+  const keeper = Number(
+    ins.run(
+      'OAuth callback loop: persist the state param in the session store',
+      'OAuth callback loop: persist the state param',
+      'OAuth callback loop: persist the state param in the session store',
+      'Persist the OAuth state param; never disable validation',
+      null,
+      null,
+      new Date(now).toISOString(),
+      now,
+    ).lastInsertRowid,
+  );
   db.close();
   return { retracted, keeper };
 }
@@ -61,17 +80,25 @@ function cliGet(id) {
 }
 
 function mcpGet(id) {
-  const reqs = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-    `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_get","arguments":{"ids":[${id}]}}}`,
-  ].join('\n') + '\n';
-  const raw = execFileSync(process.execPath, [SERVER], { env, input: reqs, encoding: 'utf8', timeout: 30000 });
+  const reqs =
+    [
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_get","arguments":{"ids":[${id}]}}}`,
+    ].join('\n') + '\n';
+  const raw = execFileSync(process.execPath, [SERVER], {
+    env,
+    input: reqs,
+    encoding: 'utf8',
+    timeout: 30000,
+  });
   for (const line of raw.split('\n').filter(Boolean)) {
     try {
       const m = JSON.parse(line);
       if (m.id === 2) return m.result?.content?.[0]?.text || '';
-    } catch { /* server also logs non-JSON lines */ }
+    } catch {
+      /* server also logs non-JSON lines */
+    }
   }
   return '';
 }
@@ -79,9 +106,21 @@ function mcpGet(id) {
 describe('get / mem_get — retracted rows announce the retraction first', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'retracted-'));
-    env = { ...process.env, CLAUDE_MEM_DIR: dir, CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1', MEM_NO_AUTO_ADOPT: '1' };
+    env = {
+      ...process.env,
+      CLAUDE_MEM_DIR: dir,
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      MEM_QUIET_HOOKS: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+    };
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('CLI `get` puts the notice ahead of the withdrawn lesson', () => {
     const { retracted, keeper } = seed();
@@ -109,10 +148,8 @@ describe('get / mem_get — retracted rows announce the retraction first', () =>
   it('still warns when the supersessor id is unknown (string marker rows)', () => {
     // auto-dedup writes non-numeric superseded_by values ('auto-dedup-fuzzy'); the row is
     // still retracted and must still say so, just without a "read #N instead" pointer.
-    expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' }))
-      .toMatch(/RETRACTED/);
-    expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' }))
-      .not.toMatch(/#/);
+    expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' })).toMatch(/RETRACTED/);
+    expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' })).not.toMatch(/#/);
     expect(supersededNotice({ superseded_at: null, superseded_by: null })).toBe(null);
   });
 });

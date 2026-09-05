@@ -28,7 +28,9 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
  */
 function inCoverageScope(file) {
   return picomatch.isMatch(join(ROOT, file), coverage.include, {
-    contains: true, dot: true, ignore: coverage.exclude,
+    contains: true,
+    dot: true,
+    ignore: coverage.exclude,
   });
 }
 

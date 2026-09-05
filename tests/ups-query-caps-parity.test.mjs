@@ -35,7 +35,11 @@ describe('UserPromptSubmit query caps — both hooks of the event', () => {
     // above were meant to cover in fact had three query builders, and the uncapped one
     // survived the round that named the defect.
     const pathC = read('../hook.mjs');
-    for (const [name, src] of [['user-prompt-search.js', pathA], ['hook-memory.mjs', pathB], ['hook.mjs', pathC]]) {
+    for (const [name, src] of [
+      ['user-prompt-search.js', pathA],
+      ['hook-memory.mjs', pathB],
+      ['hook.mjs', pathC],
+    ]) {
       expect(src, `${name} must import the shared cap`).toMatch(/from '\.\.?\/lib\/ups-query\.mjs'/);
       expect(src, `${name} must not re-declare the caps`).not.toMatch(/maxChars:\s*2000/);
     }
@@ -76,10 +80,10 @@ describe('UserPromptSubmit query caps — both hooks of the event', () => {
     const src = read('../lib/events-injection.mjs');
     // Signature shape, not layout — separators are \s* so a formatter may wrap it (P1-3).
     expect(src).toMatch(/export function searchInjectableEvents\(\s*db,\s*\{\s*ftsQuery,/);
-    expect(src, 'events-injection must not build a query of its own')
-      .not.toMatch(/sanitizeFtsQuery\(/);
-    expect(read('../hook.mjs'), 'the events call must pass a built, capped query')
-      .toMatch(/searchInjectableEvents\(\s*db,\s*\{\s*ftsQuery: upsFtsQuery\(promptText\)/);
+    expect(src, 'events-injection must not build a query of its own').not.toMatch(/sanitizeFtsQuery\(/);
+    expect(read('../hook.mjs'), 'the events call must pass a built, capped query').toMatch(
+      /searchInjectableEvents\(\s*db,\s*\{\s*ftsQuery: upsFtsQuery\(promptText\)/,
+    );
   });
 
   it('the events leg returns nothing for a query it was never given', () => {
@@ -88,8 +92,8 @@ describe('UserPromptSubmit query caps — both hooks of the event', () => {
     // resurrect the uncapped path — it must simply retrieve nothing.
     const db = createTestDb();
     db.prepare(
-      "INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)"
-      + " VALUES ('p', 'bugfix', 'redis connection pool exhausted', 'raise the cap', 2, ?)",
+      'INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)' +
+        " VALUES ('p', 'bugfix', 'redis connection pool exhausted', 'raise the cap', 2, ?)",
     ).run(Date.now());
     expect(searchInjectableEvents(db, { ftsQuery: 'redis', project: 'p' }).length).toBe(1);
     expect(searchInjectableEvents(db, { prompt: 'redis', project: 'p' }).length).toBe(0);

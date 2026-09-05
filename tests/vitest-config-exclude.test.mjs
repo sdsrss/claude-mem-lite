@@ -35,11 +35,13 @@ describe('vitest test.exclude (D#168)', () => {
     // list copied into a comment, so a vitest upgrade that adds a default fails here
     // instead of silently widening collection.
     for (const pattern of configDefaults.exclude) {
-      expect(exclude, `default exclude "${pattern}" was dropped by overriding test.exclude`)
-        .toContain(pattern);
+      expect(exclude, `default exclude "${pattern}" was dropped by overriding test.exclude`).toContain(
+        pattern,
+      );
     }
-    expect(configDefaults.exclude.length,
-      'sanity: the installed vitest must have some defaults, else this case is vacuous')
-      .toBeGreaterThan(0);
+    expect(
+      configDefaults.exclude.length,
+      'sanity: the installed vitest must have some defaults, else this case is vacuous',
+    ).toBeGreaterThan(0);
   });
 });

@@ -12,12 +12,18 @@ import { reRankWithContext, autoBoostIfNeeded, runIdleCleanup } from '../search-
 
 describe('dedup migration', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('creates unique index when no duplicates exist', () => {
     // initSchema (called by createTestDb) already applies the dedup migration
-    const hasIdx = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'").get();
+    const hasIdx = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'")
+      .get();
     expect(hasIdx).toBeDefined();
 
     // FK should be enabled after migration
@@ -27,7 +33,7 @@ describe('dedup migration', () => {
     // Can insert sessions with unique memory_session_ids
     insertSession(db, { id: 'a', memoryId: 'mem-a' });
     insertSession(db, { id: 'b', memoryId: 'mem-b' });
-    const count = db.prepare("SELECT COUNT(*) as cnt FROM sdk_sessions").get();
+    const count = db.prepare('SELECT COUNT(*) as cnt FROM sdk_sessions').get();
     expect(count.cnt).toBe(2);
   });
 
@@ -60,10 +66,14 @@ describe('dedup migration', () => {
     insertSession(rawDb, { id: 'unique', memoryId: 'unique-mem' });
 
     // Verify duplicates exist
-    const dupes = rawDb.prepare(`
+    const dupes = rawDb
+      .prepare(
+        `
       SELECT memory_session_id, COUNT(*) as cnt FROM sdk_sessions
       WHERE memory_session_id IS NOT NULL GROUP BY memory_session_id HAVING cnt > 1
-    `).all();
+    `,
+      )
+      .all();
     expect(dupes.length).toBe(1);
     expect(dupes[0].cnt).toBe(3);
 
@@ -71,13 +81,15 @@ describe('dedup migration', () => {
     initSchema(rawDb);
 
     // Verify: only 1 row per memory_session_id
-    const remaining = rawDb.prepare("SELECT id, memory_session_id FROM sdk_sessions ORDER BY id").all();
+    const remaining = rawDb.prepare('SELECT id, memory_session_id FROM sdk_sessions ORDER BY id').all();
     expect(remaining.length).toBe(2);
     expect(remaining[0].memory_session_id).toBe('dup-mem');
     expect(remaining[1].memory_session_id).toBe('unique-mem');
 
     // Unique index should now exist
-    const hasIdx = rawDb.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'").get();
+    const hasIdx = rawDb
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'")
+      .get();
     expect(hasIdx).toBeDefined();
 
     rawDb.close();
@@ -91,10 +103,12 @@ describe('FK enforcement after migration', () => {
   beforeEach(() => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
-    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sess_memory_sid ON sdk_sessions(memory_session_id)");
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_sess_memory_sid ON sdk_sessions(memory_session_id)');
     db.pragma('foreign_keys = ON');
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('allows inserting observation with valid session', () => {
     expect(() => insertObs(db, { sessionId: 'sess-1', title: 'valid' })).not.toThrow();
@@ -113,24 +127,37 @@ describe('mem_delete related_ids cleanup', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('removes deleted IDs from other observations related_ids', () => {
     // Insert 3 observations with cross-references
-    insertObs(db, { title: 'obs A', relatedIds: '[2, 3]' });       // id=1
-    insertObs(db, { title: 'obs B', relatedIds: '[1, 3]' });       // id=2
-    insertObs(db, { title: 'obs C', relatedIds: '[1, 2]' });       // id=3
+    insertObs(db, { title: 'obs A', relatedIds: '[2, 3]' }); // id=1
+    insertObs(db, { title: 'obs B', relatedIds: '[1, 3]' }); // id=2
+    insertObs(db, { title: 'obs C', relatedIds: '[1, 2]' }); // id=3
 
     // Delete obs #2 — simulate mem_delete cleanup logic
     const deletedIds = new Set([2]);
-    const referencing = db.prepare("SELECT id, related_ids FROM observations WHERE related_ids IS NOT NULL AND related_ids != '[]'").all();
+    const referencing = db
+      .prepare(
+        "SELECT id, related_ids FROM observations WHERE related_ids IS NOT NULL AND related_ids != '[]'",
+      )
+      .all();
     for (const r of referencing) {
       let ids;
-      try { ids = JSON.parse(r.related_ids); } catch { continue; }
+      try {
+        ids = JSON.parse(r.related_ids);
+      } catch {
+        continue;
+      }
       if (!Array.isArray(ids)) continue;
-      const filtered = ids.filter(id => !deletedIds.has(id));
+      const filtered = ids.filter((id) => !deletedIds.has(id));
       if (filtered.length !== ids.length) {
-        db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(JSON.stringify(filtered), r.id);
+        db.prepare('UPDATE observations SET related_ids = ? WHERE id = ?').run(
+          JSON.stringify(filtered),
+          r.id,
+        );
       }
     }
     db.prepare('DELETE FROM observations WHERE id = 2').run();
@@ -150,14 +177,18 @@ describe('mem_delete related_ids cleanup', () => {
     const id = db.prepare("SELECT id FROM observations WHERE title = 'unique searchable term'").get().id;
 
     // Verify FTS finds it
-    const before = db.prepare("SELECT rowid FROM observations_fts WHERE observations_fts MATCH '\"unique\"'").all();
+    const before = db
+      .prepare('SELECT rowid FROM observations_fts WHERE observations_fts MATCH \'"unique"\'')
+      .all();
     expect(before.length).toBe(1);
 
     // Delete
     db.prepare('DELETE FROM observations WHERE id = ?').run(id);
 
     // FTS should no longer find it
-    const after = db.prepare("SELECT rowid FROM observations_fts WHERE observations_fts MATCH '\"unique\"'").all();
+    const after = db
+      .prepare('SELECT rowid FROM observations_fts WHERE observations_fts MATCH \'"unique"\'')
+      .all();
     expect(after.length).toBe(0);
   });
 });
@@ -170,23 +201,33 @@ describe('mem_save dedup via jaccardSimilarity', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('allows saving non-duplicate titles', () => {
     insertObs(db, { title: 'Fix authentication bug in login flow' });
 
-    const recent = db.prepare("SELECT title FROM observations WHERE project = 'test' ORDER BY created_at_epoch DESC LIMIT 10").all();
+    const recent = db
+      .prepare(
+        "SELECT title FROM observations WHERE project = 'test' ORDER BY created_at_epoch DESC LIMIT 10",
+      )
+      .all();
     const newTitle = 'Add dark mode toggle to settings';
-    const isDuplicate = recent.some(r => jaccardSimilarity(r.title, newTitle) > 0.7);
+    const isDuplicate = recent.some((r) => jaccardSimilarity(r.title, newTitle) > 0.7);
     expect(isDuplicate).toBe(false);
   });
 
   it('detects near-duplicate titles', () => {
     insertObs(db, { title: 'Fix authentication bug in login flow' });
 
-    const recent = db.prepare("SELECT title FROM observations WHERE project = 'test' ORDER BY created_at_epoch DESC LIMIT 10").all();
+    const recent = db
+      .prepare(
+        "SELECT title FROM observations WHERE project = 'test' ORDER BY created_at_epoch DESC LIMIT 10",
+      )
+      .all();
     const newTitle = 'Fix authentication bug in the login flow';
-    const isDuplicate = recent.some(r => jaccardSimilarity(r.title, newTitle) > 0.7);
+    const isDuplicate = recent.some((r) => jaccardSimilarity(r.title, newTitle) > 0.7);
     expect(isDuplicate).toBe(true);
   });
 });
@@ -199,25 +240,53 @@ describe('mem_save importance', () => {
     db = createTestDb();
     insertSession(db, { id: 'manual-test', memoryId: 'manual-test' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('stores explicit importance value', () => {
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', '[]', ?, ?, ?)
-    `).run('manual-test', 'test', 'critical fix', 'bugfix', 'Critical security patch', 'critical fix', 3, new Date(now).toISOString(), now);
+    `,
+    ).run(
+      'manual-test',
+      'test',
+      'critical fix',
+      'bugfix',
+      'Critical security patch',
+      'critical fix',
+      3,
+      new Date(now).toISOString(),
+      now,
+    );
 
-    const obs = db.prepare("SELECT importance FROM observations WHERE title = 'Critical security patch'").get();
+    const obs = db
+      .prepare("SELECT importance FROM observations WHERE title = 'Critical security patch'")
+      .get();
     expect(obs.importance).toBe(3);
   });
 
   it('defaults importance to 1', () => {
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', '[]', ?, ?, ?)
-    `).run('manual-test', 'test', 'routine note', 'discovery', 'Simple note', 'routine note', 1, new Date(now).toISOString(), now);
+    `,
+    ).run(
+      'manual-test',
+      'test',
+      'routine note',
+      'discovery',
+      'Simple note',
+      'routine note',
+      1,
+      new Date(now).toISOString(),
+      now,
+    );
 
     const obs = db.prepare("SELECT importance FROM observations WHERE title = 'Simple note'").get();
     expect(obs.importance).toBe(1);
@@ -232,41 +301,58 @@ describe('FTS5 search integration', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
     // Insert test observations
-    insertObs(db, { title: 'webpack-dev-server configuration fix', text: 'webpack-dev-server configuration fix' });
+    insertObs(db, {
+      title: 'webpack-dev-server configuration fix',
+      text: 'webpack-dev-server configuration fix',
+    });
     insertObs(db, { title: 'next-auth session handling', text: 'next-auth session handling' });
     insertObs(db, { title: 'simple react component', text: 'simple react component' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('finds hyphenated terms', () => {
     const fts = sanitizeFtsQuery('webpack-dev-server');
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.title FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
-    `).all(fts);
+    `,
+      )
+      .all(fts);
     expect(rows.length).toBe(1);
     expect(rows[0].title).toContain('webpack-dev-server');
   });
 
   it('finds simple terms', () => {
     const fts = sanitizeFtsQuery('react component');
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.title FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
-    `).all(fts);
+    `,
+      )
+      .all(fts);
     expect(rows.length).toBe(1);
     expect(rows[0].title).toContain('react');
   });
 
   it('returns empty for non-matching queries', () => {
     const fts = sanitizeFtsQuery('nonexistent term xyz');
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
-    `).all(fts);
+    `,
+      )
+      .all(fts);
     expect(rows.length).toBe(0);
   });
 });
@@ -307,10 +393,24 @@ describe('mem_recent date_since filter', () => {
   beforeEach(() => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
-    insertObs(db, { sessionId: 'sess-1', project: 'test', title: 'recent-fresh-row', text: 'fresh', epochOffset: -2 * 3600000 });   // 2h ago
-    insertObs(db, { sessionId: 'sess-1', project: 'test', title: 'recent-stale-row', text: 'stale', epochOffset: -10 * 86400000 }); // 10d ago
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'recent-fresh-row',
+      text: 'fresh',
+      epochOffset: -2 * 3600000,
+    }); // 2h ago
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'recent-stale-row',
+      text: 'stale',
+      epochOffset: -10 * 86400000,
+    }); // 10d ago
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('keeps only rows newer than the relative window', async () => {
     const res = await handleRecentForTest(db, { project: 'test', date_since: '24h', limit: 100 });
@@ -327,12 +427,19 @@ describe('mem_recent date_since filter', () => {
   });
 
   it('rejects an invalid duration', async () => {
-    await expect(handleRecentForTest(db, { project: 'test', date_since: '7days' }))
-      .rejects.toThrow(/date_since/);
+    await expect(handleRecentForTest(db, { project: 'test', date_since: '7days' })).rejects.toThrow(
+      /date_since/,
+    );
   });
 
   it('obs_type filters to one observation type (CLI recent --type parity)', async () => {
-    insertObs(db, { sessionId: 'sess-1', project: 'test', type: 'bugfix', title: 'recent-bugfix-row', text: 'bug' });
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: 'recent-bugfix-row',
+      text: 'bug',
+    });
     const res = await handleRecentForTest(db, { project: 'test', obs_type: 'bugfix', limit: 100 });
     const text = res.content[0].text;
     expect(text).toContain('recent-bugfix-row');
@@ -363,32 +470,48 @@ describe('mem_get multi-source', () => {
     insertObs(db, { title: 'test observation' });
     // Insert session summary
     const now = new Date();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, files_read, files_edited, notes, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', '', ?, ?)
-    `).run('sess-1', 'test', 'build feature X', 'explored codebase', 'found pattern', 'implemented feature', 'add tests', now.toISOString(), now.getTime());
+    `,
+    ).run(
+      'sess-1',
+      'test',
+      'build feature X',
+      'explored codebase',
+      'found pattern',
+      'implemented feature',
+      'add tests',
+      now.toISOString(),
+      now.getTime(),
+    );
     // Insert user prompt
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?)
-    `).run('sess-1', 'Help me build feature X', 1, now.toISOString(), now.getTime());
+    `,
+    ).run('sess-1', 'Help me build feature X', 1, now.toISOString(), now.getTime());
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('fetches observations by default', () => {
-    const rows = db.prepare("SELECT * FROM observations WHERE id = 1").all();
+    const rows = db.prepare('SELECT * FROM observations WHERE id = 1').all();
     expect(rows.length).toBe(1);
     expect(rows[0].title).toBe('test observation');
   });
 
   it('fetches session summaries', () => {
-    const rows = db.prepare("SELECT * FROM session_summaries WHERE id = 1").all();
+    const rows = db.prepare('SELECT * FROM session_summaries WHERE id = 1').all();
     expect(rows.length).toBe(1);
     expect(rows[0].request).toBe('build feature X');
   });
 
   it('fetches user prompts', () => {
-    const rows = db.prepare("SELECT * FROM user_prompts WHERE id = 1").all();
+    const rows = db.prepare('SELECT * FROM user_prompts WHERE id = 1').all();
     expect(rows.length).toBe(1);
     expect(rows[0].prompt_text).toBe('Help me build feature X');
   });
@@ -402,14 +525,18 @@ describe('access_count tracking', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('mem_get increments access_count', () => {
     insertObs(db, { title: 'test obs' });
     const id = db.prepare("SELECT id FROM observations WHERE title = 'test obs'").get().id;
 
     // Simulate mem_get: increment access_count
-    const updateStmt = db.prepare('UPDATE observations SET access_count = COALESCE(access_count,0) + 1 WHERE id = ?');
+    const updateStmt = db.prepare(
+      'UPDATE observations SET access_count = COALESCE(access_count,0) + 1 WHERE id = ?',
+    );
     updateStmt.run(id);
     updateStmt.run(id);
 
@@ -425,12 +552,18 @@ describe('access_count tracking', () => {
 
   it('access_count boosts search ranking', () => {
     // Two observations with same text — one with high access_count
-    insertObs(db, { title: 'database query optimization', text: 'database query optimization', accessCount: 50 });
+    insertObs(db, {
+      title: 'database query optimization',
+      text: 'database query optimization',
+      accessCount: 50,
+    });
     insertObs(db, { title: 'database query slow fix', text: 'database query slow fix', accessCount: 0 });
 
     const ftsQuery = '"database" "query"';
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.title, o.access_count,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
@@ -440,12 +573,14 @@ describe('access_count tracking', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
       ORDER BY score
-    `).all(now, ftsQuery);
+    `,
+      )
+      .all(now, ftsQuery);
 
     expect(rows.length).toBe(2);
     // The one with access_count=50 should have a better (more negative) score
-    const highAccess = rows.find(r => r.access_count === 50);
-    const lowAccess = rows.find(r => r.access_count === 0);
+    const highAccess = rows.find((r) => r.access_count === 50);
+    const lowAccess = rows.find((r) => r.access_count === 0);
     expect(highAccess.score).toBeLessThan(lowAccess.score);
   });
 });
@@ -458,7 +593,9 @@ describe('reRankWithContext', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('boosts file-overlapping results', () => {
     // Insert a recent observation editing auth.js (populates observation_files)
@@ -466,7 +603,11 @@ describe('reRankWithContext', () => {
     // Insert older search-result observations (outside 2h window so they don't affect activeFiles)
     const oldOffset = -3 * 3600000; // 3 hours ago
     const r1 = insertObs(db, { title: 'bug in auth', filesModified: '["auth.js"]', epochOffset: oldOffset });
-    const r2 = insertObs(db, { title: 'unrelated fix', filesModified: '["utils.js"]', epochOffset: oldOffset });
+    const r2 = insertObs(db, {
+      title: 'unrelated fix',
+      filesModified: '["utils.js"]',
+      epochOffset: oldOffset,
+    });
     const id1 = Number(r1.lastInsertRowid);
     const id2 = Number(r2.lastInsertRowid);
 
@@ -478,8 +619,8 @@ describe('reRankWithContext', () => {
     reRankWithContext(db, results, 'test');
 
     // auth.js result should be boosted (more negative score = higher rank)
-    const authResult = results.find(r => r.id === id1);
-    const otherResult = results.find(r => r.id === id2);
+    const authResult = results.find((r) => r.id === id1);
+    const otherResult = results.find((r) => r.id === id2);
     expect(authResult.score).toBeLessThan(otherResult.score);
   });
 
@@ -487,9 +628,7 @@ describe('reRankWithContext', () => {
     // Insert obs from a different project so activeFiles is empty for 'test'
     const r1 = insertObs(db, { title: 'test', project: 'other', filesModified: '["foo.js"]' });
     const id1 = Number(r1.lastInsertRowid);
-    const results = [
-      { source: 'obs', id: id1, title: 'test', score: -5.0, importance: 1 },
-    ];
+    const results = [{ source: 'obs', id: id1, title: 'test', score: -5.0, importance: 1 }];
     reRankWithContext(db, results, 'empty-project');
     // No active files → no boost → score unchanged
     expect(results[0].score).toBe(-5.0);
@@ -498,9 +637,7 @@ describe('reRankWithContext', () => {
   it('handles obs with no files in junction table', () => {
     const r1 = insertObs(db, { title: 'test', filesModified: '[]' });
     const id1 = Number(r1.lastInsertRowid);
-    const results = [
-      { source: 'obs', id: id1, title: 'test', score: -5.0, importance: 1 },
-    ];
+    const results = [{ source: 'obs', id: id1, title: 'test', score: -5.0, importance: 1 }];
     reRankWithContext(db, results, 'test');
     // No files → no crash, score unchanged
     expect(results[0].score).toBe(-5.0);
@@ -515,14 +652,20 @@ describe('mem_stats health metrics', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('computes token estimate', () => {
     insertObs(db, { title: 'test observation', narrative: 'some narrative text here', text: 'extra text' });
-    const result = db.prepare(`
+    const result = db
+      .prepare(
+        `
       SELECT SUM(LENGTH(COALESCE(title,'')) + LENGTH(COALESCE(narrative,'')) + LENGTH(COALESCE(text,''))) / 4 as t
       FROM observations
-    `).get();
+    `,
+      )
+      .get();
     expect(result.t).toBeGreaterThan(0);
   });
 
@@ -533,29 +676,42 @@ describe('mem_stats health metrics', () => {
     insertObs(db, { title: 'recent obs', importance: 2, epochOffset: 0 });
 
     const obsTotal = db.prepare('SELECT COUNT(*) as c FROM observations').get();
-    const lowVal = db.prepare(`
+    const lowVal = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0 AND created_at_epoch < ?
-    `).get(Date.now() - 30 * 86400000);
+    `,
+      )
+      .get(Date.now() - 30 * 86400000);
 
     const noiseRatio = obsTotal.c > 0 ? lowVal.c / obsTotal.c : 0;
-    expect(noiseRatio).toBeCloseTo(0.5, 1);  // 1 of 2 is noise
+    expect(noiseRatio).toBeCloseTo(0.5, 1); // 1 of 2 is noise
   });
 
   it('triggers warning at > 60% noise', () => {
     // Insert 7 old low-value + 3 recent = 70% noise
     for (let i = 0; i < 7; i++) {
-      insertObs(db, { title: `old noise ${i}`, importance: 1, accessCount: 0, epochOffset: -(31 + i) * 86400000 });
+      insertObs(db, {
+        title: `old noise ${i}`,
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -(31 + i) * 86400000,
+      });
     }
     for (let i = 0; i < 3; i++) {
       insertObs(db, { title: `recent ${i}`, importance: 2, epochOffset: 0 });
     }
 
     const obsTotal = db.prepare('SELECT COUNT(*) as c FROM observations').get();
-    const lowVal = db.prepare(`
+    const lowVal = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0 AND created_at_epoch < ?
-    `).get(Date.now() - 30 * 86400000);
+    `,
+      )
+      .get(Date.now() - 30 * 86400000);
 
     const noiseRatio = obsTotal.c > 0 ? lowVal.c / obsTotal.c : 0;
     expect(noiseRatio).toBeGreaterThan(0.6);
@@ -570,20 +726,31 @@ describe('mem_compress', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('preview shows candidates', () => {
     // Seed 5 old low-value obs in same project/week
     for (let i = 0; i < 5; i++) {
-      insertObs(db, { title: `old obs ${i}`, importance: 1, accessCount: 0, epochOffset: -(90 - i) * 86400000 });
+      insertObs(db, {
+        title: `old obs ${i}`,
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -(90 - i) * 86400000,
+      });
     }
 
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
 
     expect(candidates.length).toBe(5);
   });
@@ -591,15 +758,25 @@ describe('mem_compress', () => {
   it('creates weekly summaries', () => {
     // Seed 5 old low-value obs with same week
     for (let i = 0; i < 5; i++) {
-      insertObs(db, { title: `old obs ${i}`, type: 'change', importance: 1, accessCount: 0, epochOffset: -(90 + i) * 86400000 });
+      insertObs(db, {
+        title: `old obs ${i}`,
+        type: 'change',
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -(90 + i) * 86400000,
+      });
     }
 
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id, project, type, title, created_at, created_at_epoch FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL ORDER BY project, created_at_epoch
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
 
     // Group by project + ISO week
     const groups = new Map();
@@ -631,12 +808,16 @@ describe('mem_compress', () => {
     insertObs(db, { title: 'visible searchable term', text: 'visible searchable term' });
     insertObs(db, { title: 'hidden searchable term', text: 'hidden searchable term', compressedInto: 99 });
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"searchable"'
         AND COALESCE(o.compressed_into, 0) = 0
-    `).all();
+    `,
+      )
+      .all();
 
     expect(rows.length).toBe(1);
     expect(rows[0].id).toBe(1);
@@ -648,11 +829,15 @@ describe('mem_compress', () => {
     insertObs(db, { title: 'small group B', importance: 1, accessCount: 0, epochOffset: -90 * 86400000 });
 
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id, project, type, title, created_at, created_at_epoch FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL ORDER BY project, created_at_epoch
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
 
     const groups = new Map();
     for (const c of candidates) {
@@ -678,38 +863,60 @@ describe('PRF document-level expansion', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('finds expanded results via shared terms in top matches', () => {
     // Seed observations that share vocabulary
-    insertObs(db, { title: 'authentication token refresh bug', text: 'authentication token refresh', narrative: 'The session cookie expired causing token refresh failure' });
-    insertObs(db, { title: 'session cookie handling fix', text: 'session cookie handling', narrative: 'Fixed session cookie not being set after authentication' });
-    insertObs(db, { title: 'cookie expiry configuration', text: 'cookie expiry configuration', narrative: 'Updated cookie expiry to match session timeout settings' });
+    insertObs(db, {
+      title: 'authentication token refresh bug',
+      text: 'authentication token refresh',
+      narrative: 'The session cookie expired causing token refresh failure',
+    });
+    insertObs(db, {
+      title: 'session cookie handling fix',
+      text: 'session cookie handling',
+      narrative: 'Fixed session cookie not being set after authentication',
+    });
+    insertObs(db, {
+      title: 'cookie expiry configuration',
+      text: 'cookie expiry configuration',
+      narrative: 'Updated cookie expiry to match session timeout settings',
+    });
 
     // Primary search for "authentication" should find direct match
     const ftsQuery = sanitizeFtsQuery('authentication');
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.title FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND COALESCE(o.compressed_into, 0) = 0
       ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
       LIMIT 8
-    `).all(ftsQuery);
+    `,
+      )
+      .all(ftsQuery);
 
     // Should find observations with "authentication" or its synonyms
     expect(rows.length).toBeGreaterThanOrEqual(1);
     // "cookie" and "session" should be discriminative terms across these results
-    const titles = rows.map(r => r.title);
-    expect(titles.some(t => t.includes('authentication') || t.includes('session'))).toBe(true);
+    const titles = rows.map((r) => r.title);
+    expect(titles.some((t) => t.includes('authentication') || t.includes('session'))).toBe(true);
   });
 
   it('does not expand when no results exist', () => {
     const ftsQuery = sanitizeFtsQuery('nonexistent_term_xyz');
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND COALESCE(o.compressed_into, 0) = 0
-    `).all(ftsQuery);
+    `,
+      )
+      .all(ftsQuery);
     expect(rows.length).toBe(0);
   });
 });
@@ -722,7 +929,9 @@ describe('adaptive time windows logic', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('detects high velocity (>10 obs/day)', () => {
     // Insert 80 observations in the last 7 days (>11/day)
@@ -730,10 +939,14 @@ describe('adaptive time windows logic', () => {
       insertObs(db, { title: `high vel obs ${i}`, epochOffset: -i * 3600000 });
     }
     const sevenDaysAgo = Date.now() - 7 * 86400000;
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM observations
       WHERE project = 'test' AND created_at_epoch > ? AND COALESCE(compressed_into, 0) = 0
-    `).get(sevenDaysAgo);
+    `,
+      )
+      .get(sevenDaysAgo);
     const velocity = row.c / 7;
     expect(velocity).toBeGreaterThan(10);
   });
@@ -744,10 +957,14 @@ describe('adaptive time windows logic', () => {
       insertObs(db, { title: `low vel obs ${i}`, epochOffset: -i * 86400000 });
     }
     const sevenDaysAgo = Date.now() - 7 * 86400000;
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM observations
       WHERE project = 'test' AND created_at_epoch > ? AND COALESCE(compressed_into, 0) = 0
-    `).get(sevenDaysAgo);
+    `,
+      )
+      .get(sevenDaysAgo);
     const velocity = row.c / 7;
     expect(velocity).toBeLessThan(3);
   });
@@ -758,10 +975,14 @@ describe('adaptive time windows logic', () => {
       insertObs(db, { title: `med vel obs ${i}`, epochOffset: -i * 4 * 3600000 });
     }
     const sevenDaysAgo = Date.now() - 7 * 86400000;
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT COUNT(*) as c FROM observations
       WHERE project = 'test' AND created_at_epoch > ? AND COALESCE(compressed_into, 0) = 0
-    `).get(sevenDaysAgo);
+    `,
+      )
+      .get(sevenDaysAgo);
     const velocity = row.c / 7;
     expect(velocity).toBeGreaterThanOrEqual(3);
     expect(velocity).toBeLessThanOrEqual(10);
@@ -788,14 +1009,26 @@ describe('BM25 scoring formula', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('recency decay: newer obs scores better', () => {
-    insertObs(db, { title: 'recency test subject alpha', text: 'recency test subject alpha', epochOffset: -30 * 86400000 });
-    insertObs(db, { title: 'recency test subject alpha', text: 'recency test subject alpha', epochOffset: -1000 });
+    insertObs(db, {
+      title: 'recency test subject alpha',
+      text: 'recency test subject alpha',
+      epochOffset: -30 * 86400000,
+    });
+    insertObs(db, {
+      title: 'recency test subject alpha',
+      text: 'recency test subject alpha',
+      epochOffset: -1000,
+    });
 
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.created_at_epoch,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
@@ -805,20 +1038,32 @@ describe('BM25 scoring formula', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"recency"'
       ORDER BY score
-    `).all(now);
+    `,
+      )
+      .all(now);
     expect(rows.length).toBe(2);
     // More recent should have better (more negative) score
-    const newer = rows.find(r => r.created_at_epoch > now - 86400000);
-    const older = rows.find(r => r.created_at_epoch < now - 86400000);
+    const newer = rows.find((r) => r.created_at_epoch > now - 86400000);
+    const older = rows.find((r) => r.created_at_epoch < now - 86400000);
     expect(newer.score).toBeLessThan(older.score);
   });
 
   it('project boost: current project gets 2x', () => {
-    insertObs(db, { title: 'projboost alpha test term', text: 'projboost alpha test term', project: 'myproject' });
-    insertObs(db, { title: 'projboost alpha test term', text: 'projboost alpha test term', project: 'other' });
+    insertObs(db, {
+      title: 'projboost alpha test term',
+      text: 'projboost alpha test term',
+      project: 'myproject',
+    });
+    insertObs(db, {
+      title: 'projboost alpha test term',
+      text: 'projboost alpha test term',
+      project: 'other',
+    });
 
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.project,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
@@ -828,10 +1073,12 @@ describe('BM25 scoring formula', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"projboost"'
       ORDER BY score
-    `).all(now);
+    `,
+      )
+      .all(now);
     expect(rows.length).toBe(2);
-    const boosted = rows.find(r => r.project === 'myproject');
-    const notBoosted = rows.find(r => r.project === 'other');
+    const boosted = rows.find((r) => r.project === 'myproject');
+    const notBoosted = rows.find((r) => r.project === 'other');
     expect(boosted.score).toBeLessThan(notBoosted.score);
   });
 
@@ -840,7 +1087,9 @@ describe('BM25 scoring formula', () => {
     insertObs(db, { title: 'impweight unique test term', text: 'impweight unique test term', importance: 3 });
 
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.importance,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
@@ -849,19 +1098,27 @@ describe('BM25 scoring formula', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"impweight"'
       ORDER BY score
-    `).all(now);
+    `,
+      )
+      .all(now);
     expect(rows.length).toBe(2);
-    const highImp = rows.find(r => r.importance === 3);
-    const lowImp = rows.find(r => r.importance === 1);
+    const highImp = rows.find((r) => r.importance === 3);
+    const lowImp = rows.find((r) => r.importance === 1);
     expect(highImp.score).toBeLessThan(lowImp.score);
   });
 
   it('access_count boost: frequently accessed scores better', () => {
     insertObs(db, { title: 'accboost unique test term', text: 'accboost unique test term', accessCount: 0 });
-    insertObs(db, { title: 'accboost unique test term', text: 'accboost unique test term', accessCount: 100 });
+    insertObs(db, {
+      title: 'accboost unique test term',
+      text: 'accboost unique test term',
+      accessCount: 100,
+    });
 
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.access_count,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
@@ -871,22 +1128,28 @@ describe('BM25 scoring formula', () => {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"accboost"'
       ORDER BY score
-    `).all(now);
+    `,
+      )
+      .all(now);
     expect(rows.length).toBe(2);
-    const highAcc = rows.find(r => r.access_count === 100);
-    const lowAcc = rows.find(r => r.access_count === 0);
+    const highAcc = rows.find((r) => r.access_count === 100);
+    const lowAcc = rows.find((r) => r.access_count === 0);
     expect(highAcc.score).toBeLessThan(lowAcc.score);
   });
 
   it('BM25 base score is negative', () => {
     insertObs(db, { title: 'bm25base unique test term', text: 'bm25base unique test term' });
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8) as raw_score
       FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"bm25base"'
-    `).all();
+    `,
+      )
+      .all();
     expect(rows.length).toBe(1);
     expect(rows[0].raw_score).toBeLessThan(0);
   });
@@ -900,14 +1163,21 @@ describe('mem_timeline', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('FTS auto-anchor finds matching observation', () => {
-    insertObs(db, { title: 'timeline anchor target observation', text: 'timeline anchor target observation' });
+    insertObs(db, {
+      title: 'timeline anchor target observation',
+      text: 'timeline anchor target observation',
+    });
 
     const ftsQuery = '"timeline" AND "anchor"';
     const now = Date.now();
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT o.id FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ?
@@ -915,7 +1185,9 @@ describe('mem_timeline', () => {
       ORDER BY bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
         * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / 1209600000.0))
       LIMIT 1
-    `).get(ftsQuery, now);
+    `,
+      )
+      .get(ftsQuery, now);
     expect(row).toBeDefined();
     expect(row.id).toBeGreaterThan(0);
   });
@@ -924,11 +1196,15 @@ describe('mem_timeline', () => {
     for (let i = 0; i < 5; i++) {
       insertObs(db, { title: `timeline obs ${i}`, epochOffset: -i * 86400000 });
     }
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT id, title FROM observations
       WHERE COALESCE(compressed_into, 0) = 0
       ORDER BY created_at_epoch DESC LIMIT 11
-    `).all();
+    `,
+      )
+      .all();
     expect(rows.length).toBe(5);
     expect(rows[0].title).toBe('timeline obs 0');
   });
@@ -937,11 +1213,15 @@ describe('mem_timeline', () => {
     insertObs(db, { title: 'proj a obs', project: 'proj-a' });
     insertObs(db, { title: 'proj b obs', project: 'proj-b' });
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT id, title FROM observations
       WHERE COALESCE(compressed_into, 0) = 0 AND project = ?
       ORDER BY created_at_epoch DESC LIMIT 11
-    `).all('proj-a');
+    `,
+      )
+      .all('proj-a');
     expect(rows.length).toBe(1);
     expect(rows[0].title).toBe('proj a obs');
   });
@@ -960,34 +1240,55 @@ describe('mem_compress full flow', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('preview returns correct count', () => {
     for (let i = 0; i < 5; i++) {
-      insertObs(db, { title: `compress preview ${i}`, importance: 1, accessCount: 0, epochOffset: -90 * 86400000 });
+      insertObs(db, {
+        title: `compress preview ${i}`,
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -90 * 86400000,
+      });
     }
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
     expect(candidates.length).toBe(5);
   });
 
   it('creates summary observation with correct type', () => {
     // Create 4 old obs in same week
     for (let i = 0; i < 4; i++) {
-      insertObs(db, { title: `compress target ${i}`, type: 'change', importance: 1, accessCount: 0, epochOffset: -90 * 86400000 + i * 1000 });
+      insertObs(db, {
+        title: `compress target ${i}`,
+        type: 'change',
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -90 * 86400000 + i * 1000,
+      });
     }
 
     // Execute compression manually
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id, project, type, title, created_at, created_at_epoch FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL ORDER BY project, created_at_epoch
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
 
     const groups = new Map();
     for (const c of candidates) {
@@ -1001,18 +1302,32 @@ describe('mem_compress full flow', () => {
 
     // Create summary
     const [, obs] = compressable[0];
-    const narrative = obs.map(o => `- ${o.title}`).join('\n');
+    const narrative = obs.map((o) => `- ${o.title}`).join('\n');
     const now = new Date();
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run('compress-test', 'compress-test', 'test', now.toISOString(), now.getTime());
+    `,
+    ).run('compress-test', 'compress-test', 'test', now.toISOString(), now.getTime());
 
-    const result = db.prepare(`
+    const result = db
+      .prepare(
+        `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES (?, ?, ?, 'change', ?, '', ?, '', '', '[]', '[]', 2, ?, ?)
-    `).run('compress-test', 'test', narrative, `Weekly summary: ${obs.length} change observations`, narrative, now.toISOString(), now.getTime());
+    `,
+      )
+      .run(
+        'compress-test',
+        'test',
+        narrative,
+        `Weekly summary: ${obs.length} change observations`,
+        narrative,
+        now.toISOString(),
+        now.getTime(),
+      );
 
     const summaryId = Number(result.lastInsertRowid);
     for (const o of obs) {
@@ -1028,7 +1343,12 @@ describe('mem_compress full flow', () => {
 
   it('marks originals with compressed_into', () => {
     for (let i = 0; i < 3; i++) {
-      insertObs(db, { title: `mark target ${i}`, importance: 1, accessCount: 0, epochOffset: -90 * 86400000 });
+      insertObs(db, {
+        title: `mark target ${i}`,
+        importance: 1,
+        accessCount: 0,
+        epochOffset: -90 * 86400000,
+      });
     }
     // Simulate marking
     db.prepare('UPDATE observations SET compressed_into = 999 WHERE id = 1').run();
@@ -1040,12 +1360,16 @@ describe('mem_compress full flow', () => {
     insertObs(db, { title: 'compressible searchable unique', text: 'compressible searchable unique' });
     db.prepare('UPDATE observations SET compressed_into = 100 WHERE id = 1').run();
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id FROM observations_fts
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH '"compressible"'
         AND COALESCE(o.compressed_into, 0) = 0
-    `).all();
+    `,
+      )
+      .all();
     expect(rows.length).toBe(0);
   });
 
@@ -1054,11 +1378,15 @@ describe('mem_compress full flow', () => {
     insertObs(db, { title: 'small B', importance: 1, accessCount: 0, epochOffset: -90 * 86400000 });
 
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id, project, type, title, created_at, created_at_epoch FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL ORDER BY project, created_at_epoch
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
 
     const groups = new Map();
     for (const c of candidates) {
@@ -1076,11 +1404,15 @@ describe('mem_compress full flow', () => {
       insertObs(db, { title: `important ${i}`, importance: 3, accessCount: 0, epochOffset: -90 * 86400000 });
     }
     const cutoff = Date.now() - 60 * 86400000;
-    const candidates = db.prepare(`
+    const candidates = db
+      .prepare(
+        `
       SELECT id FROM observations
       WHERE COALESCE(importance,1) = 1 AND COALESCE(access_count,0) = 0
         AND created_at_epoch < ? AND compressed_into IS NULL
-    `).all(cutoff);
+    `,
+      )
+      .all(cutoff);
     expect(candidates.length).toBe(0);
   });
 });
@@ -1093,7 +1425,9 @@ describe('cross-source merge', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('FTS results sorted by score (more negative = better)', () => {
     const results = [
@@ -1124,7 +1458,7 @@ describe('cross-source merge', () => {
       { source: 'prompt', id: 3, score: -3.0 },
     ];
     results.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-    expect(results.map(r => r.source)).toEqual(['session', 'prompt', 'obs']);
+    expect(results.map((r) => r.source)).toEqual(['session', 'prompt', 'obs']);
   });
 
   it('pagination: offset+limit slices correctly', () => {
@@ -1137,7 +1471,7 @@ describe('cross-source merge', () => {
     expect(page1.length).toBe(10);
     expect(page2.length).toBe(10);
     // No overlap
-    const page1Ids = new Set(page1.map(r => r.id));
+    const page1Ids = new Set(page1.map((r) => r.id));
     for (const r of page2) {
       expect(page1Ids.has(r.id)).toBe(false);
     }
@@ -1148,17 +1482,21 @@ describe('cross-source merge', () => {
 
 describe('schema: lesson_learned and search_aliases', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('observations table has lesson_learned and search_aliases columns', () => {
-    const cols = db.pragma('table_info(observations)').map(c => c.name);
+    const cols = db.pragma('table_info(observations)').map((c) => c.name);
     expect(cols).toContain('lesson_learned');
     expect(cols).toContain('search_aliases');
   });
 
   it('session_summaries table has lessons and key_decisions columns', () => {
-    const cols = db.pragma('table_info(session_summaries)').map(c => c.name);
+    const cols = db.pragma('table_info(session_summaries)').map((c) => c.name);
     expect(cols).toContain('lessons');
     expect(cols).toContain('key_decisions');
   });
@@ -1166,7 +1504,9 @@ describe('schema: lesson_learned and search_aliases', () => {
   it('new columns default to null', () => {
     insertSession(db, { id: 'sess-schema', project: 'test' });
     insertObs(db, { sessionId: 'sess-schema', title: 'test defaults' });
-    const row = db.prepare('SELECT lesson_learned, search_aliases FROM observations ORDER BY id DESC LIMIT 1').get();
+    const row = db
+      .prepare('SELECT lesson_learned, search_aliases FROM observations ORDER BY id DESC LIMIT 1')
+      .get();
     expect(row.lesson_learned).toBeNull();
     expect(row.search_aliases).toBeNull();
   });
@@ -1174,11 +1514,14 @@ describe('schema: lesson_learned and search_aliases', () => {
   it('insertObs can store lesson_learned and search_aliases', () => {
     insertSession(db, { id: 'sess-lesson', project: 'test' });
     insertObs(db, {
-      sessionId: 'sess-lesson', title: 'test lesson',
+      sessionId: 'sess-lesson',
+      title: 'test lesson',
       lessonLearned: 'Always use atomic writes',
-      searchAliases: 'atomic rename TOCTOU'
+      searchAliases: 'atomic rename TOCTOU',
     });
-    const row = db.prepare('SELECT lesson_learned, search_aliases FROM observations ORDER BY id DESC LIMIT 1').get();
+    const row = db
+      .prepare('SELECT lesson_learned, search_aliases FROM observations ORDER BY id DESC LIMIT 1')
+      .get();
     expect(row.lesson_learned).toBe('Always use atomic writes');
     expect(row.search_aliases).toBe('atomic rename TOCTOU');
   });
@@ -1188,12 +1531,21 @@ describe('schema: lesson_learned and search_aliases', () => {
 
 describe('auto-boost on access', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('boosts importance to 2 when access_count reaches 2 and importance is 1', () => {
     insertSession(db, { id: 'sess-boost', project: 'test' });
-    const result = insertObs(db, { sessionId: 'sess-boost', title: 'test boost', importance: 1, accessCount: 1 });
+    const result = insertObs(db, {
+      sessionId: 'sess-boost',
+      title: 'test boost',
+      importance: 1,
+      accessCount: 1,
+    });
     const id = Number(result.lastInsertRowid);
     db.prepare('UPDATE observations SET access_count = access_count + 1 WHERE id = ?').run(id);
     autoBoostIfNeeded(db, [id]);
@@ -1204,7 +1556,12 @@ describe('auto-boost on access', () => {
 
   it('does not boost importance=2+ observations', () => {
     insertSession(db, { id: 'sess-boost2', project: 'test' });
-    const result = insertObs(db, { sessionId: 'sess-boost2', title: 'already important', importance: 2, accessCount: 1 });
+    const result = insertObs(db, {
+      sessionId: 'sess-boost2',
+      title: 'already important',
+      importance: 2,
+      accessCount: 1,
+    });
     const id = Number(result.lastInsertRowid);
     db.prepare('UPDATE observations SET access_count = access_count + 1 WHERE id = ?').run(id);
     autoBoostIfNeeded(db, [id]);
@@ -1217,16 +1574,36 @@ describe('auto-boost on access', () => {
 
 describe('type-differentiated decay', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('decisions rank higher than changes at same age when both are 30 days old', () => {
     insertSession(db, { id: 'sess-decay', project: 'test' });
-    insertObs(db, { sessionId: 'sess-decay', type: 'decision', title: 'auth architecture design choice', text: 'auth architecture design choice', importance: 2, epochOffset: -30 * 86400000 });
-    insertObs(db, { sessionId: 'sess-decay', type: 'change', title: 'auth config update change', text: 'auth config update change', importance: 2, epochOffset: -30 * 86400000 });
+    insertObs(db, {
+      sessionId: 'sess-decay',
+      type: 'decision',
+      title: 'auth architecture design choice',
+      text: 'auth architecture design choice',
+      importance: 2,
+      epochOffset: -30 * 86400000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-decay',
+      type: 'change',
+      title: 'auth config update change',
+      text: 'auth config update change',
+      importance: 2,
+      epochOffset: -30 * 86400000,
+    });
 
     const now = Date.now();
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.type, o.title,
              bm25(observations_fts, 10, 5, 5, 3, 3, 2, 8)
                * (1.0 + EXP(-0.693 * (? - o.created_at_epoch) / (
@@ -1245,10 +1622,12 @@ describe('type-differentiated decay', () => {
       WHERE observations_fts MATCH 'auth'
         AND COALESCE(o.compressed_into, 0) = 0
       ORDER BY score
-    `).all(now);
+    `,
+      )
+      .all(now);
 
-    const decisionIdx = rows.findIndex(r => r.type === 'decision');
-    const changeIdx = rows.findIndex(r => r.type === 'change');
+    const decisionIdx = rows.findIndex((r) => r.type === 'decision');
+    const changeIdx = rows.findIndex((r) => r.type === 'change');
     expect(decisionIdx).toBeLessThan(changeIdx);
   });
 });
@@ -1257,16 +1636,22 @@ describe('type-differentiated decay', () => {
 
 describe('type-aware idle cleanup', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('does not mark decision observations as pending-purge at 30 days', () => {
     insertSession(db, { id: 'sess-idle', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle', type: 'decision',
+      sessionId: 'sess-idle',
+      type: 'decision',
       title: 'chose FTS5 over elasticsearch',
-      importance: 1, accessCount: 0,
-      epochOffset: -31 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -31 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1277,10 +1662,12 @@ describe('type-aware idle cleanup', () => {
   it('marks decision observations as pending-purge at 90+ days', () => {
     insertSession(db, { id: 'sess-idle-dec90', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-dec90', type: 'decision',
+      sessionId: 'sess-idle-dec90',
+      type: 'decision',
       title: 'old architecture decision',
-      importance: 1, accessCount: 0,
-      epochOffset: -91 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -91 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1291,10 +1678,12 @@ describe('type-aware idle cleanup', () => {
   it('marks change observations as pending-purge at 14+ days', () => {
     insertSession(db, { id: 'sess-idle2', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle2', type: 'change',
+      sessionId: 'sess-idle2',
+      type: 'change',
       title: 'updated readme',
-      importance: 1, accessCount: 0,
-      epochOffset: -15 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -15 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1305,10 +1694,12 @@ describe('type-aware idle cleanup', () => {
   it('does not mark change observations before 14 days', () => {
     insertSession(db, { id: 'sess-idle-recent', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-recent', type: 'change',
+      sessionId: 'sess-idle-recent',
+      type: 'change',
       title: 'recent change',
-      importance: 1, accessCount: 0,
-      epochOffset: -10 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -10 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1319,10 +1710,12 @@ describe('type-aware idle cleanup', () => {
   it('marks feature observations as pending-purge at 60+ days', () => {
     insertSession(db, { id: 'sess-idle-feat', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-feat', type: 'feature',
+      sessionId: 'sess-idle-feat',
+      type: 'feature',
       title: 'old feature obs',
-      importance: 1, accessCount: 0,
-      epochOffset: -61 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -61 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1333,10 +1726,12 @@ describe('type-aware idle cleanup', () => {
   it('marks bugfix observations as pending-purge at 30+ days', () => {
     insertSession(db, { id: 'sess-idle-bug', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-bug', type: 'bugfix',
+      sessionId: 'sess-idle-bug',
+      type: 'bugfix',
       title: 'old bugfix',
-      importance: 1, accessCount: 0,
-      epochOffset: -31 * 86400000
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -31 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1347,16 +1742,28 @@ describe('type-aware idle cleanup', () => {
   it('does not mark accessed or high-importance observations', () => {
     insertSession(db, { id: 'sess-idle3', project: 'test' });
     const r1 = insertObs(db, {
-      sessionId: 'sess-idle3', type: 'change', title: 'accessed change',
-      importance: 1, accessCount: 5, epochOffset: -30 * 86400000
+      sessionId: 'sess-idle3',
+      type: 'change',
+      title: 'accessed change',
+      importance: 1,
+      accessCount: 5,
+      epochOffset: -30 * 86400000,
     });
     const r2 = insertObs(db, {
-      sessionId: 'sess-idle3', type: 'change', title: 'important change',
-      importance: 2, accessCount: 0, epochOffset: -30 * 86400000
+      sessionId: 'sess-idle3',
+      type: 'change',
+      title: 'important change',
+      importance: 2,
+      accessCount: 0,
+      epochOffset: -30 * 86400000,
     });
     runIdleCleanup(db);
-    const row1 = db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(Number(r1.lastInsertRowid));
-    const row2 = db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(Number(r2.lastInsertRowid));
+    const row1 = db
+      .prepare('SELECT compressed_into FROM observations WHERE id = ?')
+      .get(Number(r1.lastInsertRowid));
+    const row2 = db
+      .prepare('SELECT compressed_into FROM observations WHERE id = ?')
+      .get(Number(r2.lastInsertRowid));
     // accessed change: importance=1, access_count=5 → not pending-purge, but auto-compressed
     expect(row1.compressed_into).toBe(-1);
     // important change: importance=2 → untouched
@@ -1366,10 +1773,31 @@ describe('type-aware idle cleanup', () => {
   it('returns counts of marked and compressed observations', () => {
     insertSession(db, { id: 'sess-idle-count', project: 'test' });
     // Two old changes with no access → pending-purge
-    insertObs(db, { sessionId: 'sess-idle-count', type: 'change', title: 'stale1', importance: 1, accessCount: 0, epochOffset: -20 * 86400000 });
-    insertObs(db, { sessionId: 'sess-idle-count', type: 'change', title: 'stale2', importance: 1, accessCount: 0, epochOffset: -20 * 86400000 });
+    insertObs(db, {
+      sessionId: 'sess-idle-count',
+      type: 'change',
+      title: 'stale1',
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -20 * 86400000,
+    });
+    insertObs(db, {
+      sessionId: 'sess-idle-count',
+      type: 'change',
+      title: 'stale2',
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -20 * 86400000,
+    });
     // One old change with access → compressed
-    insertObs(db, { sessionId: 'sess-idle-count', type: 'change', title: 'accessed', importance: 1, accessCount: 3, epochOffset: -20 * 86400000 });
+    insertObs(db, {
+      sessionId: 'sess-idle-count',
+      type: 'change',
+      title: 'accessed',
+      importance: 1,
+      accessCount: 3,
+      epochOffset: -20 * 86400000,
+    });
     const result = runIdleCleanup(db);
     expect(result.marked).toBe(2);
     expect(result.compressed).toBe(1);
@@ -1383,9 +1811,13 @@ describe('type-aware idle cleanup', () => {
   it('never pending-purges a lesson-bearing row (branch-1 guard)', () => {
     insertSession(db, { id: 'sess-idle-lesson', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-lesson', type: 'bugfix', title: 'demoted bugfix lesson',
+      sessionId: 'sess-idle-lesson',
+      type: 'bugfix',
+      title: 'demoted bugfix lesson',
       lessonLearned: 'Never drop the WHERE clause on batch UPDATE',
-      importance: 1, accessCount: 0, epochOffset: -200 * 86400000,
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -200 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1397,9 +1829,13 @@ describe('type-aware idle cleanup', () => {
     insertSession(db, { id: 'sess-idle-lesson2', project: 'test' });
     // imp=1 + accessed: the no-lesson sibling (test above) becomes -1; a lesson row must not.
     const result = insertObs(db, {
-      sessionId: 'sess-idle-lesson2', type: 'change', title: 'accessed change with lesson',
+      sessionId: 'sess-idle-lesson2',
+      type: 'change',
+      title: 'accessed change with lesson',
       lessonLearned: 'RRF must pre-sort by composite score',
-      importance: 1, accessCount: 5, epochOffset: -30 * 86400000,
+      importance: 1,
+      accessCount: 5,
+      epochOffset: -30 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1410,9 +1846,13 @@ describe('type-aware idle cleanup', () => {
   it('still marks a "none"-sentinel row — the guard must not over-protect noise', () => {
     insertSession(db, { id: 'sess-idle-none', project: 'test' });
     const result = insertObs(db, {
-      sessionId: 'sess-idle-none', type: 'change', title: 'none-sentinel',
+      sessionId: 'sess-idle-none',
+      type: 'change',
+      title: 'none-sentinel',
       lessonLearned: 'none',
-      importance: 1, accessCount: 0, epochOffset: -20 * 86400000,
+      importance: 1,
+      accessCount: 0,
+      epochOffset: -20 * 86400000,
     });
     const id = Number(result.lastInsertRowid);
     runIdleCleanup(db);
@@ -1453,7 +1893,9 @@ describe('schema_version fast path', () => {
 
     // Second call — should fast-path and NOT drop/recreate tables
     initSchema(db);
-    const sentinel = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_fast_path_sentinel'").get();
+    const sentinel = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_fast_path_sentinel'")
+      .get();
     expect(sentinel).toBeDefined();
     db.close();
   });
@@ -1484,25 +1926,43 @@ describe('mem_save atomic transaction', () => {
   beforeEach(() => {
     db = createTestDb();
     const now = new Date();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run('manual-test', 'manual-test', 'test', now.toISOString(), now.getTime());
+    `,
+    ).run('manual-test', 'manual-test', 'test', now.toISOString(), now.getTime());
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('observation and vector are both inserted (simulating mem_save flow)', () => {
     const now = Date.now();
     const saveTx = db.transaction(() => {
-      const result = db.prepare(`
+      const result = db
+        .prepare(
+          `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', '[]', 1, ?, ?)
-      `).run('manual-test', 'test', 'test content', 'discovery', 'test title', 'test content', new Date(now).toISOString(), now);
+      `,
+        )
+        .run(
+          'manual-test',
+          'test',
+          'test content',
+          'discovery',
+          'test title',
+          'test content',
+          new Date(now).toISOString(),
+          now,
+        );
       const obsId = Number(result.lastInsertRowid);
       // Simulate vector insert
       const fakeVec = Buffer.alloc(16);
-      db.prepare('INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)')
-        .run(obsId, fakeVec, 'test-v1', now);
+      db.prepare(
+        'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
+      ).run(obsId, fakeVec, 'test-v1', now);
       return obsId;
     });
 
@@ -1523,26 +1983,46 @@ describe('mem_save observation_files population', () => {
   beforeEach(() => {
     db = createTestDb();
     const now = new Date();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, 'active')
-    `).run('files-test', 'files-test', 'test', now.toISOString(), now.getTime());
+    `,
+    ).run('files-test', 'files-test', 'test', now.toISOString(), now.getTime());
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('inserts observation_files rows when files are provided', () => {
     const now = Date.now();
     const files = ['src/auth.js', 'src/utils.js'];
     const saveTx = db.transaction(() => {
-      const result = db.prepare(`
+      const result = db
+        .prepare(
+          `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', ?, 1, ?, ?)
-      `).run('files-test', 'test', 'test content', 'discovery', 'test title', 'test content', JSON.stringify(files), new Date(now).toISOString(), now);
+      `,
+        )
+        .run(
+          'files-test',
+          'test',
+          'test content',
+          'discovery',
+          'test title',
+          'test content',
+          JSON.stringify(files),
+          new Date(now).toISOString(),
+          now,
+        );
       const obsId = Number(result.lastInsertRowid);
 
       // Populate observation_files junction table (same pattern as mem_save should use)
       if (files.length > 0) {
-        const insertFile = db.prepare('INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)');
+        const insertFile = db.prepare(
+          'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+        );
         for (const f of files) {
           if (typeof f === 'string' && f.length > 0) insertFile.run(obsId, f);
         }
@@ -1552,7 +2032,9 @@ describe('mem_save observation_files population', () => {
     });
 
     const obsId = saveTx();
-    const obsFiles = db.prepare('SELECT filename FROM observation_files WHERE obs_id = ? ORDER BY filename').all(obsId);
+    const obsFiles = db
+      .prepare('SELECT filename FROM observation_files WHERE obs_id = ? ORDER BY filename')
+      .all(obsId);
     expect(obsFiles.length).toBe(2);
     expect(obsFiles[0].filename).toBe('src/auth.js');
     expect(obsFiles[1].filename).toBe('src/utils.js');
@@ -1562,10 +2044,24 @@ describe('mem_save observation_files population', () => {
     const now = Date.now();
     const files = [];
     const saveTx = db.transaction(() => {
-      const result = db.prepare(`
+      const result = db
+        .prepare(
+          `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', ?, 1, ?, ?)
-      `).run('files-test', 'test', 'test content', 'discovery', 'no files', 'test content', JSON.stringify(files), new Date(now).toISOString(), now);
+      `,
+        )
+        .run(
+          'files-test',
+          'test',
+          'test content',
+          'discovery',
+          'no files',
+          'test content',
+          JSON.stringify(files),
+          new Date(now).toISOString(),
+          now,
+        );
       return Number(result.lastInsertRowid);
     });
 
@@ -1578,23 +2074,43 @@ describe('mem_save observation_files population', () => {
     const now = Date.now();
     const files = ['src/server.mjs'];
     const saveTx = db.transaction(() => {
-      const result = db.prepare(`
+      const result = db
+        .prepare(
+          `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', ?, 1, ?, ?)
-      `).run('files-test', 'test', 'fixed server bug', 'bugfix', 'server fix', 'fixed server bug', JSON.stringify(files), new Date(now).toISOString(), now);
+      `,
+        )
+        .run(
+          'files-test',
+          'test',
+          'fixed server bug',
+          'bugfix',
+          'server fix',
+          'fixed server bug',
+          JSON.stringify(files),
+          new Date(now).toISOString(),
+          now,
+        );
       const obsId = Number(result.lastInsertRowid);
-      const insertFile = db.prepare('INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)');
+      const insertFile = db.prepare(
+        'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+      );
       for (const f of files) insertFile.run(obsId, f);
       return obsId;
     });
 
     const obsId = saveTx();
     // Query pattern: find observations by file path using junction table
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT o.id, o.title FROM observations o
       JOIN observation_files of ON o.id = of.obs_id
       WHERE of.filename = ?
-    `).all('src/server.mjs');
+    `,
+      )
+      .all('src/server.mjs');
     expect(rows.length).toBe(1);
     expect(rows[0].id).toBe(obsId);
     expect(rows[0].title).toBe('server fix');
@@ -1605,21 +2121,31 @@ describe('mem_save observation_files population', () => {
 
 describe('schema indexes', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('idx_obs_vectors_version exists', () => {
-    const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obs_vectors_version'").get();
+    const row = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obs_vectors_version'")
+      .get();
     expect(row).toBeDefined();
   });
 
   it('idx_sessions_project exists', () => {
-    const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sessions_project'").get();
+    const row = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sessions_project'")
+      .get();
     expect(row).toBeDefined();
   });
 
   it('idx_obs_not_compressed exists', () => {
-    const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obs_not_compressed'").get();
+    const row = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obs_not_compressed'")
+      .get();
     expect(row).toBeDefined();
   });
 });
@@ -1657,9 +2183,13 @@ describe('dedup migration is atomic', () => {
     initSchema(rawDb);
 
     // After: only 1 row for dup-mem, and unique index exists
-    const remaining = rawDb.prepare("SELECT COUNT(*) as cnt FROM sdk_sessions WHERE memory_session_id = 'dup-mem'").get();
+    const remaining = rawDb
+      .prepare("SELECT COUNT(*) as cnt FROM sdk_sessions WHERE memory_session_id = 'dup-mem'")
+      .get();
     expect(remaining.cnt).toBe(1);
-    const hasIdx = rawDb.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'").get();
+    const hasIdx = rawDb
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'")
+      .get();
     expect(hasIdx).toBeDefined();
 
     rawDb.close();
@@ -1670,19 +2200,37 @@ describe('dedup migration is atomic', () => {
 
 describe('mem_update', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('should update observation fields and rebuild FTS text', () => {
     insertSession(db, { id: 'sess-upd', project: 'test' });
-    const result = insertObs(db, { sessionId: 'sess-upd', title: 'Original Title', type: 'discovery', importance: 1, narrative: 'original narrative' });
+    const result = insertObs(db, {
+      sessionId: 'sess-upd',
+      title: 'Original Title',
+      type: 'discovery',
+      importance: 1,
+      narrative: 'original narrative',
+    });
     const id = Number(result.lastInsertRowid);
 
     // Simulate the handler's transactional update logic
     db.transaction(() => {
-      db.prepare('UPDATE observations SET title = ?, importance = ? WHERE id = ?').run('Updated Title', 2, id);
-      const row = db.prepare('SELECT title, subtitle, narrative, concepts, facts FROM observations WHERE id = ?').get(id);
-      const textField = [row.title, row.subtitle, row.narrative, row.concepts, row.facts].filter(Boolean).join(' ');
+      db.prepare('UPDATE observations SET title = ?, importance = ? WHERE id = ?').run(
+        'Updated Title',
+        2,
+        id,
+      );
+      const row = db
+        .prepare('SELECT title, subtitle, narrative, concepts, facts FROM observations WHERE id = ?')
+        .get(id);
+      const textField = [row.title, row.subtitle, row.narrative, row.concepts, row.facts]
+        .filter(Boolean)
+        .join(' ');
       db.prepare('UPDATE observations SET text = ? WHERE id = ?').run(textField, id);
     })();
 
@@ -1704,7 +2252,14 @@ describe('mem_update', () => {
     // With no update args, the field mapping loop produces empty updates
     const updates = [];
     const args = {};
-    for (const [key] of [['title'],['narrative'],['type'],['importance'],['lesson_learned'],['concepts']]) {
+    for (const [key] of [
+      ['title'],
+      ['narrative'],
+      ['type'],
+      ['importance'],
+      ['lesson_learned'],
+      ['concepts'],
+    ]) {
       if (args[key] !== undefined) updates.push(key);
     }
     expect(updates.length).toBe(0);
@@ -1715,16 +2270,42 @@ describe('mem_update', () => {
 
 describe('mem_export', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('should filter by project and type', () => {
     insertSession(db, { id: 'sess-exp', project: 'export-test' });
-    insertObs(db, { sessionId: 'sess-exp', project: 'export-test', title: 'Bug 1', type: 'bugfix', importance: 2 });
-    insertObs(db, { sessionId: 'sess-exp', project: 'export-test', title: 'Feature 1', type: 'feature', importance: 1 });
-    insertObs(db, { sessionId: 'sess-exp', project: 'other-proj', title: 'Other', type: 'bugfix', importance: 1 });
+    insertObs(db, {
+      sessionId: 'sess-exp',
+      project: 'export-test',
+      title: 'Bug 1',
+      type: 'bugfix',
+      importance: 2,
+    });
+    insertObs(db, {
+      sessionId: 'sess-exp',
+      project: 'export-test',
+      title: 'Feature 1',
+      type: 'feature',
+      importance: 1,
+    });
+    insertObs(db, {
+      sessionId: 'sess-exp',
+      project: 'other-proj',
+      title: 'Other',
+      type: 'bugfix',
+      importance: 1,
+    });
 
-    const bugfixes = db.prepare("SELECT * FROM observations WHERE project = ? AND type = ? AND COALESCE(compressed_into, 0) = 0 AND superseded_at IS NULL").all('export-test', 'bugfix');
+    const bugfixes = db
+      .prepare(
+        'SELECT * FROM observations WHERE project = ? AND type = ? AND COALESCE(compressed_into, 0) = 0 AND superseded_at IS NULL',
+      )
+      .all('export-test', 'bugfix');
     expect(bugfixes).toHaveLength(1);
     expect(bugfixes[0].title).toBe('Bug 1');
   });
@@ -1734,8 +2315,10 @@ describe('mem_export', () => {
     insertObs(db, { sessionId: 'sess-exp2', title: 'Active obs', importance: 1 });
     insertObs(db, { sessionId: 'sess-exp2', title: 'Compressed obs', importance: 1, compressedInto: 1 });
 
-    const active = db.prepare("SELECT * FROM observations WHERE COALESCE(compressed_into, 0) = 0 AND superseded_at IS NULL").all();
-    expect(active.every(r => r.title !== 'Compressed obs')).toBe(true);
+    const active = db
+      .prepare('SELECT * FROM observations WHERE COALESCE(compressed_into, 0) = 0 AND superseded_at IS NULL')
+      .all();
+    expect(active.every((r) => r.title !== 'Compressed obs')).toBe(true);
   });
 
   it('should filter by date range', () => {
@@ -1744,9 +2327,11 @@ describe('mem_export', () => {
     insertObs(db, { sessionId: 'sess-dt', title: 'Old', importance: 1, epochOffset: -30 * 86400000 });
 
     const cutoff = Date.now() - 7 * 86400000;
-    const recent = db.prepare("SELECT * FROM observations WHERE created_at_epoch >= ? AND COALESCE(compressed_into, 0) = 0").all(cutoff);
-    expect(recent.some(r => r.title === 'Recent')).toBe(true);
-    expect(recent.every(r => r.title !== 'Old')).toBe(true);
+    const recent = db
+      .prepare('SELECT * FROM observations WHERE created_at_epoch >= ? AND COALESCE(compressed_into, 0) = 0')
+      .all(cutoff);
+    expect(recent.some((r) => r.title === 'Recent')).toBe(true);
+    expect(recent.every((r) => r.title !== 'Old')).toBe(true);
   });
 });
 
@@ -1754,16 +2339,20 @@ describe('mem_export', () => {
 
 describe('mem_fts_check', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('should report healthy FTS indexes', async () => {
     const { checkFTSIntegrity } = await import('../schema.mjs');
     const result = checkFTSIntegrity(db);
     expect(result.healthy).toBe(true);
     expect(result.details).toHaveLength(4); // observations + session_summaries + user_prompts + events
-    expect(result.details.every(d => d.endsWith(': ok'))).toBe(true);
-    expect(result.details.some(d => d.startsWith('events_fts'))).toBe(true);
+    expect(result.details.every((d) => d.endsWith(': ok'))).toBe(true);
+    expect(result.details.some((d) => d.startsWith('events_fts'))).toBe(true);
   });
 
   it('should rebuild FTS indexes', async () => {

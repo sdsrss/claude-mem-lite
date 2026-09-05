@@ -30,12 +30,17 @@ describe('ensureDb deferred-cleanup wiring (audit P1-5)', () => {
   test('a fresh ensureDb() open marks every deferred cleanup done', () => {
     const db = ensureDb();
     try {
-      const marks = db.prepare('SELECT name FROM migration_cleanups').all().map(r => r.name);
-      expect(marks).toEqual(expect.arrayContaining([
-        'orphan-observation-files',
-        'orphan-observation-vectors',
-        'normalize-project-names',
-      ]));
+      const marks = db
+        .prepare('SELECT name FROM migration_cleanups')
+        .all()
+        .map((r) => r.name);
+      expect(marks).toEqual(
+        expect.arrayContaining([
+          'orphan-observation-files',
+          'orphan-observation-vectors',
+          'normalize-project-names',
+        ]),
+      );
     } finally {
       db.close();
     }
@@ -46,19 +51,23 @@ describe('ensureDb deferred-cleanup wiring (audit P1-5)', () => {
     // clearing one sentinel and seeding an orphan, then reopen via ensureDb().
     const db1 = ensureDb();
     db1.pragma('foreign_keys = OFF');
-    db1.prepare(
-      'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)'
-    ).run(424242, Buffer.alloc(8), 'v1', Date.now());
+    db1
+      .prepare(
+        'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
+      )
+      .run(424242, Buffer.alloc(8), 'v1', Date.now());
     db1.prepare("DELETE FROM migration_cleanups WHERE name = 'orphan-observation-vectors'").run();
     db1.close();
 
     const db2 = ensureDb(); // must re-run the unmarked cleanup
     try {
       expect(
-        db2.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = 424242').get().c
+        db2.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = 424242').get().c,
       ).toBe(0);
       expect(
-        db2.prepare("SELECT COUNT(*) AS c FROM migration_cleanups WHERE name = 'orphan-observation-vectors'").get().c
+        db2
+          .prepare("SELECT COUNT(*) AS c FROM migration_cleanups WHERE name = 'orphan-observation-vectors'")
+          .get().c,
       ).toBe(1);
     } finally {
       db2.close();

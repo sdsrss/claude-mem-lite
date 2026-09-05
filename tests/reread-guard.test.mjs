@@ -54,8 +54,14 @@ describe('buildRereadWarning', () => {
 
 describe('readFileMeta', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'reread-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'reread-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('returns mtimeMs and a token estimate for a real file', () => {
     const p = join(tmp, 'a.mjs');

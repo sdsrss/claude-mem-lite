@@ -32,10 +32,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const KNOWN_FLAGS = new Set(['--strict', '--skip-matrix', '--tolerance', '--baseline']);
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
-  if (!a.startsWith('-')) continue;                       // a flag's value, or a stray positional
-  if (KNOWN_FLAGS.has(a)) { if (a === '--tolerance' || a === '--baseline') i++; continue; }
-  console.error(`Unknown option "${a}". Known: ${[...KNOWN_FLAGS].join(' ')}.\n`
-    + '  Refusing to run: an unrecognised flag here reads as "the mode you asked for is off".');
+  if (!a.startsWith('-')) continue; // a flag's value, or a stray positional
+  if (KNOWN_FLAGS.has(a)) {
+    if (a === '--tolerance' || a === '--baseline') i++;
+    continue;
+  }
+  console.error(
+    `Unknown option "${a}". Known: ${[...KNOWN_FLAGS].join(' ')}.\n` +
+      '  Refusing to run: an unrecognised flag here reads as "the mode you asked for is off".',
+  );
   process.exit(1);
 }
 
@@ -46,7 +51,8 @@ const tolerance = toleranceIdx !== -1 ? parseFloat(process.argv[toleranceIdx + 1
 // Strict mode: a stale baseline becomes a hard failure instead of an advisory
 // warning. Opt-in via --strict flag or CI_GATE_STRICT=1 so normal local runs are
 // unaffected (backward-compatible). Honour the common truthy spellings.
-const STRICT = process.argv.includes('--strict') ||
+const STRICT =
+  process.argv.includes('--strict') ||
   /^(1|true|yes|on)$/i.test(String(process.env.CI_GATE_STRICT ?? '').trim());
 
 // v2.41: stale baseline threshold. Baseline is load-bearing evidence; if it
@@ -93,13 +99,13 @@ if (baselineAgeDays >= BASELINE_STALE_AGE_DAYS) {
     staleFailure = true;
     console.error(
       `\n  ✗ STALE BASELINE (${baselineAgeDays}d old, threshold ${BASELINE_STALE_AGE_DAYS}d) — FAILING (strict mode).\n` +
-      `    Recapture: node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json`
+        `    Recapture: node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json`,
     );
   } else {
     console.warn(
       `\n  ⚠ STALE BASELINE (${baselineAgeDays}d old, threshold ${BASELINE_STALE_AGE_DAYS}d).\n` +
-      `    Recapture: node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json\n` +
-      `    Gate continues to run — this is advisory, not a failure (pass --strict to fail).`
+        `    Recapture: node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json\n` +
+        `    Gate continues to run — this is advisory, not a failure (pass --strict to fail).`,
     );
   }
 }
@@ -149,9 +155,20 @@ for (const { name, key } of checks) {
 const baseLat = baseline.metrics.p95_search_latency_ms;
 const currLat = results.metrics.p95_search_latency_ms;
 if (currLat > baseLat * 20) {
-  failures.push({ name: 'P95 Latency', base: baseLat, curr: currLat, threshold: baseLat * 20, diffStr: `+${(currLat - baseLat).toFixed(4)}ms` });
+  failures.push({
+    name: 'P95 Latency',
+    base: baseLat,
+    curr: currLat,
+    threshold: baseLat * 20,
+    diffStr: `+${(currLat - baseLat).toFixed(4)}ms`,
+  });
 } else {
-  passes.push({ name: 'P95 Latency', base: baseLat, curr: currLat, diffStr: `${(currLat - baseLat).toFixed(4)}ms` });
+  passes.push({
+    name: 'P95 Latency',
+    base: baseLat,
+    curr: currLat,
+    diffStr: `${(currLat - baseLat).toFixed(4)}ms`,
+  });
 }
 
 // Report

@@ -25,21 +25,43 @@ const DB_DIR = `/tmp/mem-save-limits-${process.pid}`;
 let client, transport;
 
 beforeAll(async () => {
-  try { rmSync(DB_DIR, { recursive: true }); } catch { /* fresh */ }
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {
+    /* fresh */
+  }
   mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
   transport = new StdioClientTransport({
     command: process.execPath,
     args: [SERVER_PATH],
-    env: { ...process.env, CLAUDE_MEM_DIR: DB_DIR, CLAUDE_PROJECT_DIR: '/test/project', PWD: '/test/project', CLAUDE_MEM_AUTO_DEEP: '0' },
+    env: {
+      ...process.env,
+      CLAUDE_MEM_DIR: DB_DIR,
+      CLAUDE_PROJECT_DIR: '/test/project',
+      PWD: '/test/project',
+      CLAUDE_MEM_AUTO_DEEP: '0',
+    },
   });
   client = new Client({ name: 'save-limits-client', version: '0.0.0' });
   await client.connect(transport);
 }, 15_000);
 
 afterAll(async () => {
-  try { await client?.close(); } catch { /* already down */ }
-  try { await transport?.close(); } catch { /* already down */ }
-  try { rmSync(DB_DIR, { recursive: true }); } catch { /* best effort */ }
+  try {
+    await client?.close();
+  } catch {
+    /* already down */
+  }
+  try {
+    await transport?.close();
+  } catch {
+    /* already down */
+  }
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {
+    /* best effort */
+  }
 });
 
 describe('mem_save size ceiling', () => {
@@ -47,9 +69,13 @@ describe('mem_save size ceiling', () => {
     const hugeTitle = 'T'.repeat(20000);
     const res = await client.callTool({
       name: 'mem_save',
-      arguments: { content: 'a runaway summarizer wrote an enormous title for this observation', title: hugeTitle, type: 'discovery' },
+      arguments: {
+        content: 'a runaway summarizer wrote an enormous title for this observation',
+        title: hugeTitle,
+        type: 'discovery',
+      },
     });
-    const text = (res?.content || []).map(c => c.text).join('\n');
+    const text = (res?.content || []).map((c) => c.text).join('\n');
     expect(res.isError, text).toBeFalsy();
     const id = Number(text.match(/#(\d+)/)?.[1]);
     expect(Number.isInteger(id)).toBe(true);
@@ -67,9 +93,13 @@ describe('mem_save size ceiling', () => {
     const title = 'ordinary title for a normal save';
     const res = await client.callTool({
       name: 'mem_save',
-      arguments: { content: 'an ordinary observation body about the retry backoff schedule', title, type: 'decision' },
+      arguments: {
+        content: 'an ordinary observation body about the retry backoff schedule',
+        title,
+        type: 'decision',
+      },
     });
-    const text = (res?.content || []).map(c => c.text).join('\n');
+    const text = (res?.content || []).map((c) => c.text).join('\n');
     const id = Number(text.match(/#(\d+)/)?.[1]);
     const db = new Database(join(DB_DIR, 'claude-mem-lite.db'), { readonly: true });
     const row = db.prepare('SELECT title, narrative FROM observations WHERE id = ?').get(id);

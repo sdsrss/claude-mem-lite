@@ -32,9 +32,16 @@ describe('Anthropic API paths honour the proxy', () => {
     vi.mocked(postViaConnectProxy).mockReset();
     vi.stubGlobal('fetch', vi.fn());
   });
-  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); _resetMode(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    _resetMode();
+  });
 
-  for (const [name, call] of [['callModelJSON', callModelJSON], ['callHaikuJSON', callHaikuJSON]]) {
+  for (const [name, call] of [
+    ['callModelJSON', callModelJSON],
+    ['callHaikuJSON', callHaikuJSON],
+  ]) {
     it(`${name}: tunnels to api.anthropic.com when a proxy is configured`, async () => {
       vi.mocked(httpConnectProxyFor).mockReturnValue(PROXY);
       vi.mocked(postViaConnectProxy).mockResolvedValue({ ok: true, status: 200, json: () => REPLY });

@@ -20,13 +20,22 @@ const T0 = Date.parse('2026-08-25T10:00:00.000Z');
 
 /** A Bash entry with a benign response: no edit, no error, no path → insignificant. */
 const bash = (ts, session = 's1') => ({
-  kind: 'tool', ts, session, cwd: '/w/proj',
-  tool: 'Bash', input: { command: 'echo hello from the harness' }, response: 'hello from the harness\n',
+  kind: 'tool',
+  ts,
+  session,
+  cwd: '/w/proj',
+  tool: 'Bash',
+  input: { command: 'echo hello from the harness' },
+  response: 'hello from the harness\n',
 });
 /** A Write to a .sql file: rule 1 (edit) AND rule 3 (schema-ish path) → significant. */
 const write = (ts, file = '/w/proj/alpha-schema.sql', session = 's1') => ({
-  kind: 'tool', ts, session, cwd: '/w/proj',
-  tool: 'Write', input: { file_path: file, content: 'CREATE TABLE t (id INTEGER);\n' },
+  kind: 'tool',
+  ts,
+  session,
+  cwd: '/w/proj',
+  tool: 'Write',
+  input: { file_path: file, content: 'CREATE TABLE t (id INTEGER);\n' },
   response: `File created successfully at: ${file}`,
 });
 const read = (ts, path) => ({ kind: 'read', ts, path, cwd: '/w/proj', session: 's1' });
@@ -34,14 +43,17 @@ const stop = (ts) => ({ kind: 'stop', ts, session: 's1', cwd: '/w/proj' });
 
 describe('replayProject — an insignificant flush consumes the pending reads', () => {
   it('attributes the reads to the flush that swept them, not to the next one', () => {
-    const { flushes } = replayProject([
-      read(T0, '/w/proj/a.mjs'),
-      read(T0 + 1000, '/w/proj/b.mjs'),
-      bash(T0 + 2000),
-      stop(T0 + 3000),          // flush 1: entries but insignificant → eats both reads
-      write(T0 + 4000),
-      stop(T0 + 5000),          // flush 2: significant, and there is nothing left to attach
-    ], 'proj');
+    const { flushes } = replayProject(
+      [
+        read(T0, '/w/proj/a.mjs'),
+        read(T0 + 1000, '/w/proj/b.mjs'),
+        bash(T0 + 2000),
+        stop(T0 + 3000), // flush 1: entries but insignificant → eats both reads
+        write(T0 + 4000),
+        stop(T0 + 5000), // flush 2: significant, and there is nothing left to attach
+      ],
+      'proj',
+    );
 
     expect(flushes).toHaveLength(2);
     expect(flushes[0]).toMatchObject({ significant: false, readsConsumed: 2 });
@@ -54,33 +66,48 @@ describe('replayProject — an insignificant flush consumes the pending reads', 
   });
 
   it('a Stop with no buffered episode consumes nothing — production returns before the collect', () => {
-    const { flushes } = replayProject([
-      read(T0, '/w/proj/a.mjs'),
-      stop(T0 + 1000),          // no entries buffered → handleStop returns, reads untouched
-      write(T0 + 2000),
-      stop(T0 + 3000),
-    ], 'proj');
+    const { flushes } = replayProject(
+      [
+        read(T0, '/w/proj/a.mjs'),
+        stop(T0 + 1000), // no entries buffered → handleStop returns, reads untouched
+        write(T0 + 2000),
+        stop(T0 + 3000),
+      ],
+      'proj',
+    );
 
     expect(flushes).toHaveLength(1);
     expect(flushes[0]).toMatchObject({ significant: true, readsConsumed: 1 });
   });
 
   it('records the age of the reads a flush swept up', () => {
-    const { flushes } = replayProject([
-      read(T0, '/w/proj/a.mjs'),
-      bash(T0 + 10 * MIN),
-      stop(T0 + 10 * MIN + 1000),
-    ], 'proj');
+    const { flushes } = replayProject(
+      [read(T0, '/w/proj/a.mjs'), bash(T0 + 10 * MIN), stop(T0 + 10 * MIN + 1000)],
+      'proj',
+    );
     expect(flushes[0].maxReadAgeMs).toBeGreaterThanOrEqual(10 * MIN);
   });
 });
 
 describe('carryForward — the counterfactual', () => {
-  const insig = (ts, reads) => ({ ts, significant: false, readsConsumed: reads, maxReadAgeMs: 0, cfAgeMs: 0, cfDelivered: 0 });
+  const insig = (ts, reads) => ({
+    ts,
+    significant: false,
+    readsConsumed: reads,
+    maxReadAgeMs: 0,
+    cfAgeMs: 0,
+    cfDelivered: 0,
+  });
   // `reads` is what THIS flush swept up; `union` is the distinct set the counterfactual
   // holds when it delivers — smaller whenever a path was read in more than one window.
-  const sig = (ts, reads, { union = reads, cfAgeMs = 0 } = {}) =>
-    ({ ts, significant: true, readsConsumed: reads, maxReadAgeMs: 0, cfAgeMs, cfDelivered: union });
+  const sig = (ts, reads, { union = reads, cfAgeMs = 0 } = {}) => ({
+    ts,
+    significant: true,
+    readsConsumed: reads,
+    maxReadAgeMs: 0,
+    cfAgeMs,
+    cfDelivered: union,
+  });
 
   it('delivers the DISTINCT carried set, not the sum of per-flush counts', () => {
     // 3 + 2 + 1 = 6 occurrences, but only 4 distinct paths: two were read again in a
@@ -94,7 +121,7 @@ describe('carryForward — the counterfactual', () => {
     expect(cf.medianCarriedAgeMs).toBe(5 * MIN);
   });
 
-  it('does NOT carry one project\'s reads into another project\'s flush', () => {
+  it("does NOT carry one project's reads into another project's flush", () => {
     // Same rows, split across two projects: A's 3 reads have no significant flush of
     // their own, so they must be delivered NOWHERE — not to B's.
     const mixed = carryForward([[insig(1, 3)], [sig(2, 0, { union: 3 })]]);
@@ -107,10 +134,20 @@ describe('carryForward — the counterfactual', () => {
 });
 
 describe('assertRulerCanSayNo — the headline must be able to reach both ends', () => {
-  const corpus = () => new Map([['proj', [
-    read(T0, '/w/proj/a.mjs'), bash(T0 + 1000), stop(T0 + 2000),
-    read(T0 + 3000, '/w/proj/b.mjs'), write(T0 + 4000), stop(T0 + 5000),
-  ]]]);
+  const corpus = () =>
+    new Map([
+      [
+        'proj',
+        [
+          read(T0, '/w/proj/a.mjs'),
+          bash(T0 + 1000),
+          stop(T0 + 2000),
+          read(T0 + 3000, '/w/proj/b.mjs'),
+          write(T0 + 4000),
+          stop(T0 + 5000),
+        ],
+      ],
+    ]);
 
   it('passes on a corpus where both arms move', () => {
     const { problems, allSig, noneSig } = assertRulerCanSayNo(corpus());
@@ -121,7 +158,6 @@ describe('assertRulerCanSayNo — the headline must be able to reach both ends',
 
   it('reports the vacuous case rather than a 0% finding when the corpus has no reads', () => {
     const noReads = new Map([['proj', [bash(T0), stop(T0 + 1000)]]]);
-    expect(assertRulerCanSayNo(noReads).problems)
-      .toEqual(['no reads in corpus — the headline is vacuous']);
+    expect(assertRulerCanSayNo(noReads).problems).toEqual(['no reads in corpus — the headline is vacuous']);
   });
 });

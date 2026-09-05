@@ -21,7 +21,7 @@ export function truncate(str, max = 80) {
   // code unit is a high surrogate, drop it so we cut on a code-point boundary.
   let end = max - 1;
   const last = str.charCodeAt(end - 1);
-  if (last >= 0xD800 && last <= 0xDBFF) end--;
+  if (last >= 0xd800 && last <= 0xdbff) end--;
   return str.slice(0, end) + '\u2026';
 }
 
@@ -47,7 +47,8 @@ export function truncate(str, max = 80) {
 //      (<system-reminder foo="\u2026">). Unrelated tags (<other-tag>) are left intact.
 // Reachable by editing files that contain these tokens \u2014 e.g. developing claude-mem-lite
 // itself, where source/observations carry the delimiter names.
-const CONTEXT_DELIMITER_RE = /<\/?(?:claude-mem-context|memory-context|session-handoff|system-reminder|task-notification|(?:antml:)?function_calls|(?:antml:)?function_results|(?:antml:)?invoke|(?:antml:)?parameter)(?:\s[^>]*)?>/gi;
+const CONTEXT_DELIMITER_RE =
+  /<\/?(?:claude-mem-context|memory-context|session-handoff|system-reminder|task-notification|(?:antml:)?function_calls|(?:antml:)?function_results|(?:antml:)?invoke|(?:antml:)?parameter)(?:\s[^>]*)?>/gi;
 
 // Pass cap for the fixpoint loop below. 32 nested layers of a forged delimiter is far past
 // anything prose produces; the cap exists only to bound the ADVERSARIAL cost (an unbounded
@@ -84,10 +85,10 @@ function defangToFixpoint(s, re) {
   let text = String(s ?? '');
   for (let pass = 0; pass < DEFANG_MAX_PASSES; pass++) {
     const next = text.replace(re, (m) => m.slice(1, -1));
-    if (next === text) return text;   // fixpoint: nothing left to defang
+    if (next === text) return text; // fixpoint: nothing left to defang
     text = next;
   }
-  return text.replace(/[<>]/g, '');   // pathological nesting \u2192 fail closed
+  return text.replace(/[<>]/g, ''); // pathological nesting \u2192 fail closed
 }
 
 /**
@@ -171,7 +172,7 @@ export function formatErrorRecallHints(rows) {
     }
     return head;
   });
-  const ids = rows.map(r => r.id).join(',');
+  const ids = rows.map((r) => r.id).join(',');
   return `[claude-mem-lite] Related memories found for this error:\n${lines.join('\n')}\n  \u2192 Use mem_get(ids=[${ids}]) for details.\n`;
 }
 
@@ -181,13 +182,20 @@ export function formatErrorRecallHints(rows) {
  * @returns {string} Emoji icon for the type
  */
 export function typeIcon(type) {
-  const icons = { decision: '\uD83D\uDFE1', bugfix: '\uD83D\uDD34', feature: '\uD83D\uDFE2', refactor: '\uD83D\uDD35', discovery: '\uD83D\uDD0D', change: '\uD83D\uDCDD' };
+  const icons = {
+    decision: '\uD83D\uDFE1',
+    bugfix: '\uD83D\uDD34',
+    feature: '\uD83D\uDFE2',
+    refactor: '\uD83D\uDD35',
+    discovery: '\uD83D\uDD0D',
+    change: '\uD83D\uDCDD',
+  };
   return icons[type] || '\u26AA';
 }
 
 // ─── Date Formatting ─────────────────────────────────────────────────────────
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
  * Format an ISO date string as "Mon DD HH:MM" for compact display.

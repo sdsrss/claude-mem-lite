@@ -15,7 +15,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('does NOT mark "0 fail" bun-test output as error', () => {
     const sig = detectBashSignificance(
       { command: 'bun test logger.test.ts' },
-      'bun test v1.3.5\n logger.test.ts:\n  ✓ logs info\n  ✓ logs warn\n 5 pass\n 0 fail\n ran 5 tests across 1 file'
+      'bun test v1.3.5\n logger.test.ts:\n  ✓ logs info\n  ✓ logs warn\n 5 pass\n 0 fail\n ran 5 tests across 1 file',
     );
     expect(sig.isError).toBe(false);
     expect(sig.isTest).toBe(true);
@@ -24,7 +24,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('does NOT mark "0 failed" jest-style output as error', () => {
     const sig = detectBashSignificance(
       { command: 'npm test' },
-      'Tests:       0 failed, 12 passed, 12 total\nSuites:      0 failed, 3 passed, 3 total\nTime:        2.5s'
+      'Tests:       0 failed, 12 passed, 12 total\nSuites:      0 failed, 3 passed, 3 total\nTime:        2.5s',
     );
     expect(sig.isError).toBe(false);
   });
@@ -32,7 +32,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('does NOT mark "0 failures" pytest-style output as error', () => {
     const sig = detectBashSignificance(
       { command: 'pytest tests/' },
-      'collected 12 items\n\n12 passed in 0.34s\nresult: 0 failures, 0 errors'
+      'collected 12 items\n\n12 passed in 0.34s\nresult: 0 failures, 0 errors',
     );
     expect(sig.isError).toBe(false);
   });
@@ -40,7 +40,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('DOES mark "5 fail" bun-test output as error (red run)', () => {
     const sig = detectBashSignificance(
       { command: 'bun test logger.test.ts' },
-      'bun test v1.3.5\n logger.test.ts:\n  ✓ logs info\n  ✗ logs warn\n 3 pass\n 5 fail\n ran 8 tests'
+      'bun test v1.3.5\n logger.test.ts:\n  ✓ logs info\n  ✗ logs warn\n 3 pass\n 5 fail\n ran 8 tests',
     );
     expect(sig.isError).toBe(true);
   });
@@ -48,7 +48,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('DOES mark "0 fail" plus hard error signal as error (test crashed)', () => {
     const sig = detectBashSignificance(
       { command: 'bun test logger.test.ts' },
-      'TypeError: cannot read property of undefined\n  at logger.ts:42\n 0 pass\n 0 fail\n ran 0 tests (process crashed)'
+      'TypeError: cannot read property of undefined\n  at logger.ts:42\n 0 pass\n 0 fail\n ran 0 tests (process crashed)',
     );
     expect(sig.isError).toBe(true);
   });
@@ -56,7 +56,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('DOES mark "AssertionError" as error even when output mentions 0 fail elsewhere', () => {
     const sig = detectBashSignificance(
       { command: 'npm test' },
-      'AssertionError: expected 5 got 3\n  at logger.test.ts:12\nsuites: 0 failed (crashed before run)'
+      'AssertionError: expected 5 got 3\n  at logger.test.ts:12\nsuites: 0 failed (crashed before run)',
     );
     expect(sig.isError).toBe(true);
   });
@@ -64,7 +64,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('DOES mark traditional "failed" prose as error', () => {
     const sig = detectBashSignificance(
       { command: 'npm install' },
-      'npm ERR! code ENOENT\nnpm ERR! Install failed: package not found'
+      'npm ERR! code ENOENT\nnpm ERR! Install failed: package not found',
     );
     expect(sig.isError).toBe(true);
   });
@@ -72,7 +72,7 @@ describe('detectBashSignificance — green test summary exemption', () => {
   it('does NOT mark grep output containing "error" as error', () => {
     const sig = detectBashSignificance(
       { command: 'grep -r error src/' },
-      'src/foo.ts:42: throw new Error("oh no")\nsrc/bar.ts:10: // error handler'
+      'src/foo.ts:42: throw new Error("oh no")\nsrc/bar.ts:10: // error handler',
     );
     expect(sig.isError).toBe(false);
   });
@@ -91,7 +91,9 @@ describe('detectBashSignificance — green test summary exemption', () => {
     // The primary-command anchor must still exempt a search verb behind a wrapper or
     // env-assignment, and git read subcommands (grep/log) whose output contains "error".
     const readOut = 'config.log:42: throw new Error(x)\n  // error handler here too';
-    expect(detectBashSignificance({ command: 'sudo grep -i error /var/log/syslog' }, readOut).isError).toBe(false);
+    expect(detectBashSignificance({ command: 'sudo grep -i error /var/log/syslog' }, readOut).isError).toBe(
+      false,
+    );
     expect(detectBashSignificance({ command: 'git grep error src/' }, readOut).isError).toBe(false);
     expect(detectBashSignificance({ command: 'git log --grep=fix' }, readOut).isError).toBe(false);
     expect(detectBashSignificance({ command: 'time tail -n 5 build.log' }, readOut).isError).toBe(false);
@@ -123,8 +125,8 @@ describe('detectBashSignificance — isHardError (bugfix-nudge gate)', () => {
     // Representative real bugfix episode: a test fails, then you edit to fix it.
     const out = '1 failed\nAssertionError: expected 1 to be 2\n    at /p/app.test.mjs:10:3';
     const sig = detectBashSignificance({ command: 'node app.mjs' }, out);
-    expect(sig.isError).toBe(true);      // "failed" word trips isError (not a green "0 fail" summary)
-    expect(sig.isHardError).toBe(true);  // AssertionError + stack frame → real failure fingerprint
+    expect(sig.isError).toBe(true); // "failed" word trips isError (not a green "0 fail" summary)
+    expect(sig.isHardError).toBe(true); // AssertionError + stack frame → real failure fingerprint
   });
 
   it('isHardError=true on npm ERR! / build-failure fingerprints', () => {

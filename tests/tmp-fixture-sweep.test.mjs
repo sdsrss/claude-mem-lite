@@ -6,8 +6,14 @@ import { sweepStaleTestFixtures } from '../lib/tmp-fixture-sweep.mjs';
 
 describe('sweepStaleTestFixtures', () => {
   let root;
-  beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'sweep-orphan-')); });
-  afterEach(() => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'sweep-orphan-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {}
+  });
 
   // Backdate a dir's mtime to `ageMs` ago so the age gate treats it as stale.
   function makeDir(name, ageMs) {
@@ -37,8 +43,8 @@ describe('sweepStaleTestFixtures', () => {
   });
 
   it('never touches non-mem dirs (other tools, e.g. code-graph-mcp .tmp/index.db)', () => {
-    const other = makeDir('.tmpXYZ', 5 * 60 * 60 * 1000);       // code-graph-mcp style
-    const generic = makeDir('plans-abc', 5 * 60 * 60 * 1000);   // generic prefix, intentionally excluded
+    const other = makeDir('.tmpXYZ', 5 * 60 * 60 * 1000); // code-graph-mcp style
+    const generic = makeDir('plans-abc', 5 * 60 * 60 * 1000); // generic prefix, intentionally excluded
     const { removed } = sweepStaleTestFixtures({ dirs: [root], ageMs: 60 * 60 * 1000 });
     expect(removed).toBe(0);
     expect(existsSync(other)).toBe(true);

@@ -29,8 +29,16 @@ import { parseArgs, suggestUnknownFlags, KNOWN_CLI_FLAGS } from '../cli/common.m
 
 describe('parseArgs — MCP field names normalize onto CLI flags', () => {
   it('maps the renamed filter fields onto their CLI spelling', () => {
-    const { flags } = parseArgs(['--obs_type', 'bugfix', '--date_from', '2026-01-01',
-      '--date_to', '2026-02-01', '--date_since', '7d']);
+    const { flags } = parseArgs([
+      '--obs_type',
+      'bugfix',
+      '--date_from',
+      '2026-01-01',
+      '--date_to',
+      '2026-02-01',
+      '--date_since',
+      '7d',
+    ]);
     expect(flags.type).toBe('bugfix');
     expect(flags.from).toBe('2026-01-01');
     expect(flags.to).toBe('2026-02-01');
@@ -82,8 +90,15 @@ describe('suggestUnknownFlags — no unknown flag is silently dropped', () => {
   // where warn-on-every-unknown-flag turned it into a false warning on a working
   // command. Independent pre-tag review, 2026-08-13.
   it('stays silent for every flag the CLI actually reads', () => {
-    const roots = ['mem-cli.mjs', 'cli/common.mjs', 'cli/activity.mjs', 'cli/doctor.mjs',
-      'cli/fts-check.mjs', 'adopt-cli.mjs', 'cli.mjs'];
+    const roots = [
+      'mem-cli.mjs',
+      'cli/common.mjs',
+      'cli/activity.mjs',
+      'cli/doctor.mjs',
+      'cli/fts-check.mjs',
+      'adopt-cli.mjs',
+      'cli.mjs',
+    ];
     const read = new Set();
     for (const f of roots) {
       const src = readFileSync(join(REPO, f), 'utf8');
@@ -98,8 +113,9 @@ describe('suggestUnknownFlags — no unknown flag is silently dropped', () => {
     // grep". Kept as an explicit deny-list so a real flag can never hide behind a
     // silently-widened filter.
     const notFlags = new Set(['length', 'help', 'mjs', 'x']);
-    const uncatalogued = [...read]
-      .filter(f => !notFlags.has(f) && !KNOWN_CLI_FLAGS.has(f) && !KNOWN_CLI_FLAGS.has(f.replace(/_/g, '-')));
+    const uncatalogued = [...read].filter(
+      (f) => !notFlags.has(f) && !KNOWN_CLI_FLAGS.has(f) && !KNOWN_CLI_FLAGS.has(f.replace(/_/g, '-')),
+    );
     expect(uncatalogued, `flags read by code but missing from KNOWN_CLI_FLAGS`).toEqual([]);
     expect(read.size, 'sanity: the scan found flag reads at all').toBeGreaterThan(40);
   });

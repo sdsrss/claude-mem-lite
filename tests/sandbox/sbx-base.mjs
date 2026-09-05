@@ -29,7 +29,11 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 /** Resolve symlinks where the path exists; fall back to `resolve` where it does not. */
 function realish(p) {
   const abs = resolve(p);
-  try { return realpathSync.native(abs); } catch { return abs; }
+  try {
+    return realpathSync.native(abs);
+  } catch {
+    return abs;
+  }
 }
 
 /**
@@ -90,10 +94,10 @@ export function resolveSandboxBase({ sbxBase, tmp, home } = {}) {
   if (isInside(h, base)) {
     throw new Error(
       `[sandbox] refusing to build a sandbox at ${resolve(base)}: it is under HOME (${resolve(h)}).\n` +
-      `  Node resolves node_modules up the directory tree, so a root here silently borrows\n` +
-      `  the home tree's better-sqlite3 / claude-mem-lite and every check passes against the\n` +
-      `  wrong install. Set SBX_BASE to a path outside HOME, e.g. SBX_BASE=/tmp/claude/sbx.\n` +
-      `  (In a Claude Code session $TMPDIR is itself under HOME, which is how the default gets here.)`
+        `  Node resolves node_modules up the directory tree, so a root here silently borrows\n` +
+        `  the home tree's better-sqlite3 / claude-mem-lite and every check passes against the\n` +
+        `  wrong install. Set SBX_BASE to a path outside HOME, e.g. SBX_BASE=/tmp/claude/sbx.\n` +
+        `  (In a Claude Code session $TMPDIR is itself under HOME, which is how the default gets here.)`,
     );
   }
   // The hazard itself, checked after the HOME rule so the commoner case keeps its
@@ -102,9 +106,9 @@ export function resolveSandboxBase({ sbxBase, tmp, home } = {}) {
   if (owner) {
     throw new Error(
       `[sandbox] refusing to build a sandbox at ${resolve(base)}: ${owner} owns a node_modules.\n` +
-      `  Node resolves modules up the directory tree, so the sandbox would borrow that tree's\n` +
-      `  dependencies and the isolation would be fake while every check still passed.\n` +
-      `  Pick a base with no node_modules above it, e.g. SBX_BASE=/tmp/claude/sbx.`
+        `  Node resolves modules up the directory tree, so the sandbox would borrow that tree's\n` +
+        `  dependencies and the isolation would be fake while every check still passed.\n` +
+        `  Pick a base with no node_modules above it, e.g. SBX_BASE=/tmp/claude/sbx.`,
     );
   }
   return base;

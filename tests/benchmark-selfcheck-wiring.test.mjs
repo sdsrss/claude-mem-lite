@@ -71,7 +71,9 @@ function reachableFrom(fns, entry) {
   return seen;
 }
 
-const files = readdirSync(BENCH).filter((f) => f.endsWith('.mjs')).sort();
+const files = readdirSync(BENCH)
+  .filter((f) => f.endsWith('.mjs'))
+  .sort();
 const analysed = files.map((f) => {
   const src = readFileSync(join(BENCH, f), 'utf8');
   const fns = topLevelFunctions(src);
@@ -84,8 +86,11 @@ describe('every benchmark self-check is reached by its own main()', () => {
     expect(a.fns.has('main'), `${a.f} declares self-checks but no top-level main()`).toBe(true);
     const reachable = reachableFrom(a.fns, 'main');
     const orphans = a.checks.filter((c) => !reachable.has(c));
-    expect(orphans, `${a.f}: self-check(s) not reached from main() — the function may still `
-      + 'be unit-tested, but the real run no longer performs it').toEqual([]);
+    expect(
+      orphans,
+      `${a.f}: self-check(s) not reached from main() — the function may still ` +
+        'be unit-tested, but the real run no longer performs it',
+    ).toEqual([]);
   });
 });
 
@@ -100,8 +105,10 @@ describe('the wiring guard itself can fail, and is not scanning an empty tree', 
 
   it('extracts a non-empty main() from every file it judges', () => {
     for (const a of withChecks) {
-      expect(a.fns.get('main')?.split('\n').length, `${a.f}: main() body looks empty, so `
-        + 'reachability from it means nothing').toBeGreaterThan(3);
+      expect(
+        a.fns.get('main')?.split('\n').length,
+        `${a.f}: main() body looks empty, so ` + 'reachability from it means nothing',
+      ).toBeGreaterThan(3);
     }
   });
 
@@ -111,16 +118,26 @@ describe('the wiring guard itself can fail, and is not scanning an empty tree', 
     // a smaller set than exists and report a clean sweep over the survivors.
     for (const a of analysed) {
       const plain = [...a.src.matchAll(/^(?:export )?(?:async )?function (\w+)\s*\(/gm)]
-        .map((m) => m[1]).filter(isSelfCheck).sort();
-      expect(a.checks.slice().sort(), `${a.f}: body extraction and a plain declaration scan `
-        + 'disagree about the self-check set').toEqual(plain);
+        .map((m) => m[1])
+        .filter(isSelfCheck)
+        .sort();
+      expect(
+        a.checks.slice().sort(),
+        `${a.f}: body extraction and a plain declaration scan ` + 'disagree about the self-check set',
+      ).toEqual(plain);
     }
   });
 
   it('REPORTS an unreachable self-check — the mutation it exists for', () => {
     const src = [
-      'export function assertSomething(x) {', '  if (!x) throw new Error("no");', '}', '',
-      'function main() {', '  console.log("work");', '}', '',
+      'export function assertSomething(x) {',
+      '  if (!x) throw new Error("no");',
+      '}',
+      '',
+      'function main() {',
+      '  console.log("work");',
+      '}',
+      '',
     ].join('\n');
     const fns = topLevelFunctions(src);
     expect(fns.has('assertSomething')).toBe(true);
@@ -131,10 +148,23 @@ describe('the wiring guard itself can fail, and is not scanning an empty tree', 
     // keyctx-pool-replay reaches five of its checks through runSelfChecks(), so a guard
     // that only looked inside main() itself would demand the wrong shape.
     const src = [
-      'export function assertDirect() {', '  return 1;', '}', '',
-      'export function assertNested() {', '  return 2;', '}', '',
-      'export function runSelfChecks() {', '  assertNested();', '}', '',
-      'function main() {', '  assertDirect();', '  runSelfChecks();', '}', '',
+      'export function assertDirect() {',
+      '  return 1;',
+      '}',
+      '',
+      'export function assertNested() {',
+      '  return 2;',
+      '}',
+      '',
+      'export function runSelfChecks() {',
+      '  assertNested();',
+      '}',
+      '',
+      'function main() {',
+      '  assertDirect();',
+      '  runSelfChecks();',
+      '}',
+      '',
     ].join('\n');
     const reachable = reachableFrom(topLevelFunctions(src), 'main');
     for (const n of ['assertDirect', 'assertNested', 'runSelfChecks']) {
@@ -146,9 +176,16 @@ describe('the wiring guard itself can fail, and is not scanning an empty tree', 
     // The failure mode of a grep-based version: a docblock, an import, or an export list
     // mentioning the name would satisfy it while nothing calls it.
     const src = [
-      'export function assertThing() {', '  return 1;', '}', '',
-      'function main() {', '  // assertThing is documented here but never called',
-      '  const names = ["assertThing"];', '  return names;', '}', '',
+      'export function assertThing() {',
+      '  return 1;',
+      '}',
+      '',
+      'function main() {',
+      '  // assertThing is documented here but never called',
+      '  const names = ["assertThing"];',
+      '  return names;',
+      '}',
+      '',
     ].join('\n');
     expect(reachableFrom(topLevelFunctions(src), 'main').has('assertThing')).toBe(false);
   });

@@ -10,7 +10,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  detectFinalization, countDeliberatePersistence, detectUnpersistedDecision,
+  detectFinalization,
+  countDeliberatePersistence,
+  detectUnpersistedDecision,
 } from '../lib/persist-reminder.mjs';
 import { buildCiteRecallNudge } from '../lib/cite-back-hint.mjs';
 
@@ -67,8 +69,15 @@ describe('countDeliberatePersistence (transcript scan)', () => {
       assistantToolUse('Skill', { skill: 'claude-mem-lite:lesson', args: 'x' }),
       assistantToolUse('Skill', { skill: 'memory' }),
       assistantToolUse('Skill', { skill: 'claude-mem-lite:bug' }),
-      assistantToolUse('Write', { file_path: '/home/u/.claude/projects/-x-y/memory/project_foo.md', content: 'f' }),
-      assistantToolUse('Edit', { file_path: '/home/u/.claude/projects/-x-y/memory/MEMORY.md', old_string: 'a', new_string: 'b' }),
+      assistantToolUse('Write', {
+        file_path: '/home/u/.claude/projects/-x-y/memory/project_foo.md',
+        content: 'f',
+      }),
+      assistantToolUse('Edit', {
+        file_path: '/home/u/.claude/projects/-x-y/memory/MEMORY.md',
+        old_string: 'a',
+        new_string: 'b',
+      }),
       // NOT persistence: unrelated skill, non-memdir write, memdir-adjacent path
       assistantToolUse('Skill', { skill: 'claude-mem-lite:mem' }),
       assistantToolUse('Write', { file_path: '/home/u/project/notes.md', content: 'n' }),
@@ -121,10 +130,19 @@ describe('detectUnpersistedDecision', () => {
 describe('SessionStart surface (buildCiteRecallNudge third gate)', () => {
   it('emits the reminder line when the payload carries decisionSignal', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
-    writeFileSync(join(dir, 'cite-recall-projx.json'), JSON.stringify({
-      injected: 0, recalled: 0, ratio: 1, unsaved: 0, lowStreak: 0,
-      decisionSignal: '拍板', project: 'projx', savedAt: Date.now(),
-    }));
+    writeFileSync(
+      join(dir, 'cite-recall-projx.json'),
+      JSON.stringify({
+        injected: 0,
+        recalled: 0,
+        ratio: 1,
+        unsaved: 0,
+        lowStreak: 0,
+        decisionSignal: '拍板',
+        project: 'projx',
+        savedAt: Date.now(),
+      }),
+    );
     const out = buildCiteRecallNudge('projx', dir, {});
     expect(out).toContain('拍板');
     expect(out).toMatch(/mem_save|mem_defer/);
@@ -133,15 +151,33 @@ describe('SessionStart surface (buildCiteRecallNudge third gate)', () => {
 
   it('stays silent without decisionSignal and under the global opt-out', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
-    writeFileSync(join(dir, 'cite-recall-projx.json'), JSON.stringify({
-      injected: 0, recalled: 0, ratio: 1, unsaved: 0, lowStreak: 0,
-      decisionSignal: null, project: 'projx', savedAt: Date.now(),
-    }));
+    writeFileSync(
+      join(dir, 'cite-recall-projx.json'),
+      JSON.stringify({
+        injected: 0,
+        recalled: 0,
+        ratio: 1,
+        unsaved: 0,
+        lowStreak: 0,
+        decisionSignal: null,
+        project: 'projx',
+        savedAt: Date.now(),
+      }),
+    );
     expect(buildCiteRecallNudge('projx', dir, {})).toBe('');
-    writeFileSync(join(dir, 'cite-recall-projx.json'), JSON.stringify({
-      injected: 0, recalled: 0, ratio: 1, unsaved: 0, lowStreak: 0,
-      decisionSignal: '拍板', project: 'projx', savedAt: Date.now(),
-    }));
+    writeFileSync(
+      join(dir, 'cite-recall-projx.json'),
+      JSON.stringify({
+        injected: 0,
+        recalled: 0,
+        ratio: 1,
+        unsaved: 0,
+        lowStreak: 0,
+        decisionSignal: '拍板',
+        project: 'projx',
+        savedAt: Date.now(),
+      }),
+    );
     expect(buildCiteRecallNudge('projx', dir, { CLAUDE_MEM_NO_CITE_NUDGE: '1' })).toBe('');
     rmSync(dir, { recursive: true, force: true });
   });

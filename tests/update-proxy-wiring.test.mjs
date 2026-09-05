@@ -41,13 +41,27 @@ import { join } from 'node:path';
 import { httpConnectProxyFor, getViaConnectProxy } from '../lib/proxy-fetch.mjs';
 import { fetchLatestRelease, fetchAssetBuffer } from '../hook-update.mjs';
 
-afterAll(() => { rmSync(MEM_DIR, { recursive: true, force: true }); });
+afterAll(() => {
+  rmSync(MEM_DIR, { recursive: true, force: true });
+});
 
 const PROXY = 'http://127.0.0.1:10808';
-const RELEASE_BODY = { tag_name: 'v9.9.9', tarball_url: 'https://api.github.com/t', html_url: 'https://gh/r', assets: [] };
+const RELEASE_BODY = {
+  tag_name: 'v9.9.9',
+  tarball_url: 'https://api.github.com/t',
+  html_url: 'https://gh/r',
+  assets: [],
+};
 
 function proxyResponse(payload, { status = 200, buffer = null } = {}) {
-  return { ok: status >= 200 && status < 300, status, headers: {}, json: () => payload, text: () => JSON.stringify(payload), buffer: () => buffer };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {},
+    json: () => payload,
+    text: () => JSON.stringify(payload),
+    buffer: () => buffer,
+  };
 }
 
 describe('auto-update honours the proxy', () => {
@@ -56,7 +70,9 @@ describe('auto-update honours the proxy', () => {
     vi.mocked(getViaConnectProxy).mockReset();
     vi.stubGlobal('fetch', vi.fn());
   });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it('version check: tunnels through the proxy and never touches bare fetch', async () => {
     vi.mocked(httpConnectProxyFor).mockReturnValue(PROXY);
@@ -110,7 +126,9 @@ describe('auto-update honours the proxy', () => {
     const payload = Buffer.from('tarball-bytes');
     vi.mocked(getViaConnectProxy).mockResolvedValue(proxyResponse(null, { buffer: payload }));
 
-    const buf = await fetchAssetBuffer('https://github.com/sdsrss/claude-mem-lite/releases/download/v1/a.tgz');
+    const buf = await fetchAssetBuffer(
+      'https://github.com/sdsrss/claude-mem-lite/releases/download/v1/a.tgz',
+    );
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.toString()).toBe('tarball-bytes');
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -126,9 +144,11 @@ describe('auto-update honours the proxy', () => {
 
   it('asset download: a non-2xx proxied response throws (never returns a partial buffer)', async () => {
     vi.mocked(httpConnectProxyFor).mockReturnValue(PROXY);
-    vi.mocked(getViaConnectProxy).mockResolvedValue(proxyResponse(null, { status: 404, buffer: Buffer.alloc(0) }));
+    vi.mocked(getViaConnectProxy).mockResolvedValue(
+      proxyResponse(null, { status: 404, buffer: Buffer.alloc(0) }),
+    );
     await expect(
-      fetchAssetBuffer('https://github.com/sdsrss/claude-mem-lite/releases/download/v1/a.tgz')
+      fetchAssetBuffer('https://github.com/sdsrss/claude-mem-lite/releases/download/v1/a.tgz'),
     ).rejects.toThrow(/404/);
   });
 });

@@ -43,7 +43,7 @@ const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
     const m = a.match(/^--([^=]+)(?:=(.*))?$/);
     return m ? [m[1], m[2] ?? true] : [a, true];
-  })
+  }),
 );
 const DIR = args.dir || join(homedir(), '.claude/projects/-mnt-data-ssd-dev-projects-mem');
 const END = args.end ? new Date(args.end).getTime() : Date.now();
@@ -90,7 +90,8 @@ const ERR_RECALL_MARKER = /Related memories found for this error/;
 // Bounded type list mirrors observations.type CHECK; `.exec` (non-global) returns the
 // FIRST match, so a `#NN` quoted later in the same row's body is not captured.
 const INJECTED_ROW_RE = new RegExp(
-  `^\\s{0,6}#(${OBS_ID_DIGITS})\\s+\\[(?:bugfix|decision|change|discovery|feature|refactor|lesson)\\]`);
+  `^\\s{0,6}#(${OBS_ID_DIGITS})\\s+\\[(?:bugfix|decision|change|discovery|feature|refactor|lesson)\\]`,
+);
 
 function extractIds(text) {
   const ids = new Set();
@@ -118,10 +119,16 @@ function* lines(file) {
 const candidateFiles = readdirSync(DIR)
   .filter((n) => n.endsWith('.jsonl'))
   .map((n) => join(DIR, n))
-  .filter((p) => { try { return statSync(p).mtimeMs >= START; } catch { return false; } });
+  .filter((p) => {
+    try {
+      return statSync(p).mtimeMs >= START;
+    } catch {
+      return false;
+    }
+  });
 
-const hookInject = new Map();   // hookName -> Set<NN>
-const hookOcc = new Map();      // hookName -> total occurrences
+const hookInject = new Map(); // hookName -> Set<NN>
+const hookOcc = new Map(); // hookName -> total occurrences
 const hookCitedFromInjection = new Map(); // hookName -> Set<NN> (cited IDs that this hook injected)
 
 const sessionStats = new Map(); // sid -> stats
@@ -138,7 +145,10 @@ function getStats(sid) {
 // path-A/B and the co-located :imperative line share one accounting path.
 function routeIds(sessionInjectionsByHook, hookName, ids, stats) {
   let bucket = sessionInjectionsByHook.get(hookName);
-  if (!bucket) { bucket = new Set(); sessionInjectionsByHook.set(hookName, bucket); }
+  if (!bucket) {
+    bucket = new Set();
+    sessionInjectionsByHook.set(hookName, bucket);
+  }
   for (const id of ids) bucket.add(id);
   if (!hookInject.has(hookName)) {
     hookInject.set(hookName, new Set());
@@ -157,7 +167,11 @@ for (const file of candidateFiles) {
   // Pass 1: collect injections + tool counts
   for (const line of lines(file)) {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
     const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
     if (!Number.isFinite(ts) || ts < START || ts >= END) continue;
     const sid = entry.sessionId || file;
@@ -166,7 +180,12 @@ for (const file of candidateFiles) {
 
     if (entry.attachment) {
       const text = (entry.attachment.stdout || '') + '\n' + (entry.attachment.content || '');
-      if (INJECT_MARKER.test(text) || MEMCTX_MARKER.test(text) || IMP_MARKER.test(text) || ERR_RECALL_MARKER.test(text)) {
+      if (
+        INJECT_MARKER.test(text) ||
+        MEMCTX_MARKER.test(text) ||
+        IMP_MARKER.test(text) ||
+        ERR_RECALL_MARKER.test(text)
+      ) {
         const baseHook = entry.attachment.hookName || entry.attachment.hookEvent || 'unknown';
         const allLines = text.split('\n');
 
@@ -224,7 +243,11 @@ for (const file of candidateFiles) {
   // Pass 2: collect citations and credit hooks that injected the cited ID in this session
   for (const line of lines(file)) {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
     const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
     if (!Number.isFinite(ts) || ts < START || ts >= END) continue;
     const sid = entry.sessionId || file;
@@ -254,33 +277,38 @@ for (const file of candidateFiles) {
   }
 }
 
-const activeSessions = [...sessionStats.values()].filter((s) =>
-  s.hadInjection || s.hadCite || s.reads || s.edits || s.writes || s.bashes || s.assistantTurns
+const activeSessions = [...sessionStats.values()].filter(
+  (s) => s.hadInjection || s.hadCite || s.reads || s.edits || s.writes || s.bashes || s.assistantTurns,
 );
 const n = activeSessions.length;
 const days = (END - START) / 86400000;
 
-const perHook = [...hookInject.entries()].map(([h, injSet]) => {
-  const cited = hookCitedFromInjection.get(h);
-  const recall = injSet.size === 0 ? 0 : cited.size / injSet.size;
-  const [lo, hi] = wilson95(cited.size, injSet.size);
-  return {
-    hook: h,
-    inject_unique: injSet.size,
-    occurrences: hookOcc.get(h),
-    cited_unique: cited.size,
-    recall,
-    recall_ci95: [Number(lo.toFixed(3)), Number(hi.toFixed(3))],
-  };
-}).sort((a, b) => b.occurrences - a.occurrences);
+const perHook = [...hookInject.entries()]
+  .map(([h, injSet]) => {
+    const cited = hookCitedFromInjection.get(h);
+    const recall = injSet.size === 0 ? 0 : cited.size / injSet.size;
+    const [lo, hi] = wilson95(cited.size, injSet.size);
+    return {
+      hook: h,
+      inject_unique: injSet.size,
+      occurrences: hookOcc.get(h),
+      cited_unique: cited.size,
+      recall,
+      recall_ci95: [Number(lo.toFixed(3)), Number(hi.toFixed(3))],
+    };
+  })
+  .sort((a, b) => b.occurrences - a.occurrences);
 
-const totals = activeSessions.reduce((a, s) => ({
-  reads: a.reads + s.reads,
-  edits: a.edits + s.edits,
-  writes: a.writes + s.writes,
-  bashes: a.bashes + s.bashes,
-  turns: a.turns + s.assistantTurns,
-}), { reads: 0, edits: 0, writes: 0, bashes: 0, turns: 0 });
+const totals = activeSessions.reduce(
+  (a, s) => ({
+    reads: a.reads + s.reads,
+    edits: a.edits + s.edits,
+    writes: a.writes + s.writes,
+    bashes: a.bashes + s.bashes,
+    turns: a.turns + s.assistantTurns,
+  }),
+  { reads: 0, edits: 0, writes: 0, bashes: 0, turns: 0 },
+);
 
 const withCite = activeSessions.filter((s) => s.hadCite).length;
 const sessionCiteCi = wilson95(withCite, n);
@@ -294,7 +322,9 @@ const result = {
   dir: DIR,
   sessions: n,
   selection_bias: {
-    read_edit_write_per_session: n ? Number(((totals.reads + totals.edits + totals.writes) / n).toFixed(1)) : 0,
+    read_edit_write_per_session: n
+      ? Number(((totals.reads + totals.edits + totals.writes) / n).toFixed(1))
+      : 0,
     read_per_session: n ? Number((totals.reads / n).toFixed(1)) : 0,
     edit_per_session: n ? Number((totals.edits / n).toFixed(1)) : 0,
     write_per_session: n ? Number((totals.writes / n).toFixed(1)) : 0,
@@ -359,7 +389,7 @@ if (args['vs-baseline']) {
       delta,
       ciOverlap,
       regressed,
-      status: regressed ? 'REGRESSION' : (delta > REGRESSION_FLOOR && !ciOverlap ? 'IMPROVEMENT' : 'flat'),
+      status: regressed ? 'REGRESSION' : delta > REGRESSION_FLOOR && !ciOverlap ? 'IMPROVEMENT' : 'flat',
     });
   }
 
@@ -395,15 +425,21 @@ console.log('   hook                                   inject_unique  occurrence
 for (const r of perHook) {
   const cap = r.hook.length > 36 ? r.hook.slice(0, 36) : r.hook.padEnd(36);
   const ciStr = `[${(r.recall_ci95[0] * 100).toFixed(1)}, ${(r.recall_ci95[1] * 100).toFixed(1)}]%`;
-  console.log(`  ${cap} ${String(r.inject_unique).padStart(5)} ${String(r.occurrences).padStart(11)} ${String(r.cited_unique).padStart(7)} ${(r.recall * 100).toFixed(1).padStart(6)}%  ${ciStr}`);
+  console.log(
+    `  ${cap} ${String(r.inject_unique).padStart(5)} ${String(r.occurrences).padStart(11)} ${String(r.cited_unique).padStart(7)} ${(r.recall * 100).toFixed(1).padStart(6)}%  ${ciStr}`,
+  );
 }
 console.log('');
 console.log('## Selection-bias check (compare across release windows)');
 console.log(`  Read+Edit+Write per session: ${result.selection_bias.read_edit_write_per_session}`);
-console.log(`    Read=${result.selection_bias.read_per_session}  Edit=${result.selection_bias.edit_per_session}  Write=${result.selection_bias.write_per_session}`);
+console.log(
+  `    Read=${result.selection_bias.read_per_session}  Edit=${result.selection_bias.edit_per_session}  Write=${result.selection_bias.write_per_session}`,
+);
 console.log(`  Bash per session:            ${result.selection_bias.bash_per_session}`);
 console.log(`  asst-turns per session:      ${result.selection_bias.asst_turns_per_session}`);
 console.log('');
 console.log('## Session-level cite rate');
 const sc = result.session_cite_rate;
-console.log(`  ${(sc.rate * 100).toFixed(1)}% (${sc.sessions_with_cite}/${sc.total_sessions})  95% CI [${(sc.ci95[0] * 100).toFixed(1)}%, ${(sc.ci95[1] * 100).toFixed(1)}%]`);
+console.log(
+  `  ${(sc.rate * 100).toFixed(1)}% (${sc.sessions_with_cite}/${sc.total_sessions})  95% CI [${(sc.ci95[0] * 100).toFixed(1)}%, ${(sc.ci95[1] * 100).toFixed(1)}%]`,
+);

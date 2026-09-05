@@ -46,7 +46,7 @@ beforeAll(() => {
   }
   Object.assign(BASE_ENV, {
     HOME: HOME_DIR,
-    CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'),   // no LLM spend, no network
+    CLAUDE_CODE_PATH: join(ROOT, 'no-such-claude-binary'), // no LLM spend, no network
     ANTHROPIC_API_KEY: '',
     OPENROUTER_API_KEY: '',
     CLAUDE_MEM_SKIP_UPDATE: '1',
@@ -64,7 +64,11 @@ beforeAll(() => {
 
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 300));
-  try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try {
+    rmSync(ROOT, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 function sandboxDir(...parts) {
@@ -78,15 +82,26 @@ function fire(cmd, args, { cwd, env = {}, timeout = 30000 } = {}) {
     const childEnv = { ...BASE_ENV, ...env };
     for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
     const child = spawn(cmd, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
+    let stdout = '',
+      stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error(`${cmd} ${args.join(' ')} did not exit within ${timeout}ms`));
     }, timeout);
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
     child.stdin.on('error', () => {});
     child.stdin.end('');
   });
@@ -102,7 +117,11 @@ async function startMcp(dataDir, cwd) {
   return { client, transport };
 }
 
-const textOf = (res) => (res?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+const textOf = (res) =>
+  (res?.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 
 /** Read one resource row straight out of the registry DB the surface just wrote. */
 function readResource(dataDir, type, name) {
@@ -125,11 +144,21 @@ describe('P1-3 — registry import/remove/reindex behave identically on CLI and 
     // ── CLI side ──
     const cliDir = sandboxDir('cli-data');
     const cliCwd = sandboxDir('cli-proj');
-    const r = await fire(process.execPath, [
-      CLI_PATH, 'registry', 'import',
-      '--name', NAME, '--resource-type', TYPE,
-      '--capability-summary', SUMMARY,
-    ], { cwd: cliCwd, env: { CLAUDE_MEM_DIR: cliDir } });
+    const r = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'registry',
+        'import',
+        '--name',
+        NAME,
+        '--resource-type',
+        TYPE,
+        '--capability-summary',
+        SUMMARY,
+      ],
+      { cwd: cliCwd, env: { CLAUDE_MEM_DIR: cliDir } },
+    );
     expect(r.code, `CLI import failed:\n${r.stdout}\n${r.stderr}`).toBe(0);
     cliRow = readResource(cliDir, TYPE, NAME);
 
@@ -184,9 +213,10 @@ describe('P1-3 — registry import/remove/reindex behave identically on CLI and 
     const cwd = sandboxDir('rm-proj');
     // Seed via CLI so the row exists, then remove it via MCP: cross-surface, which is the
     // only way a shared core is actually proven shared.
-    await fire(process.execPath, [
-      CLI_PATH, 'registry', 'import', '--name', NAME, '--resource-type', TYPE,
-    ], { cwd, env: { CLAUDE_MEM_DIR: dir } });
+    await fire(process.execPath, [CLI_PATH, 'registry', 'import', '--name', NAME, '--resource-type', TYPE], {
+      cwd,
+      env: { CLAUDE_MEM_DIR: dir },
+    });
 
     const { client, transport } = await startMcp(dir, cwd);
     try {
@@ -208,9 +238,11 @@ describe('P1-3 — registry import/remove/reindex behave identically on CLI and 
     }
 
     // And the CLI's own not-found path still reports not-found, not a crash or a lie.
-    const cli = await fire(process.execPath, [
-      CLI_PATH, 'registry', 'remove', '--name', NAME, '--resource-type', TYPE,
-    ], { cwd, env: { CLAUDE_MEM_DIR: dir } });
+    const cli = await fire(
+      process.execPath,
+      [CLI_PATH, 'registry', 'remove', '--name', NAME, '--resource-type', TYPE],
+      { cwd, env: { CLAUDE_MEM_DIR: dir } },
+    );
     expect(cli.stdout).toMatch(/Not found/);
   }, 60000);
 
@@ -218,13 +250,16 @@ describe('P1-3 — registry import/remove/reindex behave identically on CLI and 
     const dir = sandboxDir('ri-data');
     const cwd = sandboxDir('ri-proj');
     for (const n of ['ri-a', 'ri-b']) {
-      await fire(process.execPath, [
-        CLI_PATH, 'registry', 'import', '--name', n, '--resource-type', TYPE,
-      ], { cwd, env: { CLAUDE_MEM_DIR: dir } });
+      await fire(process.execPath, [CLI_PATH, 'registry', 'import', '--name', n, '--resource-type', TYPE], {
+        cwd,
+        env: { CLAUDE_MEM_DIR: dir },
+      });
     }
 
-    const cli = await fire(process.execPath, [CLI_PATH, 'registry', 'reindex'],
-      { cwd, env: { CLAUDE_MEM_DIR: dir } });
+    const cli = await fire(process.execPath, [CLI_PATH, 'registry', 'reindex'], {
+      cwd,
+      env: { CLAUDE_MEM_DIR: dir },
+    });
     const cliCount = cli.stdout.match(/(\d+) active resources/)?.[1];
     expect(cliCount, `CLI reindex output had no count:\n${cli.stdout}`).toBeTruthy();
 
@@ -254,10 +289,19 @@ describe('P2-6 — get renders the same prompt/event fields on both faces', () =
     dataDir = sandboxDir('get-data');
     cwd = sandboxDir('get-proj');
     // Seed through the real save surface so the row shape is production's, not a fixture's.
-    const r = await fire(process.execPath, [
-      CLI_PATH, 'save', 'Prompt/event parity probe body',
-      '--type', 'decision', '--title', 'Parity probe for the get detail face',
-    ], { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const r = await fire(
+      process.execPath,
+      [
+        CLI_PATH,
+        'save',
+        'Prompt/event parity probe body',
+        '--type',
+        'decision',
+        '--title',
+        'Parity probe for the get detail face',
+      ],
+      { cwd, env: { CLAUDE_MEM_DIR: dataDir } },
+    );
     expect(r.code, `seed save failed:\n${r.stdout}\n${r.stderr}`).toBe(0);
 
     // A user_prompts row with a prompt_number — the field the CLI face was dropping.
@@ -265,26 +309,40 @@ describe('P2-6 — get renders the same prompt/event fields on both faces', () =
     try {
       const now = Date.now();
       const sess = db.prepare('SELECT content_session_id FROM sdk_sessions LIMIT 1').get();
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
         VALUES (?, ?, ?, ?, ?)
-      `).run(sess.content_session_id, 'How did we fix the parser null deref?',
-        7, new Date(now).toISOString(), now);
-    } finally { db.close(); }
+      `,
+      ).run(
+        sess.content_session_id,
+        'How did we fix the parser null deref?',
+        7,
+        new Date(now).toISOString(),
+        now,
+      );
+    } finally {
+      db.close();
+    }
   }, 60000);
 
   /** The P# id of the seeded prompt row. */
   function promptId() {
     const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
-    try { return db.prepare('SELECT id FROM user_prompts ORDER BY id DESC LIMIT 1').get().id; }
-    finally { db.close(); }
+    try {
+      return db.prepare('SELECT id FROM user_prompts ORDER BY id DESC LIMIT 1').get().id;
+    } finally {
+      db.close();
+    }
   }
 
   // FAILS IF: the CLI prompt renderer stops iterating PROMPT_DETAIL_FIELDS — prompt_number
   // disappears from the CLI detail view while remaining FTS-searchable.
   it('the CLI prompt detail renders prompt_number', async () => {
-    const r = await fire(process.execPath, [CLI_PATH, 'get', `P#${promptId()}`],
-      { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const r = await fire(process.execPath, [CLI_PATH, 'get', `P#${promptId()}`], {
+      cwd,
+      env: { CLAUDE_MEM_DIR: dataDir },
+    });
     expect(r.stdout).toMatch(/Prompt number: 7/);
     expect(r.stdout).toMatch(/How did we fix the parser null deref\?/);
   }, 60000);
@@ -293,8 +351,10 @@ describe('P2-6 — get renders the same prompt/event fields on both faces', () =
   // convention; which columns reach the user is not.
   it('both faces expose the same prompt fields', async () => {
     const id = promptId();
-    const cli = await fire(process.execPath, [CLI_PATH, 'get', `P#${id}`],
-      { cwd, env: { CLAUDE_MEM_DIR: dataDir } });
+    const cli = await fire(process.execPath, [CLI_PATH, 'get', `P#${id}`], {
+      cwd,
+      env: { CLAUDE_MEM_DIR: dataDir },
+    });
 
     const { client, transport } = await startMcp(dataDir, cwd);
     let mcp;
@@ -317,10 +377,10 @@ describe('P2-6 — get renders the same prompt/event fields on both faces', () =
     const { readFileSync } = await import('fs');
     for (const f of ['mem-cli.mjs', 'server.mjs']) {
       const src = readFileSync(join(REPO, f), 'utf8');
-      expect(src, `${f} re-inlined a user_prompts detail SELECT`)
-        .not.toMatch(/SELECT \* FROM user_prompts WHERE id IN/);
-      expect(src, `${f} re-inlined an events detail SELECT`)
-        .not.toMatch(/SELECT \* FROM events WHERE id IN/);
+      expect(src, `${f} re-inlined a user_prompts detail SELECT`).not.toMatch(
+        /SELECT \* FROM user_prompts WHERE id IN/,
+      );
+      expect(src, `${f} re-inlined an events detail SELECT`).not.toMatch(/SELECT \* FROM events WHERE id IN/);
     }
   });
 });

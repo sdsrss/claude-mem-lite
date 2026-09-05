@@ -49,7 +49,9 @@ function isValidAgent(filePath) {
     const content = readFileSync(filePath, 'utf-8');
     if (!content.trim() || content.trim().length < 50) return false;
     return hasYamlFrontmatter(content);
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 function isValidSkill(dirPath) {
@@ -63,7 +65,10 @@ function isValidSkill(dirPath) {
 function copyAgent(src, destDir, name) {
   ensureDir(destDir);
   const dest = join(destDir, name + '.md');
-  if (existsSync(dest)) { stats.skipped++; return; }
+  if (existsSync(dest)) {
+    stats.skipped++;
+    return;
+  }
   copyFileSync(src, dest);
   stats.agents++;
 }
@@ -74,7 +79,10 @@ function copySkill(srcDir, destDir) {
   const agentsMd = join(srcDir, 'AGENTS.md');
   if (existsSync(skillMd)) {
     const dest = join(destDir, 'SKILL.md');
-    if (existsSync(dest)) { stats.skipped++; return; }
+    if (existsSync(dest)) {
+      stats.skipped++;
+      return;
+    }
     copyFileSync(skillMd, dest);
     // Also copy AGENTS.md if exists
     if (existsSync(agentsMd)) copyFileSync(agentsMd, join(destDir, 'AGENTS.md'));
@@ -82,7 +90,10 @@ function copySkill(srcDir, destDir) {
   } else if (existsSync(agentsMd)) {
     // Convert AGENTS.md to SKILL.md if no SKILL.md exists
     const dest = join(destDir, 'SKILL.md');
-    if (existsSync(dest)) { stats.skipped++; return; }
+    if (existsSync(dest)) {
+      stats.skipped++;
+      return;
+    }
     copyFileSync(agentsMd, dest);
     stats.skills++;
   }

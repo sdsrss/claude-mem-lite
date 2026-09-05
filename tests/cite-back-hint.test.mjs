@@ -13,7 +13,16 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildCiteBackHint, loadCiteBackForEpisode, extractCiteBackSignals, buildUnsavedBugfixHint, countUnsavedBugfixShape, buildCiteRecallNudge, nextCiteLowStreak, CITE_NUDGE_SILENCE_AFTER } from '../lib/cite-back-hint.mjs';
+import {
+  buildCiteBackHint,
+  loadCiteBackForEpisode,
+  extractCiteBackSignals,
+  buildUnsavedBugfixHint,
+  countUnsavedBugfixShape,
+  buildCiteRecallNudge,
+  nextCiteLowStreak,
+  CITE_NUDGE_SILENCE_AFTER,
+} from '../lib/cite-back-hint.mjs';
 
 const editEntry = (file, tool = 'Edit') => ({ tool, files: [file], isError: false });
 const readEntry = (file) => ({ tool: 'Read', files: [file], isError: false });
@@ -96,11 +105,7 @@ describe('buildCiteBackHint', () => {
 
   it('caps at 2 matched files and drops the rest silently', () => {
     const episode = {
-      entries: [
-        editEntry('/p/a.mjs'),
-        editEntry('/p/b.mjs'),
-        editEntry('/p/c.mjs'),
-      ],
+      entries: [editEntry('/p/a.mjs'), editEntry('/p/b.mjs'), editEntry('/p/c.mjs')],
     };
     const cooldown = {
       '/p/a.mjs': { ts: Date.now(), lessonIds: [1] },
@@ -143,7 +148,7 @@ describe('buildCiteBackHint', () => {
     // Dedup invariant: one bullet line per file even if the same file appears
     // in multiple entries. (Filename intentionally appears twice per line —
     // once in the bullet header, once in the `/lesson --file <name>` template.)
-    const bulletLines = hint.split('\n').filter(l => l.trim().startsWith('•'));
+    const bulletLines = hint.split('\n').filter((l) => l.trim().startsWith('•'));
     expect(bulletLines.length).toBe(1);
   });
 
@@ -175,10 +180,7 @@ describe('buildUnsavedBugfixHint', () => {
 
   it('carries the unique edited-file count', () => {
     const episode = {
-      entries: [
-        editEntry('/p/a.mjs'), bashErr(),
-        editEntry('/p/b.mjs'), bashOk(),
-      ],
+      entries: [editEntry('/p/a.mjs'), bashErr(), editEntry('/p/b.mjs'), bashOk()],
     };
     const hint = buildUnsavedBugfixHint(episode);
     expect(hint).toMatch(/2 file\(s\)/);
@@ -211,8 +213,10 @@ describe('buildUnsavedBugfixHint', () => {
   it('caps the displayed file list at 3 names', () => {
     const episode = {
       entries: [
-        editEntry('/p/a.mjs'), editEntry('/p/b.mjs'),
-        editEntry('/p/c.mjs'), editEntry('/p/d.mjs'),
+        editEntry('/p/a.mjs'),
+        editEntry('/p/b.mjs'),
+        editEntry('/p/c.mjs'),
+        editEntry('/p/d.mjs'),
         bashErr(),
       ],
     };
@@ -264,12 +268,18 @@ describe('buildUnsavedBugfixHint', () => {
 //     surfaces to make the gap socially visible.
 describe('countUnsavedBugfixShape', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'unsaved-bugfix-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'unsaved-bugfix-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 't.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -298,7 +308,11 @@ describe('countUnsavedBugfixShape', () => {
       type: 'assistant',
       message: {
         content: [
-          { type: 'tool_use', name: 'mcp__claude_mem_lite__mem_save', input: { type, title: 't', lesson_learned: 'x' } },
+          {
+            type: 'tool_use',
+            name: 'mcp__claude_mem_lite__mem_save',
+            input: { type, title: 't', lesson_learned: 'x' },
+          },
         ],
       },
     };
@@ -309,7 +323,13 @@ describe('countUnsavedBugfixShape', () => {
       type: 'assistant',
       message: {
         content: [
-          { type: 'tool_use', name: 'Bash', input: { command: 'claude-mem-lite activity save --type lesson --title "fix" --body "<root cause>"' } },
+          {
+            type: 'tool_use',
+            name: 'Bash',
+            input: {
+              command: 'claude-mem-lite activity save --type lesson --title "fix" --body "<root cause>"',
+            },
+          },
         ],
       },
     };
@@ -334,10 +354,7 @@ describe('countUnsavedBugfixShape', () => {
   });
 
   it('credits mem_save tool_use with type=bugfix as a save', () => {
-    const path = writeTranscript([
-      bugfixShapeAttachment(),
-      memSaveToolUse('bugfix'),
-    ]);
+    const path = writeTranscript([bugfixShapeAttachment(), memSaveToolUse('bugfix')]);
     const r = countUnsavedBugfixShape(path);
     expect(r.nudged).toBe(1);
     expect(r.saved).toBe(1);
@@ -350,9 +367,18 @@ describe('countUnsavedBugfixShape', () => {
   it('credits the redirected /bug /lesson save (cli.mjs save … --lesson) as a save', () => {
     const bashObsInsightSave = {
       type: 'assistant',
-      message: { content: [
-        { type: 'tool_use', name: 'Bash', input: { command: 'node /root/.claude/plugins/cache/x/cli.mjs save "fixed the pool deadlock" --type bugfix --title "deadlock" --lesson "reorder acquisition"' } },
-      ] },
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Bash',
+            input: {
+              command:
+                'node /root/.claude/plugins/cache/x/cli.mjs save "fixed the pool deadlock" --type bugfix --title "deadlock" --lesson "reorder acquisition"',
+            },
+          },
+        ],
+      },
     };
     const path = writeTranscript([bugfixShapeAttachment(), bashObsInsightSave]);
     const r = countUnsavedBugfixShape(path);
@@ -368,14 +394,22 @@ describe('countUnsavedBugfixShape', () => {
   it('credits the redirected save even when the command is multi-line (template shape)', () => {
     const bashMultiLineSave = {
       type: 'assistant',
-      message: { content: [
-        { type: 'tool_use', name: 'Bash', input: { command:
-          'node /root/.claude/plugins/cache/x/cli.mjs save "fixed the pool deadlock" \\\n'
-          + '  --type bugfix \\\n'
-          + '  --title "deadlock" \\\n'
-          + '  --lesson "reorder acquisition" \\\n'
-          + '  --importance 2' } },
-      ] },
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Bash',
+            input: {
+              command:
+                'node /root/.claude/plugins/cache/x/cli.mjs save "fixed the pool deadlock" \\\n' +
+                '  --type bugfix \\\n' +
+                '  --title "deadlock" \\\n' +
+                '  --lesson "reorder acquisition" \\\n' +
+                '  --importance 2',
+            },
+          },
+        ],
+      },
     };
     const path = writeTranscript([bugfixShapeAttachment(), bashMultiLineSave]);
     const r = countUnsavedBugfixShape(path);
@@ -384,26 +418,17 @@ describe('countUnsavedBugfixShape', () => {
   });
 
   it('credits mem_save tool_use with type=lesson as a save', () => {
-    const path = writeTranscript([
-      bugfixShapeAttachment(),
-      memSaveToolUse('lesson'),
-    ]);
+    const path = writeTranscript([bugfixShapeAttachment(), memSaveToolUse('lesson')]);
     expect(countUnsavedBugfixShape(path).saved).toBe(1);
   });
 
   it('does NOT credit mem_save with non-lesson/bugfix type', () => {
-    const path = writeTranscript([
-      bugfixShapeAttachment(),
-      memSaveToolUse('change'),
-    ]);
+    const path = writeTranscript([bugfixShapeAttachment(), memSaveToolUse('change')]);
     expect(countUnsavedBugfixShape(path).saved).toBe(0);
   });
 
   it('credits Bash `activity save --type lesson` as a save', () => {
-    const path = writeTranscript([
-      bugfixShapeAttachment(),
-      bashLessonSave(),
-    ]);
+    const path = writeTranscript([bugfixShapeAttachment(), bashLessonSave()]);
     expect(countUnsavedBugfixShape(path).saved).toBe(1);
   });
 
@@ -428,8 +453,11 @@ describe('countUnsavedBugfixShape', () => {
           type: 'hook_success',
           hookName: 'PostToolUse',
           command: 'hook.mjs post-tool-use',
-          stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '[mem] episode flushed: 2 entries' } }),
-          stderr: '', exitCode: 0,
+          stdout: JSON.stringify({
+            hookSpecificOutput: { additionalContext: '[mem] episode flushed: 2 entries' },
+          }),
+          stderr: '',
+          exitCode: 0,
         },
       },
     ]);
@@ -444,8 +472,14 @@ describe('countUnsavedBugfixShape', () => {
 
 describe('buildCiteRecallNudge', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-nudge-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-nudge-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function seed(project, data) {
     const safe = project.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 64);
@@ -544,7 +578,9 @@ describe('buildCiteRecallNudge', () => {
 
   it('CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER=0 never silences', () => {
     seed('p-never', { injected: 10, recalled: 0, ratio: 0, lowStreak: 99 });
-    expect(buildCiteRecallNudge('p-never', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '0' })).toContain('cite-recall 0%');
+    expect(buildCiteRecallNudge('p-never', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '0' })).toContain(
+      'cite-recall 0%',
+    );
   });
 
   // ── v3.94.0: the three knobs that moved to envNumber ─────────────────────────
@@ -560,20 +596,20 @@ describe('buildCiteRecallNudge', () => {
     // Pre-release this read `Number(env.X) || 0.6`: '0' parsed to 0, `0 || 0.6` gave 0.6,
     // and the nag fired anyway. Now 0 survives and `ratio < 0` is never true.
     seed('p-thr0', { injected: 10, recalled: 0, ratio: 0 });
-    expect(buildCiteRecallNudge('p-thr0', tmp, {}), 'premise: these stats DO fire by default')
-      .toContain('cite-recall 0%');
-    expect(buildCiteRecallNudge('p-thr0', tmp, { CLAUDE_MEM_CITE_NUDGE_THRESHOLD: '0' }))
-      .toBe('');
+    expect(buildCiteRecallNudge('p-thr0', tmp, {}), 'premise: these stats DO fire by default').toContain(
+      'cite-recall 0%',
+    );
+    expect(buildCiteRecallNudge('p-thr0', tmp, { CLAUDE_MEM_CITE_NUDGE_THRESHOLD: '0' })).toBe('');
   });
 
   it('MIN_INJECTED=0 removes the volume floor — the other swallowed 0', () => {
     // One injection, zero recalled. Default floor of 5 keeps it silent; an explicit 0 must
     // let it through, which `Number(env.X) || 5` could not express.
     seed('p-min0', { injected: 1, recalled: 0, ratio: 0 });
-    expect(buildCiteRecallNudge('p-min0', tmp, {}), 'premise: default floor suppresses it')
-      .toBe('');
-    expect(buildCiteRecallNudge('p-min0', tmp, { CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED: '0' }))
-      .toContain('cite-recall 0%');
+    expect(buildCiteRecallNudge('p-min0', tmp, {}), 'premise: default floor suppresses it').toBe('');
+    expect(buildCiteRecallNudge('p-min0', tmp, { CLAUDE_MEM_CITE_NUDGE_MIN_INJECTED: '0' })).toContain(
+      'cite-recall 0%',
+    );
   });
 
   it('SILENCE_AFTER=garbage still silences at the default — it used to disable silencing', () => {
@@ -581,19 +617,22 @@ describe('buildCiteRecallNudge', () => {
     // `lowStreak >= NaN` is false: the self-silencing turned OFF, which is the opposite of
     // every other knob's failure direction and the one a user would never notice.
     seed('p-garbage', { injected: 10, recalled: 0, ratio: 0, lowStreak: CITE_NUDGE_SILENCE_AFTER });
-    expect(buildCiteRecallNudge('p-garbage', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: 'abc' }))
-      .toBe('');
+    expect(buildCiteRecallNudge('p-garbage', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: 'abc' })).toBe('');
   });
 
   it('a fractional SILENCE_AFTER still works — the bound is >=, not an integer domain', () => {
     // Guards the v3.94.0 pre-tag decision to DROP `integer: true` here: 2.5 was a usable
     // setting, and rejecting it would silently swap a working value for the default of 3.
     seed('p-frac', { injected: 10, recalled: 0, ratio: 0, lowStreak: 2 });
-    expect(buildCiteRecallNudge('p-frac', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
-      'lowStreak 2 is below 2.5, so the nag must still fire').toContain('cite-recall 0%');
+    expect(
+      buildCiteRecallNudge('p-frac', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
+      'lowStreak 2 is below 2.5, so the nag must still fire',
+    ).toContain('cite-recall 0%');
     seed('p-frac2', { injected: 10, recalled: 0, ratio: 0, lowStreak: 3 });
-    expect(buildCiteRecallNudge('p-frac2', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
-      'lowStreak 3 is above 2.5, so it must be silenced').toBe('');
+    expect(
+      buildCiteRecallNudge('p-frac2', tmp, { CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER: '2.5' }),
+      'lowStreak 3 is above 2.5, so it must be silenced',
+    ).toBe('');
   });
 });
 
@@ -629,11 +668,15 @@ describe('loadCiteBackForEpisode', () => {
   });
 
   afterEach(() => {
-    try { rmSync(runtimeDir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(runtimeDir, { recursive: true, force: true });
+    } catch {}
   });
 
   function seedCooldown(sessionId, data) {
-    const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 64);
+    const safe = String(sessionId)
+      .replace(/[^a-zA-Z0-9_.-]/g, '-')
+      .slice(0, 64);
     const cooldownPath = join(runtimeDir, `pre-recall-cooldown-${safe}.json`);
     writeFileSync(cooldownPath, JSON.stringify(data));
   }
@@ -694,8 +737,14 @@ describe('loadCiteBackForEpisode', () => {
 
 describe('extractCiteBackSignals (P5 ① — Stop-time positive signal)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'citeback-sig-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'citeback-sig-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   // Mirror how hook.mjs flushEpisode emits the hint: PostToolUse JSON wrapping
   // additionalContext, recorded in the transcript as a hook_success attachment.
@@ -706,22 +755,26 @@ describe('extractCiteBackSignals (P5 ① — Stop-time positive signal)', () => 
         type: 'hook_success',
         hookName: 'PostToolUse',
         command: 'node /home/u/.claude-mem-lite/hook.mjs post-tool-use',
-        stdout: JSON.stringify({ suppressOutput: true, hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: hintText } }),
-        stderr: '', exitCode: 0,
+        stdout: JSON.stringify({
+          suppressOutput: true,
+          hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: hintText },
+        }),
+        stderr: '',
+        exitCode: 0,
       },
     };
   }
 
   function writeTranscript(entries) {
     const path = join(tmp, 't.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
   it('extracts the #NN lesson ids from a real cite-back hint emission', () => {
     const hint = buildCiteBackHint(
       { entries: [{ tool: 'Edit', files: ['/p/src/foo.mjs'], isError: false }] },
-      { '/p/src/foo.mjs': { ts: Date.now(), lessonIds: [8447, 9012] } }
+      { '/p/src/foo.mjs': { ts: Date.now(), lessonIds: [8447, 9012] } },
     );
     const ids = extractCiteBackSignals(writeTranscript([citeBackAttachment(hint)]));
     expect(ids.has(8447)).toBe(true);
@@ -732,7 +785,14 @@ describe('extractCiteBackSignals (P5 ① — Stop-time positive signal)', () => 
   it('ignores attachments without the cite-back leader (e.g. plain mem context)', () => {
     const other = {
       type: 'attachment',
-      attachment: { type: 'hook_success', hookName: 'PostToolUse', command: 'x', stdout: 'just #777 in some other output', stderr: '', exitCode: 0 },
+      attachment: {
+        type: 'hook_success',
+        hookName: 'PostToolUse',
+        command: 'x',
+        stdout: 'just #777 in some other output',
+        stderr: '',
+        exitCode: 0,
+      },
     };
     expect(extractCiteBackSignals(writeTranscript([other])).size).toBe(0);
   });

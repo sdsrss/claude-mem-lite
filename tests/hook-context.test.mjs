@@ -5,7 +5,14 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtemp
 import { tmpdir } from 'os';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { estimateTokens } from '../utils.mjs';
-import { computeAdaptiveWindows, selectWithTokenBudget, cleanupClaudeMdLegacyBlock, buildSummaryLines, buildSessionContextLines, sectionQuotas } from '../hook-context.mjs';
+import {
+  computeAdaptiveWindows,
+  selectWithTokenBudget,
+  cleanupClaudeMdLegacyBlock,
+  buildSummaryLines,
+  buildSessionContextLines,
+  sectionQuotas,
+} from '../hook-context.mjs';
 import { insertDeferred } from '../lib/deferred-work.mjs';
 import { KEY_CONTEXT_LIMIT } from '../hook-shared.mjs';
 
@@ -21,9 +28,9 @@ describe('computeAdaptiveWindows', () => {
   it('returns low velocity windows when project has few observations', () => {
     // 0 observations in 7 days → velocity = 0 → low
     const windows = computeAdaptiveWindows(db, 'test');
-    expect(windows.tier1).toBe(48 * 3600000);  // 48 hours
-    expect(windows.tier2).toBe(14 * 86400000);  // 14 days
-    expect(windows.tier3).toBe(60 * 86400000);  // 60 days
+    expect(windows.tier1).toBe(48 * 3600000); // 48 hours
+    expect(windows.tier2).toBe(14 * 86400000); // 14 days
+    expect(windows.tier3).toBe(60 * 86400000); // 60 days
     expect(windows.sessWindow).toBe(14 * 86400000);
   });
 
@@ -38,8 +45,8 @@ describe('computeAdaptiveWindows', () => {
       });
     }
     const windows = computeAdaptiveWindows(db, 'test');
-    expect(windows.tier1).toBe(24 * 3600000);  // 24 hours
-    expect(windows.tier2).toBe(7 * 86400000);   // 7 days
+    expect(windows.tier1).toBe(24 * 3600000); // 24 hours
+    expect(windows.tier2).toBe(7 * 86400000); // 7 days
   });
 
   it('returns high velocity windows for >10 obs/day', () => {
@@ -53,8 +60,8 @@ describe('computeAdaptiveWindows', () => {
       });
     }
     const windows = computeAdaptiveWindows(db, 'test');
-    expect(windows.tier1).toBe(12 * 3600000);  // 12 hours
-    expect(windows.tier2).toBe(3 * 86400000);   // 3 days
+    expect(windows.tier1).toBe(12 * 3600000); // 12 hours
+    expect(windows.tier2).toBe(3 * 86400000); // 3 days
   });
 
   it('ignores compressed observations', () => {
@@ -111,12 +118,24 @@ describe('selectWithTokenBudget', () => {
   // hidden near-duplicate resurface in the SessionStart "Recent" table. obsPool now filters
   // superseded_at IS NULL (parity with the sibling keyObs query).
   it('excludes superseded rows even when compressed_into is still 0 (auto-dedup shape)', () => {
-    insertObs(db, { sessionId: 'sess-1', project: 'test', type: 'decision', title: 'live decision', importance: 2 });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'decision', title: 'superseded dup', importance: 2,
-      supersededAt: Date.now(), supersededBy: 'auto-dedup', compressedInto: 0,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'decision',
+      title: 'live decision',
+      importance: 2,
     });
-    const titles = selectWithTokenBudget(db, 'test', 2000).observations.map(o => o.title);
+    insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'decision',
+      title: 'superseded dup',
+      importance: 2,
+      supersededAt: Date.now(),
+      supersededBy: 'auto-dedup',
+      compressedInto: 0,
+    });
+    const titles = selectWithTokenBudget(db, 'test', 2000).observations.map((o) => o.title);
     expect(titles).toContain('live decision');
     expect(titles).not.toContain('superseded dup');
   });
@@ -157,20 +176,26 @@ describe('selectWithTokenBudget', () => {
   it('prioritizes high importance observations', () => {
     // Insert low importance old obs
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'low importance old', importance: 1,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'low importance old',
+      importance: 1,
       epochOffset: -86400000, // 1 day ago
     });
     // Insert high importance old obs
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'high importance old', importance: 3,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'high importance old',
+      importance: 3,
       epochOffset: -86400000 * 10, // 10 days ago
     });
     // Insert recent low importance
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'recent low importance', importance: 1,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'recent low importance',
+      importance: 1,
       epochOffset: -60000, // 1 min ago
     });
 
@@ -178,31 +203,39 @@ describe('selectWithTokenBudget', () => {
     expect(result.observations.length).toBeGreaterThan(0);
     // High importance should rank first — exponential decay preserves recency for
     // items within the half-life window (10d < 14d default), so importance=3 dominates
-    const titles = result.observations.map(o => o.title);
+    const titles = result.observations.map((o) => o.title);
     expect(titles[0]).toBe('high importance old');
   });
 
   it('filters by project', () => {
     insertSession(db, { id: 'sess-2', project: 'other' });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', title: 'test obs', importance: 1,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'test obs',
+      importance: 1,
     });
     insertObs(db, {
-      sessionId: 'sess-2', project: 'other', title: 'other obs', importance: 1,
+      sessionId: 'sess-2',
+      project: 'other',
+      title: 'other obs',
+      importance: 1,
     });
 
     const result = selectWithTokenBudget(db, 'test', 2000);
-    const titles = result.observations.map(o => o.title);
+    const titles = result.observations.map((o) => o.title);
     expect(titles).toContain('test obs');
     expect(titles).not.toContain('other obs');
   });
 
   it('includes session summaries', () => {
     const now = Date.now();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run('sess-1', 'test', 'fix bugs', 'fixed 3 bugs', 'run tests', new Date(now).toISOString(), now);
+    `,
+    ).run('sess-1', 'test', 'fix bugs', 'fixed 3 bugs', 'run tests', new Date(now).toISOString(), now);
 
     const result = selectWithTokenBudget(db, 'test', 2000);
     expect(result.summaries.length).toBe(1);
@@ -211,16 +244,21 @@ describe('selectWithTokenBudget', () => {
 
   it('skips compressed observations', () => {
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'compressed one', importance: 1, compressedInto: 42,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'compressed one',
+      importance: 1,
+      compressedInto: 42,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'active one', importance: 1,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'active one',
+      importance: 1,
     });
 
     const result = selectWithTokenBudget(db, 'test', 2000);
-    const titles = result.observations.map(o => o.title);
+    const titles = result.observations.map((o) => o.title);
     expect(titles).not.toContain('compressed one');
     expect(titles).toContain('active one');
   });
@@ -231,42 +269,52 @@ describe('selectWithTokenBudget', () => {
 
   it('R3: excludes "Modified X" titles from Key Context', () => {
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'Modified dispatch.mjs', importance: 2,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'Modified dispatch.mjs',
+      importance: 2,
       epochOffset: -1000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'Fixed dispatch race condition', importance: 2,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'Fixed dispatch race condition',
+      importance: 2,
       epochOffset: -2000,
     });
     const result = selectWithTokenBudget(db, 'test', 2000);
-    const titles = result.observations.map(o => o.title);
+    const titles = result.observations.map((o) => o.title);
     expect(titles).toContain('Fixed dispatch race condition');
     expect(titles).not.toContain('Modified dispatch.mjs');
   });
 
   it('R3: excludes "Worked on X" and "Reviewed N files:" from Key Context', () => {
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'Worked on auth cache module', importance: 2,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'Worked on auth cache module',
+      importance: 2,
       epochOffset: -1000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'Reviewed 6 files: auth.mjs, cache.mjs, utils.mjs', importance: 2,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'Reviewed 6 files: auth.mjs, cache.mjs, utils.mjs',
+      importance: 2,
       epochOffset: -2000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test',
-      title: 'Implemented auth middleware', importance: 2,
+      sessionId: 'sess-1',
+      project: 'test',
+      title: 'Implemented auth middleware',
+      importance: 2,
       epochOffset: -3000,
     });
     const result = selectWithTokenBudget(db, 'test', 2000);
-    const titles = result.observations.map(o => o.title);
+    const titles = result.observations.map((o) => o.title);
     expect(titles).toContain('Implemented auth middleware');
     expect(titles).not.toContain('Worked on auth cache module');
-    expect(titles.every(t => !t.startsWith('Reviewed '))).toBe(true);
+    expect(titles.every((t) => !t.startsWith('Reviewed '))).toBe(true);
   });
 
   // D#197. This case was named 'applies diversity penalty for file overlap' and
@@ -303,27 +351,42 @@ describe('selectWithTokenBudget', () => {
     // below can no longer tell the two behaviours apart and is just decoration.
     const dB = 1 / Math.sqrt(estimateTokens(B));
     const dC = 1 / Math.sqrt(estimateTokens(C));
-    expect(dB).toBeGreaterThan(dC);          // raw order is B before C
-    expect(0.7 * dB).toBeLessThan(dC);       // penalized order would be C before B
+    expect(dB).toBeGreaterThan(dC); // raw order is B before C
+    expect(0.7 * dB).toBeLessThan(dC); // penalized order would be C before B
 
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'bugfix',
-      title: A, importance: 1, filesModified: '["server.mjs"]', epochOffset: -1000,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: A,
+      importance: 1,
+      filesModified: '["server.mjs"]',
+      epochOffset: -1000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'bugfix',
-      title: B, importance: 1, filesModified: '["server.mjs"]', epochOffset: -2000,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: B,
+      importance: 1,
+      filesModified: '["server.mjs"]',
+      epochOffset: -2000,
     });
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'bugfix',
-      title: C, importance: 1, filesModified: '["utils.mjs"]', epochOffset: -3000,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'bugfix',
+      title: C,
+      importance: 1,
+      filesModified: '["utils.mjs"]',
+      epochOffset: -3000,
     });
 
     const result = selectWithTokenBudget(db, 'test', 2000);
     expect(result.observations.length).toBe(3);
     // Raw-density order. If this ever reads [A, C, B], a file-overlap penalty
     // has reached the ranking — which is a behaviour change owing an A/B.
-    expect(result.observations.map(o => o.title)).toEqual([A, B, C]);
+    expect(result.observations.map((o) => o.title)).toEqual([A, B, C]);
   });
 
   // D#192 — KEYCTX_POOL_OBS is a REACHABILITY backstop, not a relevance gate.
@@ -353,8 +416,11 @@ describe('selectWithTokenBudget', () => {
     // shape cannot be selected" from "this row's POSITION made it unreachable" — the
     // discriminator this fixture exists to provide.
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'decision',
-      title: 'reachability control', importance: 3,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'decision',
+      title: 'reachability control',
+      importance: 3,
       lessonLearned: 'high value density, newest row',
       epochOffset: -1000,
     });
@@ -363,7 +429,9 @@ describe('selectWithTokenBudget', () => {
     // every pool slot up to 50 under the shipped bound.
     for (let i = 0; i < 55; i++) {
       insertObs(db, {
-        sessionId: 'sess-1', project: 'test', type: 'change',
+        sessionId: 'sess-1',
+        project: 'test',
+        type: 'change',
         title: `routine change ${i} with a deliberately long title so its cost is high`,
         importance: 1,
         epochOffset: -(i * 60000 + 60000),
@@ -373,8 +441,11 @@ describe('selectWithTokenBudget', () => {
     // lands past the 50-row LIMIT. Ten days keeps it inside tier3 (30d at this
     // velocity) and importance 3 keeps it inside the tier3 arm of the WHERE.
     insertObs(db, {
-      sessionId: 'sess-1', project: 'test', type: 'decision',
-      title: 'reachability target', importance: 3,
+      sessionId: 'sess-1',
+      project: 'test',
+      type: 'decision',
+      title: 'reachability target',
+      importance: 3,
       lessonLearned: 'high value density, oldest row in the corpus',
       epochOffset: -(10 * DAY),
     });
@@ -403,21 +474,31 @@ describe('cleanupClaudeMdLegacyBlock', () => {
   const testClaudeMd = join(testDir, 'CLAUDE.md');
 
   beforeEach(async () => {
-    try { mkdirSync(testDir, { recursive: true }); } catch {}
+    try {
+      mkdirSync(testDir, { recursive: true });
+    } catch {}
     vi.stubEnv('CLAUDE_PROJECT_DIR', testDir);
-    try { unlinkSync(testClaudeMd); } catch {}
+    try {
+      unlinkSync(testClaudeMd);
+    } catch {}
     // v2.48 P2-4: clear marker so each test exercises the full cleanup path.
     const { RUNTIME_DIR } = await import('../hook-shared.mjs');
     const { inferProject } = await import('../utils.mjs');
-    try { unlinkSync(join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`)); } catch {}
+    try {
+      unlinkSync(join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`));
+    } catch {}
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    try { unlinkSync(testClaudeMd); } catch {}
+    try {
+      unlinkSync(testClaudeMd);
+    } catch {}
     const { RUNTIME_DIR } = await import('../hook-shared.mjs');
     const { inferProject } = await import('../utils.mjs');
-    try { unlinkSync(join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`)); } catch {}
+    try {
+      unlinkSync(join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`));
+    } catch {}
   });
 
   it('is a no-op when CLAUDE.md does not exist', () => {
@@ -449,11 +530,9 @@ describe('cleanupClaudeMdLegacyBlock', () => {
   });
 
   it('removes the legacy hint comment alongside the block', () => {
-    const hint = '<!-- claude-mem-lite: auto-updated context. To avoid git noise, add CLAUDE.md to .gitignore -->';
-    writeFileSync(
-      testClaudeMd,
-      `# Project\n\n${hint}\n<claude-mem-context>\nstale\n</claude-mem-context>\n`,
-    );
+    const hint =
+      '<!-- claude-mem-lite: auto-updated context. To avoid git noise, add CLAUDE.md to .gitignore -->';
+    writeFileSync(testClaudeMd, `# Project\n\n${hint}\n<claude-mem-context>\nstale\n</claude-mem-context>\n`);
     cleanupClaudeMdLegacyBlock();
     const content = readFileSync(testClaudeMd, 'utf8');
     expect(content).toContain('# Project');
@@ -476,10 +555,7 @@ describe('cleanupClaudeMdLegacyBlock', () => {
   });
 
   it('does not collapse the file into pure whitespace when block spans most of it', () => {
-    writeFileSync(
-      testClaudeMd,
-      `# Only Header\n\n<claude-mem-context>\na\nb\nc\n</claude-mem-context>\n`,
-    );
+    writeFileSync(testClaudeMd, `# Only Header\n\n<claude-mem-context>\na\nb\nc\n</claude-mem-context>\n`);
     cleanupClaudeMdLegacyBlock();
     const content = readFileSync(testClaudeMd, 'utf8');
     expect(content).toContain('# Only Header');
@@ -495,12 +571,11 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     const { RUNTIME_DIR } = await import('../hook-shared.mjs');
     const { inferProject } = await import('../utils.mjs');
     const markerPath = join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`);
-    try { unlinkSync(markerPath); } catch {}
+    try {
+      unlinkSync(markerPath);
+    } catch {}
 
-    writeFileSync(
-      testClaudeMd,
-      `# Project\n\n<claude-mem-context>\ncontent\n</claude-mem-context>\n`,
-    );
+    writeFileSync(testClaudeMd, `# Project\n\n<claude-mem-context>\ncontent\n</claude-mem-context>\n`);
     cleanupClaudeMdLegacyBlock();
 
     // Marker dropped after first call regardless of whether block existed
@@ -517,14 +592,18 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     const afterSecond = readFileSync(testClaudeMd, 'utf8');
     expect(afterSecond).toBe(reintroduced); // untouched — proves short-circuit fired
 
-    try { unlinkSync(markerPath); } catch {}
+    try {
+      unlinkSync(markerPath);
+    } catch {}
   });
 
   it('writes marker even when CLAUDE.md does not exist (avoid repeated stat)', async () => {
     const { RUNTIME_DIR } = await import('../hook-shared.mjs');
     const { inferProject } = await import('../utils.mjs');
     const markerPath = join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`);
-    try { unlinkSync(markerPath); } catch {}
+    try {
+      unlinkSync(markerPath);
+    } catch {}
 
     expect(existsSync(testClaudeMd)).toBe(false);
     cleanupClaudeMdLegacyBlock();
@@ -535,7 +614,9 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     // marker delete) is the recovery path.
     expect(existsSync(markerPath)).toBe(true);
 
-    try { unlinkSync(markerPath); } catch {}
+    try {
+      unlinkSync(markerPath);
+    } catch {}
   });
 });
 
@@ -573,7 +654,7 @@ describe('buildSummaryLines', () => {
   it('truncates long fields', () => {
     const summary = { request: 'x'.repeat(200), completed: '', next_steps: '', remaining_items: '' };
     const lines = buildSummaryLines(summary);
-    const requestLine = lines.find(l => l.startsWith('Request:'));
+    const requestLine = lines.find((l) => l.startsWith('Request:'));
     expect(requestLine.length).toBeLessThan(200);
   });
 });
@@ -584,7 +665,9 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     db = createTestDb();
     insertSession(db, { id: 'sess-x', project: 'test' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('renders open deferred_work items as numbered list with priority + D#N', () => {
     insertDeferred(db, { project: 'test', title: 'Round 2 zero-byte', priority: 3 });
@@ -626,9 +709,11 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     // Now they only appear in the Recent table; this block is dedicated to
     // the deferred_work table.
     insertObs(db, {
-      sessionId: 'sess-x', project: 'test',
+      sessionId: 'sess-x',
+      project: 'test',
       title: 'high-importance decision should not surface here anymore',
-      type: 'decision', importance: 3,
+      type: 'decision',
+      importance: 3,
     });
     const out = buildSessionContextLines(db, 'test');
     expect(out).not.toMatch(/### Deferred Work/);
@@ -637,18 +722,29 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
 
 describe('buildSessionContextLines: Recent table cell safety', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-r', project: 'test' }); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-r', project: 'test' });
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('escapes a literal pipe in a title so the markdown table stays 4 columns', () => {
-    insertObs(db, { sessionId: 'sess-r', project: 'test', type: 'decision', title: 'Use grep | sort | uniq pipeline', importance: 3 });
+    insertObs(db, {
+      sessionId: 'sess-r',
+      project: 'test',
+      type: 'decision',
+      title: 'Use grep | sort | uniq pipeline',
+      importance: 3,
+    });
     const out = buildSessionContextLines(db, 'test');
     // Select the TABLE ROW, not any line mentioning the word. On a project that is not
     // adopted the context block also renders a `### Key Context` bullet containing the same
     // title, and `.find()` returned that instead — so this passed or failed on whether the
     // HOST directory happened to be adopted (green in the maintainer's tree, red from any
     // clone). That is the very defect class this release's MAIN-1 fix is about.
-    const row = out.split('\n').find(l => l.startsWith('|') && l.includes('grep'));
+    const row = out.split('\n').find((l) => l.startsWith('|') && l.includes('grep'));
     expect(row).toBeTruthy();
     // Every cell-separating pipe is unescaped; title pipes are escaped \| — so a
     // correct row has exactly the 5 structural pipes of a 4-column row.
@@ -658,10 +754,16 @@ describe('buildSessionContextLines: Recent table cell safety', () => {
   });
 
   it('collapses CR/LF/tab in a title to spaces so one obs stays one row', () => {
-    insertObs(db, { sessionId: 'sess-r', project: 'test', type: 'bugfix', title: 'multi\nline\ttitle', importance: 2 });
+    insertObs(db, {
+      sessionId: 'sess-r',
+      project: 'test',
+      type: 'bugfix',
+      title: 'multi\nline\ttitle',
+      importance: 2,
+    });
     const out = buildSessionContextLines(db, 'test');
     // Table row, not any matching line — see the note in the pipe-escaping case above.
-    const row = out.split('\n').find(l => l.startsWith('|') && l.includes('multi'));
+    const row = out.split('\n').find((l) => l.startsWith('|') && l.includes('multi'));
     expect(row).toContain('multi line title');
   });
 });
@@ -683,12 +785,20 @@ describe('Key Context section quotas (D#196)', () => {
     delete process.env.MEM_QUIET_HOOKS;
   });
   afterEach(() => {
-    try { rmSync(process.env.CLAUDE_PROJECT_DIR, { recursive: true, force: true }); } catch { /* gone */ }
+    try {
+      rmSync(process.env.CLAUDE_PROJECT_DIR, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
     if (savedEnv.dir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = savedEnv.dir;
     if (savedEnv.quiet === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = savedEnv.quiet;
-    try { db.close(); } catch { /* already closed */ }
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
   });
 
   it('premise: the sections render at all in this fixture', () => {
@@ -701,15 +811,26 @@ describe('Key Context section quotas (D#196)', () => {
 
   // A row lands in File Lessons only if it has BOTH a lesson and a parseable first
   // filename; anything else falls to Key Context. These two helpers are the two shapes.
-  const lesson = (n) => insertObs(db, {
-    sessionId: 'sess-q', project: 'test', type: 'bugfix', importance: 3,
-    title: `lesson row ${n}`, lessonLearned: `retire the wrong thing ${n}`,
-    filesModified: JSON.stringify([`src/file${n}.mjs`]), epochOffset: -n * 1000,
-  });
-  const plain = (n) => insertObs(db, {
-    sessionId: 'sess-q', project: 'test', type: 'decision', importance: 3,
-    title: `plain row ${n}`, epochOffset: -n * 1000,
-  });
+  const lesson = (n) =>
+    insertObs(db, {
+      sessionId: 'sess-q',
+      project: 'test',
+      type: 'bugfix',
+      importance: 3,
+      title: `lesson row ${n}`,
+      lessonLearned: `retire the wrong thing ${n}`,
+      filesModified: JSON.stringify([`src/file${n}.mjs`]),
+      epochOffset: -n * 1000,
+    });
+  const plain = (n) =>
+    insertObs(db, {
+      sessionId: 'sess-q',
+      project: 'test',
+      type: 'decision',
+      importance: 3,
+      title: `plain row ${n}`,
+      epochOffset: -n * 1000,
+    });
 
   it('an all-one-shape pool emits the whole pool, not half of it', () => {
     // The defect: 10 rows fetched, 5 rendered, the sibling section empty. Measured on the
@@ -717,7 +838,9 @@ describe('Key Context section quotas (D#196)', () => {
     // and code-graph-mcp was exactly this one — 10 File Lessons, 0 Key Context.
     for (let i = 0; i < 10; i++) lesson(i);
     const out = buildSessionContextLines(db, 'test');
-    const rows = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
+    const rows = extractSection(out, 'File Lessons')
+      .split('\n')
+      .filter((l) => l.startsWith('- '));
     expect(rows.length, 'all ten pooled rows should be emitted, not five').toBe(10);
     expect(extractSection(out, 'Key Context')).toBe('');
   });
@@ -728,8 +851,12 @@ describe('Key Context section quotas (D#196)', () => {
     for (let i = 0; i < 5; i++) lesson(i);
     for (let i = 5; i < 10; i++) plain(i);
     const out = buildSessionContextLines(db, 'test');
-    const fl = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
-    const kc = extractSection(out, 'Key Context').split('\n').filter((l) => l.startsWith('- '));
+    const fl = extractSection(out, 'File Lessons')
+      .split('\n')
+      .filter((l) => l.startsWith('- '));
+    const kc = extractSection(out, 'Key Context')
+      .split('\n')
+      .filter((l) => l.startsWith('- '));
     expect([fl.length, kc.length]).toEqual([5, 5]);
   });
 
@@ -737,8 +864,12 @@ describe('Key Context section quotas (D#196)', () => {
     for (let i = 0; i < 9; i++) lesson(i);
     plain(9);
     const out = buildSessionContextLines(db, 'test');
-    const fl = extractSection(out, 'File Lessons').split('\n').filter((l) => l.startsWith('- '));
-    const kc = extractSection(out, 'Key Context').split('\n').filter((l) => l.startsWith('- '));
+    const fl = extractSection(out, 'File Lessons')
+      .split('\n')
+      .filter((l) => l.startsWith('- '));
+    const kc = extractSection(out, 'Key Context')
+      .split('\n')
+      .filter((l) => l.startsWith('- '));
     // 9/1 was emitting 6 of 10 (projects--mem's real shape on the measurement date).
     expect([fl.length, kc.length]).toEqual([9, 1]);
   });
@@ -758,10 +889,17 @@ describe('Key Context section quotas (D#196)', () => {
         expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(fl);
         expect(q.keyContextQuota, `fl=${fl} kc=${kc}: cannot show more than exist`).toBeLessThanOrEqual(kc);
         // Never fewer than the old fixed halves — this is the additivity claim.
-        expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(fl, HALF));
-        expect(q.keyContextQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(Math.min(kc, HALF));
+        expect(q.fileLessonQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(
+          Math.min(fl, HALF),
+        );
+        expect(q.keyContextQuota, `fl=${fl} kc=${kc}: regression vs the old cap`).toBeGreaterThanOrEqual(
+          Math.min(kc, HALF),
+        );
         // And the combined ceiling is still one pool, not two.
-        expect(q.fileLessonQuota + q.keyContextQuota, `fl=${fl} kc=${kc}: exceeded the pool`).toBeLessThanOrEqual(POOL);
+        expect(
+          q.fileLessonQuota + q.keyContextQuota,
+          `fl=${fl} kc=${kc}: exceeded the pool`,
+        ).toBeLessThanOrEqual(POOL);
       }
     }
   });
@@ -769,11 +907,14 @@ describe('Key Context section quotas (D#196)', () => {
 
 function extractSection(text, header) {
   const lines = text.split('\n');
-  const startIdx = lines.findIndex(l => l.startsWith(`### ${header}`));
+  const startIdx = lines.findIndex((l) => l.startsWith(`### ${header}`));
   if (startIdx === -1) return '';
   let endIdx = lines.length;
   for (let i = startIdx + 1; i < lines.length; i++) {
-    if (lines[i].startsWith('### ')) { endIdx = i; break; }
+    if (lines[i].startsWith('### ')) {
+      endIdx = i;
+      break;
+    }
   }
   return lines.slice(startIdx, endIdx).join('\n');
 }

@@ -45,15 +45,23 @@ describe('hook latency regression', () => {
   //
   // Absent→present rather than "must be absent", so a stale file left by a pre-fix
   // run cannot masquerade as a fresh regression.
-  const REAL_READS_TEST = join(process.env.HOME || homedir(), '.claude-mem-lite', 'runtime', 'reads-test.txt');
+  const REAL_READS_TEST = join(
+    process.env.HOME || homedir(),
+    '.claude-mem-lite',
+    'runtime',
+    'reads-test.txt',
+  );
   let realReadsTestPreexisted;
-  beforeAll(() => { realReadsTestPreexisted = existsSync(REAL_READS_TEST); });
+  beforeAll(() => {
+    realReadsTestPreexisted = existsSync(REAL_READS_TEST);
+  });
   afterAll(() => {
     if (realReadsTestPreexisted) return;
-    expect(existsSync(REAL_READS_TEST),
+    expect(
+      existsSync(REAL_READS_TEST),
       `a hook subprocess wrote ${REAL_READS_TEST}: the child env is missing CLAUDE_MEM_DIR, so ` +
-      'scripts/post-tool-use.sh:80 resolved $HOME/.claude-mem-lite/runtime instead of this test\'s sandbox')
-      .toBe(false);
+        "scripts/post-tool-use.sh:80 resolved $HOME/.claude-mem-lite/runtime instead of this test's sandbox",
+    ).toBe(false);
   });
 
   beforeEach(() => {
@@ -64,19 +72,25 @@ describe('hook latency regression', () => {
     // Tiny seed DB so we measure overhead, not query cost on a giant corpus.
     dbPath = join(testDir, 'mem.db');
     const db = createTestDb(dbPath);
-    db.prepare(`
+    db.prepare(
+      `
       INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('test', 'test', 'projects--test', '2026-01-01T00:00:00Z', 1735689600000, 'active')
-    `).run();
-    db.prepare(`
+    `,
+    ).run();
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_modified, files_read, importance, created_at, created_at_epoch)
       VALUES ('test', 'projects--test', 'sample obs body', 'bugfix', 'Fix sample bug in foo.mjs', '', '', '', '["foo.mjs"]', '[]', 2, '2026-01-01T00:00:00Z', 1735689600000)
-    `).run();
+    `,
+    ).run();
     db.close();
   });
 
   afterEach(() => {
-    try { rmSync(testDir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(testDir, { recursive: true, force: true });
+    } catch {}
   });
 
   /**

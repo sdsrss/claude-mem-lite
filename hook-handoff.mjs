@@ -2,11 +2,25 @@
 // Extracted for testability — hook.mjs has module-level side effects
 
 import { basename } from 'path';
-import { truncate, extractMatchKeywords, tokenizeHandoff, isSpecificTerm, scrubSecrets, LOW_SIGNAL_TITLE, EDIT_TOOLS, isMetaTriggerPrompt, notLowSignalTitleClause, neutralizeContextDelimiters } from './utils.mjs';
+import {
+  truncate,
+  extractMatchKeywords,
+  tokenizeHandoff,
+  isSpecificTerm,
+  scrubSecrets,
+  LOW_SIGNAL_TITLE,
+  EDIT_TOOLS,
+  isMetaTriggerPrompt,
+  notLowSignalTitleClause,
+  neutralizeContextDelimiters,
+} from './utils.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
 import {
-  HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE,
-  HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS,
+  HANDOFF_EXPIRY_CLEAR,
+  HANDOFF_EXPIRY_EXIT,
+  HANDOFF_ANCHOR_MAX_AGE,
+  HANDOFF_MATCH_THRESHOLD,
+  CONTINUE_KEYWORDS,
 } from './hook-shared.mjs';
 // T10d: import the whole module (not a named export) so tests can spy on
 // gitStateModule.readGitState via vi.spyOn. Named-import bindings are
@@ -43,17 +57,25 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // unfiltered query (identical to pre-D#26 behavior).
   const ccScope = scopeSessionId && scopeSessionId !== sessionId ? scopeSessionId : null;
   const prompts = ccScope
-    ? db.prepare(`
+    ? db
+        .prepare(
+          `
         SELECT prompt_text FROM user_prompts
         WHERE content_session_id = ? AND (cc_session_id = ? OR cc_session_id IS NULL)
         ORDER BY prompt_number ASC LIMIT 5
-      `).all(sessionId, ccScope)
-    : db.prepare(`
+      `,
+        )
+        .all(sessionId, ccScope)
+    : db
+        .prepare(
+          `
         SELECT prompt_text FROM user_prompts
         WHERE content_session_id = ?
         ORDER BY prompt_number ASC LIMIT 5
-      `).all(sessionId);
-  if (prompts.length === 0) return;  // Empty session — nothing to hand off
+      `,
+        )
+        .all(sessionId);
+  if (prompts.length === 0) return; // Empty session — nothing to hand off
 
   // Filter prompts whose only content is workflow/control language ("继续",
   // "提交代码", "/exit", etc.). Storing them verbatim into working_on creates
@@ -62,26 +84,30 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // the project's most recent importance≥3 non-low-signal observation as the
   // carry-forward anchor — that's the closest durable signal of "what was
   // being worked on at a higher level than this session".
-  const subjectPrompts = prompts.filter(p => !isMetaTriggerPrompt(p.prompt_text));
+  const subjectPrompts = prompts.filter((p) => !isMetaTriggerPrompt(p.prompt_text));
   const sourcePrompts = subjectPrompts.length > 0 ? subjectPrompts : prompts;
 
   const seen = new Set();
-  const uniquePrompts = sourcePrompts.filter(p => {
+  const uniquePrompts = sourcePrompts.filter((p) => {
     const t = truncate(p.prompt_text, 200);
     if (seen.has(t)) return false;
     seen.add(t);
     return true;
   });
-  let workingOn = uniquePrompts.map(p => truncate(p.prompt_text, 200)).join(' → ');
+  let workingOn = uniquePrompts.map((p) => truncate(p.prompt_text, 200)).join(' → ');
 
   if (subjectPrompts.length === 0) {
-    const fallback = db.prepare(`
+    const fallback = db
+      .prepare(
+        `
       SELECT title FROM observations
       WHERE project = ? AND ${liveObsFilterSql('')}
         AND COALESCE(importance, 1) >= 3
         AND ${notLowSignalTitleClause('')}
       ORDER BY created_at_epoch DESC LIMIT 1
-    `).get(project);
+    `,
+      )
+      .get(project);
     if (fallback?.title) {
       workingOn = `(carry-forward subject) ${truncate(fallback.title, 180)}`;
     }
@@ -96,21 +122,29 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // concurrent same-project sessions whose windows overlap can still co-attribute a few rows.
   let ccWindowStart = null;
   if (ccScope) {
-    const w = db.prepare(`
+    const w = db
+      .prepare(
+        `
       SELECT MIN(created_at_epoch) AS startEpoch FROM user_prompts
       WHERE content_session_id = ? AND cc_session_id = ?
-    `).get(sessionId, ccScope);
+    `,
+      )
+      .get(sessionId, ccScope);
     if (typeof w?.startEpoch === 'number') ccWindowStart = w.startEpoch;
   }
   const obsWindowClause = ccWindowStart !== null ? 'AND created_at_epoch >= ?' : '';
   const obsWindowParams = ccWindowStart !== null ? [ccWindowStart] : [];
 
   // 2. Completed — from observations (include narrative for richer handoff)
-  const completed = db.prepare(`
+  const completed = db
+    .prepare(
+      `
     SELECT title, type, narrative FROM observations
     WHERE memory_session_id = ? AND COALESCE(compressed_into, 0) = 0 ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 15
-  `).all(sessionId, ...obsWindowParams);
+  `,
+    )
+    .all(sessionId, ...obsWindowParams);
 
   // 3. Recent activity — episode snapshot + full session edit history from narratives.
   // Keep only entries that represent in-flight work (file edits) or outright failures
@@ -121,9 +155,13 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   if (episodeSnapshot?.entries) {
     const seenDescs = new Set();
     const pendingDescs = episodeSnapshot.entries
-      .filter(e => e.isError || EDIT_TOOLS.has(e.tool))
-      .map(e => e.desc)
-      .filter(d => { if (seenDescs.has(d)) return false; seenDescs.add(d); return true; });
+      .filter((e) => e.isError || EDIT_TOOLS.has(e.tool))
+      .map((e) => e.desc)
+      .filter((d) => {
+        if (seenDescs.has(d)) return false;
+        seenDescs.add(d);
+        return true;
+      });
     if (pendingDescs.length > 0) unfinished = pendingDescs.join('; ');
   }
 
@@ -141,19 +179,19 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
         // '\n'-join collapsed the whole task list into one unreadable multi-line bullet.
         unfinished = tasks
           .slice(0, 5)
-          .map(t => `[${t.status}] ${t.title}`)
+          .map((t) => `[${t.status}] ${t.title}`)
           .join(UNFINISHED_ENTRY_SEP);
       }
-    } catch { /* task reader is best-effort; never block handoff */ }
+    } catch {
+      /* task reader is best-effort; never block handoff */
+    }
   }
 
   // Enrich unfinished with full session edit history from observation narratives.
   // Since handoff is UPSERT (max 2 rows per project), storing more data is free.
   // Always use \n---\n separator so extractUnfinishedSummary can distinguish
   // pending work (before separator) from narrative history (after separator).
-  const narratives = completed
-    .filter(c => c.narrative)
-    .map(c => c.narrative);
+  const narratives = completed.filter((c) => c.narrative).map((c) => c.narrative);
   if (narratives.length > 0) {
     const editHistory = narratives.join('\n');
     unfinished += '\n---\n' + editHistory;
@@ -161,16 +199,30 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
 
   // 4. Key files — from episode snapshot + observations
   const fileSet = new Set();
-  const isValidFile = f => f && f.length > 2 && f.includes('/') && f.indexOf('/', 1) !== -1
-    && !f.startsWith('/dev/') && !f.startsWith('/proc/') && !f.startsWith('/tmp/');
-  if (episodeSnapshot?.files) episodeSnapshot.files.filter(isValidFile).forEach(f => fileSet.add(f));
-  const obsFiles = db.prepare(`
+  const isValidFile = (f) =>
+    f &&
+    f.length > 2 &&
+    f.includes('/') &&
+    f.indexOf('/', 1) !== -1 &&
+    !f.startsWith('/dev/') &&
+    !f.startsWith('/proc/') &&
+    !f.startsWith('/tmp/');
+  if (episodeSnapshot?.files) episodeSnapshot.files.filter(isValidFile).forEach((f) => fileSet.add(f));
+  const obsFiles = db
+    .prepare(
+      `
     SELECT files_modified FROM observations
     WHERE memory_session_id = ? AND files_modified IS NOT NULL ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 10
-  `).all(sessionId, ...obsWindowParams);
+  `,
+    )
+    .all(sessionId, ...obsWindowParams);
   for (const row of obsFiles) {
-    try { JSON.parse(row.files_modified).filter(isValidFile).forEach(f => fileSet.add(f)); } catch {}
+    try {
+      JSON.parse(row.files_modified)
+        .filter(isValidFile)
+        .forEach((f) => fileSet.add(f));
+    } catch {}
   }
 
   // 5. Key decisions — high importance observations (skip low-signal degraded titles).
@@ -182,15 +234,21 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // retracted decision rendered there is indistinguishable from live policy. The
   // carry-forward fallback at the top of this function already filters the same column;
   // this is the sibling that did not.
-  const decisions = db.prepare(`
+  const decisions = db
+    .prepare(
+      `
     SELECT title FROM observations
     WHERE memory_session_id = ? AND COALESCE(importance, 1) >= 2
       AND ${liveObsFilterSql('')} ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 10
-  `).all(sessionId, ...obsWindowParams).filter(d => d.title && !LOW_SIGNAL_TITLE.test(d.title)).slice(0, 5);
+  `,
+    )
+    .all(sessionId, ...obsWindowParams)
+    .filter((d) => d.title && !LOW_SIGNAL_TITLE.test(d.title))
+    .slice(0, 5);
 
   // 6. Match keywords
-  const allText = [workingOn, ...completed.map(c => c.title).filter(Boolean), unfinished].join(' ');
+  const allText = [workingOn, ...completed.map((c) => c.title).filter(Boolean), unfinished].join(' ');
   const keywords = extractMatchKeywords(allText, [...fileSet]);
 
   // T10d: capture HEAD sha so detectContinuationIntent can anchor on it later.
@@ -198,7 +256,9 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   let gitShaAtHandoff = null;
   try {
     gitShaAtHandoff = gitStateModule.readGitState({ cwd: process.cwd() }).headSha || null;
-  } catch { /* swallow — handoff must still persist */ }
+  } catch {
+    /* swallow — handoff must still persist */
+  }
 
   // UPSERT keyed on (project, type, session_id) — parallel sessions coexist.
   // Same session re-writing its own handoff (e.g. repeated /clear) updates in place.
@@ -214,15 +274,14 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // string would risk breaking downstream JSON.parse.
   const safe = scrubRecord('session_handoffs', {
     working_on: workingOn,
-    completed: completed.map(c => `[${c.type}] ${c.title}`).join('\n'),
+    completed: completed.map((c) => `[${c.type}] ${c.title}`).join('\n'),
     unfinished,
-    key_decisions: decisions.map(d => d.title).join('\n'),
+    key_decisions: decisions.map((d) => d.title).join('\n'),
     match_keywords: keywords,
   });
-  const safeKeyFiles = JSON.stringify(
-    [...fileSet].slice(0, 20).map(f => scrubSecrets(String(f)))
-  );
-  db.prepare(`
+  const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
+  db.prepare(
+    `
     INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project, type, session_id) DO UPDATE SET
@@ -234,11 +293,16 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       match_keywords = excluded.match_keywords,
       created_at_epoch = excluded.created_at_epoch,
       git_sha_at_handoff = excluded.git_sha_at_handoff
-  `).run(
-    project, type, storedSessionId,
+  `,
+  ).run(
+    project,
+    type,
+    storedSessionId,
     truncate(safe.working_on, 1000),
     safe.completed,
-    safe.unfinished.length > 3000 ? Array.from(safe.unfinished).slice(0, 2999).join('') + '…' : safe.unfinished,
+    safe.unfinished.length > 3000
+      ? Array.from(safe.unfinished).slice(0, 2999).join('') + '…'
+      : safe.unfinished,
     safeKeyFiles,
     safe.key_decisions,
     safe.match_keywords,
@@ -283,48 +347,66 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
       // anchor is same-session only — else a parallel same-project session at the same commit
       // would hijack (and then delete) another session's clear handoff.
       const anchor = currentCcSessionId
-        ? db.prepare(`
+        ? db
+            .prepare(
+              `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
             WHERE project = ? AND git_sha_at_handoff = ? AND (type = 'exit' OR session_id = ?)
             ORDER BY created_at_epoch DESC LIMIT 1
-          `).get(project, currentSha, currentCcSessionId)
-        : db.prepare(`
+          `,
+            )
+            .get(project, currentSha, currentCcSessionId)
+        : db
+            .prepare(
+              `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
             WHERE project = ? AND git_sha_at_handoff = ?
             ORDER BY created_at_epoch DESC LIMIT 1
-          `).get(project, currentSha);
-      if (anchor && (Date.now() - anchor.created_at_epoch <= HANDOFF_ANCHOR_MAX_AGE)) {
+          `,
+            )
+            .get(project, currentSha);
+      if (anchor && Date.now() - anchor.created_at_epoch <= HANDOFF_ANCHOR_MAX_AGE) {
         // Unmoved HEAD is a strong resume signal, but must not hijack a NEW task typed at the
         // same commit: gate long prompts on keyword overlap (mirror Stage 0). Short prompts
         // (resume nudges) auto-continue.
         if (promptText.length < 40) return true;
         const hTokens = anchor.match_keywords ? new Set(tokenizeHandoff(anchor.match_keywords)) : null;
-        if (!hTokens || tokenizeHandoff(promptText).some(t => hTokens.has(t))) return true;
+        if (!hTokens || tokenizeHandoff(promptText).some((t) => hTokens.has(t))) return true;
         // long prompt with zero keyword overlap → fall through to Stage 0/1/2
       }
     }
-  } catch { /* git/DB failure must not break the rest of the pipeline */ }
+  } catch {
+    /* git/DB failure must not break the rest of the pipeline */
+  }
 
   // Stage 0: Non-expired 'clear' handoff — assume continuation unless long unrelated prompt.
   // Session scoping: with currentCcSessionId, only your OWN clear handoff qualifies.
   const clearHandoff = currentCcSessionId
-    ? db.prepare(`
+    ? db
+        .prepare(
+          `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
         WHERE project = ? AND type = 'clear' AND session_id = ?
         ORDER BY created_at_epoch DESC LIMIT 1
-      `).get(project, currentCcSessionId)
-    : db.prepare(`
+      `,
+        )
+        .get(project, currentCcSessionId)
+    : db
+        .prepare(
+          `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
         WHERE project = ? AND type = 'clear'
         ORDER BY created_at_epoch DESC LIMIT 1
-      `).get(project);
+      `,
+        )
+        .get(project);
 
-  if (clearHandoff && (Date.now() - clearHandoff.created_at_epoch <= HANDOFF_EXPIRY_CLEAR)) {
+  if (clearHandoff && Date.now() - clearHandoff.created_at_epoch <= HANDOFF_EXPIRY_CLEAR) {
     const pTokens = tokenizeHandoff(promptText);
     const hTokens = clearHandoff.match_keywords
       ? new Set(tokenizeHandoff(clearHandoff.match_keywords))
       : null;
-    const hasOverlap = hTokens && pTokens.some(t => hTokens.has(t));
+    const hasOverlap = hTokens && pTokens.some((t) => hTokens.has(t));
     if (promptText.length < 40) {
       // Short prompts: session-scoped clear = same user/context, auto-continue.
       // Unscoped (legacy / no session_id in hook input) requires an explicit
@@ -348,21 +430,29 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
   // Session scoping: exit handoffs from OTHER sessions are still candidates (you may
   // be resuming a previous session), but clear handoffs must be same-session.
   const handoffs = currentCcSessionId
-    ? db.prepare(`
+    ? db
+        .prepare(
+          `
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR type = 'exit')
         ORDER BY created_at_epoch DESC
-      `).all(project, currentCcSessionId)
-    : db.prepare(`
+      `,
+        )
+        .all(project, currentCcSessionId)
+    : db
+        .prepare(
+          `
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
         WHERE project = ? ORDER BY created_at_epoch DESC
-      `).all(project);
+      `,
+        )
+        .all(project);
   if (handoffs.length === 0) return false;
 
   // Filter expired handoffs
   const now = Date.now();
-  const validHandoffs = handoffs.filter(h => {
+  const validHandoffs = handoffs.filter((h) => {
     const age = now - h.created_at_epoch;
     const maxAge = h.type === 'clear' ? HANDOFF_EXPIRY_CLEAR : HANDOFF_EXPIRY_EXIT;
     return age <= maxAge;
@@ -403,21 +493,31 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
   // Fetch recent handoffs and find the most recent non-expired one.
   // A newer but expired 'clear' handoff must not shadow a still-valid 'exit' handoff.
   const handoffs = currentCcSessionId
-    ? db.prepare(`
+    ? db
+        .prepare(
+          `
         SELECT * FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR (type = 'exit' AND session_id != ?))
         ORDER BY created_at_epoch DESC LIMIT 5
-      `).all(project, currentCcSessionId, currentCcSessionId)
-    : db.prepare(`
+      `,
+        )
+        .all(project, currentCcSessionId, currentCcSessionId)
+    : db
+        .prepare(
+          `
         SELECT * FROM session_handoffs
         WHERE project = ? ORDER BY created_at_epoch DESC LIMIT 5
-      `).all(project);
-  return handoffs.find(h => {
-    const age = now - h.created_at_epoch;
-    const maxAge = h.type === 'clear' ? HANDOFF_EXPIRY_CLEAR : HANDOFF_EXPIRY_EXIT;
-    return age <= maxAge;
-  }) || null;
+      `,
+        )
+        .all(project);
+  return (
+    handoffs.find((h) => {
+      const age = now - h.created_at_epoch;
+      const maxAge = h.type === 'clear' ? HANDOFF_EXPIRY_CLEAR : HANDOFF_EXPIRY_EXIT;
+      return age <= maxAge;
+    }) || null
+  );
 }
 
 export function renderHandoffInjection(db, project, currentCcSessionId = null) {
@@ -428,10 +528,14 @@ export function renderHandoffInjection(db, project, currentCcSessionId = null) {
 
 function renderHandoffFromRow(handoff, db, project) {
   const ageSec = Math.round((Date.now() - handoff.created_at_epoch) / 1000);
-  const ageStr = ageSec < 60 ? `${ageSec}s` :
-    ageSec < 3600 ? `${Math.round(ageSec / 60)}m` :
-    ageSec < 86400 ? `${Math.round(ageSec / 3600)}h` :
-    `${Math.round(ageSec / 86400)}d`;
+  const ageStr =
+    ageSec < 60
+      ? `${ageSec}s`
+      : ageSec < 3600
+        ? `${Math.round(ageSec / 60)}m`
+        : ageSec < 86400
+          ? `${Math.round(ageSec / 3600)}h`
+          : `${Math.round(ageSec / 86400)}d`;
 
   // Framing header: `UserPromptSubmit` hook writes this block to stdout, which
   // Claude Code surfaces alongside the real user prompt. Without an explicit
@@ -452,7 +556,13 @@ function renderHandoffFromRow(handoff, db, project) {
     lines.push('## Working On', neutralizeContextDelimiters(handoff.working_on), '');
   }
   if (handoff.completed) {
-    lines.push('## Completed', ...neutralizeContextDelimiters(handoff.completed).split('\n').map(l => `- ${l}`), '');
+    lines.push(
+      '## Completed',
+      ...neutralizeContextDelimiters(handoff.completed)
+        .split('\n')
+        .map((l) => `- ${l}`),
+      '',
+    );
   }
   if (handoff.unfinished) {
     // Extract only the pending-work portion (before narrative history separator).
@@ -461,7 +571,13 @@ function renderHandoffFromRow(handoff, db, project) {
     // completeness claim the episode buffer can't support.
     const pending = extractUnfinishedSummary(handoff.unfinished);
     if (pending) {
-      lines.push('## Recent activity', ...neutralizeContextDelimiters(pending).split('; ').map(l => `- ${l}`), '');
+      lines.push(
+        '## Recent activity',
+        ...neutralizeContextDelimiters(pending)
+          .split('; ')
+          .map((l) => `- ${l}`),
+        '',
+      );
     }
   }
   if (handoff.key_files) {
@@ -470,11 +586,18 @@ function renderHandoffFromRow(handoff, db, project) {
       // Defang basenames too: a filename on disk can contain a literal authority tag
       // (Linux allows almost any char but '/'), and this is the one field in this block
       // that was rendered raw while working_on/unfinished/key_decisions all neutralize.
-      if (files.length > 0) lines.push('## Key Files', neutralizeContextDelimiters(files.map(f => basename(f)).join(', ')), '');
+      if (files.length > 0)
+        lines.push('## Key Files', neutralizeContextDelimiters(files.map((f) => basename(f)).join(', ')), '');
     } catch {}
   }
   if (handoff.key_decisions) {
-    lines.push('## Key Decisions', ...neutralizeContextDelimiters(handoff.key_decisions).split('\n').map(l => `- ${l}`), '');
+    lines.push(
+      '## Key Decisions',
+      ...neutralizeContextDelimiters(handoff.key_decisions)
+        .split('\n')
+        .map((l) => `- ${l}`),
+      '',
+    );
   }
 
   lines.push('</session-handoff>');
@@ -488,21 +611,29 @@ function renderHandoffFromRow(handoff, db, project) {
   // ids align — legacy rows + tests), then fall back to the most-recent summary for the
   // project, which at resume time is the summary from the session that wrote this handoff.
   try {
-    let summary = db.prepare(`
+    let summary = db
+      .prepare(
+        `
       SELECT completed, next_steps, remaining_items FROM session_summaries
       WHERE memory_session_id = ? AND project = ?
       ORDER BY created_at_epoch DESC LIMIT 1
-    `).get(handoff.session_id, project);
+    `,
+      )
+      .get(handoff.session_id, project);
     if (!summary) {
       // Pick the project summary CLOSEST IN TIME to this handoff, not merely the newest:
       // a handoff and its own session's summary are written within ms of each other at
       // session end, so nearest-timestamp recovers the right session even when a different
       // session later wrote a newer summary for the same project (concurrent/interleaved use).
-      summary = db.prepare(`
+      summary = db
+        .prepare(
+          `
         SELECT completed, next_steps, remaining_items FROM session_summaries
         WHERE project = ?
         ORDER BY ABS(created_at_epoch - ?) ASC LIMIT 1
-      `).get(project, handoff.created_at_epoch ?? 0);
+      `,
+        )
+        .get(project, handoff.created_at_epoch ?? 0);
     }
     if (summary && (summary.completed || summary.next_steps || summary.remaining_items)) {
       lines.push('');
@@ -511,7 +642,8 @@ function renderHandoffFromRow(handoff, db, project) {
       // extractStructuredSummary over the assistant transcript tail — replayed text that can
       // carry tool-XML / forged authority tags, same class as working_on above (audit MED-4).
       if (summary.completed) lines.push(neutralizeContextDelimiters(summary.completed));
-      if (summary.remaining_items) lines.push(`Remaining: ${neutralizeContextDelimiters(summary.remaining_items)}`);
+      if (summary.remaining_items)
+        lines.push(`Remaining: ${neutralizeContextDelimiters(summary.remaining_items)}`);
       if (summary.next_steps) lines.push(`Next steps: ${neutralizeContextDelimiters(summary.next_steps)}`);
       lines.push('</session-summary>');
     }

@@ -178,17 +178,15 @@ export const CURRENT_SCHEMA_VERSION = 47;
 // pragma_table_info on a missing table returns zero rows (it does not throw), so
 // naming any column of the new table is a table-presence check.
 const LATEST_MIGRATION_COLUMNS = [
-  { table: 'observations', column: 'decay_seen_at_first_cite' },   // v46
-  { table: 'citation_surface_log', column: 'surface' },            // v45
-  { table: 'observations', column: 'scope' },                      // v44
+  { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
+  { table: 'citation_surface_log', column: 'surface' }, // v45
+  { table: 'observations', column: 'scope' }, // v44
   { table: 'observation_files', column: 'last_cited_session_id' }, // v43
 ];
 
 function hasLatestMigrationColumn(db) {
   try {
-    const stmt = db.prepare(
-      `SELECT 1 AS present FROM pragma_table_info(?) WHERE name = ?`
-    );
+    const stmt = db.prepare(`SELECT 1 AS present FROM pragma_table_info(?) WHERE name = ?`);
     return LATEST_MIGRATION_COLUMNS.every(({ table, column }) => Boolean(stmt.get(table, column)));
   } catch {
     return false; // table itself missing → caller falls through to CORE_SCHEMA
@@ -322,7 +320,7 @@ const CORE_SCHEMA = `
 // Column migrations (idempotent — only swallow "duplicate column" errors)
 const MIGRATIONS = [
   'ALTER TABLE observations ADD COLUMN importance INTEGER DEFAULT 1',
-  'ALTER TABLE observations ADD COLUMN related_ids TEXT DEFAULT \'[]\'',
+  "ALTER TABLE observations ADD COLUMN related_ids TEXT DEFAULT '[]'",
   'ALTER TABLE observations ADD COLUMN minhash_sig TEXT',
   'ALTER TABLE observations ADD COLUMN access_count INTEGER DEFAULT 0',
   'ALTER TABLE observations ADD COLUMN compressed_into INTEGER DEFAULT NULL',
@@ -432,7 +430,7 @@ export function initSchema(db) {
       if (row.version > CURRENT_SCHEMA_VERSION) {
         throw new Error(
           `DB schema is v${row.version} but this claude-mem-lite binary supports up to v${CURRENT_SCHEMA_VERSION}. ` +
-          `A newer version wrote this DB; upgrade claude-mem-lite (npm i -g claude-mem-lite@latest) or point CLAUDE_MEM_DIR to a fresh directory.`
+            `A newer version wrote this DB; upgrade claude-mem-lite (npm i -g claude-mem-lite@latest) or point CLAUDE_MEM_DIR to a fresh directory.`,
         );
       }
     }
@@ -459,14 +457,18 @@ export function initSchema(db) {
       db.pragma('foreign_keys = ON');
       return db;
     }
-  } catch { /* table absent — proceed */ }
+  } catch {
+    /* table absent — proceed */
+  }
 
   // Create core tables
   db.exec(CORE_SCHEMA);
 
   // Run column migrations
   for (const sql of MIGRATIONS) {
-    try { db.exec(sql); } catch (e) {
+    try {
+      db.exec(sql);
+    } catch (e) {
       if (!e.message?.includes('duplicate column name')) throw e;
     }
   }
@@ -475,7 +477,9 @@ export function initSchema(db) {
   // Old PK assumed one session per project, causing cross-session handoff overwrite
   // (see docs/bug.txt). Rebuild table if still on old PK. Idempotent.
   try {
-    const handoffDdl = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='session_handoffs'`).get();
+    const handoffDdl = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='session_handoffs'`)
+      .get();
     const oldPk = handoffDdl && /PRIMARY KEY\s*\(\s*project\s*,\s*type\s*\)/i.test(handoffDdl.sql);
     if (oldPk) {
       const rebuild = db.transaction(() => {
@@ -505,37 +509,54 @@ export function initSchema(db) {
       });
       rebuild();
     }
-  } catch { /* non-critical — next open retries */ }
+  } catch {
+    /* non-critical — next open retries */
+  }
 
   // v25 (T10d): commit-anchored continuation — store HEAD sha at handoff time
   // so detectContinuationIntent can auto-confirm continuation when the working
   // tree hasn't moved since /exit or /clear. Runs AFTER the PK-widen rebuild
   // above so the new column is not clobbered by the DROP+CREATE path.
   try {
-    const handoffCols = db.prepare(`PRAGMA table_info(session_handoffs)`).all().map(c => c.name);
+    const handoffCols = db
+      .prepare(`PRAGMA table_info(session_handoffs)`)
+      .all()
+      .map((c) => c.name);
     if (!handoffCols.includes('git_sha_at_handoff')) {
       db.exec(`ALTER TABLE session_handoffs ADD COLUMN git_sha_at_handoff TEXT DEFAULT NULL`);
     }
-  } catch { /* non-critical — migration retries on next open */ }
+  } catch {
+    /* non-critical — migration retries on next open */
+  }
 
   // Dedup migration: ensure memory_session_id is unique, then enable FK
-  const hasIdx = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'`).get();
+  const hasIdx = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sess_memory_sid'`)
+    .get();
   if (!hasIdx) {
-    const dupes = db.prepare(`
+    const dupes = db
+      .prepare(
+        `
       SELECT memory_session_id, COUNT(*) as cnt
       FROM sdk_sessions
       WHERE memory_session_id IS NOT NULL
       GROUP BY memory_session_id HAVING cnt > 1
-    `).all();
+    `,
+      )
+      .all();
 
     // Atomic: dedup + create unique index in one transaction
     const dedupAndIndex = db.transaction(() => {
       for (const { memory_session_id } of dupes) {
-        const rows = db.prepare(`
+        const rows = db
+          .prepare(
+            `
           SELECT s.id FROM sdk_sessions s
           WHERE s.memory_session_id = ?
           ORDER BY s.id ASC
-        `).all(memory_session_id);
+        `,
+          )
+          .all(memory_session_id);
         for (let i = 1; i < rows.length; i++) {
           db.prepare('DELETE FROM sdk_sessions WHERE id = ?').run(rows[i].id);
         }
@@ -547,15 +568,27 @@ export function initSchema(db) {
 
   // Performance indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_epoch_project ON observations(created_at_epoch DESC, project)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sess_sum_epoch ON session_summaries(created_at_epoch DESC, project)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_project_epoch_minhash ON observations(project, created_at_epoch DESC) WHERE minhash_sig IS NOT NULL`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_sess_sum_epoch ON session_summaries(created_at_epoch DESC, project)`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_obs_project_epoch_minhash ON observations(project, created_at_epoch DESC) WHERE minhash_sig IS NOT NULL`,
+  );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_user_prompts_session ON user_prompts(content_session_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_user_prompts_cc ON user_prompts(cc_session_id) WHERE cc_session_id IS NOT NULL`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_superseded ON observations(superseded_at) WHERE superseded_at IS NOT NULL`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_user_prompts_cc ON user_prompts(cc_session_id) WHERE cc_session_id IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_obs_superseded ON observations(superseded_at) WHERE superseded_at IS NOT NULL`,
+  );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_branch ON observations(branch) WHERE branch IS NOT NULL`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project ON sdk_sessions(project)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_not_compressed ON observations(created_at_epoch DESC) WHERE COALESCE(compressed_into, 0) = 0`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_handoffs_project_time ON session_handoffs(project, type, created_at_epoch DESC)`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_obs_not_compressed ON observations(created_at_epoch DESC) WHERE COALESCE(compressed_into, 0) = 0`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_handoffs_project_time ON session_handoffs(project, type, created_at_epoch DESC)`,
+  );
   // v47 (audit 2026-09-02 P2-11 + the previous round's ALGO-7), one additive migration for
   // both. Additive only: new indexes on existing columns, no table rewrite, no data move.
   //
@@ -567,13 +600,17 @@ export function initSchema(db) {
   // The second narrows the live-row scan the injection faces run per project. Partial on the
   // same predicate `liveObsFilterSql` uses, so the index covers exactly the rows those
   // queries can return.
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_project_live ON observations(project, created_at_epoch DESC) WHERE superseded_at IS NULL AND COALESCE(compressed_into, 0) = 0`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_obs_project_live ON observations(project, created_at_epoch DESC) WHERE superseded_at IS NULL AND COALESCE(compressed_into, 0) = 0`,
+  );
 
   // FTS5 migration: recreate observations_fts when columns are missing (one-time)
   // Detect old FTS5 table missing lesson_learned or search_aliases and recreate with full column set
   let obsFtsRecreated = false;
   try {
-    const ftsDdl = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='observations_fts'`).get();
+    const ftsDdl = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='observations_fts'`)
+      .get();
     if (ftsDdl && (!ftsDdl.sql.includes('lesson_learned') || !ftsDdl.sql.includes('search_aliases'))) {
       db.exec(`DROP TRIGGER IF EXISTS observations_ai`);
       db.exec(`DROP TRIGGER IF EXISTS observations_ad`);
@@ -581,7 +618,9 @@ export function initSchema(db) {
       db.exec(`DROP TABLE IF EXISTS observations_fts`);
       obsFtsRecreated = true;
     }
-  } catch { /* non-critical — ensureFTS will create if missing */ }
+  } catch {
+    /* non-critical — ensureFTS will create if missing */
+  }
 
   // v27 migration: drop legacy _au triggers that fire on ANY row UPDATE so
   // ensureFTS reinstates them with `AFTER UPDATE OF <fts_cols>`. Trigger fires
@@ -590,21 +629,31 @@ export function initSchema(db) {
   // Conditional per #7647: only drop when the stored DDL lacks the scoped
   // `UPDATE OF` clause (handles re-run + fresh-DB cases).
   for (const [trg, tbl] of [
-    ['observations_au',      'observations'],
+    ['observations_au', 'observations'],
     ['session_summaries_au', 'session_summaries'],
-    ['user_prompts_au',      'user_prompts'],
+    ['user_prompts_au', 'user_prompts'],
   ]) {
     try {
       const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`).get(trg);
       if (row && row.sql && !/\bAFTER\s+UPDATE\s+OF\s+/i.test(row.sql)) {
         db.exec(`DROP TRIGGER IF EXISTS ${tbl}_au`);
       }
-    } catch { /* non-critical — ensureFTS will recreate */ }
+    } catch {
+      /* non-critical — ensureFTS will recreate */
+    }
   }
 
   // FTS5 full-text search tables + triggers (idempotent)
   ensureFTS(db, 'observations_fts', 'observations', OBS_FTS_COLUMNS);
-  ensureFTS(db, 'session_summaries_fts', 'session_summaries', ['request', 'investigated', 'learned', 'completed', 'next_steps', 'notes', 'remaining_items']);
+  ensureFTS(db, 'session_summaries_fts', 'session_summaries', [
+    'request',
+    'investigated',
+    'learned',
+    'completed',
+    'next_steps',
+    'notes',
+    'remaining_items',
+  ]);
   ensureFTS(db, 'user_prompts_fts', 'user_prompts', ['prompt_text']);
 
   // Rebuild FTS5 if we just recreated it above (the new index is empty and must be
@@ -618,7 +667,9 @@ export function initSchema(db) {
     try {
       const cnt = db.prepare(`SELECT COUNT(*) as cnt FROM observations`).get();
       if (cnt.cnt > 0) db.exec(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`);
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
   }
 
   // v36 migration: narrow events_fts_au like the v27 fix above. The events FTS
@@ -629,11 +680,15 @@ export function initSchema(db) {
   // the CREATE TRIGGER IF NOT EXISTS below reinstates the scoped form (handles
   // re-run + fresh-DB: undefined row on a fresh DB is a no-op).
   try {
-    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`).get();
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_fts_au'`)
+      .get();
     if (row && row.sql && !/\bAFTER\s+UPDATE\s+OF\s+/i.test(row.sql)) {
       db.exec(`DROP TRIGGER IF EXISTS events_fts_au`);
     }
-  } catch { /* non-critical — recreated below */ }
+  } catch {
+    /* non-critical — recreated below */
+  }
 
   // ─── v2.31 T6: events table + FTS5 (activity namespace) ───────────────────
   // Independent namespace for bugfix/lesson/bug/discovery/refactor/feature/
@@ -718,7 +773,9 @@ export function initSchema(db) {
     'ALTER TABLE observation_files ADD COLUMN last_resolved_session_id TEXT DEFAULT NULL',
     'ALTER TABLE observation_files ADD COLUMN last_cited_session_id TEXT DEFAULT NULL',
   ]) {
-    try { db.exec(sql); } catch (e) {
+    try {
+      db.exec(sql);
+    } catch (e) {
       if (!e.message?.includes('duplicate column name')) throw e;
     }
   }
@@ -728,12 +785,16 @@ export function initSchema(db) {
   try {
     const obsFilesCount = db.prepare('SELECT COUNT(*) as c FROM observation_files').get().c;
     if (obsFilesCount === 0) {
-      const obsWithFiles = db.prepare(
-        `SELECT id, files_modified FROM observations WHERE files_modified IS NOT NULL AND files_modified != '[]'`
-      ).all();
+      const obsWithFiles = db
+        .prepare(
+          `SELECT id, files_modified FROM observations WHERE files_modified IS NOT NULL AND files_modified != '[]'`,
+        )
+        .all();
       if (obsWithFiles.length > 0) {
         const migrateFiles = db.transaction(() => {
-          const insertFile = db.prepare('INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)');
+          const insertFile = db.prepare(
+            'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+          );
           for (const row of obsWithFiles) {
             try {
               const files = JSON.parse(row.files_modified);
@@ -744,13 +805,17 @@ export function initSchema(db) {
                   }
                 }
               }
-            } catch { /* skip malformed JSON */ }
+            } catch {
+              /* skip malformed JSON */
+            }
           }
         });
         migrateFiles();
       }
     }
-  } catch { /* non-critical — migration can retry on next open */ }
+  } catch {
+    /* non-critical — migration can retry on next open */
+  }
 
   // observation_files orphan cleanup moved to runDeferredCleanups() (audit P1-5):
   // it now runs retryably outside the version fast-path. See DEFERRED_CLEANUPS.
@@ -911,30 +976,46 @@ export function auditSessionConsistency(db, { graceMinutes = 5 } = {}) {
   const cutoff = Date.now() - graceMinutes * 60_000;
   // UUID-shape gate mirrors the v30 trigger — same length=36 + LIKE pattern.
   const UUID_LIKE = '________-____-____-____-____________';
-  const idMixUuidShape = db.prepare(`
+  const idMixUuidShape = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM sdk_sessions
     WHERE memory_session_id IS NOT NULL
       AND memory_session_id = content_session_id
       AND length(memory_session_id) = 36
       AND memory_session_id LIKE ?
-  `).get(UUID_LIKE).c;
-  const idMixOther = db.prepare(`
+  `,
+    )
+    .get(UUID_LIKE).c;
+  const idMixOther = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM sdk_sessions
     WHERE memory_session_id IS NOT NULL
       AND memory_session_id = content_session_id
       AND NOT (length(memory_session_id) = 36 AND memory_session_id LIKE ?)
-  `).get(UUID_LIKE).c;
-  const missingMemId = db.prepare(`
+  `,
+    )
+    .get(UUID_LIKE).c;
+  const missingMemId = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM sdk_sessions
     WHERE memory_session_id IS NULL
       AND started_at_epoch < ?
-  `).get(cutoff).c;
-  const orphanObs = db.prepare(`
+  `,
+    )
+    .get(cutoff).c;
+  const orphanObs = db
+    .prepare(
+      `
     SELECT COUNT(*) AS c FROM observations o
     WHERE NOT EXISTS (
       SELECT 1 FROM sdk_sessions s WHERE s.memory_session_id = o.memory_session_id
     )
-  `).get().c;
+  `,
+    )
+    .get().c;
   // Audit P3-14 backstop. `observations.importance` is INTEGER DEFAULT 1 but NULLABLE, and
   // the two maintenance faces disagree about what NULL means: decayAndMarkIdle reads
   // COALESCE(importance,1)=1 and queues the row for purge, runIdleCleanup reads a bare
@@ -943,17 +1024,16 @@ export function auditSessionConsistency(db, { graceMinutes = 5 } = {}) {
   // ones that got in another way — an old version, a hand-edited DB, a restored dump.
   // Reported here rather than in its own command because `orphan_obs` above establishes
   // that this audit already covers observation-level integrity, not only sessions.
-  const obsImportanceNull = db.prepare(
-    'SELECT COUNT(*) AS c FROM observations WHERE importance IS NULL'
-  ).get().c;
+  const obsImportanceNull = db
+    .prepare('SELECT COUNT(*) AS c FROM observations WHERE importance IS NULL')
+    .get().c;
   return {
     id_mix_uuid_shape: idMixUuidShape,
     id_mix_other: idMixOther,
     missing_mem_id: missingMemId,
     orphan_obs: orphanObs,
     obs_importance_null: obsImportanceNull,
-    healthy: idMixUuidShape === 0 && missingMemId === 0 && orphanObs === 0
-      && obsImportanceNull === 0,
+    healthy: idMixUuidShape === 0 && missingMemId === 0 && orphanObs === 0 && obsImportanceNull === 0,
   };
 }
 
@@ -969,16 +1049,16 @@ const DEFERRED_CLEANUPS = [
     // while early warm-start handles ran with foreign_keys OFF, so junction rows
     // leaked. Idempotent (NOT IN is empty on a clean DB).
     name: 'orphan-observation-files',
-    run: (db) => db.prepare(
-      `DELETE FROM observation_files WHERE obs_id NOT IN (SELECT id FROM observations)`
-    ).run(),
+    run: (db) =>
+      db.prepare(`DELETE FROM observation_files WHERE obs_id NOT IN (SELECT id FROM observations)`).run(),
   },
   {
     // v28 (v2.47) P0-1: orphaned observation_vectors — same FK-OFF root cause.
     name: 'orphan-observation-vectors',
-    run: (db) => db.prepare(
-      `DELETE FROM observation_vectors WHERE observation_id NOT IN (SELECT id FROM observations)`
-    ).run(),
+    run: (db) =>
+      db
+        .prepare(`DELETE FROM observation_vectors WHERE observation_id NOT IN (SELECT id FROM observations)`)
+        .run(),
   },
   {
     // Project-name normalization: migrate short names ("mem") to canonical
@@ -986,26 +1066,34 @@ const DEFERRED_CLEANUPS = [
     // substring. Idempotent: only acts on remaining short-name records.
     name: 'normalize-project-names',
     run: (db) => {
-      const shortProjects = db.prepare(`
+      const shortProjects = db
+        .prepare(
+          `
         SELECT DISTINCT project FROM observations
         WHERE project NOT LIKE '%--_%' AND project != '' AND project IS NOT NULL
         UNION
         SELECT DISTINCT project FROM sdk_sessions
         WHERE project NOT LIKE '%--_%' AND project != '' AND project IS NOT NULL
-      `).all();
+      `,
+        )
+        .all();
       if (shortProjects.length === 0) return;
       const normalize = db.transaction(() => {
         for (const { project: shortName } of shortProjects) {
-          let canonical = db.prepare(
-            `SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`
-          ).get(`%--${shortName}`);
+          let canonical = db
+            .prepare(
+              `SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
+            )
+            .get(`%--${shortName}`);
           if (!canonical) {
-            const tokens = shortName.split(/[-_.]/).filter(t => t.length >= 5);
+            const tokens = shortName.split(/[-_.]/).filter((t) => t.length >= 5);
             for (const token of tokens) {
-              canonical = db.prepare(
-                `SELECT project FROM observations WHERE project LIKE ? AND project LIKE '%--_%'
-                 GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`
-              ).get(`%${token}%`);
+              canonical = db
+                .prepare(
+                  `SELECT project FROM observations WHERE project LIKE ? AND project LIKE '%--_%'
+                 GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
+                )
+                .get(`%${token}%`);
               if (canonical) break;
             }
           }
@@ -1017,10 +1105,20 @@ const DEFERRED_CLEANUPS = [
             // handoffs (session_handoffs) were stranded on the old name — invisible to
             // every project-scoped query after normalization. All eight carry a
             // `project` column (verified).
-            for (const table of ['observations', 'sdk_sessions', 'session_summaries',
-                                 'session_handoffs', 'citation_log', 'citation_surface_log',
-                                 'events', 'deferred_work']) {
-              db.prepare(`UPDATE ${table} SET project = ? WHERE project = ?`).run(canonical.project, shortName);
+            for (const table of [
+              'observations',
+              'sdk_sessions',
+              'session_summaries',
+              'session_handoffs',
+              'citation_log',
+              'citation_surface_log',
+              'events',
+              'deferred_work',
+            ]) {
+              db.prepare(`UPDATE ${table} SET project = ? WHERE project = ?`).run(
+                canonical.project,
+                shortName,
+              );
             }
           }
         }
@@ -1039,7 +1137,12 @@ const DEFERRED_CLEANUPS = [
 export function runDeferredCleanups(db) {
   let done;
   try {
-    done = new Set(db.prepare('SELECT name FROM migration_cleanups').all().map(r => r.name));
+    done = new Set(
+      db
+        .prepare('SELECT name FROM migration_cleanups')
+        .all()
+        .map((r) => r.name),
+    );
   } catch {
     return; // table not present yet (pre-migration open) — nothing to do
   }
@@ -1069,7 +1172,7 @@ export function ensureDb() {
     // Remove DB_DIR only if it has no user data (no .db files)
     if (existsSync(DB_DIR)) {
       try {
-        const hasDbFiles = readdirSync(DB_DIR).some(f => f.endsWith('.db'));
+        const hasDbFiles = readdirSync(DB_DIR).some((f) => f.endsWith('.db'));
         if (!hasDbFiles) rmSync(DB_DIR, { recursive: true, force: true });
       } catch {}
     }
@@ -1083,12 +1186,17 @@ export function ensureDb() {
   if (!existsSync(DB_PATH) && existsSync(oldPath)) {
     renameSync(oldPath, DB_PATH);
     for (const ext of ['-wal', '-shm']) {
-      if (existsSync(oldPath + ext)) try { renameSync(oldPath + ext, DB_PATH + ext); } catch {}
+      if (existsSync(oldPath + ext))
+        try {
+          renameSync(oldPath + ext, DB_PATH + ext);
+        } catch {}
     }
   }
 
   const db = new Database(DB_PATH);
-  try { chmodSync(DB_PATH, 0o600); } catch {}
+  try {
+    chmodSync(DB_PATH, 0o600);
+  } catch {}
   db.pragma('journal_mode = WAL');
   // 5000ms matches the MCP server (server.mjs) — 3000ms wasn't enough under realistic
   // concurrency (parallel CLI saves + a long-running FTS rebuild can push individual
@@ -1106,7 +1214,9 @@ export function ensureDb() {
     runDeferredCleanups(ready);
     return ready;
   } catch (e) {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
     throw e;
   }
 }
@@ -1118,8 +1228,9 @@ export function ensureDb() {
  * uncheckpointed transactions — silent data loss.
  */
 export function isDbCorruptionError(err) {
-  return /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i
-    .test(`${err?.code || ''} ${err?.message || ''}`);
+  return /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i.test(
+    `${err?.code || ''} ${err?.message || ''}`,
+  );
 }
 
 /**
@@ -1141,14 +1252,26 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
   } catch (firstErr) {
     if (!isDbCorruptionError(firstErr)) throw firstErr;
     warn?.(`DB corruption detected, attempting WAL recovery: ${firstErr.message}`);
-    try { rmSync(DB_PATH + '-wal', { force: true }); } catch { /* best-effort */ }
-    try { rmSync(DB_PATH + '-shm', { force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(DB_PATH + '-wal', { force: true });
+    } catch {
+      /* best-effort */
+    }
+    try {
+      rmSync(DB_PATH + '-shm', { force: true });
+    } catch {
+      /* best-effort */
+    }
     try {
       const db = ensureDb();
       info?.('DB recovered after WAL cleanup');
       return db;
     } catch (retryErr) {
-      try { retryErr.walRecoveryAttempted = true; } catch { /* frozen error — fine */ }
+      try {
+        retryErr.walRecoveryAttempted = true;
+      } catch {
+        /* frozen error — fine */
+      }
       throw retryErr;
     }
   }
@@ -1171,9 +1294,15 @@ export function rebuildFTS(db) {
   const errors = [];
   for (const fts of FTS_TABLES) {
     try {
-      if (!idRe.test(fts)) { errors.push(`${fts}: invalid identifier`); continue; }
+      if (!idRe.test(fts)) {
+        errors.push(`${fts}: invalid identifier`);
+        continue;
+      }
       const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(fts);
-      if (!exists) { errors.push(`${fts}: not found`); continue; }
+      if (!exists) {
+        errors.push(`${fts}: not found`);
+        continue;
+      }
       db.exec(`INSERT INTO ${fts}(${fts}) VALUES('rebuild')`);
       rebuilt.push(fts);
     } catch (e) {
@@ -1195,9 +1324,17 @@ export function checkFTSIntegrity(db) {
   let healthy = true;
   for (const fts of FTS_TABLES) {
     try {
-      if (!idRe.test(fts)) { details.push(`${fts}: invalid identifier`); healthy = false; continue; }
+      if (!idRe.test(fts)) {
+        details.push(`${fts}: invalid identifier`);
+        healthy = false;
+        continue;
+      }
       const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(fts);
-      if (!exists) { details.push(`${fts}: missing`); healthy = false; continue; }
+      if (!exists) {
+        details.push(`${fts}: missing`);
+        healthy = false;
+        continue;
+      }
       db.exec(`INSERT INTO ${fts}(${fts}) VALUES('integrity-check')`);
       details.push(`${fts}: ok`);
     } catch (e) {
@@ -1212,13 +1349,13 @@ export function ensureFTS(db, ftsName, tableName, columns) {
   // Validate identifiers to prevent SQL injection (done upfront; both
   // branches below use these identifiers in string-interpolated SQL)
   const idRe = /^[a-z][a-z0-9_]*$/;
-  if (!idRe.test(ftsName) || !idRe.test(tableName) || !columns.every(c => idRe.test(c))) {
+  if (!idRe.test(ftsName) || !idRe.test(tableName) || !columns.every((c) => idRe.test(c))) {
     throw new Error(`Invalid identifier in ensureFTS: ${ftsName}, ${tableName}`);
   }
 
   const colList = columns.join(', ');
-  const newVals = columns.map(c => `new.${c}`).join(', ');
-  const oldVals = columns.map(c => `old.${c}`).join(', ');
+  const newVals = columns.map((c) => `new.${c}`).join(', ');
+  const oldVals = columns.map((c) => `old.${c}`).join(', ');
 
   // Column-aware (re)creation. An existing FTS table is never silently reused when its
   // indexed-column set has drifted from `columns`. Root cause of a silent-write bug class:
@@ -1235,8 +1372,15 @@ export function ensureFTS(db, ftsName, tableName, columns) {
   let recreated = false;
   if (ftsRow) {
     let existingCols = [];
-    try { existingCols = db.prepare(`PRAGMA table_info(${ftsName})`).all().map(c => c.name); } catch { /* unreadable → treat as drifted, recreate */ }
-    const drifted = existingCols.length !== columns.length || columns.some(c => !existingCols.includes(c));
+    try {
+      existingCols = db
+        .prepare(`PRAGMA table_info(${ftsName})`)
+        .all()
+        .map((c) => c.name);
+    } catch {
+      /* unreadable → treat as drifted, recreate */
+    }
+    const drifted = existingCols.length !== columns.length || columns.some((c) => !existingCols.includes(c));
     if (drifted) {
       db.exec(`DROP TRIGGER IF EXISTS ${tableName}_ai`);
       db.exec(`DROP TRIGGER IF EXISTS ${tableName}_ad`);
@@ -1246,7 +1390,9 @@ export function ensureFTS(db, ftsName, tableName, columns) {
     }
   }
   if (!ftsRow || recreated) {
-    db.exec(`CREATE VIRTUAL TABLE ${ftsName} USING fts5(${colList}, content='${tableName}', content_rowid='id')`);
+    db.exec(
+      `CREATE VIRTUAL TABLE ${ftsName} USING fts5(${colList}, content='${tableName}', content_rowid='id')`,
+    );
   }
 
   // Triggers created / recreated independently of FTS table existence so that
@@ -1280,7 +1426,9 @@ export function ensureFTS(db, ftsName, tableName, columns) {
     try {
       const cnt = db.prepare(`SELECT COUNT(*) AS c FROM ${tableName}`).get();
       if (cnt.c > 0) db.exec(`INSERT INTO ${ftsName}(${ftsName}) VALUES('rebuild')`);
-    } catch { /* non-critical — index repopulates lazily on next write */ }
+    } catch {
+      /* non-critical — index repopulates lazily on next write */
+    }
   }
 }
 
@@ -1300,8 +1448,17 @@ export function ensureEventsFTS(db) {
   let recreated = false;
   if (ftsRow) {
     let existingCols = [];
-    try { existingCols = db.prepare(`PRAGMA table_info(events_fts)`).all().map(c => c.name); } catch { /* unreadable → recreate */ }
-    const drifted = existingCols.length !== EVENTS_FTS_COLUMNS.length || EVENTS_FTS_COLUMNS.some(c => !existingCols.includes(c));
+    try {
+      existingCols = db
+        .prepare(`PRAGMA table_info(events_fts)`)
+        .all()
+        .map((c) => c.name);
+    } catch {
+      /* unreadable → recreate */
+    }
+    const drifted =
+      existingCols.length !== EVENTS_FTS_COLUMNS.length ||
+      EVENTS_FTS_COLUMNS.some((c) => !existingCols.includes(c));
     if (drifted) {
       db.exec(`DROP TRIGGER IF EXISTS events_fts_ai`);
       db.exec(`DROP TRIGGER IF EXISTS events_fts_ad`);
@@ -1342,6 +1499,8 @@ export function ensureEventsFTS(db) {
     try {
       const cnt = db.prepare(`SELECT COUNT(*) AS c FROM events`).get();
       if (cnt.c > 0) db.exec(`INSERT INTO events_fts(events_fts) VALUES('rebuild')`);
-    } catch { /* non-critical — index repopulates lazily on next write */ }
+    } catch {
+      /* non-critical — index repopulates lazily on next write */
+    }
   }
 }

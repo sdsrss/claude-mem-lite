@@ -1,6 +1,46 @@
 #!/usr/bin/env node
-const CLI_COMMANDS = new Set(['search', 'recent', 'recall', 'get', 'timeline', 'save', 'stats', 'context', 'browse', 'citation-stats', 'delete', 'update', 'export', 'restore', 'compress', 'maintain', 'optimize', 'fts-check', 'registry', 'import', 'import-jsonl', 'enrich', 'activity', 'adopt', 'unadopt', 'memdir-audit', 'defer', 'help']);
-const INSTALL_COMMANDS = new Set(['install', 'uninstall', 'status', 'doctor', 'cleanup', 'cleanup-hooks', 'self-update', 'repair', 'rebuild-binding', 'release']);
+const CLI_COMMANDS = new Set([
+  'search',
+  'recent',
+  'recall',
+  'get',
+  'timeline',
+  'save',
+  'stats',
+  'context',
+  'browse',
+  'citation-stats',
+  'delete',
+  'update',
+  'export',
+  'restore',
+  'compress',
+  'maintain',
+  'optimize',
+  'fts-check',
+  'registry',
+  'import',
+  'import-jsonl',
+  'enrich',
+  'activity',
+  'adopt',
+  'unadopt',
+  'memdir-audit',
+  'defer',
+  'help',
+]);
+const INSTALL_COMMANDS = new Set([
+  'install',
+  'uninstall',
+  'status',
+  'doctor',
+  'cleanup',
+  'cleanup-hooks',
+  'self-update',
+  'repair',
+  'rebuild-binding',
+  'release',
+]);
 
 const cmd = process.argv[2];
 
@@ -17,7 +57,10 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
 } else if (cmd === '--help' || cmd === '-h') {
   const { run } = await import('./mem-cli.mjs');
   await run(['help']);
-} else if (cmd === 'doctor' && process.argv.slice(3).some(a => a === '--benchmark' || a === '--metrics' || a === '--session-audit')) {
+} else if (
+  cmd === 'doctor' &&
+  process.argv.slice(3).some((a) => a === '--benchmark' || a === '--metrics' || a === '--session-audit')
+) {
   // Per #8217: the DB-layer doctor modes (--benchmark / --metrics / --session-audit,
   // each implemented in cli/doctor.mjs) route to mem-cli. Everything else — plain
   // `doctor`, `doctor --` (POSIX end-of-options), and `doctor --json` — stays with
@@ -56,19 +99,35 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   process.stderr.write(`[mem] Unknown command: "${cmd}"\n`);
   // Suggest closest command by edit distance
   const allCmds = [...CLI_COMMANDS, ...INSTALL_COMMANDS];
-  let best = null, bestDist = Infinity;
+  let best = null,
+    bestDist = Infinity;
   for (const c of allCmds) {
-    const a = cmd.toLowerCase(), b = c;
-    const m = a.length, n = b.length;
+    const a = cmd.toLowerCase(),
+      b = c;
+    const m = a.length,
+      n = b.length;
     if (Math.abs(m - n) > 2) continue;
-    const d = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
-    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] !== b[j-1] ? 1 : 0));
-    if (d[m][n] < bestDist) { bestDist = d[m][n]; best = c; }
+    const d = Array.from({ length: m + 1 }, (_, i) =>
+      Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+    );
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        d[i][j] = Math.min(
+          d[i - 1][j] + 1,
+          d[i][j - 1] + 1,
+          d[i - 1][j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0),
+        );
+    if (d[m][n] < bestDist) {
+      bestDist = d[m][n];
+      best = c;
+    }
   }
   if (best && bestDist <= 2) {
     process.stderr.write(`[mem] Did you mean: ${best}?\n`);
   } else {
-    process.stderr.write('[mem] Run "claude-mem-lite help" for CLI commands or "claude-mem-lite install" for setup\n');
+    process.stderr.write(
+      '[mem] Run "claude-mem-lite help" for CLI commands or "claude-mem-lite install" for setup\n',
+    );
   }
   process.exitCode = 1;
 }

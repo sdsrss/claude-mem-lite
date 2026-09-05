@@ -28,11 +28,9 @@ describe('README auto-adopt description matches silentAutoAdopt', () => {
     // a memdir sentinel, the docs below would be wrong in the other direction and this
     // suite would otherwise keep passing.
     expect(ADOPT_CLI).toMatch(/export function silentAutoAdopt/);
-    expect(ADOPT_CLI, 'silentAutoAdopt must go through the CLAUDE.md writer')
-      .toMatch(/writeManaged\(cwd,/);
+    expect(ADOPT_CLI, 'silentAutoAdopt must go through the CLAUDE.md writer').toMatch(/writeManaged\(cwd,/);
     expect(CLAUDEMD, 'writeManaged must target <cwd>/CLAUDE.md').toMatch(/claudeMdPath\(cwd\)/);
-    expect(CLAUDEMD, 'and the detail doc, under the project .claude dir')
-      .toMatch(/join\(cwd, '\.claude'\)/);
+    expect(CLAUDEMD, 'and the detail doc, under the project .claude dir').toMatch(/join\(cwd, '\.claude'\)/);
     // Idempotent re-sync rather than a one-shot: the "already-adopted" / "refreshed"
     // branches are what make "every SessionStart" true.
     expect(ADOPT_CLI).toMatch(/already-adopted/);
@@ -60,8 +58,9 @@ describe('README auto-adopt description matches silentAutoAdopt', () => {
   it('the stale-phrase check can say NO', () => {
     // Anti-vacuity: `not.toContain` passes trivially on text that never had the phrase.
     // Feed it the sentence that actually shipped and require a match.
-    const shipped = "**Auto-adopt fires on the first SessionStart per project (v2.82.1+).**"
-      + " The plugin automatically writes the **invited-memory sentinel** into the project's memdir";
+    const shipped =
+      '**Auto-adopt fires on the first SessionStart per project (v2.82.1+).**' +
+      " The plugin automatically writes the **invited-memory sentinel** into the project's memdir";
     expect(shipped).toContain('first SessionStart');
     expect(shipped).not.toMatch(/every\s+SessionStart/i);
   });

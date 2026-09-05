@@ -47,18 +47,26 @@ function runMutated(find, replace) {
     const copy = join(dir, 'audit-metrics.mjs');
     writeFileSync(copy, broken);
     return spawnSync(process.execPath, [copy, '--self-check'], {
-      cwd: REPO, encoding: 'utf8', timeout: SUBPROCESS_TIMEOUT_MS,
+      cwd: REPO,
+      encoding: 'utf8',
+      timeout: SUBPROCESS_TIMEOUT_MS,
       env: { ...process.env, AUDIT_METRICS_REPO: REPO },
     });
   } finally {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
 describe('audit-metrics --self-check', () => {
   it('passes on the real tree', () => {
     const r = spawnSync(process.execPath, [SCRIPT, '--self-check'], {
-      cwd: REPO, encoding: 'utf8', timeout: SUBPROCESS_TIMEOUT_MS,
+      cwd: REPO,
+      encoding: 'utf8',
+      timeout: SUBPROCESS_TIMEOUT_MS,
     });
     expect(r.status, `stderr: ${r.stderr}`).toBe(0);
     expect(r.stdout).toContain('audit-metrics self-check: OK');

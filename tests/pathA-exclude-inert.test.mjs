@@ -68,7 +68,10 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     const db = createTestDb();
     insertSession(db, { id: 's1', project: 'p1' });
     const inserted = insertObs(db, {
-      sessionId: 's1', project: 'p1', type: 'bugfix', importance: 3,
+      sessionId: 's1',
+      project: 'p1',
+      type: 'bugfix',
+      importance: 3,
       title: 'sqlite fts5 rowid match trap',
       narrative: 'the rowid constraint is silently dropped by fts5 match',
       text: 'sqlite fts5 rowid match constraint dropped silently',
@@ -78,10 +81,16 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     const q = 'sqlite fts5 rowid match trap';
 
     const none = searchRelevantMemories(db, q, 'p1', []);
-    expect(none.some((r) => r.id === numericId), 'premise: the row is findable at all').toBe(true);
+    expect(
+      none.some((r) => r.id === numericId),
+      'premise: the row is findable at all',
+    ).toBe(true);
 
     const excludedByNumber = searchRelevantMemories(db, q, 'p1', [numericId]);
-    expect(excludedByNumber.some((r) => r.id === numericId), 'a numeric exclude must work').toBe(false);
+    expect(
+      excludedByNumber.some((r) => r.id === numericId),
+      'a numeric exclude must work',
+    ).toBe(false);
 
     const excludedByString = searchRelevantMemories(db, q, 'p1', [String(numericId)]);
     expect(
@@ -125,9 +134,9 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     const hook = readFileSync(join(REPO, 'hook.mjs'), 'utf8');
     // Statement sequence, not one-line layout: a formatter expands this loop body over
     // four lines and the pinned property — both pushes, in this order — is unchanged (P1-3).
-    const push = /for \(const id of ids\)\s*\{\s*keyContextIds\.push\(id\);\s*pathAInjectedIds\.push\(id\);\s*\}/;
-    expect(hook, 'hook.mjs no longer pushes marker ids verbatim — was the coercion added?')
-      .toMatch(push);
+    const push =
+      /for \(const id of ids\)\s*\{\s*keyContextIds\.push\(id\);\s*pathAInjectedIds\.push\(id\);\s*\}/;
+    expect(hook, 'hook.mjs no longer pushes marker ids verbatim — was the coercion added?').toMatch(push);
   });
 
   it('countInjectedBySurface counts ATTACHMENTS, not occurrences within one', () => {
@@ -137,20 +146,26 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     // Counting occurrences instead would inflate the redundancy figure with formatting.
     const dir = mkdtempSync(join(tmpdir(), 'd193-count-'));
     const file = join(dir, 'transcript.jsonl');
-    const block = (lines) => JSON.stringify({
-      type: 'attachment',
-      attachment: {
-        type: 'hook_success',
-        command: 'pre-tool-recall.js',
-        stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: lines } }),
-      },
-    });
+    const block = (lines) =>
+      JSON.stringify({
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'pre-tool-recall.js',
+          stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: lines } }),
+        },
+      });
     // Attachment 1 names #42 twice; attachment 2 names it once. Occurrences = 3,
     // attachments = 2, and 2 is the number that matters.
-    writeFileSync(file, [
-      block('[mem] Lessons for a.mjs:\n  #42 [bugfix] first\n  #42 [bugfix] first again\n  #43 [bugfix] other'),
-      block('[mem] Lessons for b.mjs:\n  #42 [bugfix] first'),
-    ].join('\n'));
+    writeFileSync(
+      file,
+      [
+        block(
+          '[mem] Lessons for a.mjs:\n  #42 [bugfix] first\n  #42 [bugfix] first again\n  #43 [bugfix] other',
+        ),
+        block('[mem] Lessons for b.mjs:\n  #42 [bugfix] first'),
+      ].join('\n'),
+    );
 
     const counts = countInjectedBySurface(file).pretool;
     expect(counts.get(42), '#42 appeared in two attachments').toBe(2);

@@ -20,21 +20,21 @@ const parse = (def, data) => z.object(def).safeParse(data);
 // paths in mem-cli.mjs (renderObsRows / renderSessionRows / renderPromptRows)
 // and server.mjs (mem_search / mem_get / mem_timeline content templates).
 const SCALAR_FORMS = [
-  { label: 'bare int',       value: 42 },
-  { label: 'bare string',    value: '42' },
-  { label: '#N string',      value: '#42' },
-  { label: 'P#N string',     value: 'P#42' },
-  { label: 'S#N string',     value: 'S#42' },
-  { label: 'lowercase p#N',  value: 'p#42' },
-  { label: 'lowercase s#N',  value: 's#42' },
+  { label: 'bare int', value: 42 },
+  { label: 'bare string', value: '42' },
+  { label: '#N string', value: '#42' },
+  { label: 'P#N string', value: 'P#42' },
+  { label: 'S#N string', value: 'S#42' },
+  { label: 'lowercase p#N', value: 'p#42' },
+  { label: 'lowercase s#N', value: 's#42' },
 ];
 
 const ARRAY_FORMS = [
-  { label: 'array mixed',        value: [1, '#2', 'P#3', 'S#4'] },
+  { label: 'array mixed', value: [1, '#2', 'P#3', 'S#4'] },
   { label: 'comma-string mixed', value: '1,#2,P#3,S#4' },
-  { label: 'JSON-array string',  value: '[1,"P#2","S#3"]' },
-  { label: 'single bare int',    value: 1 },
-  { label: 'single P#N string',  value: 'P#1' },
+  { label: 'JSON-array string', value: '[1,"P#2","S#3"]' },
+  { label: 'single bare int', value: 1 },
+  { label: 'single P#N string', value: 'P#1' },
 ];
 
 describe('schema round-trip parity (#8127)', () => {

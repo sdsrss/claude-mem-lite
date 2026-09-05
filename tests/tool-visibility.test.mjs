@@ -14,8 +14,15 @@ import { SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
 const SERVER_PATH = resolve(new URL('..', import.meta.url).pathname, 'server.mjs');
 
 const EXPECTED_CORE = [
-  'mem_defer', 'mem_defer_drop', 'mem_defer_list',
-  'mem_get', 'mem_recall', 'mem_recent', 'mem_save', 'mem_search', 'mem_timeline',
+  'mem_defer',
+  'mem_defer_drop',
+  'mem_defer_list',
+  'mem_get',
+  'mem_recall',
+  'mem_recent',
+  'mem_save',
+  'mem_search',
+  'mem_timeline',
 ];
 
 function startServer(memDir, extraEnv = {}) {
@@ -67,11 +74,23 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
   });
 
   afterEach(async () => {
-    try { proc.stdin.end(); } catch { /* already closed */ }
-    try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    try {
+      proc.stdin.end();
+    } catch {
+      /* already closed */
+    }
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      /* already exited */
+    }
     // Best-effort wait for process to settle before cleaning the tmp DB.
     await new Promise((r) => setTimeout(r, 50));
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it('tools/list returns exactly the 9 core names', async () => {
@@ -89,7 +108,12 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
   it('CLAUDE_MEM_ALL_TOOLS=1 restores all 20 tools in tools/list (opt-out)', async () => {
     // Spin up a dedicated server with the env var set — the default fixture
     // runs without it, so we need a separate process for this case.
-    try { proc.stdin.end(); proc.kill('SIGTERM'); } catch { /* ignore */ }
+    try {
+      proc.stdin.end();
+      proc.kill('SIGTERM');
+    } catch {
+      /* ignore */
+    }
     proc = startServer(tmp, { CLAUDE_MEM_ALL_TOOLS: '1' });
     await rpc(proc, 1, 'initialize', {
       protocolVersion: '2024-11-05',

@@ -1,7 +1,12 @@
 // Unit tests for search-scoring.mjs (extracted from server.mjs for testability)
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { reRankWithContext, extractPRFTerms, expandQueryByConcepts, PRF_STOP_WORDS } from '../search-scoring.mjs';
+import {
+  reRankWithContext,
+  extractPRFTerms,
+  expandQueryByConcepts,
+  PRF_STOP_WORDS,
+} from '../search-scoring.mjs';
 
 // ─── reRankWithContext ──────────────────────────────────────────────────────
 
@@ -11,14 +16,24 @@ describe('reRankWithContext', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('boosts results with exact file match', () => {
     // Insert recent obs editing auth.js (active file — within 2h window)
     insertObs(db, { title: 'recent edit', filesModified: '["src/auth.js"]', epochOffset: -1000 });
     // Insert OLD result obs (outside 2h window so they don't contribute to active files)
-    const r1 = insertObs(db, { title: 'auth result', filesModified: '["src/auth.js"]', epochOffset: -3 * 3600000 });
-    const r2 = insertObs(db, { title: 'other result', filesModified: '["lib/other.js"]', epochOffset: -3 * 3600000 });
+    const r1 = insertObs(db, {
+      title: 'auth result',
+      filesModified: '["src/auth.js"]',
+      epochOffset: -3 * 3600000,
+    });
+    const r2 = insertObs(db, {
+      title: 'other result',
+      filesModified: '["lib/other.js"]',
+      epochOffset: -3 * 3600000,
+    });
 
     const results = [
       { source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 },
@@ -34,18 +49,24 @@ describe('reRankWithContext', () => {
 
   it('applies half-weight for directory-level matches', () => {
     // Active file: Button.js (within 2h window)
-    insertObs(db, { title: 'recent edit', filesModified: '["src/components/Button.js"]', epochOffset: -1000 });
+    insertObs(db, {
+      title: 'recent edit',
+      filesModified: '["src/components/Button.js"]',
+      epochOffset: -1000,
+    });
     // Result obs touches Modal.js (same dir, different file) — outside 2h window
-    const r1 = insertObs(db, { title: 'modal result', filesModified: '["src/components/Modal.js"]', epochOffset: -3 * 3600000 });
+    const r1 = insertObs(db, {
+      title: 'modal result',
+      filesModified: '["src/components/Modal.js"]',
+      epochOffset: -3 * 3600000,
+    });
 
-    const results = [
-      { source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 },
-    ];
+    const results = [{ source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 }];
     reRankWithContext(db, results, 'test');
 
     // Should be boosted but less than exact match (half weight)
     expect(results[0].score).toBeLessThan(-5.0);
-    const boost = results[0].score / (-5.0);
+    const boost = results[0].score / -5.0;
     // 0.3 * 0.5 * (1/1) = 0.15 -> multiplier = 1.15
     expect(boost).toBeCloseTo(1.15, 1);
   });
@@ -54,9 +75,7 @@ describe('reRankWithContext', () => {
     // No recent observations -> no active files
     const r1 = insertObs(db, { title: 'old obs', filesModified: '["foo.js"]', epochOffset: -3 * 3600000 });
 
-    const results = [
-      { source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 },
-    ];
+    const results = [{ source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 }];
     reRankWithContext(db, results, 'test');
     expect(results[0].score).toBe(-5.0);
   });
@@ -64,9 +83,7 @@ describe('reRankWithContext', () => {
   it('skips non-obs results', () => {
     insertObs(db, { title: 'recent', filesModified: '["foo.js"]', epochOffset: -1000 });
 
-    const results = [
-      { source: 'session', id: 999, score: -5.0 },
-    ];
+    const results = [{ source: 'session', id: 999, score: -5.0 }];
     reRankWithContext(db, results, 'test');
     expect(results[0].score).toBe(-5.0);
   });
@@ -76,9 +93,7 @@ describe('reRankWithContext', () => {
     // Result obs with no files
     const r1 = insertObs(db, { title: 'no files', filesModified: '[]', epochOffset: -5000 });
 
-    const results = [
-      { source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 },
-    ];
+    const results = [{ source: 'obs', id: Number(r1.lastInsertRowid), score: -5.0 }];
     expect(() => reRankWithContext(db, results, 'test')).not.toThrow();
     expect(results[0].score).toBe(-5.0);
   });
@@ -89,8 +104,14 @@ describe('reRankWithContext', () => {
 describe('extractPRFTerms', () => {
   it('extracts discriminative terms from top results', () => {
     const results = [
-      { title: 'authentication session handling', narrative: 'The authentication module handles session tokens securely' },
-      { title: 'session token refresh logic', narrative: 'Session token refresh was broken in the authentication flow' },
+      {
+        title: 'authentication session handling',
+        narrative: 'The authentication module handles session tokens securely',
+      },
+      {
+        title: 'session token refresh logic',
+        narrative: 'Session token refresh was broken in the authentication flow',
+      },
       { title: 'token validation fix', narrative: 'Fixed token validation in authentication middleware' },
     ];
     const terms = extractPRFTerms(results, '"search"');
@@ -103,11 +124,14 @@ describe('extractPRFTerms', () => {
 
   it('excludes query terms', () => {
     const results = [
-      { title: 'authentication fix applied', narrative: 'Fixed the authentication flow for authentication system' },
+      {
+        title: 'authentication fix applied',
+        narrative: 'Fixed the authentication flow for authentication system',
+      },
       { title: 'authentication token update', narrative: 'Updated authentication tokens for authentication' },
     ];
     const terms = extractPRFTerms(results, '"authentication"');
-    expect(terms.every(t => t !== 'authentication')).toBe(true);
+    expect(terms.every((t) => t !== 'authentication')).toBe(true);
   });
 
   it('respects limit parameter', () => {
@@ -142,7 +166,7 @@ describe('extractPRFTerms', () => {
     ];
     const terms = extractPRFTerms(results, '"query"');
     // unique1234 only appears in 1 doc, should not be extracted
-    expect(terms.every(t => t !== 'unique1234')).toBe(true);
+    expect(terms.every((t) => t !== 'unique1234')).toBe(true);
   });
 });
 
@@ -156,8 +180,14 @@ describe('extractPRFTerms', () => {
 
 describe('extractPRFTerms surface forms', () => {
   const results = [
-    { title: 'Implementing the caching layer', narrative: 'Implemented a caching mechanism for database queries' },
-    { title: 'Cache implementation details', narrative: 'The implementation uses Redis for distributed caching' },
+    {
+      title: 'Implementing the caching layer',
+      narrative: 'Implemented a caching mechanism for database queries',
+    },
+    {
+      title: 'Cache implementation details',
+      narrative: 'The implementation uses Redis for distributed caching',
+    },
     { title: 'Testing caching behavior', narrative: 'Verified the caching implementation works correctly' },
   ];
 
@@ -165,22 +195,25 @@ describe('extractPRFTerms surface forms', () => {
     const terms = extractPRFTerms(results, 'database query');
     expect(terms.length).toBeGreaterThan(0);
     const corpusTokens = new Set(
-      results.map(r => (r.title + ' ' + r.narrative).toLowerCase()).join(' ')
-        .replace(/[^a-z0-9_-]/g, ' ').split(/\s+/)
+      results
+        .map((r) => (r.title + ' ' + r.narrative).toLowerCase())
+        .join(' ')
+        .replace(/[^a-z0-9_-]/g, ' ')
+        .split(/\s+/),
     );
     for (const t of terms) expect(corpusTokens.has(t)).toBe(true);
   });
 
   it('does NOT emit bare porter stems that the unicode61 index cannot match', () => {
     const terms = extractPRFTerms(results, 'database query');
-    expect(terms).not.toContain('cach');       // porter stem of caching/cache → 0 FTS hits
-    expect(terms).not.toContain('implement');  // porter stem of implementation/implementing → 0 FTS hits
+    expect(terms).not.toContain('cach'); // porter stem of caching/cache → 0 FTS hits
+    expect(terms).not.toContain('implement'); // porter stem of implementation/implementing → 0 FTS hits
   });
 
   it('still merges morphological variants so the family clears the >=2-doc bar', () => {
     const terms = extractPRFTerms(results, 'database query');
     // caching-family and/or implementation-family selected via their shared stem
-    expect(terms.some(t => t.startsWith('cach') || t.startsWith('implement'))).toBe(true);
+    expect(terms.some((t) => t.startsWith('cach') || t.startsWith('implement'))).toBe(true);
   });
 });
 
@@ -192,44 +225,52 @@ describe('expandQueryByConcepts', () => {
     db = createTestDb();
     insertSession(db, { id: 'sess-1', memoryId: 'sess-1' });
   });
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+  });
 
   it('discovers co-occurring concepts', () => {
     // Insert observations with shared concepts
     for (let i = 0; i < 3; i++) {
       const now = Date.now() + i;
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, 'test', ?, 'discovery', ?, '', 'auth security tokens', '', '[]', '[]', 1, ?, ?)
-      `).run('sess-1', `authentication text ${i}`, `auth obs ${i}`, new Date(now).toISOString(), now);
+      `,
+      ).run('sess-1', `authentication text ${i}`, `auth obs ${i}`, new Date(now).toISOString(), now);
     }
 
     const concepts = expandQueryByConcepts(db, '"auth"', 'test');
     // "security" and "tokens" should co-occur with "auth"
     expect(concepts.length).toBeGreaterThan(0);
-    expect(concepts.every(c => c !== 'auth')).toBe(true);
+    expect(concepts.every((c) => c !== 'auth')).toBe(true);
   });
 
   it('excludes query terms from results', () => {
     for (let i = 0; i < 3; i++) {
       const now = Date.now() + i;
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, 'test', ?, 'discovery', ?, '', 'database query optimization', '', '[]', '[]', 1, ?, ?)
-      `).run('sess-1', `database text ${i}`, `db obs ${i}`, new Date(now).toISOString(), now);
+      `,
+      ).run('sess-1', `database text ${i}`, `db obs ${i}`, new Date(now).toISOString(), now);
     }
 
     const concepts = expandQueryByConcepts(db, '"database"', 'test');
-    expect(concepts.every(c => c !== 'database')).toBe(true);
+    expect(concepts.every((c) => c !== 'database')).toBe(true);
   });
 
   it('respects project filter', () => {
     for (let i = 0; i < 3; i++) {
       const now = Date.now() + i;
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
         VALUES (?, 'other-project', ?, 'discovery', ?, '', 'react hooks state', '', '[]', '[]', 1, ?, ?)
-      `).run('sess-1', `react text ${i}`, `react obs ${i}`, new Date(now).toISOString(), now);
+      `,
+      ).run('sess-1', `react text ${i}`, `react obs ${i}`, new Date(now).toISOString(), now);
     }
 
     // Searching in 'test' project should not find 'other-project' observations

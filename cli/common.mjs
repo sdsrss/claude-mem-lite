@@ -173,7 +173,7 @@ export function rejectBareStringFlags(flags, keys) {
  * @returns {string|null} Resolved value, or null after a conflict fail().
  */
 export function resolvePositionalAlias(positionalStr, flags, aliasKeys) {
-  const given = aliasKeys.filter(k => typeof flags[k] === 'string' && flags[k].trim() !== '');
+  const given = aliasKeys.filter((k) => typeof flags[k] === 'string' && flags[k].trim() !== '');
   if (given.length > 1) {
     fail(`[mem] Both --${given[0]} and --${given[1]} provided — pass the value once.`);
     return null;
@@ -197,21 +197,99 @@ export function resolvePositionalAlias(positionalStr, flags, aliasKeys) {
  * them to a command — same maintenance contract as JSON_SUPPORTED_CMDS in mem-cli.
  */
 export const KNOWN_CLI_FLAGS = new Set([
-  'after', 'age-days', 'all', 'anchor', 'batch', 'before', 'benchmark', 'body', 'branch',
-  'capability-summary', 'category', 'closes-deferred', 'concepts', 'confirm', 'days', 'deep',
-  'detail', 'domain-tags', 'dry-run', 'enrich', 'execute', 'fields', 'file', 'files', 'floors',
-  'force', 'format', 'from', 'help', 'id', 'ids', 'content', 'importance', 'include-compressed', 'include-noise',
-  'intent-tags', 'invocation-name', 'json', 'key', 'keywords', 'lesson', 'lesson-learned', 'limit',
-  'local-path', 'margins', 'max', 'memdir', 'merge-ids', 'metrics', 'name', 'narrative', 'no-deep',
-  'offset', 'ops', 'or', 'priority', 'project', 'quality', 'query', 'reason', 'repo-url',
-  'rerank', 'resource-type', 'retain-days', 'retry', 'run', 'run-all', 'scope', 'session-audit',
-  'sidechain', 'since', 'sort', 'source', 'status', 'sweep', 'task', 'tech-stack', 'text', 'tier', 'title',
-  'to', 'trigger-patterns', 'type', 'use-cases', 'verbose',
+  'after',
+  'age-days',
+  'all',
+  'anchor',
+  'batch',
+  'before',
+  'benchmark',
+  'body',
+  'branch',
+  'capability-summary',
+  'category',
+  'closes-deferred',
+  'concepts',
+  'confirm',
+  'days',
+  'deep',
+  'detail',
+  'domain-tags',
+  'dry-run',
+  'enrich',
+  'execute',
+  'fields',
+  'file',
+  'files',
+  'floors',
+  'force',
+  'format',
+  'from',
+  'help',
+  'id',
+  'ids',
+  'content',
+  'importance',
+  'include-compressed',
+  'include-noise',
+  'intent-tags',
+  'invocation-name',
+  'json',
+  'key',
+  'keywords',
+  'lesson',
+  'lesson-learned',
+  'limit',
+  'local-path',
+  'margins',
+  'max',
+  'memdir',
+  'merge-ids',
+  'metrics',
+  'name',
+  'narrative',
+  'no-deep',
+  'offset',
+  'ops',
+  'or',
+  'priority',
+  'project',
+  'quality',
+  'query',
+  'reason',
+  'repo-url',
+  'rerank',
+  'resource-type',
+  'retain-days',
+  'retry',
+  'run',
+  'run-all',
+  'scope',
+  'session-audit',
+  'sidechain',
+  'since',
+  'sort',
+  'source',
+  'status',
+  'sweep',
+  'task',
+  'tech-stack',
+  'text',
+  'tier',
+  'title',
+  'to',
+  'trigger-patterns',
+  'type',
+  'use-cases',
+  'verbose',
   // Catalogued 2026-08-13 when suggestUnknownFlags started reporting EVERY unknown
   // flag: these are real, code-read flags that the old edit-distance gate happened to
   // stay silent about (`adopt --disable/--enable`, `activity --min-importance`,
   // `save --supersedes`). Verified by running each command and checking for a warning.
-  'disable', 'enable', 'min-importance', 'supersedes',
+  'disable',
+  'enable',
+  'min-importance',
+  'supersedes',
   // `doctor --benchmark --prompts-limit N` — read off raw argv in cli/doctor.mjs, so
   // it never appeared in a `flags.x` grep. Caught by independent review after the
   // warn-on-every-unknown-flag flip turned the omission into a false warning on a
@@ -230,7 +308,8 @@ export const KNOWN_CLI_FLAGS = new Set([
 
 /** Levenshtein distance, early-exit past `max` (cheap enough for a handful of flags). */
 function editDistance(a, b, max = 2) {
-  const m = a.length, n = b.length;
+  const m = a.length,
+    n = b.length;
   if (Math.abs(m - n) > max) return max + 1;
   let prev = Array.from({ length: n + 1 }, (_, j) => j);
   for (let i = 1; i <= m; i++) {
@@ -261,10 +340,14 @@ export function suggestUnknownFlags(flags) {
   const result = [];
   for (const key of Object.keys(flags)) {
     if (!key || KNOWN_CLI_FLAGS.has(key)) continue;
-    let best = null, bestDist = 3;
+    let best = null,
+      bestDist = 3;
     for (const known of KNOWN_CLI_FLAGS) {
       const d = editDistance(key, known);
-      if (d < bestDist) { bestDist = d; best = known; }
+      if (d < bestDist) {
+        bestDist = d;
+        best = known;
+      }
     }
     // Report EVERY unknown flag; the suggestion is a bonus when a near-miss exists.
     // Previously an unknown flag with no neighbour within distance 2 produced no
@@ -365,9 +448,9 @@ export { parseIdToken } from '../lib/id-routing.mjs';
  */
 export function formatProbeHints(probe) {
   const hints = [];
-  if (probe.obs.length > 0)     hints.push(`#${probe.obs.join(', #')} (obs)`);
+  if (probe.obs.length > 0) hints.push(`#${probe.obs.join(', #')} (obs)`);
   if (probe.session.length > 0) hints.push(`S#${probe.session.join(', S#')} (session)`);
-  if (probe.prompt.length > 0)  hints.push(`P#${probe.prompt.join(', P#')} (prompt)`);
-  if (probe.event?.length > 0)  hints.push(`E#${probe.event.join(', E#')} (event)`);
+  if (probe.prompt.length > 0) hints.push(`P#${probe.prompt.join(', P#')} (prompt)`);
+  if (probe.event?.length > 0) hints.push(`E#${probe.event.join(', E#')} (event)`);
   return hints;
 }

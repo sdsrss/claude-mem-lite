@@ -58,14 +58,30 @@ const SERVER_PATH = join(REPO, 'server.mjs');
 // flag flip (both sides move together). This literal is what makes a tool silently
 // appearing in — or vanishing from — every agent's startup context a test failure.
 const PUBLIC_TOOLS = [
-  'mem_search', 'mem_recent', 'mem_recall', 'mem_get', 'mem_save', 'mem_timeline',
-  'mem_defer', 'mem_defer_list', 'mem_defer_drop',
+  'mem_search',
+  'mem_recent',
+  'mem_recall',
+  'mem_get',
+  'mem_save',
+  'mem_timeline',
+  'mem_defer',
+  'mem_defer_list',
+  'mem_defer_drop',
 ];
 // The 11 hidden-but-callable tools: absent from tools/call-time discovery, still
 // routable by exact name (Claude Code agents reach them via the CLI).
 const HIDDEN_TOOLS = [
-  'mem_delete', 'mem_update', 'mem_export', 'mem_compress', 'mem_maintain',
-  'mem_optimize', 'mem_fts_check', 'mem_stats', 'mem_registry', 'mem_use', 'mem_browse',
+  'mem_delete',
+  'mem_update',
+  'mem_export',
+  'mem_compress',
+  'mem_maintain',
+  'mem_optimize',
+  'mem_fts_check',
+  'mem_stats',
+  'mem_registry',
+  'mem_use',
+  'mem_browse',
 ];
 
 // Every per-tool case registers through itTool, so the coverage guard below reads the
@@ -89,7 +105,11 @@ let ROOT, DATA_DIR, WORK_DIR, client, transport;
 const PROJECT = 'work--mcpsweep';
 
 /** Join the text blocks of a tools/call result. */
-const textOf = (res) => (res?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+const textOf = (res) =>
+  (res?.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 
 /** Call a tool over the wire, requiring a non-error result with a non-empty payload. */
 async function call(name, args = {}) {
@@ -103,20 +123,37 @@ async function call(name, args = {}) {
 /** Open the sandbox memory DB for verification independent of the server's read path. */
 function withDb(fn) {
   const db = new Database(join(DATA_DIR, 'claude-mem-lite.db'));
-  try { return fn(db); } finally { try { db.close(); } catch { /* already closed */ } }
+  try {
+    return fn(db);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
 /** Same, for the registry DB (mem_registry / mem_use). */
 function withRegistryDb(fn) {
   const db = new Database(join(DATA_DIR, 'resource-registry.db'));
-  try { return fn(db); } finally { try { db.close(); } catch { /* already closed */ } }
+  try {
+    return fn(db);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
 /** Backdate a project's rows so the age-gated tools (compress/maintain) engage. */
 function ageProject(project, days) {
   return withDb((db) => {
     const epoch = Date.now() - days * 86400000;
-    return db.prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
+    return db
+      .prepare('UPDATE observations SET created_at_epoch = ?, created_at = ? WHERE project = ?')
       .run(epoch, new Date(epoch).toISOString(), project).changes;
   });
 }
@@ -193,26 +230,45 @@ beforeAll(async () => {
   // strictly increasing (mem_recent / mem_timeline assert on that order).
   SEED_BUGFIX_ID = await save({
     content: 'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-    title: 'Widget cache invalidation race', type: 'bugfix', importance: 3,
-    lesson_learned: SEED_LESSON, files: ['lib/widget-cache.mjs'],
+    title: 'Widget cache invalidation race',
+    type: 'bugfix',
+    importance: 3,
+    lesson_learned: SEED_LESSON,
+    files: ['lib/widget-cache.mjs'],
   });
   SEED_DECISION_ID = await save({
     content: 'Chose a write-through widget layer over read-through for predictable latency',
-    title: 'Write-through widget layer', type: 'decision', importance: 2,
+    title: 'Write-through widget layer',
+    type: 'decision',
+    importance: 2,
   });
   SEED_DISCOVERY_ID = await save({
     content: 'Discovered the retry backoff timer resets on every redirect hop',
-    title: 'Retry backoff resets on redirect', type: 'discovery', importance: 2,
+    title: 'Retry backoff resets on redirect',
+    type: 'discovery',
+    importance: 2,
   });
 }, 60000);
 
 afterAll(async () => {
   try {
-    try { await client?.close(); } catch { /* already gone */ }
-    try { await transport?.close(); } catch { /* already gone */ }
+    try {
+      await client?.close();
+    } catch {
+      /* already gone */
+    }
+    try {
+      await transport?.close();
+    } catch {
+      /* already gone */
+    }
   } finally {
     // In a `finally` so a failure above still removes the sandbox.
-    try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      rmSync(ROOT, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   }
 });
 
@@ -221,20 +277,24 @@ afterAll(async () => {
 describe('MCP feature sweep: registered surface', () => {
   it('tools/list returns exactly the 9 public tools, and no hidden one', async () => {
     const { tools: listed } = await client.listTools();
-    const names = listed.map(t => t.name).sort();
+    const names = listed.map((t) => t.name).sort();
     // Exact set BOTH ways: a missing tool and an extra tool are equally a failure.
     expect(names).toEqual([...PUBLIC_TOOLS].sort());
     for (const hidden of HIDDEN_TOOLS) expect(names).not.toContain(hidden);
     // …and the wire response agrees with what tool-schemas declares. This leg catches a
     // registration/filter break (declared public, missing on the wire) that the literal
     // above cannot distinguish from an intentional list change.
-    expect(names).toEqual(DECLARED_TOOLS.filter(t => !t.hidden).map(t => t.name).sort());
+    expect(names).toEqual(
+      DECLARED_TOOLS.filter((t) => !t.hidden)
+        .map((t) => t.name)
+        .sort(),
+    );
   });
 
   it('every tool tool-schemas registers has a sweep case (coverage guard)', () => {
     // SWEPT_TOOLS is the set of cases actually registered with vitest, so a tool added to
     // tool-schemas without a case fails here and cannot be silenced by editing a literal.
-    const declared = DECLARED_TOOLS.map(t => t.name).sort();
+    const declared = DECLARED_TOOLS.map((t) => t.name).sort();
     expect(declared).toEqual([...SWEPT_TOOLS].sort());
     expect(declared).toEqual([...PUBLIC_TOOLS, ...HIDDEN_TOOLS].sort());
     expect(declared).toHaveLength(20);
@@ -246,13 +306,13 @@ describe('MCP feature sweep: registered surface', () => {
 describe('MCP feature sweep: public tools', () => {
   itTool('mem_search', async () => {
     const all = await call('mem_search', { query: 'widget', project: PROJECT });
-    const ids = [...all.matchAll(/^#(\d+) /gm)].map(m => Number(m[1]));
+    const ids = [...all.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1]));
     expect(ids).toContain(SEED_BUGFIX_ID);
     expect(ids).toContain(SEED_DECISION_ID);
 
     // obs_type must actually narrow — a dropped filter shows the bugfix row too.
     const narrowed = await call('mem_search', { query: 'widget', project: PROJECT, obs_type: 'decision' });
-    const narrowedIds = [...narrowed.matchAll(/^#(\d+) /gm)].map(m => Number(m[1]));
+    const narrowedIds = [...narrowed.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1]));
     expect(narrowedIds).toEqual([SEED_DECISION_ID]);
   });
 
@@ -261,8 +321,8 @@ describe('MCP feature sweep: public tools', () => {
     // Header names the project inferred from the SERVER's cwd — the proof that the
     // subprocess really ran inside the sandbox and not in this repo.
     expect(text).toContain(`Recent observations (${PROJECT}):`);
-    const ids = [...text.matchAll(/^#(\d+) /gm)].map(m => Number(m[1]));
-    expect(ids).toEqual([SEED_DISCOVERY_ID, SEED_DECISION_ID]);   // newest first, limit honored
+    const ids = [...text.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1]));
+    expect(ids).toEqual([SEED_DISCOVERY_ID, SEED_DECISION_ID]); // newest first, limit honored
   });
 
   itTool('mem_recall', async () => {
@@ -272,7 +332,7 @@ describe('MCP feature sweep: public tools', () => {
     expect(text).toContain(SEED_LESSON);
     // A file nobody touched must say so rather than fall back to a broad match.
     const none = await call('mem_recall', { file: 'no-such-file-xyzzy.mjs' });
-    expect(none).toContain("No history for \"no-such-file-xyzzy.mjs\"");
+    expect(none).toContain('No history for "no-such-file-xyzzy.mjs"');
   });
 
   itTool('mem_get', async () => {
@@ -293,17 +353,26 @@ describe('MCP feature sweep: public tools', () => {
   itTool('mem_save', async () => {
     const text = await call('mem_save', {
       content: 'Traced a flaky upload to an unclosed multipart stream',
-      title: 'Flaky upload from unclosed stream', type: 'bugfix', importance: 3,
-      project: 'mcpsweep-save', lesson_learned: 'Close the stream in a finally block',
+      title: 'Flaky upload from unclosed stream',
+      type: 'bugfix',
+      importance: 3,
+      project: 'mcpsweep-save',
+      lesson_learned: 'Close the stream in a finally block',
     });
     expect(text).toMatch(/Saved as observation #\d+ \[bugfix\] in project "mcpsweep-save"/);
     expect(text).toContain('lesson captured');
     // Cross-check the row in the sandbox DB — the response text alone is the server
     // quoting its own input back.
     const id = savedId(text);
-    const row = withDb(db => db.prepare('SELECT type, importance, project, title, lesson_learned FROM observations WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db
+        .prepare('SELECT type, importance, project, title, lesson_learned FROM observations WHERE id = ?')
+        .get(id),
+    );
     expect(row).toMatchObject({
-      type: 'bugfix', importance: 3, project: 'mcpsweep-save',
+      type: 'bugfix',
+      importance: 3,
+      project: 'mcpsweep-save',
       title: 'Flaky upload from unclosed stream',
       lesson_learned: 'Close the stream in a finally block',
     });
@@ -312,33 +381,53 @@ describe('MCP feature sweep: public tools', () => {
   itTool('mem_timeline', async () => {
     // Anchored on the MIDDLE seed, so which row lands before and which after is fully
     // determined: the rendered order must be bugfix → decision(anchor) → discovery.
-    const text = await call('mem_timeline', { anchor: SEED_DECISION_ID, before: 1, after: 1, project: PROJECT });
+    const text = await call('mem_timeline', {
+      anchor: SEED_DECISION_ID,
+      before: 1,
+      after: 1,
+      project: PROJECT,
+    });
     expect(text).toContain(`Timeline around #${SEED_DECISION_ID}`);
-    const ids = [...text.matchAll(/^#(\d+) /gm)].map(m => Number(m[1]));
+    const ids = [...text.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1]));
     expect(ids).toEqual([SEED_BUGFIX_ID, SEED_DECISION_ID, SEED_DISCOVERY_ID]);
-    expect(text).toMatch(new RegExp(`^#${SEED_DECISION_ID} .*◀$`, 'm'));   // anchor marker on the anchor
+    expect(text).toMatch(new RegExp(`^#${SEED_DECISION_ID} .*◀$`, 'm')); // anchor marker on the anchor
   });
 
   itTool('mem_defer', async () => {
     const text = await call('mem_defer', {
-      title: 'Benchmark the widget cache under load', priority: 3,
-      detail: 'needs a load fixture first', project: 'mcpsweep-defer',
+      title: 'Benchmark the widget cache under load',
+      priority: 3,
+      detail: 'needs a load fixture first',
+      project: 'mcpsweep-defer',
     });
     const m = text.match(/Deferred as D#(\d+) \(item (\d+)\) in project "mcpsweep-defer"/);
     expect(m, `unexpected mem_defer confirmation: ${text}`).toBeTruthy();
-    const row = withDb(db => db.prepare('SELECT title, priority, detail, status, project FROM deferred_work WHERE id = ?').get(Number(m[1])));
+    const row = withDb((db) =>
+      db
+        .prepare('SELECT title, priority, detail, status, project FROM deferred_work WHERE id = ?')
+        .get(Number(m[1])),
+    );
     expect(row).toMatchObject({
-      title: 'Benchmark the widget cache under load', priority: 3,
-      detail: 'needs a load fixture first', status: 'open', project: 'mcpsweep-defer',
+      title: 'Benchmark the widget cache under load',
+      priority: 3,
+      detail: 'needs a load fixture first',
+      status: 'open',
+      project: 'mcpsweep-defer',
     });
   });
 
   itTool('mem_defer_list', async () => {
     // Seeds its own rows (no dependency on the mem_defer case) in its own project.
     const P = 'mcpsweep-deferlist';
-    expect(await call('mem_defer_list', { project: P })).toContain(`No open deferred items in project "${P}".`);
-    const a = (await call('mem_defer', { title: 'Split the retry helper out of transport', priority: 3, project: P })).match(/D#(\d+)/)[1];
-    const b = (await call('mem_defer', { title: 'Document the backoff ceiling', priority: 1, project: P })).match(/D#(\d+)/)[1];
+    expect(await call('mem_defer_list', { project: P })).toContain(
+      `No open deferred items in project "${P}".`,
+    );
+    const a = (
+      await call('mem_defer', { title: 'Split the retry helper out of transport', priority: 3, project: P })
+    ).match(/D#(\d+)/)[1];
+    const b = (
+      await call('mem_defer', { title: 'Document the backoff ceiling', priority: 1, project: P })
+    ).match(/D#(\d+)/)[1];
 
     const list = await call('mem_defer_list', { project: P });
     expect(list).toContain('Split the retry helper out of transport');
@@ -352,11 +441,17 @@ describe('MCP feature sweep: public tools', () => {
 
   itTool('mem_defer_drop', async () => {
     const P = 'mcpsweep-deferdrop';
-    const id = Number((await call('mem_defer', { title: 'Retire the legacy uploader shim', priority: 2, project: P })).match(/D#(\d+)/)[1]);
+    const id = Number(
+      (await call('mem_defer', { title: 'Retire the legacy uploader shim', priority: 2, project: P })).match(
+        /D#(\d+)/,
+      )[1],
+    );
 
     const dropped = await call('mem_defer_drop', { id: `D#${id}`, reason: 'covered elsewhere', project: P });
     expect(dropped).toContain(`Dropped D#${id} in project "${P}". Reason: covered elsewhere`);
-    const row = withDb(db => db.prepare('SELECT status, drop_reason FROM deferred_work WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db.prepare('SELECT status, drop_reason FROM deferred_work WHERE id = ?').get(id),
+    );
     expect(row).toMatchObject({ status: 'dropped', drop_reason: 'covered elsewhere' });
     expect(await call('mem_defer_list', { project: P })).toContain('No open deferred items');
   });
@@ -372,7 +467,7 @@ describe('MCP feature sweep: hidden tools', () => {
     const total = text.match(/Total: (\d+) observations \| (\d+) sessions/);
     expect(total, `no parseable totals line in:\n${text}`).toBeTruthy();
     // Must agree with the DB it claims to describe (all live rows, any project).
-    const live = withDb(db => db.prepare('SELECT COUNT(*) c FROM observations').get().c);
+    const live = withDb((db) => db.prepare('SELECT COUNT(*) c FROM observations').get().c);
     expect(Number(total[1])).toBe(live);
     expect(text).toContain('🔴 Working:');
   });
@@ -380,7 +475,7 @@ describe('MCP feature sweep: hidden tools', () => {
   itTool('mem_browse', async () => {
     const text = await call('mem_browse', { project: PROJECT });
     expect(text).toContain(`Memory Dashboard (${PROJECT})`);
-    expect(text).toContain('🔴 Working Memory (3)');            // exactly the three seeds
+    expect(text).toContain('🔴 Working Memory (3)'); // exactly the three seeds
     expect(text).toContain(`#${SEED_BUGFIX_ID}`);
     expect(text).toMatch(/Totals: 3 observations \| Working: 3 \| Active: 0 \| Archive: 0/);
 
@@ -391,24 +486,41 @@ describe('MCP feature sweep: hidden tools', () => {
   });
 
   itTool('mem_update', async () => {
-    const id = await save({ content: 'Initial note about the nightly export job schedule', title: 'Nightly export note', project: 'mcpsweep-update' });
-    const text = await call('mem_update', { id, title: 'Nightly export job window moved', importance: 3, lesson_learned: 'Coordinate window changes with the data team' });
+    const id = await save({
+      content: 'Initial note about the nightly export job schedule',
+      title: 'Nightly export note',
+      project: 'mcpsweep-update',
+    });
+    const text = await call('mem_update', {
+      id,
+      title: 'Nightly export job window moved',
+      importance: 3,
+      lesson_learned: 'Coordinate window changes with the data team',
+    });
     expect(text).toContain(`Updated observation #${id}: title, importance, lesson_learned`);
-    const row = withDb(db => db.prepare('SELECT title, importance, lesson_learned FROM observations WHERE id = ?').get(id));
+    const row = withDb((db) =>
+      db.prepare('SELECT title, importance, lesson_learned FROM observations WHERE id = ?').get(id),
+    );
     expect(row).toMatchObject({
-      title: 'Nightly export job window moved', importance: 3,
+      title: 'Nightly export job window moved',
+      importance: 3,
       lesson_learned: 'Coordinate window changes with the data team',
     });
   });
 
   itTool('mem_delete', async () => {
-    const id = await save({ content: 'Scratch row created only to be deleted by the sweep', title: 'Scratch delete row', project: 'mcpsweep-delete' });
-    const rows = () => withDb(db => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c);
+    const id = await save({
+      content: 'Scratch row created only to be deleted by the sweep',
+      title: 'Scratch delete row',
+      project: 'mcpsweep-delete',
+    });
+    const rows = () =>
+      withDb((db) => db.prepare('SELECT COUNT(*) c FROM observations WHERE id = ?').get(id).c);
 
     const preview = await call('mem_delete', { ids: [id], confirm: false });
     expect(preview).toContain('Preview: 1 observation(s) will be deleted');
     expect(preview).toContain(`#${id}`);
-    expect(rows()).toBe(1);                                     // preview must not mutate
+    expect(rows()).toBe(1); // preview must not mutate
 
     const confirmed = await call('mem_delete', { ids: [id], confirm: true });
     expect(confirmed).toContain('Deleted 1 observation(s).');
@@ -418,10 +530,13 @@ describe('MCP feature sweep: hidden tools', () => {
   itTool('mem_export', async () => {
     const text = await call('mem_export', { project: PROJECT, format: 'jsonl' });
     expect(text).toMatch(/^Exported 3 observations:/);
-    const rows = text.split('\n').filter(l => l.trim().startsWith('{')).map(l => JSON.parse(l));
+    const rows = text
+      .split('\n')
+      .filter((l) => l.trim().startsWith('{'))
+      .map((l) => JSON.parse(l));
     expect(rows).toHaveLength(3);
-    const seeded = rows.find(r => r.id === SEED_BUGFIX_ID);
-    expect(seeded, `seeded row missing from export: ${rows.map(r => r.id).join(',')}`).toBeTruthy();
+    const seeded = rows.find((r) => r.id === SEED_BUGFIX_ID);
+    expect(seeded, `seeded row missing from export: ${rows.map((r) => r.id).join(',')}`).toBeTruthy();
     // The round-trippable column set restore reads back (v3.42 HIGH-2) must be present.
     expect(seeded.project).toBe(PROJECT);
     expect(seeded.lesson_learned).toBe(SEED_LESSON);
@@ -431,120 +546,181 @@ describe('MCP feature sweep: hidden tools', () => {
     }
   });
 
-  itTool('mem_compress', async () => {
-    // Compression needs ≥3 rows in one project-week that are ≥30d old, importance ≤1,
-    // never accessed and lesson-free. Seed through the real save path, then backdate.
-    const P = 'mcpsweep-compress';
-    for (const [title, content] of [
-      ['Changelog heading rename', 'Renamed the changelog heading ahead of the quarterly audit'],
-      ['Vendor trailing-comma rule', 'Bumped the linter rule covering trailing commas in vendor files'],
-      ['Onboarding screenshot removal', 'Removed an obsolete screenshot from the onboarding docs folder'],
-    ]) await save({ content, title, importance: 1, project: P });
-    expect(ageProject(P, 60)).toBe(3);
+  itTool(
+    'mem_compress',
+    async () => {
+      // Compression needs ≥3 rows in one project-week that are ≥30d old, importance ≤1,
+      // never accessed and lesson-free. Seed through the real save path, then backdate.
+      const P = 'mcpsweep-compress';
+      for (const [title, content] of [
+        ['Changelog heading rename', 'Renamed the changelog heading ahead of the quarterly audit'],
+        ['Vendor trailing-comma rule', 'Bumped the linter rule covering trailing commas in vendor files'],
+        ['Onboarding screenshot removal', 'Removed an obsolete screenshot from the onboarding docs folder'],
+      ])
+        await save({ content, title, importance: 1, project: P });
+      expect(ageProject(P, 60)).toBe(3);
 
-    const preview = await call('mem_compress', { project: P, preview: true });
-    expect(preview).toContain('Total candidates: 3');
-    expect(preview).toContain('Compressable groups (≥3 obs): 1');
-    expect(preview).toContain('Observations to compress: 3');
-    const uncompressed = () => withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project = ? AND COALESCE(compressed_into,0) = 0").get(P).c);
-    expect(uncompressed()).toBe(3);                             // preview must not mutate
+      const preview = await call('mem_compress', { project: P, preview: true });
+      expect(preview).toContain('Total candidates: 3');
+      expect(preview).toContain('Compressable groups (≥3 obs): 1');
+      expect(preview).toContain('Observations to compress: 3');
+      const uncompressed = () =>
+        withDb(
+          (db) =>
+            db
+              .prepare(
+                'SELECT COUNT(*) c FROM observations WHERE project = ? AND COALESCE(compressed_into,0) = 0',
+              )
+              .get(P).c,
+        );
+      expect(uncompressed()).toBe(3); // preview must not mutate
 
-    const executed = await call('mem_compress', { project: P, preview: false });
-    expect(executed).toBe('Compressed 3 observations into 1 weekly summaries.');
-    // The three originals now point at a summary row; exactly one live row remains.
-    expect(withDb(db => db.prepare("SELECT COUNT(*) c FROM observations WHERE project = ? AND COALESCE(compressed_into,0) != 0").get(P).c)).toBe(3);
-    expect(uncompressed()).toBe(1);
-    expect(await call('mem_compress', { project: P, preview: true })).toBe('No candidates for compression.');
-  }, 30000);
+      const executed = await call('mem_compress', { project: P, preview: false });
+      expect(executed).toBe('Compressed 3 observations into 1 weekly summaries.');
+      // The three originals now point at a summary row; exactly one live row remains.
+      expect(
+        withDb(
+          (db) =>
+            db
+              .prepare(
+                'SELECT COUNT(*) c FROM observations WHERE project = ? AND COALESCE(compressed_into,0) != 0',
+              )
+              .get(P).c,
+        ),
+      ).toBe(3);
+      expect(uncompressed()).toBe(1);
+      expect(await call('mem_compress', { project: P, preview: true })).toBe(
+        'No candidates for compression.',
+      );
+    },
+    30000,
+  );
 
-  itTool('mem_maintain', async () => {
-    const P = 'mcpsweep-maintain';
-    for (const [title, content] of [
-      ['Stale feature flag list', 'Tidied the stale feature flag list inside the deployment runbook'],
-      ['Legacy migration notes', 'Archived the legacy migration notes from the operations wiki space'],
-      ['Unused gradle task', 'Dropped an unused gradle task from the android build configuration'],
-    ]) await save({ content, title, importance: 1, project: P });
+  itTool(
+    'mem_maintain',
+    async () => {
+      const P = 'mcpsweep-maintain';
+      for (const [title, content] of [
+        ['Stale feature flag list', 'Tidied the stale feature flag list inside the deployment runbook'],
+        ['Legacy migration notes', 'Archived the legacy migration notes from the operations wiki space'],
+        ['Unused gradle task', 'Dropped an unused gradle task from the android build configuration'],
+      ])
+        await save({ content, title, importance: 1, project: P });
 
-    const fresh = await call('mem_maintain', { action: 'scan', project: P });
-    expect(fresh).toContain('Total active observations: 3');
-    expect(fresh).toMatch(/Stale \(>30d, imp=1, no access, never injected\): 0/);
+      const fresh = await call('mem_maintain', { action: 'scan', project: P });
+      expect(fresh).toContain('Total active observations: 3');
+      expect(fresh).toMatch(/Stale \(>30d, imp=1, no access, never injected\): 0/);
 
-    expect(ageProject(P, 90)).toBe(3);
-    expect(await call('mem_maintain', { action: 'scan', project: P }))
-      .toMatch(/Stale \(>30d, imp=1, no access, never injected\): 3/);
+      expect(ageProject(P, 90)).toBe(3);
+      expect(await call('mem_maintain', { action: 'scan', project: P })).toMatch(
+        /Stale \(>30d, imp=1, no access, never injected\): 3/,
+      );
 
-    const executed = await call('mem_maintain', { action: 'execute', operations: ['decay'], project: P });
-    expect(executed).toMatch(/marked 3 idle as pending-purge/);
-    const after = await call('mem_maintain', { action: 'scan', project: P });
-    expect(after).toContain('Total active observations: 0');
-    expect(after).toMatch(/Pending purge \(idle-marked\): 3/);
-  }, 30000);
+      const executed = await call('mem_maintain', { action: 'execute', operations: ['decay'], project: P });
+      expect(executed).toMatch(/marked 3 idle as pending-purge/);
+      const after = await call('mem_maintain', { action: 'scan', project: P });
+      expect(after).toContain('Total active observations: 0');
+      expect(after).toMatch(/Pending purge \(idle-marked\): 3/);
+    },
+    30000,
+  );
 
-  itTool('mem_optimize', async () => {
-    // A plain save with no lesson/concepts/aliases is a narrow re-enrich candidate.
-    const P = 'mcpsweep-optimize';
-    await save({ content: 'Sketch of the queue drain sequence for the optimize sweep', title: 'Queue drain sketch', project: P });
+  itTool(
+    'mem_optimize',
+    async () => {
+      // A plain save with no lesson/concepts/aliases is a narrow re-enrich candidate.
+      const P = 'mcpsweep-optimize';
+      await save({
+        content: 'Sketch of the queue drain sequence for the optimize sweep',
+        title: 'Queue drain sketch',
+        project: P,
+      });
 
-    const preview = await call('mem_optimize', { action: 'preview', project: P });
-    expect(preview).toContain('🔍 LLM Optimization Preview:');
-    const num = (re) => {
-      const m = preview.match(re);
-      expect(m, `no line matching ${re} in:\n${preview}`).toBeTruthy();
-      return Number(m[1]);
-    };
-    const reenrich = num(/^\s*Re-enrich candidates: (\d+)$/m);
-    const clusterMerge = num(/^\s*Cluster-merge candidates: (\d+) clusters$/m);
-    const smartCompress = num(/^\s*Smart-compress candidates: (\d+) clusters$/m);
-    const normalizeLine = preview.match(/^\s*Normalize: (?:(\d+) unique concepts|gate closed .*)$/m);
-    expect(normalizeLine, `no parseable Normalize line in:\n${preview}`).toBeTruthy();
-    const normalizeUnits = Number(normalizeLine[1] || 0) > 0 ? 1 : 0;
-    // The headline total is the sum of the four task figures — a Total computed over a
-    // different scope (e.g. one leg ignoring `project`) fails here.
-    expect(num(/^\s*Total: (\d+) items$/m)).toBe(reenrich + normalizeUnits + clusterMerge + smartCompress);
-    expect(reenrich).toBeGreaterThan(0);
+      const preview = await call('mem_optimize', { action: 'preview', project: P });
+      expect(preview).toContain('🔍 LLM Optimization Preview:');
+      const num = (re) => {
+        const m = preview.match(re);
+        expect(m, `no line matching ${re} in:\n${preview}`).toBeTruthy();
+        return Number(m[1]);
+      };
+      const reenrich = num(/^\s*Re-enrich candidates: (\d+)$/m);
+      const clusterMerge = num(/^\s*Cluster-merge candidates: (\d+) clusters$/m);
+      const smartCompress = num(/^\s*Smart-compress candidates: (\d+) clusters$/m);
+      const normalizeLine = preview.match(/^\s*Normalize: (?:(\d+) unique concepts|gate closed .*)$/m);
+      expect(normalizeLine, `no parseable Normalize line in:\n${preview}`).toBeTruthy();
+      const normalizeUnits = Number(normalizeLine[1] || 0) > 0 ? 1 : 0;
+      // The headline total is the sum of the four task figures — a Total computed over a
+      // different scope (e.g. one leg ignoring `project`) fails here.
+      expect(num(/^\s*Total: (\d+) items$/m)).toBe(reenrich + normalizeUnits + clusterMerge + smartCompress);
+      expect(reenrich).toBeGreaterThan(0);
 
-    // The run arm must DEGRADE — candidates picked up, every Haiku call refused because
-    // CLAUDE_CODE_PATH points nowhere. "0 processed, 0 skipped" (an empty work queue, or
-    // a task that never ran at all) is a failure, not a pass.
-    const run = await call('mem_optimize', { action: 'run', tasks: ['re-enrich'], max_items: 1, project: P });
-    expect(run).toContain('🔧 LLM Optimization Results:');
-    expect(run).toMatch(/Re-enrich: 0 processed, [1-9]\d* skipped/);
-    expect(run).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
-    // Degraded means UNCHANGED, not half-written: the candidate keeps its empty fields.
-    const row = withDb(db => db.prepare("SELECT lesson_learned, concepts, optimized_at FROM observations WHERE project = ?").get(P));
-    expect(row).toMatchObject({ lesson_learned: null, optimized_at: null });
-  }, 60000);
+      // The run arm must DEGRADE — candidates picked up, every Haiku call refused because
+      // CLAUDE_CODE_PATH points nowhere. "0 processed, 0 skipped" (an empty work queue, or
+      // a task that never ran at all) is a failure, not a pass.
+      const run = await call('mem_optimize', {
+        action: 'run',
+        tasks: ['re-enrich'],
+        max_items: 1,
+        project: P,
+      });
+      expect(run).toContain('🔧 LLM Optimization Results:');
+      expect(run).toMatch(/Re-enrich: 0 processed, [1-9]\d* skipped/);
+      expect(run).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
+      // Degraded means UNCHANGED, not half-written: the candidate keeps its empty fields.
+      const row = withDb((db) =>
+        db
+          .prepare('SELECT lesson_learned, concepts, optimized_at FROM observations WHERE project = ?')
+          .get(P),
+      );
+      expect(row).toMatchObject({ lesson_learned: null, optimized_at: null });
+    },
+    60000,
+  );
 
-  itTool('mem_fts_check', async () => {
-    expect(await call('mem_fts_check', { action: 'check' }))
-      .toBe('FTS5 indexes are healthy — all integrity checks passed.');
+  itTool(
+    'mem_fts_check',
+    async () => {
+      expect(await call('mem_fts_check', { action: 'check' })).toBe(
+        'FTS5 indexes are healthy — all integrity checks passed.',
+      );
 
-    const rebuilt = await call('mem_fts_check', { action: 'rebuild' });
-    for (const table of ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts']) {
-      expect(rebuilt).toContain(table);
-    }
-    expect(rebuilt).not.toContain('Errors:');
-    // The rebuilt index must still answer — a rebuild that empties it would pass on the
-    // message alone.
-    expect(await call('mem_search', { query: 'widget', project: PROJECT })).toContain(`#${SEED_BUGFIX_ID}`);
-  }, 30000);
+      const rebuilt = await call('mem_fts_check', { action: 'rebuild' });
+      for (const table of ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts']) {
+        expect(rebuilt).toContain(table);
+      }
+      expect(rebuilt).not.toContain('Errors:');
+      // The rebuilt index must still answer — a rebuild that empties it would pass on the
+      // message alone.
+      expect(await call('mem_search', { query: 'widget', project: PROJECT })).toContain(`#${SEED_BUGFIX_ID}`);
+    },
+    30000,
+  );
 
   itTool('mem_registry', async () => {
     const skillPath = writeSkill('mcpsweep-registry-skill', 'Body of the registry sweep fixture.');
     const imported = await call('mem_registry', {
-      action: 'import', name: 'mcpsweep-registry-skill', resource_type: 'skill',
-      local_path: skillPath, use_cases: 'exercising the registry surface',
+      action: 'import',
+      name: 'mcpsweep-registry-skill',
+      resource_type: 'skill',
+      local_path: skillPath,
+      use_cases: 'exercising the registry surface',
       capability_summary: 'registry sweep fixture skill',
     });
     expect(imported).toMatch(/^Imported: skill:mcpsweep-registry-skill \(id=\d+\)$/);
-    expect(withRegistryDb(db => db.prepare("SELECT status, local_path FROM resources WHERE name = ?").get('mcpsweep-registry-skill')))
-      .toMatchObject({ status: 'active', local_path: skillPath });
+    expect(
+      withRegistryDb((db) =>
+        db.prepare('SELECT status, local_path FROM resources WHERE name = ?').get('mcpsweep-registry-skill'),
+      ),
+    ).toMatchObject({ status: 'active', local_path: skillPath });
 
     expect(await call('mem_registry', { action: 'list' })).toContain('mcpsweep-registry-skill');
     expect(await call('mem_registry', { action: 'stats' })).toMatch(/Total active: [1-9]\d*/);
-    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' }))
-      .toContain('mcpsweep-registry-skill');
-    expect(await call('mem_registry', { action: 'reindex' })).toMatch(/FTS5 reindexed\. \d+ active resources\./);
+    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' })).toContain(
+      'mcpsweep-registry-skill',
+    );
+    expect(await call('mem_registry', { action: 'reindex' })).toMatch(
+      /FTS5 reindexed\. \d+ active resources\./,
+    );
 
     // P2-6's semantics, pinned on the MCP face. The CLI face got a `not.toMatch(/\n\s*Path:/)`
     // when the two renderers were collapsed; this face — whose semantics were the ones KEPT —
@@ -558,10 +734,16 @@ describe('MCP feature sweep: hidden tools', () => {
     const unmanagedDir = join(DATA_DIR, 'unmanaged', 'skills', 'mcpsweep-unmanaged-skill');
     mkdirSync(unmanagedDir, { recursive: true });
     const unmanagedPath = join(unmanagedDir, 'SKILL.md');
-    writeFileSync(unmanagedPath, '---\nname: mcpsweep-unmanaged-skill\ndescription: mcp sweep unmanaged fixture\n---\n\nBody.\n');
+    writeFileSync(
+      unmanagedPath,
+      '---\nname: mcpsweep-unmanaged-skill\ndescription: mcp sweep unmanaged fixture\n---\n\nBody.\n',
+    );
     await call('mem_registry', {
-      action: 'import', name: 'mcpsweep-unmanaged-skill', resource_type: 'skill',
-      local_path: unmanagedPath, use_cases: 'exercising the non-managed render path',
+      action: 'import',
+      name: 'mcpsweep-unmanaged-skill',
+      resource_type: 'skill',
+      local_path: unmanagedPath,
+      use_cases: 'exercising the non-managed render path',
       capability_summary: 'registry sweep unmanaged fixture skill',
     });
 
@@ -582,30 +764,50 @@ describe('MCP feature sweep: hidden tools', () => {
     expect(unmanagedBlock, 'the P2-6 path leak is back on the MCP face').not.toMatch(/\n\s*Path:/);
     expect(unmanagedBlock).toMatch(/Use: (Skill\(|mem_use\(name=)/);
 
-    await call('mem_registry', { action: 'remove', name: 'mcpsweep-unmanaged-skill', resource_type: 'skill' });
+    await call('mem_registry', {
+      action: 'remove',
+      name: 'mcpsweep-unmanaged-skill',
+      resource_type: 'skill',
+    });
 
-    expect(await call('mem_registry', { action: 'remove', name: 'mcpsweep-registry-skill', resource_type: 'skill' }))
-      .toBe('Removed: skill:mcpsweep-registry-skill');
-    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' }))
-      .toContain('No matching resources for: "mcpsweep-registry-skill"');
+    expect(
+      await call('mem_registry', {
+        action: 'remove',
+        name: 'mcpsweep-registry-skill',
+        resource_type: 'skill',
+      }),
+    ).toBe('Removed: skill:mcpsweep-registry-skill');
+    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' })).toContain(
+      'No matching resources for: "mcpsweep-registry-skill"',
+    );
   });
 
   itTool('mem_use', async () => {
     const BODY = 'MCPSWEEPUSEBODY — the loaded skill body must reach the caller verbatim.';
     const skillPath = writeSkill('mcpsweep-use-skill', BODY);
     await call('mem_registry', {
-      action: 'import', name: 'mcpsweep-use-skill', resource_type: 'skill',
-      local_path: skillPath, capability_summary: 'use sweep fixture skill',
+      action: 'import',
+      name: 'mcpsweep-use-skill',
+      resource_type: 'skill',
+      local_path: skillPath,
+      capability_summary: 'use sweep fixture skill',
     });
 
     const loaded = await call('mem_use', { name: 'mcpsweep-use-skill' });
     expect(loaded).toContain('<skill-loaded name="mcpsweep-use-skill" type="skill"');
-    expect(loaded).toContain(BODY);                             // file contents, not just a pointer
+    expect(loaded).toContain(BODY); // file contents, not just a pointer
     expect(loaded).toContain('</skill-loaded>');
     // The load is recorded against the resource (adoption signal, not a no-op read).
-    const invocations = withRegistryDb(db => db.prepare(`
+    const invocations = withRegistryDb(
+      (db) =>
+        db
+          .prepare(
+            `
       SELECT COUNT(*) c FROM invocations i JOIN resources r ON r.id = i.resource_id WHERE r.name = ?
-    `).get('mcpsweep-use-skill').c);
+    `,
+          )
+          .get('mcpsweep-use-skill').c,
+    );
     expect(invocations).toBe(1);
 
     // A name that shares no token with any registered resource reports a miss. A name that

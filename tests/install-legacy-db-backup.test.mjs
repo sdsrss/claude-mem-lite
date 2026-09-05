@@ -51,10 +51,10 @@ describe('Bug 2: migrateLegacyClaudeMemData', () => {
       writeFileSync(join(oldDir, 'claude-mem.db-shm'), 'shm');
       const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
       expect(result.action).toBe('backed-up');
-      const stamps = readdirSync(newDir).filter(f => f.includes('legacy-backup'));
-      expect(stamps.some(f => f.endsWith('.db.legacy-backup-1700000000000'))).toBe(true);
-      expect(stamps.some(f => f.endsWith('.db-wal.legacy-backup-1700000000000'))).toBe(true);
-      expect(stamps.some(f => f.endsWith('.db-shm.legacy-backup-1700000000000'))).toBe(true);
+      const stamps = readdirSync(newDir).filter((f) => f.includes('legacy-backup'));
+      expect(stamps.some((f) => f.endsWith('.db.legacy-backup-1700000000000'))).toBe(true);
+      expect(stamps.some((f) => f.endsWith('.db-wal.legacy-backup-1700000000000'))).toBe(true);
+      expect(stamps.some((f) => f.endsWith('.db-shm.legacy-backup-1700000000000'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

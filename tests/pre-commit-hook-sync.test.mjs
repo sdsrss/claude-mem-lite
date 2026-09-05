@@ -28,8 +28,11 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 // cwd pinned to the repo: an unpinned `git` subprocess reads whatever repo the runner
 // happens to sit in, which is the 2026-08-29 audit's own P1 finding.
 const git = (...args) => {
-  try { return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim(); }
-  catch { return ''; }
+  try {
+    return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
 };
 
 const CANONICAL = 'scripts/pre-commit.sh';
@@ -48,7 +51,9 @@ describe('pre-commit hook sync (P1-11)', () => {
   it('whatever hook git will run is the canonical script (or an exec shim to it)', (ctx) => {
     const configured = git('config', 'core.hooksPath');
     const hooksDir = configured
-      ? (isAbsolute(configured) ? configured : join(REPO, configured))
+      ? isAbsolute(configured)
+        ? configured
+        : join(REPO, configured)
       : join(REPO, '.git', 'hooks');
     const hookPath = join(hooksDir, 'pre-commit');
 
@@ -66,9 +71,9 @@ describe('pre-commit hook sync (P1-11)', () => {
 
     expect(
       isShim || isCopy,
-      `${hookPath} is neither ${CANONICAL} nor an exec shim naming it. This is the P1-11 `
-      + `defect: an untracked stale copy. Fix with:\n`
-      + `  git config core.hooksPath .githooks`,
+      `${hookPath} is neither ${CANONICAL} nor an exec shim naming it. This is the P1-11 ` +
+        `defect: an untracked stale copy. Fix with:\n` +
+        `  git config core.hooksPath .githooks`,
     ).toBe(true);
 
     // A byte copy is accepted (it is correct today) but it is the shape that rots — it was
@@ -79,9 +84,9 @@ describe('pre-commit hook sync (P1-11)', () => {
     // rule is the assertion above.
     if (isCopy && !isShim) {
       ctx.annotate?.(
-        `${hookPath} is a byte copy of ${CANONICAL}, not a shim. It is correct now and will `
-        + `silently go stale on the next edit to ${CANONICAL}. Prefer:\n`
-        + `  git config core.hooksPath .githooks`,
+        `${hookPath} is a byte copy of ${CANONICAL}, not a shim. It is correct now and will ` +
+          `silently go stale on the next edit to ${CANONICAL}. Prefer:\n` +
+          `  git config core.hooksPath .githooks`,
         'warning',
       );
     }

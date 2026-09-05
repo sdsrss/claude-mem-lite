@@ -8,7 +8,11 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'fs';
-import { LOW_SIGNAL_PATTERNS, buildLowSignalRegex, buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
+import {
+  LOW_SIGNAL_PATTERNS,
+  buildLowSignalRegex,
+  buildNotLowSignalSql,
+} from '../lib/low-signal-patterns.mjs';
 import { LOW_SIGNAL_TITLE } from '../utils.mjs';
 import { notLowSignalTitleClause } from '../scoring-sql.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
@@ -19,43 +23,43 @@ import { searchObservationsHybrid } from '../search-engine.mjs';
 // w.r.t. the 12 patterns.
 const SAMPLES = [
   // Should match (LOW_SIGNAL = true)
-  { t: 'Modified install.mjs',                              low: true },
-  { t: 'Modified hook-llm.mjs, utils.mjs +3 more',          low: true },
-  { t: 'Worked on schema.mjs',                              low: true },
-  { t: 'Reviewed 7 files: a.mjs, b.mjs',                    low: true },
-  { t: 'Reviewed 12 files: x.mjs',                          low: true },
-  { t: 'Codebase exploration: projects--mem schema, FTS5',  low: true },
-  { t: 'Codebase exploration of session hook generation',   low: true },
-  { t: 'Error while working on tests/foo.test.mjs',         low: true },
-  { t: 'Error in tests/bar.test.mjs:42',                    low: true },
-  { t: 'Error: hook.mjs, hook-episode.mjs: 145|proj|raw',   low: true },
-  { t: '# This is a raw shell stdout dump',                 low: true },
-  { t: 'node cli.mjs doctor',                               low: true },
-  { t: 'npm install --save',                                low: true },
-  { t: 'npx some-tool run',                                 low: true },
-  { t: '(no description) — fallback',                       low: true },
-  { t: 'gh release list ... (error)',                       low: true },
-  { t: 'bash command failed (error)',                       low: true },
+  { t: 'Modified install.mjs', low: true },
+  { t: 'Modified hook-llm.mjs, utils.mjs +3 more', low: true },
+  { t: 'Worked on schema.mjs', low: true },
+  { t: 'Reviewed 7 files: a.mjs, b.mjs', low: true },
+  { t: 'Reviewed 12 files: x.mjs', low: true },
+  { t: 'Codebase exploration: projects--mem schema, FTS5', low: true },
+  { t: 'Codebase exploration of session hook generation', low: true },
+  { t: 'Error while working on tests/foo.test.mjs', low: true },
+  { t: 'Error in tests/bar.test.mjs:42', low: true },
+  { t: 'Error: hook.mjs, hook-episode.mjs: 145|proj|raw', low: true },
+  { t: '# This is a raw shell stdout dump', low: true },
+  { t: 'node cli.mjs doctor', low: true },
+  { t: 'npm install --save', low: true },
+  { t: 'npx some-tool run', low: true },
+  { t: '(no description) — fallback', low: true },
+  { t: 'gh release list ... (error)', low: true },
+  { t: 'bash command failed (error)', low: true },
 
   // Should NOT match (legitimate titles — real lessons/bugfixes/decisions)
   { t: 'doctor dep checks: use import probe not path check', low: false },
-  { t: 'title dedup must happen at basename layer',          low: false },
-  { t: 'hook-update SOURCE_FILES drift',                     low: false },
+  { t: 'title dedup must happen at basename layer', low: false },
+  { t: 'hook-update SOURCE_FILES drift', low: false },
   { t: 'FTS5 external-content delete trigger needs orig values', low: false },
-  { t: 'handoff injection misread as user message',          low: false },
-  { t: 'rebuildVector wrote vectors to wrong table/column',  low: false },
+  { t: 'handoff injection misread as user message', low: false },
+  { t: 'rebuildVector wrote vectors to wrong table/column', low: false },
   { t: 'Heterogeneous hook events get heterogeneous context budgets', low: false },
-  { t: 'pre-tool-recall Edit fallback must stack filters',   low: false },
-  { t: 'Batch A: CLI↔MCP parity fields',                     low: false },
-  { t: 'dev-drift detection: symlink/plain mix',             low: false },
-  { t: 'Fix weak regex in makeEntryDesc',                    low: false },
-  { t: 'v2.34.1 UX audit — 4 fixes',                         low: false },
-  { t: 'Version bump 2.34.5 → 2.34.6',                       low: false },
-  { t: 'measure signal-content of blocked set',              low: false },
+  { t: 'pre-tool-recall Edit fallback must stack filters', low: false },
+  { t: 'Batch A: CLI↔MCP parity fields', low: false },
+  { t: 'dev-drift detection: symlink/plain mix', low: false },
+  { t: 'Fix weak regex in makeEntryDesc', low: false },
+  { t: 'v2.34.1 UX audit — 4 fixes', low: false },
+  { t: 'Version bump 2.34.5 → 2.34.6', low: false },
+  { t: 'measure signal-content of blocked set', low: false },
 
   // Edge cases
-  { t: '',                                                   low: false },  // empty should be benign
-  { t: 'Error out of memory — genuine crash report',         low: true },   // "Error: " prefix catches this
+  { t: '', low: false }, // empty should be benign
+  { t: 'Error out of memory — genuine crash report', low: true }, // "Error: " prefix catches this
   // wait, "Error out" doesn't match any pattern (no colon). Let me re-check.
 ];
 
@@ -134,7 +138,7 @@ describe('LOW_SIGNAL patterns — 3-way equivalence', () => {
     // maintain its own hardcoded NOT LIKE list. This guards against regression
     // back to the drift-prone inline pattern.
     const src = readFileSync('scripts/pre-tool-recall.js', 'utf8');
-    expect(src).toContain("import { buildNotLowSignalSql }");
+    expect(src).toContain('import { buildNotLowSignalSql }');
     expect(src).toContain("from '../lib/low-signal-patterns.mjs'");
 
     // Verify NO stray "o.title NOT LIKE 'Xxx %'" hardcoded patterns remain.
@@ -167,7 +171,11 @@ describe('LOW_SIGNAL patterns — 3-way equivalence', () => {
   const LESSON = 'verify the published tarball contents, not just the step ran';
 
   it('lessonEscape option: low-signal title + real lesson is NOT hidden', () => {
-    expect(moduleSqlMatches('npm pack drops npm-shrinkwrap.json on files[] whitelist', LESSON, { lessonEscape: true })).toBe(false);
+    expect(
+      moduleSqlMatches('npm pack drops npm-shrinkwrap.json on files[] whitelist', LESSON, {
+        lessonEscape: true,
+      }),
+    ).toBe(false);
     expect(moduleSqlMatches('Error: FTS5 column mismatch', LESSON, { lessonEscape: true })).toBe(false);
   });
 
@@ -204,7 +212,8 @@ describe('read-side lesson escape — end-to-end search regression (obs #229 sha
       type: 'bugfix',
       title: 'npm pack drops npm-shrinkwrap.json when package.json has a files[] whitelist',
       narrative: 'npm packlist always-include set covers package.json but not the shrinkwrap',
-      lessonLearned: 'verify the PUBLISHED tarball contents (npm pack + tar -tzf), not just that the generating step ran',
+      lessonLearned:
+        'verify the PUBLISHED tarball contents (npm pack + tar -tzf), not just that the generating step ran',
       importance: 2,
     });
     // Same low-signal title shape, no lesson → must stay hidden from search.
@@ -217,11 +226,16 @@ describe('read-side lesson escape — end-to-end search regression (obs #229 sha
     });
 
     const rows = searchObservationsHybrid(db, {
-      ftsQuery: 'shrinkwrap', args: {},
-      epochFrom: null, epochTo: null,
-      perSourceLimit: 10, perSourceOffset: 0, currentProject: 'test', limit: 10,
+      ftsQuery: 'shrinkwrap',
+      args: {},
+      epochFrom: null,
+      epochTo: null,
+      perSourceLimit: 10,
+      perSourceOffset: 0,
+      currentProject: 'test',
+      limit: 10,
     });
-    const titles = rows.map(r => r.title);
+    const titles = rows.map((r) => r.title);
     expect(titles).toContain('npm pack drops npm-shrinkwrap.json when package.json has a files[] whitelist');
     expect(titles).not.toContain('npm pack drops warnings on stale shrinkwrap fixture');
     db.close();

@@ -44,8 +44,19 @@ function seed(db, rows) {
   insertSession(db, { id: 'mem-s1', project: 'p' });
   const ins = db.prepare(
     `INSERT INTO observations (memory_session_id, project, type, title, lesson_learned, importance, created_at, created_at_epoch)
-     VALUES (?,?,?,?,?,?,?,?)`);
-  for (const r of rows) ins.run('mem-s1', 'p', 'bugfix', r.title, r.lesson, r.importance ?? 2, new Date(r.epoch).toISOString(), r.epoch);
+     VALUES (?,?,?,?,?,?,?,?)`,
+  );
+  for (const r of rows)
+    ins.run(
+      'mem-s1',
+      'p',
+      'bugfix',
+      r.title,
+      r.lesson,
+      r.importance ?? 2,
+      new Date(r.epoch).toISOString(),
+      r.epoch,
+    );
 }
 
 // promptText/actionText default to the original hardcoded literals -- existing
@@ -57,15 +68,34 @@ function seed(db, rows) {
 // just the tool_use action) carries the given string; existing 5/6/7-arg call
 // sites are unaffected (defaults to null -- no text block, byte-identical
 // assistant-content array to before).
-function writeTranscript(dir, name, sessionId, ts, injectedMarkerLine, promptText = 'fix rrfAccumulate merge dedup', actionText = 'const r = rrfAccumulate(a, b); // merge dedup', citedProse = null) {
+function writeTranscript(
+  dir,
+  name,
+  sessionId,
+  ts,
+  injectedMarkerLine,
+  promptText = 'fix rrfAccumulate merge dedup',
+  actionText = 'const r = rrfAccumulate(a, b); // merge dedup',
+  citedProse = null,
+) {
   const assistantContent = [{ type: 'tool_use', name: 'Edit', input: { new_string: actionText } }];
   if (citedProse) assistantContent.unshift({ type: 'text', text: citedProse });
-  writeFileSync(join(dir, name), [
-    { type: 'user', sessionId, timestamp: ts, message: { role: 'user', content: promptText } },
-    { sessionId, timestamp: ts, attachment: { hookName: 'UserPromptSubmit', content: injectedMarkerLine } },
-    { type: 'assistant', sessionId, timestamp: ts, message: { role: 'assistant', content: assistantContent } },
-    { type: 'user', sessionId, timestamp: ts, message: { role: 'user', content: 'ok' } },
-  ].map((l) => JSON.stringify(l)).join('\n'));
+  writeFileSync(
+    join(dir, name),
+    [
+      { type: 'user', sessionId, timestamp: ts, message: { role: 'user', content: promptText } },
+      { sessionId, timestamp: ts, attachment: { hookName: 'UserPromptSubmit', content: injectedMarkerLine } },
+      {
+        type: 'assistant',
+        sessionId,
+        timestamp: ts,
+        message: { role: 'assistant', content: assistantContent },
+      },
+      { type: 'user', sessionId, timestamp: ts, message: { role: 'user', content: 'ok' } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join('\n'),
+  );
 }
 
 // Task 8: factored out of the first e2e test so the placebo-random null-control
@@ -79,12 +109,28 @@ function writeTranscript(dir, name, sessionId, ts, injectedMarkerLine, promptTex
 function makeE2EFixture() {
   const db = createTestDb();
   seed(db, [
-    { title: 'rrfAccumulate', lesson: 'call rrfAccumulate for merge dedup', importance: 3, epoch: 1_700_000_000_000 },
-    { title: 'unrelated', lesson: 'validate VAR before rm in shell scripts', importance: 2, epoch: 1_700_000_100_000 },
+    {
+      title: 'rrfAccumulate',
+      lesson: 'call rrfAccumulate for merge dedup',
+      importance: 3,
+      epoch: 1_700_000_000_000,
+    },
+    {
+      title: 'unrelated',
+      lesson: 'validate VAR before rm in shell scripts',
+      importance: 2,
+      epoch: 1_700_000_100_000,
+    },
   ]);
   const ts = '2026-07-01T00:00:00.000Z';
   const dir = tmpFixtureDir('adopt-e2e-');
-  writeTranscript(dir, 's1.jsonl', 's1', ts, 'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#42)');
+  writeTranscript(
+    dir,
+    's1.jsonl',
+    's1',
+    ts,
+    'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#42)',
+  );
   return { db, dir };
 }
 
@@ -125,11 +171,22 @@ describe('computeAdoption end-to-end', () => {
   it('emits a separate prose-channel bucket for the same event (dual-channel, not merged)', () => {
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate for merge dedup', importance: 3, epoch: 1_700_000_000_000 },
+      {
+        title: 'rrfAccumulate',
+        lesson: 'call rrfAccumulate for merge dedup',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
     ]);
     const ts = '2026-07-01T00:00:00.000Z';
     const dir = tmpFixtureDir('adopt-e2e-');
-    writeTranscript(dir, 's1.jsonl', 's1', ts, 'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#77)');
+    writeTranscript(
+      dir,
+      's1.jsonl',
+      's1',
+      ts,
+      'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#77)',
+    );
 
     const res = computeAdoption(dir, db, { start: 0, end: Date.now() + 1e12, project: 'p', m: 3 });
     const proseBucket = res.perBucket.find((b) => b.surface === 'imperative' && b.channel === 'prose');
@@ -148,7 +205,13 @@ describe('computeAdoption end-to-end', () => {
     insertSession(db, { id: 'mem-s2', project: 'p' }); // no observations seeded
     const ts = '2026-07-01T00:00:00.000Z';
     const dir = tmpFixtureDir('adopt-e2e-');
-    writeTranscript(dir, 's2.jsonl', 's2', ts, 'Memory — a past lesson applies to THIS task. You must: call zzqqNoMatch (#99)');
+    writeTranscript(
+      dir,
+      's2.jsonl',
+      's2',
+      ts,
+      'Memory — a past lesson applies to THIS task. You must: call zzqqNoMatch (#99)',
+    );
 
     const res = computeAdoption(dir, db, { start: 0, end: Date.now() + 1e12, project: 'p', m: 3 });
     expect(res.perBucket).toEqual([]);
@@ -176,7 +239,13 @@ describe('computeAdoption null controls (placebo)', () => {
     // cosShown collapses to 0 for both channels. This is deterministic (seeded,
     // no Math.random) -- reproducible every run, not a flaky coin flip.
     const { db, dir } = makeE2EFixture();
-    const res = computeAdoption(dir, db, { start: 0, end: Date.now() + 1e12, project: 'p', m: 3, placebo: 'random' });
+    const res = computeAdoption(dir, db, {
+      start: 0,
+      end: Date.now() + 1e12,
+      project: 'p',
+      m: 3,
+      placebo: 'random',
+    });
     expect(res.perBucket.length).toBeGreaterThan(0); // guard: a vacuous empty loop would trivially satisfy the assertions below
     for (const b of res.perBucket) {
       expect(b.ci95[0]).toBeLessThanOrEqual(0);
@@ -188,24 +257,54 @@ describe('computeAdoption null controls (placebo)', () => {
     const db = createTestDb();
     seed(db, [
       // Session sA's pair: LOW absolute score magnitude (importance*overlap = 3 vs 1).
-      { title: 'rrfAccumulateAlphaX', lesson: 'rrfAccumulateAlphaX rrfAccumulateAlphaX is the strong primary path always', importance: 3, epoch: 1_700_000_000_000 },
-      { title: 'helperBetaGammaX', lesson: 'helperBetaGammaX is a rarely used fallback', importance: 1, epoch: 1_700_000_000_000 },
+      {
+        title: 'rrfAccumulateAlphaX',
+        lesson: 'rrfAccumulateAlphaX rrfAccumulateAlphaX is the strong primary path always',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
+      {
+        title: 'helperBetaGammaX',
+        lesson: 'helperBetaGammaX is a rarely used fallback',
+        importance: 1,
+        epoch: 1_700_000_000_000,
+      },
       // Session sB's pair: HIGH absolute score magnitude (5 vs 4), both well above
       // sA's pair -- so the GLOBAL median (across both sessions) falls BETWEEN
       // sA's and sB's own pairs, misgrouping relative to the true (session-local)
       // shown/near-miss boundary instead of just reproducing it.
-      { title: 'widgetDeltaOneX', lesson: 'widgetDeltaOneX widgetDeltaOneX is the strong primary path always', importance: 5, epoch: 1_700_000_000_000 },
-      { title: 'widgetDeltaTwoX', lesson: 'widgetDeltaTwoX is a rarely used fallback', importance: 4, epoch: 1_700_000_000_000 },
+      {
+        title: 'widgetDeltaOneX',
+        lesson: 'widgetDeltaOneX widgetDeltaOneX is the strong primary path always',
+        importance: 5,
+        epoch: 1_700_000_000_000,
+      },
+      {
+        title: 'widgetDeltaTwoX',
+        lesson: 'widgetDeltaTwoX is a rarely used fallback',
+        importance: 4,
+        epoch: 1_700_000_000_000,
+      },
     ]);
     const dir = tmpFixtureDir('adopt-e2e-');
-    writeTranscript(dir, 'sA.jsonl', 'sA', '2026-07-01T00:00:00.000Z',
+    writeTranscript(
+      dir,
+      'sA.jsonl',
+      'sA',
+      '2026-07-01T00:00:00.000Z',
       'Memory — a past lesson applies to THIS task. You must: rrfAccumulateAlphaX rrfAccumulateAlphaX is the strong primary path always (#101)',
       'fix rrfAccumulateAlphaX and helperBetaGammaX now',
-      'Applied rrfAccumulateAlphaX rrfAccumulateAlphaX is the strong primary path always as guidance.');
-    writeTranscript(dir, 'sB.jsonl', 'sB', '2026-07-01T01:00:00.000Z',
+      'Applied rrfAccumulateAlphaX rrfAccumulateAlphaX is the strong primary path always as guidance.',
+    );
+    writeTranscript(
+      dir,
+      'sB.jsonl',
+      'sB',
+      '2026-07-01T01:00:00.000Z',
       'Memory — a past lesson applies to THIS task. You must: widgetDeltaOneX widgetDeltaOneX is the strong primary path always (#202)',
       'fix widgetDeltaOneX and widgetDeltaTwoX now',
-      'Applied widgetDeltaOneX widgetDeltaOneX is the strong primary path always as guidance.');
+      'Applied widgetDeltaOneX widgetDeltaOneX is the strong primary path always as guidance.',
+    );
 
     const opts = { start: 0, end: Date.now() + 1e12, project: 'p', m: 3 };
     const real = computeAdoption(dir, db, opts);
@@ -260,7 +359,13 @@ describe('computeAdoption collectEvents (Task 9 extension)', () => {
 
   it('collectEvents:true exposes the SAME run-wide-IDF action-channel delta the action bucket reports -- not a per-event-IDF recompute', () => {
     const { db, dir } = makeE2EFixture();
-    const res = computeAdoption(dir, db, { start: 0, end: Date.now() + 1e12, project: 'p', m: 3, collectEvents: true });
+    const res = computeAdoption(dir, db, {
+      start: 0,
+      end: Date.now() + 1e12,
+      project: 'p',
+      m: 3,
+      collectEvents: true,
+    });
     const actionBucket = res.perBucket.find((b) => b.surface === 'imperative' && b.channel === 'action');
     expect(Array.isArray(res.events)).toBe(true);
     expect(res.events).toHaveLength(1);
@@ -313,19 +418,35 @@ describe('floorCheck / emitLabels / scoreLabels (Task 9)', () => {
     // vacuity this test proves is gone.
     const db = createTestDb();
     seed(db, [
-      { title: 'rrfAccumulate', lesson: 'call rrfAccumulate for merge dedup', importance: 3, epoch: 1_700_000_000_000 },
+      {
+        title: 'rrfAccumulate',
+        lesson: 'call rrfAccumulate for merge dedup',
+        importance: 3,
+        epoch: 1_700_000_000_000,
+      },
     ]);
     const dir = tmpFixtureDir('adopt-floor-');
     // s1: assistant's own `text` block later writes "#42" -- cite-positive
     // under the fixed (assistant-prose-only) check.
-    writeTranscript(dir, 's1.jsonl', 's1', '2026-07-01T00:00:00.000Z',
+    writeTranscript(
+      dir,
+      's1.jsonl',
+      's1',
+      '2026-07-01T00:00:00.000Z',
       'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#42)',
-      'fix rrfAccumulate merge dedup', 'const r = rrfAccumulate(a, b); // merge dedup',
-      'Applied the past lesson (#42) as guidance.');
+      'fix rrfAccumulate merge dedup',
+      'const r = rrfAccumulate(a, b); // merge dedup',
+      'Applied the past lesson (#42) as guidance.',
+    );
     // s2: assistant turn is Edit-only, no `text` block -- "#77" never appears
     // in ANY assistant prose in this session -- cite-silent.
-    writeTranscript(dir, 's2.jsonl', 's2', '2026-07-01T01:00:00.000Z',
-      'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#77)');
+    writeTranscript(
+      dir,
+      's2.jsonl',
+      's2',
+      '2026-07-01T01:00:00.000Z',
+      'Memory — a past lesson applies to THIS task. You must: call rrfAccumulate for merge dedup (#77)',
+    );
 
     const result = floorCheck(dir, db, { start: 0, end: Date.now() + 1e12, project: 'p', m: 3 });
     expect(result.citePositive.n).toBeGreaterThanOrEqual(1);
@@ -339,7 +460,10 @@ describe('floorCheck / emitLabels / scoreLabels (Task 9)', () => {
     const out = join(outDir, 'l.jsonl');
     const n = emitLabels(dir, db, { N: 1, out, start: 0, end: Date.now() + 1e12, project: 'p', m: 3 });
     expect(n).toBe(1);
-    const rows = readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const rows = readFileSync(out, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveProperty('label', null);
     expect(rows[0]).toHaveProperty('lessonText');
@@ -358,29 +482,50 @@ describe('floorCheck / emitLabels / scoreLabels (Task 9)', () => {
   it('scoreLabels: auc === 1 when every positive delta exceeds every negative delta', () => {
     const outDir = tmpFixtureDir('adopt-score-');
     const p = join(outDir, 'labels.jsonl');
-    writeFileSync(p, [
-      { delta: 0.9, label: 1 }, { delta: 0.8, label: 1 },
-      { delta: 0.2, label: 0 }, { delta: 0.1, label: 0 },
-    ].map((r) => JSON.stringify(r)).join('\n'));
+    writeFileSync(
+      p,
+      [
+        { delta: 0.9, label: 1 },
+        { delta: 0.8, label: 1 },
+        { delta: 0.2, label: 0 },
+        { delta: 0.1, label: 0 },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n'),
+    );
     expect(scoreLabels(p)).toEqual({ auc: 1, nPos: 2, nNeg: 2 });
   });
 
   it('scoreLabels: auc === 0.5 when positive/negative deltas are symmetric (no separation)', () => {
     const outDir = tmpFixtureDir('adopt-score-');
     const p = join(outDir, 'labels.jsonl');
-    writeFileSync(p, [
-      { delta: 0.1, label: 1 }, { delta: 0.5, label: 1 },
-      { delta: 0.1, label: 0 }, { delta: 0.5, label: 0 },
-    ].map((r) => JSON.stringify(r)).join('\n'));
+    writeFileSync(
+      p,
+      [
+        { delta: 0.1, label: 1 },
+        { delta: 0.5, label: 1 },
+        { delta: 0.1, label: 0 },
+        { delta: 0.5, label: 0 },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n'),
+    );
     expect(scoreLabels(p)).toEqual({ auc: 0.5, nPos: 2, nNeg: 2 });
   });
 
   it('scoreLabels excludes rows still carrying a null (un-hand-labeled) label', () => {
     const outDir = tmpFixtureDir('adopt-score-');
     const p = join(outDir, 'labels.jsonl');
-    writeFileSync(p, [
-      { delta: 0.9, label: 1 }, { delta: 0.1, label: 0 }, { delta: 0.5, label: null },
-    ].map((r) => JSON.stringify(r)).join('\n'));
+    writeFileSync(
+      p,
+      [
+        { delta: 0.9, label: 1 },
+        { delta: 0.1, label: 0 },
+        { delta: 0.5, label: null },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n'),
+    );
     expect(scoreLabels(p)).toEqual({ auc: 1, nPos: 1, nNeg: 1 });
   });
 });

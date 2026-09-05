@@ -12,11 +12,36 @@ import { coreRunSearchPipeline, searchEventsFts } from '../lib/search-core.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { handleSearchForTest } from '../server.mjs';
 
-function addEvent(db, { title, body = '', project = 'test', event_type = 'bugfix', importance = 2, epochOffset = 0, superseded = false }) {
-  return Number(db.prepare(`
+function addEvent(
+  db,
+  {
+    title,
+    body = '',
+    project = 'test',
+    event_type = 'bugfix',
+    importance = 2,
+    epochOffset = 0,
+    superseded = false,
+  },
+) {
+  return Number(
+    db
+      .prepare(
+        `
     INSERT INTO events (project, event_type, title, body, importance, created_at_epoch, superseded_at_epoch)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(project, event_type, title, body, importance, Date.now() + epochOffset, superseded ? Date.now() : null).lastInsertRowid);
+  `,
+      )
+      .run(
+        project,
+        event_type,
+        title,
+        body,
+        importance,
+        Date.now() + epochOffset,
+        superseded ? Date.now() : null,
+      ).lastInsertRowid,
+  );
 }
 
 // ─── D#75: E# id-routing ─────────────────────────────────────────────────────
@@ -80,39 +105,70 @@ describe('D#74 — auto-escalation keeps the cross-source legs (events)', () => 
     insertObs(db, { title: 'weak obs', text: 'weak', epochOffset: -100 });
     const eid = addEvent(db, { title: 'zanzibar cache corruption', body: 'zanzibar', epochOffset: -10 });
 
-    const deepObs = [{ source: 'obs', id: 9991, type: 'discovery', title: 'deep fused row', score: -5, created_at_epoch: Date.now() - 200, snippet: '' }];
+    const deepObs = [
+      {
+        source: 'obs',
+        id: 9991,
+        type: 'discovery',
+        title: 'deep fused row',
+        score: -5,
+        created_at_epoch: Date.now() - 200,
+        snippet: '',
+      },
+    ];
     const res = await coreRunSearchPipeline(
       {
-        db, currentProject: 'test', env: { CLAUDE_MEM_AUTO_DEEP: '1' },
+        db,
+        currentProject: 'test',
+        env: { CLAUDE_MEM_AUTO_DEEP: '1' },
         searchObservationsHybrid,
         deepSearch: async () => ({ variants: ['zanzibar'], reranked: false, results: deepObs }),
-        shouldEscalateToDeep: () => true,   // force the weak-results verdict
+        shouldEscalateToDeep: () => true, // force the weak-results verdict
         autoDeepLlmReady: () => true,
         reRankWithContext: () => {},
         llm: async () => '',
       },
       {
-        query: 'zanzibar', ftsQuery: 'zanzibar', deepMode: 'auto',
-        limit: 20, offset: 0, project: null, obsType: null,
-        rerankPolicy: 'mcp', crossSourceEpochSortNoFts: true, recentListingNoFts: true,
+        query: 'zanzibar',
+        ftsQuery: 'zanzibar',
+        deepMode: 'auto',
+        limit: 20,
+        offset: 0,
+        project: null,
+        obsType: null,
+        rerankPolicy: 'mcp',
+        crossSourceEpochSortNoFts: true,
+        recentListingNoFts: true,
       },
     );
 
     expect(res.escalated).toBe(true);
     expect(res.isDeep).toBe(true);
-    expect(res.page.some((r) => r.source === 'event' && r.id === eid)).toBe(true);   // D#74 fix
-    expect(res.page.some((r) => r.source === 'obs' && r.id === 9991)).toBe(true);    // deep fuse present
-    expect(res.total).toBe(res.page.length);                                          // deep-path count == shown
+    expect(res.page.some((r) => r.source === 'event' && r.id === eid)).toBe(true); // D#74 fix
+    expect(res.page.some((r) => r.source === 'obs' && r.id === 9991)).toBe(true); // deep fuse present
+    expect(res.total).toBe(res.page.length); // deep-path count == shown
   });
 
   it('explicit deep=true still dives observations-only (events NOT re-added)', async () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
     addEvent(db, { title: 'zanzibar event', body: 'zanzibar', epochOffset: -10 });
-    const deepObs = [{ source: 'obs', id: 9992, type: 'discovery', title: 'deep only', score: -5, created_at_epoch: Date.now(), snippet: '' }];
+    const deepObs = [
+      {
+        source: 'obs',
+        id: 9992,
+        type: 'discovery',
+        title: 'deep only',
+        score: -5,
+        created_at_epoch: Date.now(),
+        snippet: '',
+      },
+    ];
     const res = await coreRunSearchPipeline(
       {
-        db, currentProject: 'test', env: {},
+        db,
+        currentProject: 'test',
+        env: {},
         searchObservationsHybrid,
         deepSearch: async () => ({ variants: ['zanzibar'], reranked: false, results: deepObs }),
         shouldEscalateToDeep: () => false,
@@ -120,11 +176,18 @@ describe('D#74 — auto-escalation keeps the cross-source legs (events)', () => 
         reRankWithContext: () => {},
         llm: async () => '',
       },
-      { query: 'zanzibar', ftsQuery: 'zanzibar', deepMode: 'deep', limit: 20, offset: 0, rerankPolicy: 'mcp' },
+      {
+        query: 'zanzibar',
+        ftsQuery: 'zanzibar',
+        deepMode: 'deep',
+        limit: 20,
+        offset: 0,
+        rerankPolicy: 'mcp',
+      },
     );
     expect(res.isDeep).toBe(true);
     expect(res.escalated).toBe(false);
-    expect(res.page.some((r) => r.source === 'event')).toBe(false);   // explicit deep = obs-only, unchanged
+    expect(res.page.some((r) => r.source === 'event')).toBe(false); // explicit deep = obs-only, unchanged
   });
 });
 
@@ -138,37 +201,57 @@ describe('D#76 — obs_type filters observations AND events', () => {
     const typed = searchEventsFts(db, { ftsQuery: 'cache', eventType: 'bugfix', perSourceLimit: 10 });
     expect(typed.every((r) => r.event_type === 'bugfix')).toBe(true);
     expect(typed).toHaveLength(2);
-    const strong = searchEventsFts(db, { ftsQuery: 'cache', eventType: 'bugfix', importance: 2, perSourceLimit: 10 });
-    expect(strong).toHaveLength(1);   // the importance:1 bugfix filtered out
+    const strong = searchEventsFts(db, {
+      ftsQuery: 'cache',
+      eventType: 'bugfix',
+      importance: 2,
+      perSourceLimit: 10,
+    });
+    expect(strong).toHaveLength(1); // the importance:1 bugfix filtered out
   });
 
   it('mem_search(obs_type="bugfix") includes bugfix events, excludes sessions/prompts, count stays consistent', async () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
-    insertObs(db, { type: 'bugfix', title: 'cache bugfix obs', text: 'cache', importance: 2, epochOffset: -100 });
+    insertObs(db, {
+      type: 'bugfix',
+      title: 'cache bugfix obs',
+      text: 'cache',
+      importance: 2,
+      epochOffset: -100,
+    });
     insertObs(db, { type: 'discovery', title: 'cache discovery obs', text: 'cache', epochOffset: -200 });
     addEvent(db, { event_type: 'bugfix', title: 'cache bugfix event', body: 'cache', epochOffset: -150 });
     addEvent(db, { event_type: 'decision', title: 'cache decision event', body: 'cache', epochOffset: -160 });
     // A session that matches 'cache' but must NOT surface under an obs_type filter.
     insertSession(db, { id: 'csess-1', memoryId: 'msess-1', project: 'test' });
-    db.prepare(`INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run('msess-1', 'test', 'cache session request', 'done', new Date().toISOString(), Date.now() - 300);
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('msess-1', 'test', 'cache session request', 'done', new Date().toISOString(), Date.now() - 300);
 
     const res = await handleSearchForTest(db, { query: 'cache', obs_type: 'bugfix', deep: false });
-    const bySource = res.results.reduce((m, r) => { m[r.source] = (m[r.source] || 0) + 1; return m; }, {});
-    expect(bySource.event).toBeGreaterThanOrEqual(1);     // canonical bugfix store reached
+    const bySource = res.results.reduce((m, r) => {
+      m[r.source] = (m[r.source] || 0) + 1;
+      return m;
+    }, {});
+    expect(bySource.event).toBeGreaterThanOrEqual(1); // canonical bugfix store reached
     expect(bySource.obs).toBeGreaterThanOrEqual(1);
-    expect(bySource.session).toBeUndefined();             // type-less source excluded
+    expect(bySource.session).toBeUndefined(); // type-less source excluded
     expect(bySource.prompt).toBeUndefined();
-    expect(res.results.every((r) => r.type === 'bugfix')).toBe(true);   // only bugfix-typed rows
-    expect(res.total).toBe(res.results.length);           // "N of M" population matches shown rows
+    expect(res.results.every((r) => r.type === 'bugfix')).toBe(true); // only bugfix-typed rows
+    expect(res.total).toBe(res.results.length); // "N of M" population matches shown rows
   });
 
   it('type="events" honors obs_type as the event_type filter (was silently ignored)', async () => {
     const db = createTestDb();
     addEvent(db, { event_type: 'bugfix', title: 'cache bugfix event', body: 'cache' });
     addEvent(db, { event_type: 'decision', title: 'cache decision event', body: 'cache' });
-    const res = await handleSearchForTest(db, { query: 'cache', type: 'events', obs_type: 'bugfix', deep: false });
+    const res = await handleSearchForTest(db, {
+      query: 'cache',
+      type: 'events',
+      obs_type: 'bugfix',
+      deep: false,
+    });
     expect(res.results).toHaveLength(1);
     expect(res.results[0].type).toBe('bugfix');
   });

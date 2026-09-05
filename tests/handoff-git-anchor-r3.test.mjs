@@ -16,13 +16,25 @@ describe('Stage -1 git-anchor gates on prompt + session (R3 H-M1)', () => {
     db = createTestDb();
     spy = vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({ headSha: SHA });
     // an EXIT handoff from session A at the current HEAD; keywords describe the ORIGINAL work
-    db.prepare(`INSERT INTO session_handoffs (project, type, session_id, git_sha_at_handoff, match_keywords, working_on, created_at_epoch)
-      VALUES ('p', 'exit', 'sess-A', ?, 'authentication login oauth token refresh', 'auth work', ?)`).run(SHA, Date.now());
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, git_sha_at_handoff, match_keywords, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 'sess-A', ?, 'authentication login oauth token refresh', 'auth work', ?)`,
+    ).run(SHA, Date.now());
   });
-  afterEach(() => { spy.mockRestore(); db.close(); });
+  afterEach(() => {
+    spy.mockRestore();
+    db.close();
+  });
 
   it('does NOT auto-continue a long, unrelated new task at the same commit', () => {
-    expect(detectContinuationIntent(db, 'please add a completely different CSV export feature to the reports grid', 'p', 'sess-B')).toBe(false);
+    expect(
+      detectContinuationIntent(
+        db,
+        'please add a completely different CSV export feature to the reports grid',
+        'p',
+        'sess-B',
+      ),
+    ).toBe(false);
   });
 
   it('still auto-continues a short resume nudge (cross-session exit-resume preserved)', () => {
@@ -31,13 +43,24 @@ describe('Stage -1 git-anchor gates on prompt + session (R3 H-M1)', () => {
   });
 
   it('auto-continues a long prompt that overlaps the anchored work', () => {
-    expect(detectContinuationIntent(db, 'keep working on the oauth token refresh login flow we started', 'p', 'sess-B')).toBe(true);
+    expect(
+      detectContinuationIntent(
+        db,
+        'keep working on the oauth token refresh login flow we started',
+        'p',
+        'sess-B',
+      ),
+    ).toBe(true);
   });
 
-  it('does NOT let another session\'s clear-anchor hijack via the git anchor (parallel bleed)', () => {
+  it("does NOT let another session's clear-anchor hijack via the git anchor (parallel bleed)", () => {
     const db2 = createTestDb();
-    db2.prepare(`INSERT INTO session_handoffs (project, type, session_id, git_sha_at_handoff, match_keywords, created_at_epoch)
-      VALUES ('p', 'clear', 'sess-A', ?, 'authentication login', ?)`).run(SHA, Date.now());
+    db2
+      .prepare(
+        `INSERT INTO session_handoffs (project, type, session_id, git_sha_at_handoff, match_keywords, created_at_epoch)
+      VALUES ('p', 'clear', 'sess-A', ?, 'authentication login', ?)`,
+      )
+      .run(SHA, Date.now());
     // clear is same-session only; session B must not inherit sess-A's clear via the anchor
     expect(detectContinuationIntent(db2, 'ok thanks', 'p', 'sess-B')).toBe(false);
     db2.close();

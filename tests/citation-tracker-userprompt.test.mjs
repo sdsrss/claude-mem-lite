@@ -21,12 +21,18 @@ import {
 
 describe('extractInjectedFromUserPromptSubmit', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-ups-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-ups-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -207,18 +213,24 @@ describe('extractInjectedFromUserPromptSubmit', () => {
     ]);
     const ids = extractInjectedFromUserPromptSubmit(path);
     expect(ids.has(42)).toBe(true); // the observation #42
-    expect(ids.size).toBe(1);       // the E#42 event did NOT also enter the set
+    expect(ids.size).toBe(1); // the E#42 event did NOT also enter the set
   });
 });
 
 describe('extractInjectedFromErrorRecall', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-err-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-err-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -283,12 +295,18 @@ describe('extractInjectedFromErrorRecall', () => {
 
 describe('extractInjectedFromFyi', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-fyi-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-fyi-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -351,12 +369,18 @@ describe('extractInjectedFromFyi', () => {
 
 describe('extractAllInjected (union wrapper)', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-all-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-all-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -417,10 +441,38 @@ describe('extractAllInjected (union wrapper)', () => {
 
   it('unions all four injection surfaces (PTR + UPS + error-recall + FYI), production quoted paths', () => {
     const path = writeTranscript([
-      { type: 'attachment', attachment: { type: 'hook_success', command: 'node "/p/scripts/pre-tool-recall.js"', stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '  #100 [bugfix] a' } }) } },
-      { type: 'attachment', attachment: { type: 'hook_success', command: 'node "/p/hook.mjs" user-prompt', stdout: '<memory-context relevance="high">\n- [decision] b (#200)\n</memory-context>' } },
-      { type: 'attachment', attachment: { type: 'hook_success', command: 'bash "/p/scripts/post-tool-use.sh"', stdout: '[claude-mem-lite] Related memories found for this error:\n  #300 [bugfix] c\n' } },
-      { type: 'attachment', attachment: { type: 'hook_success', command: 'node "/p/scripts/user-prompt-search.js"', stdout: '[mem] FYI — Related memories (continue your task):\n#400 🟡 d\n' } },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/p/scripts/pre-tool-recall.js"',
+          stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '  #100 [bugfix] a' } }),
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/p/hook.mjs" user-prompt',
+          stdout: '<memory-context relevance="high">\n- [decision] b (#200)\n</memory-context>',
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'bash "/p/scripts/post-tool-use.sh"',
+          stdout: '[claude-mem-lite] Related memories found for this error:\n  #300 [bugfix] c\n',
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/p/scripts/user-prompt-search.js"',
+          stdout: '[mem] FYI — Related memories (continue your task):\n#400 🟡 d\n',
+        },
+      },
     ]);
     const ids = extractAllInjected(path);
     expect([...ids].sort((a, b) => a - b)).toEqual([100, 200, 300, 400]);
@@ -459,12 +511,18 @@ describe('extractAllInjected mainOnly thread filter (citation-decay symmetry)', 
   // inside a sidechain lands in the denominator but never the numerator and is
   // streak-demoted despite being used. mainOnly closes that asymmetry.
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-side-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-side-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeTranscript(entries) {
     const path = join(tmp, 'transcript.jsonl');
-    writeFileSync(path, entries.map(e => JSON.stringify(e)).join('\n'));
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n'));
     return path;
   }
 
@@ -474,7 +532,9 @@ describe('extractAllInjected mainOnly thread filter (citation-decay symmetry)', 
     attachment: {
       type: 'hook_success',
       command: 'node /opt/scripts/pre-tool-recall.js',
-      stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '  #502 [bugfix] main-thread lesson' } }),
+      stdout: JSON.stringify({
+        hookSpecificOutput: { additionalContext: '  #502 [bugfix] main-thread lesson' },
+      }),
     },
   };
   const sidechainPtr = {
@@ -483,7 +543,9 @@ describe('extractAllInjected mainOnly thread filter (citation-decay symmetry)', 
     attachment: {
       type: 'hook_success',
       command: 'node /opt/scripts/pre-tool-recall.js',
-      stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '  #501 [bugfix] subagent-only lesson' } }),
+      stdout: JSON.stringify({
+        hookSpecificOutput: { additionalContext: '  #501 [bugfix] subagent-only lesson' },
+      }),
     },
   };
 
@@ -511,7 +573,9 @@ describe('extractAllInjected mainOnly thread filter (citation-decay symmetry)', 
       attachment: {
         type: 'hook_success',
         command: 'node /opt/scripts/pre-tool-recall.js',
-        stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: '  #777 [decision] no-flag line' } }),
+        stdout: JSON.stringify({
+          hookSpecificOutput: { additionalContext: '  #777 [decision] no-flag line' },
+        }),
       },
     };
     const path = writeTranscript([noFlag]);

@@ -12,24 +12,23 @@ import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import {
-  resolveEdgeAttribution,
-  readPreRecallFileEdges,
-} from '../lib/edge-attribution.mjs';
+import { resolveEdgeAttribution, readPreRecallFileEdges } from '../lib/edge-attribution.mjs';
 
 const EDGE_COLS = 'inject_count, miss_streak, last_resolved_session_id, last_cited_session_id';
 
 function edgeRow(db, obsId, filename) {
-  return db.prepare(
-    `SELECT ${EDGE_COLS} FROM observation_files WHERE obs_id = ? AND filename = ?`
-  ).get(obsId, filename);
+  return db
+    .prepare(`SELECT ${EDGE_COLS} FROM observation_files WHERE obs_id = ? AND filename = ?`)
+    .get(obsId, filename);
 }
 
 describe('edge-attribution schema (v43)', () => {
   it('fresh initSchema creates observation_files with the 4 edge columns', () => {
     const db = createTestDb();
-    const cols = db.prepare(`SELECT name FROM pragma_table_info('observation_files')`)
-      .all().map(r => r.name);
+    const cols = db
+      .prepare(`SELECT name FROM pragma_table_info('observation_files')`)
+      .all()
+      .map((r) => r.name);
     expect(cols).toContain('inject_count');
     expect(cols).toContain('miss_streak');
     expect(cols).toContain('last_resolved_session_id');
@@ -41,8 +40,12 @@ describe('edge-attribution schema (v43)', () => {
     const db = createTestDb();
     insertSession(db, { id: 's1', project: 'p' });
     const r = insertObs(db, {
-      sessionId: 's1', project: 'p', type: 'bugfix', importance: 2,
-      lessonLearned: 'L', filesModified: '["a.mjs"]',
+      sessionId: 's1',
+      project: 'p',
+      type: 'bugfix',
+      importance: 2,
+      lessonLearned: 'L',
+      filesModified: '["a.mjs"]',
     });
     const row = edgeRow(db, Number(r.lastInsertRowid), 'a.mjs');
     expect(row.inject_count).toBe(0);
@@ -61,12 +64,20 @@ describe('resolveEdgeAttribution', () => {
     db = createTestDb();
     insertSession(db, { id: 'seed', project: PROJECT });
   });
-  afterEach(() => { try { db.close(); } catch {} });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   function seed(filesModified, project = PROJECT) {
     const r = insertObs(db, {
-      sessionId: 'seed', project, type: 'bugfix', importance: 2,
-      lessonLearned: 'edge lesson', filesModified: JSON.stringify(filesModified),
+      sessionId: 'seed',
+      project,
+      type: 'bugfix',
+      importance: 2,
+      lessonLearned: 'edge lesson',
+      filesModified: JSON.stringify(filesModified),
     });
     return Number(r.lastInsertRowid);
   }
@@ -74,9 +85,11 @@ describe('resolveEdgeAttribution', () => {
   it('uncited injection increments miss_streak + inject_count on the matched edge', () => {
     const obsId = seed(['utils.mjs']);
     const r = resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
     );
     expect(r.misses).toBe(1);
     const row = edgeRow(db, obsId, 'utils.mjs');
@@ -88,9 +101,11 @@ describe('resolveEdgeAttribution', () => {
   it('cited injection records hit: miss_streak stays 0, last_cited stamped', () => {
     const obsId = seed(['utils.mjs']);
     const r = resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set([obsId]), 'sessA',
+      new Set([obsId]),
+      'sessA',
     );
     expect(r.hits).toBe(1);
     const row = edgeRow(db, obsId, 'utils.mjs');
@@ -112,8 +127,8 @@ describe('resolveEdgeAttribution', () => {
   it('cross-turn late citation undoes the same-session miss (streak back to 0, no recount)', () => {
     const obsId = seed(['utils.mjs']);
     const edges = [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }];
-    resolveEdgeAttribution(db, PROJECT, edges, new Set(), 'sessA');          // turn 1: miss
-    resolveEdgeAttribution(db, PROJECT, edges, new Set([obsId]), 'sessA');   // turn 2: late cite
+    resolveEdgeAttribution(db, PROJECT, edges, new Set(), 'sessA'); // turn 1: miss
+    resolveEdgeAttribution(db, PROJECT, edges, new Set([obsId]), 'sessA'); // turn 2: late cite
     const row = edgeRow(db, obsId, 'utils.mjs');
     expect(row.miss_streak).toBe(0);
     expect(row.inject_count).toBe(1);
@@ -135,9 +150,11 @@ describe('resolveEdgeAttribution', () => {
   it('matches edges stored as relative path via the /basename boundary', () => {
     const obsId = seed(['scripts/utils.mjs']);
     resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/scripts/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
     );
     expect(edgeRow(db, obsId, 'scripts/utils.mjs').miss_streak).toBe(1);
   });
@@ -145,9 +162,11 @@ describe('resolveEdgeAttribution', () => {
   it('matches a case-variant stored basename (parity with the NOCASE trigger arms)', () => {
     const obsId = seed(['Utils.mjs']);
     resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
     );
     expect(edgeRow(db, obsId, 'Utils.mjs').miss_streak).toBe(1);
   });
@@ -159,9 +178,11 @@ describe('resolveEdgeAttribution', () => {
   it('mainInjectedIds gate: skips obs absent from the main-thread injected set', () => {
     const obsId = seed(['utils.mjs']);
     const r = resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
       { mainInjectedIds: new Set([999999]) },
     );
     expect(r).toEqual({ hits: 0, misses: 0, touchedEdges: 0 });
@@ -171,9 +192,11 @@ describe('resolveEdgeAttribution', () => {
   it('mainInjectedIds gate: cited obs is credited even when outside the injected set', () => {
     const obsId = seed(['utils.mjs']);
     const r = resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set([obsId]), 'sessA',
+      new Set([obsId]),
+      'sessA',
       { mainInjectedIds: new Set() },
     );
     expect(r.hits).toBe(1);
@@ -183,9 +206,11 @@ describe('resolveEdgeAttribution', () => {
   it('does NOT touch a different-basename suffix edge (bash-utils.mjs vs utils.mjs)', () => {
     const obsId = seed(['bash-utils.mjs']);
     resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
     );
     const row = edgeRow(db, obsId, 'bash-utils.mjs');
     expect(row.miss_streak).toBe(0);
@@ -195,14 +220,20 @@ describe('resolveEdgeAttribution', () => {
   it('ignores obs belonging to another project', () => {
     insertSession(db, { id: 'seed-other', project: 'other--proj' });
     const r = insertObs(db, {
-      sessionId: 'seed-other', project: 'other--proj', type: 'bugfix', importance: 2,
-      lessonLearned: 'foreign', filesModified: '["utils.mjs"]',
+      sessionId: 'seed-other',
+      project: 'other--proj',
+      type: 'bugfix',
+      importance: 2,
+      lessonLearned: 'foreign',
+      filesModified: '["utils.mjs"]',
     });
     const obsId = Number(r.lastInsertRowid);
     const res = resolveEdgeAttribution(
-      db, PROJECT,
+      db,
+      PROJECT,
       [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-      new Set(), 'sessA',
+      new Set(),
+      'sessA',
     );
     expect(res.misses).toBe(0);
     expect(edgeRow(db, obsId, 'utils.mjs').miss_streak).toBe(0);
@@ -213,9 +244,11 @@ describe('resolveEdgeAttribution', () => {
     process.env.MEM_DISABLE_CITATION_DECAY = '1';
     try {
       const r = resolveEdgeAttribution(
-        db, PROJECT,
+        db,
+        PROJECT,
         [{ filePath: '/proj/utils.mjs', obsIds: [obsId] }],
-        new Set(), 'sessA',
+        new Set(),
+        'sessA',
       );
       expect(r).toEqual({ hits: 0, misses: 0, touchedEdges: 0 });
       expect(edgeRow(db, obsId, 'utils.mjs').inject_count).toBe(0);
@@ -227,12 +260,20 @@ describe('resolveEdgeAttribution', () => {
 
 describe('readPreRecallFileEdges', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'edge-cooldown-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'edge-cooldown-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
 
   function writeCooldown(sessionId, data) {
     mkdirSync(tmp, { recursive: true });
-    const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 64);
+    const safe = String(sessionId)
+      .replace(/[^a-zA-Z0-9_.-]/g, '-')
+      .slice(0, 64);
     writeFileSync(join(tmp, `pre-recall-cooldown-${safe}.json`), JSON.stringify(data));
   }
 

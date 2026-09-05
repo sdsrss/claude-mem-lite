@@ -80,10 +80,12 @@ describe('doctor reporter discipline (the caller side of the contract)', () => {
   // Drive the ruler to failure: it must actually reject the shape it exists to catch.
   it('the scan rejects a bare warn() with neither counter', () => {
     const lines = ['      warn(`Old processes running`);', '    } else {'];
-    const uncounted = lines.filter((line, i) =>
-      /(^|[^a-zA-Z_.])warn\(/.test(line)
-      && !/warnings\+\+/.test(line)
-      && !/issues\+\+/.test(lines.slice(i, i + 8).join('\n')));
+    const uncounted = lines.filter(
+      (line, i) =>
+        /(^|[^a-zA-Z_.])warn\(/.test(line) &&
+        !/warnings\+\+/.test(line) &&
+        !/issues\+\+/.test(lines.slice(i, i + 8).join('\n')),
+    );
     expect(uncounted).toHaveLength(1);
   });
 });

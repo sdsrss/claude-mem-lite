@@ -10,7 +10,11 @@ import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 // format-utils.mjs is import-free — pulling three defang helpers keeps this script
 // inside its "lightweight standalone" budget (no heavy transitive deps).
-import { neutralizeContextDelimiters, neutralizeSkillDelimiters, neutralizeSkillBridgeDelimiters } from '../format-utils.mjs';
+import {
+  neutralizeContextDelimiters,
+  neutralizeSkillDelimiters,
+  neutralizeSkillBridgeDelimiters,
+} from '../format-utils.mjs';
 // D#154: single envelope writer. Also import-free (no runtime deps), so it stays
 // inside this script's "lightweight standalone" budget.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
@@ -68,13 +72,17 @@ try {
 
   try {
     // Query: find by name or invocation_name, ONLY if managed path
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT name, local_path FROM resources
       WHERE status = 'active'
         AND (name = ? OR invocation_name = ?)
         AND local_path LIKE ?
       LIMIT 1
-    `).get(skillName, skillName, `%${MANAGED_MARKER}%`);
+    `,
+      )
+      .get(skillName, skillName, `%${MANAGED_MARKER}%`);
 
     if (!row || !row.local_path) process.exit(0);
 
@@ -97,7 +105,9 @@ try {
     // (notably sdscc) silently drop plain-text stdout from PreToolUse — the previous
     // console.log() form would render on stock CC but no-op on those variants.
     // Token budget: ~4 chars per token, 4000 token limit = 16000 chars.
-    const portablePath = resolvedPath.startsWith(homedir()) ? '~' + resolvedPath.slice(homedir().length) : resolvedPath;
+    const portablePath = resolvedPath.startsWith(homedir())
+      ? '~' + resolvedPath.slice(homedir().length)
+      : resolvedPath;
     // Defang the untrusted skill body + name before wrapping (audit 2026-08-14 M-4):
     // registry rows come from third-party repos, and this was the one AUTO injection
     // surface of that data with zero neutralization — a body carrying a literal
@@ -106,7 +116,8 @@ try {
     // chars: it lands in an ATTRIBUTE position, where `"` breaks out of the wrapper
     // tag itself. Applied to the truncated summary too (a cut can't be trusted to
     // land mid-tag).
-    const defang = (s) => neutralizeSkillBridgeDelimiters(neutralizeSkillDelimiters(neutralizeContextDelimiters(s)));
+    const defang = (s) =>
+      neutralizeSkillBridgeDelimiters(neutralizeSkillDelimiters(neutralizeContextDelimiters(s)));
     const safeName = String(row.name).replace(/["'<>]/g, '');
     let additionalContext;
     if (content.length > 16000) {
@@ -123,9 +134,13 @@ try {
     // Silent failure — never block Skill tool, but record for self-observation.
     recordHookError('skill-bridge:query', e, RUNTIME_DIR, { skillName });
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 } catch (e) {
   // Top-level catch — exit 0 no matter what, but record what slipped past.
-  try { recordHookError('skill-bridge:top', e, RUNTIME_DIR); } catch {}
+  try {
+    recordHookError('skill-bridge:top', e, RUNTIME_DIR);
+  } catch {}
 }

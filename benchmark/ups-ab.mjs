@@ -60,9 +60,17 @@ const DEDUP_FILE_PREFIX = `.claude-mem-injected-${PROJECT}`;
 function clearDedupFiles() {
   try {
     for (const name of readdirSync(RUNTIME_DIR)) {
-      if (name.startsWith(DEDUP_FILE_PREFIX)) { try { rmSync(join(RUNTIME_DIR, name)); } catch { /* ignore */ } }
+      if (name.startsWith(DEDUP_FILE_PREFIX)) {
+        try {
+          rmSync(join(RUNTIME_DIR, name));
+        } catch {
+          /* ignore */
+        }
+      }
     }
-  } catch { /* runtime dir may not exist */ }
+  } catch {
+    /* runtime dir may not exist */
+  }
 }
 
 // Inject ids the script surfaced for one prompt under one arm. Clears the per-project
@@ -80,7 +88,9 @@ function injectedFor(prompt, bypass) {
       timeout: 10000,
       env: { ...process.env, CLAUDE_MEM_UPS_IDENTIFIER_BYPASS: bypass ? '1' : '0' },
     });
-  } catch (e) { out = e.stdout || ''; }
+  } catch (e) {
+    out = e.stdout || '';
+  }
   const ids = [];
   for (const line of out.split('\n')) {
     const m = line.match(/^#(\d+)\b/);
@@ -90,35 +100,49 @@ function injectedFor(prompt, bypass) {
 }
 
 function runArm(bypass) {
-  const positives = SUITE.positives.map(q => {
+  const positives = SUITE.positives.map((q) => {
     const injected = injectedFor(q.query, bypass);
-    const hit = q.expected_ids.every(id => injected.includes(id));
-    const recall = q.expected_ids.length ? q.expected_ids.filter(id => injected.includes(id)).length / q.expected_ids.length : 1;
+    const hit = q.expected_ids.every((id) => injected.includes(id));
+    const recall = q.expected_ids.length
+      ? q.expected_ids.filter((id) => injected.includes(id)).length / q.expected_ids.length
+      : 1;
     return { query: q.query, expected: q.expected_ids, injected, hit, recall };
   });
-  const negatives = SUITE.hard_negatives.map(q => {
+  const negatives = SUITE.hard_negatives.map((q) => {
     const injected = injectedFor(q.query, bypass);
-    const noise = injected.filter(id => !q.expected_ids.includes(id));
+    const noise = injected.filter((id) => !q.expected_ids.includes(id));
     return { query: q.query, expected: q.expected_ids, injected, noise: noise.length };
   });
   // topical_eager: prompts naming a SPECIFIC identifier whose match is on-topic-but-unrequested
   // (#8858). Measured for visibility but NEVER folded into the verdict's precision cost — it is
   // eagerness, not a true off-topic false-positive.
-  const topical = (SUITE.topical_eager || []).map(q => {
+  const topical = (SUITE.topical_eager || []).map((q) => {
     const injected = injectedFor(q.query, bypass);
-    const eager = injected.filter(id => !q.expected_ids.includes(id));
+    const eager = injected.filter((id) => !q.expected_ids.includes(id));
     return { query: q.query, expected: q.expected_ids, injected, eager: eager.length };
   });
-  const pos_hits = positives.filter(p => p.hit).length;
+  const pos_hits = positives.filter((p) => p.hit).length;
   const pos_recall = positives.reduce((s, p) => s + p.recall, 0) / (positives.length || 1);
   const neg_noise = negatives.reduce((s, n) => s + n.noise, 0);
-  const neg_dirty = negatives.filter(n => n.noise > 0).length;
+  const neg_dirty = negatives.filter((n) => n.noise > 0).length;
   const eager_inj = topical.reduce((s, t) => s + t.eager, 0);
-  const eager_dirty = topical.filter(t => t.eager > 0).length;
-  return { positives, negatives, topical, pos_hits, pos_recall, neg_noise, neg_dirty, eager_inj, eager_dirty };
+  const eager_dirty = topical.filter((t) => t.eager > 0).length;
+  return {
+    positives,
+    negatives,
+    topical,
+    pos_hits,
+    pos_recall,
+    neg_noise,
+    neg_dirty,
+    eager_inj,
+    eager_dirty,
+  };
 }
 
-function pct(n) { return (100 * n).toFixed(0) + '%'; }
+function pct(n) {
+  return (100 * n).toFixed(0) + '%';
+}
 
 const control = runArm(false);
 const treatment = runArm(true);
@@ -132,35 +156,58 @@ else if (recallGain <= 0 && precisionCost > 0) verdict = 'REJECT (precision down
 else verdict = 'NEUTRAL (no movement)';
 
 if (jsonOut) {
-  console.log(JSON.stringify({ project: PROJECT, control, treatment, recallGain, precisionCost, verdict }, null, 2));
+  console.log(
+    JSON.stringify({ project: PROJECT, control, treatment, recallGain, precisionCost, verdict }, null, 2),
+  );
 } else {
-  const P = SUITE.positives.length, N = SUITE.hard_negatives.length;
-  console.error(`\n─── UPS identifier-bypass A/B (project=${PROJECT}, ${P} positives / ${N} hard-negatives) ───`);
+  const P = SUITE.positives.length,
+    N = SUITE.hard_negatives.length;
+  console.error(
+    `\n─── UPS identifier-bypass A/B (project=${PROJECT}, ${P} positives / ${N} hard-negatives) ───`,
+  );
   console.error(`                    control (off)      treatment (on)`);
-  console.error(`  positives hits    ${String(control.pos_hits).padStart(2)}/${P}  (recall ${pct(control.pos_recall)})      ${String(treatment.pos_hits).padStart(2)}/${P}  (recall ${pct(treatment.pos_recall)})`);
-  console.error(`  hard-neg noise    ${control.neg_noise} obs (${control.neg_dirty}/${N} dirty)        ${treatment.neg_noise} obs (${treatment.neg_dirty}/${N} dirty)   [TRUE off-topic FP]`);
+  console.error(
+    `  positives hits    ${String(control.pos_hits).padStart(2)}/${P}  (recall ${pct(control.pos_recall)})      ${String(treatment.pos_hits).padStart(2)}/${P}  (recall ${pct(treatment.pos_recall)})`,
+  );
+  console.error(
+    `  hard-neg noise    ${control.neg_noise} obs (${control.neg_dirty}/${N} dirty)        ${treatment.neg_noise} obs (${treatment.neg_dirty}/${N} dirty)   [TRUE off-topic FP]`,
+  );
   const ET = (SUITE.topical_eager || []).length;
-  if (ET) console.error(`  topical-eager     ${control.eager_inj} obs (${control.eager_dirty}/${ET} dirty)        ${treatment.eager_inj} obs (${treatment.eager_dirty}/${ET} dirty)   [on-topic, NOT in verdict]`);
-  console.error(`\n  Δ recall(hits) = ${recallGain >= 0 ? '+' : ''}${recallGain}   Δ precision(true-FP) = ${precisionCost >= 0 ? '+' : ''}${precisionCost}`);
+  if (ET)
+    console.error(
+      `  topical-eager     ${control.eager_inj} obs (${control.eager_dirty}/${ET} dirty)        ${treatment.eager_inj} obs (${treatment.eager_dirty}/${ET} dirty)   [on-topic, NOT in verdict]`,
+    );
+  console.error(
+    `\n  Δ recall(hits) = ${recallGain >= 0 ? '+' : ''}${recallGain}   Δ precision(true-FP) = ${precisionCost >= 0 ? '+' : ''}${precisionCost}`,
+  );
   console.error(`  VERDICT: ${verdict}`);
   console.error(`\n  Positives detail [✓=target surfaced]:`);
   for (let i = 0; i < control.positives.length; i++) {
-    const c = control.positives[i], t = treatment.positives[i];
-    const flip = (!c.hit && t.hit) ? '  ← RECOVERED' : (c.hit && !t.hit) ? '  ← LOST' : '';
-    console.error(`    [${c.hit ? '✓' : '·'}→${t.hit ? '✓' : '·'}] exp #${c.expected.join(',')}  ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]${flip}`);
+    const c = control.positives[i],
+      t = treatment.positives[i];
+    const flip = !c.hit && t.hit ? '  ← RECOVERED' : c.hit && !t.hit ? '  ← LOST' : '';
+    console.error(
+      `    [${c.hit ? '✓' : '·'}→${t.hit ? '✓' : '·'}] exp #${c.expected.join(',')}  ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]${flip}`,
+    );
   }
   console.error(`\n  Hard-negatives detail [noise = injected obs not expected]:`);
   for (let i = 0; i < control.negatives.length; i++) {
-    const c = control.negatives[i], t = treatment.negatives[i];
-    const flip = (c.noise === 0 && t.noise > 0) ? '  ← NEW TRUE-FP' : '';
-    console.error(`    [${c.noise}→${t.noise}] ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]  "${c.query.slice(0, 42)}"${flip}`);
+    const c = control.negatives[i],
+      t = treatment.negatives[i];
+    const flip = c.noise === 0 && t.noise > 0 ? '  ← NEW TRUE-FP' : '';
+    console.error(
+      `    [${c.noise}→${t.noise}] ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]  "${c.query.slice(0, 42)}"${flip}`,
+    );
   }
   if (ET) {
     console.error(`\n  Topical-eager detail [eager = on-identifier obs surfaced, not a true FP]:`);
     for (let i = 0; i < control.topical.length; i++) {
-      const c = control.topical[i], t = treatment.topical[i];
-      const flip = (c.eager === 0 && t.eager > 0) ? '  ← NEW EAGER' : '';
-      console.error(`    [${c.eager}→${t.eager}] ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]  "${c.query.slice(0, 42)}"${flip}`);
+      const c = control.topical[i],
+        t = treatment.topical[i];
+      const flip = c.eager === 0 && t.eager > 0 ? '  ← NEW EAGER' : '';
+      console.error(
+        `    [${c.eager}→${t.eager}] ctl=[${c.injected.join(',') || '—'}] trt=[${t.injected.join(',') || '—'}]  "${c.query.slice(0, 42)}"${flip}`,
+      );
     }
   }
 }

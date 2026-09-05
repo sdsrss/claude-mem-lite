@@ -96,9 +96,9 @@ describe('discoverPlugin', () => {
 
     const items = discoverPlugin(plugin, 'plug');
     expect(items).toHaveLength(2);
-    expect(items.find(i => i.type === 'agent').name).toBe('plug/expert');
-    expect(items.find(i => i.type === 'skill').name).toBe('plug/helper');
-    expect(items.every(i => i.parentPlugin === 'plug')).toBe(true);
+    expect(items.find((i) => i.type === 'agent').name).toBe('plug/expert');
+    expect(items.find((i) => i.type === 'skill').name).toBe('plug/helper');
+    expect(items.every((i) => i.parentPlugin === 'plug')).toBe(true);
   });
 
   it('skips empty agent files', () => {
@@ -123,7 +123,7 @@ describe('discoverPlugins', () => {
 
     const items = discoverPlugins(dir);
     expect(items).toHaveLength(2);
-    expect(items.map(i => i.name).sort()).toEqual(['a/x', 'b/s1']);
+    expect(items.map((i) => i.name).sort()).toEqual(['a/x', 'b/s1']);
   });
 
   it('returns empty for nonexistent dir', () => {
@@ -143,7 +143,7 @@ describe('discoverAllManaged', () => {
 
     const items = discoverAllManaged(managed);
     expect(items).toHaveLength(2);
-    expect(items.map(i => i.name).sort()).toEqual(['plug/bot', 'standalone']);
+    expect(items.map((i) => i.name).sort()).toEqual(['plug/bot', 'standalone']);
   });
 
   it('skips learned directory', () => {
@@ -156,7 +156,7 @@ describe('discoverAllManaged', () => {
     // discoverAllManaged passes skipNames: ['learned']
     const managed2 = join(TEST_ROOT, 'managed2');
     const items = discoverAllManaged(managed2);
-    const names = items.map(i => i.name);
+    const names = items.map((i) => i.name);
     expect(names).toContain('real');
     expect(names).not.toContain('learned');
   });

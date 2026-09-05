@@ -30,100 +30,218 @@ describe('computeTier', () => {
   });
 
   it('archive wins over same-session (Rule 1 > Rule 2)', () => {
-    expect(computeTier({
-      compressed_into: -1, memory_session_id: 'sess-current',
-    }, baseCtx)).toBe('archive');
+    expect(
+      computeTier(
+        {
+          compressed_into: -1,
+          memory_session_id: 'sess-current',
+        },
+        baseCtx,
+      ),
+    ).toBe('archive');
   });
 
   it('returns working for same session', () => {
-    expect(computeTier({
-      memory_session_id: 'sess-current', project: 'test',
-      compressed_into: null, superseded_at: null,
-      created_at_epoch: NOW - 10 * DAY, importance: 1,
-    }, baseCtx)).toBe('working');
+    expect(
+      computeTier(
+        {
+          memory_session_id: 'sess-current',
+          project: 'test',
+          compressed_into: null,
+          superseded_at: null,
+          created_at_epoch: NOW - 10 * DAY,
+          importance: 1,
+        },
+        baseCtx,
+      ),
+    ).toBe('working');
   });
 
   it('returns working for recently accessed high-importance', () => {
-    expect(computeTier({
-      project: 'test', importance: 2, last_accessed_at: NOW - HOUR,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      created_at_epoch: NOW - 30 * DAY, type: 'decision',
-    }, baseCtx)).toBe('working');
+    expect(
+      computeTier(
+        {
+          project: 'test',
+          importance: 2,
+          last_accessed_at: NOW - HOUR,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          created_at_epoch: NOW - 30 * DAY,
+          type: 'decision',
+        },
+        baseCtx,
+      ),
+    ).toBe('working');
   });
 
   it('not working if importance < 2 even if recently accessed', () => {
-    expect(computeTier({
-      project: 'test', importance: 1, last_accessed_at: NOW - HOUR,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      created_at_epoch: NOW - 30 * DAY, type: 'decision',
-    }, baseCtx)).not.toBe('working');
+    expect(
+      computeTier(
+        {
+          project: 'test',
+          importance: 1,
+          last_accessed_at: NOW - HOUR,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          created_at_epoch: NOW - 30 * DAY,
+          type: 'decision',
+        },
+        baseCtx,
+      ),
+    ).not.toBe('working');
   });
 
   it('returns working for recently created same-project', () => {
-    expect(computeTier({
-      project: 'test', created_at_epoch: NOW - HOUR,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      importance: 1, type: 'change',
-    }, baseCtx)).toBe('working');
+    expect(
+      computeTier(
+        {
+          project: 'test',
+          created_at_epoch: NOW - HOUR,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          importance: 1,
+          type: 'change',
+        },
+        baseCtx,
+      ),
+    ).toBe('working');
   });
 
   it('returns active for observation within decay window', () => {
-    expect(computeTier({
-      type: 'decision', created_at_epoch: NOW - 100 * DAY,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      project: 'other-project', importance: 1,
-    }, baseCtx)).toBe('active');
+    expect(
+      computeTier(
+        {
+          type: 'decision',
+          created_at_epoch: NOW - 100 * DAY,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          project: 'other-project',
+          importance: 1,
+        },
+        baseCtx,
+      ),
+    ).toBe('active');
   });
 
   it('returns archive for observation beyond decay window', () => {
-    expect(computeTier({
-      type: 'change', created_at_epoch: NOW - 20 * DAY,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      project: 'other-project', importance: 1,
-    }, baseCtx)).toBe('archive');
+    expect(
+      computeTier(
+        {
+          type: 'change',
+          created_at_epoch: NOW - 20 * DAY,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          project: 'other-project',
+          importance: 1,
+        },
+        baseCtx,
+      ),
+    ).toBe('archive');
   });
 
   it('handles null fields gracefully', () => {
-    expect(computeTier({
-      compressed_into: null, superseded_at: null, memory_session_id: null,
-      project: null, importance: null, last_accessed_at: null,
-      created_at_epoch: NOW - 5 * DAY, type: 'discovery',
-    }, baseCtx)).toBe('active');
+    expect(
+      computeTier(
+        {
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: null,
+          project: null,
+          importance: null,
+          last_accessed_at: null,
+          created_at_epoch: NOW - 5 * DAY,
+          type: 'discovery',
+        },
+        baseCtx,
+      ),
+    ).toBe('active');
   });
 
   it('unknown type defaults to change active window (14d)', () => {
-    expect(computeTier({
-      type: 'unknown', created_at_epoch: NOW - 10 * DAY,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      project: 'other', importance: 1,
-    }, baseCtx)).toBe('active');
+    expect(
+      computeTier(
+        {
+          type: 'unknown',
+          created_at_epoch: NOW - 10 * DAY,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          project: 'other',
+          importance: 1,
+        },
+        baseCtx,
+      ),
+    ).toBe('active');
 
-    expect(computeTier({
-      type: 'unknown', created_at_epoch: NOW - 20 * DAY,
-      compressed_into: null, superseded_at: null, memory_session_id: 'other',
-      project: 'other', importance: 1,
-    }, baseCtx)).toBe('archive');
+    expect(
+      computeTier(
+        {
+          type: 'unknown',
+          created_at_epoch: NOW - 20 * DAY,
+          compressed_into: null,
+          superseded_at: null,
+          memory_session_id: 'other',
+          project: 'other',
+          importance: 1,
+        },
+        baseCtx,
+      ),
+    ).toBe('archive');
   });
 });
 
 describe('TIER_CASE_SQL parity with computeTier', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-current' }); insertSession(db, { id: 'other-sess' }); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-current' });
+    insertSession(db, { id: 'other-sess' });
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('SQL and JS produce identical results for sample observations', () => {
     insertObs(db, { sessionId: 'sess-current', title: 'same-session', type: 'change' });
     insertObs(db, { sessionId: 'other-sess', title: 'recent', type: 'bugfix', epochOffset: -HOUR });
-    insertObs(db, { sessionId: 'other-sess', title: 'active-decision', type: 'decision', epochOffset: -100 * DAY, project: 'other' });
-    insertObs(db, { sessionId: 'other-sess', title: 'expired-change', type: 'change', epochOffset: -20 * DAY, project: 'other' });
+    insertObs(db, {
+      sessionId: 'other-sess',
+      title: 'active-decision',
+      type: 'decision',
+      epochOffset: -100 * DAY,
+      project: 'other',
+    });
+    insertObs(db, {
+      sessionId: 'other-sess',
+      title: 'expired-change',
+      type: 'change',
+      epochOffset: -20 * DAY,
+      project: 'other',
+    });
     insertObs(db, { sessionId: 'other-sess', title: 'compressed', type: 'change', compressedInto: -1 });
     insertObs(db, { sessionId: 'other-sess', title: 'superseded', type: 'bugfix', supersededAt: NOW });
-    insertObs(db, { sessionId: 'other-sess', title: 'high-imp-accessed', type: 'feature', importance: 2, lastAccessedAt: NOW - HOUR, epochOffset: -30 * DAY });
+    insertObs(db, {
+      sessionId: 'other-sess',
+      title: 'high-imp-accessed',
+      type: 'feature',
+      importance: 2,
+      lastAccessedAt: NOW - HOUR,
+      epochOffset: -30 * DAY,
+    });
 
     const params = tierSqlParams(baseCtx);
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT *, ${TIER_CASE_SQL} as tier FROM observations
-    `).all(...params);
+    `,
+      )
+      .all(...params);
 
     for (const row of rows) {
       const jsTier = computeTier(row, baseCtx);
@@ -139,20 +257,31 @@ describe('TIER_CASE_SQL parity with computeTier', () => {
   // `created_at_epoch >= ?` fired for any old known-type row within the default
   // window, classifying a past-its-window decision as 'active' while JS said 'archive'.
   it('does not fall through to the default window for a known type with a shortened window', () => {
-    insertObs(db, { sessionId: 'other-sess', title: 'short-window-decision', type: 'decision', epochOffset: -5 * DAY, project: 'other' });
+    insertObs(db, {
+      sessionId: 'other-sess',
+      title: 'short-window-decision',
+      type: 'decision',
+      epochOffset: -5 * DAY,
+      project: 'other',
+    });
     // Custom params simulating decision-window=1d while default=14d (indices match tierSqlParams).
     const params = [
-      'sess-current', 'test', NOW - HOUR, // session / project+importance working
-      'test', NOW - HOUR,                 // project+recent working
-      NOW - 1 * DAY,                      // decision window = 1d (SHORTER than default)
-      NOW - 120 * DAY,                    // discovery
-      NOW - 60 * DAY,                     // feature
-      NOW - 28 * DAY,                     // bugfix
-      NOW - 28 * DAY,                     // refactor
-      NOW - 14 * DAY,                     // change
-      NOW - 14 * DAY,                     // default fallthrough
+      'sess-current',
+      'test',
+      NOW - HOUR, // session / project+importance working
+      'test',
+      NOW - HOUR, // project+recent working
+      NOW - 1 * DAY, // decision window = 1d (SHORTER than default)
+      NOW - 120 * DAY, // discovery
+      NOW - 60 * DAY, // feature
+      NOW - 28 * DAY, // bugfix
+      NOW - 28 * DAY, // refactor
+      NOW - 14 * DAY, // change
+      NOW - 14 * DAY, // default fallthrough
     ];
-    const row = db.prepare(`SELECT *, ${TIER_CASE_SQL} as tier FROM observations WHERE title = ?`).get(...params, 'short-window-decision');
+    const row = db
+      .prepare(`SELECT *, ${TIER_CASE_SQL} as tier FROM observations WHERE title = ?`)
+      .get(...params, 'short-window-decision');
     // 5-day-old decision: past its 1d window, still within the 14d default. Type-window
     // semantics → 'archive'. Pre-guard the default fallthrough wrongly returned 'active'.
     expect(row.tier).toBe('archive');
@@ -209,9 +338,13 @@ describe('TIER_CASE_SQL parity with computeTier', () => {
             });
             try {
               const params = tierSqlParams(baseCtx);
-              const row = db.prepare(`
+              const row = db
+                .prepare(
+                  `
                 SELECT *, ${TIER_CASE_SQL} as tier FROM observations WHERE title = ?
-              `).get(...params, title);
+              `,
+                )
+                .get(...params, title);
               if (!row) return true; // insertObs may skip invalid combos
               const jsTier = computeTier(row, baseCtx);
               return row.tier === jsTier;
@@ -229,13 +362,27 @@ describe('TIER_CASE_SQL parity with computeTier', () => {
 });
 
 describe('relativeTime', () => {
-  it('formats seconds', () => { expect(relativeTime(NOW - 30000, NOW)).toBe('30s ago'); });
-  it('formats minutes', () => { expect(relativeTime(NOW - 5 * 60000, NOW)).toBe('5min ago'); });
-  it('formats hours', () => { expect(relativeTime(NOW - 3 * HOUR, NOW)).toBe('3h ago'); });
-  it('formats days', () => { expect(relativeTime(NOW - 5 * DAY, NOW)).toBe('5d ago'); });
-  it('formats months', () => { expect(relativeTime(NOW - 45 * DAY, NOW)).toBe('1mo ago'); });
+  it('formats seconds', () => {
+    expect(relativeTime(NOW - 30000, NOW)).toBe('30s ago');
+  });
+  it('formats minutes', () => {
+    expect(relativeTime(NOW - 5 * 60000, NOW)).toBe('5min ago');
+  });
+  it('formats hours', () => {
+    expect(relativeTime(NOW - 3 * HOUR, NOW)).toBe('3h ago');
+  });
+  it('formats days', () => {
+    expect(relativeTime(NOW - 5 * DAY, NOW)).toBe('5d ago');
+  });
+  it('formats months', () => {
+    expect(relativeTime(NOW - 45 * DAY, NOW)).toBe('1mo ago');
+  });
   // Future / clock-skew timestamps must not render a negative duration
   // ("-7200s ago"). Clamp to the present so display stays sensible.
-  it('clamps future timestamps to now', () => { expect(relativeTime(NOW + 2 * HOUR, NOW)).toBe('0s ago'); });
-  it('clamps a few seconds in the future', () => { expect(relativeTime(NOW + 5000, NOW)).toBe('0s ago'); });
+  it('clamps future timestamps to now', () => {
+    expect(relativeTime(NOW + 2 * HOUR, NOW)).toBe('0s ago');
+  });
+  it('clamps a few seconds in the future', () => {
+    expect(relativeTime(NOW + 5000, NOW)).toBe('0s ago');
+  });
 });

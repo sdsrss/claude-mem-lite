@@ -16,17 +16,24 @@ async function main() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
   let toolName = null;
-  try { toolName = JSON.parse(input).tool_name || null; } catch { return; }
+  try {
+    toolName = JSON.parse(input).tool_name || null;
+  } catch {
+    return;
+  }
   if (toolName && DENY.has(toolName)) {
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason:
-          `[efficacy-harness] ${toolName} is disabled in this cell — make the change directly with the Edit tool.`,
-      },
-    }));
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: `[efficacy-harness] ${toolName} is disabled in this cell — make the change directly with the Edit tool.`,
+        },
+      }),
+    );
   }
 }
 
-main().catch(() => {}).finally(() => process.exit(0));
+main()
+  .catch(() => {})
+  .finally(() => process.exit(0));

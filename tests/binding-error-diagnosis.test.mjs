@@ -68,8 +68,9 @@ describe('flattenBindingError', () => {
   });
 
   it('passes a short single-line error through untouched', () => {
-    expect(flattenBindingError('Could not locate the bindings file. Tried: x'))
-      .toBe('Could not locate the bindings file. Tried: x');
+    expect(flattenBindingError('Could not locate the bindings file. Tried: x')).toBe(
+      'Could not locate the bindings file. Tried: x',
+    );
   });
 
   it('survives null / undefined / a thrown non-Error', () => {
@@ -81,8 +82,16 @@ describe('flattenBindingError', () => {
 
 describe('the diagnosis reaches every surface that renders it', () => {
   let runtimeDir;
-  beforeEach(() => { runtimeDir = mkdtempSync(join(tmpdir(), 'mem-abidiag-')); });
-  afterEach(() => { try { rmSync(runtimeDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  beforeEach(() => {
+    runtimeDir = mkdtempSync(join(tmpdir(), 'mem-abidiag-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(runtimeDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   it('the persisted breakage marker keeps the ABI numbers', () => {
     // doctor reads this back hours later as "a fire failed ~Nh ago (<reason>)". A bare
@@ -95,10 +104,9 @@ describe('the diagnosis reaches every surface that renders it', () => {
 
   it("doctor's per-root message keeps the ABI numbers", async () => {
     const { probeRuntimeRoots } = await import('../lib/install-shape.mjs');
-    const [r] = probeRuntimeRoots(
-      [{ label: 'managed install', root: '/nowhere', ownDeps: true }],
-      { probe: () => ({ ok: false, error: ABI_ERROR }) },
-    );
+    const [r] = probeRuntimeRoots([{ label: 'managed install', root: '/nowhere', ownDeps: true }], {
+      probe: () => ({ ok: false, error: ABI_ERROR }),
+    });
     expect(r.ok).toBe(false);
     expect(r.error).toContain('NODE_MODULE_VERSION 127');
     expect(r.error).toContain('NODE_MODULE_VERSION 137');
@@ -114,17 +122,27 @@ describe('the diagnosis reaches every surface that renders it', () => {
     const root = mkdtempSync(join(tmpdir(), 'mem-bareprobe-'));
     try {
       mkdirSync(join(root, 'scripts'), { recursive: true });
-      copyFileSync(join(REPO, 'scripts', 'binding-probe-cli.mjs'), join(root, 'scripts', 'binding-probe-cli.mjs'));
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }));
+      copyFileSync(
+        join(REPO, 'scripts', 'binding-probe-cli.mjs'),
+        join(root, 'scripts', 'binding-probe-cli.mjs'),
+      );
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({ name: 'claude-mem-lite', version: '9.9.9' }),
+      );
       // No lib/ at all → the helper import throws → bareProbe is the only path left.
       const pkgDir = join(root, 'node_modules', 'better-sqlite3');
       mkdirSync(pkgDir, { recursive: true });
-      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'better-sqlite3', version: '0.0.0', main: 'index.js' }));
+      writeFileSync(
+        join(pkgDir, 'package.json'),
+        JSON.stringify({ name: 'better-sqlite3', version: '0.0.0', main: 'index.js' }),
+      );
       // Throw the real five-line ABI shape.
       writeFileSync(join(pkgDir, 'index.js'), `throw new Error(${JSON.stringify(ABI_ERROR)});\n`);
 
       const r = spawnSync(process.execPath, [join(root, 'scripts', 'binding-probe-cli.mjs')], {
-        encoding: 'utf8', timeout: 60_000,
+        encoding: 'utf8',
+        timeout: 60_000,
         env: { ...process.env, PROBE_ROOT: root, CLAUDE_MEM_DIR: root },
       });
       const err = r.stderr || '';
@@ -143,10 +161,9 @@ describe('the diagnosis reaches every surface that renders it', () => {
 
   it('an unowned root still names its own tree alongside the ancestor path it failed in', async () => {
     const { probeRuntimeRoots } = await import('../lib/install-shape.mjs');
-    const [r] = probeRuntimeRoots(
-      [{ label: 'managed install', root: '/opt/app', ownDeps: false }],
-      { probe: () => ({ ok: false, error: ABI_ERROR }) },
-    );
+    const [r] = probeRuntimeRoots([{ label: 'managed install', root: '/opt/app', ownDeps: false }], {
+      probe: () => ({ ok: false, error: ABI_ERROR }),
+    });
     // Both facts have to be legible together: where it failed, and that this install
     // has nothing of its own to rebuild.
     expect(r.error).toContain('better_sqlite3.node');
@@ -176,7 +193,13 @@ describe('launch.mjs npm-install failure: npm speaks for itself on inherited std
     mkdirSync(join(root, 'scripts'), { recursive: true });
     copyFileSync(join(REPO, 'scripts', 'launch.mjs'), join(root, 'scripts', 'launch.mjs'));
   });
-  afterEach(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ } });
+  afterEach(() => {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   it("delivers npm's own diagnosis plus an actionable repair", () => {
     // The guard opens on missing node_modules/better-sqlite3 alone (launch.mjs:13), so
@@ -189,7 +212,8 @@ describe('launch.mjs npm-install failure: npm speaks for itself on inherited std
     // needed" property while removing the dependency on what sits above $TMPDIR.
     writeFileSync(join(root, 'package.json'), '{ this is not json');
     const r = spawnSync(process.execPath, [join(root, 'scripts', 'launch.mjs')], {
-      encoding: 'utf8', timeout: 180_000,
+      encoding: 'utf8',
+      timeout: 180_000,
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_MEM_DIR: root },
     });
     const err = r.stderr || '';

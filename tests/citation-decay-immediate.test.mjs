@@ -15,7 +15,11 @@ describe('applyCitationDecay transaction mode (MED-2)', () => {
   const cleanups = [];
   afterEach(() => {
     while (cleanups.length) {
-      try { cleanups.pop()(); } catch { /* ignore */ }
+      try {
+        cleanups.pop()();
+      } catch {
+        /* ignore */
+      }
     }
   });
 
@@ -34,8 +38,14 @@ describe('applyCitationDecay transaction mode (MED-2)', () => {
     let usedDefault = false;
     db.transaction = (fn) => {
       const t = realTransaction(fn);
-      const wrapped = (...a) => { usedDefault = true; return t(...a); };
-      wrapped.immediate = (...a) => { usedImmediate = true; return t.immediate(...a); };
+      const wrapped = (...a) => {
+        usedDefault = true;
+        return t(...a);
+      };
+      wrapped.immediate = (...a) => {
+        usedImmediate = true;
+        return t.immediate(...a);
+      };
       wrapped.deferred = (...a) => t.deferred(...a);
       wrapped.exclusive = (...a) => t.exclusive(...a);
       return wrapped;
@@ -51,11 +61,19 @@ describe('applyCitationDecay transaction mode (MED-2)', () => {
     const db = createTestDb();
     cleanups.push(() => db.close());
     insertSession(db, { id: 'sess-1', project: 'p' });
-    const r = insertObs(db, { project: 'p', title: 'lesson', importance: 1, uncitedStreak: 2, lessonLearned: 'y' });
+    const r = insertObs(db, {
+      project: 'p',
+      title: 'lesson',
+      importance: 1,
+      uncitedStreak: 2,
+      lessonLearned: 'y',
+    });
     const id = Number(r.lastInsertRowid);
     const res = applyCitationDecay(db, 'p', [id], [id], 'sess-A');
     expect(res.promoted).toBe(1);
-    const row = db.prepare('SELECT importance, uncited_streak, cited_count FROM observations WHERE id = ?').get(id);
+    const row = db
+      .prepare('SELECT importance, uncited_streak, cited_count FROM observations WHERE id = ?')
+      .get(id);
     expect(row.importance).toBe(1); // D#179: untouched (seeded at 1)
     expect(row.uncited_streak).toBe(0);
     expect(row.cited_count).toBe(1);

@@ -22,7 +22,9 @@ describe('findFtsAnchor', () => {
   });
 
   afterEach(() => {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   });
 
   it('returns null when ftsQuery is empty', () => {
@@ -58,8 +60,18 @@ describe('findFtsAnchor', () => {
 
   it('respects project filter (excludes rows from other projects)', () => {
     insertSession(db, { id: 'sess-2', project: 'other' });
-    insertObs(db, { sessionId: 'sess-2', project: 'other', title: 'ep-flush leak in other project', type: 'bugfix' });
-    const own = insertObs(db, { sessionId: 'sess-1', project: 'mine', title: 'ep-flush leak in my project', type: 'bugfix' });
+    insertObs(db, {
+      sessionId: 'sess-2',
+      project: 'other',
+      title: 'ep-flush leak in other project',
+      type: 'bugfix',
+    });
+    const own = insertObs(db, {
+      sessionId: 'sess-1',
+      project: 'mine',
+      title: 'ep-flush leak in my project',
+      type: 'bugfix',
+    });
     insertSession(db, { id: 'sess-mine', project: 'mine' });
     const fts = sanitizeFtsQuery('ep-flush leak');
     expect(findFtsAnchor(db, { ftsQuery: fts, project: 'mine' })?.id).toBe(Number(own.lastInsertRowid));
@@ -74,7 +86,11 @@ describe('findFtsAnchor', () => {
 
   it('prefers more recent row when BM25 is roughly equal (recency-weighted)', () => {
     insertObs(db, { title: 'ep-flush old row', type: 'bugfix', epochOffset: -90 * 24 * 3600 * 1000 });
-    const recent = insertObs(db, { title: 'ep-flush recent row', type: 'bugfix', epochOffset: -1 * 60 * 1000 });
+    const recent = insertObs(db, {
+      title: 'ep-flush recent row',
+      type: 'bugfix',
+      epochOffset: -1 * 60 * 1000,
+    });
     const fts = sanitizeFtsQuery('ep-flush');
     expect(findFtsAnchor(db, { ftsQuery: fts })?.id).toBe(Number(recent.lastInsertRowid));
   });

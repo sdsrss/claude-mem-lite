@@ -11,9 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
-import {
-  shouldQueueSaveEnrich, executeSaveEnrich, ENRICH_OBLIGATED_TYPES,
-} from '../lib/save-enrich.mjs';
+import { shouldQueueSaveEnrich, executeSaveEnrich, ENRICH_OBLIGATED_TYPES } from '../lib/save-enrich.mjs';
 
 const PROJECT = 'enrich--test';
 
@@ -55,7 +53,8 @@ describe('executeSaveEnrich (fill-only-empty worker)', () => {
     const db = createTestDb();
     const { id } = save(db);
     const callJson = async () => ({
-      lesson_learned: 'CREATE IF NOT EXISTS never updates an existing trigger body — bump schema version and DROP+recreate',
+      lesson_learned:
+        'CREATE IF NOT EXISTS never updates an existing trigger body — bump schema version and DROP+recreate',
       search_aliases: ['trigger body stale', '触发器 不更新'],
     });
     const r = await executeSaveEnrich(db, id, { callJson });
@@ -78,9 +77,14 @@ describe('executeSaveEnrich (fill-only-empty worker)', () => {
     await executeSaveEnrich(db, id, {
       callJson: async () => ({ lesson_learned: 'none', search_aliases: ['tombstone resurrection'] }),
     });
-    const hit = db.prepare(`
+    const hit = db
+      .prepare(
+        `
       SELECT rowid FROM observations_fts WHERE observations_fts MATCH 'tombstone' LIMIT 5
-    `).all().map((r) => r.rowid);
+    `,
+      )
+      .all()
+      .map((r) => r.rowid);
     expect(hit).toContain(id);
     db.close();
   });
@@ -141,7 +145,12 @@ describe('executeSaveEnrich (fill-only-empty worker)', () => {
     const { id } = save(db);
     db.prepare(`UPDATE observations SET superseded_at = ? WHERE id = ?`).run(Date.now(), id);
     let called = 0;
-    const r = await executeSaveEnrich(db, id, { callJson: async () => { called++; return {}; } });
+    const r = await executeSaveEnrich(db, id, {
+      callJson: async () => {
+        called++;
+        return {};
+      },
+    });
     expect(called).toBe(0);
     expect(r.enriched).toBe(false);
     db.close();
@@ -177,8 +186,12 @@ describe('executeSaveEnrich (fill-only-empty worker)', () => {
     const before = row(db, id);
     await executeSaveEnrich(db, id, {
       callJson: async () => ({
-        lesson_learned: 'a lesson', search_aliases: ['x alias'],
-        title: 'hostile title rewrite', narrative: 'hostile narrative', importance: 1, type: 'change',
+        lesson_learned: 'a lesson',
+        search_aliases: ['x alias'],
+        title: 'hostile title rewrite',
+        narrative: 'hostile narrative',
+        importance: 1,
+        type: 'change',
       }),
     });
     const o = row(db, id);

@@ -37,9 +37,7 @@ describe('pairedSummary', () => {
   });
 
   test('drops a task that lacks a control or treatment arm (incomplete pair)', () => {
-    const runs = [
-      { taskId: 'A', arm: 'treatment', trial: 1, recurred: false, tokens: 1, toolCalls: 1 },
-    ];
+    const runs = [{ taskId: 'A', arm: 'treatment', trial: 1, recurred: false, tokens: 1, toolCalls: 1 }];
     const s = pairedSummary(runs);
     expect(s.perTask).toHaveLength(0);
     expect(s.dropped).toContain('A');

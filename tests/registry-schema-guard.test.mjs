@@ -22,8 +22,13 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  ensureRegistryDb, REGISTRY_SCHEMA_VERSION,
-  RESOURCES_SCHEMA, FTS5_SCHEMA, TRIGGERS_SCHEMA, INVOCATIONS_SCHEMA, PREINSTALLED_SCHEMA,
+  ensureRegistryDb,
+  REGISTRY_SCHEMA_VERSION,
+  RESOURCES_SCHEMA,
+  FTS5_SCHEMA,
+  TRIGGERS_SCHEMA,
+  INVOCATIONS_SCHEMA,
+  PREINSTALLED_SCHEMA,
 } from '../registry.mjs';
 
 // resources_fts as it would look on a DB created BEFORE `name` joined the indexed columns.
@@ -36,8 +41,13 @@ const INSERT_RESOURCE = `
 `;
 
 let dir, dbPath;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mem-regver-')); dbPath = join(dir, 'resource-registry.db'); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'mem-regver-'));
+  dbPath = join(dir, 'resource-registry.db');
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
 
 /** Seed an on-disk registry DB at the current schema, optionally with a narrowed FTS index. */
 function seedDb({ ftsSchema = FTS5_SCHEMA, withTriggers = true, version = null } = {}) {
@@ -86,7 +96,9 @@ describe('registry forward-incompatibility guard (audit P2-6)', () => {
     const db = ensureRegistryDb(dbPath);
     try {
       expect(db.prepare('SELECT version FROM schema_version').get().version).toBe(REGISTRY_SCHEMA_VERSION);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -104,7 +116,9 @@ describe('registry version adoption for pre-version DBs (back-compat)', () => {
       // Adoption must never wipe: pre-existing rows survive untouched.
       expect(db.prepare(`SELECT COUNT(*) c FROM resources WHERE name='legacy-skill'`).get().c).toBe(1);
       expect(db.prepare(`SELECT COUNT(*) c FROM preinstalled`).get().c).toBe(1);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it('stamps a brand-new DB and stays at exactly one version row across opens', () => {
@@ -114,7 +128,9 @@ describe('registry version adoption for pre-version DBs (back-compat)', () => {
     try {
       const rows = db.prepare('SELECT version FROM schema_version').all();
       expect(rows).toEqual([{ version: REGISTRY_SCHEMA_VERSION }]);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -131,7 +147,9 @@ describe('resources_fts column-drift self-heal (audit P2-6)', () => {
       // and the row is actually reachable through FTS, on the newly indexed column
       const hit = db.prepare(`SELECT rowid FROM resources_fts WHERE resources_fts MATCH 'widened'`).all();
       expect(hit.length).toBe(1);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it('repopulates the widened index from rows that predate the drift', () => {
@@ -145,30 +163,47 @@ describe('resources_fts column-drift self-heal (audit P2-6)', () => {
 
     const db = ensureRegistryDb(dbPath);
     try {
-      const cols = db.prepare(`PRAGMA table_info(resources_fts)`).all().map(c => c.name);
+      const cols = db
+        .prepare(`PRAGMA table_info(resources_fts)`)
+        .all()
+        .map((c) => c.name);
       expect(cols).toContain('name');
       // A recreated external-content index starts EMPTY; without a rebuild the old row
       // would be invisible to search forever.
       const hit = db.prepare(`SELECT rowid FROM resources_fts WHERE resources_fts MATCH 'preexisting'`).all();
       expect(hit.length).toBe(1);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it('preserves the canonical FTS column ORDER (BM25 positional weights depend on it)', () => {
     // bm25(resources_fts, 3,3,3,2,2,1,1,1) in registry-retriever weights by POSITION, so a
     // reordered index silently mis-weights every search. Reorder counts as drift.
-    const REORDERED = FTS5_SCHEMA
-      .replace('    trigger_patterns,\n', '')
-      .replace('    keywords,\n', '    keywords,\n    trigger_patterns,\n');
+    const REORDERED = FTS5_SCHEMA.replace('    trigger_patterns,\n', '').replace(
+      '    keywords,\n',
+      '    keywords,\n    trigger_patterns,\n',
+    );
     seedDb({ ftsSchema: REORDERED });
     const db = ensureRegistryDb(dbPath);
     try {
-      const cols = db.prepare(`PRAGMA table_info(resources_fts)`).all().map(c => c.name);
+      const cols = db
+        .prepare(`PRAGMA table_info(resources_fts)`)
+        .all()
+        .map((c) => c.name);
       expect(cols).toEqual([
-        'trigger_patterns', 'keywords', 'capability_summary', 'intent_tags',
-        'use_cases', 'domain_tags', 'tech_stack', 'name',
+        'trigger_patterns',
+        'keywords',
+        'capability_summary',
+        'intent_tags',
+        'use_cases',
+        'domain_tags',
+        'tech_stack',
+        'name',
       ]);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it('leaves a matching index alone — no needless drop/rebuild on every open', () => {
@@ -182,6 +217,8 @@ describe('resources_fts column-drift self-heal (audit P2-6)', () => {
       expect(db.prepare(`SELECT COUNT(*) c FROM resources`).get().c).toBe(1);
       const hit = db.prepare(`SELECT rowid FROM resources_fts WHERE resources_fts MATCH 'stable'`).all();
       expect(hit.length).toBe(1);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 });

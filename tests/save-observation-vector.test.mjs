@@ -25,9 +25,14 @@ describe('saveObservation vector text includes lesson_learned', () => {
     for (let i = 0; i < 8; i++) {
       const base = i < 5 ? 'deadlock' : 'filler';
       const extra = i < 3 ? 'raceflux' : 'otherterm';
-      insertObs(db, { sessionId: 'manual-test', project: 'test', type: 'bugfix',
-        title: `note ${i}`, narrative: `${base} ${extra} in the pool handler ${i}`,
-        text: `${base} ${extra} pool handler ${i}` });
+      insertObs(db, {
+        sessionId: 'manual-test',
+        project: 'test',
+        type: 'bugfix',
+        title: `note ${i}`,
+        narrative: `${base} ${extra} in the pool handler ${i}`,
+        text: `${base} ${extra} pool handler ${i}`,
+      });
     }
     const { rebuildVocabulary, _resetVocabCache } = await import('../tfidf.mjs');
     _resetVocabCache();
@@ -46,19 +51,27 @@ describe('saveObservation vector text includes lesson_learned', () => {
     // reaches the vector text.
     const T = new Date('2026-01-01T00:00:00Z');
     const withLesson = saveObservation(db, {
-      content: 'deadlock occurred in the pool', title: 'shared title', type: 'discovery',
-      project: 'test', lesson_learned: 'raceflux is the real cause', now: T,
+      content: 'deadlock occurred in the pool',
+      title: 'shared title',
+      type: 'discovery',
+      project: 'test',
+      lesson_learned: 'raceflux is the real cause',
+      now: T,
     });
     // +6 min to clear the 5-min dedup window (identical title+content would
     // otherwise be flagged a near-duplicate and skipped).
     const noLesson = saveObservation(db, {
-      content: 'deadlock occurred in the pool', title: 'shared title', type: 'discovery',
-      project: 'test', now: new Date(T.getTime() + 6 * 60 * 1000),
+      content: 'deadlock occurred in the pool',
+      title: 'shared title',
+      type: 'discovery',
+      project: 'test',
+      now: new Date(T.getTime() + 6 * 60 * 1000),
     });
     expect(withLesson.kind).toBe('saved');
     expect(noLesson.kind).toBe('saved');
 
-    const vecOf = (id) => db.prepare('SELECT vector FROM observation_vectors WHERE observation_id = ?').get(id)?.vector;
+    const vecOf = (id) =>
+      db.prepare('SELECT vector FROM observation_vectors WHERE observation_id = ?').get(id)?.vector;
     const a = vecOf(withLesson.id);
     const b = vecOf(noLesson.id);
     expect(a).toBeDefined();

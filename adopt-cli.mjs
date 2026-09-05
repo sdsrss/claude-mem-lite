@@ -17,20 +17,28 @@ import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync
 import { homedir } from 'os';
 import { join, isAbsolute } from 'path';
 import {
-  memdirPath, removePluginSection, removePluginDoc,
-  isAdopted as memdirIsAdopted, hasPluginState,
+  memdirPath,
+  removePluginSection,
+  removePluginDoc,
+  isAdopted as memdirIsAdopted,
+  hasPluginState,
 } from './memdir.mjs';
 import {
-  writeManaged, removeManaged, isAdopted as claudeMdIsAdopted,
+  writeManaged,
+  removeManaged,
+  isAdopted as claudeMdIsAdopted,
   hasResidue as claudeMdHasResidue,
-  needsRefresh, migrateLegacyMemoryDir, hasLegacyMemdirSentinel,
-  claudeMdPath, detailDocPath,
+  needsRefresh,
+  migrateLegacyMemoryDir,
+  hasLegacyMemdirSentinel,
+  claudeMdPath,
+  detailDocPath,
 } from './claudemd.mjs';
-import {
-  PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc,
-} from './adopt-content.mjs';
+import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
 
-function log(msg) { console.log(msg); }
+function log(msg) {
+  console.log(msg);
+}
 
 function detectCwd() {
   return process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd();
@@ -50,12 +58,16 @@ function listAllMemdirs() {
       if (existsSync(memdir) && statSync(memdir).isDirectory()) {
         out.push({ projectSlug: name, memdir });
       }
-    } catch { /* ignore entries we can't stat */ }
+    } catch {
+      /* ignore entries we can't stat */
+    }
   }
   return out;
 }
 
-function claudeConfigPath() { return join(homedir(), '.claude.json'); }
+function claudeConfigPath() {
+  return join(homedir(), '.claude.json');
+}
 
 // Real adopted-project paths come from Claude Code's own ~/.claude.json `projects`
 // map (keys are absolute cwds Claude Code has opened). The memdir slug under
@@ -71,10 +83,14 @@ function listKnownProjectDirs() {
     const cfg = JSON.parse(readFileSync(p, 'utf8'));
     const projects = cfg && cfg.projects && typeof cfg.projects === 'object' ? Object.keys(cfg.projects) : [];
     return projects.filter((d) => typeof d === 'string' && isAbsolute(d) && existsSync(d));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
-function hasFlag(args, flag) { return Array.isArray(args) && args.includes(flag); }
+function hasFlag(args, flag) {
+  return Array.isArray(args) && args.includes(flag);
+}
 
 // ─── Per-project auto-adopt opt-out sentinel ─────────────────────────────────
 // `<memdir>/.mem-no-auto-adopt` is the durable, project-scoped escape hatch.
@@ -154,14 +170,22 @@ function migrateAll(args) {
   const force = hasFlag(args, '--force');
   const dryRun = hasFlag(args, '--dry-run');
   const dirs = listAllMemdirs();
-  if (dirs.length === 0) { log('[adopt --all] no memdirs found'); return; }
+  if (dirs.length === 0) {
+    log('[adopt --all] no memdirs found');
+    return;
+  }
 
-  let removed = 0, absent = 0, skipped = 0;
+  let removed = 0,
+    absent = 0,
+    skipped = 0;
   for (const { projectSlug, memdir } of dirs) {
     if (dryRun) {
       const has = memdirIsAdopted(memdir, PLUGIN_SLUG);
-      const action = !has ? 'absent'
-        : (hasPluginState(memdir, PLUGIN_SLUG) || force) ? 'would-remove' : 'would-skip-foreign';
+      const action = !has
+        ? 'absent'
+        : hasPluginState(memdir, PLUGIN_SLUG) || force
+          ? 'would-remove'
+          : 'would-skip-foreign';
       log(`[adopt --all --dry-run] ${projectSlug} → ${action}`);
       if (action === 'would-remove') removed++;
       else if (action === 'would-skip-foreign') skipped++;
@@ -169,13 +193,19 @@ function migrateAll(args) {
       continue;
     }
     const r = removePluginSection(memdir, PLUGIN_SLUG, { force });
-    if (r.action === 'removed') { removePluginDoc(memdir, PLUGIN_SLUG); removed++; }
-    else if (r.action === 'skipped-foreign') skipped++;
+    if (r.action === 'removed') {
+      removePluginDoc(memdir, PLUGIN_SLUG);
+      removed++;
+    } else if (r.action === 'skipped-foreign') skipped++;
     else absent++;
   }
   log('');
-  log(`[adopt --all] legacy memory-dir cleanup over ${dirs.length} project(s): ${removed} cleaned, ${skipped} skipped-foreign, ${absent} none.`);
-  log('[adopt --all] CLAUDE.md adoption is per-project — it runs automatically on each project\'s next SessionStart.');
+  log(
+    `[adopt --all] legacy memory-dir cleanup over ${dirs.length} project(s): ${removed} cleaned, ${skipped} skipped-foreign, ${absent} none.`,
+  );
+  log(
+    "[adopt --all] CLAUDE.md adoption is per-project — it runs automatically on each project's next SessionStart.",
+  );
 }
 
 /**
@@ -205,15 +235,21 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     if (!claudeMdIsAdopted(cwd, PLUGIN_SLUG)) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
       action = 'adopted';
-    } else if (process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH !== '1'
-        && needsRefresh(cwd, { slug: PLUGIN_SLUG, version, block, doc })) {
+    } else if (
+      process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH !== '1' &&
+      needsRefresh(cwd, { slug: PLUGIN_SLUG, version, block, doc })
+    ) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
       action = 'refreshed';
     }
     if (markerDir && markerKey) writeMarker(markerDir, markerKey);
     return { ok: true, action };
   } catch (e) {
-    try { if (markerDir && markerKey) writeMarker(markerDir, markerKey); } catch { /* best-effort */ }
+    try {
+      if (markerDir && markerKey) writeMarker(markerDir, markerKey);
+    } catch {
+      /* best-effort */
+    }
     return { ok: false, action: 'skipped', reason: 'error', err: e };
   }
 }
@@ -235,13 +271,15 @@ export function hasAutoAdoptMarker(markerDir, markerKey) {
  */
 function cmdDisable(args) {
   const all = hasFlag(args, '--all');
-  const targets = all
-    ? listAllMemdirs().map((m) => m.memdir)
-    : [memdirPath(detectCwd())];
+  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
 
-  if (targets.length === 0) { log('[adopt --disable] no memdirs found'); return; }
+  if (targets.length === 0) {
+    log('[adopt --disable] no memdirs found');
+    return;
+  }
 
-  let disabled = 0, already = 0;
+  let disabled = 0,
+    already = 0;
   for (const memdir of targets) {
     if (!existsSync(memdir)) mkdirSync(memdir, { recursive: true });
     const path = disableSentinelPath(memdir);
@@ -255,7 +293,9 @@ function cmdDisable(args) {
     disabled++;
   }
   log('');
-  log(`[adopt --disable] ${targets.length} target(s): ${disabled} newly disabled, ${already} already disabled`);
+  log(
+    `[adopt --disable] ${targets.length} target(s): ${disabled} newly disabled, ${already} already disabled`,
+  );
 }
 
 /**
@@ -264,13 +304,15 @@ function cmdDisable(args) {
  */
 function cmdEnable(args) {
   const all = hasFlag(args, '--all');
-  const targets = all
-    ? listAllMemdirs().map((m) => m.memdir)
-    : [memdirPath(detectCwd())];
+  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
 
-  if (targets.length === 0) { log('[adopt --enable] no memdirs found'); return; }
+  if (targets.length === 0) {
+    log('[adopt --enable] no memdirs found');
+    return;
+  }
 
-  let enabled = 0, absent = 0;
+  let enabled = 0,
+    absent = 0;
   for (const memdir of targets) {
     const path = disableSentinelPath(memdir);
     if (!existsSync(path)) {
@@ -278,7 +320,11 @@ function cmdEnable(args) {
       absent++;
       continue;
     }
-    try { unlinkSync(path); } catch { /* best-effort */ }
+    try {
+      unlinkSync(path);
+    } catch {
+      /* best-effort */
+    }
     log(`[adopt --enable] ${memdir} → enabled`);
     enabled++;
   }
@@ -301,26 +347,35 @@ function statusAll() {
   }
 
   const dirs = listAllMemdirs();
-  let legacy = 0, disabled = 0;
+  let legacy = 0,
+    disabled = 0;
   for (const { memdir } of dirs) {
     if (memdirIsAdopted(memdir, PLUGIN_SLUG)) legacy++;
     if (isAutoAdoptDisabled(memdir)) disabled++;
   }
   log('');
-  log(`[adopt --status] scanned ${dirs.length} memdir(s): ${legacy} with legacy sentinel (await migration), ${disabled} auto-adopt-disabled.`);
-  if (legacy > 0) log('[adopt --status] run `claude-mem-lite adopt --all` to sweep legacy memory-dir sentinels now.');
+  log(
+    `[adopt --status] scanned ${dirs.length} memdir(s): ${legacy} with legacy sentinel (await migration), ${disabled} auto-adopt-disabled.`,
+  );
+  if (legacy > 0)
+    log('[adopt --status] run `claude-mem-lite adopt --all` to sweep legacy memory-dir sentinels now.');
 
   const known = listKnownProjectDirs();
   let adoptedCount = 0;
   for (const dir of known) if (claudeMdHasResidue(dir, PLUGIN_SLUG)) adoptedCount++;
-  log(`[adopt --status] known projects (~/.claude.json): ${known.length} scanned, ${adoptedCount} with a CLAUDE.md managed block or partial residue (detail doc/state).`);
-  if (adoptedCount > 0) log('[adopt --status] run `claude-mem-lite unadopt --all` to remove every CLAUDE.md block.');
+  log(
+    `[adopt --status] known projects (~/.claude.json): ${known.length} scanned, ${adoptedCount} with a CLAUDE.md managed block or partial residue (detail doc/state).`,
+  );
+  if (adoptedCount > 0)
+    log('[adopt --status] run `claude-mem-lite unadopt --all` to remove every CLAUDE.md block.');
 
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ? 'set' : 'unset';
   const noAutoAdopt = process.env.MEM_NO_AUTO_ADOPT === '1' ? '1 (opt-out)' : 'unset';
   log('');
   log('Auto-adopt gates (next SessionStart fires only if these pass):');
-  log(`  CLAUDE_PLUGIN_ROOT  = ${pluginRoot}  (any install path is consent; gate is the per-project opt-out below)`);
+  log(
+    `  CLAUDE_PLUGIN_ROOT  = ${pluginRoot}  (any install path is consent; gate is the per-project opt-out below)`,
+  );
   log(`  MEM_NO_AUTO_ADOPT   = ${noAutoAdopt}  (global escape hatch)`);
   log('Per-project opt-out: `claude-mem-lite adopt --disable` (run --enable to re-arm).');
 }
@@ -348,20 +403,28 @@ function unadoptAll(args) {
 
   // 1. New scheme: scrub CLAUDE.md managed blocks across known project paths.
   const projectDirs = listKnownProjectDirs();
-  let blocks = 0, partial = 0;
+  let blocks = 0,
+    partial = 0;
   for (const dir of projectDirs) {
     // hasResidue, not isAdopted: the sweep must also catch PARTIAL residue
     // (block without detail doc, or an orphaned doc/state sidecar) —
     // isAdopted's block-AND-doc gate skipped those projects forever.
     if (!claudeMdHasResidue(dir, PLUGIN_SLUG)) continue;
     if (dryRun) {
-      log(`[unadopt --all --dry-run] ${dir} → would-remove plugin residue (CLAUDE.md block and/or detail doc/state)`);
+      log(
+        `[unadopt --all --dry-run] ${dir} → would-remove plugin residue (CLAUDE.md block and/or detail doc/state)`,
+      );
       blocks++;
       continue;
     }
     const r = removeManaged(dir, PLUGIN_SLUG);
-    if (r.action === 'removed') { log(`[unadopt --all] ${dir} → removed`); blocks++; }
-    else { log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`); partial++; }
+    if (r.action === 'removed') {
+      log(`[unadopt --all] ${dir} → removed`);
+      blocks++;
+    } else {
+      log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
+      partial++;
+    }
   }
 
   // 2. Legacy memory-dir cleanup across every memdir (foreign-content guarded).
@@ -373,14 +436,21 @@ function unadoptAll(args) {
       continue;
     }
     const r = removePluginSection(memdir, PLUGIN_SLUG, { force });
-    if (r.action === 'removed') { removePluginDoc(memdir, PLUGIN_SLUG); legacy++; }
+    if (r.action === 'removed') {
+      removePluginDoc(memdir, PLUGIN_SLUG);
+      legacy++;
+    }
   }
 
   log('');
   const partialNote = partial > 0 ? ` (+${partial} partial-residue cleanup(s))` : '';
-  log(`[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}.`);
+  log(
+    `[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}.`,
+  );
   if (projectDirs.length === 0) {
-    log('[unadopt --all] no known projects found in ~/.claude.json — if a project was adopted but never opened in Claude Code, run `claude-mem-lite unadopt` from inside it.');
+    log(
+      '[unadopt --all] no known projects found in ~/.claude.json — if a project was adopted but never opened in Claude Code, run `claude-mem-lite unadopt` from inside it.',
+    );
   }
 }
 
@@ -395,8 +465,12 @@ export function cmdUnadopt(args = []) {
 
   const cwd = detectCwd();
   if (dryRun) {
-    const blockState = claudeMdHasResidue(cwd, PLUGIN_SLUG) ? 'would-remove CLAUDE.md block + detail doc' : 'no CLAUDE.md block';
-    const legacy = hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG) ? 'would-clean legacy memory-dir sentinel' : 'no legacy residue';
+    const blockState = claudeMdHasResidue(cwd, PLUGIN_SLUG)
+      ? 'would-remove CLAUDE.md block + detail doc'
+      : 'no CLAUDE.md block';
+    const legacy = hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)
+      ? 'would-clean legacy memory-dir sentinel'
+      : 'no legacy residue';
     log(`[unadopt --dry-run] ${cwd}`);
     log(`  ${blockState}`);
     log(`  ${legacy}`);

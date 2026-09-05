@@ -30,22 +30,43 @@ describe('MCP tool descriptions use discouragement style', () => {
   });
 
   test('core (unhidden) names are the contract-critical nine', () => {
-    const coreNames = tools.filter((t) => !t.hidden).map((t) => t.name).sort();
+    const coreNames = tools
+      .filter((t) => !t.hidden)
+      .map((t) => t.name)
+      .sort();
     // The original six back the claude-mem-lite invited-memory contract; the
     // three mem_defer_* tools (v2.70) are first-class carry-forward primitives.
     // Changing this list is an MCP surface-area change — update adopt-content.mjs
     // and CLAUDE.md in the same PR.
-    expect(coreNames).toEqual(
-      ['mem_defer', 'mem_defer_drop', 'mem_defer_list',
-       'mem_get', 'mem_recall', 'mem_recent', 'mem_save', 'mem_search', 'mem_timeline'],
-    );
+    expect(coreNames).toEqual([
+      'mem_defer',
+      'mem_defer_drop',
+      'mem_defer_list',
+      'mem_get',
+      'mem_recall',
+      'mem_recent',
+      'mem_save',
+      'mem_search',
+      'mem_timeline',
+    ]);
   });
 
   test('hidden names are the maintenance/admin/specialized eleven', () => {
-    const hiddenNames = tools.filter((t) => t.hidden === true).map((t) => t.name).sort();
+    const hiddenNames = tools
+      .filter((t) => t.hidden === true)
+      .map((t) => t.name)
+      .sort();
     expect(hiddenNames).toEqual([
-      'mem_browse', 'mem_compress', 'mem_delete', 'mem_export', 'mem_fts_check',
-      'mem_maintain', 'mem_optimize', 'mem_registry', 'mem_stats', 'mem_update',
+      'mem_browse',
+      'mem_compress',
+      'mem_delete',
+      'mem_export',
+      'mem_fts_check',
+      'mem_maintain',
+      'mem_optimize',
+      'mem_registry',
+      'mem_stats',
+      'mem_update',
       'mem_use',
     ]);
   });
@@ -71,12 +92,27 @@ describe('MCP tool descriptions use discouragement style', () => {
   test.each(
     // vitest .each wants an array; map to [name, tool] pairs for nicer labels
     [
-      'mem_search', 'mem_recent', 'mem_timeline', 'mem_get', 'mem_delete',
-      'mem_save', 'mem_stats', 'mem_compress', 'mem_maintain', 'mem_optimize',
-      'mem_registry', 'mem_use', 'mem_update', 'mem_export', 'mem_recall',
-      'mem_fts_check', 'mem_browse',
-      'mem_defer', 'mem_defer_list', 'mem_defer_drop',
-    ].map((n) => [n])
+      'mem_search',
+      'mem_recent',
+      'mem_timeline',
+      'mem_get',
+      'mem_delete',
+      'mem_save',
+      'mem_stats',
+      'mem_compress',
+      'mem_maintain',
+      'mem_optimize',
+      'mem_registry',
+      'mem_use',
+      'mem_update',
+      'mem_export',
+      'mem_recall',
+      'mem_fts_check',
+      'mem_browse',
+      'mem_defer',
+      'mem_defer_list',
+      'mem_defer_drop',
+    ].map((n) => [n]),
   )('%s description has DO NOT / USE when markers and <760 authored chars', (name) => {
     const tool = tools.find((t) => t.name === name);
     expect(tool, `${name} not found in tools export`).toBeTruthy();
@@ -92,7 +128,7 @@ describe('MCP tool descriptions use discouragement style', () => {
     for (const tool of tools) {
       expect(
         /Equivalent CLI:|MCP only/.test(tool.description),
-        `${tool.name} should document its CLI equivalent (or mark MCP only)`
+        `${tool.name} should document its CLI equivalent (or mark MCP only)`,
       ).toBe(true);
     }
   });

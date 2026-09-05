@@ -1,6 +1,20 @@
 // tests/tfidf.test.mjs
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { tokenize, buildVocabulary, rebuildVocabulary, getVocabulary, computeVector, cosineSimilarity, vectorSearch, VOCAB_DIM, MIN_COSINE_SIMILARITY, VECTOR_SCAN_LIMIT, porterStem, _resetVocabCache, vectorsEnabled } from '../tfidf.mjs';
+import {
+  tokenize,
+  buildVocabulary,
+  rebuildVocabulary,
+  getVocabulary,
+  computeVector,
+  cosineSimilarity,
+  vectorSearch,
+  VOCAB_DIM,
+  MIN_COSINE_SIMILARITY,
+  VECTOR_SCAN_LIMIT,
+  porterStem,
+  _resetVocabCache,
+  vectorsEnabled,
+} from '../tfidf.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 describe('tokenize', () => {
@@ -49,8 +63,14 @@ describe('tokenize', () => {
 
 describe('buildVocabulary', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-1' }); _resetVocabCache(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1' });
+    _resetVocabCache();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns null for empty database', () => {
     const vocab = buildVocabulary(db);
@@ -58,7 +78,10 @@ describe('buildVocabulary', () => {
   });
 
   it('builds vocabulary from observations', () => {
-    insertObs(db, { title: 'fix auth bug', narrative: 'the authentication system had a token refresh issue' });
+    insertObs(db, {
+      title: 'fix auth bug',
+      narrative: 'the authentication system had a token refresh issue',
+    });
     insertObs(db, { title: 'add search feature', narrative: 'implemented full text search with FTS5' });
     insertObs(db, { title: 'refactor auth module', narrative: 'cleaned up the authentication code' });
 
@@ -101,11 +124,23 @@ describe('buildVocabulary', () => {
     // and rare terms have low df (high IDF) but low IG.
     // Under IG ranking, common terms should come first in the vocab index order.
     for (let i = 0; i < 20; i++) {
-      insertObs(db, { title: `Common pattern observation ${i}`, narrative: 'uses the common pattern repeatedly', importance: 1 });
+      insertObs(db, {
+        title: `Common pattern observation ${i}`,
+        narrative: 'uses the common pattern repeatedly',
+        importance: 1,
+      });
     }
     // "raretermxyz" appears in exactly 2 docs — high IDF, low IG
-    insertObs(db, { title: 'Rare jargon alpha', narrative: 'uses raretermxyz for special purpose', importance: 1 });
-    insertObs(db, { title: 'Another rare jargon', narrative: 'raretermxyz appears again here', importance: 1 });
+    insertObs(db, {
+      title: 'Rare jargon alpha',
+      narrative: 'uses raretermxyz for special purpose',
+      importance: 1,
+    });
+    insertObs(db, {
+      title: 'Another rare jargon',
+      narrative: 'raretermxyz appears again here',
+      importance: 1,
+    });
 
     const vocab = buildVocabulary(db);
     expect(vocab).not.toBeNull();
@@ -169,8 +204,14 @@ describe('buildVocabulary', () => {
 
 describe('computeVector', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-1' }); _resetVocabCache(); });
-  afterEach(() => { db.close(); });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1' });
+    _resetVocabCache();
+  });
+  afterEach(() => {
+    db.close();
+  });
 
   it('returns null for null vocabulary', () => {
     expect(computeVector('test text', null)).toBeNull();
@@ -213,7 +254,7 @@ describe('cosineSimilarity', () => {
     const a = new Float32Array([0.5, 0.5, 0.5, 0.5]);
     // Normalize
     const norm = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
-    const an = a.map(v => v / norm);
+    const an = a.map((v) => v / norm);
     expect(cosineSimilarity(an, an)).toBeCloseTo(1.0, 4);
   });
 
@@ -229,9 +270,18 @@ describe('cosineSimilarity', () => {
     // Need 5+ docs with overlapping terms to ensure df>=2 filter passes
     insertObs(db, { title: 'auth token refresh', narrative: 'fix the authentication token expiry problem' });
     insertObs(db, { title: 'database schema migration', narrative: 'update the database tables and schema' });
-    insertObs(db, { title: 'auth session bug', narrative: 'session authentication was broken and token expired' });
-    insertObs(db, { title: 'auth middleware update', narrative: 'improved the authentication token validation logic' });
-    insertObs(db, { title: 'database backup script', narrative: 'automated the database backup and migration' });
+    insertObs(db, {
+      title: 'auth session bug',
+      narrative: 'session authentication was broken and token expired',
+    });
+    insertObs(db, {
+      title: 'auth middleware update',
+      narrative: 'improved the authentication token validation logic',
+    });
+    insertObs(db, {
+      title: 'database backup script',
+      narrative: 'automated the database backup and migration',
+    });
     const vocab = buildVocabulary(db);
     expect(vocab).not.toBeNull();
     const q = computeVector('authentication token problem', vocab);
@@ -249,11 +299,17 @@ describe('buildVocabulary noise filtering', () => {
   it('excludes English stop words from vocabulary', () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-1' });
-    insertObs(db, { title: 'the and or but in on at to for of is it', narrative: 'the cat sat on the mat with the hat' });
+    insertObs(db, {
+      title: 'the and or but in on at to for of is it',
+      narrative: 'the cat sat on the mat with the hat',
+    });
     // Terms like 'schema', 'migrat' need df>=2, so repeat in multiple docs
     insertObs(db, { title: 'database migration schema', narrative: 'fix the error in schema migration' });
     insertObs(db, { title: 'database schema update', narrative: 'schema migration fix applied' });
-    insertObs(db, { title: 'hook implementation database', narrative: 'implement the hook for this feature' });
+    insertObs(db, {
+      title: 'hook implementation database',
+      narrative: 'implement the hook for this feature',
+    });
     const vocab = buildVocabulary(db);
     const terms = [...vocab.terms.keys()];
     expect(terms).not.toContain('the');
@@ -342,7 +398,9 @@ describe('persisted vocabulary', () => {
     insertObs(db, { title: 'search query optimization', narrative: 'FTS5 BM25 ranking search' });
     const vocab1 = rebuildVocabulary(db);
     const obs = db.prepare('SELECT id, title, narrative FROM observations').all();
-    const insertVec = db.prepare('INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)');
+    const insertVec = db.prepare(
+      'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
+    );
     for (const o of obs) {
       const vec = computeVector(o.title + ' ' + o.narrative, vocab1);
       if (vec) insertVec.run(o.id, Buffer.from(vec.buffer), vocab1.version, Date.now());
@@ -353,12 +411,17 @@ describe('persisted vocabulary', () => {
     insertVec.run(obs[0].id, Buffer.from(new Float32Array(512).buffer), 'old-version-aaa', Date.now());
     insertVec.run(obs[1].id, Buffer.from(new Float32Array(512).buffer), 'old-version-bbb', Date.now());
     // Force new version by inserting more obs with new terms so vocab changes
-    insertObs(db, { title: 'entirely new topic about rust compiler', narrative: 'cargo rust ownership borrow check' });
+    insertObs(db, {
+      title: 'entirely new topic about rust compiler',
+      narrative: 'cargo rust ownership borrow check',
+    });
     insertObs(db, { title: 'another rust discussion', narrative: 'rust memory ownership' });
     _resetVocabCache();
     const vocab2 = rebuildVocabulary(db);
     expect(vocab2.version).not.toBe(vocab1.version);
-    const staleCount = db.prepare('SELECT COUNT(*) as c FROM observation_vectors WHERE vocab_version != ?').get(vocab2.version).c;
+    const staleCount = db
+      .prepare('SELECT COUNT(*) as c FROM observation_vectors WHERE vocab_version != ?')
+      .get(vocab2.version).c;
     expect(staleCount).toBe(0);
     db.close();
   });
@@ -372,7 +435,9 @@ describe('persisted vocabulary', () => {
     insertObs(db, { title: 'search optimization fix', narrative: 'improved query ranking' });
     const vocab = rebuildVocabulary(db);
     const obs = db.prepare('SELECT id, title, narrative FROM observations').all();
-    const insertVec = db.prepare('INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)');
+    const insertVec = db.prepare(
+      'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
+    );
     for (const o of obs) {
       const vec = computeVector(o.title + ' ' + o.narrative, vocab);
       if (vec) insertVec.run(o.id, Buffer.from(vec.buffer), vocab.version, Date.now());
@@ -476,7 +541,7 @@ describe('sublinear TF in computeVector', () => {
         // Cosine similarity should be high (both about search+query) but not 1.0
         const sim = cosineSimilarity(vecRepeat, vecOnce);
         expect(sim).toBeGreaterThan(0.5); // still similar topic
-        expect(sim).toBeLessThan(1.0);    // but not identical (sublinear dampens repetition)
+        expect(sim).toBeLessThan(1.0); // but not identical (sublinear dampens repetition)
       }
     }
     db.close();

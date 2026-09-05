@@ -15,9 +15,8 @@ import { createTestDb } from './test-helpers.mjs';
 const P2_11 = 'idx_sess_sum_memory_session';
 const ALGO_7 = 'idx_obs_project_live';
 
-const indexSql = (db, name) => db.prepare(
-  "SELECT sql FROM sqlite_master WHERE type='index' AND name = ?",
-).get(name)?.sql ?? null;
+const indexSql = (db, name) =>
+  db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name = ?").get(name)?.sql ?? null;
 
 describe('v47 additive indexes', () => {
   it('both exist on a freshly initialised DB', () => {
@@ -54,18 +53,20 @@ describe('v47 additive indexes', () => {
     expect(indexSql(db, P2_11), 'premise: index should be gone before the upgrade').toBeNull();
     expect(indexSql(db, ALGO_7), 'premise: index should be gone before the upgrade').toBeNull();
 
-    expect(CURRENT_SCHEMA_VERSION,
-      'the DDL for these indexes sits below initSchema\'s fast path, so shipping it without '
-      + 'bumping past 46 is a no-op on every existing install')
-      .toBeGreaterThan(PREVIOUS_RELEASED_VERSION);
+    expect(
+      CURRENT_SCHEMA_VERSION,
+      "the DDL for these indexes sits below initSchema's fast path, so shipping it without " +
+        'bumping past 46 is a no-op on every existing install',
+    ).toBeGreaterThan(PREVIOUS_RELEASED_VERSION);
 
     db.prepare('UPDATE schema_version SET version = ?').run(PREVIOUS_RELEASED_VERSION);
     initSchema(db);
 
     expect(indexSql(db, P2_11), `${P2_11} was not created by the upgrade path`).toBeTruthy();
     expect(indexSql(db, ALGO_7), `${ALGO_7} was not created by the upgrade path`).toBeTruthy();
-    expect(db.prepare('SELECT version FROM schema_version LIMIT 1').get().version)
-      .toBe(CURRENT_SCHEMA_VERSION);
+    expect(db.prepare('SELECT version FROM schema_version LIMIT 1').get().version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     db.close();
   });
 
@@ -74,9 +75,11 @@ describe('v47 additive indexes', () => {
     // statements the audit ran through EXPLAIN QUERY PLAN. Asserting the PLAN, not just the
     // index's existence, because an index the planner declines to use buys nothing.
     const db = createTestDb();
-    const plan = db.prepare(
-      'EXPLAIN QUERY PLAN SELECT 1 FROM session_summaries WHERE memory_session_id = ?',
-    ).all('probe').map((r) => r.detail).join(' ');
+    const plan = db
+      .prepare('EXPLAIN QUERY PLAN SELECT 1 FROM session_summaries WHERE memory_session_id = ?')
+      .all('probe')
+      .map((r) => r.detail)
+      .join(' ');
     expect(plan).toContain(P2_11);
     expect(plan).not.toMatch(/SCAN session_summaries(?!\S)/);
     db.close();

@@ -67,10 +67,14 @@ describe('MCP-reachable LLM legs must not block the event loop (D#138 MEDIUM-3)'
     vi.mocked(spawn).mockReset();
   });
 
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('mem_optimize (hook-optimize identifySynonymGroups) spawns, never execFileSync', async () => {
-    vi.mocked(spawn).mockImplementation(autoAnswer('{"groups":[{"canonical":"race condition","aliases":["竞态"]}]}'));
+    vi.mocked(spawn).mockImplementation(
+      autoAnswer('{"groups":[{"canonical":"race condition","aliases":["竞态"]}]}'),
+    );
     const { identifySynonymGroups } = await import('../hook-optimize.mjs');
 
     const groups = await identifySynonymGroups(['race condition', '竞态']);
@@ -81,14 +85,19 @@ describe('MCP-reachable LLM legs must not block the event loop (D#138 MEDIUM-3)'
   });
 
   it('mem_registry enrich (registry-enricher) spawns, never execFileSync', async () => {
-    vi.mocked(spawn).mockImplementation(autoAnswer(JSON.stringify({
-      capability_summary: 'Formats commit messages',
-      intent_tags: 'git,commit',
-      domain_tags: 'vcs',
-    })));
+    vi.mocked(spawn).mockImplementation(
+      autoAnswer(
+        JSON.stringify({
+          capability_summary: 'Formats commit messages',
+          intent_tags: 'git,commit',
+          domain_tags: 'vcs',
+        }),
+      ),
+    );
     const db = createRegistryTestDb();
-    db.prepare(`INSERT INTO resources (name, type, source, local_path, quality_tier) VALUES (?, ?, ?, ?, ?)`)
-      .run('commit-helper', 'skill', 'user', '/tmp/commit-helper/SKILL.md', 'community');
+    db.prepare(
+      `INSERT INTO resources (name, type, source, local_path, quality_tier) VALUES (?, ?, ?, ?, ?)`,
+    ).run('commit-helper', 'skill', 'user', '/tmp/commit-helper/SKILL.md', 'community');
     const { enrichResource } = await import('../registry-enricher.mjs');
 
     const ok = await enrichResource(db, 'commit-helper', 'skill', '# commit-helper\nWrites commits.');
@@ -141,7 +150,7 @@ describe('no blocking LLM dispatcher is reachable from server.mjs (static guard)
     return out;
   }
 
-  it('no module in server.mjs\'s import graph imports a blocking dispatcher', () => {
+  it("no module in server.mjs's import graph imports a blocking dispatcher", () => {
     const seen = new Set();
     const offenders = [];
     const queue = ['server.mjs'];
@@ -151,7 +160,7 @@ describe('no blocking LLM dispatcher is reachable from server.mjs (static guard)
       if (seen.has(rel) || DETACHED_BOUNDARY[rel]) continue;
       seen.add(rel);
       const abs = join(REPO, rel);
-      if (!existsSync(abs)) continue;          // package import or generated path
+      if (!existsSync(abs)) continue; // package import or generated path
       const src = readFileSync(abs, 'utf8');
 
       // Only count a REAL import binding, not a mention in prose: the twins'

@@ -36,11 +36,16 @@ let client;
 let transport;
 
 function textOf(result) {
-  return (result?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  return (result?.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 }
 
 beforeAll(async () => {
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
   mkdirSync(`${DB_DIR}/runtime`, { recursive: true });
 
   transport = new StdioClientTransport({
@@ -71,9 +76,15 @@ beforeAll(async () => {
 }, 20_000);
 
 afterAll(async () => {
-  try { await client?.close(); } catch {}
-  try { await transport?.close(); } catch {}
-  try { rmSync(DB_DIR, { recursive: true }); } catch {}
+  try {
+    await client?.close();
+  } catch {}
+  try {
+    await transport?.close();
+  } catch {}
+  try {
+    rmSync(DB_DIR, { recursive: true });
+  } catch {}
 });
 
 describe('MCP read tools defang structural delimiters', () => {

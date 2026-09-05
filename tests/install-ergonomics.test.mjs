@@ -74,7 +74,10 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       // instead skip the probe and coast on setup.sh's binding_usable fallback,
       // testing nothing about bareProbe.)
       mkdirSync(join(pluginRoot, 'scripts'), { recursive: true });
-      copyFileSync(resolve('scripts/binding-probe-cli.mjs'), join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'));
+      copyFileSync(
+        resolve('scripts/binding-probe-cli.mjs'),
+        join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'),
+      );
       makeWorkingNodeModules(dataDir);
 
       execFileSync('bash', [SETUP_PATH], {
@@ -85,7 +88,9 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
 
       expect(existsSync(flag)).toBe(false);
     } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -106,7 +111,10 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       for (const f of ['binding-probe.mjs', 'proc-lock.mjs', 'resolve-data-dir.mjs']) {
         copyFileSync(resolve('lib', f), join(pluginRoot, 'lib', f));
       }
-      copyFileSync(resolve('scripts/binding-probe-cli.mjs'), join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'));
+      copyFileSync(
+        resolve('scripts/binding-probe-cli.mjs'),
+        join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'),
+      );
       const nm = makeWorkingNodeModules(pluginRoot);
 
       const flag = join(dataDir, 'runtime', '.deps-broken');
@@ -124,7 +132,9 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       const abi = process.versions.modules;
       expect(existsSync(join(nm, `.mem-binding-ok-${abi}`))).toBe(true);
     } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -165,7 +175,9 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       // SessionStart stdout is a JSON envelope — a crashing child must not reach it.
       expect(out).toBe('');
     } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
     }
   });
 
@@ -191,7 +203,10 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       for (const f of ['binding-probe.mjs', 'proc-lock.mjs', 'resolve-data-dir.mjs']) {
         copyFileSync(resolve('lib', f), join(pluginRoot, 'lib', f));
       }
-      copyFileSync(resolve('scripts/binding-probe-cli.mjs'), join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'));
+      copyFileSync(
+        resolve('scripts/binding-probe-cli.mjs'),
+        join(pluginRoot, 'scripts', 'binding-probe-cli.mjs'),
+      );
 
       const flag = join(dataDir, 'runtime', '.deps-broken');
 
@@ -206,9 +221,13 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       const written = JSON.parse(readFileSync(flag, 'utf8'));
       expect(written.reason).toContain('binding probe/rebuild failed');
       expect(written.repair).toContain('npm rebuild better-sqlite3 --dangerously-allow-all-scripts');
-      expect(existsSync(join(pluginRoot, 'node_modules', `.mem-binding-ok-${process.versions.modules}`))).toBe(false);
+      expect(
+        existsSync(join(pluginRoot, 'node_modules', `.mem-binding-ok-${process.versions.modules}`)),
+      ).toBe(false);
     } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
     }
   }, 60000);
 });
@@ -222,10 +241,12 @@ describe('collectOrphanHookPaths (v2.79)', () => {
   it('returns empty for non-mem hooks even when paths are missing', () => {
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'node "/no/such/other/hook.mjs"' }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [{ type: 'command', command: 'node "/no/such/other/hook.mjs"' }],
+          },
+        ],
       },
     };
     expect(collectOrphanHookPaths(settings)).toEqual([]);
@@ -234,14 +255,25 @@ describe('collectOrphanHookPaths (v2.79)', () => {
   it('flags mem hooks pointing at missing absolute paths', () => {
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" session-start' }],
-        }],
-        PostToolUse: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'bash "/tmp/nonexistent-claude-mem-lite/scripts/post-tool-use.sh"' }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [
+              { type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" session-start' },
+            ],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: '*',
+            hooks: [
+              {
+                type: 'command',
+                command: 'bash "/tmp/nonexistent-claude-mem-lite/scripts/post-tool-use.sh"',
+              },
+            ],
+          },
+        ],
       },
     };
     const orphans = collectOrphanHookPaths(settings);
@@ -252,10 +284,12 @@ describe('collectOrphanHookPaths (v2.79)', () => {
   it('ignores ${CLAUDE_PLUGIN_ROOT}-templated hooks (those are plugin-owned, runtime-resolved)', () => {
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hook.mjs" session-start' }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hook.mjs" session-start' }],
+          },
+        ],
       },
     };
     expect(collectOrphanHookPaths(settings)).toEqual([]);
@@ -266,10 +300,12 @@ describe('collectOrphanHookPaths (v2.79)', () => {
     const real = INSTALL_PATH;
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: `node "${real}" session-start` }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [{ type: 'command', command: `node "${real}" session-start` }],
+          },
+        ],
       },
     };
     expect(collectOrphanHookPaths(settings)).toEqual([]);
@@ -285,13 +321,18 @@ describe('collectOrphanHookPaths (v2.79)', () => {
     // the trailing arg as $0 to the inline script). The parser is what we test.
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{
-            type: 'command',
-            command: 'bash -c "claude-mem-lite tracer; exec bash" "/tmp/nonexistent-claude-mem-lite/scripts/wrapped.sh"',
-          }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [
+              {
+                type: 'command',
+                command:
+                  'bash -c "claude-mem-lite tracer; exec bash" "/tmp/nonexistent-claude-mem-lite/scripts/wrapped.sh"',
+              },
+            ],
+          },
+        ],
       },
     };
     const orphans = collectOrphanHookPaths(settings);
@@ -302,18 +343,24 @@ describe('collectOrphanHookPaths (v2.79)', () => {
   it('deduplicates repeated missing paths across hook events', () => {
     const settings = {
       hooks: {
-        SessionStart: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" session-start' }],
-        }],
-        Stop: [{
-          matcher: '*',
-          hooks: [{ type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" stop' }],
-        }],
+        SessionStart: [
+          {
+            matcher: '*',
+            hooks: [
+              { type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" session-start' },
+            ],
+          },
+        ],
+        Stop: [
+          {
+            matcher: '*',
+            hooks: [{ type: 'command', command: 'node "/tmp/nonexistent-claude-mem-lite/hook.mjs" stop' }],
+          },
+        ],
       },
     };
     const orphans = collectOrphanHookPaths(settings);
-    expect(orphans.filter(p => p === '/tmp/nonexistent-claude-mem-lite/hook.mjs')).toHaveLength(1);
+    expect(orphans.filter((p) => p === '/tmp/nonexistent-claude-mem-lite/hook.mjs')).toHaveLength(1);
   });
 });
 
@@ -323,17 +370,28 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
     try {
       mkdirSync(join(home, '.claude'), { recursive: true });
       // Seed settings.json with mem hooks pointing at a non-existent install root
-      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-        hooks: {
-          SessionStart: [{
-            matcher: '*',
-            hooks: [{
-              type: 'command',
-              command: 'node "/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs" session-start',
-            }],
-          }],
-        },
-      }, null, 2));
+      writeFileSync(
+        join(home, '.claude', 'settings.json'),
+        JSON.stringify(
+          {
+            hooks: {
+              SessionStart: [
+                {
+                  matcher: '*',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: 'node "/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs" session-start',
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+      );
 
       let output = '';
       try {
@@ -351,7 +409,9 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
       expect(output).toContain('/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs');
       expect(output).toMatch(/Repair:.*install\.mjs uninstall/);
     } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch {}
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
     }
   });
 });

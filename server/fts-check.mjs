@@ -16,18 +16,21 @@ export function handleMemFtsCheck(db, args) {
   if (args.action === 'check') {
     const result = checkFTSIntegrity(db);
     return {
-      content: [{
-        type: 'text',
-        text: result.healthy
-          ? 'FTS5 indexes are healthy — all integrity checks passed.'
-          : `FTS5 issues found:\n${result.details.join('\n')}`,
-      }],
+      content: [
+        {
+          type: 'text',
+          text: result.healthy
+            ? 'FTS5 indexes are healthy — all integrity checks passed.'
+            : `FTS5 issues found:\n${result.details.join('\n')}`,
+        },
+      ],
     };
   }
   // args.action === 'rebuild' (Zod enum enforces one of the two)
   const result = rebuildFTS(db);
-  const summary = result.errors.length > 0
-    ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
-    : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
+  const summary =
+    result.errors.length > 0
+      ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
+      : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
   return { content: [{ type: 'text', text: summary }] };
 }

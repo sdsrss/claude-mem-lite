@@ -15,7 +15,7 @@ describe('extractTokens', () => {
           cache_creation_input_tokens: 10,
           cache_read_input_tokens: 200,
         },
-      })
+      }),
     ).toBe(360);
   });
 
@@ -29,9 +29,25 @@ describe('extractTokens', () => {
 describe('countToolUses', () => {
   test('counts tool_use blocks across assistant stream-json events', () => {
     const events = [
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }, { type: 'tool_use', name: 'Edit' }] } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'hi' },
+            { type: 'tool_use', name: 'Edit' },
+          ],
+        },
+      },
       { type: 'user', message: { content: [{ type: 'tool_result' }] } },
-      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }, { type: 'tool_use', name: 'Read' }] } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Bash' },
+            { type: 'tool_use', name: 'Read' },
+          ],
+        },
+      },
       { type: 'result' },
     ];
     expect(countToolUses(events)).toBe(3);
@@ -39,7 +55,9 @@ describe('countToolUses', () => {
 
   test('returns 0 for an empty or text-only transcript', () => {
     expect(countToolUses([])).toBe(0);
-    expect(countToolUses([{ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }])).toBe(0);
+    expect(
+      countToolUses([{ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }]),
+    ).toBe(0);
   });
 });
 

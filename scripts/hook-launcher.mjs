@@ -136,13 +136,13 @@ function swapInProgress() {
     if (typeof ts !== 'number' || Date.now() - ts > SWAP_MAX_MS) return false;
     if (typeof pid !== 'number' || pid <= 0) return false;
     try {
-      process.kill(pid, 0);   // signal 0 = existence probe
+      process.kill(pid, 0); // signal 0 = existence probe
       return true;
     } catch (e) {
-      return e.code === 'EPERM';   // alive, owned by another user
+      return e.code === 'EPERM'; // alive, owned by another user
     }
   } catch {
-    return false;   // no marker / unreadable / torn JSON → not a swap
+    return false; // no marker / unreadable / torn JSON → not a swap
   }
 }
 
@@ -180,10 +180,7 @@ async function runEntry({ bustCache = false } = {}) {
 function ownDependencies() {
   try {
     const pkg = JSON.parse(readFileSync(join(INSTALL_DIR, 'package.json'), 'utf8'));
-    return new Set([
-      ...Object.keys(pkg.dependencies || {}),
-      ...Object.keys(pkg.optionalDependencies || {}),
-    ]);
+    return new Set([...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.optionalDependencies || {})]);
   } catch {
     return null; // unreadable package.json → caller stays permissive
   }
@@ -224,46 +221,63 @@ function describeFailure(e) {
   const pkg = /Cannot find package '([^']+)'/.exec(String(e.message || ''))?.[1];
   if (pkg) return pkg;
   if (e.url) return String(e.url).split('/').pop();
-  return String(e.message || 'unknown').split('/').slice(-2).join('/');
+  return String(e.message || 'unknown')
+    .split('/')
+    .slice(-2)
+    .join('/');
 }
 
 function recentHealAttempt() {
   try {
     return Date.now() - statSync(HEAL_MARKER).mtimeMs < HEAL_COOLDOWN_MS;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 function recordHealAttempt() {
   try {
     mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
     writeFileSync(HEAL_MARKER, String(Date.now()));
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 // Drop the 6h cooldown once a heal fully resolves. The marker is written BEFORE
 // spawn (rate-limits concurrent fires), but a SUCCESSFUL heal must not keep
 // blocking an unrelated later breakage that happens within the window. (#6/#9)
 function clearHealMarker() {
-  try { unlinkSync(HEAL_MARKER); } catch { /* already gone — fine */ }
+  try {
+    unlinkSync(HEAL_MARKER);
+  } catch {
+    /* already gone — fine */
+  }
 }
 
 function recordBreakage(reason) {
   try {
     mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
     writeFileSync(BROKEN_MARKER, JSON.stringify({ reason, ts: Date.now() }));
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 function clearBreakage() {
-  try { if (existsSync(BROKEN_MARKER)) unlinkSync(BROKEN_MARKER); } catch { /* best-effort */ }
+  try {
+    if (existsSync(BROKEN_MARKER)) unlinkSync(BROKEN_MARKER);
+  } catch {
+    /* best-effort */
+  }
 }
 
 async function attemptHeal(reason) {
   if (recentHealAttempt()) {
     process.stderr.write(
       `[claude-mem-lite] Self-heal skipped (last attempt < 6h ago).\n` +
-      `[claude-mem-lite] Manual recovery: ${CLI_REPAIR}\n` +
-      `[claude-mem-lite] If that fails, run: ${TARBALL_FALLBACK}\n`,
+        `[claude-mem-lite] Manual recovery: ${CLI_REPAIR}\n` +
+        `[claude-mem-lite] If that fails, run: ${TARBALL_FALLBACK}\n`,
     );
     return false;
   }
@@ -273,7 +287,7 @@ async function attemptHeal(reason) {
   if (!existsSync(installer)) {
     process.stderr.write(
       `[claude-mem-lite] install.mjs missing at ${installer} — cannot self-heal\n` +
-      `[claude-mem-lite] Manual recovery: ${TARBALL_FALLBACK}\n`,
+        `[claude-mem-lite] Manual recovery: ${TARBALL_FALLBACK}\n`,
     );
     return false;
   }
@@ -319,16 +333,24 @@ function healNativeBindingIfBroken() {
   try {
     if (!existsSync(NB_BROKEN_MARKER)) {
       // Healthy (or already healed by the child) → reset the cooldown.
-      try { unlinkSync(NB_HEAL_MARKER); } catch { /* nothing to reset */ }
+      try {
+        unlinkSync(NB_HEAL_MARKER);
+      } catch {
+        /* nothing to reset */
+      }
       return;
     }
     try {
       if (Date.now() - statSync(NB_HEAL_MARKER).mtimeMs < HEAL_COOLDOWN_MS) return;
-    } catch { /* no marker → not on cooldown */ }
+    } catch {
+      /* no marker → not on cooldown */
+    }
     try {
       mkdirSync(HOOK_RUNTIME_DIR, { recursive: true });
       writeFileSync(NB_HEAL_MARKER, String(Date.now()));
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
 
     const installer = join(INSTALL_DIR, 'install.mjs');
     if (!existsSync(installer)) {
@@ -349,16 +371,18 @@ function healNativeBindingIfBroken() {
       stdio: 'ignore',
     });
     child.unref();
-  } catch { /* best-effort — never block the hook fire */ }
+  } catch {
+    /* best-effort — never block the hook fire */
+  }
 }
 
 async function trySyncDataDirFromCache() {
   try {
-    const { syncDataDirFromCache } = await import(
-      pathToFileURL(join(INSTALL_DIR, 'hook-update.mjs')).href
-    );
+    const { syncDataDirFromCache } = await import(pathToFileURL(join(INSTALL_DIR, 'hook-update.mjs')).href);
     if (typeof syncDataDirFromCache === 'function') await syncDataDirFromCache();
-  } catch { /* best-effort — proceed to the normal entry regardless */ }
+  } catch {
+    /* best-effort — proceed to the normal entry regardless */
+  }
 }
 
 const IS_SESSION_START = rest.includes('session-start');
@@ -371,7 +395,6 @@ if (IS_SESSION_START) {
   healNativeBindingIfBroken();
   await trySyncDataDirFromCache();
 }
-
 
 try {
   await runEntry();
@@ -405,7 +428,7 @@ try {
     recordBreakage(`retry-failed: ${retryErr.message}`);
     process.stderr.write(
       `[claude-mem-lite] Hook still failing after self-heal: ${retryErr.message}\n` +
-      `[claude-mem-lite] Manual recovery: ${TARBALL_FALLBACK}\n`,
+        `[claude-mem-lite] Manual recovery: ${TARBALL_FALLBACK}\n`,
     );
     process.exit(0);
   }

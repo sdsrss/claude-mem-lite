@@ -76,26 +76,54 @@ beforeEach(() => {
 
   // Insert test session
   const now = new Date();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
     VALUES (?, ?, ?, ?, ?, 'active')
-  `).run('e2e-sess', 'e2e-sess', 'parent--testproj', now.toISOString(), now.getTime());
+  `,
+  ).run('e2e-sess', 'e2e-sess', 'parent--testproj', now.toISOString(), now.getTime());
 });
 
 afterEach(() => {
-  try { db.close(); } catch {}
-  try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  try {
+    db.close();
+  } catch {}
+  try {
+    rmSync(tmpHome, { recursive: true, force: true });
+  } catch {}
 });
 
 // ─── Helper: Seed observations ───────────────────────────────────────────────
 
-function seedObs({ type = 'discovery', title, text = '', importance = 1, filesModified = '[]', lessonLearned = null, epochOffset = 0 }) {
+function seedObs({
+  type = 'discovery',
+  title,
+  text = '',
+  importance = 1,
+  filesModified = '[]',
+  lessonLearned = null,
+  epochOffset = 0,
+}) {
   const epoch = Date.now() + epochOffset;
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
                               files_read, files_modified, importance, lesson_learned, created_at, created_at_epoch)
     VALUES ('e2e-sess', 'parent--testproj', ?, ?, ?, '', ?, '', '', '[]', ?, ?, ?, ?, ?)
-  `).run(text || title, type, title, text || title, filesModified, importance, lessonLearned, new Date(epoch).toISOString(), epoch);
+  `,
+    )
+    .run(
+      text || title,
+      type,
+      title,
+      text || title,
+      filesModified,
+      importance,
+      lessonLearned,
+      new Date(epoch).toISOString(),
+      epoch,
+    );
 
   // Populate observation_files junction table (mirrors production saveObservation behavior)
   if (filesModified && filesModified !== '[]') {
@@ -103,12 +131,16 @@ function seedObs({ type = 'discovery', title, text = '', importance = 1, filesMo
       const files = JSON.parse(filesModified);
       if (Array.isArray(files)) {
         const obsId = Number(result.lastInsertRowid);
-        const insertFile = db.prepare('INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)');
+        const insertFile = db.prepare(
+          'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+        );
         for (const f of files) {
           if (typeof f === 'string' && f.length > 0) insertFile.run(obsId, f);
         }
       }
-    } catch { /* skip malformed JSON */ }
+    } catch {
+      /* skip malformed JSON */
+    }
   }
 
   return result;
@@ -192,9 +224,9 @@ describe('CLI E2E: 2026-06-29 audit parsing/scoring guards', () => {
   it('MED: --key=value long-option form is honored, not silently dropped to the default', () => {
     const saved = runCli(['save', 'kvform note alpha', '--type=feature', '--project=kvproj']);
     expect(saved.stdout).toMatch(/project: kvproj/); // not the current/default project
-    expect(saved.stdout).toContain('[feature]');      // not the default discovery type
+    expect(saved.stdout).toContain('[feature]'); // not the default discovery type
     const recent = JSON.parse(runCli(['recent', '--limit=1', '--project=kvproj', '--json']).stdout);
-    expect(recent.results.length).toBe(1);            // --limit=1 applied, scoped to kvproj
+    expect(recent.results.length).toBe(1); // --limit=1 applied, scoped to kvproj
   });
 
   it('LOW: compress --age-days rejects "1e5"/"30x" instead of mis-parsing to a too-broad cutoff', () => {
@@ -210,25 +242,36 @@ describe('CLI E2E: 2026-06-29 audit parsing/scoring guards', () => {
   });
 
   it('LOW: a far-future created_at_epoch yields a FINITE score (no EXP overflow → null / rank #1 poison)', () => {
-    seedObs({ type: 'change', title: 'future row zeta', text: 'database restore zeta', epochOffset: 30 * 365 * 86400000 });
-    seedObs({ type: 'change', title: 'normal row zeta', text: 'database restore zeta', epochOffset: -3600000 });
+    seedObs({
+      type: 'change',
+      title: 'future row zeta',
+      text: 'database restore zeta',
+      epochOffset: 30 * 365 * 86400000,
+    });
+    seedObs({
+      type: 'change',
+      title: 'normal row zeta',
+      text: 'database restore zeta',
+      epochOffset: -3600000,
+    });
     const out = JSON.parse(runCli(['search', 'database restore zeta', '--json']).stdout);
     expect(out.results.length).toBeGreaterThanOrEqual(2);
     for (const r of out.results) {
-      expect(r.score).not.toBeNull();          // JSON.stringify(-Infinity) === null pre-fix
+      expect(r.score).not.toBeNull(); // JSON.stringify(-Infinity) === null pre-fix
       expect(Number.isFinite(r.score)).toBe(true);
     }
   });
 
   it('LOW: a confirmed delete snapshots a pre-delete .bak first; preview does not', () => {
     seedObs({ type: 'discovery', title: 'deletable scratch note', text: 'deletable scratch note' });
-    const bakCount = () => readdirSync(dataDir).filter(f => f.includes('.pre-delete-') && f.endsWith('.bak')).length;
+    const bakCount = () =>
+      readdirSync(dataDir).filter((f) => f.includes('.pre-delete-') && f.endsWith('.bak')).length;
     expect(bakCount()).toBe(0);
-    runCli(['delete', '1']);                 // preview only — no --confirm
-    expect(bakCount()).toBe(0);              // preview must not snapshot
+    runCli(['delete', '1']); // preview only — no --confirm
+    expect(bakCount()).toBe(0); // preview must not snapshot
     const out = runCli(['delete', '1', '--confirm']);
     expect(out.stdout).toMatch(/Deleted 1 observation/);
-    expect(bakCount()).toBe(1);              // confirmed delete leaves a recoverable pre-image
+    expect(bakCount()).toBe(1); // confirmed delete leaves a recoverable pre-image
   });
 });
 
@@ -240,11 +283,29 @@ describe('CLI E2E: single-source context re-rank reorders results (audit #9)', (
     // A and B have identical relevance and are 3h old (searchable, not "recently
     // active" themselves). C is recent and re-touches src/a.mjs, making ONLY that
     // file active — so A gets the file-overlap boost and B does not.
-    seedObs({ type: 'discovery', title: 'widgetzz alpha', text: 'widgetzz alpha', filesModified: '["src/b.mjs"]', epochOffset: -3 * 3600000 });
-    seedObs({ type: 'discovery', title: 'widgetzz alpha', text: 'widgetzz alpha', filesModified: '["src/a.mjs"]', epochOffset: -3 * 3600000 });
-    seedObs({ type: 'discovery', title: 'unrelated recent note', text: 'nothing to match', filesModified: '["src/a.mjs"]', epochOffset: 0 });
+    seedObs({
+      type: 'discovery',
+      title: 'widgetzz alpha',
+      text: 'widgetzz alpha',
+      filesModified: '["src/b.mjs"]',
+      epochOffset: -3 * 3600000,
+    });
+    seedObs({
+      type: 'discovery',
+      title: 'widgetzz alpha',
+      text: 'widgetzz alpha',
+      filesModified: '["src/a.mjs"]',
+      epochOffset: -3 * 3600000,
+    });
+    seedObs({
+      type: 'discovery',
+      title: 'unrelated recent note',
+      text: 'nothing to match',
+      filesModified: '["src/a.mjs"]',
+      epochOffset: 0,
+    });
     const out = JSON.parse(runCli(['search', 'widgetzz', '--type', 'discovery', '--json']).stdout);
-    const matched = out.results.filter(r => (r.files_modified || '').includes('src/'));
+    const matched = out.results.filter((r) => (r.files_modified || '').includes('src/'));
     expect(matched.length).toBe(2);
     // The active-file result (src/a.mjs) must rank first now that the boost is applied.
     expect(matched[0].files_modified).toContain('src/a.mjs');
@@ -253,7 +314,11 @@ describe('CLI E2E: single-source context re-rank reorders results (audit #9)', (
 
 describe('CLI E2E: search', () => {
   it('finds observations via FTS5 and returns formatted output', () => {
-    seedObs({ type: 'bugfix', title: 'Fixed database connection pool leak', text: 'database connection pool was exhausted under load' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Fixed database connection pool leak',
+      text: 'database connection pool was exhausted under load',
+    });
     const { stdout, exitCode } = runCli(['search', 'database connection']);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('[mem]');
@@ -264,7 +329,12 @@ describe('CLI E2E: search', () => {
   });
 
   it('shows lesson_learned when present', () => {
-    seedObs({ type: 'bugfix', title: 'Race condition in queue', text: 'queue race condition', lessonLearned: 'Always use mutex for shared state' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Race condition in queue',
+      text: 'queue race condition',
+      lessonLearned: 'Always use mutex for shared state',
+    });
     const { stdout } = runCli(['search', 'queue race']);
     expect(stdout).toContain('Always use mutex');
   });
@@ -282,7 +352,10 @@ describe('CLI E2E: search', () => {
       seedObs({ title: `Widget feature ${i}`, text: `widget implementation details number ${i}` });
     }
     const { stdout } = runCli(['search', 'widget', '--limit', '3']);
-    const lines = stdout.trim().split('\n').filter(l => l.startsWith('#'));
+    const lines = stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('#'));
     expect(lines.length).toBeLessThanOrEqual(3);
   });
 
@@ -302,7 +375,7 @@ describe('CLI E2E: search', () => {
     const totalOf = (args) => JSON.parse(runCli(['search', 'gizmo', '--json', ...args]).stdout).total;
     const base = totalOf(['--limit', '3']);
     expect(base).toBe(30); // true population, not the ~13-row over-fetch cap
-    expect(totalOf(['--limit', '25'])).toBe(base);   // larger limit must not grow total
+    expect(totalOf(['--limit', '25'])).toBe(base); // larger limit must not grow total
     expect(totalOf(['--limit', '3', '--offset', '5'])).toBe(base); // paging must not grow total
     expect(totalOf(['--limit', '3', '--offset', '20'])).toBe(base);
   });
@@ -322,12 +395,14 @@ describe('CLI E2E: search', () => {
     for (let i = 0; i < 50; i++) {
       seedObs({ title: `Sprocket module ${i}`, text: `sprocket module unique payload ${i}` });
     }
-    const idsOf = (args) => JSON.parse(runCli(['search', 'sprocket', '--json', ...args]).stdout).results.map(r => r.id);
+    const idsOf = (args) =>
+      JSON.parse(runCli(['search', 'sprocket', '--json', ...args]).stdout).results.map((r) => r.id);
     const full = idsOf(['--limit', '50']);
     expect(full.length).toBeGreaterThanOrEqual(40); // hybrid path returned a real population
     const paged = [];
-    for (let off = 0; off < full.length; off += 5) paged.push(...idsOf(['--limit', '5', '--offset', String(off)]));
-    expect(paged).toEqual(full);                 // identical order => disjoint + stable
+    for (let off = 0; off < full.length; off += 5)
+      paged.push(...idsOf(['--limit', '5', '--offset', String(off)]));
+    expect(paged).toEqual(full); // identical order => disjoint + stable
     expect(new Set(paged).size).toBe(paged.length); // no id appears on two pages
   });
 
@@ -397,7 +472,9 @@ describe('CLI E2E: recent', () => {
 
   it('returns empty message when no observations', () => {
     // Use a project that has no observations
-    const { stdout } = runCli(['recent', '5'], { env: { CLAUDE_PROJECT_DIR: join(tmpHome, 'other', 'empty') } });
+    const { stdout } = runCli(['recent', '5'], {
+      env: { CLAUDE_PROJECT_DIR: join(tmpHome, 'other', 'empty') },
+    });
     expect(stdout).toContain('No recent');
   });
 
@@ -406,7 +483,10 @@ describe('CLI E2E: recent', () => {
       seedObs({ title: `Item ${i}`, text: `item text ${i}`, epochOffset: -i * 60000 });
     }
     const { stdout } = runCli(['recent', '3']);
-    const lines = stdout.trim().split('\n').filter(l => l.startsWith('#'));
+    const lines = stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('#'));
     expect(lines.length).toBe(3);
   });
 });
@@ -414,7 +494,8 @@ describe('CLI E2E: recent', () => {
 describe('CLI E2E: recall', () => {
   it('finds observations by filename in files_modified', () => {
     seedObs({
-      title: 'Fixed auth module', text: 'auth module fix',
+      title: 'Fixed auth module',
+      text: 'auth module fix',
       filesModified: '["src/auth.mjs"]',
     });
     const { stdout, exitCode } = runCli(['recall', 'auth.mjs']);
@@ -425,8 +506,10 @@ describe('CLI E2E: recall', () => {
 
   it('shows lesson with recall results', () => {
     seedObs({
-      title: 'Schema migration gotcha', text: 'schema gotcha',
-      filesModified: '["db/schema.mjs"]', lessonLearned: 'Always backup before migration',
+      title: 'Schema migration gotcha',
+      text: 'schema gotcha',
+      filesModified: '["db/schema.mjs"]',
+      lessonLearned: 'Always backup before migration',
     });
     const { stdout } = runCli(['recall', 'schema.mjs']);
     expect(stdout).toContain('Always backup before migration');
@@ -439,11 +522,14 @@ describe('CLI E2E: recall', () => {
 
   it('hides hook-llm fallback titles by default but surfaces with --include-noise', () => {
     seedObs({
-      type: 'bugfix', title: 'Real fix for parser regression',
-      filesModified: '["src/parser.mjs"]', lessonLearned: 'Catch trailing-whitespace edge case',
+      type: 'bugfix',
+      title: 'Real fix for parser regression',
+      filesModified: '["src/parser.mjs"]',
+      lessonLearned: 'Catch trailing-whitespace edge case',
     });
     seedObs({
-      type: 'change', title: 'Modified src/parser.mjs',
+      type: 'change',
+      title: 'Modified src/parser.mjs',
       filesModified: '["src/parser.mjs"]',
     });
 
@@ -462,8 +548,12 @@ describe('CLI E2E: recall', () => {
 describe('CLI E2E: get', () => {
   it('returns full observation details', () => {
     seedObs({
-      type: 'bugfix', title: 'Connection pool fix', text: 'Fixed pool exhaustion',
-      importance: 3, filesModified: '["src/pool.mjs"]', lessonLearned: 'Monitor pool size',
+      type: 'bugfix',
+      title: 'Connection pool fix',
+      text: 'Fixed pool exhaustion',
+      importance: 3,
+      filesModified: '["src/pool.mjs"]',
+      lessonLearned: 'Monitor pool size',
     });
     const obsId = db.prepare('SELECT id FROM observations ORDER BY id DESC LIMIT 1').get().id;
     const { stdout, exitCode } = runCli(['get', String(obsId)]);
@@ -491,7 +581,7 @@ describe('CLI E2E: get', () => {
     seedObs({ title: 'First obs', text: 'first content' });
     seedObs({ title: 'Second obs', text: 'second content' });
     const rows = db.prepare('SELECT id FROM observations ORDER BY id DESC LIMIT 2').all();
-    const ids = rows.map(r => r.id).join(',');
+    const ids = rows.map((r) => r.id).join(',');
     const { stdout } = runCli(['get', ids]);
     expect(stdout).toContain('First obs');
     expect(stdout).toContain('Second obs');
@@ -507,7 +597,11 @@ describe('CLI E2E: timeline', () => {
   it('shows timeline around an anchor', () => {
     // Create 7 observations with increasing timestamps
     for (let i = 0; i < 7; i++) {
-      seedObs({ title: `Timeline item ${i}`, text: `timeline content ${i}`, epochOffset: -((6 - i) * 60000) });
+      seedObs({
+        title: `Timeline item ${i}`,
+        text: `timeline content ${i}`,
+        epochOffset: -((6 - i) * 60000),
+      });
     }
     const rows = db.prepare('SELECT id FROM observations ORDER BY created_at_epoch ASC').all();
     const anchorId = rows[3].id; // middle item
@@ -517,7 +611,10 @@ describe('CLI E2E: timeline', () => {
     expect(stdout).toContain(`Timeline around #${anchorId}`);
     expect(stdout).toContain('<--'); // anchor marker
     // Should have before + anchor + after items
-    const lines = stdout.trim().split('\n').filter(l => l.startsWith('#'));
+    const lines = stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('#'));
     expect(lines.length).toBe(7); // 3 before + 1 anchor + 3 after
   });
 
@@ -551,7 +648,10 @@ describe('CLI E2E: timeline', () => {
     const rows = db.prepare('SELECT id FROM observations ORDER BY created_at_epoch ASC').all();
     const anchorId = rows[5].id;
     const { stdout } = runCli(['timeline', '--anchor', String(anchorId), '--before', '1', '--after', '1']);
-    const lines = stdout.trim().split('\n').filter(l => l.startsWith('#'));
+    const lines = stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('#'));
     expect(lines.length).toBe(3); // 1 before + 1 anchor + 1 after
   });
 });
@@ -580,7 +680,12 @@ describe('CLI E2E: save', () => {
   });
 
   it('respects --title flag', () => {
-    runCli(['save', 'Long description of what happened during the incident response and mitigation', '--title', 'Incident Response']);
+    runCli([
+      'save',
+      'Long description of what happened during the incident response and mitigation',
+      '--title',
+      'Incident Response',
+    ]);
     const obs = db.prepare("SELECT * FROM observations WHERE title = 'Incident Response'").get();
     expect(obs).toBeTruthy();
     expect(obs.narrative).toContain('Long description');
@@ -599,14 +704,17 @@ describe('CLI E2E: save', () => {
 
   it('scrubs secrets from saved content', () => {
     runCli(['save', 'Found API key sk-proj-abcdef1234567890abcdef1234567890 in config']);
-    const obs = db.prepare("SELECT * FROM observations ORDER BY id DESC LIMIT 1").get();
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id DESC LIMIT 1').get();
     expect(obs.text).not.toContain('sk-proj-abcdef1234567890abcdef1234567890');
     expect(obs.text).toContain('***');
   });
 
   it('generates minhash signature', () => {
-    runCli(['save', 'This is a sufficiently long observation text to generate a minhash signature for dedup purposes']);
-    const obs = db.prepare("SELECT minhash_sig FROM observations ORDER BY id DESC LIMIT 1").get();
+    runCli([
+      'save',
+      'This is a sufficiently long observation text to generate a minhash signature for dedup purposes',
+    ]);
+    const obs = db.prepare('SELECT minhash_sig FROM observations ORDER BY id DESC LIMIT 1').get();
     expect(obs.minhash_sig).toBeTruthy();
     expect(obs.minhash_sig.length).toBeGreaterThan(0);
   });
@@ -650,14 +758,18 @@ describe('CLI E2E: stats', () => {
   it('filters by --project', () => {
     seedObs({ title: 'In project', text: 'in project content' });
     // Insert observation in a different project
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES ('other-sess', 'other-sess', 'other--project', datetime('now'), ?, 'active')
-    `).run(Date.now());
-    db.prepare(`
+    `,
+    ).run(Date.now());
+    db.prepare(
+      `
       INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
       VALUES ('other-sess', 'other--project', 'other text', 'change', 'Other obs', '', '', '', '', '[]', '[]', 1, datetime('now'), ?)
-    `).run(Date.now());
+    `,
+    ).run(Date.now());
 
     const { stdout } = runCli(['stats', '--project', 'testproj']);
     expect(stdout).toContain('parent--testproj');
@@ -695,8 +807,10 @@ describe('CLI E2E: --json output for listing commands (Tier 2)', () => {
 
   it('recall --json includes file/include_noise/results with lesson_learned', () => {
     seedObs({
-      title: 'Json recall hit', text: 'r1',
-      filesModified: '["lib/json-target.mjs"]', lessonLearned: 'lesson body',
+      title: 'Json recall hit',
+      text: 'r1',
+      filesModified: '["lib/json-target.mjs"]',
+      lessonLearned: 'lesson body',
     });
 
     const { stdout, exitCode } = runCli(['recall', 'json-target.mjs', '--json']);
@@ -722,7 +836,16 @@ describe('CLI E2E: --json output for listing commands (Tier 2)', () => {
     const rows = db.prepare('SELECT id FROM observations ORDER BY created_at_epoch ASC').all();
     const anchorId = rows[2].id;
 
-    const { stdout, exitCode } = runCli(['timeline', '--anchor', String(anchorId), '--before', '1', '--after', '1', '--json']);
+    const { stdout, exitCode } = runCli([
+      'timeline',
+      '--anchor',
+      String(anchorId),
+      '--before',
+      '1',
+      '--after',
+      '1',
+      '--json',
+    ]);
     expect(exitCode).toBe(0);
     const data = JSON.parse(stdout);
     expect(data.anchor.id).toBe(anchorId);
@@ -777,10 +900,12 @@ describe('CLI E2E: --json output for listing commands (Tier 2)', () => {
     expect(data.totals).toHaveProperty('observations');
     expect(data.totals).toHaveProperty('sessions');
     expect(data.recent).toHaveProperty('observations');
-    expect(data.type_distribution).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'bugfix' }),
-      expect.objectContaining({ type: 'decision' }),
-    ]));
+    expect(data.type_distribution).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'bugfix' }),
+        expect.objectContaining({ type: 'decision' }),
+      ]),
+    );
     expect(data.data_health).toHaveProperty('noise_ratio');
     expect(data.tier_distribution).toHaveProperty('working');
   });
@@ -884,11 +1009,14 @@ describe('CLI E2E: import-jsonl routing', () => {
   // The shape-mismatch warning must fire ONLY when no transcript event was recognized.
   it('re-running on an already-imported transcript does not claim wrong shape', () => {
     const transcript = join(tmpHome, 'rerun.jsonl');
-    writeFileSync(transcript, [
-      '{"type":"user","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:00.000Z","message":{"role":"user","content":"investigate the cache eviction policy"}}',
-      '{"type":"assistant","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_x1","name":"Read","input":{"file_path":"/p/cache.mjs"}}]}}',
-      '{"type":"user","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_x1","content":"file contents here"}]}}',
-    ].join('\n') + '\n');
+    writeFileSync(
+      transcript,
+      [
+        '{"type":"user","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:00.000Z","message":{"role":"user","content":"investigate the cache eviction policy"}}',
+        '{"type":"assistant","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_x1","name":"Read","input":{"file_path":"/p/cache.mjs"}}]}}',
+        '{"type":"user","sessionId":"e2e-rerun-1","timestamp":"2026-06-20T10:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_x1","content":"file contents here"}]}}',
+      ].join('\n') + '\n',
+    );
 
     const first = runCli(['import-jsonl', transcript, '--project', 'rerun-proj']);
     expect(first.exitCode).toBe(0);
@@ -905,10 +1033,13 @@ describe('CLI E2E: import-jsonl routing', () => {
   // JSON with no user/assistant/tool_result events).
   it('warns about wrong shape when no transcript event is recognized', () => {
     const exportShaped = join(tmpHome, 'export-output.jsonl');
-    writeFileSync(exportShaped, [
-      '{"id":1,"type":"bugfix","title":"Some saved obs","narrative":"body"}',
-      '{"id":2,"type":"decision","title":"Another obs","narrative":"body"}',
-    ].join('\n') + '\n');
+    writeFileSync(
+      exportShaped,
+      [
+        '{"id":1,"type":"bugfix","title":"Some saved obs","narrative":"body"}',
+        '{"id":2,"type":"decision","title":"Another obs","narrative":"body"}',
+      ].join('\n') + '\n',
+    );
 
     const { stdout, exitCode } = runCli(['import-jsonl', exportShaped, '--project', 'wrong-proj']);
     expect(exitCode).toBe(0);
@@ -929,14 +1060,18 @@ describe('CLI E2E: context', () => {
     const db = new Database(join(dataDir, 'claude-mem-lite.db'));
     const now = Date.now();
     const sessionId = `cli-e2e-ctx-${randomUUID().slice(0, 8)}`;
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
       VALUES (?, ?, 'mem-cli-e2e-ctx', ?, ?, 'completed')
-    `).run(sessionId, sessionId, new Date(now).toISOString(), now);
-    db.prepare(`
+    `,
+    ).run(sessionId, sessionId, new Date(now).toISOString(), now);
+    db.prepare(
+      `
       INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
       VALUES (?, 'mem-cli-e2e-ctx', 'DB-derived request', 'DB-derived completed', 'DB-derived next', ?, ?)
-    `).run(sessionId, new Date(now).toISOString(), now);
+    `,
+    ).run(sessionId, new Date(now).toISOString(), now);
     db.close();
 
     // Write a CLAUDE.md with a DIFFERENT context — the CLI must ignore it
@@ -1017,7 +1152,15 @@ describe('registry bare value-less flag (Round2-P1)', () => {
   // a wrong importance, while the sibling `save` rejected the same input. Aligned via
   // isNumericToken (#8277/#8470).
   it('activity save --importance rejects trailing-garbage tokens', () => {
-    const { stderr, exitCode } = runCli(['activity', 'save', '--type', 'bugfix', 'x', '--importance', '3xyz']);
+    const { stderr, exitCode } = runCli([
+      'activity',
+      'save',
+      '--type',
+      'bugfix',
+      'x',
+      '--importance',
+      '3xyz',
+    ]);
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain('Invalid importance');
   });
@@ -1074,8 +1217,13 @@ describe('CLI E2E: search → recall hint on a path query', () => {
   // user pasting the path they were just editing got a flat "No results" — true about the
   // index, false about the store. This is the one zero-result shape the CLI can disprove.
   it('names the recall command when the query is a path the store knows', () => {
-    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
-      filesModified: '["src/payments/webhook.ts"]', lessonLearned: 'Dedupe on the provider event id' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Retry storm on duplicate deliveries',
+      importance: 3,
+      filesModified: '["src/payments/webhook.ts"]',
+      lessonLearned: 'Dedupe on the provider event id',
+    });
 
     const { stdout, exitCode } = runCli(['search', 'src/payments/webhook.ts']);
     expect(exitCode).toBe(0);
@@ -1085,8 +1233,13 @@ describe('CLI E2E: search → recall hint on a path query', () => {
   });
 
   it('fires on a bare filename too (recall matches on basename)', () => {
-    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
-      filesModified: '["src/payments/webhook.ts"]', lessonLearned: 'Dedupe on the provider event id' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Retry storm on duplicate deliveries',
+      importance: 3,
+      filesModified: '["src/payments/webhook.ts"]',
+      lessonLearned: 'Dedupe on the provider event id',
+    });
     const { stdout } = runCli(['search', 'webhook.ts']);
     expect(stdout).toContain('recall "webhook.ts"');
   });
@@ -1094,8 +1247,12 @@ describe('CLI E2E: search → recall hint on a path query', () => {
   // Driven to failure in both directions: a hint that fires on every empty search is
   // noise, and a hint that fires when `recall` would ALSO be empty is a lie.
   it('stays silent for a prose query', () => {
-    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
-      filesModified: '["src/payments/webhook.ts"]' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Retry storm on duplicate deliveries',
+      importance: 3,
+      filesModified: '["src/payments/webhook.ts"]',
+    });
     const { stdout } = runCli(['search', 'quantum entanglement scheduler']);
     expect(stdout).toContain('No results');
     expect(stdout).not.toContain('search indexes text');
@@ -1108,8 +1265,12 @@ describe('CLI E2E: search → recall hint on a path query', () => {
   });
 
   it('leaves --json output unchanged', () => {
-    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
-      filesModified: '["src/payments/webhook.ts"]' });
+    seedObs({
+      type: 'bugfix',
+      title: 'Retry storm on duplicate deliveries',
+      importance: 3,
+      filesModified: '["src/payments/webhook.ts"]',
+    });
     const { stdout } = runCli(['search', 'src/payments/webhook.ts', '--json']);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed).toMatchObject({ total: 0, returned: 0, results: [] });
@@ -1119,11 +1280,21 @@ describe('CLI E2E: search → recall hint on a path query', () => {
   // question the user did not ask, so it must not bump the engagement counters that
   // feed the tier/decay system.
   it('does not bump access_count on the rows it counts', () => {
-    const id = Number(seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
-      filesModified: '["src/payments/webhook.ts"]' }).lastInsertRowid);
-    const before = db.prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?').get(id).c;
+    const id = Number(
+      seedObs({
+        type: 'bugfix',
+        title: 'Retry storm on duplicate deliveries',
+        importance: 3,
+        filesModified: '["src/payments/webhook.ts"]',
+      }).lastInsertRowid,
+    );
+    const before = db
+      .prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?')
+      .get(id).c;
     runCli(['search', 'src/payments/webhook.ts']);
-    const after = db.prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?').get(id).c;
+    const after = db
+      .prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?')
+      .get(id).c;
     expect(after).toBe(before);
   });
 });

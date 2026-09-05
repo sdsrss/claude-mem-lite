@@ -15,7 +15,10 @@ import { fileURLToPath } from 'url';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import {
-  saveObservation, formatSupersedeSkipped, formatSupersededNote, splitSupersedeTokens,
+  saveObservation,
+  formatSupersedeSkipped,
+  formatSupersededNote,
+  splitSupersedeTokens,
 } from '../lib/save-observation.mjs';
 
 describe('saveObservation supersedes', () => {
@@ -25,18 +28,29 @@ describe('saveObservation supersedes', () => {
     insertSession(db, { id: 'manual-test', project: 'test' });
     insertSession(db, { id: 'manual-other', project: 'other' });
   });
-  afterEach(() => { db.close(); });
-
-  const seedOld = (over = {}) => insertObs(db, {
-    sessionId: 'manual-test', project: 'test', type: 'discovery',
-    title: 'Old rerank verdict', narrative: 'rerank is not the lever', text: 'rerank verdict', ...over,
+  afterEach(() => {
+    db.close();
   });
+
+  const seedOld = (over = {}) =>
+    insertObs(db, {
+      sessionId: 'manual-test',
+      project: 'test',
+      type: 'discovery',
+      title: 'Old rerank verdict',
+      narrative: 'rerank is not the lever',
+      text: 'rerank verdict',
+      ...over,
+    });
 
   it('tombstones and links a prior observation the new save overturns', () => {
     const oldId = Number(seedOld().lastInsertRowid);
     const r = saveObservation(db, {
       content: 'Fresh measurement overturns the old rerank verdict: paraphrase gap closed',
-      title: 'Rerank verdict reversed', type: 'decision', project: 'test', supersedes: [oldId],
+      title: 'Rerank verdict reversed',
+      type: 'decision',
+      project: 'test',
+      supersedes: [oldId],
     });
     expect(r.kind).toBe('saved');
     expect(r.supersededIds).toEqual([oldId]);
@@ -46,9 +60,20 @@ describe('saveObservation supersedes', () => {
   });
 
   it('never supersedes a row in a different project', () => {
-    const otherId = Number(insertObs(db, { sessionId: 'manual-other', project: 'other', title: 'Other proj', narrative: 'x', text: 'x' }).lastInsertRowid);
+    const otherId = Number(
+      insertObs(db, {
+        sessionId: 'manual-other',
+        project: 'other',
+        title: 'Other proj',
+        narrative: 'x',
+        text: 'x',
+      }).lastInsertRowid,
+    );
     const r = saveObservation(db, {
-      content: 'A brand new save in test project unrelated to other', title: 'New', project: 'test', supersedes: [otherId],
+      content: 'A brand new save in test project unrelated to other',
+      title: 'New',
+      project: 'test',
+      supersedes: [otherId],
     });
     expect(r.supersededIds).toEqual([]);
     const other = db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(otherId);
@@ -58,7 +83,10 @@ describe('saveObservation supersedes', () => {
   it('skips an already-superseded row (idempotent, no re-stamp)', () => {
     const oldId = Number(seedOld({ supersededAt: 111 }).lastInsertRowid);
     const r = saveObservation(db, {
-      content: 'Another fresh conclusion about the ranking lever question entirely', title: 'Newer', project: 'test', supersedes: [oldId],
+      content: 'Another fresh conclusion about the ranking lever question entirely',
+      title: 'Newer',
+      project: 'test',
+      supersedes: [oldId],
     });
     expect(r.supersededIds).toEqual([]);
     const old = db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId);
@@ -67,7 +95,9 @@ describe('saveObservation supersedes', () => {
 
   it('ignores self-reference, non-existent, and malformed ids', () => {
     const r = saveObservation(db, {
-      content: 'Standalone save that references junk supersede ids for safety', title: 'Standalone', project: 'test',
+      content: 'Standalone save that references junk supersede ids for safety',
+      title: 'Standalone',
+      project: 'test',
       supersedes: [999999, -1, 0, 'x', null],
     });
     expect(r.kind).toBe('saved');
@@ -89,7 +119,11 @@ describe('saveObservation supersedes', () => {
         if (prop === 'prepare') {
           return (sql) => {
             if (/UPDATE observations SET superseded_at/.test(sql)) {
-              return { run: () => { throw new Error('simulated failure mid-supersession'); } };
+              return {
+                run: () => {
+                  throw new Error('simulated failure mid-supersession');
+                },
+              };
             }
             return target.prepare(sql);
           };
@@ -99,14 +133,21 @@ describe('saveObservation supersedes', () => {
       },
     });
 
-    expect(() => saveObservation(failingDb, {
-      content: 'Fresh measurement overturns the old rerank verdict: paraphrase gap closed',
-      title: 'Rerank verdict reversed', type: 'decision', project: 'test', supersedes: [oldId],
-    })).toThrow(/simulated failure mid-supersession/);
+    expect(() =>
+      saveObservation(failingDb, {
+        content: 'Fresh measurement overturns the old rerank verdict: paraphrase gap closed',
+        title: 'Rerank verdict reversed',
+        type: 'decision',
+        project: 'test',
+        supersedes: [oldId],
+      }),
+    ).toThrow(/simulated failure mid-supersession/);
 
     // Neither half may survive: no orphan new row, and the old row is untouched.
     expect(db.prepare('SELECT COUNT(*) AS c FROM observations').get().c).toBe(before);
-    expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at).toBeNull();
+    expect(
+      db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at,
+    ).toBeNull();
   });
 
   // D#201. Every case above pins that an ineligible id is NOT superseded. None
@@ -122,15 +163,22 @@ describe('saveObservation supersedes', () => {
   // replay that must NOT be turned into an error.
   it('reports every requested id that was NOT superseded, with a reason (D#201)', () => {
     const gone = 999999;
-    const otherId = Number(insertObs(db, {
-      sessionId: 'manual-other', project: 'other', title: 'Other proj', narrative: 'x', text: 'x',
-    }).lastInsertRowid);
+    const otherId = Number(
+      insertObs(db, {
+        sessionId: 'manual-other',
+        project: 'other',
+        title: 'Other proj',
+        narrative: 'x',
+        text: 'x',
+      }).lastInsertRowid,
+    );
     const already = Number(seedOld({ supersededAt: 111 }).lastInsertRowid);
     const good = Number(seedOld().lastInsertRowid);
 
     const r = saveObservation(db, {
       content: 'A correcting observation that names one good id and three bad ones',
-      title: 'Correction', project: 'test',
+      title: 'Correction',
+      project: 'test',
       supersedes: [good, gone, otherId, already],
     });
 
@@ -140,11 +188,13 @@ describe('saveObservation supersedes', () => {
     // `kind` is asserted, not tolerated: D#205 made the same three reasons reachable for
     // EVENT ids, so a skip entry that does not say which table it came from would name an
     // id that exists in both.
-    expect(skipped).toEqual([
-      { id: otherId, reason: 'other-project', kind: 'obs' },
-      { id: already, reason: 'already-superseded', kind: 'obs' },
-      { id: gone, reason: 'no-such-observation', kind: 'obs' },
-    ].sort((a, b) => a.id - b.id));
+    expect(skipped).toEqual(
+      [
+        { id: otherId, reason: 'other-project', kind: 'obs' },
+        { id: already, reason: 'already-superseded', kind: 'obs' },
+        { id: gone, reason: 'no-such-observation', kind: 'obs' },
+      ].sort((a, b) => a.id - b.id),
+    );
   });
 
   it('supersedeSkipped is empty when every requested id lands (D#201)', () => {
@@ -152,7 +202,9 @@ describe('saveObservation supersedes', () => {
     const b = Number(seedOld().lastInsertRowid);
     const r = saveObservation(db, {
       content: 'A correcting observation naming only ids that are all eligible',
-      title: 'Correction', project: 'test', supersedes: [a, b],
+      title: 'Correction',
+      project: 'test',
+      supersedes: [a, b],
     });
     expect(r.supersededIds.sort()).toEqual([a, b].sort());
     expect(r.supersedeSkipped).toEqual([]);
@@ -163,12 +215,17 @@ describe('saveObservation supersedes', () => {
     // They still came from the user, so they still have to surface.
     const r = saveObservation(db, {
       content: 'Standalone save that references junk supersede ids for safety',
-      title: 'Standalone', project: 'test', supersedes: [-1, 0, 'x', null],
+      title: 'Standalone',
+      project: 'test',
+      supersedes: [-1, 0, 'x', null],
     });
     expect(r.supersededIds).toEqual([]);
-    expect(r.supersedeSkipped.map((s) => s.reason)).toEqual(
-      ['malformed-id', 'malformed-id', 'malformed-id', 'malformed-id']
-    );
+    expect(r.supersedeSkipped.map((s) => s.reason)).toEqual([
+      'malformed-id',
+      'malformed-id',
+      'malformed-id',
+      'malformed-id',
+    ]);
   });
 
   // The nastiest instance of the same sentence: the save never happens at all,
@@ -181,12 +238,17 @@ describe('saveObservation supersedes', () => {
     expect(first.kind).toBe('saved');
 
     const second = saveObservation(db, {
-      content: body, title: 'Correction', project: 'test', supersedes: [oldId],
+      content: body,
+      title: 'Correction',
+      project: 'test',
+      supersedes: [oldId],
     });
     expect(second.kind).toBe('duplicate');
     expect(second.supersedeSkipped).toEqual([{ id: oldId, reason: 'duplicate-save', kind: 'obs' }]);
     // …and the row really did stay live, which is what makes the report necessary.
-    expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at).toBeNull();
+    expect(
+      db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at,
+    ).toBeNull();
   });
 
   // CLASS-LEVEL SWEEP. `supersedeSkipped` is only worth anything if a face
@@ -199,13 +261,20 @@ describe('saveObservation supersedes', () => {
     const problems = [];
     for (const face of faces) {
       const src = readFileSync(join(REPO, face), 'utf8');
-      if (!/import\s*\{[^}]*\bformatSupersedeSkipped\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(src)) {
+      if (
+        !/import\s*\{[^}]*\bformatSupersedeSkipped\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(
+          src,
+        )
+      ) {
         problems.push(`${face}: does not import formatSupersedeSkipped`);
         continue;
       }
       // Call sites, not the import.
       const calls = [...src.matchAll(/formatSupersedeSkipped\(/g)].length;
-      if (calls < 2) problems.push(`${face}: ${calls} call site(s) — needs one for the saved path and one for the dedup short-circuit`);
+      if (calls < 2)
+        problems.push(
+          `${face}: ${calls} call site(s) — needs one for the saved path and one for the dedup short-circuit`,
+        );
       // The dedup branch must consult it BEFORE it returns, or the swallowed
       // supersession stays silent on exactly the path that swallows it.
       //
@@ -216,7 +285,10 @@ describe('saveObservation supersedes', () => {
       // first draft of this sweep anchored there and reported a false positive
       // against correctly-wired code.
       const dupIdx = src.search(/Skipped: similar to existing/);
-      if (dupIdx === -1) { problems.push(`${face}: no user-facing duplicate message found — sweep would pass vacuously`); continue; }
+      if (dupIdx === -1) {
+        problems.push(`${face}: no user-facing duplicate message found — sweep would pass vacuously`);
+        continue;
+      }
       const dupBlock = src.slice(Math.max(0, dupIdx - 400), dupIdx + 600);
       if (!dupBlock.includes('formatSupersedeSkipped')) {
         problems.push(`${face}: the duplicate branch returns without consulting formatSupersedeSkipped`);
@@ -227,10 +299,16 @@ describe('saveObservation supersedes', () => {
 
   it('is a no-op when supersedes is omitted (back-compat)', () => {
     const oldId = Number(seedOld().lastInsertRowid);
-    const r = saveObservation(db, { content: 'Plain save with no supersedes field at all here', title: 'Plain', project: 'test' });
+    const r = saveObservation(db, {
+      content: 'Plain save with no supersedes field at all here',
+      title: 'Plain',
+      project: 'test',
+    });
     expect(r.supersededIds).toEqual([]);
     expect(r.supersededEventIds).toEqual([]);
-    expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at).toBeNull();
+    expect(
+      db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(oldId).superseded_at,
+    ).toBeNull();
   });
 
   // ─── D#205: events are supersedable through the same verb ──────────────────
@@ -270,10 +348,16 @@ describe('saveObservation supersedes', () => {
     });
 
     function seedEvent({ project = 'test', title = 'Hook context cost scales 2.1-3.8x per call' } = {}) {
-      return Number(db.prepare(`
+      return Number(
+        db
+          .prepare(
+            `
         INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
         VALUES (?, 'discovery', ?, 'body', 3, ?)
-      `).run(project, title, Date.now() - 60_000).lastInsertRowid);
+      `,
+          )
+          .run(project, title, Date.now() - 60_000).lastInsertRowid,
+      );
     }
 
     it('retires the event and reports it separately from observations', () => {
@@ -281,14 +365,18 @@ describe('saveObservation supersedes', () => {
       const obsId = Number(seedOld().lastInsertRowid);
       const r = saveObservation(db, {
         content: 'The 2.1-3.8x range was never produced by any measurement and is withdrawn',
-        title: 'Cost range withdrawn', project: 'test', supersedes: [obsId, `E#${evId}`],
+        title: 'Cost range withdrawn',
+        project: 'test',
+        supersedes: [obsId, `E#${evId}`],
       });
       expect(r.supersedeSkipped).toEqual([]);
       // Separate arrays, because the two tables share an id space: a merged list of bare
       // `#N` could not say which table each retired row came from.
       expect(r.supersededIds).toEqual([obsId]);
       expect(r.supersededEventIds).toEqual([evId]);
-      const ev = db.prepare('SELECT superseded_at_epoch, superseded_by_id FROM events WHERE id = ?').get(evId);
+      const ev = db
+        .prepare('SELECT superseded_at_epoch, superseded_by_id FROM events WHERE id = ?')
+        .get(evId);
       expect(ev.superseded_at_epoch, 'event must be tombstoned').toBeGreaterThan(0);
       // superseded_by_id REFERENCES events(id) and the retiring row is an OBSERVATION, so
       // writing savedId there would point at whatever event happens to share the number —
@@ -303,11 +391,15 @@ describe('saveObservation supersedes', () => {
       const sameNumbered = Number(seedOld({ title: 'same-id decoy' }).lastInsertRowid);
       const r = saveObservation(db, {
         content: 'Bare numbers address observations only, one more sentence for length',
-        title: 'Namespace check', project: 'test', supersedes: [sameNumbered],
+        title: 'Namespace check',
+        project: 'test',
+        supersedes: [sameNumbered],
       });
       expect(r.supersededIds).toEqual([sameNumbered]);
       expect(r.supersededEventIds).toEqual([]);
-      expect(db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch).toBeNull();
+      expect(
+        db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch,
+      ).toBeNull();
     });
 
     it('classifies an unusable E# id instead of dropping it', () => {
@@ -316,7 +408,8 @@ describe('saveObservation supersedes', () => {
       db.prepare('UPDATE events SET superseded_at_epoch = ? WHERE id = ?').run(Date.now(), already);
       const r = saveObservation(db, {
         content: 'Three unusable event ids must each come back with their own reason here',
-        title: 'Classification', project: 'test',
+        title: 'Classification',
+        project: 'test',
         supersedes: ['E#99999', `E#${foreign}`, `E#${already}`],
       });
       expect(r.supersededEventIds).toEqual([]);
@@ -338,15 +431,23 @@ describe('saveObservation supersedes', () => {
       const evId = seedEvent();
       const text = 'A correction that will read as a near duplicate of itself shortly';
       saveObservation(db, { content: text, title: 'Dup base', project: 'test' });
-      const r = saveObservation(db, { content: text, title: 'Dup base', project: 'test', supersedes: [`E#${evId}`] });
+      const r = saveObservation(db, {
+        content: text,
+        title: 'Dup base',
+        project: 'test',
+        supersedes: [`E#${evId}`],
+      });
       expect(r.kind).toBe('duplicate');
       expect(r.supersedeSkipped).toEqual([{ id: evId, reason: 'duplicate-save', kind: 'event' }]);
-      expect(db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch).toBeNull();
+      expect(
+        db.prepare('SELECT superseded_at_epoch FROM events WHERE id = ?').get(evId).superseded_at_epoch,
+      ).toBeNull();
     });
 
     it('formatSupersededNote renders both tables, and neither face rebuilds the string', () => {
-      expect(formatSupersededNote({ supersededIds: [7], supersededEventIds: [9] }))
-        .toBe(' Superseded: #7, E#9.');
+      expect(formatSupersededNote({ supersededIds: [7], supersededEventIds: [9] })).toBe(
+        ' Superseded: #7, E#9.',
+      );
       expect(formatSupersededNote({ supersededIds: [], supersededEventIds: [] })).toBe('');
       expect(formatSupersededNote(undefined)).toBe('');
 
@@ -356,7 +457,11 @@ describe('saveObservation supersedes', () => {
       const problems = [];
       for (const face of ['mem-cli.mjs', 'server.mjs']) {
         const src = readFileSync(join(REPO, face), 'utf8');
-        if (!/import\s*\{[^}]*\bformatSupersededNote\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(src)) {
+        if (
+          !/import\s*\{[^}]*\bformatSupersededNote\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(
+            src,
+          )
+        ) {
           problems.push(`${face}: does not import formatSupersededNote`);
           continue;
         }

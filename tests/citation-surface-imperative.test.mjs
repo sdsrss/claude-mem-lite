@@ -37,15 +37,23 @@ const bothInOne = (blockId, imperativeId, lesson = 'stamp the guard on both dedu
     type: 'hook_success',
     command: 'node "/home/sds/.claude-mem-lite/hook.mjs" user-prompt',
     stdout:
-      `<memory-context relevance="high">\n- [decision] picked X | Lesson: Y (#${blockId})\n</memory-context>\n`
-      + `${formatTaskImperative(lesson, imperativeId)}\n`,
+      `<memory-context relevance="high">\n- [decision] picked X | Lesson: Y (#${blockId})\n</memory-context>\n` +
+      `${formatTaskImperative(lesson, imperativeId)}\n`,
   },
 });
 
 describe('task_imperative surface', () => {
   let tmp;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cite-imp-')); });
-  afterEach(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* gone */ } });
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cite-imp-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   const writeTranscript = (entries) => {
     const path = join(tmp, 'transcript.jsonl');
@@ -71,21 +79,25 @@ describe('task_imperative surface', () => {
     // Lessons routinely cross-reference other observations; the emitter puts THIS
     // lesson's id in trailing parens. Collecting every (#NN) on the line would credit
     // the face with injections it never made.
-    const path = writeTranscript([bothInOne(202, 909, 'follow the chain from (#7) rather than re-deriving it')]);
+    const path = writeTranscript([
+      bothInOne(202, 909, 'follow the chain from (#7) rather than re-deriving it'),
+    ]);
     expect([...extractInjectedBySurface(path).task_imperative]).toEqual([909]);
   });
 
   it('ignores an imperative-shaped line under a different hook command', () => {
     // Same prose, wrong origin: a transcript can quote the framing (this very test file
     // does). Only the UserPromptSubmit hook's own attachment counts as an injection.
-    const path = writeTranscript([{
-      type: 'attachment',
-      attachment: {
-        type: 'hook_success',
-        command: 'node "/home/sds/.claude-mem-lite/scripts/user-prompt-search.js"',
-        stdout: `${formatTaskImperative('quoted, not injected', 909)}\n`,
+    const path = writeTranscript([
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/home/sds/.claude-mem-lite/scripts/user-prompt-search.js"',
+          stdout: `${formatTaskImperative('quoted, not injected', 909)}\n`,
+        },
       },
-    }]);
+    ]);
     expect(extractInjectedBySurface(path).task_imperative.size).toBe(0);
   });
 
@@ -135,16 +147,29 @@ describe('task_imperative surface', () => {
   it('records and reads back as its own row in the funnel', () => {
     const db = createTestDb();
     insertSession(db, { id: 'sess-imp', project: 'p1' });
-    const mk = (title) => Number(insertObs(db, {
-      sessionId: 'sess-imp', project: 'p1', type: 'bugfix', title, importance: 2,
-    }).lastInsertRowid);
+    const mk = (title) =>
+      Number(
+        insertObs(db, {
+          sessionId: 'sess-imp',
+          project: 'p1',
+          type: 'bugfix',
+          title,
+          importance: 2,
+        }).lastInsertRowid,
+      );
     const imperativeId = mk('imperative pick');
     const blockId = mk('block pick');
 
-    recordCitationSurfaces(db, 'p1', 'cc-sess-1', {
-      ups: new Set([blockId]),
-      task_imperative: new Set([imperativeId]),
-    }, new Set([imperativeId]));
+    recordCitationSurfaces(
+      db,
+      'p1',
+      'cc-sess-1',
+      {
+        ups: new Set([blockId]),
+        task_imperative: new Set([imperativeId]),
+      },
+      new Set([imperativeId]),
+    );
 
     const faces = Object.fromEntries(
       computeSurfaceFunnel(db, { days: 7, project: 'p1' }).surfaces.map((s) => [s.surface, s]),

@@ -26,7 +26,13 @@ const ENTRIES = ['cli.mjs', 'mem-cli.mjs', 'server.mjs', 'hook.mjs', 'install.mj
 const homes = [];
 
 afterAll(() => {
-  for (const h of homes) { try { rmSync(h, { recursive: true, force: true }); } catch { /* best-effort */ } }
+  for (const h of homes) {
+    try {
+      rmSync(h, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
 });
 
 /** A fixture install that doctor considers healthy, so each case can break exactly one thing. */
@@ -52,8 +58,11 @@ function doctorChecks(home) {
   try {
     out = execFileSync(process.execPath, [INSTALLER, 'doctor', '--json'], {
       env: {
-        ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'),
-        CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1',
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_QUIET_HOOKS: '1',
       },
       encoding: 'utf8',
       timeout: SUBPROCESS_TIMEOUT_MS,
@@ -69,8 +78,10 @@ function doctorChecks(home) {
   // and every `find` over it returns undefined, so all three cases failed claiming the
   // branch never fired. The verdict lives in `checks`; assert it is there rather than
   // defaulting to `[]`, or a shape change turns these into three silent no-ops.
-  expect(Array.isArray(parsed.checks),
-    `doctor --json has no checks array; got keys ${Object.keys(parsed).join(', ')}`).toBe(true);
+  expect(
+    Array.isArray(parsed.checks),
+    `doctor --json has no checks array; got keys ${Object.keys(parsed).join(', ')}`,
+  ).toBe(true);
   return parsed.checks;
 }
 
@@ -136,13 +147,14 @@ describe('doctor reports its failure branches', () => {
     // what is on disk. This branch is what turns "my hooks silently stopped working" into
     // a named file.
     const { home, installDir } = healthyHome();
-    const victim = HOOK_SCRIPT_FILES.find((f) => f.endsWith('user-prompt-search.js'))
-      || HOOK_SCRIPT_FILES[0];
+    const victim = HOOK_SCRIPT_FILES.find((f) => f.endsWith('user-prompt-search.js')) || HOOK_SCRIPT_FILES[0];
     expect(victim, 'premise: the manifest must be non-empty').toBeTruthy();
 
     const clean = doctorChecks(home);
-    expect(find(clean, new RegExp(victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))),
-      'premise: healthy fixture must not already name this script').toBeUndefined();
+    expect(
+      find(clean, new RegExp(victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))),
+      'premise: healthy fixture must not already name this script',
+    ).toBeUndefined();
 
     unlinkSync(join(installDir, 'scripts', victim));
     const entry = find(doctorChecks(home), new RegExp(victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

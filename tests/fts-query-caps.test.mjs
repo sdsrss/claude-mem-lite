@@ -20,7 +20,7 @@ const terms = (q) => (q ? q.split(/ AND | /).filter(Boolean).length : 0);
 
 describe('sanitizeFtsQuery caps', () => {
   it('is unchanged with no options — the default stays uncapped', () => {
-    const long = longAscii(400);                       // ~19k chars
+    const long = longAscii(400); // ~19k chars
     expect(sanitizeFtsQuery(long)).toBe(sanitizeFtsQuery(long, {}));
     expect(sanitizeFtsQuery(long, { maxChars: 0, maxTokens: 0 })).toBe(sanitizeFtsQuery(long));
   });

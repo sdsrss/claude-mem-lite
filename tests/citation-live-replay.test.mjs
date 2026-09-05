@@ -38,15 +38,13 @@ describe('face-coverage guard', () => {
     // The failure this guard exists for: a face added to SURFACE_MATCHERS that this
     // replay silently cannot see would print a table missing a row, which reads as
     // "that face scored zero" rather than "that face was never measured".
-    expect(() => assertFaceCoverage(
-      ['pretool'], { keyctx: 'why' }, ['pretool', 'keyctx', 'brand_new_face'],
-    )).toThrow(/brand_new_face/);
+    expect(() =>
+      assertFaceCoverage(['pretool'], { keyctx: 'why' }, ['pretool', 'keyctx', 'brand_new_face']),
+    ).toThrow(/brand_new_face/);
   });
 
   it('THROWS when it claims to score something that is not a product face', () => {
-    expect(() => assertFaceCoverage(
-      ['pretool', 'typo_face'], {}, ['pretool'],
-    )).toThrow(/typo_face/);
+    expect(() => assertFaceCoverage(['pretool', 'typo_face'], {}, ['pretool'])).toThrow(/typo_face/);
   });
 
   it('THROWS when a face is claimed by BOTH lists — the two must partition, not overlap', () => {
@@ -54,9 +52,9 @@ describe('face-coverage guard', () => {
     // unknown-check; the run would then print "not replayable here: ups" directly above
     // a scored `ups` row. The case that used to sit here carried this title and asserted
     // only that CITATION_SURFACES was non-empty — it never checked the property it named.
-    expect(() => assertFaceCoverage(
-      ['pretool', 'ups'], { ups: 'bogus claim of unreachability' }, ['pretool', 'ups'],
-    )).toThrow(/BOTH scored and declared unreachable/);
+    expect(() =>
+      assertFaceCoverage(['pretool', 'ups'], { ups: 'bogus claim of unreachability' }, ['pretool', 'ups']),
+    ).toThrow(/BOTH scored and declared unreachable/);
   });
 
   it('has a non-empty face list to check against', () => {
@@ -77,7 +75,9 @@ describe('ruler-can-say-no guard', () => {
   });
 
   it('THROWS when no injected pair reads as cited (numerator cannot see the denominator)', () => {
-    expect(() => assertRulerCanSayNo(rows(10, 0))).toThrow(/cannot \n?see the denominator|cannot see the denominator/);
+    expect(() => assertRulerCanSayNo(rows(10, 0))).toThrow(
+      /cannot \n?see the denominator|cannot see the denominator/,
+    );
   });
 
   it('THROWS when nothing was injected at all', () => {
@@ -93,7 +93,14 @@ describe('ruler-can-say-no guard', () => {
     expect(() => assertRulerCanSayNo(rows(0, 0), { windowed: true })).toThrow(/--since\/--until window/);
     expect(() => assertRulerCanSayNo(rows(0, 0), { frozen: true })).toThrow(/--corpus/);
     // …and the three are actually different, not one string with a decorative branch.
-    const msg = (o) => { try { assertRulerCanSayNo(rows(0, 0), o); } catch (e) { return e.message; } return ''; };
+    const msg = (o) => {
+      try {
+        assertRulerCanSayNo(rows(0, 0), o);
+      } catch (e) {
+        return e.message;
+      }
+      return '';
+    };
     expect(new Set([msg({}), msg({ windowed: true }), msg({ frozen: true })]).size).toBe(3);
   });
 
@@ -107,17 +114,19 @@ describe('ruler-can-say-no guard', () => {
       { face: 'error_recall', pairs: 25, hits: 0 },
     ];
     const global = mixed.reduce((a, r) => a + r.hits, 0) / mixed.reduce((a, r) => a + r.pairs, 0);
-    expect(global).toBeGreaterThan(0);   // the global checks cannot fire on this input…
+    expect(global).toBeGreaterThan(0); // the global checks cannot fire on this input…
     expect(global).toBeLessThan(1);
-    expect(() => assertRulerCanSayNo(mixed)).toThrow(/pretool/);  // …and the per-face one must.
+    expect(() => assertRulerCanSayNo(mixed)).toThrow(/pretool/); // …and the per-face one must.
   });
 
   it('does NOT throw on a small face that happens to be saturated', () => {
     // Asymmetry, on purpose: 3/3 is an ordinary small sample, 25/25 is a broken predicate.
-    expect(() => assertRulerCanSayNo([
-      { face: 'pretool', pairs: 40, hits: 12 },
-      { face: 'task_imperative', pairs: 3, hits: 3 },
-    ])).not.toThrow();
+    expect(() =>
+      assertRulerCanSayNo([
+        { face: 'pretool', pairs: 40, hits: 12 },
+        { face: 'task_imperative', pairs: 3, hits: 3 },
+      ]),
+    ).not.toThrow();
   });
 
   it('FLAGS rather than throws a face at exactly 0% — a narrow slice can legitimately be 0', () => {
@@ -186,10 +195,16 @@ describe('aggregate', () => {
 // the sum. A `scopeOf` that returned only known scopes (dropping the unknown) would keep
 // every rate below identical and fail only on the sum — which is why the sum is asserted.
 describe('byScope (D#153 — is `environment` the low-relevance class on the file face?)', () => {
-  const scopeOf = (id) => ({ 1: 'environment', 2: 'environment', 3: 'project' }[id] ?? '(gone)');
+  const scopeOf = (id) => ({ 1: 'environment', 2: 'environment', 3: 'project' })[id] ?? '(gone)';
   const recs = [
     // env: 1 cited / 2 injected. project: 1/1. gone: 0/1.
-    { project: 'p', session: 's1', ts: 1, anyCite: true, faces: { pretool: { inj: [1, 2, 3, 99], hit: [1, 3] } } },
+    {
+      project: 'p',
+      session: 's1',
+      ts: 1,
+      anyCite: true,
+      faces: { pretool: { inj: [1, 2, 3, 99], hit: [1, 3] } },
+    },
   ];
 
   it('rates each scope over its OWN pairs, and the buckets sum to the face total', () => {
@@ -199,19 +214,31 @@ describe('byScope (D#153 — is `environment` the low-relevance class on the fil
     expect(get('project')).toMatchObject({ pairs: 1, cited: 1, rate: '100.0%' });
     // The row whose observation is gone from the DB is bucketed, never dropped.
     expect(get('(gone)')).toMatchObject({ pairs: 1, cited: 0 });
-    expect(rows.reduce((a, r) => a + r.pairs, 0),
-      'the scope buckets do not sum to the face pair count — some pairs were silently dropped')
-      .toBe(aggregate(recs)[0].pairs);
+    expect(
+      rows.reduce((a, r) => a + r.pairs, 0),
+      'the scope buckets do not sum to the face pair count — some pairs were silently dropped',
+    ).toBe(aggregate(recs)[0].pairs);
   });
 
   it('keeps faces separate — a scope rate must not pool two faces', () => {
-    const two = [{
-      project: 'p', session: 's1', ts: 1, anyCite: true,
-      faces: { pretool: { inj: [1], hit: [1] }, ups: { inj: [2], hit: [] } },
-    }];
+    const two = [
+      {
+        project: 'p',
+        session: 's1',
+        ts: 1,
+        anyCite: true,
+        faces: { pretool: { inj: [1], hit: [1] }, ups: { inj: [2], hit: [] } },
+      },
+    ];
     const rows = byScope(two, scopeOf);
-    expect(rows.find((r) => r.face === 'pretool' && r.scope === 'environment')).toMatchObject({ pairs: 1, cited: 1 });
-    expect(rows.find((r) => r.face === 'ups' && r.scope === 'environment')).toMatchObject({ pairs: 1, cited: 0 });
+    expect(rows.find((r) => r.face === 'pretool' && r.scope === 'environment')).toMatchObject({
+      pairs: 1,
+      cited: 1,
+    });
+    expect(rows.find((r) => r.face === 'ups' && r.scope === 'environment')).toMatchObject({
+      pairs: 1,
+      cited: 0,
+    });
   });
 });
 
@@ -220,49 +247,77 @@ describe('byScope (D#153 — is `environment` the low-relevance class on the fil
 let root;
 
 /** One `hook_success` attachment record, the shape Claude Code writes. */
-const attach = (command, stdout, ts) => JSON.stringify({
-  type: 'attachment', timestamp: ts, attachment: { type: 'hook_success', command, stdout },
-});
-const assistant = (text, ts, extra = {}) => JSON.stringify({
-  type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text }] }, ...extra,
-});
+const attach = (command, stdout, ts) =>
+  JSON.stringify({
+    type: 'attachment',
+    timestamp: ts,
+    attachment: { type: 'hook_success', command, stdout },
+  });
+const assistant = (text, ts, extra = {}) =>
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: ts,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+    ...extra,
+  });
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), 'cite-replay-'));
   const proj = join(root, 'proj-a');
   mkdirSync(proj, { recursive: true });
   const T = '2026-08-20T10:00:00.000Z';
-  const T_AFTER = '2026-08-22T10:00:00.000Z';   // the far side of the --split date below
+  const T_AFTER = '2026-08-22T10:00:00.000Z'; // the far side of the --split date below
 
-  writeFileSync(join(proj, 's1.jsonl'), [
-    // pretool: 3 injected, 2 cited below.
-    attach('node "/x/scripts/pre-tool-recall.js"',
-      '  #101 [lesson] alpha\n  #102 [bugfix] beta\n  #103 [decision] gamma', T),
-    // ups + task_imperative ride the SAME attachment — the overlap that kept the
-    // imperative face unmetered since v3.23. They must land in different buckets.
-    attach('node "/x/hook.mjs" user-prompt',
-      `<memory-context>\n- [lesson] alpha | Lesson: a (#201)\n- [bugfix] beta (#202)\n</memory-context>\n${TASK_IMPERATIVE_PREFIX} You must: do the thing. (#301)`, T),
-    // fyi
-    attach('node "/x/scripts/user-prompt-search.js"',
-      '[mem] FYI — Related memories\n#401 🟡 alpha\n#402 🔵 beta', T),
-    // error_recall
-    attach('bash /x/scripts/post-tool-use.sh',
-      '[claude-mem-lite] Related memories found for this error:\n  #501 [bugfix] boom', T),
-    // A sidechain-flagged attachment INSIDE the main transcript. The attachment faces
-    // are scored mainOnly, matching the citation-decay loop, so #104 must not become a
-    // pretool pair — otherwise the denominator counts an injection whose citation the
-    // main thread was never in a position to make.
-    JSON.stringify({
-      type: 'attachment', timestamp: T, isSidechain: true,
-      attachment: { type: 'hook_success', command: 'node "/x/scripts/pre-tool-recall.js"', stdout: '  #104 [lesson] delta' },
-    }),
-    assistant('Fixed per #101 and #102, and #201, and #301, and #401.', T),
-    // The mirror of the record above, on the CITED side: a sidechain-flagged assistant
-    // turn naming #103. The numerator is main-thread-only for the same reason the
-    // denominator is, so #103 must stay uncited — a face is not credited for a citation
-    // the main thread never made.
-    assistant('Also relevant: #103.', T, { isSidechain: true }),
-  ].join('\n') + '\n');
+  writeFileSync(
+    join(proj, 's1.jsonl'),
+    [
+      // pretool: 3 injected, 2 cited below.
+      attach(
+        'node "/x/scripts/pre-tool-recall.js"',
+        '  #101 [lesson] alpha\n  #102 [bugfix] beta\n  #103 [decision] gamma',
+        T,
+      ),
+      // ups + task_imperative ride the SAME attachment — the overlap that kept the
+      // imperative face unmetered since v3.23. They must land in different buckets.
+      attach(
+        'node "/x/hook.mjs" user-prompt',
+        `<memory-context>\n- [lesson] alpha | Lesson: a (#201)\n- [bugfix] beta (#202)\n</memory-context>\n${TASK_IMPERATIVE_PREFIX} You must: do the thing. (#301)`,
+        T,
+      ),
+      // fyi
+      attach(
+        'node "/x/scripts/user-prompt-search.js"',
+        '[mem] FYI — Related memories\n#401 🟡 alpha\n#402 🔵 beta',
+        T,
+      ),
+      // error_recall
+      attach(
+        'bash /x/scripts/post-tool-use.sh',
+        '[claude-mem-lite] Related memories found for this error:\n  #501 [bugfix] boom',
+        T,
+      ),
+      // A sidechain-flagged attachment INSIDE the main transcript. The attachment faces
+      // are scored mainOnly, matching the citation-decay loop, so #104 must not become a
+      // pretool pair — otherwise the denominator counts an injection whose citation the
+      // main thread was never in a position to make.
+      JSON.stringify({
+        type: 'attachment',
+        timestamp: T,
+        isSidechain: true,
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/x/scripts/pre-tool-recall.js"',
+          stdout: '  #104 [lesson] delta',
+        },
+      }),
+      assistant('Fixed per #101 and #102, and #201, and #301, and #401.', T),
+      // The mirror of the record above, on the CITED side: a sidechain-flagged assistant
+      // turn naming #103. The numerator is main-thread-only for the same reason the
+      // denominator is, so #103 must stay uncited — a face is not credited for a citation
+      // the main thread never made.
+      assistant('Also relevant: #103.', T, { isSidechain: true }),
+    ].join('\n') + '\n',
+  );
 
   // Sidechains, built so the two calibers give DIFFERENT answers. The first version of
   // this fixture had agent-a cite the very lesson it was handed, which makes
@@ -273,13 +328,24 @@ beforeAll(() => {
   // receiver-attributed → 1 of 3.   session union → cited {999, 601, 603} → 3 of 3.
   const sub = join(proj, 's1', 'subagents');
   mkdirSync(sub, { recursive: true });
-  const dispatched = (id, said) => [
-    JSON.stringify({
-      type: 'user', timestamp: T, isSidechain: true,
-      message: { role: 'user', content: [{ type: 'text', text: `[Project memory — surfaced by your operator's claude-mem-lite]\n  #${id} — a lesson.` }] },
-    }),
-    assistant(`Proceeding, see #${said}.`, T, { isSidechain: true }),
-  ].join('\n') + '\n';
+  const dispatched = (id, said) =>
+    [
+      JSON.stringify({
+        type: 'user',
+        timestamp: T,
+        isSidechain: true,
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `[Project memory — surfaced by your operator's claude-mem-lite]\n  #${id} — a lesson.`,
+            },
+          ],
+        },
+      }),
+      assistant(`Proceeding, see #${said}.`, T, { isSidechain: true }),
+    ].join('\n') + '\n';
   writeFileSync(join(sub, 'agent-a.jsonl'), dispatched(601, 999));
   writeFileSync(join(sub, 'agent-b.jsonl'), dispatched(602, 601));
   writeFileSync(join(sub, 'agent-c.jsonl'), dispatched(603, 603));
@@ -289,14 +355,22 @@ beforeAll(() => {
   // showed that both `before: aggregate(everything)` and `after: []` survived the suite,
   // because `expect(after).toHaveLength(0)` is a negative assertion with no decoy planted.
   // This is the decoy. It carries pretool only, so it moves exactly one face's totals.
-  writeFileSync(join(proj, 's2.jsonl'), [
-    attach('node "/x/scripts/pre-tool-recall.js"', '  #701 [lesson] epsilon\n  #702 [bugfix] zeta', T_AFTER),
-    assistant('Applied #701.', T_AFTER),
-  ].join('\n') + '\n');
-
+  writeFileSync(
+    join(proj, 's2.jsonl'),
+    [
+      attach(
+        'node "/x/scripts/pre-tool-recall.js"',
+        '  #701 [lesson] epsilon\n  #702 [bugfix] zeta',
+        T_AFTER,
+      ),
+      assistant('Applied #701.', T_AFTER),
+    ].join('\n') + '\n',
+  );
 });
 
-afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+afterAll(() => {
+  if (root) rmSync(root, { recursive: true, force: true });
+});
 
 function run(extra = []) {
   const out = execFileSync(process.execPath, [SCRIPT, '--json', ...extra], {
@@ -310,7 +384,7 @@ function run(extra = []) {
 describe('end-to-end over a known corpus', () => {
   it('scores each face through the SHIPPED extractors', () => {
     const faces = run();
-    expect(faces.pretool).toMatchObject({ pairs: 5, cited: 3 });  // s1 3/2 + s2 2/1
+    expect(faces.pretool).toMatchObject({ pairs: 5, cited: 3 }); // s1 3/2 + s2 2/1
     expect(faces.ups).toMatchObject({ pairs: 2, cited: 1 });
     expect(faces.fyi).toMatchObject({ pairs: 2, cited: 1 });
     expect(faces.error_recall).toMatchObject({ pairs: 1, cited: 0 });
@@ -346,27 +420,38 @@ describe('end-to-end over a known corpus', () => {
       const proj = join(r2, 'proj-m');
       mkdirSync(proj, { recursive: true });
       const T = '2026-08-20T10:00:00.000Z';
-      const resp = (requestId, blocks) => JSON.stringify({
-        type: 'assistant', timestamp: T, requestId,
-        message: { role: 'assistant', id: `msg-${requestId}`, content: blocks },
-      });
+      const resp = (requestId, blocks) =>
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: T,
+          requestId,
+          message: { role: 'assistant', id: `msg-${requestId}`, content: blocks },
+        });
       // #801 is named in a response that ALSO calls a tool; #802 only in prose. They sit
       // in DIFFERENT responses, so a per-file or per-user-turn bucket marks both applied
       // and this case reddens — that is the caliber the requestId unit exists for.
-      writeFileSync(join(proj, 's.jsonl'), [
-        // #803 is injected and never cited. Without it the corpus is 2 pairs / 2 hits and
-        // the ruler's own ALWAYS-TRUE self-check refuses the run — correctly, since a
-        // 100% face is indistinguishable from a broken membership test. Watching that
-        // guard fire on a fixture built for a different purpose is itself confirmation
-        // it is live.
-        attach('node "/x/scripts/pre-tool-recall.js"', '  #801 [lesson] eta\n  #802 [bugfix] theta\n  #803 [decision] iota', T),
-        resp('r1', [{ type: 'text', text: 'Applying #801 to the scheduler.' }]),
-        resp('r1', [{ type: 'tool_use', name: 'Edit', id: 'tu1', input: {} }]),
-        resp('r2', [{ type: 'text', text: 'For the record, #802 explains the earlier failure.' }]),
-      ].join('\n') + '\n');
+      writeFileSync(
+        join(proj, 's.jsonl'),
+        [
+          // #803 is injected and never cited. Without it the corpus is 2 pairs / 2 hits and
+          // the ruler's own ALWAYS-TRUE self-check refuses the run — correctly, since a
+          // 100% face is indistinguishable from a broken membership test. Watching that
+          // guard fire on a fixture built for a different purpose is itself confirmation
+          // it is live.
+          attach(
+            'node "/x/scripts/pre-tool-recall.js"',
+            '  #801 [lesson] eta\n  #802 [bugfix] theta\n  #803 [decision] iota',
+            T,
+          ),
+          resp('r1', [{ type: 'text', text: 'Applying #801 to the scheduler.' }]),
+          resp('r1', [{ type: 'tool_use', name: 'Edit', id: 'tu1', input: {} }]),
+          resp('r2', [{ type: 'text', text: 'For the record, #802 explains the earlier failure.' }]),
+        ].join('\n') + '\n',
+      );
 
       const out = execFileSync(process.execPath, [SCRIPT, '--json', '--mentions'], {
-        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: r2 }, encoding: 'utf8',
+        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: r2 },
+        encoding: 'utf8',
       });
       const parsed = JSON.parse(out);
       const rows = parsed.mention_vs_application;
@@ -380,7 +465,8 @@ describe('end-to-end over a known corpus', () => {
 
   it('declares keyctx unreachable rather than omitting it', () => {
     const out = execFileSync(process.execPath, [SCRIPT, '--json'], {
-      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root }, encoding: 'utf8',
+      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root },
+      encoding: 'utf8',
     });
     const parsed = JSON.parse(out);
     expect(Object.keys(parsed.not_replayable)).toContain('keyctx');
@@ -393,7 +479,8 @@ describe('end-to-end over a known corpus', () => {
 
   it('--split PARTITIONS one walk: both arms non-empty and summing to overall', () => {
     const out = execFileSync(process.execPath, [SCRIPT, '--json', '--split', '2026-08-21'], {
-      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root }, encoding: 'utf8',
+      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root },
+      encoding: 'utf8',
     });
     const parsed = JSON.parse(out);
     const byFace = (rows) => Object.fromEntries(rows.map((r) => [r.face, r]));
@@ -429,13 +516,20 @@ describe('end-to-end over a known corpus', () => {
     try {
       const p = join(saturated, 'proj-sat');
       mkdirSync(p, { recursive: true });
-      writeFileSync(join(p, 's1.jsonl'), [
-        attach('node "/x/scripts/pre-tool-recall.js"', '  #101 [lesson] alpha', '2026-08-20T10:00:00.000Z'),
-        assistant('Per #101.', '2026-08-20T10:00:00.000Z'),
-      ].join('\n') + '\n');
-      expect(() => execFileSync(process.execPath, [SCRIPT, '--json'], {
-        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: saturated }, encoding: 'utf8', stdio: 'pipe',
-      })).toThrow(/ALWAYS-TRUE/);
+      writeFileSync(
+        join(p, 's1.jsonl'),
+        [
+          attach('node "/x/scripts/pre-tool-recall.js"', '  #101 [lesson] alpha', '2026-08-20T10:00:00.000Z'),
+          assistant('Per #101.', '2026-08-20T10:00:00.000Z'),
+        ].join('\n') + '\n',
+      );
+      expect(() =>
+        execFileSync(process.execPath, [SCRIPT, '--json'], {
+          env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: saturated },
+          encoding: 'utf8',
+          stdio: 'pipe',
+        }),
+      ).toThrow(/ALWAYS-TRUE/);
     } finally {
       rmSync(saturated, { recursive: true, force: true });
     }
@@ -444,14 +538,16 @@ describe('end-to-end over a known corpus', () => {
   it('--dump then --corpus re-scores the SAME frozen corpus', () => {
     const frozen = join(root, 'frozen.json');
     execFileSync(process.execPath, [SCRIPT, '--json', '--dump', frozen], {
-      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root }, encoding: 'utf8',
+      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root },
+      encoding: 'utf8',
     });
     // Re-scored with the transcript root pointed at an EMPTY dir: the numbers must come
     // from the frozen file, otherwise `--corpus` is silently re-walking.
     const empty = mkdtempSync(join(tmpdir(), 'cite-replay-empty-'));
     try {
       const out = execFileSync(process.execPath, [SCRIPT, '--json', '--corpus', frozen], {
-        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: empty }, encoding: 'utf8',
+        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: empty },
+        encoding: 'utf8',
       });
       const faces = Object.fromEntries(JSON.parse(out).overall.map((r) => [r.face, r]));
       expect(faces.pretool).toMatchObject({ pairs: 5, cited: 3 });
@@ -463,9 +559,13 @@ describe('end-to-end over a known corpus', () => {
   it('REFUSES a frozen corpus this build cannot read, instead of half-scoring it', () => {
     const stale = join(root, 'stale.json');
     writeFileSync(stale, JSON.stringify({ format: 'citation-live-replay/0', files: 1, records: [] }));
-    expect(() => execFileSync(process.execPath, [SCRIPT, '--json', '--corpus', stale], {
-      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root }, encoding: 'utf8', stdio: 'pipe',
-    })).toThrow(/citation-live-replay\/0/);
+    expect(() =>
+      execFileSync(process.execPath, [SCRIPT, '--json', '--corpus', stale], {
+        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root },
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }),
+    ).toThrow(/citation-live-replay\/0/);
   });
 
   it('REFUSES a /1 corpus specifically — the version whose records lack citedTotal', () => {
@@ -475,14 +575,23 @@ describe('end-to-end over a known corpus', () => {
     // would read as pollution-free. That is the silently-wrong published number this whole
     // guard exists to prevent, and nothing failed when the bump was reverted.
     const v1 = join(root, 'v1.json');
-    writeFileSync(v1, JSON.stringify({
-      format: 'citation-live-replay/1',
-      files: 1,
-      records: [{ project: 'p', session: 's1', ts: 1, anyCite: true, faces: { pretool: { inj: [1], hit: [1] } } }],
-    }));
-    expect(() => execFileSync(process.execPath, [SCRIPT, '--json', '--corpus', v1], {
-      env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root }, encoding: 'utf8', stdio: 'pipe',
-    })).toThrow(/citation-live-replay\/1/);
+    writeFileSync(
+      v1,
+      JSON.stringify({
+        format: 'citation-live-replay/1',
+        files: 1,
+        records: [
+          { project: 'p', session: 's1', ts: 1, anyCite: true, faces: { pretool: { inj: [1], hit: [1] } } },
+        ],
+      }),
+    );
+    expect(() =>
+      execFileSync(process.execPath, [SCRIPT, '--json', '--corpus', v1], {
+        env: { ...process.env, CLAUDE_MEM_TRANSCRIPT_ROOT: root },
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }),
+    ).toThrow(/citation-live-replay\/1/);
   });
 });
 
@@ -494,7 +603,12 @@ describe('end-to-end over a known corpus', () => {
 // `citedTotal` and the corpus format went to /2.
 describe('pollutionSensitivity', () => {
   const rec = (session, citedTotal, faces) => ({
-    project: 'p', session, ts: 1, anyCite: true, citedTotal, faces,
+    project: 'p',
+    session,
+    ts: 1,
+    anyCite: true,
+    citedTotal,
+    faces,
   });
 
   it('recomputes each face with document-shaped sessions excluded', () => {
@@ -508,7 +622,7 @@ describe('pollutionSensitivity', () => {
     const out = pollutionSensitivity(records, rows);
     expect(out.docSessions).toBe(1);
     const pretool = out.rows.find((r) => r.face === 'pretool');
-    expect(pretool.rate).toBe('75.0%');            // 3/4 with the document session in
+    expect(pretool.rate).toBe('75.0%'); // 3/4 with the document session in
     expect(pretool.pairsFromDocSessions).toBe(2);
     expect(pretool.rateExclDocSessions).toBe('50.0%'); // 1/2 without it
     expect(pretool.delta).toBe('-25.0pp');
@@ -524,7 +638,9 @@ describe('pollutionSensitivity', () => {
   it('treats a missing citedTotal as not-document-shaped rather than as zero pollution', () => {
     // A /1 record has no citedTotal. The format gate refuses those corpora outright, but
     // the reducer must not silently treat the absence as "measured, and clean".
-    const records = [{ project: 'p', session: 's1', ts: 1, anyCite: true, faces: { pretool: { inj: [1], hit: [1] } } }];
+    const records = [
+      { project: 'p', session: 's1', ts: 1, anyCite: true, faces: { pretool: { inj: [1], hit: [1] } } },
+    ];
     expect(pollutionSensitivity(records, aggregate(records)).docSessions).toBe(0);
   });
 

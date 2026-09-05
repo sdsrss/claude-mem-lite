@@ -1,6 +1,15 @@
 // lib.mjs — shared sandbox harness utilities for simulating a real user.
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, cpSync, statSync } from 'node:fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  chmodSync,
+  cpSync,
+  statSync,
+} from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,7 +41,9 @@ export function check(name, fn) {
     detail = (e.message || String(e)).split('\n').slice(0, 4).join(' | ');
   }
   results.push({ phase, name, ok, detail });
-  console.log(`${ok ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m'} ${name}${detail ? `\n       ${detail}` : ''}`);
+  console.log(
+    `${ok ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m'} ${name}${detail ? `\n       ${detail}` : ''}`,
+  );
   return ok;
 }
 
@@ -62,7 +73,7 @@ export function run(cmd, args, opts = {}) {
   } catch (e) {
     res.code = e.status ?? -1;
     res.stdout = e.stdout || '';
-    res.stderr = e.stderr || (e.message || '');
+    res.stderr = e.stderr || e.message || '';
   }
   return res;
 }
@@ -79,7 +90,10 @@ export function snapshotRepo(dest) {
   const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
     cwd: REPO,
     encoding: 'utf8',
-  }).trim().split('\n').filter(Boolean);
+  })
+    .trim()
+    .split('\n')
+    .filter(Boolean);
   const files = [...new Set([...tracked, ...untracked])].filter(Boolean);
   let copied = 0;
   for (const f of files) {
@@ -89,7 +103,11 @@ export function snapshotRepo(dest) {
     // devices into the tree; they surface in `git ls-files --others` but are not
     // repo content. Copy regular files only.
     let st;
-    try { st = statSync(src); } catch { continue; }
+    try {
+      st = statSync(src);
+    } catch {
+      continue;
+    }
     if (!st.isFile()) continue;
     const dst = join(dest, f);
     mkdirSync(dirname(dst), { recursive: true });
@@ -104,7 +122,9 @@ export function makeFakeClaudeBin(home) {
   const binDir = join(home, 'bin');
   mkdirSync(binDir, { recursive: true });
   const script = join(binDir, 'claude');
-  writeFileSync(script, `#!/usr/bin/env bash
+  writeFileSync(
+    script,
+    `#!/usr/bin/env bash
 set -euo pipefail
 STATE="${home}/.claude/mcp-state.txt"
 mkdir -p "${home}/.claude"
@@ -138,7 +158,8 @@ case "$cmd" in
       printf '%s: stdio\\n' "$name"
     done < "$STATE" ;;
 esac
-`);
+`,
+  );
   chmodSync(script, 0o755);
   return binDir;
 }
@@ -180,7 +201,11 @@ export function mcpSession(cmd, args, { env, cwd, requests, timeout = 60_000 }) 
       if (done) return;
       done = true;
       clearTimeout(timer);
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
       resolve({ responses, stderr: err, stdout: out, code });
     };
     const timer = setTimeout(() => finish('TIMEOUT'), timeout);
@@ -199,8 +224,13 @@ export function mcpSession(cmd, args, { env, cwd, requests, timeout = 60_000 }) 
         if (responses.length >= requests.length) finish(0);
       }
     });
-    child.stderr.on('data', (d) => { err += d.toString(); });
-    child.on('error', (e) => { err += `\nspawn error: ${e.message}`; finish(-1); });
+    child.stderr.on('data', (d) => {
+      err += d.toString();
+    });
+    child.on('error', (e) => {
+      err += `\nspawn error: ${e.message}`;
+      finish(-1);
+    });
     child.on('exit', (code) => setTimeout(() => finish(code), 300));
     for (const r of requests) child.stdin.write(JSON.stringify(r) + '\n');
   });

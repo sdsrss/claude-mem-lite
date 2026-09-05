@@ -71,7 +71,11 @@ export function discoverFlat(dirPath, type, opts = {}) {
     if (name.startsWith('.') || name === 'node_modules' || skipNames.has(name)) continue;
     const fullPath = join(dirPath, name);
     let stat;
-    try { stat = statSync(fullPath); } catch { continue; }
+    try {
+      stat = statSync(fullPath);
+    } catch {
+      continue;
+    }
 
     if (stat.isDirectory()) {
       if (type === 'skill') {
@@ -111,7 +115,9 @@ export function discoverPlugin(pluginDir, pluginName) {
         const absPath = join(agentSubDir, file);
         try {
           if (statSync(absPath).size === 0) continue;
-        } catch { continue; }
+        } catch {
+          continue;
+        }
         items.push({
           type: 'agent',
           name: `${pluginName}/${basename(file, '.md')}`,
@@ -155,7 +161,11 @@ export function discoverPlugins(dirPath) {
   for (const pluginName of readdirSync(dirPath)) {
     if (pluginName.startsWith('.') || pluginName === 'node_modules') continue;
     const pluginDir = join(dirPath, pluginName);
-    try { if (!statSync(pluginDir).isDirectory()) continue; } catch { continue; }
+    try {
+      if (!statSync(pluginDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
     items.push(...discoverPlugin(pluginDir, pluginName));
   }
   return items;
@@ -182,7 +192,7 @@ export function discoverAllManaged(managedDir) {
  * @returns {Array<DiscoveredResource & {filePath: string}>}
  */
 export function withRelativePaths(items, managedDir) {
-  return items.map(item => ({
+  return items.map((item) => ({
     ...item,
     filePath: relative(managedDir, item.absPath),
   }));

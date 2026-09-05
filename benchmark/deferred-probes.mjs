@@ -20,12 +20,32 @@ const PROJECT = 'deferred-probe';
 export const DEFERRED_FIXTURES = {
   project: PROJECT,
   items: [
-    { title: '升级 CI runner 到 ubuntu-24', detail: '现 runner 镜像 EOL,需迁移 workflow 与缓存 key', priority: 2 },
-    { title: 'Migrate signing key rotation runbook', detail: 'Ed25519 key rotation steps live only in chat; write docs/runbook', priority: 3 },
-    { title: '补充 vitest 全局 env 缺口', detail: 'MEM_QUIET_HOOKS 与 CLAUDE_MEM_DIR 未在全局 setup 固定', priority: 2 },
-    { title: 'Refactor episode flush batching', detail: 'flush groups by ccSession; consider time-window compaction', priority: 1 },
+    {
+      title: '升级 CI runner 到 ubuntu-24',
+      detail: '现 runner 镜像 EOL,需迁移 workflow 与缓存 key',
+      priority: 2,
+    },
+    {
+      title: 'Migrate signing key rotation runbook',
+      detail: 'Ed25519 key rotation steps live only in chat; write docs/runbook',
+      priority: 3,
+    },
+    {
+      title: '补充 vitest 全局 env 缺口',
+      detail: 'MEM_QUIET_HOOKS 与 CLAUDE_MEM_DIR 未在全局 setup 固定',
+      priority: 2,
+    },
+    {
+      title: 'Refactor episode flush batching',
+      detail: 'flush groups by ccSession; consider time-window compaction',
+      priority: 1,
+    },
     { title: '对账任务分区键评估', detail: '按日期分区后冷分区归档策略未定', priority: 2 },
-    { title: 'Add retry to release manifest upload', detail: 'transient 503 from GH API kills sign step', priority: 2 },
+    {
+      title: 'Add retry to release manifest upload',
+      detail: 'transient 503 from GH API kills sign step',
+      priority: 2,
+    },
   ],
   // Query → the planted title it must reach (CJK, English, and mixed forms).
   positives: [
@@ -67,14 +87,21 @@ export function runDeferredProbes(db, { searchFn = searchDeferredWork } = {}) {
   return out;
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url).includes(process.argv[1].replace(/\.mjs$/, ''));
 if (isMain) {
   const { createTestDb } = await import('../tests/test-helpers.mjs');
   const db = createTestDb();
   const results = runDeferredProbes(db);
-  for (const p of results) console.error(`  ${p.pass ? '✓' : '✗'} [${p.kind}] "${p.query}"${p.pass ? '' : ` — got: ${p.got.join(' | ') || '(none)'}`}`);
+  for (const p of results)
+    console.error(
+      `  ${p.pass ? '✓' : '✗'} [${p.kind}] "${p.query}"${p.pass ? '' : ` — got: ${p.got.join(' | ') || '(none)'}`}`,
+    );
   db.close();
   const failed = results.filter((p) => !p.pass);
-  if (failed.length) { console.error(`\n${failed.length} probe(s) FAILED`); process.exit(1); }
+  if (failed.length) {
+    console.error(`\n${failed.length} probe(s) FAILED`);
+    process.exit(1);
+  }
   console.error(`\nall ${results.length} probes pass`);
 }

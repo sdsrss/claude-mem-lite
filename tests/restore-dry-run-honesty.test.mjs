@@ -23,7 +23,8 @@ let dir, backup, env;
 
 function cli(args, dataDir) {
   return execFileSync(process.execPath, [CLI, ...args], {
-    env: { ...env, CLAUDE_MEM_DIR: dataDir }, encoding: 'utf8',
+    env: { ...env, CLAUDE_MEM_DIR: dataDir },
+    encoding: 'utf8',
   });
 }
 
@@ -31,16 +32,34 @@ function cli(args, dataDir) {
 function makeBackup() {
   const now = Date.now();
   const rows = [
-    { project: 'p--proj', type: 'change', title: 'Weekly summary: 7 change observations',
+    {
+      project: 'p--proj',
+      type: 'change',
+      title: 'Weekly summary: 7 change observations',
       narrative: 'Weekly summary covering seven routine build-config changes in this project.',
-      importance: 1, created_at_epoch: now - 5 * 86400000, created_at: new Date(now - 5 * 86400000).toISOString() },
-    { project: 'p--proj', type: 'change', title: 'Weekly summary: 7 change observations',
+      importance: 1,
+      created_at_epoch: now - 5 * 86400000,
+      created_at: new Date(now - 5 * 86400000).toISOString(),
+    },
+    {
+      project: 'p--proj',
+      type: 'change',
+      title: 'Weekly summary: 7 change observations',
       narrative: 'Weekly summary covering seven routine build-config changes in this project.',
-      importance: 1, created_at_epoch: now - 5 * 86400000 + 60000, created_at: new Date(now - 5 * 86400000 + 60000).toISOString() },
-    { project: 'p--proj', type: 'bugfix', title: 'Retry budget was shared across shards',
+      importance: 1,
+      created_at_epoch: now - 5 * 86400000 + 60000,
+      created_at: new Date(now - 5 * 86400000 + 60000).toISOString(),
+    },
+    {
+      project: 'p--proj',
+      type: 'bugfix',
+      title: 'Retry budget was shared across shards',
       narrative: 'One hot shard starved the rest because the retry budget was a single global counter.',
       lesson_learned: 'give each shard its own retry budget',
-      importance: 3, created_at_epoch: now - 9 * 86400000, created_at: new Date(now - 9 * 86400000).toISOString() },
+      importance: 3,
+      created_at_epoch: now - 9 * 86400000,
+      created_at: new Date(now - 9 * 86400000).toISOString(),
+    },
   ];
   writeFileSync(backup, JSON.stringify(rows));
   return rows.length;
@@ -51,18 +70,28 @@ describe('restore --dry-run — reports a preview, not an outcome', () => {
     dir = mkdtempSync(join(tmpdir(), 'restore-dry-'));
     backup = join(dir, 'backup.json');
     env = {
-      ...process.env, CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1', MEM_NO_AUTO_ADOPT: '1',
-      CLAUDE_PROJECT_DIR: '/x/proj', PWD: '/x/proj',
+      ...process.env,
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      MEM_QUIET_HOOKS: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+      CLAUDE_PROJECT_DIR: '/x/proj',
+      PWD: '/x/proj',
     };
   });
-  afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+  afterEach(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  });
 
   it('uses conditional wording and writes nothing', () => {
     makeBackup();
     const target = join(dir, 'data-dry');
     const out = cli(['restore', backup, '--dry-run'], target);
     expect(out).toMatch(/would be restored/);
-    expect(out).not.toMatch(/\d+ restored,/);       // the past-tense shape
+    expect(out).not.toMatch(/\d+ restored,/); // the past-tense shape
     // …and the claim is true: nothing landed.
     expect(cli(['recent', '5'], target)).toMatch(/No recent observations/);
   });

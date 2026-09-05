@@ -291,23 +291,39 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
     // THIS fixture reaches the two-receipt state: mutating either leg alone
     // (triggerErrorRecall writing its own envelope, or flushEpisode writing its own)
     // turns 2 tests red, so both legs genuinely fire in one process.
-    execFileSync(process.execPath, [
-      resolve(import.meta.dirname, '../cli.mjs'), 'save',
-      '--type', 'bugfix', '--importance', '3',
-      '--lesson', 'Invalidate the widget cache on write, never on read',
-      'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
-    ], { cwd: projDir, env, encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
+    execFileSync(
+      process.execPath,
+      [
+        resolve(import.meta.dirname, '../cli.mjs'),
+        'save',
+        '--type',
+        'bugfix',
+        '--importance',
+        '3',
+        '--lesson',
+        'Invalidate the widget cache on write, never on read',
+        'Fixed the widget cache invalidation race in lib/widget-cache.mjs',
+      ],
+      { cwd: projDir, env, encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
   });
 
   afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   function postToolUse(payload) {
     try {
       return execFileSync(process.execPath, [HOOK_PATH, 'post-tool-use'], {
         input: JSON.stringify({ cwd: projDir, hook_event_name: 'PostToolUse', ...payload }),
-        timeout: 25000, encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 25000,
+        encoding: 'utf8',
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (e) {
       return e.stdout || '';
@@ -315,8 +331,8 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
   }
 
   const HARD_ERROR_RESPONSE =
-    'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\n'
-    + 'npm ERR! Test failed. See above for more details.';
+    'FAIL widget-cache.test.mjs\nError: widget cache invalidation race detected\n' +
+    'npm ERR! Test failed. See above for more details.';
 
   /**
    * Fill the episode buffer to EPISODE_BUFFER_SIZE so the NEXT PostToolUse both
@@ -328,7 +344,11 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
       postToolUse({
         session_id: sessionId,
         tool_name: 'Edit',
-        tool_input: { file_path: join(projDir, `f${i}.js`), old_string: 'readPath()', new_string: 'writePath()' },
+        tool_input: {
+          file_path: join(projDir, `f${i}.js`),
+          old_string: 'readPath()',
+          new_string: 'writePath()',
+        },
         tool_response: 'The file has been updated successfully with the new content applied.',
       });
     }
@@ -342,7 +362,9 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
       tool_response: HARD_ERROR_RESPONSE,
     });
     // If this is empty the co-fire tests below would be vacuous.
-    expect(stdout.trim(), 'error-recall produced nothing — the fixture is not exercising the path').not.toBe('');
+    expect(stdout.trim(), 'error-recall produced nothing — the fixture is not exercising the path').not.toBe(
+      '',
+    );
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.hookSpecificOutput.additionalContext).toContain('Related memories found for this error');
   });

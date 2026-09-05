@@ -24,7 +24,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SAMPLE = JSON.parse(
-  readFileSync(join(__dirname, '../benchmark/fixtures/longmemeval-sample.json'), 'utf8')
+  readFileSync(join(__dirname, '../benchmark/fixtures/longmemeval-sample.json'), 'utf8'),
 );
 const byId = (id) => SAMPLE.find((e) => e.question_id === id);
 

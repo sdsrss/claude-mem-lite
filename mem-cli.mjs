@@ -18,17 +18,59 @@ import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { _resetVocabCache, vecTextForRow, vectorsEnabled } from './tfidf.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { fetchObsDetail, fetchPromptDetail, fetchEventDetail, fetchSessionDetail, OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, supersededNotice } from './lib/get-core.mjs';
-import { collectBrowseTiers, getActiveMemorySessionId, BROWSE_TIERS, BROWSE_TIER_LABELS } from './lib/browse-core.mjs';
+import {
+  fetchObsDetail,
+  fetchPromptDetail,
+  fetchEventDetail,
+  fetchSessionDetail,
+  OBS_FIELDS,
+  SESSION_DETAIL_FIELDS,
+  PROMPT_DETAIL_FIELDS,
+  EVENT_DETAIL_FIELDS,
+  supersededNotice,
+} from './lib/get-core.mjs';
+import {
+  collectBrowseTiers,
+  getActiveMemorySessionId,
+  BROWSE_TIERS,
+  BROWSE_TIER_LABELS,
+} from './lib/browse-core.mjs';
 import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
-import { ensureRegistryDb, collectRegistryStats, listResourcesRanked, formatRegistryListLine } from './registry.mjs';
-import { IMPORT_STRING_FIELDS, importResource, removeResource, reindexResources, enrichResourceRow, enrichImportedResources, enrichNamedResource, REGISTRY_CONFINE_ENV, resourceUseHint } from './lib/registry-core.mjs';
+import {
+  ensureRegistryDb,
+  collectRegistryStats,
+  listResourcesRanked,
+  formatRegistryListLine,
+} from './registry.mjs';
+import {
+  IMPORT_STRING_FIELDS,
+  importResource,
+  removeResource,
+  reindexResources,
+  enrichResourceRow,
+  enrichImportedResources,
+  enrichNamedResource,
+  REGISTRY_CONFINE_ENV,
+  resourceUseHint,
+} from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
-import { computeFunnel, formatFunnel, computeSweep, formatSweep, DEFAULT_SWEEP_FLOORS, DEFAULT_SWEEP_MARGINS } from './registry-recommend.mjs';
+import {
+  computeFunnel,
+  formatFunnel,
+  computeSweep,
+  formatSweep,
+  DEFAULT_SWEEP_FLOORS,
+  DEFAULT_SWEEP_MARGINS,
+} from './registry-recommend.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
-  runMaintainOps, findDuplicates, maintenanceStats,
-  OP_CAP, STALE_AGE_MS, PINNED_INJ_THRESHOLD, resolveDefaultMaintainOps,
+  runMaintainOps,
+  findDuplicates,
+  maintenanceStats,
+  OP_CAP,
+  STALE_AGE_MS,
+  PINNED_INJ_THRESHOLD,
+  resolveDefaultMaintainOps,
 } from './lib/maintain-core.mjs';
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
@@ -44,7 +86,11 @@ import { parseIntFlag, isNumericToken } from './lib/cli-flags.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { auditMemdir, memdirPath } from './memdir.mjs';
 import { aggregateProjectCiteRecall } from './lib/citation-tracker.mjs';
-import { probeOtherSources as probeIdSources, bucketIdTokens, splitDeferredTokens } from './lib/id-routing.mjs';
+import {
+  probeOtherSources as probeIdSources,
+  bucketIdTokens,
+  splitDeferredTokens,
+} from './lib/id-routing.mjs';
 import { join, sep, dirname } from 'path';
 import { spawnSync } from 'child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
@@ -54,37 +100,80 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 // move each cmdXxx into its own cli/<cmd>.mjs; mem-cli.mjs becomes pure dispatch.
 import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
 import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
-import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdToken, formatProbeHints, rejectBareStringFlags, resolvePositionalAlias, suggestUnknownFlags, OBS_TIME_FIELDS, formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
-import { saveObservation, saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
+import {
+  parseArgs,
+  out,
+  outVerbatim,
+  fail,
+  relativeTime,
+  fmtDateShort,
+  parseIdToken,
+  formatProbeHints,
+  rejectBareStringFlags,
+  resolvePositionalAlias,
+  suggestUnknownFlags,
+  OBS_TIME_FIELDS,
+  formatObsFieldValue,
+  obsFieldLabel,
+  formatPendingPurgeLine,
+} from './cli/common.mjs';
+import {
+  saveObservation,
+  saveWithClosures,
+  formatSupersedeSkipped,
+  formatSupersededNote,
+} from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile, countRecallableByFile } from './lib/recall-core.mjs';
 import { fetchRecent, RECENT_MAX } from './lib/recent-core.mjs';
-import { resolveAnchorToken, formatAnchorError, resolveQueryAnchor, fetchRecentTimeline, fetchTimelineWindow } from './lib/timeline-core.mjs';
-import { buildSearchFtsQuery, parseDateBounds, parseDuration, coreRunSearchPipeline } from './lib/search-core.mjs';
+import {
+  resolveAnchorToken,
+  formatAnchorError,
+  resolveQueryAnchor,
+  fetchRecentTimeline,
+  fetchTimelineWindow,
+} from './lib/timeline-core.mjs';
+import {
+  buildSearchFtsQuery,
+  parseDateBounds,
+  parseDuration,
+  coreRunSearchPipeline,
+} from './lib/search-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { countRecentHookErrors } from './lib/hook-telemetry.mjs';
-import { computeCitationFunnelTrend, computeSurfaceFunnel, DECAY_DENOMINATOR_SURFACES } from './lib/citation-tracker.mjs';
+import {
+  computeCitationFunnelTrend,
+  computeSurfaceFunnel,
+  DECAY_DENOMINATOR_SURFACES,
+} from './lib/citation-tracker.mjs';
 
 // Human labels for citation_surface_log.surface. Padded to a common width so
 // the citation-stats face table lines up; the enum itself lives in
 // lib/citation-tracker.mjs (CITATION_SURFACES).
 const SURFACE_LABELS = {
-  pretool:        'PreToolUse recall  ',
-  ups:            'UserPromptSubmit   ',
-  error_recall:   'error-recall       ',
-  fyi:            'FYI (prompt-search)',
+  pretool: 'PreToolUse recall  ',
+  ups: 'UserPromptSubmit   ',
+  error_recall: 'error-recall       ',
+  fyi: 'FYI (prompt-search)',
   task_imperative: 'task-imperative    ',
-  keyctx:         'Key Context        ',
-  subagent:       'subagent (dispatch)',
+  keyctx: 'Key Context        ',
+  subagent: 'subagent (dispatch)',
 };
 import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
-  insertDeferred, listOpenWithOrdinal, dropDeferred, formatDropReasonHint,
+  insertDeferred,
+  listOpenWithOrdinal,
+  dropDeferred,
+  formatDropReasonHint,
   resolveDeferredIds,
-  getDeferredByIds, formatDeferredDetail,
-  searchDeferredWork, formatDeferredSearchTrailer,
-  formatDeferListRow, countStaleOpen, formatDeferStaleHint,
+  getDeferredByIds,
+  formatDeferredDetail,
+  searchDeferredWork,
+  formatDeferredSearchTrailer,
+  formatDeferListRow,
+  countStaleOpen,
+  formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
 import { shouldQueueSaveEnrich, queueSaveEnrich } from './lib/save-enrich.mjs';
 
@@ -116,7 +205,9 @@ function emitRecallHint(db, query) {
       out(`[mem] ${n} observation(s) are linked to that file — search indexes text, not file paths.`);
       out(`[mem] Try: claude-mem-lite recall "${q}"`);
     }
-  } catch { /* hint is best-effort; never break search */ }
+  } catch {
+    /* hint is best-effort; never break search */
+  }
 }
 
 async function cmdSearch(db, args, { llm } = {}) {
@@ -130,7 +221,9 @@ async function cmdSearch(db, args, { llm } = {}) {
   const query = resolvePositionalAlias(positional.join(' '), flags, ['query']);
   if (query === null) return;
   if (!query) {
-    fail('[mem] Usage: claude-mem-lite search <query> [--type TYPE] [--source SOURCE] [--limit N] [--project P] [--from DATE] [--to DATE] [--since DUR] [--importance N] [--branch B] [--offset N] [--sort relevance|time|importance] [--include-noise] [--deep] [--no-deep] [--rerank] — query may also be passed via --query "<query>"');
+    fail(
+      '[mem] Usage: claude-mem-lite search <query> [--type TYPE] [--source SOURCE] [--limit N] [--project P] [--from DATE] [--to DATE] [--since DUR] [--importance N] [--branch B] [--offset N] [--sort relevance|time|importance] [--include-noise] [--deep] [--no-deep] [--rerank] — query may also be passed via --query "<query>"',
+    );
     return;
   }
 
@@ -145,7 +238,8 @@ async function cmdSearch(db, args, { llm } = {}) {
   const project = flags.project ? resolveProject(db, flags.project) : null;
   const bounds = parseDateBounds(flags.from, flags.to, flags.since);
   if (!bounds.ok) {
-    if (bounds.bad === 'since') fail(`[mem] Invalid --since "${bounds.value}". Use <N><unit>, e.g. 7d, 24h, 90m, 2w.`);
+    if (bounds.bad === 'since')
+      fail(`[mem] Invalid --since "${bounds.value}". Use <N><unit>, e.g. 7d, 24h, 90m, 2w.`);
     else fail(`[mem] Invalid --${bounds.bad} date: "${bounds.value}". Use YYYY-MM-DD or ISO 8601.`);
     return;
   }
@@ -153,12 +247,17 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Inverted range silently returns 0 rows; warn so users see the cause, don't error
   // (a deliberate "search for nothing in this window" is not malformed input).
   if (dateFrom !== null && dateTo !== null && dateFrom > dateTo) {
-    process.stderr.write(`[mem] Note: --from "${flags.from}" is after --to "${flags.to}"; this range is empty\n`);
+    process.stderr.write(
+      `[mem] Note: --from "${flags.from}" is after --to "${flags.to}"; this range is empty\n`,
+    );
   }
   const minImportance = flags.importance !== undefined ? parseInt(flags.importance, 10) : null;
   // isNumericToken first: "2abc"→2 / "1e2"→1 would pass the range check and silently
   // filter at a value the user never typed. Reject garbage like out-of-range does.
-  if (minImportance !== null && (!isNumericToken(flags.importance) || isNaN(minImportance) || minImportance < 1 || minImportance > 3)) {
+  if (
+    minImportance !== null &&
+    (!isNumericToken(flags.importance) || isNaN(minImportance) || minImportance < 1 || minImportance > 3)
+  ) {
     fail(`[mem] Invalid --importance "${flags.importance}". Must be 1, 2, or 3.`);
     return;
   }
@@ -186,9 +285,12 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Haiku call + N hybrid searches; observations-only. NOT the passive path — this
   // is the explicit "search harder" lever for vocabulary-mismatch recall misses.
   // --deep forces deep; --no-deep forces normal; neither = unset (env/default decide).
-  const explicitDeep = (flags.deep === true || flags.deep === 'true')
-    ? true
-    : ((flags['no-deep'] === true || flags['no-deep'] === 'true') ? false : undefined);
+  const explicitDeep =
+    flags.deep === true || flags.deep === 'true'
+      ? true
+      : flags['no-deep'] === true || flags['no-deep'] === 'true'
+        ? false
+        : undefined;
   const deepMode = resolveDeepMode(explicitDeep, { surface: 'cli' });
 
   // --rerank: opt-in LLM rerank of the fused top-20 (option C, deep-search.mjs).
@@ -197,7 +299,9 @@ async function cmdSearch(db, args, { llm } = {}) {
   const rerankFlag = flags.rerank === true || flags.rerank === 'true';
   const rerank = rerankFlag && deepMode === 'deep';
   if (rerankFlag && deepMode !== 'deep') {
-    process.stderr.write('[mem] Note: --rerank requires --deep (it reranks deep-search candidates); ignored\n');
+    process.stderr.write(
+      '[mem] Note: --rerank requires --deep (it reranks deep-search candidates); ignored\n',
+    );
   }
 
   if (source && !['observations', 'sessions', 'prompts', 'events'].includes(source)) {
@@ -210,13 +314,16 @@ async function cmdSearch(db, args, { llm } = {}) {
   // searches only; --json keeps its documented shape (deliberate asymmetry,
   // locked by tests). Defined before the sanitize-empty early-return so a pure
   // "D#92" query (which sanitizes to no FTS terms) still reaches the item.
-  const wantDeferredTrailer = !jsonOutput && !source && !type && !branch && !tier && !minImportance && offset === 0;
+  const wantDeferredTrailer =
+    !jsonOutput && !source && !type && !branch && !tier && !minImportance && offset === 0;
   const emitDeferredTrailer = () => {
     if (!wantDeferredTrailer) return;
     try {
       const rows = searchDeferredWork(db, query, project || cliProject(db));
       for (const line of formatDeferredSearchTrailer(rows, 'claude-mem-lite get D#<id>')) out(line);
-    } catch { /* trailer is best-effort; never break search */ }
+    } catch {
+      /* trailer is best-effort; never break search */
+    }
   };
 
   const ftsQuery = buildSearchFtsQuery(query, { or: useOr });
@@ -238,13 +345,22 @@ async function cmdSearch(db, args, { llm } = {}) {
   // --deep ignores --or: each variant runs AND + the engine's built-in
   // OR-fallback, so --or has no effect on the deep path — say so (F8).
   if (deepMode === 'deep' && useOr) {
-    process.stderr.write('[mem] Note: --or has no effect with --deep (variants use AND + engine OR-fallback)\n');
+    process.stderr.write(
+      '[mem] Note: --or has no effect with --deep (variants use AND + engine OR-fallback)\n',
+    );
   }
 
   // Warn if obs-only filters used with non-observation source
   if (source && source !== 'observations' && (type || tier || minImportance || branch)) {
-    const ignored = [type && '--type', tier && '--tier', minImportance && '--importance', branch && '--branch'].filter(Boolean);
-    process.stderr.write(`[mem] Note: ${ignored.join(', ')} only apply to observations, ignored for --source ${source}\n`);
+    const ignored = [
+      type && '--type',
+      tier && '--tier',
+      minImportance && '--importance',
+      branch && '--branch',
+    ].filter(Boolean);
+    process.stderr.write(
+      `[mem] Note: ${ignored.join(', ')} only apply to observations, ignored for --source ${source}\n`,
+    );
   }
 
   // When --type/--tier/--importance/--branch (obs-only fields) is specified, implicitly restrict to observations.
@@ -276,25 +392,44 @@ async function cmdSearch(db, args, { llm } = {}) {
 
   const res = await coreRunSearchPipeline(
     {
-      db, currentProject: project ? null : cliProject(db), env: process.env,
-      searchObservationsHybrid, deepSearch, shouldEscalateToDeep, autoDeepLlmReady,
-      reRankWithContext, llm,
+      db,
+      currentProject: project ? null : cliProject(db),
+      env: process.env,
+      searchObservationsHybrid,
+      deepSearch,
+      shouldEscalateToDeep,
+      autoDeepLlmReady,
+      reRankWithContext,
+      llm,
     },
     {
-      query, ftsQuery, effectiveSource, deepMode, rerank,
-      limit, offset, project: project || null, obsType: type, importance: minImportance,
-      branch, includeNoise, epochFrom: dateFrom, epochTo: dateTo, sort, tier,
+      query,
+      ftsQuery,
+      effectiveSource,
+      deepMode,
+      rerank,
+      limit,
+      offset,
+      project: project || null,
+      obsType: type,
+      importance: minImportance,
+      branch,
+      includeNoise,
+      epochFrom: dateFrom,
+      epochTo: dateTo,
+      sort,
+      tier,
       // ── CLI surface policy ──
-      obsTypeScoped,                     // D#76: obs_type ⇒ obs+events (skip type-less sessions/prompts)
-      obsTypeFallback: false,            // #8217 removed list-by-type fallback from the CLI
-      crossSourceEpochSortNoFts: false,  // CLI never reaches cross-source with empty ftsQuery (fails earlier)
-      rerankPolicy: 'cli',               // re-rank/supersede on any obs; re-sort gated on cross-source
+      obsTypeScoped, // D#76: obs_type ⇒ obs+events (skip type-less sessions/prompts)
+      obsTypeFallback: false, // #8217 removed list-by-type fallback from the CLI
+      crossSourceEpochSortNoFts: false, // CLI never reaches cross-source with empty ftsQuery (fails earlier)
+      rerankPolicy: 'cli', // re-rank/supersede on any obs; re-sort gated on cross-source
       rerankProject: project || cliProject(db),
       recentListingNoFts: false,
-      tolerateMissingFts: true,          // pre-FTS legacy DBs: swallow session/prompt FTS errors
-      tierPosition: 'early',             // tier filter inside the obs block (before sessions/prompts)
+      tolerateMissingFts: true, // pre-FTS legacy DBs: swallow session/prompt FTS errors
+      tierPosition: 'early', // tier filter inside the obs block (before sessions/prompts)
       tierProject: project || cliProject(db),
-    }
+    },
   );
   const isDeep = res.isDeep;
   const orFallbackFired = res.orFallbackFired;
@@ -305,23 +440,41 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Deep / escalation observability on stderr — reconstructed from core signals.
   // The CLI emitted these inline in runDeep; same strings, same order (escalation →
   // variants → rerank). rerank is only ever true on explicit --deep (never auto).
-  if (res.escalated) process.stderr.write(`[mem] auto-escalated to deep search (weak results: ${res.escalatedObsCount} hits)\n`);
+  if (res.escalated)
+    process.stderr.write(
+      `[mem] auto-escalated to deep search (weak results: ${res.escalatedObsCount} hits)\n`,
+    );
   if (isDeep && deepVariants) {
-    process.stderr.write(deepVariants.length > 1
-      ? `[mem] Deep search: rewrote into ${deepVariants.length} query variants, RRF-fused\n`
-      : '[mem] Deep search: rewrite returned no usable variants; used original query only\n');
+    process.stderr.write(
+      deepVariants.length > 1
+        ? `[mem] Deep search: rewrote into ${deepVariants.length} query variants, RRF-fused\n`
+        : '[mem] Deep search: rewrite returned no usable variants; used original query only\n',
+    );
   }
   if (rerank) {
-    process.stderr.write(res.reranked
-      ? '[mem] Deep search: LLM-reranked the fused top-20\n'
-      : '[mem] Deep search: rerank produced no usable order; kept fused order\n');
+    process.stderr.write(
+      res.reranked
+        ? '[mem] Deep search: LLM-reranked the fused top-20\n'
+        : '[mem] Deep search: rerank produced no usable order; kept fused order\n',
+    );
   }
 
   // "nothing matched" (no offset) vs "this page is empty" (with offset) — the two
   // CLI messages. preFinalizeCount is the pre-pagination population (post-tier).
   if (res.preFinalizeCount === 0) {
     if (jsonOutput) {
-      out(JSON.stringify({ query, total: 0, returned: 0, offset, limit, deep: isDeep, variants: isDeep ? deepVariants : undefined, results: [] }));
+      out(
+        JSON.stringify({
+          query,
+          total: 0,
+          returned: 0,
+          offset,
+          limit,
+          deep: isDeep,
+          variants: isDeep ? deepVariants : undefined,
+          results: [],
+        }),
+      );
     } else {
       out(`[mem] No results for "${query}"`);
       emitRecallHint(db, query);
@@ -334,7 +487,18 @@ async function cmdSearch(db, args, { llm } = {}) {
 
   if (paged.length === 0) {
     if (jsonOutput) {
-      out(JSON.stringify({ query, total, returned: 0, offset, limit, deep: isDeep, variants: isDeep ? deepVariants : undefined, results: [] }));
+      out(
+        JSON.stringify({
+          query,
+          total,
+          returned: 0,
+          offset,
+          limit,
+          deep: isDeep,
+          variants: isDeep ? deepVariants : undefined,
+          results: [],
+        }),
+      );
     } else {
       out(`[mem] No results for "${query}" at offset ${offset}`);
     }
@@ -343,12 +507,12 @@ async function cmdSearch(db, args, { llm } = {}) {
 
   // "N of M" total when paged < total (paired-path with server.mjs formatSearchOutput, #8198).
   const showTime = sort === 'time';
-  const hasMixed = paged.some(r => r.source === 'session' || r.source === 'prompt' || r.source === 'event');
+  const hasMixed = paged.some((r) => r.source === 'session' || r.source === 'prompt' || r.source === 'event');
   // Suppressed when --or was explicit — user already asked for OR, no "fallback" there.
   const fallbackHint = orFallbackFired && !useOr ? ' (relaxed AND→OR)' : '';
 
   if (jsonOutput) {
-    const items = paged.map(r => {
+    const items = paged.map((r) => {
       const base = {
         source: r.source,
         id: r.id,
@@ -356,7 +520,12 @@ async function cmdSearch(db, args, { llm } = {}) {
         score: r.score ?? null,
       };
       if (r.source === 'session') {
-        return { ...base, request: r.request || null, completed: r.completed || null, project: r.project || null };
+        return {
+          ...base,
+          request: r.request || null,
+          completed: r.completed || null,
+          project: r.project || null,
+        };
       }
       if (r.source === 'prompt') {
         return { ...base, prompt_text: r.prompt_text || null };
@@ -371,39 +540,47 @@ async function cmdSearch(db, args, { llm } = {}) {
         body_tokens: r.bodyTokens ?? null,
       };
     });
-    out(JSON.stringify({
-      query,
-      total,
-      returned: paged.length,
-      offset,
-      limit,
-      deep: isDeep,
-      variants: isDeep ? deepVariants : undefined,
-      relaxed_and_to_or: orFallbackFired && !useOr,
-      mixed_sources: hasMixed,
-      results: items,
-    }));
+    out(
+      JSON.stringify({
+        query,
+        total,
+        returned: paged.length,
+        offset,
+        limit,
+        deep: isDeep,
+        variants: isDeep ? deepVariants : undefined,
+        relaxed_and_to_or: orFallbackFired && !useOr,
+        mixed_sources: hasMixed,
+        results: items,
+      }),
+    );
     return;
   }
 
   const countLabel = total > paged.length ? `${paged.length} of ${total}` : `${paged.length}`;
   // Pluralize on total — "Found 1 of 44 result" reads wrong; the population (44) drives
   // grammatical number, not the page slice (1).
-  out(`[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${query}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}`);
+  out(
+    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${query}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}`,
+  );
   // `~Nt` = est. tokens to fetch this row's full body via mem_get (attachBodyTokens, paired with
   // MCP). Conditional so a row that skipped enrichment renders cleanly, not "~undefinedt".
-  const tok = r => (r.bodyTokens ? ` ~${r.bodyTokens}t` : '');
+  const tok = (r) => (r.bodyTokens ? ` ~${r.bodyTokens}t` : '');
   for (const r of paged) {
     const timeStr = showTime && r.created_at_epoch ? ` (${relativeTime(r.created_at_epoch)})` : '';
     if (r.source === 'session') {
       const date = fmtDateShort(r.created_at);
-      out(`S#${r.id} 📋 ${date}${timeStr} ${truncate(r.request || r.completed || '(no summary)', 80)}${tok(r)}`);
+      out(
+        `S#${r.id} 📋 ${date}${timeStr} ${truncate(r.request || r.completed || '(no summary)', 80)}${tok(r)}`,
+      );
     } else if (r.source === 'prompt') {
       const date = fmtDateShort(r.created_at);
       out(`P#${r.id} 💬 ${date}${timeStr} ${truncate(r.prompt_text || '(empty)', 80)}${tok(r)}`);
     } else if (r.source === 'event') {
       const date = fmtDateShort(r.created_at);
-      out(`E#${r.id} ${typeIcon(r.type)} ${date}${timeStr} ${truncate(r.title || '(untitled)', 80)}${tok(r)}`);
+      out(
+        `E#${r.id} ${typeIcon(r.type)} ${date}${timeStr} ${truncate(r.title || '(untitled)', 80)}${tok(r)}`,
+      );
       if (r.lesson_learned) {
         out(`  -> ${truncate(r.lesson_learned, 80)}`);
       }
@@ -432,12 +609,19 @@ function cmdRecent(db, args) {
   // the MCP surface is capped by the same number.
   // isNumericToken first: "2abc"→2 / "1e2"→1 are positive integers that the bare check
   // accepted silently; the positional path must reject garbage like the --limit flag does.
-  const isValid = rawArg !== undefined && isNumericToken(rawArg) && Number.isInteger(rawLimit) && rawLimit > 0 && rawLimit <= RECENT_MAX;
+  const isValid =
+    rawArg !== undefined &&
+    isNumericToken(rawArg) &&
+    Number.isInteger(rawLimit) &&
+    rawLimit > 0 &&
+    rawLimit <= RECENT_MAX;
   if (rawArg !== undefined && !isValid) {
     // Name the ACTUAL fallback: a present --limit overrides the positional below, so
     // claiming "default 10" when `recent abc --limit 5` returns 5 misled the user.
     const fallbackLabel = flags.limit !== undefined ? '--limit' : 'default 10';
-    process.stderr.write(`[mem] Invalid count "${rawArg}" (must be an integer between 1 and ${RECENT_MAX}); using ${fallbackLabel}\n`);
+    process.stderr.write(
+      `[mem] Invalid count "${rawArg}" (must be an integer between 1 and ${RECENT_MAX}); using ${fallbackLabel}\n`,
+    );
   }
   // Positional [N] wins for backward-compat; --limit is sibling-parity alias
   // (search/recall/browse/stats all accept --limit). Pre-2.69 `recent --limit N`
@@ -465,7 +649,10 @@ function cmdRecent(db, args) {
   let since = null;
   if (flags.since !== undefined) {
     const d = parseDuration(flags.since);
-    if (!d.ok) { fail(`[mem] Invalid --since "${flags.since}". Use <N><unit>, e.g. 7d, 24h, 90m, 2w.`); return; }
+    if (!d.ok) {
+      fail(`[mem] Invalid --since "${flags.since}". Use <N><unit>, e.g. 7d, 24h, 90m, 2w.`);
+      return;
+    }
     since = Date.now() - d.ms;
   }
 
@@ -473,20 +660,22 @@ function cmdRecent(db, args) {
   const rows = fetchRecent(db, { project, type, since, limit });
 
   if (jsonOutput) {
-    out(JSON.stringify({
-      project: project || null,
-      limit,
-      type: type || null,
-      total: rows.length,
-      results: rows.map(r => ({
-        id: r.id,
-        type: r.type,
-        title: r.title || r.subtitle || null,
-        importance: r.importance ?? null,
-        created_at: r.created_at,
-        created_at_epoch: r.created_at_epoch,
-      })),
-    }));
+    out(
+      JSON.stringify({
+        project: project || null,
+        limit,
+        type: type || null,
+        total: rows.length,
+        results: rows.map((r) => ({
+          id: r.id,
+          type: r.type,
+          title: r.title || r.subtitle || null,
+          importance: r.importance ?? null,
+          created_at: r.created_at,
+          created_at_epoch: r.created_at_epoch,
+        })),
+      }),
+    );
     return;
   }
 
@@ -509,7 +698,9 @@ function cmdRecall(db, args) {
   const file = resolvePositionalAlias(positional.join(' '), flags, ['file']);
   if (file === null) return;
   if (!file) {
-    fail('[mem] Usage: claude-mem-lite recall <file> [--limit N] [--include-noise] [--json] — file may also be passed via --file <file>');
+    fail(
+      '[mem] Usage: claude-mem-lite recall <file> [--limit N] [--include-noise] [--json] — file may also be passed via --file <file>',
+    );
     return;
   }
 
@@ -521,22 +712,24 @@ function cmdRecall(db, args) {
   const { filename, rows } = recallByFile(db, file, { limit, includeNoise });
 
   if (jsonOutput) {
-    out(JSON.stringify({
-      file: filename,
-      limit,
-      include_noise: includeNoise,
-      total: rows.length,
-      results: rows.map(r => ({
-        id: r.id,
-        type: r.type,
-        title: r.title || null,
-        lesson_learned: r.lesson_learned || null,
-        importance: r.importance ?? null,
-        project: r.project,
-        created_at: r.created_at,
-        created_at_epoch: r.created_at_epoch,
-      })),
-    }));
+    out(
+      JSON.stringify({
+        file: filename,
+        limit,
+        include_noise: includeNoise,
+        total: rows.length,
+        results: rows.map((r) => ({
+          id: r.id,
+          type: r.type,
+          title: r.title || null,
+          lesson_learned: r.lesson_learned || null,
+          importance: r.importance ?? null,
+          project: r.project,
+          created_at: r.created_at,
+          created_at_epoch: r.created_at_epoch,
+        })),
+      }),
+    );
     return;
   }
 
@@ -554,7 +747,6 @@ function cmdRecall(db, args) {
   }
 }
 
-
 // Time-field formatting moved to cli/common.mjs so the CLI `get` and the MCP
 // `mem_get` (server.mjs) share one source and can't drift (the drift bug:
 // MCP printed bare ms while CLI showed `<ms> (<relative>)`). Imported at the
@@ -563,7 +755,9 @@ function cmdRecall(db, args) {
 export { OBS_TIME_FIELDS, formatObsFieldValue };
 // Test seam: exposes cmdSearch with the llm injection slot without going through
 // ensureDb — lets hermetic tests pass a seeded :memory: db and a stub llm.
-export async function cmdSearchForTest(db, args, opts) { return cmdSearch(db, args, opts); }
+export async function cmdSearchForTest(db, args, opts) {
+  return cmdSearch(db, args, opts);
+}
 
 function renderObsRows(db, ids, requestedFields) {
   // Access-bump + fetch via the shared get-core (P2-12) — single source with mem_get.
@@ -583,7 +777,10 @@ function renderObsRows(db, ids, requestedFields) {
       if (f === 'text' && r.narrative && typeof val === 'string' && val.startsWith(r.narrative)) continue;
       const formatted = formatObsFieldValue(f, val);
       const maxLen = f === 'narrative' ? 1000 : f === 'lesson_learned' ? 500 : f === 'text' ? 500 : 200;
-      const display = typeof formatted === 'string' && formatted.length > maxLen ? formatted.slice(0, maxLen) + '…' : formatted;
+      const display =
+        typeof formatted === 'string' && formatted.length > maxLen
+          ? formatted.slice(0, maxLen) + '…'
+          : formatted;
       lines.push(`${obsFieldLabel(f)}: ${display}`);
     }
     parts.push(lines.join('\n'));
@@ -600,7 +797,7 @@ function renderSessionRows(db, ids) {
     // SESSION_DETAIL_FIELDS (get-core, P2-12): the FULL render set — the old
     // 6-field subset made remaining_items/notes/files_* searchable-but-invisible.
     for (const f of SESSION_DETAIL_FIELDS) {
-      if (f === 'id' || f === 'created_at') continue;   // already in the header
+      if (f === 'id' || f === 'created_at') continue; // already in the header
       const val = r[f];
       if (val === null || val === undefined || val === '') continue;
       const label = f[0].toUpperCase() + f.slice(1).replace(/_/g, ' ');
@@ -622,8 +819,7 @@ const CLI_DETAIL_LABELS = {
 };
 
 /** Label a column for the CLI's `Label: value` render style. */
-const cliFieldLabel = (f) =>
-  CLI_DETAIL_LABELS[f] || f[0].toUpperCase() + f.slice(1).replace(/_/g, ' ');
+const cliFieldLabel = (f) => CLI_DETAIL_LABELS[f] || f[0].toUpperCase() + f.slice(1).replace(/_/g, ' ');
 
 function renderPromptRows(db, ids) {
   const rows = fetchPromptDetail(db, ids);
@@ -644,13 +840,13 @@ function renderPromptRows(db, ids) {
 }
 
 function renderEventRows(db, ids) {
-  const rows = fetchEventDetail(db, ids);   // derives created_at from created_at_epoch
+  const rows = fetchEventDetail(db, ids); // derives created_at from created_at_epoch
   if (rows.length === 0) return null;
   const parts = [];
   for (const r of rows) {
     const lines = [`E#${r.id} [${r.event_type}] ${r.created_at ? fmtDateShort(r.created_at) : ''}`];
     for (const f of EVENT_DETAIL_FIELDS) {
-      if (f === 'id' || f === 'event_type' || f === 'created_at') continue;   // in the header
+      if (f === 'id' || f === 'event_type' || f === 'created_at') continue; // in the header
       const val = r[f];
       if (val === null || val === undefined || val === '') continue;
       lines.push(`${cliFieldLabel(f)}: ${val}`);
@@ -666,12 +862,17 @@ function cmdGet(db, args) {
   const idStr = resolvePositionalAlias(positional.join(','), flags, ['ids']);
   if (idStr === null) return;
   if (!idStr) {
-    fail('[mem] Usage: claude-mem-lite get <id1,id2,...> [--source obs|session|prompt|event] [--fields f1,f2,...] — ids may also be passed via --ids 1,2\n' +
-         '        IDs accept prefix from search output: #123 (obs), P#123 (prompt), S#123 (session), E#123 (event), D#123 (deferred item, full detail).');
+    fail(
+      '[mem] Usage: claude-mem-lite get <id1,id2,...> [--source obs|session|prompt|event] [--fields f1,f2,...] — ids may also be passed via --ids 1,2\n' +
+        '        IDs accept prefix from search output: #123 (obs), P#123 (prompt), S#123 (session), E#123 (event), D#123 (deferred item, full detail).',
+    );
     return;
   }
 
-  const tokens = idStr.split(',').map(s => s.trim()).filter(Boolean);
+  const tokens = idStr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   // Explicit --source overrides any prefix; otherwise each token's prefix routes individually.
   const explicit = flags.source;
@@ -690,7 +891,14 @@ function cmdGet(db, args) {
   if (unparseable.length > 0) {
     process.stderr.write(`[mem] Ignoring unparseable ID token(s): ${unparseable.join(', ')}\n`);
   }
-  if (bySrc.obs.length + bySrc.session.length + bySrc.prompt.length + bySrc.event.length + deferredIds.length === 0) {
+  if (
+    bySrc.obs.length +
+      bySrc.session.length +
+      bySrc.prompt.length +
+      bySrc.event.length +
+      deferredIds.length ===
+    0
+  ) {
     fail('[mem] No valid IDs provided');
     return;
   }
@@ -699,12 +907,14 @@ function cmdGet(db, args) {
   if (rejectBareStringFlags(flags, ['fields', 'source'])) return;
   let requestedFields = null;
   if (flags.fields) {
-    const allRequested = flags.fields.split(',').map(s => s.trim());
-    const invalid = allRequested.filter(f => !OBS_FIELDS.includes(f));
+    const allRequested = flags.fields.split(',').map((s) => s.trim());
+    const invalid = allRequested.filter((f) => !OBS_FIELDS.includes(f));
     if (invalid.length > 0) {
-      process.stderr.write(`[mem] Unknown field(s): ${invalid.join(', ')}. Valid: ${OBS_FIELDS.join(', ')}\n`);
+      process.stderr.write(
+        `[mem] Unknown field(s): ${invalid.join(', ')}. Valid: ${OBS_FIELDS.join(', ')}\n`,
+      );
     }
-    requestedFields = allRequested.filter(f => OBS_FIELDS.includes(f));
+    requestedFields = allRequested.filter((f) => OBS_FIELDS.includes(f));
     if (requestedFields.length === 0) {
       fail('[mem] No valid fields specified');
       return;
@@ -718,42 +928,65 @@ function cmdGet(db, args) {
   let deferredMissing = [];
   if (deferredIds.length > 0) {
     const dRows = getDeferredByIds(db, deferredIds);
-    const found = new Set(dRows.map(r => r.id));
-    deferredMissing = deferredIds.filter(id => !found.has(id));
+    const found = new Set(dRows.map((r) => r.id));
+    deferredMissing = deferredIds.filter((id) => !found.has(id));
     if (dRows.length > 0) {
       sections.push(dRows.map(formatDeferredDetail).join('\n\n'));
       totalFound += dRows.length;
     }
     if (deferredMissing.length > 0) {
-      process.stderr.write(`[mem] Deferred item(s) not found: ${deferredMissing.map(i => `D#${i}`).join(', ')}\n`);
+      process.stderr.write(
+        `[mem] Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}\n`,
+      );
     }
   }
   if (bySrc.obs.length > 0) {
     const s = renderObsRows(db, bySrc.obs, requestedFields);
-    if (s) { sections.push(s.text); totalFound += s.count; }
+    if (s) {
+      sections.push(s.text);
+      totalFound += s.count;
+    }
   }
   if (bySrc.session.length > 0) {
     const s = renderSessionRows(db, bySrc.session);
-    if (s) { sections.push(s.text); totalFound += s.count; }
+    if (s) {
+      sections.push(s.text);
+      totalFound += s.count;
+    }
   }
   if (bySrc.prompt.length > 0) {
     const s = renderPromptRows(db, bySrc.prompt);
-    if (s) { sections.push(s.text); totalFound += s.count; }
+    if (s) {
+      sections.push(s.text);
+      totalFound += s.count;
+    }
   }
   if (bySrc.event.length > 0) {
     const s = renderEventRows(db, bySrc.event);
-    if (s) { sections.push(s.text); totalFound += s.count; }
+    if (s) {
+      sections.push(s.text);
+      totalFound += s.count;
+    }
   }
 
   if (totalFound === 0) {
     // Deferred-only request that found nothing — the source-probe below is
     // about obs/session/prompt/event and would print an empty source list.
-    if (deferredMissing.length > 0 && bySrc.obs.length + bySrc.session.length + bySrc.prompt.length + bySrc.event.length === 0) {
-      fail(`[mem] Deferred item(s) not found: ${deferredMissing.map(i => `D#${i}`).join(', ')}. List open items: claude-mem-lite defer list`);
+    if (
+      deferredMissing.length > 0 &&
+      bySrc.obs.length + bySrc.session.length + bySrc.prompt.length + bySrc.event.length === 0
+    ) {
+      fail(
+        `[mem] Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}. List open items: claude-mem-lite defer list`,
+      );
       return;
     }
     // Probe the OTHER sources so the caller can retry with the right prefix.
-    const queried = new Set(Object.entries(bySrc).filter(([, v]) => v.length > 0).map(([k]) => k));
+    const queried = new Set(
+      Object.entries(bySrc)
+        .filter(([, v]) => v.length > 0)
+        .map(([k]) => k),
+    );
     const allIds = [...bySrc.obs, ...bySrc.session, ...bySrc.prompt, ...bySrc.event];
     const probe = probeIdSources(db, allIds, queried);
     const hits = formatProbeHints(probe);
@@ -786,7 +1019,7 @@ function cmdTimeline(db, args) {
   const project = flags.project ? resolveProject(db, flags.project) : null;
   const jsonOutput = flags.json === true || flags.json === 'true';
 
-  const toRow = r => ({
+  const toRow = (r) => ({
     id: r.id,
     type: r.type,
     title: r.title || r.subtitle || null,
@@ -806,13 +1039,15 @@ function cmdTimeline(db, args) {
       // a direct-lookup miss (like `get` on a bad id) → anchor:null + error code, rc=1.
       if (jsonOutput) {
         process.exitCode = 1;
-        out(JSON.stringify({
-          anchor: null,
-          anchor_note: formatAnchorError(resolved.error, 'mcp'),
-          before: [],
-          after: [],
-          error: resolved.error.code || 'anchor_resolution_failed',
-        }));
+        out(
+          JSON.stringify({
+            anchor: null,
+            anchor_note: formatAnchorError(resolved.error, 'mcp'),
+            before: [],
+            after: [],
+            error: resolved.error.code || 'anchor_resolution_failed',
+          }),
+        );
       } else {
         fail(formatAnchorError(resolved.error, 'cli'));
       }
@@ -843,14 +1078,16 @@ function cmdTimeline(db, args) {
     const rows = fetchRecentTimeline(db, { project, limit: before + after + 1 });
 
     if (jsonOutput) {
-      out(JSON.stringify({
-        anchor: null,
-        anchor_note: queryStr ? `no anchor matched query "${queryStr}"` : null,
-        before: [],
-        after: [],
-        fallback: 'recent',
-        results: rows.map(toRow),
-      }));
+      out(
+        JSON.stringify({
+          anchor: null,
+          anchor_note: queryStr ? `no anchor matched query "${queryStr}"` : null,
+          before: [],
+          after: [],
+          fallback: 'recent',
+          results: rows.map(toRow),
+        }),
+      );
       return;
     }
 
@@ -875,13 +1112,15 @@ function cmdTimeline(db, args) {
     // mismatch). Same --json contract as the resolution-miss path above.
     if (jsonOutput) {
       process.exitCode = 1;
-      out(JSON.stringify({
-        anchor: null,
-        anchor_note: `Observation #${anchorId} not found.`,
-        before: [],
-        after: [],
-        error: 'id-not-found',
-      }));
+      out(
+        JSON.stringify({
+          anchor: null,
+          anchor_note: `Observation #${anchorId} not found.`,
+          before: [],
+          after: [],
+          error: 'id-not-found',
+        }),
+      );
     } else {
       fail(`[mem] Observation #${anchorId} not found`);
     }
@@ -890,12 +1129,14 @@ function cmdTimeline(db, args) {
   const { anchor, beforeRows, afterRows } = win;
 
   if (jsonOutput) {
-    out(JSON.stringify({
-      anchor: toRow(anchor),
-      anchor_note: anchorNote,
-      before: beforeRows.map(toRow),
-      after: afterRows.map(toRow),
-    }));
+    out(
+      JSON.stringify({
+        anchor: toRow(anchor),
+        anchor_note: anchorNote,
+        before: beforeRows.map(toRow),
+        after: afterRows.map(toRow),
+      }),
+    );
     return;
   }
 
@@ -916,7 +1157,19 @@ function cmdSave(db, args) {
   // Reject value-less string flags before they reach .split()/saveObservation as a
   // boolean `true` (#8470): bare --files/--title/--lesson crashed with a raw stacktrace.
   // Runs before content resolution so a bare --text gets this clean error, not the usage line.
-  if (rejectBareStringFlags(flags, ['text', 'content', 'title', 'files', 'lesson', 'lesson-learned', 'project', 'type'])) return;
+  if (
+    rejectBareStringFlags(flags, [
+      'text',
+      'content',
+      'title',
+      'files',
+      'lesson',
+      'lesson-learned',
+      'project',
+      'type',
+    ])
+  )
+    return;
 
   // Content: positional, or --text/--content as flags-only aliases (--content is the
   // literal MCP mem_save field name, #233). Callers coming from the MCP schema map
@@ -925,7 +1178,9 @@ function cmdSave(db, args) {
   const text = resolvePositionalAlias(positional.join(' '), flags, ['text', 'content']);
   if (text === null) return;
   if (!text.trim()) {
-    fail('[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] — content may also be passed via --text/--content "<text>"');
+    fail(
+      '[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] — content may also be passed via --text/--content "<text>"',
+    );
     return;
   }
 
@@ -940,18 +1195,29 @@ function cmdSave(db, args) {
   const rawImp = flags.importance !== undefined ? parseInt(flags.importance, 10) : 2;
   // isNumericToken first: bare parseInt would coerce "2abc"→2 / "1e2"→1 and persist a
   // wrong importance that silently skews ranking/decay. Float literals still truncate (#8277).
-  if (flags.importance !== undefined && (!isNumericToken(flags.importance) || isNaN(rawImp) || rawImp < 1 || rawImp > 3)) {
+  if (
+    flags.importance !== undefined &&
+    (!isNumericToken(flags.importance) || isNaN(rawImp) || rawImp < 1 || rawImp > 3)
+  ) {
     fail(`[mem] Invalid importance "${flags.importance}". Must be 1, 2, or 3.`);
     return;
   }
   const project = flags.project ? resolveProject(db, flags.project) : inferProject();
-  const saveFiles = flags.files ? flags.files.split(',').map(f => f.trim()).filter(Boolean) : [];
+  const saveFiles = flags.files
+    ? flags.files
+        .split(',')
+        .map((f) => f.trim())
+        .filter(Boolean)
+    : [];
 
   // Optional lesson_learned — accepts --lesson or --lesson-learned (alias)
   // Mirrors MCP memSaveSchema.lesson_learned (≤500 chars) and cmdUpdate's flag handling.
-  const rawLesson = flags.lesson !== undefined ? flags.lesson
-    : flags['lesson-learned'] !== undefined ? flags['lesson-learned']
-    : null;
+  const rawLesson =
+    flags.lesson !== undefined
+      ? flags.lesson
+      : flags['lesson-learned'] !== undefined
+        ? flags['lesson-learned']
+        : null;
   if (rawLesson !== null && typeof rawLesson === 'string' && rawLesson.length > 500) {
     fail(`[mem] --lesson too long (${rawLesson.length} chars, max 500).`);
     return;
@@ -969,9 +1235,13 @@ function cmdSave(db, args) {
   let closesTokens = null;
   if (flags['closes-deferred'] !== undefined && flags['closes-deferred'] !== false) {
     const raw = String(flags['closes-deferred']);
-    closesTokens = raw.split(',').map(t => t.trim()).filter(Boolean).map(t => {
-      return /^\d+$/.test(t) ? parseInt(t, 10) : t;
-    });
+    closesTokens = raw
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .map((t) => {
+        return /^\d+$/.test(t) ? parseInt(t, 10) : t;
+      });
     if (closesTokens.length === 0) {
       fail('[mem] --closes-deferred requires at least one token (integer ordinal or D#N)');
       return;
@@ -992,9 +1262,14 @@ function cmdSave(db, args) {
     // printed a clean `Superseded: #1.` Worse, the token vanished before saveObservation
     // saw it, which made the `malformed-id` class D#201 added unreachable from the CLI —
     // the exact face whose silence motivated D#201. Number() rejects `1abc` as NaN.
-    supersedesIds = raw.split(',').map((t) => t.trim()).filter(Boolean);
+    supersedesIds = raw
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
     if (supersedesIds.length === 0) {
-      fail('[mem] --supersedes requires at least one id: a number for an observation, or E#<n> for an event (e.g. --supersedes 8754,E#10524)');
+      fail(
+        '[mem] --supersedes requires at least one id: a number for an observation, or E#<n> for an event (e.g. --supersedes 8754,E#10524)',
+      );
       return;
     }
   }
@@ -1004,16 +1279,20 @@ function cmdSave(db, args) {
     // The transaction body — dedup short-circuit BEFORE the resolver, and D#195's
     // allowStatuses — is lib/save-observation.mjs's (audit 2026-09-02 P1-6). Both faces
     // used to write it out and each carried a "kept in sync with the other" comment.
-    ({ result, closesIds } = saveWithClosures(db, {
-      content: text,
-      title: flags.title,
-      type,
-      importance: rawImp,
-      project,
-      files: saveFiles,
-      lesson_learned: rawLesson,
-      supersedes: supersedesIds || undefined,
-    }, { closesTokens, project }));
+    ({ result, closesIds } = saveWithClosures(
+      db,
+      {
+        content: text,
+        title: flags.title,
+        type,
+        importance: rawImp,
+        project,
+        files: saveFiles,
+        lesson_learned: rawLesson,
+        supersedes: supersedesIds || undefined,
+      },
+      { closesTokens, project },
+    ));
   } catch (e) {
     if (closesTokens) {
       fail(`[mem] save with --closes-deferred failed: ${e.message}`);
@@ -1024,7 +1303,9 @@ function cmdSave(db, args) {
   }
 
   if (result.kind === 'duplicate') {
-    out(`[mem] Skipped: similar to existing #${result.existingId}. Use "claude-mem-lite get ${result.existingId}" to review.`);
+    out(
+      `[mem] Skipped: similar to existing #${result.existingId}. Use "claude-mem-lite get ${result.existingId}" to review.`,
+    );
     // D#201: the dedup swallowed the requested supersession too — say so here,
     // because this branch returns before the note below is ever reached.
     const dupSkip = formatSupersedeSkipped(result.supersedeSkipped);
@@ -1033,15 +1314,16 @@ function cmdSave(db, args) {
   }
 
   const lessonNote = result.lessonCaptured ? ' 💡lesson captured' : '';
-  const closedNote = closesIds && closesIds.length > 0
-    ? ` Closed: ${closesIds.map(i => `D#${i}`).join(', ')}.`
-    : '';
+  const closedNote =
+    closesIds && closesIds.length > 0 ? ` Closed: ${closesIds.map((i) => `D#${i}`).join(', ')}.` : '';
   const supersededNote = formatSupersededNote(result);
   // G1+G2: detached backfill worker (lesson for obligated types + aliases for
   // every save) — fill-only-empty, so an agent acting on the nudge still wins.
-  const enrichNote = shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id)
-    ? ' (background enrichment queued)' : '';
-  out(`[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`);
+  const enrichNote =
+    shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id) ? ' (background enrichment queued)' : '';
+  out(
+    `[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`,
+  );
   // D#201: on its OWN line, after the success line. Appending it to the success
   // string would put a warning inside a sentence that reads as "done".
   const skipNote = formatSupersedeSkipped(result.supersedeSkipped);
@@ -1054,9 +1336,15 @@ function cmdDefer(db, args) {
   const sub = args[0];
   const rest = args.slice(1);
   switch (sub) {
-    case 'add':  cmdDeferAdd(db, rest); break;
-    case 'list': cmdDeferList(db, rest); break;
-    case 'drop': cmdDeferDrop(db, rest); break;
+    case 'add':
+      cmdDeferAdd(db, rest);
+      break;
+    case 'list':
+      cmdDeferList(db, rest);
+      break;
+    case 'drop':
+      cmdDeferDrop(db, rest);
+      break;
     default:
       fail('[mem] Usage: claude-mem-lite defer <add|list|drop> ...');
       fail('[mem]   defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P]');
@@ -1076,14 +1364,18 @@ function cmdDeferAdd(db, args) {
   if (resolvedTitle === null) return;
   const title = resolvedTitle.trim();
   if (!title) {
-    fail('[mem] Usage: claude-mem-lite defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P] — title may also be passed via --title "<title>"');
+    fail(
+      '[mem] Usage: claude-mem-lite defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P] — title may also be passed via --title "<title>"',
+    );
     return;
   }
   // Mirror MCP memDeferSchema.title (z.string().min(1).max(200)). CLI used to
   // accept multi-line / 1000-char titles, then `defer list` would render them
   // as one wrapped row that pushed every other item off-screen.
   if (title.length > 200) {
-    fail(`[mem] defer add: title too long (${title.length} chars, max 200). Move detail to --detail "<text>".`);
+    fail(
+      `[mem] defer add: title too long (${title.length} chars, max 200). Move detail to --detail "<text>".`,
+    );
     return;
   }
   const priority = flags.priority !== undefined ? parseInt(flags.priority, 10) : 2;
@@ -1100,7 +1392,10 @@ function cmdDeferAdd(db, args) {
   const project = flags.project ? resolveProject(db, flags.project) : inferProject();
   const detail = typeof flags.detail === 'string' ? flags.detail : null;
   const files = flags.files
-    ? flags.files.split(',').map(f => f.trim()).filter(Boolean)
+    ? flags.files
+        .split(',')
+        .map((f) => f.trim())
+        .filter(Boolean)
     : null;
 
   let r;
@@ -1113,7 +1408,7 @@ function cmdDeferAdd(db, args) {
   // Compute the freshly-inserted row's ordinal for an immediately-actionable
   // response ("ok, deferred this as item N"). Mirrors server.mjs:980.
   const open = listOpenWithOrdinal(db, project, 50);
-  const ord = open.find(o => o.id === r.id)?.ordinal ?? '?';
+  const ord = open.find((o) => o.id === r.id)?.ordinal ?? '?';
   out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".`);
 }
 
@@ -1144,7 +1439,9 @@ function cmdDeferDrop(db, args) {
   const idStr = resolvePositionalAlias(positional.join(' '), flags, ['id']);
   if (idStr === null) return;
   if (!idStr.trim()) {
-    fail('[mem] Usage: claude-mem-lite defer drop <id-or-D#N>[,id2,...] --reason "<reason>" [--project P] — id may also be passed via --id D#N');
+    fail(
+      '[mem] Usage: claude-mem-lite defer drop <id-or-D#N>[,id2,...] --reason "<reason>" [--project P] — id may also be passed via --id D#N',
+    );
     return;
   }
   const reason = flags.reason;
@@ -1156,8 +1453,11 @@ function cmdDeferDrop(db, args) {
   // already accepts the batch form (cmdSave uses resolveDeferredIds on a split list);
   // drop now mirrors that ergonomic so users can prune multiple items in one call
   // without N shell invocations.
-  const rawTokens = idStr.split(',').map(s => s.trim()).filter(Boolean);
-  const tokens = rawTokens.map(t => /^\d+$/.test(t) ? parseInt(t, 10) : t);
+  const rawTokens = idStr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const tokens = rawTokens.map((t) => (/^\d+$/.test(t) ? parseInt(t, 10) : t));
   const project = flags.project ? resolveProject(db, flags.project) : cliProject(db);
 
   let realIds;
@@ -1175,10 +1475,12 @@ function cmdDeferDrop(db, args) {
     else dropped.push(realId);
   }
   if (dropped.length > 0) {
-    out(`[mem] Dropped ${dropped.map(id => `D#${id}`).join(', ')} in project "${project}". Reason: ${reason.trim()}`);
+    out(
+      `[mem] Dropped ${dropped.map((id) => `D#${id}`).join(', ')} in project "${project}". Reason: ${reason.trim()}`,
+    );
   }
   if (noop.length > 0) {
-    out(`[mem] No-op (not in 'open' status): ${noop.map(id => `D#${id}`).join(', ')}`);
+    out(`[mem] No-op (not in 'open' status): ${noop.map((id) => `D#${id}`).join(', ')}`);
   }
   // D#195 (c): catch the mis-drop at the moment it happens, not months later
   // when the ledger can no longer tell a fixed item from a rejected one.
@@ -1206,7 +1508,6 @@ async function renderQualityReport(db, { project, days }) {
   const { computeQualityStats, formatQualityReport } = await import('./lib/stats-quality.mjs');
   out(formatQualityReport(computeQualityStats(db, { project, days })));
 }
-
 
 async function cmdStats(db, args) {
   const { flags } = parseArgs(args);
@@ -1238,27 +1539,39 @@ async function cmdStats(db, args) {
     const totalRecovered = rows.reduce((a, r) => a + r.recovered, 0);
     const recoveryRate = totalAttempts > 0 ? totalRecovered / totalAttempts : 0;
     if (flags.json === true || flags.json === 'true') {
-      out(JSON.stringify({
-        days, total_attempts: totalAttempts, total_recovered: totalRecovered,
-        recovery_rate: Number(recoveryRate.toFixed(4)),
-        per_day: rows,
-      }, null, 2));
+      out(
+        JSON.stringify(
+          {
+            days,
+            total_attempts: totalAttempts,
+            total_recovered: totalRecovered,
+            recovery_rate: Number(recoveryRate.toFixed(4)),
+            per_day: rows,
+          },
+          null,
+          2,
+        ),
+      );
       return;
     }
     out(`[mem] lesson-retry stats — last ${days}d (UTC date buckets)`);
     out(`  attempts:  ${totalAttempts}`);
     out(`  recovered: ${totalRecovered}`);
-    out(`  rate:      ${(recoveryRate * 100).toFixed(1)}% ${totalAttempts === 0 ? '(no data — retry path may be unused this window)' : ''}`);
-    if (totalAttempts >= 50 && recoveryRate < 0.10) {
+    out(
+      `  rate:      ${(recoveryRate * 100).toFixed(1)}% ${totalAttempts === 0 ? '(no data — retry path may be unused this window)' : ''}`,
+    );
+    if (totalAttempts >= 50 && recoveryRate < 0.1) {
       out('  ⚠ recovery rate <10% over ≥50 attempts — retry path likely dead weight, consider deleting');
-    } else if (totalAttempts >= 50 && recoveryRate >= 0.30) {
+    } else if (totalAttempts >= 50 && recoveryRate >= 0.3) {
       out('  ✓ recovery rate ≥30% — retry path actively saving lessons');
     }
     if (rows.length > 0) {
       out('\n  date         attempts  recovered  rate');
       for (const r of rows.slice(0, 14)) {
-        const rate = r.attempts > 0 ? (r.recovered / r.attempts * 100).toFixed(1) + '%' : '—';
-        out(`  ${r.date_bucket}  ${String(r.attempts).padStart(8)}  ${String(r.recovered).padStart(9)}  ${rate.padStart(5)}`);
+        const rate = r.attempts > 0 ? ((r.recovered / r.attempts) * 100).toFixed(1) + '%' : '—';
+        out(
+          `  ${r.date_bucket}  ${String(r.attempts).padStart(8)}  ${String(r.recovered).padStart(9)}  ${rate.padStart(5)}`,
+        );
       }
     }
     return;
@@ -1266,9 +1579,23 @@ async function cmdStats(db, args) {
 
   const now = Date.now();
   const {
-    obsTotal, sessTotal, promptTotal, obsRecent, sessRecent,
-    types, projects, daily, tokenEst, avgImp, lowVal, lowSignalTitle,
-    noiseRatio, lowSignalRatio, compressedCount, supersededOnlyCount, tierMap,
+    obsTotal,
+    sessTotal,
+    promptTotal,
+    obsRecent,
+    sessRecent,
+    types,
+    projects,
+    daily,
+    tokenEst,
+    avgImp,
+    lowVal,
+    lowSignalTitle,
+    noiseRatio,
+    lowSignalRatio,
+    compressedCount,
+    supersededOnlyCount,
+    tierMap,
     // currentProject steers the TIER context only (the report itself stays global unless
     // --project was given). Without it, `stats` from a subdirectory tiered every row against
     // the empty cwd-derived name while `recent` had already resolved to the work-tree root.
@@ -1284,47 +1611,53 @@ async function cmdStats(db, args) {
   // pre-maintain snapshots against a 59MB DB with nothing reporting it. Cheap probes
   // only (DB file + .bak aggregate), no recursive tree walk.
   let dbBytes = 0;
-  try { dbBytes = statSync(join(DB_DIR, 'claude-mem-lite.db')).size; } catch { /* fresh */ }
+  try {
+    dbBytes = statSync(join(DB_DIR, 'claude-mem-lite.db')).size;
+  } catch {
+    /* fresh */
+  }
   const snaps = listSnapshots(join(DB_DIR, 'claude-mem-lite.db'));
   const backupBytes = snaps.reduce((s, x) => s + x.size, 0);
   const mb = (n) => (n / (1024 * 1024)).toFixed(1);
 
   if (jsonOutput) {
-    out(JSON.stringify({
-      project,
-      days,
-      totals: {
-        observations: obsTotal.c,
-        sessions: sessTotal.c,
-        prompts: promptTotal.c,
-      },
-      recent: {
-        observations: obsRecent.c,
-        sessions: sessRecent.c,
-      },
-      type_distribution: types.map(t => ({ type: t.type, count: t.c })),
-      top_projects: projects.map(p => ({ project: p.project, count: p.c })),
-      daily_activity: daily.map(d => ({ day: d.day, count: d.c })),
-      data_health: {
-        estimated_tokens: tokenEst.t ?? 0,
-        avg_importance: Number((avgImp.v ?? 1).toFixed(2)),
-        low_value_count: lowVal.c,
-        noise_ratio: Number(noiseRatio.toFixed(4)),
-        low_signal_titles: lowSignalTitle.c,
-        low_signal_ratio: Number(lowSignalRatio.toFixed(4)),
-        compressed: compressedCount.c,
-        superseded_only: supersededOnlyCount.c,
-        hook_errors_24h: hookErrors24h,
-        db_bytes: dbBytes,
-        backup_count: snaps.length,
-        backup_bytes: backupBytes,
-      },
-      tier_distribution: {
-        working: tierMap.working ?? 0,
-        active: tierMap.active ?? 0,
-        archive: tierMap.archive ?? 0,
-      },
-    }));
+    out(
+      JSON.stringify({
+        project,
+        days,
+        totals: {
+          observations: obsTotal.c,
+          sessions: sessTotal.c,
+          prompts: promptTotal.c,
+        },
+        recent: {
+          observations: obsRecent.c,
+          sessions: sessRecent.c,
+        },
+        type_distribution: types.map((t) => ({ type: t.type, count: t.c })),
+        top_projects: projects.map((p) => ({ project: p.project, count: p.c })),
+        daily_activity: daily.map((d) => ({ day: d.day, count: d.c })),
+        data_health: {
+          estimated_tokens: tokenEst.t ?? 0,
+          avg_importance: Number((avgImp.v ?? 1).toFixed(2)),
+          low_value_count: lowVal.c,
+          noise_ratio: Number(noiseRatio.toFixed(4)),
+          low_signal_titles: lowSignalTitle.c,
+          low_signal_ratio: Number(lowSignalRatio.toFixed(4)),
+          compressed: compressedCount.c,
+          superseded_only: supersededOnlyCount.c,
+          hook_errors_24h: hookErrors24h,
+          db_bytes: dbBytes,
+          backup_count: snaps.length,
+          backup_bytes: backupBytes,
+        },
+        tier_distribution: {
+          working: tierMap.working ?? 0,
+          active: tierMap.active ?? 0,
+          archive: tierMap.archive ?? 0,
+        },
+      }),
+    );
     return;
   }
 
@@ -1332,7 +1665,9 @@ async function cmdStats(db, args) {
   // Env-aware data dir (CLAUDE_MEM_DIR || ~/.claude-mem-lite) — stated so any
   // raw-db fallback can't guess a co-located-with-the-CLI path (D#92 chain).
   out(`Data dir: ${DB_DIR}`);
-  out(`Total: ${obsTotal.c.toLocaleString()} observations | ${sessTotal.c} sessions | ${promptTotal.c} prompts`);
+  out(
+    `Total: ${obsTotal.c.toLocaleString()} observations | ${sessTotal.c} sessions | ${promptTotal.c} prompts`,
+  );
   out(`Last ${days}d: ${obsRecent.c} observations | ${sessRecent.c} sessions`);
   out('');
   if (types.length) {
@@ -1354,39 +1689,56 @@ async function cmdStats(db, args) {
   out(`  Est. tokens: ${tokenEst.t ?? 0}`);
   out(`  Avg importance: ${(avgImp.v ?? 1).toFixed(2)}`);
   out(`  Low-value (imp≤1, never used, >30d): ${lowVal.c} (${(noiseRatio * 100).toFixed(1)}% noise)`);
-  out(`  Low-signal titles (Modified/Error/Worked on…): ${lowSignalTitle.c} (${(lowSignalRatio * 100).toFixed(1)}%)`);
+  out(
+    `  Low-signal titles (Modified/Error/Worked on…): ${lowSignalTitle.c} (${(lowSignalRatio * 100).toFixed(1)}%)`,
+  );
   out(`  Compressed: ${compressedCount.c}`);
-  out(`  Hook errors (last 24h): ${hookErrors24h}${hookErrors24h > 0 ? `  ← tail ${join(resolveRuntimeDir(DB_DIR), 'hook-errors')}` : ''}`);
+  out(
+    `  Hook errors (last 24h): ${hookErrors24h}${hookErrors24h > 0 ? `  ← tail ${join(resolveRuntimeDir(DB_DIR), 'hook-errors')}` : ''}`,
+  );
   // Hint threshold = the REAL eviction budget (pre-release review 2026-08-16: a
   // hardcoded 3×-DB heuristic promised an eviction that fires only past the budget).
-  out(`  Disk: DB ${mb(dbBytes)}MB | ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB${backupBytes > backupBudgetBytes() ? `  ← over the ${mb(backupBudgetBytes())}MB backup budget; next maintain/save snapshot evicts oldest (>7d old)` : ''}`);
+  out(
+    `  Disk: DB ${mb(dbBytes)}MB | ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB${backupBytes > backupBudgetBytes() ? `  ← over the ${mb(backupBudgetBytes())}MB backup budget; next maintain/save snapshot evicts oldest (>7d old)` : ''}`,
+  );
   // Tier-1 firing counters for ① file-intel + ② reread-guard (recorded by
   // pre-tool-recall.js via lib/metrics.mjs; CLAUDE_MEM_METRICS=1 to enable).
   const featAgg = aggregateMetrics(DB_DIR, 7);
   const fiN = featAgg.file_intel?.count ?? 0;
   const rrN = featAgg.reread_warn?.count ?? 0;
   const metricsOn = process.env.CLAUDE_MEM_METRICS === '1';
-  out(`  Feature injections (7d): 📄 file-intel ${fiN} · 🔁 reread-warn ${rrN}${(!metricsOn && fiN + rrN === 0) ? '  (set CLAUDE_MEM_METRICS=1 to record)' : ''}`);
+  out(
+    `  Feature injections (7d): 📄 file-intel ${fiN} · 🔁 reread-warn ${rrN}${!metricsOn && fiN + rrN === 0 ? '  (set CLAUDE_MEM_METRICS=1 to record)' : ''}`,
+  );
   // G13: surface the recall/enrich metering so "did the worker succeed" is
   // readable from stats, not just raw jsonl. enrich-save shows ok/total; the
   // per-reason split (llm-null vs txn-failed …) stays a jq query on the jsonl.
   const prN = featAgg.pretool_recall?.count ?? 0;
   const erN = featAgg.error_recall?.count ?? 0;
-  let esOk = 0, esN = 0;
+  let esOk = 0,
+    esN = 0;
   for (const r of readMetrics(DB_DIR, 7)) {
-    if (r.event === 'enrich_save') { esN++; if (r.enriched) esOk++; }
+    if (r.event === 'enrich_save') {
+      esN++;
+      if (r.enriched) esOk++;
+    }
   }
   if (prN + erN + esN > 0 || metricsOn) {
-    out(`  Recall metering (7d): 🧠 pretool ${prN} · ⛑ error-recall ${erN} · ✚ enrich-save ${esOk}/${esN} ok`);
+    out(
+      `  Recall metering (7d): 🧠 pretool ${prN} · ⛑ error-recall ${erN} · ✚ enrich-save ${esOk}/${esN} ok`,
+    );
   }
-  if (noiseRatio > 0.6 || lowSignalRatio > 0.3) out('  ⚠️ High noise ratio — consider running mem maintain / compress');
+  if (noiseRatio > 0.6 || lowSignalRatio > 0.3)
+    out('  ⚠️ High noise ratio — consider running mem maintain / compress');
   out('');
   // Tier counts only live (uncompressed, non-superseded) observations — surface the
   // full decomposition so live + compressed + superseded = Total adds up cleanly.
   const tierTotal = (tierMap.working ?? 0) + (tierMap.active ?? 0) + (tierMap.archive ?? 0);
   const supersededLabel = supersededOnlyCount.c > 0 ? ` + ${supersededOnlyCount.c} superseded` : '';
   out(`Tier distribution (live ${tierTotal}, excludes ${compressedCount.c} compressed${supersededLabel}):`);
-  out(`  🔴 Working: ${tierMap.working ?? 0} | 🟡 Active: ${tierMap.active ?? 0} | 🔵 Archive: ${tierMap.archive ?? 0}`);
+  out(
+    `  🔴 Working: ${tierMap.working ?? 0} | 🟡 Active: ${tierMap.active ?? 0} | 🔵 Archive: ${tierMap.archive ?? 0}`,
+  );
 }
 
 function cmdContext(db, args) {
@@ -1400,8 +1752,11 @@ function cmdContext(db, args) {
   const block = buildSessionContextLines(db, project).trim();
 
   if (!block) {
-    if (jsonOutput) { out(JSON.stringify({ raw: '', sections: {} })); }
-    else { out(`[mem] No context yet for project "${project}"`); }
+    if (jsonOutput) {
+      out(JSON.stringify({ raw: '', sections: {} }));
+    } else {
+      out(`[mem] No context yet for project "${project}"`);
+    }
     return;
   }
 
@@ -1412,7 +1767,11 @@ function cmdContext(db, args) {
     let match;
     const sectionStarts = [];
     while ((match = sectionRegex.exec(block)) !== null) {
-      sectionStarts.push({ name: match[1].trim(), index: match.index, headerEnd: match.index + match[0].length });
+      sectionStarts.push({
+        name: match[1].trim(),
+        index: match.index,
+        headerEnd: match.index + match[0].length,
+      });
     }
     for (let i = 0; i < sectionStarts.length; i++) {
       const start = sectionStarts[i].headerEnd;
@@ -1448,7 +1807,10 @@ function cmdBrowse(db, args) {
 
   // Shared collection (lib/browse-core, P2-12) — single source with mem_browse.
   const { showTiers, tierData, tierCounts, grandTotal } = collectBrowseTiers(db, {
-    project, tierFilter, limit, now,
+    project,
+    tierFilter,
+    limit,
+    now,
     currentSessionId: getActiveMemorySessionId(db, project),
   });
   const tiers = BROWSE_TIERS;
@@ -1459,7 +1821,7 @@ function cmdBrowse(db, args) {
     for (const tier of showTiers) {
       tiersOut[tier] = {
         count: tierData[tier].count,
-        results: tierData[tier].rows.map(r => ({
+        results: tierData[tier].rows.map((r) => ({
           id: r.id,
           type: r.type,
           title: r.title || null,
@@ -1469,13 +1831,15 @@ function cmdBrowse(db, args) {
         })),
       };
     }
-    out(JSON.stringify({
-      project,
-      limit,
-      tier_filter: tierFilter,
-      totals: { ...tierCounts, grand_total: grandTotal },
-      tiers: tiersOut,
-    }));
+    out(
+      JSON.stringify({
+        project,
+        limit,
+        tier_filter: tierFilter,
+        totals: { ...tierCounts, grand_total: grandTotal },
+        tiers: tiersOut,
+      }),
+    );
     return;
   }
 
@@ -1490,10 +1854,15 @@ function cmdBrowse(db, args) {
       continue;
     }
 
-    if (count === 0) { out(''); continue; }
+    if (count === 0) {
+      out('');
+      continue;
+    }
 
     for (const r of rows) {
-      out(`  #${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || '(untitled)', 80)} | ${relativeTime(r.created_at_epoch)}`);
+      out(
+        `  #${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || '(untitled)', 80)} | ${relativeTime(r.created_at_epoch)}`,
+      );
     }
     if (count > rows.length) out(`  ... and ${count - rows.length} more`);
     out('');
@@ -1505,7 +1874,7 @@ function cmdBrowse(db, args) {
   }
 
   if (!tierFilter) {
-    const parts = tiers.map(t => `${t[0].toUpperCase() + t.slice(1)}: ${tierCounts[t] ?? 0}`);
+    const parts = tiers.map((t) => `${t[0].toUpperCase() + t.slice(1)}: ${tierCounts[t] ?? 0}`);
     out(`Totals: ${grandTotal} observations | ${parts.join(' | ')}`);
   }
 }
@@ -1518,23 +1887,32 @@ function cmdDelete(db, args) {
   const idStr = resolvePositionalAlias(positional.join(','), flags, ['ids']);
   if (idStr === null) return;
   if (!idStr) {
-    fail('[mem] Usage: claude-mem-lite delete <id1,id2,...> [--confirm] — ids may also be passed via --ids 1,2');
+    fail(
+      '[mem] Usage: claude-mem-lite delete <id1,id2,...> [--confirm] — ids may also be passed via --ids 1,2',
+    );
     return;
   }
 
   // delete operates on observations only. Reject P#/S# explicitly so callers aren't
   // surprised by silent NaN filtering when they paste search-output IDs.
-  const tokens = idStr.split(',').map(s => s.trim()).filter(Boolean);
-  const nonObs = tokens.filter(t => /^[EePpSs]#?\d+$/.test(t));
+  const tokens = idStr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const nonObs = tokens.filter((t) => /^[EePpSs]#?\d+$/.test(t));
   if (nonObs.length > 0) {
-    fail(`[mem] delete only works on observations. Rejected: ${nonObs.join(', ')}. ` +
-         `Prompts, sessions, and events are not deletable here — inspect with \`claude-mem-lite get P#N --source prompt\` / \`--source session\` / \`--source event\`.`);
+    fail(
+      `[mem] delete only works on observations. Rejected: ${nonObs.join(', ')}. ` +
+        `Prompts, sessions, and events are not deletable here — inspect with \`claude-mem-lite get P#N --source prompt\` / \`--source session\` / \`--source event\`.`,
+    );
     return;
   }
-  const ids = tokens.map(t => {
-    const p = parseIdToken(t);
-    return p && p.source === null ? p.id : NaN;
-  }).filter(n => !isNaN(n));
+  const ids = tokens
+    .map((t) => {
+      const p = parseIdToken(t);
+      return p && p.source === null ? p.id : NaN;
+    })
+    .filter((n) => !isNaN(n));
   if (ids.length === 0) {
     fail('[mem] No valid IDs provided');
     return;
@@ -1560,9 +1938,14 @@ function cmdDelete(db, args) {
   // transaction) lives in lib/delete-core.mjs — single source of truth shared with the MCP
   // mem_delete path (was inlined here + kept in sync by parity comments, the #1 drift risk).
   const result = deleteObservations(db, ids);
-  const missing = ids.filter(id => !rows.some(r => r.id === id));
-  const recoveredNote = result.recoveredChildren > 0 ? ` Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.` : '';
-  out(`[mem] Deleted ${result.deleted} observation(s).${recoveredNote}${missing.length > 0 ? ` Note: ID(s) ${missing.join(', ')} not found.` : ''}`);
+  const missing = ids.filter((id) => !rows.some((r) => r.id === id));
+  const recoveredNote =
+    result.recoveredChildren > 0
+      ? ` Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.`
+      : '';
+  out(
+    `[mem] Deleted ${result.deleted} observation(s).${recoveredNote}${missing.length > 0 ? ` Note: ID(s) ${missing.join(', ')} not found.` : ''}`,
+  );
 }
 
 // ─── Update ──────────────────────────────────────────────────────────────────
@@ -1575,8 +1958,10 @@ function cmdUpdate(db, args) {
   if (resolvedId === null) return;
   const raw = resolvedId || undefined;
   if (raw && /^[EePpSs]#?\d+$/.test(String(raw).trim())) {
-    fail(`[mem] update only works on observations. Rejected: ${raw}. ` +
-         `Prompts, sessions, and events are not editable here.`);
+    fail(
+      `[mem] update only works on observations. Rejected: ${raw}. ` +
+        `Prompts, sessions, and events are not editable here.`,
+    );
     return;
   }
   // Strict parseIdToken gate (aligned with cmdDelete): a bare parseInt fallback
@@ -1585,7 +1970,9 @@ function cmdUpdate(db, args) {
   const parsed = raw ? parseIdToken(raw) : null;
   const id = parsed && parsed.source === null ? parsed.id : NaN;
   if (!id || isNaN(id)) {
-    fail('[mem] Usage: claude-mem-lite update <id> [--title T] [--type T] [--importance N] [--lesson T] [--narrative T] [--concepts T] — id may also be passed via --id N');
+    fail(
+      '[mem] Usage: claude-mem-lite update <id> [--title T] [--type T] [--importance N] [--lesson T] [--narrative T] [--concepts T] — id may also be passed via --id N',
+    );
     return;
   }
 
@@ -1605,7 +1992,9 @@ function cmdUpdate(db, args) {
     // Reject empty title — clears the observation's identifier and would render it
     // as `(untitled)` in every listing. Almost always an accidental shell-stripped arg.
     if (typeof flags.title === 'string' && flags.title.trim() === '') {
-      fail('[mem] --title cannot be empty. Pass a non-empty string or omit the flag to leave the title unchanged.');
+      fail(
+        '[mem] --title cannot be empty. Pass a non-empty string or omit the flag to leave the title unchanged.',
+      );
       return;
     }
     fields.title = flags.title;
@@ -1667,7 +2056,9 @@ function cmdUpdate(db, args) {
   // derived-column rebuild in one transaction — single source with MCP mem_update.
   const updatedCols = applyObsUpdate(db, id, fields);
   if (updatedCols.length === 0) {
-    fail('[mem] No fields to update. Use --title, --type, --importance, --lesson/--lesson-learned, --narrative, --concepts');
+    fail(
+      '[mem] No fields to update. Use --title, --type, --importance, --lesson/--lesson-learned, --narrative, --concepts',
+    );
     return;
   }
 
@@ -1701,11 +2092,17 @@ function cmdExport(db, args) {
   let exportToEpoch = null;
   if (flags.from) {
     exportFromEpoch = new Date(flags.from).getTime();
-    if (isNaN(exportFromEpoch)) { fail(`[mem] Invalid --from date: "${flags.from}". Use YYYY-MM-DD or ISO 8601.`); return; }
+    if (isNaN(exportFromEpoch)) {
+      fail(`[mem] Invalid --from date: "${flags.from}". Use YYYY-MM-DD or ISO 8601.`);
+      return;
+    }
   }
   if (flags.to) {
     exportToEpoch = new Date(flags.to).getTime();
-    if (isNaN(exportToEpoch)) { fail(`[mem] Invalid --to date: "${flags.to}". Use YYYY-MM-DD or ISO 8601.`); return; }
+    if (isNaN(exportToEpoch)) {
+      fail(`[mem] Invalid --to date: "${flags.to}". Use YYYY-MM-DD or ISO 8601.`);
+      return;
+    }
     if (/^\d{4}-\d{2}-\d{2}$/.test(flags.to)) exportToEpoch += DAY_MS - 1;
   }
   // --include-compressed: include compressed observations (aligned with MCP mem_export).
@@ -1713,10 +2110,15 @@ function cmdExport(db, args) {
   // of the live-row pair (backup/export of tombstones is opt-in, retractions are not).
   const { wheres, params } = buildExportWhere({
     includeCompressed: flags['include-compressed'] === true || flags['include-compressed'] === 'true',
-    project, type: flags.type || null, fromEpoch: exportFromEpoch, toEpoch: exportToEpoch,
+    project,
+    type: flags.type || null,
+    fromEpoch: exportFromEpoch,
+    toEpoch: exportToEpoch,
   });
   if (exportFromEpoch !== null && exportToEpoch !== null && exportFromEpoch > exportToEpoch) {
-    process.stderr.write(`[mem] Note: --from "${flags.from}" is after --to "${flags.to}"; this range is empty\n`);
+    process.stderr.write(
+      `[mem] Note: --from "${flags.from}" is after --to "${flags.to}"; this range is empty\n`,
+    );
   }
 
   // Backup default: with no --limit, export the COMPLETE matching set. `export` is
@@ -1741,8 +2143,10 @@ function cmdExport(db, args) {
     ? parseIntFlag(flags.limit, {
         name: '--limit',
         defaultValue: -1,
-        warn: () => process.stderr.write(
-          `[mem] Invalid --limit "${flags.limit}" (must be an integer ≥ 1); exporting the COMPLETE matching set instead\n`),
+        warn: () =>
+          process.stderr.write(
+            `[mem] Invalid --limit "${flags.limit}" (must be an integer ≥ 1); exporting the COMPLETE matching set instead\n`,
+          ),
       })
     : -1;
   const format = flags.format || 'json';
@@ -1759,11 +2163,15 @@ function cmdExport(db, args) {
   // informational (restore remaps id and buckets under a restore session).
   // EXPORT_COLUMNS_SQL is the single source of truth shared with the MCP mem_export
   // tool (server.mjs) so the two export surfaces can never drift (v3.42 HIGH-2).
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT ${EXPORT_COLUMNS_SQL}
     FROM observations WHERE ${wheres.join(' AND ')}
     ORDER BY created_at_epoch DESC LIMIT ?
-  `).all(...params, limit);
+  `,
+    )
+    .all(...params, limit);
 
   if (rows.length === 0) {
     // Empty result must respect the requested format so `export … | jq` works:
@@ -1791,11 +2199,15 @@ function cmdExport(db, args) {
   // set (-1), and `rows.length >= -1` is always true — so the guard as written announced
   // "Results capped at -1" on the one path that is guaranteed NOT to be capped.
   if (limitGiven && limit > 0 && rows.length >= limit) {
-    process.stderr.write(`[mem] Note: Results capped at ${limit}. Raise --limit or narrow --from/--to to export more.\n`);
+    process.stderr.write(
+      `[mem] Note: Results capped at ${limit}. Raise --limit or narrow --from/--to to export more.\n`,
+    );
   }
   // Fidelity caveat at backup-creation time (mirrors the restore-side note). stderr,
   // so stdout stays a clean JSON/JSONL stream for `export > backup.json`.
-  process.stderr.write('[mem] Note: export omits related_ids and supersession links (superseded rows are excluded) — content and value-signals round-trip, the relationship graph does not.\n');
+  process.stderr.write(
+    '[mem] Note: export omits related_ids and supersession links (superseded rows are excluded) — content and value-signals round-trip, the relationship graph does not.\n',
+  );
 }
 
 // ─── Restore ───────────────────────────────────────────────────────────────
@@ -1810,19 +2222,33 @@ function cmdExport(db, args) {
 function cmdRestore(db, argv) {
   const { positional, flags } = parseArgs(argv);
   const file = positional[0];
-  if (!file) { fail('[mem] Usage: claude-mem-lite restore <file> [--project P] [--dry-run]'); return; }
+  if (!file) {
+    fail('[mem] Usage: claude-mem-lite restore <file> [--project P] [--dry-run]');
+    return;
+  }
   let raw;
-  try { raw = readFileSync(file, 'utf8'); }
-  catch (e) { fail(`[mem] Cannot read "${file}": ${e.message}`); return; }
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (e) {
+    fail(`[mem] Cannot read "${file}": ${e.message}`);
+    return;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) { out('[mem] Empty file — nothing to restore.'); return; }
+  if (!trimmed) {
+    out('[mem] Empty file — nothing to restore.');
+    return;
+  }
   let rows;
   let parseFailures = 0;
   if (trimmed[0] === '[') {
     // Whole-array JSON is a single document — partial parse is impossible, so
     // a syntax error rejects the file (unchanged behavior).
-    try { rows = JSON.parse(trimmed); }
-    catch (e) { fail(`[mem] "${file}" is not valid export JSON/JSONL: ${e.message}`); return; }
+    try {
+      rows = JSON.parse(trimmed);
+    } catch (e) {
+      fail(`[mem] "${file}" is not valid export JSON/JSONL: ${e.message}`);
+      return;
+    }
   } else {
     // JSONL: tolerate per-line syntax errors so one corrupt line in a large
     // backup doesn't discard every valid row. Parse failures fold into the
@@ -1831,20 +2257,33 @@ function cmdRestore(db, argv) {
     rows = [];
     for (const line of trimmed.split('\n')) {
       if (!line.trim()) continue;
-      try { rows.push(JSON.parse(line)); }
-      catch { parseFailures++; }
+      try {
+        rows.push(JSON.parse(line));
+      } catch {
+        parseFailures++;
+      }
     }
   }
-  if (!Array.isArray(rows) || (rows.length === 0 && parseFailures === 0)) { out('[mem] No observations in file.'); return; }
-  if (rows.length === 0) { fail(`[mem] "${file}": all ${parseFailures} line(s) failed to parse as JSONL.`); return; }
+  if (!Array.isArray(rows) || (rows.length === 0 && parseFailures === 0)) {
+    out('[mem] No observations in file.');
+    return;
+  }
+  if (rows.length === 0) {
+    fail(`[mem] "${file}": all ${parseFailures} line(s) failed to parse as JSONL.`);
+    return;
+  }
 
   const projOverride = flags.project ? resolveProject(db, flags.project) : null;
   const dryRun = flags['dry-run'] === true || flags['dry-run'] === 'true';
-  const num = (v) => Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0;
+  const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 
-  const dupCheck = db.prepare('SELECT id FROM observations WHERE project = ? AND title = ? AND created_at_epoch = ? LIMIT 1');
+  const dupCheck = db.prepare(
+    'SELECT id FROM observations WHERE project = ? AND title = ? AND created_at_epoch = ? LIMIT 1',
+  );
   // Final field state of a restored row, for the post-signalUpdate vector rebuild below.
-  const vecRow = db.prepare('SELECT title, narrative, concepts, lesson_learned, search_aliases FROM observations WHERE id = ?');
+  const vecRow = db.prepare(
+    'SELECT title, narrative, concepts, lesson_learned, search_aliases FROM observations WHERE id = ?',
+  );
   const signalUpdate = db.prepare(`UPDATE observations SET
       text = COALESCE(?, text),
       subtitle = ?, concepts = ?, facts = ?, search_aliases = ?, files_read = ?, branch = COALESCE(?, branch),
@@ -1853,9 +2292,15 @@ function cmdRestore(db, argv) {
       decay_seen_count = ?, last_accessed_at = ?
     WHERE id = ?`);
 
-  let restored = 0, skipped = 0, malformed = 0, tombstoned = 0;
+  let restored = 0,
+    skipped = 0,
+    malformed = 0,
+    tombstoned = 0;
   for (const r of rows) {
-    if (!r || typeof r !== 'object' || !r.type || !r.title) { malformed++; continue; }
+    if (!r || typeof r !== 'object' || !r.type || !r.title) {
+      malformed++;
+      continue;
+    }
     // M-8 (audit 2026-08-14): a row exported with --include-compressed carries its
     // compressed_into tombstone. Restoring it as a live row resurrects a member its
     // weekly-summary keeper already absorbed (duplicate search hits, and the marker's
@@ -1868,16 +2313,32 @@ function cmdRestore(db, argv) {
     // were deliberately retired by the quality pipeline (idle-cleanup/optimize mark
     // importance-1 aged rows) — restoring them live would resurrect adjudicated
     // noise, unlike -2 (a purge QUEUE the user may still be racing to undo).
-    if (r.compressed_into && r.compressed_into !== COMPRESSED_PENDING_PURGE) { tombstoned++; continue; }
+    if (r.compressed_into && r.compressed_into !== COMPRESSED_PENDING_PURGE) {
+      tombstoned++;
+      continue;
+    }
     const project = projOverride || r.project || inferProject();
-    const createdEpoch = Number.isFinite(Number(r.created_at_epoch)) ? Number(r.created_at_epoch) : Date.now();
+    const createdEpoch = Number.isFinite(Number(r.created_at_epoch))
+      ? Number(r.created_at_epoch)
+      : Date.now();
     // Durable exact-dup guard — saveObservation's 5-min Jaccard window can't catch a
     // re-restore of an old-timestamped backup, so gate on project+title+created_at.
-    if (dupCheck.get(project, r.title, createdEpoch)) { skipped++; continue; }
-    if (dryRun) { restored++; continue; }
+    if (dupCheck.get(project, r.title, createdEpoch)) {
+      skipped++;
+      continue;
+    }
+    if (dryRun) {
+      restored++;
+      continue;
+    }
     try {
       let files = [];
-      try { const fm = JSON.parse(r.files_modified || '[]'); if (Array.isArray(fm)) files = fm; } catch { /* leave [] */ }
+      try {
+        const fm = JSON.parse(r.files_modified || '[]');
+        if (Array.isArray(fm)) files = fm;
+      } catch {
+        /* leave [] */
+      }
       const imp = num(r.importance);
       const res = saveObservation(db, {
         content: r.narrative || r.title,
@@ -1889,7 +2350,10 @@ function cmdRestore(db, argv) {
         lesson_learned: r.lesson_learned || null,
         now: new Date(createdEpoch),
       });
-      if (res.kind !== 'saved') { skipped++; continue; } // saveObservation Jaccard dedup
+      if (res.kind !== 'saved') {
+        skipped++;
+        continue;
+      } // saveObservation Jaccard dedup
       // Re-apply the fields saveObservation zeros/derives so the backup is faithful.
       // `text` is the observation BODY and its own FTS5 column — import-jsonl / cold-start
       // rows keep the body there with an empty narrative, so saveObservation (content =
@@ -1905,14 +2369,21 @@ function cmdRestore(db, argv) {
       // text — left as-is.
       signalUpdate.run(
         r.text ? scrubSecrets(r.text) : null,
-        scrubSecrets(r.subtitle || ''), scrubSecrets(r.concepts || ''), scrubSecrets(r.facts || ''),
+        scrubSecrets(r.subtitle || ''),
+        scrubSecrets(r.concepts || ''),
+        scrubSecrets(r.facts || ''),
         r.search_aliases === null || r.search_aliases === undefined ? null : scrubSecrets(r.search_aliases),
-        r.files_read || '[]', r.branch ?? null,
+        r.files_read || '[]',
+        r.branch ?? null,
         // v44 scope round-trip (review D#78): whitelist-validated; old backups
         // without the column restore as NULL — same as pre-v44 behavior.
         normalizeScope(r.scope),
-        num(r.access_count), num(r.cited_count), num(r.uncited_streak), num(r.injection_count),
-        num(r.decay_seen_count), r.last_accessed_at ?? null,
+        num(r.access_count),
+        num(r.cited_count),
+        num(r.uncited_streak),
+        num(r.injection_count),
+        num(r.decay_seen_count),
+        r.last_accessed_at ?? null,
         res.id,
       );
       // The FTS `text` column re-syncs through the observations _au trigger, but the
@@ -1935,13 +2406,18 @@ function cmdRestore(db, argv) {
   // ones that parsed.
   const totalMalformed = malformed + parseFailures;
   const totalLines = rows.length + parseFailures;
-  const tombstoneNote = tombstoned > 0 ? `, ${tombstoned} compressed member(s) rejected (keeper-absorbed or auto-retired tombstones)` : '';
+  const tombstoneNote =
+    tombstoned > 0
+      ? `, ${tombstoned} compressed member(s) rejected (keeper-absorbed or auto-retired tombstones)`
+      : '';
   // Past tense only when rows were actually written. `Restore (dry-run): 6 restored` reads
   // as done to anyone skimming past the parenthetical, and this command's whole job is to
   // let a user check a backup BEFORE trusting it.
-  out(`[mem] Restore${dryRun ? ' (dry-run)' : ''}: ${restored} ${dryRun ? 'would be restored (at most)' : 'restored'}`
-    + `, ${skipped} duplicate(s) ${dryRun ? 'would be skipped' : 'skipped'}${tombstoneNote}`
-    + `, ${totalMalformed} malformed/failed from ${totalLines} row(s).`);
+  out(
+    `[mem] Restore${dryRun ? ' (dry-run)' : ''}: ${restored} ${dryRun ? 'would be restored (at most)' : 'restored'}` +
+      `, ${skipped} duplicate(s) ${dryRun ? 'would be skipped' : 'skipped'}${tombstoneNote}` +
+      `, ${totalMalformed} malformed/failed from ${totalLines} row(s).`,
+  );
   if (dryRun) {
     // The preview applies the durable exact-dup guard (project+title+created_at) but NOT
     // saveObservation's Jaccard near-duplicate collapse, which only exists once rows are
@@ -1949,14 +2425,18 @@ function cmdRestore(db, argv) {
     // 10 and restored 9. Simulating Jaccard here would mean a second copy of the dedup rule
     // — the drift class this codebase keeps paying for — so the number is labelled an upper
     // bound instead. Run without --dry-run for the exact count.
-    out('[mem] Note: the preview does not simulate near-duplicate collapse, so the real run may restore fewer.');
+    out(
+      '[mem] Note: the preview does not simulate near-duplicate collapse, so the real run may restore fewer.',
+    );
   }
   // Name the lossiness where the user meets it. Export omits related_ids and drops
   // superseded rows, and restore re-inserts under fresh AUTOINCREMENT ids — so no
   // cross-link can survive the round-trip. That is a deliberate format tradeoff (stored
   // ids would be stale after the remap), but "N restored" alone reads as full fidelity.
   if (restored > 0) {
-    out('[mem] Note: related_ids and supersession links are not carried across export/restore (ids are remapped on restore) — restored rows have no cross-links.');
+    out(
+      '[mem] Note: related_ids and supersession links are not carried across export/restore (ids are remapped on restore) — restored rows have no cross-links.',
+    );
   }
 }
 
@@ -1968,7 +2448,9 @@ function cmdCompress(db, args) {
   // --run, maintain uses positional `execute`). A bare --run previously fell through to
   // a silent preview; fail fast pointing at the right flag. --execute still wins if both.
   if ((flags.run === true || flags.run === 'true') && flags.execute !== true && flags.execute !== 'true') {
-    fail("[mem] compress executes with --execute, not --run (--run is optimize's flag). Re-run: claude-mem-lite compress --execute");
+    fail(
+      "[mem] compress executes with --execute, not --run (--run is optimize's flag). Re-run: claude-mem-lite compress --execute",
+    );
     return;
   }
   const preview = flags.execute !== true && flags.execute !== 'true';
@@ -1986,7 +2468,9 @@ function cmdCompress(db, args) {
     // — a false parity claim (the candidate gate is the real data guard, but the age floor
     // should match the tool the description promises equivalence with).
     if (!isNumericToken(flags['age-days']) || !Number.isInteger(parsed) || parsed < 30 || parsed > 365) {
-      fail(`[mem] Invalid --age-days "${flags['age-days']}". Must be an integer between 30 and 365 (parity with mem_compress).`);
+      fail(
+        `[mem] Invalid --age-days "${flags['age-days']}". Must be an integer between 30 and 365 (parity with mem_compress).`,
+      );
       return;
     }
     ageDays = parsed;
@@ -2013,7 +2497,9 @@ function cmdCompress(db, args) {
       const [proj, week] = key.split('::');
       const types = {};
       for (const o of obs) types[o.type] = (types[o.type] || 0) + 1;
-      const typeStr = Object.entries(types).map(([t, c]) => `${c} ${t}`).join(', ');
+      const typeStr = Object.entries(types)
+        .map(([t, c]) => `${c} ${t}`)
+        .join(', ');
       out(`  ${proj} ${week}: ${obs.length} obs (${typeStr})`);
     }
     out('[mem] Run with --execute to compress.');
@@ -2038,7 +2524,9 @@ function cmdMaintain(db, args) {
   const { positional, flags } = parseArgs(args);
   const action = positional[0];
   if (!action || !['scan', 'execute'].includes(action)) {
-    fail("[mem] Usage: claude-mem-lite maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.");
+    fail(
+      "[mem] Usage: claude-mem-lite maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.",
+    );
     return;
   }
   // Guard value-less string flags before any `.split()` / resolveProject runs. A bare
@@ -2063,20 +2551,24 @@ function cmdMaintain(db, args) {
     out(`  Stale (>30d, imp=1, no access, never injected): ${stats.stale}`);
     out(`  Broken (no title/narrative): ${stats.broken}`);
     out(`  Boostable (accessed>3, imp<3): ${stats.boostable}`);
-    out(`  Pinned-but-uncited (inj>=${PINNED_INJ_THRESHOLD}, cited=0, above floor): ${stats.pinned} — floored by the default maintain set since v3.76.0, no lesson → 1, lesson → 2 (opt out: CLAUDE_MEM_SKIP_DEMOTE_PINNED=1)`);
+    out(
+      `  Pinned-but-uncited (inj>=${PINNED_INJ_THRESHOLD}, cited=0, above floor): ${stats.pinned} — floored by the default maintain set since v3.76.0, no lesson → 1, lesson → 2 (opt out: CLAUDE_MEM_SKIP_DEMOTE_PINNED=1)`,
+    );
     out(formatPendingPurgeLine(stats.pendingPurge));
     if (duplicates.length > 0) {
-      const autoMergeable = duplicates.filter(d => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);
-      const manualReview = duplicates.filter(d => parseFloat(d.similarity) < AUTO_MERGE_THRESHOLD);
+      const autoMergeable = duplicates.filter((d) => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);
+      const manualReview = duplicates.filter((d) => parseFloat(d.similarity) < AUTO_MERGE_THRESHOLD);
 
       if (autoMergeable.length > 0) {
         out(`  Auto-mergeable (similarity >= ${AUTO_MERGE_THRESHOLD}):`);
         for (const d of autoMergeable.slice(0, 15)) {
           const keep = (d.a.importance ?? 1) >= (d.b.importance ?? 1) ? d.a : d.b;
           const remove = keep === d.a ? d.b : d.a;
-          out(`    [${keep.id}] "${truncate(keep.title, 40)}" <-> [${remove.id}] "${truncate(remove.title, 40)}" (${d.similarity})`);
+          out(
+            `    [${keep.id}] "${truncate(keep.title, 40)}" <-> [${remove.id}] "${truncate(remove.title, 40)}" (${d.similarity})`,
+          );
         }
-        const mergeIds = autoMergeable.map(d => {
+        const mergeIds = autoMergeable.map((d) => {
           const keep = (d.a.importance ?? 1) >= (d.b.importance ?? 1) ? d.a : d.b;
           const remove = keep === d.a ? d.b : d.a;
           return `${keep.id}:${remove.id}`;
@@ -2087,7 +2579,9 @@ function cmdMaintain(db, args) {
       if (manualReview.length > 0) {
         out('  Needs review:');
         for (const d of manualReview.slice(0, 15)) {
-          out(`    [${d.a.id}] "${truncate(d.a.title, 40)}" <-> [${d.b.id}] "${truncate(d.b.title, 40)}" (${d.similarity})`);
+          out(
+            `    [${d.a.id}] "${truncate(d.a.title, 40)}" <-> [${d.b.id}] "${truncate(d.b.title, 40)}" (${d.similarity})`,
+          );
         }
       }
     }
@@ -2095,7 +2589,16 @@ function cmdMaintain(db, args) {
   }
 
   // Execute
-  const VALID_OPS = ['cleanup', 'decay', 'boost', 'demote_pinned', 'dedup', 'purge_stale', 'rebuild_vectors', 'vacuum'];
+  const VALID_OPS = [
+    'cleanup',
+    'decay',
+    'boost',
+    'demote_pinned',
+    'dedup',
+    'purge_stale',
+    'rebuild_vectors',
+    'vacuum',
+  ];
   // Distinguish flag-absent (use default op set) from flag-present-but-empty
   // (`--ops ""`, e.g. an unset shell var). The latter previously coerced via `||`
   // to the destructive default set and EXECUTED it; route it to the VALID_OPS check
@@ -2103,8 +2606,8 @@ function cmdMaintain(db, args) {
   // was the literal `cleanup,decay,boost` when this was written; it now comes from
   // DEFAULT_MAINTAIN_OPS, which is why the list is no longer spelled out here.)
   const opsStr = flags.ops === undefined ? resolveDefaultMaintainOps().join(',') : String(flags.ops);
-  const ops = opsStr.split(',').map(s => s.trim());
-  const invalidOps = ops.filter(op => !VALID_OPS.includes(op));
+  const ops = opsStr.split(',').map((s) => s.trim());
+  const invalidOps = ops.filter((op) => !VALID_OPS.includes(op));
   if (invalidOps.length > 0) {
     fail(`[mem] Unknown operation(s): ${invalidOps.join(', ')}. Valid: ${VALID_OPS.join(', ')}`);
     return;
@@ -2138,10 +2641,16 @@ function cmdMaintain(db, args) {
   const invalidMergeSegments = [];
   const mergeGroups = [];
   if (flags['merge-ids']) {
-    for (const seg of String(flags['merge-ids']).split(',').map(x => x.trim()).filter(Boolean)) {
-      const parts = seg.split(':').map(x => x.trim());
-      const nums = parts.map(x => Number(x));
-      if (parts.length < 2 || nums.some(n => !Number.isFinite(n) || n <= 0)) { invalidMergeSegments.push(seg); continue; }
+    for (const seg of String(flags['merge-ids'])
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)) {
+      const parts = seg.split(':').map((x) => x.trim());
+      const nums = parts.map((x) => Number(x));
+      if (parts.length < 2 || nums.some((n) => !Number.isFinite(n) || n <= 0)) {
+        invalidMergeSegments.push(seg);
+        continue;
+      }
       mergeGroups.push(nums);
     }
   }
@@ -2155,8 +2664,10 @@ function cmdMaintain(db, args) {
     invalidMergeSegments,
     mergeIdsFlagName: '--merge-ids',
     renderPurgePreview: (previewRow) => {
-      const lines = ['purge_stale preview (no --confirm):',
-        `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`];
+      const lines = [
+        'purge_stale preview (no --confirm):',
+        `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`,
+      ];
       if (previewRow.candidates > 0) {
         lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
         lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
@@ -2177,22 +2688,33 @@ import { cmdFtsCheck } from './cli/fts-check.mjs';
 function cmdRegistry(_memDb, args) {
   const { positional, flags } = parseArgs(args);
   const action = positional[0];
-  if (!action || !['list', 'stats', 'search', 'import', 'remove', 'reindex', 'recommend-stats'].includes(action)) {
-    fail('[mem] Usage: claude-mem-lite registry <list|stats|search|import|remove|reindex|recommend-stats> [--type skill|agent] [--query Q] [--name N] [--resource-type T]');
+  if (
+    !action ||
+    !['list', 'stats', 'search', 'import', 'remove', 'reindex', 'recommend-stats'].includes(action)
+  ) {
+    fail(
+      '[mem] Usage: claude-mem-lite registry <list|stats|search|import|remove|reindex|recommend-stats> [--type skill|agent] [--query Q] [--name N] [--resource-type T]',
+    );
     return;
   }
 
   // recommend-stats reads the shadow-recommendation JSONL (filesystem), not the
   // registry DB — handle it before opening rdb so it works without a registry DB.
   if (action === 'recommend-stats') {
-    const days = (typeof flags.days === 'string' || typeof flags.days === 'number') && +flags.days > 0 ? Math.floor(+flags.days) : 7;
+    const days =
+      (typeof flags.days === 'string' || typeof flags.days === 'number') && +flags.days > 0
+        ? Math.floor(+flags.days)
+        : 7;
     out(formatFunnel(computeFunnel(days)));
     if (flags.sweep) {
       // Offline ROC over the shipped gate thresholds (B3). Parse `--floors`/`--margins` as
       // comma lists of finite numbers; fall back to the spanning defaults on bad/empty input.
       const parseNums = (v, fallback) => {
         if (typeof v !== 'string') return fallback;
-        const nums = v.split(',').map(x => Number(x.trim())).filter(Number.isFinite);
+        const nums = v
+          .split(',')
+          .map((x) => Number(x.trim()))
+          .filter(Number.isFinite);
         return nums.length ? nums : fallback;
       };
       const floors = parseNums(flags.floors, DEFAULT_SWEEP_FLOORS);
@@ -2221,7 +2743,11 @@ function cmdRegistry(_memDb, args) {
     fail(`[mem] Invalid --type "${flags.type}". Use: skill, agent`);
     return;
   }
-  if (flags['resource-type'] !== undefined && flags['resource-type'] !== 'skill' && flags['resource-type'] !== 'agent') {
+  if (
+    flags['resource-type'] !== undefined &&
+    flags['resource-type'] !== 'skill' &&
+    flags['resource-type'] !== 'agent'
+  ) {
     fail(`[mem] Invalid --resource-type "${flags['resource-type']}". Use: skill, agent`);
     return;
   }
@@ -2232,14 +2758,19 @@ function cmdRegistry(_memDb, args) {
       // string "true". Reject it cleanly (#8470) before it becomes a confusing no-match.
       if (rejectBareStringFlags(flags, ['query', 'category', 'quality'])) return;
       const query = flags.query || positional.slice(1).join(' ');
-      if (!query) { fail('[mem] Usage: claude-mem-lite registry search <query> [--type skill|agent] [--category C] [--quality Q]'); return; }
+      if (!query) {
+        fail(
+          '[mem] Usage: claude-mem-lite registry search <query> [--type skill|agent] [--category C] [--quality Q]',
+        );
+        return;
+      }
       let results = searchResources(rdb, query, {
         type: flags.type || undefined,
-        limit: (flags.category || flags.quality) ? 20 : 10,
+        limit: flags.category || flags.quality ? 20 : 10,
       });
       // Apply category/quality post-filters (aligned with MCP mem_registry)
-      if (flags.category) results = results.filter(r => r.category === flags.category);
-      if (flags.quality) results = results.filter(r => r.quality_tier === flags.quality);
+      if (flags.category) results = results.filter((r) => r.category === flags.category);
+      if (flags.quality) results = results.filter((r) => r.quality_tier === flags.quality);
       // Prioritize directly invocable resources (aligned with MCP mem_registry)
       results.sort((a, b) => {
         const aInvocable = a.invocation_name ? 1 : 0;
@@ -2248,16 +2779,24 @@ function cmdRegistry(_memDb, args) {
         return 0;
       });
       results = results.slice(0, 5);
-      if (results.length === 0) { out(`[mem] No matching resources for: "${query}"`); return; }
+      if (results.length === 0) {
+        out(`[mem] No matching resources for: "${query}"`);
+        return;
+      }
       out(`[mem] ${results.length} resource(s) for "${query}":`);
       const home = homedir();
       for (const r of results) {
         const badge = r.quality_tier === 'installed' ? '[✓]' : r.quality_tier === 'verified' ? '[★]' : '[○]';
         const categoryLabel = r.category ? ` [${r.category}]` : '';
         // P2-6: the invocation rule is shared; only the four-space indent is this face's.
-        const { portablePath, howToUse } = resourceUseHint(r, { home, managedPrefix: join(DB_DIR, 'managed') + sep });
+        const { portablePath, howToUse } = resourceUseHint(r, {
+          home,
+          managedPrefix: join(DB_DIR, 'managed') + sep,
+        });
         const pathLine = portablePath ? `\n    Path: ${portablePath}` : '';
-        out(`  ${badge} ${r.type === 'skill' ? 'S' : 'A'} ${r.name}${categoryLabel} — ${truncate(r.capability_summary || '', 80)}${pathLine}\n    Use: ${howToUse}`);
+        out(
+          `  ${badge} ${r.type === 'skill' ? 'S' : 'A'} ${r.name}${categoryLabel} — ${truncate(r.capability_summary || '', 80)}${pathLine}\n    Use: ${howToUse}`,
+        );
       }
       return;
     }
@@ -2268,7 +2807,10 @@ function cmdRegistry(_memDb, args) {
       // Shared ranked query + row line (registry.mjs, P2-12): COALESCE ordering and
       // the 80-char/adopt:0 row shape had drifted between the faces.
       const allResources = listResourcesRanked(rdb, { type: typeFilter });
-      if (allResources.length === 0) { out('[mem] No resources found.'); return; }
+      if (allResources.length === 0) {
+        out('[mem] No resources found.');
+        return;
+      }
       const resources = allResources.slice(0, listLimit);
       out(`[mem] Resources (showing ${resources.length} of ${allResources.length}):`);
       for (const r of resources) out(`  ${formatRegistryListLine(r)}`);
@@ -2297,10 +2839,32 @@ function cmdRegistry(_memDb, args) {
     if (action === 'import') {
       // Bare value-less flags → boolean true → SQLite-bind crash in upsertResource (#8470).
       // Shared guard — single source with update/remove/the other commands.
-      if (rejectBareStringFlags(flags, ['name', 'resource-type', 'invocation-name', 'source', 'repo-url', 'local-path', 'intent-tags', 'domain-tags', 'trigger-patterns', 'capability-summary', 'keywords', 'tech-stack', 'use-cases'])) return;
+      if (
+        rejectBareStringFlags(flags, [
+          'name',
+          'resource-type',
+          'invocation-name',
+          'source',
+          'repo-url',
+          'local-path',
+          'intent-tags',
+          'domain-tags',
+          'trigger-patterns',
+          'capability-summary',
+          'keywords',
+          'tech-stack',
+          'use-cases',
+        ])
+      )
+        return;
       const name = flags.name;
       const resourceType = flags['resource-type'];
-      if (!name || !resourceType) { fail('[mem] Usage: claude-mem-lite registry import --name N --resource-type skill|agent [--invocation-name I] [--capability-summary S]'); return; }
+      if (!name || !resourceType) {
+        fail(
+          '[mem] Usage: claude-mem-lite registry import --name N --resource-type skill|agent [--invocation-name I] [--capability-summary S]',
+        );
+        return;
+      }
       // Validate --source against its CHECK enum (parity with memRegistrySchema.source on MCP):
       // an invalid value otherwise reaches the INSERT and throws a raw SqliteError stacktrace
       // (the dispatcher's catch only special-cases SQLITE_BUSY/LOCKED).
@@ -2327,11 +2891,12 @@ function cmdRegistry(_memDb, args) {
       if (rejectBareStringFlags(flags, ['name', 'resource-type'])) return;
       const name = flags.name;
       const resourceType = flags['resource-type'];
-      if (!name || !resourceType) { fail('[mem] Usage: claude-mem-lite registry remove --name N --resource-type skill|agent'); return; }
+      if (!name || !resourceType) {
+        fail('[mem] Usage: claude-mem-lite registry remove --name N --resource-type skill|agent');
+        return;
+      }
       const { removed } = removeResource(rdb, { name, type: resourceType });
-      out(removed
-        ? `[mem] Removed: ${resourceType}:${name}`
-        : `[mem] Not found: ${resourceType}:${name}`);
+      out(removed ? `[mem] Removed: ${resourceType}:${name}` : `[mem] Not found: ${resourceType}:${name}`);
       return;
     }
 
@@ -2341,7 +2906,9 @@ function cmdRegistry(_memDb, args) {
       return;
     }
   } finally {
-    try { rdb.close(); } catch {}
+    try {
+      rdb.close();
+    } catch {}
   }
 }
 
@@ -2372,10 +2939,14 @@ function _resolveMemdirsForAudit(flags) {
     const projectsRoot = join(homedir(), '.claude', 'projects');
     if (!existsSync(projectsRoot)) return [];
     let entries;
-    try { entries = readdirSync(projectsRoot); } catch { return []; }
+    try {
+      entries = readdirSync(projectsRoot);
+    } catch {
+      return [];
+    }
     return entries
-      .map(name => join(projectsRoot, name, 'memory'))
-      .filter(p => existsSync(p))
+      .map((name) => join(projectsRoot, name, 'memory'))
+      .filter((p) => existsSync(p))
       .sort();
   }
   return [memdirPath(process.cwd())];
@@ -2394,12 +2965,13 @@ function cmdMemdirAudit(args) {
     const result = auditMemdir(md);
     out(_formatAuditResult(md, result));
     totalScanned += result.total;
-    nonCompliant +=
-      result.missingWhy.length + result.missingHowToApply.length + result.missingBoth.length;
+    nonCompliant += result.missingWhy.length + result.missingHowToApply.length + result.missingBoth.length;
     if (memdirs.length > 1) out('');
   }
   if (memdirs.length > 1) {
-    out(`[mem] Scanned ${memdirs.length} memdir(s), ${totalScanned} memory file(s), ${nonCompliant} non-compliant.`);
+    out(
+      `[mem] Scanned ${memdirs.length} memdir(s), ${totalScanned} memory file(s), ${nonCompliant} non-compliant.`,
+    );
   }
   if (nonCompliant > 0) process.exitCode = 1;
 }
@@ -2414,22 +2986,29 @@ function _reportSidechainCiteRecall({ days, json }) {
   // memdir = ~/.claude/projects/<encoded>/memory; transcripts are its siblings.
   const txDir = dirname(memdirPath(process.cwd()));
   const { main, sidechain } = aggregateProjectCiteRecall(txDir, { cutoff });
-  const rate = b => (b.injected > 0 ? (100 * b.recalled / b.injected) : null);
-  const sideRate = rate(sidechain), mainRate = rate(main);
+  const rate = (b) => (b.injected > 0 ? (100 * b.recalled) / b.injected : null);
+  const sideRate = rate(sidechain),
+    mainRate = rate(main);
 
   if (json) {
-    out(JSON.stringify({
-      window_days: days,
-      main: { ...main, rate: mainRate },
-      sidechain: { ...sidechain, rate: sideRate },
-    }));
+    out(
+      JSON.stringify({
+        window_days: days,
+        main: { ...main, rate: mainRate },
+        sidechain: { ...sidechain, rate: sideRate },
+      }),
+    );
     return;
   }
 
-  const pct = r => (r === null ? '—' : `${r.toFixed(1)}%`);
+  const pct = (r) => (r === null ? '—' : `${r.toFixed(1)}%`);
   out(`Sidechain (subagent) cite-recall — last ${days}d:`);
-  out(`  main        ${pct(mainRate).padStart(6)}   recalled ${main.recalled} / injected ${main.injected}   (${main.files} transcript(s))`);
-  out(`  sidechain   ${pct(sideRate).padStart(6)}   recalled ${sidechain.recalled} / injected ${sidechain.injected}   (${sidechain.files} subagent file(s), ${sidechain.withInjections} with injections)`);
+  out(
+    `  main        ${pct(mainRate).padStart(6)}   recalled ${main.recalled} / injected ${main.injected}   (${main.files} transcript(s))`,
+  );
+  out(
+    `  sidechain   ${pct(sideRate).padStart(6)}   recalled ${sidechain.recalled} / injected ${sidechain.injected}   (${sidechain.files} subagent file(s), ${sidechain.withInjections} with injections)`,
+  );
   if (sidechain.files > 0 && sidechain.injected === 0) {
     out('  → subagent transcripts exist but none carried a detectable memory injection in');
     out('    this window. claude-mem-lite hooks do NOT fire inside subagents; the dispatch-');
@@ -2460,7 +3039,9 @@ function cmdCitationStats(db, args) {
   }
 
   const cutoff = Date.now() - days * 86400 * 1000;
-  const perProject = db.prepare(`
+  const perProject = db
+    .prepare(
+      `
     SELECT project,
            COALESCE(SUM(cited_count), 0) AS cited,
            COALESCE(SUM(decay_seen_count), 0) AS resolved,
@@ -2470,16 +3051,22 @@ function cmdCitationStats(db, args) {
        AND ${liveObsFilterSql('')}
   GROUP BY project
   ORDER BY resolved DESC
-  `).all(cutoff);
+  `,
+    )
+    .all(cutoff);
 
-  const decayQueue = db.prepare(`
+  const decayQueue = db
+    .prepare(
+      `
     SELECT id, project, type, title, importance, uncited_streak, cited_count
       FROM observations
      WHERE uncited_streak >= 2
        AND ${liveObsFilterSql('')}
   ORDER BY uncited_streak DESC, importance ASC
      LIMIT 20
-  `).all();
+  `,
+    )
+    .all();
 
   // D#179/D#198, second half: the sibling `demoted` caption below was re-worded when the
   // decay loop stopped writing `importance`, and this one was not — the same "the copy I
@@ -2490,16 +3077,22 @@ function cmdCitationStats(db, args) {
   // caption reading "promoted". The discriminator is now the pair the promote branch
   // actually writes (`cited_count + 1`, `uncited_streak = 0`); `importance` is still
   // SELECTed and printed, so a reader can see it is unrelated.
-  const promoted = db.prepare(`
+  const promoted = db
+    .prepare(
+      `
     SELECT id, project, type, title, importance, cited_count
       FROM observations
      WHERE cited_count >= 1 AND COALESCE(uncited_streak, 0) = 0
        AND ${liveObsFilterSql('')}
   ORDER BY cited_count DESC
      LIMIT 10
-  `).all();
+  `,
+    )
+    .all();
 
-  const demoted = db.prepare(`
+  const demoted = db
+    .prepare(
+      `
     SELECT id, project, type, title, importance, demoted_at
       FROM observations
      WHERE demoted_at IS NOT NULL
@@ -2507,7 +3100,9 @@ function cmdCitationStats(db, args) {
        AND ${liveObsFilterSql('')}
   ORDER BY demoted_at DESC
      LIMIT 10
-  `).all(cutoff);
+  `,
+    )
+    .all(cutoff);
 
   // v34.x: surface pre-v34 data pollution. applyCitationDecay bumps cited_count
   // and decay_seen_count atomically (same UPDATE statement), so the invariant
@@ -2516,14 +3111,19 @@ function cmdCitationStats(db, args) {
   // where a backfill seeded cited_count without populating decay_seen_count.
   // Without this note, those rows make per-project cite_pct >100% with no
   // explanation. Cite rate stays unbiased for obs created after this commit.
-  const pollutedRows = db.prepare(`
+  const pollutedRows = db
+    .prepare(
+      `
     SELECT COUNT(*) AS n FROM observations
      WHERE cited_count > decay_seen_count
        AND ${liveObsFilterSql('')}
-  `).get();
-  const dataPollutionNote = pollutedRows.n > 0
-    ? `${pollutedRows.n} obs have cited_count > decay_seen_count (pre-v34 backfill — invariant holds for new data).`
-    : null;
+  `,
+    )
+    .get();
+  const dataPollutionNote =
+    pollutedRows.n > 0
+      ? `${pollutedRows.n} obs have cited_count > decay_seen_count (pre-v34 backfill — invariant holds for new data).`
+      : null;
 
   // R1: per-session invocation→cite funnel trend (citation_log). Same `days` window
   // as the per-project cite rate above; funnel.prior/delta_pt show the direction.
@@ -2538,8 +3138,13 @@ function cmdCitationStats(db, args) {
   // rows persist across GC, so their per-project sum is the honest historical rate.
   // Attach both to each row so the text + JSON surface the biased and honest numbers.
   const funnelByProject = new Map(
-    db.prepare(`SELECT project, COALESCE(SUM(injected_n), 0) inj, COALESCE(SUM(cited_n), 0) cit
-                  FROM citation_log GROUP BY project`).all().map(r => [r.project, r])
+    db
+      .prepare(
+        `SELECT project, COALESCE(SUM(injected_n), 0) inj, COALESCE(SUM(cited_n), 0) cit
+                  FROM citation_log GROUP BY project`,
+      )
+      .all()
+      .map((r) => [r.project, r]),
   );
   for (const r of perProject) {
     const f = funnelByProject.get(r.project);
@@ -2548,17 +3153,37 @@ function cmdCitationStats(db, args) {
   }
 
   if (json) {
-    out(JSON.stringify({ window_days: days, per_project: perProject, decay_queue: decayQueue, promoted, demoted, data_pollution_note: dataPollutionNote, funnel, surface_funnel: surfaceFunnel }, null, 2));
+    out(
+      JSON.stringify(
+        {
+          window_days: days,
+          per_project: perProject,
+          decay_queue: decayQueue,
+          promoted,
+          demoted,
+          data_pollution_note: dataPollutionNote,
+          funnel,
+          surface_funnel: surfaceFunnel,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
   if (dataPollutionNote) out(`Note: ${dataPollutionNote}\n`);
   out(`Cite rate by project (last ${days}d):`);
-  out(`  funnel = lifetime injected→cited (citation_log, GC-durable = honest) · surviving = cited/decay over in-window non-GC'd obs (survivorship-biased, reads high):`);
+  out(
+    `  funnel = lifetime injected→cited (citation_log, GC-durable = honest) · surviving = cited/decay over in-window non-GC'd obs (survivorship-biased, reads high):`,
+  );
   for (const r of perProject) {
-    const funnelRate = r.funnel_injected > 0 ? (r.funnel_cited * 100 / r.funnel_injected).toFixed(1) + '%' : '—';
-    const survRate = r.resolved > 0 ? (r.cited * 100 / r.resolved).toFixed(1) + '%' : '—';
-    out(`  ${r.project.padEnd(30)} funnel ${String(funnelRate).padStart(6)} (${r.funnel_cited}/${r.funnel_injected}) · surviving ${String(survRate).padStart(6)} (${r.cited}/${r.resolved}) · at_risk:${r.at_risk}`);
+    const funnelRate =
+      r.funnel_injected > 0 ? ((r.funnel_cited * 100) / r.funnel_injected).toFixed(1) + '%' : '—';
+    const survRate = r.resolved > 0 ? ((r.cited * 100) / r.resolved).toFixed(1) + '%' : '—';
+    out(
+      `  ${r.project.padEnd(30)} funnel ${String(funnelRate).padStart(6)} (${r.funnel_cited}/${r.funnel_injected}) · surviving ${String(survRate).padStart(6)} (${r.cited}/${r.resolved}) · at_risk:${r.at_risk}`,
+    );
   }
   out('');
 
@@ -2570,7 +3195,9 @@ function cmdCitationStats(db, args) {
     for (const s of funnel.sessions) {
       const day = s.resolved_at ? new Date(s.resolved_at).toISOString().slice(0, 10) : '—'.repeat(10);
       const pct = (s.rate * 100).toFixed(1) + '%';
-      out(`  ${day}  ${(s.project || '').padEnd(28)} inj ${String(s.injected_n).padStart(3)}  cited ${String(s.cited_n).padStart(3)}  ${pct.padStart(6)}`);
+      out(
+        `  ${day}  ${(s.project || '').padEnd(28)} inj ${String(s.injected_n).padStart(3)}  cited ${String(s.cited_n).padStart(3)}  ${pct.padStart(6)}`,
+      );
     }
   }
   let trendLine = `window rate ${(funnel.window.rate * 100).toFixed(1)}%  cited ${funnel.window.cited}/${funnel.window.injected}`;
@@ -2587,7 +3214,9 @@ function cmdCitationStats(db, args) {
   // v45: the same funnel split by INJECTION FACE. The aggregate above says
   // whether effectiveness is rising; this says WHICH face to aim a lever at.
   out(`Cite rate by injection face (last ${days}d):`);
-  out('  a per-face VIEW, not a partition — do NOT reconcile against the funnel above: faces overlap (an obs carried by two counts in both) and the funnel also counts cite-back signals that belong to no face:');
+  out(
+    '  a per-face VIEW, not a partition — do NOT reconcile against the funnel above: faces overlap (an obs carried by two counts in both) and the funnel also counts cite-back signals that belong to no face:',
+  );
   if (surfaceFunnel.unavailable) {
     // The read FAILED — a missing/unreadable citation_surface_log. Pre-b4 this
     // rendered identically to an empty window, so the #10650 shape (table never
@@ -2606,19 +3235,24 @@ function cmdCitationStats(db, args) {
       // the note cannot drift from the behaviour it describes. (The example
       // used to name task_imperative; it joined the denominator on 2026-08-25
       // once its rate was read, leaving `subagent` as the bare non-decay face.)
-      const note = s.surface === 'keyctx'
-        ? '  (promotion-only: never demotes)'
-        : (DECAY_DENOMINATOR_SURFACES.includes(s.surface)
-          ? ''
-          : '  (metered only: outside the decay denominator)');
-      out(`  ${SURFACE_LABELS[s.surface] || s.surface}  inj ${String(s.injected).padStart(4)}  cited ${String(s.cited).padStart(4)}  ${pct.padStart(6)}  over ${s.sessions} session(s)${note}`);
+      const note =
+        s.surface === 'keyctx'
+          ? '  (promotion-only: never demotes)'
+          : DECAY_DENOMINATOR_SURFACES.includes(s.surface)
+            ? ''
+            : '  (metered only: outside the decay denominator)';
+      out(
+        `  ${SURFACE_LABELS[s.surface] || s.surface}  inj ${String(s.injected).padStart(4)}  cited ${String(s.cited).padStart(4)}  ${pct.padStart(6)}  over ${s.sessions} session(s)${note}`,
+      );
     }
   }
   out('');
   out('Active decay queue (uncited_streak >= 2, next miss → rollover):');
   if (decayQueue.length === 0) out('  (none)');
   for (const r of decayQueue) {
-    out(`  #${r.id} [${r.type}] ${(r.title || '').slice(0, 60)}   imp=${r.importance} streak=${r.uncited_streak}`);
+    out(
+      `  #${r.id} [${r.type}] ${(r.title || '').slice(0, 60)}   imp=${r.importance} streak=${r.uncited_streak}`,
+    );
   }
   out('');
   out('Recently cited (cited_count >= 1, streak reset; importance unaffected):');
@@ -2882,7 +3516,10 @@ async function cmdImport(argv) {
   const { positional, flags } = parseArgs(argv);
   const url = positional[0];
 
-  if (!url) { fail('[mem] Usage: claude-mem-lite import <github-url> [--enrich]'); return; }
+  if (!url) {
+    fail('[mem] Usage: claude-mem-lite import <github-url> [--enrich]');
+    return;
+  }
 
   let rdb;
   try {
@@ -2911,14 +3548,22 @@ async function cmdImport(argv) {
     if (flags.enrich) {
       out('[mem] Running LLM enrichment...');
       const { enrichResource } = await import('./registry-enricher.mjs');
-      const { ok: enriched, denied } = await enrichImportedResources(rdb, results, { confineTo: DB_DIR, enrichResource });
+      const { ok: enriched, denied } = await enrichImportedResources(rdb, results, {
+        confineTo: DB_DIR,
+        enrichResource,
+      });
       out(`[mem] Enriched ${enriched}/${results.length} resources.`);
-      if (denied) out(`[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`);
+      if (denied)
+        out(
+          `[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
+        );
     }
   } catch (e) {
     fail(`[mem] Import failed: ${e.message}`);
   } finally {
-    try { rdb.close(); } catch {}
+    try {
+      rdb.close();
+    } catch {}
   }
 }
 
@@ -2939,8 +3584,12 @@ async function cmdImportJsonl(db, argv) {
 
   let files = [];
   let st;
-  try { st = fs.statSync(abs); }
-  catch (e) { fail(`[mem] Cannot stat ${abs}: ${e.message}`); return; }
+  try {
+    st = fs.statSync(abs);
+  } catch (e) {
+    fail(`[mem] Cannot stat ${abs}: ${e.message}`);
+    return;
+  }
 
   if (st.isDirectory()) {
     const walk = (dir) => {
@@ -2955,10 +3604,18 @@ async function cmdImportJsonl(db, argv) {
     files = [abs];
   }
 
-  if (files.length === 0) { out('[mem] No .jsonl files found.'); return; }
+  if (files.length === 0) {
+    out('[mem] No .jsonl files found.');
+    return;
+  }
 
   const { importJsonl } = await import('./lib/import-jsonl.mjs');
-  let totalPrompts = 0, totalObs = 0, totalSkip = 0, totalOrphans = 0, totalRecognized = 0, errorCount = 0;
+  let totalPrompts = 0,
+    totalObs = 0,
+    totalSkip = 0,
+    totalOrphans = 0,
+    totalRecognized = 0,
+    errorCount = 0;
   for (const f of files) {
     // Per-file isolation: one unreadable file (EACCES, EBUSY, mid-batch IO error)
     // shouldn't crash the whole import — readFileSync inside importJsonl would
@@ -2979,13 +3636,17 @@ async function cmdImportJsonl(db, argv) {
     totalSkip += r.skipped;
     totalOrphans += r.orphans || 0;
     totalRecognized += r.recognized || 0;
-    out(`[mem] ${f}: +${r.prompts} prompts, +${r.observations} observations`
-      + `${r.orphans ? ` (${r.orphans} from unpaired tool_use)` : ''}, ${r.skipped} skipped`);
+    out(
+      `[mem] ${f}: +${r.prompts} prompts, +${r.observations} observations` +
+        `${r.orphans ? ` (${r.orphans} from unpaired tool_use)` : ''}, ${r.skipped} skipped`,
+    );
   }
   const errorTail = errorCount > 0 ? `, ${errorCount} file(s) errored` : '';
-  out(`[mem] Total: ${totalPrompts} prompts, ${totalObs} observations`
-    + `${totalOrphans ? ` (${totalOrphans} from unpaired tool_use)` : ''}`
-    + `, ${totalSkip} skipped from ${files.length} file(s)${errorTail}.`);
+  out(
+    `[mem] Total: ${totalPrompts} prompts, ${totalObs} observations` +
+      `${totalOrphans ? ` (${totalOrphans} from unpaired tool_use)` : ''}` +
+      `, ${totalSkip} skipped from ${files.length} file(s)${errorTail}.`,
+  );
   if (totalPrompts > 0 || totalObs > 0) {
     // Orphan tool_use events persist as (truncated) observations and are counted INSIDE
     // totalObs (lib/import-jsonl.mjs), so they already count as "something was imported"
@@ -2998,14 +3659,18 @@ async function cmdImportJsonl(db, argv) {
     // Distinct from the wrong-shape case below: do NOT cry "wrong shape" at a valid
     // transcript the user successfully imported earlier (cold-start backfill re-runs
     // hit this on every already-ingested file).
-    out(`[mem] Nothing new: ${totalRecognized} transcript event(s) already imported (re-running import-jsonl on the same transcript is a safe no-op).`);
+    out(
+      `[mem] Nothing new: ${totalRecognized} transcript event(s) already imported (re-running import-jsonl on the same transcript is a safe no-op).`,
+    );
   } else if (totalSkip > 0 && errorCount === 0) {
     // No transcript event recognized at all — almost always the wrong file format
     // (import-jsonl ingests Claude Code transcript JSONL, not `export` output, which
     // is observation-shaped). Pre-fix this exited 0 with no signal, so pointing it at
     // the wrong file looked like success. Make the no-op explicit (stdout, like the
     // summary lines above).
-    out(`[mem] Warning: 0 imported, ${totalSkip} line(s) skipped — none matched the expected Claude Code transcript JSONL shape (user/assistant/tool_result). 'export' output is NOT re-importable via import-jsonl.`);
+    out(
+      `[mem] Warning: 0 imported, ${totalSkip} line(s) skipped — none matched the expected Claude Code transcript JSONL shape (user/assistant/tool_result). 'export' output is NOT re-importable via import-jsonl.`,
+    );
   }
 }
 
@@ -3028,10 +3693,19 @@ async function cmdEnrich(argv) {
     const { enrichResource } = await import('./registry-enricher.mjs');
 
     if (flags.all) {
-      const rows = rdb.prepare("SELECT name, type, local_path FROM resources WHERE status = 'active' AND (enrichment_status IS NULL OR enrichment_status = 'failed')").all();
-      if (rows.length === 0) { out('[mem] All resources already enriched.'); return; }
+      const rows = rdb
+        .prepare(
+          "SELECT name, type, local_path FROM resources WHERE status = 'active' AND (enrichment_status IS NULL OR enrichment_status = 'failed')",
+        )
+        .all();
+      if (rows.length === 0) {
+        out('[mem] All resources already enriched.');
+        return;
+      }
       out(`[mem] Enriching ${rows.length} resources...`);
-      let ok = 0, failCount = 0, denied = 0;
+      let ok = 0,
+        failCount = 0,
+        denied = 0;
       for (const r of rows) {
         const { status, error } = await enrichResourceRow(rdb, r, { confineTo: DB_DIR, enrichResource });
         if (status === 'enriched') ok++;
@@ -3042,16 +3716,33 @@ async function cmdEnrich(argv) {
         // enrichResource all skipped the sleep before, and still do — `error` present on a
         // 'failed' row is what distinguishes "returned false" from "threw".
         const apiReturned = status === 'enriched' || (status === 'failed' && !error);
-        if (apiReturned && !flags.batch) await new Promise(resolve => setTimeout(resolve, 500));
+        if (apiReturned && !flags.batch) await new Promise((resolve) => setTimeout(resolve, 500));
       }
       out(`[mem] Done: ${ok} enriched, ${failCount} failed.`);
-      if (denied) out(`[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`);
+      if (denied)
+        out(
+          `[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
+        );
     } else if (name) {
       const { status, error } = await enrichNamedResource(rdb, name, { confineTo: DB_DIR, enrichResource });
-      if (status === 'not-found') { fail(`[mem] Resource not found: ${name}`); return; }
-      if (status === 'no-path') { fail(`[mem] No local_path for ${name}`); return; }
-      if (status === 'denied') { fail(`[mem] Access denied: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`); return; }
-      if (status === 'unreadable') { fail(`[mem] Enrich error: ${error?.message || 'cannot read local_path'}`); return; }
+      if (status === 'not-found') {
+        fail(`[mem] Resource not found: ${name}`);
+        return;
+      }
+      if (status === 'no-path') {
+        fail(`[mem] No local_path for ${name}`);
+        return;
+      }
+      if (status === 'denied') {
+        fail(
+          `[mem] Access denied: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
+        );
+        return;
+      }
+      if (status === 'unreadable') {
+        fail(`[mem] Enrich error: ${error?.message || 'cannot read local_path'}`);
+        return;
+      }
       out(status === 'enriched' ? `[mem] Enriched: ${name}` : `[mem] Enrichment failed for ${name}`);
     } else {
       fail('[mem] Usage: claude-mem-lite enrich <name> OR claude-mem-lite enrich --all [--batch]');
@@ -3059,7 +3750,9 @@ async function cmdEnrich(argv) {
   } catch (e) {
     fail(`[mem] Enrich error: ${e.message}`);
   } finally {
-    try { rdb.close(); } catch {}
+    try {
+      rdb.close();
+    } catch {}
   }
 }
 
@@ -3072,7 +3765,7 @@ async function cmdOptimize(db, args) {
   // the default budget (tasks/project undefined → run-everything). Normalize
   // `--flag=value` into `--flag value` up front so both forms parse identically;
   // the `--execute=` special-case below already anticipated this for one flag.
-  args = args.flatMap(a => {
+  args = args.flatMap((a) => {
     const m = /^(--[a-z][a-z-]*)=([\s\S]*)$/.exec(a);
     return m ? [m[1], m[2]] : [a];
   });
@@ -3083,9 +3776,11 @@ async function cmdOptimize(db, args) {
   // through to a silent preview, so the user thought they ran a mutation but didn't.
   // Catch both `--execute` and the `--execute=value` form (the latter slipped a bare
   // `args.includes('--execute')` and fell through to a silent preview — review minor).
-  const hasExecuteFlag = args.some(a => a === '--execute' || a.startsWith('--execute='));
+  const hasExecuteFlag = args.some((a) => a === '--execute' || a.startsWith('--execute='));
   if (hasExecuteFlag && !run && !runAll) {
-    fail("[mem] optimize executes with --run, not --execute (--execute is compress's flag). Re-run: claude-mem-lite optimize --run");
+    fail(
+      "[mem] optimize executes with --run, not --execute (--execute is compress's flag). Re-run: claude-mem-lite optimize --run",
+    );
     return;
   }
   const verbose = args.includes('--verbose') || args.includes('-v');
@@ -3094,8 +3789,11 @@ async function cmdOptimize(db, args) {
   const taskIdx = args.indexOf('--task');
   let tasks;
   if (taskIdx >= 0 && args[taskIdx + 1]) {
-    const parsed = args[taskIdx + 1].split(',').map(s => s.trim()).filter(Boolean);
-    const invalid = parsed.filter(t => !VALID_TASKS.includes(t));
+    const parsed = args[taskIdx + 1]
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const invalid = parsed.filter((t) => !VALID_TASKS.includes(t));
     if (invalid.length > 0) {
       fail(`[mem] Unknown task(s): ${invalid.join(', ')}. Valid: ${VALID_TASKS.join(', ')}`);
       return;
@@ -3135,15 +3833,19 @@ async function cmdOptimize(db, args) {
   let project;
   if (projectIdx >= 0 && args[projectIdx + 1]) {
     const raw = args[projectIdx + 1];
-    project = (raw === '.' || raw === 'current') ? cliProject(db) : raw;
+    project = raw === '.' || raw === 'current' ? cliProject(db) : raw;
   }
 
   if (!run && !runAll) {
     const preview = optimizePreview(db, { project, detail: verbose });
     out('[mem] 🔍 LLM Optimization Preview:');
     if (project) out(`  Project filter: ${project}`);
-    out(`  Re-enrich candidates: ${preview.reenrich}${preview.reenrichWide !== undefined && preview.reenrichWide !== null ? `  (wide scope: ${preview.reenrichWide})` : ''}${preview.reenrichAliases ? `  (aliases scope: ${preview.reenrichAliases})` : ''}${preview.reenrichScopes ? `  (scopes scope: ${preview.reenrichScopes})` : ''}`);
-    out(`  Normalize: ${preview.normalizeGateOpen ? `${preview.normalize} unique concepts` : 'gate closed (7-day interval)'}`);
+    out(
+      `  Re-enrich candidates: ${preview.reenrich}${preview.reenrichWide !== undefined && preview.reenrichWide !== null ? `  (wide scope: ${preview.reenrichWide})` : ''}${preview.reenrichAliases ? `  (aliases scope: ${preview.reenrichAliases})` : ''}${preview.reenrichScopes ? `  (scopes scope: ${preview.reenrichScopes})` : ''}`,
+    );
+    out(
+      `  Normalize: ${preview.normalizeGateOpen ? `${preview.normalize} unique concepts` : 'gate closed (7-day interval)'}`,
+    );
     // "candidates" matches the MCP wording (server.mjs mem_optimize preview) AND the
     // Re-enrich line just above, which already read that way on both surfaces. The two
     // surfaces render one optimizePreview() result — tests/audit-findings-20260814.test.mjs
@@ -3157,19 +3859,24 @@ async function cmdOptimize(db, args) {
         out('─── Cluster-merge details ───');
         for (const [i, cluster] of preview.mergeClusters.entries()) {
           out(`  Cluster ${i + 1} (${cluster.length} obs, project=${cluster[0]?.project || '?'}):`);
-          for (const obs of cluster) out(`    #${obs.id} [${obs.type || 'change'}] ${truncate(obs.title || '(untitled)', 100)}`);
+          for (const obs of cluster)
+            out(`    #${obs.id} [${obs.type || 'change'}] ${truncate(obs.title || '(untitled)', 100)}`);
         }
       }
       if (preview.reenrichSamples && preview.reenrichSamples.length > 0) {
         out('─── Re-enrich sample (first 20) ───');
         for (const obs of preview.reenrichSamples) {
-          out(`  #${obs.id} [${obs.type || 'change'}] (project=${obs.project || '?'}) ${truncate(obs.title || '(untitled)', 100)}`);
+          out(
+            `  #${obs.id} [${obs.type || 'change'}] (project=${obs.project || '?'}) ${truncate(obs.title || '(untitled)', 100)}`,
+          );
         }
       }
       if (preview.compressSamples && preview.compressSamples.length > 0) {
         out('─── Smart-compress sample (first 5 clusters) ───');
         for (const [i, cluster] of preview.compressSamples.entries()) {
-          out(`  Cluster ${i + 1} (${cluster.observations?.length || 0} obs, project=${cluster.project || '?'})`);
+          out(
+            `  Cluster ${i + 1} (${cluster.observations?.length || 0} obs, project=${cluster.project || '?'})`,
+          );
         }
       }
     }
@@ -3180,16 +3887,30 @@ async function cmdOptimize(db, args) {
     return;
   }
 
-  out(`[mem] Running LLM optimization${reenrichScope !== 'narrow' ? ` (scope: ${reenrichScope})` : ''}${project ? ` (project: ${project})` : ''}...`);
+  out(
+    `[mem] Running LLM optimization${reenrichScope !== 'narrow' ? ` (scope: ${reenrichScope})` : ''}${project ? ` (project: ${project})` : ''}...`,
+  );
   const results = await optimizeRun(db, { tasks, maxItems, force: runAll, reenrichScope, project });
 
-  if (results.reenrich) out(`  Re-enrich: ${results.reenrich.processed || 0} processed, ${results.reenrich.skipped || 0} skipped`);
+  if (results.reenrich)
+    out(
+      `  Re-enrich: ${results.reenrich.processed || 0} processed, ${results.reenrich.skipped || 0} skipped`,
+    );
   if (results.normalize) {
     if (results.normalize.skipped) out(`  Normalize: skipped (${results.normalize.reason})`);
-    else out(`  Normalize: ${results.normalize.processed || 0} updated, ${results.normalize.groups || 0} synonym groups`);
+    else
+      out(
+        `  Normalize: ${results.normalize.processed || 0} updated, ${results.normalize.groups || 0} synonym groups`,
+      );
   }
-  if (results.clusterMerge) out(`  Cluster-merge: ${results.clusterMerge.merged || 0} merged of ${results.clusterMerge.processed || 0} clusters`);
-  if (results.smartCompress) out(`  Smart-compress: ${results.smartCompress.compressed || 0} compressed of ${results.smartCompress.processed || 0} clusters`);
+  if (results.clusterMerge)
+    out(
+      `  Cluster-merge: ${results.clusterMerge.merged || 0} merged of ${results.clusterMerge.processed || 0} clusters`,
+    );
+  if (results.smartCompress)
+    out(
+      `  Smart-compress: ${results.smartCompress.compressed || 0} compressed of ${results.smartCompress.processed || 0} clusters`,
+    );
 }
 
 // cmdDoctor extracted to cli/doctor.mjs (v2.41 split).
@@ -3222,16 +3943,27 @@ export async function run(argv) {
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
   for (const { flag, suggestion } of suggestUnknownFlags(parseArgs(cmdArgs).flags)) {
-    process.stderr.write(suggestion
-      ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
-      : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`);
+    process.stderr.write(
+      suggestion
+        ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
+        : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
+    );
   }
 
   // adopt / unadopt do pure filesystem work on ~/.claude/projects/<encoded>/memory/ —
   // no DB needed. Route them before the DB open so an unbootable DB doesn't block.
-  if (cmd === 'adopt') { cmdAdopt(cmdArgs); return; }
-  if (cmd === 'unadopt') { cmdUnadopt(cmdArgs); return; }
-  if (cmd === 'memdir-audit') { cmdMemdirAudit(cmdArgs); return; }
+  if (cmd === 'adopt') {
+    cmdAdopt(cmdArgs);
+    return;
+  }
+  if (cmd === 'unadopt') {
+    cmdUnadopt(cmdArgs);
+    return;
+  }
+  if (cmd === 'memdir-audit') {
+    cmdMemdirAudit(cmdArgs);
+    return;
+  }
 
   let db;
   try {
@@ -3264,8 +3996,13 @@ export async function run(argv) {
         },
         log: (m) => process.stderr.write(`[mem] ${m}\n`),
       });
-      if (healed.healed) { process.exitCode = healed.exitCode; return; }
-      out(`[mem] Error: native DB binding unusable on Node ${process.version}${healed.error ? ` — ${healed.error}` : ''}`);
+      if (healed.healed) {
+        process.exitCode = healed.exitCode;
+        return;
+      }
+      out(
+        `[mem] Error: native DB binding unusable on Node ${process.version}${healed.error ? ` — ${healed.error}` : ''}`,
+      );
       out(`[mem] Fix: ${CLI_INVOKE} rebuild-binding`);
       process.exitCode = 1;
       return;
@@ -3283,7 +4020,15 @@ export async function run(argv) {
   // text-parsing callers keep working — the note lives in stderr for scripts to
   // detect the gap.
   const JSON_SUPPORTED_CMDS = new Set([
-    'search', 'context', 'recent', 'recall', 'timeline', 'stats', 'browse', 'export', 'citation-stats',
+    'search',
+    'context',
+    'recent',
+    'recall',
+    'timeline',
+    'stats',
+    'browse',
+    'export',
+    'citation-stats',
   ]);
   // Suppress the note on subpaths that DO emit JSON, so it never FALSELY tells a script
   // "outputs text" while writing valid JSON to stdout — a false note is worse than a
@@ -3291,39 +4036,94 @@ export async function run(argv) {
   // emits JSON for --benchmark / --metrics / --session-audit; activity's show/save emit
   // JSON. Without those sub-flags, doctor is text and the note stays useful.
   const jsonCapableSubpath =
-    (cmd === 'doctor' && (cmdArgs.includes('--benchmark') || cmdArgs.includes('--metrics') || cmdArgs.includes('--session-audit'))) ||
+    (cmd === 'doctor' &&
+      (cmdArgs.includes('--benchmark') ||
+        cmdArgs.includes('--metrics') ||
+        cmdArgs.includes('--session-audit'))) ||
     cmd === 'activity';
   if (cmdArgs.includes('--json') && !JSON_SUPPORTED_CMDS.has(cmd) && !jsonCapableSubpath) {
-    process.stderr.write(`[mem] Note: --json is supported only on: ${[...JSON_SUPPORTED_CMDS].join(', ')}. "${cmd}" outputs text.\n`);
+    process.stderr.write(
+      `[mem] Note: --json is supported only on: ${[...JSON_SUPPORTED_CMDS].join(', ')}. "${cmd}" outputs text.\n`,
+    );
   }
 
   try {
     switch (cmd) {
-      case 'search':    await cmdSearch(db, cmdArgs); break;
-      case 'recent':    cmdRecent(db, cmdArgs); break;
-      case 'recall':    cmdRecall(db, cmdArgs); break;
-      case 'get':       cmdGet(db, cmdArgs); break;
-      case 'timeline':  cmdTimeline(db, cmdArgs); break;
-      case 'save':      cmdSave(db, cmdArgs); break;
-      case 'defer':     cmdDefer(db, cmdArgs); break;
-      case 'delete':    cmdDelete(db, cmdArgs); break;
-      case 'update':    cmdUpdate(db, cmdArgs); break;
-      case 'export':    cmdExport(db, cmdArgs); break;
-      case 'restore':   cmdRestore(db, cmdArgs); break;
-      case 'compress':  cmdCompress(db, cmdArgs); break;
-      case 'maintain':  cmdMaintain(db, cmdArgs); break;
-      case 'optimize':  await cmdOptimize(db, cmdArgs); break;
-      case 'fts-check': cmdFtsCheck(db, cmdArgs); break;
-      case 'stats':     await cmdStats(db, cmdArgs); break;
-      case 'context':   cmdContext(db, cmdArgs); break;
-      case 'browse':    cmdBrowse(db, cmdArgs); break;
-      case 'citation-stats': cmdCitationStats(db, cmdArgs); break;
-      case 'registry':  cmdRegistry(db, cmdArgs); break;
-      case 'import':    await cmdImport(cmdArgs); break;
-      case 'import-jsonl': await cmdImportJsonl(db, cmdArgs); break;
-      case 'enrich':    await cmdEnrich(cmdArgs); break;
-      case 'doctor':    await cmdDoctor(db, cmdArgs); break;
-      case 'activity':  await cmdActivity(db, cmdArgs); break;
+      case 'search':
+        await cmdSearch(db, cmdArgs);
+        break;
+      case 'recent':
+        cmdRecent(db, cmdArgs);
+        break;
+      case 'recall':
+        cmdRecall(db, cmdArgs);
+        break;
+      case 'get':
+        cmdGet(db, cmdArgs);
+        break;
+      case 'timeline':
+        cmdTimeline(db, cmdArgs);
+        break;
+      case 'save':
+        cmdSave(db, cmdArgs);
+        break;
+      case 'defer':
+        cmdDefer(db, cmdArgs);
+        break;
+      case 'delete':
+        cmdDelete(db, cmdArgs);
+        break;
+      case 'update':
+        cmdUpdate(db, cmdArgs);
+        break;
+      case 'export':
+        cmdExport(db, cmdArgs);
+        break;
+      case 'restore':
+        cmdRestore(db, cmdArgs);
+        break;
+      case 'compress':
+        cmdCompress(db, cmdArgs);
+        break;
+      case 'maintain':
+        cmdMaintain(db, cmdArgs);
+        break;
+      case 'optimize':
+        await cmdOptimize(db, cmdArgs);
+        break;
+      case 'fts-check':
+        cmdFtsCheck(db, cmdArgs);
+        break;
+      case 'stats':
+        await cmdStats(db, cmdArgs);
+        break;
+      case 'context':
+        cmdContext(db, cmdArgs);
+        break;
+      case 'browse':
+        cmdBrowse(db, cmdArgs);
+        break;
+      case 'citation-stats':
+        cmdCitationStats(db, cmdArgs);
+        break;
+      case 'registry':
+        cmdRegistry(db, cmdArgs);
+        break;
+      case 'import':
+        await cmdImport(cmdArgs);
+        break;
+      case 'import-jsonl':
+        await cmdImportJsonl(db, cmdArgs);
+        break;
+      case 'enrich':
+        await cmdEnrich(cmdArgs);
+        break;
+      case 'doctor':
+        await cmdDoctor(db, cmdArgs);
+        break;
+      case 'activity':
+        await cmdActivity(db, cmdArgs);
+        break;
       default:
         out(`[mem] Unknown command: ${cmd}`);
         out('[mem] Run "claude-mem-lite help" for usage');
@@ -3335,14 +4135,22 @@ export async function run(argv) {
     // to the user: writer contention past the 5s busy_timeout. Pre-fix this
     // raised an unhandled SqliteError with a node stack trace.
     const code = e && typeof e.code === 'string' ? e.code : '';
-    if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED' ||
-        code.startsWith('SQLITE_BUSY_') || code.startsWith('SQLITE_LOCKED_')) {
-      process.stderr.write(`[mem] Database busy — another process held the writer past the 5s timeout. Retry shortly.\n`);
+    if (
+      code === 'SQLITE_BUSY' ||
+      code === 'SQLITE_LOCKED' ||
+      code.startsWith('SQLITE_BUSY_') ||
+      code.startsWith('SQLITE_LOCKED_')
+    ) {
+      process.stderr.write(
+        `[mem] Database busy — another process held the writer past the 5s timeout. Retry shortly.\n`,
+      );
       process.exitCode = 1;
       return;
     }
     throw e;
   } finally {
-    try { db.close(); } catch {}
+    try {
+      db.close();
+    } catch {}
   }
 }

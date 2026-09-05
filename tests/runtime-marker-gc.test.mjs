@@ -34,8 +34,12 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 24 * 60 * 60 * 1000;
 
 let dir;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'rt-gc-')); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'rt-gc-'));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
 
 function put(name, ageDays) {
   const p = join(dir, name);
@@ -195,13 +199,13 @@ describe('wiring', () => {
   });
 
   it('sweeps a realistic mixed directory to exactly the intended set', () => {
-    put('session-tmp--sdscc-e2e-abc', 90);          // deleted test sandbox
+    put('session-tmp--sdscc-e2e-abc', 90); // deleted test sandbox
     put('cite-recall-scratchpad--fixture-1.json', 90);
     put('.skill-reco-cooldown-projects--moa', 90);
-    put('.auto-adopt-projects--moa', 90);            // preserved
+    put('.auto-adopt-projects--moa', 90); // preserved
     put('.deferred-block-migrated-projects--moa', 90); // preserved
-    put('ep-projects--moa.json', 90);                // not ours
-    put('session-projects--mem', 1);                 // active project
+    put('ep-projects--moa.json', 90); // not ours
+    put('session-projects--mem', 1); // active project
     expect(sweepStaleProjectMarkers(dir)).toBe(3);
     expect(readdirSync(dir).sort()).toEqual([
       '.auto-adopt-projects--moa',

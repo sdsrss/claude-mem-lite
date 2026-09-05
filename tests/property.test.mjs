@@ -28,7 +28,7 @@ describe('sanitizeFtsQuery properties', () => {
         if (result === null) return true;
         // Should not throw when used in FTS5 MATCH
         try {
-          db.prepare("SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?").all(result);
+          db.prepare('SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?').all(result);
           return true;
         } catch {
           return false;
@@ -90,8 +90,10 @@ describe('scrubSecrets properties', () => {
   it('preserves non-secret text unchanged', () => {
     // Generate strings that cannot match any secret pattern
     const safeChars = 'abcdefghijklmnopqrstuvwxyz 0123456789';
-    const safeArb = fc.string({ minLength: 1, maxLength: 200 }).map(
-      s => Array.from(s).map(c => safeChars[c.charCodeAt(0) % safeChars.length]).join('')
+    const safeArb = fc.string({ minLength: 1, maxLength: 200 }).map((s) =>
+      Array.from(s)
+        .map((c) => safeChars[c.charCodeAt(0) % safeChars.length])
+        .join(''),
     );
 
     fc.assert(
@@ -108,14 +110,11 @@ describe('scrubSecrets properties', () => {
 describe('computeMinHash properties', () => {
   it('is deterministic: same input produces same output', () => {
     fc.assert(
-      fc.property(
-        fc.string({ minLength: 20, maxLength: 500 }),
-        (input) => {
-          const sig1 = computeMinHash(input);
-          const sig2 = computeMinHash(input);
-          return sig1 === sig2;
-        },
-      ),
+      fc.property(fc.string({ minLength: 20, maxLength: 500 }), (input) => {
+        const sig1 = computeMinHash(input);
+        const sig2 = computeMinHash(input);
+        return sig1 === sig2;
+      }),
       { numRuns: 200 },
     );
   });
@@ -126,8 +125,9 @@ describe('computeMinHash properties', () => {
 describe('estimateJaccardFromMinHash properties', () => {
   it('is symmetric: f(a,b) === f(b,a)', () => {
     // Generate meaningful text to get non-null signatures
-    const textArb = fc.array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
-      .map(words => words.join(' '));
+    const textArb = fc
+      .array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
+      .map((words) => words.join(' '));
 
     fc.assert(
       fc.property(textArb, textArb, (a, b) => {
@@ -141,8 +141,9 @@ describe('estimateJaccardFromMinHash properties', () => {
   });
 
   it('is bounded [0, 1]', () => {
-    const textArb = fc.array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
-      .map(words => words.join(' '));
+    const textArb = fc
+      .array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
+      .map((words) => words.join(' '));
 
     fc.assert(
       fc.property(textArb, textArb, (a, b) => {
@@ -157,8 +158,9 @@ describe('estimateJaccardFromMinHash properties', () => {
   });
 
   it('identity: f(sig, sig) === 1.0', () => {
-    const textArb = fc.array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
-      .map(words => words.join(' '));
+    const textArb = fc
+      .array(fc.lorem({ maxCount: 5 }), { minLength: 3, maxLength: 10 })
+      .map((words) => words.join(' '));
 
     fc.assert(
       fc.property(textArb, (text) => {
@@ -196,7 +198,7 @@ describe('jaccardSimilarity properties', () => {
   it('identity: f(s, s) === 1.0 for non-empty strings with words', () => {
     fc.assert(
       fc.property(
-        fc.array(fc.lorem({ maxCount: 1 }), { minLength: 1, maxLength: 5 }).map(w => w.join(' ')),
+        fc.array(fc.lorem({ maxCount: 1 }), { minLength: 1, maxLength: 5 }).map((w) => w.join(' ')),
         (s) => {
           return jaccardSimilarity(s, s) === 1.0;
         },

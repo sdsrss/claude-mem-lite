@@ -27,11 +27,7 @@ describe('planRepoSparsePaths', () => {
   });
 
   it('drops unsafe paths (.. / absolute) without forcing a full clone', () => {
-    const r = planRepoSparsePaths([
-      { path: 'skills/ok' },
-      { path: '../escape' },
-      { path: '/etc/passwd' },
-    ]);
+    const r = planRepoSparsePaths([{ path: 'skills/ok' }, { path: '../escape' }, { path: '/etc/passwd' }]);
     expect(r.full).toBe(false);
     expect(r.paths).toEqual(['skills/ok']); // unsafe ones excluded, never reach sparse-checkout
   });

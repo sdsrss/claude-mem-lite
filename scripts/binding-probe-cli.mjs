@@ -36,18 +36,20 @@ const ROOT = process.env.PROBE_ROOT || join(dirname(fileURLToPath(import.meta.ur
 // because bareProbe runs when lib/ could not be imported. Same 240 cap, same
 // ellipsis, same 'unknown' floor — asserted for parity by the tests.
 function flattenLocal(err, max = 240) {
-  const s = String(err ?? '').replace(/\s+/g, ' ').trim();
+  const s = String(err ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!s) return 'unknown';
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
 function bareProbe(root) {
   const script =
-    'try {'
-    + 'const { createRequire } = require("node:module");'
-    + `const D = createRequire(${JSON.stringify(join(root, 'package.json'))})("better-sqlite3");`
-    + 'new D(":memory:").close();'
-    + '} catch (e) { process.stdout.write(String((e && e.message) || e)); process.exit(1); }';
+    'try {' +
+    'const { createRequire } = require("node:module");' +
+    `const D = createRequire(${JSON.stringify(join(root, 'package.json'))})("better-sqlite3");` +
+    'new D(":memory:").close();' +
+    '} catch (e) { process.stdout.write(String((e && e.message) || e)); process.exit(1); }';
   const r = spawnSync(process.execPath, ['-e', script], { stdio: 'pipe', timeout: 8000 });
   if (!r.error && r.status === 0) return true;
   // Say WHY. The inline predecessor printed the cause here; dropping it left the
@@ -72,8 +74,10 @@ function bareProbe(root) {
   // FIRST, then flatten it.
   const printed = String(r.stdout || '').trim();
   const spawnErr = r.error && r.error.message;
-  const why = printed ? flattenLocal(printed)
-    : spawnErr ? flattenLocal(spawnErr)
+  const why = printed
+    ? flattenLocal(printed)
+    : spawnErr
+      ? flattenLocal(spawnErr)
       : `probe exited ${r.status ?? `on signal ${r.signal}`}`;
   process.stderr.write(`[claude-mem-lite] binding probe: ${why}\n`);
   return false;
@@ -82,8 +86,9 @@ function bareProbe(root) {
 let helpers = null;
 try {
   const [probeMod, lockMod, dirMod] = await Promise.all(
-    ['binding-probe.mjs', 'proc-lock.mjs', 'resolve-data-dir.mjs']
-      .map((f) => import(pathToFileURL(join(ROOT, 'lib', f)).href)),
+    ['binding-probe.mjs', 'proc-lock.mjs', 'resolve-data-dir.mjs'].map(
+      (f) => import(pathToFileURL(join(ROOT, 'lib', f)).href),
+    ),
   );
   helpers = { ...probeMod, ...lockMod, ...dirMod };
 } catch {
@@ -112,8 +117,8 @@ try {
 const release = helpers.acquireLock(lockPath);
 if (!release) {
   process.stderr.write(
-    `[claude-mem-lite] binding probe: ${helpers.flattenBindingError(first.error)} `
-    + '(another install/repair in flight — deferring heal)\n',
+    `[claude-mem-lite] binding probe: ${helpers.flattenBindingError(first.error)} ` +
+      '(another install/repair in flight — deferring heal)\n',
   );
   process.exit(1);
 }

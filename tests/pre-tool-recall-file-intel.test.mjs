@@ -24,12 +24,17 @@ function runScript(input, env = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    child.stdout.on('data', d => { stdout += d; });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
     child.on('close', () => resolveP({ stdout }));
     child.on('error', reject);
     child.stdin.write(JSON.stringify(input));
     child.stdin.end();
-    setTimeout(() => { child.kill(); reject(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    setTimeout(() => {
+      child.kill();
+      reject(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -53,7 +58,11 @@ describe('pre-tool-recall file intelligence (feature ①)', () => {
     db.close();
   });
 
-  afterEach(() => { try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {}
+  });
 
   const env = (extra = {}) => ({
     CLAUDE_MEM_DIR: tmpRoot,
@@ -95,9 +104,12 @@ describe('pre-tool-recall file intelligence (feature ①)', () => {
     db.pragma('foreign_keys = OFF');
     initSchema(db);
     insertObs(db, {
-      sessionId: 'mem-intel', project: 'parent--inteltest',
-      type: 'bugfix', importance: 2,
-      title: 'lessony bug', lessonLearned: 'always null-check the widget root',
+      sessionId: 'mem-intel',
+      project: 'parent--inteltest',
+      type: 'bugfix',
+      importance: 2,
+      title: 'lessony bug',
+      lessonLearned: 'always null-check the widget root',
       filesModified: `["${fp}"]`,
     });
     db.close();

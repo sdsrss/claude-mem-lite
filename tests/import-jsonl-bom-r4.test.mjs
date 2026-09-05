@@ -15,11 +15,13 @@ const FIXTURE = join(__dirname, 'fixtures/sample-claude-jsonl/sample.jsonl');
 
 describe('importJsonl — leading UTF-8 BOM (R4)', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
 
   it('imports every line even when the file starts with a BOM (line 1 not dropped)', async () => {
     const raw = readFileSync(FIXTURE, 'utf8');
-    const BOM = String.fromCharCode(0xFEFF);
+    const BOM = String.fromCharCode(0xfeff);
     const bomPath = join(mkdtempSync(join(tmpdir(), 'bom-')), 'bom.jsonl');
     writeFileSync(bomPath, BOM + raw); // prepend the BOM
     const r = await importJsonl(db, bomPath, { project: 'proj' });

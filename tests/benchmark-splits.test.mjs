@@ -15,7 +15,11 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('splitFixture', () => {
-  const sample = Array.from({ length: 30 }, (_, i) => ({ id: `q${i}`, query: `query ${i}`, relevant_ids: [i] }));
+  const sample = Array.from({ length: 30 }, (_, i) => ({
+    id: `q${i}`,
+    query: `query ${i}`,
+    relevant_ids: [i],
+  }));
 
   it('is deterministic for a given seed', () => {
     const a = splitFixture(sample, 0.3, 42);
@@ -35,7 +39,7 @@ describe('splitFixture', () => {
 
   it('honors the ratio (within rounding)', () => {
     const { eval: ev, train } = splitFixture(sample, 0.3, 42);
-    expect(ev.length).toBe(9);     // round(30 * 0.3) = 9
+    expect(ev.length).toBe(9); // round(30 * 0.3) = 9
     expect(train.length).toBe(21);
   });
 
@@ -47,7 +51,10 @@ describe('splitFixture', () => {
   });
 
   it('handles tiny inputs without crashing (eval ≥ 1)', () => {
-    const tiny = [{ id: 'a', query: 'a', relevant_ids: [1] }, { id: 'b', query: 'b', relevant_ids: [2] }];
+    const tiny = [
+      { id: 'a', query: 'a', relevant_ids: [1] },
+      { id: 'b', query: 'b', relevant_ids: [2] },
+    ];
     const { eval: ev, train } = splitFixture(tiny, 0.3, 7);
     expect(ev.length + train.length).toBe(2);
     expect(ev.length).toBeGreaterThanOrEqual(1);

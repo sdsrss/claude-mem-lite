@@ -11,11 +11,17 @@ export function jaccardSimilarity(a, b) {
   if (!a || !b) return 0;
   // Strip trailing punctuation from tokens to match MinHash normalization
   // (prevents "server.rs," ≠ "server.rs" dedup failures)
-  const norm = s => s.toLowerCase().split(/\s+/).map(t => t.replace(/[,;:!?]+$/, ''));
+  const norm = (s) =>
+    s
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.replace(/[,;:!?]+$/, ''));
   const setA = new Set(norm(a));
   const setB = new Set(norm(b));
   let intersection = 0;
-  for (const w of setA) { if (setB.has(w)) intersection++; }
+  for (const w of setA) {
+    if (setB.has(w)) intersection++;
+  }
   const union = setA.size + setB.size - intersection;
   return union === 0 ? 0 : intersection / union;
 }
@@ -42,19 +48,22 @@ function fnv1a(str) {
  */
 export function computeMinHash(text, numHashes = 64) {
   if (!text || typeof text !== 'string') return null;
-  const tokens = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
-    .filter(t => t.length > 2);
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
   // Require at least 3 tokens for meaningful signature (avoids high collision on short texts)
   if (tokens.length < 3) return null;
 
-  const mins = new Array(numHashes).fill(0xFFFFFFFF);
+  const mins = new Array(numHashes).fill(0xffffffff);
   for (const token of tokens) {
     for (let i = 0; i < numHashes; i++) {
       const val = fnv1a(`${i}-${token}`);
       if (val < mins[i]) mins[i] = val;
     }
   }
-  return mins.map(v => v.toString(16).padStart(8, '0')).join('');
+  return mins.map((v) => v.toString(16).padStart(8, '0')).join('');
 }
 
 /**

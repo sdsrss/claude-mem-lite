@@ -22,9 +22,7 @@ import { saveObservation } from '../hook-llm.mjs';
 describe('scope schema (v43 batch)', () => {
   it('fresh initSchema creates observations.scope', () => {
     const db = createTestDb();
-    const col = db.prepare(
-      `SELECT name FROM pragma_table_info('observations') WHERE name = 'scope'`
-    ).get();
+    const col = db.prepare(`SELECT name FROM pragma_table_info('observations') WHERE name = 'scope'`).get();
     expect(col).toEqual({ name: 'scope' });
     db.close();
   });
@@ -45,38 +43,69 @@ describe('normalizeScope', () => {
 
 describe('insertObservationRow / saveObservation persist scope', () => {
   let db;
-  beforeEach(() => { db = createTestDb(); insertSession(db, { id: 'sess-1', project: 'p' }); });
-  afterEach(() => { try { db.close(); } catch {} });
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'p' });
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+  });
 
   it('insertObservationRow writes scope; omitted → NULL', () => {
     const id1 = insertObservationRow(db, {
-      memory_session_id: 'sess-1', project: 'p', type: 'bugfix',
-      title: 't', created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+      memory_session_id: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
       scope: 'environment',
     });
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(id1).scope).toBe('environment');
     const id2 = insertObservationRow(db, {
-      memory_session_id: 'sess-1', project: 'p', type: 'bugfix',
-      title: 't2', created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+      memory_session_id: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't2',
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
     });
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(id2).scope).toBeNull();
   });
 
   it('saveObservation passes a valid obs.scope through and nulls an invalid one', () => {
-    const idA = saveObservation({
-      type: 'bugfix', title: 'proxy blocks fetch behind corp VPN',
-      narrative: 'a sufficiently long narrative for the noise gates to pass through here',
-      importance: 2, lessonLearned: 'node fetch ignores HTTP_PROXY without an agent',
-      files: ['whatever.mjs'], scope: 'environment',
-    }, 'p', 'sess-1', db);
+    const idA = saveObservation(
+      {
+        type: 'bugfix',
+        title: 'proxy blocks fetch behind corp VPN',
+        narrative: 'a sufficiently long narrative for the noise gates to pass through here',
+        importance: 2,
+        lessonLearned: 'node fetch ignores HTTP_PROXY without an agent',
+        files: ['whatever.mjs'],
+        scope: 'environment',
+      },
+      'p',
+      'sess-1',
+      db,
+    );
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(idA).scope).toBe('environment');
 
-    const idB = saveObservation({
-      type: 'bugfix', title: 'another lesson-bearing observation title here',
-      narrative: 'another sufficiently long narrative for the noise gates to pass through',
-      importance: 2, lessonLearned: 'a second real lesson body for the test',
-      files: ['other.mjs'], scope: 'bogus-value',
-    }, 'p', 'sess-1', db);
+    const idB = saveObservation(
+      {
+        type: 'bugfix',
+        title: 'another lesson-bearing observation title here',
+        narrative: 'another sufficiently long narrative for the noise gates to pass through',
+        importance: 2,
+        lessonLearned: 'a second real lesson body for the test',
+        files: ['other.mjs'],
+        scope: 'bogus-value',
+      },
+      'p',
+      'sess-1',
+      db,
+    );
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(idB).scope).toBeNull();
   });
 });
@@ -90,11 +119,18 @@ describe('in-place re-summarization preserves scope on empty (review D#78)', () 
     const db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'p' });
     const id = insertObservationRow(db, {
-      memory_session_id: 'sess-1', project: 'p', type: 'bugfix',
-      title: 't', created_at: new Date().toISOString(), created_at_epoch: Date.now(),
+      memory_session_id: 'sess-1',
+      project: 'p',
+      type: 'bugfix',
+      title: 't',
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
       scope: 'environment',
     });
-    db.prepare('UPDATE observations SET scope=COALESCE(?, scope) WHERE id=?').run(normalizeScope('Environment'), id);
+    db.prepare('UPDATE observations SET scope=COALESCE(?, scope) WHERE id=?').run(
+      normalizeScope('Environment'),
+      id,
+    );
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(id).scope).toBe('environment');
     db.prepare('UPDATE observations SET scope=COALESCE(?, scope) WHERE id=?').run(normalizeScope('file'), id);
     expect(db.prepare('SELECT scope FROM observations WHERE id=?').get(id).scope).toBe('file');
@@ -137,9 +173,9 @@ describe('episode prompts instruct Haiku to emit scope', () => {
   // "at least one legend" is what let the survivor through. Two numbers per
   // file catch drift in either direction.
   const LEGEND_SITES = [
-    ['../hook-llm.mjs', { keys: 2, legends: 1 }],        // 2 templates, 1 shared tail
+    ['../hook-llm.mjs', { keys: 2, legends: 1 }], // 2 templates, 1 shared tail
     ['../lib/save-enrich.mjs', { keys: 1, legends: 1 }], // save-time enrichment
-    ['../hook-optimize.mjs', { keys: 3, legends: 3 }],   // narrow/wide + aliases + scopes
+    ['../hook-optimize.mjs', { keys: 3, legends: 3 }], // narrow/wide + aliases + scopes
   ];
 
   it('every scope-classifying prompt renders the shared legend — by count, per file', () => {
@@ -163,16 +199,27 @@ describe('pre-tool-recall CLAUDE_MEM_SCOPE_FILTER (opt-in)', () => {
   function runScript(input, env = {}) {
     return new Promise((res, reject) => {
       const child = spawn('node', [SCRIPT_PATH], {
-        env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '', CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, ...env },
+        env: {
+          ...process.env,
+          CLAUDE_MEM_HOOK_RUNNING: '',
+          CLAUDE_MEM_DIR: tmpRoot,
+          CLAUDE_PROJECT_DIR: projectDir,
+          ...env,
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stdout = '';
-      child.stdout.on('data', d => { stdout += d; });
+      child.stdout.on('data', (d) => {
+        stdout += d;
+      });
       child.on('close', () => res(stdout));
       child.on('error', reject);
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
-      setTimeout(() => { child.kill(); reject(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+      setTimeout(() => {
+        child.kill();
+        reject(new Error('timeout'));
+      }, SUBPROCESS_TIMEOUT_MS);
     });
   }
 
@@ -188,17 +235,27 @@ describe('pre-tool-recall CLAUDE_MEM_SCOPE_FILTER (opt-in)', () => {
     db.close();
   });
 
-  afterEach(() => { try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {}
+  });
 
   function seed(scope, lesson, fname) {
     const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
     db.pragma('foreign_keys = OFF');
     initSchema(db);
     const id = insertObservationRow(db, {
-      memory_session_id: 'mem-sc', project: 'parent--scopetest', type: 'bugfix',
-      title: `seed ${fname}`, importance: 2, lesson_learned: lesson,
-      created_at: new Date().toISOString(), created_at_epoch: Date.now(),
-      files_modified: JSON.stringify([fname]), scope,
+      memory_session_id: 'mem-sc',
+      project: 'parent--scopetest',
+      type: 'bugfix',
+      title: `seed ${fname}`,
+      importance: 2,
+      lesson_learned: lesson,
+      created_at: new Date().toISOString(),
+      created_at_epoch: Date.now(),
+      files_modified: JSON.stringify([fname]),
+      scope,
     });
     db.prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)').run(id, fname);
     db.close();
@@ -206,10 +263,14 @@ describe('pre-tool-recall CLAUDE_MEM_SCOPE_FILTER (opt-in)', () => {
 
   it('flag ON: environment-scoped lesson is not injected on Edit', async () => {
     seed('environment', 'proxy gotcha unrelated to this file', 'envy.mjs');
-    const stdout = await runScript({
-      tool_name: 'Edit', session_id: 's1',
-      tool_input: { file_path: join(projectDir, 'envy.mjs') },
-    }, { CLAUDE_MEM_SCOPE_FILTER: '1' });
+    const stdout = await runScript(
+      {
+        tool_name: 'Edit',
+        session_id: 's1',
+        tool_input: { file_path: join(projectDir, 'envy.mjs') },
+      },
+      { CLAUDE_MEM_SCOPE_FILTER: '1' },
+    );
     if (stdout) {
       const ctx = JSON.parse(stdout).hookSpecificOutput?.additionalContext || '';
       expect(ctx).not.toContain('proxy gotcha unrelated to this file');
@@ -219,25 +280,35 @@ describe('pre-tool-recall CLAUDE_MEM_SCOPE_FILTER (opt-in)', () => {
   it('flag ON: file-scoped and NULL-scoped lessons still fire', async () => {
     seed('file', 'file-scoped lesson body', 'filey.mjs');
     seed(null, 'legacy null-scope lesson body', 'nully.mjs');
-    const out1 = await runScript({
-      tool_name: 'Edit', session_id: 's2',
-      tool_input: { file_path: join(projectDir, 'filey.mjs') },
-    }, { CLAUDE_MEM_SCOPE_FILTER: '1' });
+    const out1 = await runScript(
+      {
+        tool_name: 'Edit',
+        session_id: 's2',
+        tool_input: { file_path: join(projectDir, 'filey.mjs') },
+      },
+      { CLAUDE_MEM_SCOPE_FILTER: '1' },
+    );
     expect(JSON.parse(out1).hookSpecificOutput.additionalContext).toContain('file-scoped lesson body');
-    const out2 = await runScript({
-      tool_name: 'Edit', session_id: 's3',
-      tool_input: { file_path: join(projectDir, 'nully.mjs') },
-    }, { CLAUDE_MEM_SCOPE_FILTER: '1' });
+    const out2 = await runScript(
+      {
+        tool_name: 'Edit',
+        session_id: 's3',
+        tool_input: { file_path: join(projectDir, 'nully.mjs') },
+      },
+      { CLAUDE_MEM_SCOPE_FILTER: '1' },
+    );
     expect(JSON.parse(out2).hookSpecificOutput.additionalContext).toContain('legacy null-scope lesson body');
   });
 
   it('flag OFF (default): environment-scoped lesson still fires — no behavior change', async () => {
     seed('environment', 'environment lesson visible without the flag', 'defaulty.mjs');
     const stdout = await runScript({
-      tool_name: 'Edit', session_id: 's4',
+      tool_name: 'Edit',
+      session_id: 's4',
       tool_input: { file_path: join(projectDir, 'defaulty.mjs') },
     });
-    expect(JSON.parse(stdout).hookSpecificOutput.additionalContext)
-      .toContain('environment lesson visible without the flag');
+    expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toContain(
+      'environment lesson visible without the flag',
+    );
   });
 });

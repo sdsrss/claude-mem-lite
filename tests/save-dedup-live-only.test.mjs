@@ -29,22 +29,29 @@ import { saveObservation } from '../lib/save-observation.mjs';
 
 const PROJECT = 'x--dedup-live';
 const TITLE = 'session token refresh fails after key rotation';
-const BODY = 'refreshSessionToken threw after every deploy because the rotated signing key '
-  + 'was read once at module load instead of per call';
+const BODY =
+  'refreshSessionToken threw after every deploy because the rotated signing key ' +
+  'was read once at module load instead of per call';
 
 let db;
 
 beforeEach(() => {
   db = new Database(':memory:');
   initSchema(db);
-  db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
-              VALUES ('cc-dl','mem-dl', ?, datetime('now'), ?)`).run(PROJECT, Date.now());
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+              VALUES ('cc-dl','mem-dl', ?, datetime('now'), ?)`,
+  ).run(PROJECT, Date.now());
 });
 
 /** Save one observation through the production pipeline. */
 function save(overrides = {}) {
   return saveObservation(db, {
-    content: BODY, title: TITLE, type: 'bugfix', importance: 2, project: PROJECT,
+    content: BODY,
+    title: TITLE,
+    type: 'bugfix',
+    importance: 2,
+    project: PROJECT,
     ...overrides,
   });
 }
@@ -65,8 +72,10 @@ describe('write-side dedup ignores retired rows', () => {
     const first = save();
     // Retire it exactly as the supersession path does: epoch-ms integer, not ISO text.
     db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(Date.now(), first.id);
-    expect(db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(first.id).superseded_at,
-      'premise: the row under test is not actually retired').not.toBeNull();
+    expect(
+      db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(first.id).superseded_at,
+      'premise: the row under test is not actually retired',
+    ).not.toBeNull();
 
     const correction = save();
     expect(correction.kind, `reported a duplicate of tombstone #${first.id}`).toBe('saved');
@@ -77,8 +86,9 @@ describe('write-side dedup ignores retired rows', () => {
     const parent = save({ title: 'weekly cluster parent', content: 'unrelated cluster parent body' });
     const first = save();
     db.prepare('UPDATE observations SET compressed_into = ? WHERE id = ?').run(parent.id, first.id);
-    expect(db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(first.id).compressed_into)
-      .toBe(parent.id);
+    expect(
+      db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(first.id).compressed_into,
+    ).toBe(parent.id);
 
     const again = save();
     expect(again.kind, `reported a duplicate of compressed row #${first.id}`).toBe('saved');
@@ -97,7 +107,8 @@ describe('write-side dedup ignores retired rows', () => {
 
     const correction = save({ supersedes: [String(target.id)] });
     expect(correction.kind).toBe('saved');
-    expect(correction.supersededIds, 'dedup against a tombstone swallowed the supersession')
-      .toContain(target.id);
+    expect(correction.supersededIds, 'dedup against a tombstone swallowed the supersession').toContain(
+      target.id,
+    );
   });
 });

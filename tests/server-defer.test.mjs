@@ -10,21 +10,21 @@ import { randomUUID } from 'crypto';
 
 describe('MCP tool registration — defer family', () => {
   it('registers mem_defer / mem_defer_list / mem_defer_drop', () => {
-    const names = tools.map(t => t.name);
+    const names = tools.map((t) => t.name);
     expect(names).toContain('mem_defer');
     expect(names).toContain('mem_defer_list');
     expect(names).toContain('mem_defer_drop');
   });
 
   it('mem_defer description follows DO-NOT/USE-when template', () => {
-    const t = tools.find(t => t.name === 'mem_defer');
+    const t = tools.find((t) => t.name === 'mem_defer');
     expect(t.description).toMatch(/DO NOT use when/);
     expect(t.description).toMatch(/USE when/);
     expect(t.description).toMatch(/Equivalent CLI/);
   });
 
   it('mem_defer schema requires title + accepts priority 1..3', () => {
-    const t = tools.find(t => t.name === 'mem_defer');
+    const t = tools.find((t) => t.name === 'mem_defer');
     // title required
     expect(() => t.inputSchema.title.parse(undefined)).toThrow();
     expect(t.inputSchema.title.parse('hello')).toBe('hello');
@@ -34,7 +34,7 @@ describe('MCP tool registration — defer family', () => {
   });
 
   it('memSaveSchema gains optional closes_deferred mixed array', () => {
-    const t = tools.find(t => t.name === 'mem_save');
+    const t = tools.find((t) => t.name === 'mem_save');
     // closes_deferred should be optional (parse undefined OK)
     expect(t.inputSchema.closes_deferred.parse(undefined)).toBeUndefined();
     // accepts mixed [number, "D#N"]
@@ -96,12 +96,16 @@ describe('mem_save closes_deferred MCP-side dedup-replay (parity with CLI)', () 
       // Add a deferred item
       execSync(`node ${cli} defer add "subject" --priority 2`, { env, encoding: 'utf8' });
       // First save with --closes-deferred 1 — closes the item
-      const out1 = execSync(`node ${cli} save "fix subject" --type bugfix --lesson "fix" --closes-deferred 1`,
-        { env, encoding: 'utf8' });
+      const out1 = execSync(
+        `node ${cli} save "fix subject" --type bugfix --lesson "fix" --closes-deferred 1`,
+        { env, encoding: 'utf8' },
+      );
       expect(out1).toMatch(/Closed: D#\d+/);
       // Second save with same args — must return Skipped, NOT throw
-      const out2 = execSync(`node ${cli} save "fix subject" --type bugfix --lesson "fix" --closes-deferred 1`,
-        { env, encoding: 'utf8' });
+      const out2 = execSync(
+        `node ${cli} save "fix subject" --type bugfix --lesson "fix" --closes-deferred 1`,
+        { env, encoding: 'utf8' },
+      );
       expect(out2).toMatch(/Skipped: similar to existing #\d+/);
       // Critical: the second call must NOT include "Closed: D#" (closure was skipped on dedup path)
       expect(out2).not.toMatch(/Closed: D#/);

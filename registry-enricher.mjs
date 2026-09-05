@@ -17,7 +17,9 @@ import { truncate, debugCatch } from './utils.mjs';
  */
 export function buildEnrichPrompt(name, content, existingMeta) {
   const truncated = truncate(content, 3000);
-  const existing = existingMeta.intent_tags ? `\n<existing-metadata>\ncurrent_tags: ${existingMeta.intent_tags}\n</existing-metadata>` : '';
+  const existing = existingMeta.intent_tags
+    ? `\n<existing-metadata>\ncurrent_tags: ${existingMeta.intent_tags}\n</existing-metadata>`
+    : '';
 
   return `You are a tool classification expert. Analyze this Claude Code skill and extract structured metadata.
 
@@ -46,7 +48,14 @@ export function applyEnrichment(db, name, type, enrichResult) {
   const params = [];
 
   // Only fill empty fields
-  const fields = ['capability_summary', 'intent_tags', 'domain_tags', 'trigger_patterns', 'use_cases', 'tech_stack'];
+  const fields = [
+    'capability_summary',
+    'intent_tags',
+    'domain_tags',
+    'trigger_patterns',
+    'use_cases',
+    'tech_stack',
+  ];
   for (const f of fields) {
     if ((!row[f] || row[f].trim() === '') && enrichResult[f]) {
       updates.push(`${f} = ?`);
@@ -80,17 +89,25 @@ export function applyEnrichment(db, name, type, enrichResult) {
  * @returns {Promise<boolean>} true if enriched successfully
  */
 export async function enrichResource(db, name, type, content) {
-  const existing = db.prepare('SELECT intent_tags, capability_summary FROM resources WHERE name = ? AND type = ?').get(name, type);
+  const existing = db
+    .prepare('SELECT intent_tags, capability_summary FROM resources WHERE name = ? AND type = ?')
+    .get(name, type);
   if (!existing) return false;
 
-  db.prepare("UPDATE resources SET enrichment_status = 'pending' WHERE name = ? AND type = ?").run(name, type);
+  db.prepare("UPDATE resources SET enrichment_status = 'pending' WHERE name = ? AND type = ?").run(
+    name,
+    type,
+  );
 
   try {
     const prompt = buildEnrichPrompt(name, content, existing);
     const result = await callHaikuJSONAsync(prompt, { timeout: BG_LLM_TIMEOUT_MS, maxTokens: 500 });
 
     if (!result || !result.capability_summary) {
-      db.prepare("UPDATE resources SET enrichment_status = 'failed' WHERE name = ? AND type = ?").run(name, type);
+      db.prepare("UPDATE resources SET enrichment_status = 'failed' WHERE name = ? AND type = ?").run(
+        name,
+        type,
+      );
       return false;
     }
 
@@ -98,7 +115,10 @@ export async function enrichResource(db, name, type, content) {
     return true;
   } catch (e) {
     debugCatch(e, 'enricher');
-    db.prepare("UPDATE resources SET enrichment_status = 'failed' WHERE name = ? AND type = ?").run(name, type);
+    db.prepare("UPDATE resources SET enrichment_status = 'failed' WHERE name = ? AND type = ?").run(
+      name,
+      type,
+    );
     return false;
   }
 }

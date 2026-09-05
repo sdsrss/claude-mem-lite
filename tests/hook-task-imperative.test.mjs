@@ -47,8 +47,9 @@ describe('selectImperativeLesson (Phase-2 gate)', () => {
   it('picks highest importance*overlap (top-1)', () => {
     seed({ title: 'a', lessonLearned: 'touch rrfMerge carefully', importance: 2 });
     seed({ title: 'b', lessonLearned: 'rrfMerge and rrfFuseN must agree', importance: 3 });
-    expect(selectImperativeLesson(db, 'editing rrfMerge today', 'p').lesson_learned)
-      .toBe('rrfMerge and rrfFuseN must agree');
+    expect(selectImperativeLesson(db, 'editing rrfMerge today', 'p').lesson_learned).toBe(
+      'rrfMerge and rrfFuseN must agree',
+    );
   });
   it('respects excludeIds (no double-injection with the context block)', () => {
     seed({ title: 'a', lessonLearned: 'use rrfMerge not union', importance: 3 });
@@ -67,35 +68,61 @@ describe('hook.mjs UserPromptSubmit task-imperative wiring (default off)', () =>
     projDir = join(tmpHome, 'proj', 'mem');
     mkdirSync(projDir, { recursive: true });
   });
-  afterEach(() => { try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ } });
+  afterEach(() => {
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   function initHomeDb() {
     const dbDir = join(tmpHome, '.claude-mem-lite');
     mkdirSync(join(dbDir, 'runtime'), { recursive: true });
     const db = new Database(join(dbDir, 'claude-mem-lite.db'));
-    db.pragma('journal_mode = WAL'); db.pragma('foreign_keys = OFF');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = OFF');
     initSchema(db);
     return db;
   }
   function runUserPrompt(stdin, extraEnv = {}) {
     try {
       const stdout = execFileSync(process.execPath, [HOOK_PATH, 'user-prompt'], {
-        input: stdin, timeout: 10000, encoding: 'utf8',
-        env: { ...process.env, HOME: tmpHome, CLAUDE_PROJECT_DIR: projDir,
-          CLAUDE_MEM_SKIP_UPDATE: '1', CLAUDE_MEM_SKIP_COMPRESS: '1', CLAUDE_MEM_SKIP_OPTIMIZE: '1',
-          MEM_NO_AUTO_ADOPT: '1', MEM_QUIET_HOOKS: '1', CLAUDE_MEM_HOOK_RUNNING: undefined,
-          CLAUDE_MEM_TASK_IMPERATIVE: undefined, ...extraEnv },
+        input: stdin,
+        timeout: 10000,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: tmpHome,
+          CLAUDE_PROJECT_DIR: projDir,
+          CLAUDE_MEM_SKIP_UPDATE: '1',
+          CLAUDE_MEM_SKIP_COMPRESS: '1',
+          CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+          MEM_NO_AUTO_ADOPT: '1',
+          MEM_QUIET_HOOKS: '1',
+          CLAUDE_MEM_HOOK_RUNNING: undefined,
+          CLAUDE_MEM_TASK_IMPERATIVE: undefined,
+          ...extraEnv,
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       return { stdout, exitCode: 0 };
-    } catch (e) { return { stdout: e.stdout?.toString() || '', exitCode: e.status ?? 1 }; }
+    } catch (e) {
+      return { stdout: e.stdout?.toString() || '', exitCode: e.status ?? 1 };
+    }
   }
   const seedLesson = () => {
     const db = initHomeDb();
     insertSession(db, { id: 'cc-imp', project: 'proj--mem' });
-    insertObs(db, { sessionId: 'cc-imp', project: 'proj--mem', type: 'bugfix',
-      title: 'recoverChildrenOf ordering', text: 'recover children before delete',
-      lessonLearned: 'always call recoverChildrenOf before hard delete', importance: 3 });
+    insertObs(db, {
+      sessionId: 'cc-imp',
+      project: 'proj--mem',
+      type: 'bugfix',
+      title: 'recoverChildrenOf ordering',
+      text: 'recover children before delete',
+      lessonLearned: 'always call recoverChildrenOf before hard delete',
+      importance: 3,
+    });
     db.close();
   };
   const stdin = JSON.stringify({ prompt: 'about to edit recoverChildrenOf now', session_id: 'cc-imp' });
@@ -110,6 +137,8 @@ describe('hook.mjs UserPromptSubmit task-imperative wiring (default off)', () =>
     seedLesson();
     const out = runUserPrompt(stdin, { CLAUDE_MEM_TASK_IMPERATIVE: 'on' });
     expect(out.exitCode).toBe(0);
-    expect(out.stdout).toContain('Memory — a past lesson applies to THIS task. You must: always call recoverChildrenOf before hard delete.');
+    expect(out.stdout).toContain(
+      'Memory — a past lesson applies to THIS task. You must: always call recoverChildrenOf before hard delete.',
+    );
   });
 });

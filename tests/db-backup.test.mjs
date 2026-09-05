@@ -18,18 +18,24 @@ describe('snapshotDb', () => {
     initSchema(db);
     return { db, p, d };
   }
-  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
 
   it('writes a VACUUM INTO snapshot next to the DB and it is a valid copy', () => {
     const { db, d } = fileDb();
-    db.prepare(`INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES ('s','s','p','now',0,'active')`).run();
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES ('s','s','p','now',0,'active')`,
+    ).run();
     const out = snapshotDb(db, { tag: 'pre-maintain' });
     expect(out).toBeTruthy();
     expect(existsSync(out)).toBe(true);
-    expect(readdirSync(d).filter(n => n.includes('.pre-maintain-')).length).toBe(1);
+    expect(readdirSync(d).filter((n) => n.includes('.pre-maintain-')).length).toBe(1);
     // The snapshot is a real, openable DB carrying the schema + the row.
     const snap = new Database(out, { readonly: true });
-    expect(snap.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='observations'`).get()).toBeTruthy();
+    expect(
+      snap.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='observations'`).get(),
+    ).toBeTruthy();
     expect(snap.prepare(`SELECT COUNT(*) c FROM sdk_sessions`).get().c).toBe(1);
     snap.close();
     db.close();
@@ -38,7 +44,7 @@ describe('snapshotDb', () => {
   it('prunes to the newest `retain` snapshots', () => {
     const { db, d } = fileDb();
     for (let i = 0; i < 5; i++) snapshotDb(db, { tag: 't', retain: 3 });
-    expect(readdirSync(d).filter(n => n.includes('.t-') && n.endsWith('.bak')).length).toBe(3);
+    expect(readdirSync(d).filter((n) => n.includes('.t-') && n.endsWith('.bak')).length).toBe(3);
     db.close();
   });
 

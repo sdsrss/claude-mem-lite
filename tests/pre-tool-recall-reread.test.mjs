@@ -22,12 +22,17 @@ function runScript(input, env = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    child.stdout.on('data', d => { stdout += d; });
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
     child.on('close', () => resolveP({ stdout }));
     child.on('error', reject);
     child.stdin.write(JSON.stringify(input));
     child.stdin.end();
-    setTimeout(() => { child.kill(); reject(new Error('timeout')); }, SUBPROCESS_TIMEOUT_MS);
+    setTimeout(() => {
+      child.kill();
+      reject(new Error('timeout'));
+    }, SUBPROCESS_TIMEOUT_MS);
   });
 }
 
@@ -49,10 +54,18 @@ describe('pre-tool-recall repeated-read guard (feature ②)', () => {
     db.close();
   });
 
-  afterEach(() => { try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
+  afterEach(() => {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {}
+  });
 
   const env = (extra = {}) => ({ CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, ...extra });
-  const read = (fp, sid, extra = {}) => ({ tool_name: 'Read', session_id: sid, tool_input: { file_path: fp, ...extra } });
+  const read = (fp, sid, extra = {}) => ({
+    tool_name: 'Read',
+    session_id: sid,
+    tool_input: { file_path: fp, ...extra },
+  });
 
   it('warns on a second full read of an unchanged file in the same session', async () => {
     const fp = join(projectDir, 'big.mjs');

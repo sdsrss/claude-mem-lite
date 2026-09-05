@@ -18,8 +18,8 @@ import { episodeHasSignificantContent, explainSignificance } from '../hook-episo
 import { buildImmediateObservation } from '../hook-llm.mjs';
 import { LOW_SIGNAL_TITLE } from '../utils.mjs';
 
-const entries = (spec) => spec.flatMap(([tool, n, extra = {}]) =>
-  Array.from({ length: n }, () => ({ tool, ...extra })));
+const entries = (spec) =>
+  spec.flatMap(([tool, n, extra = {}]) => Array.from({ length: n }, () => ({ tool, ...extra })));
 
 const ep = (spec, files = []) => ({ entries: entries(spec), files });
 
@@ -42,8 +42,22 @@ describe('explainSignificance', () => {
   it('names the rule that decided, in precedence order', () => {
     // An episode that satisfies several rules must report the FIRST one, or the counts
     // attribute an edit-driven episode to research.
-    expect(explainSignificance(ep([['Edit', 1], ['Grep', 20]])).rule).toBe(1);
-    expect(explainSignificance(ep([['Bash', 1, { isError: true, bashSig: { isBuild: true } }], ['Grep', 20]])).rule).toBe(2);
+    expect(
+      explainSignificance(
+        ep([
+          ['Edit', 1],
+          ['Grep', 20],
+        ]),
+      ).rule,
+    ).toBe(1);
+    expect(
+      explainSignificance(
+        ep([
+          ['Bash', 1, { isError: true, bashSig: { isBuild: true } }],
+          ['Grep', 20],
+        ]),
+      ).rule,
+    ).toBe(2);
     expect(explainSignificance(ep([['Grep', 20]], ['app/config.yml'])).rule).toBe(3);
     expect(explainSignificance(ep([['Grep', 8]])).rule).toBe(4);
     expect(explainSignificance(ep([['Grep', 7]])).rule).toBe(null);
@@ -56,18 +70,35 @@ describe('explainSignificance', () => {
     expect(grepOnly).toMatchObject({ rule: 4, readCount: 8, grepCount: 8, grepDecisive: true });
 
     // Would have fired anyway on Reads alone — moving Grep out costs nothing here.
-    const readsCarry = explainSignificance(ep([['Read', 8], ['Grep', 4]]));
+    const readsCarry = explainSignificance(
+      ep([
+        ['Read', 8],
+        ['Grep', 4],
+      ]),
+    );
     expect(readsCarry).toMatchObject({ rule: 4, readCount: 12, grepCount: 4, grepDecisive: false });
 
     // Mixed, and the Greps are what crosses the threshold.
-    const mixed = explainSignificance(ep([['Read', 5], ['Grep', 3]]));
+    const mixed = explainSignificance(
+      ep([
+        ['Read', 5],
+        ['Grep', 3],
+      ]),
+    );
     expect(mixed).toMatchObject({ rule: 4, readCount: 8, grepCount: 3, grepDecisive: true });
   });
 
   it('leaves grepDecisive false when rule 4 was not the decider', () => {
     // Otherwise an edit episode that happens to contain Greps would be counted as
     // evidence that Grep carries research episodes.
-    expect(explainSignificance(ep([['Edit', 1], ['Grep', 20]])).grepDecisive).toBe(false);
+    expect(
+      explainSignificance(
+        ep([
+          ['Edit', 1],
+          ['Grep', 20],
+        ]),
+      ).grepDecisive,
+    ).toBe(false);
     expect(explainSignificance(ep([['Grep', 2]])).grepDecisive).toBe(false);
   });
 });
@@ -89,9 +120,12 @@ describe('explainSignificance', () => {
 describe('the review-pattern title branch is a low-signal guard, not dead code', () => {
   const grepEpisode = (files) => ({
     entries: Array.from({ length: 6 }, () => ({
-      tool: 'Grep', desc: 'Search "handleStop" → 12 matches in 4 files', files: [],
+      tool: 'Grep',
+      desc: 'Search "handleStop" → 12 matches in 4 files',
+      files: [],
     })),
-    files, filesRead: [],
+    files,
+    filesRead: [],
   });
 
   it('keeps a pure-Grep episode with no captured files out of the injectable set', () => {

@@ -29,7 +29,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { initSchema } from '../schema.mjs';
 import { keyContextIdsFileName } from '../lib/injected-ids.mjs';
-import { recordKeyContextInjection, touchKeyContextMarker, KEYCTX_TOUCH_AFTER_MS } from '../lib/keyctx-marker.mjs';
+import {
+  recordKeyContextInjection,
+  touchKeyContextMarker,
+  KEYCTX_TOUCH_AFTER_MS,
+} from '../lib/keyctx-marker.mjs';
 import { handlePreCompact } from '../hook-precompact.mjs';
 
 const dirs = [];
@@ -39,7 +43,13 @@ function mkdir() {
   return d;
 }
 afterAll(() => {
-  for (const d of dirs.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
+  for (const d of dirs.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* gone */
+    }
+  }
 });
 
 const PROJECT = 'test--project';
@@ -98,8 +108,9 @@ describe('touchKeyContextMarker — the age sweep must measure last USE', () => 
 
   it('never throws on an unreadable runtime dir', () => {
     // Runs inside the user-prompt hot path; a stat failure must not take the prompt down.
-    expect(() => touchKeyContextMarker({ runtimeDir: '/nonexistent/keyctx', project: PROJECT, sessionId: SESSION }))
-      .not.toThrow();
+    expect(() =>
+      touchKeyContextMarker({ runtimeDir: '/nonexistent/keyctx', project: PROJECT, sessionId: SESSION }),
+    ).not.toThrow();
   });
 });
 
@@ -114,7 +125,9 @@ describe('handlePreCompact — the twin must describe the same set as SessionSta
 
     handlePreCompact({ db, project: PROJECT, sessionId: SESSION, runtimeDir });
 
-    expect(existsSync(path), 'marker vanished — the exclude-set must exist and be empty, not absent').toBe(true);
+    expect(existsSync(path), 'marker vanished — the exclude-set must exist and be empty, not absent').toBe(
+      true,
+    );
     const after = JSON.parse(readFileSync(path, 'utf8'));
     expect(after.ids, `stale ids survived an empty re-render: ${JSON.stringify(after.ids)}`).toEqual([]);
     expect(after.session).toBe(SESSION);

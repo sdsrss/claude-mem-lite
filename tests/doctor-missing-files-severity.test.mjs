@@ -43,7 +43,13 @@ const homes = [];
 const ENTRIES = ['cli.mjs', 'mem-cli.mjs', 'server.mjs', 'hook.mjs', 'install.mjs'];
 
 /** Build a fake INSTALL_DIR under a fake HOME in the given shape, then run `doctor --json`. */
-function doctorOn({ symlinkEntries = false, copyEntries = false, extraSymlinks = [], extraCopies = [], omitEntries = [] }) {
+function doctorOn({
+  symlinkEntries = false,
+  copyEntries = false,
+  extraSymlinks = [],
+  extraCopies = [],
+  omitEntries = [],
+}) {
   // Fresh HOME per call so two shapes can be compared in one test.
   const home = mkdtempSync(join(tmpdir(), 'doctor-shape-'));
   homes.push(home);
@@ -69,8 +75,11 @@ function doctorOn({ symlinkEntries = false, copyEntries = false, extraSymlinks =
   try {
     out = execFileSync(process.execPath, [INSTALLER, 'doctor', '--json'], {
       env: {
-        ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'),
-        CLAUDE_MEM_SKIP_UPDATE: '1', MEM_QUIET_HOOKS: '1',
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_QUIET_HOOKS: '1',
       },
       encoding: 'utf8',
     });
@@ -92,15 +101,23 @@ function driftLines(report) {
 
 describe('doctor — missing-file severity by install shape', () => {
   afterEach(() => {
-    for (const h of homes.splice(0)) { try { rmSync(h, { recursive: true, force: true }); } catch { /* gone */ } }
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('a COPY install with missing managed files is reported, not silent', () => {
     // The shape where a missing module is fatal at runtime. It must not be the quiet one.
     const report = doctorOn({ copyEntries: true });
     const lines = driftLines(report);
-    expect(lines.length, `copy install with missing files said nothing:\n${JSON.stringify(report.checks, null, 1)}`)
-      .toBeGreaterThan(0);
+    expect(
+      lines.length,
+      `copy install with missing files said nothing:\n${JSON.stringify(report.checks, null, 1)}`,
+    ).toBeGreaterThan(0);
     expect(lines.some((c) => c.level === 'warn' || c.level === 'fail')).toBe(true);
     // And it must NOT prescribe the dev remedy to a non-dev install.
     expect(lines.some((c) => /install --dev/.test(c.message))).toBe(false);
@@ -116,13 +133,17 @@ describe('doctor — missing-file severity by install shape', () => {
     const withMissing = doctorOn({ symlinkEntries: true });
     const complete = doctorOn({ symlinkEntries: true, extraSymlinks: modules });
     expect(driftLines(withMissing).length, 'no managed-files line at all').toBeGreaterThan(0);
-    expect(withMissing.issues,
-      `${modules.length} unlinked-but-reachable modules were counted as issues `
-      + `(${withMissing.issues} vs ${complete.issues} for a fully linked install)`)
-      .toBe(complete.issues);
+    expect(
+      withMissing.issues,
+      `${modules.length} unlinked-but-reachable modules were counted as issues ` +
+        `(${withMissing.issues} vs ${complete.issues} for a fully linked install)`,
+    ).toBe(complete.issues);
     // …and it must SAY why it is benign, so the reader does not run the remedy anyway.
-    expect(driftLines(withMissing).map((c) => c.message).join(' '))
-      .toMatch(/realpath|resolve|repo|harmless|benign/i);
+    expect(
+      driftLines(withMissing)
+        .map((c) => c.message)
+        .join(' '),
+    ).toMatch(/realpath|resolve|repo|harmless|benign/i);
   });
 
   it('a MISSING entry point is an issue even in a pure-symlink install', () => {
@@ -135,10 +156,15 @@ describe('doctor — missing-file severity by install shape', () => {
     const withAll = doctorOn({ symlinkEntries: true });
     const missingEntry = doctorOn({ symlinkEntries: true, omitEntries: ['hook.mjs'] });
     expect(driftLines(missingEntry).length, 'no managed-files line at all').toBeGreaterThan(0);
-    expect(missingEntry.issues,
-      `an absent entry point added no issue (${missingEntry.issues} vs ${withAll.issues})`)
-      .toBeGreaterThan(withAll.issues);
-    expect(driftLines(missingEntry).map((c) => c.message).join(' ')).toMatch(/ENTRY POINT/);
+    expect(
+      missingEntry.issues,
+      `an absent entry point added no issue (${missingEntry.issues} vs ${withAll.issues})`,
+    ).toBeGreaterThan(withAll.issues);
+    expect(
+      driftLines(missingEntry)
+        .map((c) => c.message)
+        .join(' '),
+    ).toMatch(/ENTRY POINT/);
   });
 
   it('a HYBRID install (a copied managed file among symlinks) still counts as an issue', () => {
@@ -149,8 +175,9 @@ describe('doctor — missing-file severity by install shape', () => {
     const pure = doctorOn({ symlinkEntries: true });
     const hybrid = doctorOn({ symlinkEntries: true, extraCopies: ['utils.mjs'] });
     expect(driftLines(hybrid).length, 'no managed-files line at all').toBeGreaterThan(0);
-    expect(hybrid.issues,
-      `a copied managed file added no issue (${hybrid.issues} vs pure ${pure.issues})`)
-      .toBeGreaterThan(pure.issues);
+    expect(
+      hybrid.issues,
+      `a copied managed file added no issue (${hybrid.issues} vs pure ${pure.issues})`,
+    ).toBeGreaterThan(pure.issues);
   });
 });

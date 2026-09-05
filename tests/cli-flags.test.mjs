@@ -129,7 +129,9 @@ describe('isNumericToken', () => {
 // on valid flags or truly-novel names.
 describe('suggestUnknownFlags', () => {
   it('flags a misspelled flag with the closest known suggestion', () => {
-    expect(suggestUnknownFlags({ improtance: '3' })).toEqual([{ flag: 'improtance', suggestion: 'importance' }]);
+    expect(suggestUnknownFlags({ improtance: '3' })).toEqual([
+      { flag: 'improtance', suggestion: 'importance' },
+    ]);
     expect(suggestUnknownFlags({ projcte: 'x' })).toEqual([{ flag: 'projcte', suggestion: 'project' }]);
     expect(suggestUnknownFlags({ lmit: '5' })).toEqual([{ flag: 'lmit', suggestion: 'limit' }]);
   });
@@ -149,8 +151,9 @@ describe('suggestUnknownFlags', () => {
     // with zero output. Report it; suggestion stays null so no wrong name is invented.
     // The catalogue was audited against every code-read flag when this flipped.
     expect(suggestUnknownFlags({ xyzzy: '1' })).toEqual([{ flag: 'xyzzy', suggestion: null }]);
-    expect(suggestUnknownFlags({ 'completely-different-flag': true }))
-      .toEqual([{ flag: 'completely-different-flag', suggestion: null }]);
+    expect(suggestUnknownFlags({ 'completely-different-flag': true })).toEqual([
+      { flag: 'completely-different-flag', suggestion: null },
+    ]);
   });
 
   it('ignores the empty-string key from a bare `--`', () => {
@@ -160,6 +163,6 @@ describe('suggestUnknownFlags', () => {
   it('reports multiple typos in one invocation', () => {
     const result = suggestUnknownFlags({ improtance: '3', lmit: '5' });
     expect(result).toHaveLength(2);
-    expect(result.map(r => r.flag).sort()).toEqual(['improtance', 'lmit']);
+    expect(result.map((r) => r.flag).sort()).toEqual(['improtance', 'lmit']);
   });
 });

@@ -39,7 +39,10 @@ import { extractIdents } from '../lib/lesson-idents.mjs';
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 
 const argv = process.argv.slice(2);
-const argOf = (f) => { const i = argv.indexOf(f); return i === -1 ? null : argv[i + 1]; };
+const argOf = (f) => {
+  const i = argv.indexOf(f);
+  return i === -1 ? null : argv[i + 1];
+};
 const NARROW = Number(argOf('--narrow') || 50);
 
 const dbPath = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'claude-mem-lite.db');
@@ -66,7 +69,9 @@ try {
 function rankAt(limit, userPrompt, project) {
   const promptIdents = new Set(extractIdents(userPrompt));
   if (promptIdents.size === 0) return [];
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT id, title, lesson_learned, importance
     FROM observations
     WHERE project = ?
@@ -77,10 +82,14 @@ function rankAt(limit, userPrompt, project) {
       AND LOWER(TRIM(lesson_learned)) != 'none'
     ORDER BY importance DESC, created_at_epoch DESC, id DESC
     LIMIT ${limit}
-  `).all(project);
+  `,
+    )
+    .all(project);
   const out = [];
   for (const r of rows) {
-    const overlap = extractIdents(`${r.lesson_learned} ${r.title || ''}`).filter((i) => promptIdents.has(i)).length;
+    const overlap = extractIdents(`${r.lesson_learned} ${r.title || ''}`).filter((i) =>
+      promptIdents.has(i),
+    ).length;
     if (overlap === 0) continue;
     out.push({ id: r.id, importance: r.importance || 2, overlap, score: (r.importance || 2) * overlap });
   }
@@ -90,7 +99,9 @@ function rankAt(limit, userPrompt, project) {
 
 /** Per-project pool sizes under the SHIPPED predicate, split by importance. */
 function populations() {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT project,
            COUNT(*) eligible,
            SUM(COALESCE(importance, 1) >= 3) imp3,
@@ -102,7 +113,9 @@ function populations() {
       AND TRIM(lesson_learned) != ''
       AND LOWER(TRIM(lesson_learned)) != 'none'
     GROUP BY project HAVING eligible > 0 ORDER BY eligible DESC
-  `).all();
+  `,
+    )
+    .all();
 }
 
 // ─── real prompts, paired to their own project ───────────────────────────────
@@ -112,17 +125,34 @@ function realPrompts() {
   const seen = new Set();
   const out = [];
   let dirs;
-  try { dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
+  try {
+    dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch {
+    return out;
+  }
   for (const d of dirs) {
     const dir = join(root, d.name);
     let names;
-    try { names = readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch { continue; }
+    try {
+      names = readdirSync(dir).filter((n) => n.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
     for (const n of names) {
       let lines;
-      try { lines = readFileSync(join(dir, n), 'utf8').split('\n'); } catch { continue; }
+      try {
+        lines = readFileSync(join(dir, n), 'utf8').split('\n');
+      } catch {
+        continue;
+      }
       for (const line of lines) {
         if (!line.trim()) continue;
-        let e; try { e = JSON.parse(line); } catch { continue; }
+        let e;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
         if (e?.type !== 'user' || e?.isSidechain === true) continue;
         // A TYPED prompt is a plain string; arrays are tool_result payloads.
         const c = e.message?.content;
@@ -153,9 +183,11 @@ function assertAgreesWithShipped(prompts, projects) {
       const mine = rankAt(IMPERATIVE_POOL_BACKSTOP, p.text, project).map((r) => [r.id, r.score]);
       const theirs = rankImperativeCandidates(db, p.text, project).map((r) => [r.id, r.score]);
       if (JSON.stringify(mine) !== JSON.stringify(theirs)) {
-        throw new Error(`ruler check: this file's pool query disagrees with the shipped `
-          + `rankImperativeCandidates on project ${project} — every number below would describe `
-          + 'a program that is not the one that ships.');
+        throw new Error(
+          `ruler check: this file's pool query disagrees with the shipped ` +
+            `rankImperativeCandidates on project ${project} — every number below would describe ` +
+            'a program that is not the one that ships.',
+        );
       }
       checked++;
     }
@@ -167,13 +199,16 @@ function assertAgreesWithShipped(prompts, projects) {
 function main() {
   const pops = populations();
   if (argv.includes('--population')) {
-    console.table(pops.map((r) => ({ ...r, overBackstop: r.eligible > IMPERATIVE_POOL_BACKSTOP ? 'YES' : '' })));
+    console.table(
+      pops.map((r) => ({ ...r, overBackstop: r.eligible > IMPERATIVE_POOL_BACKSTOP ? 'YES' : '' })),
+    );
     return;
   }
 
   const prompts = realPrompts();
-  const projects = db.prepare(
-    'SELECT project, COUNT(*) n FROM observations GROUP BY project HAVING n >= 20 ORDER BY n DESC').all();
+  const projects = db
+    .prepare('SELECT project, COUNT(*) n FROM observations GROUP BY project HAVING n >= 20 ORDER BY n DESC')
+    .all();
   const known = new Map(pops.map((r) => [r.project, r.eligible]));
   const checked = assertAgreesWithShipped(prompts, projects);
 
@@ -181,15 +216,26 @@ function main() {
   // prompt with every project inflates the per-project column with pairs that cannot occur.
   const paired = prompts.filter((p) => p.project && known.has(p.project));
 
-  let cases = 0; let bothPick = 0; let destroyed = 0; let changed = 0;
-  let supersetViolations = 0; let monotonicityViolations = 0; let changedWithoutGain = 0;
+  let cases = 0;
+  let bothPick = 0;
+  let destroyed = 0;
+  let changed = 0;
+  let supersetViolations = 0;
+  let monotonicityViolations = 0;
+  let changedWithoutGain = 0;
   const per = new Map();
   for (const { text, project } of paired) {
     const narrow = rankAt(NARROW, text, project);
     const wide = rankImperativeCandidates(db, text, project);
     if (!narrow.length && !wide.length) continue;
     cases++;
-    const r = per.get(project) || { project, eligible: known.get(project), cases: 0, destroyed: 0, changed: 0 };
+    const r = per.get(project) || {
+      project,
+      eligible: known.get(project),
+      cases: 0,
+      destroyed: 0,
+      changed: 0,
+    };
     r.cases++;
     // The argument the release rests on, attacked on every prompt rather than asserted.
     const wideIds = new Set(wide.map((x) => x.id));
@@ -198,16 +244,23 @@ function main() {
       bothPick++;
       if (wide[0].score < narrow[0].score) monotonicityViolations++;
       if (wide[0].id !== narrow[0].id) {
-        changed++; r.changed++;
+        changed++;
+        r.changed++;
         if (!(wide[0].score > narrow[0].score)) changedWithoutGain++;
       }
-    } else if (wide.length) { destroyed++; r.destroyed++; }
+    } else if (wide.length) {
+      destroyed++;
+      r.destroyed++;
+    }
     per.set(project, r);
   }
 
   const bench = paired.filter((p) => p.project === pops[0]?.project).slice(0, 200);
   const timed = {};
-  for (const [label, limit] of [['narrow', NARROW], ['shipped', IMPERATIVE_POOL_BACKSTOP]]) {
+  for (const [label, limit] of [
+    ['narrow', NARROW],
+    ['shipped', IMPERATIVE_POOL_BACKSTOP],
+  ]) {
     const t0 = process.hrtime.bigint();
     for (const p of bench) rankAt(limit, p.text, p.project);
     timed[label] = Number(process.hrtime.bigint() - t0) / 1e6 / (bench.length || 1);
@@ -237,8 +290,12 @@ function main() {
   } else {
     console.log('─── imperative-pool live replay ───');
     console.log(`narrow LIMIT ${NARROW}  vs  shipped IMPERATIVE_POOL_BACKSTOP ${IMPERATIVE_POOL_BACKSTOP}`);
-    console.log(`ruler check: this file's pool query == shipped rankImperativeCandidates on ${checked} (prompt, project) pairs`);
-    console.log(`prompts ${prompts.length}  ·  with a resolvable own-project corpus ${paired.length}  ·  producing a candidate ${cases}`);
+    console.log(
+      `ruler check: this file's pool query == shipped rankImperativeCandidates on ${checked} (prompt, project) pairs`,
+    );
+    console.log(
+      `prompts ${prompts.length}  ·  with a resolvable own-project corpus ${paired.length}  ·  producing a candidate ${cases}`,
+    );
     console.log('');
     console.log(`picks the narrow bound destroys outright: ${destroyed}  ${pct(destroyed, cases)}`);
     console.log(`top-1 changed (of ${bothPick} where both picked) : ${changed}  ${pct(changed, bothPick)}`);
@@ -249,14 +306,18 @@ function main() {
     console.log(`  wide top-1 scores LOWER than narrow: ${monotonicityViolations}`);
     console.log(`  pick changed without a strict gain : ${changedWithoutGain}`);
     console.log('');
-    console.table(per.size ? [...per.values()].sort((a, b) => b.cases - a.cases) : [{ note: 'no paired prompts' }]);
+    console.table(
+      per.size ? [...per.values()].sort((a, b) => b.cases - a.cases) : [{ note: 'no paired prompts' }],
+    );
     console.log('eligible pool per project (SHIPPED predicate — live filter included):');
     console.table(pops.slice(0, 10));
   }
 
   if (violations) {
-    console.error(`\nFALSIFIED: ${violations} counterexample(s) to the superset/monotonicity argument. `
-      + 'The claim that widening the pool cannot lower this face\'s objective does NOT hold on this corpus.');
+    console.error(
+      `\nFALSIFIED: ${violations} counterexample(s) to the superset/monotonicity argument. ` +
+        "The claim that widening the pool cannot lower this face's objective does NOT hold on this corpus.",
+    );
     process.exit(1);
   }
 }
