@@ -2,6 +2,45 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+Audit round R7 (`docs/audits/20260905-225651.md`) read the two write paths R6 named as the
+next entry: the adopt boundary that writes into every user's project tree
+(`memdir.mjs` / `claudemd.mjs` / `adopt-*.mjs`) and `lib/citation-tracker.mjs`. 3,254 lines,
+read end to end. All three findings are fixed here, each with a mutation-verified guard.
+
+**⚠️ Behavior change — the generated `.claude/plugin_claude_mem_lite.md` no longer contains
+an absolute path.** It used to embed the resolved CLI invocation
+(`node /home/<you>/.claude/plugins/cache/sdsrss/claude-mem-lite/<version>/cli.mjs`) **24
+times**. That path is machine-specific and version-pinned, so the file was rewritten on every
+plugin release, and any project that commits `.claude/` — the standard home for project-scoped
+settings, commands and agents — shipped teammates a `$HOME` path that exists on no other
+machine. Commands are now written as `claude-mem-lite <cmd>`, with a header note pointing at
+the MCP server instructions for the absolute form when the bare name is not on PATH.
+
+- *What you must do*: nothing. The file refreshes itself on the next SessionStart. If you
+  track it in git, expect one final diff that removes the paths.
+- *Why this is a `change:` and not a `fix:`*: the bytes written into your repository differ.
+
+**Citation metering no longer counts a quotation as an injection.**
+`extractInjectedFromSubagentPrompt` scanned every transcript entry, so a dispatched agent that
+merely quoted the memory block — reviewing this code, or summarizing what it was handed — had
+those `#NN` counted as injected, and `collectSubagentSurface`'s per-file `seen ∩ said`
+intersection then credited them as cited: 100% cite-rate off one self-reference. It now gates
+on `entry.type === 'user'`, the entry that actually carries a dispatched task prompt (measured
+against 11 real subagent transcripts, not assumed). This mattered past metering because
+`sub.injected` is a citation-decay entry gate and an allow-list for `bumpCitationAccess` →
+`access_count` → the `boost` op → `importance`. Aggravating factor now closed: the reader ran
+unconditionally while the writer (`CLAUDE_MEM_SUBAGENT_INJECT`) is default-off, so on a default
+install every id it found was a false positive by construction.
+
+**`unadopt` no longer deletes a symlinked `CLAUDE.md`.** When the managed block was the whole
+file, `removeManaged` unlinked it — deleting the LINK and orphaning the target when the path
+was symlinked into a dotfiles repo (chezmoi/stow/yadm). `writeManaged` deliberately writes
+THROUGH such a link (the 2026-09-02 P0-5 fix in `lib/atomic-write.mjs`); the removal side now
+matches, emptying through the link instead. A regular file is still removed, not left at
+0 bytes.
+
 ## v3.98.0 — the one untrusted input, read end to end
 
 Audit round R6 (`docs/audits/20260905-214840.md`) read the third-party skill-import path end
