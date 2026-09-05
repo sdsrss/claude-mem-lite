@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as acorn from 'acorn';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // `tasks/` belongs here for the same reason `tmp/` does (D#168): it is gitignored local
@@ -34,7 +35,15 @@ function collectMjs(dir, out = []) {
 const SPEC_RE =
   /(?:^|[\s;}])(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
-/** Path-like specifiers only — bare ones ('node:fs', 'better-sqlite3') are package resolution. */
+/**
+ * Path-like specifiers only — bare ones ('node:fs', 'better-sqlite3') are package
+ * resolution. TEXT scan: it reads comments and string literals as imports too.
+ *
+ * That is deliberate for ONE caller, the resolvability check at the bottom, where over-
+ * reporting is the safe direction (a typo'd path that never resolves should be loud) and
+ * where the cost is already paid by a directory skip-list. Every other caller uses
+ * `astSpecs` below.
+ */
 function pathSpecs(source) {
   const specs = [];
   for (const m of source.matchAll(SPEC_RE)) {
@@ -46,7 +55,54 @@ function pathSpecs(source) {
   return specs;
 }
 
+// Audit 2026-09-05 P2-10. The graph below is this repo's CYCLE guard, and it was built
+// from `pathSpecs` — so a commented-out `import('../x.mjs')` counted as a real edge, and
+// a surplus edge in a cycle detector is a cycle nobody wrote. The ruler had the same
+// defect (P2-9, fixed in `scripts/audit-metrics.mjs` the round before); this file proved
+// it by going red when that fix's self-check probe put a specifier in a string literal.
+//
+// Comments and string literals are not AST nodes, so the parser cannot make that mistake.
+// A file acorn rejects falls back to the text scan rather than contributing no edges —
+// an edge-less module cannot participate in a cycle, so a parse error would read as a
+// clean graph. `unparsed` is asserted empty so such a file is visible rather than silent.
+const unparsed = [];
+
+function astSpecs(source, file) {
+  let ast;
+  try {
+    ast = acorn.parse(source, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+  } catch {
+    unparsed.push(relative(ROOT, file));
+    return pathSpecs(source);
+  }
+  const specs = [];
+  const walk = (node) => {
+    if (!node || typeof node.type !== 'string') return;
+    const src = node.source;
+    const isStatic =
+      node.type === 'ImportDeclaration' ||
+      node.type === 'ExportNamedDeclaration' ||
+      node.type === 'ExportAllDeclaration';
+    if ((isStatic || node.type === 'ImportExpression') && src?.type === 'Literal') {
+      const spec = src.value;
+      if (typeof spec === 'string' && (spec.startsWith('.') || spec.startsWith('/'))) {
+        specs.push({ spec, lazy: node.type === 'ImportExpression' });
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'parent') continue;
+      const v = node[key];
+      if (Array.isArray(v)) {
+        for (const c of v) if (c && typeof c.type === 'string') walk(c);
+      } else if (v && typeof v.type === 'string') walk(v);
+    }
+  };
+  walk(ast);
+  return specs;
+}
+
 const relativeSpecs = (source) => pathSpecs(source).filter((s) => s.spec.startsWith('.'));
+const relativeAstSpecs = (source, file) => astSpecs(source, file).filter((s) => s.spec.startsWith('.'));
 
 /** @param {boolean} includeLazy Follow `await import()` edges too. */
 function buildGraph(files, includeLazy) {
@@ -54,7 +110,7 @@ function buildGraph(files, includeLazy) {
   const graph = new Map();
   for (const file of files) {
     const deps = [];
-    for (const { spec, lazy } of relativeSpecs(readFileSync(file, 'utf8'))) {
+    for (const { spec, lazy } of relativeAstSpecs(readFileSync(file, 'utf8'), file)) {
       if (lazy && !includeLazy) continue;
       let target = resolve(dirname(file), spec);
       if (existsSync(target) && statSync(target).isDirectory()) target = join(target, 'index.mjs');
@@ -142,7 +198,7 @@ describe('module import graph', () => {
     // sibling modules must be reached relatively.
     const absolute = [];
     for (const file of files) {
-      for (const { spec } of pathSpecs(readFileSync(file, 'utf8'))) {
+      for (const { spec } of astSpecs(readFileSync(file, 'utf8'), file)) {
         if (spec.startsWith('/')) absolute.push(`${relative(ROOT, file)} -> ${spec}`);
       }
     }
@@ -166,6 +222,12 @@ describe('module import graph', () => {
       }
     }
     expect(broken, `unresolvable imports:\n  ${broken.join('\n  ')}`).toEqual([]);
+  });
+
+  it('every file parsed — none fell back to the text scan', () => {
+    // The fallback exists so a parse error cannot empty the graph; this is what makes it
+    // visible. `unparsed` is populated by the graph build in this describe's body.
+    expect([...new Set(unparsed)].sort(), 'files acorn could not parse').toEqual([]);
   });
 
   it('project-utils.mjs does not import from the utils.mjs barrel', () => {
