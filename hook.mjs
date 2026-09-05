@@ -2541,7 +2541,19 @@ async function handlePreCompactDispatch() {
 
 // ─── UserPromptSubmit Handler ────────────────────────────────────────────────
 
-async function handleUserPrompt() {
+// ─── UserPromptSubmit handler phases ────────────────────────────────────────
+//
+// Same split as the Stop handler above (audit 2026-09-05 P2-1): `handleUserPrompt` ran
+// 364 lines over four concerns — stdin, the prompt row, handoff injection and semantic
+// memory injection. Moved and named; no behaviour, no ordering, no error handling
+// changed. None of the four blocks contained a `return`, so none of them could exit the
+// handler early, and the caller's `finally { db.close() }` still covers all of them.
+
+/**
+ * Read, validate and sanitise the prompt from hook stdin.
+ * @returns {{promptText: string, hookData: object}|null} null when there is nothing to do.
+ */
+async function readUserPromptInput() {
   let raw;
   try {
     raw = await readStdin();
@@ -2576,6 +2588,354 @@ async function handleUserPrompt() {
   // user_prompts INSERT, FTS query, and continuation detection all see clean text.
   // eslint-disable-next-line no-control-regex -- intentional: NUL/C0 strip prevents SQLite C-string truncation
   const promptText = stripPrivate(rawPrompt).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  return { promptText, hookData };
+}
+
+/**
+ * Insert the prompt row and advance the per-session counter.
+ * @returns {{promptNumber: number, ccSessionId: string|null}} both are read by the
+ *   injection phases below — the counter drives the handoff window, and the CC id
+ *   scopes every row identity that must not merge concurrent same-project sessions.
+ */
+function recordUserPromptRow(db, { sessionId, project, promptText, hookData, now }) {
+  // Ensure session exists (INSERT OR IGNORE avoids race condition)
+  db.prepare(
+    `
+    INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+    VALUES (?, ?, ?, ?, ?, 'active')
+  `,
+  ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
+
+  // T4-P2-D: atomic increment+read via UPDATE ... RETURNING (SQLite 3.35+).
+  // Previously UPDATE + SELECT as two statements; parallel prompts could read a stale
+  // counter and emit duplicate prompt_number values. better-sqlite3 ships a modern SQLite.
+  const bumped = db
+    .prepare(
+      'UPDATE sdk_sessions SET prompt_counter = COALESCE(prompt_counter, 0) + 1 WHERE content_session_id = ? RETURNING prompt_counter',
+    )
+    .get(sessionId);
+  const promptNumber = bumped?.prompt_counter || 1;
+
+  // Claude Code's real session_id (CC UUID) from hook stdin. Persisted on the
+  // prompt row (cc_session_id) so buildAndSaveHandoff can scope working_on to ONE
+  // CC session — getSessionId() is project-scoped (no CC-UUID), so without this
+  // concurrent/within-TTL same-project sessions merge each other's prompts (D#26).
+  // Also scopes handoff-row injection below. Null (legacy) when stdin lacks session_id.
+  const ccSessionId =
+    typeof hookData.session_id === 'string' && hookData.session_id.length > 0 ? hookData.session_id : null;
+
+  db.prepare(
+    `
+    INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, cc_session_id, created_at, created_at_epoch)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    sessionId,
+    // Scrub BEFORE the 10k slice: a secret straddling char 10000 would otherwise
+    // be cut to a sub-6-char head that scrubSecrets's value-length floor no longer
+    // matches, persisting a partial secret into prompt_text (later re-emitted at
+    // server.mjs prompt_text + mem-cli recent). Scrubbing full text first is leak-free.
+    scrubSecrets(promptText).slice(0, 10000),
+    promptNumber,
+    ccSessionId,
+    now.toISOString(),
+    now.getTime(),
+  );
+
+  return { promptNumber, ccSessionId };
+}
+
+/** Cross-session handoff injection (first 3 prompts of this CC session). */
+function injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSessionId }) {
+  // Cross-session handoff injection (first 3 prompts window, before semantic memory).
+  // prompt_counter is project-scoped (shared across concurrent same-project CC sessions), so a
+  // parallel session would start past the window and never get its handoff injected. Count THIS
+  // cc_session's own prompts instead (the current one is already inserted above); legacy null cc
+  // id falls back to the shared counter.
+  const windowPos = ccSessionId
+    ? db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE cc_session_id = ?').get(ccSessionId)?.c ||
+      promptNumber
+    : promptNumber;
+  if (windowPos <= 3) {
+    try {
+      if (detectContinuationIntent(db, promptText, project, ccSessionId)) {
+        const picked = pickHandoffToInject(db, project, ccSessionId);
+        if (picked) {
+          const injection = renderHandoffInjection(db, project, ccSessionId);
+          if (injection) process.stdout.write(injection + '\n');
+          // Consume ONLY the row we just injected — leave other projects' exit
+          // handoffs intact so future sessions can still resume from them.
+          // Pre-v2.46 wiped every exit handoff for the project on any continuation
+          // intent, which made the DB effectively forgetful: 115 completed sessions
+          // produced 1 persisted handoff.
+          try {
+            db.prepare('DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?').run(
+              project,
+              picked.type,
+              picked.session_id,
+            );
+          } catch {}
+        }
+      }
+    } catch (e) {
+      debugCatch(e, 'handleUserPrompt-handoff');
+    }
+  }
+}
+
+/**
+ * Semantic memory injection: search past observations for the user's prompt.
+ *
+ * Takes `ccSessionId` and NOT the mem-internal `sessionId`: every marker and row this
+ * phase writes is scoped to the Claude Code session, because the internal id is
+ * project-scoped and would merge concurrent same-project sessions (D#26). The split
+ * made that visible — the internal id was in scope here and simply never used.
+ */
+async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
+  // Semantic memory injection: search past observations for the user's prompt.
+  // P0 short-circuit on user-explicit "ignore memory" / "不要用记忆" override
+  // (mirrors CC built-in memoryTypes.ts:215). Skip both Key Context lookup
+  // and the <memory-context> emission for this turn.
+  if (!detectMemOverride(promptText))
+    try {
+      // D#123 (review C-1): the exclude-set is the Key Context ids ACTUALLY
+      // rendered at SessionStart — read from the marker handleSessionStart wrote,
+      // not re-derived from a query. The old query-mirroring set excluded rows
+      // that were never shown (quiet/adopted projects render no Key Context at
+      // all), blanking the same-project <memory-context> leg outright. Missing
+      // or other-session marker → empty set: unknown injections must fail open
+      // (inject, maybe duplicate) rather than fail closed (suppress).
+      const keyContextIds = [];
+      try {
+        // `keyCtxRaw`, not `raw`: this function already binds `raw` to the stdin payload
+        // ~120 lines up, and a second `raw` holding a marker FILE's contents reads as that
+        // one (audit 2026-09-02 P2-17 — the one hit in the tree worth a rename).
+        const keyCtxRaw = readFileSync(
+          join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)),
+          'utf8',
+        );
+        const { ids, session } = JSON.parse(keyCtxRaw);
+        if (Array.isArray(ids) && !(session && ccSessionId && session !== ccSessionId)) {
+          keyContextIds.push(...ids);
+        }
+        // The marker's validity is session-lifetime but gcStalePreRecallCooldowns sweeps it
+        // by AGE. Stamping it on read makes that sweep mean "24h with no prompt in this
+        // session" instead of "24h since the render" — otherwise a session running past a
+        // day loses its own exclude-set and re-injects what Key Context is still showing.
+        touchKeyContextMarker({ runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId });
+      } catch {
+        /* no marker — nothing was injected, exclude nothing */
+      }
+      const pathAInjectedIds = [];
+
+      // Read IDs already injected by user-prompt-search.js to avoid duplicate injection
+      try {
+        // D#120: the marker file is session-keyed (no ccSessionId → legacy
+        // project-keyed name), so a concurrent session's write can no longer
+        // replace this session's payload between the UPS write and this read.
+        const injectedFile = join(RUNTIME_DIR, injectedIdsFileName(project, ccSessionId));
+        // The freshness + same-session gate is lib/injected-ids.mjs's (audit 2026-09-02
+        // P1-2); this was the third hand-typed copy of it. THE 10 s WINDOW STAYS HERE and
+        // is passed in: the two writers gate on DEDUP_STALE_MS (5 min) and this reader on
+        // 10 s ("same prompt cycle"), and that disagreement is a real open question
+        // (P1-2's second half — the 10 s window still accepts the PREVIOUS prompt's
+        // marker), not a copy-paste slip to be normalised away by the consolidation.
+        // Legacy payloads without `session` keep the old time-window-only behaviour.
+        const { ids, fresh } = readInjectedMarker(injectedFile, {
+          sessionId: ccSessionId,
+          maxAgeMs: 10000,
+        });
+        if (fresh) {
+          // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
+          //
+          // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
+          // `mergeCrossHookInjected` (pre-tool-recall.js) `.map(String)`s the whole union,
+          // so once PreToolUse has emitted one row in the window every id is a STRING.
+          // Both consumers below test `new Set(excludeIds).has(r.id)` against a NUMBER out
+          // of SQLite, so from that moment the exclude suppresses nothing.
+          //
+          // Coercing with Number() here would make it work — and that is a real behaviour
+          // change, not a type repair, which is why it is not done as a drive-by.
+          //
+          // GET THE SIDE RIGHT. The marker is WRITTEN by `user-prompt-search.js` (the
+          // `fyi` face) and `pre-tool-recall.js` (`pretool`); it is READ here, in
+          // handleUserPrompt, which is the `ups` face. So the gated population is
+          // `ups ∩ (fyi ∪ pretool)`. A first version of this note measured the mirror
+          // image — `fyi ∩ (pretool ∪ ups)` — and published 18.0%, the number for a
+          // mechanism that is not this one. The pre-tag review caught it.
+          //
+          // Measured 2026-09-02T12:12Z over 99 transcripts, one walk, as an UPPER bound
+          // (session-level, ignoring the marker's stale window): a working exclude would
+          // drop at most 23 of 256 `ups` (session, id) pairs — 9.0% — across 14 of 71
+          // sessions, and 3 of 24 on task_imperative (12.5%). By attachments rather than
+          // pairs it is 29 of 332 (8.7%).
+          //
+          // Still not repaired at 9.0%, and the corrected number strengthens the case
+          // rather than weakening it: this path ALREADY has a working suppressor.
+          // `shouldSkipByDedup` (prompt-search-utils.mjs) String-normalises both sides, so
+          // it functions, and it skips the whole injection at >=0.8 overlap. Turning this
+          // one on adds a second, finer-grained suppressor on a face that is already
+          // suppressed, with the direction unknown — the freed slot is sometimes refilled
+          // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
+          // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
+          //
+          // The ruler that settles it is now BUILT and sits at the bottom of this same
+          // function: `lib/patha-exclude-meter.mjs`, off unless CLAUDE_MEM_METRICS=1. It
+          // does not persist the marker for an offline replay — reconstructing per-prompt
+          // exclude sets that way needs a file that rotates after DEDUP_STALE_MS, and the
+          // replay would then run against a drifted database. Both arms run at this read
+          // instead. What is still missing is elapsed time, not a method. D#213.
+          // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
+          for (const id of ids) {
+            keyContextIds.push(id);
+            pathAInjectedIds.push(id);
+          }
+        }
+      } catch {
+        /* file may not exist — that's fine */
+      }
+
+      // Phase-2 task-imperative (EXPERIMENTAL, default OFF — CLAUDE_MEM_TASK_IMPERATIVE):
+      // the single highest-value lesson relevant to THIS prompt, delivered at the prompt
+      // position under an imperative template. Excluded from the <memory-context> list so it
+      // is never injected twice. Channel-isolation measure (efficacy arm U, 2026-06-29):
+      // task-prompt 6-8/8 vs PreToolUse hook 0/8.
+      //
+      // The default flip is ABANDONED (D#137, 2026-08-16). rankImperativeCandidates requires
+      // identifier overlap between the prompt and the lesson body/title, and over the last 400
+      // real prompts that gate opened 76 times = 19.0% (CJK prompts 57/352 = 16.2%, ASCII
+      // 19/48 = 39.6%). With 88% of prompts on this install in Chinese, the emitter fires
+      // roughly once every six prompts — the canary can never accumulate n, because the
+      // ceiling is the gate's DESIGN (precision-first symbol anchoring), not a defect.
+      // Reviving the flip needs a CJK-viable anchor proven in A/B without a precision loss;
+      // until then this stays experimental and off.
+      const taskImperativeOn =
+        process.env.CLAUDE_MEM_TASK_IMPERATIVE === 'on' || process.env.CLAUDE_MEM_TASK_IMPERATIVE === '1';
+      // ── D#214 arm B (counterfactual), computed BEFORE the delivered arm ─────────
+      // Ordering is the whole correctness argument, so it is stated where the order is:
+      // arm A's search legitimately bumps `injection_count` on every row it delivers,
+      // and that column feeds `noisePenaltyClause`. Running the counterfactual AFTER it
+      // — as the first version did — lets arm A push a row across the >=4 noise gate and
+      // then attributes the resulting difference to the repair. The pre-tag review
+      // reproduced that: a marker id for a row the query never matches, where the honest
+      // answer is `suppressed 0 / refilled 0`, reported `refilled: 1, setChanged: true`.
+      //
+      // So arm B runs first, on the same handle, with `counterfactual: true` — it writes
+      // nothing and emits no `inject` metric row, so arm A afterwards sees exactly the
+      // state arm B saw. Both arms, one state, and neither one perturbs the other.
+      //
+      // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
+      // repaired system would not have made into arm B's exclude, so on any prompt where
+      // the pick changed, the delta described a system that does not exist.
+      // Lazy on "the marker carried ids", NOT on the metrics env. Gating the import on
+      // `CLAUDE_MEM_METRICS === '1'` would read cheaper still, and would put a second copy
+      // of `pathAMeterEnabled`'s own predicate here — the twin shape this meter's tests
+      // exist to pin. `pathAMeterEnabled()` stays the only place that predicate lives; the
+      // module still stops loading on every OTHER event, which is what P1-8 is about.
+      let pathAMeterEnabled, coerceMarkerIds, recordPathAExclude;
+      if (pathAInjectedIds.length > 0) {
+        ({ pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } =
+          await import('./lib/patha-exclude-meter.mjs'));
+      }
+      const meterCoerced =
+        pathAMeterEnabled && pathAMeterEnabled() ? [...coerceMarkerIds(pathAInjectedIds)] : null;
+      let meterArmB = null;
+      if (meterCoerced) {
+        try {
+          const pickB = taskImperativeOn
+            ? selectImperativeLesson(db, promptText, project, [...pathAInjectedIds, ...meterCoerced])
+            : null;
+          const excludeB = pickB ? [...keyContextIds, pickB.id] : keyContextIds;
+          meterArmB = {
+            rows: searchRelevantMemories(db, promptText, project, [...excludeB, ...meterCoerced], {
+              counterfactual: true,
+            }),
+            pick: pickB ? pickB.id : null,
+          };
+        } catch (e) {
+          debugCatch(e, 'patha-exclude-meter-armB');
+          meterArmB = { error: String(e?.message || 'unknown') };
+        }
+      }
+
+      // Exclude only ids path-A (user-prompt-search.js) already injected — NOT the
+      // SessionStart Key Context set, which overlaps the high-value lesson pool and
+      // would suppress the pick. The chosen id is excluded from the <memory-context>
+      // block below instead.
+      const imperativePick = taskImperativeOn
+        ? selectImperativeLesson(db, promptText, project, pathAInjectedIds)
+        : null;
+      const contextExclude = imperativePick ? [...keyContextIds, imperativePick.id] : keyContextIds;
+
+      const memories = searchRelevantMemories(db, promptText, project, contextExclude);
+      if (memories.length > 0) {
+        const lines = ['<memory-context relevance="high">'];
+        for (const m of memories) lines.push(formatMemoryLine(m));
+        lines.push('</memory-context>');
+        process.stdout.write(lines.join('\n') + '\n');
+      }
+      // HIGH-1 (full audit 2026-07-16): surface FTS-matched events — the canonical
+      // store for promoted bugfix/decision/lesson memories that persistHaikuSummary
+      // upgrade-deletes out of observations. Without this leg they are unreachable at
+      // prompt time. Separate E#-tagged block so it doesn't perturb observation
+      // ranking and citation extractors (bare-`#` anchored) never read an event id as
+      // an obs id. Nested try so an events failure can't suppress the imperative pick.
+      try {
+        // upsFtsQuery, not the raw prompt (audit ALGO-1). lib/ups-query.mjs declares
+        // itself "the ONE query-cap definition for the UserPromptSubmit event", and both
+        // OTHER legs of this same event go through it — but this leg, wired in v3.48
+        // before that module existed, handed searchInjectableEvents the whole prompt and
+        // let it call the uncapped sanitizeFtsQuery. Measured here: a 250KB CJK prompt
+        // (path B's stdin cap is 256KB) costs 356ms uncapped against 5.5ms capped, all of
+        // it synchronous, before the model sees the turn.
+        const events = searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project });
+        if (events.length > 0) {
+          const elines = ['<memory-context relevance="events">'];
+          for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);
+          elines.push('</memory-context>');
+          process.stdout.write(elines.join('\n') + '\n');
+        }
+      } catch (e) {
+        debugCatch(e, 'handleUserPrompt-events');
+      }
+      if (imperativePick) {
+        // Guard the write on a non-empty return — formatTaskImperative yields '' for a
+        // lesson that strips to empty (e.g. "."), which would otherwise emit a bare line.
+        const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
+        if (imperativeLine) process.stdout.write(imperativeLine + '\n');
+      }
+
+      // D#214's ruler, second half: arm B was computed above, before anything was
+      // delivered; this only shapes the row and appends it. Kept after every
+      // `process.stdout.write` so the metric append is never in front of the injection,
+      // and so a throw here cannot corrupt what was already emitted.
+      //
+      // `meterCoerced` being non-null is the gate — it is null unless
+      // CLAUDE_MEM_METRICS=1 AND the marker carried ids, which is what keeps both the
+      // counterfactual search and the second lesson selection off a stock install.
+      try {
+        if (meterCoerced) {
+          recordPathAExclude(DB_DIR, {
+            markerIds: pathAInjectedIds,
+            emitted: memories,
+            after: meterArmB,
+            imperativeArm: taskImperativeOn ? 'on' : 'off',
+            imperativeBefore: imperativePick ? imperativePick.id : null,
+            imperativeAfter: meterArmB ? (meterArmB.pick ?? null) : null,
+          });
+        }
+      } catch (e) {
+        debugCatch(e, 'patha-exclude-meter');
+      }
+    } catch (e) {
+      debugCatch(e, 'handleUserPrompt-memory');
+    }
+}
+
+async function handleUserPrompt() {
+  const input = await readUserPromptInput();
+  if (!input) return;
+  const { promptText, hookData } = input;
 
   const sessionId = getSessionId();
   const db = openDb();
@@ -2585,322 +2945,15 @@ async function handleUserPrompt() {
 
   try {
     const now = new Date();
-
-    // Ensure session exists (INSERT OR IGNORE avoids race condition)
-    db.prepare(
-      `
-      INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-      VALUES (?, ?, ?, ?, ?, 'active')
-    `,
-    ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
-
-    // T4-P2-D: atomic increment+read via UPDATE ... RETURNING (SQLite 3.35+).
-    // Previously UPDATE + SELECT as two statements; parallel prompts could read a stale
-    // counter and emit duplicate prompt_number values. better-sqlite3 ships a modern SQLite.
-    const bumped = db
-      .prepare(
-        'UPDATE sdk_sessions SET prompt_counter = COALESCE(prompt_counter, 0) + 1 WHERE content_session_id = ? RETURNING prompt_counter',
-      )
-      .get(sessionId);
-    const promptNumber = bumped?.prompt_counter || 1;
-
-    // Claude Code's real session_id (CC UUID) from hook stdin. Persisted on the
-    // prompt row (cc_session_id) so buildAndSaveHandoff can scope working_on to ONE
-    // CC session — getSessionId() is project-scoped (no CC-UUID), so without this
-    // concurrent/within-TTL same-project sessions merge each other's prompts (D#26).
-    // Also scopes handoff-row injection below. Null (legacy) when stdin lacks session_id.
-    const ccSessionId =
-      typeof hookData.session_id === 'string' && hookData.session_id.length > 0 ? hookData.session_id : null;
-
-    db.prepare(
-      `
-      INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, cc_session_id, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `,
-    ).run(
+    const { promptNumber, ccSessionId } = recordUserPromptRow(db, {
       sessionId,
-      // Scrub BEFORE the 10k slice: a secret straddling char 10000 would otherwise
-      // be cut to a sub-6-char head that scrubSecrets's value-length floor no longer
-      // matches, persisting a partial secret into prompt_text (later re-emitted at
-      // server.mjs prompt_text + mem-cli recent). Scrubbing full text first is leak-free.
-      scrubSecrets(promptText).slice(0, 10000),
-      promptNumber,
-      ccSessionId,
-      now.toISOString(),
-      now.getTime(),
-    );
-
-    // Cross-session handoff injection (first 3 prompts window, before semantic memory).
-    // prompt_counter is project-scoped (shared across concurrent same-project CC sessions), so a
-    // parallel session would start past the window and never get its handoff injected. Count THIS
-    // cc_session's own prompts instead (the current one is already inserted above); legacy null cc
-    // id falls back to the shared counter.
-    const windowPos = ccSessionId
-      ? db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE cc_session_id = ?').get(ccSessionId)?.c ||
-        promptNumber
-      : promptNumber;
-    if (windowPos <= 3) {
-      try {
-        if (detectContinuationIntent(db, promptText, project, ccSessionId)) {
-          const picked = pickHandoffToInject(db, project, ccSessionId);
-          if (picked) {
-            const injection = renderHandoffInjection(db, project, ccSessionId);
-            if (injection) process.stdout.write(injection + '\n');
-            // Consume ONLY the row we just injected — leave other projects' exit
-            // handoffs intact so future sessions can still resume from them.
-            // Pre-v2.46 wiped every exit handoff for the project on any continuation
-            // intent, which made the DB effectively forgetful: 115 completed sessions
-            // produced 1 persisted handoff.
-            try {
-              db.prepare(
-                'DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?',
-              ).run(project, picked.type, picked.session_id);
-            } catch {}
-          }
-        }
-      } catch (e) {
-        debugCatch(e, 'handleUserPrompt-handoff');
-      }
-    }
-
-    // Semantic memory injection: search past observations for the user's prompt.
-    // P0 short-circuit on user-explicit "ignore memory" / "不要用记忆" override
-    // (mirrors CC built-in memoryTypes.ts:215). Skip both Key Context lookup
-    // and the <memory-context> emission for this turn.
-    if (!detectMemOverride(promptText))
-      try {
-        // D#123 (review C-1): the exclude-set is the Key Context ids ACTUALLY
-        // rendered at SessionStart — read from the marker handleSessionStart wrote,
-        // not re-derived from a query. The old query-mirroring set excluded rows
-        // that were never shown (quiet/adopted projects render no Key Context at
-        // all), blanking the same-project <memory-context> leg outright. Missing
-        // or other-session marker → empty set: unknown injections must fail open
-        // (inject, maybe duplicate) rather than fail closed (suppress).
-        const keyContextIds = [];
-        try {
-          // `keyCtxRaw`, not `raw`: this function already binds `raw` to the stdin payload
-          // ~120 lines up, and a second `raw` holding a marker FILE's contents reads as that
-          // one (audit 2026-09-02 P2-17 — the one hit in the tree worth a rename).
-          const keyCtxRaw = readFileSync(
-            join(RUNTIME_DIR, keyContextIdsFileName(project, ccSessionId)),
-            'utf8',
-          );
-          const { ids, session } = JSON.parse(keyCtxRaw);
-          if (Array.isArray(ids) && !(session && ccSessionId && session !== ccSessionId)) {
-            keyContextIds.push(...ids);
-          }
-          // The marker's validity is session-lifetime but gcStalePreRecallCooldowns sweeps it
-          // by AGE. Stamping it on read makes that sweep mean "24h with no prompt in this
-          // session" instead of "24h since the render" — otherwise a session running past a
-          // day loses its own exclude-set and re-injects what Key Context is still showing.
-          touchKeyContextMarker({ runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId });
-        } catch {
-          /* no marker — nothing was injected, exclude nothing */
-        }
-        const pathAInjectedIds = [];
-
-        // Read IDs already injected by user-prompt-search.js to avoid duplicate injection
-        try {
-          // D#120: the marker file is session-keyed (no ccSessionId → legacy
-          // project-keyed name), so a concurrent session's write can no longer
-          // replace this session's payload between the UPS write and this read.
-          const injectedFile = join(RUNTIME_DIR, injectedIdsFileName(project, ccSessionId));
-          // The freshness + same-session gate is lib/injected-ids.mjs's (audit 2026-09-02
-          // P1-2); this was the third hand-typed copy of it. THE 10 s WINDOW STAYS HERE and
-          // is passed in: the two writers gate on DEDUP_STALE_MS (5 min) and this reader on
-          // 10 s ("same prompt cycle"), and that disagreement is a real open question
-          // (P1-2's second half — the 10 s window still accepts the PREVIOUS prompt's
-          // marker), not a copy-paste slip to be normalised away by the consolidation.
-          // Legacy payloads without `session` keep the old time-window-only behaviour.
-          const { ids, fresh } = readInjectedMarker(injectedFile, {
-            sessionId: ccSessionId,
-            maxAgeMs: 10000,
-          });
-          if (fresh) {
-            // D#193, DELIBERATELY NOT NUMERICALISED — read this before "fixing" it.
-            //
-            // Ids arrive here as written. `user-prompt-search.js` writes plain numbers, but
-            // `mergeCrossHookInjected` (pre-tool-recall.js) `.map(String)`s the whole union,
-            // so once PreToolUse has emitted one row in the window every id is a STRING.
-            // Both consumers below test `new Set(excludeIds).has(r.id)` against a NUMBER out
-            // of SQLite, so from that moment the exclude suppresses nothing.
-            //
-            // Coercing with Number() here would make it work — and that is a real behaviour
-            // change, not a type repair, which is why it is not done as a drive-by.
-            //
-            // GET THE SIDE RIGHT. The marker is WRITTEN by `user-prompt-search.js` (the
-            // `fyi` face) and `pre-tool-recall.js` (`pretool`); it is READ here, in
-            // handleUserPrompt, which is the `ups` face. So the gated population is
-            // `ups ∩ (fyi ∪ pretool)`. A first version of this note measured the mirror
-            // image — `fyi ∩ (pretool ∪ ups)` — and published 18.0%, the number for a
-            // mechanism that is not this one. The pre-tag review caught it.
-            //
-            // Measured 2026-09-02T12:12Z over 99 transcripts, one walk, as an UPPER bound
-            // (session-level, ignoring the marker's stale window): a working exclude would
-            // drop at most 23 of 256 `ups` (session, id) pairs — 9.0% — across 14 of 71
-            // sessions, and 3 of 24 on task_imperative (12.5%). By attachments rather than
-            // pairs it is 29 of 332 (8.7%).
-            //
-            // Still not repaired at 9.0%, and the corrected number strengthens the case
-            // rather than weakening it: this path ALREADY has a working suppressor.
-            // `shouldSkipByDedup` (prompt-search-utils.mjs) String-normalises both sides, so
-            // it functions, and it skips the whole injection at >=0.8 overlap. Turning this
-            // one on adds a second, finer-grained suppressor on a face that is already
-            // suppressed, with the direction unknown — the freed slot is sometimes refilled
-            // from the pool and sometimes just lost (`rerank-pool-replay`: 6587 of 11289
-            // prompts already inject nothing) and the `ups` cite-rate is 8.1%.
-            //
-            // The ruler that settles it is now BUILT and sits at the bottom of this same
-            // function: `lib/patha-exclude-meter.mjs`, off unless CLAUDE_MEM_METRICS=1. It
-            // does not persist the marker for an offline replay — reconstructing per-prompt
-            // exclude sets that way needs a file that rotates after DEDUP_STALE_MS, and the
-            // replay would then run against a drifted database. Both arms run at this read
-            // instead. What is still missing is elapsed time, not a method. D#213.
-            // tests/pathA-exclude-inert.test.mjs pins this state so a silent flip goes red.
-            for (const id of ids) {
-              keyContextIds.push(id);
-              pathAInjectedIds.push(id);
-            }
-          }
-        } catch {
-          /* file may not exist — that's fine */
-        }
-
-        // Phase-2 task-imperative (EXPERIMENTAL, default OFF — CLAUDE_MEM_TASK_IMPERATIVE):
-        // the single highest-value lesson relevant to THIS prompt, delivered at the prompt
-        // position under an imperative template. Excluded from the <memory-context> list so it
-        // is never injected twice. Channel-isolation measure (efficacy arm U, 2026-06-29):
-        // task-prompt 6-8/8 vs PreToolUse hook 0/8.
-        //
-        // The default flip is ABANDONED (D#137, 2026-08-16). rankImperativeCandidates requires
-        // identifier overlap between the prompt and the lesson body/title, and over the last 400
-        // real prompts that gate opened 76 times = 19.0% (CJK prompts 57/352 = 16.2%, ASCII
-        // 19/48 = 39.6%). With 88% of prompts on this install in Chinese, the emitter fires
-        // roughly once every six prompts — the canary can never accumulate n, because the
-        // ceiling is the gate's DESIGN (precision-first symbol anchoring), not a defect.
-        // Reviving the flip needs a CJK-viable anchor proven in A/B without a precision loss;
-        // until then this stays experimental and off.
-        const taskImperativeOn =
-          process.env.CLAUDE_MEM_TASK_IMPERATIVE === 'on' || process.env.CLAUDE_MEM_TASK_IMPERATIVE === '1';
-        // ── D#214 arm B (counterfactual), computed BEFORE the delivered arm ─────────
-        // Ordering is the whole correctness argument, so it is stated where the order is:
-        // arm A's search legitimately bumps `injection_count` on every row it delivers,
-        // and that column feeds `noisePenaltyClause`. Running the counterfactual AFTER it
-        // — as the first version did — lets arm A push a row across the >=4 noise gate and
-        // then attributes the resulting difference to the repair. The pre-tag review
-        // reproduced that: a marker id for a row the query never matches, where the honest
-        // answer is `suppressed 0 / refilled 0`, reported `refilled: 1, setChanged: true`.
-        //
-        // So arm B runs first, on the same handle, with `counterfactual: true` — it writes
-        // nothing and emits no `inject` metric row, so arm A afterwards sees exactly the
-        // state arm B saw. Both arms, one state, and neither one perturbs the other.
-        //
-        // Arm B also carries its OWN imperative pick. Reusing arm A's put a pick the
-        // repaired system would not have made into arm B's exclude, so on any prompt where
-        // the pick changed, the delta described a system that does not exist.
-        // Lazy on "the marker carried ids", NOT on the metrics env. Gating the import on
-        // `CLAUDE_MEM_METRICS === '1'` would read cheaper still, and would put a second copy
-        // of `pathAMeterEnabled`'s own predicate here — the twin shape this meter's tests
-        // exist to pin. `pathAMeterEnabled()` stays the only place that predicate lives; the
-        // module still stops loading on every OTHER event, which is what P1-8 is about.
-        let pathAMeterEnabled, coerceMarkerIds, recordPathAExclude;
-        if (pathAInjectedIds.length > 0) {
-          ({ pathAMeterEnabled, coerceMarkerIds, recordPathAExclude } =
-            await import('./lib/patha-exclude-meter.mjs'));
-        }
-        const meterCoerced =
-          pathAMeterEnabled && pathAMeterEnabled() ? [...coerceMarkerIds(pathAInjectedIds)] : null;
-        let meterArmB = null;
-        if (meterCoerced) {
-          try {
-            const pickB = taskImperativeOn
-              ? selectImperativeLesson(db, promptText, project, [...pathAInjectedIds, ...meterCoerced])
-              : null;
-            const excludeB = pickB ? [...keyContextIds, pickB.id] : keyContextIds;
-            meterArmB = {
-              rows: searchRelevantMemories(db, promptText, project, [...excludeB, ...meterCoerced], {
-                counterfactual: true,
-              }),
-              pick: pickB ? pickB.id : null,
-            };
-          } catch (e) {
-            debugCatch(e, 'patha-exclude-meter-armB');
-            meterArmB = { error: String(e?.message || 'unknown') };
-          }
-        }
-
-        // Exclude only ids path-A (user-prompt-search.js) already injected — NOT the
-        // SessionStart Key Context set, which overlaps the high-value lesson pool and
-        // would suppress the pick. The chosen id is excluded from the <memory-context>
-        // block below instead.
-        const imperativePick = taskImperativeOn
-          ? selectImperativeLesson(db, promptText, project, pathAInjectedIds)
-          : null;
-        const contextExclude = imperativePick ? [...keyContextIds, imperativePick.id] : keyContextIds;
-
-        const memories = searchRelevantMemories(db, promptText, project, contextExclude);
-        if (memories.length > 0) {
-          const lines = ['<memory-context relevance="high">'];
-          for (const m of memories) lines.push(formatMemoryLine(m));
-          lines.push('</memory-context>');
-          process.stdout.write(lines.join('\n') + '\n');
-        }
-        // HIGH-1 (full audit 2026-07-16): surface FTS-matched events — the canonical
-        // store for promoted bugfix/decision/lesson memories that persistHaikuSummary
-        // upgrade-deletes out of observations. Without this leg they are unreachable at
-        // prompt time. Separate E#-tagged block so it doesn't perturb observation
-        // ranking and citation extractors (bare-`#` anchored) never read an event id as
-        // an obs id. Nested try so an events failure can't suppress the imperative pick.
-        try {
-          // upsFtsQuery, not the raw prompt (audit ALGO-1). lib/ups-query.mjs declares
-          // itself "the ONE query-cap definition for the UserPromptSubmit event", and both
-          // OTHER legs of this same event go through it — but this leg, wired in v3.48
-          // before that module existed, handed searchInjectableEvents the whole prompt and
-          // let it call the uncapped sanitizeFtsQuery. Measured here: a 250KB CJK prompt
-          // (path B's stdin cap is 256KB) costs 356ms uncapped against 5.5ms capped, all of
-          // it synchronous, before the model sees the turn.
-          const events = searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project });
-          if (events.length > 0) {
-            const elines = ['<memory-context relevance="events">'];
-            for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);
-            elines.push('</memory-context>');
-            process.stdout.write(elines.join('\n') + '\n');
-          }
-        } catch (e) {
-          debugCatch(e, 'handleUserPrompt-events');
-        }
-        if (imperativePick) {
-          // Guard the write on a non-empty return — formatTaskImperative yields '' for a
-          // lesson that strips to empty (e.g. "."), which would otherwise emit a bare line.
-          const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
-          if (imperativeLine) process.stdout.write(imperativeLine + '\n');
-        }
-
-        // D#214's ruler, second half: arm B was computed above, before anything was
-        // delivered; this only shapes the row and appends it. Kept after every
-        // `process.stdout.write` so the metric append is never in front of the injection,
-        // and so a throw here cannot corrupt what was already emitted.
-        //
-        // `meterCoerced` being non-null is the gate — it is null unless
-        // CLAUDE_MEM_METRICS=1 AND the marker carried ids, which is what keeps both the
-        // counterfactual search and the second lesson selection off a stock install.
-        try {
-          if (meterCoerced) {
-            recordPathAExclude(DB_DIR, {
-              markerIds: pathAInjectedIds,
-              emitted: memories,
-              after: meterArmB,
-              imperativeArm: taskImperativeOn ? 'on' : 'off',
-              imperativeBefore: imperativePick ? imperativePick.id : null,
-              imperativeAfter: meterArmB ? (meterArmB.pick ?? null) : null,
-            });
-          }
-        } catch (e) {
-          debugCatch(e, 'patha-exclude-meter');
-        }
-      } catch (e) {
-        debugCatch(e, 'handleUserPrompt-memory');
-      }
+      project,
+      promptText,
+      hookData,
+      now,
+    });
+    injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSessionId });
+    await injectSemanticMemory(db, { project, promptText, ccSessionId });
   } finally {
     db.close();
   }
