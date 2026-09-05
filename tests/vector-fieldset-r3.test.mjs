@@ -25,12 +25,21 @@ describe('vector-hit fetch column parity (F4)', () => {
     }
   });
 
-  it('both vector-hit SELECTs use the shared constant — no hardcoded observation column list', () => {
+  it('both vector-hit branches fetch through the one hoisted VEC_HIT_OBS_COLS statement', () => {
     // D#207: join(), not new URL('../X.mjs', …) — that form blinds knip to search-engine.mjs.
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'search-engine.mjs'), 'utf8');
-    // Both vector-hit fetches must read `SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`.
+    // A20260905-P2-2 hoisted the per-hit `db.prepare()` out of both loops, so the SQL is
+    // now written ONCE above the branch split and both arms call the same statement —
+    // strictly stronger against the drift this guard exists for than two twin SELECTs.
     const shared = (src.match(/SELECT \$\{VEC_HIT_OBS_COLS\} FROM observations WHERE id = \?/g) || []).length;
-    expect(shared, 'both vector-hit branches must fetch via VEC_HIT_OBS_COLS').toBe(2);
+    expect(shared, 'exactly one shared vector-hit SELECT, built from VEC_HIT_OBS_COLS').toBe(1);
+    // …and each branch must actually go through it, rather than re-fetching its own way.
+    const viaShared = (src.match(/vecHitObs\.get\(/g) || []).length;
+    expect(viaShared, 'both vector-hit branches read via the hoisted statement').toBe(2);
+    // It must stay hoisted: `prepare` inside either `for (const vr of vecResults)` loop
+    // recompiles the SQL per hit, up to VECTOR_SCAN_LIMIT times per search.
+    const preparedPerHit = /for \(const vr of vecResults\) \{[\s\S]*?db\.prepare\(/.test(src);
+    expect(preparedPerHit, 'no db.prepare() inside a vector-hit loop').toBe(false);
     // And no vector-hit fetch may keep a literal `SELECT id, type, title … FROM observations WHERE id = ?`.
     const literal = (src.match(/SELECT id, type, title[^`']*FROM observations WHERE id = \?/g) || []).length;
     expect(literal, 'no hardcoded per-branch column list may remain').toBe(0);

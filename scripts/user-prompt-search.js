@@ -408,6 +408,23 @@ function searchByFile(db, files, project, limit) {
   const cutoff = Date.now() - LOOKBACK_MS;
   const results = [];
 
+  // Loop-invariant: every clause helper below renders SQL TEXT from a table alias, and
+  // the per-file part is `fileMatchParams(file)` — bound values, not SQL. Prepared once
+  // (better-sqlite3 recompiles on every `prepare`), on the UserPromptSubmit hot path.
+  const byFile = db.prepare(`
+    SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
+    FROM observations o
+    JOIN observation_files of2 ON of2.obs_id = o.id
+    WHERE o.project = ?
+      AND o.importance >= 1
+      AND ${liveObsFilterSql('o')}
+      AND o.created_at_epoch > ?
+      AND ${fileMatchClause('of2')}
+      AND ${notLowSignalTitleClause('o')}
+    ORDER BY o.created_at_epoch DESC
+    LIMIT ?
+  `);
+
   for (const file of files.slice(0, 3)) {
     // Shared predicate (pre-tag review of v3.76.2, SF-1/S2). This leg used
     // `file.split('/').pop()` — weaker than node:path `basename`, since it misses '\'
@@ -417,20 +434,8 @@ function searchByFile(db, files, project, limit) {
     const basename = basenameAnySep(file);
     if (!basename || basename.length < 2) continue;
 
-    // R1: exclude LOW_SIGNAL degraded titles from file-level recall.
-    const rows = db.prepare(`
-      SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
-      FROM observations o
-      JOIN observation_files of2 ON of2.obs_id = o.id
-      WHERE o.project = ?
-        AND o.importance >= 1
-        AND ${liveObsFilterSql('o')}
-        AND o.created_at_epoch > ?
-        AND ${fileMatchClause('of2')}
-        AND ${notLowSignalTitleClause('o')}
-      ORDER BY o.created_at_epoch DESC
-      LIMIT ?
-    `).all(project, cutoff, ...fileMatchParams(file), limit);
+    // R1: exclude LOW_SIGNAL degraded titles from file-level recall (in `byFile` above).
+    const rows = byFile.all(project, cutoff, ...fileMatchParams(file), limit);
 
     results.push(...rows);
   }

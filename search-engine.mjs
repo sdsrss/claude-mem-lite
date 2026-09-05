@@ -493,6 +493,12 @@ export function searchObservationsHybrid(db, ctx) {
     });
     if (vecResults.length === 0) return results;
 
+    // Prepared ONCE for both arms below. better-sqlite3 does not cache statements, so
+    // the `db.prepare()` this replaces recompiled the same SQL per vector hit — up to
+    // VECTOR_SCAN_LIMIT (500, tfidf.mjs) compilations per hybrid search, on the
+    // retrieval path. The two arms are mutually exclusive, so one statement serves both.
+    const vecHitObs = db.prepare(`SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`);
+
     if (results.length > 0) {
       // RRF fuses by RANK (array index), so the BM25 side must already be in
       // composite-score order. `results` here is [full-FTS sorted, …concept ×0.7,
@@ -507,7 +513,7 @@ export function searchObservationsHybrid(db, ctx) {
       const resultMap = new Map(results.map(r => [r.id, r]));
       for (const vr of vecResults) {
         if (!resultMap.has(vr.id)) {
-          const obs = db.prepare(`SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`).get(vr.id);
+          const obs = vecHitObs.get(vr.id);
           if (!obs) continue;
           if (epochFrom !== null && obs.created_at_epoch < epochFrom) continue;
           if (epochTo !== null && obs.created_at_epoch > epochTo) continue;
@@ -527,7 +533,7 @@ export function searchObservationsHybrid(db, ctx) {
     } else {
       // FTS5 found nothing but vector found results
       for (const vr of vecResults) {
-        const obs = db.prepare(`SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`).get(vr.id);
+        const obs = vecHitObs.get(vr.id);
         if (!obs) continue;
         if (epochFrom !== null && obs.created_at_epoch < epochFrom) continue;
         if (epochTo !== null && obs.created_at_epoch > epochTo) continue;
