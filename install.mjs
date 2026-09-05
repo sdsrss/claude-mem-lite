@@ -44,7 +44,7 @@ import { MARKETPLACE_KEY, PLUGIN_KEY, isPluginExplicitlyDisabled } from './lib/p
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import { RESOURCE_METADATA } from './install-metadata.mjs';
-import { scanPluginCacheHookPollution } from './plugin-cache-guard.mjs';
+import { scanPluginCacheHookPollution, hasInstallManagedHooks, pluginCacheHookEvents } from './plugin-cache-guard.mjs';
 import { SOURCE_FILES, HOOK_SCRIPT_FILES } from './source-files.mjs';
 import { probeBetterSqlite3Binding, ensureBetterSqlite3Working, NATIVE_BINDING_REBUILD_CMD } from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
@@ -317,6 +317,40 @@ export function bumpJsonField(filePath, keyPath, newVal) {
   parent[lastKey] = newVal;
   writeFileSync(filePath, JSON.stringify(json, null, 2) + '\n');
   return { changed: true, prev };
+}
+
+// CLAUDE.md's `- **Version**: x.y.z` line, patched to a new version.
+//
+// Replaces the version TOKEN, not the whole line. The line carries a trailing
+// annotation ("— **this exact string is a release guard.**") and the previous
+// whole-line form deleted it on the first release after that annotation was
+// written. Every gate stayed green through the deletion — publish.yml greps the
+// `^- **Version**: <semver>` prefix and install-e2e asserts the same substring,
+// so neither can see a truncated tail. Pure + exported for the same reason
+// bumpJsonField is: syncVersions gets one testable point of truth per file shape.
+//
+// @returns patched text, or null when the line is absent (caller warns + skips).
+export function patchClaudeMdVersion(text, version) {
+  const versionLine = /^(- \*\*Version\*\*: )\d+\.\d+\.\d+(.*)$/m;
+  if (!versionLine.test(text)) return null;
+  return text.replace(versionLine, (_m, head, tail) => `${head}${version}${tail}`);
+}
+
+// Repair instruction for an unregistered hook manifest.
+//
+// The obvious advice — copy the marketplace clone over the cache copy — is a SILENT
+// NO-OP in one real sequence (pre-ship review, finding 3): `install` empties the
+// marketplace manifest too, so after `install` + `cleanup-hooks` BOTH files are
+// `{"hooks":{}}` and the cp exits 0 having changed nothing, leaving the user staring
+// at the same red line. Claude Code also seeds a NEW cache version from that same
+// emptied clone. So check the source before prescribing it, and fall back to a
+// reinstall — which re-clones the manifest from the repo — when it is empty too.
+export function hookManifestRepairHint(cacheRoot, marketplaceRoot) {
+  const src = join(marketplaceRoot, 'hooks', 'hooks.json');
+  const dst = join(cacheRoot, 'hooks', 'hooks.json');
+  return pluginCacheHookEvents(marketplaceRoot).ok
+    ? `cp "${src}" "${dst}" && restart Claude Code`
+    : `no usable marketplace copy to restore from — reinstall the plugin (/plugin uninstall then /plugin install), then restart Claude Code`;
 }
 
 // Doctor's final summary line. Pure function so the 4-way contract
@@ -597,7 +631,7 @@ if (pluginHandlesMcp) {
 }
 }
 
-function dedupePluginCacheAndHooks() {
+function dedupePluginCacheAndHooks({ managedHooks } = {}) {
 // 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
 // clear them to prevent double execution. install.mjs hooks (in settings.json)
 // point to ~/.claude-mem-lite/ (latest code in dev mode via symlinks),
@@ -609,6 +643,32 @@ function dedupePluginCacheAndHooks() {
 const pluginDir = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
 const pluginHooksPath = join(pluginDir, 'hooks', 'hooks.json');
 
+// Clearing is a DEDUP, and a dedup with only one registration left is a delete.
+// Both clearers below empty a file Claude Code reads hooks from; that is correct
+// only while settings.json ALSO registers them. On a plugin-only install (no
+// install.mjs-managed entries) the cache manifest is the sole registration, so
+// clearing it silently unregisters all seven events — and status/doctor then read
+// "settings.json holds none" as the healthy plugin shape. plugin-cache-guard.mjs
+// has documented this precondition since it was written and hook.mjs's self-heal
+// honours it; these two sites did not.
+//
+// `managedHooks` comes from the caller rather than a bare hasInstallManagedHooks()
+// call, and that is the whole point: install() runs configureHooks() first, so a
+// self-read here is ALWAYS true and the guard would be decorative — the real
+// protection would be the call ORDER, which nothing pins and a future reorder
+// would silently revert (pre-ship review, finding 1). Passing the value makes the
+// dependency data, not sequence. Explicit `false` is honoured; omitted → self-read,
+// for any caller that has not just written settings.json.
+const settingsOwnsHooks = managedHooks ?? hasInstallManagedHooks();
+
+// Scope note (pre-ship review, finding 2): the gate covers the two hook-CLEARING
+// blocks only. The launch.mjs / launch-preflight.mjs sync below it is not dedup —
+// it is issue #15's dev-mode MCP routing fix — and an early return out of the whole
+// function would silently stop shipping it to plugin-cache users.
+if (!settingsOwnsHooks) {
+  log('Plugin cache: hooks left in place (plugin-only install — the cache manifest is the only registration)');
+}
+
 if (existsSync(pluginDir)) {
   // NOTE: Do NOT clear marketplace .mcp.json — Claude Code copies from
   // marketplace clone → plugin cache on updates. Clearing it causes the
@@ -617,7 +677,7 @@ if (existsSync(pluginDir)) {
 
   // Clear plugin hooks to prevent double hook execution
   try {
-    if (existsSync(pluginHooksPath)) {
+    if (settingsOwnsHooks && existsSync(pluginHooksPath)) {
       const pluginHooks = JSON.parse(readFileSync(pluginHooksPath, 'utf8'));
       if (pluginHooks.hooks && Object.keys(pluginHooks.hooks).length > 0) {
         // Atomic (audit 2026-09-02 P1-10): a torn hooks.json is not a fail-open marker —
@@ -659,7 +719,7 @@ if (existsSync(pluginDir)) {
 
         // Clear cached hooks.json (runtime reads here, not marketplace source)
         const cachedHooksPath = join(verDir, 'hooks', 'hooks.json');
-        if (existsSync(cachedHooksPath)) {
+        if (settingsOwnsHooks && existsSync(cachedHooksPath)) {
           try {
             const h = JSON.parse(readFileSync(cachedHooksPath, 'utf8'));
             if (h.hooks && Object.keys(h.hooks).length > 0) {
@@ -862,6 +922,11 @@ writeSettings(settings);
 // kept saying five after the map changed, which is how a missing registration reads as
 // a successful one.
 ok(`Hooks configured (${Object.keys(hookConfigs).join(', ')})`);
+// Returned so dedupePluginCacheAndHooks gates on a VALUE this function produced
+// rather than re-reading settings.json — see the `managedHooks` note there. This
+// function writes all seven events unconditionally, so the answer is always true;
+// returning it keeps that fact in the caller's dataflow instead of in call order.
+return true;
 }
 
 function backupLegacyClaudeMemData() {
@@ -1231,8 +1296,14 @@ async function install() {
   await installDependencies(IS_DEV);
   createCliSymlink();
   registerMcpServer();
-  dedupePluginCacheAndHooks();
-  configureHooks();
+  // configureHooks BEFORE dedupe, and its result feeds the dedup gate: dedupe now
+  // refuses to clear a hooks manifest unless install.mjs-managed hooks exist in
+  // settings.json, and on a first install those entries do not exist until
+  // configureHooks writes them. Passing the value (rather than letting dedupe
+  // re-read settings.json) is what keeps a future reorder from silently turning the
+  // dedup off — the dependency is data, not sequence.
+  const managedHooks = configureHooks();
+  dedupePluginCacheAndHooks({ managedHooks });
   backupLegacyClaudeMemData();
   await installPreinstalledResources();
   verifyDatabase();
@@ -1452,7 +1523,15 @@ async function status() {
   } else if (pluginDisabled) {
     push('ok', 'hooks', 'Hooks: not configured', { configured: false });
   } else if (pluginProvides) {
-    push('ok', 'hooks', `Hooks: provided by the plugin manifest (v${shape.activePluginVersion.version} hooks/hooks.json) — settings.json correctly holds none`, { configured: false, via: 'plugin' });
+    // Open the manifest being credited. Trusting `settings.json holds none` alone
+    // reported all-green over an emptied cache manifest — zero hooks registered.
+    const manifest = pluginCacheHookEvents(shape.activePluginVersion.root);
+    if (manifest.ok) {
+      push('ok', 'hooks', `Hooks: provided by the plugin manifest (v${shape.activePluginVersion.version} hooks/hooks.json, ${manifest.events.length} events) — settings.json correctly holds none`, { configured: false, via: 'plugin', events: manifest.events });
+    } else {
+      const repair = hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY));
+      push('fail', 'hooks', `Hooks: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered. Repair: ${repair}`, { configured: false, via: 'plugin', events: [], manifest_reason: manifest.reason });
+    }
   } else {
     push('fail', 'hooks', 'Hooks: not configured', { configured: false });
   }
@@ -1688,8 +1767,17 @@ async function doctor() {
   } else if (shape.activePluginVersion) {
     // Plugin-only: hooks come from the cache's hooks/hooks.json, and an EMPTY
     // settings.json hooks block is the correct state — warning about it told a
-    // correctly-installed user their hooks were missing.
-    ok(`Plugin lifecycle: hooks served by the plugin manifest (v${shape.activePluginVersion.version}); settings.json correctly holds none`);
+    // correctly-installed user their hooks were missing. But "correct state" is
+    // only half the question: read the manifest too, or an emptied one passes as
+    // the healthy shape (same false green as status).
+    const manifest = pluginCacheHookEvents(shape.activePluginVersion.root);
+    if (manifest.ok) {
+      ok(`Plugin lifecycle: hooks served by the plugin manifest (v${shape.activePluginVersion.version}, ${manifest.events.length} events); settings.json correctly holds none`);
+    } else {
+      fail(`Plugin lifecycle: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered`);
+      log(`    Repair: ${hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY))}`);
+      issues++;
+    }
   } else {
     dwarn('Plugin lifecycle: hooks not configured');
   }
@@ -2452,9 +2540,8 @@ function syncVersions() {
   const claudeMdPath = join(PROJECT_DIR, 'CLAUDE.md');
   if (existsSync(claudeMdPath)) {
     const orig = readFileSync(claudeMdPath, 'utf8');
-    const versionLine = /^- \*\*Version\*\*: .+$/m;
-    if (versionLine.test(orig)) {
-      const patched = orig.replace(versionLine, `- **Version**: ${version}`);
+    const patched = patchClaudeMdVersion(orig, version);
+    if (patched !== null) {
       if (patched !== orig) {
         writeFileSync(claudeMdPath, patched);
         ok(`CLAUDE.md: → ${version}`);

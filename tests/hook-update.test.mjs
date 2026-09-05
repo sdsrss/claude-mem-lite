@@ -546,6 +546,19 @@ describe('rate-limit handling + malformed-response robustness', () => {
 });
 
 describe('cache hook residue clearing', () => {
+  // The clearer is a DEDUP against install.mjs-managed settings.json hooks, so every
+  // case that expects clearing must set up that second registration. Before the
+  // guard existed these fixtures had no settings.json at all and still cleared —
+  // which is exactly the plugin-only shape the third test now pins as a refusal.
+  function writeManagedHooks(home) {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: {
+        SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs')}" hook.mjs session-start` }] }],
+      },
+    }));
+  }
+
   it('clears populated hooks.json in every remaining cache version', async () => {
     const home = makeDir('mem-cache-residue');
     const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
@@ -558,6 +571,7 @@ describe('cache hook residue clearing', () => {
     // A third version with already-empty hooks.json should be untouched.
     mkdirSync(join(cacheBase, '2.30.0', 'hooks'), { recursive: true });
     writeFileSync(join(cacheBase, '2.30.0', 'hooks', 'hooks.json'), JSON.stringify({ description: 'empty', hooks: {} }));
+    writeManagedHooks(home);
 
     const origHome = process.env.HOME;
     process.env.HOME = home;
@@ -579,11 +593,46 @@ describe('cache hook residue clearing', () => {
 
   it('returns 0 when cache base does not exist', async () => {
     const home = makeDir('mem-cache-residue-empty');
+    writeManagedHooks(home);
     const origHome = process.env.HOME;
     process.env.HOME = home;
     try {
       const { clearCacheHookResidue } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
       expect(clearCacheHookResidue()).toBe(0);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  // The defect this guard closes: on a plugin-only install the cache manifest is the
+  // ONLY hook registration, so clearing it unregisters all seven events, and because
+  // settings.json legitimately holds none afterwards, status and doctor both read the
+  // wreckage as the healthy plugin shape. Observed live at v3.95.0: an emptied
+  // 3.95.0/hooks/hooks.json, `status` printing "provided by the plugin manifest", and
+  // a full session with zero hook fires.
+  it('refuses to clear when settings.json holds no install-managed hooks (plugin-only install)', async () => {
+    const home = makeDir('mem-cache-residue-pluginonly');
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+    const manifest = join(cacheBase, '3.95.0', 'hooks', 'hooks.json');
+    mkdirSync(join(cacheBase, '3.95.0', 'hooks'), { recursive: true });
+    const original = JSON.stringify({
+      description: 'claude-mem-lite hooks',
+      hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+    });
+    writeFileSync(manifest, original);
+    // Control: a settings.json that exists but registers only ANOTHER plugin's hooks
+    // must not count as install.mjs-managed ownership of ours.
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'node /somewhere/other-plugin/hook.js' }] }] },
+    }));
+
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { clearCacheHookResidue } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+      expect(clearCacheHookResidue()).toBe(0);
+      expect(readFileSync(manifest, 'utf8')).toBe(original);
     } finally {
       process.env.HOME = origHome;
     }

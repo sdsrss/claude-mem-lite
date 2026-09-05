@@ -1053,7 +1053,28 @@ function copyReleaseIntoStaging(sourceDir, stagingDir, manifest = { SOURCE_FILES
 // ── Cache hook residue clearing ────────────────────────────
 // Inline (does not import plugin-cache-guard.mjs) so hook-update.mjs keeps working
 // even if plugin-cache-guard.mjs is missing on disk in degraded installs.
+
+// Mirror of plugin-cache-guard.hasInstallManagedHooks, inlined for the reason above.
+// Kept string-identical in its match rule (`.claude-mem-lite/` or `/claude-mem-lite/`
+// appearing in a serialized hooks block) so the two cannot disagree about whether
+// settings.json owns the hooks.
+function hasInstallManagedSettingsHooks() {
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) return false;
+  try {
+    const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const serialized = JSON.stringify(s.hooks || {});
+    return serialized.includes('.claude-mem-lite/') || serialized.includes('/claude-mem-lite/');
+  } catch { return false; }
+}
 export function clearCacheHookResidue() {
+  // Same precondition plugin-cache-guard.mjs documents and hook.mjs's self-heal
+  // honours: this is a DEDUP against install.mjs-managed settings.json entries.
+  // With no such entries the cache manifest is the ONLY hook registration, and
+  // "clearing residue" unregisters all seven events — invisibly, because
+  // status/doctor then see the shape of a healthy plugin-only install. Inlined
+  // here for the same reason the rest of this function is (see header).
+  if (!hasInstallManagedSettingsHooks()) return 0;
   const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
   if (!existsSync(cacheBase)) return 0;
   let cleared = 0;

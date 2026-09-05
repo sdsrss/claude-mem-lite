@@ -64,6 +64,36 @@ export function clearPluginCacheHooks(opts) {
   return cleared.sort();
 }
 
+/**
+ * What a cache version's hooks/hooks.json ACTUALLY registers.
+ *
+ * The counterpart to hasInstallManagedHooks: on a plugin-only install this file
+ * is the sole hook registration, so an EMPTY one means every hook is dead. Both
+ * status and doctor used to credit "the plugin manifest serves the hooks" from
+ * `settings.json holds none` + `an active plugin version exists` alone, never
+ * opening the manifest — and an emptied manifest looks exactly like a healthy
+ * npm-shape install from those two facts. That false green is what let a cleared
+ * cache run for a full session reporting all-green with zero hooks firing.
+ *
+ * @param {string} root Cache version dir (shape.activePluginVersion.root)
+ * @returns {{ok: boolean, events: string[], reason: string|null}}
+ *          ok=false with reason 'no-manifest' | 'unreadable' | 'empty'
+ */
+export function pluginCacheHookEvents(root) {
+  const p = join(root, 'hooks', 'hooks.json');
+  if (!existsSync(p)) return { ok: false, events: [], reason: 'no-manifest' };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    return { ok: false, events: [], reason: 'unreadable' };
+  }
+  const events = Object.keys(parsed?.hooks || {});
+  return events.length > 0
+    ? { ok: true, events, reason: null }
+    : { ok: false, events: [], reason: 'empty' };
+}
+
 export function hasInstallManagedHooks(opts) {
   const home = opts?.home || homedir();
   const plugin = opts?.plugin || DEFAULT_PLUGIN;

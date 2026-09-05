@@ -2,6 +2,143 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.95.1 — the plugin cleared its own hook manifest, and every check we own called it healthy
+
+A plugin-only install could reach a state with **zero hooks registered** while `status` and
+`doctor` both printed green. Found by inspection on a live v3.95.0 install, not by a test,
+and the reason no test could have found it is the more useful half of this note.
+
+### The shape
+
+Claude Code registers a plugin's hooks from the version dir recorded in
+`installed_plugins.json` — `~/.claude/plugins/cache/<mp>/<plugin>/<ver>/hooks/hooks.json`,
+not the marketplace checkout. An npm-shape install does not use that file at all:
+`install.mjs` writes the seven events into `~/.claude/settings.json`, then CLEARS the cache
+manifest, because leaving both populated fires every hook twice.
+
+`plugin-cache-guard.mjs` has stated the precondition for that clearing in its header since
+it was written — *only clear while settings.json also registers the hooks* — and
+`hook.mjs`'s session-start self-heal checks it. Two other sites did not:
+`hook-update.clearCacheHookResidue()` and `install.mjs::dedupePluginCacheAndHooks()`. On a
+plugin-only install there is no second registration, so the dedup is a **delete**: all seven
+events unregister at once, at the next session boundary, with no error anywhere.
+
+### Why every check we own said green
+
+`status` and `doctor` inferred "the plugin manifest serves the hooks" from two facts —
+settings.json holds none, and an active plugin version exists — and **never opened the
+manifest they were crediting**. From those two facts alone an emptied manifest and a
+healthy npm-shape install are the same observation.
+
+The sandbox harness could not see it either. `tests/sandbox/phaseA-plugin.mjs` fires the
+hook scripts directly rather than through Claude Code's registration layer, so it reports
+44/44 against a cache whose manifest is empty — doctrine rule 9 (a verdict from a
+structurally blind ruler says nothing) applied to a green rather than a NEUTRAL.
+
+### What the live install showed
+
+Same machine, same v3.95.0 cache, two consecutive sessions — the manifest was emptied
+14:46:33, 19 seconds into the first one:
+
+| | session started 14:46:14 | session started ~15:57 |
+|---|---|---|
+| `system` transcript entries (incl. `stop_hook_summary`) | **28** | **0** |
+| hook artifacts in `~/.claude-mem-lite/runtime/` after a timestamp baseline | present | **0** across 1 Read + 8 Bash calls |
+| `status` verdict | ✓ green | ✓ green |
+
+The second column is what a user gets from the second session onward. The third row is the
+defect this release is actually about.
+
+### Fixes
+
+1. **`pluginCacheHookEvents()`** (`plugin-cache-guard.mjs`) reads what a cache version
+   actually registers. `status` and `doctor` now open the manifest: green names the event
+   count (`hooks.json, 7 events`), and `empty` / `no-manifest` / `unreadable` go red with a
+   `cp` repair line, doctor exiting 1. Mutation-verified — stubbing the reader to return
+   healthy over an empty manifest turns all three new checks red.
+2. **Both unguarded clearers now require `hasInstallManagedHooks()`**, the precondition the
+   guard module already documented. `hook-update.mjs` inlines its own copy rather than
+   importing, keeping the "works when plugin-cache-guard.mjs is missing" property its
+   header claims.
+3. **`install()` runs `configureHooks()` before `dedupePluginCacheAndHooks()`.** The new
+   gate reads the settings.json that `configureHooks` writes; in the old order it would
+   read an empty one on a first install and skip the dedup the npm shape genuinely needs.
+
+Repair for anyone already in this state, without waiting for the update to land:
+
+```bash
+cp ~/.claude/plugins/marketplaces/<mp>/hooks/hooks.json \
+   ~/.claude/plugins/cache/<mp>/claude-mem-lite/<ver>/hooks/hooks.json
+# then restart Claude Code — hook manifests load at session start
+```
+
+### Not established
+
+**Which process emptied that manifest is not attributed.** The `_note` identifies the
+writer as `hook-update.clearCacheHookResidue()`, but both paths that reach it should have
+been blocked on this shape: `checkForUpdate` computes `canInstall = !pluginMode && …`
+(false under `CLAUDE_PLUGIN_ROOT`), and `syncDataDirFromCache` returns
+`no-existing-code-install` when the data dir has no `package.json` — that dir's birth time
+is 14:44:48 and it has never held one. `update-state.json` carries only `lastCheck`, the
+shape the fetch-failed branch writes, which does not support a completed install either.
+The tests stub `HOME` correctly, so suite pollution is ruled out. Per doctrine rule 10 the
+premise gets corrected before it is quoted: the gate below closes the *class* regardless of
+which caller fired, and this paragraph is here so nobody later cites a culprit that was
+never measured.
+
+### fix: `release` no longer eats CLAUDE.md's trailing annotation
+
+`syncVersions` replaced the whole `- **Version**: x.y.z` line, so the first release after
+that line grew its `— **this exact string is a release guard.**` suffix deleted it. Nothing
+could catch that: `publish.yml` greps the line's semver prefix and `install-e2e` asserts the
+same substring, and both survive a truncated tail. Extracted as the pure, exported
+`patchClaudeMdVersion(text, version)` — same "one testable point of truth per file shape"
+move `bumpJsonField` already made for the three JSON manifests — which replaces the version
+token and leaves the rest of the line alone. Caught on this release, on its own output.
+
+### From the pre-ship review
+
+An independent review of the diff returned SHIP with three repairs, all applied before the
+tag:
+
+- **The printed repair could be a silent no-op.** `install` empties the *marketplace*
+  manifest as well as the cache one, so after `install` + `cleanup-hooks` both files are
+  `{"hooks":{}}` and the prescribed `cp` copies empty over empty, exits 0, and leaves the
+  same red line. `hookManifestRepairHint()` now checks the source first and prescribes a
+  plugin reinstall when there is nothing usable to restore from.
+- **The install-side gate was unreachable-false, leaving call ORDER as the only
+  protection.** `configureHooks()` writes all seven events unconditionally one line
+  earlier, so a self-read of settings.json there is always true. It now returns that fact
+  and `install()` passes it in — the dependency is data, not sequence, and a future reorder
+  cannot silently disable the dedup.
+- **The gate was scoped too widely.** An early return skipped the whole function, including
+  the `launch.mjs` / `launch-preflight.mjs` sync into every cache version dir — issue #15's
+  dev-mode MCP routing fix, which is not hook dedup. It now wraps the two clearing blocks
+  only.
+
+The review also caught this file's Baselines table still stamped to v3.95.0 while the tree
+had moved, which is doctrine rules 1 and 7 in one line; it is re-measured below.
+
+### Verification
+
+Measured on the release tree, last, after those repairs. `npx vitest run` **350 files /
+5800 tests** (5799 passed, 1 skipped) — +13 over v3.95.0's 5787, all new here. `npx eslint .`
+clean. `knip` **52 unused exports / 0 unused files**, unchanged from the v3.95.0 baseline
+and with none of the three new exports in the unused set (name-checked, not inferred from
+the count). Coverage: statements **84.37%** · branches **78.88%** · functions **89.22%** ·
+lines **87.72%** — identical to v3.95.0, because the new code lives in `install.mjs` and
+`plugin-cache-guard.mjs`, both outside the gate's file set. `npm audit --omit=dev` found 0
+vulnerabilities; `benchmark/ci-gate.mjs --strict` passed all four matrix deltas;
+`scripts/smoke-tarball.mjs` installed the packed 3.95.1 tarball, rebuilt the native addon
+and opened a DB.
+
+One measurement note, since this repo's own rule is that a ruler must not pollute what it
+measures: two suite runs during this release reported failures that were **not** the diff —
+`package.json` / `CLAUDE.md` were being rewritten mid-run by the release tooling and by a
+concurrent reviewer, and this repo has CLAUDE.md-mutation detectors that correctly noticed.
+Both re-ran green on a settled tree. The numbers above are from runs with nothing else
+touching the tree.
+
 ## v3.95.0 — a dependency release, and the one advisory the updater we installed structurally cannot reach
 
 No source change. Seven dependabot PRs merged plus one hand-written floor, and the reason

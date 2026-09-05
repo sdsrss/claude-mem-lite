@@ -7,7 +7,40 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { bumpJsonField, buildDoctorSummary } from '../install.mjs';
+import { bumpJsonField, buildDoctorSummary, patchClaudeMdVersion } from '../install.mjs';
+
+describe('patchClaudeMdVersion', () => {
+  // v3.95.1: the pre-fix form replaced the WHOLE line, so the first release after
+  // the "this exact string is a release guard" annotation was written silently
+  // deleted it. No gate could catch that — publish.yml greps the line's semver
+  // prefix and install-e2e asserts the same substring, and both survive a
+  // truncated tail. This test is the only thing that can.
+  const REAL_LINE = '- **Version**: 3.95.0 — **this exact string is a release guard.**';
+
+  it('preserves the trailing annotation while bumping the version', () => {
+    const md = `# CLAUDE.md\n\n${REAL_LINE}\n  next line untouched\n`;
+    const out = patchClaudeMdVersion(md, '3.95.1');
+    expect(out).toContain('- **Version**: 3.95.1 — **this exact string is a release guard.**');
+    expect(out).toContain('next line untouched');
+    expect(out).not.toContain('3.95.0');
+  });
+
+  it('handles a bare version line with no annotation', () => {
+    const out = patchClaudeMdVersion('- **Version**: 1.0.0\n', '2.0.0');
+    expect(out).toBe('- **Version**: 2.0.0\n');
+  });
+
+  it('returns null when the line is absent, so the caller can warn instead of writing', () => {
+    expect(patchClaudeMdVersion('# CLAUDE.md\n\nno version here\n', '2.0.0')).toBeNull();
+  });
+
+  it('touches only the first version line and leaves prose versions alone', () => {
+    const md = `${REAL_LINE}\n\nSee v3.95.0 in the changelog.\n`;
+    const out = patchClaudeMdVersion(md, '3.95.1');
+    expect(out).toContain('See v3.95.0 in the changelog.');
+    expect(out).toContain('- **Version**: 3.95.1 —');
+  });
+});
 
 describe('bumpJsonField', () => {
   let dir, file;

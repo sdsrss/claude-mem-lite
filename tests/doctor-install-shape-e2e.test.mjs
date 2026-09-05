@@ -205,6 +205,94 @@ describe('status: the plugin manifest doing its job is not two failures', () => 
   });
 });
 
+// The live v3.95.0 defect: something emptied the active cache version's
+// hooks/hooks.json, so Claude Code registered ZERO hooks from the next session on —
+// and both commands printed green, because "settings.json holds none" + "an active
+// plugin version exists" was the entire test. An emptied manifest is indistinguishable
+// from a healthy npm-shape install by those two facts alone, so both now open it.
+describe('an EMPTY plugin manifest is not the healthy plugin shape', () => {
+  function emptyTheManifest(version) {
+    writeFileSync(join(pluginCacheDir(version), 'hooks', 'hooks.json'), JSON.stringify({
+      description: 'claude-mem-lite hooks',
+      _note: 'Auto-cleared by hook-update.mjs post-install — prevents double hook registration',
+      hooks: {},
+    }));
+  }
+
+  it('status goes RED, names the state, and prints a repair', () => {
+    makePluginVersion('3.95.0');
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
+    enablePlugin();
+    // Control: populated manifest is green, so the red below is attributable to the
+    // emptying and not to the fixture's shape.
+    expect(run('status').stdout).toMatch(/✓ Hooks: provided by the plugin manifest/);
+
+    emptyTheManifest('3.95.0');
+    const r = run('status');
+    expect(r.stdout).toMatch(/✗ Hooks: plugin manifest v3\.95\.0 registers NO hooks \(empty\)/);
+    // Which repair it prescribes depends on the marketplace copy — both branches
+    // are pinned in "the repair line it prints" below. Here: it prints one.
+    expect(r.stdout).toMatch(/Repair: \S/);
+  });
+
+  it('doctor goes RED and exits 1', () => {
+    makePluginVersion('3.95.0');
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
+    enablePlugin();
+    expect(failLines(run('doctor').stdout), 'a healthy fixture was already red').toEqual([]);
+
+    emptyTheManifest('3.95.0');
+    const r = run('doctor');
+    expect(r.stdout).toMatch(/registers NO hooks \(empty\)/);
+    expect(r.code, `doctor exited ${r.code} over an unregistered hook chain\n${r.stdout}`).toBe(1);
+  });
+
+  it('a missing manifest is caught too, not just an emptied one', () => {
+    makePluginVersion('3.95.0');
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
+    enablePlugin();
+    expect(run('status').stdout, 'fixture was not green to begin with').toMatch(/✓ Hooks: provided by the plugin manifest/);
+
+    rmSync(join(pluginCacheDir('3.95.0'), 'hooks', 'hooks.json'));
+    expect(run('status').stdout).toMatch(/registers NO hooks \(no-manifest\)/);
+    const d = run('doctor');
+    expect(d.stdout).toMatch(/registers NO hooks \(no-manifest\)/);
+    expect(d.code).toBe(1);
+  });
+
+  // The prescribed repair must not be a silent no-op. `install` empties the
+  // MARKETPLACE manifest as well as the cache one, so after install +
+  // cleanup-hooks both are `{"hooks":{}}` and a cp between them changes nothing.
+  describe('the repair line it prints', () => {
+    function marketplaceHooks(body) {
+      const dir = join(home, '.claude', 'plugins', 'marketplaces', 'sdsrss', 'hooks');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'hooks.json'), JSON.stringify(body));
+    }
+
+    beforeEach(() => {
+      makePluginVersion('3.95.0');
+      emptyTheManifest('3.95.0');
+      mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
+      enablePlugin();
+    });
+
+    it('prescribes the cp when the marketplace copy still has the hooks', () => {
+      marketplaceHooks({ hooks: { SessionStart: [{ matcher: '*', hooks: [] }] } });
+      const out = run('status').stdout;
+      expect(out).toMatch(/Repair: cp /);
+      expect(out).not.toMatch(/reinstall the plugin/);
+    });
+
+    it('prescribes a reinstall instead when the marketplace copy is empty too', () => {
+      marketplaceHooks({ description: 'x', _note: 'cleared', hooks: {} });
+      const out = run('status').stdout;
+      expect(out).toMatch(/no usable marketplace copy to restore from — reinstall the plugin/);
+      expect(out).not.toMatch(/Repair: cp /);
+    });
+  });
+});
+
 describe('rebuild-binding: repairs every broken tree, and says so honestly', () => {
   // One spawn: this command shells out to npm, so it is the most expensive case in
   // the file. Generous timeout for a cold 2-core runner.

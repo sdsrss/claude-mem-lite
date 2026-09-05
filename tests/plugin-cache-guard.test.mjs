@@ -7,6 +7,7 @@ import {
   scanPluginCacheHookPollution,
   clearPluginCacheHooks,
   hasInstallManagedHooks,
+  pluginCacheHookEvents,
 } from '../plugin-cache-guard.mjs';
 
 function makeHome() {
@@ -23,6 +24,52 @@ function writeCacheHooks(home, version, hooksBody) {
 }
 
 describe('plugin-cache-guard', () => {
+  // Driven to failure in all three directions, because the whole point of this
+  // reader is to say NO: a check that cannot go red over an emptied manifest is
+  // the false green it was written to replace.
+  describe('pluginCacheHookEvents', () => {
+    it('reports the event names a populated manifest registers', () => {
+      const home = makeHome();
+      try {
+        writeCacheHooks(home, '3.95.0', {
+          hooks: {
+            SessionStart: [{ matcher: '*', hooks: [] }],
+            Stop: [{ matcher: '*', hooks: [] }],
+          },
+        });
+        const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '3.95.0');
+        expect(pluginCacheHookEvents(root)).toEqual({
+          ok: true, events: ['SessionStart', 'Stop'], reason: null,
+        });
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('says NO for a manifest cleared to {} — the shape that shipped as all-green', () => {
+      const home = makeHome();
+      try {
+        writeCacheHooks(home, '3.95.0', {
+          description: 'claude-mem-lite hooks',
+          _note: 'Auto-cleared by hook-update.mjs post-install',
+          hooks: {},
+        });
+        const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '3.95.0');
+        expect(pluginCacheHookEvents(root)).toEqual({ ok: false, events: [], reason: 'empty' });
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('says NO for a missing manifest and for an unparseable one', () => {
+      const home = makeHome();
+      try {
+        const root = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '3.95.0');
+        expect(pluginCacheHookEvents(root)).toEqual({ ok: false, events: [], reason: 'no-manifest' });
+
+        mkdirSync(join(root, 'hooks'), { recursive: true });
+        writeFileSync(join(root, 'hooks', 'hooks.json'), '{ not json');
+        expect(pluginCacheHookEvents(root)).toEqual({ ok: false, events: [], reason: 'unreadable' });
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+  });
+
   describe('scanPluginCacheHookPollution', () => {
     it('returns empty when cache base does not exist', () => {
       const home = makeHome();

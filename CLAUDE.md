@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 3.95.0 — **this exact string is a release guard.**
+- **Version**: 3.95.1 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=20, ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -167,9 +167,9 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **350 files / 5787** (5786 passed, 1 skipped) | v3.95.0 `ca1881b`, 2026-09-05 |
-| Knip | **52** unused exports, **0** unused files | v3.95.0 `ca1881b`, 2026-09-05, primary working tree |
-| Coverage | statements **84.37%** · branches **78.88%** · functions **89.22%** · lines **87.72%** | v3.95.0 `ca1881b`, 2026-09-05 |
+| Tests | **350 files / 5800** (5799 passed, 1 skipped) | v3.95.1 release tree, 2026-09-05 |
+| Knip | **52** unused exports, **0** unused files | v3.95.1 release tree, 2026-09-05, primary working tree |
+| Coverage | statements **84.37%** · branches **78.88%** · functions **89.22%** · lines **87.72%** | v3.95.1 release tree, 2026-09-05 (unchanged from v3.95.0 — the release's new code sits in `install.mjs` and `plugin-cache-guard.mjs`, both outside the gate's file set) |
 
 **Knip measurement contract** (full version + name-set history in
 `docs/measurement/baselines.md`):
