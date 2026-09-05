@@ -118,6 +118,41 @@ describe('URL builders', () => {
   it('buildRepoUrl returns correct API URL', () => {
     expect(buildRepoUrl('user', 'repo')).toBe('https://api.github.com/repos/user/repo');
   });
+
+  // ── audit 2026-09-05 R6 Q2 ───────────────────────────────────────────────────────
+  // Git ref names may legally contain `#` (unlike `?`, which git forbids), and so may file
+  // names. Interpolated raw, that `#` opens a URL FRAGMENT and swallows everything after it.
+  // Measured on the un-encoded builder: new URL(buildTreeUrl('u','r','feat#x')) parsed as
+  // { search: '', hash: '#x?recursive=1' } — so GitHub received a NON-recursive tree request
+  // and every nested skills/*/SKILL.md became invisible, silently. The content URL lost its
+  // whole path the same way.
+  // FAILS IF: the builders go back to raw interpolation.
+  it('a # in the branch cannot swallow the recursive=1 query', () => {
+    const u = new URL(buildTreeUrl('user', 'repo', 'feat#x'));
+    expect(u.searchParams.get('recursive')).toBe('1');
+    expect(u.hash).toBe('');
+    expect(u.pathname).toBe('/repos/user/repo/git/trees/feat%23x');
+  });
+
+  it('a # in the branch or path cannot truncate the raw content URL', () => {
+    const u = new URL(buildContentUrl('user', 'repo', 'feat#x', 'skills/foo#1/SKILL.md'));
+    expect(u.hash).toBe('');
+    expect(u.pathname).toBe('/user/repo/feat%23x/skills/foo%231/SKILL.md');
+  });
+
+  // The counter-case: encoding must preserve the path SEPARATORS — encodeURIComponent on the
+  // whole path would turn `skills/foo/SKILL.md` into `skills%2Ffoo%2FSKILL.md` and 404 every
+  // ordinary import. The three cases above are satisfied by that broken form too, so without
+  // this one the pin would green-light it.
+  it('ordinary owner/repo/branch/path round-trip unchanged', () => {
+    expect(buildTreeUrl('user', 'repo', 'main')).toBe(
+      'https://api.github.com/repos/user/repo/git/trees/main?recursive=1',
+    );
+    expect(buildContentUrl('user', 'repo', 'main', 'skills/foo/SKILL.md')).toBe(
+      'https://raw.githubusercontent.com/user/repo/main/skills/foo/SKILL.md',
+    );
+    expect(buildRepoUrl('user', 'repo')).toBe('https://api.github.com/repos/user/repo');
+  });
 });
 
 describe('buildHeaders', () => {

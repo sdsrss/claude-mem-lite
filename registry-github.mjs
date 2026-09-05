@@ -34,25 +34,43 @@ export function parseGitHubUrl(url) {
   };
 }
 
+// Percent-encode ONE path segment. Git ref names may legally contain `#` (git forbids `?`,
+// not `#`), and so may file names — interpolated raw, that `#` opens a URL FRAGMENT and
+// swallows the rest: `…/git/trees/feat#x?recursive=1` parses as hash `#x?recursive=1` with an
+// EMPTY query, so GitHub answered a NON-recursive tree and every nested skills/*/SKILL.md went
+// silently undiscovered; the raw content URL lost its whole path the same way (audit
+// 2026-09-05 R6 Q2, measured). encodeURIComponent leaves the unreserved set — including the
+// `.`, `-`, `_` and `~` that ordinary owners/repos/branches are made of — untouched.
+const seg = (s) => encodeURIComponent(String(s ?? ''));
+
+// A repo-relative file path is MANY segments: encode each one but keep the `/` separators.
+// encodeURIComponent on the whole path would emit `skills%2Ffoo%2FSKILL.md` and 404 every
+// ordinary import — the counter-case pinned in tests/registry-github.test.mjs.
+const segPath = (p) =>
+  String(p ?? '')
+    .split('/')
+    .map(seg)
+    .join('/');
+
 /**
  * Build GitHub API tree URL (recursive).
  */
 export function buildTreeUrl(owner, repo, branch) {
-  return `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+  return `https://api.github.com/repos/${seg(owner)}/${seg(repo)}/git/trees/${seg(branch)}?recursive=1`;
 }
 
 /**
  * Build raw content URL for a file.
  */
 export function buildContentUrl(owner, repo, branch, path) {
-  return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+  return `https://raw.githubusercontent.com/${seg(owner)}/${seg(repo)}/${seg(branch)}/${segPath(path)}`;
 }
 
 /**
  * Build GitHub API repo metadata URL.
  */
 export function buildRepoUrl(owner, repo) {
-  return `https://api.github.com/repos/${owner}/${repo}`;
+  return `https://api.github.com/repos/${seg(owner)}/${seg(repo)}`;
 }
 
 /**
