@@ -106,13 +106,13 @@ This repo measures its own retrieval quality, and most of its expensive mistakes
 evidence for each is in `docs/measurement/`. **Violating one silently produces a number
 that looks measured and is not.**
 
-> **`docs/` is developer-local and NOT in git** (`.gitignore`), so a fresh clone will not
-> have it and every `docs/measurement/...` pointer below will dangle. That is deliberate:
-> those files are the internal record, not something an installer needs. **The ten rules
-> and every invariant in this file are self-contained** — the appendix carries the
-> evidence (calibers, populations, superseded drafts, the reasoning behind each rule),
-> never a rule you need and cannot find here. If you have no `docs/measurement/`, treat
-> the rules as binding anyway and re-derive evidence by re-measuring, per rule 1.
+> **`docs/measurement/` IS tracked — it is this file's appendix, not internal notes.**
+> The rest of `docs/` (design specs, plans, templates) is developer-local and ignored, so
+> a fresh clone gets the appendix and nothing else from `docs/`. Even so, **the ten rules
+> and every invariant in this file are self-contained**: the appendix carries the evidence
+> (calibers, populations, superseded drafts, the reasoning behind each rule), never a rule
+> you need and cannot find here. Keep it that way when you add to either — a rule that
+> only exists in the appendix is a rule most sessions will never load.
 
 1. **Stamp every number** with its date AND the tree/corpus it came from. A figure without
    a stamp cannot be superseded by a later reader.

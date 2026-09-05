@@ -1,5 +1,13 @@
-/docs
-/CLAUDE.md
+# docs/ is developer-local (design specs, plans, templates) EXCEPT docs/measurement/,
+# which is CLAUDE.md's evidence appendix and is tracked with it. Written as `/docs/*`
+# plus a negation on purpose: git does not descend into an excluded DIRECTORY, so a
+# bare `/docs` would make `!/docs/measurement/` silently inert.
+/docs/*
+!/docs/measurement/
+# CLAUDE.md is tracked on purpose — it is the operating manual for this tree, and /init
+# cannot reconstruct the measurement doctrine or the record of which drafts were refuted.
+# It was listed here once; the entry did nothing (gitignore does not apply to tracked
+# files) except make `git add CLAUDE.md` need -f and hide an accidental untracking.
 /node_modules
 # Bumping a native dep on a FUSE filesystem can leave one behind: `npm ci` cannot rmdir
 # `better-sqlite3/build/Release` while a long-running process still has the old `.node`
