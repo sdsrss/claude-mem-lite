@@ -24,6 +24,7 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 | Dead code | `npm run dead-code` (knip — **read the measurement contract below first**) |
 | Shell | `shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-commit.sh scripts/setup.sh` |
 | Micro-bench | `npm run benchmark` (`node benchmark/benchmark.mjs`) · CI gate: `npm run benchmark:gate` (`benchmark/ci-gate.mjs`) |
+| **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **`benchmark/baseline.json` EXPIRES 30 days after its own `timestamp`**, and both `ci.yml` (on push) and `publish.yml` pass `--strict`, which turns that into a hard failure. Sampled 2026-09-05 → red from **2026-10-05**. In the release path the failure lands *after* the tag is pushed (v3.69.0/v3.69.1 stalled on exactly this), so recapture BEFORE tagging, in its own commit, naming the sampled tree. |
 | Audit metrics | `npm run audit:metrics` · `npm run audit:baseline` |
 
 Two CLI families, both canonical in `cli.mjs`:
@@ -109,11 +110,13 @@ evidence for each is in `docs/measurement/`. **Violating one silently produces a
 that looks measured and is not.**
 
 > **`docs/measurement/` IS tracked — it is this file's appendix, not internal notes.**
-> So are `docs/audit/` (the audit ledger — each round marks the previous round's items
-> 已解决/未解决/复发, which is impossible against a report nobody can read) and
+> So are `docs/audit/` and `docs/audits/` (the audit ledger — each round marks the previous
+> round's items 已解决/未解决/复发, which is impossible against a report nobody can read) and
 > `docs/ARCHITECTURE.md`. The rest of `docs/` (design specs, plans, templates) is
-> developer-local and ignored, so a fresh clone gets those three and nothing else from
-> `docs/`. Even so, **the ten rules
+> developer-local and ignored, so a fresh clone gets those four and nothing else from
+> `docs/`. **The plural `docs/audits/` is a second ledger directory, not a typo** — the two
+> audit prompt templates in use write to different paths, and the plural one was ignored
+> until 2026-09-05, which cost the R5 report its readability for exactly one round. Even so, **the ten rules
 > and every invariant in this file are self-contained**: the appendix carries the evidence
 > (calibers, populations, superseded drafts, the reasoning behind each rule), never a rule
 > you need and cannot find here. Keep it that way when you add to either — a rule that
@@ -172,9 +175,18 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **351 files / 5844** (5843 passed, 1 skipped) | `audit/2026-09-05-round4` @ `a8d7dd1`, 2026-09-05 |
-| Knip | **50** unused exports, **0** unused files | same tree, primary working tree (was 52 at v3.96.0; −1 `install-metadata.mjs:MARKETING_ON_REQUEST` now imported by a test, −1 `_extractResponseFromError` deleted as dead) |
-| Coverage | statements **84.34%** · branches **78.88%** · functions **89.26%** · lines **85.44%** | same tree. Gate (80 / 74 / 84 / 83) passes. |
+| Tests | **353 files / 5858** (5857 passed, 1 skipped) | `audit/2026-09-05-r5-impl` @ `c13d66c`, 2026-09-05 (was 351 / 5844 at `a8d7dd1`: +2 test files — `session-start-lock-sweeper`, `pre-commit-version-sync` — and +14 cases across those plus `install-lifecycle`, `hook-update`, `hook-launcher`) |
+| Knip | **50** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unused-export NAME SET is byte-identical to `a8d7dd1` (same-tree A/B, `git stash`). The duplicate export (`FALLBACK_OBS_WINDOW_MS`) was removed, not reclassified. |
+| Coverage | statements **84.34%** · branches **78.88%** · functions **89.26%** · lines **85.44%** | same tree. Gate (80 / 74 / 84 / 83) passes. Unmoved by the R5 batch. |
+
+**`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
+across it.** `cycles()` and `untestedModules()` used to count `*.config.mjs` as source
+modules while `depsMd()` did not, so `--md` printed 163 and `--deps` printed 161 for what
+reads as one set, and `eslint.config.mjs` was listed as a source module with no test. All
+four reporters now share one predicate (`isGraphModule`), and `--self-check` fails if they
+ever disagree again. Modules **163 → 161**, untested **24 / 163 → 23 / 161**. Edges are
+unchanged (481 static + 48 lazy, 0 cycles) — both config files have zero local imports, so
+only the node count moved.
 
 **The 2026-09-05 whole-tree reformat (`36f8c0f`) changed the CALIBER of four
 line-denominated metrics. Do not diff any of them across it** — prettier split one-line
