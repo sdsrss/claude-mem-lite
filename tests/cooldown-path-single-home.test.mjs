@@ -30,7 +30,9 @@ const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)),
  * a scan for the idiom alone flagged it — one site with no second copy to drift against
  * is not this defect, and a guard that cries about it would be turned off.
  */
-const SANITIZE_RULE = /String\((sessionId|ccSessionId)\)\.replace\(\/\[\^a-zA-Z0-9_\.-\]\/g/;
+// `\s*` before `.replace`: a formatter breaks the method chain across lines, and this
+// rule is about the IDIOM having one home, not about it fitting on one line (P1-3).
+const SANITIZE_RULE = /String\((sessionId|ccSessionId)\)\s*\.replace\(\/\[\^a-zA-Z0-9_\.-\]\/g/;
 
 let runtimeDir;
 beforeEach(() => {

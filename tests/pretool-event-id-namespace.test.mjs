@@ -167,7 +167,9 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
     // future `[event]` row would re-enter the denominator. Nothing else is red
     // if that happens.
     const src = readFileSync(join(REPO, 'lib/citation-tracker.mjs'), 'utf8');
-    const m = /const INJECTED_RE = new RegExp\(`#\(\$\{OBS_ID_DIGITS\}\)\\\\s\+\\\\\[\(([^)]*)\)\\\\\]`/.exec(src);
+    // `\s*` after `new RegExp(`: a formatter moves the template literal onto its own
+    // line. The captured type list — what this guard reads — is unaffected (P1-3).
+    const m = /const INJECTED_RE = new RegExp\(\s*`#\(\$\{OBS_ID_DIGITS\}\)\\\\s\+\\\\\[\(([^)]*)\)\\\\\]`/.exec(src);
     expect(m, 'INJECTED_RE shape changed — re-derive this guard').toBeTruthy();
     const types = m[1].split('|');
     expect(types).not.toContain('event');

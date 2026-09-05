@@ -64,7 +64,10 @@ describe('doctor reporter discipline (the caller side of the contract)', () => {
       // Bare `warn(` only — `dwarn(` is the counting wrapper, and the line that DEFINES
       // it legitimately calls `warn` after bumping `warnings`.
       if (!/(^|[^a-zA-Z_.])warn\(/.test(line)) return;
-      if (/warnings\+\+/.test(line)) return;
+      // The counter may sit on an EARLIER line than its `warn(` — `const dwarn = (msg) =>
+      // { warnings++; warn(msg); };` becomes three lines under a formatter. Look back the
+      // same way the `issues++` check below looks forward (P1-3).
+      if (/warnings\+\+/.test(lines.slice(Math.max(0, i - 3), i + 1).join('\n'))) return;
       // A `warn(...)` may span lines; `issues++` follows the closing call. Six lines is
       // wider than any current call site's argument list.
       const window = lines.slice(i, i + 8).join('\n');

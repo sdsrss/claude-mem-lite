@@ -74,11 +74,12 @@ describe('UserPromptSubmit query caps — both hooks of the event', () => {
     // query only: a `prompt` option would be silently ignored, so the signature is what
     // is asserted, not the caller's good behaviour.
     const src = read('../lib/events-injection.mjs');
-    expect(src).toMatch(/export function searchInjectableEvents\(db, \{\s*ftsQuery,/);
+    // Signature shape, not layout — separators are \s* so a formatter may wrap it (P1-3).
+    expect(src).toMatch(/export function searchInjectableEvents\(\s*db,\s*\{\s*ftsQuery,/);
     expect(src, 'events-injection must not build a query of its own')
       .not.toMatch(/sanitizeFtsQuery\(/);
     expect(read('../hook.mjs'), 'the events call must pass a built, capped query')
-      .toMatch(/searchInjectableEvents\(db, \{\s*ftsQuery: upsFtsQuery\(promptText\)/);
+      .toMatch(/searchInjectableEvents\(\s*db,\s*\{\s*ftsQuery: upsFtsQuery\(promptText\)/);
   });
 
   it('the events leg returns nothing for a query it was never given', () => {

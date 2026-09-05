@@ -149,7 +149,9 @@ describe('the WIRING: hook.mjs must use the flag, and must run arm B FIRST', () 
   const src = readFileSync(join(REPO, 'hook.mjs'), 'utf8');
 
   it('passes counterfactual: true on the arm-B search', () => {
-    expect(src).toMatch(/searchRelevantMemories\([^;]*\{\s*counterfactual:\s*true\s*\}\)/);
+    // `,?` before the brace: a formatter that adds a trailing comma writes
+    // `{ counterfactual: true, }` across lines, which is the same call (P1-3).
+    expect(src).toMatch(/searchRelevantMemories\([^;]*\{\s*counterfactual:\s*true,?\s*\}\s*\)/);
   });
 
   it('computes arm B BEFORE the delivered search, not after it', () => {

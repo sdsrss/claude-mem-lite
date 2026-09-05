@@ -123,7 +123,9 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     // hook.mjs's own half stays a source assertion: there is no seam to drive here, the
     // ids go straight from the reader into the exclude array.
     const hook = readFileSync(join(REPO, 'hook.mjs'), 'utf8');
-    const push = /for \(const id of ids\) \{ keyContextIds\.push\(id\); pathAInjectedIds\.push\(id\); \}/;
+    // Statement sequence, not one-line layout: a formatter expands this loop body over
+    // four lines and the pinned property — both pushes, in this order — is unchanged (P1-3).
+    const push = /for \(const id of ids\)\s*\{\s*keyContextIds\.push\(id\);\s*pathAInjectedIds\.push\(id\);\s*\}/;
     expect(hook, 'hook.mjs no longer pushes marker ids verbatim — was the coercion added?')
       .toMatch(push);
   });

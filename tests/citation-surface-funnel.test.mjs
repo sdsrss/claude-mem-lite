@@ -429,7 +429,9 @@ describe('hook.mjs Stop wiring', () => {
   // that silently drops a concurrent session's counts, so the argument is
   // asserted rather than left to the reader.
   it('keys the surface funnel on the CC session id, not the memory session id', () => {
-    const call = src.match(/recordCitationSurfaces\(db, project,\s*([^,]+),/);
+    // Argument positions, not layout: every separator is \s* so the guard survives a
+    // formatter putting each argument on its own line (audit 2026-09-05 P1-3).
+    const call = src.match(/recordCitationSurfaces\(\s*db,\s*project,\s*([^,]+),/);
     expect(call, 'recordCitationSurfaces call site not found').not.toBeNull();
     expect(call[1].trim()).toBe('ccSessionId || sessionId');
   });
