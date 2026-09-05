@@ -811,8 +811,27 @@ async function handlePostToolFailure() {
 
 // ─── Stop Handler ───────────────────────────────────────────────────────────
 
-async function handleStop() {
-  // Read Claude Code's real session_id from hook stdin for parallel-session scoping.
+// ─── Stop handler phases ────────────────────────────────────────────────────
+//
+// `handleStop` ran 470 lines and interleaved five concerns, so describing it meant
+// grepping for phase comments. Audit 2026-09-05 P2-1 asked for the split
+// `handleSessionStart` already has (runSessionStartDbMutations,
+// saveHandoffAndFastSummary, buildStartupDashboardText). These four are that code,
+// moved and named — no behaviour, no ordering and no error handling changed.
+//
+// Each phase keeps the try/catch it had. That nesting is not incidental: a failing
+// fast-summary or citation scan must not take the rest of Stop down, while the
+// `UPDATE sdk_sessions` in the first phase deliberately has no catch of its own and
+// still propagates through the caller's `finally { db.close() }`.
+
+/**
+ * Read Claude Code's real session_id and transcript path from hook stdin.
+ *
+ * This is the stable CC identifier — the mem plugin's file-based getSessionId()
+ * collides across parallel sessions for the same project (see docs/bug.txt).
+ * Both are null when stdin is unavailable; the caller falls back to the local id.
+ */
+async function readStopHookInput() {
   // This is the stable CC identifier — the mem plugin's file-based getSessionId()
   // collides across parallel sessions for the same project (see docs/bug.txt).
   let ccSessionId = null;
@@ -827,18 +846,11 @@ async function handleStop() {
       transcriptPath = hookData.transcript_path;
     }
   } catch { /* stdin unavailable — fall back to local session id */ }
+  return { ccSessionId, transcriptPath };
+}
 
-  // Capture session info BEFORE cleanup. All DB lookups use the mem-internal id
-  // (that's what handleUserPrompt wrote into user_prompts / sdk_sessions / observations
-  // via getSessionId()). `ccSessionId` is used only to tag session_handoffs rows
-  // for parallel-session scoping — it must not be used as a query key, otherwise
-  // queries miss and UPDATE sdk_sessions becomes a no-op (v2.33.2 regression fix).
-  const sessionId = getSessionId();
-  const project = inferProject();
-
-  // Snapshot episode BEFORE flush for handoff extraction
-  const episodeSnapshot = readEpisodeRaw();
-
+/** Flush whatever is left in the episode buffer, under the PostToolUse lock. */
+function flushEpisodeAtStop(sessionId, project) {
   // Flush remaining episode buffer (locked to prevent race with handlePostToolUse)
   if (acquireLock(1000)) {
     try {
@@ -901,368 +913,405 @@ async function handleStop() {
       }
     } catch (e) { debugCatch(e, 'handleStop-fallback'); }
   }
+}
+
+/**
+ * Mark the session completed and write its handoff snapshot.
+ *
+ * sessionId = mem-internal (query key); ccSessionId = CC UUID (scope key for
+ * parallel-safe row identity). Without the split, CC UUID-based queries miss
+ * user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
+ */
+function markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot }) {
+  db.prepare(`
+    UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ?
+    WHERE content_session_id = ? AND status = 'active'
+  `).run(new Date().toISOString(), Date.now(), sessionId);
+  // Save handoff snapshot for cross-session continuity.
+  // sessionId = mem-internal (query key); ccSessionId = CC UUID (scope key for
+  // parallel-safe row identity). Without the split, CC UUID-based queries miss
+  // user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
+  try { buildAndSaveHandoff(db, sessionId, project, 'exit', episodeSnapshot, ccSessionId || sessionId); }
+  catch (e) { debugCatch(e, 'handleStop-handoff'); }
+}
+
+/** Fast summary baseline — ensures a summary exists even if the background LLM fails. */
+function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
+  // Fast summary baseline — ensures summary exists even if background LLM fails.
+  // T4-P2-B: guard against Stop firing twice for the same session (rare but possible;
+  // mirrors handleSessionStart line 795 hasSummary guard). Uses mem-internal sessionId
+  // as the WHERE key per the top-of-file dual-id invariant (#7789).
+  try {
+    const existingSummary = db.prepare(
+      'SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1'
+    ).get(sessionId);
+    if (!existingSummary) {
+      const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
+
+      // Structural extraction from the assistant's tail message.
+      // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
+      // tail is deterministically parseable without Haiku. Prior baseline left
+      // remaining_items=='' for every session whose Haiku pass failed (≈66%
+      // in prod data), losing the user-visible "Not done" list.
+      let structuredCompleted = '';
+      let structuredNotDone = '';
+      let structuredNotes = '';
+      try {
+        const tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
+        if (tail) {
+          const s = extractStructuredSummary(tail);
+          structuredCompleted = s.done;
+          structuredNotDone = s.notDone;
+          const notesParts = [];
+          if (s.failed) notesParts.push(`Failed: ${s.failed}`);
+          if (s.uncertain) notesParts.push(`Uncertain: ${s.uncertain}`);
+          structuredNotes = notesParts.join('\n');
+        }
+      } catch (e) { debugCatch(e, 'handleStop-structured-extract'); }
+
+      const finalCompleted = structuredCompleted || obsCompleted;
+      const finalRemaining = structuredNotDone;
+      const finalNotes = structuredNotes || 'fast';
+
+      if (fastRequestRaw || finalCompleted || finalRemaining) {
+        insertFastSummary(db, {
+          sessionId, project, now: new Date(),
+          values: { request: fastRequestRaw, completed: finalCompleted, remaining: finalRemaining, notes: finalNotes },
+          limits: FAST_SUMMARY_LIMITS.stop,
+        });
+      }
+    }
+  } catch (e) { debugCatch(e, 'handleStop-fast-summary'); }
+}
+
+/** Scan the transcript for `#NN` citations, bump access_count, and run citation decay. */
+function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath }) {
+  // P4: scan transcript for `#NN` observation citations in assistant text
+  // and bump access_count for matched rows. Closes the loop on the "cite #NN"
+  // contract — before P4 this was a one-way obligation with no feedback.
+  //
+  // CLAUDE_MEM_NO_CITATION_TRACK=1 disables BOTH the P4 access_count bump
+  // AND the v32 citation-decay loop nested below — anything that needs the
+  // transcript scan lives inside this guard. To disable just the decay
+  // loop (keep access_count bumps), use MEM_DISABLE_CITATION_DECAY=1 which
+  // applyCitationDecay checks separately.
+  try {
+    if (transcriptPath && !process.env.CLAUDE_MEM_NO_CITATION_TRACK) {
+      // D#152/D#177: the `subagent` face, collected ONCE, up front, and used twice —
+      // by the decay block below (only under CLAUDE_MEM_SUBAGENT_DECAY) and by its own
+      // metering call at the tail. It used to be collected at the tail only, with a
+      // comment saying the position was load-bearing because lib/transcript-scan.mjs
+      // memoizes ONE file and reading the sidechains evicts the parent. That constraint
+      // is real but it is not "last" — it is "not BETWEEN two parent scans". Running it
+      // FIRST parses the sidechains before anything has memoized the parent, so the
+      // parent is then parsed once and stays memoized for every scanner after it:
+      // still one parent parse per Stop, the property the tail comment was protecting.
+      let sub = { injected: new Set(), cited: new Set(), files: 0 };
+      try { sub = collectSubagentSurface(transcriptPath); }
+      catch (e) { debugCatch(e, 'handleStop-subagent-collect'); }
+
+      const ids = extractCitationsFromTranscript(transcriptPath);
+      if (ids.size > 0) {
+        // Gate the access-count channel on relevance (audit FLOW-2 / D#179). The cited
+        // set is every `#NN` in this session's assistant text and cannot tell a
+        // citation from a mention; in this repository a CHANGELOG or audit-writing
+        // session names dozens of ids in prose, and access_count > 3 promotes a row a
+        // tier via boostAccessed. The population to credit — all seven faces, and why
+        // extractAllInjected alone is the wrong five — lives in the builder.
+        const relevant = buildCitationRelevanceSet({
+          transcriptPath, runtimeDir: RUNTIME_DIR, project,
+          sessionId: ccSessionId, subagentInjected: sub.injected,
+        });
+        const n = bumpCitationAccess(db, ids, project, relevant);
+        debugLog('DEBUG', 'handleStop',
+          `citations: ${ids.size} ids scanned, ${relevant.size} relevant, ${n} obs bumped`);
+      }
+
+      // v32 citation-decay: tighter feedback loop on top of P4. Re-scan
+      // transcript with main-thread filter, extract injected IDs from BOTH
+      // surfaces (PTR + UserPromptSubmit <memory-context>) via extractAllInjected,
+      // then mutate importance/streak per applyCitationDecay's contract.
+      // Cheap (file still in OS cache).
+      //
+      // v34.x: pre-v34 this only saw pre-tool-recall injections, leaving the
+      // UPS surface (highest-volume — all decision-type FTS hits) starved.
+      // Union closed by extractAllInjected — one integration point so the
+      // contract test in tests/citation-tracker-userprompt.test.mjs covers it.
+      try {
+        // mainOnly: the injected denominator must use the same thread
+        // filter as citedMain (the numerator, below) — an obs injected only
+        // inside a subagent (sidechain) would otherwise enter the denominator
+        // but never the numerator and streak-demote despite being used there.
+        // v45: take the per-FACE breakdown and union it, instead of asking
+        // for the union directly. Same ids (extractAllInjected IS this union
+        // — see unionSurfaces), same single transcript walk, but the split
+        // survives to citation_surface_log below so "which face earns its
+        // budget" becomes answerable. Before this, every face was merged
+        // before anything was recorded and no lever had a target.
+        const injectedBySurface = extractInjectedBySurface(transcriptPath, { mainOnly: true });
+        const injected = unionSurfaces(injectedBySurface);
+        // P5 ①: cite-back signals — observations whose warned file the agent
+        // edited this session. Union into injected so they're resolved (they
+        // were injected via pre-tool-recall) and, below, into cited so the
+        // edit promotes them even without a literal #NN in text.
+        const citeBackIds = extractCiteBackSignals(transcriptPath);
+        for (const id of citeBackIds) injected.add(id);
+        // D#124, promotion-only (v3.66.1): the SessionStart Key Context block
+        // leaves no hook attachment, so its ids come from the per-session
+        // marker. They are added to the decay set ONLY where they were
+        // actually cited (below), never as bare denominator: the block
+        // re-renders the same fixed top-10 unconditionally, so an uncited
+        // render says nothing about relevance. v3.66.0 fed them in as
+        // denominator and that made the block eat its own contents.
+        // The policy used to rest on a second ground as well — "since keyObs
+        // gates on `importance >= 2`, one demotion evicts the common
+        // importance-2 row from Key Context for good" — which D#179/D#198
+        // retired: this loop no longer writes `importance`, so no citation
+        // miss can evict anything. The first ground is untouched and is why
+        // the policy stays.
+        const keyCtxIds = extractInjectedFromKeyContext({
+          runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId,
+        });
+        // D#177: `sub.injected` counts toward the entry gate when the face is admitted.
+        // Without this a session whose ONLY injection was a dispatched agent's prompt
+        // would return here with injected.size === 0 and the face would be "in the
+        // denominator" in name only — the failure mode where a face is wired at one
+        // level and gated out at another, which is how UPS went unmetered for a whole
+        // minor version.
+        const subDecayOn = !['0', 'off', 'false', 'no'].includes(
+          String(process.env.CLAUDE_MEM_SUBAGENT_DECAY ?? '').toLowerCase());
+        if (injected.size > 0 || keyCtxIds.size > 0 || (subDecayOn && sub.injected.size > 0)) {
+          // Text-floor gate: skip decay on tool-only Stops. Without this,
+          // a turn that ends on tool_use locks every injected obs as
+          // uncited (last_decided_session_id set), so a later turn that
+          // cites correctly can't undo the verdict. Per CLAUDE.md the
+          // contract is "NEXT time you produce user-facing text," so a
+          // session with zero main-thread text gets a free pass — the
+          // next Stop in the same session will re-evaluate.
+          if (!hasMainThreadAssistantText(transcriptPath)) {
+            debugLog('DEBUG', 'handleStop', `citation-decay: skipped (no main-thread assistant text yet, injected=${injected.size})`);
+          } else {
+            const citedMain = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
+            for (const id of citeBackIds) citedMain.add(id);
+            // D#177: admit the `subagent` face to the decay loop. It cannot ride the
+            // normal path because its injection lands in a dispatched agent's PROMPT
+            // and its citation lands in that agent's OWN transcript — so its ids enter
+            // the denominator AND its receiver-attributed cites enter the numerator,
+            // asymmetrically, together. Feeding only the first half would mark every
+            // subagent-only injection uncited by construction (that is why the face was
+            // metered-but-excluded since v3.77); feeding only the second half would
+            // credit the main-thread faces for citations the main thread never made.
+            //
+            // `sub.cited` is already the per-FILE intersection with `sub.injected`
+            // (collectSubagentSurface), so this cannot credit an id the subagent surface
+            // did not itself inject. Measured on the live corpus (1122 transcripts, 34
+            // subagent-bearing sessions): 33 marginal (session,id) pairs enter the
+            // denominator, 21.2% of them cited; 21 distinct observations behind the
+            // uncited ones, FIVE at uncited_streak = 2. Four are 3->2 down-ranks (#8597,
+            // #8847 with cited_count 56, #8948, #10246). At 2026-08-25 18:00Z #10716 was
+            // at importance 2 — one miss from a 2->1 eviction out of
+            // rankImperativeCandidates' own `importance >= 2` pool, the case
+            // IMPERATIVE_POOL_BACKSTOP does not cover, and the reason "down-ranks, not
+            // evictions" is wrong as a blanket claim. That row has since been promoted by
+            // the very session that documented it (D#179: this loop cannot tell writing
+            // `#NN` from applying it), so re-check the CLASS, not the row.
+            // Cross-crediting is 3 pairs of 1181 DISTINCT (session,id) across the five
+            // decay faces inside subagent-bearing sessions (0.25%), or 3 of 2738 the same
+            // way corpus-wide (0.11%) — ids the main thread never cited but a subagent did.
+            //
+            // ON by default since v3.83.0; `CLAUDE_MEM_SUBAGENT_DECAY=0` restores the
+            // metered-but-never-decaying state the face sat in from v3.77 to v3.82.
+            //
+            // The denominator is a COPY, not a mutation of `injected`: the edge
+            // attribution below takes `mainInjectedIds: injected` to keep sidechain-only
+            // injections from accruing file-edge misses (review D#78), and folding the
+            // subagent ids into that set would undo exactly that guard.
+            // The promotion-only half: a Key Context row the agent actually
+            // cited joins the decay set (and takes the promote branch); one
+            // it ignored is never entered, so it cannot streak or demote.
+            for (const id of keyCtxIds) if (citedMain.has(id)) injected.add(id);
+            // BOTH halves of the merge are COPIES, built AFTER the keyctx promotion above
+            // so they carry it too. When the flag is off each IS the original object, so
+            // every consumer below is byte identical to the pre-D#177 path.
+            //
+            // The copies are the whole safety property. `injected` and `citedMain` have
+            // four consumers between them and only `applyCitationDecay` should see the
+            // subagent ids; the first draft of this change mutated `citedMain` in place
+            // and the pre-tag review measured both leaks it caused:
+            //   • recordCitationSurfaces (below) scored a `pretool` row the main thread
+            //     never cited as a pretool HIT — `pretool.cited_n` 0 -> 1 on a
+            //     two-observation probe. That is the caliber CLAUDE.md publishes for the
+            //     funnel ("cited as #NN in the session's own MAIN-THREAD text"), so it
+            //     would have made citation_surface_log and citation-live-replay.mjs
+            //     permanently different rulers — the v3.81.0 cross-agent defect, mirrored.
+            //   • resolveEdgeAttribution gates sidechain edges on
+            //     `!mainInjected.has(id) && !cited.has(id)`, so a file edge flipped MISS
+            //     -> HIT (`miss_streak` 1 -> 0). The comment there defends the DENOMINATOR
+            //     half of that gate and says nothing about the numerator, which is exactly
+            //     how the leak got past a reading of it.
+            const decayInjected = subDecayOn ? new Set([...injected, ...sub.injected]) : injected;
+            const decayCited = subDecayOn ? new Set([...citedMain, ...sub.cited]) : citedMain;
+            // D#60: the idempotency key must be the CC session UUID, NOT the
+            // project-scoped memory sessionId — concurrent same-project CC
+            // sessions share the latter, so the second session's decay pass
+            // read "already decided" and silently undercounted decay_seen /
+            // streaks / adoption denominators. Fallback keeps legacy
+            // stdin-less invocations on the old key.
+            const r = applyCitationDecay(db, project, decayInjected, decayCited, ccSessionId || sessionId);
+            debugLog('DEBUG', 'handleStop', `citation-decay: touched=${r.touched} promoted=${r.promoted} demoted=${r.demoted}`);
+            // R1: persist this session's invocation→cite funnel row. touched =
+            // obs resolved this run (denominator), promoted = obs cited this run
+            // (numerator). Idempotent (touched is 0 on re-fire) + best-effort.
+            recordCitationFunnel(db, project, sessionId, r.touched, r.promoted);
+            // v45: the same funnel split by injection FACE. Keyed on
+            // ccSessionId — the SAME D#60 reasoning as applyCitationDecay
+            // above, and load-bearing here for a second reason: this table
+            // OVERWRITES rather than accumulates, and the memory sessionId
+            // is one file per PROJECT, so two concurrent CC sessions in one
+            // project would share a row and the later Stop would erase the
+            // earlier session's counts outright. citation_log survives the
+            // shared key only because it adds deltas.
+            // keyctx rides along for VISIBILITY only — it is a separate
+            // telemetry table, so recording it here cannot widen the decay
+            // denominator the way v3.66.0's union did.
+            recordCitationSurfaces(db, project, ccSessionId || sessionId,
+              { ...injectedBySurface, keyctx: keyCtxIds }, citedMain);
+            // P1 (D#78): per-edge attribution. The session cooldown file
+            // (keyed by CC session id) records which FILE each obs was
+            // injected for; resolve those (obs,file) edges as hit/miss with
+            // the same citedMain set. Lives inside the same text-floor gate
+            // so a tool-only Stop can't lock edges as missed. Best-effort.
+            // Keying on ccSessionId (NOT the rotating memory sessionId)
+            // matches the cooldown file's lifetime — a memory-session
+            // rotation mid-CC-session must not re-resolve old injections as
+            // fresh misses. mainInjectedIds mirrors the mainOnly discipline
+            // above: sidechain-only injections in the cooldown never accrue
+            // misses (review D#78).
+            try {
+              if (ccSessionId) {
+                const edges = readPreRecallFileEdges(RUNTIME_DIR, ccSessionId);
+                if (edges.length > 0) {
+                  const er = resolveEdgeAttribution(db, project, edges, citedMain, ccSessionId,
+                    { mainInjectedIds: injected });
+                  debugLog('DEBUG', 'handleStop', `edge-attribution: edges=${er.touchedEdges} hits=${er.hits} misses=${er.misses}`);
+                }
+              }
+            } catch (e) { debugCatch(e, 'handleStop-edge-attribution'); }
+          }
+        }
+      } catch (e) { debugCatch(e, 'handleStop-citation-decay'); }
+
+      // Persist cite-recall ratio for the next SessionStart to surface as
+      // feedback. This block re-scans the transcript rather than threading the
+      // count through `extractCitationsFromTranscript`, so the bump path stays
+      // unchanged — and since P2-8 every scanner in it shares ONE parse via
+      // lib/transcript-scan.mjs, so "scan again" costs an array iteration, not a
+      // re-read. (The old wording, "cheap; the file is already in OS cache", was
+      // arguing the pre-memo case: the OS cache saved the read, never the parse,
+      // which was ~all of the cost.)
+      try {
+        const stats = computeCiteRecall(transcriptPath);
+        // B2 (v2.83.1): also persist the bugfix-shape nudge/save delta so
+        // the next SessionStart can surface "N unsaved bugfix-shape edits"
+        // alongside cite-recall. Same scan target (transcript already in OS
+        // cache); same persistence file; one extra line in buildCiteRecallNudge.
+        const bugfixStats = countUnsavedBugfixShape(transcriptPath);
+        const dest = citeRecallPathFor(RUNTIME_DIR, project);
+        // Carry the consecutive-low-cite streak forward so the SessionStart
+        // nag can self-silence after the project has ignored it N times.
+        let priorStreak = 0;
+        try { priorStreak = JSON.parse(readFileSync(dest, 'utf8')).lowStreak || 0; } catch {}
+        const lowStreak = nextCiteLowStreak(priorStreak, stats);
+        // G3: finalized-in-conversation + zero deliberate persistence →
+        // decisionSignal rides the payload; next SessionStart reminds once.
+        let decisionSignal = null;
+        try {
+          const promptRows = db.prepare(`
+            SELECT prompt_text FROM user_prompts
+            WHERE content_session_id = ? ORDER BY prompt_number ASC LIMIT 200
+          `).all(sessionId);
+          const d = detectUnpersistedDecision({
+            prompts: promptRows.map((r) => r.prompt_text),
+            transcriptPath,
+          });
+          if (d.fire) decisionSignal = d.signal;
+        } catch (e) { debugCatch(e, 'handleStop-persist-reminder'); }
+        const payload = { ...stats, ...bugfixStats, lowStreak, decisionSignal, project, savedAt: Date.now() };
+        writeFileSync(dest, JSON.stringify(payload), { mode: 0o600 });
+      } catch (e) { debugCatch(e, 'handleStop-cite-recall-persist'); }
+
+      // D#152: the `subagent` face. Recorded in its OWN
+      // recordCitationSurfaces call because it carries a different `cited`
+      // set — a lesson handed to a dispatched subagent is cited in that
+      // subagent's own transcript. Folding it into the main call would score
+      // subagent injections against citedMain and report 0% by
+      // construction; folding its cites INTO citedMain would credit the
+      // main-thread faces for citations the main thread never made. The
+      // upsert key is (project, session, surface), so two calls with
+      // disjoint face sets do not collide.
+      //
+      // SINCE v3.83.0 (D#177) this is no longer metering-only: the face DOES reach
+      // applyCitationDecay, through the `decayInjected` / `decayCited` copies above.
+      // The sentence above about folding cites into `citedMain` still holds and is the
+      // reason those are copies — this call, `resolveEdgeAttribution` and the keyctx
+      // promotion all keep the un-widened set. `CLAUDE_MEM_SUBAGENT_DECAY=0` returns
+      // the face to metering-only.
+      //
+      // The "placed LAST" note below is now historical: `collectSubagentSurface` runs
+      // at the HEAD of this block (the decay loop needs its result), and `sub` here is
+      // that same object rather than a second call. The parse-count property the note
+      // defends is unchanged — see the comment at the collection site.
+      // earlier, this block costs ONE extra parse of the parent — the memo
+      // re-caches on the first re-read, so it is one, not one per later
+      // scanner — and breaks the "one parse per Stop" property the block
+      // above documents. Measured by instrumenting the parse: 1 parent parse
+      // at this position, 2 when relocated earlier. ~25ms on the largest
+      // real transcript here (5.4MB), matching lib/transcript-scan.mjs's
+      // own header figure.
+      // The text floor is re-checked rather than inherited — same reason as
+      // every other face: a tool-only Stop must not bank a verdict, and it
+      // must not enter the funnel's session denominator either.
+      try {
+        if (hasMainThreadAssistantText(transcriptPath)) {
+          // `sub` is the one collected at the top of this block — a second
+          // collectSubagentSurface call here would re-parse every sidechain file and,
+          // worse, could disagree with the set the decay loop above just scored.
+          if (sub.injected.size > 0) {
+            recordCitationSurfaces(db, project, ccSessionId || sessionId,
+              { subagent: sub.injected }, sub.cited);
+            debugLog('DEBUG', 'handleStop',
+              `subagent-face: files=${sub.files} injected=${sub.injected.size} cited=${sub.cited.size}`);
+          }
+        }
+      } catch (e) { debugCatch(e, 'handleStop-subagent-face'); }
+    }
+  } catch (e) { debugCatch(e, 'handleStop-citation-track'); }
+}
+
+async function handleStop() {
+  // Read Claude Code's real session_id from hook stdin for parallel-session scoping.
+  const { ccSessionId, transcriptPath } = await readStopHookInput();
+
+  // Capture session info BEFORE cleanup. All DB lookups use the mem-internal id
+  // (that's what handleUserPrompt wrote into user_prompts / sdk_sessions / observations
+  // via getSessionId()). `ccSessionId` is used only to tag session_handoffs rows
+  // for parallel-session scoping — it must not be used as a query key, otherwise
+  // queries miss and UPDATE sdk_sessions becomes a no-op (v2.33.2 regression fix).
+  const sessionId = getSessionId();
+  const project = inferProject();
+
+  // Snapshot episode BEFORE flush for handoff extraction
+  const episodeSnapshot = readEpisodeRaw();
+
+  flushEpisodeAtStop(sessionId, project);
 
   // Mark session completed + save handoff (sync, instant)
   const db = openDb();
   if (db) {
     try {
-      db.prepare(`
-        UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ?
-        WHERE content_session_id = ? AND status = 'active'
-      `).run(new Date().toISOString(), Date.now(), sessionId);
-      // Save handoff snapshot for cross-session continuity.
-      // sessionId = mem-internal (query key); ccSessionId = CC UUID (scope key for
-      // parallel-safe row identity). Without the split, CC UUID-based queries miss
-      // user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
-      try { buildAndSaveHandoff(db, sessionId, project, 'exit', episodeSnapshot, ccSessionId || sessionId); }
-      catch (e) { debugCatch(e, 'handleStop-handoff'); }
-
-      // Fast summary baseline — ensures summary exists even if background LLM fails.
-      // T4-P2-B: guard against Stop firing twice for the same session (rare but possible;
-      // mirrors handleSessionStart line 795 hasSummary guard). Uses mem-internal sessionId
-      // as the WHERE key per the top-of-file dual-id invariant (#7789).
-      try {
-        const existingSummary = db.prepare(
-          'SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1'
-        ).get(sessionId);
-        if (!existingSummary) {
-          const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
-
-          // Structural extraction from the assistant's tail message.
-          // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
-          // tail is deterministically parseable without Haiku. Prior baseline left
-          // remaining_items=='' for every session whose Haiku pass failed (≈66%
-          // in prod data), losing the user-visible "Not done" list.
-          let structuredCompleted = '';
-          let structuredNotDone = '';
-          let structuredNotes = '';
-          try {
-            const tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
-            if (tail) {
-              const s = extractStructuredSummary(tail);
-              structuredCompleted = s.done;
-              structuredNotDone = s.notDone;
-              const notesParts = [];
-              if (s.failed) notesParts.push(`Failed: ${s.failed}`);
-              if (s.uncertain) notesParts.push(`Uncertain: ${s.uncertain}`);
-              structuredNotes = notesParts.join('\n');
-            }
-          } catch (e) { debugCatch(e, 'handleStop-structured-extract'); }
-
-          const finalCompleted = structuredCompleted || obsCompleted;
-          const finalRemaining = structuredNotDone;
-          const finalNotes = structuredNotes || 'fast';
-
-          if (fastRequestRaw || finalCompleted || finalRemaining) {
-            insertFastSummary(db, {
-              sessionId, project, now: new Date(),
-              values: { request: fastRequestRaw, completed: finalCompleted, remaining: finalRemaining, notes: finalNotes },
-              limits: FAST_SUMMARY_LIMITS.stop,
-            });
-          }
-        }
-      } catch (e) { debugCatch(e, 'handleStop-fast-summary'); }
-
-      // P4: scan transcript for `#NN` observation citations in assistant text
-      // and bump access_count for matched rows. Closes the loop on the "cite #NN"
-      // contract — before P4 this was a one-way obligation with no feedback.
-      //
-      // CLAUDE_MEM_NO_CITATION_TRACK=1 disables BOTH the P4 access_count bump
-      // AND the v32 citation-decay loop nested below — anything that needs the
-      // transcript scan lives inside this guard. To disable just the decay
-      // loop (keep access_count bumps), use MEM_DISABLE_CITATION_DECAY=1 which
-      // applyCitationDecay checks separately.
-      try {
-        if (transcriptPath && !process.env.CLAUDE_MEM_NO_CITATION_TRACK) {
-          // D#152/D#177: the `subagent` face, collected ONCE, up front, and used twice —
-          // by the decay block below (only under CLAUDE_MEM_SUBAGENT_DECAY) and by its own
-          // metering call at the tail. It used to be collected at the tail only, with a
-          // comment saying the position was load-bearing because lib/transcript-scan.mjs
-          // memoizes ONE file and reading the sidechains evicts the parent. That constraint
-          // is real but it is not "last" — it is "not BETWEEN two parent scans". Running it
-          // FIRST parses the sidechains before anything has memoized the parent, so the
-          // parent is then parsed once and stays memoized for every scanner after it:
-          // still one parent parse per Stop, the property the tail comment was protecting.
-          let sub = { injected: new Set(), cited: new Set(), files: 0 };
-          try { sub = collectSubagentSurface(transcriptPath); }
-          catch (e) { debugCatch(e, 'handleStop-subagent-collect'); }
-
-          const ids = extractCitationsFromTranscript(transcriptPath);
-          if (ids.size > 0) {
-            // Gate the access-count channel on relevance (audit FLOW-2 / D#179). The cited
-            // set is every `#NN` in this session's assistant text and cannot tell a
-            // citation from a mention; in this repository a CHANGELOG or audit-writing
-            // session names dozens of ids in prose, and access_count > 3 promotes a row a
-            // tier via boostAccessed. The population to credit — all seven faces, and why
-            // extractAllInjected alone is the wrong five — lives in the builder.
-            const relevant = buildCitationRelevanceSet({
-              transcriptPath, runtimeDir: RUNTIME_DIR, project,
-              sessionId: ccSessionId, subagentInjected: sub.injected,
-            });
-            const n = bumpCitationAccess(db, ids, project, relevant);
-            debugLog('DEBUG', 'handleStop',
-              `citations: ${ids.size} ids scanned, ${relevant.size} relevant, ${n} obs bumped`);
-          }
-
-          // v32 citation-decay: tighter feedback loop on top of P4. Re-scan
-          // transcript with main-thread filter, extract injected IDs from BOTH
-          // surfaces (PTR + UserPromptSubmit <memory-context>) via extractAllInjected,
-          // then mutate importance/streak per applyCitationDecay's contract.
-          // Cheap (file still in OS cache).
-          //
-          // v34.x: pre-v34 this only saw pre-tool-recall injections, leaving the
-          // UPS surface (highest-volume — all decision-type FTS hits) starved.
-          // Union closed by extractAllInjected — one integration point so the
-          // contract test in tests/citation-tracker-userprompt.test.mjs covers it.
-          try {
-            // mainOnly: the injected denominator must use the same thread
-            // filter as citedMain (the numerator, below) — an obs injected only
-            // inside a subagent (sidechain) would otherwise enter the denominator
-            // but never the numerator and streak-demote despite being used there.
-            // v45: take the per-FACE breakdown and union it, instead of asking
-            // for the union directly. Same ids (extractAllInjected IS this union
-            // — see unionSurfaces), same single transcript walk, but the split
-            // survives to citation_surface_log below so "which face earns its
-            // budget" becomes answerable. Before this, every face was merged
-            // before anything was recorded and no lever had a target.
-            const injectedBySurface = extractInjectedBySurface(transcriptPath, { mainOnly: true });
-            const injected = unionSurfaces(injectedBySurface);
-            // P5 ①: cite-back signals — observations whose warned file the agent
-            // edited this session. Union into injected so they're resolved (they
-            // were injected via pre-tool-recall) and, below, into cited so the
-            // edit promotes them even without a literal #NN in text.
-            const citeBackIds = extractCiteBackSignals(transcriptPath);
-            for (const id of citeBackIds) injected.add(id);
-            // D#124, promotion-only (v3.66.1): the SessionStart Key Context block
-            // leaves no hook attachment, so its ids come from the per-session
-            // marker. They are added to the decay set ONLY where they were
-            // actually cited (below), never as bare denominator: the block
-            // re-renders the same fixed top-10 unconditionally, so an uncited
-            // render says nothing about relevance. v3.66.0 fed them in as
-            // denominator and that made the block eat its own contents.
-            // The policy used to rest on a second ground as well — "since keyObs
-            // gates on `importance >= 2`, one demotion evicts the common
-            // importance-2 row from Key Context for good" — which D#179/D#198
-            // retired: this loop no longer writes `importance`, so no citation
-            // miss can evict anything. The first ground is untouched and is why
-            // the policy stays.
-            const keyCtxIds = extractInjectedFromKeyContext({
-              runtimeDir: RUNTIME_DIR, project, sessionId: ccSessionId,
-            });
-            // D#177: `sub.injected` counts toward the entry gate when the face is admitted.
-            // Without this a session whose ONLY injection was a dispatched agent's prompt
-            // would return here with injected.size === 0 and the face would be "in the
-            // denominator" in name only — the failure mode where a face is wired at one
-            // level and gated out at another, which is how UPS went unmetered for a whole
-            // minor version.
-            const subDecayOn = !['0', 'off', 'false', 'no'].includes(
-              String(process.env.CLAUDE_MEM_SUBAGENT_DECAY ?? '').toLowerCase());
-            if (injected.size > 0 || keyCtxIds.size > 0 || (subDecayOn && sub.injected.size > 0)) {
-              // Text-floor gate: skip decay on tool-only Stops. Without this,
-              // a turn that ends on tool_use locks every injected obs as
-              // uncited (last_decided_session_id set), so a later turn that
-              // cites correctly can't undo the verdict. Per CLAUDE.md the
-              // contract is "NEXT time you produce user-facing text," so a
-              // session with zero main-thread text gets a free pass — the
-              // next Stop in the same session will re-evaluate.
-              if (!hasMainThreadAssistantText(transcriptPath)) {
-                debugLog('DEBUG', 'handleStop', `citation-decay: skipped (no main-thread assistant text yet, injected=${injected.size})`);
-              } else {
-                const citedMain = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
-                for (const id of citeBackIds) citedMain.add(id);
-                // D#177: admit the `subagent` face to the decay loop. It cannot ride the
-                // normal path because its injection lands in a dispatched agent's PROMPT
-                // and its citation lands in that agent's OWN transcript — so its ids enter
-                // the denominator AND its receiver-attributed cites enter the numerator,
-                // asymmetrically, together. Feeding only the first half would mark every
-                // subagent-only injection uncited by construction (that is why the face was
-                // metered-but-excluded since v3.77); feeding only the second half would
-                // credit the main-thread faces for citations the main thread never made.
-                //
-                // `sub.cited` is already the per-FILE intersection with `sub.injected`
-                // (collectSubagentSurface), so this cannot credit an id the subagent surface
-                // did not itself inject. Measured on the live corpus (1122 transcripts, 34
-                // subagent-bearing sessions): 33 marginal (session,id) pairs enter the
-                // denominator, 21.2% of them cited; 21 distinct observations behind the
-                // uncited ones, FIVE at uncited_streak = 2. Four are 3->2 down-ranks (#8597,
-                // #8847 with cited_count 56, #8948, #10246). At 2026-08-25 18:00Z #10716 was
-                // at importance 2 — one miss from a 2->1 eviction out of
-                // rankImperativeCandidates' own `importance >= 2` pool, the case
-                // IMPERATIVE_POOL_BACKSTOP does not cover, and the reason "down-ranks, not
-                // evictions" is wrong as a blanket claim. That row has since been promoted by
-                // the very session that documented it (D#179: this loop cannot tell writing
-                // `#NN` from applying it), so re-check the CLASS, not the row.
-                // Cross-crediting is 3 pairs of 1181 DISTINCT (session,id) across the five
-                // decay faces inside subagent-bearing sessions (0.25%), or 3 of 2738 the same
-                // way corpus-wide (0.11%) — ids the main thread never cited but a subagent did.
-                //
-                // ON by default since v3.83.0; `CLAUDE_MEM_SUBAGENT_DECAY=0` restores the
-                // metered-but-never-decaying state the face sat in from v3.77 to v3.82.
-                //
-                // The denominator is a COPY, not a mutation of `injected`: the edge
-                // attribution below takes `mainInjectedIds: injected` to keep sidechain-only
-                // injections from accruing file-edge misses (review D#78), and folding the
-                // subagent ids into that set would undo exactly that guard.
-                // The promotion-only half: a Key Context row the agent actually
-                // cited joins the decay set (and takes the promote branch); one
-                // it ignored is never entered, so it cannot streak or demote.
-                for (const id of keyCtxIds) if (citedMain.has(id)) injected.add(id);
-                // BOTH halves of the merge are COPIES, built AFTER the keyctx promotion above
-                // so they carry it too. When the flag is off each IS the original object, so
-                // every consumer below is byte identical to the pre-D#177 path.
-                //
-                // The copies are the whole safety property. `injected` and `citedMain` have
-                // four consumers between them and only `applyCitationDecay` should see the
-                // subagent ids; the first draft of this change mutated `citedMain` in place
-                // and the pre-tag review measured both leaks it caused:
-                //   • recordCitationSurfaces (below) scored a `pretool` row the main thread
-                //     never cited as a pretool HIT — `pretool.cited_n` 0 -> 1 on a
-                //     two-observation probe. That is the caliber CLAUDE.md publishes for the
-                //     funnel ("cited as #NN in the session's own MAIN-THREAD text"), so it
-                //     would have made citation_surface_log and citation-live-replay.mjs
-                //     permanently different rulers — the v3.81.0 cross-agent defect, mirrored.
-                //   • resolveEdgeAttribution gates sidechain edges on
-                //     `!mainInjected.has(id) && !cited.has(id)`, so a file edge flipped MISS
-                //     -> HIT (`miss_streak` 1 -> 0). The comment there defends the DENOMINATOR
-                //     half of that gate and says nothing about the numerator, which is exactly
-                //     how the leak got past a reading of it.
-                const decayInjected = subDecayOn ? new Set([...injected, ...sub.injected]) : injected;
-                const decayCited = subDecayOn ? new Set([...citedMain, ...sub.cited]) : citedMain;
-                // D#60: the idempotency key must be the CC session UUID, NOT the
-                // project-scoped memory sessionId — concurrent same-project CC
-                // sessions share the latter, so the second session's decay pass
-                // read "already decided" and silently undercounted decay_seen /
-                // streaks / adoption denominators. Fallback keeps legacy
-                // stdin-less invocations on the old key.
-                const r = applyCitationDecay(db, project, decayInjected, decayCited, ccSessionId || sessionId);
-                debugLog('DEBUG', 'handleStop', `citation-decay: touched=${r.touched} promoted=${r.promoted} demoted=${r.demoted}`);
-                // R1: persist this session's invocation→cite funnel row. touched =
-                // obs resolved this run (denominator), promoted = obs cited this run
-                // (numerator). Idempotent (touched is 0 on re-fire) + best-effort.
-                recordCitationFunnel(db, project, sessionId, r.touched, r.promoted);
-                // v45: the same funnel split by injection FACE. Keyed on
-                // ccSessionId — the SAME D#60 reasoning as applyCitationDecay
-                // above, and load-bearing here for a second reason: this table
-                // OVERWRITES rather than accumulates, and the memory sessionId
-                // is one file per PROJECT, so two concurrent CC sessions in one
-                // project would share a row and the later Stop would erase the
-                // earlier session's counts outright. citation_log survives the
-                // shared key only because it adds deltas.
-                // keyctx rides along for VISIBILITY only — it is a separate
-                // telemetry table, so recording it here cannot widen the decay
-                // denominator the way v3.66.0's union did.
-                recordCitationSurfaces(db, project, ccSessionId || sessionId,
-                  { ...injectedBySurface, keyctx: keyCtxIds }, citedMain);
-                // P1 (D#78): per-edge attribution. The session cooldown file
-                // (keyed by CC session id) records which FILE each obs was
-                // injected for; resolve those (obs,file) edges as hit/miss with
-                // the same citedMain set. Lives inside the same text-floor gate
-                // so a tool-only Stop can't lock edges as missed. Best-effort.
-                // Keying on ccSessionId (NOT the rotating memory sessionId)
-                // matches the cooldown file's lifetime — a memory-session
-                // rotation mid-CC-session must not re-resolve old injections as
-                // fresh misses. mainInjectedIds mirrors the mainOnly discipline
-                // above: sidechain-only injections in the cooldown never accrue
-                // misses (review D#78).
-                try {
-                  if (ccSessionId) {
-                    const edges = readPreRecallFileEdges(RUNTIME_DIR, ccSessionId);
-                    if (edges.length > 0) {
-                      const er = resolveEdgeAttribution(db, project, edges, citedMain, ccSessionId,
-                        { mainInjectedIds: injected });
-                      debugLog('DEBUG', 'handleStop', `edge-attribution: edges=${er.touchedEdges} hits=${er.hits} misses=${er.misses}`);
-                    }
-                  }
-                } catch (e) { debugCatch(e, 'handleStop-edge-attribution'); }
-              }
-            }
-          } catch (e) { debugCatch(e, 'handleStop-citation-decay'); }
-
-          // Persist cite-recall ratio for the next SessionStart to surface as
-          // feedback. This block re-scans the transcript rather than threading the
-          // count through `extractCitationsFromTranscript`, so the bump path stays
-          // unchanged — and since P2-8 every scanner in it shares ONE parse via
-          // lib/transcript-scan.mjs, so "scan again" costs an array iteration, not a
-          // re-read. (The old wording, "cheap; the file is already in OS cache", was
-          // arguing the pre-memo case: the OS cache saved the read, never the parse,
-          // which was ~all of the cost.)
-          try {
-            const stats = computeCiteRecall(transcriptPath);
-            // B2 (v2.83.1): also persist the bugfix-shape nudge/save delta so
-            // the next SessionStart can surface "N unsaved bugfix-shape edits"
-            // alongside cite-recall. Same scan target (transcript already in OS
-            // cache); same persistence file; one extra line in buildCiteRecallNudge.
-            const bugfixStats = countUnsavedBugfixShape(transcriptPath);
-            const dest = citeRecallPathFor(RUNTIME_DIR, project);
-            // Carry the consecutive-low-cite streak forward so the SessionStart
-            // nag can self-silence after the project has ignored it N times.
-            let priorStreak = 0;
-            try { priorStreak = JSON.parse(readFileSync(dest, 'utf8')).lowStreak || 0; } catch {}
-            const lowStreak = nextCiteLowStreak(priorStreak, stats);
-            // G3: finalized-in-conversation + zero deliberate persistence →
-            // decisionSignal rides the payload; next SessionStart reminds once.
-            let decisionSignal = null;
-            try {
-              const promptRows = db.prepare(`
-                SELECT prompt_text FROM user_prompts
-                WHERE content_session_id = ? ORDER BY prompt_number ASC LIMIT 200
-              `).all(sessionId);
-              const d = detectUnpersistedDecision({
-                prompts: promptRows.map((r) => r.prompt_text),
-                transcriptPath,
-              });
-              if (d.fire) decisionSignal = d.signal;
-            } catch (e) { debugCatch(e, 'handleStop-persist-reminder'); }
-            const payload = { ...stats, ...bugfixStats, lowStreak, decisionSignal, project, savedAt: Date.now() };
-            writeFileSync(dest, JSON.stringify(payload), { mode: 0o600 });
-          } catch (e) { debugCatch(e, 'handleStop-cite-recall-persist'); }
-
-          // D#152: the `subagent` face. Recorded in its OWN
-          // recordCitationSurfaces call because it carries a different `cited`
-          // set — a lesson handed to a dispatched subagent is cited in that
-          // subagent's own transcript. Folding it into the main call would score
-          // subagent injections against citedMain and report 0% by
-          // construction; folding its cites INTO citedMain would credit the
-          // main-thread faces for citations the main thread never made. The
-          // upsert key is (project, session, surface), so two calls with
-          // disjoint face sets do not collide.
-          //
-          // SINCE v3.83.0 (D#177) this is no longer metering-only: the face DOES reach
-          // applyCitationDecay, through the `decayInjected` / `decayCited` copies above.
-          // The sentence above about folding cites into `citedMain` still holds and is the
-          // reason those are copies — this call, `resolveEdgeAttribution` and the keyctx
-          // promotion all keep the un-widened set. `CLAUDE_MEM_SUBAGENT_DECAY=0` returns
-          // the face to metering-only.
-          //
-          // The "placed LAST" note below is now historical: `collectSubagentSurface` runs
-          // at the HEAD of this block (the decay loop needs its result), and `sub` here is
-          // that same object rather than a second call. The parse-count property the note
-          // defends is unchanged — see the comment at the collection site.
-          // earlier, this block costs ONE extra parse of the parent — the memo
-          // re-caches on the first re-read, so it is one, not one per later
-          // scanner — and breaks the "one parse per Stop" property the block
-          // above documents. Measured by instrumenting the parse: 1 parent parse
-          // at this position, 2 when relocated earlier. ~25ms on the largest
-          // real transcript here (5.4MB), matching lib/transcript-scan.mjs's
-          // own header figure.
-          // The text floor is re-checked rather than inherited — same reason as
-          // every other face: a tool-only Stop must not bank a verdict, and it
-          // must not enter the funnel's session denominator either.
-          try {
-            if (hasMainThreadAssistantText(transcriptPath)) {
-              // `sub` is the one collected at the top of this block — a second
-              // collectSubagentSurface call here would re-parse every sidechain file and,
-              // worse, could disagree with the set the decay loop above just scored.
-              if (sub.injected.size > 0) {
-                recordCitationSurfaces(db, project, ccSessionId || sessionId,
-                  { subagent: sub.injected }, sub.cited);
-                debugLog('DEBUG', 'handleStop',
-                  `subagent-face: files=${sub.files} injected=${sub.injected.size} cited=${sub.cited.size}`);
-              }
-            }
-          } catch (e) { debugCatch(e, 'handleStop-subagent-face'); }
-        }
-      } catch (e) { debugCatch(e, 'handleStop-citation-track'); }
+      markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot });
+      writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
+      trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
     } finally {
       db.close();
     }
