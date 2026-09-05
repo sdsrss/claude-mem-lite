@@ -76,6 +76,19 @@ export const INTENTS = [
   { pattern: /implement|feature\b|add\s+(?:a\s+)?new|实现|添加|新功能|新增|开发|编写|创建|构建|做一个|加一个|写一个/i, type: null, limit: 3 },
   // Recall/history intent (catch-all temporal, lowest priority)
   // CJK: 刚才/历史/回顾 from real prompts; 碰到过|遇到过|见过|同样的问题 from spoken CN
+  //
+  // MEASURED AND REJECTED — do not re-add `remind me` here without a ruler (2026-09-05,
+  // 10-row typed corpus, sandbox install). The reasoning that it belongs is seductive and
+  // wrong: `remember` is already in this arm, `remind me` is its imperative twin, and its
+  // absence is the sole reason "remind me what we decided about session cookies" reaches
+  // hasExplicitSignal with no error signature, no file, no identifier and no CJK, and is
+  // dropped before FTS runs. Added, the prompt does fire — and this arm carries
+  // useRecent + limit 5, so when topical FTS comes back empty (it does: the OR floor
+  // drops a long multi-topic prompt whose best row shares only "session"/"cookies") the
+  // recency fallback spends FIVE injection slots on the five newest rows, and on the
+  // measured corpus the session-cookies decision was NOT among them. Five noise rows and
+  // no answer is worse than the silence it replaced. Any future attempt needs
+  // benchmark/citation-live-replay.mjs on the `fyi` face, not this intuition.
   { pattern: /before|previously|last time|remember|seen this|same\s+issue|之前|上次|以前|记得|刚才|历史|回顾|碰到过|遇到过|见过|同样的问题|类似的问题/i, type: null, limit: 5, useRecent: true },
 ];
 

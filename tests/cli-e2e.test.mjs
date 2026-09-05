@@ -1053,3 +1053,77 @@ describe('import-jsonl all-skipped warning (Round2-P2)', () => {
     expect(stdout).toMatch(/none matched/i);
   });
 });
+
+describe('CLI E2E: version alias', () => {
+  // `claude-mem-lite version` is what a user types before they know the flag exists, and
+  // it is far enough from every real command that the edit-distance suggester fell through
+  // to the generic "run help / run install" line — the CLI refusing a question it can
+  // answer. The flag forms must keep working byte-identically.
+  for (const arg of ['version', '--version', '-v', '-V']) {
+    it(`\`${arg}\` prints the package version and exits 0`, () => {
+      const { stdout, exitCode } = runCli([arg]);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toMatch(/^claude-mem-lite v\d+\.\d+\.\d+/);
+    });
+  }
+});
+
+describe('CLI E2E: search → recall hint on a path query', () => {
+  // OBS_FTS_COLUMNS does not index `files`, so a save that named a path in --files and
+  // never mentioned it in prose is reachable by `recall` and invisible to `search`. The
+  // user pasting the path they were just editing got a flat "No results" — true about the
+  // index, false about the store. This is the one zero-result shape the CLI can disprove.
+  it('names the recall command when the query is a path the store knows', () => {
+    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
+      filesModified: '["src/payments/webhook.ts"]', lessonLearned: 'Dedupe on the provider event id' });
+
+    const { stdout, exitCode } = runCli(['search', 'src/payments/webhook.ts']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('No results');
+    expect(stdout).toContain('search indexes text, not file paths');
+    expect(stdout).toContain('recall "src/payments/webhook.ts"');
+  });
+
+  it('fires on a bare filename too (recall matches on basename)', () => {
+    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
+      filesModified: '["src/payments/webhook.ts"]', lessonLearned: 'Dedupe on the provider event id' });
+    const { stdout } = runCli(['search', 'webhook.ts']);
+    expect(stdout).toContain('recall "webhook.ts"');
+  });
+
+  // Driven to failure in both directions: a hint that fires on every empty search is
+  // noise, and a hint that fires when `recall` would ALSO be empty is a lie.
+  it('stays silent for a prose query', () => {
+    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
+      filesModified: '["src/payments/webhook.ts"]' });
+    const { stdout } = runCli(['search', 'quantum entanglement scheduler']);
+    expect(stdout).toContain('No results');
+    expect(stdout).not.toContain('search indexes text');
+  });
+
+  it('stays silent for a path no observation is linked to', () => {
+    const { stdout } = runCli(['search', 'src/nowhere/absent.ts']);
+    expect(stdout).toContain('No results');
+    expect(stdout).not.toContain('search indexes text');
+  });
+
+  it('leaves --json output unchanged', () => {
+    seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
+      filesModified: '["src/payments/webhook.ts"]' });
+    const { stdout } = runCli(['search', 'src/payments/webhook.ts', '--json']);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed).toMatchObject({ total: 0, returned: 0, results: [] });
+  });
+
+  // Doctrine rule 6: a ruler must not pollute what it measures. The hint answers a
+  // question the user did not ask, so it must not bump the engagement counters that
+  // feed the tier/decay system.
+  it('does not bump access_count on the rows it counts', () => {
+    const id = Number(seedObs({ type: 'bugfix', title: 'Retry storm on duplicate deliveries', importance: 3,
+      filesModified: '["src/payments/webhook.ts"]' }).lastInsertRowid);
+    const before = db.prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?').get(id).c;
+    runCli(['search', 'src/payments/webhook.ts']);
+    const after = db.prepare('SELECT COALESCE(access_count, 0) AS c FROM observations WHERE id = ?').get(id).c;
+    expect(after).toBe(before);
+  });
+});

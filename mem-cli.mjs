@@ -58,7 +58,7 @@ import { parseArgs, out, outVerbatim, fail, relativeTime, fmtDateShort, parseIdT
 import { saveObservation, saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
-import { recallByFile } from './lib/recall-core.mjs';
+import { recallByFile, countRecallableByFile } from './lib/recall-core.mjs';
 import { fetchRecent, RECENT_MAX } from './lib/recent-core.mjs';
 import { resolveAnchorToken, formatAnchorError, resolveQueryAnchor, fetchRecentTimeline, fetchTimelineWindow } from './lib/timeline-core.mjs';
 import { buildSearchFtsQuery, parseDateBounds, parseDuration, coreRunSearchPipeline } from './lib/search-core.mjs';
@@ -89,6 +89,35 @@ import {
 import { shouldQueueSaveEnrich, queueSaveEnrich } from './lib/save-enrich.mjs';
 
 // ─── Commands ────────────────────────────────────────────────────────────────
+
+// A path query is not a text query, and `search` cannot tell the user so.
+//
+// OBS_FTS_COLUMNS (scoring-sql.mjs) indexes title/narrative/lesson/aliases/concepts — it
+// does NOT index `files`. File association lives in the observation_files junction, which
+// is `recall`'s table and only `recall`'s. So a save that named `src/payments/webhook.ts`
+// in --files and never mentioned it in prose is reachable by `recall` and unreachable by
+// `search`, and the user typing the path they were just editing gets a flat
+// "No results" — a true statement about the FTS index that reads as a false one about the
+// store. This is the one zero-result shape the CLI can positively disprove, so it does,
+// with the exact command that answers it.
+//
+// Cheap and quiet: one COUNT, only on a zero-result query that is a single whitespace-free
+// token shaped like a path or filename, and silent when that count is 0 (the ordinary case
+// — an ordinary prose query never reaches the COUNT at all). countRecallableByFile does
+// not bump access counters, so offering the hint cannot inflate the engagement signal of
+// rows the user has not read.
+function emitRecallHint(db, query) {
+  const q = String(query || '').trim();
+  if (!q || /\s/.test(q)) return;
+  if (!(q.includes('/') || q.includes('\\') || /\.[A-Za-z0-9]{1,8}$/.test(q))) return;
+  try {
+    const n = countRecallableByFile(db, q);
+    if (n > 0) {
+      out(`[mem] ${n} observation(s) are linked to that file — search indexes text, not file paths.`);
+      out(`[mem] Try: claude-mem-lite recall "${q}"`);
+    }
+  } catch { /* hint is best-effort; never break search */ }
+}
 
 async function cmdSearch(db, args, { llm } = {}) {
   const { positional, flags } = parseArgs(args);
@@ -295,6 +324,7 @@ async function cmdSearch(db, args, { llm } = {}) {
       out(JSON.stringify({ query, total: 0, returned: 0, offset, limit, deep: isDeep, variants: isDeep ? deepVariants : undefined, results: [] }));
     } else {
       out(`[mem] No results for "${query}"`);
+      emitRecallHint(db, query);
       // The zero-result path is where the trailer earns its keep — the D#92
       // failure chain was exactly "searched, found nothing, item was deferred".
       emitDeferredTrailer();
@@ -1696,9 +1726,24 @@ function cmdExport(db, args) {
   // truncated backup that lost rows on restore, and `--limit 5000` was REJECTED back
   // to 200 (can't back up >1000 at all). Now: omit --limit → LIMIT -1 (SQLite = no
   // limit); pass --limit N → honor any positive N (a backup may exceed 1000).
+  //
+  // The invalid-value branch has to land on that same -1, not on the sibling commands'
+  // `defaultValue: 200`. `parseIntFlag`'s warn-and-default contract is right for `search`
+  // and `recent`, where the default is a display width; here the default is COMPLETENESS,
+  // and defaulting a backup to 200 rows reopens the truncation the paragraph above closed
+  // — through the invalid door instead of the absent one. It is the same failure shape as
+  // the bare `--to` guard at the top of this function: `export --limit "$N" > backup.json`
+  // with `$N` unset or typo'd writes 200 rows, warns on a stderr the redirect usually
+  // discards, and exits 0. Recovering to the complete set is the only direction that
+  // cannot lose a row on restore.
   const limitGiven = flags.limit !== undefined && flags.limit !== null && flags.limit !== '';
   const limit = limitGiven
-    ? parseIntFlag(flags.limit, { name: '--limit', defaultValue: 200 })
+    ? parseIntFlag(flags.limit, {
+        name: '--limit',
+        defaultValue: -1,
+        warn: () => process.stderr.write(
+          `[mem] Invalid --limit "${flags.limit}" (must be an integer ≥ 1); exporting the COMPLETE matching set instead\n`),
+      })
     : -1;
   const format = flags.format || 'json';
   if (!['json', 'jsonl'].includes(format)) {
@@ -1742,7 +1787,10 @@ function cmdExport(db, args) {
     outVerbatim(JSON.stringify(rows, null, 2));
   }
 
-  if (limitGiven && rows.length >= limit) {
+  // `limit > 0`, not just `limitGiven`: an invalid `--limit` now recovers to the complete
+  // set (-1), and `rows.length >= -1` is always true — so the guard as written announced
+  // "Results capped at -1" on the one path that is guaranteed NOT to be capped.
+  if (limitGiven && limit > 0 && rows.length >= limit) {
     process.stderr.write(`[mem] Note: Results capped at ${limit}. Raise --limit or narrow --from/--to to export more.\n`);
   }
   // Fidelity caveat at backup-creation time (mirrors the restore-side note). stderr,

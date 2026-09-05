@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, statSync, symlinkSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
@@ -550,11 +550,21 @@ describe('cache hook residue clearing', () => {
   // case that expects clearing must set up that second registration. Before the
   // guard existed these fixtures had no settings.json at all and still cleared —
   // which is exactly the plugin-only shape the third test now pins as a refusal.
-  function writeManagedHooks(home) {
+  // `live` also CREATES the launcher the entry names. The clearer now requires that:
+  // a settings.json entry naming a deleted launcher is a registration that fires
+  // nothing, and authorising a manifest wipe from it is the defect the fourth test
+  // below pins. Writing the file keeps this fixture what its name claims — a real
+  // install-managed registration — rather than a string that resembles one.
+  function writeManagedHooks(home, { live = true } = {}) {
+    const launcher = join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs');
+    if (live) {
+      mkdirSync(dirname(launcher), { recursive: true });
+      writeFileSync(launcher, '// installed launcher\n');
+    }
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
       hooks: {
-        SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs')}" hook.mjs session-start` }] }],
+        SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${launcher}" hook.mjs session-start` }] }],
       },
     }));
   }
@@ -626,6 +636,35 @@ describe('cache hook residue clearing', () => {
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
       hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'node /somewhere/other-plugin/hook.js' }] }] },
     }));
+
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { clearCacheHookResidue } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+      expect(clearCacheHookResidue()).toBe(0);
+      expect(readFileSync(manifest, 'utf8')).toBe(original);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  // The half the plugin-only guard above does NOT cover, and the reachable route back
+  // into its exact end state: settings.json DOES name a path of ours, but the path is
+  // gone. Reached by installing globally, switching to the plugin, and removing
+  // ~/.claude-mem-lite without running our `uninstall` — the leftover entries fire
+  // nothing, so the cache manifest is again the only live registration, and a clearer
+  // gated on the string alone empties it on every update check.
+  it('refuses to clear when the settings.json entry names a path that no longer exists', async () => {
+    const home = makeDir('mem-cache-residue-stale');
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+    const manifest = join(cacheBase, '3.95.1', 'hooks', 'hooks.json');
+    mkdirSync(join(cacheBase, '3.95.1', 'hooks'), { recursive: true });
+    const original = JSON.stringify({
+      description: 'claude-mem-lite hooks',
+      hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+    });
+    writeFileSync(manifest, original);
+    writeManagedHooks(home, { live: false });
 
     const origHome = process.env.HOME;
     process.env.HOME = home;

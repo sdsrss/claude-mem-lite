@@ -7,6 +7,7 @@ import {
   scanPluginCacheHookPollution,
   clearPluginCacheHooks,
   hasInstallManagedHooks,
+  hasLiveInstallManagedHooks,
   pluginCacheHookEvents,
 } from '../plugin-cache-guard.mjs';
 
@@ -156,6 +157,73 @@ describe('plugin-cache-guard', () => {
           hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'node /tmp/other-tool/hook.mjs' }] }] },
         }));
         expect(hasInstallManagedHooks({ home })).toBe(false);
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+  });
+
+  // The predicate that gates the DESTRUCTIVE branch. hasInstallManagedHooks answers a
+  // string question and is right to; this one has to be able to say NO to a settings.json
+  // that mentions us and cannot run, because that state is indistinguishable from a live
+  // global install by string alone and clearing on it empties the only working manifest.
+  describe('hasLiveInstallManagedHooks', () => {
+    function writeSettings(home, command) {
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+        hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command }] }] },
+      }));
+    }
+
+    it('returns true when the managed entry names a launcher that exists', () => {
+      const home = makeHome();
+      try {
+        const launcher = join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs');
+        mkdirSync(join(home, '.claude-mem-lite', 'scripts'), { recursive: true });
+        writeFileSync(launcher, '// installed\n');
+        writeSettings(home, `node "${launcher}" hook.mjs session-start`);
+        expect(hasInstallManagedHooks({ home })).toBe(true);
+        expect(hasLiveInstallManagedHooks({ home })).toBe(true);
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('says NO when the managed entry names a launcher that was deleted', () => {
+      const home = makeHome();
+      try {
+        const launcher = join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs');
+        writeSettings(home, `node "${launcher}" hook.mjs session-start`);
+        // The string test still passes — that is precisely the trap.
+        expect(hasInstallManagedHooks({ home })).toBe(true);
+        expect(hasLiveInstallManagedHooks({ home })).toBe(false);
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('resolves an unquoted legacy command path too', () => {
+      const home = makeHome();
+      try {
+        const launcher = join(home, '.claude-mem-lite', 'hook.mjs');
+        writeSettings(home, `node ${launcher} session-start`);
+        expect(hasLiveInstallManagedHooks({ home })).toBe(false);
+        mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
+        writeFileSync(launcher, '// installed\n');
+        expect(hasLiveInstallManagedHooks({ home })).toBe(true);
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('keeps the string answer when no path can be parsed out of the command', () => {
+      const home = makeHome();
+      try {
+        // Marker present, but nothing path-shaped to check — the narrow rule must not
+        // turn "unfamiliar shape" into "dead", or it would silently disable the dedup.
+        writeSettings(home, 'run-mem-hook --plugin .claude-mem-lite/ session-start');
+        expect(hasInstallManagedHooks({ home })).toBe(true);
+        expect(hasLiveInstallManagedHooks({ home })).toBe(true);
+      } finally { rmSync(home, { recursive: true, force: true }); }
+    });
+
+    it('stays false on a plugin-only install (nothing of ours in settings.json)', () => {
+      const home = makeHome();
+      try {
+        writeSettings(home, 'node /tmp/other-tool/hook.mjs');
+        expect(hasLiveInstallManagedHooks({ home })).toBe(false);
       } finally { rmSync(home, { recursive: true, force: true }); }
     });
   });

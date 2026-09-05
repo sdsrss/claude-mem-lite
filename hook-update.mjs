@@ -1061,11 +1061,33 @@ function copyReleaseIntoStaging(sourceDir, stagingDir, manifest = { SOURCE_FILES
 function hasInstallManagedSettingsHooks() {
   const settingsPath = join(homedir(), '.claude', 'settings.json');
   if (!existsSync(settingsPath)) return false;
-  try {
-    const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    const serialized = JSON.stringify(s.hooks || {});
-    return serialized.includes('.claude-mem-lite/') || serialized.includes('/claude-mem-lite/');
-  } catch { return false; }
+  let s;
+  try { s = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { return false; }
+  const serialized = JSON.stringify(s.hooks || {});
+  if (!(serialized.includes('.claude-mem-lite/') || serialized.includes('/claude-mem-lite/'))) return false;
+  // Liveness, mirroring plugin-cache-guard.hasLiveInstallManagedHooks (see its docblock).
+  // The string test alone says settings.json MENTIONS a path of ours, not that the path
+  // still exists — and a stale entry left by a removed global install fires nothing while
+  // making this function authorise emptying the plugin manifest that does. Narrow by
+  // construction: only a command we parsed a path out of, ALL of whose paths are gone,
+  // flips the answer; an unfamiliar shape yields no path and keeps the old result.
+  let checked = 0;
+  for (const matchers of Object.values(s?.hooks || {})) {
+    if (!Array.isArray(matchers)) continue;
+    for (const m of matchers) {
+      for (const h of (Array.isArray(m?.hooks) ? m.hooks : [])) {
+        const c = typeof h?.command === 'string' ? h.command : '';
+        if (!(c.includes('.claude-mem-lite/') || c.includes('/claude-mem-lite/'))) continue;
+        let paths = [...c.matchAll(/"([^"]+)"/g)].map(x => x[1]).filter(p => p.startsWith('/'));
+        if (paths.length === 0) paths = c.split(/\s+/).filter(t => t.startsWith('/'));
+        for (const p of paths) {
+          checked++;
+          if (existsSync(p)) return true;
+        }
+      }
+    }
+  }
+  return checked === 0;
 }
 export function clearCacheHookResidue() {
   // Same precondition plugin-cache-guard.mjs documents and hook.mjs's self-heal

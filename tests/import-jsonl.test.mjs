@@ -255,3 +255,46 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
     expect(second).not.toMatch(/Try: claude-mem-lite recent/);
   });
 });
+
+describe('importJsonl — <task-notification> parity with the live writers', () => {
+  let db;
+  beforeEach(() => { db = createTestDb(); });
+
+  // hook.mjs handleUserPrompt and scripts/user-prompt-search.js both return on
+  // `rawPrompt.startsWith('<task-notification>')` — it is Claude Code protocol, not user
+  // input. Backfill is the third input boundary into user_prompts and was the only one
+  // persisting them, so a cold-start import seeded rows the live path would never write.
+  // Every read path then has to filter them back out, and the two that do not
+  // (`get P#N`, the timeline P# anchor) hand the agent protocol chatter as context.
+  it('skips protocol notifications and keeps the real prompt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-tn-'));
+    try {
+      const file = join(dir, 'tn.jsonl');
+      writeFileSync(file, [
+        '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"a real question about billing retries"},"timestamp":"2026-04-01T12:00:00Z"}',
+        '{"type":"user","sessionId":"tn-1","message":{"role":"user","content":"<task-notification>background task finished</task-notification>"},"timestamp":"2026-04-01T12:00:01Z"}',
+      ].join('\n') + '\n');
+
+      const r = await importJsonl(db, file, { project: 'proj' });
+      expect(r.prompts).toBe(1);
+      expect(r.skipped).toBe(1);
+
+      const rows = db.prepare('SELECT prompt_text FROM user_prompts').all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].prompt_text).toMatch(/billing retries/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // Driven to failure the other way: the guard must not swallow a prompt that merely
+  // MENTIONS the sentinel mid-sentence — only one that opens with it is protocol.
+  it('keeps a prompt that only mentions the sentinel', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-tn-'));
+    try {
+      const file = join(dir, 'tn2.jsonl');
+      writeFileSync(file,
+        '{"type":"user","sessionId":"tn-2","message":{"role":"user","content":"why does <task-notification> reach the transcript at all"},"timestamp":"2026-04-01T12:00:00Z"}\n');
+      const r = await importJsonl(db, file, { project: 'proj' });
+      expect(r.prompts).toBe(1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

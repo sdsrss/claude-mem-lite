@@ -1504,6 +1504,45 @@ describe('CLI export command', () => {
     expect(data.length).toBe(2);
   });
 
+  // An INVALID --limit used to land on parseIntFlag's `defaultValue: 200`, which is the
+  // right convention for `search`/`recent` (default = display width) and the wrong one
+  // here (default = COMPLETENESS). `export --limit "$N" > backup.json` with `$N` unset
+  // writes 200 rows, warns on the stderr the redirect discards, and exits 0 — the same
+  // truncated-backup shape the no-limit default was changed to -1 to close, reached
+  // through the invalid door instead of the absent one. 205 rows because a 200-row store
+  // cannot tell the two behaviours apart.
+  it('recovers an invalid --limit to the COMPLETE set, not to 200', async () => {
+    for (let i = 0; i < 205; i++) {
+      insertObs(testDb, {
+        sessionId: 'mem-s1', project: 'test--project', type: 'discovery',
+        title: `Bulk export item ${i}`, text: `bulk content ${i}`,
+      });
+    }
+    for (const bad of ['abc', '0', '-5']) {
+      const output = await captureStdoutOnly(() => run(['export', '--limit', bad]));
+      expect(JSON.parse(output).length).toBe(205);
+    }
+  });
+
+  // The other half: recovering to -1 makes `rows.length >= limit` trivially true, so the
+  // cap notice announced "Results capped at -1" on the one path guaranteed not to be
+  // capped. A real cap must still say so.
+  it('announces a real cap and stays quiet on the recovered one', async () => {
+    for (let i = 0; i < 5; i++) {
+      insertObs(testDb, {
+        sessionId: 'mem-s1', project: 'test--project', type: 'discovery',
+        title: `Cap notice item ${i}`, text: `content ${i}`,
+      });
+    }
+    const capped = await captureStdout(() => run(['export', '--limit', '2']));
+    expect(capped).toContain('Results capped at 2');
+
+    const recovered = await captureStdout(() => run(['export', '--limit', 'abc']));
+    expect(recovered).toContain('COMPLETE matching set');
+    expect(recovered).not.toContain('capped at -1');
+    expect(recovered).not.toMatch(/Results capped at/);
+  });
+
   it('excludes compressed observations by default', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1', project: 'test--project', type: 'discovery',

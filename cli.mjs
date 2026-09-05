@@ -4,7 +4,11 @@ const INSTALL_COMMANDS = new Set(['install', 'uninstall', 'status', 'doctor', 'c
 
 const cmd = process.argv[2];
 
-if (cmd === '--version' || cmd === '-v') {
+// `version` and `-V` are aliases, not extra syntax: the bare subcommand is what a user
+// types first (`claude-mem-lite version`), and it is far enough from every real command
+// name that the edit-distance suggester below fell through to the generic
+// "Run help / Run install" line — a wrong answer to a question the CLI can answer.
+if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   const { readFileSync } = await import('fs');
   const { fileURLToPath } = await import('url');
   const { dirname, join } = await import('path');

@@ -1869,7 +1869,16 @@ async function doctor() {
       // `validate` job (where the "old processes" were vitest's own workers) and it
       // reddens doctor-install-shape-e2e's "instead of going red forever" case on any
       // dev box with a previous-version session still open.
-      warn(`Old processes running${currentVersion ? ` (current: v${currentVersion})` : ''}:\n    ` + stale.join('\n    '));
+      //
+      // `dwarn`, not the bare `warn`: the first cut called the bare one, which prints the
+      // ⚠ line but never touches the `warnings` counter — so a doctor run whose ONLY
+      // finding was a stale launcher printed the ⚠ and then closed with
+      // "All checks passed!". That is the exact sentence buildDoctorSummary's docblock
+      // says must not lie, and the exact case tests/doctor-summary.test.mjs pins at the
+      // pure-function level; the counter simply never reached it from here. `dwarn`
+      // increments `warnings` only — `issues` stays 0, so the paragraph above still
+      // holds and `doctor` still exits 0.
+      dwarn(`Old processes running${currentVersion ? ` (current: v${currentVersion})` : ''}:\n    ` + stale.join('\n    '));
     } else {
       ok('No stale processes');
     }

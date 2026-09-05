@@ -2,6 +2,165 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.96.0 — v3.95.1 taught the checks to see the emptied manifest; this is the half that stops emptying it
+
+Found by driving the shipped v3.95.1 tree as a user for two rounds — fresh install, sandbox
+`CLAUDE_MEM_DIR`, all seven hook events fired by hand, every CLI family exercised — rather
+than by reading code. Six defects, ordered here by what they cost a user. One candidate fix
+was measured, came out worse than the behaviour it replaced, and was reverted; that note is
+at the bottom because it is the most useful part of the round.
+
+### 1. A dead `settings.json` entry made the plugin delete its own hooks, every session
+
+v3.95.1 closed the *detection* half of this: `pluginCacheHookEvents()` opens the cache
+manifest, so `status` and `doctor` can no longer read an emptied one as a healthy
+plugin-only install. It did not close the *cause*, and the cause is still reachable.
+
+`hasInstallManagedHooks()` answers a string question — does `settings.json` mention a path
+of ours. That is the right question for `install()`, which has just written those entries
+itself. It is the wrong question for the SessionStart self-heal, whose action is
+destructive. A user who installed globally, later switched to the plugin, and removed
+`~/.claude-mem-lite` by hand (or ran `npm uninstall -g` without our `uninstall`) is left
+with entries naming a launcher that no longer exists. They fire nothing. The string test
+still passes, so the self-heal read a dead registration as the live one and emptied the
+manifest that was actually working — on every SessionStart, silently, landing in exactly
+the end state v3.95.1 had just learned to recognise.
+
+Reproduced from a sandbox `HOME` before the fix:
+
+```
+stale settings entry, launcher deleted → hasInstallManagedHooks: true → cleared: ['3.95.1']
+                                       → pluginCacheHookEvents: { ok: false, reason: 'empty' }
+```
+
+`hasLiveInstallManagedHooks()` adds the liveness question and gates both destructive sites
+(`hook.mjs` session-start, `hook-update.clearCacheHookResidue()`; `hook-update.mjs` keeps
+its own inlined copy, preserving the "works when plugin-cache-guard.mjs is missing"
+property its header claims). Deliberately narrow: it returns `false` only when a managed
+command was parsed AND none of the paths it names exist. An unparseable or unfamiliar
+command shape keeps the old answer, so this can only ever remove the destructive branch
+from a case positively verified as dead — never add it to one.
+
+| settings.json shape | `hasInstallManagedHooks` | `hasLiveInstallManagedHooks` |
+|---|---|---|
+| stale entry, launcher deleted | true | **false** |
+| real global install | true | true |
+| plugin-only (nothing of ours) | false | false |
+
+`tests/hook-update.test.mjs`'s `writeManagedHooks` fixture now *creates* the launcher it
+names. It never did — which is why the suite was green over a settings.json that could not
+have run a hook, and is a small instance of the same defect: a fixture standing for an
+install by string alone.
+
+### 2. `export --limit` with a bad value silently truncated a backup to 200 rows
+
+The no-`--limit` default was changed to `-1` (complete) precisely because
+`export > backup.json` used to cap at 200 and lose rows on restore. The **invalid**-value
+branch was left on `parseIntFlag`'s `defaultValue: 200` — the right convention for `search`
+and `recent`, where the default is a display width, and the wrong one here, where the
+default is completeness. Same truncation, reached through the invalid door instead of the
+absent one:
+
+```
+export --limit "$N" > backup.json     # $N unset or typo'd
+250-row store → 200 rows exported, 50 lost
+warning on stderr (which the redirect discards), exit 0
+```
+
+Measured on a 250-row store: pre-fix 200/250, post-fix 250/250. Recovering to the complete
+set is the only direction that cannot lose a row on restore. Fixing it also exposed that
+the cap notice guards on `limitGiven` alone, and `rows.length >= -1` is always true — so
+the recovered path announced `Results capped at -1`, on the one path guaranteed not to be
+capped. Both halves are pinned, mutation-verified against the pre-fix source.
+
+### 3. `doctor` printed ⚠ and then said "All checks passed!"
+
+`buildDoctorSummary`'s docblock says that sentence must not lie about warnings, and
+`tests/doctor-summary.test.mjs` has pinned the 4-way contract at the pure-function level
+since it was written. The counter simply never reached it: the doctor body has two
+reporters, `warn` (prints ⚠, counts nothing) and `dwarn` (counts, then prints), and the
+stale-process check called the bare one. A run whose only finding was an old launcher
+printed the ⚠ and closed with "All checks passed!".
+
+One token. What is worth keeping is the guard that replaces the unit test's blind spot: a
+source scan asserting every bare `warn(` in the doctor body is accompanied by `warnings++`
+or `issues++`. It goes red against the pre-fix source and green after — verified both
+directions, because a scan that cannot fail is not a check (doctrine rule 5). `dwarn`
+raises `warnings` only, so `doctor` still exits 0 on a stale launcher, which is the
+behaviour the original comment argued for and got half right.
+
+### 4. `import-jsonl` wrote the protocol messages both live writers refuse
+
+`hook.mjs::handleUserPrompt` and `scripts/user-prompt-search.js` both return on
+`rawPrompt.startsWith('<task-notification>')` — it is Claude Code protocol, not user input.
+Cold-start backfill is the third input boundary into `user_prompts` and was the only one
+persisting them. Every read path then filters them back out (`prompt_text NOT LIKE
+'<task-notification>%'` in `lib/search-core.mjs`, `search-engine.mjs`, the UPS
+prompt-fallback), and the two that do not — `get P#N` and the timeline `P#` anchor — hand
+the agent protocol chatter as recalled context. Counted as `skipped`, which is what it is.
+(`<private>` redaction was checked at the same seam and was already correct on this path.)
+
+### 5. Searching a file path was a dead end
+
+`OBS_FTS_COLUMNS` indexes title / narrative / lesson / aliases / concepts. It does not index
+`files` — that association lives in the `observation_files` junction, which is `recall`'s
+table and only `recall`'s. So a save that named a path in `--files` and never mentioned it
+in prose is reachable by `recall` and invisible to `search`, and a user pasting the path
+they were just editing got a flat `No results`: true about the index, false about the
+store. It is the one zero-result shape the CLI can positively disprove, so it now does.
+
+```
+$ claude-mem-lite search "src/payments/webhook.ts"
+[mem] No results for "src/payments/webhook.ts"
+[mem] 1 observation(s) are linked to that file — search indexes text, not file paths.
+[mem] Try: claude-mem-lite recall "src/payments/webhook.ts"
+```
+
+One COUNT, only on a zero-result query that is a single whitespace-free token shaped like a
+path, silent when the count is 0 — an ordinary prose query never reaches the COUNT.
+`--json` output is unchanged. The count goes through a new `countRecallableByFile()` that
+shares `recallByFile`'s predicate and deliberately **not** its `access_count` bump: the hint
+answers a question the user did not ask, and a ruler must not pollute what it measures
+(doctrine rule 6). Pinned in-process as well as through the CLI, so v8 coverage can see it.
+
+### 6. `claude-mem-lite version` was an unknown command
+
+Far enough from every real command that the edit-distance suggester fell through to the
+generic "run help / run install" line — the CLI refusing a question it can answer. `version`
+and `-V` now join `--version` / `-v`.
+
+### Measured and rejected: `remind me` as a recall-intent trigger
+
+Recorded because the reasoning for it is seductive and the measurement says no.
+
+`hasExplicitSignal` admits a prompt only on an error signature, a file mention, a recall
+intent, a code identifier, or CJK. A plain English recall question carries none of those, so
+"remind me what we decided about session cookies" is dropped before FTS runs — while
+`remember` has been in the recall-intent list all along and `remind me` is its imperative
+twin. Adding it looks like closing an omission.
+
+Measured on a 10-row typed corpus in a sandbox install: the prompt does fire, and that arm
+carries `useRecent` + `limit 5`, so when topical FTS comes back empty (it does — the OR
+floor drops a long multi-topic prompt whose best row shares only "session"/"cookies") the
+recency fallback spends **five** injection slots on the five newest rows, and the
+session-cookies decision was not among them. Five noise rows and no answer is worse than
+the silence it replaced. Reverted byte-identically; the comment stays so the next reader
+does not re-derive it. Any future attempt needs `benchmark/citation-live-replay.mjs` on the
+`fyi` face — `denoise-ab` is structurally blind there (doctrine rule 9).
+
+The broader behaviour behind it — prose recall questions with no identifier, file or error
+signature get no injection — is the deliberate, benchmarked v2.57.x precision gate, with
+`CLAUDE_MEM_UPS_REQUIRE_SIGNAL=0` as its documented escape hatch. Untouched.
+
+### Not a defect (checked, so the next round does not re-check)
+
+Secret scrubbing over ten key shapes, FTS query fuzzing (21 hostile queries incl. SQL
+injection and bare FTS5 operators), exit codes on every usage error and on an unopenable
+DB, 12 concurrent writers, corrupt and read-only databases, mixed-prefix `get`
+(`#/D#/P#/E#/S#`), export→restore round-trip, and the `/clear` handoff. All behaved as
+documented. Two apparent bugs during the round were the tester's own project-name
+mismatches, not the system's.
+
 ## v3.95.1 — the plugin cleared its own hook manifest, and every check we own called it healthy
 
 A plugin-only install could reach a state with **zero hooks registered** while `status` and

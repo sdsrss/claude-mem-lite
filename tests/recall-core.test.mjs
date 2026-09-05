@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { recallByFile } from '../lib/recall-core.mjs';
+import { recallByFile, countRecallableByFile } from '../lib/recall-core.mjs';
 
 // Single-source recall core (convergence audit 2026-06-13): cmdRecall (CLI) and
 // mem_recall (MCP) hand-copied the junction query, LIKE escaping, and the
@@ -125,5 +125,61 @@ describe('recall-core', () => {
     for (const k of ['id', 'type', 'title', 'lesson_learned', 'importance', 'created_at', 'created_at_epoch', 'project']) {
       expect(k in r, `column ${k}`).toBe(true);
     }
+  });
+});
+
+// The bump-free twin. `search` calls this on a zero-result path query to decide whether
+// `recall` would have answered — a question asked ON the user's behalf, not BY them.
+// Sharing the predicate is the point (a hint that disagrees with the command it names is
+// worse than no hint); NOT sharing the access-count bump is equally the point.
+describe('countRecallableByFile', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-cr', project: 'test' });
+  });
+  afterEach(() => db.close());
+
+  it('agrees with recallByFile on what matches', () => {
+    insertObs(db, {
+      sessionId: 'sess-cr', type: 'bugfix', importance: 3,
+      title: 'retry storm on duplicate deliveries', lessonLearned: 'dedupe on the provider event id',
+      filesModified: '["src/payments/webhook.ts"]',
+    });
+    expect(countRecallableByFile(db, 'src/payments/webhook.ts')).toBe(1);
+    expect(countRecallableByFile(db, 'webhook.ts')).toBe(1);
+    expect(countRecallableByFile(db, 'C:\\proj\\src\\payments\\webhook.ts')).toBe(1);
+    // Same path-boundary rule the sibling has: webhook.ts must not answer for a file
+    // whose name merely ends with it.
+    expect(countRecallableByFile(db, 'hook.ts')).toBe(0);
+    expect(countRecallableByFile(db, 'src/nowhere/absent.ts')).toBe(0);
+  });
+
+  it('does NOT bump access_count or last_accessed_at (recallByFile does)', () => {
+    const id = Number(insertObs(db, {
+      sessionId: 'sess-cr', type: 'bugfix', importance: 3,
+      title: 'counter probe', filesModified: '["probe.mjs"]',
+    }).lastInsertRowid);
+    const read = () => db.prepare('SELECT COALESCE(access_count,0) AS c, last_accessed_at AS t FROM observations WHERE id = ?').get(id);
+
+    const before = read();
+    countRecallableByFile(db, 'probe.mjs');
+    countRecallableByFile(db, 'probe.mjs');
+    const afterCount = read();
+    expect(afterCount.c).toBe(before.c);
+    expect(afterCount.t).toBe(before.t);
+
+    // Drive it to failure in the other direction: the sibling MUST still bump, or this
+    // test would pass just as well against a recall path that stopped counting reads.
+    recallByFile(db, 'probe.mjs');
+    expect(read().c).toBe(before.c + 1);
+  });
+
+  it('excludes superseded and low-signal rows, so the hint cannot over-promise', () => {
+    insertObs(db, {
+      sessionId: 'sess-cr', type: 'bugfix', importance: 2,
+      title: 'Modified promise.mjs', filesModified: '["promise.mjs"]',
+    });
+    expect(countRecallableByFile(db, 'promise.mjs')).toBe(0);
   });
 });

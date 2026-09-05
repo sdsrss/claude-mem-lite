@@ -1855,12 +1855,21 @@ async function handleSessionStart() {
   // Plugin cache self-heal: Claude Code auto-updates the marketplace plugin can
   // re-populate cache/<ver>/hooks/hooks.json, reintroducing duplicate hook
   // registration alongside install.mjs-managed settings.json entries. Silently
-  // clear — gated by hasInstallManagedHooks to avoid breaking plugin-only users.
+  // clear — gated to avoid breaking plugin-only users.
+  //
+  // The gate is hasLiveInstallManagedHooks, not the bare hasInstallManagedHooks: this
+  // branch EMPTIES the manifest, which is a dedup only while settings.json is really the
+  // other registration. A settings.json entry naming a deleted `~/.claude-mem-lite`
+  // launcher (global install removed by hand, plugin kept) satisfies the string test and
+  // fires nothing — so the self-heal read a dead registration as live and wiped the one
+  // that worked, every SessionStart. `?? hasInstallManagedHooks` keeps a guard module
+  // that predates the predicate working exactly as before.
   // Dynamic-import fallback: if plugin-cache-guard.mjs is missing (pre-2.31.2
   // auto-upgrade install), skip self-heal instead of crashing the entire hook.
   try {
     const guard = await loadCacheGuard();
-    if (guard.hasInstallManagedHooks && guard.hasInstallManagedHooks()) {
+    const ownsHooks = guard.hasLiveInstallManagedHooks ?? guard.hasInstallManagedHooks;
+    if (ownsHooks && ownsHooks()) {
       const cleared = guard.clearPluginCacheHooks({
         reason: 'Auto-healed by hook.mjs session-start — install.mjs-managed hooks active in settings.json',
       });
