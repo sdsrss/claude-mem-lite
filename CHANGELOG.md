@@ -2,6 +2,134 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v3.96.1 — four audit rounds that mostly repaired the instruments, and one 82,048-character regex
+
+No user-visible behaviour changes. Every shipped code change here is a refactor whose
+output was proved identical, plus a whole-tree reformat. What is worth reading is the
+other half: four of this repo's own measuring instruments were wrong, and three of them
+were wrong in the direction that produces a clean-looking number.
+
+The audit ledger — every finding, its evidence, and the four items deliberately left
+undone — is now tracked at `docs/audit/2026-09-05-audit.md`. It used to be gitignored,
+which is why the round that opened this series had to rebuild the previous round's status
+table out of CHANGELOG paragraphs and still lost nine of its items.
+
+### The cycle guard was reading an incomplete graph
+
+`tests/import-graph.test.mjs` is what keeps this repo at zero circular imports. It built
+its graph by regexing source text, so a comment reading ``this used to `await
+import('../hook-optimize.mjs')` `` counted as a live edge — a surplus edge in a cycle
+detector is a cycle nobody wrote, reproduced end to end:
+
+```
+one commented-out import line →
+  circular imports found: lib/time-constants.mjs -> lib/shard-gc.mjs -> lib/time-constants.mjs
+```
+
+The under-reporting is the half nobody looks for. The specifier pattern was
+
+```
+/(?:^|[\s;}])(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?['"]([^'"]+)['"]|…/g
+```
+
+and that lazy span sits inside an **optional** group. A bare `export { A, B };` with no
+`from` clause starts the branch, and the engine travels to the next ` from ` to satisfy the
+group — one match spanned **82,048 characters** (offset 30,401 → 112,449 in `mem-cli.mjs`),
+and the global scan's `lastIndex` skipped everything inside it. Eight real `await import()`
+edges were invisible, in `mem-cli.mjs` and `server.mjs`, because both files contain a bare
+`export { … };`.
+
+Both tools now walk the AST — comments and string literals are not nodes — with the regex
+kept only as a fallback for a file the parser rejects, and an assertion that the fallback
+list is empty. Returning no edges on a parse error is the worse failure: an edge-less
+module cannot participate in a cycle, so a parse error would read as a clean graph. The
+"does every relative import resolve" check deliberately keeps the text scan, because
+over-reporting a typo'd path is the safe direction there.
+
+Verified by diffing edge NAME SETS rather than counts: 1303 → 1308, a net +5 that hides
+"−3 phantoms, +8 real". `scripts/audit-metrics.mjs` had the same defect and was fixed
+first; its `--self-check` now carries both arms.
+
+"Zero import cycles" was true before this release. It was a statement about a graph
+missing eight edges.
+
+### The metrics ruler threw away the name of every test that failed
+
+`scripts/audit-metrics.mjs` kept only its summary regex and discarded vitest's output, so a
+red run reported `Tests 1 failed | 5830 passed` and the name was unrecoverable. That is why
+a single failure sat in the ledger for two rounds as "could not be reproduced". The ruler
+now parses the `FAIL` lines into the report row and saves the last 200 lines to
+`tmp/audit-vitest-<ts>.log`.
+
+It paid for itself in the same session: the failure recurred, named itself, and turned out
+to be `tests/binding-error-diagnosis.test.mjs:222` — a case that spawned a **real
+`npm install`** and waited up to 180 s for npm's own stderr. Under a full parallel run npm
+had not flushed its diagnosis before the timeout. `launch.mjs` resolves `npm` through PATH,
+so the test now puts a stub first on PATH; the whole assertion survives, including the one
+that fails if someone switches that `stdio` to `'pipe'`. The suite no longer starts an
+external npm process.
+
+### `format:check` was red on 525 of 531 files and had been since the day it was added
+
+`.prettierrc` was committed on 2026-09-03 and never applied, while `CLAUDE.md` listed
+`npm run format:check` as a project command. A permanently-red check is not a gate. The
+tree is formatted (`36f8c0f`, listed in a new `.git-blame-ignore-revs`), and
+`format:check` now gates `ci.yml` and `scripts/pre-commit.sh`.
+
+Two things surfaced while doing it. Seven structural guards pinned code shapes with literal
+spaces in their regexes and went red on reflow — each was restated to match across line
+breaks without dropping a term, in its own commit before the reformat. And prettier moves a
+trailing `// eslint-disable-line` onto the following line, where it covers the body instead
+of the signature, which introduced a real lint error on a tree whose baseline is 0/0.
+
+`npm run format` needs **two passes** to reach a fixed point — `tests/hook-update.test.mjs`
+still fails `--check` after the first.
+
+### Refactors, each proved to be a pure move
+
+- Three `db.prepare()` calls hoisted out of their loops. `search-engine.mjs` recompiled the
+  same SQL once per vector hit in both arms of the RRF/FTS-empty split — up to
+  `VECTOR_SCAN_LIMIT` (500) compilations per hybrid search, on the retrieval path. The two
+  arms are mutually exclusive, so one hoisted statement serves both. `denoise-ab` reads
+  NEUTRAL with every Δ exactly 0.000 and 30/30 behavioural probes passing.
+- `lib/shard-gc.mjs` — `lib/metrics.mjs` and `registry-recommend.mjs` shipped the same
+  12-line daily-shard GC line for line, so the 90-day retention rule had two homes.
+- `lib/llm-call.mjs`, `lib/quiet-scope.mjs`, `lib/handoff-constants.mjs` — `callLLM`, the
+  quiet/adoption predicates and the handoff constants left the hook layer. Two `lib/`
+  modules imported `hook-shared.mjs` for them and dragged its whole import graph along;
+  the direction guard had to carve out an exception by name. That exception is deleted:
+  `lib/` may now import no `hook-*.mjs` at all. `hook-shared.mjs` re-exports all nine
+  names, so no caller changed, and a new guard fails if any of them is ever redeclared
+  there instead of re-exported.
+- `handleStop` 470 → 40 lines and `handleUserPrompt` 364 → 26, each into named phases.
+  Both were verified by reducing the old and new regions to multisets of trimmed,
+  comment-free statements and diffing: nothing lost either time. The second split turned
+  up two parameters that had been in scope and never used.
+
+### Measured, then declined
+
+Merging the two `UserPromptSubmit` processes into one. At a 5,000-row corpus they cost p50
+53.7 ms and 109.2 ms; a merge removes at most one interpreter boot (p50 19.5 ms, 12.0% of
+the total), against ~150 LOC moved and the loss of the first hook's independent 2 s
+fast-path contract. Their p95 sum is 2.9% of the 7,000 ms `hooks.json` already allows them.
+
+### One caveat for anyone diffing numbers across this release
+
+The reformat re-calibrated four line-denominated metrics. No code was added or removed —
+prettier split one-line statements — so do not diff any of them across `36f8c0f`:
+
+| Metric | before | at v3.96.1 |
+|---|---|---|
+| source lines | 52,356 | 61,311 |
+| functions > 50 lines | 140 | 179 |
+| duplicate rate (any / cross-file) | 1.88% / 0.29% | 5.15% / 2.35% |
+| coverage **lines** | 87.67% | 85.44% |
+
+The coverage row is the trap. Statements (84.34%) and functions (89.26%) did not move at
+all, so nothing became uncovered; only the line denominator grew. The gate
+(80 / 74 / 84 / 83) passes. `CLAUDE.md`'s Baselines section carries this table — re-stamp
+from v3.96.1, never from a figure quoted before it.
+
 ## v3.96.0 — v3.95.1 taught the checks to see the emptied manifest; this is the half that stops emptying it
 
 Found by driving the shipped v3.95.1 tree as a user for two rounds — fresh install, sandbox
