@@ -228,7 +228,9 @@ export const SUBPROCESS_TIMEOUT_MS = resolveSubprocessTimeout(process.env.MEM_TE
  *      resolveDataDir against the HOME it was handed — the path just deleted — and
  *      recreates `.claude-mem-lite/runtime` plus a fresh 274KB DB. Identified by shape:
  *      the fixture's own subdirs (`work/`, `audit/`) never come back, only the data dir.
- *      lib/tmp-fixture-sweep.mjs:40-45 is the adjudicated backstop for this class.
+ *      lib/tmp-fixture-sweep.mjs absorbs this class via its `mem-` prefix (:24) and
+ *      DEFAULT_FIXTURE_AGE_MS (:51) — NOT the R10 P2-18 comment at :40-45, which is about
+ *      three unrelated prefixes; an earlier draft cited those lines in three places.
  *
  * `maxRetries` here is DEFENSIVE, not the fix for either cause above: Node documents it
  * as the remedy for ENOTEMPTY / EBUSY / EPERM / EMFILE / ENFILE, `force: true` covers only

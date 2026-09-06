@@ -53,6 +53,13 @@ const INDIRECTLY_GATED = {
 
 // How far back from the spawn line the controlling guard may sit. The llm-episode site puts
 // its `if (...) {` on the line above; nothing legitimate needs more room than this.
+//
+// The window is built from NON-COMMENT lines only, and that is the whole guard. A first draft
+// filtered comments when FINDING spawn calls but not when building the window, so any comment
+// mentioning the flag within four lines satisfied it. Pre-ship review mutation-proved the
+// consequence: remove the gate but keep the explanatory comment above the spawn and the guard
+// went green. It survived only because that comment happened to sit two lines outside the
+// window — reflowing it would have been enough to make the guard vacuous.
 const GUARD_WINDOW_LINES = 4;
 
 // A comment that QUOTES a spawn call is not a spawn call. hook.mjs:1643 does exactly that
@@ -71,11 +78,14 @@ function spawnSites(src) {
     if (isComment(text)) return;
     const m = text.match(/spawnBackground\(\s*'([a-z-]+)'/);
     if (!m) return;
-    sites.push({
-      event: m[1],
-      line: i + 1,
-      window: lines.slice(Math.max(0, i - GUARD_WINDOW_LINES), i + 1).join('\n'),
-    });
+    // Walk back over CODE lines, skipping comments entirely rather than counting them
+    // against the budget. Guard text must be in executable source to gate anything.
+    const code = [text];
+    for (let j = i - 1; j >= 0 && code.length <= GUARD_WINDOW_LINES; j--) {
+      if (isComment(lines[j]) || lines[j].trim() === '') continue;
+      code.unshift(lines[j]);
+    }
+    sites.push({ event: m[1], line: i + 1, window: code.join('\n') });
   });
   return sites;
 }

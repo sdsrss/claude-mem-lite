@@ -415,14 +415,19 @@ describe('deepDisclosureNote — D#3, the caveat the caller could not otherwise 
   it('names the plain-search hit count when the widening was automatic', () => {
     // The escalation fact previously existed on stderr ONLY, which the MCP surface's own
     // caller cannot read — and MCP is where deep=auto is the DEFAULT.
-    const note = deepDisclosureNote({ escalated: true, escalatedObsCount: 2, variantCount: 4 });
+    const note = deepDisclosureNote({
+      escalated: true,
+      escalatedObsCount: 2,
+      variantCount: 4,
+      rowCount: 10,
+    });
     expect(note).toContain('auto-escalated');
     expect(note).toContain('2 hit(s)');
     expect(note).toContain('ADJACENT');
   });
 
   it('says the deep search was asked for when it was not an escalation', () => {
-    const note = deepDisclosureNote({ escalated: false, variantCount: 4 });
+    const note = deepDisclosureNote({ escalated: false, variantCount: 4, rowCount: 3 });
     expect(note).toContain('explicitly requested');
     expect(note).not.toContain('auto-escalated');
     expect(note).toContain('ADJACENT');
@@ -432,25 +437,39 @@ describe('deepDisclosureNote — D#3, the caveat the caller could not otherwise 
     // The failure this exists to prevent is an agent treating a full page as confirmation.
     // `search "kubernetes helm chart"` says No results and --deep returns 8 webshop rows;
     // the caller has to be told the second shape is not evidence.
-    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 0, variantCount: 4 })).toMatch(
-      /valid conclusion/,
-    );
+    expect(
+      deepDisclosureNote({ escalated: true, escalatedObsCount: 0, variantCount: 4, rowCount: 8 }),
+    ).toMatch(/valid conclusion/);
   });
 
   it('stays silent when the rewrite produced no usable variant', () => {
     // variantCount <= 1 means deep IS the baseline — the union that floods never happened,
     // and the existing "== baseline" note already says so. Warning here would train the
     // caller to skip the line on the runs where it matters.
-    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 1, variantCount: 1 })).toBe('');
-    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 1, variantCount: 0 })).toBe('');
-    expect(deepDisclosureNote({ variantCount: undefined })).toBe('');
+    const shown = { escalated: true, escalatedObsCount: 1, rowCount: 10 };
+    expect(deepDisclosureNote({ ...shown, variantCount: 1 })).toBe('');
+    expect(deepDisclosureNote({ ...shown, variantCount: 0 })).toBe('');
+    expect(deepDisclosureNote({ ...shown, variantCount: undefined })).toBe('');
     expect(deepDisclosureNote()).toBe('');
+  });
+
+  it('stays silent on a zero-result deep search — there are no rows above', () => {
+    // Caught in pre-ship review. Both faces already print a dedicated zero-result message
+    // saying the rewrite ran and found nothing, so appending "rows above may be ADJACENT ...
+    // nothing here answers this is a valid conclusion" to an empty page both refers to rows
+    // that do not exist and restates the page's own conclusion. The four cases above all
+    // passed while this shape shipped, which is why an absent case is not a passing one.
+    const flooded = { escalated: true, escalatedObsCount: 0, variantCount: 4 };
+    expect(deepDisclosureNote({ ...flooded, rowCount: 0 })).toBe('');
+    expect(deepDisclosureNote({ ...flooded, rowCount: undefined })).toBe('');
+    // One row IS "rows above" — the caveat is about adjacency, which a single wrong row has.
+    expect(deepDisclosureNote({ ...flooded, rowCount: 1 })).toContain('ADJACENT');
   });
 
   it('honours the CLAUDE_MEM_DEEP_DISCLOSURE=off opt-out, case-insensitively', () => {
     // Required by the released-artifact checklist: a user-visible default change ships with
     // a revert path that is not "pin the old version".
-    const args = { escalated: true, escalatedObsCount: 2, variantCount: 4 };
+    const args = { escalated: true, escalatedObsCount: 2, variantCount: 4, rowCount: 10 };
     expect(deepDisclosureNote({ ...args, env: { CLAUDE_MEM_DEEP_DISCLOSURE: 'off' } })).toBe('');
     expect(deepDisclosureNote({ ...args, env: { CLAUDE_MEM_DEEP_DISCLOSURE: 'OFF' } })).toBe('');
     // Any other value keeps the disclosure — an off switch that trips on '0' or 'false'
@@ -473,6 +492,10 @@ describe('deepDisclosureNote — D#3, the caveat the caller could not otherwise 
     for (const face of ['server.mjs', 'mem-cli.mjs']) {
       const src = readFileSync(join(root, face), 'utf8');
       expect(src, `${face} must CALL the shared helper`).toMatch(/\bdeepDisclosureNote\(\{/);
+      // Every silence rule lives in the helper, but the helper can only apply the row rule
+      // if the face hands it the count. A face that forgets `rowCount` gets the default 0
+      // and goes permanently silent — a failure that looks like "working as intended".
+      expect(src, `${face} must pass rowCount`).toMatch(/rowCount:/);
       expect(src, `${face} must not restate the caveat text`).not.toContain('may be ADJACENT');
     }
   });

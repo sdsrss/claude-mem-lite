@@ -93,6 +93,40 @@ taken on a different toolchain — treat the toolchain as part of the stamp).
   (80/74/84/83). Denominators moved against the v3.93.0 line (8578 → 8954 statements),
   so this is not a same-population comparison with it.
 
+### The worktree discriminating arm: ran 2026-09-06, offset NOT reproduced, cause still open
+
+Rule 1 above has said "cause never established" since D#161. The arm it was waiting for — a
+`git worktree --detach` with its **OWN `npm ci`**, not a symlink to the primary tree's
+`node_modules` — has now run, at `61a6f66` (v5.3.0 branch tip):
+
+| Arm | Reading | Name set |
+|---|---|---|
+| primary working tree @ `61a6f66` | **45** unused exports | reference |
+| detached worktree, own `npm ci` @ `61a6f66` | **45** unused exports | byte-identical (diffed, not counted) |
+
+With R9's earlier arm (detached worktree, `node_modules` **symlinked** to the primary tree's,
+48 = 48) that is two worktree arms with no offset. So the ~15 gap is **not** a property of the
+detached checkout on its own.
+
+**It does not establish the cause, and rule 1 stays as written.** Two reasons:
+
+1. **The population that produced the gap is largely gone.** Rule 1's own enumeration is
+   `utils.mjs:12-15`'s backward-compat re-exports plus their `nlp.mjs` /
+   `registry-retriever.mjs` sources — and `registry-retriever.mjs` was deleted with the skill
+   registry in v5.0.0. Not reproducing a gap whose composition no longer exists says little
+   about the mechanism (doctrine rule 3: state the population).
+2. **A first draft of the CLAUDE.md rewrite got the sign backwards** and is recorded here as
+   the error, per this file's job: it proposed "a partial `node_modules` makes real imports
+   unresolvable, which reads as unused". That raises a count. The measured offset lowered it
+   (31 worktree vs 46 primary at `2ebc159`). Doctrine rule 10 — correct the premise before
+   quoting it. The candidate mechanisms that *can* lower a count are still the ones rule 1
+   lists: knip dropping whole modules (the `new URL(...)` blind spot), gitignore evaluation,
+   and `tests/**/*.test.mjs` being `entry` while `project` excludes `tests/**`.
+
+What the arm does buy: a worktree reading is no longer presumed ~15 low, so it is worth
+diffing name sets against a primary-tree reading of the same commit rather than discarding it
+unexamined. Still no name-set guard — that bet has not improved.
+
 ### CI-clone vs working-tree knip: second reading (n=2)
 
 The open question recorded under rule 1 — which side of the ~15-name worktree/working-tree

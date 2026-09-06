@@ -1175,7 +1175,7 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
     // D#2. Still 1 dir per run, and that is the designed outcome: removal SUCCEEDS, then
     // a detached worker of the handleStop subprocess recreates `.claude-mem-lite/` and
     // `.claude/` under the HOME it was handed — this now-deleted path. `audit/t4` never
-    // comes back, which is how the shape is identified. lib/tmp-fixture-sweep.mjs:40-45
+    // comes back, which is how the shape is identified. lib/tmp-fixture-sweep.mjs`s `mem-` prefix (:24) + its 1h age gate (:51)
     // absorbs that class at the next run past its 1h age gate. The shared helper is used
     // anyway so a real removal failure is REPORTED, not swallowed as it was before.
     disposeFixtureDir(tmpHome);

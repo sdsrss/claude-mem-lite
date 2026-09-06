@@ -24,14 +24,22 @@ import { fileURLToPath } from 'url';
 // out of knip's report entirely (tests/no-url-module-paths.test.mjs pins this repo-wide).
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Bare-predicate sites, by enclosing function. Every entry is adjudicated in CLAUDE.md:
+// Bare-predicate sites, by enclosing function. Every entry is adjudicated in CLAUDE.md, and
+// the reasons are NOT interchangeable — a draft of this comment bucketed cleanupBroken with
+// the importance-only three and gave the one hard-delete site an inertness claim that is
+// false. lib/maintain-core.mjs:436-441 says "the first three" for precisely that reason.
 //   markAutoCompressible      writes -1, which purgeStale (-2) and recoverOrphanedChildren
 //                             (> 0) both skip — cannot delete or resurface anything
-//   cleanupBroken             ) move only importance, inert on a row every read path
-//   decayAndMarkIdle          ) already hides (its OTHER arm, the PENDING_PURGE writer,
-//   boostAccessed             ) does carry the full predicate — see the case below)
-//   demotePinned              )
-//   hardDeleteCandidateCount  cleanup arm mirrors cleanupBroken, so forecast == action
+//   decayAndMarkIdle          ) move only importance, inert on a row every read path already
+//   boostAccessed             ) hides (decayAndMarkIdle's OTHER arm, the PENDING_PURGE
+//   demotePinned              ) writer, DOES carry the full predicate — see the case below)
+//   cleanupBroken             the one HARD DELETE in this set (:405), and the only site where
+//                             deleting a tombstone's superseded_by is reachable. Bare because
+//                             its rows have no title/narrative/lesson and so were never
+//                             injectable, hence never cited by id — a LIKELIHOOD judgement,
+//                             not inertness. D#4. Do not restate it as inert.
+//   hardDeleteCandidateCount  cleanupBroken's predicate MINUS its lesson guard, so it
+//                             over-counts on purpose (:635-637). Not a mirror.
 //   maintenanceStats          superseded_at IS NULL sits inside the *stale* CASE only, so
 //                             each forecast matches the op it predicts
 //   computeStatsFeed          one predicate on both halves of a ratio; superseded rows are
@@ -100,9 +108,17 @@ describe('live-row predicate adjudication', () => {
     // which purgeStale hard-deletes; mergeDuplicates points a row at a keeper. Both must
     // exclude tombstones, and both regressions are silent data loss rather than a wrong count.
     const src = readFileSync(join(ROOT, 'lib/maintain-core.mjs'), 'utf8');
-    const pendingPurgeWrite = src.slice(src.indexOf('export function decayAndMarkIdle'));
-    expect(pendingPurgeWrite).toMatch(/SET compressed_into = \$\{COMPRESSED_PENDING_PURGE\}/);
-    expect(pendingPurgeWrite.slice(0, 2000)).toContain("liveObsFilterSql('')");
+    const fnStart = src.indexOf('export function decayAndMarkIdle');
+    expect(fnStart, 'decayAndMarkIdle not found — the anchor moved').toBeGreaterThan(-1);
+    // Slice to the END of the mark-idle statement, not a fixed character budget. A first
+    // draft used slice(0, 2000) and the target sat at offset 1538 — 462 chars of headroom
+    // in a block that is already ten lines of SQL comment, so adding a few more lines
+    // would have false-red'd the guard rather than caught anything.
+    const writeStart = src.indexOf('SET compressed_into = ${COMPRESSED_PENDING_PURGE}', fnStart);
+    expect(writeStart, 'the PENDING_PURGE write left decayAndMarkIdle').toBeGreaterThan(-1);
+    const stmtEnd = src.indexOf('.run(', writeStart);
+    expect(stmtEnd, 'could not find the end of the mark-idle statement').toBeGreaterThan(writeStart);
+    expect(src.slice(writeStart, stmtEnd)).toContain("liveObsFilterSql('')");
     expect(src).toContain(
       "`UPDATE observations SET compressed_into = ? WHERE id = ? AND ${liveObsFilterSql('')}`",
     );

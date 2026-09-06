@@ -448,6 +448,7 @@ async function cmdSearch(db, args, { llm } = {}) {
       escalated: res.escalated,
       escalatedObsCount: res.escalatedObsCount,
       variantCount: deepVariants?.length ?? 0,
+      rowCount: paged?.length ?? 0,
     });
     if (disclosure) process.stderr.write(`${disclosure}\n`);
   }

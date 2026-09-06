@@ -138,7 +138,8 @@ describe('SessionStart stdout envelope', () => {
     // hook subprocess — whose HOME is still this now-deleted path — re-runs
     // resolveDataDir and recreates `.claude-mem-lite/runtime` plus a fresh 274KB DB.
     // `work/` never comes back, which is how the shape is identified. That is the class
-    // lib/tmp-fixture-sweep.mjs:40-45 absorbs at the next run past its 1h age gate.
+    // lib/tmp-fixture-sweep.mjs absorbs via its `mem-` prefix (:24) at the next run
+    // past DEFAULT_FIXTURE_AGE_MS (:51).
     // Using the shared helper anyway so a real removal failure would now be REPORTED
     // rather than swallowed by the `catch {}` this replaced.
     disposeFixtureDir(tmpHome);

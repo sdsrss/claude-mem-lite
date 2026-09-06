@@ -591,6 +591,7 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
       escalated: r.escalated,
       escalatedObsCount: r.escalatedObsCount,
       variantCount: r.variants?.length ?? 0,
+      rowCount: r.page?.length ?? 0,
     });
     if (disclosure) output.content[0].text += `\n\n${disclosure}`;
   }

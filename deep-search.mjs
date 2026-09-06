@@ -206,14 +206,21 @@ export function resolveDeepMode(explicitDeep, { surface, env = process.env } = {
  *      the one caller who most needs the caveat was the one who could not see it.
  *   2. Nothing said a full page can be entirely adjacent rows.
  *
- * Silent when `variantCount <= 1`: with no usable rewrite, deep IS the baseline, and the
- * existing "== baseline" note already says so. Crying flood there would train callers to
- * ignore the line.
+ * Silent in two cases, and both silences are load-bearing:
+ *   - `variantCount <= 1`: with no usable rewrite, deep IS the baseline, and the existing
+ *     "== baseline" note already says so. Crying flood there would train callers to ignore
+ *     the line on the runs where it matters.
+ *   - `rowCount <= 0`: "rows above may be adjacent" is nonsense with no rows above, and
+ *     both zero-result faces ALREADY say the rewrite ran and found nothing — so the note
+ *     would restate the page's own conclusion in more words. Caught in pre-ship review,
+ *     which is also why `rowCount` is a parameter rather than a check in each face: two
+ *     surfaces deciding this separately is how they drift.
  *
  * @param {object} [opts]
  * @param {boolean} [opts.escalated] the result came from auto-escalation, not an explicit ask
  * @param {number} [opts.escalatedObsCount] hits the plain search returned before widening
  * @param {number} [opts.variantCount] query variants fused (1 = rewrite produced nothing)
+ * @param {number} [opts.rowCount] rows actually shown to the caller
  * @param {object} [opts.env=process.env] opt-out: CLAUDE_MEM_DEEP_DISCLOSURE=off
  * @returns {string} the note, or '' when it should not be shown
  */
@@ -221,10 +228,12 @@ export function deepDisclosureNote({
   escalated = false,
   escalatedObsCount = 0,
   variantCount = 0,
+  rowCount = 0,
   env = process.env,
 } = {}) {
   if (String(env.CLAUDE_MEM_DEEP_DISCLOSURE || '').toLowerCase() === 'off') return '';
   if (!(variantCount > 1)) return '';
+  if (!(rowCount > 0)) return '';
   const why = escalated
     ? `auto-escalated after the plain search returned ${escalatedObsCount} hit(s)`
     : 'explicitly requested';
