@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — the second package manager, removed
+## v5.0.0 — the second package manager, removed
 
 **BREAKING.** The skill/agent resource registry, the shadow skill-recommendation engine and
 the PreToolUse Skill bridge are gone. This is a `major` bump when it ships: three CLI
