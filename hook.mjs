@@ -2038,8 +2038,15 @@ function saveHandoffAndFastSummary(
         .get(prevProject || project, 'clear', handoffScopeId);
     } catch {}
 
-    // Generate session summary for previous session (background Haiku — richer version)
-    spawnBackground('llm-summary', prevSessionId, prevProject || project);
+    // Generate session summary for previous session (background Haiku — richer version).
+    // Honours CLAUDE_MEM_SKIP_SUMMARY like the handleStop site does. This is the SAME
+    // worker, and the flag's whole purpose (see the comment at its other call site) is
+    // that llm-summary recreates a test's sandbox tree behind its cleanup — timed at
+    // 432ms there. Gating one of two call sites left the flag unable to do the one job
+    // it exists for whenever this branch is reached.
+    if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) {
+      spawnBackground('llm-summary', prevSessionId, prevProject || project);
+    }
 
     // Build fast synchronous summary for immediate context availability.
     // Background llm-summary will produce a richer Haiku version later;
