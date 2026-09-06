@@ -2545,6 +2545,12 @@ async function rebuildBinding() {
       const verify = await ensureBetterSqlite3Working(root);
       if (verify.ok) {
         ok(`better-sqlite3 binding ${verify.action} for Node ${process.version} — ${label} (${root})`);
+        if (verify.quarantined) {
+          // Say it out loud: the heal renamed a file inside the user's node_modules because
+          // the shipped prebuild was present and would not load. A silent move inside a
+          // dependency is the kind of thing that reads as corruption six months later.
+          log(`  the shipped prebuild would not load — moved aside to ${verify.quarantined}.unusable`);
+        }
       } else {
         fail(`better-sqlite3 binding still unusable in ${label}: ${verify.error}`);
         log(`Try manually: ${nativeBindingRepairHint(root)}`);

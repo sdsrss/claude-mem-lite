@@ -443,3 +443,135 @@ describe('formatHookError — the hint must name a repair that actually applies'
     expect(line).not.toMatch(/cli\.mjs repair/);
   });
 });
+
+// ── The prebuild that is present and will not load ──────────────────────────
+//
+// Found 2026-09-06 by running tests/sandbox/phaseB-npm.mjs against a corrupted
+// `prebuilds/linux-x64.node`: `claude-mem-lite rebuild-binding` — the foreground repair
+// doctor tells users to run, the one deliberately given no time budget — exited 1, and the
+// manual command it printed could not fix it either. doctor stayed red permanently.
+//
+// The mechanism, measured in a scratch tree with a control (`docs/measurement/findings.md`):
+// better-sqlite3 13's `lib/binding.js` picks `prebuilds/<target>.node` on EXISTENCE alone
+// and prefers it over `build/`. So a prebuild that is present and unloadable — an old
+// glibc, a truncated download, the wrong arch baked into an image — shadows the binding the
+// source-compile fallback produces. Corrupt prebuild + healthy build/Release → `wrong ELF
+// class`; move the prebuild aside → loads; remove both → fails (the control proving
+// build/Release is what saved it). v4.0.0 added the source build for "a platform 13 ships no
+// prebuild for" and this is its neighbour: a prebuild that exists but cannot be used.
+//
+// These tests build the fixture around the REAL `lib/binding.js` from the installed
+// dependency, so a future version that changes how a prebuild is chosen breaks them here
+// rather than in the field.
+describe('ensureBetterSqlite3Working — an unloadable prebuild shadows the source build', () => {
+  const made = [];
+  const realBindingJs = join(REPO, 'node_modules', 'better-sqlite3', 'lib', 'binding.js');
+
+  /** The prebuild basename this platform resolves, or null when 13 ships none for it. */
+  function prebuildName() {
+    const r = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const b=require(${JSON.stringify(realBindingJs)});` +
+          `process.stdout.write((b.getPrebuildPath&&b.getPrebuildPath())||'')`,
+      ],
+      { encoding: 'utf8' },
+    );
+    const p = (r.stdout || '').trim();
+    return p ? p.split(/[\\/]/).pop() : null;
+  }
+
+  /** A tree shaped like a real install: the dependency's own resolver + a junk prebuild. */
+  function fixture({ withPrebuild = true } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-prebuild-'));
+    made.push(dir);
+    const pkg = join(dir, 'node_modules', 'better-sqlite3');
+    mkdirSync(join(pkg, 'lib'), { recursive: true });
+    mkdirSync(join(pkg, 'prebuilds'), { recursive: true });
+    writeFileSync(join(dir, 'package.json'), '{"name":"host","version":"1.0.0"}');
+    writeFileSync(join(pkg, 'package.json'), '{"name":"better-sqlite3","version":"13.0.0"}');
+    writeFileSync(join(pkg, 'lib', 'binding.js'), readFileSync(realBindingJs));
+    const name = prebuildName();
+    const prebuild = name ? join(pkg, 'prebuilds', name) : null;
+    if (withPrebuild && prebuild) writeFileSync(prebuild, Buffer.from('\x7fELF broken-abi'));
+    return { dir, prebuild };
+  }
+
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('moves the unloadable prebuild aside so the compiled binding is the one that loads', async () => {
+    const { dir, prebuild } = fixture();
+    if (!prebuild) return; // platform 13 ships no prebuild for — covered by the case below
+    const cmds = [];
+    let prebuildPresentAtCompile = null;
+    const r = await ensureBetterSqlite3Working(dir, {
+      probe: () => ({ ok: false, error: 'wrong ELF class: ELFCLASS32' }),
+      // Models the resolver rather than a call counter: this tree only becomes loadable
+      // once the shadowing prebuild is out of the way. A stub that just returns ok on the
+      // second call would pass without the fix.
+      verify: () => (existsSync(prebuild) ? { ok: false, error: 'wrong ELF class' } : { ok: true }),
+      exec: (cmd) => {
+        cmds.push(cmd);
+        if (cmd === NATIVE_BINDING_SOURCE_BUILD_CMD) prebuildPresentAtCompile = existsSync(prebuild);
+      },
+    });
+    // `quarantined` is not decoration: rebuild-binding prints it, because silently moving a
+    // file inside the user's node_modules is not something they should have to discover.
+    expect(r).toEqual({ ok: true, action: 'compiled', quarantined: prebuild });
+    expect(cmds).toEqual([NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD]);
+    // Ordering matters: compiling first and quarantining after would leave the same dead
+    // tree on a build that takes minutes.
+    expect(prebuildPresentAtCompile, 'quarantine must precede the compile').toBe(false);
+    expect(existsSync(prebuild)).toBe(false);
+    expect(existsSync(`${prebuild}.unusable`), 'kept, not deleted').toBe(true);
+  });
+
+  it('puts the prebuild back when the compile did not fix it either', async () => {
+    const { dir, prebuild } = fixture();
+    if (!prebuild) return;
+    const before = readFileSync(prebuild);
+    const r = await ensureBetterSqlite3Working(dir, {
+      probe: () => ({ ok: false, error: 'wrong ELF class' }),
+      verify: () => ({ ok: false, error: 'wrong ELF class' }),
+      exec: () => {},
+    });
+    expect(r.ok).toBe(false);
+    // Leave no worse: a tree we could not repair must come back exactly as it was, or the
+    // next `npm rebuild` reinstall has one fewer file than it started with.
+    expect(existsSync(prebuild), 'restored on failure').toBe(true);
+    expect(readFileSync(prebuild)).toEqual(before);
+    expect(existsSync(`${prebuild}.unusable`)).toBe(false);
+  });
+
+  it('changes nothing on a platform that ships no prebuild (the v4.0.0 case)', async () => {
+    const { dir } = fixture({ withPrebuild: false });
+    let verifyCalls = 0;
+    const cmds = [];
+    const r = await ensureBetterSqlite3Working(dir, {
+      probe: () => ({ ok: false, error: 'Could not locate the bindings file' }),
+      verify: () => ({ ok: ++verifyCalls >= 2, error: 'still dead' }),
+      exec: (cmd) => cmds.push(cmd),
+    });
+    expect(r).toEqual({ ok: true, action: 'compiled' });
+    expect(cmds).toEqual([NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD]);
+  });
+
+  it('does not touch the prebuild on the time-budgeted path that opts out of the compile', async () => {
+    const { dir, prebuild } = fixture();
+    if (!prebuild) return;
+    const r = await ensureBetterSqlite3Working(dir, {
+      probe: () => ({ ok: false, error: 'wrong ELF class' }),
+      verify: () => ({ ok: false, error: 'wrong ELF class' }),
+      exec: () => {},
+      sourceBuild: false,
+    });
+    expect(r.ok).toBe(false);
+    // Quarantining without a compile to follow it turns "broken addon" into "no addon" —
+    // strictly worse, and this is the SessionStart path (scripts/binding-probe-cli.mjs).
+    expect(existsSync(prebuild)).toBe(true);
+    expect(existsSync(`${prebuild}.unusable`)).toBe(false);
+  });
+});

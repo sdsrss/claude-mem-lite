@@ -12,8 +12,9 @@
 // `--build-from-source`, which no-oped the same way). That fix was correct for
 // better-sqlite3 12 and expired silently when the dependency was bumped — so the guard here
 // is deliberately about the SHAPE of a hint, not about one command string.
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -93,5 +94,44 @@ describe('hook-launcher keeps its literal in sync with the constants', () => {
     const m = /const NB_MANUAL_CMD =\s*\n?\s*'([^']*)'/.exec(src);
     expect(m, 'NB_MANUAL_CMD literal not found — the sync guard has lost its subject').toBeTruthy();
     expect(m[1]).toBe(`${NATIVE_BINDING_REBUILD_CMD} && ${NATIVE_BINDING_SOURCE_BUILD_CMD}`);
+  });
+});
+
+// 2026-09-06, found by tests/sandbox/phaseB-npm.mjs after its self-heal section was
+// un-blinded: the npm pair above heals a platform that ships NO prebuild, and cannot heal a
+// prebuild that is present and will not load. better-sqlite3 13 picks
+// `prebuilds/<target>.node` on existence alone and prefers it over `build/`, so the addon
+// the source build produces stays shadowed — measured with a control in
+// docs/measurement/findings.md. The only repair that covers both is the bundled CLI's
+// `rebuild-binding`, because the quarantine step lives inside ensureBetterSqlite3Working.
+//
+// So the hint must LEAD with that, and the npm pair becomes the fallback for a tree with no
+// CLI beside it. Same defect as A20260906-R8-P1-1 in a new shape: a printed repair that
+// cannot repair is worse than no repair, because the user stops looking.
+describe('the hint leads with the repair that runs the whole chain', () => {
+  const made = [];
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('prefers the bundled CLI when the root has one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-hint-'));
+    made.push(dir);
+    writeFileSync(join(dir, 'cli.mjs'), '');
+    const hint = nativeBindingRepairHint(dir);
+    expect(hint).toContain(`node "${join(dir, 'cli.mjs')}" rebuild-binding`);
+    // Order is the assertion: a user runs the first command they are given.
+    expect(hint.indexOf('rebuild-binding')).toBeLessThan(hint.indexOf(NATIVE_BINDING_REBUILD_CMD));
+    // The pair stays as the no-CLI fallback — losing it would strand the case v4.0.0 added.
+    expect(hint).toContain(NATIVE_BINDING_SOURCE_BUILD_CMD);
+  });
+
+  it('falls back to the npm pair when no CLI sits beside the tree', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-hint-'));
+    made.push(dir);
+    const hint = nativeBindingRepairHint(dir);
+    expect(hint).not.toContain('rebuild-binding');
+    expect(hint).toContain(`cd "${dir}"`);
+    expect(hint).toContain(NATIVE_BINDING_SOURCE_BUILD_CMD);
   });
 });

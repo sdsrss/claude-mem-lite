@@ -78,7 +78,13 @@ hardcoding it.
 
 **Sandbox install harness** (not in `vitest run`; real `npm i -g` + real MCP stdio, minutes +
 network): `SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseA-plugin.mjs` / `phaseB-npm.mjs` /
-`phaseC-update.mjs`, one at a time — see `tests/sandbox/README.md`. **`SBX_BASE` is not
+`phaseC-update.mjs`, one at a time — see `tests/sandbox/README.md`. **Run it after any
+dependency major**: from v4.0.0 to v5.1.0 both self-heal sections corrupted
+`build/Release/better_sqlite3.node`, a better-sqlite3 **12** path, so they measured nothing —
+phase B's eight self-heal checks sat behind an `if (existsSync(…))` and silently stopped
+running. Each phase now asserts its own check count (`EXPECTED_CHECKS`, 47 / 45 / 15), and
+`tests/sandbox/lib.mjs::loadedBindingPath` asks better-sqlite3 which addon it would load
+instead of naming one. **`SBX_BASE` is not
 optional**: the fallback `$TMPDIR` lands under `$HOME`, and Node resolves `node_modules` up
 the tree, so on a machine whose `~/node_modules` holds `better-sqlite3` the run silently
 measures the home tree and passes anyway. The harness now refuses such a base.
@@ -373,6 +379,21 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   used to stamp it as a side effect of replacing one concept term, evicting rows from a
   lesson backfill they had never visited (R10 P2-2). Before writing it, check you are the
   pass it belongs to.
+- **A prebuilt addon that is PRESENT and will not load cannot be healed by compiling one.**
+  better-sqlite3 13's `lib/binding.js` picks `prebuilds/<target>.node` on **existence alone**
+  and prefers it over `build/`, so whatever `npm run --prefix node_modules/better-sqlite3
+  build-release` produces stays shadowed. Measured 2026-09-06 with a control: corrupt prebuild
+  + healthy `build/Release` → `wrong ELF class`; prebuild moved aside → opens; neither → fails.
+  Real triggers are a glibc too old for the shipped binary, a truncated download, the wrong
+  arch baked into an image. Before the fix `rebuild-binding` exited 1 on that shape and printed
+  a manual command with the same dead end, so `doctor` stayed red forever.
+  `ensureBetterSqlite3Working` now renames the dead prebuild to `<name>.node.unusable` before
+  the source build and puts it back if the compile did not help. **Only inside the source-build
+  branch** — quarantining with no compile to follow turns "broken addon" into "no addon", and
+  that branch is exactly what the 20 s SessionStart path opts out of (`sourceBuild: false`).
+- **Never name the native addon's path — ask `lib/binding.js`'s `getPrebuildPath()`.** The
+  literal has now gone stale twice on one dependency bump: `tests/install-bsqlite-probe.test.mjs`
+  (caught by its control) and both sandbox phases (caught by nothing for four minor versions).
 - **A long LLM round-trip needs `liveObsFilterSql` in the UPDATE's WHERE, not just in the
   SELECT that chose the row.** 45 seconds is long enough for a concurrent hook to supersede
   or compress it, and an unguarded write resurrects a dead row AND stamps it processed
@@ -391,7 +412,7 @@ PreToolUse hooks already run `mem_recall` for past lessons before Read/Edit/Writ
 | Deferring to a future session | `mem_defer({title, priority:1|2|3, detail})`; when fixed, add `closes_deferred=[N]` to `mem_save` |
 | Looking up past work / history | `mem_search "keywords"` · `mem_recent` · `mem_timeline` |
 
-Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these `mem_*` tools are deferred behind ToolSearch this session, the Bash CLI `claude-mem-lite` is one call vs two (ToolSearch + call); the MCP server instructions carry the absolute path to use when it is not on PATH.
+Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these `mem_*` tools are deferred behind ToolSearch this session, the Bash CLI (exact path in the detail doc) is one call vs two (ToolSearch + call).
 
 Full tool + CLI tables, citation/decay rules, and save discipline → `.claude/plugin_claude_mem_lite.md`
 <!-- claude-mem-lite:end -->

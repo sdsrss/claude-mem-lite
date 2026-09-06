@@ -190,7 +190,20 @@ if [[ -d "$ROOT/node_modules/better-sqlite3" ]]; then
     # Both commands, `&&` not `||`: `npm rebuild` exits 0 without compiling on
     # better-sqlite3 13 (no install script to run), so it never signals failure and
     # an `||` chain would never reach the source build. A20260906-R8-P1-1.
-    mark_deps_broken "better-sqlite3 binding probe/rebuild failed (npm >= 12 blocks compile scripts by default)" "npm rebuild better-sqlite3 --dangerously-allow-all-scripts && npm run --prefix node_modules/better-sqlite3 build-release"
+    #
+    # …and the pair alone is still not enough. It heals a platform 13 ships no prebuild
+    # for; it cannot heal a prebuild that is PRESENT and will not load, because 13 prefers
+    # `prebuilds/<target>.node` over anything the source build produces. This string is what
+    # the SessionStart dashboard prints as `Repair:`, so it leads with the CLI, which is the
+    # only path that moves the dead prebuild aside first (lib/binding-probe.mjs). Mirrors
+    # nativeBindingRepairHint(); this file may not import lib/, hence the duplication —
+    # tests/audit-r8-binding-repair-hint.test.mjs pins the set of files allowed to do that.
+    # mark_deps_broken already prefixes `cd <root> && `, so these are root-relative.
+    NB_REPAIR="npm rebuild better-sqlite3 --dangerously-allow-all-scripts && npm run --prefix node_modules/better-sqlite3 build-release"
+    if [[ -f "$ROOT/cli.mjs" ]]; then
+      NB_REPAIR="node cli.mjs rebuild-binding   (or, without the CLI: $NB_REPAIR)"
+    fi
+    mark_deps_broken "better-sqlite3 binding probe/rebuild failed (npm >= 12 blocks compile scripts by default)" "$NB_REPAIR"
   fi
 fi
 
