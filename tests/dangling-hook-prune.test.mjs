@@ -199,6 +199,32 @@ describe('collectOrphanHookPaths sees the launcher entry argument', () => {
     expect(collectOrphanHookPaths(live, installDir)).toEqual([]);
   });
 
+  it('still reports a MISSING LAUNCHER, which the entry check must not shadow', () => {
+    // Regression I introduced while closing the entry-argument gap: once
+    // launcherEntryPath returned a path the scan `continue`d, so the quoted-token pass
+    // that used to catch the launcher itself never ran. A half-applied update leaves
+    // hook.mjs present and scripts/hook-launcher.mjs missing — every hook fire then dies
+    // with ERR_MODULE_NOT_FOUND while doctor prints "Orphan hooks: none". A/B against
+    // `main` on this exact fixture: main returned the launcher path, this branch returned
+    // []. Both files matter; neither may shadow the other.
+    const noLauncher = join(root, 'half-applied');
+    mkdirSync(noLauncher, { recursive: true }); // scripts/ deliberately absent
+    writeFileSync(join(noLauncher, 'hook.mjs'), '// entry present, launcher gone');
+    const cmd = `node "${join(noLauncher, 'scripts', 'hook-launcher.mjs')}" hook.mjs session-start`;
+    const s = { hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: cmd }] }] } };
+    expect(collectOrphanHookPaths(s, noLauncher)).toEqual([join(noLauncher, 'scripts', 'hook-launcher.mjs')]);
+  });
+
+  it('reports BOTH when the launcher and the entry are missing', () => {
+    const empty = join(root, 'nothing-here');
+    mkdirSync(empty, { recursive: true });
+    const cmd = `node "${join(empty, 'scripts', 'hook-launcher.mjs')}" scripts/gone.js`;
+    const s = { hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: cmd }] }] } };
+    expect(collectOrphanHookPaths(s, empty).sort()).toEqual(
+      [join(empty, 'scripts', 'hook-launcher.mjs'), join(empty, 'scripts', 'gone.js')].sort(),
+    );
+  });
+
   it('still reports a missing ABSOLUTE hook path (the pre-existing behaviour)', () => {
     const gone = join(installDir, 'scripts', 'never-existed.sh');
     const s = {

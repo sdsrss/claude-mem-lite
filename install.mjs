@@ -17,7 +17,7 @@ import {
   statSync,
   lstatSync,
 } from 'fs';
-import { join, resolve, dirname, isAbsolute, basename } from 'path';
+import { join, resolve, dirname, basename } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
@@ -275,32 +275,6 @@ function isDevInstall() {
   } catch {
     return false;
   }
-}
-
-// Decide what to check out of a registry repo. We only ever copy the manifest's
-// `entry.path` subdirs into managed/skills|agents, so the working tree never
-// needs the rest of the repo — a partial+sparse clone fetches just those subtrees
-// (e.g. davila7/claude-code-templates: 197MB whole repo → a few MB of 3 paths).
-// Returns { full, paths }: `full` forces a normal checkout when any entry maps to
-// the repo root ('.') — sparse buys nothing there. Unsafe paths ('..'/absolute)
-// are dropped here exactly as the copy loop drops them, so they never reach
-// `sparse-checkout set`. Pure + exported for unit testing.
-export function planRepoSparsePaths(entries) {
-  let needsFull = false;
-  const paths = [];
-  for (const e of entries || []) {
-    const p = e && e.path;
-    if (!p || p === '.' || p === './') {
-      needsFull = true;
-      continue;
-    }
-    if (isAbsolute(p) || String(p).includes('..')) continue; // unsafe — skipped at copy too
-    const norm = String(p).replace(/^\.\//, '').replace(/\/+$/, '');
-    if (norm && !paths.includes(norm)) paths.push(norm);
-  }
-  // No usable sparse paths (all root or all unsafe) → a full checkout is the only
-  // thing that can produce content; sparse would be an empty, pointless tree.
-  return { full: needsFull || paths.length === 0, paths };
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -1994,13 +1968,14 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
       for (const h of cfg.hooks || []) {
         const cmd = h.command || '';
         if (cmd.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
-        // The launcher's entry argument first: it is the file that actually runs, and
-        // it is unquoted, so the quoted-token scan below cannot see it.
+        // The launcher's entry argument, which is unquoted and so invisible to the
+        // quoted-token scan below. Recorded IN ADDITION to that scan, never instead of
+        // it: a `continue` here shadowed a missing `scripts/hook-launcher.mjs` — the
+        // half-applied-update shape where every hook fire dies with
+        // ERR_MODULE_NOT_FOUND — and doctor went back to printing "Orphan hooks: none".
+        // Both files have to exist for the hook to run, so both are reportable.
         const entry = launcherEntryPath(cmd, installDir);
-        if (entry) {
-          if (!existsSync(entry) && !out.includes(entry)) out.push(entry);
-          continue;
-        }
+        if (entry && !existsSync(entry) && !out.includes(entry)) out.push(entry);
         // v2.80: scan ALL quoted tokens (was: only the first), prefer ones
         // that look like a hook path. Fixes a footgun where a wrapper command
         // like `bash -c "some inline" "/real/path.sh"` would pick "some inline"
@@ -2036,11 +2011,11 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
  *   - 0-byte `.db` files that are NOT in the protected-db allow-list
  *
  * Protections (never touched):
- *   - subdirectories (managed/, runtime/, scripts/, lib/, cli/, commands/, server/, node_modules/, .claude-plugin/, registry/, etc.)
+ *   - subdirectories (runtime/, scripts/, lib/, cli/, commands/, server/, node_modules/, .claude-plugin/, etc.)
  *   - non-empty `.db` files — real data risk, always preserved
  *   - WAL/SHM (`*-wal`, `*-shm`) transients
  *   - files not ending in `.mjs` or `.db`
- *   - the two canonical DBs (`claude-mem-lite.db`, `resource-registry.db`) even when 0-byte (fresh-install transient state)
+ *   - the canonical DB (`claude-mem-lite.db`) even when 0-byte (fresh-install transient state)
  *
  * @param {string} dataDir Absolute path, typically `~/.claude-mem-lite`
  * @param {string[]} sourceFiles SOURCE_FILES manifest

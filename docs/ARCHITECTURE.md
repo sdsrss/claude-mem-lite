@@ -85,7 +85,7 @@ middle tier a single mutual layer. Nothing in `lib/` or `engine` imports a face 
 
 ## 3. Dependency graph (generated: `npm run audit:deps`)
 
-Modules: 150 · edges: 444 static + 44 lazy (relative `import`/`export … from` + literal `import()`, read from the AST — comments and string literals are not edges).
+Modules: 149 · edges: 444 static + 44 lazy (relative `import`/`export … from` + literal `import()`, read from the AST — comments and string literals are not edges).
 
 ### Layer matrix (rows import columns; count of edges)
 
@@ -258,9 +258,9 @@ graph LR
 
 | Module | Lines | Responsibility | Public interface (exports; `*` = re-export) |
 |---|---|---|---|
-| `cli.mjs` | 146 | (no header comment) | (entry — no exports) |
+| `cli.mjs` | 149 | (no header comment) | (entry — no exports) |
 | `hook.mjs` | 3190 | Hook v2 — Cognitive memory architecture Selective encoding, episodic batching, error-triggered recall Hooks (fast <100ms): post-tool-use,… | (entry — no exports) |
-| `install.mjs` | 2630 | Installer — Smart install/uninstall/status/doctor | HOOK_SCRIPT_FILES, probeBetterSqlite3Binding, ensureBetterSqlite3Working, copyHookScripts(), migrateLegacyClaudeMemData(), bumpJsonField(), patchClaudeMdVersion() … (+11) |
+| `install.mjs` | 2609 | Installer — Smart install/uninstall/status/doctor | HOOK_SCRIPT_FILES, probeBetterSqlite3Binding, ensureBetterSqlite3Working, copyHookScripts(), migrateLegacyClaudeMemData(), bumpJsonField(), patchClaudeMdVersion() … (+10) |
 | `scripts/hook-launcher.mjs` | 535 | Self-healing wrapper for Node hook entry points. Why: pre-v2.84 a stale-manifest bug in hook-update.mjs could leave the install with a hook.mjs that… | (entry — no exports) |
 | `scripts/launch-preflight.mjs` | 83 | Detect incomplete installs at MCP server launch. Why: issue #15 — published v2.53.0 npm tarball contains all files, but some users end up with a… | detectMissingImports(), resolveLaunchEntry() |
 | `scripts/launch.mjs` | 199 | Auto-installs dependencies then starts MCP server Uses only Node built-ins so it works before npm install | (entry — no exports) |
@@ -268,7 +268,7 @@ graph LR
 | `scripts/pre-agent-inject.js` | 150 | PreToolUse:Agent/Task hook — subagent dispatch-time memory injection. Subagents are memory-blind (plugin hooks do NOT fire inside them — #8848); this… | (entry — no exports) |
 | `scripts/pre-tool-recall.js` | 885 | PreToolUse file recall — injects lessons before Edit/Write Lightweight standalone (~30ms): only imports better-sqlite3, fs, path, os, and the… | (entry — no exports) |
 | `scripts/user-prompt-search.js` | 1069 | Auto-search memory on user prompt Runs as UserPromptSubmit hook — injects relevant memories before Claude sees the prompt Lightweight: only imports… | corpusFloorScale, hasExplicitSignal(), IDENTIFIER_BYPASS, extractTechIdentifiers(), rowMatchesIdentifier(), searchByFts(), isDirectInvocation() |
-| `server.mjs` | 2029 | MCP Server — All-in-one memory system FTS5 search, zero LLM calls, single process | handleSearchForTest(), handleRecentForTest(), SAVE_TEXT_LIMITS, clampSaveText(), handleExportForTest(), SPAWN_LOG_RETENTION_MS, SPAWN_LOG_MAX_LINES … (+2) |
+| `server.mjs` | 2031 | MCP Server — All-in-one memory system FTS5 search, zero LLM calls, single process | handleSearchForTest(), handleRecentForTest(), SAVE_TEXT_LIMITS, clampSaveText(), handleExportForTest(), SPAWN_LOG_RETENTION_MS, SPAWN_LOG_MAX_LINES … (+2) |
 
 ### Faces (arg parsing + rendering)
 
@@ -345,7 +345,7 @@ graph LR
 | `lib/get-core.mjs` | 167 | shared core for the CLI `get` / MCP `mem_get` twin (P2-12, audit 2026-08-14). The 23-element OBS_FIELDS array was duplicated verbatim in mem-cli.mjs… | OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, fetchPromptDetail(), fetchSessionDetail(), fetchEventDetail() … (+2) |
 | `lib/git-state.mjs` | 53 | thin wrapper around git status/stash/HEAD sha (T10b). Used by startup-dashboard (T10c) and continuation-anchor detection (T10d). All calls are… | readGitState() |
 | `lib/handoff-constants.mjs` | 18 | cross-session handoff policy, defined once. Moved out of `hook-shared.mjs` (audit 2026-09-05 P1-2): `lib/startup-dashboard.mjs` imported… | HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE, HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS |
-| `lib/hook-prune.mjs` | 118 | settings.json hook-entry classification and reconciliation. Extracted here because TWO faces need it and a direct import would close a cycle:… | isMemHook(), launcherEntryPath(), pruneDanglingMemHooks() |
+| `lib/hook-prune.mjs` | 133 | settings.json hook-entry classification and reconciliation. Extracted here because TWO faces need it and a direct import would close a cycle:… | isMemHook(), launcherEntryPath(), pruneDanglingMemHooks() |
 | `lib/hook-stdin.mjs` | 147 | one bounded stdin reader for every hook entry point. Audit 2026-09-02 P1-9. Six hook processes read the host's JSON payload off stdin and they did it… | DEFAULT_STDIN_MAX_BYTES, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent(), DEFAULT_STDIN_TIMEOUT_MS, readHookStdin() |
 | `lib/hook-stdout.mjs` | 262 | one hook process, at most ONE JSON document on stdout. Claude Code parses a command hook's stdout as a SINGLE JSON document. From the 2.1.233 bundle,… | queueHookContext(), queueHookUpdatedInput(), queueHookSystemMessage(), flushHookStdout(), resetHookStdout(), peekHookStdout() |
 | `lib/hook-telemetry.mjs` | 183 | unsampled hook-error log. Distinct from lib/err-sampler.mjs: that one writes 1% of swallowed debugCatch errors into ${dbDir}/errors/ for *production… | recordHookError(), countRecentHookErrors(), HOOK_ERROR_RETENTION_MS |
@@ -427,7 +427,6 @@ graph LR
 | `scripts/audit-metrics.mjs` | 1078 | Repeatable code-metrics snapshot for docs/audit/*.md. node scripts/audit-metrics.mjs # JSON to stdout, reuses coverage/ + runs eslint/knip/prettier… | (entry — no exports) |
 | `scripts/binding-probe-cli.mjs` | 157 | SessionStart native-binding probe + bounded heal. Contract with scripts/setup.sh: exit 0 = binding usable NOW, non-zero = not. Everything… | (entry — no exports) |
 | `scripts/convert-commands.mjs` | 161 | Convert command .md files to SKILL.md skills in managed agent plugins Usage: node scripts/convert-commands.mjs [--dry-run] [--delete-originals] D#29:… | (entry — no exports) |
-| `scripts/extract-repos.mjs` | 248 | Extract skills/agents from cloned repos into managed/ directory structure Target structure: managed/agents/<plugin-name>/agents/<agent>.md… | (entry — no exports) |
 | `scripts/mock-claude.mjs` | 66 | Mock claude CLI for E2E tests — deterministic JSON responses Usage: CLAUDE_CODE_PATH=scripts/mock-claude.mjs Called as: node mock-claude.mjs -p… | (entry — no exports) |
 | `scripts/p0-forward-probe.mjs` | 175 | Forward probe: seed injection_count from scan data into probe DB, measure noise penalty impact on top-noise IDs vs top-cited IDs. Read-only against… | (entry — no exports) |
 | `scripts/prompt-search-utils.mjs` | 282 | Shared logic for user-prompt-search hook and its tests. Extracted to eliminate code duplication between the hook script and test file. ─── Skip… | computeEffectiveLen(), shouldSkip(), INTENTS, detectIntent(), detectMemOverride*, extractErrorSignature(), MAX_SESSION_INJECTIONS … (+5) |

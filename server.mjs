@@ -291,18 +291,20 @@ function defangResult(result, { skillBlocks = true } = {}) {
  * @param {boolean} [opts.verbatim=false] Skip the defang pass. Only for payloads that
  *   must round-trip byte-exact — `mem_export` feeds `restore`, so neutralizing it would
  *   silently corrupt backups of any memory that legitimately discusses these tags.
- * @param {boolean} [opts.emitsSkillBlock=false] This handler legitimately emits a real
- *   `<skill-loaded>` wrapper, so the chokepoint must not strip it. `mem_use` is the only
- *   one, and it neutralizes its own untrusted body/name/path per call site (R6 P1-1).
- *   Applies to the SUCCESS path only — an error message never emits a wrapper.
+ *
+ * There used to be an `emitsSkillBlock` opt-out here, for the one handler that
+ * legitimately emitted a real `<skill-loaded>` wrapper: `mem_use`. It went with the skill
+ * registry, so the chokepoint is now unconditional — every non-verbatim result is defanged
+ * for skill blocks. Do not reintroduce the opt-out for a handler that merely wants to emit
+ * a wrapper; R6 P1-1 was exactly the shape where one exempt face carried the whole risk.
  */
-function safeHandler(fn, { verbatim = false, emitsSkillBlock = false } = {}) {
+function safeHandler(fn, { verbatim = false } = {}) {
   return async (args, extra) => {
     try {
       lastMcpRequestTime = Date.now();
       idleCleanupRan = false;
       const result = await fn(args, extra);
-      return verbatim ? result : defangResult(result, { skillBlocks: !emitsSkillBlock });
+      return verbatim ? result : defangResult(result, { skillBlocks: true });
     } catch (err) {
       return defangResult({ content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true });
     }

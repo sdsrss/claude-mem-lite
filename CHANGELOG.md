@@ -77,7 +77,7 @@ on testing them); `audit-fixes.test.mjs`'s T3-P2-A passed *vacuously*, its only 
 sitting behind an `if` the new error text can never satisfy; and `install.mjs` /
 `hook-update.mjs` still copied a `registry/preinstalled.json` that no longer exists.
 
-**Measurements** (all re-taken, none carried): tests 359 files / 5936 → **342 / 5570**,
+**Measurements** (all re-taken, none carried): tests 359 files / 5936 → **343 / 5578**,
 attributed in three steps by same-tree A/B name-set diffs rather than by subtracting counts.
 Knip 49 → **48** — and the count is the least interesting part: mid-removal it read 49, the
 same number as v4.0.4, while the name set had changed on both sides. Coverage

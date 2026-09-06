@@ -92,7 +92,21 @@ async function loadModule(env = {}) {
   // — mirror the afterEach delete instead of assigning a nullish value.
   if (env.CLAUDE_MEM_DIR === undefined) delete process.env.CLAUDE_MEM_DIR;
   else process.env.CLAUDE_MEM_DIR = env.CLAUDE_MEM_DIR;
+  // HOME is sandboxed by DEFAULT, not only when a caller remembers to pass it.
+  // `installExtractedRelease` now WRITES `~/.claude/settings.json` (the post-swap hook
+  // reconcile), and `os.homedir()` honours $HOME on POSIX — so on any machine whose
+  // settings.json holds a dangling claude-mem-lite hook entry, which is exactly the state
+  // an upgrade past the registry removal creates, `npx vitest run` was rewriting the
+  // developer's real config and leaving a .bak. Reproduced at 289 B → 42 B before this
+  // line existed. Most loadModule call sites pass no HOME; defaulting here covers all of
+  // them at once and cannot be forgotten by a test written later.
+  //
+  // A caller that already pointed HOME somewhere else (several set `process.env.HOME`
+  // directly before calling, to build a plugin-cache fixture) is left alone — the rule is
+  // "never the REAL home", not "always a fresh one", and clobbering their sandbox breaks
+  // the fixture they just built.
   if (env.HOME) process.env.HOME = env.HOME;
+  else if (process.env.HOME === originalHome) process.env.HOME = makeDir('mem-update-home');
   if (env.CLAUDE_PLUGIN_ROOT) process.env.CLAUDE_PLUGIN_ROOT = env.CLAUDE_PLUGIN_ROOT;
   return await import('../hook-update.mjs');
 }
@@ -110,6 +124,28 @@ afterEach(() => {
   process.env.HOME = originalHome;
   for (const dir of trackedDirs) rmSync(dir, { recursive: true, force: true });
   trackedDirs.clear();
+});
+
+describe('loadModule never leaves the real HOME in place', () => {
+  // The guard that bites on ANY machine. tests/suite-touches-no-user-config.test.mjs
+  // asserts the real ~/.claude/settings.json is unchanged, but that can only fail on a
+  // machine whose settings.json actually holds a dangling mem hook entry — it passes
+  // vacuously on a plugin-only install, which is how the leak survived review in the first
+  // place. This one checks the mechanism instead of the symptom: after loadModule() with no
+  // HOME, $HOME must not be the developer's, because installExtractedRelease writes
+  // ~/.claude/settings.json.
+  it('redirects $HOME away from the developer even when no HOME is passed', async () => {
+    process.env.HOME = originalHome; // premise: start from the real one
+    await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+    expect(process.env.HOME, 'a test could write the real ~/.claude').not.toBe(originalHome);
+  });
+
+  it('respects a HOME the caller already set, rather than clobbering their fixture', async () => {
+    const preset = makeDir('mem-update-preset-home');
+    process.env.HOME = preset;
+    await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+    expect(process.env.HOME).toBe(preset);
+  });
 });
 
 describe('createUpdateTmpDir (P3-4: predictable-/tmp TOCTOU)', () => {
