@@ -961,7 +961,7 @@ server.registerTool(
   },
   safeHandler(async (args) => {
     // Shared preview body (lib/delete-core, P2-12) — single source with CLI delete.
-    const { rows, lines: previewLines } = previewDeleteRows(db, args.ids);
+    const { rows, lines: previewLines, missing } = previewDeleteRows(db, args.ids);
 
     if (rows.length === 0) {
       return { content: [{ type: 'text', text: 'No observations found for given IDs.' }] };
@@ -969,6 +969,8 @@ server.registerTool(
 
     if (!args.confirm) {
       const lines = [`Preview: ${rows.length} observation(s) will be deleted:\n`, ...previewLines];
+      if (missing.length > 0)
+        lines.push(`\nNote: ID(s) ${missing.join(', ')} not found and will be skipped.`);
       lines.push(`\nCall mem_delete(ids=[...], confirm=true) to execute.`);
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
@@ -978,7 +980,6 @@ server.registerTool(
     // with the CLI `delete` path (was inlined + kept in sync by parity comments).
     const result = deleteObservations(db, args.ids);
 
-    const missing = args.ids.filter((id) => !rows.some((r) => r.id === id));
     const msg = [`Deleted ${result.deleted} observation(s).`];
     if (result.recoveredChildren > 0)
       msg.push(`Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.`);

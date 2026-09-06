@@ -18,6 +18,16 @@ export function cmdFtsCheck(db, args) {
     return;
   }
 
+  // Exit-code contract, matching `memdir-audit` — the other diagnostic in
+  // CLI_COMMANDS, whose help documents "Exit 0 if every file is compliant, 1
+  // otherwise". Both actions used to print the failure and exit 0, so
+  // `fts-check rebuild && echo repaired` announced a repair that had not
+  // happened, and an agent reading only the status code was told the index was
+  // healthy. `doctor` points users at this command precisely when it is not.
+  //
+  // Findings stay on STDOUT via out() rather than moving to fail()'s stderr:
+  // they are the report the user asked for, not an error trace, and the details
+  // are worth piping. Only process.exitCode changes.
   if (action === 'check') {
     const result = checkFTSIntegrity(db);
     if (result.healthy) {
@@ -25,6 +35,7 @@ export function cmdFtsCheck(db, args) {
     } else {
       out(`[mem] FTS5 issues found:`);
       for (const d of result.details) out(`  ${d}`);
+      process.exitCode = 1;
     }
     return;
   }
@@ -32,7 +43,10 @@ export function cmdFtsCheck(db, args) {
   if (action === 'rebuild') {
     const result = rebuildFTS(db);
     if (result.errors.length > 0) {
+      // Partial success is a failure of the requested operation: the caller asked
+      // for a rebuild and at least one index still is not rebuilt.
       out(`[mem] Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`);
+      process.exitCode = 1;
     } else {
       out(`[mem] Successfully rebuilt: ${result.rebuilt.join(', ')}`);
     }

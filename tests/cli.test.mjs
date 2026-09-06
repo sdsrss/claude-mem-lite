@@ -2169,6 +2169,51 @@ describe('CLI maintain command', () => {
     expect(output).toContain('Usage');
   });
 
+  // `--ops` is documented under `maintain <scan|execute>`, and `execute` rejects an
+  // unknown op by name. `scan` never read the flag at all, so the PREVIEW step — the
+  // one whose job is to tell you what the operation would do before you run it —
+  // accepted `--ops purge-stale` (hyphen for underscore), printed a normal report,
+  // and exited 0. The typo surfaced only on execute, after the user had already read
+  // a scan they believed was scoped to that op.
+  describe('scan --ops validation (parity with execute)', () => {
+    beforeEach(() => {
+      process.exitCode = 0;
+    });
+    afterEach(() => {
+      process.exitCode = 0;
+    });
+
+    it('rejects an unknown op by name, exactly as execute does', async () => {
+      const output = await captureStdout(() => run(['maintain', 'scan', '--ops', 'purge-stale']));
+      expect(output).toContain('Unknown operation(s): purge-stale');
+      expect(output).toContain('purge_stale'); // the valid list names the near-miss
+      expect(output).not.toContain('Maintenance scan'); // rejected before the report
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('rejects the invalid member of a partly-valid list', async () => {
+      const output = await captureStdout(() => run(['maintain', 'scan', '--ops', 'cleanup,bogus']));
+      expect(output).toContain('Unknown operation(s): bogus');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('accepts a valid op, and says the report is not scoped to it', async () => {
+      const output = await captureStdout(() => run(['maintain', 'scan', '--ops', 'purge_stale']));
+      expect(output).toContain('Maintenance scan');
+      // The flag is real on execute but scan always reports every category — say so
+      // rather than letting a scoped-looking invocation imply a scoped report.
+      expect(output).toContain('reports every category');
+      expect(process.exitCode).toBe(0);
+    });
+
+    it('plain scan stays silent about ops', async () => {
+      const output = await captureStdout(() => run(['maintain', 'scan']));
+      expect(output).toContain('Maintenance scan');
+      expect(output).not.toContain('reports every category');
+      expect(process.exitCode).toBe(0);
+    });
+  });
+
   it('scan reports maintenance stats', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',
@@ -3728,6 +3773,70 @@ describe('CLI fts-check command', () => {
   it('rebuilds FTS', async () => {
     const output = await captureStdout(() => run(['fts-check', 'rebuild']));
     expect(output).toContain('rebuilt');
+  });
+
+  it('delete preview names the ids that do not exist', async () => {
+    // The preview is where the user decides. Reporting the miss only after
+    // --confirm tells them a row was never there once it is too late to matter.
+    insertSession(testDb, { id: 's-del', project: 'p' });
+    const id = Number(
+      insertObs(testDb, { sessionId: 's-del', project: 'p', type: 'bugfix', title: 'doomed row' })
+        .lastInsertRowid,
+    );
+    const output = await captureStdout(() => run(['delete', `${id},99999`]));
+    expect(output).toContain('will be deleted');
+    expect(output).toContain('doomed row');
+    expect(output).toContain('not found');
+    expect(output).toContain('99999');
+  });
+
+  // Exit codes. `doctor` points users here when it flags an unhealthy index, and
+  // both actions used to report the failure on stdout and then exit 0 — so
+  // `fts-check rebuild && echo repaired` printed "repaired" after failing to
+  // repair, and an agent reading the exit code was told the index was fine.
+  // Convention matched: memdir-audit, the other diagnostic in CLI_COMMANDS,
+  // documents "Exit 0 if every file is compliant, 1 otherwise". Details stay on
+  // stdout (they are what the user reads); only the exit code changes.
+  describe('exit codes', () => {
+    beforeEach(() => {
+      process.exitCode = 0;
+    });
+    afterEach(() => {
+      process.exitCode = 0;
+    });
+
+    it('check exits 0 on a healthy index', async () => {
+      const output = await captureStdout(() => run(['fts-check', 'check']));
+      expect(output).toContain('healthy');
+      expect(process.exitCode).toBe(0);
+    });
+
+    it('check exits 1 when an index is missing or corrupt', async () => {
+      // Drop one FTS table: checkFTSIntegrity reports it "missing" — the same
+      // unhealthy verdict a corrupt index produces, reached deterministically.
+      testDb.exec('DROP TABLE IF EXISTS user_prompts_fts');
+      const output = await captureStdout(() => run(['fts-check', 'check']));
+      expect(output).toContain('issues found');
+      expect(output).toContain('user_prompts_fts');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('rebuild exits 0 when every index rebuilt', async () => {
+      const output = await captureStdout(() => run(['fts-check', 'rebuild']));
+      expect(output).toContain('Successfully rebuilt');
+      expect(process.exitCode).toBe(0);
+    });
+
+    it('rebuild exits 1 when any index could not be rebuilt', async () => {
+      testDb.exec('DROP TABLE IF EXISTS user_prompts_fts');
+      const output = await captureStdout(() => run(['fts-check', 'rebuild']));
+      expect(output).toContain('Errors:');
+      expect(output).toContain('user_prompts_fts');
+      // Premise: the OTHER indexes did rebuild, so this is a partial failure —
+      // exactly the case the old code reported and then called success.
+      expect(output).toContain('observations_fts');
+      expect(process.exitCode).toBe(1);
+    });
   });
 });
 

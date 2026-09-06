@@ -45,6 +45,7 @@ import {
   STALE_AGE_MS,
   PINNED_INJ_THRESHOLD,
   resolveDefaultMaintainOps,
+  ALL_MAINTAIN_OPS,
 } from './lib/maintain-core.mjs';
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
@@ -1898,7 +1899,7 @@ function cmdDelete(db, args) {
 
   const confirm = flags.confirm === true || flags.confirm === 'true';
   // Shared preview body (lib/delete-core, P2-12) — single source with mem_delete.
-  const { rows, lines: previewLines } = previewDeleteRows(db, ids);
+  const { rows, lines: previewLines, missing } = previewDeleteRows(db, ids);
 
   if (rows.length === 0) {
     fail('[mem] No observations found for given IDs');
@@ -1908,6 +1909,7 @@ function cmdDelete(db, args) {
   if (!confirm) {
     out(`[mem] Preview: ${rows.length} observation(s) will be deleted:`);
     for (const line of previewLines) out(line);
+    if (missing.length > 0) out(`[mem] Note: ID(s) ${missing.join(', ')} not found and will be skipped.`);
     out('[mem] Run with --confirm to execute deletion.');
     return;
   }
@@ -1916,7 +1918,6 @@ function cmdDelete(db, args) {
   // transaction) lives in lib/delete-core.mjs — single source of truth shared with the MCP
   // mem_delete path (was inlined here + kept in sync by parity comments, the #1 drift risk).
   const result = deleteObservations(db, ids);
-  const missing = ids.filter((id) => !rows.some((r) => r.id === id));
   const recoveredNote =
     result.recoveredChildren > 0
       ? ` Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.`
@@ -2498,6 +2499,13 @@ function cmdCompress(db, args) {
 
 // ─── Maintain ────────────────────────────────────────────────────────────────
 
+// Shared by BOTH maintain branches. It used to be a local const inside `execute`,
+// which is why `scan` — the preview step — silently accepted `--ops purge-stale`
+// (hyphen for underscore), printed a full report and exited 0, leaving the typo to
+// surface only on the run the preview was supposed to de-risk. The list itself now
+// comes from lib/maintain-core.mjs so this face and the MCP schema cannot drift.
+const VALID_MAINTAIN_OPS = ALL_MAINTAIN_OPS;
+
 function cmdMaintain(db, args) {
   const { positional, flags } = parseArgs(args);
   const action = positional[0];
@@ -2518,12 +2526,32 @@ function cmdMaintain(db, args) {
   const baseParams = project ? [project] : [];
 
   if (action === 'scan') {
+    // Validate --ops here too, with the same list and the same message `execute`
+    // uses. Catching the typo in the PREVIEW is the whole point: this is the step a
+    // user runs to find out what would happen, and it used to ignore the flag
+    // wholesale. Only validated when present — a plain `maintain scan` is unchanged.
+    if (flags.ops !== undefined) {
+      const scanOps = String(flags.ops)
+        .split(',')
+        .map((s) => s.trim());
+      const invalid = scanOps.filter((op) => !VALID_MAINTAIN_OPS.includes(op));
+      if (invalid.length > 0) {
+        fail(`[mem] Unknown operation(s): ${invalid.join(', ')}. Valid: ${VALID_MAINTAIN_OPS.join(', ')}`);
+        return;
+      }
+    }
+
     const staleAge = Date.now() - STALE_AGE_MS;
     const mctx = { projectFilter, baseParams, staleAge };
     const duplicates = findDuplicates(db, mctx);
     const stats = maintenanceStats(db, mctx);
 
     out(`[mem] Maintenance scan:`);
+    // The ops are valid but scan is not scoped by them — say so instead of letting a
+    // scoped-looking invocation imply a scoped report.
+    if (flags.ops !== undefined) {
+      out(`  (--ops is an execute-time filter; this scan reports every category)`);
+    }
     out(`  Total active: ${stats.total}`);
     out(`  Near-duplicate pairs: ${duplicates.length}`);
     out(`  Stale (>30d, imp=1, no access, never injected): ${stats.stale}`);
@@ -2567,27 +2595,17 @@ function cmdMaintain(db, args) {
   }
 
   // Execute
-  const VALID_OPS = [
-    'cleanup',
-    'decay',
-    'boost',
-    'demote_pinned',
-    'dedup',
-    'purge_stale',
-    'rebuild_vectors',
-    'vacuum',
-  ];
   // Distinguish flag-absent (use default op set) from flag-present-but-empty
   // (`--ops ""`, e.g. an unset shell var). The latter previously coerced via `||`
-  // to the destructive default set and EXECUTED it; route it to the VALID_OPS check
+  // to the destructive default set and EXECUTED it; route it to the VALID_MAINTAIN_OPS check
   // below instead so it's rejected like `--ops " "` / `--ops "decay,"`. (That default
   // was the literal `cleanup,decay,boost` when this was written; it now comes from
   // DEFAULT_MAINTAIN_OPS, which is why the list is no longer spelled out here.)
   const opsStr = flags.ops === undefined ? resolveDefaultMaintainOps().join(',') : String(flags.ops);
   const ops = opsStr.split(',').map((s) => s.trim());
-  const invalidOps = ops.filter((op) => !VALID_OPS.includes(op));
+  const invalidOps = ops.filter((op) => !VALID_MAINTAIN_OPS.includes(op));
   if (invalidOps.length > 0) {
-    fail(`[mem] Unknown operation(s): ${invalidOps.join(', ')}. Valid: ${VALID_OPS.join(', ')}`);
+    fail(`[mem] Unknown operation(s): ${invalidOps.join(', ')}. Valid: ${VALID_MAINTAIN_OPS.join(', ')}`);
     return;
   }
   const staleAge = Date.now() - STALE_AGE_MS;
@@ -3182,6 +3200,8 @@ Commands:
     --json              Machine-readable output (plain doctor run)
 
   fts-check <check|rebuild>  FTS5 index check or rebuild
+                        Exit 0 when every index is healthy / rebuilt, 1 otherwise —
+                        so "fts-check rebuild && <next step>" is safe to chain.
 
   stats                 Show memory statistics
     --project P         Filter by project

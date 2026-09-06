@@ -129,6 +129,26 @@ describe('lib/delete-core.mjs previewDeleteRows', () => {
     expect(lines[0]).toContain('| p');
     db.close();
   });
+
+  // Both faces computed the not-found set only in the CONFIRM branch, so the
+  // PREVIEW — the step whose whole job is to show what will happen before it
+  // happens — listed the found rows and said nothing about the rest. A user
+  // previewing `delete 42,43,44`, seeing two rows and typing --confirm, learned
+  // that 43 never existed only after the delete. The sibling `activity delete`
+  // already warns in its preview; this puts the set in the shared core so both
+  // the CLI and mem_delete report it from one place.
+  it('reports which requested ids were not found (preview needs it, not just confirm)', () => {
+    const db = seededDb();
+    const id = Number(
+      insertObs(db, { sessionId: 's1', project: 'p', type: 'bugfix', title: 'doomed row' }).lastInsertRowid,
+    );
+    const { missing } = previewDeleteRows(db, [id, 99999, 88888]);
+    expect(missing).toEqual([99999, 88888]);
+
+    // All-found is an empty array, never undefined — callers gate on .length.
+    expect(previewDeleteRows(db, [id]).missing).toEqual([]);
+    db.close();
+  });
 });
 
 describe('lib/browse-core.mjs collectBrowseTiers', () => {
