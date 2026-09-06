@@ -1061,8 +1061,8 @@ const DEFERRED_CLEANUPS = [
   },
   {
     // Project-name normalization: migrate short names ("mem") to canonical
-    // ("projects--mem"). Exact suffix match first, then distinctive-token
-    // substring. Idempotent: only acts on remaining short-name records.
+    // ("projects--mem") by EXACT canonical-suffix match. Idempotent: only acts on
+    // remaining short-name records.
     name: 'normalize-project-names',
     run: (db) => {
       const shortProjects = db
@@ -1077,52 +1077,66 @@ const DEFERRED_CLEANUPS = [
         )
         .all();
       if (shortProjects.length === 0) return;
-      const normalize = db.transaction(() => {
-        for (const { project: shortName } of shortProjects) {
-          let canonical = db
-            .prepare(
-              `SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
-            )
-            .get(`%--${shortName}`);
-          if (!canonical) {
-            const tokens = shortName.split(/[-_.]/).filter((t) => t.length >= 5);
-            for (const token of tokens) {
-              canonical = db
-                .prepare(
-                  `SELECT project FROM observations WHERE project LIKE ? AND project LIKE '%--_%'
-                 GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
-                )
-                .get(`%${token}%`);
-              if (canonical) break;
-            }
-          }
-          if (canonical) {
-            // Rename the short project to canonical on EVERY project-scoped table.
-            // Originally only the first three were rewritten, so a short-named
-            // project's deferred TODOs (deferred_work), activity (events), citation
-            // history (citation_log + v45 citation_surface_log), and /clear-/exit
-            // handoffs (session_handoffs) were stranded on the old name — invisible to
-            // every project-scoped query after normalization. All eight carry a
-            // `project` column (verified).
-            for (const table of [
-              'observations',
-              'sdk_sessions',
-              'session_summaries',
-              'session_handoffs',
-              'citation_log',
-              'citation_surface_log',
-              'events',
-              'deferred_work',
-            ]) {
-              db.prepare(`UPDATE ${table} SET project = ? WHERE project = ?`).run(
-                canonical.project,
-                shortName,
-              );
-            }
-          }
+      // R10 P1-3: ONE transaction per short name, not one for the whole scan. Three of the
+      // eight tables below have a PRIMARY KEY containing `project`, so a single collision
+      // used to roll back every OTHER project's rename too, leave the sentinel unwritten,
+      // and replay the whole SELECT DISTINCT + N updates on every subsequent DB open —
+      // i.e. on every hook event, forever, never converging.
+      const renameOne = db.transaction((shortName, canonicalName) => {
+        // Rename the short project to canonical on EVERY project-scoped table.
+        // Originally only the first three were rewritten, so a short-named
+        // project's deferred TODOs (deferred_work), activity (events), citation
+        // history (citation_log + v45 citation_surface_log), and /clear-/exit
+        // handoffs (session_handoffs) were stranded on the old name — invisible to
+        // every project-scoped query after normalization. All eight carry a
+        // `project` column (verified).
+        for (const table of [
+          'observations',
+          'sdk_sessions',
+          'session_summaries',
+          'session_handoffs',
+          'citation_log',
+          'citation_surface_log',
+          'events',
+          'deferred_work',
+        ]) {
+          // R10 P1-3: OR IGNORE. session_handoffs (project,type,session_id),
+          // citation_log (project,memory_session_id) and citation_surface_log
+          // (project,session_id,surface) collide whenever the SAME session was recorded
+          // under both names — which is exactly what an in-session plugin upgrade
+          // produces. Skipping the colliding row keeps the canonical one, which is the
+          // newer and more complete of the two; the alternative was a permanent stall.
+          db.prepare(`UPDATE OR IGNORE ${table} SET project = ? WHERE project = ?`).run(
+            canonicalName,
+            shortName,
+          );
         }
       });
-      normalize();
+      for (const { project: shortName } of shortProjects) {
+        // R10 P1-2: EXACT canonical-suffix match only. There used to be a fallback that
+        // took any >=5-char token of the short name and substring-matched it against every
+        // canonical project — so `workspace`, the ordinary name for a devcontainer whose
+        // cwd is the filesystem root `/workspace`, was absorbed into an unrelated
+        // `workspaces--repo` across all eight tables. project-utils.mjs:109-120 already
+        // treats a root-directory short name as legitimate; this cleanup did not, there is
+        // no snapshot on this path, and the sentinel means it never runs again. A legacy
+        // name that only a token match could resolve is still readable — resolveProject
+        // step 3 does that substring match at READ time, where a wrong guess costs a query
+        // rather than the row's identity.
+        const canonical = db
+          .prepare(
+            `SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
+          )
+          .get(`%--${shortName}`);
+        if (canonical) {
+          try {
+            renameOne(shortName, canonical.project);
+          } catch (e) {
+            // One project's failure must not abandon the others, nor the sentinel.
+            debugCatch(e, 'normalize-project-names');
+          }
+        }
+      }
     },
   },
 ];
