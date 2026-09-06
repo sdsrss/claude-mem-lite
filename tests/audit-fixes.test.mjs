@@ -818,6 +818,9 @@ describe('T2 CLI fixes', () => {
 //            effective retention was next daily cycle (~24h). Fix: cutoff = now - 37d.
 //   T4-P1-B  pre-skill-bridge.js used plain-text stdout; some CC variants drop plain-text
 //            PreToolUse output (sdscc). Fix: switch to JSON `hookSpecificOutput`.
+//            PIN REMOVED 2026-09 with the skill-registry subsystem itself
+//            (docs/audits/20260906-145304.md). The JSON-stdout contract it pinned is
+//            still enforced tree-wide by tests/hook-script-stdout-contract.test.mjs.
 //   T4-P2-B  handleStop inserted fast session_summaries without a dedup guard — Stop fired
 //            twice produced a duplicate row. Fix: mirror handleSessionStart's `hasSummary` check.
 //   T4-P2-D  handleUserPrompt did UPDATE prompt_counter + SELECT as two statements — concurrent
@@ -828,7 +831,6 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 
 const HOOK_PATH = resolve(new URL('..', import.meta.url).pathname, 'hook.mjs');
-const PRE_SKILL_BRIDGE = resolve(new URL('..', import.meta.url).pathname, 'scripts/pre-skill-bridge.js');
 
 const DAY_MS = 86_400_000;
 const PENDING_PURGE_MARKER = -2; // COMPRESSED_PENDING_PURGE
@@ -1157,70 +1159,6 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
     } finally {
       db2.close();
     }
-  });
-});
-
-describe('T4-P1-B: pre-skill-bridge emits JSON hookSpecificOutput', () => {
-  let tmpHome;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'mem-audit-t4-bridge-'));
-  });
-
-  afterEach(() => {
-    try {
-      rmSync(tmpHome, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
-
-  it('wraps skill content in JSON hookSpecificOutput instead of plain-text stdout', () => {
-    // Build the managed skill fixture the bridge expects:
-    //   ~/.claude-mem-lite/managed/skills/t4-probe/SKILL.md
-    //   ~/.claude-mem-lite/resource-registry.db with a matching `resources` row.
-    const managedDir = join(tmpHome, '.claude-mem-lite', 'managed', 'skills', 't4-probe');
-    mkdirSync(managedDir, { recursive: true });
-    const skillPath = join(managedDir, 'SKILL.md');
-    writeFileSync(skillPath, '# t4-probe\nsample managed skill body for T4-P1-B');
-
-    // Minimal registry DB — we only need a `resources` row the bridge can SELECT.
-    const regDbPath = join(tmpHome, '.claude-mem-lite', 'resource-registry.db');
-    const rdb = new Database(regDbPath);
-    rdb.pragma('journal_mode = WAL');
-    rdb.exec(`CREATE TABLE IF NOT EXISTS resources (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      invocation_name TEXT,
-      local_path TEXT,
-      source TEXT,
-      capability_summary TEXT
-    )`);
-    rdb
-      .prepare(
-        `INSERT INTO resources (name, type, status, invocation_name, local_path)
-                 VALUES (?, 'skill', 'active', ?, ?)`,
-      )
-      .run('t4-probe', 't4-probe', managedDir);
-    rdb.close();
-
-    const input = JSON.stringify({ tool_input: { skill: 't4-probe' } });
-    const out = execFileSync(process.execPath, [PRE_SKILL_BRIDGE], {
-      input,
-      encoding: 'utf8',
-      timeout: 5000,
-      env: { ...process.env, HOME: tmpHome, CLAUDE_MEM_HOOK_RUNNING: undefined },
-    });
-
-    const trimmed = out.trim();
-    expect(trimmed.length).toBeGreaterThan(0);
-    // Must parse as JSON — no bare `<skill-bridge>` prefix.
-    const parsed = JSON.parse(trimmed);
-    expect(parsed.hookSpecificOutput?.hookEventName).toBe('PreToolUse');
-    expect(parsed.hookSpecificOutput?.additionalContext).toMatch(/t4-probe/);
-    expect(parsed.hookSpecificOutput?.additionalContext).toMatch(/sample managed skill body/);
   });
 });
 

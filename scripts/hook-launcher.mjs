@@ -54,7 +54,7 @@ const DATA_DIR = MEM_DIR && isAbsolute(MEM_DIR) ? MEM_DIR : join(homedir(), '.cl
 // declared exception in the tree: the launcher runs BEFORE the native binding is known to
 // work, so it imports only `node:` builtins on purpose — even a leaf lib module is a
 // resolution it declines to make on the path whose job is surviving a broken install. The
-// standalone hook scripts it mirrors (pre-tool-recall / pre-skill-bridge) honour the same
+// standalone hook scripts it mirrors (pre-tool-recall / post-tool-recall) honour the same
 // variable and write 78 of every 79 of these markers, so reading a different dir would mean
 // never healing. `resolveRuntimeDir` is the canonical rule (audit 2026-09-02 P1-14) and this
 // is NOT identical to it: the resolver additionally makes a RELATIVE override absolute
@@ -342,7 +342,7 @@ async function attemptHeal(reason) {
 //
 // Since the heal moved off the hot path, a hot-path fire that hits a missing module records
 // the breakage and defers. But this launcher fronts several entries — hook.mjs plus
-// pre-tool-recall.js, pre-skill-bridge.js, post-tool-recall.js, user-prompt-search.js — and
+// pre-tool-recall.js, post-tool-recall.js, user-prompt-search.js — and
 // the missing module may sit on one of THEIR import chains and not on hook.mjs's. Then
 // session-start's own entry imports cleanly, the catch below never fires, and before this
 // function existed the clean fire simply cleared the marker: nothing ever repaired it. (That

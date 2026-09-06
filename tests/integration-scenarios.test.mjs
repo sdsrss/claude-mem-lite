@@ -1100,35 +1100,6 @@ describe('Scenario 12: Skill Auto-Dispatch — L1 name match + L2 bridge + L3 me
     expect(matchRegistrySkillName('fix the bug', names)).toBeNull();
   });
 
-  it('L2: pre-skill-bridge only matches managed paths', () => {
-    const db = createRegistryTestDb();
-    // Managed skill
-    db.prepare(
-      `
-      INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
-      VALUES ('humanizer', 'skill', 'user', 'hash', 'active', '/home/.claude-mem-lite/managed/skills/humanizer/SKILL.md', 'humanizer', '', '', '', '', '', '', '')
-    `,
-    ).run();
-    // Non-managed skill
-    db.prepare(
-      `
-      INSERT INTO resources (name, type, source, file_hash, status, local_path, invocation_name, capability_summary, trigger_patterns, keywords, intent_tags, use_cases, domain_tags, tech_stack)
-      VALUES ('brainstorming', 'skill', 'preinstalled', 'hash', 'active', '/home/.claude/plugins/cache/superpowers/SKILL.md', 'superpowers:brainstorming', '', '', '', '', '', '', '')
-    `,
-    ).run();
-
-    const managed = db
-      .prepare(`SELECT name FROM resources WHERE name = 'humanizer' AND local_path LIKE '%managed%'`)
-      .get();
-    const native = db
-      .prepare(`SELECT name FROM resources WHERE name = 'brainstorming' AND local_path LIKE '%managed%'`)
-      .get();
-
-    expect(managed).toBeTruthy();
-    expect(native).toBeUndefined();
-    db.close();
-  });
-
   it('L3: mem_use exact match query pattern works', () => {
     const db = createRegistryTestDb();
     db.prepare(

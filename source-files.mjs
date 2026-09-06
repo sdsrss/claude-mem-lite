@@ -63,7 +63,7 @@ export const SOURCE_FILES = [
   // Single source of truth for the CLAUDE_MEM_DIR → data-dir resolver (rejects a
   // stringified "undefined"/"null"/relative env instead of creating a stray dir).
   // Statically imported by schema.mjs / cli.mjs / install.mjs
-  // AND hook scripts (pre-tool-recall / post-tool-recall / pre-skill-bridge) — ship it
+  // AND hook scripts (pre-tool-recall / post-tool-recall) — ship it
   // or auto-update leaves schema + every hook with ERR_MODULE_NOT_FOUND on each fire.
   'lib/resolve-data-dir.mjs',
   // lib/ — statically imported by hook-llm.mjs (activity) + hook-handoff.mjs (git-state, task-reader);
@@ -104,7 +104,7 @@ export const SOURCE_FILES = [
   'lib/id-routing.mjs',
   'lib/err-sampler.mjs',
   // v2.76.x: unsampled hook-script failure log. Imported by
-  // scripts/pre-tool-recall.js + scripts/pre-skill-bridge.js (recorder)
+  // scripts/pre-tool-recall.js (recorder)
   // and mem-cli.mjs (countRecentHookErrors for `stats`). Missing from
   // manifest → tarball ships hooks that ERR_MODULE_NOT_FOUND on every fire.
   'lib/hook-telemetry.mjs',
@@ -334,7 +334,6 @@ export const HOOK_SCRIPT_FILES = [
   'prompt-search-utils.mjs',
   'pre-tool-recall.js',
   'post-tool-recall.js',
-  'pre-skill-bridge.js',
   // The Agent|Task hook command in BOTH registration sites is now the .sh prefilter,
   // which execs the .js only when CLAUDE_MEM_SUBAGENT_INJECT is on (audit P2-5). Both
   // must be materialized: shipping the prefilter without its target turns every

@@ -125,27 +125,6 @@ export function neutralizeSkillDelimiters(s) {
   return defangToFixpoint(s, SKILL_BLOCK_RE);
 }
 
-// <skill-bridge> is the wrapper scripts/pre-skill-bridge.js puts around a managed
-// skill body it injects as PreToolUse additionalContext. The body comes from a
-// third-party repo (tools/adopt import) — an untrusted boundary — so a literal
-// `</skill-bridge>` inside it would close the wrapper early and spill the rest of
-// the payload (e.g. a forged <system-reminder>) as undelimited context (audit
-// 2026-08-14 M-4). Not in CONTEXT_DELIMITER_RE for the same reason <skill-loaded>
-// isn't: the bridge's OWN wrapper must stay live, so the defang is applied per
-// call site to the untrusted body only.
-const SKILL_BRIDGE_RE = /<\/?skill-bridge(?:\s[^>]*)?>/gi;
-
-/**
- * Defang a literal `<skill-bridge>` opener/closer in untrusted text that is about
- * to be wrapped in a real skill-bridge block. Same fixpoint treatment as the
- * classes above. Never apply to the wrapper itself.
- * @param {string} s Input string (any type; coerced)
- * @returns {string} Text with skill-bridge delimiters defanged
- */
-export function neutralizeSkillBridgeDelimiters(s) {
-  return defangToFixpoint(s, SKILL_BRIDGE_RE);
-}
-
 /**
  * Render the PostToolUse error-recall hint block (hook.mjs::triggerErrorRecall).
  * The single most-relevant hit (rows[0]) that carries a lesson_learned gets its

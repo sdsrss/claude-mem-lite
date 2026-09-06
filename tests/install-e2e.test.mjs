@@ -158,17 +158,14 @@ describe('E2E: Plugin install mode', () => {
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs session-start',
     );
 
-    // PreToolUse — three matchers
+    // PreToolUse — two matchers (the `Skill` bridge went with the skill-registry
+    // subsystem in 2026-09; see docs/audits/20260906-145304.md)
     const preToolUse = hooks.hooks.PreToolUse;
-    expect(preToolUse).toHaveLength(3);
+    expect(preToolUse).toHaveLength(2);
     const preMatchers = preToolUse.map((h) => h.matcher);
     expect(preMatchers).toContain('Edit|Write|NotebookEdit|Read');
-    expect(preMatchers).toContain('Skill');
+    expect(preMatchers).not.toContain('Skill');
     expect(preMatchers).toContain('Agent|Task');
-
-    // PreToolUse Skill bridge
-    const skillBridge = preToolUse.find((h) => h.matcher === 'Skill');
-    expect(skillBridge.hooks[0].command).toContain('pre-skill-bridge.js');
 
     // PreToolUse Agent|Task subagent-injection hook (P0)
     const agentInject = preToolUse.find((h) => h.matcher === 'Agent|Task');
@@ -289,19 +286,18 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(settings.hooks.UserPromptSubmit).toBeTruthy();
     expect(settings.hooks.PreToolUse).toBeTruthy();
 
-    // PreToolUse has three separate matchers
+    // PreToolUse has two separate matchers
     const preToolUse = settings.hooks.PreToolUse;
-    expect(preToolUse.length).toBeGreaterThanOrEqual(3);
+    expect(preToolUse.length).toBeGreaterThanOrEqual(2);
 
     // Edit/Write/Read recall hook (v2.34.6 extended Read)
     const editMatcher = preToolUse.find((h) => h.matcher === 'Edit|Write|NotebookEdit|Read');
     expect(editMatcher).toBeTruthy();
     expect(editMatcher.hooks[0].command).toContain('pre-tool-recall.js');
 
-    // Skill bridge hook
-    const skillMatcher = preToolUse.find((h) => h.matcher === 'Skill');
-    expect(skillMatcher).toBeTruthy();
-    expect(skillMatcher.hooks[0].command).toContain('pre-skill-bridge.js');
+    // No `Skill` matcher: the bridge was removed with the skill-registry subsystem
+    // (2026-09). Asserted negatively so a reinstated twin cannot slip back in silently.
+    expect(preToolUse.find((h) => h.matcher === 'Skill')).toBeUndefined();
 
     // Agent|Task subagent-injection hook (P0)
     const agentMatcher = preToolUse.find((h) => h.matcher === 'Agent|Task');
@@ -478,12 +474,12 @@ describe('E2E: Smart invocation scripts deployed', () => {
   it('plugin hooks.json references all smart invocation scripts', () => {
     const hooks = readJson('hooks/hooks.json');
 
-    // Pre-skill-bridge for Skill() interception
+    // Pre-tool-recall for Edit/Write/Read
     const preToolUse = hooks.hooks.PreToolUse;
-    const skillHook = preToolUse.find((h) => h.matcher === 'Skill');
-    expect(skillHook).toBeTruthy();
-    expect(skillHook.hooks[0].command).toContain('pre-skill-bridge.js');
-    expect(skillHook.hooks[0].timeout).toBe(3);
+    const recallHook = preToolUse.find((h) => h.matcher === 'Edit|Write|NotebookEdit|Read');
+    expect(recallHook).toBeTruthy();
+    expect(recallHook.hooks[0].command).toContain('pre-tool-recall.js');
+    expect(recallHook.hooks[0].timeout).toBe(3);
 
     // User-prompt-search for L1 auto-load
     const userPrompt = hooks.hooks.UserPromptSubmit[0].hooks;
@@ -502,7 +498,6 @@ describe('E2E: Smart invocation scripts deployed', () => {
       // --dev mode creates a scripts symlink → all scripts accessible
       expect(existsSync(join(dataDir, 'scripts'))).toBe(true);
       // Verify the smart invocation scripts exist in the project
-      expect(existsSync(join(PROJECT_DIR, 'scripts', 'pre-skill-bridge.js'))).toBe(true);
       expect(existsSync(join(PROJECT_DIR, 'scripts', 'user-prompt-search.js'))).toBe(true);
       expect(existsSync(join(PROJECT_DIR, 'scripts', 'prompt-search-utils.mjs'))).toBe(true);
       expect(existsSync(join(PROJECT_DIR, 'scripts', 'pre-tool-recall.js'))).toBe(true);
@@ -568,7 +563,6 @@ describe('E2E: Version consistency across all manifests', () => {
     expect(files).toContain('hooks/hooks.json');
 
     // Smart invocation scripts
-    expect(files).toContain('scripts/pre-skill-bridge.js');
     expect(files).toContain('scripts/pre-agent-inject.js');
     expect(files).toContain('scripts/user-prompt-search.js');
     expect(files).toContain('scripts/prompt-search-utils.mjs');

@@ -385,11 +385,10 @@ describe('hook update lifecycle', () => {
   it('staged install curates scripts/ to HOOK_SCRIPT_FILES and skips dev-only files', async () => {
     const dataDir = makeDataDir();
     const releaseDir = makeReleaseDir();
-    // Add the rest of HOOK_SCRIPT_FILES so we can assert all five land
+    // Add the rest of HOOK_SCRIPT_FILES so we can assert all four land
     writeFileSync(join(releaseDir, 'scripts', 'user-prompt-search.js'), '// search');
     writeFileSync(join(releaseDir, 'scripts', 'prompt-search-utils.mjs'), '// utils');
     writeFileSync(join(releaseDir, 'scripts', 'pre-tool-recall.js'), '// recall');
-    writeFileSync(join(releaseDir, 'scripts', 'pre-skill-bridge.js'), '// bridge');
     // Dev-only file + nested helper subdir — neither should land in dataDir
     writeFileSync(join(releaseDir, 'scripts', 'mock-claude.mjs'), '// dev-only');
     mkdirSync(join(releaseDir, 'scripts', 'helpers'), { recursive: true });
@@ -403,13 +402,12 @@ describe('hook update lifecycle', () => {
     const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
 
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
-    // All five curated hook scripts land
+    // All four curated hook scripts land
     for (const name of [
       'post-tool-use.sh',
       'user-prompt-search.js',
       'prompt-search-utils.mjs',
       'pre-tool-recall.js',
-      'pre-skill-bridge.js',
     ]) {
       expect(existsSync(join(dataDir, 'scripts', name))).toBe(true);
     }

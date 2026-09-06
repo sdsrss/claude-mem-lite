@@ -8,7 +8,7 @@
 //
 //   - eslint listed `scripts/**` in its `ignores`, so 4470 lines across 17 files
 //     were never linted at all — five of them (post-tool-use, pre-agent-inject,
-//     pre-tool-recall, pre-skill-bridge, user-prompt-search) fire on every hook
+//     pre-tool-recall, user-prompt-search) fire on every hook
 //     event in production.
 //   - knip DOES scan the directory, but knip.json lists `scripts/*.{mjs,js}` as
 //     ENTRY points, and an entry point's exports are exempt from the

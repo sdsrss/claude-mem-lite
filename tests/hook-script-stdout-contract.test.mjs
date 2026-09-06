@@ -123,7 +123,6 @@ describe('hook stdout contract — one writer (D#154)', () => {
       'hook.mjs',
       'scripts/post-tool-recall.js',
       'scripts/pre-agent-inject.js',
-      'scripts/pre-skill-bridge.js',
       'scripts/pre-tool-recall.js',
       'scripts/user-prompt-search.js',
     ]);

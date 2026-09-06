@@ -1049,17 +1049,6 @@ function configureHooks() {
     ],
   };
 
-  const memPreSkillBridge = {
-    matcher: 'Skill',
-    hooks: [
-      {
-        type: 'command',
-        command: nodeHook('scripts/pre-skill-bridge.js'),
-        timeout: 3,
-      },
-    ],
-  };
-
   // P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
   // Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
   // can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
@@ -1079,13 +1068,13 @@ function configureHooks() {
   };
 
   // Filter out existing mem hooks, then append fresh ones
-  // PreToolUse has three separate matchers, so we register all three
+  // PreToolUse has two separate matchers, so we register both
   // Event set MUST stay equal to hooks/hooks.json's (minus scripts/setup.sh, which
   // bootstraps the plugin cache and has no settings.json counterpart) —
   // tests/audit-silent-20260814.test.mjs diffs a real `install --dev` run's
   // settings.json against the shipped manifest and reds on any new divergence.
   const hookConfigs = {
-    PreToolUse: [memPreToolRecall, memPreSkillBridge, memPreAgentInject],
+    PreToolUse: [memPreToolRecall, memPreAgentInject],
     PostToolUse: [memPostToolUse, memPostToolRecall],
     PostToolUseFailure: [memPostToolFailure],
     PreCompact: [memPreCompact],

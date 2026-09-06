@@ -198,20 +198,6 @@ for (const s of ['scripts/pre-tool-recall.js']) {
     detail: `exit=${r.code} ${r.stderr.slice(0, 300)}`,
   }));
 }
-const preSkill = {
-  session_id: SESSION,
-  cwd: PROJECT,
-  hook_event_name: 'PreToolUse',
-  tool_name: 'Skill',
-  tool_input: { skill: 'superpowers:brainstorming' },
-};
-check('PreToolUse pre-skill-bridge exits 0', () => {
-  const r = runHook(`node "${CACHE}/scripts/hook-launcher.mjs" scripts/pre-skill-bridge.js`, preSkill, {
-    env: ENV,
-    cwd: PROJECT,
-  });
-  return { ok: r.code === 0, detail: `exit=${r.code} ${r.stderr.slice(0, 300)}` };
-});
 const preAgent = {
   session_id: SESSION,
   cwd: PROJECT,

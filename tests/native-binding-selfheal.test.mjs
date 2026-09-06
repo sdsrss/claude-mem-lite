@@ -331,8 +331,9 @@ describe('native-binding breakage marker — the unattended-heal trigger', () =>
 });
 
 // The field outage's 79 log entries came from scripts/pre-tool-recall.js and
-// scripts/pre-skill-bridge.js — STANDALONE hook scripts that never import
-// hook.mjs, so hook.mjs's dispatch catch (and its marker) could not see them.
+// scripts/pre-skill-bridge.js (the latter removed in 2026-09 with the skill
+// registry) — STANDALONE hook scripts that never import hook.mjs, so hook.mjs's
+// dispatch catch (and its marker) could not see them.
 // recordHookError is the one choke point every hook script funnels through, so
 // the flag lives there and covers scripts written later for free.
 describe('recordHookError — the standalone hook scripts must arm the heal too', () => {
@@ -358,11 +359,7 @@ describe('recordHookError — the standalone hook scripts must arm the heal too'
   });
 
   it('still writes its JSONL shard (the flag is additive, not a replacement)', () => {
-    recordHookError(
-      'skill-bridge:db-open',
-      Object.assign(new Error('x'), { code: 'ERR_DLOPEN_FAILED' }),
-      dir,
-    );
+    recordHookError('ups:db-open', Object.assign(new Error('x'), { code: 'ERR_DLOPEN_FAILED' }), dir);
     expect(existsSync(join(dir, 'hook-errors'))).toBe(true);
   });
 });

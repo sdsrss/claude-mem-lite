@@ -566,7 +566,7 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
   });
 
   it('reads the marker dir the standalone hook scripts write to (CLAUDE_MEM_RUNTIME_DIR)', () => {
-    // pre-tool-recall.js / pre-skill-bridge.js honor CLAUDE_MEM_RUNTIME_DIR and
+    // pre-tool-recall.js / post-tool-recall.js honor CLAUDE_MEM_RUNTIME_DIR and
     // wrote 78 of the 79 field markers; a launcher reading only CLAUDE_MEM_DIR
     // would look in the wrong place and never heal.
     const root = makeInstall('cml-launcher-nb-runtimedir');

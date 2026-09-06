@@ -1,10 +1,10 @@
 // install-hook-scripts.test.mjs — Bug 1 regression
 // install.mjs writes settings.json hook commands pointing at
-// `~/.claude-mem-lite/scripts/pre-tool-recall.js` and `pre-skill-bridge.js`,
-// but the non-dev copy block only copies 3 of the 5 scripts. The two
-// PreToolUse scripts go missing on every fresh install, so each Read/Skill
-// tool call after install logs "Cannot find module" until the user manually
-// patches settings.json or copies the files. Lock the full set in a single
+// `~/.claude-mem-lite/scripts/pre-tool-recall.js` (and, until the skill-registry
+// removal in 2026-09, `pre-skill-bridge.js`), but the non-dev copy block only
+// copied 3 of the 5 scripts. The PreToolUse scripts went missing on every fresh
+// install, so each Read/Skill tool call after install logged "Cannot find module"
+// until the user manually patched settings.json or copied the files. Lock the full set in a single
 // constant so adding a script + wiring its hook can't drift out of sync.
 
 import { describe, it, expect } from 'vitest';
@@ -17,9 +17,8 @@ import { HOOK_SCRIPT_FILES, copyHookScripts } from '../install.mjs';
 const PROJECT_SCRIPTS = resolve('scripts');
 
 describe('Bug 1: HOOK_SCRIPT_FILES manifest', () => {
-  it('includes both PreToolUse scripts referenced by settings.json hooks', () => {
+  it('includes the PreToolUse script referenced by settings.json hooks', () => {
     expect(HOOK_SCRIPT_FILES).toContain('pre-tool-recall.js');
-    expect(HOOK_SCRIPT_FILES).toContain('pre-skill-bridge.js');
   });
 
   it('includes the 3 previously-copied scripts to preserve existing behavior', () => {
@@ -44,9 +43,8 @@ describe('Bug 1: copyHookScripts behavior', () => {
       for (const name of HOOK_SCRIPT_FILES) {
         expect(existsSync(join(dest, name))).toBe(true);
       }
-      // pre-tool-recall.js and pre-skill-bridge.js specifically — the bug we're fixing
+      // pre-tool-recall.js specifically — the bug we're fixing
       expect(existsSync(join(dest, 'pre-tool-recall.js'))).toBe(true);
-      expect(existsSync(join(dest, 'pre-skill-bridge.js'))).toBe(true);
     } finally {
       rmSync(dest, { recursive: true, force: true });
     }

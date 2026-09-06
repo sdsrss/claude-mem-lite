@@ -5,7 +5,7 @@
 // WHY THIS FILE EXISTS (it does not duplicate the hook tests already here):
 //   tests/e2e.test.mjs            — hook.mjs lifecycle, but only the events a past bug
 //                                   touched, and never the standalone scripts.
-//   tests/pre-tool-recall*.test.mjs / pre-skill-bridge / pre-agent-inject /
+//   tests/pre-tool-recall*.test.mjs / pre-agent-inject /
 //   post-tool-recall / user-prompt-search — one script each, deep on that script's own
 //                                   feature (bind mode, file-intel, defang, re-read guard).
 //   tests/lifecycle-e2e.test.mjs  — install → adopt → uninstall, not per-event I/O.
@@ -1633,73 +1633,6 @@ describe('hook feature sweep: standalone hook scripts', () => {
       { event: 'PostToolUse', plainAllowed: false },
       (stdinPayload, malCwd) =>
         hookScript('post-tool-recall.js', { cwd: malCwd, stdin: stdinPayload, env: BIND }),
-    );
-  });
-
-  itHook('scripts/pre-skill-bridge.js', async () => {
-    const NAME = 'hs-skill';
-    const cwd = workDir(NAME);
-    const BODY = 'HOOKSWEEPSKILLBODY — the managed skill body must reach the caller verbatim.';
-    const skillDir = join(DATA_DIR, 'managed', 'skills', 'hooksweep-skill');
-    mkdirSync(skillDir, { recursive: true });
-    const skillPath = join(skillDir, 'SKILL.md');
-    writeFileSync(
-      skillPath,
-      `---\nname: hooksweep-skill\ndescription: hook sweep fixture skill\n---\n\n${BODY}\n`,
-    );
-    await cli(
-      [
-        'registry',
-        'import',
-        '--name',
-        'hooksweep-skill',
-        '--resource-type',
-        'skill',
-        '--local-path',
-        skillPath,
-        '--capability-summary',
-        'hook sweep fixture skill',
-      ],
-      cwd,
-    );
-
-    const r = await hookScript('pre-skill-bridge.js', {
-      cwd,
-      stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-skill',
-        tool_name: 'Skill',
-        tool_input: { skill: 'hooksweep-skill' },
-      }),
-    });
-    expect(r.code, `pre-skill-bridge exited ${r.code}\n${r.stderr}`).toBe(0);
-    const [envelope] = expectHookStdout(r.stdout, {
-      event: 'PreToolUse',
-      plainAllowed: false,
-      label: 'scripts/pre-skill-bridge.js',
-    });
-    expect(envelope, `no PreToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
-    const ctx = envelope.hookSpecificOutput.additionalContext;
-    expect(ctx).toContain('<skill-bridge name="hooksweep-skill" source="managed">');
-    expect(ctx).toContain(BODY); // file contents, not just a pointer
-    expect(ctx).toContain('</skill-bridge>');
-
-    // A skill the registry does not know must stay silent — the bridge only intercepts
-    // managed skills, and a stray envelope here would shadow Claude Code's own Skill load.
-    const unknown = await hookScript('pre-skill-bridge.js', {
-      cwd,
-      stdin: JSON.stringify({
-        session_id: 'cc-hooksweep-skill',
-        tool_name: 'Skill',
-        tool_input: { skill: 'zqxwvrunk' },
-      }),
-    });
-    expect(unknown.code).toBe(0);
-    expect(unknown.stdout).toBe('');
-
-    await expectMalformedResilience(
-      'scripts/pre-skill-bridge.js',
-      { event: 'PreToolUse', plainAllowed: false },
-      (stdin, malCwd) => hookScript('pre-skill-bridge.js', { cwd: malCwd, stdin }),
     );
   });
 

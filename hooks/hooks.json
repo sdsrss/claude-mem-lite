@@ -42,16 +42,6 @@
         ]
       },
       {
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs\" scripts/pre-skill-bridge.js",
-            "timeout": 3
-          }
-        ]
-      },
-      {
         "matcher": "Agent|Task",
         "hooks": [
           {

@@ -189,7 +189,6 @@
     "scripts/user-prompt-search.js",
     "scripts/pre-tool-recall.js",
     "scripts/post-tool-recall.js",
-    "scripts/pre-skill-bridge.js",
     "scripts/pre-agent-inject.sh",
     "scripts/pre-agent-inject.js",
     "scripts/prompt-search-utils.mjs",

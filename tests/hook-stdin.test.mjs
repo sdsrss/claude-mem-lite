@@ -191,7 +191,6 @@ describe('every hook entry point reads stdin through the shared module', () => {
     'hook.mjs',
     'scripts/user-prompt-search.js',
     'scripts/pre-tool-recall.js',
-    'scripts/pre-skill-bridge.js',
     'scripts/post-tool-recall.js',
   ];
 
