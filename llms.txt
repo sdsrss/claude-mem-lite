@@ -2,13 +2,13 @@
 
 > Persistent long-term memory for Claude Code (Anthropic's CLI coding agent) via the Model Context Protocol (MCP). Captures coding decisions, bugfixes, and context across sessions; recalls them via hybrid FTS5 + TF-IDF search. Single local SQLite database, no external services. A lighter, lower-cost alternative to claude-mem — episode batching plus a smaller model reduce LLM cost substantially (an internal architecture estimate, not a measured benchmark).
 
-claude-mem-lite is a Claude Code plugin (also installable via npm/npx) that runs as an MCP server plus a set of Claude Code lifecycle hooks (`SessionStart`, `PostToolUse`, `Stop`, `UserPromptSubmit`, `PreToolUse:Edit`, `PreToolUse:Read`). It automatically captures coding observations during sessions — file edits, bug fixes, decisions, refactors — then surfaces relevant past observations when you edit a related file or hit a familiar error. Search is hybrid: FTS5 BM25 + TF-IDF cosine similarity merged via Reciprocal Rank Fusion (RRF), with 100+ synonym pairs including CJK↔EN cross-language mappings. Benchmarked at 0.88 Recall@10 / 0.96 Precision@10 / 0.95 nDCG@10 across 200 observations / 30 queries.
+claude-mem-lite is a Claude Code plugin (also installable via npm/npx) that runs as an MCP server plus a set of Claude Code lifecycle hooks (`SessionStart`, `PreCompact`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`). It automatically captures coding observations during sessions — file edits, bug fixes, decisions, refactors — then surfaces relevant past observations when you edit a related file or hit a familiar error. Search is hybrid: FTS5 BM25 + TF-IDF cosine similarity merged via Reciprocal Rank Fusion (RRF), with 100+ synonym pairs including CJK↔EN cross-language mappings. Benchmarked at 0.88 Recall@10 / 0.96 Precision@10 / 0.95 nDCG@10 across 200 observations / 30 queries.
 
 ## Core docs
 
 - [README](https://github.com/sdsrss/claude-mem-lite/blob/main/README.md): full usage, architecture, comparison vs claude-mem / mem0 / MCP reference memory, FAQ
 - [中文 README](https://github.com/sdsrss/claude-mem-lite/blob/main/README.zh-CN.md): Chinese documentation
-- [CHANGELOG](https://github.com/sdsrss/claude-mem-lite/blob/main/CHANGELOG.md): version history (currently v2.84.2)
+- [CHANGELOG](https://github.com/sdsrss/claude-mem-lite/blob/main/CHANGELOG.md): version history
 - [CLAUDE.md](https://github.com/sdsrss/claude-mem-lite/blob/main/CLAUDE.md): architecture map and module roles
 - [Architecture comparison](https://github.com/sdsrss/claude-mem-lite#architecture-comparison): vs claude-mem original (the project this was redesigned from)
 - [Comparison vs mem0 / MCP memory](https://github.com/sdsrss/claude-mem-lite#comparison-memory-systems-for-ai-coding-agents): differentiation from general LLM memory frameworks
@@ -16,12 +16,12 @@ claude-mem-lite is a Claude Code plugin (also installable via npm/npx) that runs
 
 ## Key concepts
 
-- **MCP server**: registers 20 tools total; 9 core exposed to Claude Code (`mem_search`, `mem_recent`, `mem_recall`, `mem_timeline`, `mem_get`, `mem_save`, `mem_defer`, `mem_defer_list`, `mem_defer_drop`); 11 admin/maintenance tools hidden from `tools/list` but reachable via the `claude-mem-lite` CLI
-- **Hooks**: `SessionStart` (context injection + handoff resume), `PostToolUse` (episode capture + error-triggered recall), `Stop` (episode flush + handoff snapshot), `UserPromptSubmit` (semantic memory injection + L1 skill auto-load), `PreToolUse:Edit/Read` (file lesson recall)
+- **MCP server**: registers 18 tools total; 9 core exposed to Claude Code (`mem_search`, `mem_recent`, `mem_recall`, `mem_timeline`, `mem_get`, `mem_save`, `mem_defer`, `mem_defer_list`, `mem_defer_drop`); 9 admin/maintenance tools hidden from `tools/list` but reachable via the `claude-mem-lite` CLI
+- **Hooks** (seven events, as registered in `hooks/hooks.json`): `SessionStart` (context injection + handoff resume), `PreCompact` (pre-compaction snapshot), `PreToolUse` (file lesson recall before Edit/Write/Read; context for spawned agents), `PostToolUse` (episode capture), `PostToolUseFailure` (error-triggered recall on a host-flagged failure), `Stop` (episode flush + handoff snapshot), `UserPromptSubmit` (semantic memory injection)
 - **Episode batching**: groups related tool calls (5–10 ops) before sending to LLM (Haiku) for structured observation extraction, instead of one LLM call per tool use (claude-mem original's model). Combined with the smaller model this is the source of the cost reduction — the headline multiplier is an architecture estimate (call-count × token × model-price reduction), not a measured end-to-end benchmark.
 - **Hybrid retrieval**: FTS5 BM25 keyword search + TF-IDF cosine (512-dim vectors) semantic search, fused via Reciprocal Rank Fusion. Synonym expansion handles abbreviations (`K8s`, `DB`, `auth`) and CJK↔EN cross-language (数据库↔database)
 - **Cross-session handoff**: captures session state on `/clear` or `/exit`, re-injects on next session via FTS5 term overlap or `git SHA` continuation anchor
-- **Invited memory pattern (v2.82+)**: installs an MCP-trigger sentinel into the project's `MEMORY.md` so Claude Code loads the tool-use contract as user-memory authority (higher rank than MCP server instructions). Auto-fires on first SessionStart per project; per-project and global opt-outs available.
+- **Invited memory pattern (v3.13+)**: installs a plugin-owned managed block into the project's `CLAUDE.md`, plus an on-demand detail doc at `.claude/plugin_claude_mem_lite.md`, so Claude Code loads the tool-use contract as project-instruction authority. NOT `MEMORY.md`: Claude Code loads both at equal weight, and seeding MEMORY.md would pollute an index meant for the user's own memories (`claudemd.mjs`). Auto-fires on first SessionStart per project; per-project (`adopt --disable`) and global (`MEM_NO_AUTO_ADOPT=1`) opt-outs available.
 
 ## Installation
 
@@ -29,7 +29,7 @@ claude-mem-lite is a Claude Code plugin (also installable via npm/npx) that runs
 - `npx github:sdsrss/claude-mem-lite` (one-liner; installs to `~/.claude-mem-lite/`)
 - `git clone https://github.com/sdsrss/claude-mem-lite.git && node install.mjs install` (for development)
 
-Requires Node.js ≥ 18, Claude Code CLI. Linux/macOS only (uses POSIX shell scripts).
+Requires Node.js ≥ 22 (`package.json` `engines`; better-sqlite3 13 requires it and Node 20 reached EOL in 2026-04), Claude Code CLI. Linux/macOS only (uses POSIX shell scripts; `package.json` declares `os`).
 
 ## Related projects
 

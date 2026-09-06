@@ -188,7 +188,7 @@ Source files stay in the cloned repo. Update via `git pull && node install.mjs i
 ### What happens during installation
 
 1. **Install dependencies** -- `npm install --omit=dev` (compiles native `better-sqlite3`)
-2. **Register MCP server** -- `mem-lite` server with 20 tools (9 core exposed via `tools/list` + 11 hidden-but-callable; see the Usage section for the full table). The pre-v2.78 generic server name `mem` is renamed to `mem-lite` for namespace hygiene; the tool names themselves (`mem_search`, `mem_recall`, ...) are unchanged.
+2. **Register MCP server** -- `mem-lite` server with 18 tools (9 core exposed via `tools/list` + 9 hidden-but-callable; see the Usage section for the full table). The pre-v2.78 generic server name `mem` is renamed to `mem-lite` for namespace hygiene; the tool names themselves (`mem_search`, `mem_recall`, ...) are unchanged.
 3. **Configure hooks** -- `PostToolUse`, `SessionStart`, `Stop`, `UserPromptSubmit` lifecycle hooks
 4. **Create data directory** -- `~/.claude-mem-lite/` (hidden) for database, runtime, and managed resource files
 5. **Auto-migrate** -- If `~/.claude-mem/` (original claude-mem) or `~/claude-mem-lite/` (pre-v0.5 unhidden) exists, migrates database and runtime files to `~/.claude-mem-lite/`, preserving the original untouched
@@ -228,8 +228,6 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     ep-flush-*.json      # Flushed episodes awaiting processing
     reads-<project>.txt  # Read file paths (collected on flush)
   managed/
-    skills/              # Standalone skills: {name}/SKILL.md
-    agents/              # Agent plugins: {group}/agents/{name}.md + skills/*/SKILL.md
     repos/               # Shallow-cloned source repos
 ```
 
@@ -237,11 +235,14 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ### MCP Tools (used automatically by Claude)
 
-As of v2.70.0, the server registers 20 tools in total but only the 9 **core**
-tools appear in `tools/list`. The 11 **hidden** tools remain callable at the
+As of v2.70.0, the server registers 18 tools in total but only the 9 **core**
+tools appear in `tools/list`. The 9 **hidden** tools remain callable at the
 protocol layer (`tools/call` by exact name still routes normally); they're
-omitted from the list response so Claude Code sessions don't load 11 extra
-tool schemas at startup. Hidden tools are the maintenance / admin / browser
+omitted from the list response so Claude Code sessions don't load 9 extra
+tool schemas at startup. (It read 20 / 11 until v5.0.0 removed the two skill-registry
+tools — `tool-schemas.mjs` is the source of truth, and
+`tests/tool-count-docs.test.mjs` now holds this paragraph, both README tool tables,
+`README.zh-CN.md`, `llms.txt` and `docs/ARCHITECTURE.md` to it.) Hidden tools are the maintenance / admin / browser
 surface — reach them through the CLI column in the second table.
 
 **Core (9, exposed to Claude Code)**
@@ -636,12 +637,11 @@ claude-mem-lite/
   scripts/
     setup.sh           # Setup hook: npm install + migration (hidden dir + old dir)
     post-tool-use.sh   # Bash pre-filter: skips noise in ~5ms, tracks Read paths
-    user-prompt-search.js # UserPromptSubmit hook: auto-search memory + L1 skill auto-load
-    pre-skill-bridge.js  # PreToolUse hook: L2 skill bridge for managed resources
+    user-prompt-search.js # UserPromptSubmit hook: auto-search memory on user prompts
     pre-tool-recall.js   # PreToolUse hook: file lesson recall before Edit/Write
+    post-tool-recall.js  # PostToolUse hook: error recall after a failed tool call
+    pre-agent-inject.sh  # PreToolUse hook: context for spawned agents
     prompt-search-utils.mjs # Shared logic: skip patterns, intent detection, name matching
-    convert-commands.mjs # Converts command .md → SKILL.md in managed plugins
-    index-managed.mjs  # Offline indexer for managed resources
   # Test & benchmark (dev only)
   tests/               # Unit, property, integration, contract, E2E, pipeline tests
   benchmark/           # BM25 search quality benchmarks + CI gate
@@ -765,7 +765,7 @@ claude-mem-lite.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLAUDE_MEM_ALL_TOOLS` | `1` exposes all 20 MCP tools in `tools/list` instead of the 9 core ones (pre-v2.34.0 behavior). The 11 hidden tools stay callable by exact name either way. | _(9 core)_ |
+| `CLAUDE_MEM_ALL_TOOLS` | `1` exposes all 18 MCP tools in `tools/list` instead of the 9 core ones (pre-v2.34.0 behavior). The 9 hidden tools stay callable by exact name either way. | _(9 core)_ |
 | `CLAUDE_MEM_FILE_INTEL` | `0` disables the file-intel block injected before `Read` (past observations about the file you are about to open). | _(on)_ |
 | `CLAUDE_MEM_FILE_INTEL_MIN_TOKENS` | Files smaller than this stay silent — file-intel only pays for itself on large files. | `800` |
 | `CLAUDE_MEM_REREAD_GUARD` | `0` disables the warning when the same file is read twice in a session. Never fires on `offset`/`limit` paging. | _(on)_ |

@@ -44,15 +44,23 @@ pins; new findings here are high-priority):
   manifest covers every runtime-executed file, including hook scripts, the MCP
   launcher, and plugin declaration files); install/update verifies fail-closed.
 - **Prompt-injection surfaces**: everything injected into model context from
-  stored or third-party data (memory rows, registry skill bodies, handoffs) is
-  delimiter-neutralized ("defang"). A bypass that renders a live
+  stored or third-party data (memory rows, deferred-work items, session
+  handoffs, event bodies) is delimiter-neutralized ("defang"). A bypass that renders a live
   `<system-reminder>`/tool tag from stored data is a vulnerability.
 - **Secret handling**: transcripts and observations pass through the secret
   scrubber before storage; a class of credential that survives scrubbing into
   the DB or logs is a vulnerability.
 - **Local data boundaries**: hooks and CLI must stay inside the data dir
   (`~/.claude-mem-lite` or `CLAUDE_MEM_DIR`); path-traversal out of it via
-  crafted registry rows, project names, or import files is a vulnerability.
+  crafted project names, import files, or release archives is a vulnerability.
+- **User-owned files**: the installer writes `~/.claude/settings.json`,
+  `~/.claude.json` and an adopted project's `CLAUDE.md`. Losing, truncating or
+  widening the permissions of any of those is a vulnerability, whatever the
+  exit code says.
 
-Out of scope: issues requiring an already-compromised local account, and the
-inherent trust a user places in skills/agents they explicitly import.
+Out of scope: issues requiring an already-compromised local account.
+
+(R10 P2-19: this section named "registry skill bodies" and "skills/agents they
+explicitly import" — the skill/agent registry was removed in v5.0.0, so both
+described a surface that no longer exists while omitting the user-owned files
+that R10 found three real defects in.)

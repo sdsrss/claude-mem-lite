@@ -12,12 +12,20 @@ commands and two MCP tools disappear.
 
 | Removed | Was | Now |
 |---|---|---|
-| `claude-mem-lite registry <list\|stats\|search\|import\|remove\|reindex\|recommend-stats>` | managed the resource DB | `Unknown command` |
-| `claude-mem-lite import <github-url>` | imported skills/agents from a repo | `Unknown command` |
-| `claude-mem-lite enrich <name>` | Haiku capability summaries for registry rows | `Unknown command` |
+| `claude-mem-lite registry <list\|stats\|search\|import\|remove\|reindex\|recommend-stats>` | managed the resource DB | named-removal message + exit 1 |
+| `claude-mem-lite import <github-url>` | imported skills/agents from a repo | named-removal message + exit 1 |
+| `claude-mem-lite enrich <name>` | Haiku capability summaries for registry rows | named-removal message + exit 1 |
 | MCP `mem_registry`, `mem_use` | hidden-but-callable by exact name | `Tool not found` |
 | Install step: 15 shallow clones, ~150 MB | seeded 186 preinstalled resources | not run |
 | `CLAUDE_MEM_RECOMMEND_MODE`, `CLAUDE_MEM_SKIP_REPOS`, `CLAUDE_MEM_REGISTRY_CONFINE`, `CLAUDE_MEM_IMPORT_MAX_{ITEMS,FILE_BYTES,TOTAL_BYTES}` | registry knobs | ignored |
+
+These three do **not** print `Unknown command` (R10 P2-19 corrected this table — it said
+they did). `cli.mjs` gives them a dedicated message that names the removal, points at the
+CHANGELOG migration note, and tells you to pin `claude-mem-lite@4.0.4` to revert; it is
+deliberately kept out of the edit-distance suggester, whose nearest match for `import` is
+`import-jsonl` — a different feature that takes a path, so a stale `import <github-url>`
+would have been pointed at something that could plausibly run.
+`tests/removed-registry-commands.test.mjs` pins the wording.
 
 `tools/list` is **unchanged** — both removed tools were already hidden, so an agent that
 discovers tools normally sees no difference. Memory retrieval, injection, citation tracking

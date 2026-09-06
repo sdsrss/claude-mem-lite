@@ -81,16 +81,13 @@
 - **原子写入** -- 所有文件写入（episode、CLAUDE.md）使用 write-to-tmp + rename 防止崩溃时损坏
 - **健壮锁机制** -- PID 感知的锁文件，自动清理过期（>30s）或孤儿（PID 已死）锁
 - **过期会话清理** -- 活跃超过 24 小时的会话在下次启动时自动标记为 abandoned
-- **统一资源发现** -- 共享文件系统遍历层（`resource-discovery.mjs`），运行时扫描器和离线索引器共用，支持扁平目录、插件嵌套和松散 `.md` 文件
-- **领域同义词扩展** -- 注册表搜索查询自动扩展领域同义词（如 "修复" → fix, debug, bugfix, repair, error）
-- **持久化冷却机制** -- 5 分钟跨会话冷却 + 同会话去重，避免重复推荐 skill 自动加载
+- **领域同义词扩展** -- 搜索查询自动扩展领域同义词（如 "修复" → fix, debug, bugfix, repair, error）
 - **多 provider LLM 调用** -- provider 优先级 `ANTHROPIC_API_KEY`（直连 Anthropic API）→ `OPENROUTER_API_KEY`（OpenRouter，OpenAI 兼容，可用 `OPENROUTER_MODEL` 指向任意模型）→ 无 key 时回退 `claude -p` CLI
 - **Haiku 熔断器** -- 连续 3 次 LLM 失败后，禁用 Haiku 调度 5 分钟，防止级联延迟
 - **否定意图感知** -- 正确处理 "不要测试了，先修 bug" 等复杂提示，排除被否定的意图，支持中英文混合输入
 - **可配置 LLM 模型** -- 通过 `CLAUDE_MEM_MODEL` 环境变量在 Haiku（快速/低成本）和 Sonnet（深度分析）之间切换
 - **数据库自动恢复** -- 启动时检测并清理损坏的 WAL/SHM 文件；定期 WAL checkpoint 防止无限增长
 - **Schema 自动迁移** -- 每次启动运行幂等的 `ALTER TABLE` 迁移，安全地添加新列和索引，不丢失数据
-- **探索奖励** -- 注册表中的新资源在复合排名中获得公平机会；高推荐零采纳的"僵尸"资源被惩罚
 - **LLM 并发控制** -- 基于文件的信号量将后台 worker 限制为 2 个并发 LLM 调用，防止资源争用
 - **stdin 溢出保护** -- Hook 输入在 256KB 处截断，对超大工具输出使用正则挽救关键信息
 - **跨会话交接** -- 在 `/clear` 或 `/exit` 时捕获会话状态（请求、已完成工作、后续步骤、关键文件），下次会话检测到继续意图时自动注入上下文（支持显式关键词和 FTS5 术语重叠匹配）
@@ -109,7 +106,7 @@
 
 ## 环境要求
 
-- **Node.js** >= 18
+- **Node.js** >= 22（v4.0.0 起：better-sqlite3 13 要求 >=22，Node 20 已于 2026-04 EOL；`package.json` 的 `engines` 是唯一事实来源）
 - **Claude Code** CLI 已安装并配置（`claude` 命令可用）
 - **SQLite3** 支持（由 `better-sqlite3` 提供，安装时编译）
 - **平台**：Linux 或 macOS（参见[平台支持](#平台支持)）
@@ -148,7 +145,7 @@ node install.mjs install
 ### 安装过程
 
 1. **安装依赖** -- `npm install --omit=dev`（编译原生 `better-sqlite3`）
-2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 20 个工具（9 个核心通过 `tools/list` 暴露 + 11 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
+2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 18 个工具（9 个核心通过 `tools/list` 暴露 + 9 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
 
 > **自动 adopt 会写进你的项目，且每次 SessionStart 都跑（v3.13+）。** 插件向**项目自己的 `<cwd>/CLAUDE.md`**（通常是会进 git 的文件）写入一个 slug 限定的**托管块**，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件。该块是一条提升 Claude 主动调用 `mem_recall` / `mem_save` 的 system-authority 指针；块以外的内容逐字保留，也能与其它插件的块共存于同一文件。这是**每次** SessionStart 都做的幂等同步，不只是第一次——块被删掉会重新写回，出货模板变了会刷新。**任何安装路径都生效**（npm、npx、`/plugin`、手动），**无需再手动跑 `/adopt`**。
 >
@@ -192,8 +189,6 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     ep-flush-*.json      # 已刷新的 episode，等待处理
     reads-<project>.txt  # Read 文件路径（刷新时收集）
   managed/
-    skills/              # 独立 skill：{name}/SKILL.md
-    agents/              # Agent 插件：{group}/agents/{name}.md + skills/*/SKILL.md
     repos/               # 浅克隆的源代码仓库
 ```
 
@@ -201,12 +196,16 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 
 ### MCP 工具
 
-v2.34.0 起服务端注册 17 个工具，但 `tools/list` 只暴露 6 个 **核心** 工具；其余
-11 个 **隐藏** 工具仍然注册在 MCP 层（按名 `tools/call` 仍命中），只是不会出现
-在列表响应里，以避免 Claude Code 会话启动时加载 11 份额外的工具 schema。隐藏
-工具走下面表格的 CLI 入口。
+v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。当前是 18 个工具，其中 9 个
+**核心** 工具出现在列表里，另外 9 个 **隐藏** 工具仍然注册在 MCP 层（按名
+`tools/call` 仍命中），只是不出现在列表响应里，以避免 Claude Code 会话启动时
+多加载 9 份工具 schema。隐藏工具走下面表格的 CLI 入口。
 
-**核心（6 个，暴露给 Claude Code）**
+（这里长期写着 17 / 6 / 11，而英文 README 写着 20 / 9 / 11 —— 两个都不对。
+`tool-schemas.mjs` 是唯一事实来源，`tests/tool-count-docs.test.mjs` 现在把两份
+README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
+
+**核心（9 个，暴露给 Claude Code）**
 
 | 工具 | 描述 |
 |------|------|
@@ -216,8 +215,11 @@ v2.34.0 起服务端注册 17 个工具，但 `tools/list` 只暴露 6 个 **核
 | `mem_timeline` | 围绕锚点按时间顺序浏览观察。 |
 | `mem_get` | 获取指定观察 ID 的完整详情（包含重要度和关联 ID）。 |
 | `mem_save` | 手动保存记忆/观察。 |
+| `mem_defer` | 记录一条跨会话待办（deferred work）。 |
+| `mem_defer_list` | 列出当前项目未关闭的待办。 |
+| `mem_defer_drop` | 带理由地关闭一条待办。 |
 
-**隐藏但可按名调用（11 个，走 CLI）**
+**隐藏但可按名调用（9 个，走 CLI）**
 
 | 工具 | 对应 CLI | 说明 |
 |------|----------|------|
@@ -516,12 +518,11 @@ claude-mem-lite/
   scripts/
     setup.sh           # Setup 钩子：npm install + 迁移（隐藏目录 + 旧目录）
     post-tool-use.sh   # Bash 预过滤器：~5ms 跳过噪声，追踪 Read 路径
-    user-prompt-search.js # UserPromptSubmit 钩子：自动搜索记忆 + L1 skill 自动加载
-    pre-skill-bridge.js  # PreToolUse 钩子：L2 managed skill 桥接
+    user-prompt-search.js # UserPromptSubmit 钩子：用户提问时自动搜索记忆
     pre-tool-recall.js   # PreToolUse 钩子：Edit/Write 前文件教训回忆
+    post-tool-recall.js  # PostToolUse 钩子：工具失败后的错误召回
+    pre-agent-inject.sh  # PreToolUse 钩子：为子代理注入上下文
     prompt-search-utils.mjs # 共享逻辑：跳过模式、意图检测、名称匹配
-    convert-commands.mjs # 将 command .md 转换为托管插件中的 SKILL.md
-    index-managed.mjs  # 托管资源离线索引器
   # 测试和基准（仅开发）
   tests/               # 单元、属性、集成、契约、E2E、管线测试
   benchmark/           # BM25 搜索质量基准 + CI 门控
