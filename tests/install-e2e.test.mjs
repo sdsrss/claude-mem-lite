@@ -81,6 +81,11 @@ function runInstall(command, home, args = [], extraEnv = {}) {
       HOME: home,
       // Skip managed repo cloning by suppressing git commands
       CLAUDE_MEM_SKIP_REPOS: '1',
+      // R10 P2-17: without this, install.mjs's dogfood branch (it detects THIS repo by
+      // git remote) ran cmdAdopt against the inherited PWD — the repository root — and
+      // rewrote the tracked CLAUDE.md managed block plus .claude/plugin_claude_mem_lite.md
+      // on every `vitest run`. HOME is sandboxed here; the adopt target was not.
+      MEM_NO_AUTO_ADOPT: '1',
       ...extraEnv,
     },
     stdio: ['pipe', 'pipe', 'pipe'],

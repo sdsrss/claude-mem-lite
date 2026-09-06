@@ -888,8 +888,16 @@ async function dogfoodAutoAdopt() {
   // Only fires when install.mjs is running from the claude-mem-lite source repo
   // itself (detected via git remote match). In npm/npx flows PROJECT_DIR is a
   // cache dir with no git metadata, so this is a no-op for end users.
-  // --no-adopt override respected.
-  if (!flags.has('--no-adopt')) {
+  // Two overrides are respected, and they are NOT interchangeable:
+  //   --no-adopt            per-invocation opt-out
+  //   MEM_NO_AUTO_ADOPT=1   the GLOBAL escape hatch. adopt-content.mjs advertises it in
+  //                         the managed block itself ("全局禁用自动 adopt") and hook.mjs:2299
+  //                         gates SessionStart auto-adopt on it — this call site ignored it,
+  //                         so `install` adopted users who had opted out globally, and the
+  //                         unit suite (tests/install-e2e.test.mjs, inheriting PWD = repo
+  //                         root) rewrote this repository's own CLAUDE.md managed block and
+  //                         .claude/ sidecar on every run. R10 P2-17.
+  if (!flags.has('--no-adopt') && process.env.MEM_NO_AUTO_ADOPT !== '1') {
     try {
       const remote = execFileSync('git', ['-C', PROJECT_DIR, 'config', '--get', 'remote.origin.url'], {
         encoding: 'utf8',
