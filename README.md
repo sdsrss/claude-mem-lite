@@ -75,7 +75,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 
 ## Features
 
-- **Automatic capture** -- Hooks into Claude Code lifecycle (PostToolUse, SessionStart, Stop, UserPromptSubmit) to record observations without manual effort
+- **Automatic capture** -- Hooks into the Claude Code lifecycle (SessionStart, PreCompact, PreToolUse, PostToolUse, PostToolUseFailure, Stop, UserPromptSubmit — the seven events in `hooks/hooks.json`) to record observations without manual effort
 - **Hybrid search** -- FTS5 BM25 + TF-IDF vector cosine similarity, merged via Reciprocal Rank Fusion (RRF). FTS5 handles keyword matching; 512-dim TF-IDF vectors capture semantic similarity for recall beyond exact terms
 - **Timeline browsing** -- Navigate observations chronologically with anchor-based context windows
 - **Episode batching** -- Groups related file operations into coherent episodes before LLM encoding
@@ -105,14 +105,12 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Atomic writes** -- All file writes (episodes, CLAUDE.md) use write-to-tmp + rename to prevent corruption on crash
 - **Robust locking** -- PID-aware lock files with automatic stale/orphan cleanup (>30s timeout or dead PID)
 - **Stale session cleanup** -- Sessions active for >24h are automatically marked as abandoned on next start
-- **Unified resource discovery** -- Shared filesystem traversal layer (`resource-discovery.mjs`) used by both runtime scanner and offline indexer, supporting flat directories, plugin nesting, and loose `.md` files
-- **Domain synonym expansion** -- Registry search queries expand to domain synonyms (e.g., "fix" → debug, bugfix, troubleshoot, diagnose, repair)
+- **Domain synonym expansion** -- Search queries expand to domain synonyms (e.g., "fix" → debug, bugfix, troubleshoot, diagnose, repair)
 - **Multi-provider LLM mode** -- Provider priority `ANTHROPIC_API_KEY` (direct Anthropic API) → `OPENROUTER_API_KEY` (OpenRouter, OpenAI-compatible — point it at any model via `OPENROUTER_MODEL`) → `claude -p` CLI fallback when no key is set
 - **Lesson-learned indexing** -- `lesson_learned` field indexed in FTS5 with weight 8, making past debugging insights directly searchable
 - **Cross-source normalization** -- `mem_search` normalizes scores across observations, sessions, and prompts before merging, preventing any source from dominating results
 - **Exponential recency decay** -- Type-differentiated half-lives (decisions: 90d, discoveries: 60d, bugfixes: 14d, changes: 7d) consistently applied in all ranking paths
 - **Prompt-time memory injection** -- UserPromptSubmit hook automatically searches and injects relevant past observations with recency and importance weighting
-- **Smart skill invocation** -- Auto-loaded and searched managed skills/agents include portable `~` paths with `Read()` guidance; native plugin skills recommend `Skill("full:name")`; prevents `Skill()` misuse for managed resources that aren't registered with Claude Code's native handler
 - **Dual injection dedup** -- `user-prompt-search.js` and `handleUserPrompt` coordinate via temp file to prevent duplicate memory injection
 - **Plugin cache hook self-heal** -- Claude Code runtime reads plugin hooks from `~/.claude/plugins/cache/<mp>/<plugin>/<ver>/hooks/hooks.json`, not from the marketplace source. When `install.mjs`-managed `settings.json` hooks coexist with a stale cache `hooks.json` (e.g. from a previous marketplace install or a plugin auto-update), the runtime registers hooks twice → every session start / user prompt fires twice. `install.mjs` and `hook-update.mjs` now clear cache `hooks.json` in every version dir, and `hook.mjs session-start` self-heals on every session (gated by `hasInstallManagedHooks` so plugin-only users are not affected). `install.mjs status` reports cache pollution state (since v2.31.1/2.31.2).
 - **Result-dedup cooldown** -- User-prompt memory injection uses result-overlap detection (>80% ID overlap → skip) instead of time-based cooldown, allowing topic switches within seconds while preventing redundant injections
@@ -189,7 +187,7 @@ Source files stay in the cloned repo. Update via `git pull && node install.mjs i
 
 1. **Install dependencies** -- `npm install --omit=dev` (compiles native `better-sqlite3`)
 2. **Register MCP server** -- `mem-lite` server with 18 tools (9 core exposed via `tools/list` + 9 hidden-but-callable; see the Usage section for the full table). The pre-v2.78 generic server name `mem` is renamed to `mem-lite` for namespace hygiene; the tool names themselves (`mem_search`, `mem_recall`, ...) are unchanged.
-3. **Configure hooks** -- `PostToolUse`, `SessionStart`, `Stop`, `UserPromptSubmit` lifecycle hooks
+3. **Configure hooks** -- all seven lifecycle events: `SessionStart`, `PreCompact`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`
 4. **Create data directory** -- `~/.claude-mem-lite/` (hidden) for database, runtime, and managed resource files
 5. **Auto-migrate** -- If `~/.claude-mem/` (original claude-mem) or `~/claude-mem-lite/` (pre-v0.5 unhidden) exists, migrates database and runtime files to `~/.claude-mem-lite/`, preserving the original untouched
 6. **Initialize database** -- SQLite with WAL mode, FTS5 indexes created on first server start
@@ -259,7 +257,7 @@ surface — reach them through the CLI column in the second table.
 | `mem_defer_list` | List open deferred items for the current project. |
 | `mem_defer_drop` | Drop a deferred item without fixing it; requires a `reason` for the audit trail. |
 
-**Hidden-but-callable (11, CLI-routed)**
+**Hidden-but-callable (9, CLI-routed)**
 
 | Tool | CLI equivalent | Notes |
 |------|----------------|-------|
@@ -453,9 +451,6 @@ UserPromptSubmit (two parallel paths)
   -> [user-prompt-search.js] Auto-search memory via FTS5 + active file context
   -> [user-prompt-search.js] Inject relevant past observations with recency/importance weighting
   -> [user-prompt-search.js] Write injected IDs to temp file for dedup
-  -> [user-prompt-search.js] L1 skill auto-load: match managed skill names in prompt
-     -> Load content with portable ~ path + Read() guidance
-     -> source="managed-skill|managed-agent", path="~/.claude-mem-lite/managed/..."
   -> [hook.mjs handleUserPrompt] Capture user prompt text to user_prompts table
   -> [hook.mjs handleUserPrompt] Increment session prompt counter
   -> [hook.mjs handleUserPrompt] Handoff: detect continuation intent → inject previous session context
@@ -548,7 +543,7 @@ Shows MCP registration, hook configuration, plugin disabled state, and database 
 
 ### Recovery (stuck install / hook errors)
 
-If you see `ERR_MODULE_NOT_FOUND` on PreToolUse:Read/Edit/Skill hooks, or `claude-mem-lite` commands crash with import errors, you're likely hit by a partial auto-update — the updater copied new scripts but missed a sibling `lib/*` file, breaking the hook chain (and the next auto-update that would have healed it).
+If you see `ERR_MODULE_NOT_FOUND` on PreToolUse:Read/Edit hooks, or `claude-mem-lite` commands crash with import errors, you're likely hit by a partial auto-update — the updater copied new scripts but missed a sibling `lib/*` file, breaking the hook chain (and the next auto-update that would have healed it).
 
 **v2.84.0+** ships a `repair` subcommand that re-syncs from the latest GitHub release:
 

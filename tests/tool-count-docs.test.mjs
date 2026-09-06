@@ -42,7 +42,17 @@ describe('R10 P2-19 — every doc tool count matches tool-schemas.mjs', () => {
       // the three true numbers. This catches a stale count without demanding a fixed
       // sentence shape, which is what let five prose variants drift apart.
       const claims = [
+        // Number BEFORE the keyword: "18 tools", "9 hidden", "18 个工具".
         ...src.matchAll(/(\d+)\s*(?:tools\b|个工具|listed\b|hidden\b|个\s*\*\*隐藏|个\s*\*\*核心)/g),
+        // Number AFTER it: "Hidden-but-callable (9, CLI-routed)", "核心（9 个…）". This form
+        // walked straight past the first version of this guard — README.md kept
+        // "Hidden-but-callable (11, CLI-routed)" through a pass that corrected every other
+        // count in the same file, four lines above a table with nine rows in it.
+        // Scoped to a **bold** heading run, which is where the tool tables put theirs. An
+        // unscoped version matched `lib/*-core.mjs` (87 modules under lib/) in
+        // docs/ARCHITECTURE.md — a module count, not a tool count. `[^*\n]` also means the
+        // run cannot cross a `*`, which is what excludes that path glob.
+        ...src.matchAll(/\*\*[^*\n]*?(?:hidden|core|隐藏|核心)[^*\n]*?[(（]\s*(\d+)/gi),
       ].map((m) => Number(m[1]));
       const allowed = new Set([TOTAL, listed.length, hidden.length]);
       const bad = claims.filter((n) => !allowed.has(n));

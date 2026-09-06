@@ -32,7 +32,7 @@ sessions and events. Three **faces** expose it:
 | MCP server | `server.mjs` | stdio JSON-RPC, 9 listed + 9 hidden tools (`tool-schemas.mjs`) |
 | CLI | `cli.mjs` → `mem-cli.mjs` (data) / `install.mjs` (lifecycle) | `claude-mem-lite <cmd>` |
 
-The faces share logic through `lib/*-core.mjs` (84 modules under `lib/`); the engines
+The faces share logic through `lib/*-core.mjs` (87 modules under `lib/`); the engines
 (`search-engine.mjs`, `deep-search.mjs`, `hook-*.mjs`, `schema.mjs`) sit
 beside them at the repo root. Rule from `CLAUDE.md`: **shared by two faces → `lib/`;
 owned by one face → stays in that face's file.**
@@ -428,7 +428,6 @@ graph LR
 | `scripts/binding-probe-cli.mjs` | 157 | SessionStart native-binding probe + bounded heal. Contract with scripts/setup.sh: exit 0 = binding usable NOW, non-zero = not. Everything… | (entry — no exports) |
 | `scripts/convert-commands.mjs` | 161 | Convert command .md files to SKILL.md skills in managed agent plugins Usage: node scripts/convert-commands.mjs [--dry-run] [--delete-originals] D#29:… | (entry — no exports) |
 | `scripts/mock-claude.mjs` | 66 | Mock claude CLI for E2E tests — deterministic JSON responses Usage: CLAUDE_CODE_PATH=scripts/mock-claude.mjs Called as: node mock-claude.mjs -p… | (entry — no exports) |
-| `scripts/p0-forward-probe.mjs` | 175 | Forward probe: seed injection_count from scan data into probe DB, measure noise penalty impact on top-noise IDs vs top-cited IDs. Read-only against… | (entry — no exports) |
 | `scripts/prompt-search-utils.mjs` | 282 | Shared logic for user-prompt-search hook and its tests. Extracted to eliminate code duplication between the hook script and test file. ─── Skip… | computeEffectiveLen(), shouldSkip(), INTENTS, detectIntent(), detectMemOverride*, extractErrorSignature(), MAX_SESSION_INJECTIONS … (+5) |
 | `scripts/sign-release.mjs` | 59 | CI release signer (P1 supply-chain hardening). Builds release-manifest.json (sha256 of every SOURCE_FILES entry at this checkout) and signs the exact… | (entry — no exports) |
 | `scripts/smoke-tarball.mjs` | 226 | Real-install smoke test (audit item ①). The riskiest install path — `npm pack` → real `npm install` of the tarball → better-sqlite3 native rebuild →… | (entry — no exports) |

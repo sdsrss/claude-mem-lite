@@ -10,7 +10,7 @@ retroactively.
 | Version | Supported |
 | ------- | --------- |
 | latest release | ✅ |
-| anything older | ❌ (update: `claude-mem-lite update` or reinstall) |
+| anything older | ❌ (update: `claude-mem-lite self-update`, or reinstall) |
 
 ## Reporting a vulnerability
 

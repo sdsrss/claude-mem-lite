@@ -572,16 +572,18 @@ export const memDeferDropSchema = {
 //
 // Core vs hidden (v2.34.0, expanded v2.70.0): only 9 tools are exposed via MCP
 // `tools/list` (the original 6 + mem_defer/mem_defer_list/mem_defer_drop). The
-// remaining 11 stay registered — and are still callable by name at the MCP
+// remaining 9 stay registered — and are still callable by name at the MCP
 // protocol level (`tools/call` by exact name) — but are omitted from the list
 // response so they don't bloat every agent's startup context. The core set
 // covers the hot paths the invited-memory contract promises (recall before
 // Edit, save after bugfix, search/recent/timeline/get for retrieval, defer
 // for cross-session carry-forward). Hidden tools are either maintenance
 // (compress/maintain/optimize/fts_check), admin/infra
-// (stats/export/update/delete), or specialized browsers
-// (browse/registry/use) — all of which have CLI equivalents documented in
-// `adopt-content.mjs`.
+// (stats/export/update/delete), or a specialized browser (browse) — all of which have
+// CLI equivalents documented in `adopt-content.mjs`. R10 P3-28: this said "remaining 11"
+// and listed `registry/use`, four lines above the array that disproves it — mem_registry
+// and mem_use went with the skill registry in v5.0.0. tests/tool-schemas.test.mjs pins
+// 18 = 9 + 9; this comment is now the only prose nearby and must agree with it.
 // ────────────────────────────────────────────────────────────────────────────
 
 export const tools = [

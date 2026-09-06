@@ -54,7 +54,7 @@
 
 ## 功能特性
 
-- **自动捕获** -- 挂载到 Claude Code 生命周期（PostToolUse、PreToolUse、SessionStart、Stop、UserPromptSubmit），无需手动操作即可记录观察
+- **自动捕获** -- 挂载到 Claude Code 生命周期（`hooks/hooks.json` 里的七个事件：SessionStart、PreCompact、PreToolUse、PostToolUse、PostToolUseFailure、Stop、UserPromptSubmit），无需手动操作即可记录观察
 - **FTS5 搜索** -- 基于 BM25 排名的全文搜索，覆盖观察、会话摘要和用户提示，支持重要度加权
 - **时间线浏览** -- 基于锚点的时间上下文窗口，按时间顺序浏览观察
 - **Episode 批处理** -- 将相关文件操作分组为连贯的 episode，再进行 LLM 编码
@@ -150,8 +150,8 @@ node install.mjs install
 > **自动 adopt 会写进你的项目，且每次 SessionStart 都跑（v3.13+）。** 插件向**项目自己的 `<cwd>/CLAUDE.md`**（通常是会进 git 的文件）写入一个 slug 限定的**托管块**，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件。该块是一条提升 Claude 主动调用 `mem_recall` / `mem_save` 的 system-authority 指针；块以外的内容逐字保留，也能与其它插件的块共存于同一文件。这是**每次** SessionStart 都做的幂等同步，不只是第一次——块被删掉会重新写回，出货模板变了会刷新。**任何安装路径都生效**（npm、npx、`/plugin`、手动），**无需再手动跑 `/adopt`**。
 >
 > 关闭方式：项目级 `claude-mem-lite adopt --disable`（重新启用用 `--enable`）；全局 `export MEM_NO_AUTO_ADOPT=1`；只冻结模板刷新用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。`claude-mem-lite unadopt` 可移除托管块与详情文件。手动 `/adopt` 仍保留用于编辑后重写或 `--all` 批量场景。
-3. **配置钩子** -- `PostToolUse`、`PreToolUse`、`SessionStart`、`Stop`、`UserPromptSubmit` 生命周期钩子
-4. **创建数据目录** -- `~/.claude-mem-lite/`（隐藏目录），存放数据库、运行时和托管资源文件
+3. **配置钩子** -- 全部七个生命周期事件：`SessionStart`、`PreCompact`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`、`UserPromptSubmit`
+4. **创建数据目录** -- `~/.claude-mem-lite/`（隐藏目录），存放数据库与运行时文件
 5. **自动迁移** -- 自动检测 `~/.claude-mem/`（原版 claude-mem）或 `~/claude-mem-lite/`（v0.5 前的非隐藏目录），将数据库和运行时文件迁移到 `~/.claude-mem-lite/`，原目录保持不变
 6. **初始化数据库** -- SQLite WAL 模式，FTS5 索引在服务器首次启动时创建
 
@@ -370,9 +370,6 @@ PostToolUse（每次工具执行）
 UserPromptSubmit（两个并行路径）
   -> [user-prompt-search.js] 通过 FTS5 + 活跃文件上下文自动搜索记忆
   -> [user-prompt-search.js] 注入相关历史观察（按时效和重要性加权）
-  -> [user-prompt-search.js] L1 Skill 自动加载：匹配 prompt 中的 managed skill 名
-     -> 加载内容 + 便携 ~ 路径 + Read() 调用指引
-     -> source="managed-skill|managed-agent", path="~/.claude-mem-lite/managed/..."
   -> [hook.mjs] 捕获用户提示文本到 user_prompts 表
   -> [hook.mjs] 递增会话提示计数器
   -> [hook.mjs] 交接：检测继续意图 → 注入上一次会话上下文
@@ -432,7 +429,7 @@ npx claude-mem-lite doctor            # 诊断问题
 
 ### 故障恢复（安装卡死 / hook 报错）
 
-如果你看到 PreToolUse:Read/Edit/Skill hook 报 `ERR_MODULE_NOT_FOUND`，或者 `claude-mem-lite` 命令本身因为 import 错误崩溃，多半是被部分自动更新坑了——更新器复制了新脚本但漏了配套的 `lib/*` 文件，hook 链就此断掉（连下一次本可自愈的自动更新也跑不了）。
+如果你看到 PreToolUse:Read/Edit hook 报 `ERR_MODULE_NOT_FOUND`，或者 `claude-mem-lite` 命令本身因为 import 错误崩溃，多半是被部分自动更新坑了——更新器复制了新脚本但漏了配套的 `lib/*` 文件，hook 链就此断掉（连下一次本可自愈的自动更新也跑不了）。
 
 **v2.84.0+** 提供 `repair` 子命令，从 GitHub 最新 release 重新同步：
 
@@ -565,7 +562,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `CLAUDE_MEM_DIR` | 自定义数据目录。所有数据库、运行时文件和托管资源均存储在此。 | `~/.claude-mem-lite/` |
+| `CLAUDE_MEM_DIR` | 自定义数据目录。所有数据库与运行时文件均存储在此。 | `~/.claude-mem-lite/` |
 | `CLAUDE_MEM_MODEL` | 后台 LLM 调用模型（Episode 提取、会话总结、调度）。可选 `haiku` 或 `sonnet`。 | `haiku` |
 | `ANTHROPIC_API_KEY` | Anthropic API key。设置后所有后台 LLM 调用直连 Anthropic Messages API（带 prompt caching），优先级最高。 | _(未设 → CLI)_ |
 | `OPENROUTER_API_KEY` | OpenRouter API key（OpenAI 兼容）。当**未设** `ANTHROPIC_API_KEY` 时用于后台 LLM 调用；两者都未设则回退到 `claude -p` CLI。 | _(未设)_ |
