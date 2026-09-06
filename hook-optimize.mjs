@@ -364,8 +364,25 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         Array.isArray(parsed.search_aliases) && parsed.search_aliases.length
           ? parsed.search_aliases.slice(0, 6).join(' ')
           : cand.search_aliases || null;
-      const title = truncate(scrubSecrets(parsed.title || ''), 120);
-      const narrative = truncate(scrubSecrets(parsed.narrative || cand.narrative || ''), 500);
+      // R10 P1-4. `wide` is the lesson-backfill pass by definition — its WHERE selects rows
+      // that already have a substantive narrative and only lack a lesson. Rewriting their
+      // title and cutting their narrative at 500 chars is not enrichment, it is content
+      // loss: this UPDATE also stamps optimized_at, which evicts the row from all three
+      // re-enrich pools permanently, and unlike applyObsUpdate there is no snapshot to
+      // restore from. The affected rows are exactly the hand-written ones (mem_save,
+      // mem_update --narrative, import-jsonl); hook-llm caps its own writes at 500, which
+      // is why this stayed invisible. So wide carries the stored values through unchanged.
+      //
+      // For `narrow`, the truncate stays on LLM output but NOT on the preserve-on-empty
+      // fallback — truncating the row's own stored narrative to buy nothing was the same
+      // bug in miniature.
+      const isWide = scope === 'wide';
+      const title = isWide ? cand.title : truncate(scrubSecrets(parsed.title || ''), 120);
+      const narrative = isWide
+        ? cand.narrative
+        : parsed.narrative
+          ? truncate(scrubSecrets(parsed.narrative), 500)
+          : cand.narrative || '';
       // Floor at the stored importance: re-enrich adds a lesson, it must never silently downgrade
       // a user-set/promoted importance (the UPDATE also sets optimized_at → the loss is permanent).
       // Upgrades are still honored.
@@ -386,31 +403,44 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         lesson_learned: lessonLearned,
         search_aliases: searchAliases,
       });
-      db.prepare(
-        `
+      // R10 P3-3: the live-row guard on the WHERE. The LLM round-trip above is up to 45 s,
+      // and a concurrent hook can supersede or auto-compress this row inside that window —
+      // without the guard the dead row was rewritten with stale content AND stamped
+      // optimized_at, which resurrects it into every pool that filters on the stamp. The
+      // scopes branch already guards with `AND scope IS NULL`; this is the same idea.
+      // 0 changes is a skip, not a success: it must not count as processed and must not
+      // rebuild a vector for a row that is no longer live.
+      const res = db
+        .prepare(
+          `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
           text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
           scope=COALESCE(?, scope)
-        WHERE id = ?
+        WHERE id = ? AND ${liveObsFilterSql('')}
       `,
-      ).run(
-        type,
-        safe.title,
-        safe.narrative,
-        safe.concepts,
-        safe.facts,
-        safe.text,
-        importance,
-        safe.lesson_learned,
-        safe.search_aliases,
-        minhashSig,
-        Date.now(),
-        // COALESCE (mirrors the hook-llm upgrade path): a re-enrich that omits
-        // scope, or emits an off-enum value, must never blank an existing label —
-        // and THIS update stamps optimized_at, so the loss would be permanent.
-        normalizeScope(parsed.scope),
-        cand.id,
-      );
+        )
+        .run(
+          type,
+          safe.title,
+          safe.narrative,
+          safe.concepts,
+          safe.facts,
+          safe.text,
+          importance,
+          safe.lesson_learned,
+          safe.search_aliases,
+          minhashSig,
+          Date.now(),
+          // COALESCE (mirrors the hook-llm upgrade path): a re-enrich that omits
+          // scope, or emits an off-enum value, must never blank an existing label —
+          // and THIS update stamps optimized_at, so the loss would be permanent.
+          normalizeScope(parsed.scope),
+          cand.id,
+        );
+      if (res.changes === 0) {
+        skipped++;
+        continue;
+      }
 
       rebuildVector(db, cand.id, {
         title,
@@ -544,8 +574,15 @@ export function applyNormalization(db, groups, { project = null } = {}) {
     .all(project, project);
 
   let updated = 0;
+  // R10 P2-2: normalize does NOT stamp optimized_at. That column is the "re-enrich has
+  // seen this row" marker read by all three re-enrich pools (:156, :177) and by
+  // cluster-merge (:634); writing it here evicted a row from lesson backfill because a
+  // synonym replacement touched one concept term — two unrelated passes sharing one flag.
+  // Nothing in normalize needs it: its own re-run gate is the 7-day NORMALIZE_GATE_FILE
+  // timer, and the pass is idempotent anyway because a canonicalized term stops matching
+  // an alias, so `changed` stays false on the second run.
   const updateStmt = db.prepare(`
-    UPDATE observations SET concepts = ?, search_aliases = ?, optimized_at = ? WHERE id = ?
+    UPDATE observations SET concepts = ?, search_aliases = ? WHERE id = ?
   `);
 
   for (const row of rows) {
@@ -574,7 +611,7 @@ export function applyNormalization(db, groups, { project = null } = {}) {
         concepts: uniqueConcepts,
         search_aliases: newAliases,
       });
-      updateStmt.run(safe.concepts, safe.search_aliases, Date.now(), row.id);
+      updateStmt.run(safe.concepts, safe.search_aliases, row.id);
       // V-F3: normalize mutated concepts + search_aliases (both vector fields) — rebuild the
       // vector so it reflects the canonicalized terms (no-op when the vector arm is disabled).
       rebuildVector(db, row.id, {
