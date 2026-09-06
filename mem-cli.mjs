@@ -1176,7 +1176,9 @@ function cmdSave(db, args) {
     fail(`[mem] Invalid importance "${flags.importance}". Must be 1, 2, or 3.`);
     return;
   }
-  const project = flags.project ? resolveProject(db, flags.project) : inferProject();
+  // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
+  // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
   const saveFiles = flags.files
     ? flags.files
         .split(',')
@@ -1363,7 +1365,9 @@ function cmdDeferAdd(db, args) {
     fail(`[mem] Invalid --priority "${flags.priority}". Must be 1 (low), 2 (normal), or 3 (urgent).`);
     return;
   }
-  const project = flags.project ? resolveProject(db, flags.project) : inferProject();
+  // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
+  // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
   const detail = typeof flags.detail === 'string' ? flags.detail : null;
   const files = flags.files
     ? flags.files

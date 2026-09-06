@@ -158,15 +158,6 @@ describe('no shipped module keeps a private temp+rename writer', () => {
     // would silently widen the permissions on session state
     'hook-update.mjs', // update-state.json
     'lib/native-binding-hint.mjs', // ABI self-heal marker (runs when the DB cannot open)
-    // lib/proc-lock.mjs — runtime/install.lock. Argued rather than assumed, because this
-    // one is not the idiom at all: the regex pairs `writeFileSync(lockPath, …)` with
-    // `renameSync(lockPath, tombstone)`, where lockPath is the rename's SOURCE. Nothing is
-    // ever renamed ONTO lockPath, so there is no path by which a user's symlink is replaced
-    // with a regular file — which is the whole thing this sweep exists to prevent. The
-    // rename is the single-winner steal protocol for a stale lock (R10 P1-7); the shared
-    // writer has no such operation and routing it there would be meaningless. The target is
-    // plugin-owned runtime state, so the runtime-state rationale above applies too.
-    'lib/proc-lock.mjs',
   ]);
 
   it('the sweep walks a plausible number of shipped modules', () => {

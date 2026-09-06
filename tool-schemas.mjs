@@ -19,15 +19,25 @@ const coerceBool = z.preprocess(
   z.boolean(),
 );
 
-// Coerce ids: accept single number, string "123", comma-separated "1,2,3", or array
+// Coerce ids: accept single number, string "123", comma-separated "1,2,3", or array.
+//
+// R10 P2-6: a token that is not a whole integer is LEFT AS A STRING so zod rejects it —
+// it is never parseInt'd. parseInt truncates and stops at the first non-digit, so the old
+// preprocessor turned "1.5" into 1 (mem_delete then deleted #1) and dropped "abc" out of
+// "1,abc,3" entirely, deleting a two-element set the caller never asked for. The array
+// form `[1.5]` and the CLI both already rejected these; only the MCP string form did not,
+// and mem_delete is a destructive tool. mem-cli.mjs records the same shape as a real
+// incident — "3.9 -> 3 updated the wrong row" — which the CLI fixed and this did not.
+// Same discipline as coerceDeferredTokens below: hand a non-conforming token to zod
+// rather than silently repairing it.
+// Positive whole digits only. coerceIntArray has exactly one consumer, memDeleteSchema
+// below, and an observation id is a positive AUTOINCREMENT rowid — so "-3" is as much a
+// caller mistake as "1.5" and gets the same answer: left as a string, rejected by zod.
+const wholeIntOrRaw = (s) => (/^\d+$/.test(s) ? parseInt(s, 10) : s);
 const coerceIntArray = z.preprocess((v) => {
-  if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? parseInt(x, 10) : x));
+  if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x));
   if (typeof v === 'number') return [v];
-  if (typeof v === 'string')
-    return v
-      .split(',')
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n));
+  if (typeof v === 'string') return v.split(',').map((s) => wholeIntOrRaw(s.trim()));
   return v;
 }, z.array(z.number().int()));
 

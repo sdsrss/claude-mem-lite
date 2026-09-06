@@ -174,6 +174,12 @@ function resolveProject(name) {
   return _resolveProjectShared(db, name);
 }
 
+/** R10 P2-3: the WRITE variant. Exact matching only — a fuzzy guess on a write puts the
+ *  row in a project the caller never named and cannot find it under. */
+function resolveProjectForWrite(name) {
+  return _resolveProjectShared(db, name, { mode: 'write' });
+}
+
 // ─── Scoring Model Constants ────────────────────────────────────────────────
 //
 // Composite scoring: BM25(weights) × recency_decay × [project_boost] × [importance] × [access_bonus]
@@ -1021,7 +1027,7 @@ server.registerTool(
     // `obs_type` → `type`: the sibling read tools all name it obs_type (see the schema
     // comment). Without this, an unknown key was dropped and the row saved as `discovery`.
     args = applyArgAliases(args, { obs_type: 'type' });
-    if (args.project) args = { ...args, project: resolveProject(args.project) };
+    if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
 
     let closesIds, result;
@@ -1094,7 +1100,7 @@ server.registerTool(
     inputSchema: memDeferSchema,
   },
   safeHandler(async (args) => {
-    if (args.project) args = { ...args, project: resolveProject(args.project) };
+    if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
     const r = insertDeferred(db, {
       project,

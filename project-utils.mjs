@@ -72,14 +72,31 @@ export function projectNameFromDir(p) {
   return raw.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 100);
 }
 
+/** Escape LIKE metacharacters so a caller-supplied name is matched literally.
+ *  R10 P2-3: unescaped, `--project '%'` matched every project and ORDER BY COUNT(*)
+ *  returned the biggest one; `_` matched any single character the same way. */
+function likeLiteral(s) {
+  return s.replace(/[\\%_]/g, '\\$&');
+}
+
 /**
  * Resolve short project name to canonical "parent--base" form.
  * Uses DB suffix match with in-process cache.
+ *
+ * R10 P2-3 — `mode` is not cosmetic. The fuzzy steps 2 and 3 below are a deliberate READ
+ * convenience: a wrong guess costs one query, and the user sees an empty result and tries
+ * again. On a WRITE they cost the row's identity — `mem_save project:"api"` landed in
+ * `mono--api-gateway`, and the caller's own next project-scoped read of "api" does not
+ * find it. Write callers pass mode:'write' and get exact matching only: an already
+ * canonical name, the exact `%--name` suffix completion users depend on (`mem` ->
+ * `projects--mem`), an exactly existing bare name, or the caller's own string back.
+ *
  * @param {import('better-sqlite3').Database} db Database instance
  * @param {string|null|undefined} name Project name to resolve
+ * @param {{mode?: 'read'|'write'}} [opts]
  * @returns {string|null|undefined} Canonical project name
  */
-export function resolveProject(db, name) {
+export function resolveProject(db, name, { mode = 'read' } = {}) {
   if (!name) return name;
   // Defense-in-depth: a bare `--project` CLI flag parses to boolean `true` (and a
   // malformed MCP/hook caller could pass any non-string). `true.includes('--')` below
@@ -87,10 +104,13 @@ export function resolveProject(db, name) {
   // Treat any non-string as "no project filter" (null) — the degradation every caller
   // already handles for an absent --project — instead of crashing at the root helper.
   if (typeof name !== 'string') return null;
-  if (_cache.has(name)) return _cache.get(name);
+  // Key on the MODE too: the same name legitimately resolves to two different answers,
+  // and a name-only cache hands whichever call ran first to the other one.
+  const ck = `${mode}:${name}`;
+  if (_cache.has(ck)) return _cache.get(ck);
   // Already a canonical name (contains "--")? Use as-is.
   if (name.includes('--')) {
-    _cache.set(name, name);
+    _cache.set(ck, name);
     return name;
   }
 
@@ -99,11 +119,11 @@ export function resolveProject(db, name) {
   // 1) Exact suffix match: "mem" → "projects--mem"
   const suffixed = db
     .prepare(
-      'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1',
+      "SELECT project FROM observations WHERE project LIKE ? ESCAPE '\\' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1",
     )
-    .get(`%--${name}`);
+    .get(`%--${likeLiteral(name)}`);
   if (suffixed) {
-    _cache.set(name, suffixed.project);
+    _cache.set(ck, suffixed.project);
     return suffixed.project;
   }
 
@@ -115,18 +135,26 @@ export function resolveProject(db, name) {
   // the documented "prefer canonical parent--name over a stray short name" intent.
   const exact = db.prepare('SELECT project FROM observations WHERE project = ? LIMIT 1').get(name);
   if (exact) {
-    _cache.set(name, exact.project);
+    _cache.set(ck, exact.project);
     return exact.project;
+  }
+
+  // R10 P2-3: a write stops here. Steps 2 and 3 below guess; step 4 synthesizes from the
+  // process cwd, which for a write is worse still — an MCP call naming a project the
+  // caller is not sitting in would land in the caller's own directory's project.
+  if (mode === 'write') {
+    _cache.set(ck, name);
+    return name;
   }
 
   // 2) Prefix-in-suffix match: "code-graph" → "projects--code-graph-mcp"
   const prefixed = db
     .prepare(
-      'SELECT project FROM observations WHERE project LIKE ? GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1',
+      "SELECT project FROM observations WHERE project LIKE ? ESCAPE '\\' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1",
     )
-    .get(`%--${name}%`);
+    .get(`%--${likeLiteral(name)}%`);
   if (prefixed) {
-    _cache.set(name, prefixed.project);
+    _cache.set(ck, prefixed.project);
     return prefixed.project;
   }
 
@@ -140,23 +168,23 @@ export function resolveProject(db, name) {
   const token = db
     .prepare(
       `SELECT project FROM observations
-       WHERE (project LIKE '%-' || ? || '-%' OR project LIKE '%-' || ?)
+       WHERE (project LIKE '%-' || ? || '-%' ESCAPE '\\' OR project LIKE '%-' || ? ESCAPE '\\')
        GROUP BY project ORDER BY COUNT(*) DESC LIMIT 1`,
     )
-    .get(name, name);
+    .get(likeLiteral(name), likeLiteral(name));
   if (token) {
-    _cache.set(name, token.project);
+    _cache.set(ck, token.project);
     return token.project;
   }
 
   // 4) Fallback: synthesize canonical form from current directory
   const inferred = inferProject();
   if (inferred.endsWith(`--${name}`)) {
-    _cache.set(name, inferred);
+    _cache.set(ck, inferred);
     return inferred;
   }
 
-  _cache.set(name, name);
+  _cache.set(ck, name);
   return name;
 }
 

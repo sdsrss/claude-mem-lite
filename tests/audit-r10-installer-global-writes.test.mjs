@@ -112,6 +112,60 @@ describe('R10 P1-7 — a stale lock is stolen by exactly one process', () => {
     expect(r.neither, 'nobody could reclaim a stale lock — the lock is now a deadlock').toBe(0);
   }, 60000);
 
+  // The second defect the race harness exposed, and the one that survived the first fix.
+  // writeFileSync(path, data, { flag: 'wx' }) is TWO syscalls — create, then write — so the
+  // lock file is briefly visible EMPTY. isStale() treats an unparseable lock as stale by
+  // design, so a peer reading in that window stole a lock whose owner was mid-create and
+  // already believed it held it. This case watches the file while a peer acquires it in a
+  // loop and asserts the empty state is never observable; the statistical race case above
+  // only reproduces it under CPU load, which a test must not depend on.
+  it('the lock file is never observable in an empty, half-created state', async () => {
+    const lockPath = join(root, 'runtime', 'watched.lock');
+    mkdirSync(dirname(lockPath), { recursive: true });
+    // BOTH sides are workers so the watcher can busy-spin. A main-thread watcher has to
+    // await between reads to let the event loop run, and at one sample per tick it misses
+    // the window about two runs in three — a guard that flaky is worse than none.
+    const sab = new SharedArrayBuffer(12);
+    const ctl = new Int32Array(sab); // [0]=stop flag, [1]=empty reads seen, [2]=acquisitions
+    const acquirer = new Worker(
+      `import { parentPort, workerData } from 'node:worker_threads';
+       import { acquireLock } from ${JSON.stringify(join(REPO, 'lib', 'proc-lock.mjs'))};
+       const ctl = new Int32Array(workerData.sab);
+       // Time-bounded, not iteration-bounded: on a loaded box a fixed iteration count made
+       // this case run for minutes against a busy-spinning watcher.
+       const deadline = Date.now() + 2000;
+       let n = 0;
+       while (Date.now() < deadline) { const r = acquireLock(workerData.lockPath); if (r) r(); n++; }
+       Atomics.store(ctl, 2, n);
+       Atomics.store(ctl, 0, 1);
+       parentPort.postMessage('done');`,
+      { eval: true, workerData: { sab, lockPath } },
+    );
+    const watcher = new Worker(
+      `import { parentPort, workerData } from 'node:worker_threads';
+       import { readFileSync } from 'node:fs';
+       const ctl = new Int32Array(workerData.sab);
+       let reads = 0;
+       while (Atomics.load(ctl, 0) === 0) {
+         try { if (readFileSync(workerData.lockPath, 'utf8').length === 0) Atomics.add(ctl, 1, 1); reads++; }
+         catch { /* between release and the next acquire */ }
+       }
+       parentPort.postMessage(reads);`,
+      { eval: true, workerData: { sab, lockPath } },
+    );
+    // Attach BOTH listeners before awaiting either: a worker that finishes first emits its
+    // message into the void and the later await never settles (this case hung for 60 s).
+    const pAcq = new Promise((res, rej) => (acquirer.on('message', res), acquirer.on('error', rej)));
+    const pWatch = new Promise((res, rej) => (watcher.on('message', res), watcher.on('error', rej)));
+    const [, reads] = await Promise.all([pAcq, pWatch]);
+    await Promise.all([acquirer.terminate(), watcher.terminate()]);
+    expect(Atomics.load(ctl, 2), 'the acquirer barely ran; this case proves nothing').toBeGreaterThan(500);
+    expect(reads, 'the watcher never saw the lock at all; this case proves nothing').toBeGreaterThan(500);
+    // Measured on this box, 2 s per arm, three runs each: the two-syscall create leaves
+    // 15,024 / 17,071 / 23,575 empty reads; link() leaves 0 / 0 / 0.
+    expect(Atomics.load(ctl, 1), 'a peer can read the lock file before its contents are written').toBe(0);
+  }, 60000);
+
   it('still refuses a LIVE lock', () => {
     const lockPath = join(root, 'runtime', 'live.lock');
     mkdirSync(dirname(lockPath), { recursive: true });
