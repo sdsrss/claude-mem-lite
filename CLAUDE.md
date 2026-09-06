@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 3.99.0 — **this exact string is a release guard.**
+- **Version**: 4.0.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
-- **Runtime**: Node >=20, ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
+- **Runtime**: Node >=22 (20 dropped in v4.0.0; EOL 2026-04 and better-sqlite3 13 requires >=22), ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
 
 ## Commands
 
 | Task | Command |
 |------|---------|
-| Setup | `npm install` (needs a Node >=20 toolchain; native `better-sqlite3` binding must build) |
+| Setup | `npm install` (needs a Node >=22 toolchain; native `better-sqlite3` binding must build) |
 | All tests | `npx vitest run` — or `npm test` |
 | **One file** | `npx vitest run tests/foo.test.mjs` |
 | **One case** | `npx vitest run -t 'case name'` |
@@ -33,8 +33,24 @@ Two CLI families, both canonical in `cli.mjs`:
 - **`INSTALL_COMMANDS`** — `install uninstall status doctor cleanup cleanup-hooks self-update repair rebuild-binding release`
 
 `claude-mem-lite help` for flags. **`rebuild-binding` is the fix for a missing native
-binding** — npm 12 blocks install scripts by default, which leaves `better-sqlite3` with no
-`.node` at all while a plain `npm rebuild` prints success without compiling anything.
+binding**, and **v4.0.0 changed what it is fixing** — do not carry the old paragraph forward.
+better-sqlite3 12 shipped `"install": "prebuild-install || node-gyp rebuild --release"`, so
+npm 12's default script block left it with no `.node` at all; that was the whole -32000 class.
+**13 has NO install script** and ships `prebuilds/<platform>.node` instead, for 8 platforms
+(linux / linuxmusl / darwin / win32 × x64 / arm64). Measured: `npm install --ignore-scripts
+better-sqlite3@13` lands 8 prebuilds and opens a DB; the same install of 12 lands none and
+cannot. So on any covered platform the script block no longer reaches users at all.
+
+The trap moved rather than vanished. With no install script, **`npm rebuild better-sqlite3`
+now exits 0 printing "rebuilt dependencies successfully" while compiling nothing — and
+`--dangerously-allow-all-scripts` does not change that**, because there is no script to
+allow. On a platform 13 ships no prebuild for, that made the whole heal chain a silent no-op.
+`ensureBetterSqlite3Working` therefore has a third step since v4.0.0: when the npm path exits
+clean but the binding is still dead, it runs the package's own
+`npm run --prefix node_modules/better-sqlite3 build-release` (13 still ships `src/`, `deps/`
+and `binding.gyp`), and reports `action: 'compiled'`. Both halves are pinned in CI by the two
+legs of `smoke-npm12`.
+
 `doctor --metrics` is the only reader for the `inject` metric series (plain `doctor` omits it).
 
 **Sandbox install harness** (not in `vitest run`; real `npm i -g` + real MCP stdio, minutes +
@@ -175,9 +191,9 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **357 files / 5907** (5906 passed, 1 skipped) | tag `v3.99.0` (R7 batch), 2026-09-05 (was 355 / 5890 at tag `v3.98.0`: +2 test files `audit-r7-citation-subagent-type-gate` / `audit-r7-adopt-boundary`, +17 cases across those two plus the restated + added cases in `cli-path-invocation`; both new files live under `tests/`, which `obs-id-caliber-sync` does not generate cases from) |
-| Knip | **49** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. The −1 is ATTRIBUTED by same-tree A/B name-set diff (`git stash push -u`), not by subtraction: the single name that left is `extractInjectedFromSubagentPrompt`, because R7's new test is the first to import it directly. That it sat in this list is itself the finding's backstory — no test reached the function, which is how the missing entry-type gate survived. Every other name is byte-identical to the `v3.98.0` set. |
-| Coverage | statements **84.29%** · branches **78.84%** · functions **89.26%** · lines **85.40%** (87 file rows) | same tree. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **The `v3.98.0` row (84.34 / 78.88 / 89.26 / 85.44) does not reproduce** — HEAD `e694259` itself measures **84.29 / 78.85 / 89.26 / 85.40, 86 rows**, so that figure was CARRIED across R6 ("unmoved by R5") rather than re-measured, which is what this section's header warns against. **The ruler is per-tree reproducible** — A/A run twice on HEAD and twice on the R7 tree, byte-identical each time — so sub-0.05 moves here are signal, not run noise. R7's measured effect: branches 78.85 → 78.84, other three identical; `lib/citation-tracker.mjs`, the only edited file inside the measured set, went UP on all four (93.71→93.73 / 88.13→88.19 / 100→100 / 97.32→97.33). **UNATTRIBUTED, do not repeat a guess here**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from HEAD's report and present on the R7 tree, and it is neither imported by anything R7 changed nor pulled in by R7's new tests — holding both new test files aside still shows it, at a third aggregate (84.28 / 78.81). Two attributions were written into this row and both were wrong before this measurement; the mechanism is open. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
+| Tests | **357 files / 5911** (5910 passed, 1 skipped) | tag `v4.0.0`, 2026-09-06 (was 357 / 5907 at tag `v3.99.0`: +4 cases, all in `native-binding-selfheal` for the source-compile heal; no new test FILES, so `obs-id-caliber-sync`'s generated count is unmoved) |
+| Knip | **49** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unmoved by v4.0.0 and checked the right way: the unused-export NAME SET is **byte-identical** to the `v3.99.0` set, not merely the same count (doctrine rule 4). The one new export, `NATIVE_BINDING_SOURCE_BUILD_CMD`, is absent from the list because its test imports it. |
+| Coverage | statements **84.30%** · branches **78.82%** · functions **89.27%** · lines **85.40%** | tag `v4.0.0`. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. Was 84.29 / 78.84 / 89.26 / 85.40 at `v3.99.0`. **RE-MEASURE, NEVER CARRY — this row has been wrong twice.** The `v3.98.0` figure (84.34 / 78.88 / 89.26 / 85.44) did not reproduce at all: HEAD `e694259` itself measured 84.29 / 78.85 / 89.26 / 85.40, i.e. it had been carried across R6 ("unmoved by R5") instead of re-measured. **The ruler is per-tree reproducible** (A/A run twice on two different trees, byte-identical each time), so sub-0.05 moves are signal rather than run noise — which is exactly why carrying is not safe here. **UNATTRIBUTED, open since v3.99.0, do not guess a third time**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards, imported by nothing that changed and not pulled in by the new tests. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
 
 **`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
 across it.** `cycles()` and `untestedModules()` used to count `*.config.mjs` as source

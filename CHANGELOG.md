@@ -2,6 +2,39 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v4.0.0 — Node 22 floor, and better-sqlite3 13's prebuilt binaries
+
+**⚠️ BREAKING — this release requires Node >= 22.** Node 20 reached end of life in April
+2026, and better-sqlite3 13 declares `engines: {"node": ">=22"}`. Both queued major upgrades
+needed the floor raised, so it is raised once here rather than twice.
+
+- *What you must do*: run claude-mem-lite on Node 22 or newer. `npm install` prints an
+  `EBADENGINE` warning if you are below it.
+- *Revert path*: pin the previous release — `npm install claude-mem-lite@3.99.0` — which
+  keeps the `>=20` floor and better-sqlite3 12. No data migration is involved in either
+  direction; the SQLite file is untouched by this release.
+- CI now tests Node **22, 24 and 26** (26 is new, closing a deferred audit item).
+
+**The most common install failure is gone on every mainstream platform.** better-sqlite3 12
+carried `"install": "prebuild-install || node-gyp rebuild --release"`, so npm 12's
+default install-script block left it with no compiled `.node` and the server died before
+the MCP handshake (clients reported `-32000`). **13 has no install script at all** — it ships
+`prebuilds/<platform>.node` for linux, linuxmusl, darwin and win32 on x64 and arm64. Measured
+directly: `npm install --ignore-scripts better-sqlite3@13` lands 8 prebuilt binaries and opens
+a database; the same install of 12 lands none and cannot. If npm's script blocking was
+breaking your install, it no longer can.
+
+**And the repair path was rebuilt for the platforms that are still not covered.** Losing the
+install script also means `npm rebuild better-sqlite3` now exits 0 printing "rebuilt
+dependencies successfully" while compiling nothing — `--dangerously-allow-all-scripts` does
+not help, because there is no script to allow. On a platform 13 ships no prebuild for, that
+turned the entire self-heal chain into a silent no-op that reported success over a broken
+install. `ensureBetterSqlite3Working` now falls through to the package's own
+`build-release` (13 still ships `src/`, `deps/` and `binding.gyp`) and reports
+`action: 'compiled'`. `claude-mem-lite rebuild-binding` and `doctor` inherit the fix. CI pins
+both halves as separate legs: one asserts a blocked install script never reaches you, the
+other deletes the prebuilt binaries and requires the heal to compile from source.
+
 ## v3.99.0 — the file we write into your repo, and the quote we counted as a citation
 
 Audit round R7 (`docs/audits/20260905-225651.md`) read the two write paths R6 named as the
