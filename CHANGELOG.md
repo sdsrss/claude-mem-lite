@@ -2,6 +2,86 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.1.0 — the R10 audit, fixed
+
+Whole-project audit round R10 (`docs/audits/20260906-173816.md`) landed as 18 commits.
+Eight of its nine P1s, 15 of 20 P2s and 14 P3s are fixed; every fix carries a test that
+was RED first, and every guard a `git revert` could walk past was mutation-verified
+against that revert.
+
+**What changes for you**
+
+| Change | Was | Now |
+|---|---|---|
+| `npm install` on Windows | installed, then failed silently in seven POSIX code paths | `EBADPLATFORM` — `package.json` declares `os: [darwin, linux]` |
+| `mem_delete` with a string id | `"1.5"` deleted #1; `"1,abc,3"` silently dropped `abc` | both rejected by the schema |
+| `mem_save` / `mem_defer` / CLI `save` / `defer` with `--project <short-name>` | fuzzy-resolved, so `api` could land in `mono--api-gateway` | exact match only: canonical name, the `%--name` suffix completion, or an existing bare name |
+| `install` with `MEM_NO_AUTO_ADOPT=1` | adopted anyway | honoured, like every other auto-adopt caller |
+| `install` / `uninstall` with an unparseable `settings.json` | replaced the whole file with `{}` | exits 1 and writes nothing |
+| `optimize --task` with no value | ran all four tasks | usage error |
+| CJK-only titles | never deduplicated (no MinHash signature) | signed and deduplicated; ASCII signatures are byte-identical |
+| SessionStart timeout, settings.json install shape | 10 s | 15 s, matching the plugin shape |
+
+**Data-loss and security fixes**
+
+- `deferred_work.title` / `detail` / `drop_reason` never passed the secret scrubber, and
+  every read surface replays them into model context. Scrubbed at the single choke point.
+- Six credential shapes walked through `scrubSecrets` untouched: a JSON `"Authorization"`
+  header, Azure `AccountKey=` and SAS `sig=`, `--token <value>`, `Cookie: session=`, and
+  driver-suffixed database URLs like `postgresql+psycopg2://`. Measured over 182,364 lines
+  of this repo's own text: nine disagreements, all of them lines that document a secret,
+  zero over-scrubs of real content.
+- The daily unattended `llm-optimize` run rewrote user content three ways: `wide` re-enrich
+  overwrote the title and cut the narrative at 500 characters (even when the model returned
+  nothing), the weekly normalize pass stamped `optimized_at` and evicted rows from a lesson
+  backfill they had never visited, and the re-enrich UPDATE had no live-row guard across a
+  45-second model round-trip.
+- `normalize-project-names` merged a root-directory project such as `workspace` into an
+  unrelated `workspaces--repo` across eight tables via a token-substring fallback, and any
+  primary-key collision rolled back every other project's rename and replayed the whole scan
+  on the next DB open, forever.
+- Two processes could hold `install.lock` at once. The steal was unlink-then-create, and
+  creation was `writeFileSync` with `wx` — two syscalls, so the file is briefly visible
+  empty and a peer judged it stale. Now a rename-tombstone steal plus `link`-based creation:
+  0 double acquisitions in 12,000 rounds, 8,000 of them under load.
+- `atomicWriteFileSync` widened permissions, measured 0600 to 0644, on targets that include
+  `~/.claude.json`.
+- `cleanup` deleted `.update-backup-*`, the only rollback copy of an in-flight update, with
+  no lock check — while `doctor` was telling the user to run it.
+- Every `claude -p` spawn ran with `cwd: /tmp`. Claude Code loads a project-level CLAUDE.md
+  from its cwd, so on a shared host any local account could steer every background
+  summarization call. Now a 0700 directory under the runtime dir.
+- `mergeDuplicates` accepted cross-project groups, hiding one project's row behind another's
+  keeper where no read surface could find it.
+- SECURITY.md pointed at GitHub private vulnerability reporting, which was switched off for
+  the repository, leaving reporters only the public issue that same paragraph forbids. It is
+  enabled, and the file no longer tells you to run `claude-mem-lite update` (which edits an
+  observation) to get a security fix.
+
+**Also**
+
+`Proxy-Authorization` is finally sent on CONNECT, so an authenticating proxy no longer
+degrades every call to the subprocess path while `doctor` says "unreachable".
+`self-update` / `doctor` / `status` / `rebuild-binding` now read
+`installed_plugins.json` to find the live plugin version instead of guessing the newest
+cached directory — the guess let `prunePluginCache` delete the tree the user's sessions
+load. The self-heal path no longer prints installer output onto the SessionStart JSON
+envelope. `commands/mem.md` and `commands/update.md` told the agent to run a purge without
+`confirm=true`, which previews instead of deleting and then reports success. Corrupt FTS
+indexes are rebuilt rather than "repaired" by deleting the WAL. Eleven smaller hook, CLI and
+hygiene defects, and roughly forty stale documentation claims, now pinned by a guard that
+derives the tool counts from `tool-schemas.mjs`.
+
+**Deliberately not fixed**, with reasons recorded in CLAUDE.md: the session-lifecycle
+finding (P1-1) needs a real `/clear` capture first, because the two possible host semantics
+require opposite fixes; the two install-path rewrites have a proven mechanism but no
+reproduced symptom; the FTS double-count fix collides with a guard that closes a data-loss
+bug.
+
+Suite 343 files / 5578 to **356 / 5687**, and the one permanently-skipped case is gone —
+it was a switched-off local pre-commit gate. Knip 48 to 45 unused exports with zero new
+ones. All retrieval quality metrics byte-identical across all 18 commits.
+
 ## v5.0.0 — the second package manager, removed
 
 **BREAKING.** The skill/agent resource registry, the shadow skill-recommendation engine and
