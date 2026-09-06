@@ -146,6 +146,17 @@ This repo measures its own retrieval quality, and most of its expensive mistakes
 evidence for each is in `docs/measurement/`. **Violating one silently produces a number
 that looks measured and is not.**
 
+> **R10 (`docs/audits/20260906-173816.md`) landed as `efdf505..f1dde1a`, 16 commits.**
+> Eight of its nine P1s and most P2/P3s are fixed, each with a RED-first test and, where a
+> guard could be walked past, a mutation run against the real revert. Four items are
+> deliberately open and the report below says why: P1-1 (session lifecycle — needs a real
+> `/clear` stdin capture first, and the two possible host semantics need opposite fixes),
+> P2-11 / P2-12 (install-path rewrites — mechanism proven, runtime symptom not, and R10 §8
+> says do not touch `install()` without reproducing in `tests/sandbox/phaseB-npm.mjs`),
+> P3-11 (FTS double-count — the fix collides with `looksAlreadyDerived`, which closes a
+> data-loss bug) and P3-24's second half (deleting `scripts/convert-commands.mjs` would
+> strand `lib/frontmatter.mjs` and make its guard vacuous).
+>
 > **`docs/measurement/` IS tracked — it is this file's appendix, not internal notes.**
 > So are `docs/audit/` and `docs/audits/` (the audit ledger — each round marks the previous
 > round's items 已解决/未解决/复发, which is impossible against a report nobody can read) and
@@ -212,9 +223,9 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **343 files / 5578** (5577 passed, 1 skipped) | branch `refactor/2026-09-06-drop-skill-registry`, 2026-09-06, post-removal working tree (re-stamp with the release sha at ship). The skill-registry removal (R9, `docs/audits/20260906-145304.md`) took this from v4.0.4's **359 / 5936** in three steps, each attributed by a same-tree A/B NAME-SET diff rather than by subtracting counts: step 1 (recommendation engine) 359/5936 → 357/5884; step 2 (Skill bridge) → 356/5870, 14 names out + 1 renamed in; step 3 (registry) → 340/5556, 318 out + 4 renamed in; then +1 file / +5 cases for the removed-command discoverability signal (§EXT §2-EXT item 4), which is additive and was written RED-first. The R9 REVIEW rounds then added three files and 23 cases, every one RED-first and each count read back from the runner rather than hand-added (the first attempt at this breakdown was arithmetic that did not sum): `removed-registry-commands` 5, `dangling-hook-prune` 14, `suite-touches-no-user-config` 2, plus 2 in `hook-update` for the loadModule HOME guard. Against that, `coverage-scope` lost its `registry.mjs` case. **Watch the generated term**: `obs-id-caliber-sync` emits one case per `.mjs`/`.js` under `benchmark/`, `lib/`, `scripts/` and the repo root, and contributed −1, −1 and −10 across the three steps — exactly the count of deleted source files in those directories each time. Pre-removal history: v4.0.4 added 2 cases over v4.0.3's 359 / 5934; v4.0.2 added 3 over v4.0.1's 359 / 5929; the `v4.0.0` figure was 357 / 5911 and was **byte-identical under vitest 4 and vitest 5 on the same tree**. |
-| Knip | **48** unused exports, **0** unused files, **0** duplicate exports | branch `refactor/2026-09-06-drop-skill-registry`, primary working tree. **The count is the least interesting part of this row.** Mid-removal it read 49 — numerically identical to v4.0.4 — while the NAME SET had changed on both sides: `registry-retriever.mjs:DISPATCH_SYNONYMS` left with its module, and `utils.mjs:isPathConfined` newly appeared because `server.mjs` had been its last consumer. A count-only comparison would have reported "unmoved" (doctrine rule 4, caught by the same-tree name-set diff). `isPathConfined` was then deleted — dead security code that nothing calls invites false confidence — on the precedent its own neighbouring comment records for `basenameAnySep`, giving 48. Unmoved-and-verified across v4.0.0 through v4.0.4 before that. `lib/hook-prune.mjs` adds no entry — all three of its exports are imported by product code and tests. |
-| Coverage | statements **85.87%** · branches **80.15%** · functions **90.28%** · lines **87.05%** | branch `refactor/2026-09-06-drop-skill-registry`, **vitest 5.0.0**, 2026-09-06, post-removal tree. **THIRD CALIBER BREAK — do not diff against v4.0.4's 84.18 / 78.82 / 89.28 / 85.30**: the `include` allowlist lost three entries, so the denominator is a different set of files. **The first stamp of this row named the wrong three** (caught by independent review): it credited `registry-retriever.mjs`, which was in **`exclude`**, never `include` — and `vitest.config.mjs`'s own comment says removing such an entry changes nothing. The three that actually left `include` are `registry-scanner.mjs`, `resource-discovery.mjs` and **`registry.mjs`**, the last being the one that mattered: audit 2026-09-02 P1-15 had deliberately moved it IN because at 86.78% stmts it was a well-covered file sitting invisible, and `tests/coverage-scope.test.mjs` pinned it there. Both went with the module. Measured, not assumed: removing the now-dangling `'registry.mjs'` include entry moved **no column** — vitest ignores an include entry with no file — so the deltas here are the +9 hook-prune cases and `lib/hook-prune.mjs` entering the `lib/**` denominator. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **RE-MEASURE, NEVER CARRY — this row has now been wrong three times**, twice by carrying and once by mis-attributing. **UNATTRIBUTED, open since v3.99.0, do not guess a third time**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
+| Tests | **356 files / 5687** (5687 passed, **0 skipped**) | `main` @ `cc4fc5e`, 2026-09-06, after the R10 audit-fix series (`efdf505..cc4fc5e`, 15 commits). Was **343 / 5578** (5577 + 1 skipped) at `efdf505`. **The 1 skipped became 0 for a reason worth knowing**: `tests/pre-commit-hook-sync.test.mjs` skips when no git hook is installed, and this clone had none — `git config core.hooksPath .githooks` (R10 P2-20, now also `npm run hooks:install`) un-skipped it. A skip that permanent is a check that is off. **Watch the generated term**: `obs-id-caliber-sync` emits one case per `.mjs`/`.js` under `benchmark/`, `lib/`, `scripts/` and the repo root, so deleting `scripts/p0-forward-probe.mjs` (R10 P3-24) took one case with it — which is why the R10 batch that removed it netted +0 cases despite adding one. Pre-R10 history: the skill-registry removal took 359/5936 → 343/5578 in three attributed steps; v4.0.4 added 2 over v4.0.3's 359 / 5934; the `v4.0.0` figure was 357 / 5911 and was **byte-identical under vitest 4 and vitest 5 on the same tree**. |
+| Knip | **45** unused exports, **0** unused files, **0** duplicate exports, **3** unlisted binaries (`du`, `pgrep`, `claude-mem-lite`, all from `install.mjs`) | `main` @ `cc4fc5e`, primary working tree. Was **48** at `efdf505`. **Attributed by NAME SET, not by subtracting counts** (doctrine rule 4): exactly three names left the list — `lib/scrub-record.mjs:TEXT_FIELDS_BY_TABLE`, `hook-optimize.mjs:executeSmartCompress` and `schema.mjs:isDbCorruptionError` — each because an R10 test now imports it. **Zero new unused exports across 15 commits.** The 3 unlisted binaries were present at `efdf505` too and are not new; the earlier rows simply never recorded that line. **The worktree-offset rule got a second data point**: this `efdf505` reading was taken in a `git worktree --detach` whose `node_modules` was SYMLINKED to the primary tree's, and it read 48 — matching the primary-tree figure, as the R9 reviewer also found (n=2 now). The discriminating arm — a detached worktree with its OWN `npm ci` — is still unrun, so keep measuring from the primary tree, but the rule is more likely about `node_modules` than about the checkout. |
+| Coverage | statements **85.68%** · branches **80.09%** · functions **90.42%** · lines **86.82%** | `main` @ `cc4fc5e`, **vitest 5.0.0**, 2026-09-06. Same caliber as the previous row (the `include` allowlist did not change in R10), so this one IS comparable: 85.87 → 85.68 stmts, 80.15 → 80.09 branches, 90.28 → 90.42 functions, 87.05 → 86.82 lines. The movement is denominator, not regression — R10 added code to `lib/` (`proc-lock` steal protocol, `atomic-write` mode preservation, `deferred-work` scrub, `get-core` notices) faster than it added `lib/` tests, since several R10 guards drive root-level faces that are outside the gate. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **RE-MEASURE, NEVER CARRY — this row has been wrong three times**, twice by carrying and once by mis-attributing which files left the `include` list. **UNATTRIBUTED, open since v3.99.0, do not guess a fourth time**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
 
 **`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
 across it.** `cycles()` and `untestedModules()` used to count `*.config.mjs` as source
@@ -224,6 +235,18 @@ four reporters now share one predicate (`isGraphModule`), and `--self-check` fai
 ever disagree again. Modules **163 → 161**, untested **24 / 163 → 23 / 161**. Edges are
 unchanged (481 static + 48 lazy, 0 cycles) — both config files have zero local imports, so
 only the node count moved.
+
+Re-stamped at `cc4fc5e` (2026-09-06, post-R10): **148 modules, 444 static + 44 lazy edges,
+0 cycles**, 171 functions over 50 lines of 1855, duplicate rate 5.15% any / 2.26%
+cross-file. `npm run audit:selfcheck` exits 0, so all four reporters still agree. Do not
+read 161 → 148 as deletion — the two readings come from different rounds and this row's own
+lesson is that the population moved underneath the number.
+
+**`--self-check` also stopped leaking** (R10 P2-18): its `fail()` called `process.exit(1)`,
+which skips the `finally` that removes its probe directory, so every failing self-check left
+an `audit-metrics-selfcheck-` directory in `/tmp`. It throws now, and the exit is deferred
+past the `finally` — moving the exit into the `catch` skips it just the same, which a
+forced-failure probe caught.
 
 **The 2026-09-05 whole-tree reformat (`36f8c0f`) changed the CALIBER of four
 line-denominated metrics. Do not diff any of them across it** — prettier split one-line
@@ -300,7 +323,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   Off switch: `CLAUDE_MEM_ERROR_RECALL_ON_FAILURE=off`.
 - **`hooks/hooks.json` and `install.mjs`'s direct `settings.json` entries are two separate
   hook sets and must be changed together** — `tests/audit-silent-20260814.test.mjs` diffs
-  them and is verified binding.
+  them and is verified binding. **That diff does not compare `timeout`**, which is how
+  SessionStart ran with 15 s under the plugin shape and 10 s under the settings.json shape
+  for several releases (R10 P2-16, now both 15). If you add a field to either set, ask
+  whether the guard actually reads it.
 - **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a
   ranking bound.** It silently makes well-matching rows unpickable, and an importance
   demotion across the pool's `WHERE` becomes an *eviction* rather than a down-rank. This
@@ -325,6 +351,32 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   unadopted temp dir and assert a premise first.
 - Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for
   CLI injection.
+- **`MEM_NO_AUTO_ADOPT=1` is a GLOBAL opt-out and every auto-adopt caller must honour it.**
+  `install.mjs`'s dogfood branch respected only `--no-adopt`, and because it detects this
+  repo by its git REMOTE while adopt-cli resolves its TARGET from `CLAUDE_PROJECT_DIR ‖ PWD`,
+  the unit suite rewrote this repository's own CLAUDE.md managed block and `.claude/`
+  sidecar on every run (R9's "fourth trap"; R10 P2-17 found the writer). Any test that
+  spawns `install.mjs install` or `repair` must set it —
+  `tests/suite-touches-no-repo-files.test.mjs` scans for that and skips `doctor` / `status`
+  / `uninstall` spawners, which cannot reach the adopt path.
+- **`writeFileSync(path, data, { flag: 'wx' })` is TWO syscalls**, so the file is briefly
+  visible EMPTY. Anything that treats an unparseable file as reclaimable — `proc-lock`'s
+  `isStale` did — will steal a lock its owner is mid-way through creating. Fill a private
+  temp and `linkSync` it into place instead; `link` is atomic, fails EEXIST exactly like
+  O_EXCL, and never exposes the name without its contents (R10 P1-7).
+- **A `project` column is not a substitute for a project CHECK on a write.** `resolveProject`
+  is fuzzy by design for reads, where a wrong guess costs a query; write callers must pass
+  `{ mode: 'write' }`, and cross-project operations (`mergeDuplicates`, the
+  `normalize-project-names` cleanup) must compare the two rows' projects before acting.
+  Both faces silently relocated user data before R10 P2-3 / P2-7 / P1-2.
+- **`optimized_at` is the re-enrich pools' "seen it" flag and nothing else's.** Normalize
+  used to stamp it as a side effect of replacing one concept term, evicting rows from a
+  lesson backfill they had never visited (R10 P2-2). Before writing it, check you are the
+  pass it belongs to.
+- **A long LLM round-trip needs `liveObsFilterSql` in the UPDATE's WHERE, not just in the
+  SELECT that chose the row.** 45 seconds is long enough for a concurrent hook to supersede
+  or compress it, and an unguarded write resurrects a dead row AND stamps it processed
+  (R10 P3-3). Treat `changes === 0` as a skip, not a success.
 
 <!-- claude-mem-lite:begin v1 -->
 ## claude-mem-lite — persistent memory
