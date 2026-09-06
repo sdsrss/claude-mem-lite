@@ -12,6 +12,7 @@ import {
   statSync,
   chmodSync,
   rmSync,
+  utimesSync,
 } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
@@ -373,5 +374,47 @@ describe('R10 P2-10 — cleanup does not delete an in-flight update rollback cop
     runCleanup(data);
     const lock = join(data, 'runtime', 'install.lock');
     expect(existsSync(lock), 'cleanup left install.lock held after exiting').toBe(false);
+  });
+
+  // Same defect shape as P2-10, one directory over and still open: the runtime
+  // `ep-flush-*` / `pending-*` block deleted every match with NO age gate.
+  //
+  // `ep-flush-<ts>-<id>.json` is the episode handed to the summarizer; hook-shared.mjs
+  // sets ORPHAN_EPISODE_AGE_MS to 1h for the automatic sweep and says why in as many
+  // words — "handleLLMEpisode's worst-case round-trip is ~60s ... 1h leaves a wide
+  // safety margin against deleting an in-flight file". The MANUAL command had no such
+  // margin, and `doctor` tells users to run it. Deleting a seconds-old flush file
+  // discards that episode's observations silently, and cleanup prints "✓ Removed".
+  //
+  // The inconsistency is visible inside cleanup itself: the very next block sweeps test
+  // fixtures at 24h with the comment "conservative for a manual cleanup".
+  it('keeps a FRESH ep-flush/pending file (an in-flight episode is not residue)', () => {
+    const data = seedDataDir();
+    const rt = join(data, 'runtime');
+    const fresh = join(rt, `ep-flush-${Date.now()}-live.json`);
+    const freshPending = join(rt, `pending-${Date.now()}-live.json`);
+    writeFileSync(fresh, '{"entries":[]}');
+    writeFileSync(freshPending, '{}');
+
+    const out = runCleanup(data);
+    expect(existsSync(fresh), `cleanup deleted an in-flight episode flush file:\n${out}`).toBe(true);
+    expect(existsSync(freshPending), out).toBe(true);
+  });
+
+  it('still removes an ep-flush/pending file older than the orphan window', () => {
+    const data = seedDataDir();
+    const rt = join(data, 'runtime');
+    const stale = join(rt, 'ep-flush-1700000000000-orphan.json');
+    const stalePending = join(rt, 'pending-1700000000000-orphan.json');
+    writeFileSync(stale, '{"entries":[]}');
+    writeFileSync(stalePending, '{}');
+    // Two hours old — past the 1h orphan window, so no live worker can own it.
+    const old = Date.now() - 2 * 60 * 60 * 1000;
+    utimesSync(stale, old / 1000, old / 1000);
+    utimesSync(stalePending, old / 1000, old / 1000);
+
+    const out = runCleanup(data);
+    expect(existsSync(stale), `cleanup left a genuine orphan behind:\n${out}`).toBe(false);
+    expect(existsSync(stalePending), out).toBe(false);
   });
 });

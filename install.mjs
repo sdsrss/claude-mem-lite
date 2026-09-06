@@ -71,6 +71,7 @@ import {
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
+import { ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
@@ -2207,11 +2208,35 @@ function cleanup() {
   // and holding install.lock across it would block a self-heal for no reason.
   if (updateLock) updateLock();
 
-  // Clean pending-* / ep-flush-* in runtime/ (env-aware, and honouring the runtime override)
+  // Clean pending-* / ep-flush-* in runtime/ (env-aware, and honouring the runtime override).
+  //
+  // AGE-GATED, same window the automatic sweep uses (ORPHAN_EPISODE_AGE_MS, 1h). An
+  // `ep-flush-<ts>-<id>.json` is the episode handed to the summarizer, not residue: the
+  // round-trip is ~60s, and deleting one mid-flight discards that episode's observations
+  // silently while printing "✓ Removed". This block had no age gate at all, which made a
+  // documented maintenance command — the one `doctor` tells users to run — destructive
+  // against live work. Matches the P2-10 fix above (in-flight update residue) and the
+  // fixture sweep below, whose comment already states the principle: a MANUAL cleanup is
+  // the conservative one.
   const runtimeDir = MEM_RUNTIME_DIR;
   if (existsSync(runtimeDir)) {
+    const epCutoff = Date.now() - ORPHAN_EPISODE_AGE_MS;
+    let inFlight = 0;
     for (const f of readdirSync(runtimeDir)) {
       if (f.startsWith('pending-') || f.startsWith('ep-flush-')) {
+        // Unreadable mtime → treat as in-flight and skip. Failing safe here costs one
+        // stale file until the next sweep; failing open costs an episode.
+        let mtimeMs;
+        try {
+          mtimeMs = statSync(join(runtimeDir, f)).mtimeMs;
+        } catch {
+          inFlight++;
+          continue;
+        }
+        if (mtimeMs > epCutoff) {
+          inFlight++;
+          continue;
+        }
         if (dryRun) {
           ok(`Would remove: runtime/${f}`);
           removed++;
@@ -2225,6 +2250,11 @@ function cleanup() {
           warn(`Failed to remove runtime/${f}: ${e.message}`);
         }
       }
+    }
+    if (inFlight > 0) {
+      log(
+        `  Kept ${inFlight} episode file(s) newer than 1h — possibly in flight, they sweep automatically once stale.`,
+      );
     }
   }
 

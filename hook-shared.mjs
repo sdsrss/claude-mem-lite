@@ -37,7 +37,7 @@ export {
   CONTINUE_KEYWORDS,
 } from './lib/handoff-constants.mjs';
 
-import { DAY_MS } from './lib/time-constants.mjs';
+import { DAY_MS, ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // P1-14: one resolver, so this module honours CLAUDE_MEM_RUNTIME_DIR like the five
@@ -82,12 +82,11 @@ export const RELATED_OBS_WINDOW_MS = 7 * DAY_MS; // 7 days
 // <memory-context> injection on quiet/adopted projects where nothing renders).
 export const KEY_CONTEXT_LIMIT = 10;
 
-// Orphan-sweep threshold for `ep-flush-*` / `pending-*` runtime artifacts.
-// handleLLMEpisode's worst-case round-trip is ~60s (delay + LLM call + DB
-// write); 1h leaves a wide safety margin against deleting an in-flight file.
-// Older orphans are crashed workers or pre-shutdown buffers that no live
-// caller will ever pick up, so sweeping them on SessionStart is safe.
-export const ORPHAN_EPISODE_AGE_MS = 60 * 60 * 1000;
+// Orphan-sweep threshold for `ep-flush-*` / `pending-*` runtime artifacts. Defined in
+// lib/time-constants.mjs (the zero-import leaf) because install.mjs's manual `cleanup`
+// needs the same window and may only import from lib/; re-exported here so this module's
+// existing importers are unchanged.
+export { ORPHAN_EPISODE_AGE_MS };
 
 // `reads-<project>.txt` (bash fast-path Read tracker) is consumed by flushEpisode's
 // rename-collect on the next edit-flush, NOT by a background worker — so a project
