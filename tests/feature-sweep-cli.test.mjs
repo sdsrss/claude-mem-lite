@@ -189,22 +189,6 @@ function writeTranscript(path, sessionId) {
   );
 }
 
-/** A local SKILL.md the registry can import without touching the network. */
-/**
- * A skill fixture at an arbitrary path OUTSIDE the managed data dir.
- *
- * Fine for `registry import`, which only records the path. NOT what `enrich` reads —
- * see writeManagedSkill.
- */
-/**
- * The same fixture where a real imported resource actually lands: under
- * `<CLAUDE_MEM_DIR>/managed/`, which is what registry-importer writes.
- *
- * Audit P1-3 put the path-confinement gate on all four enrichment legs, so a fixture
- * parked next to the sandbox (ROOT/skills) is now refused before the enricher is called —
- * which is correct behaviour, and would silently turn the `enrich --all` case into an
- * assertion about refusals rather than about an unreachable LLM.
- */
 // Seeded ids, filled in beforeAll.
 let SEED_BUGFIX_ID, SEED_DECISION_ID, SEED_DISCOVERY_ID, SEED_DEFER_ID;
 const SEED_LESSON = 'Invalidate the widget cache on write, never on read';

@@ -93,11 +93,15 @@ export default defineConfig({
       //     registry.mjs   86.78% stmts / 90.27% lines    rationale EXPIRED
       //
       // Importing a module is not exercising it: the thirteen files that import
-      // install.mjs reach an eighth of it. registry.mjs is the one the finding was right
-      // about, and it is now IN scope — which RAISED the totals (84.32% → 84.38% stmts),
-      // because a well-covered file had simply been invisible. Adding all three would have
-      // dropped statements to 71.05% and blown every threshold, i.e. measured the harness
-      // exactly as this comment always claimed.
+      // install.mjs reach an eighth of it. registry.mjs was the one the finding was right
+      // about, and it went IN — which RAISED the totals (84.32% → 84.38% stmts), because a
+      // well-covered file had simply been invisible. Adding all three would have dropped
+      // statements to 71.05% and blown every threshold, i.e. measured the harness exactly
+      // as this comment always claimed.
+      //
+      // registry.mjs itself was DELETED in v5.0.0 with the skill registry, so its `include`
+      // entry went with it. The install.mjs / server.mjs / hook.mjs rationale above is
+      // unaffected and still the reason those three stay out.
       //
       // NOTE: these three were listed in BOTH `include`-absent and `exclude`. `include`
       // below is an explicit allowlist that never named them, so their `exclude` entries
@@ -105,7 +109,6 @@ export default defineConfig({
       // before anyone "fixes" scope by editing `exclude` alone and measures no difference.
       include: [
         'lib/**/*.mjs',
-        'registry.mjs',
         'utils.mjs',
         'schema.mjs',
         'search-scoring.mjs',

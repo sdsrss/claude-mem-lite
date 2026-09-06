@@ -1,10 +1,12 @@
 # claude-mem-lite — Architecture
 
-Generated 2026-09-05 against v3.96.0. §3 and §4 regenerated at `a8d7dd1`, the head of
-`audit/2026-09-05-round4`. Two earlier changes still govern how to read them: the whole-tree
-reformat (`36f8c0f`) means **every LINE COUNT in §4 is post-reformat and must not be compared
-with a figure quoted before it**, and edge extraction moved onto the AST (P2-9), so §3's edge
-counts supersede any earlier quote. §1/§2/§5 hand-maintained, last re-read on round 4.
+Generated 2026-09-05 against v3.96.0; **§3 and §4 regenerated 2026-09-06** on the
+skill-registry removal branch (R9, `docs/audits/20260906-145304.md`), which deleted 11 source
+modules — the previous §3/§4 named every one of them. Two earlier changes still govern how to
+read them: the whole-tree reformat (`36f8c0f`) means **every LINE COUNT in §4 is post-reformat
+and must not be compared with a figure quoted before it**, and edge extraction moved onto the
+AST (P2-9), so §3's edge counts supersede any earlier quote. §1/§2/§5 hand-maintained; the
+registry entries in them were removed by hand in the same pass.
 
 Sections 3 and 4 are **tool output** — regenerate them rather than editing by hand:
 
@@ -22,7 +24,7 @@ file it was read from; a line without a file is an inference and is marked as su
 
 A persistent-memory plugin for Claude Code. One SQLite database
 (`~/.claude-mem-lite/`, `better-sqlite3` + FTS5) holds observations, user prompts,
-sessions, events and a resource registry. Three **faces** expose it:
+sessions and events. Three **faces** expose it:
 
 | Face | Entry | Transport |
 |---|---|---|
@@ -31,7 +33,7 @@ sessions, events and a resource registry. Three **faces** expose it:
 | CLI | `cli.mjs` → `mem-cli.mjs` (data) / `install.mjs` (lifecycle) | `claude-mem-lite <cmd>` |
 
 The faces share logic through `lib/*-core.mjs` (84 modules under `lib/`); the engines
-(`search-engine.mjs`, `deep-search.mjs`, `hook-*.mjs`, `registry*.mjs`, `schema.mjs`) sit
+(`search-engine.mjs`, `deep-search.mjs`, `hook-*.mjs`, `schema.mjs`) sit
 beside them at the repo root. Rule from `CLAUDE.md`: **shared by two faces → `lib/`;
 owned by one face → stays in that face's file.**
 
@@ -46,7 +48,7 @@ entry    cli.mjs · hook.mjs · server.mjs · install.mjs · scripts/*.js hooks 
 face     mem-cli.mjs · cli/*.mjs · server/*.mjs · adopt-cli.mjs        (arg parsing + rendering)
   │
 engine   hook-*.mjs · search-engine · deep-search · rerank · scoring-sql · search-scoring
-         registry* · resource-discovery · haiku-client · schema · memdir · claudemd · tool-schemas …
+         haiku-client · schema · memdir · claudemd · tool-schemas …
   │  ▲
 lib/     87 shared cores (search-core, save-observation, maintain-core, citation-tracker, …)
   │
@@ -57,7 +59,7 @@ Measured direction (§3, 2026-09-05): **0 static cycles, 0 lazy cycles** (also p
 `tests/import-graph.test.mjs`). The graph is a DAG but **not strictly layered**:
 
 - `lib → engine` has 12 edges. This is by design — a shared core fronts the engine it
-  wraps (`lib/search-core.mjs → search-engine.mjs`, `lib/registry-core.mjs → registry.mjs`).
+  wraps (`lib/search-core.mjs → search-engine.mjs`, `lib/hook-prune.mjs → install.mjs`).
   **None of them reaches the hook layer any more.** Two used to: `lib/lesson-bridge.mjs`
   and `lib/startup-dashboard.mjs` imported `hook-shared.mjs`, which
   `tests/observation-vector-single-writer.test.mjs` waved through as a named exception
@@ -83,22 +85,22 @@ middle tier a single mutual layer. Nothing in `lib/` or `engine` imports a face 
 
 ## 3. Dependency graph (generated: `npm run audit:deps`)
 
-Modules: 161 · edges: 481 static + 48 lazy (relative `import`/`export … from` + literal `import()`, read from the AST — comments and string literals are not edges).
+Modules: 150 · edges: 444 static + 44 lazy (relative `import`/`export … from` + literal `import()`, read from the AST — comments and string literals are not edges).
 
 ### Layer matrix (rows import columns; count of edges)
 
 | from \ to | entry | face | engine | lib | leaf | tooling |
 |---|---|---|---|---|---|---|
-| **entry** | 2 | 4 | 34 | 108 | 16 | 2 |
-| **face** | 0 | 8 | 19 | 39 | 7 | 0 |
-| **engine** | 0 | 0 | 36 | 59 | 33 | 0 |
-| **lib** | 0 | 0 | 12 | 78 | 39 | 0 |
+| **entry** | 2 | 4 | 26 | 104 | 15 | 2 |
+| **face** | 0 | 8 | 14 | 38 | 7 | 0 |
+| **engine** | 0 | 0 | 29 | 58 | 25 | 0 |
+| **lib** | 0 | 0 | 11 | 78 | 38 | 0 |
 | **leaf** | 0 | 0 | 1 | 9 | 11 | 0 |
-| **tooling** | 0 | 0 | 3 | 8 | 1 | 0 |
+| **tooling** | 0 | 0 | 1 | 6 | 1 | 0 |
 
-### Upward edges (lower layer importing a higher one; tooling excluded): 22
+### Upward edges (lower layer importing a higher one; tooling excluded): 21
 
-- lib → engine: 12 (sanctioned — shared cores front the engines)
+- lib → engine: 11 (sanctioned — shared cores front the engines)
   - `lib/error-recall-core.mjs` → `scoring-sql.mjs`
   - `lib/get-core.mjs` → `search-scoring.mjs`
   - `lib/inject-search-core.mjs` → `scoring-sql.mjs`
@@ -106,7 +108,6 @@ Modules: 161 · edges: 481 static + 48 lazy (relative `import`/`export … from`
   - `lib/quiet-scope.mjs` → `memdir.mjs`
   - `lib/quiet-scope.mjs` → `claudemd.mjs`
   - `lib/quiet-scope.mjs` → `adopt-content.mjs`
-  - `lib/registry-core.mjs` → `registry.mjs`
   - `lib/save-enrich.mjs` → `haiku-client.mjs` (lazy)
   - `lib/search-core.mjs` → `search-engine.mjs`
   - `lib/search-core.mjs` → `scoring-sql.mjs`
@@ -128,18 +129,18 @@ Modules: 161 · edges: 481 static + 48 lazy (relative `import`/`export … from`
 
 | Most imported (fan-in) | edges | Most importing (fan-out) | edges |
 |---|---|---|---|
-| `utils.mjs` | 50 | `mem-cli.mjs` | 54 |
-| `lib/time-constants.mjs` | 26 | `hook.mjs` | 48 |
-| `lib/inject-search-core.mjs` | 24 | `server.mjs` | 39 |
-| `lib/resolve-data-dir.mjs` | 17 | `scripts/pre-tool-recall.js` | 22 |
-| `schema.mjs` | 17 | `install.mjs` | 17 |
-| `format-utils.mjs` | 10 | `scripts/user-prompt-search.js` | 16 |
+| `utils.mjs` | 44 | `mem-cli.mjs` | 48 |
+| `lib/time-constants.mjs` | 25 | `hook.mjs` | 47 |
+| `lib/inject-search-core.mjs` | 24 | `server.mjs` | 34 |
+| `schema.mjs` | 15 | `scripts/pre-tool-recall.js` | 22 |
+| `lib/resolve-data-dir.mjs` | 14 | `install.mjs` | 16 |
 | `tfidf.mjs` | 10 | `hook-llm.mjs` | 15 |
+| `format-utils.mjs` | 9 | `scripts/user-prompt-search.js` | 15 |
 | `scoring-sql.mjs` | 9 | `hook-optimize.mjs` | 13 |
-| `haiku-client.mjs` | 8 | `utils.mjs` | 11 |
-| `hook-shared.mjs` | 8 | `hook-context.mjs` | 9 |
-| `lib/hook-telemetry.mjs` | 8 | `hook-memory.mjs` | 9 |
-| `lib/scrub-record.mjs` | 8 | `hook-shared.mjs` | 9 |
+| `hook-shared.mjs` | 8 | `hook-update.mjs` | 11 |
+| `lib/atomic-write.mjs` | 8 | `utils.mjs` | 11 |
+| `lib/scrub-record.mjs` | 8 | `hook-context.mjs` | 9 |
+| `project-utils.mjs` | 8 | `hook-memory.mjs` | 9 |
 
 ### Entry → module graph (mermaid; static edges from entry/face files into engine-layer modules, lib/ and leaves collapsed)
 
@@ -191,19 +192,14 @@ graph LR
   hook_mjs --> hook_handoff_mjs
   plugin_cache_guard_mjs["plugin-cache-guard.mjs"]
   hook_mjs -.-> plugin_cache_guard_mjs
-  registry_recommend_mjs["registry-recommend.mjs"]
-  hook_mjs -.-> registry_recommend_mjs
   hook_mjs -.-> adopt_cli_mjs
   hook_update_mjs["hook-update.mjs"]
   hook_mjs -.-> hook_update_mjs
   hook_optimize_mjs["hook-optimize.mjs"]
   hook_mjs -.-> hook_optimize_mjs
   install_mjs --> LIB
-  install_metadata_mjs["install-metadata.mjs"]
-  install_mjs --> install_metadata_mjs
   install_mjs --> plugin_cache_guard_mjs
   install_mjs -.-> schema_mjs
-  install_mjs -.-> registry_recommend_mjs
   install_mjs -.-> hook_update_mjs
   mem_cli_mjs --> schema_mjs
   mem_cli_mjs --> LIB
@@ -213,11 +209,6 @@ graph LR
   mem_cli_mjs --> search_engine_mjs
   deep_search_mjs["deep-search.mjs"]
   mem_cli_mjs --> deep_search_mjs
-  registry_mjs["registry.mjs"]
-  mem_cli_mjs --> registry_mjs
-  registry_retriever_mjs["registry-retriever.mjs"]
-  mem_cli_mjs --> registry_retriever_mjs
-  mem_cli_mjs --> registry_recommend_mjs
   mem_cli_mjs --> hook_optimize_mjs
   mem_cli_mjs --> hook_context_mjs
   mem_cli_mjs --> adopt_cli_mjs
@@ -227,10 +218,6 @@ graph LR
   mem_cli_mjs --> cli_doctor_mjs
   mem_cli_mjs --> cli_activity_mjs
   mem_cli_mjs -.-> hook_llm_mjs
-  registry_importer_mjs["registry-importer.mjs"]
-  mem_cli_mjs -.-> registry_importer_mjs
-  registry_enricher_mjs["registry-enricher.mjs"]
-  mem_cli_mjs -.-> registry_enricher_mjs
   scripts_launch_mjs["scripts/launch.mjs"]
   scripts_launch_mjs -.-> LIB
   scripts_launch_mjs -.-> hook_update_mjs
@@ -242,8 +229,6 @@ graph LR
   scripts_pre_agent_inject_js -.-> LIB
   scripts_pre_agent_inject_js -.-> schema_mjs
   scripts_pre_agent_inject_js -.-> hook_memory_mjs
-  scripts_pre_skill_bridge_js["scripts/pre-skill-bridge.js"]
-  scripts_pre_skill_bridge_js --> LIB
   scripts_pre_tool_recall_js["scripts/pre-tool-recall.js"]
   scripts_pre_tool_recall_js --> LIB
   scoring_sql_mjs["scoring-sql.mjs"]
@@ -251,7 +236,6 @@ graph LR
   scripts_user_prompt_search_js["scripts/user-prompt-search.js"]
   scripts_user_prompt_search_js --> schema_mjs
   scripts_user_prompt_search_js --> LIB
-  scripts_user_prompt_search_js --> registry_recommend_mjs
   server_mjs["server.mjs"]
   server_mjs --> schema_mjs
   server_mjs --> search_scoring_mjs
@@ -263,38 +247,28 @@ graph LR
   tool_schemas_mjs["tool-schemas.mjs"]
   server_mjs --> tool_schemas_mjs
   server_mjs --> hook_optimize_mjs
-  server_mjs --> registry_mjs
-  server_mjs --> registry_retriever_mjs
   server_fts_check_mjs["server/fts-check.mjs"]
   server_mjs --> server_fts_check_mjs
-  server_mjs -.-> registry_importer_mjs
-  server_mjs -.-> registry_enricher_mjs
   server_fts_check_mjs --> schema_mjs
 ```
 
 ## 4. Module inventory (generated: `npm run audit:inventory`)
 
-Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module's own header comment (first 12 lines, truncated at 150 chars); `(no header comment)` is itself a finding. Exports show the first 7.
-
-
-
-
 ### Entry points
 
 | Module | Lines | Responsibility | Public interface (exports; `*` = re-export) |
 |---|---|---|---|
-| `cli.mjs` | 133 | (no header comment) | (entry — no exports) |
-| `hook.mjs` | 3187 | Hook v2 — Cognitive memory architecture Selective encoding, episodic batching, error-triggered recall Hooks (fast <100ms): post-tool-use,… | (entry — no exports) |
-| `install.mjs` | 3203 | Installer — Smart install/uninstall/status/doctor | HOOK_SCRIPT_FILES, probeBetterSqlite3Binding, ensureBetterSqlite3Working, copyHookScripts(), migrateLegacyClaudeMemData(), bumpJsonField(), patchClaudeMdVersion() … (+10) |
-| `scripts/hook-launcher.mjs` | 435 | Self-healing wrapper for Node hook entry points. Why: pre-v2.84 a stale-manifest bug in hook-update.mjs could leave the install with a hook.mjs that… | (entry — no exports) |
+| `cli.mjs` | 146 | (no header comment) | (entry — no exports) |
+| `hook.mjs` | 3190 | Hook v2 — Cognitive memory architecture Selective encoding, episodic batching, error-triggered recall Hooks (fast <100ms): post-tool-use,… | (entry — no exports) |
+| `install.mjs` | 2630 | Installer — Smart install/uninstall/status/doctor | HOOK_SCRIPT_FILES, probeBetterSqlite3Binding, ensureBetterSqlite3Working, copyHookScripts(), migrateLegacyClaudeMemData(), bumpJsonField(), patchClaudeMdVersion() … (+11) |
+| `scripts/hook-launcher.mjs` | 535 | Self-healing wrapper for Node hook entry points. Why: pre-v2.84 a stale-manifest bug in hook-update.mjs could leave the install with a hook.mjs that… | (entry — no exports) |
 | `scripts/launch-preflight.mjs` | 83 | Detect incomplete installs at MCP server launch. Why: issue #15 — published v2.53.0 npm tarball contains all files, but some users end up with a… | detectMissingImports(), resolveLaunchEntry() |
-| `scripts/launch.mjs` | 200 | Auto-installs dependencies then starts MCP server Uses only Node built-ins so it works before npm install | (entry — no exports) |
+| `scripts/launch.mjs` | 199 | Auto-installs dependencies then starts MCP server Uses only Node built-ins so it works before npm install | (entry — no exports) |
 | `scripts/post-tool-recall.js` | 120 | PostToolUse companion to pre-tool-recall.js for the bind-salience forcing-function (component 2). After an Edit/Write, if a lesson surfaced for this… | (entry — no exports) |
 | `scripts/pre-agent-inject.js` | 150 | PreToolUse:Agent/Task hook — subagent dispatch-time memory injection. Subagents are memory-blind (plugin hooks do NOT fire inside them — #8848); this… | (entry — no exports) |
-| `scripts/pre-skill-bridge.js` | 146 | PreToolUse Skill bridge — loads managed skills from registry Intercepts Skill("name") calls for skills in ~/.claude-mem-lite/managed/ Lightweight… | (entry — no exports) |
 | `scripts/pre-tool-recall.js` | 885 | PreToolUse file recall — injects lessons before Edit/Write Lightweight standalone (~30ms): only imports better-sqlite3, fs, path, os, and the… | (entry — no exports) |
-| `scripts/user-prompt-search.js` | 1191 | Auto-search memory on user prompt Runs as UserPromptSubmit hook — injects relevant memories before Claude sees the prompt Lightweight: only imports… | corpusFloorScale, hasExplicitSignal(), IDENTIFIER_BYPASS, extractTechIdentifiers(), rowMatchesIdentifier(), searchByFts(), isDirectInvocation() |
-| `server.mjs` | 2413 | MCP Server — All-in-one memory system FTS5 search, zero LLM calls, single process | handleSearchForTest(), handleRecentForTest(), SAVE_TEXT_LIMITS, clampSaveText(), handleExportForTest(), SPAWN_LOG_RETENTION_MS, SPAWN_LOG_MAX_LINES … (+2) |
+| `scripts/user-prompt-search.js` | 1069 | Auto-search memory on user prompt Runs as UserPromptSubmit hook — injects relevant memories before Claude sees the prompt Lightweight: only imports… | corpusFloorScale, hasExplicitSignal(), IDENTIFIER_BYPASS, extractTechIdentifiers(), rowMatchesIdentifier(), searchByFts(), isDirectInvocation() |
+| `server.mjs` | 2029 | MCP Server — All-in-one memory system FTS5 search, zero LLM calls, single process | handleSearchForTest(), handleRecentForTest(), SAVE_TEXT_LIMITS, clampSaveText(), handleExportForTest(), SPAWN_LOG_RETENTION_MS, SPAWN_LOG_MAX_LINES … (+2) |
 
 ### Faces (arg parsing + rendering)
 
@@ -302,47 +276,38 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 |---|---|---|---|
 | `adopt-cli.mjs` | 484 | CLAUDE.md-steering plan (v3.13): CLI handlers for claude-mem-lite adopt [--all] [--force] [--dry-run] [--status] [--disable/--enable] claude-mem-lite… | disableSentinelPath(), isAutoAdoptDisabled(), cmdAdopt(), silentAutoAdopt(), hasAutoAdoptMarker(), cmdUnadopt() |
 | `cli/activity.mjs` | 222 | `claude-mem-lite activity <save/search/recent/show>`. Extracted from mem-cli.mjs (v2.41, god-module split). Thin wrapper over lib/activity.mjs pure… | cmdActivity() |
-| `cli/common.mjs` | 456 | shared helpers used by every per-command file under cli/. Extracted from mem-cli.mjs (v2.41) as first step in the god-module split. Scope: pure… | parseArgs(), out(), outVerbatim(), fail(), rejectBareStringFlags(), resolvePositionalAlias(), KNOWN_CLI_FLAGS … (+9) |
+| `cli/common.mjs` | 447 | shared helpers used by every per-command file under cli/. Extracted from mem-cli.mjs (v2.41) as first step in the god-module split. Scope: pure… | parseArgs(), out(), outVerbatim(), fail(), rejectBareStringFlags(), resolvePositionalAlias(), KNOWN_CLI_FLAGS … (+9) |
 | `cli/doctor.mjs` | 117 | `claude-mem-lite doctor --benchmark/--metrics`. Extracted from mem-cli.mjs (v2.41, god-module split). `doctor` without flags is handled upstream by… | cmdDoctor() |
 | `cli/fts-check.mjs` | 40 | `claude-mem-lite fts-check <check/rebuild>`. Extracted from mem-cli.mjs (v2.41, god-module split). | cmdFtsCheck() |
-| `mem-cli.mjs` | 4156 | CLI — lightweight command layer for direct memory access No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs READ commands resolve the… | OBS_TIME_FIELDS, formatObsFieldValue, cmdSearchForTest(), run() |
+| `mem-cli.mjs` | 3741 | CLI — lightweight command layer for direct memory access No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs READ commands resolve the… | OBS_TIME_FIELDS, formatObsFieldValue, cmdSearchForTest(), run() |
 | `server/fts-check.mjs` | 36 | MCP `mem_fts_check` handler. Extracted from server.mjs (v2.41, god-module split). Pure delegate to schema.mjs helpers; Zod filters args.action before… | handleMemFtsCheck() |
 
 ### Engines (root modules)
 
 | Module | Lines | Responsibility | Public interface (exports; `*` = re-export) |
 |---|---|---|---|
-| `adopt-content.mjs` | 172 | CLAUDE.md-steering plan (v3.13): content generators for the claude-mem-lite managed block (written into <cwd>/CLAUDE.md) and its companion… | PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock(), getDetailDoc() |
-| `claudemd.mjs` | 319 | CLAUDE.md-steering plan (v3.13): claudemd.mjs — primitives for the project-tree managed block at <cwd>/CLAUDE.md plus an on-demand detail doc at… | claudeMdPath(), detailDocPath(), readBlock(), isAdopted(), hasResidue(), needsRefresh(), writeManaged() … (+3) |
+| `adopt-content.mjs` | 187 | CLAUDE.md-steering plan (v3.13): content generators for the claude-mem-lite managed block (written into <cwd>/CLAUDE.md) and its companion… | PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock(), getDetailDoc() |
+| `claudemd.mjs` | 333 | CLAUDE.md-steering plan (v3.13): claudemd.mjs — primitives for the project-tree managed block at <cwd>/CLAUDE.md plus an on-demand detail doc at… | claudeMdPath(), detailDocPath(), readBlock(), isAdopted(), hasResidue(), needsRefresh(), writeManaged() … (+3) |
 | `deep-search.mjs` | 554 | Opt-in LLM multi-query / HyDE deep search. This is the EXPLICIT "search harder" path — it is NOT on the passive hook pipeline, which stays… | MAX_VARIANTS, AUTO_DEEP_MIN_RESULTS, AUTO_DEEP_MIN_CORPUS, hasEscalatableCorpus(), autoDeepLlmReady(), shouldEscalateToDeep(), resolveDeepMode() … (+10) |
 | `haiku-client.mjs` | 840 | Unified LLM call wrapper Shared by memory (hook.mjs) and dispatch modules Provider priority: ANTHROPIC_API_KEY (direct Anthropic API) →… | BG_LLM_TIMEOUT_MS, resolveModel(), resolveOpenRouterModel(), detectMode(), _resetMode(), getClaudePath(), splitPrompt() … (+13) |
-| `hook-context.mjs` | 747 | CLAUDE.md context injection and token budgeting SHARED ENGINE — the `hook-` prefix is historical, not a scope. buildSessionContextLines is imported… | computeAdaptiveWindows(), sectionQuotas(), selectWithTokenBudget(), cleanupClaudeMdLegacyBlock(), buildSessionContextLines(), buildSummaryLines() |
+| `hook-context.mjs` | 752 | CLAUDE.md context injection and token budgeting SHARED ENGINE — the `hook-` prefix is historical, not a scope. buildSessionContextLines is imported… | computeAdaptiveWindows(), sectionQuotas(), selectWithTokenBudget(), cleanupClaudeMdLegacyBlock(), buildSessionContextLines(), buildSummaryLines() |
 | `hook-episode.mjs` | 483 | episode buffer management Handles file-based episode storage with advisory locking and pending entry recovery | readEpisodeRaw(), episodeFile(), lockFile(), acquireLock(), releaseLock(), readEpisode(), writeEpisode() … (+7) |
-| `hook-handoff.mjs` | 672 | Cross-session handoff extraction, detection, and injection Extracted for testability — hook.mjs has module-level side effects | buildAndSaveHandoff(), detectContinuationIntent(), pickHandoffToInject(), renderHandoffInjection(), extractUnfinishedSummary() |
+| `hook-handoff.mjs` | 681 | Cross-session handoff extraction, detection, and injection Extracted for testability — hook.mjs has module-level side effects | buildAndSaveHandoff(), detectContinuationIntent(), pickHandoffToInject(), renderHandoffInjection(), extractUnfinishedSummary() |
 | `hook-llm.mjs` | 1640 | Background LLM workers for episode extraction and session summaries Extracted from hook.mjs for testability and reduced complexity | retractPreSavedObs(), recordRetryAttempt(), readRetryStats(), buildVecText(), saveObservation(), persistHaikuSummary(), buildDegradedTitle() … (+8) |
 | `hook-memory.mjs` | 731 | — Semantic Memory Injection Search past observations for relevant memories to inject as context at user-prompt time. | formatMemoryLine(), searchRelevantMemories(), IMPERATIVE_POOL_BACKSTOP, rankImperativeCandidates(), selectImperativeLesson(), buildSubagentInjection() |
 | `hook-optimize.mjs` | 1323 | LLM-powered database optimization SHARED ENGINE — the `hook-` prefix is historical, not a scope. All three entry surfaces import this: hook.mjs… | distributeBudget(), rebuildVector(), findReenrichCandidates(), countReenrichCandidates(), executeReenrich(), _normalizeGateOpen(), shouldRunNormalize() … (+14) |
 | `hook-precompact.mjs` | 63 | PreCompact hook handler. Fires immediately before Claude Code auto-compaction begins. Emits a fresh <claude-mem-context> block on stdout so the… | handlePreCompact(), entry() |
 | `hook-semaphore.mjs` | 199 | LLM concurrency semaphore Limits concurrent claude -p calls to prevent resource contention | LLM_SEM_MAX, LLM_SEM_TIMEOUT, LLM_SEM_STALE_MS, sleepMs, _setLocalHeldAt(), acquireLLMSlot(), releaseLLMSlot() |
-| `hook-shared.mjs` | 415 | Shared infrastructure for hook.mjs and hook-llm.mjs Constants, session management, DB access, LLM calls, process utilities | callLLM*, isQuietHooks*, isAdoptedHere*, effectiveQuiet*, HANDOFF_EXPIRY_CLEAR*, HANDOFF_EXPIRY_EXIT*, HANDOFF_ANCHOR_MAX_AGE* … (+29) |
-| `hook-update.mjs` | 1342 | Auto-update via GitHub Releases Checks for new versions on SessionStart, downloads and installs automatically. Skips in dev mode (symlinked… | checkForUpdate(), getCachedUpdateBanner(), isUpdateCheckDue(), fetchLatestRelease(), compareVersions(), getCurrentVersion(), createUpdateTmpDir() … (+10) |
-| `install-metadata.mjs` | 2193 | Curated resource metadata for the dispatch/registry system. Extracted from install.mjs to keep the installer focused on installation logic. Contains… | RESOURCE_METADATA, MARKETING_ON_REQUEST |
+| `hook-shared.mjs` | 424 | Shared infrastructure for hook.mjs and hook-llm.mjs Constants, session management, DB access, LLM calls, process utilities | callLLM*, isQuietHooks*, isAdoptedHere*, effectiveQuiet*, HANDOFF_EXPIRY_CLEAR*, HANDOFF_EXPIRY_EXIT*, HANDOFF_ANCHOR_MAX_AGE* … (+29) |
+| `hook-update.mjs` | 1411 | Auto-update via GitHub Releases Checks for new versions on SessionStart, downloads and installs automatically. Skips in dev mode (symlinked… | checkForUpdate(), getCachedUpdateBanner(), isUpdateCheckDue(), fetchLatestRelease(), compareVersions(), getCurrentVersion(), createUpdateTmpDir() … (+10) |
 | `memdir.mjs` | 432 | Phase B (Invited-Memory plan): memdir.mjs — primitives for the per-project Claude Code memdir at ~/.claude/projects/<encoded>/memory/. The public API… | UserEditedError, BudgetExceededError, encodeProjectPath(), memdirPath(), readMemoryIndex(), writePluginSection(), removePluginSection() … (+5) |
 | `plugin-cache-guard.mjs` | 197 | Plugin cache hook sentinel. Claude Code runtime reads plugin hooks from ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/hooks/hooks.json NOT… | DEFAULT_MARKETPLACE, DEFAULT_PLUGIN, scanPluginCacheHookPollution(), clearPluginCacheHooks(), pluginCacheHookEvents(), hasInstallManagedHooks(), hasLiveInstallManagedHooks() |
-| `registry-enricher.mjs` | 124 | LLM enrichment for registry resources (Stage 2) Sends resource content to Haiku for semantic metadata generation Graceful degradation: failure… | buildEnrichPrompt(), applyEnrichment(), enrichResource() |
-| `registry-github.mjs` | 68 | GitHub API helpers for smart import Pure functions for URL parsing and API URL construction Actual HTTP calls are in registry-importer.mjs Parse a… | parseGitHubUrl(), buildTreeUrl(), buildContentUrl(), buildRepoUrl(), buildHeaders() |
-| `registry-importer.mjs` | 454 | Registry importer — tree discovery, frontmatter parsing, keyword extraction, GitHub import pipeline GitHub API helpers (parseGitHubUrl, buildTreeUrl,… | discoverFromTree(), parseFrontmatter, extractKeywords(), importFromGitHub() |
-| `registry-recommend.mjs` | 503 | Intent-based skill recommendation — Phase 1 (shadow). See docs/superpowers/specs/2026-06-23-skill-recommendation-loop-design.md Phase-1 invariant:… | RECOMMEND_MODE_UNIMPLEMENTED, getRequestedRecommendMode(), getRecommendMode(), RECO_BM25_FLOOR, RECO_MARGIN, fetchInstalledSkillCandidates(), intentMatch() … (+17) |
-| `registry-retriever.mjs` | 611 | Resource retriever — FTS5 search + composite scoring Tier 2 of the 3-tier dispatch intelligence architecture Re-export for backward compatibility ───… | DISPATCH_SYNONYMS, cjkIntentTokens(), buildEnhancedQuery(), buildQueryFromText(), filterByProjectDomain(), retrieveResources(), searchResources() |
-| `registry-scanner.mjs` | 261 | Resource scanner — discovers skills/agents from filesystem Scans user local dirs and managed pre-installed dirs | scanDirectory(), scanPluginResources(), scanPluginsDirectory(), scanAllResources(), diffResources() |
-| `registry.mjs` | 665 | Resource registry database schema and CRUD operations Independent from schema.mjs (memory DB) — uses separate resource-registry.db ─── Schema… | REGISTRY_SCHEMA_VERSION, ensureRegistryDb(), RESOURCES_SCHEMA, FTS5_SCHEMA, TRIGGERS_SCHEMA, INVOCATIONS_SCHEMA, PREINSTALLED_SCHEMA … (+4) |
 | `rerank.mjs` | 95 | Shared LLM-rerank core: reorder a top-K candidate list by an LLM relevance read. Used by BOTH the production deep-search rerank stage… | extractRanked(), llmRerankOrder(), defaultRerankLLM() |
-| `resource-discovery.mjs` | 199 | Shared resource discovery — filesystem traversal for skills/agents Used by registry-scanner.mjs (runtime) and scripts/index-managed.mjs (offline)… | findSkillMd(), discoverFlat(), discoverPlugin(), discoverPlugins(), discoverAllManaged(), withRelativePaths() |
-| `schema.mjs` | 1506 | shared database schema and initialization Used by both server.mjs (MCP process) and hook.mjs (hook process) Ensures DB + tables exist regardless of… | DB_DIR, DB_PATH, REGISTRY_DB_PATH, CODE_DIR, CURRENT_SCHEMA_VERSION, initSchema(), auditSessionConsistency() … (+8) |
+| `schema.mjs` | 1505 | shared database schema and initialization Used by both server.mjs (MCP process) and hook.mjs (hook process) Ensures DB + tables exist regardless of… | DB_DIR, DB_PATH, CODE_DIR, CURRENT_SCHEMA_VERSION, initSchema(), auditSessionConsistency(), runDeferredCleanups() … (+7) |
 | `scoring-sql.mjs` | 252 | SQL constants for BM25 scoring and temporal decay. Extracted from utils.mjs for focused module boundaries. ─── Why these multipliers exist (read… | DECAY_HALF_LIFE_BY_TYPE, DEFAULT_DECAY_HALF_LIFE_MS, OBS_BM25, SESS_BM25, EVT_BM25, OBS_FTS_COLUMNS, TYPE_DECAY_CASE … (+11) |
 | `search-engine.mjs` | 777 | Shared observation-search engine — the single source of truth for hybrid FTS5 + vector ranking, OR fallback, concept/PRF expansion, and RRF merge.… | VEC_HIT_OBS_COLS, buildObsFtsQuery(), buildObsFtsParams(), countObsFtsMatches(), countSessionFtsMatches(), countPromptFtsMatches(), countEventFtsMatches() … (+5) |
 | `search-scoring.mjs` | 397 | shared search-scoring / ranking helpers: re-ranking, supersede marking, PRF term extraction, concept-expansion — plus the MCP instructions builder… | buildServerInstructions(), reRankWithContext(), PRF_STOP_WORDS, extractPRFTerms(), expandQueryByConcepts(), autoBoostIfNeeded(), runIdleCleanup() |
-| `tool-schemas.mjs` | 1031 | Shared Zod schemas for MCP tool inputs Single source of truth — used by server.mjs (runtime) and contract.test.mjs (validation tests) LLM-friendly… | OBS_TYPE_ENUM, memSearchSchema, memRecentSchema, memTimelineSchema, memGetSchema, memDeleteSchema, memSaveSchema … (+15) |
+| `tool-schemas.mjs` | 951 | Shared Zod schemas for MCP tool inputs Single source of truth — used by server.mjs (runtime) and contract.test.mjs (validation tests) LLM-friendly… | OBS_TYPE_ENUM, memSearchSchema, memRecentSchema, memTimelineSchema, memGetSchema, memDeleteSchema, memSaveSchema … (+13) |
 
 ### Shared cores (lib/)
 
@@ -350,9 +315,9 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 |---|---|---|---|
 | `lib/activity.mjs` | 222 | activity namespace data layer (T7 v2.31) Pure functions over the events table. No I/O beyond the passed-in db handle. Activity events are NOT… | EVENT_TYPES, saveEvent(), getEvent(), searchEvents(), recentEvents(), promoteInsightEvents() |
 | `lib/atomic-write.mjs` | 79 | crash-safe file writes with optional one-time backup. Why: several write paths mutate user-global config that, if torn or clobbered, breaks the user… | atomicWriteFileSync() |
-| `lib/binding-probe.mjs` | 262 | better-sqlite3 native binding probe + auto-rebuild. Shared by install.mjs (verify after `npm install`) and scripts/launch.mjs (verify before… | NATIVE_BINDING_REBUILD_CMD, BINDING_HEAL_GUARD_ENV, isNativeBindingError(), flattenBindingError(), probeBetterSqlite3Binding(), probeBindingInFreshProcess(), ensureBetterSqlite3Working() … (+1) |
+| `lib/binding-probe.mjs` | 348 | better-sqlite3 native binding probe + auto-rebuild. Shared by install.mjs (verify after `npm install`) and scripts/launch.mjs (verify before… | NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD, nativeBindingRepairHint(), BINDING_HEAL_GUARD_ENV, isNativeBindingError(), flattenBindingError(), probeBetterSqlite3Binding() … (+3) |
 | `lib/browse-core.mjs` | 81 | shared data collection for the CLI `browse` / MCP `mem_browse` twin (P2-12, audit 2026-08-14). The tier count + row queries were duplicated and had… | BROWSE_TIERS, BROWSE_TIER_LABELS, getActiveMemorySessionId(), collectBrowseTiers() |
-| `lib/citation-tracker.mjs` | 1847 | Citation tracker (P4): scan Claude Code transcript for `#NN` observation-id citations in assistant text, then bulk-increment access_count for matched… | OBS_ID_DIGITS, citationIdRe(), unanchoredInjectedIdRe(), extractCitationsFromTranscript(), classifyCitationContext(), computeCiteRecall(), extractUserTypedIds() … (+27) |
+| `lib/citation-tracker.mjs` | 1865 | Citation tracker (P4): scan Claude Code transcript for `#NN` observation-id citations in assistant text, then bulk-increment access_count for matched… | OBS_ID_DIGITS, citationIdRe(), unanchoredInjectedIdRe(), extractCitationsFromTranscript(), classifyCitationContext(), computeCiteRecall(), extractUserTypedIds() … (+27) |
 | `lib/cite-back-hint.mjs` | 332 | PostToolUse cite-back hint builder. Fires when a flushed episode edits a file that PreToolUse:Read/Edit had nudged earlier in the same session — the… | buildCiteBackHint(), buildUnsavedBugfixHint(), countUnsavedBugfixShape(), CITE_NUDGE_SILENCE_AFTER, nextCiteLowStreak(), buildCiteRecallNudge(), loadCiteBackForEpisode() … (+1) |
 | `lib/cite-recall-path.mjs` | 54 | the ONE definition of the cite-recall snapshot file's path. Same shape, same failure mode and same fix as lib/cooldown-path.mjs (audit 2026-08-29… | CITE_RECALL_FILE_PREFIX, citeRecallProjectKey(), citeRecallPathFor() |
 | `lib/cli-flags.mjs` | 72 | CLI numeric-flag validation helper. Extends the audit pattern from #8277 (Number.isInteger + range check) with a single reusable surface that also… | isNumericToken(), parseIntFlag() |
@@ -364,7 +329,7 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 | `lib/deferred-work.mjs` | 469 | — deferred_work data layer Pure-data CRUD + ordinal resolver + transactional closure helper. Decoupled from observations table: different lifecycle,… | insertDeferred(), listOpenWithOrdinal(), formatDeferListRow(), countStaleOpen(), formatDeferStaleHint(), dropDeferred(), formatDropReasonHint() … (+6) |
 | `lib/delete-core.mjs` | 105 | shared hard-delete orchestration for the CLI `delete` command (mem-cli.mjs cmdDelete) and the MCP `mem_delete` tool (server.mjs). Both surfaces… | deleteObservations(), previewDeleteRows() |
 | `lib/doctor-benchmark.mjs` | 162 | Baseline benchmark capture for v2.31 MVP. Measures (bounded scope): - L2 MCP instructions byte count (cost-per-turn source). - Count of registered… | runBenchmark() |
-| `lib/doctor-drift.mjs` | 158 | Dev-drift check: in dev-mode installs (symlinked to project repo), every managed source file in INSTALL_DIR should be a symlink. A regular file means… | checkDevDrift(), HOOK_SCRIPT_ENTRY_POINTS, checkHookScriptDrift() |
+| `lib/doctor-drift.mjs` | 157 | Dev-drift check: in dev-mode installs (symlinked to project repo), every managed source file in INSTALL_DIR should be a symlink. A regular file means… | checkDevDrift(), HOOK_SCRIPT_ENTRY_POINTS, checkHookScriptDrift() |
 | `lib/edge-attribution.mjs` | 169 | P1 (D#78): per-(obs, file) edge attribution for pre-tool-recall injections. pre-tool-recall triggers purely on file-edge matches (observation_files),… | readPreRecallFileEdges(), resolveEdgeAttribution() |
 | `lib/efficacy-arms.mjs` | 36 | pure arm-semantics for the efficacy severe test. ONE tested source of truth for "what does arm X mean", because a wrong per-arm env silently… | INJECTED_ARMS, armConfig(), taskSuffixForArm() |
 | `lib/efficacy-bridge-select.mjs` | 15 | pure helpers for the efficacy arm-B measurement: (1) select only commits where the bridge CAN bind (lesson identifier ∈ edit region), (2) verify the… | lessonBindsToRegion(), BRIDGE_MARKER, bridgeFired() |
@@ -373,13 +338,14 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 | `lib/error-recall-core.mjs` | 400 | Error-triggered recall — the SELECTION half of the surface. Why this is a shared core and not left inline in hook.mjs (project convention "shared by… | ERROR_RECALL_LIMIT, DEFAULT_ERROR_RECALL_BM25_FLOOR, CALIBRATED_ERROR_RECALL_BM25_FLOOR, errorRecallBm25Floor(), errorRecallSql(), errorRecallFtsQuery(), selectErrorRecall() |
 | `lib/events-injection.mjs` | 135 | surface `events` into the passive injection surfaces. HIGH-1 (full audit 2026-07-16): persistHaikuSummary upgrade-deletes every event-typed memory… | searchInjectableEvents(), recentInjectableEvents(), renderInjectableEvent() |
 | `lib/export-columns.mjs` | 120 | Single source of truth for the observation columns that `export` emits and `restore` reads back. Both the CLI (`cmdExport` in mem-cli.mjs) and the… | EXPORT_COLUMNS, EXPORT_COLUMNS_SQL, buildExportWhere() |
-| `lib/fast-summary.mjs` | 100 | The non-LLM session summary — one shape, three callers. Audit 2026-08-22 P2-9. hook.mjs carried three hand-copied versions of "read this session's… | FAST_SUMMARY_LIMITS, readFastSummarySource(), insertFastSummary() |
+| `lib/fast-summary.mjs` | 111 | The non-LLM session summary — one shape, three callers. Audit 2026-08-22 P2-9. hook.mjs carried three hand-copied versions of "read this session's… | FAST_SUMMARY_LIMITS, readFastSummarySource(), insertFastSummary() |
 | `lib/file-edge-match.mjs` | 82 | Single source of truth for the (obs,file) trigger-edge match predicate. Two consumers MUST stay in byte-identical agreement or injection and… | fileMatchClause(), basenameAnySep(), fileMatchParams() |
 | `lib/file-intel.mjs` | 185 | pure, zero-dependency builder for the PreToolUse:Read "file intelligence" injection (feature ①). Before Claude reads a file, surface its approximate… | estimateContentTokens(), humanTokens(), extractFileSummary(), formatFileIntelLine(), fileIntelFor() |
-| `lib/frontmatter.mjs` | 84 | the ONE YAML-frontmatter parser for skill/agent markdown. Audit 2026-09-02 P1-16. There were three, and they were not all the same:… | parseFrontmatter() |
+| `lib/frontmatter.mjs` | 83 | the ONE YAML-frontmatter parser for skill/agent markdown. Audit 2026-09-02 P1-16. There were three, and they were not all the same:… | parseFrontmatter() |
 | `lib/get-core.mjs` | 167 | shared core for the CLI `get` / MCP `mem_get` twin (P2-12, audit 2026-08-14). The 23-element OBS_FIELDS array was duplicated verbatim in mem-cli.mjs… | OBS_FIELDS, SESSION_DETAIL_FIELDS, PROMPT_DETAIL_FIELDS, EVENT_DETAIL_FIELDS, fetchPromptDetail(), fetchSessionDetail(), fetchEventDetail() … (+2) |
 | `lib/git-state.mjs` | 53 | thin wrapper around git status/stash/HEAD sha (T10b). Used by startup-dashboard (T10c) and continuation-anchor detection (T10d). All calls are… | readGitState() |
 | `lib/handoff-constants.mjs` | 18 | cross-session handoff policy, defined once. Moved out of `hook-shared.mjs` (audit 2026-09-05 P1-2): `lib/startup-dashboard.mjs` imported… | HANDOFF_EXPIRY_CLEAR, HANDOFF_EXPIRY_EXIT, HANDOFF_ANCHOR_MAX_AGE, HANDOFF_MATCH_THRESHOLD, CONTINUE_KEYWORDS |
+| `lib/hook-prune.mjs` | 118 | settings.json hook-entry classification and reconciliation. Extracted here because TWO faces need it and a direct import would close a cycle:… | isMemHook(), launcherEntryPath(), pruneDanglingMemHooks() |
 | `lib/hook-stdin.mjs` | 147 | one bounded stdin reader for every hook entry point. Audit 2026-09-02 P1-9. Six hook processes read the host's JSON payload off stdin and they did it… | DEFAULT_STDIN_MAX_BYTES, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent(), DEFAULT_STDIN_TIMEOUT_MS, readHookStdin() |
 | `lib/hook-stdout.mjs` | 262 | one hook process, at most ONE JSON document on stdout. Claude Code parses a command hook's stdout as a SINGLE JSON document. From the 2.1.233 bundle,… | queueHookContext(), queueHookUpdatedInput(), queueHookSystemMessage(), flushHookStdout(), resetHookStdout(), peekHookStdout() |
 | `lib/hook-telemetry.mjs` | 183 | unsampled hook-error log. Distinct from lib/err-sampler.mjs: that one writes 1% of swallowed debugCatch errors into ${dbDir}/errors/ for *production… | recordHookError(), countRecentHookErrors(), HOOK_ERROR_RETENTION_MS |
@@ -410,7 +376,6 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 | `lib/quiet-scope.mjs` | 42 | "should this surface stay quiet here?", defined once. Moved out of `hook-shared.mjs` (audit 2026-09-05 P1-2): `lib/startup-dashboard.mjs` imported… | isQuietHooks(), isAdoptedHere(), effectiveQuiet() |
 | `lib/recall-core.mjs` | 99 | Single source of truth for file-keyed recall: the observation_files junction query, LIKE-wildcard escaping, noise filtering, and the access-count… | recallByFile(), countRecallableByFile() |
 | `lib/recent-core.mjs` | 71 | Shared "most recent live observations" core for cmdRecent (CLI `recent`) and runRecent (MCP mem_recent). `recent` was the last retrieval command… | RECENT_MAX, fetchRecent() |
-| `lib/registry-core.mjs` | 264 | Shared body for the registry write actions — import / remove / reindex / enrich. These were the last un-collapsed CLI/MCP twin (audit 2026-08-22… | IMPORT_STRING_FIELDS, importResource(), removeResource(), reindexResources(), REGISTRY_CONFINE_ENV, registryConfineEnabled(), enrichResourceRow() … (+3) |
 | `lib/release-digest.mjs` | 109 | shared release-signing core (P1 supply-chain hardening). One source of truth for BOTH sides of the auto-update authenticity check so the CI signer… | sha256Hex(), sha256File(), buildReleaseManifest(), serializeManifest(), verifyReleaseFiles(), verifyManifestSignature() |
 | `lib/relevance-floor.mjs` | 149 | Corpus-size normalization for ABSOLUTE relevance floors. Extracted from scripts/user-prompt-search.js (v3.61.0) when a second injection face —… | corpusFloorScale() |
 | `lib/reread-guard.mjs` | 63 | pure logic + one IO helper for feature ② (repeated-read guard). When the agent does a full Read of a file it already read this session and the file… | readFileMeta(), shouldWarnReread(), buildRereadWarning() |
@@ -421,7 +386,7 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 | `lib/save-observation.mjs` | 497 | Shared "save one observation" pipeline — used by both mem-cli.mjs::cmdSave (CLI `claude-mem-lite save`) and server.mjs::mem_save (MCP tool).… | splitSupersedeTokens(), formatSupersededNote(), formatSupersedeSkipped(), saveObservation(), saveWithClosures() |
 | `lib/scrub-record.mjs` | 82 | per-table scrub helper. Applies scrubSecrets to the known text fields of a table row. Numeric / JSON-blob / id fields are passed through untouched.… | TEXT_FIELDS_BY_TABLE, scrubRecord() |
 | `lib/search-core.mjs` | 1011 | Shared cross-source search core for cmdSearch (CLI) and mem_search (MCP). coreRunSearchPipeline (below) is the SINGLE orchestration body — deep /… | buildSearchFtsQuery(), parseDuration(), parseDateBounds(), MIN_FUSION_POOL, computePerSourceWindow(), effectiveObsFtsQuery(), searchSessionsFts() … (+7) |
-| `lib/shard-gc.mjs` | 50 | retention sweep for daily JSONL shard directories. Two sinks in this tree append one `YYYY-MM-DD.jsonl` per day with no GC of their own —… | gcDailyShards() |
+| `lib/shard-gc.mjs` | 54 | retention sweep for daily JSONL shard directories. `lib/metrics.mjs` (CLAUDE_MEM_METRICS) appends one `YYYY-MM-DD.jsonl` per day with no GC of its… | gcDailyShards() |
 | `lib/startup-dashboard.mjs` | 135 | aggregates git/tasks/plans/handoff/events stats into a single SessionStart injection line (T10c v2.31). Pure function (with injectable stubs for test… | buildDashboard() |
 | `lib/stats-core.mjs` | 191 | shared primary stats feed for CLI `stats` and MCP `mem_stats`. Audit 2026-07-17 MED-4: these ~15 COUNT/GROUP-BY queries were hand-copied… | computeStatsFeed() |
 | `lib/stats-quality.mjs` | 230 | Shared quality-dashboard computation — used by both mem-cli.mjs (CLI `stats --quality`) and server.mjs (MCP `mem_stats({quality: true})`). Splits… | computeNoiseGauge(), computeQualityStats(), formatQualityReport() |
@@ -442,33 +407,32 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 |---|---|---|---|
 | `bash-utils.mjs` | 476 | Bash command analysis and file path extraction Extracted from utils.mjs for focused responsibility Read/search commands whose output legitimately… | detectBashSignificance(), extractErrorKeywords(), planErrorRecall(), extractFilePaths(), stripTestSuffix() |
 | `cli-path.mjs` | 25 | single source of truth for invoking the bundled CLI by an absolute, install-shape-independent path. cli.mjs is a sibling of this module at the… | CLI_PATH, CLI_INVOKE |
-| `format-utils.mjs` | 246 | String formatting and display utilities Extracted from utils.mjs for focused responsibility Truncate a string to a maximum length, replacing newlines… | truncate(), neutralizeContextDelimiters(), neutralizeSkillDelimiters(), neutralizeSkillBridgeDelimiters(), formatErrorRecallHints(), typeIcon(), fmtDate() … (+2) |
+| `format-utils.mjs` | 225 | String formatting and display utilities Extracted from utils.mjs for focused responsibility Truncate a string to a maximum length, replacing newlines… | truncate(), neutralizeContextDelimiters(), neutralizeSkillDelimiters(), formatErrorRecallHints(), typeIcon(), fmtDate(), fmtTime() … (+1) |
 | `hash-utils.mjs` | 98 | Hashing and similarity utilities Extracted from utils.mjs for focused responsibility Compute word-level Jaccard similarity between two strings.… | jaccardSimilarity(), computeMinHash(), estimateJaccardFromMinHash() |
 | `nlp.mjs` | 453 | FTS5 query building, synonym expansion, CJK tokenization. Extracted from utils.mjs for focused module boundaries. Re-export for backward… | SYNONYM_MAP, CJK_COMPOUNDS, cjkBigrams(), extractCjkSynonymTokens(), extractCjkKeywords(), extractCjkLikePatterns(), cjkPrecisionOk() … (+4) |
 | `project-utils.mjs` | 166 | shared project resolution Extracted from server.mjs and mem-cli.mjs to eliminate duplication Leaf module: imports nothing from utils.mjs. utils.mjs… | inferProject(), inferProjectDir(), projectNameFromDir(), resolveProject(), _resetProjectCache() |
 | `secret-scrub.mjs` | 258 | Secret pattern detection and scrubbing Extracted from utils.mjs for focused responsibility ─── Secret Patterns… | SECRET_PATTERNS, scrubSecrets() |
 | `skip-tools.mjs` | 33 | Single source of truth for tools skipped in post-tool-use processing. Used by hook.mjs (Node) and validated against scripts/post-tool-use.sh (bash).… | SKIP_TOOLS, SKIP_PREFIXES |
-| `source-files.mjs` | 418 | Shared runtime source-file manifest — imported by install.mjs and hook-update.mjs so the two code paths never drift. Adding a new .mjs that any entry… | SOURCE_FILES, HOOK_SCRIPT_FILES, RELEASE_SIGNED_FILES |
+| `source-files.mjs` | 401 | Shared runtime source-file manifest — imported by install.mjs and hook-update.mjs so the two code paths never drift. Adding a new .mjs that any entry… | SOURCE_FILES, HOOK_SCRIPT_FILES, RELEASE_SIGNED_FILES |
 | `stop-words.mjs` | 168 | Shared base stop-word set for all NLP/search modules. Single source of truth: consumers extend with domain-specific extras. Common English stop words… | BASE_STOP_WORDS, CJK_STOP_WORDS |
-| `synonyms.mjs` | 777 | Unified synonym data for FTS5 search and dispatch. Consolidates SYNONYM_PAIRS/SYNONYM_MAP (from nlp.mjs) and DISPATCH_SYNONYMS (from… | SYNONYM_PAIRS, SYNONYM_MAP, CJK_COMPOUNDS, DISPATCH_SYNONYMS |
+| `synonyms.mjs` | 778 | Unified synonym data for FTS5 search and dispatch. Consolidates SYNONYM_PAIRS/SYNONYM_MAP (from nlp.mjs) and DISPATCH_SYNONYMS (formerly… | SYNONYM_PAIRS, SYNONYM_MAP, CJK_COMPOUNDS, DISPATCH_SYNONYMS |
 | `tfidf.mjs` | 597 | TF-IDF vector search engine Pure JS implementation, zero external dependencies. Provides tokenization, vocabulary building, vector computation,… | VOCAB_DIM, MIN_COSINE_SIMILARITY, VECTOR_SCAN_LIMIT, RRF_K, vectorsEnabled(), porterStem(), tokenize() … (+9) |
 | `tier.mjs` | 132 | Virtual three-tier memory classification engine Computes tier (working/active/archive) from existing observation fields. No database dependencies —… | ACTIVE_WINDOWS, computeTier(), TIER_CASE_SQL, tierSqlParams(), relativeTime() |
-| `utils.mjs` | 643 | shared utilities Used by server.mjs, hook.mjs, and tests Local binding for internal use: the `export … from './secret-scrub.mjs'` re-export below is… | DECAY_HALF_LIFE_BY_TYPE*, DEFAULT_DECAY_HALF_LIFE_MS*, OBS_BM25*, SESS_BM25*, EVT_BM25*, TYPE_DECAY_CASE*, TYPE_QUALITY_CASE* … (+55) |
+| `utils.mjs` | 635 | shared utilities Used by server.mjs, hook.mjs, and tests Local binding for internal use: the `export … from './secret-scrub.mjs'` re-export below is… | DECAY_HALF_LIFE_BY_TYPE*, DEFAULT_DECAY_HALF_LIFE_MS*, OBS_BM25*, SESS_BM25*, EVT_BM25*, TYPE_DECAY_CASE*, TYPE_QUALITY_CASE* … (+54) |
 
 ### Dev / CI tooling (scripts/)
 
 | Module | Lines | Responsibility | Public interface (exports; `*` = re-export) |
 |---|---|---|---|
-| `scripts/audit-metrics.mjs` | 1041 | Repeatable code-metrics snapshot for docs/audit/*.md. node scripts/audit-metrics.mjs # JSON to stdout, reuses coverage/ + runs eslint/knip/prettier… | (entry — no exports) |
-| `scripts/binding-probe-cli.mjs` | 149 | SessionStart native-binding probe + bounded heal. Contract with scripts/setup.sh: exit 0 = binding usable NOW, non-zero = not. Everything… | (entry — no exports) |
-| `scripts/convert-commands.mjs` | 163 | Convert command .md files to SKILL.md skills in managed agent plugins Usage: node scripts/convert-commands.mjs [--dry-run] [--delete-originals] D#29:… | (entry — no exports) |
+| `scripts/audit-metrics.mjs` | 1078 | Repeatable code-metrics snapshot for docs/audit/*.md. node scripts/audit-metrics.mjs # JSON to stdout, reuses coverage/ + runs eslint/knip/prettier… | (entry — no exports) |
+| `scripts/binding-probe-cli.mjs` | 157 | SessionStart native-binding probe + bounded heal. Contract with scripts/setup.sh: exit 0 = binding usable NOW, non-zero = not. Everything… | (entry — no exports) |
+| `scripts/convert-commands.mjs` | 161 | Convert command .md files to SKILL.md skills in managed agent plugins Usage: node scripts/convert-commands.mjs [--dry-run] [--delete-originals] D#29:… | (entry — no exports) |
 | `scripts/extract-repos.mjs` | 248 | Extract skills/agents from cloned repos into managed/ directory structure Target structure: managed/agents/<plugin-name>/agents/<agent>.md… | (entry — no exports) |
-| `scripts/index-managed.mjs` | 1000 | Smart feature extractor & indexer for managed skills/agents v2 Multi-dimensional feature extraction for intent-based hook dispatch Advantage over… | (entry — no exports) |
 | `scripts/mock-claude.mjs` | 66 | Mock claude CLI for E2E tests — deterministic JSON responses Usage: CLAUDE_CODE_PATH=scripts/mock-claude.mjs Called as: node mock-claude.mjs -p… | (entry — no exports) |
 | `scripts/p0-forward-probe.mjs` | 175 | Forward probe: seed injection_count from scan data into probe DB, measure noise penalty impact on top-noise IDs vs top-cited IDs. Read-only against… | (entry — no exports) |
-| `scripts/prompt-search-utils.mjs` | 312 | Shared logic for user-prompt-search hook and its tests. Extracted to eliminate code duplication between the hook script and test file. ─── Skip… | computeEffectiveLen(), shouldSkip(), INTENTS, detectIntent(), detectMemOverride*, extractErrorSignature(), MAX_SESSION_INJECTIONS … (+6) |
+| `scripts/prompt-search-utils.mjs` | 282 | Shared logic for user-prompt-search hook and its tests. Extracted to eliminate code duplication between the hook script and test file. ─── Skip… | computeEffectiveLen(), shouldSkip(), INTENTS, detectIntent(), detectMemOverride*, extractErrorSignature(), MAX_SESSION_INJECTIONS … (+5) |
 | `scripts/sign-release.mjs` | 59 | CI release signer (P1 supply-chain hardening). Builds release-manifest.json (sha256 of every SOURCE_FILES entry at this checkout) and signs the exact… | (entry — no exports) |
-| `scripts/smoke-tarball.mjs` | 183 | Real-install smoke test (audit item ①). The riskiest install path — `npm pack` → real `npm install` of the tarball → better-sqlite3 native rebuild →… | (entry — no exports) |
+| `scripts/smoke-tarball.mjs` | 226 | Real-install smoke test (audit item ①). The riskiest install path — `npm pack` → real `npm install` of the tarball → better-sqlite3 native rebuild →… | (entry — no exports) |
 
 ## 5. Main flows (≤5 steps each; file:function is where the step was read)
 
@@ -489,9 +453,8 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 **F3 · Prompt-time recall** (UserPromptSubmit — two processes, in order)
 1. `scripts/user-prompt-search.js:main` — strip `<private>`, mem-override short-circuit (`lib/mem-override.mjs`), deterministic `D#N` deferred injection.
 2. Skip gates (`shouldSkip`, length, follow-up); FTS search over observations (`lib/inject-search-core.mjs`, `nlp.mjs`) → dedup against the session marker (`lib/injected-ids.mjs`) → emit `<memory-context>`, bump `injection_count`.
-3. Shadow skill recommendation (`registry-recommend.mjs:recommendSkill`) logged, not injected.
-4. `hook.mjs:handleUserPrompt` → `recordUserPromptRow` (prompt row + atomic counter, returns the CC session id), then `injectHandoffIfEarly` for the first 3 prompts of that CC session (`renderHandoffInjection`).
-5. `hook.mjs:injectSemanticMemory` → `hook-memory.mjs:searchRelevantMemories`, excluding ids already injected by step 2 (marker file is the cross-process contract).
+3. `hook.mjs:handleUserPrompt` → `recordUserPromptRow` (prompt row + atomic counter, returns the CC session id), then `injectHandoffIfEarly` for the first 3 prompts of that CC session (`renderHandoffInjection`).
+4. `hook.mjs:injectSemanticMemory` → `hook-memory.mjs:searchRelevantMemories`, excluding ids already injected by step 2 (marker file is the cross-process contract).
 
 **F4 · Stop** (turn end → citation accounting)
 1. `hook.mjs:readStopHookInput` reads the CC session id and transcript path; `flushEpisodeAtStop` snapshots and flushes the episode buffer (lock, else atomic claim-rename fallback).
@@ -519,7 +482,7 @@ Layer = `layerOf()` in `scripts/audit-metrics.mjs`. Responsibility = the module'
 **F7 · Install / self-update** (`cli.mjs install` · `hook-update.mjs`)
 1. `install.mjs:install` — `installSourceFiles` copies the `source-files.mjs` set to `~/.claude-mem-lite/`, `installDependencies` installs deps. (The native binding is probed at every launch by `scripts/launch.mjs` via `lib/binding-probe.mjs` — CHANGELOG v3.58.x, not re-read here.)
 2. `configureHooks` writes direct `settings.json` entries, then dedupes against the plugin manifest (`plugin-cache-guard.mjs`) — the two hook sets must change together (`tests/audit-silent-20260814.test.mjs`).
-3. `installPreinstalledResources` seeds the registry from `install-metadata.mjs`; `dogfoodAutoAdopt`.
+3. `dogfoodAutoAdopt` writes the managed CLAUDE.md block for an adopted project.
 4. Update: `hook-update.mjs:checkForUpdate` (24 h, dev-mode skip) → `fetchLatestRelease` → `downloadAndInstall` → `verifyReleaseAuthenticity` (signed manifest).
 5. `installExtractedRelease` swaps files with a journal (`recoverInterruptedSwaps` on next start) and smoke-tests the installed tree.
 

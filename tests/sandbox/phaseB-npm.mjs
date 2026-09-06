@@ -179,7 +179,6 @@ for (const [label, args] of [
   ['stats', ['stats']],
   ['timeline', ['timeline']],
   ['activity', ['activity', 'recent']],
-  ['registry', ['registry', 'list']],
 ]) {
   const r = run(CLI, args, { env: ENV, cwd: PROJECT });
   check(`CLI ${label} exits 0`, () => ({

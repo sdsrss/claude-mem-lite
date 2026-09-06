@@ -77,12 +77,12 @@ on testing them); `audit-fixes.test.mjs`'s T3-P2-A passed *vacuously*, its only 
 sitting behind an `if` the new error text can never satisfy; and `install.mjs` /
 `hook-update.mjs` still copied a `registry/preinstalled.json` that no longer exists.
 
-**Measurements** (all re-taken, none carried): tests 359 files / 5936 → **340 / 5556**,
+**Measurements** (all re-taken, none carried): tests 359 files / 5936 → **342 / 5570**,
 attributed in three steps by same-tree A/B name-set diffs rather than by subtracting counts.
 Knip 49 → **48** — and the count is the least interesting part: mid-removal it read 49, the
 same number as v4.0.4, while the name set had changed on both sides. Coverage
-85.87 / 80.18 / 90.22 / 87.02 is a **caliber break**, not an improvement: three modules left
-the `vitest.config.mjs` include allowlist, so the denominator shrank. Net **−15,514** lines
+85.87 / 80.15 / 90.28 / 87.05 is a **caliber break**, not an improvement: three modules left
+the `vitest.config.mjs` include allowlist, so the denominator is a different set of files. Net **−15,514** lines
 of product code, tests and manifest.
 
 ## v4.0.4 — the audit finding a guard had already rejected

@@ -81,8 +81,6 @@
 - **原子写入** -- 所有文件写入（episode、CLAUDE.md）使用 write-to-tmp + rename 防止崩溃时损坏
 - **健壮锁机制** -- PID 感知的锁文件，自动清理过期（>30s）或孤儿（PID 已死）锁
 - **过期会话清理** -- 活跃超过 24 小时的会话在下次启动时自动标记为 abandoned
-- **智能调用** -- 三层调用系统：L1 自动加载（UserPromptSubmit 匹配 skill 名注入内容 + `Read()` 路径），L2 Bridge（PreToolUse 拦截 `Skill()` 误调），L3 显式调用（`mem_use` MCP 工具）。managed 资源用 `Read("~/.claude-mem-lite/managed/.../SKILL.md")`，原生插件用 `Skill("full:name")`
-- **资源注册表** -- 对已安装的 skill 和 agent 建立 FTS5 索引，支持复合评分和调用追踪。搜索结果区分 managed（Read 路径）vs native（Skill 全名）调用方式
 - **统一资源发现** -- 共享文件系统遍历层（`resource-discovery.mjs`），运行时扫描器和离线索引器共用，支持扁平目录、插件嵌套和松散 `.md` 文件
 - **领域同义词扩展** -- 注册表搜索查询自动扩展领域同义词（如 "修复" → fix, debug, bugfix, repair, error）
 - **持久化冷却机制** -- 5 分钟跨会话冷却 + 同会话去重，避免重复推荐 skill 自动加载
@@ -188,7 +186,6 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 ```
 ~/.claude-mem-lite/
   claude-mem-lite.db       # SQLite 数据库 — 记忆（WAL 模式）
-  resource-registry.db     # SQLite 数据库 — skill/agent 注册表
   runtime/
     session-<project>    # 活跃会话状态
     ep-<project>.json    # Episode 缓冲区
@@ -233,8 +230,6 @@ v2.34.0 起服务端注册 17 个工具，但 `tools/list` 只暴露 6 个 **核
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL 导出，支持项目/类型/日期过滤。 |
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 完整性检查与重建。 |
 | `mem_browse` | `claude-mem-lite browse` | 分层仪表盘（working / active / archive）。 |
-| `mem_registry` | `claude-mem-lite registry <action>` | 列 / 搜索 / 导入 / 移除 skill / agent。 |
-| `mem_use` | _MCP only_ | 从 registry 按名载入 skill / agent。 |
 
 ### 技能命令（在 Claude Code 聊天中使用）
 
@@ -370,11 +365,6 @@ PostToolUse（每次工具执行）
   -> 为有意义的 episode 启动 LLM episode worker
   -> 错误触发回忆：搜索记忆中相关的历史修复
 
-PreToolUse（工具执行前）
-  -> L2 Skill Bridge：拦截对 managed 资源的 Skill() 调用
-     -> 匹配 managed 路径 → 输出内容 + mem_use() 提示
-     -> 未匹配 → 静默放行到原生 handler
-
 UserPromptSubmit（两个并行路径）
   -> [user-prompt-search.js] 通过 FTS5 + 活跃文件上下文自动搜索记忆
   -> [user-prompt-search.js] 注入相关历史观察（按时效和重要性加权）
@@ -392,36 +382,6 @@ Stop
   -> 标记会话为已完成
   -> 启动 LLM 摘要 worker（轮询等待）
 ```
-
-### 智能调用系统
-
-三层调用系统确保 managed 资源（`~/.claude-mem-lite/managed/` 中的 skill 和 agent）能被正确调用：
-
-```
-L1 自动加载（UserPromptSubmit，<50ms）
-  -> 匹配 prompt 中的 managed skill/agent 名称
-  -> 加载 SKILL.md / {name}.md 内容
-  -> 输出：Read("~/.claude-mem-lite/managed/.../path.md") 调用指引
-  -> 截断时提供 mem_use(name="...") 备选
-
-L2 Bridge（PreToolUse Skill hook，<30ms）
-  -> 拦截 Skill("name") 调用，查询 managed 注册表
-  -> 匹配到 → 输出内容 + mem_use() 提示（防止原生 handler 报错）
-  -> 未匹配 → 放行到原生 Skill handler
-
-L3 显式调用（mem_use MCP 工具）
-  -> 按名称精确匹配 + FTS5 模糊回退
-  -> 返回完整内容 + 便携路径供 Read() 重载
-```
-
-**调用方式区分：**
-
-| 资源类型 | 位置 | 调用方式 |
-|---------|------|---------|
-| Managed skill | `~/.claude-mem-lite/managed/skills/` | `Read("~/.../SKILL.md")` 或 `mem_use(name="...")` |
-| Managed agent | `~/.claude-mem-lite/managed/agents/` | `Read("~/.../{name}.md")` 或 `mem_use(name="...", type="agent")` |
-| 原生插件 skill | `~/.claude/plugins/cache/` | `Skill("plugin:skill-name")` |
-| 用户自建 skill | `~/.claude/skills/` | `Skill("name")` |
 
 ### Episode 编码
 
@@ -548,13 +508,6 @@ claude-mem-lite/
   format-utils.mjs     # 字符串格式化：截断、类型图标、日期/时间格式化
   hash-utils.mjs       # MinHash 签名、Jaccard 相似度（去重用）
   bash-utils.mjs       # Bash 输出显著性检测：错误、测试、构建、部署
-  # 智能调度
-  dispatch.mjs         # 三级调度编排：快速过滤、上下文信号、FTS5、Haiku
-  dispatch-inject.mjs  # 注入模板渲染：skill/agent 推荐
-  registry.mjs         # 资源注册表 DB：schema、CRUD、FTS5、调用追踪
-  registry-retriever.mjs # FTS5 检索：同义词扩展与复合评分
-  registry-scanner.mjs # 文件系统扫描器：读取内容 + 哈希，委托发现层
-  resource-discovery.mjs # 共享发现层：扁平目录、插件嵌套、松散 .md 文件
   haiku-client.mjs     # 统一 Haiku LLM 封装：直连 API 或 CLI 回退
   # 安装与配置
   install.mjs          # CLI 安装器：设置、卸载、状态、诊断（npx/git clone 模式）

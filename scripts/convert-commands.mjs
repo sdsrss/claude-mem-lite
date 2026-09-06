@@ -155,8 +155,6 @@ function main() {
 
   if (DRY_RUN) {
     console.log('\nRe-run without --dry-run to execute conversion.');
-  } else if (converted > 0) {
-    console.log('\nNext: run `node scripts/index-managed.mjs` to re-index.');
   }
 }
 

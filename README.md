@@ -105,7 +105,6 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Atomic writes** -- All file writes (episodes, CLAUDE.md) use write-to-tmp + rename to prevent corruption on crash
 - **Robust locking** -- PID-aware lock files with automatic stale/orphan cleanup (>30s timeout or dead PID)
 - **Stale session cleanup** -- Sessions active for >24h are automatically marked as abandoned on next start
-- **Resource registry** -- Indexes installed skills and agents with FTS5 search, composite scoring, and invocation tracking; searchable via `mem_registry` MCP tool
 - **Unified resource discovery** -- Shared filesystem traversal layer (`resource-discovery.mjs`) used by both runtime scanner and offline indexer, supporting flat directories, plugin nesting, and loose `.md` files
 - **Domain synonym expansion** -- Registry search queries expand to domain synonyms (e.g., "fix" → debug, bugfix, troubleshoot, diagnose, repair)
 - **Multi-provider LLM mode** -- Provider priority `ANTHROPIC_API_KEY` (direct Anthropic API) → `OPENROUTER_API_KEY` (OpenRouter, OpenAI-compatible — point it at any model via `OPENROUTER_MODEL`) → `claude -p` CLI fallback when no key is set
@@ -121,7 +120,6 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Configurable LLM model** -- Switch between Haiku (fast/cheap) and Sonnet (deeper analysis) via `CLAUDE_MEM_MODEL` env var
 - **DB auto-recovery** -- Detects and cleans corrupted WAL/SHM files on startup; periodic WAL checkpoints prevent unbounded growth
 - **Schema auto-migration** -- Idempotent `ALTER TABLE` migrations run on every startup, safely adding new columns and indexes without data loss
-- **Exploration bonus** -- New resources in the registry get a fair chance in composite ranking; zombie resources (high recommend, zero adopt) are penalized in scoring
 - **LLM concurrency control** -- File-based semaphore limits background workers to 2 concurrent LLM calls, preventing resource contention
 - **stdin overflow protection** -- Hook input truncated at 256KB with regex-based action salvage for oversized tool outputs
 - **Cross-session handoff** -- Captures session state (request, completed work, next steps, key files) on `/clear` or `/exit`, then injects context when the next session detects continuation intent via explicit keywords or FTS5 term overlap
@@ -224,7 +222,6 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 ```
 ~/.claude-mem-lite/
   claude-mem-lite.db       # SQLite database — memory (WAL mode)
-  resource-registry.db     # SQLite database — skill/agent registry
   runtime/
     session-<project>    # Active session state
     ep-<project>.json    # Episode buffer
@@ -274,8 +271,6 @@ surface — reach them through the CLI column in the second table.
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL dump, filters by project, type, date. |
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity + rebuild. |
 | `mem_browse` | `claude-mem-lite browse` | Tier-grouped dashboard (working / active / archive). |
-| `mem_registry` | `claude-mem-lite registry <action>` | List / search / import / remove skills + agents. |
-| `mem_use` | _MCP only_ | Load a skill / agent from the registry by name. |
 
 ### Skill Commands (in Claude Code chat)
 
@@ -472,29 +467,6 @@ Stop
   -> Spawn LLM summary worker (poll-based wait)
 ```
 
-### Resource Registry
-
-The resource registry (`registry.mjs`, `registry-retriever.mjs`) indexes installed skills and agents into a searchable FTS5 database. Unlike the previous proactive dispatch system, the registry is now on-demand — it's reachable via the `claude-mem-lite registry` CLI (primary path for Claude Code since v2.34.0 hides the `mem_registry` MCP tool from `tools/list`) or by direct `tools/call mem_registry` for MCP clients that know the name.
-
-```
-Registry pipeline:
-  -> registry-scanner.mjs discovers skills/agents on filesystem
-  -> resource-discovery.mjs handles flat dirs, plugin nesting, loose .md files
-  -> registry-indexer.mjs indexes content into FTS5 with metadata
-  -> registry-retriever.mjs provides BM25-ranked search with synonym expansion
-  -> mem_registry MCP tool exposes search/list/stats/import/remove/reindex actions
-
-Smart invocation (three layers):
-  L1 auto-load: UserPromptSubmit matches managed skill name in prompt
-     -> Loads content with path="~/.claude-mem-lite/managed/.../SKILL.md"
-     -> Guides: Read("path") or mem_use(name="..."), never Skill()
-  L2 bridge: PreToolUse hook intercepts Skill("name") for managed resources
-     -> Outputs content, prevents native handler failure
-  L3 explicit: mem_use(name="...") loads full content with reload path
-  Search: managed resources → Read(path), native plugins → Skill("full:name")
-```
-
-Composite scoring for search results: BM25 relevance (40%) + repo stars (15%) + success rate (15%) + adoption rate (10%) + freshness (10%) + exploration bonus (10%). Domain filtering ensures platform-specific resources (iOS, Go, Rust) only surface for matching projects.
 
 ### Episode Encoding
 
@@ -656,12 +628,6 @@ claude-mem-lite/
   format-utils.mjs     # String formatting: truncate, typeIcon, date/time/week formatting
   hash-utils.mjs       # MinHash signatures, Jaccard similarity for dedup
   bash-utils.mjs       # Bash output significance detection: errors, tests, builds, deploys
-  # Resource registry
-  registry.mjs         # Resource registry DB: schema, CRUD, FTS5, invocation tracking
-  registry-retriever.mjs # FTS5 retrieval with synonym expansion and composite scoring
-  registry-indexer.mjs # Resource indexing pipeline
-  registry-scanner.mjs # Filesystem scanner: reads content + hashes, delegates discovery
-  resource-discovery.mjs # Shared discovery layer: flat dirs, plugin nesting, loose .md files
   haiku-client.mjs     # Unified Haiku LLM wrapper: direct API or CLI fallback
   # Install & config
   install.mjs          # CLI installer: setup, uninstall, status, doctor (npx/git clone mode)
@@ -809,15 +775,6 @@ claude-mem-lite.
 | `CLAUDE_MEM_NO_TEMPLATE_REFRESH` | `1` stops SessionStart from refreshing the adopted `CLAUDE.md` managed block when the shipped template changes. | _(refreshes)_ |
 | `MEM_QUIET_HOOKS` | See Core above — the broadest injection-volume switch. | _(disabled)_ |
 
-### Registry import bounds
-
-`registry import-url` pulls from a third-party repository, so it is bounded. Entries past a
-bound are refused, not truncated, and the refusal is printed with the import result. Set any
-of these to `0` for the pre-v3.98 unlimited behavior; an unparseable or negative value keeps
-the default rather than removing the bound.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
 
 ### Retrieval tuning
 

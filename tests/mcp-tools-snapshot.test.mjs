@@ -63,7 +63,7 @@ describe('MCP tools surface', () => {
     }
   });
 
-  it('every tool description carries an Equivalent CLI line (except mem_use, MCP-only)', () => {
+  it('every tool description carries an Equivalent CLI line', () => {
     for (const t of tools) {
       expect(t.description, `${t.name} missing "Equivalent CLI:" line`).toMatch(/Equivalent CLI:/);
     }

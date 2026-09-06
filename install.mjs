@@ -2052,6 +2052,10 @@ export function pruneStaleInstallFiles(dataDir, sourceFiles) {
   // like 'lib/activity.mjs' — those belong to a subdir and prune never touches
   // subdirs anyway. For top-level entries ('server.mjs'), basename === entry.
   const topLevelAllowed = new Set(sourceFiles.filter((f) => !f.includes('/')).map((f) => f));
+  // resource-registry.db stayed on this list until v5.0.0 removed the registry. It is
+  // deliberately still protected: a user upgrading from <=4.x has one on disk, it can be
+  // 0 bytes (fresh-install transient state), and pruneStaleInstallFiles would then delete
+  // user data the CHANGELOG tells them to remove themselves. Drop it a major later.
   const PROTECTED_DBS = new Set(['claude-mem-lite.db', 'resource-registry.db']);
   const removed = [];
   let entries;

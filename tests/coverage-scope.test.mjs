@@ -66,15 +66,6 @@ describe('coverage scope (audit P2-2)', () => {
     }
   });
 
-  it('measures registry.mjs, which was well covered and invisible', () => {
-    // The other half, asserted separately so a revert of the scope change goes red rather
-    // than merely shrinking a loop above. Moving it IN raised the totals (84.32% → 84.38%
-    // statements), which is the tell that it was never harness-only.
-    expect(coverage.include).toContain('registry.mjs');
-    expect(coverage.exclude).not.toContain('registry.mjs');
-    expect(inCoverageScope('registry.mjs')).toBe(true);
-  });
-
   it('still measures the 22 hand-picked root modules', () => {
     for (const f of ['utils.mjs', 'schema.mjs', 'mem-cli.mjs', 'tfidf.mjs']) {
       expect(inCoverageScope(f)).toBe(true);
