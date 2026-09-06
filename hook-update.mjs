@@ -403,11 +403,11 @@ export function getCurrentVersion() {
 }
 
 // SWITCHABLE_PATHS = everything in SOURCE_FILES plus the recursive dirs that
-// install.mjs copies as whole subtrees (scripts, registry, node_modules). It's
+// install.mjs copies as whole subtrees (scripts, node_modules). It's
 // built per-call from the *tarball's* manifest, not the locally-imported one —
 // see loadReleaseManifest comment for why.
 function buildSwitchablePaths(sourceFiles) {
-  return [...sourceFiles, 'scripts', 'registry', 'node_modules'];
+  return [...sourceFiles, 'scripts', 'node_modules'];
 }
 
 // Load the SOURCE_FILES / HOOK_SCRIPT_FILES manifest from the *extracted
@@ -987,6 +987,41 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
 
     rmSync(stagingDir, { recursive: true, force: true });
     rmSync(backupDir, { recursive: true, force: true });
+
+    // Post-update migration: reconcile settings.json against the release we just
+    // swapped in. `configureHooks()` already strips stale mem entries — but its only
+    // caller is `install()`, and this path never runs it, while `buildSwitchablePaths`
+    // replaces `scripts/` wholesale. So an upgrade that REMOVES a hook script deletes
+    // the file and leaves settings.json pointing at it; the launcher then reports a
+    // broken install on every fire, for a file that is not coming back (R9 review P1-1,
+    // first hit by the v5.0.0 `PreToolUse:Skill` removal). Plugin-channel installs are
+    // unaffected — hooks/hooks.json is replaced wholesale — so this is npm-channel only.
+    //
+    // The reconciler lives in lib/hook-prune.mjs, not install.mjs: install.mjs already
+    // imports THIS file, so importing it back would close a cycle the repo's import-graph
+    // guard rejects. Failure is non-fatal — a stale entry is noisy, not broken, and must
+    // never roll back an otherwise-good update.
+    try {
+      const settingsPath = join(homedir(), '.claude', 'settings.json');
+      if (existsSync(settingsPath)) {
+        const { pruneDanglingMemHooks } = await import('./lib/hook-prune.mjs');
+        const before = JSON.parse(readFileSync(settingsPath, 'utf8'));
+        const { settings, removed } = pruneDanglingMemHooks(before, targetDir);
+        if (removed.length > 0) {
+          // Through the shared writer: settings.json is user-owned config and may be a
+          // symlink into a dotfiles repo, which a bare temp+rename would sever (P0-5).
+          const { atomicWriteFileSync } = await import('./lib/atomic-write.mjs');
+          atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', { backup: true });
+          debugLog(
+            'INFO',
+            'update',
+            `pruned ${removed.length} dangling hook entr(ies): ${removed.join(', ')}`,
+          );
+        }
+      }
+    } catch (e) {
+      debugCatch(e, 'pruneDanglingMemHooks');
+    }
 
     // Post-update migration: clean stale global MCPs if plugin handles it.
     // Both "mem" (legacy, pre-v2.78) and "mem-lite" (current) are purged so a

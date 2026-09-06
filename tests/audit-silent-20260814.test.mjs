@@ -310,7 +310,7 @@ let _installPromise = null;
 function installedRegistries() {
   if (_installPromise) return _installPromise;
   _installPromise = (async () => {
-    const { isMemHook } = await import('../install.mjs');
+    const { isMemHook } = await import('../lib/hook-prune.mjs');
     const installHome = sandboxDir('inst-home');
     const dataDir = sandboxDir('inst-data');
     const cwd = sandboxDir('work', 'inst');

@@ -2,7 +2,7 @@
 // `hook.mjs` + event-word clause classified `node ~/.config/hook.mjs session-start`
 // (a user's generic hook) as ours → install/uninstall silently deleted it.
 import { describe, it, expect } from 'vitest';
-import { isMemHook } from '../install.mjs';
+import { isMemHook } from '../lib/hook-prune.mjs';
 
 const mk = (command) => ({ hooks: [{ type: 'command', command }] });
 

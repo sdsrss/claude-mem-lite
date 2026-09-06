@@ -73,6 +73,7 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
 // and any external consumers still import HOOK_SCRIPT_FILES from install.mjs.
@@ -1942,30 +1943,6 @@ async function doctor() {
 
 // ─── Settings helpers ───────────────────────────────────────────────────────
 
-// Identify a settings hook as one of OURS (to replace on install / strip on uninstall).
-// Must be tight: the old `hook.mjs` + event-word test matched a user's OWN generic hook
-// (`node ~/.config/hook.mjs session-start`) and install/uninstall silently deleted it.
-// The launcher marker (`hook-launcher.mjs`, which every Node hook routes through since v2.84)
-// replaces that clause; the product-name substring (our install-dir / legacy-direct hooks)
-// and the bash prefilter round out the real markers.
-export function isMemHook(cfg) {
-  if (!cfg.hooks) return false;
-  return cfg.hooks.some((h) => {
-    const cmd = h.command || '';
-    return (
-      cmd.includes('claude-mem-lite') ||
-      cmd.includes('hook-launcher.mjs') ||
-      cmd.includes('scripts/post-tool-use.sh') ||
-      // Same reason post-tool-use.sh is named here: a bash prefilter routes through
-      // NO launcher, and the product-name clause only fires when the install dir
-      // happens to contain it — which CLAUDE_MEM_DIR can relocate. Without this line
-      // an Agent|Task hook in a relocated install survives uninstall and duplicates
-      // on reinstall (audit 2026-08-22 P2-5 added the second prefilter).
-      cmd.includes('scripts/pre-agent-inject.sh')
-    );
-  });
-}
-
 function hasMemHooksConfigured(settings) {
   if (!settings?.hooks) return false;
   return Object.values(settings.hooks).some(
@@ -2007,7 +1984,7 @@ function looksLikeHookPath(p) {
   return HOOK_PATH_EXTS.some((ext) => p.endsWith(ext));
 }
 
-export function collectOrphanHookPaths(settings) {
+export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
   if (!settings?.hooks) return [];
   const out = [];
   for (const configs of Object.values(settings.hooks)) {
@@ -2017,6 +1994,13 @@ export function collectOrphanHookPaths(settings) {
       for (const h of cfg.hooks || []) {
         const cmd = h.command || '';
         if (cmd.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
+        // The launcher's entry argument first: it is the file that actually runs, and
+        // it is unquoted, so the quoted-token scan below cannot see it.
+        const entry = launcherEntryPath(cmd, installDir);
+        if (entry) {
+          if (!existsSync(entry) && !out.includes(entry)) out.push(entry);
+          continue;
+        }
         // v2.80: scan ALL quoted tokens (was: only the first), prefer ones
         // that look like a hook path. Fixes a footgun where a wrapper command
         // like `bash -c "some inline" "/real/path.sh"` would pick "some inline"

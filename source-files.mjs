@@ -142,6 +142,11 @@ export const SOURCE_FILES = [
   // + auto-update lock). Must ship or a partial install/update skips them.
   'lib/proc-lock.mjs',
   'lib/atomic-write.mjs',
+  // Shared settings.json hook classification + dangling-entry reconciliation.
+  // Statically imported by install.mjs AND dynamically by hook-update.mjs's
+  // post-swap step — missing it from the manifest would break auto-update's
+  // hook reconcile on the very release that needs it.
+  'lib/hook-prune.mjs',
   'lib/proxy-fetch.mjs',
   'lib/llm-provider-probe.mjs',
   // P1 supply-chain: shared release-signing core (sha256 manifest + Ed25519

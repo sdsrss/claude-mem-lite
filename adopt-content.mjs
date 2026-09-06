@@ -151,7 +151,6 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 | 导出 JSON/JSONL | \`${CLI} export [--format jsonl]\` |
 | 统计总量 / 健康 | \`${CLI} stats [--days 30]\` |
 | 删除 / 更新某条 | \`${CLI} delete <id>[,<id>]\` · \`${CLI} update <id> [--title ...]\` |
-| skill-agent registry | \`${CLI} registry <list\\|search\\|import>\` |
 
 ## CLI 速查（常用检索）
 
