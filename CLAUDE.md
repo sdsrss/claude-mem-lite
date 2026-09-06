@@ -339,6 +339,23 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   demotion across the pool's `WHERE` becomes an *eviction* rather than a down-rank. This
   shape has been found on five faces. Count such populations with the pool's OWN
   `liveObsFilterSql`, never a bare `WHERE importance = 3`.
+- **`COALESCE(compressed_into,0)=0` alone is NOT the liveness predicate** — `liveObsFilterSql`
+  also requires `superseded_at IS NULL`. **Which sites need the full one is settled; do not
+  re-derive it.** Carrying it: the two `COMPRESSED_PENDING_PURGE` writers
+  (`decayAndMarkIdle`'s mark-idle arm, `search-scoring.runIdleCleanup`) and
+  `mergeDuplicates`' keeper write — because `purgeStale` hard-deletes that sentinel, and
+  deleting a retired row destroys the `superseded_by` that the Stop citation loop follows to
+  credit a `#NN` to its successor (27 of 31 superseded rows carry one). Deliberately NOT
+  carrying it, each for a stated reason: `decayAndMarkIdle`'s decay arm / `boostAccessed` /
+  `demotePinned` move only `importance`, inert on a row every read path already hides;
+  `markAutoCompressible` writes `-1`, which both `purgeStale` (`-2`) and
+  `recoverOrphanedChildren` (`> 0`) skip, so it cannot delete or resurface anything;
+  `maintenanceStats` puts `superseded_at IS NULL` inside the **stale** CASE only, so each
+  forecast matches the op it predicts, and `hardDeleteCandidateCount`'s cleanup arm mirrors
+  `cleanupBroken`; `stats-core.computeStatsFeed` uses one predicate on both halves of a ratio
+  and reports superseded rows on their own line. Judged point by point 2026-09-06 across all
+  11 shipped sites (R8 §6-a, carried as open in R10 §7) — **zero changes warranted**, so a
+  future round finding "a bare predicate" has found the decision, not a defect.
 - **The cross-hook injected-ids marker is a union across TABLES**, so ids need namespacing
   (`injectedIdKey` in `lib/injected-ids.mjs`: `P` prompts, `D` deferred, `E` events,
   observations bare). 91.6% of observation ids also exist as an event id.
