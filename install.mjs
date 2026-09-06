@@ -2119,11 +2119,32 @@ export function hasOtherMarketplacePlugins(
   return Object.keys(plugins).some((key) => key !== pluginKey && key.endsWith(`@${marketplaceKey}`));
 }
 
+/** Thrown when settings.json exists but is not parseable. Never a reason to write. */
+class SettingsUnparseableError extends Error {}
+
 function readSettings() {
+  // R10 P1-8: ENOENT and a parse failure are NOT the same answer. Both used to return {},
+  // so a settings.json the user was midway through hand-editing (one trailing comma) was
+  // replaced wholesale on the next install / uninstall: permissions, env, other plugins'
+  // hooks, enabledPlugins — all of it. The .bak is written only on the FIRST overwrite
+  // ever, so on a real machine it is months old and not a recovery path.
+  let raw;
   try {
-    return JSON.parse(readFileSync(SETTINGS_PATH, 'utf8'));
+    raw = readFileSync(SETTINGS_PATH, 'utf8');
   } catch {
-    return {};
+    return {}; // absent — a first install legitimately starts from nothing
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    // `null` and arrays parse fine and would silently drop every key on merge.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('top level is not a JSON object');
+    }
+    return parsed;
+  } catch (e) {
+    throw new SettingsUnparseableError(
+      `${SETTINGS_PATH} is not valid JSON (${e.message}) — fix it first; nothing was written.`,
+    );
   }
 }
 
@@ -2148,8 +2169,18 @@ function cleanup() {
 
   // Clean .update-staging-* / .update-backup-* — hook-update writes these under
   // DB_DIR (= MEM_DATA_DIR, env-aware), so scan the data dir, not the homedir code dir.
+  //
+  // R10 P2-10: take install.lock first. `.update-backup-*` is the ONLY rollback copy of an
+  // in-flight update and it holds the journal hook-update replays; `.update-staging-*` is
+  // the tree being swapped in. Deleting either mid-update leaves the install unrecoverable,
+  // and the window is long — it spans the source-compile fallback, up to five minutes —
+  // while doctor is actively telling the user to run cleanup. Non-blocking: if an installer
+  // holds the lock we skip only these two patterns, not the rest of cleanup.
   const stalePatterns = ['.update-staging-', '.update-backup-'];
-  if (existsSync(MEM_DATA_DIR)) {
+  const updateLock = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  if (!updateLock) {
+    warn('Update residue skipped: install in progress (install.lock held)');
+  } else if (existsSync(MEM_DATA_DIR)) {
     for (const f of readdirSync(MEM_DATA_DIR)) {
       if (stalePatterns.some((p) => f.startsWith(p))) {
         if (dryRun) {
@@ -2167,6 +2198,9 @@ function cleanup() {
       }
     }
   }
+  // Release immediately: the rest of cleanup touches runtime scratch that no installer owns,
+  // and holding install.lock across it would block a self-heal for no reason.
+  if (updateLock) updateLock();
 
   // Clean pending-* / ep-flush-* in runtime/ (env-aware, and honouring the runtime override)
   const runtimeDir = MEM_RUNTIME_DIR;
@@ -2545,6 +2579,23 @@ export async function main(argv = process.argv.slice(2)) {
   cmd = argv[0];
   flags = new Set(argv.slice(1));
 
+  try {
+    return await dispatch(cmd);
+  } catch (e) {
+    // R10 P1-8: an unparseable settings.json aborts the whole command with a non-zero exit
+    // and a message that names the file. Refusing to act is the only safe answer — every
+    // write path merges into what readSettings returned, so continuing means replacing the
+    // user's Claude Code configuration with whatever this installer happens to know about.
+    if (e instanceof SettingsUnparseableError) {
+      console.error(`\n  ✗ ${e.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    throw e;
+  }
+}
+
+async function dispatch(cmd) {
   switch (cmd) {
     case 'install':
       await runLockedInstall();
