@@ -18,6 +18,7 @@
     "benchmark/episode-flush-replay.mjs",
     "benchmark/keyctx-pool-replay.mjs",
     "benchmark/patha-exclude-report.mjs",
+    "benchmark/deep-search-holdout.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

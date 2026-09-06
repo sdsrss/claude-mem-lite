@@ -255,6 +255,120 @@ describe('deepSearch — fusion over real hybrid search', () => {
   });
 });
 
+// ─── Hard negatives: a query the corpus cannot answer must stay unanswered ────
+//
+// The recall ruler (tests/benchmark-deep-search.test.mjs) measures R@10 only, so
+// it is structurally blind to the failure this section pins (doctrine rule 9):
+// deep search returning rows for a query with NO relevant memory.
+//
+// Prose-shaped rows on purpose. The makeSeed() corpus above is deliberately terse
+// and topically disjoint, which hides the defect — real observations are full
+// narrative sentences, so they share ordinary English stems ("deployment",
+// "release", "package") that an OR-relaxed query matches on.
+function makeProseSeed() {
+  const rows = [
+    [
+      'websocket reconnect timer leak',
+      'The websocket reconnect loop leaked retry timers because onclose never cleared them, so a manually closed socket kept dialling the server',
+    ],
+    [
+      'session store moved to redis',
+      'Switched the session store from cookies to Redis so horizontal scaling stops logging users out on every deployment release',
+    ],
+    [
+      'checkout rounding error',
+      'Checkout totals were off by a cent because we rounded each line item instead of rounding the order total once at the boundary',
+    ],
+    [
+      'signed image cdn',
+      'Added a product image CDN with signed URLs that expire after one hour to stop hotlinking of uploaded assets',
+    ],
+    [
+      'connection pool exhaustion',
+      'The Postgres connection pool exhausted under load because migrations held an idle transaction open on the request pool',
+    ],
+    [
+      'payment provider choice',
+      'Chose Stripe over Adyen for payments because the refund API is simpler and we already had the SDK integrated',
+    ],
+    [
+      'stale search index',
+      'Search results were stale because the Elasticsearch reindex job silently failed on mapping conflicts during deployment',
+    ],
+    [
+      'cart reducer split',
+      'Refactored the cart reducer into slices so the checkout flow stops re-rendering the whole component tree on updates',
+    ],
+    [
+      'email retry storm',
+      'Discovered that the email queue retries forever on a 400 from the provider, filling the dead letter table with permanent failures',
+    ],
+    [
+      'dark mode tokens',
+      'Added dark mode using CSS custom properties instead of shipping a second stylesheet for the alternate theme',
+    ],
+    [
+      'rate limiter per process',
+      'The rate limiter counted requests per process, so four workers allowed four times the intended request rate',
+    ],
+    [
+      'inventory oversell',
+      'Inventory oversold during flash sales because the stock check and the decrement were not performed in one transaction',
+    ],
+  ];
+  return {
+    observations: rows.map(([title, narrative], i) => ({
+      id: i + 1,
+      session_id: 's1',
+      project: 'proj-a',
+      text: `${title} ${narrative}`,
+      type: 'bugfix',
+      title,
+      narrative,
+      facts: '',
+      concepts: '',
+      files_modified: '[]',
+      importance: 2,
+      epoch_offset_days: -1,
+    })),
+    sessions: [],
+  };
+}
+
+describe('deepSearch — hard negatives (precision arm)', () => {
+  // The FLOOD ITSELF is measured by benchmark/deep-search-holdout.mjs, not pinned
+  // here: it is an open, unfixed gap (mean FP@10 = 10.00, 12/12 queries, measured
+  // 2026-09-06 on benchmark/fixtures/seed-data.json), and three candidate gates
+  // were rejected by that ruler — see the module docblock in the ruler for the
+  // rejected set and why. A test asserting the defect away would be red; a test
+  // asserting the defect persists would go red on the fix. The ruler is the
+  // right home for a number that is expected to move.
+  //
+  // What IS pinned here is the contract a future fix must not break while
+  // closing it: the original query's own OR-fallback rows are baseline, and the
+  // baseline is untouchable.
+  it('an OR-relaxed ORIGINAL query still contributes its rows (baseline is untouchable)', async () => {
+    _resetVocabCache();
+    const db = createTestDb();
+    seedDatabase(db, makeProseSeed());
+    seedVectors(db);
+
+    // "deployment release package" has no AND match either, so the ORIGINAL
+    // query itself relaxes to OR. That is the user's own wording, so those rows
+    // must survive — the baseline-equivalence guarantee covers variant[0].
+    const q = 'deployment release package';
+    const baseIds = searchObservationsHybrid(db, baselineCtx(q, 'proj-a'))
+      .slice(0, 10)
+      .map((r) => r.id);
+    expect(baseIds.length).toBeGreaterThan(0); // premise: OR-fallback did fire and did match
+
+    const llm = stubLLM({ variants: [] }); // collapse to [original]
+    const { results } = await deepSearch(db, { query: q, project: 'proj-a', limit: 10 }, { llm });
+    expect(results.map((r) => r.id)).toEqual(baseIds);
+    db.close();
+  });
+});
+
 describe('deepSearch — error handling (F5: never-worse in the error dimension)', () => {
   it('propagates an engine error on the ORIGINAL query (does not swallow to empty)', async () => {
     const throwing = () => {
