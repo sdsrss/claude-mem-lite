@@ -35,7 +35,6 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { _resetMode, _resetHeadlessFlag } from '../haiku-client.mjs';
-import { createRegistryTestDb } from './test-helpers.mjs';
 
 /** A spawn() stub that answers with `stdout` one microtask after the caller attaches listeners. */
 function autoAnswer(stdout) {
@@ -82,30 +81,6 @@ describe('MCP-reachable LLM legs must not block the event loop (D#138 MEDIUM-3)'
     expect(execFileSync, 'blocking leg reached from an MCP handler').not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(groups).toEqual([{ canonical: 'race condition', aliases: ['竞态'] }]); // leg really ran
-  });
-
-  it('mem_registry enrich (registry-enricher) spawns, never execFileSync', async () => {
-    vi.mocked(spawn).mockImplementation(
-      autoAnswer(
-        JSON.stringify({
-          capability_summary: 'Formats commit messages',
-          intent_tags: 'git,commit',
-          domain_tags: 'vcs',
-        }),
-      ),
-    );
-    const db = createRegistryTestDb();
-    db.prepare(
-      `INSERT INTO resources (name, type, source, local_path, quality_tier) VALUES (?, ?, ?, ?, ?)`,
-    ).run('commit-helper', 'skill', 'user', '/tmp/commit-helper/SKILL.md', 'community');
-    const { enrichResource } = await import('../registry-enricher.mjs');
-
-    const ok = await enrichResource(db, 'commit-helper', 'skill', '# commit-helper\nWrites commits.');
-
-    expect(execFileSync, 'blocking leg reached from an MCP handler').not.toHaveBeenCalled();
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(ok, 'enrichment must succeed so the assertion above is about HOW, not WHETHER').toBe(true);
-    db.close();
   });
 
   it('mem_search deep+rerank (defaultRerankLLM) spawns, never execFileSync', async () => {

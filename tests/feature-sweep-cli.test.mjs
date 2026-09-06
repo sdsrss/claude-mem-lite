@@ -41,7 +41,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_PATH = join(REPO, 'cli.mjs');
 const REPO_CLAUDE_MD = join(REPO, 'CLAUDE.md');
 
-// The 28 routed commands, pinned here on purpose. The `help` case closes BOTH drift
+// The 25 routed commands, pinned here on purpose. The `help` case closes BOTH drift
 // directions around this literal, which on its own proves nothing:
 //   (a) router ↔ literal — the CLI_COMMANDS literal in cli.mjs must equal this list;
 //   (b) literal ↔ coverage — the set of case names actually registered via itCmd()
@@ -67,10 +67,7 @@ const EXPECTED_CLI_COMMANDS = [
   'maintain',
   'optimize',
   'fts-check',
-  'registry',
-  'import',
   'import-jsonl',
-  'enrich',
   'activity',
   'adopt',
   'unadopt',
@@ -199,14 +196,6 @@ function writeTranscript(path, sessionId) {
  * Fine for `registry import`, which only records the path. NOT what `enrich` reads —
  * see writeManagedSkill.
  */
-function writeSkill(name) {
-  const dir = join(ROOT, 'skills', name);
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, 'SKILL.md');
-  writeFileSync(p, `---\nname: ${name}\ndescription: sweep fixture skill for ${name}\n---\n\nBody.\n`);
-  return p;
-}
-
 /**
  * The same fixture where a real imported resource actually lands: under
  * `<CLAUDE_MEM_DIR>/managed/`, which is what registry-importer writes.
@@ -216,14 +205,6 @@ function writeSkill(name) {
  * which is correct behaviour, and would silently turn the `enrich --all` case into an
  * assertion about refusals rather than about an unreachable LLM.
  */
-function writeManagedSkill(name) {
-  const dir = join(DATA_DIR, 'managed', 'skills', name);
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, 'SKILL.md');
-  writeFileSync(p, `---\nname: ${name}\ndescription: sweep fixture skill for ${name}\n---\n\nBody.\n`);
-  return p;
-}
-
 // Seeded ids, filled in beforeAll.
 let SEED_BUGFIX_ID, SEED_DECISION_ID, SEED_DISCOVERY_ID, SEED_DEFER_ID;
 const SEED_LESSON = 'Invalidate the widget cache on write, never on read';
@@ -707,21 +688,6 @@ describe('CLI feature sweep: data commands', () => {
     expect(second.stdout).not.toContain('none matched');
     expect(jsonOf(ok(['recent', '5', '--project', 'sweep-jsonl', '--json'])).total).toBe(1);
   });
-
-  itCmd('import', () => {
-    // GitHub import is the one command that cannot be exercised end-to-end without
-    // network. Its documented failure paths run entirely locally: the usage error,
-    // and parseGitHubUrl rejecting a non-GitHub URL BEFORE the first fetch
-    // (registry-importer.mjs:235). Both are asserted; the fetch path is not.
-    const noArg = runCli(['import']);
-    expect(noArg.exitCode).toBe(1);
-    expect(noArg.stdout + noArg.stderr).toContain('Usage: claude-mem-lite import <github-url>');
-
-    const badUrl = runCli(['import', 'https://example.com/not-github/repo']);
-    expect(badUrl.exitCode).toBe(1);
-    expect(badUrl.stdout + badUrl.stderr).toContain('Invalid GitHub URL');
-    expect(badUrl.stdout + badUrl.stderr).not.toMatch(/ENOTFOUND|ETIMEDOUT|fetch failed/);
-  });
 });
 
 // ─── Maintenance surfaces ───────────────────────────────────────────────────
@@ -869,102 +835,6 @@ describe('CLI feature sweep: maintenance commands', () => {
 });
 
 // ─── Registry surfaces ──────────────────────────────────────────────────────
-
-describe('CLI feature sweep: registry commands', () => {
-  itCmd('registry', () => {
-    const skill = writeSkill('sweep-registry-skill');
-    const imported = ok([
-      'registry',
-      'import',
-      '--name',
-      'sweep-registry-skill',
-      '--resource-type',
-      'skill',
-      '--local-path',
-      skill,
-      '--use-cases',
-      'exercising the registry surface',
-    ]);
-    expect(imported.stdout).toMatch(/Imported: skill:sweep-registry-skill \(id=\d+\)/);
-
-    expect(ok(['registry', 'list']).stdout).toContain('sweep-registry-skill');
-    expect(ok(['registry', 'stats']).stdout).toMatch(/Total active: [1-9]\d*/);
-
-    const found = ok(['registry', 'search', 'sweep-registry-skill']);
-    expect(found.stdout).toContain('sweep-registry-skill');
-    // This fixture lives at ROOT/skills/, i.e. NOT under the managed dir — so no `Path:`
-    // line, and the row is invoked by name. Until v3.92.0 the CLI printed the absolute
-    // local_path here while the MCP face printed nothing (audit P2-6), and this assertion
-    // was `toContain(skill)`, pinning that divergence as if it were the contract. The Use:
-    // line for a non-managed hit never refers to the path, so printing an absolute home
-    // path bought the reader nothing.
-    expect(found.stdout).not.toContain(skill);
-    expect(found.stdout).not.toMatch(/\n\s*Path:/);
-    expect(found.stdout).toMatch(/Use: (Skill\(|mem_use\(name=)/);
-
-    expect(ok(['registry', 'reindex']).stdout).toMatch(/FTS5 reindexed\. \d+ active resources/);
-
-    expect(
-      ok(['registry', 'remove', '--name', 'sweep-registry-skill', '--resource-type', 'skill']).stdout,
-    ).toContain('Removed: skill:sweep-registry-skill');
-    // Positive post-removal assertion: the documented zero-result line, not a negative
-    // coupled to the exact "  [✓] S " row prefix (which would go green on a mere
-    // formatting change while the row was still being returned).
-    expect(ok(['registry', 'search', 'sweep-registry-skill']).stdout).toContain(
-      'No matching resources for: "sweep-registry-skill"',
-    );
-  });
-
-  itCmd(
-    'enrich',
-    () => {
-      const unknown = runCli(['enrich', 'no-such-resource-xyzzy']);
-      expect(unknown.exitCode).toBe(1);
-      expect(unknown.stdout + unknown.stderr).toContain('Resource not found: no-such-resource-xyzzy');
-
-      // With a resource pending enrichment and no reachable LLM, --all must report an
-      // honest failure count and exit 0 — not hang, not spawn a real `claude`. The fixture
-      // has to live under the managed dir or the P1-3 confinement gate refuses it before
-      // the enricher is reached, and this case would be asserting the wrong thing.
-      const skill = writeManagedSkill('sweep-enrich-skill');
-      ok([
-        'registry',
-        'import',
-        '--name',
-        'sweep-enrich-skill',
-        '--resource-type',
-        'skill',
-        '--local-path',
-        skill,
-      ]);
-      const all = ok(['enrich', '--all']);
-      expect(all.stdout).toMatch(/Done: 0 enriched, [1-9]\d* failed\./);
-      expect(all.stdout, 'a managed path must not be refused').not.toMatch(/Refused/);
-      ok(['registry', 'remove', '--name', 'sweep-enrich-skill', '--resource-type', 'skill']);
-
-      // The other side of the same gate, on the shipped CLI: a resource whose local_path
-      // sits outside the managed dir is refused rather than read. tests/registry-enrich-
-      // confinement.test.mjs owns the detail; this one pins that the sweep's own surface
-      // routes it, since `enrich` is the command this case is named after.
-      const outside = writeSkill('sweep-enrich-outside');
-      ok([
-        'registry',
-        'import',
-        '--name',
-        'sweep-enrich-outside',
-        '--resource-type',
-        'skill',
-        '--local-path',
-        outside,
-      ]);
-      const refused = ok(['enrich', '--all']);
-      expect(refused.stdout).toMatch(/Refused 1: local_path outside the managed directory/);
-      expect(refused.stdout).toMatch(/Done: 0 enriched, 0 failed\./);
-      ok(['registry', 'remove', '--name', 'sweep-enrich-outside', '--resource-type', 'skill']);
-    },
-    40000,
-  );
-});
 
 // ─── Project-adoption surfaces (cwd-scoped filesystem writes) ───────────────
 

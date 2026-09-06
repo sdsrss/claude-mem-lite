@@ -568,10 +568,8 @@ describe('E2E: Version consistency across all manifests', () => {
     expect(files).toContain('scripts/prompt-search-utils.mjs');
     expect(files).toContain('scripts/pre-tool-recall.js');
 
-    // Registry + CLI
+    // CLI
     expect(files).toContain('mem-cli.mjs');
-    expect(files).toContain('registry.mjs');
-    expect(files).toContain('registry-retriever.mjs');
   });
 });
 

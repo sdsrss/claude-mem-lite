@@ -3,7 +3,7 @@
 // No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs
 
 import { homedir } from 'os';
-import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, REGISTRY_DB_PATH } from './schema.mjs';
+import { ensureDbWithWalRecovery, DB_PATH, DB_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { truncate, typeIcon, inferProject, scrubSecrets, COMPRESSED_PENDING_PURGE } from './utils.mjs';
 import { resolveProject } from './project-utils.mjs';
@@ -36,24 +36,6 @@ import {
   BROWSE_TIER_LABELS,
 } from './lib/browse-core.mjs';
 import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
-import {
-  ensureRegistryDb,
-  collectRegistryStats,
-  listResourcesRanked,
-  formatRegistryListLine,
-} from './registry.mjs';
-import {
-  IMPORT_STRING_FIELDS,
-  importResource,
-  removeResource,
-  reindexResources,
-  enrichResourceRow,
-  enrichImportedResources,
-  enrichNamedResource,
-  REGISTRY_CONFINE_ENV,
-  resourceUseHint,
-} from './lib/registry-core.mjs';
-import { searchResources } from './registry-retriever.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
   runMaintainOps,
@@ -83,7 +65,7 @@ import {
   bucketIdTokens,
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
-import { join, sep, dirname } from 'path';
+import { join, dirname } from 'path';
 import { spawnSync } from 'child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 
@@ -2677,203 +2659,6 @@ import { cmdFtsCheck } from './cli/fts-check.mjs';
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
-function cmdRegistry(_memDb, args) {
-  const { positional, flags } = parseArgs(args);
-  const action = positional[0];
-  if (!action || !['list', 'stats', 'search', 'import', 'remove', 'reindex'].includes(action)) {
-    fail(
-      '[mem] Usage: claude-mem-lite registry <list|stats|search|import|remove|reindex> [--type skill|agent] [--query Q] [--name N] [--resource-type T]',
-    );
-    return;
-  }
-
-  let rdb;
-  try {
-    rdb = ensureRegistryDb(REGISTRY_DB_PATH);
-    rdb.pragma('busy_timeout = 3000');
-  } catch (e) {
-    out(`[mem] Registry DB not available: ${e.message}`);
-    return;
-  }
-
-  // `--type` and `--resource-type` are both constrained to skill|agent across
-  // registry sub-actions. Validating once here means search/list/import/remove
-  // all reject typos like `--type sklil` instead of silently returning
-  // "No resources found." (which looked like the registry was empty for that
-  // type, not like a typo).
-  if (flags.type !== undefined && flags.type !== 'skill' && flags.type !== 'agent') {
-    fail(`[mem] Invalid --type "${flags.type}". Use: skill, agent`);
-    return;
-  }
-  if (
-    flags['resource-type'] !== undefined &&
-    flags['resource-type'] !== 'skill' &&
-    flags['resource-type'] !== 'agent'
-  ) {
-    fail(`[mem] Invalid --resource-type "${flags['resource-type']}". Use: skill, agent`);
-    return;
-  }
-
-  try {
-    if (action === 'search') {
-      // Bare `--query` parses to boolean true; `true || ...` would search for the literal
-      // string "true". Reject it cleanly (#8470) before it becomes a confusing no-match.
-      if (rejectBareStringFlags(flags, ['query', 'category', 'quality'])) return;
-      const query = flags.query || positional.slice(1).join(' ');
-      if (!query) {
-        fail(
-          '[mem] Usage: claude-mem-lite registry search <query> [--type skill|agent] [--category C] [--quality Q]',
-        );
-        return;
-      }
-      let results = searchResources(rdb, query, {
-        type: flags.type || undefined,
-        limit: flags.category || flags.quality ? 20 : 10,
-      });
-      // Apply category/quality post-filters (aligned with MCP mem_registry)
-      if (flags.category) results = results.filter((r) => r.category === flags.category);
-      if (flags.quality) results = results.filter((r) => r.quality_tier === flags.quality);
-      // Prioritize directly invocable resources (aligned with MCP mem_registry)
-      results.sort((a, b) => {
-        const aInvocable = a.invocation_name ? 1 : 0;
-        const bInvocable = b.invocation_name ? 1 : 0;
-        if (aInvocable !== bInvocable) return bInvocable - aInvocable;
-        return 0;
-      });
-      results = results.slice(0, 5);
-      if (results.length === 0) {
-        out(`[mem] No matching resources for: "${query}"`);
-        return;
-      }
-      out(`[mem] ${results.length} resource(s) for "${query}":`);
-      const home = homedir();
-      for (const r of results) {
-        const badge = r.quality_tier === 'installed' ? '[✓]' : r.quality_tier === 'verified' ? '[★]' : '[○]';
-        const categoryLabel = r.category ? ` [${r.category}]` : '';
-        // P2-6: the invocation rule is shared; only the four-space indent is this face's.
-        const { portablePath, howToUse } = resourceUseHint(r, {
-          home,
-          managedPrefix: join(DB_DIR, 'managed') + sep,
-        });
-        const pathLine = portablePath ? `\n    Path: ${portablePath}` : '';
-        out(
-          `  ${badge} ${r.type === 'skill' ? 'S' : 'A'} ${r.name}${categoryLabel} — ${truncate(r.capability_summary || '', 80)}${pathLine}\n    Use: ${howToUse}`,
-        );
-      }
-      return;
-    }
-
-    if (action === 'list') {
-      const typeFilter = flags.type;
-      const listLimit = parseIntFlag(flags.limit, { name: '--limit', defaultValue: 20, max: 1000 });
-      // Shared ranked query + row line (registry.mjs, P2-12): COALESCE ordering and
-      // the 80-char/adopt:0 row shape had drifted between the faces.
-      const allResources = listResourcesRanked(rdb, { type: typeFilter });
-      if (allResources.length === 0) {
-        out('[mem] No resources found.');
-        return;
-      }
-      const resources = allResources.slice(0, listLimit);
-      out(`[mem] Resources (showing ${resources.length} of ${allResources.length}):`);
-      for (const r of resources) out(`  ${formatRegistryListLine(r)}`);
-      if (allResources.length > listLimit) {
-        out(`[mem] Use --limit N to see more, or "registry search <query>" to find specific resources.`);
-      }
-      return;
-    }
-
-    if (action === 'stats') {
-      // Shared collection (registry.mjs collectRegistryStats, P2-12) — single
-      // source with the MCP mem_registry stats action.
-      const s = collectRegistryStats(rdb);
-      out(`[mem] Registry Stats:`);
-      out(`  Total active: ${s.total}`);
-      for (const t of s.byType) out(`  ${t.type}: ${t.c}`);
-      out(`  User-added: ${s.userAdded}`);
-      out(`  Zero adoption (recommended but never adopted): ${s.zeroAdopt}`);
-      if (s.topAdopted.length > 0) {
-        out('  Top adopted:');
-        for (const r of s.topAdopted) out(`    ${r.name} (${r.type}): ${r.adopt_count}/${r.recommend_count}`);
-      }
-      return;
-    }
-
-    if (action === 'import') {
-      // Bare value-less flags → boolean true → SQLite-bind crash in upsertResource (#8470).
-      // Shared guard — single source with update/remove/the other commands.
-      if (
-        rejectBareStringFlags(flags, [
-          'name',
-          'resource-type',
-          'invocation-name',
-          'source',
-          'repo-url',
-          'local-path',
-          'intent-tags',
-          'domain-tags',
-          'trigger-patterns',
-          'capability-summary',
-          'keywords',
-          'tech-stack',
-          'use-cases',
-        ])
-      )
-        return;
-      const name = flags.name;
-      const resourceType = flags['resource-type'];
-      if (!name || !resourceType) {
-        fail(
-          '[mem] Usage: claude-mem-lite registry import --name N --resource-type skill|agent [--invocation-name I] [--capability-summary S]',
-        );
-        return;
-      }
-      // Validate --source against its CHECK enum (parity with memRegistrySchema.source on MCP):
-      // an invalid value otherwise reaches the INSERT and throws a raw SqliteError stacktrace
-      // (the dispatcher's catch only special-cases SQLITE_BUSY/LOCKED).
-      if (flags.source && !new Set(['preinstalled', 'user', 'github']).has(flags.source)) {
-        fail(`[mem] Invalid --source "${flags.source}". Valid: preinstalled, user, github`);
-        return;
-      }
-      // Provenance preservation + the 'installed' tier grant live in lib/registry-core.mjs,
-      // shared with the mem_registry MCP twin (audit 2026-08-22 P1-3). CLI flags are
-      // kebab-case; the core's field list is the canonical snake_case source.
-      const fields = {};
-      for (const f of IMPORT_STRING_FIELDS) fields[f] = flags[f.replace(/_/g, '-')] || '';
-      const { id } = importResource(rdb, { name, type: resourceType, source: flags.source, fields });
-      out(`[mem] Imported: ${resourceType}:${name} (id=${id})`);
-      if (!flags['capability-summary'] && !flags['use-cases']) {
-        out('[mem] Tip: Add --capability-summary or --use-cases so the resource appears in searches.');
-      }
-      return;
-    }
-
-    if (action === 'remove') {
-      // Bare value-less --name / --resource-type → boolean true → SQLite-bind crash on
-      // the DELETE below; shared guard, single source with import/update.
-      if (rejectBareStringFlags(flags, ['name', 'resource-type'])) return;
-      const name = flags.name;
-      const resourceType = flags['resource-type'];
-      if (!name || !resourceType) {
-        fail('[mem] Usage: claude-mem-lite registry remove --name N --resource-type skill|agent');
-        return;
-      }
-      const { removed } = removeResource(rdb, { name, type: resourceType });
-      out(removed ? `[mem] Removed: ${resourceType}:${name}` : `[mem] Not found: ${resourceType}:${name}`);
-      return;
-    }
-
-    if (action === 'reindex') {
-      const { activeCount } = reindexResources(rdb);
-      out(`[mem] FTS5 reindexed. ${activeCount} active resources.`);
-      return;
-    }
-  } finally {
-    try {
-      rdb.close();
-    } catch {}
-  }
-}
-
 // ─── memdir-audit ────────────────────────────────────────────────────────────
 // Body-structure audit for ~/.claude/projects/<encoded>/memory/feedback_*.md
 // and project_*.md. CLI-only by design — running this every session would be
@@ -3415,23 +3200,8 @@ Commands:
     --days N            Cite-rate window in days (default 7)
     --json              Output as JSON: {window_days,per_project:[],decay_queue:[],promoted:[]}
 
-  registry <action>     Manage tool resource registry
-    list                List resources [--type skill|agent] [--limit N] (default 20)
-    stats               Registry statistics
-    search <query>      Search resources [--type skill|agent] [--category C] [--quality Q]
-    import              Import resource --name N --resource-type T [--repo-url U] [--local-path P] [--use-cases U]
-    remove              Remove resource --name N --resource-type T
-    reindex             Rebuild FTS5 index
-
   import-jsonl <file-or-dir>      Import Claude Code JSONL transcripts (cold-start backfill)
     --project P         Project name (default: inferred from cwd)
-
-  import <github-url>   Import skills/agents into the resource registry from a GitHub repo
-    --enrich            Auto-enrich each imported resource with a Haiku capability summary
-
-  enrich <name>         Re-enrich a single registry resource (Haiku capability summary)
-    --all               Enrich every active resource missing or failed enrichment
-    --batch             Skip the inter-call delay (use only with low rate-limit risk)
 
   activity <action>     Non-memdir event log (v2.31) — bugfix/lesson/bug/discovery/etc.
     save --type T "<title>" [--body "<text>"] [--files f1,f2] [--file path] [--importance 1-3] [--project P]
@@ -3472,69 +3242,6 @@ DB: ${DB_PATH}`);
 }
 
 // ─── Import (GitHub) ────────────────────────────────────────────────────────
-
-async function cmdImport(argv) {
-  const { positional, flags } = parseArgs(argv);
-  const url = positional[0];
-
-  if (!url) {
-    fail('[mem] Usage: claude-mem-lite import <github-url> [--enrich]');
-    return;
-  }
-
-  let rdb;
-  try {
-    rdb = ensureRegistryDb(REGISTRY_DB_PATH);
-    rdb.pragma('busy_timeout = 3000');
-  } catch (e) {
-    fail(`[mem] Registry DB error: ${e.message}`);
-    return;
-  }
-
-  try {
-    const { importFromGitHub, formatImportSkips } = await import('./registry-importer.mjs');
-    out(`[mem] Importing from ${url}...`);
-    // `skipped` sink + shared summary (R6 Q1) — same helper the MCP twin renders, so the
-    // bounds cannot end up enforced-but-silent on one of the two faces.
-    const skipped = [];
-    const results = await importFromGitHub(rdb, url, { skipped });
-    const refusal = formatImportSkips(skipped);
-
-    if (results.length === 0) {
-      out('[mem] No skills/agents found in this repository.');
-      if (refusal) out(`[mem] ${refusal}`);
-      return;
-    }
-
-    out(`[mem] Imported ${results.length} resource(s):`);
-    for (const r of results) {
-      out(`  ${r.type === 'skill' ? 'S' : 'A'} ${r.name} (id=${r.id})`);
-    }
-    if (refusal) out(`[mem] ${refusal}`);
-
-    if (flags.enrich) {
-      out('[mem] Running LLM enrichment...');
-      const { enrichResource } = await import('./registry-enricher.mjs');
-      const { ok: enriched, denied } = await enrichImportedResources(rdb, results, {
-        confineTo: DB_DIR,
-        enrichResource,
-      });
-      out(`[mem] Enriched ${enriched}/${results.length} resources.`);
-      if (denied)
-        out(
-          `[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
-        );
-    }
-  } catch (e) {
-    fail(`[mem] Import failed: ${e.message}`);
-  } finally {
-    try {
-      rdb.close();
-    } catch {}
-  }
-}
-
-// ─── Import (Claude Code JSONL transcript — cold-start backfill) ─────────────
 
 async function cmdImportJsonl(db, argv) {
   const { positional, flags } = parseArgs(argv);
@@ -3642,86 +3349,6 @@ async function cmdImportJsonl(db, argv) {
 }
 
 // ─── Enrich ─────────────────────────────────────────────────────────────────
-
-async function cmdEnrich(argv) {
-  const { positional, flags } = parseArgs(argv);
-  const name = positional[0];
-
-  let rdb;
-  try {
-    rdb = ensureRegistryDb(REGISTRY_DB_PATH);
-    rdb.pragma('busy_timeout = 3000');
-  } catch (e) {
-    fail(`[mem] Registry DB error: ${e.message}`);
-    return;
-  }
-
-  try {
-    const { enrichResource } = await import('./registry-enricher.mjs');
-
-    if (flags.all) {
-      const rows = rdb
-        .prepare(
-          "SELECT name, type, local_path FROM resources WHERE status = 'active' AND (enrichment_status IS NULL OR enrichment_status = 'failed')",
-        )
-        .all();
-      if (rows.length === 0) {
-        out('[mem] All resources already enriched.');
-        return;
-      }
-      out(`[mem] Enriching ${rows.length} resources...`);
-      let ok = 0,
-        failCount = 0,
-        denied = 0;
-      for (const r of rows) {
-        const { status, error } = await enrichResourceRow(rdb, r, { confineTo: DB_DIR, enrichResource });
-        if (status === 'enriched') ok++;
-        else if (status === 'denied') denied++;
-        else failCount++;
-        // Pace exactly where the pre-refactor loop did: after an enrichResource call that
-        // RETURNED. A missing path, an unreadable file, a gate refusal and a throw out of
-        // enrichResource all skipped the sleep before, and still do — `error` present on a
-        // 'failed' row is what distinguishes "returned false" from "threw".
-        const apiReturned = status === 'enriched' || (status === 'failed' && !error);
-        if (apiReturned && !flags.batch) await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      out(`[mem] Done: ${ok} enriched, ${failCount} failed.`);
-      if (denied)
-        out(
-          `[mem] Refused ${denied}: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
-        );
-    } else if (name) {
-      const { status, error } = await enrichNamedResource(rdb, name, { confineTo: DB_DIR, enrichResource });
-      if (status === 'not-found') {
-        fail(`[mem] Resource not found: ${name}`);
-        return;
-      }
-      if (status === 'no-path') {
-        fail(`[mem] No local_path for ${name}`);
-        return;
-      }
-      if (status === 'denied') {
-        fail(
-          `[mem] Access denied: local_path outside the managed directory (${REGISTRY_CONFINE_ENV}=off to override).`,
-        );
-        return;
-      }
-      if (status === 'unreadable') {
-        fail(`[mem] Enrich error: ${error?.message || 'cannot read local_path'}`);
-        return;
-      }
-      out(status === 'enriched' ? `[mem] Enriched: ${name}` : `[mem] Enrichment failed for ${name}`);
-    } else {
-      fail('[mem] Usage: claude-mem-lite enrich <name> OR claude-mem-lite enrich --all [--batch]');
-    }
-  } catch (e) {
-    fail(`[mem] Enrich error: ${e.message}`);
-  } finally {
-    try {
-      rdb.close();
-    } catch {}
-  }
-}
 
 async function cmdOptimize(db, args) {
   // cmdOptimize parses flags positionally (args.indexOf('--task') + args[idx+1])
@@ -4073,17 +3700,8 @@ export async function run(argv) {
       case 'citation-stats':
         cmdCitationStats(db, cmdArgs);
         break;
-      case 'registry':
-        cmdRegistry(db, cmdArgs);
-        break;
-      case 'import':
-        await cmdImport(cmdArgs);
-        break;
       case 'import-jsonl':
         await cmdImportJsonl(db, cmdArgs);
-        break;
-      case 'enrich':
-        await cmdEnrich(cmdArgs);
         break;
       case 'doctor':
         await cmdDoctor(db, cmdArgs);

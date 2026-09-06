@@ -67,20 +67,13 @@ describe('background LLM call sites use the shared constant, not a bare literal'
   // `lib/llm-call.mjs` is where callLLM's `timeoutMs = BG_LLM_TIMEOUT_MS` default lives
   // since audit 2026-09-05 P1-2 moved it out of hook-shared.mjs, which now only
   // re-exports the name and therefore has no call site left to guard.
-  const BACKGROUND_SITES = [
-    'lib/save-enrich.mjs',
-    'hook-optimize.mjs',
-    'registry-enricher.mjs',
-    'hook-llm.mjs',
-    'lib/llm-call.mjs',
-  ];
+  const BACKGROUND_SITES = ['lib/save-enrich.mjs', 'hook-optimize.mjs', 'hook-llm.mjs', 'lib/llm-call.mjs'];
 
   // Per-file floor on how many LLM calls must carry the constant. Raise when a
   // file gains a call; never lower without saying why.
   const BG_TIMEOUT_USE_COUNTS = {
     'lib/save-enrich.mjs': 1,
     'hook-optimize.mjs': 5,
-    'registry-enricher.mjs': 1,
     'hook-llm.mjs': 2,
     'lib/llm-call.mjs': 1,
   };
@@ -89,7 +82,7 @@ describe('background LLM call sites use the shared constant, not a bare literal'
     it(`${file} passes BG_LLM_TIMEOUT_MS at every LLM call it makes`, () => {
       const src = read(file);
       // A bare `toContain('BG_LLM_TIMEOUT_MS')` was satisfied by the IMPORT line:
-      // deleting `timeout: BG_LLM_TIMEOUT_MS` from registry-enricher or from all
+      // deleting `timeout: BG_LLM_TIMEOUT_MS` from a call site or from all
       // five hook-optimize sites left the suite green while each call silently
       // fell back to its dispatcher default (10s / 15s) — the exact regression
       // this release exists to fix, and no numeric literal appears so the

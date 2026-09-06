@@ -7,7 +7,6 @@
 //   update   → lib/observation-write.mjs applyObsUpdate
 //   delete   → lib/delete-core.mjs      previewDeleteRows
 //   browse   → lib/browse-core.mjs      collectBrowseTiers
-//   registry → registry.mjs             collectRegistryStats + formatRegistryListLine
 //
 // Faces keep their own validation front-ends and header/footer conventions —
 // only the data collection, field sets, and drift-prone row shapes are shared.
@@ -20,13 +19,11 @@ import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { ensureRegistryDb, upsertResource } from '../registry.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { OBS_FIELDS, SESSION_DETAIL_FIELDS, fetchObsDetail } from '../lib/get-core.mjs';
 import { applyObsUpdate } from '../lib/observation-write.mjs';
 import { previewDeleteRows } from '../lib/delete-core.mjs';
 import { collectBrowseTiers } from '../lib/browse-core.mjs';
-import { collectRegistryStats, formatRegistryListLine, listResourcesRanked } from '../registry.mjs';
 
 function seededDb() {
   const db = createTestDb();
@@ -158,112 +155,6 @@ describe('lib/browse-core.mjs collectBrowseTiers', () => {
     db.close();
   });
 });
-
-describe('registry.mjs stats + list twins', () => {
-  function regDb() {
-    const rdb = ensureRegistryDb(':memory:');
-    upsertResource(rdb, {
-      name: 'alpha-skill',
-      type: 'skill',
-      status: 'active',
-      source: 'user',
-      local_path: '/tmp/alpha',
-      capability_summary: 'x'.repeat(120),
-    });
-    upsertResource(rdb, {
-      name: 'beta-agent',
-      type: 'agent',
-      status: 'active',
-      source: 'github',
-      local_path: '/tmp/beta',
-    });
-    rdb.prepare("UPDATE resources SET adopt_count = 5, recommend_count = 9 WHERE name = 'alpha-skill'").run();
-    return rdb;
-  }
-
-  it('collectRegistryStats returns the five stat groups both faces render', () => {
-    const rdb = regDb();
-    const s = collectRegistryStats(rdb);
-    expect(s.total).toBe(2);
-    expect(Object.fromEntries(s.byType.map((t) => [t.type, t.c]))).toEqual({ skill: 1, agent: 1 });
-    expect(s.userAdded).toBe(1);
-    expect(s.zeroAdopt).toBe(0);
-    expect(s.topAdopted.map((r) => r.name)).toEqual(['alpha-skill']);
-    rdb.close();
-  });
-
-  // FAILS IF: the faces re-diverge on the list row shape — the audited drift was
-  // truncate 50 vs 80 and `adopt:null` on one face only.
-  it('formatRegistryListLine coalesces null counts and truncates at 80', () => {
-    const line = formatRegistryListLine({
-      name: 'alpha-skill',
-      type: 'skill',
-      invocation_name: null,
-      recommend_count: null,
-      adopt_count: null,
-      capability_summary: 'y'.repeat(200),
-    });
-    expect(line).toContain('rec:0');
-    expect(line).toContain('adopt:0');
-    expect(line).not.toContain('null');
-    // Pin the cap AT 80 (review 2026-08-16: the original `< 140` bound also
-    // passed at the audited-drift value 50 — mutation-verified hole). truncate()
-    // yields 79 kept chars + '…' = exactly 80.
-    const summarySegment = line.split(' — ')[2];
-    expect(summarySegment, 'summary segment must be truncate(…, 80)-shaped').toBe('y'.repeat(79) + '…');
-  });
-
-  // truncate() semantics, not a bare slice (adversarial review 2026-08-16, all
-  // three runtime-proven): newlines flatten (one row per resource), no lone
-  // UTF-16 surrogate at the cut, and ≤80-char summaries pass through untouched.
-  it('formatRegistryListLine flattens newlines and never splits a surrogate pair', () => {
-    const multiline = formatRegistryListLine({
-      name: 'n',
-      type: 'skill',
-      recommend_count: 1,
-      adopt_count: 1,
-      capability_summary: 'line one\nline two',
-    });
-    expect(multiline).toContain('line one line two');
-    expect(multiline).not.toContain('\n');
-
-    const emoji = formatRegistryListLine({
-      name: 'n',
-      type: 'skill',
-      recommend_count: 1,
-      adopt_count: 1,
-      capability_summary: 'x'.repeat(78) + '🚀🚀🚀', // surrogate pair straddles the cut
-    });
-    expect(emoji.isWellFormed(), 'lone surrogate emitted at the truncation cut').toBe(true);
-  });
-
-  // FAILS IF: the COALESCE ordering fix regresses — NULL-count rows then sort
-  // apart from 0-count rows and the un-adopted tail interleaves wrongly
-  // (mutation-verified: dropping COALESCE survived every other suite).
-  it('listResourcesRanked sorts NULL counts as 0 (adoption desc, then recommendation)', () => {
-    const rdb = regDb();
-    upsertResource(rdb, {
-      name: 'gamma-skill',
-      type: 'skill',
-      status: 'active',
-      source: 'user',
-      local_path: '/tmp/gamma',
-    });
-    rdb
-      .prepare("UPDATE resources SET adopt_count = NULL, recommend_count = NULL WHERE name = 'gamma-skill'")
-      .run();
-    rdb.prepare("UPDATE resources SET adopt_count = 0, recommend_count = 3 WHERE name = 'beta-agent'").run();
-    const names = listResourcesRanked(rdb).map((r) => r.name);
-    // alpha (5 adopts) first; beta (0 adopts, 3 recs) beats gamma (NULL≡0 adopts, NULL≡0 recs).
-    expect(names).toEqual(['alpha-skill', 'beta-agent', 'gamma-skill']);
-    rdb.close();
-  });
-});
-
-// ─── Face-level pin: the session-detail dead end is actually fixed ─────────────────
-// The core constant test above pins SESSION_DETAIL_FIELDS; this pins the FACE — the
-// CLI `get S#N` render loop actually walks that list (review 2026-08-16: the audited
-// motivation "remaining_items searchable-but-unrendered" had no face-level test).
 
 describe('CLI get S#N renders remaining_items (the audited dead-end field)', () => {
   it('a session summary with remaining_items shows it in the detail view', () => {

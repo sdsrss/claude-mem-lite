@@ -1,15 +1,8 @@
 // Shared test utilities for claude-mem-lite
-// Single source of truth: uses initSchema/registry schemas — no DDL duplication
+// Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import {
-  RESOURCES_SCHEMA,
-  FTS5_SCHEMA,
-  TRIGGERS_SCHEMA,
-  INVOCATIONS_SCHEMA,
-  PREINSTALLED_SCHEMA,
-} from '../registry.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
 /**
@@ -21,23 +14,6 @@ export function createTestDb() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF');
   return initSchema(db);
-}
-
-/**
- * Create an in-memory registry test database with full production schema.
- * Uses exported schemas from registry.mjs — single source of truth.
- */
-export function createRegistryTestDb() {
-  const db = new Database(':memory:');
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 3000');
-  db.pragma('foreign_keys = ON');
-  db.exec(RESOURCES_SCHEMA);
-  db.exec(FTS5_SCHEMA);
-  db.exec(TRIGGERS_SCHEMA);
-  db.exec(INVOCATIONS_SCHEMA);
-  db.exec(PREINSTALLED_SCHEMA);
-  return db;
 }
 
 export function insertSession(db, { id, project = 'test', memoryId = null }) {

@@ -3733,58 +3733,6 @@ describe('CLI fts-check command', () => {
 
 // ─── registry command ───────────────────────────────────────────────────────
 
-describe('CLI registry command', () => {
-  beforeEach(() => {
-    testDb = createTestDb();
-  });
-  afterEach(() => {
-    testDb.close();
-  });
-
-  it('shows usage for no action', async () => {
-    const output = await captureStdout(() => run(['registry']));
-    expect(output).toContain('Usage');
-  });
-
-  it('shows usage for invalid action', async () => {
-    const output = await captureStdout(() => run(['registry', 'invalid']));
-    expect(output).toContain('Usage');
-  });
-
-  // Registry commands access real DB files via REGISTRY_DB_PATH.
-  // These tests just verify the command routing works without crashing.
-  it('list runs without crashing', async () => {
-    const output = await captureStdout(() => run(['registry', 'list']));
-    // May succeed or show "not available" depending on registry DB
-    expect(output).toBeDefined();
-  });
-
-  it('stats runs without crashing', async () => {
-    const output = await captureStdout(() => run(['registry', 'stats']));
-    expect(output).toBeDefined();
-  });
-
-  it('reindex runs without crashing', async () => {
-    const output = await captureStdout(() => run(['registry', 'reindex']));
-    expect(output).toBeDefined();
-  });
-
-  it('search shows usage when no query', async () => {
-    const output = await captureStdout(() => run(['registry', 'search']));
-    expect(output).toContain('Usage');
-  });
-
-  it('import shows usage when missing params', async () => {
-    const output = await captureStdout(() => run(['registry', 'import']));
-    expect(output).toContain('Usage');
-  });
-
-  it('remove shows usage when missing params', async () => {
-    const output = await captureStdout(() => run(['registry', 'remove']));
-    expect(output).toContain('Usage');
-  });
-});
-
 // ─── P2: memdir-audit CLI ────────────────────────────────────────────────────
 
 describe('CLI memdir-audit command', () => {

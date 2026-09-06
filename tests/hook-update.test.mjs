@@ -60,7 +60,6 @@ function makeCodeHome(version = '1.0.0') {
 function makeReleaseDir(version = '1.1.0') {
   const dir = makeDir('mem-update-release');
   mkdirSync(join(dir, 'scripts'), { recursive: true });
-  mkdirSync(join(dir, 'registry'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ version }, null, 2));
   writeFileSync(
     join(dir, 'package-lock.json'),
@@ -70,7 +69,6 @@ function makeReleaseDir(version = '1.1.0') {
   writeFileSync(join(dir, 'server.mjs'), '// new server');
   writeFileSync(join(dir, 'cli.mjs'), '#!/usr/bin/env node\n// new cli\n');
   writeFileSync(join(dir, 'scripts', 'post-tool-use.sh'), '#!/usr/bin/env bash\necho ok\n');
-  writeFileSync(join(dir, 'registry', 'preinstalled.json'), '{"resources":[]}');
   return dir;
 }
 
@@ -452,27 +450,6 @@ describe('hook update lifecycle', () => {
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
     expect(existsSync(join(dataDir, newRelPath))).toBe(true);
     expect(readFileSync(join(dataDir, newRelPath), 'utf8')).toContain('added in newer release');
-  });
-
-  // Regression: pre-v2.55 readdirSync + copyFileSync threw EISDIR on any
-  // subdirectory under registry/, silently rolling back the entire update.
-  // registry/ stays recursive so future subtrees ship intact.
-  it('staged install recursively copies subdirectories under registry/', async () => {
-    const dataDir = makeDataDir();
-    const releaseDir = makeReleaseDir();
-    mkdirSync(join(releaseDir, 'registry', 'fixtures'), { recursive: true });
-    writeFileSync(join(releaseDir, 'registry', 'fixtures', 'sample.json'), '{}');
-    mockedExecSync.mockImplementation((cmd, opts = {}) => {
-      if (String(cmd).startsWith('npm install')) {
-        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
-      }
-      return '';
-    });
-    const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
-
-    expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
-    expect(existsSync(join(dataDir, 'registry', 'fixtures', 'sample.json'))).toBe(true);
-    expect(existsSync(join(dataDir, 'registry', 'preinstalled.json'))).toBe(true);
   });
 });
 

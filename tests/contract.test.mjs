@@ -13,8 +13,6 @@ import {
   memMaintainSchema,
   memOptimizeSchema,
   memRecallSchema,
-  memRegistrySchema,
-  memUseSchema,
   memBrowseSchema,
 } from '../tool-schemas.mjs';
 
@@ -472,96 +470,7 @@ describe('mem_maintain schema', () => {
 
 // ─── mem_registry schema ────────────────────────────────────────────────────
 
-describe('mem_registry schema', () => {
-  it('accepts list action', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'list' }).success).toBe(true);
-  });
-
-  it('accepts list with type filter', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'list', type: 'skill' }).success).toBe(true);
-  });
-
-  it('accepts stats action', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'stats' }).success).toBe(true);
-  });
-
-  it('accepts import with full metadata', () => {
-    expect(
-      parseSchema(memRegistrySchema, {
-        action: 'import',
-        name: 'my-tool',
-        resource_type: 'skill',
-        repo_url: 'https://github.com/user/repo',
-        intent_tags: 'test,debug',
-        domain_tags: 'javascript',
-        capability_summary: 'A testing tool',
-        trigger_patterns: 'when user wants to test',
-      }).success,
-    ).toBe(true);
-  });
-
-  it('accepts remove action', () => {
-    expect(
-      parseSchema(memRegistrySchema, { action: 'remove', name: 'old-tool', resource_type: 'agent' }).success,
-    ).toBe(true);
-  });
-
-  it('accepts reindex action', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'reindex' }).success).toBe(true);
-  });
-
-  it('rejects invalid action', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'invalid' }).success).toBe(false);
-  });
-
-  it('rejects invalid resource_type', () => {
-    expect(
-      parseSchema(memRegistrySchema, { action: 'import', name: 'x', resource_type: 'invalid' }).success,
-    ).toBe(false);
-  });
-
-  it('accepts search with category filter', () => {
-    expect(
-      parseSchema(memRegistrySchema, { action: 'search', query: 'test', category: 'testing' }).success,
-    ).toBe(true);
-  });
-
-  it('accepts search with quality filter', () => {
-    expect(
-      parseSchema(memRegistrySchema, { action: 'search', query: 'test', quality: 'installed' }).success,
-    ).toBe(true);
-  });
-
-  it('accepts all valid quality enum values', () => {
-    for (const q of ['installed', 'verified', 'community']) {
-      expect(parseSchema(memRegistrySchema, { action: 'search', query: 'x', quality: q }).success).toBe(true);
-    }
-  });
-
-  it('rejects invalid quality enum value', () => {
-    expect(parseSchema(memRegistrySchema, { action: 'search', query: 'x', quality: 'premium' }).success).toBe(
-      false,
-    );
-  });
-});
-
 // ─── memUseSchema ────────────────────────────────────────────────────────────
-
-describe('memUseSchema', () => {
-  it('memUseSchema accepts valid input', () => {
-    const schema = z.object(memUseSchema);
-    expect(schema.parse({ name: 'humanizer' })).toEqual({ name: 'humanizer' });
-    expect(schema.parse({ name: 'tdd-workflows', type: 'agent' })).toEqual({
-      name: 'tdd-workflows',
-      type: 'agent',
-    });
-  });
-
-  it('memUseSchema rejects missing name', () => {
-    const schema = z.object(memUseSchema);
-    expect(() => schema.parse({})).toThrow();
-  });
-});
 
 // ─── memBrowseSchema ─────────────────────────────────────────────────────────
 

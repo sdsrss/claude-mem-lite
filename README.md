@@ -818,9 +818,6 @@ the default rather than removing the bound.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLAUDE_MEM_IMPORT_MAX_ITEMS` | Max skills/agents imported from one repository. | `200` |
-| `CLAUDE_MEM_IMPORT_MAX_FILE_BYTES` | Max size of a single `SKILL.md`/`AGENT.md`. Oversized entries are skipped; the rest still import. | `2097152` (2 MB) |
-| `CLAUDE_MEM_IMPORT_MAX_TOTAL_BYTES` | Byte budget for one import run. Exhausting it stops the walk and books the remainder as refused. | `52428800` (50 MB) |
 
 ### Retrieval tuning
 
@@ -840,7 +837,6 @@ benchmark and A/B harness are calibrated against — changing them invalidates t
 | `CLAUDE_MEM_ERROR_RECALL_BM25_MIN` | Relevance floor for the error-recall surface (memories injected after a failed Bash command). **Off by default.** Setting it to `10.5` (the calibrated value) makes the surface stay silent when its best-matching memory is not actually about the failure — the whole set is dropped, never trimmed row-by-row. **It is a real trade, not a free win:** measured on a live database at that threshold, injections fall ~37% and ~39% of firings go silent, concentrated in projects with few memories. Off by default because nothing shows the dropped rows were noise. Explore with `node benchmark/error-recall-suite.mjs --sweep`. | `0` (off) |
 | `CLAUDE_MEM_ERROR_RECALL_RERANK` | `off` restores the flat keyword ordering of the error-recall surface. **On by default**, and unlike the floor above it removes nothing: memories that share only the failed command's vocabulary are demoted below memories that mention the failure itself, and when a project has none of the latter the result is unchanged. Measured on a live database over 52 real failing commands × 15 projects: the lead memory matched no error term in 42.3% of firings before, 21.5% after, with the injected row count identical. | _(on)_ |
 | `CLAUDE_MEM_ERROR_RECALL_ON_FAILURE` | `off` stops the plugin from recalling memories when a Bash command **fails at the host level**. On by default. Claude Code delivers failed tool calls to a separate `PostToolUseFailure` hook event, so before this the surface only ever saw commands that exited `0` while printing error-ish text — a genuinely failing build recalled nothing. Denials from your own guardrails (sandbox, policy hooks, declined permission prompts) and commands you interrupted are never recalled for. | _(on)_ |
-| `CLAUDE_MEM_REGISTRY_CONFINE` | `off` lets registry enrichment read a resource whose `local_path` lies outside the managed data directory. **On by default.** Enrichment reads the file at `resources.local_path` and sends it to an LLM; the confinement check used to guard one of the four code paths that do this (`mem_registry(action="enrich")`) and not the other three, so `enrich <name>`, `enrich --all` and `import --enrich` read any path the row happened to hold. All four are gated now. Turn it off only if you deliberately registered resources outside `CLAUDE_MEM_DIR` and want them enriched; only `off` disables it — case-insensitively and ignoring surrounding whitespace — so a typo leaves the guard on. | _(on)_ |
 | `CLAUDE_MEM_UPS_IDENTIFIER_BYPASS` | `0` disables the bypass that lets an exact identifier match skip the score floors. | _(on)_ |
 | `CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT` | How many past-prompt rows the fallback arm may return. | `1` |
 | `MEM_COVERAGE_THRESHOLD` | Fraction of query terms a memory must cover to qualify (∈ [0,1]). | `0.4` |
@@ -885,7 +881,6 @@ what is already stored — only whether new work runs.
 | `CLAUDE_MEM_SKIP_MARKER_GC` | Skip the runtime-marker sweep. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h auto-update check against GitHub Releases. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SIG_VERIFY` | Skip Ed25519 signature verification of a downloaded update. **Escape hatch — leaves updates unauthenticated.** | _(verifies)_ |
-| `CLAUDE_MEM_SKIP_REPOS` | Skip skill/agent registry seeding during install. | _(seeds)_ |
 | `CLAUDE_MEM_NO_LESSON_RETRY` | `1` disables the one-shot retry that re-asks for a missing `lesson_learned`. | _(retries)_ |
 | `CLAUDE_MEM_FLUSH_TIMEOUT` | Seconds the Stop hook waits for pending episode flushes. | `15` |
 | `CLAUDE_MEM_BACKUP_BUDGET_MB` | Disk budget for backup snapshots; the next maintain/save evicts oldest snapshots past the 7-day undo grace. | `256` |
@@ -897,7 +892,6 @@ and names can change between releases.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLAUDE_MEM_RECOMMEND_MODE` | Skill-recommendation engine: `shadow` (log would-be recommendations, inject nothing) or `off`. **`live` is parsed but not implemented** — live injection is Phase 2. Setting it runs shadow and prints one warning to stderr per process; `claude-mem-lite doctor` also reports it as an inert flag. | `shadow` |
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
 | `CLAUDE_MEM_SALIENCE` | Selects a comprehension-bridge arm (`bridge`, `bind`); unset = current default behavior. | _(unset)_ |

@@ -13,7 +13,6 @@ import { resolveDataDir } from './lib/resolve-data-dir.mjs';
 // CLAUDE_MEM_DIR so users can relocate state to a larger/faster volume.
 export const DB_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
 export const DB_PATH = join(DB_DIR, 'claude-mem-lite.db');
-export const REGISTRY_DB_PATH = join(DB_DIR, 'resource-registry.db');
 // CODE / install location — server.mjs, hook.mjs, cli.mjs, package.json live
 // here. ALWAYS homedir-rooted: Claude Code's settings.json + MCP registration
 // bake ABSOLUTE paths to server.mjs/hooks, so the code must NOT follow the

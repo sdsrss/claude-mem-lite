@@ -21,12 +21,12 @@ const MAX_AUTHORED_DESCRIPTION = 760;
 const authoredLength = (desc) => desc.split(CLI_INVOKE).join('').length;
 
 describe('MCP tool descriptions use discouragement style', () => {
-  test('there are exactly 20 tools (9 core + 11 hidden)', () => {
-    expect(tools).toHaveLength(20);
+  test('there are exactly 18 tools (9 core + 9 hidden)', () => {
+    expect(tools).toHaveLength(18);
     const core = tools.filter((t) => !t.hidden);
     const hidden = tools.filter((t) => t.hidden === true);
     expect(core, 'core count').toHaveLength(9);
-    expect(hidden, 'hidden count').toHaveLength(11);
+    expect(hidden, 'hidden count').toHaveLength(9);
   });
 
   test('core (unhidden) names are the contract-critical nine', () => {
@@ -51,7 +51,7 @@ describe('MCP tool descriptions use discouragement style', () => {
     ]);
   });
 
-  test('hidden names are the maintenance/admin/specialized eleven', () => {
+  test('hidden names are the maintenance/admin/specialized nine', () => {
     const hiddenNames = tools
       .filter((t) => t.hidden === true)
       .map((t) => t.name)
@@ -64,10 +64,8 @@ describe('MCP tool descriptions use discouragement style', () => {
       'mem_fts_check',
       'mem_maintain',
       'mem_optimize',
-      'mem_registry',
       'mem_stats',
       'mem_update',
-      'mem_use',
     ]);
   });
 
@@ -102,8 +100,6 @@ describe('MCP tool descriptions use discouragement style', () => {
       'mem_compress',
       'mem_maintain',
       'mem_optimize',
-      'mem_registry',
-      'mem_use',
       'mem_update',
       'mem_export',
       'mem_recall',

@@ -45,10 +45,8 @@ describe('MCP tools surface', () => {
         'mem_fts_check',
         'mem_maintain',
         'mem_optimize',
-        'mem_registry',
         'mem_stats',
         'mem_update',
-        'mem_use',
       ].sort(),
     );
   });
@@ -67,7 +65,6 @@ describe('MCP tools surface', () => {
 
   it('every tool description carries an Equivalent CLI line (except mem_use, MCP-only)', () => {
     for (const t of tools) {
-      if (t.name === 'mem_use') continue; // no CLI equivalent
       expect(t.description, `${t.name} missing "Equivalent CLI:" line`).toMatch(/Equivalent CLI:/);
     }
   });

@@ -33,21 +33,10 @@ export const SOURCE_FILES = [
   'package.json',
   'package-lock.json',
   'skill.md',
-  'registry.mjs',
-  'registry-scanner.mjs',
-  'registry-retriever.mjs',
-  'resource-discovery.mjs',
-  // registry-enricher/-github/-importer are dynamically imported by server.mjs
-  // (mem_registry tool) and mem-cli.mjs (registry CLI subcommands). Missing
-  // them from SOURCE_FILES silently broke those code paths prior to this fix.
-  'registry-enricher.mjs',
-  'registry-github.mjs',
-  'registry-importer.mjs',
   // Shared SOURCE_FILES manifest — self-reference so `~/.claude-mem-lite/` can
   // re-run install.mjs (which imports this module) after an auto-update.
   'source-files.mjs',
   'install.mjs',
-  'install-metadata.mjs',
   'mem-cli.mjs',
   'tier.mjs',
   'tfidf.mjs',
@@ -208,8 +197,7 @@ export const SOURCE_FILES = [
   // (scripts/user-prompt-search.js and hook.mjs user-prompt via hook-memory.mjs).
   'lib/ups-query.mjs',
   // P2-12 twin cores: get/browse shared data collection for the CLI/MCP pairs
-  // (update lives in observation-write, delete-preview in delete-core, registry
-  // stats/list in registry.mjs — all already listed).
+  // (update lives in observation-write, delete-preview in delete-core).
   'lib/get-core.mjs',
   'lib/browse-core.mjs',
   // v2.61 dedup refactor: shared "save one observation" pipeline used by both
@@ -222,10 +210,6 @@ export const SOURCE_FILES = [
   // auto-update. Same single-source-of-truth pattern (see #8217).
   'lib/observation-write.mjs',
   'lib/recall-core.mjs',
-  // Shared registry write core (import/remove/reindex + the 'installed' tier grant).
-  // Statically imported by mem-cli.mjs AND server.mjs — missing it from the manifest
-  // would break `registry import|remove|reindex` and mem_registry on auto-update.
-  'lib/registry-core.mjs',
   // Shared timeline core (anchor resolution + before/after window) and shared
   // cross-source search core (sessions/prompts FTS, CJK fallback, normalization,
   // pagination math). Statically imported by mem-cli.mjs AND server.mjs — same
@@ -372,8 +356,8 @@ const LAUNCHER_SCRIPT_FILES = ['launch.mjs', 'launch-preflight.mjs', 'setup.sh',
 // themselves, but they NAME what gets executed: hooks/hooks.json declares the
 // command lines Claude Code runs on every hook fire, .mcp.json declares the MCP
 // server launch command, plugin.json/marketplace.json steer the install source,
-// commands/*.md are model-visible skill bodies, registry/preinstalled.json seeds
-// the resource registry. All ship in the tarball; none were signed — the same
+// commands/*.md are model-visible skill bodies. All ship in the tarball; none
+// were signed — the same
 // shape as the two closed RCE gaps (hook scripts v3.40, launch.mjs v3.42): a
 // release published without the signing key could swap hooks.json to point a
 // hook event at an arbitrary command while every signed hash still matched.
@@ -384,11 +368,9 @@ const PLUGIN_DECLARATION_FILES = [
   '.mcp.json',
   '.claude-plugin/plugin.json',
   '.claude-plugin/marketplace.json',
-  'registry/preinstalled.json',
   'commands/mem.md',
   'commands/memory.md',
   'commands/update.md',
-  'commands/tools.md',
   'commands/adopt.md',
   'commands/unadopt.md',
   'commands/lesson.md',

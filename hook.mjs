@@ -642,9 +642,6 @@ async function handlePostToolUse() {
   if (SKIP_TOOLS.has(tool_name)) return;
   if (SKIP_PREFIXES.some((p) => tool_name.startsWith(p))) return;
 
-  // Shadow skill-adoption telemetry. mem_use is pre-filtered above, so the Skill tool is
-  // the only visible adoption signal (v1). Placed before the resp-length gate because a
-  // skill load's response shape varies. Never throws.
   const resp = normalizeToolResponse(tool_response);
   if (!resp || resp.length < 10) return;
 

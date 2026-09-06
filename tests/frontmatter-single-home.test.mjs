@@ -20,7 +20,6 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { parseFrontmatter } from '../lib/frontmatter.mjs';
-import { parseFrontmatter as importerParseFrontmatter } from '../registry-importer.mjs';
 import { walkShipped, sweepShipped } from './shipped-tree.mjs';
 
 // D#207: join(), never new URL('../X.mjs', import.meta.url).
@@ -28,10 +27,6 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(join(REPO, rel), 'utf8');
 
 describe('parseFrontmatter — one implementation', () => {
-  it('the shipped re-export IS the lib function, not a copy of it', () => {
-    expect(importerParseFrontmatter).toBe(parseFrontmatter);
-  });
-
   it('parses the `|` block that the simplified copy got wrong', () => {
     // The exact divergence. The dropped parser returned '|' here.
     const { frontmatter } = parseFrontmatter(
@@ -90,15 +85,12 @@ describe('parseFrontmatter — one implementation', () => {
     expect(sweepShipped(DEFINE_RE, PARSER_ALLOWED)).toEqual([]);
   });
 
-  it('the three known consumers import the shared one', () => {
-    // The sweep above proves nobody DEFINES a second parser; this proves the three files
-    // that used to carry one now take it from the shared module rather than having simply
-    // dropped the feature.
-    for (const rel of [
-      'registry-importer.mjs',
-      'scripts/index-managed.mjs',
-      'scripts/convert-commands.mjs',
-    ]) {
+  it('the known consumer imports the shared one', () => {
+    // The sweep above proves nobody DEFINES a second parser; this proves the file that
+    // used to carry one now takes it from the shared module rather than having simply
+    // dropped the feature. Two of the original three consumers (registry-importer.mjs,
+    // scripts/index-managed.mjs) went with the skill-registry removal in 2026-09.
+    for (const rel of ['scripts/convert-commands.mjs']) {
       expect(read(rel), `${rel} must import the shared one`).toMatch(/frontmatter\.mjs'/);
     }
   });
@@ -111,48 +103,5 @@ describe('parseFrontmatter — one implementation', () => {
     for (const rel of PARSER_ALLOWED) {
       expect(read(rel), `${rel} is allowlisted but defines no parser`).toMatch(DEFINE_RE);
     }
-  });
-});
-
-describe('registry FTS5 DDL — one definition', () => {
-  it("index-managed uses registry.mjs's blocks instead of its own", () => {
-    const src = read('scripts/index-managed.mjs')
-      .split('\n')
-      .filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
-      .join('\n');
-    expect(src).toMatch(/FTS5_SCHEMA,\s*TRIGGERS_SCHEMA\s*\}\s*from\s*'\.\.\/registry\.mjs'/);
-    expect(src, 'must not re-declare the virtual table').not.toMatch(
-      /CREATE VIRTUAL TABLE[\s\S]{0,80}resources_fts/,
-    );
-    expect(src, 'must not re-declare the sync triggers').not.toMatch(/CREATE TRIGGER\s+res_fts_/);
-  });
-
-  it('the stale BM25 weight comment is gone from every copy', () => {
-    // The drift was in the DOCUMENTATION before it was anywhere else: `trigger_patterns(5)`
-    // against a shipped bm25(resources_fts, 3,3,3,2,2,1,1,1). A reader tuning against the
-    // comment would have been tuning a weight that does not exist.
-    for (const rel of ['registry.mjs', 'registry-retriever.mjs', 'scripts/index-managed.mjs']) {
-      expect(read(rel), `${rel} still claims trigger_patterns(5)`).not.toMatch(/trigger_patterns\(5\)/);
-    }
-    // The sweep can fire, and the real weights are where the comment points.
-    expect('// BM25 weights: trigger_patterns(5), keywords(3)').toMatch(/trigger_patterns\(5\)/);
-    // The SQL writes them as floats (`3.0`) while every doc comment writes integers (`3`).
-    // Match the SQL as it actually is — the first cut of this assertion required integers
-    // and failed against the shipped call, which is the wrong direction for a guard whose
-    // whole subject is documentation drifting away from code.
-    //
-    // Count and assert EVERY call, do not `toMatch` the file. `registry-retriever.mjs`
-    // contains three identical `bm25(resources_fts, …)` calls and a whole-file `toMatch`
-    // passes when any ONE of them matches — the v3.92.0 review changed only the third and
-    // the case stayed green, so two of the three weights this test names could drift while
-    // it read as enforced.
-    const src = read('registry-retriever.mjs');
-    const calls = src.match(/bm25\(resources_fts,[^)]*\)/g) || [];
-    expect(calls.length, 'no bm25(resources_fts, …) call found — the anchor moved').toBeGreaterThan(0);
-    const WEIGHTS =
-      /^bm25\(resources_fts,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*3(?:\.0)?,\s*2(?:\.0)?,\s*2(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?,\s*1(?:\.0)?\)$/;
-    calls.forEach((call, i) => {
-      expect(call, `bm25 call #${i + 1} of ${calls.length} carries different weights`).toMatch(WEIGHTS);
-    });
   });
 });

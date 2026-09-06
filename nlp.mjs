@@ -361,7 +361,7 @@ export function sanitizeFtsQuery(query, opts = {}) {
         // "redis" in "redis缓存问题". extractCjkKeywords + cjkBigrams only see CJK runs, so
         // without this the Latin anchor (often the single most precise term — a proper noun
         // like redis/grafana/oauth with no CJK synonym) was dropped, zeroing recall on
-        // whitespace-free mixed-script prompts. Mirrors registry-retriever.mjs's embedded-
+        // whitespace-free mixed-script prompts. Mirrors the embedded-
         // English extraction. Lowercased for parity with the write-path unicode61 folding.
         for (const en of remainder.match(/[a-zA-Z]{2,}/g) || []) {
           const low = en.toLowerCase();

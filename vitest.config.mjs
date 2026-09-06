@@ -110,8 +110,6 @@ export default defineConfig({
         'schema.mjs',
         'search-scoring.mjs',
         'mem-cli.mjs',
-        'registry-scanner.mjs',
-        'resource-discovery.mjs',
         'hook-episode.mjs',
         'hook-context.mjs',
         'hook-semaphore.mjs',
@@ -133,15 +131,7 @@ export default defineConfig({
       // `experiment/**` is listed because the `lib/**/*.mjs` include above is NOT anchored
       // to the repo root — it also matches `experiment/lib/*.mjs`, an unshipped scratch dir
       // that would otherwise drag the gate down with code nothing ships.
-      exclude: [
-        'install.mjs',
-        'server.mjs',
-        'hook.mjs',
-        'registry-retriever.mjs',
-        'benchmark/**',
-        'scripts/**',
-        'experiment/**',
-      ],
+      exclude: ['install.mjs', 'server.mjs', 'hook.mjs', 'benchmark/**', 'scripts/**', 'experiment/**'],
       // Re-baselined 2026-08-22 against the measured number, which the P2-2 re-scoping
       // had left 12 points below: the gate said 75/75/65 while the suite actually ran
       // 86.58 lines / 87.42 functions / 77.22 branches, i.e. coverage could fall by a

@@ -244,36 +244,6 @@ export function shouldSkipByDedup(newIds, injectedFile, sessionId) {
   }
 }
 
-// ─── Registry Skill Name Matching ───────────────────────────────────────────
-
-/**
- * Check if prompt text contains a known managed skill name.
- * Returns the matched name or null.
- * @param {string} text - user prompt
- * @param {Set<string>} skillNames - set of known managed skill names (lowercase)
- * @returns {string|null}
- */
-export function matchRegistrySkillName(text, skillNames) {
-  if (!text || skillNames.size === 0) return null;
-  const lower = text.toLowerCase();
-
-  // Sort names longest-first to match "code-review-expert" before "code-review"
-  const sorted = [...skillNames].sort((a, b) => b.length - a.length);
-
-  for (const name of sorted) {
-    const idx = lower.indexOf(name);
-    if (idx === -1) continue;
-
-    // Check word boundaries: char before and after must be non-alphanumeric (or start/end)
-    const before = idx === 0 ? ' ' : lower[idx - 1];
-    const after = idx + name.length >= lower.length ? ' ' : lower[idx + name.length];
-    if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) continue;
-
-    return name;
-  }
-  return null;
-}
-
 // ─── File Path Detection ─────────────────────────────────────────────────────
 
 /** Detect file paths in text — excludes URLs and pure version numbers */

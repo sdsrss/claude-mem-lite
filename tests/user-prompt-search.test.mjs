@@ -9,7 +9,6 @@ import { unlinkSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { sanitizeFtsQuery, relaxFtsQueryToOr } from '../utils.mjs';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { ensureRegistryDb } from '../registry.mjs';
 import {
   createTestDb,
   insertSession,
@@ -25,7 +24,6 @@ import {
   shouldSkipByDedup,
   extractFiles,
   extractErrorSignature,
-  matchRegistrySkillName,
   detectMemOverride,
 } from '../scripts/prompt-search-utils.mjs';
 // Importing the script runs main() once on load; with stdin closed (vitest) it
@@ -534,35 +532,6 @@ describe('extractFiles', () => {
 });
 
 // ─── Unit Tests: Registry Skill Name Matching ──────────────────────────────
-
-describe('matchRegistrySkillName', () => {
-  const skillNames = new Set(['humanizer', 'tdd-workflows', 'code-review-expert', 'audit-website']);
-
-  it('matches exact skill name in prompt', () => {
-    expect(matchRegistrySkillName('用 humanizer 处理这段文字', skillNames)).toBe('humanizer');
-  });
-
-  it('matches skill name as word boundary', () => {
-    expect(matchRegistrySkillName('run the tdd-workflows agent', skillNames)).toBe('tdd-workflows');
-  });
-
-  it('returns null when no match', () => {
-    expect(matchRegistrySkillName('fix the database bug', skillNames)).toBeNull();
-  });
-
-  it('matches case-insensitively', () => {
-    expect(matchRegistrySkillName('Use Humanizer on this text', skillNames)).toBe('humanizer');
-  });
-
-  it('does not match partial names embedded in other words', () => {
-    expect(matchRegistrySkillName('audit the code', skillNames)).toBeNull();
-  });
-
-  it('returns longest match when multiple skills could match', () => {
-    const names = new Set(['code-review', 'code-review-expert']);
-    expect(matchRegistrySkillName('use code-review-expert', names)).toBe('code-review-expert');
-  });
-});
 
 // ─── Unit Tests: Output Format ───────────────────────────────────────────────
 
@@ -1803,166 +1772,6 @@ describe('user-prompt-search T3: BM25 threshold + prompt-length gate', () => {
     db.pragma('wal_checkpoint(FULL)');
     const { stdout } = await runScript({ prompt: 'a' });
     expect(stdout.trim()).toBe('');
-  });
-});
-
-// ─── T4 (v2.31): Skill pointer (no raw-body injection) ─────────────────────
-// Purpose: the registry-skill auto-load block must NEVER emit the full skill
-// body to stdout (previously up to 16KB). It may emit a single pointer line
-// containing the skill name so Claude can decide to invoke via SkillTool.
-// See Task 4 in docs/plans/2026-04-14-mem-v2.31-mvp.md.
-//
-// Seeding strategy: filesystem + registry DB. Managed-skill detection confines to the
-// env-aware data dir (DB_DIR = CLAUDE_MEM_DIR || homedir), and runScript sets
-// CLAUDE_MEM_DIR=testDir, so we place the skill under testDir/managed/<nonce>. This matches
-// production after D#29 and keeps the whole fixture inside the temp dir — pre-D#29 this had
-// to write under the REAL homedir (the relocation fix removed that requirement).
-describe('user-prompt-search T4: registry skill pointer (no body injection)', () => {
-  let db;
-  let testDir;
-  let managedSkillDir;
-  let skillName;
-
-  /**
-   * Seed a registered skill with a body under testDir/managed (= CLAUDE_MEM_DIR/managed,
-   * where managed-skill detection confines after D#29) plus a registry row pointing at it.
-   * Returns the skill name for use in the prompt.
-   */
-  function seedRegistrySkill({ registryDbPath, bodyBytes, nonceOverride }) {
-    const nonce = nonceOverride ?? `test-skill-large-${process.pid}-${Date.now()}`;
-    const skillDir = join(testDir, 'managed', nonce);
-    mkdirSync(skillDir, { recursive: true });
-    const skillPath = join(skillDir, 'SKILL.md');
-    writeFileSync(skillPath, 'A'.repeat(bodyBytes));
-
-    const rdb = ensureRegistryDb(registryDbPath);
-    try {
-      rdb
-        .prepare(
-          `
-        INSERT INTO resources (name, type, status, source, local_path, invocation_name)
-        VALUES (?, 'skill', 'active', 'user', ?, ?)
-      `,
-        )
-        .run(nonce, skillPath, nonce);
-    } finally {
-      rdb.close();
-    }
-    return { skillName: nonce, skillDir };
-  }
-
-  beforeEach(() => {
-    cleanupTestFiles();
-    try {
-      if (existsSync(COOLDOWN_FILE)) unlinkSync(COOLDOWN_FILE);
-    } catch {}
-    testDir = resolve(import.meta.dirname, '.tmp-prompt-search-dir');
-    try {
-      rmSync(testDir, { recursive: true, force: true });
-    } catch {}
-    mkdirSync(testDir, { recursive: true });
-    // runtime/ needed so setSkillCooldown can write (doesn't affect assertion,
-    // but keeps the path clean; write is try/catch-guarded anyway).
-    mkdirSync(join(testDir, 'runtime'), { recursive: true });
-    const dbPath = join(testDir, 'claude-mem-lite.db');
-    db = createFileDb(dbPath);
-    insertSession(db, { id: 's1', project: 'test--project', memoryId: 'mem-s1' });
-    managedSkillDir = null;
-    skillName = null;
-  });
-
-  afterEach(() => {
-    try {
-      db.close();
-    } catch {}
-    try {
-      rmSync(testDir, { recursive: true, force: true });
-    } catch {}
-    // Always clean up the homedir-seeded skill fixture
-    if (managedSkillDir) {
-      try {
-        rmSync(managedSkillDir, { recursive: true, force: true });
-      } catch {}
-    }
-    cleanupTestFiles();
-  });
-
-  it('never emits raw skill bodies — at most a one-line pointer', async () => {
-    const registryDbPath = join(testDir, 'resource-registry.db');
-    const seeded = seedRegistrySkill({ registryDbPath, bodyBytes: 10000 });
-    managedSkillDir = seeded.skillDir;
-    skillName = seeded.skillName;
-    db.pragma('wal_checkpoint(FULL)');
-
-    const prompt = `please use the ${skillName} skill to help me with this task`;
-    const { stdout } = await runScript({ prompt });
-
-    // HARD constraint: the 10KB body must not appear in stdout under any
-    // circumstance. A run of 100+ 'A' characters can only come from the body.
-    expect(stdout).not.toMatch(/A{100,}/);
-
-    // SOFT constraint: if the hook DOES emit something (the pointer line),
-    // it must be short and reference the skill by name so Claude can act.
-    if (stdout.trim()) {
-      expect(stdout.length).toBeLessThan(500);
-      expect(stdout).toContain(skillName);
-    }
-  });
-
-  // D#29: the managed-skill detection LIKE marker used a hardcoded homedir literal, so under
-  // CLAUDE_MEM_DIR relocation (runScript sets CLAUDE_MEM_DIR=testDir) it matched nothing and
-  // dropped every managed skill from injection. The marker must follow DB_DIR/managed.
-  it('detects a managed skill under the relocated CLAUDE_MEM_DIR and emits its pointer (D#29)', async () => {
-    const registryDbPath = join(testDir, 'resource-registry.db');
-    const seeded = seedRegistrySkill({ registryDbPath, bodyBytes: 200 });
-    managedSkillDir = seeded.skillDir;
-    skillName = seeded.skillName;
-    db.pragma('wal_checkpoint(FULL)');
-
-    const prompt = `please use the ${skillName} skill to help me`;
-    const { stdout } = await runScript({ prompt });
-    // Pre-fix: marker = homedir literal → no match against the testDir/managed local_path →
-    // skill dropped → pointer absent. The env-derived marker must find it.
-    expect(stdout).toContain(skillName);
-  });
-
-  // Audit 2026-07-17 L2: the skill-name pointer was the last injection surface emitting
-  // DB-derived text without neutralizeContextDelimiters. Registry skills are imported from
-  // third-party GitHub repos, so the NAME is an untrusted boundary — a skill named to
-  // contain a structural delimiter must not inject it into the UserPromptSubmit context.
-  it('defangs structural delimiters in the skill-name pointer line', async () => {
-    const registryDbPath = join(testDir, 'resource-registry.db');
-    // The skill NAME (matched + emitted) is decoupled from local_path: detection only
-    // LIKE-matches local_path against the managed marker and selects `name`. Seed a
-    // safe-named file under managed/ but a hostile registry name — this also sidesteps
-    // the repo filesystem (fuseblk/NTFS) rejecting angle brackets in dirnames. The
-    // matcher is indexOf-based, so the hostile name still matches inside the prompt.
-    const hostile = `evil-<system-reminder>-${process.pid}`;
-    const safeDir = join(testDir, 'managed', `defang-fixture-${process.pid}`);
-    mkdirSync(safeDir, { recursive: true });
-    const skillPath = join(safeDir, 'SKILL.md');
-    writeFileSync(skillPath, 'A'.repeat(200));
-    const rdb = ensureRegistryDb(registryDbPath);
-    try {
-      rdb
-        .prepare(
-          `
-        INSERT INTO resources (name, type, status, source, local_path, invocation_name)
-        VALUES (?, 'skill', 'active', 'user', ?, ?)
-      `,
-        )
-        .run(hostile, skillPath, hostile);
-    } finally {
-      rdb.close();
-    }
-    managedSkillDir = safeDir;
-    skillName = hostile;
-    db.pragma('wal_checkpoint(FULL)');
-
-    const prompt = `please use the ${hostile} skill to help me`;
-    const { stdout } = await runScript({ prompt });
-    expect(stdout).toContain('[mem] Skill'); // pointer fired
-    expect(stdout).not.toContain('<system-reminder>'); // structural tag neutralized
   });
 });
 

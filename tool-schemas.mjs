@@ -511,45 +511,6 @@ export const memFtsCheckSchema = {
   action: z.enum(['check', 'rebuild']).describe('check=verify FTS integrity, rebuild=rebuild FTS indexes'),
 };
 
-export const memRegistrySchema = {
-  action: z
-    .enum(['list', 'stats', 'search', 'import', 'remove', 'reindex', 'import_url', 'enrich'])
-    .describe('Registry operation'),
-  query: z.string().optional().describe('Search query — keywords describing what you need (for search)'),
-  type: z.enum(['skill', 'agent']).optional().describe('Filter by resource type (for list/search)'),
-  name: z.string().optional().describe('Resource name (for import/remove)'),
-  resource_type: z.enum(['skill', 'agent']).optional().describe('Resource type (for import/remove)'),
-  source: z
-    .enum(['preinstalled', 'user', 'github'])
-    .optional()
-    .describe('Source (for import, default: user)'),
-  repo_url: z.string().optional().describe('GitHub repository URL (for import)'),
-  local_path: z.string().optional().describe('Local file path (for import)'),
-  invocation_name: z.string().optional().describe('Invocation name like "plugin:skill" (for import)'),
-  intent_tags: z.string().optional().describe('Comma-separated intent tags (for import)'),
-  domain_tags: z.string().optional().describe('Comma-separated domain/tech tags (for import)'),
-  trigger_patterns: z.string().optional().describe('When to recommend this tool (for import)'),
-  capability_summary: z.string().optional().describe('What this tool does (for import)'),
-  keywords: z.string().optional().describe('Search keywords (for import)'),
-  tech_stack: z.string().optional().describe('Technology stack tags (for import)'),
-  use_cases: z.string().optional().describe('Usage scenarios (for import)'),
-  url: z.string().optional().describe('GitHub repository URL (for import_url action)'),
-  enrich: coerceBool.optional().describe('Auto-enrich imported resources (for import_url action)'),
-  category: z
-    .string()
-    .optional()
-    .describe("Filter by category (e.g., 'testing', 'code-quality', 'debugging')"),
-  quality: z
-    .enum(['installed', 'verified', 'community'])
-    .optional()
-    .describe('Filter by quality tier (default: all)'),
-};
-
-export const memUseSchema = {
-  name: z.string().min(1).describe('Skill or agent name to load (exact name or search query)'),
-  type: z.enum(['skill', 'agent']).optional().describe('Resource type (default: skill)'),
-};
-
 export const memBrowseSchema = {
   project: z.string().optional().describe('Filter by project (default: inferred from CWD)'),
   tier: z.enum(['working', 'active', 'archive']).optional().describe('Show only this tier'),
@@ -822,47 +783,6 @@ export const tools = [
       CLI_INVOKE +
       ' optimize [--run|--run-all] [--task re-enrich,normalize,cluster-merge,smart-compress] [--max N]  (preview is default)',
     inputSchema: memOptimizeSchema,
-    hidden: true,
-  },
-  {
-    name: 'mem_registry',
-    description:
-      'Manage the skill/agent resource registry (list, stats, search, import, remove, reindex, enrich).\n' +
-      '\n' +
-      'DO NOT use when:\n' +
-      '  - Searching project memory (use mem_search — registry is tool resources, not observations)\n' +
-      '  - You already know the skill name and just want to load it (use mem_use)\n' +
-      '  - Importing from a random URL user has not explicitly trusted\n' +
-      '\n' +
-      'USE when:\n' +
-      '  - User asks "what skills/agents are installed" → action="list"\n' +
-      '  - Looking for a tool by capability → action="search" with keywords\n' +
-      '  - User explicitly asks to import a GitHub repo → action="import_url"\n' +
-      '\n' +
-      'Equivalent CLI: ' +
-      CLI_INVOKE +
-      ' registry <list|search|import|...> [args]',
-    inputSchema: memRegistrySchema,
-    hidden: true,
-  },
-  {
-    name: 'mem_use',
-    description:
-      'Load and activate a skill or agent from the registry by EXACT name or invocation_name.\n' +
-      "A name that matches nothing returns closest-match names to pick from — never another resource's content.\n" +
-      '\n' +
-      'DO NOT use when:\n' +
-      '  - You have not confirmed the skill exists (run mem_registry action="list" first)\n' +
-      '  - The user only asked about a skill, not to invoke it\n' +
-      '  - A built-in Claude Code Skill is a better fit than a managed one\n' +
-      '\n' +
-      'USE when:\n' +
-      '  - mem_registry search surfaced a promising skill and you want its full content\n' +
-      '  - You know the invocation_name (e.g. "plugin:foo") and need its instructions\n' +
-      '  - User says "run the <X> skill" where X is a registered resource\n' +
-      '\n' +
-      'Equivalent CLI: MCP only (no CLI handler — use mem_registry to inspect)',
-    inputSchema: memUseSchema,
     hidden: true,
   },
   {

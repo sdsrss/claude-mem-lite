@@ -1519,17 +1519,6 @@ describe('MCP T3 audit fixes (stdio)', () => {
     expect(text).toMatch(/Exported 2 observations/);
   });
 
-  // T3-P2-A: registry list sorts by adoption and never prints "adopt:null".
-  it('T3-P2-A: mem_registry list never emits "adopt:null"', async () => {
-    await initialize(proc);
-    const resp = await callTool('mem_registry', { action: 'list' });
-    const text = resp.result?.content?.[0]?.text || '';
-    // Empty registries yield "No resources found." — only assert formatting when populated.
-    if (/^Resources /m.test(text)) {
-      expect(text).not.toMatch(/adopt:null/);
-    }
-  });
-
   // T3-P2-B: cap message must not fire when the result equals the explicit limit but no more rows exist.
   it('T3-P2-B: mem_export with limit == total does NOT claim "capped"', async () => {
     await initialize(proc);

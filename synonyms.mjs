@@ -1,5 +1,6 @@
 // synonyms.mjs -- Unified synonym data for FTS5 search and dispatch.
-// Consolidates SYNONYM_PAIRS/SYNONYM_MAP (from nlp.mjs) and DISPATCH_SYNONYMS (from registry-retriever.mjs).
+// Consolidates SYNONYM_PAIRS/SYNONYM_MAP (from nlp.mjs) and DISPATCH_SYNONYMS (formerly
+// registry-retriever.mjs, removed with the skill registry in 2026-09).
 
 // ─── Synonym Pairs (Bidirectional FTS5 expansion) ─────────────────────────────
 

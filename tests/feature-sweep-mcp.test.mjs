@@ -43,7 +43,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -79,8 +79,6 @@ const HIDDEN_TOOLS = [
   'mem_optimize',
   'mem_fts_check',
   'mem_stats',
-  'mem_registry',
-  'mem_use',
   'mem_browse',
 ];
 
@@ -134,20 +132,6 @@ function withDb(fn) {
   }
 }
 
-/** Same, for the registry DB (mem_registry / mem_use). */
-function withRegistryDb(fn) {
-  const db = new Database(join(DATA_DIR, 'resource-registry.db'));
-  try {
-    return fn(db);
-  } finally {
-    try {
-      db.close();
-    } catch {
-      /* already closed */
-    }
-  }
-}
-
 /** Backdate a project's rows so the age-gated tools (compress/maintain) engage. */
 function ageProject(project, days) {
   return withDb((db) => {
@@ -168,15 +152,6 @@ function savedId(text) {
 /** Save through the protocol and return the new id. */
 async function save(args) {
   return savedId(await call('mem_save', args));
-}
-
-/** A local SKILL.md the registry can index; under DATA_DIR so mem_use's path-confinement passes. */
-function writeSkill(name, body) {
-  const dir = join(DATA_DIR, 'managed', 'skills', name);
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, 'SKILL.md');
-  writeFileSync(p, `---\nname: ${name}\ndescription: mcp sweep fixture skill\n---\n\n${body}\n`);
-  return p;
 }
 
 // Seeded ids in PROJECT, filled in beforeAll. Every OTHER case writes to its own
@@ -297,7 +272,7 @@ describe('MCP feature sweep: registered surface', () => {
     const declared = DECLARED_TOOLS.map((t) => t.name).sort();
     expect(declared).toEqual([...SWEPT_TOOLS].sort());
     expect(declared).toEqual([...PUBLIC_TOOLS, ...HIDDEN_TOOLS].sort());
-    expect(declared).toHaveLength(20);
+    expect(declared).toHaveLength(18);
   });
 });
 
@@ -695,125 +670,4 @@ describe('MCP feature sweep: hidden tools', () => {
     },
     30000,
   );
-
-  itTool('mem_registry', async () => {
-    const skillPath = writeSkill('mcpsweep-registry-skill', 'Body of the registry sweep fixture.');
-    const imported = await call('mem_registry', {
-      action: 'import',
-      name: 'mcpsweep-registry-skill',
-      resource_type: 'skill',
-      local_path: skillPath,
-      use_cases: 'exercising the registry surface',
-      capability_summary: 'registry sweep fixture skill',
-    });
-    expect(imported).toMatch(/^Imported: skill:mcpsweep-registry-skill \(id=\d+\)$/);
-    expect(
-      withRegistryDb((db) =>
-        db.prepare('SELECT status, local_path FROM resources WHERE name = ?').get('mcpsweep-registry-skill'),
-      ),
-    ).toMatchObject({ status: 'active', local_path: skillPath });
-
-    expect(await call('mem_registry', { action: 'list' })).toContain('mcpsweep-registry-skill');
-    expect(await call('mem_registry', { action: 'stats' })).toMatch(/Total active: [1-9]\d*/);
-    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' })).toContain(
-      'mcpsweep-registry-skill',
-    );
-    expect(await call('mem_registry', { action: 'reindex' })).toMatch(
-      /FTS5 reindexed\. \d+ active resources\./,
-    );
-
-    // P2-6's semantics, pinned on the MCP face. The CLI face got a `not.toMatch(/\n\s*Path:/)`
-    // when the two renderers were collapsed; this face — whose semantics were the ones KEPT —
-    // had no assertion on its rendered output at all, so the v3.93.0 pre-tag review could
-    // reintroduce the exact leak at `server.mjs`'s call site with every suite still green.
-    //
-    // The pair is the assertion, not the negative half alone: the fixture above is MANAGED
-    // (writeSkill puts it under <data>/managed), so it MUST still render a Path line, while a
-    // resource outside that prefix must not. A lone `not.toMatch` would also pass on a face
-    // that stopped rendering anything.
-    const unmanagedDir = join(DATA_DIR, 'unmanaged', 'skills', 'mcpsweep-unmanaged-skill');
-    mkdirSync(unmanagedDir, { recursive: true });
-    const unmanagedPath = join(unmanagedDir, 'SKILL.md');
-    writeFileSync(
-      unmanagedPath,
-      '---\nname: mcpsweep-unmanaged-skill\ndescription: mcp sweep unmanaged fixture\n---\n\nBody.\n',
-    );
-    await call('mem_registry', {
-      action: 'import',
-      name: 'mcpsweep-unmanaged-skill',
-      resource_type: 'skill',
-      local_path: unmanagedPath,
-      use_cases: 'exercising the non-managed render path',
-      capability_summary: 'registry sweep unmanaged fixture skill',
-    });
-
-    // Per-ROW, not per-response. A whole-response `not.toMatch(/Path:/)` is satisfied by the
-    // OTHER row: both fixtures share the `mcpsweep`/`skill` tokens, so either query returns
-    // both, and the managed row's legitimate Path line would clear the negative assertion for
-    // the unmanaged one. That is the "assertion satisfied by something other than its target"
-    // shape this repo keeps recording — hit while writing this very case.
-    const blockFor = (out, name) => out.split(/\n(?=\[)/).find((b) => b.includes(`**${name}**`));
-
-    const hits = await call('mem_registry', { action: 'search', query: 'mcpsweep' });
-    const managedBlock = blockFor(hits, 'mcpsweep-registry-skill');
-    const unmanagedBlock = blockFor(hits, 'mcpsweep-unmanaged-skill');
-    expect(managedBlock, 'premise: the managed fixture must be in the result set').toBeTruthy();
-    expect(unmanagedBlock, 'premise: the unmanaged fixture must be in the result set').toBeTruthy();
-
-    expect(managedBlock, 'a MANAGED hit must still render its portable path').toMatch(/\n\s*Path:/);
-    expect(unmanagedBlock, 'the P2-6 path leak is back on the MCP face').not.toMatch(/\n\s*Path:/);
-    expect(unmanagedBlock).toMatch(/Use: (Skill\(|mem_use\(name=)/);
-
-    await call('mem_registry', {
-      action: 'remove',
-      name: 'mcpsweep-unmanaged-skill',
-      resource_type: 'skill',
-    });
-
-    expect(
-      await call('mem_registry', {
-        action: 'remove',
-        name: 'mcpsweep-registry-skill',
-        resource_type: 'skill',
-      }),
-    ).toBe('Removed: skill:mcpsweep-registry-skill');
-    expect(await call('mem_registry', { action: 'search', query: 'mcpsweep-registry-skill' })).toContain(
-      'No matching resources for: "mcpsweep-registry-skill"',
-    );
-  });
-
-  itTool('mem_use', async () => {
-    const BODY = 'MCPSWEEPUSEBODY — the loaded skill body must reach the caller verbatim.';
-    const skillPath = writeSkill('mcpsweep-use-skill', BODY);
-    await call('mem_registry', {
-      action: 'import',
-      name: 'mcpsweep-use-skill',
-      resource_type: 'skill',
-      local_path: skillPath,
-      capability_summary: 'use sweep fixture skill',
-    });
-
-    const loaded = await call('mem_use', { name: 'mcpsweep-use-skill' });
-    expect(loaded).toContain('<skill-loaded name="mcpsweep-use-skill" type="skill"');
-    expect(loaded).toContain(BODY); // file contents, not just a pointer
-    expect(loaded).toContain('</skill-loaded>');
-    // The load is recorded against the resource (adoption signal, not a no-op read).
-    const invocations = withRegistryDb(
-      (db) =>
-        db
-          .prepare(
-            `
-      SELECT COUNT(*) c FROM invocations i JOIN resources r ON r.id = i.resource_id WHERE r.name = ?
-    `,
-          )
-          .get('mcpsweep-use-skill').c,
-    );
-    expect(invocations).toBe(1);
-
-    // A name that shares no token with any registered resource reports a miss. A name that
-    // DOES share a token now gets the closest-match SUGGESTION instead (audit F1 — it used
-    // to get the top hit's body); that path is pinned in tests/audit-findings-20260814, so
-    // this case stays on the no-candidate arm.
-    expect(await call('mem_use', { name: 'zqxwvrunk' })).toContain('No skill found for "zqxwvrunk"');
-  });
 });

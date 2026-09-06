@@ -3,7 +3,7 @@
 // Runs as UserPromptSubmit hook — injects relevant memories before Claude sees the prompt
 // Lightweight: only imports schema.mjs and utils.mjs, no MCP SDK
 
-import { ensureDb, DB_DIR, REGISTRY_DB_PATH } from '../schema.mjs';
+import { ensureDb, DB_DIR } from '../schema.mjs';
 import {
   relaxFtsQueryToOr,
   truncate,
@@ -22,10 +22,9 @@ import { fileMatchClause, fileMatchParams, basenameAnySep } from '../lib/file-ed
 import { cjkPrecisionOk } from '../nlp.mjs';
 import { upsFtsQuery } from '../lib/ups-query.mjs';
 import { corpusFloorScale } from '../lib/relevance-floor.mjs';
-import { writeFileSync, readFileSync, existsSync, renameSync } from 'fs';
-import { join, sep } from 'path';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { pathToFileURL } from 'url';
-import Database from 'better-sqlite3';
 import {
   shouldSkip,
   computeEffectiveLen,
@@ -35,7 +34,6 @@ import {
   extractErrorSignature,
   extractDeferredRefs,
   DEDUP_STALE_MS,
-  matchRegistrySkillName,
   detectMemOverride,
 } from './prompt-search-utils.mjs';
 import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
@@ -648,73 +646,6 @@ function formatPromptResults(rows) {
   return lines.join('\n');
 }
 
-// ─── Registry Skill Pointer (T4 v2.31) ─────────────────────────────────────
-// Formerly "auto-load": we used to read the full SKILL.md body (up to 16KB)
-// and inject it into stdout on keyword match. Now we only emit a short
-// pointer line so Claude can decide to invoke via SkillTool. The cooldown
-// and match mechanics below are unchanged.
-
-const SKILL_COOLDOWN_FILE = join(RUNTIME_DIR, `.skill-cooldown-${inferProject()}`);
-const SKILL_COOLDOWN_MS = 300_000; // 5 minutes
-
-function loadManagedSkillNames() {
-  if (!existsSync(REGISTRY_DB_PATH)) return new Set();
-  try {
-    const rdb = new Database(REGISTRY_DB_PATH, { readonly: true });
-    rdb.pragma('busy_timeout = 500');
-    try {
-      // D#29: derive the managed marker from the env-aware data dir, not a hardcoded
-      // homedir literal — under CLAUDE_MEM_DIR relocation the stored local_path lives at
-      // DB_DIR/managed, so the old literal matched nothing and dropped every managed skill
-      // from injection. Coarse LIKE prefilter; resource names are re-validated downstream.
-      // D#29: derive the managed marker from the env-aware data dir, not a hardcoded
-      // homedir literal — under CLAUDE_MEM_DIR relocation the stored local_path lives at
-      // DB_DIR/managed, so the old literal matched nothing and dropped every managed skill
-      // from injection. Coarse LIKE prefilter; resource names are re-validated downstream.
-      const rows = rdb
-        .prepare(
-          `
-        SELECT name FROM resources
-        WHERE status = 'active' AND local_path LIKE ?
-      `,
-        )
-        .all(`%${join(DB_DIR, 'managed') + sep}%`);
-      return new Set(rows.map((r) => r.name.toLowerCase()));
-    } finally {
-      rdb.close();
-    }
-  } catch {
-    return new Set();
-  }
-}
-
-function getSkillCooldown() {
-  try {
-    const raw = readFileSync(SKILL_COOLDOWN_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    const now = Date.now();
-    const cleaned = {};
-    for (const [k, v] of Object.entries(data)) {
-      if (now - v < SKILL_COOLDOWN_MS) cleaned[k] = v;
-    }
-    return cleaned;
-  } catch {
-    return {};
-  }
-}
-
-function setSkillCooldown(name) {
-  try {
-    const data = getSkillCooldown();
-    data[name] = Date.now();
-    const tmp = SKILL_COOLDOWN_FILE + `.tmp-${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(data));
-    renameSync(tmp, SKILL_COOLDOWN_FILE);
-  } catch {
-    /* silent */
-  }
-}
-
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1089,30 +1020,6 @@ async function main() {
           }
         } catch {}
       }
-    }
-
-    // ─── L1: Registry skill pointer (T4 v2.31) ──────────────────────────
-    // Previously this block injected the full skill body (up to 16KB) on
-    // keyword match, silently inflating every matched prompt. We now emit a
-    // single pointer line so Claude can decide to invoke via SkillTool on
-    // demand — the cooldown and match preconditions stay identical.
-    try {
-      const skillNames = loadManagedSkillNames();
-      const matched = matchRegistrySkillName(promptText, skillNames);
-      if (matched) {
-        const cooldown = getSkillCooldown();
-        if (!cooldown[matched]) {
-          // Registry skill names come from third-party repos (tools/adopt import) — an
-          // untrusted boundary like every other DB-derived string on this surface.
-          const safeName = neutralizeContextDelimiters(matched);
-          process.stdout.write(
-            `\n[mem] Skill "${safeName}" may apply — invoke via SkillTool or run: claude-mem-lite registry show ${safeName}\n`,
-          );
-          setSkillCooldown(matched);
-        }
-      }
-    } catch {
-      /* silent — never block on registry failure */
     }
   } catch (e) {
     // Hooks must never break Claude Code — swallow, but RECORD: this catch wraps

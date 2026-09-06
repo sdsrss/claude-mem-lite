@@ -613,7 +613,7 @@ function layerOf(r) {
   if (/^(mem-cli\.mjs|cli\/|server\/|adopt-cli\.mjs)/.test(r)) return 'face';
   if (r.startsWith('lib/')) return 'lib';
   if (
-    /^(hook-|search-|scoring-sql|deep-search|rerank|registry|resource-discovery|haiku-client|memdir|claudemd|adopt-content|install-metadata|plugin-cache-guard|tool-schemas|schema\.mjs)/.test(
+    /^(hook-|search-|scoring-sql|deep-search|rerank|haiku-client|memdir|claudemd|adopt-content|plugin-cache-guard|tool-schemas|schema\.mjs)/.test(
       r,
     )
   )

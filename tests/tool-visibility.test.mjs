@@ -105,7 +105,7 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     expect(names).toEqual(EXPECTED_CORE);
   });
 
-  it('CLAUDE_MEM_ALL_TOOLS=1 restores all 20 tools in tools/list (opt-out)', async () => {
+  it('CLAUDE_MEM_ALL_TOOLS=1 restores all 18 tools in tools/list (opt-out)', async () => {
     // Spin up a dedicated server with the env var set — the default fixture
     // runs without it, so we need a separate process for this case.
     try {
@@ -123,7 +123,7 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     const resp = await rpc(proc, 2, 'tools/list', {});
     expect(resp.error, 'tools/list error').toBeUndefined();
     const names = resp.result.tools.map((t) => t.name);
-    expect(names).toHaveLength(20);
+    expect(names).toHaveLength(18);
     // Spot-check hidden names are present
     expect(names).toContain('mem_stats');
     expect(names).toContain('mem_browse');

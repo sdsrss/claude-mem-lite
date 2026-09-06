@@ -121,8 +121,9 @@ describe('KNOWN_CLI_FLAGS', () => {
     for (const bogus of ['observations', 'error', 'count', 'message', 'level']) {
       expect(isVouchedFor(bogus), `bogus flag "${bogus}" vouched for itself`).toBe(false);
     }
-    // …while the real string-list flags still pass.
-    for (const real of ['domain-tags', 'tech-stack', 'keywords']) {
+    // …while real flags still pass. (The three registry string-list flags this arm used
+    // to name went with the skill-registry removal in 2026-09; these are live equivalents.)
+    for (const real of ['files', 'ops', 'fields']) {
       expect(isVouchedFor(real), `real flag "${real}" no longer recognised`).toBe(true);
     }
   });

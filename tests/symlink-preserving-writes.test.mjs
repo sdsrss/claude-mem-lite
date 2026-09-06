@@ -158,7 +158,6 @@ describe('no shipped module keeps a private temp+rename writer', () => {
     // would silently widen the permissions on session state
     'hook-update.mjs', // update-state.json
     'lib/native-binding-hint.mjs', // ABI self-heal marker (runs when the DB cannot open)
-    'scripts/user-prompt-search.js', // injected-ids marker, hot path, zero-import budget
   ]);
 
   it('the sweep walks a plausible number of shipped modules', () => {

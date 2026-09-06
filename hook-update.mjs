@@ -7,7 +7,6 @@ import {
   readFileSync,
   writeFileSync,
   copyFileSync,
-  cpSync,
   readdirSync,
   existsSync,
   lstatSync,
@@ -1192,15 +1191,6 @@ function copyReleaseIntoStaging(
       const src = join(sourceScripts, name);
       if (existsSync(src)) copyFileSync(src, join(stagingScripts, name));
     }
-  }
-
-  // registry/ stays recursive — preinstalled.json is the only current entry
-  // but the directory is consumed wholesale by the registry indexer and may
-  // grow subtrees. Pre-v2.55 readdirSync+copyFileSync would EISDIR-throw on
-  // any subdir and silently roll back the entire update.
-  const sourceRegistry = join(sourceDir, 'registry');
-  if (existsSync(sourceRegistry)) {
-    cpSync(sourceRegistry, join(stagingDir, 'registry'), { recursive: true });
   }
 
   const stagedScripts = join(stagingDir, 'scripts');

@@ -62,8 +62,8 @@ describe('detectMissingImports', () => {
 
   it('catches dynamic imports too', () => {
     const d = tmp();
-    writeFileSync(join(d, 'server.mjs'), `const m = await import('./registry-importer.mjs');\n`);
-    expect(detectMissingImports(d)).toEqual(['registry-importer.mjs']);
+    writeFileSync(join(d, 'server.mjs'), `const m = await import('./lib/save-observation.mjs');\n`);
+    expect(detectMissingImports(d)).toEqual(['lib/save-observation.mjs']);
   });
 
   it('ignores node: builtins and package imports', () => {
