@@ -120,7 +120,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Schema auto-migration** -- Idempotent `ALTER TABLE` migrations run on every startup, safely adding new columns and indexes without data loss
 - **LLM concurrency control** -- File-based semaphore limits background workers to 2 concurrent LLM calls, preventing resource contention
 - **stdin overflow protection** -- Hook input truncated at 256KB with regex-based action salvage for oversized tool outputs
-- **Cross-session handoff** -- Captures session state (request, completed work, next steps, key files) on `/clear` or `/exit`, then injects context when the next session detects continuation intent via explicit keywords or FTS5 term overlap
+- **Cross-session handoff** -- Captures session state (request, completed work, next steps, key files) on `/exit`, then injects context when the next session detects continuation intent via explicit keywords or FTS5 term overlap. **The `/clear` and `/compact` arm does not currently fire** (tracked as R10-P1-1): SessionStart treats a session file left on disk as the marker of a previous session that ended without `Stop` (`hook.mjs:2386-2398`), and that file is exactly what `Stop` deletes (`hook.mjs:1542`), so the branch that would write the `clear` snapshot is not reached. Measured on the maintainer's own install, `session_handoffs` holds 4 `exit` rows and **0** `clear` rows. The suspected cause — `Stop` running at the end of every assistant turn rather than once per session — is a host-behaviour question that has NOT been verified yet, and the fix differs depending on whether Claude Code rotates its session id across `/clear`, so it needs a real `/clear` stdin capture before any code changes
 - **Git-SHA continuation anchor** (v2.31.0) -- Handoff rows include `git_sha_at_handoff`; any handoff matching the current `HEAD` counts as continuation regardless of TTL. Code state is a stronger continuation signal than wall-clock time
 - **Startup dashboard** (v2.31.0) -- SessionStart hook aggregates `git status` + `~/.claude/tasks/*.json` + `~/.claude/plans/*.md` + most-recent exit handoff + recent event count into a single structured block injected via `hookSpecificOutput.additionalContext`
 - **Activity namespace** (v2.31.0) -- Dedicated `events` table + FTS5 for non-memdir types (`bugfix`, `lesson`, `bug`, `discovery`, `refactor`, `feature`, `observation`, `decision`) that don't compete with `WHAT_NOT_TO_SAVE` semantics on the observations table. CLI: `claude-mem-lite activity save|search|recent|show`. `hook-llm` routes non-memdir summary types through `persistHaikuSummary` so upgrades from observations→events are atomic. (v3.39: the `/lesson` and `/bug` slash commands were redirected from this events table to searchable **observations** — `mem_search` never read the events table, so explicit saves were unfindable; the events table remains the auto-capture activity log.)
@@ -431,7 +431,9 @@ FTS5 indexes: `observations_fts` (title, subtitle, narrative, text, facts, conce
 
 ```
 SessionStart
-  -> Generate session ID (or save handoff snapshot on /clear)
+  -> Generate session ID
+     (the /clear|/compact handoff branch here is currently unreachable — R10-P1-1,
+      see Cross-session handoff above)
   -> Mark stale sessions (>24h active) as abandoned
   -> Clean orphaned/stale lock files
   -> Query recent observations (24h)
@@ -458,8 +460,9 @@ UserPromptSubmit (two parallel paths)
 
 Stop
   -> Flush final episode buffer
-  -> Save handoff snapshot (on /exit)
+  -> Save handoff snapshot (type 'exit')
   -> Mark session completed
+  -> Delete the session file  <- what makes the SessionStart /clear branch unreachable
   -> Spawn LLM summary worker (poll-based wait)
 ```
 
