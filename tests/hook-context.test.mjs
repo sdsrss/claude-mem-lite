@@ -80,6 +80,30 @@ describe('computeAdaptiveWindows', () => {
     expect(windows.tier1).toBe(48 * 3600000);
   });
 
+  // Audit R8 §11.3, the other half of the case above. Velocity is a POOL-SIZING
+  // heuristic, not a history record: the windows it returns are handed to the recall
+  // queries at :201 / :468 / :502, every one of which filters with liveObsFilterSql. So
+  // counting a population strictly larger than the one the window is later applied to
+  // makes a project of tombstones read as busy and then hands it the TIGHTEST window —
+  // 12h instead of 48h — to find the few live rows it has. That is the opposite of the
+  // documented intent ("Low activity -> longer windows").
+  // FAILS IF: `superseded_at IS NULL` is dropped from computeAdaptiveWindows' COUNT.
+  it('ignores superseded observations', () => {
+    for (let i = 0; i < 80; i++) {
+      insertObs(db, {
+        sessionId: 'sess-1',
+        project: 'test',
+        title: `superseded obs ${i}`,
+        epochOffset: -(i * 1800000),
+        supersededAt: Date.now(),
+        supersededBy: 999,
+      });
+    }
+    const windows = computeAdaptiveWindows(db, 'test');
+    expect(windows.tier1, '80 tombstones must not read as a high-velocity project').toBe(48 * 3600000);
+    expect(windows.tier3).toBe(60 * 86400000);
+  });
+
   it('scopes velocity to specific project', () => {
     // Add observations to a different project
     insertSession(db, { id: 'sess-other', project: 'other' });

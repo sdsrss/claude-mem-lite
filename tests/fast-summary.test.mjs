@@ -35,11 +35,11 @@ function seedPrompt(sessionId, n, text) {
               VALUES (?, ?, ?, ?, ?)`,
   ).run(sessionId, n, text, NOW.toISOString(), NOW.getTime() + n);
 }
-function seedObs(sessionId, title, epoch, compressedInto = null) {
+function seedObs(sessionId, title, epoch, compressedInto = null, supersededAt = null) {
   db.prepare(
-    `INSERT INTO observations (memory_session_id, project, type, title, created_at, created_at_epoch, compressed_into)
-              VALUES (?, 'p', 'discovery', ?, ?, ?, ?)`,
-  ).run(sessionId, title, NOW.toISOString(), epoch, compressedInto);
+    `INSERT INTO observations (memory_session_id, project, type, title, created_at, created_at_epoch, compressed_into, superseded_at)
+              VALUES (?, 'p', 'discovery', ?, ?, ?, ?, ?)`,
+  ).run(sessionId, title, NOW.toISOString(), epoch, compressedInto, supersededAt);
 }
 
 describe('readFastSummarySource', () => {
@@ -59,6 +59,23 @@ describe('readFastSummarySource', () => {
     seedObs('s1', 'live-one', NOW.getTime() + 2);
     seedObs('s1', 'folded-away', NOW.getTime() + 3, 99);
     expect(readFastSummarySource(db, 's1').completed).toBe('live-one');
+  });
+
+  // Scope guard, the mirror of the compressed case above. Audit R8 §11.3 read this query's
+  // `compressed_into`-only filter as a half-written liveObsFilterSql and proposed adding
+  // `superseded_at IS NULL`. That is wrong here for the reason audit 2026-08-14 F4 already
+  // wrote down for the sibling field `session_handoffs.completed`: `completed` is the
+  // session's own history, and a lesson a later save overturned still happened. F4 pinned
+  // the handoff face; this face had no guard, which is why the sweep reached it.
+  // FAILS IF: `superseded_at IS NULL` is added to readFastSummarySource's SELECT.
+  it('still records a superseded observation — completed is history, not standing policy', () => {
+    seedObs('s1', 'live-one', NOW.getTime() + 2);
+    seedObs('s1', 'retracted-by-a-correction', NOW.getTime() + 3, null, NOW.getTime() + 4);
+    const { completed } = readFastSummarySource(db, 's1');
+    expect(completed, 'the session did write that observation; its own record must say so').toContain(
+      'retracted-by-a-correction',
+    );
+    expect(completed).toContain('live-one');
   });
 
   it('is empty, not undefined, for a session with nothing in it', () => {

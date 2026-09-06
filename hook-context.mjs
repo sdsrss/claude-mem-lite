@@ -60,11 +60,16 @@ function mdCell(s) {
 
 export function computeAdaptiveWindows(db, project) {
   const sevenDaysAgo = Date.now() - 7 * DAY_MS;
+  // liveObsFilterSql, not a hand-written half of it (A20260906-R8-§11.3). This COUNT is a
+  // POOL-SIZING input: the windows returned below are handed to the recall queries at :201 /
+  // :468 / :502, all three of which filter live rows. Counting a strictly larger population
+  // than the window is applied to inverts the documented intent — 80 superseded rows read as
+  // >10 obs/day and earned the TIGHTEST window (12h) for finding the few live rows left.
   const row = db
     .prepare(
       `
     SELECT COUNT(*) as c FROM observations
-    WHERE project = ? AND created_at_epoch > ? AND COALESCE(compressed_into, 0) = 0
+    WHERE project = ? AND created_at_epoch > ? AND ${liveObsFilterSql('')}
   `,
     )
     .get(project, sevenDaysAgo);

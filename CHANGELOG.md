@@ -2,6 +2,41 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v4.0.4 — the audit finding a guard had already rejected
+
+R8's independent review left four items for this round. Two of them were wrong, and the
+repository said so within seconds of the change being applied.
+
+**One real fix: a velocity heuristic counted rows it then refused to look at.**
+`computeAdaptiveWindows` sized its 7-day observation count with `compressed_into` alone, but
+the windows it returns are handed to three recall queries that all filter `superseded_at` too.
+So a project whose recent rows are mostly tombstones read as high-velocity and was handed the
+*tightest* window — 12 hours instead of 48 — to find the few live rows it had left. Measured
+before the fix: 80 superseded rows returned `tier1` = 43,200,000ms; after, 172,800,000ms. The
+function's own docstring says "Low activity -> longer windows", so this restores documented
+behaviour rather than changing it. Nothing else in the injection path moves.
+
+**Two proposed fixes were rejected, and the reasoning is now in the source.** The same sweep
+flagged `hook-handoff.mjs`'s and `lib/fast-summary.mjs`'s `completed` queries for the same
+missing clause. Adding it to the first turned an existing guard red on the spot: audit
+2026-08-14 F4 had already ruled on that exact line, with a case whose comment reads `FAILS IF:
+the superseded filter is copied onto the 'completed' SELECT`. `completed` is the session's own
+history — a decision a later save overturned still happened, and erasing it from the record
+misreports the session that made it. Only `key_decisions`, which is re-presented to the next
+session as standing policy, filters superseded rows, and it always did.
+
+`lib/fast-summary.mjs` writes the sibling field and had no guard at all, which is exactly why a
+repo-wide sweep reached it. It has one now, plus a docblock on each of the two queries saying
+the single-clause filter is deliberate and naming the guard. The next sweep should stop at the
+code instead of at a test run.
+
+**A guard that could not fail.** `tests/install-ergonomics.test.mjs` asserted that setup.sh's
+repair line contains `npm rebuild better-sqlite3 --dangerously-allow-all-scripts` — which the
+*repaired* hint contains as its first half, so the assertion held for both shapes. Confirmed
+against the real revert rather than a hand-typed one: `git show cb00974:scripts/setup.sh` passes
+that command alone, and the old assertion is green against it. It now pins the full `&&` chain
+against the exported constants, and that `||` never appears.
+
 ## v4.0.3 — the fourth heal path, and two guards that still could not fail
 
 Second pass on the independent review that produced v4.0.2. Everything here was reproduced

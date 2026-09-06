@@ -10,6 +10,7 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { collectOrphanHookPaths } from '../install.mjs';
+import { NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD } from '../lib/binding-probe.mjs';
 
 const INSTALL_PATH = resolve('install.mjs');
 const SETUP_PATH = resolve('scripts/setup.sh');
@@ -220,7 +221,21 @@ describe('setup.sh deps-broken flag round-trip (v2.79, binding-probe since D#6 f
       expect(existsSync(flag)).toBe(true);
       const written = JSON.parse(readFileSync(flag, 'utf8'));
       expect(written.reason).toContain('binding probe/rebuild failed');
-      expect(written.repair).toContain('npm rebuild better-sqlite3 --dangerously-allow-all-scripts');
+      // Audit R8 §11.3. This line used to assert only the npm-rebuild command, which the
+      // repaired hint contains as its FIRST HALF — so the assertion held for both shapes and
+      // could not fail. Confirmed against the real revert, not a hand-typed one:
+      // `git show cb00974:scripts/setup.sh` line 190 passes `"npm rebuild better-sqlite3
+      // --dangerously-allow-all-scripts"` alone, and `toContain` on that substring is green
+      // against it. On better-sqlite3 13 that command exits 0 without compiling, so the shape
+      // this guard exists to catch is a repair line that reports success on a dead binding.
+      //
+      // Assert the CHAIN instead, against the constants rather than a literal: setup.sh cannot
+      // import lib/, so its copy is pinned to these two by
+      // tests/audit-r8-binding-repair-hint.test.mjs, and this case pins what setup.sh actually
+      // writes at runtime. `&&`, never `||` — step 1 exits 0 whether or not it compiled, so an
+      // `||` chain never reaches step 2, which is the original defect itself.
+      expect(written.repair).toContain(`${NATIVE_BINDING_REBUILD_CMD} && ${NATIVE_BINDING_SOURCE_BUILD_CMD}`);
+      expect(written.repair).not.toContain('||');
       expect(
         existsSync(join(pluginRoot, 'node_modules', `.mem-binding-ok-${process.versions.modules}`)),
       ).toBe(false);

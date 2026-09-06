@@ -136,6 +136,15 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   const obsWindowParams = ccWindowStart !== null ? [ccWindowStart] : [];
 
   // 2. Completed — from observations (include narrative for richer handoff)
+  //
+  // `compressed_into` ONLY, deliberately — not a half-written liveObsFilterSql. Audit
+  // 2026-08-14 F4 ruled on exactly this line: `completed` is the session's own history, and a
+  // decision a later save overturned still happened, so erasing it here would misreport the
+  // session. Only key_decisions (:242) is re-presented to a LATER session as standing policy,
+  // and that one does filter superseded_at. The scope guard is the third case of "F4 — handoff
+  // key_decisions excludes a retracted decision" in tests/audit-silent-20260814.test.mjs.
+  // Audit R8 §11.3 proposed adding the filter here from a repo-wide regex sweep of the
+  // predicate shape; it was rejected on this reasoning, and the guard catches it.
   const completed = db
     .prepare(
       `
