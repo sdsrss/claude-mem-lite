@@ -177,7 +177,11 @@ jobs:
   #      build/Release — the cause, since the broken-binding symptom is gone.
   #   2. prebuilds deleted → stands in for a platform no prebuild covers (exotic
   #      libc/arch), where the shipped heal is still the only thing between the user and
-  #      a -32000. Keeps binding-probe / setup.sh 6b / launch.mjs / hook-update covered.
+  #      a -32000. Covers binding-probe / setup.sh 6b / launch.mjs, which all route through
+  #      ensureBetterSqlite3Working (scripts/smoke-tarball.mjs). It does NOT reach
+  #      hook-update.mjs's post-install smoke, which inlines its own rebuild chain and is
+  #      pinned by tests/hook-update.test.mjs instead — an independent review caught this
+  #      line claiming otherwise.
   smoke-npm12:
     runs-on: ubuntu-latest
     steps:

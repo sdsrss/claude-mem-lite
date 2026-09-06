@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v4.0.3 — the fourth heal path, and two guards that still could not fail
+
+Second pass on the independent review that produced v4.0.2. Everything here was reproduced
+before fixing; nothing changes behaviour you asked for.
+
+**Auto-update could never land again on a platform better-sqlite3 ships no prebuild for.**
+`hook-update.mjs` runs a post-install smoke gate with its own inlined rebuild chain — a
+fourth heal path that never got the v4.0.0 fix. Both of its `npm rebuild` attempts exit 0
+without compiling on better-sqlite3 13, the re-probe then threw, smoke failed, and the caller
+rolled the whole update back to the old install. Every time. It now falls through to the
+source build, which is safe *here* for the reason it is not safe on the SessionStart probe
+path: the binding is already unusable when this runs, so `node-gyp clean` destroys nothing,
+and a failure still rolls back to the previous working install.
+
+**Two more guards could not fail, both found by re-running the real revert rather than a
+hand-written one.** The symlink guard scanned a five-line window before `symlinkSync`, and a
+prettier-legal eight-line revert sits outside it — green suite, and `format:check` passes too.
+The identifier rule added in v4.0.2 missed it as well, because it matched `Link` and the
+variable is called `link`. And doctor's Node-floor guard read the printed line only, so
+comparing against `>= 18` while still printing the real floor would have passed.
+
+Also from the same review: `install.mjs` had an unreachable `catch` left over from v4.0.1,
+`ci.yml` carried a comment claiming a CI leg covers `hook-update` when it does not, and two
+docblocks understated what their code does — `clearLinkPath` can remove a real directory, not
+only a link to one, and the repair hint's second command discards the first command's output
+before rebuilding (`build-release` starts with `node-gyp clean`).
+
+*Correction to the v4.0.0 notes*: they say `doctor` inherits the heal fix. It does not —
+`doctor` probes through `probeRuntimeRoots` and never heals; what it inherited in v4.0.1 was
+the repair line it prints.
+
 ## v4.0.2 — the self-heal that deleted the binding it was healing
 
 **Upgrade if you are on v4.0.0 or v4.0.1.** Found by an independent review of the v4.0.0

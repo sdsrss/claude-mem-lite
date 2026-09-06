@@ -191,6 +191,16 @@ describe('R8 doctor Node floor tracks package.json#engines', () => {
     expect(printed, `doctor's Node line does not state its floor: ${entry.message}`).toBe(expected);
   });
 
+  it('compares against the floor it prints, not a second literal', () => {
+    // The e2e case above reads the ok LINE. That alone would still pass if someone compared
+    // `>= 18` while labelling `${nodeFloor}` — the exact split this finding was about, just
+    // moved. Independent review flagged it; pinned on the source of the comparison.
+    const src = readFileSync(join(REPO, 'install.mjs'), 'utf8');
+    const cmp = /parseInt\(nodeVer\.slice\(1\)\) >= ([A-Za-z_$][\w$]*|\d+)/.exec(src);
+    expect(cmp, 'premise: doctor still compares a parsed major').toBeTruthy();
+    expect(cmp[1], `doctor compares against ${cmp[1]}, not the floor it prints`).toBe('nodeFloor');
+  });
+
   it('parses the floor out of the range forms engines actually takes', () => {
     expect(requiredNodeMajorSync('>=22')).toBe(22);
     expect(requiredNodeMajorSync('^22.12.0 || ^24.0.0 || >=26.0.0')).toBe(22);

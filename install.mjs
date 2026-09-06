@@ -420,6 +420,12 @@ export function patchClaudeMdVersion(text, version) {
  * removes the link and leaves the target intact (a link to a populated dir, target still
  * readable afterwards) — following it would delete the developer's own scripts/.
  *
+ * It is `recursive`, so it also removes a REAL directory at `p`, not only a link to one.
+ * That is deliberate and pre-existing (the dev-mode sites already did this): running
+ * `install --dev` after a normal install finds a real `DATA_DIR/node_modules` where a link
+ * belongs. Named here because the one-line summary above says "before a symlink is written
+ * over it", which undersells what the call can delete.
+ *
  * @param {string} p
  * @returns {boolean}
  */
@@ -1581,13 +1587,9 @@ async function uninstall() {
   // 1b. Remove CLI symlink
   for (const binDir of [join(homedir(), '.local', 'bin'), '/usr/local/bin']) {
     const cliLink = join(binDir, 'claude-mem-lite');
-    try {
-      if (clearLinkPath(cliLink)) {
-        ok(`CLI symlink removed: ${cliLink}`);
-      }
-    } catch {
-      /* may not have permissions */
-    }
+    // No try/catch: clearLinkPath swallows a permissions failure and returns false, so the
+    // wrapper this used to have was unreachable once the existsSync gate moved inside it.
+    if (clearLinkPath(cliLink)) ok(`CLI symlink removed: ${cliLink}`);
   }
 
   // 2. Remove hooks from settings.json (match both npx and git-clone install paths)

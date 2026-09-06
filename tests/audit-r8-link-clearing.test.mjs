@@ -115,7 +115,10 @@ describe('the reverted shape cannot come back unnoticed', () => {
     const reverted = [];
     lines.forEach((line, i) => {
       if (!line.includes('symlinkSync(')) return;
-      const window = lines.slice(Math.max(0, i - 5), i).join('\n');
+      // 12, not 5: an independent review showed a prettier-LEGAL 8-line revert
+      // (`if (existsSync(link)) { try { unlinkSync(link); } catch { /* … */ } }`) sitting
+      // outside a 5-line window, green suite and `prettier --check` both.
+      const window = lines.slice(Math.max(0, i - 12), i).join('\n');
       if (/existsSync\(/.test(window) && /(?:unlinkSync|rmSync)\(/.test(window)) {
         reverted.push(`install.mjs:${i + 1}`);
       }
@@ -133,13 +136,15 @@ describe('the reverted shape cannot come back unnoticed', () => {
     // rather than on a window: every link path in this file is named `…Link`, and
     // existsSync is exactly the call that cannot see a dangling one.
     const src = readFileSync(join(REPO_ROOT, 'install.mjs'), 'utf8');
-    const linkNames = src.match(/\b\w*Link\b/g) ?? [];
+    const linkNames = src.match(/\b\w*[Ll]ink\b/g) ?? [];
     expect(new Set(linkNames).size, 'premise: this file still has link variables').toBeGreaterThan(2);
 
     const offenders = src
       .split('\n')
       .map((line, i) => ({ line, n: i + 1 }))
-      .filter(({ line }) => /existsSync\(\s*\w*Link\b/.test(line))
+      // Case-insensitive on the identifier: the dev-mode loop calls its variable `link`,
+      // which a capital-L-only pattern misses — the same review's escape route.
+      .filter(({ line }) => /existsSync\(\s*\w*[Ll]ink\b/.test(line))
       .map(({ n, line }) => `install.mjs:${n}: ${line.trim()}`);
     expect(offenders, `existsSync cannot see a dangling link: ${offenders.join(' | ')}`).toEqual([]);
   });

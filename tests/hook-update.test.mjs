@@ -330,6 +330,35 @@ describe('hook update lifecycle', () => {
       expect(rebuilds).toEqual(['npm rebuild better-sqlite3 --dangerously-allow-all-scripts']);
     });
 
+    // A20260906-R8b-P2-1 (independent review of v4.0.0). This is the FOURTH heal path and it
+    // never got the v4.0.0 fix: it inlines two npm rebuilds, and on better-sqlite3 13 both
+    // exit 0 without compiling. The re-probe then throws, smoke fails, and the caller rolls
+    // the whole update back — so on a platform 13 ships no prebuild for, auto-update could
+    // never land again and the user was pinned to the old version forever.
+    it('compiles from source when npm rebuild heals nothing, instead of rolling back', async () => {
+      const dataDir = makeDataDir();
+      const releaseDir = makeReleaseDir();
+      let probes = 0;
+      const cmds = [];
+      mockedExecSync.mockImplementation(
+        installWithBinding((c) => {
+          if (c.includes('createRequire')) {
+            probes++;
+            // Dead after the npm rebuilds (probes 1-2), alive after the source build (3).
+            if (probes <= 2) throw new Error('Could not locate the bindings file');
+            return '';
+          }
+          if (c.startsWith('npm ')) cmds.push(c);
+          return '';
+        }),
+      );
+      const { installExtractedRelease } = await loadModule({ CLAUDE_MEM_DIR: dataDir });
+
+      expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
+      expect(probes).toBe(3);
+      expect(cmds.some((c) => c.includes('build-release'))).toBe(true);
+    });
+
     it('rolls back when the binding stays broken after rebuild', async () => {
       const dataDir = makeDataDir();
       const releaseDir = makeReleaseDir();

@@ -23,6 +23,7 @@ import { pathToFileURL } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
 import { DB_DIR, CODE_DIR } from './schema.mjs';
 import { debugCatch, debugLog } from './utils.mjs';
+import { NATIVE_BINDING_SOURCE_BUILD_CMD } from './lib/binding-probe.mjs';
 // Local manifest is fallback only — the active manifest is loaded from the
 // extracted tarball's own source-files.mjs inside installExtractedRelease.
 // See loadReleaseManifest below.
@@ -877,7 +878,27 @@ function smokeInstalledRelease(targetDir) {
         } catch {
           execSync('npm rebuild better-sqlite3', { cwd: targetDir, timeout: 120000, stdio: 'ignore' });
         }
-        execSync(probeCmd, { timeout: 20000, stdio: 'ignore' });
+        try {
+          execSync(probeCmd, { timeout: 20000, stdio: 'ignore' });
+        } catch {
+          // Both npm rebuilds healed nothing — which is what better-sqlite3 13 does on a
+          // platform it ships no prebuild for, because there is no install script for them to
+          // run. Without this step the re-probe threw, smoke failed, and the caller rolled the
+          // whole update back, so auto-update could never land again on those platforms
+          // (A20260906-R8b-P2-1, found by independent review of v4.0.0).
+          //
+          // The source build is `node-gyp clean && node-gyp rebuild`, i.e. it deletes build/
+          // first — which is why the SessionStart probe path must NOT run it. Here it is safe
+          // for two independent reasons: the binding is ALREADY unusable (the probe above just
+          // threw), so clean destroys nothing; and this whole function is a smoke gate whose
+          // failure rolls back to the previous, working install.
+          execSync(NATIVE_BINDING_SOURCE_BUILD_CMD, {
+            cwd: targetDir,
+            timeout: 300000,
+            stdio: 'ignore',
+          });
+          execSync(probeCmd, { timeout: 20000, stdio: 'ignore' });
+        }
       }
     }
     return true;
