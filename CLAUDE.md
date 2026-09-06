@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 5.1.1 — **this exact string is a release guard.**
+- **Version**: 5.2.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0; EOL 2026-04 and better-sqlite3 13 requires >=22), ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5

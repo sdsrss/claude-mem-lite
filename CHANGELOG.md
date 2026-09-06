@@ -2,6 +2,54 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.2.0 — four commands that reported success for work they did not do
+
+Found by using the CLI and the hooks as a user for two rounds — saving, searching,
+corrupting a database, running the maintenance commands — not by reading code. Every
+defect here has the same shape: the tool says it worked, the exit code agrees, and the
+thing you asked for did not happen.
+
+**What changes for you**
+
+| Change | Was | Now |
+|---|---|---|
+| `fts-check check` / `rebuild` on an unhealthy index | printed the failure, **exited 0** — so `fts-check rebuild && <next step>` ran the next step | exits 1 on an unhealthy or partial result; findings still on stdout |
+| `maintain scan --ops <typo>` (e.g. `purge-stale`) | flag ignored entirely: full report, exit 0, typo surfaced only on `execute` | rejected by name with the valid list, exit 1 — same as `execute` |
+| `maintain scan --ops <valid>` | looked scoped to that op; was not | says the report covers every category |
+| `delete <ids>` preview | listed found rows, silent about ids that do not exist | names them: `Note: ID(s) 99999 not found and will be skipped.` (CLI and `mem_delete`) |
+| `cleanup` | deleted **every** `ep-flush-*` / `pending-*`, including one written seconds ago — discarding an episode mid-summarization, silently | age-gated to 1h, matching the automatic sweep; reports how many it kept |
+
+**Upgrading**
+
+The three exit-code changes are the only ones that can affect an existing script. If you
+have automation that treated `fts-check` or `maintain scan` as "always exit 0", it will now
+see a non-zero status **when the operation actually failed** — that is the point, but it is
+a behaviour change, hence the minor bump rather than a patch. To defer it, pin `5.1.1`.
+Nothing else needs action; no data, schema, or config migration.
+
+**Also in this release: a ruler, and three fixes that it rejected**
+
+`deep search` answers questions the corpus cannot answer. `search "kubernetes helm chart"`
+correctly reports *No results*; `--deep` on the same query returns 8 of 13 memories about
+an unrelated project. `mem_search`'s `deep` is AUTO by default on the MCP surface and
+escalates exactly when the normal search was weak — precisely when the honest answer is
+"nothing".
+
+`benchmark/deep-search-holdout.mjs` is the missing precision arm; the existing suite
+measures recall only and is structurally blind to this. Its negatives are not hand-picked
+— they are the suite's own queries asked of a corpus with their answers deleted, so every
+returned row is a false positive by construction. It reads **mean FP@10 = 10.00, 12/12
+queries**.
+
+**No fix ships for it**, deliberately. Three were built and the two arms together rejected
+all three: suppressing the AND→OR fallback on rewrites takes R@10 from 0.7383 to 0.3962
+(the vocabulary-mismatch win *is* that fallback); an absolute score floor and a
+cross-variant convergence gate both fail because on several queries the holdout arm scores
+at or above the positive arm. The discrimination is not available at that layer, and a
+threshold fitted to a handful of points is how v3.61.0 shipped 0/8 injections on fresh
+installs. The ruler, the rejected set, and the reasoning are recorded so the next attempt
+starts from measurement.
+
 ## v5.1.1 — the prebuild that shadows its own repair
 
 Found by playing a real user through the sandbox install harness
