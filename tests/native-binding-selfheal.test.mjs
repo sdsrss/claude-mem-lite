@@ -14,12 +14,17 @@
 //   3. a breakage marker is recorded on EVERY failing fire (even when the hint
 //      is rate-limited) so the next session-start can heal unattended.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { acquireLock } from '../lib/proc-lock.mjs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
+
+// Module-level, distinct from the block-scoped REPO_ROOT further down (that one is local to
+// the rebuild-binding describe). dirname(fileURLToPath(...)) + join, never new URL() —
+// tests/no-url-module-paths.test.mjs.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import {
   isNativeBindingError,
   healAndReexec,
@@ -123,6 +128,41 @@ describe('ensureBetterSqlite3Working — source-compile fallback when npm rebuil
     expect(r.ok).toBe(false);
     expect(r.error).toContain('source build failed');
     expect(r.error).toContain('no compiler');
+  });
+
+  // A20260906-R8b-P0-1 (found by independent review of v4.0.0, reproduced before fixing).
+  //
+  // The source build is `node-gyp clean && node-gyp rebuild`, so it DELETES build/ before it
+  // starts. Under a caller with a small time budget it is therefore not merely useless but
+  // DESTRUCTIVE: measured on a tree whose compiled binding opened a DB, a 20 s cap killed the
+  // rebuild at 20.02 s (SIGTERM) and left no `.node` — `DB opens: YES` became `NO`. The hook
+  // path (scripts/binding-probe-cli.mjs) injects `exec` with exactly that 20 s cap while a
+  // full compile takes ~41 s here, and it re-runs on every SessionStart because setup.sh only
+  // writes its marker on success. The old suppression looked only at an injected `rebuild`,
+  // which that caller does not inject — so the one caller that had a budget was the one caller
+  // the guard missed.
+  it('does not attempt the source build when the caller opts out', async () => {
+    const cmds = [];
+    const r = await ensureBetterSqlite3Working('/inst', {
+      probe: () => ({ ok: false, error: 'Could not locate the bindings file' }),
+      verify: () => ({ ok: false, error: 'still dead' }),
+      exec: (cmd) => cmds.push(cmd),
+      sourceBuild: false,
+    });
+    expect(r.ok).toBe(false);
+    // Premise: the npm step still ran, so the opt-out disabled the source build specifically
+    // rather than short-circuiting the whole chain.
+    expect(cmds).toEqual([NATIVE_BINDING_REBUILD_CMD]);
+    expect(r.error).not.toContain('source build');
+  });
+
+  it('the time-budgeted hook path opts out', () => {
+    // scripts/binding-probe-cli.mjs runs under the SessionStart hook cap and injects a 20 s
+    // exec. It must not reach a step that deletes build/ before compiling.
+    const src = readFileSync(join(REPO, 'scripts/binding-probe-cli.mjs'), 'utf8');
+    expect(src, 'the hook probe must pass sourceBuild:false').toMatch(/sourceBuild:\s*false/);
+    // Premise: it still injects the capped exec this guard exists because of.
+    expect(src).toMatch(/timeout:\s*20000/);
   });
 
   it('the source-build command targets the package, not the project', () => {

@@ -40,7 +40,7 @@ describe('nativeBindingRepairHint', () => {
     const hint = nativeBindingRepairHint('/tmp/x');
     expect(hint).toContain(NATIVE_BINDING_REBUILD_CMD);
     expect(hint).toContain(NATIVE_BINDING_SOURCE_BUILD_CMD);
-    expect(hint).toContain('cd /tmp/x');
+    expect(hint).toContain('cd "/tmp/x"'); // quoted — roots contain spaces
 
     // The trap this whole finding is about: step 1 exits 0 whether or not it compiled, so
     // `||` would never reach step 2 while LOOKING like a fallback. Assert the source build
@@ -57,7 +57,11 @@ describe('nativeBindingRepairHint', () => {
 describe('no shipped surface hands out the npm-rebuild command alone', () => {
   it.each(HINT_SURFACES)('%s names the source build wherever it names npm rebuild', (rel) => {
     const src = readFileSync(join(REPO, rel), 'utf8');
-    if (!src.includes('npm rebuild better-sqlite3')) return; // surface does not hint here
+    // Either spelling counts as "this file hints here". Checking only the literal was a
+    // hole the independent review found: once install.mjs and install-shape.mjs switched to
+    // the helper, reverting one of them to `${NATIVE_BINDING_REBUILD_CMD}` reintroduced the
+    // dead hint AND took the early return, so the suite stayed green.
+    if (!src.includes('npm rebuild better-sqlite3') && !src.includes('NATIVE_BINDING_REBUILD_CMD')) return; // surface does not hint here
     expect(
       src.includes('build-release'),
       `${rel} prints/uses the npm-rebuild command without ever naming the source build — ` +

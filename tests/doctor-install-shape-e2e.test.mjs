@@ -176,7 +176,9 @@ describe('doctor: a stale binding is found in whichever install owns it', () => 
     expect(r.stdout).toMatch(/Native DB binding: unusable in .*managed install/);
     // Sending the user to rebuild the healthy tree is how the pre-fix repair
     // "succeeded" while the broken install stayed broken.
-    expect(r.stdout).toContain(`cd ${managed}`);
+    // Quoted since v4.0.2 (roots can contain spaces). The INTENT is unchanged and is what
+    // this line has always been about: the repair must name THIS tree, not the healthy one.
+    expect(r.stdout).toContain(`cd "${managed}"`);
     expect(r.stdout).not.toMatch(new RegExp(`cd ${REPO}\\b`));
   });
 

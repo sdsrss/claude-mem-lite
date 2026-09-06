@@ -125,4 +125,22 @@ describe('the reverted shape cannot come back unnoticed', () => {
       `existsSync-gated removal before symlinkSync is back at: ${reverted.join(', ')}`,
     ).toEqual([]);
   });
+
+  it('install.mjs never tests a link path with existsSync', () => {
+    // The window rule above cannot see uninstall's CLI-symlink removal — there is no
+    // symlinkSync near it — so reverting that one site left the whole suite green. Found by
+    // independent review; this is the assertion that covers it. Keyed on the identifier
+    // rather than on a window: every link path in this file is named `…Link`, and
+    // existsSync is exactly the call that cannot see a dangling one.
+    const src = readFileSync(join(REPO_ROOT, 'install.mjs'), 'utf8');
+    const linkNames = src.match(/\b\w*Link\b/g) ?? [];
+    expect(new Set(linkNames).size, 'premise: this file still has link variables').toBeGreaterThan(2);
+
+    const offenders = src
+      .split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /existsSync\(\s*\w*Link\b/.test(line))
+      .map(({ n, line }) => `install.mjs:${n}: ${line.trim()}`);
+    expect(offenders, `existsSync cannot see a dangling link: ${offenders.join(' | ')}`).toEqual([]);
+  });
 });

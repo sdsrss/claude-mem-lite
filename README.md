@@ -145,7 +145,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 
 ## Requirements
 
-- **Node.js** >= 20
+- **Node.js** >= 22
 - **Claude Code** CLI installed and configured (`claude` command available)
 - **SQLite3** support (provided by `better-sqlite3`, compiled on install)
 - **Platform**: Linux or macOS (see [Platform Support](#platform-support))

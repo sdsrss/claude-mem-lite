@@ -132,6 +132,14 @@ try {
     probe: () => first,
     exec: (cmd, opts) => execSync(cmd, { ...opts, timeout: 20000 }),
     verify: () => helpers.probeBindingInFreshProcess(ROOT, { timeoutMs: 8000 }),
+    // NOT on this path (A20260906-R8b-P0-1). The source build is
+    // `node-gyp clean && node-gyp rebuild`: it deletes build/ before compiling, and a full
+    // compile takes ~41 s against the 20 s cap above — so under this budget it does not fail
+    // harmlessly, it destroys a binding that was working (measured: DB opens YES → NO, .node
+    // gone, SIGTERM at 20.02 s), and repeats every SessionStart because setup.sh writes its
+    // marker only on success. The compile belongs on a foreground path with no cap:
+    // `claude-mem-lite rebuild-binding`, which is what the repair hints now print.
+    sourceBuild: false,
   });
 } finally {
   // process.exit skips finally blocks — every exit below this point, so the

@@ -107,7 +107,7 @@ try {
   }
   if (!verify.ok) {
     process.stderr.write(`[claude-mem-lite] better-sqlite3 binding unusable: ${verify.error}\n`);
-    process.stderr.write(`[claude-mem-lite] Repair: ${nativeBindingRepairHint(`"${ROOT}"`)}\n`);
+    process.stderr.write(`[claude-mem-lite] Repair: ${nativeBindingRepairHint(ROOT)}\n`);
     process.exit(1);
   }
   if (verify.action === 'rebuilt') {

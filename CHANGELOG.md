@@ -2,6 +2,38 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v4.0.2 — the self-heal that deleted the binding it was healing
+
+**Upgrade if you are on v4.0.0 or v4.0.1.** Found by an independent review of the v4.0.0
+commits, reproduced before fixing.
+
+**The source-compile fallback added in v4.0.0 could destroy a working binding, once per
+session.** That step is better-sqlite3's own `build-release`, which is
+`node-gyp clean && node-gyp rebuild` — it **deletes `build/` before it compiles**. The
+SessionStart hook probe runs the heal chain under a 20-second cap while a full compile takes
+about 41 seconds here, so the attempt was not merely useless, it was destructive. Measured on
+a tree whose compiled binding opened a database: 20 s cap, SIGTERM at 20.02 s, no `.node`
+left, `DB opens: YES` → `NO`. And it repeated on every SessionStart, because `setup.sh` only
+writes its success marker on success.
+
+The v4.0.0 guard meant to prevent exactly this looked at whether the caller injected its own
+`rebuild`. The one caller that is genuinely time-boxed injects `exec` — so the only caller
+with a budget was the only caller the guard missed. There is now an explicit
+`sourceBuild: false` opt-out and the hook path takes it; compiling from source belongs on a
+path with no cap (`claude-mem-lite rebuild-binding`, which is what the repair hints print).
+Nothing changes for the foreground paths — `install`, `rebuild-binding` and the CLI's
+heal-and-re-exec still compile.
+
+**Two guards from v4.0.1 could not fail.** The same review reverted the fixes and watched the
+suite stay green. The repair-hint guard skipped any file that had switched from the literal
+command to the constant — i.e. every file v4.0.1 had just fixed — and the symlink guard
+scanned only near `symlinkSync`, which never sees `uninstall`'s CLI-link removal (the site the
+v4.0.1 notes led with). Both holes are closed and both closures are verified by re-running the
+exact reverts that used to pass.
+
+Smaller, same review: repair hints now quote the directory, so they survive a path with spaces;
+`README.md` still said Node >= 20, which v4.0.0 raised to 22.
+
 ## v4.0.1 — the repair that reported success, and three more half-checks
 
 Audit round R8 (`docs/audits/20260906-013350.md`) read the install/uninstall/repair and
