@@ -14,12 +14,13 @@
 // exact thing this file exists to catch.
 import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { REPO } from './shipped-tree.mjs';
 import { HOOK_SCRIPT_FILES } from '../source-files.mjs';
 import { SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
+import { requiredNodeMajor as requiredNodeMajorSync } from '../install.mjs';
 
 const INSTALLER = join(REPO, 'install.mjs');
 const ENTRIES = ['cli.mjs', 'mem-cli.mjs', 'server.mjs', 'hook.mjs', 'install.mjs'];
@@ -164,5 +165,37 @@ describe('doctor reports its failure branches', () => {
     // all: the branch already emits 'warn', so the fail→warn downgrade the file header says
     // it guards against was the one thing it could not see.
     expect(entry.level).toBe('warn');
+  });
+});
+
+// ─── R8 · doctor's Node floor comes from package.json, not a second literal ──
+//
+// A20260906-R8-P2-1. This one cannot be driven the obvious way — the test process IS the
+// Node under test, so "doctor fails on Node 20" is unreachable from a Node 26 runner.
+// The assertable half is the floor doctor USES: it prints it on the ok line, so the check
+// is "the number doctor reports equals the one npm enforces". Mutation-verified both ways:
+// hardcoding 18 back into doctor reddens it, and bumping package.json#engines without
+// touching doctor keeps it green (which is the point — one source, no drift).
+describe('R8 doctor Node floor tracks package.json#engines', () => {
+  it('reports the same major that engines declares', async () => {
+    const { requiredNodeMajor } = await import('../install.mjs');
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    const expected = requiredNodeMajor(pkg.engines?.node, NaN);
+    expect(expected, 'premise: package.json must declare an engines.node floor').toBeGreaterThan(0);
+
+    const entry = find(doctorChecks(healthyHome().home), /^Node\.js:/);
+    expect(entry, 'premise: doctor must emit a Node.js check').toBeTruthy();
+    const printed = /required/.test(entry.message)
+      ? Number(/>=(\d+) required/.exec(entry.message)?.[1])
+      : NaN;
+    expect(printed, `doctor's Node line does not state its floor: ${entry.message}`).toBe(expected);
+  });
+
+  it('parses the floor out of the range forms engines actually takes', () => {
+    expect(requiredNodeMajorSync('>=22')).toBe(22);
+    expect(requiredNodeMajorSync('^22.12.0 || ^24.0.0 || >=26.0.0')).toBe(22);
+    // An unreadable/absent manifest must not silently become "any Node is fine".
+    expect(requiredNodeMajorSync(undefined)).toBe(22);
+    expect(requiredNodeMajorSync('')).toBe(22);
   });
 });

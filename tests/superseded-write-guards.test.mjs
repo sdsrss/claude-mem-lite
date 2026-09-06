@@ -312,3 +312,66 @@ describe('mergeDuplicates does not write compressed_into onto a tombstone', () =
     db.close();
   });
 });
+
+// ─── R8 · the three hook-optimize pools P0-3 did not reach ──────────────────
+//
+// Audit 2026-09-02 P0-3 fixed findSmartCompressCandidates and left its reasoning in a
+// comment at hook-optimize.mjs:877 ("liveObsFilterSql, not compressed_into alone …
+// auto-dedup losers carry superseded_at with compressed_into=0 and match this predicate
+// exactly"). Three sibling pools in the SAME file kept the half-predicate: the default
+// re-enrich scope, the normalize vocabulary, and normalize's own UPDATE. Grouped by
+// surface, per this file's header. A20260906-R8-P2-2.
+const setConcepts = (db, id, c) => db.prepare('UPDATE observations SET concepts = ? WHERE id = ?').run(c, id);
+
+describe('R8 hook-optimize pools: a tombstone is not re-enriched, mined, or rewritten', () => {
+  it('findReenrichCandidates default scope excludes a superseded row', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    const db = freshDb();
+    const tomb = add(db, { title: 'retracted finding', supersededAt: TOMB });
+
+    // FAILS IF: line 172 reads `COALESCE(compressed_into,0) = 0` instead of
+    // liveObsFilterSql('') — the tombstone then costs a Haiku call and gets optimized_at.
+    expect(findReenrichCandidates(db, 10).map((r) => r.id)).not.toContain(tomb);
+
+    // Premise: the SAME row is a candidate once live, so the exclusion above is the
+    // liveness filter and not one of the pool's five other NULL conditions.
+    db.prepare('UPDATE observations SET superseded_at = NULL WHERE id = ?').run(tomb);
+    expect(findReenrichCandidates(db, 10).map((r) => r.id)).toContain(tomb);
+    db.close();
+  });
+
+  it('extractUniqueConcepts does not mine vocabulary out of a superseded row', async () => {
+    const { extractUniqueConcepts } = await import('../hook-optimize.mjs');
+    const db = freshDb();
+    const tomb = add(db, { title: 'retracted', supersededAt: TOMB });
+    setConcepts(db, tomb, 'ftsfive rowidmatch');
+
+    // FAILS IF: line 471 keeps the half-predicate — a retracted row's vocabulary then
+    // seeds the synonym groups that applyNormalization rewrites LIVE rows with.
+    expect(extractUniqueConcepts(db)).not.toContain('ftsfive');
+
+    db.prepare('UPDATE observations SET superseded_at = NULL WHERE id = ?').run(tomb);
+    expect(extractUniqueConcepts(db)).toContain('ftsfive');
+    db.close();
+  });
+
+  it('applyNormalization does not rewrite a superseded row', async () => {
+    const { applyNormalization } = await import('../hook-optimize.mjs');
+    const db = freshDb();
+    const tomb = add(db, { title: 'retracted', supersededAt: TOMB });
+    setConcepts(db, tomb, 'ftsfive');
+    const groups = [{ canonical: 'fts', aliases: ['ftsfive'] }];
+
+    // FAILS IF: line 539 keeps the half-predicate. This one is a WRITE — it rewrites
+    // concepts + search_aliases and stamps optimized_at on a row every read face hides.
+    expect(applyNormalization(db, groups).updated).toBe(0);
+    expect(col(db, tomb, 'concepts')).toBe('ftsfive');
+    expect(col(db, tomb, 'optimized_at')).toBeNull();
+
+    // Premise: the same group DOES rewrite the same row once it is live.
+    db.prepare('UPDATE observations SET superseded_at = NULL WHERE id = ?').run(tomb);
+    expect(applyNormalization(db, groups).updated).toBe(1);
+    expect(col(db, tomb, 'concepts')).toBe('fts');
+    db.close();
+  });
+});

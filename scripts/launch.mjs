@@ -69,7 +69,8 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
 // intact but the .node binary stale → server FATALs with "Could not locate
 // the bindings file" on first DB open. Probe + auto-rebuild before launching.
 try {
-  const { ensureBetterSqlite3Working, probeBindingInFreshProcess } = await import('../lib/binding-probe.mjs');
+  const { ensureBetterSqlite3Working, probeBindingInFreshProcess, nativeBindingRepairHint } =
+    await import('../lib/binding-probe.mjs');
   // The rebuild inside ensureBetterSqlite3Working mutates node_modules — the
   // same write class as install/repair/update, and this was the ONE rebuild
   // path outside the shared install.lock: a second MCP launch or a concurrent
@@ -106,9 +107,7 @@ try {
   }
   if (!verify.ok) {
     process.stderr.write(`[claude-mem-lite] better-sqlite3 binding unusable: ${verify.error}\n`);
-    process.stderr.write(
-      `[claude-mem-lite] Repair: cd "${ROOT}" && npm rebuild better-sqlite3 --dangerously-allow-all-scripts\n`,
-    );
+    process.stderr.write(`[claude-mem-lite] Repair: ${nativeBindingRepairHint(`"${ROOT}"`)}\n`);
     process.exit(1);
   }
   if (verify.action === 'rebuilt') {

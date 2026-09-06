@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 4.0.0 — **this exact string is a release guard.**
+- **Version**: 4.0.1 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0; EOL 2026-04 and better-sqlite3 13 requires >=22), ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -58,11 +58,21 @@ things are measured and unexplained, so do not invent a mechanism for either: th
 flips to "No packages with unreviewed install scripts" when `prebuilds/` alone is deleted
 (same tree, same lockfile, `binding.gyp` present both ways), and `npm rebuild` compiles
 nothing even in the state where npm says the script exists and is blocked.
+
 `ensureBetterSqlite3Working` therefore has a third step since v4.0.0: when the npm path exits
 clean but the binding is still dead, it runs the package's own
 `npm run --prefix node_modules/better-sqlite3 build-release` (13 still ships `src/`, `deps/`
 and `binding.gyp`), and reports `action: 'compiled'`. Both halves are pinned in CI by the two
 legs of `smoke-npm12`.
+
+**Never hand a human `NATIVE_BINDING_REBUILD_CMD` on its own** — that is step 1 of the heal
+chain, not a repair. Since v4.0.1 every user-facing hint goes through
+`nativeBindingRepairHint()`, which sequences both commands with `&&` and **never `||`**:
+step 1 exits 0 whether or not it compiled, so an `||` fallback can never fire. Two surfaces
+duplicate the string because they may not import `lib/` (`scripts/hook-launcher.mjs`'s
+pure-`node:` charter, `scripts/setup.sh`); both are pinned to the constants by
+`tests/audit-r8-binding-repair-hint.test.mjs`, which also fails if a fourth surface starts
+hardcoding it.
 
 `doctor --metrics` is the only reader for the `inject` metric series (plain `doctor` omits it).
 
@@ -204,9 +214,9 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **357 files / 5911** (5910 passed, 1 skipped) | tag `v4.0.0`, 2026-09-06 — **and byte-identical under vitest 5.0.0 on the same tree**, which is the evidence that the bump is functionally neutral: the coverage denominators moved, the pass/fail set did not. (was 357 / 5907 at tag `v3.99.0`: +4 cases, all in `native-binding-selfheal` for the source-compile heal; no new test FILES, so `obs-id-caliber-sync`'s generated count is unmoved) |
-| Knip | **49** unused exports, **0** unused files, **0** duplicate exports | same tree, primary working tree. Unmoved by v4.0.0 and checked the right way: the unused-export NAME SET is **byte-identical** to the `v3.99.0` set, not merely the same count (doctrine rule 4). The one new export, `NATIVE_BINDING_SOURCE_BUILD_CMD`, is absent from the list because its test imports it. |
-| Coverage | statements **84.18%** · branches **78.82%** · functions **89.27%** · lines **85.30%** | **vitest 5.0.0**, 2026-09-06. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **Not comparable to any figure taken before the vitest 5 bump — see the caliber note below the next table.** The last vitest 4 reading, same tree, back-to-back: 84.30 / 78.82 / 89.27 / 85.40. **RE-MEASURE, NEVER CARRY — this row has been wrong twice.** The `v3.98.0` figure (84.34 / 78.88 / 89.26 / 85.44) did not reproduce at all: HEAD `e694259` itself measured 84.29 / 78.85 / 89.26 / 85.40, i.e. it had been carried across R6 ("unmoved by R5") instead of re-measured. **The ruler is per-tree reproducible** (A/A run twice on two different trees, byte-identical each time), so sub-0.05 moves are signal rather than run noise — which is exactly why carrying is not safe here. **UNATTRIBUTED, open since v3.99.0, do not guess a third time**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards, imported by nothing that changed and not pulled in by the new tests. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
+| Tests | **359 files / 5929** (5928 passed, 1 skipped) | tag `v4.0.1`, 2026-09-06. R8 added 2 test FILES and 18 cases (3 pool predicates + 2 Node floor + 4 link clearing + 9 repair hint). The `v4.0.0` figure was 357 / 5911, and was **byte-identical under vitest 4 and vitest 5 on the same tree** — that is the evidence the vitest bump was functionally neutral: the coverage denominators moved, the pass/fail set did not. (v4.0.0 was 357 / 5907 at tag `v3.99.0`: +4 cases, all in `native-binding-selfheal` for the source-compile heal; no new test FILES, so `obs-id-caliber-sync`'s generated count is unmoved) |
+| Knip | **49** unused exports, **0** unused files, **0** duplicate exports | tag `v4.0.1`, primary working tree. Unmoved by v4.0.0 AND v4.0.1, checked the right way both times: the unused-export NAME SET is **byte-identical**, not merely the same count (doctrine rule 4) — for v4.0.1 via a same-tree `git stash push -u` A/B, with the worktree diffed against its pre-stash state afterwards to prove the pop restored everything. R8's three new exports (`clearLinkPath`, `requiredNodeMajor`, `nativeBindingRepairHint`) are absent from the list because product code and tests import them. |
+| Coverage | statements **84.18%** · branches **78.82%** · functions **89.28%** · lines **85.30%** | tag `v4.0.1`, **vitest 5.0.0**, 2026-09-06. R8 moved exactly one row, fully attributed: `lib/binding-probe.mjs` funcs 62.5 → 64.7 for the one added function its test covers (its uncovered lines only RENUMBERED, 260 → 287, because a docblock pushed them down). `hook-optimize.mjs` and `install.mjs` are outside the coverage allowlist, so R8's other three fixes cannot move this row at all — check `vitest.config.mjs`'s `include` before attributing anything to a root module. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **Not comparable to any figure taken before the vitest 5 bump — see the caliber note below the next table.** The last vitest 4 reading, same tree, back-to-back: 84.30 / 78.82 / 89.27 / 85.40. **RE-MEASURE, NEVER CARRY — this row has been wrong twice.** The `v3.98.0` figure (84.34 / 78.88 / 89.26 / 85.44) did not reproduce at all: HEAD `e694259` itself measured 84.29 / 78.85 / 89.26 / 85.40, i.e. it had been carried across R6 ("unmoved by R5") instead of re-measured. **The ruler is per-tree reproducible** (A/A run twice on two different trees, byte-identical each time), so sub-0.05 moves are signal rather than run noise — which is exactly why carrying is not safe here. **UNATTRIBUTED, open since v3.99.0, do not guess a third time**: `lib/git-state.mjs` (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards, imported by nothing that changed and not pulled in by the new tests. Caliber note: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
 
 **`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
 across it.** `cycles()` and `untestedModules()` used to count `*.config.mjs` as source

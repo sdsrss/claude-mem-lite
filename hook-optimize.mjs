@@ -169,7 +169,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
   const stmt = db.prepare(`
     SELECT id, title, narrative, type, subtitle, importance, project
     FROM observations
-    WHERE COALESCE(compressed_into, 0) = 0
+    WHERE ${liveObsFilterSql('')}
       AND (concepts IS NULL OR concepts = '')
       AND (facts IS NULL OR facts = '')
       AND lesson_learned IS NULL
@@ -468,7 +468,7 @@ export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
     SELECT concepts FROM observations
-    WHERE COALESCE(compressed_into, 0) = 0
+    WHERE ${liveObsFilterSql('')}
       AND concepts IS NOT NULL AND concepts != ''
       ${projectClause}
     ORDER BY created_at_epoch DESC
@@ -536,7 +536,7 @@ export function applyNormalization(db, groups, { project = null } = {}) {
     .prepare(
       `
     SELECT id, title, narrative, concepts, search_aliases, lesson_learned FROM observations
-    WHERE COALESCE(compressed_into, 0) = 0
+    WHERE ${liveObsFilterSql('')}
       AND concepts IS NOT NULL AND concepts != ''
       AND (? IS NULL OR project = ?)
   `,

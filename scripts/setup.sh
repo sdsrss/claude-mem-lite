@@ -187,7 +187,10 @@ if [[ -d "$ROOT/node_modules/better-sqlite3" ]]; then
     mark_deps_ok
   else
     log_warn "better-sqlite3 native binding unusable — hooks degraded until repaired (flag: $DEPS_FLAG)"
-    mark_deps_broken "better-sqlite3 binding probe/rebuild failed (npm >= 12 blocks compile scripts by default)" "npm rebuild better-sqlite3 --dangerously-allow-all-scripts"
+    # Both commands, `&&` not `||`: `npm rebuild` exits 0 without compiling on
+    # better-sqlite3 13 (no install script to run), so it never signals failure and
+    # an `||` chain would never reach the source build. A20260906-R8-P1-1.
+    mark_deps_broken "better-sqlite3 binding probe/rebuild failed (npm >= 12 blocks compile scripts by default)" "npm rebuild better-sqlite3 --dangerously-allow-all-scripts && npm run --prefix node_modules/better-sqlite3 build-release"
   fi
 fi
 

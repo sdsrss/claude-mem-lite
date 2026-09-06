@@ -68,7 +68,7 @@ import { SOURCE_FILES, HOOK_SCRIPT_FILES } from './source-files.mjs';
 import {
   probeBetterSqlite3Binding,
   ensureBetterSqlite3Working,
-  NATIVE_BINDING_REBUILD_CMD,
+  nativeBindingRepairHint,
 } from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
@@ -404,6 +404,57 @@ export function patchClaudeMdVersion(text, version) {
 // at the same red line. Claude Code also seeds a NEW cache version from that same
 // emptied clone. So check the source before prescribing it, and fall back to a
 // reinstall — which re-clones the manifest from the repo — when it is empty too.
+/**
+ * Clear whatever occupies `p` — file, directory, or symlink INCLUDING a dangling one —
+ * before a symlink is written over it. Returns true when something was removed.
+ *
+ * A20260906-R8-P2-3: every call site used to gate on `existsSync(p)`, which FOLLOWS the
+ * link, so a dangling symlink reads as absent. Two consequences, and the second is the
+ * one that bites: `uninstall` leaves a dead `claude-mem-lite` on PATH, and
+ * `createCliSymlink` skips the removal, `symlinkSync` throws EEXIST, the catch falls back
+ * to an unwritable /usr/local/bin, and the user is told "CLI symlink failed — run
+ * manually". Re-running `install` — the documented repair — cannot repair it. The same
+ * file already knew the idiom: isDevInstall() pairs existsSync with lstatSync.
+ *
+ * rmSync rather than unlinkSync because the dev-mode sites link DIRECTORIES; verified it
+ * removes the link and leaves the target intact (a link to a populated dir, target still
+ * readable afterwards) — following it would delete the developer's own scripts/.
+ *
+ * @param {string} p
+ * @returns {boolean}
+ */
+export function clearLinkPath(p) {
+  try {
+    lstatSync(p);
+  } catch {
+    return false; // genuinely absent — nothing to clear
+  }
+  try {
+    rmSync(p, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false; // permissions; callers fall back or report their own failure
+  }
+}
+
+/**
+ * Minimum supported Node MAJOR, parsed out of a `package.json#engines.node` range.
+ *
+ * A20260906-R8-P2-1: doctor carried its own `>= 18` literal, so v4.0.0 raised the real
+ * floor to 22 (npm refuses to install below it, and better-sqlite3 13 ships no prebuild
+ * for those Nodes) while doctor kept printing `✓ Node.js: v20.x` — greenlighting the
+ * runtime that WAS the fault, in the one tool a broken user is told to run. One source,
+ * so the two cannot drift again; the fallback only covers an unreadable manifest.
+ *
+ * @param {unknown} enginesNode e.g. '>=22' or '^22.12.0 || ^24.0.0 || >=26.0.0'
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+export function requiredNodeMajor(enginesNode, fallback = 22) {
+  const m = /(\d+)/.exec(String(enginesNode ?? ''));
+  return m ? Number(m[1]) : fallback;
+}
+
 export function hookManifestRepairHint(cacheRoot, marketplaceRoot) {
   const src = join(marketplaceRoot, 'hooks', 'hooks.json');
   const dst = join(cacheRoot, 'hooks', 'hooks.json');
@@ -513,34 +564,22 @@ function installSourceFiles(IS_DEV) {
         // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
         const linkParent = dirname(link);
         if (!existsSync(linkParent)) mkdirSync(linkParent, { recursive: true });
-        // Remove existing file/symlink before creating
-        if (existsSync(link))
-          try {
-            unlinkSync(link);
-          } catch {}
+        // Remove existing file/symlink (including a dangling one) before creating.
+        clearLinkPath(link);
         symlinkSync(target, link);
       }
     }
     // Symlink scripts/ directory
     const scriptsLink = join(DATA_DIR, 'scripts');
-    if (existsSync(scriptsLink))
-      try {
-        rmSync(scriptsLink, { recursive: true, force: true });
-      } catch {}
+    clearLinkPath(scriptsLink);
     symlinkSync(join(PROJECT_DIR, 'scripts'), scriptsLink);
     // Symlink node_modules/
     const nmLink = join(DATA_DIR, 'node_modules');
-    if (existsSync(nmLink))
-      try {
-        rmSync(nmLink, { recursive: true, force: true });
-      } catch {}
+    clearLinkPath(nmLink);
     symlinkSync(join(PROJECT_DIR, 'node_modules'), nmLink);
     // Symlink registry/ directory
     const regLink = join(DATA_DIR, 'registry');
-    if (existsSync(regLink))
-      try {
-        rmSync(regLink, { recursive: true, force: true });
-      } catch {}
+    clearLinkPath(regLink);
     if (existsSync(join(PROJECT_DIR, 'registry'))) {
       symlinkSync(join(PROJECT_DIR, 'registry'), regLink);
     }
@@ -620,9 +659,7 @@ async function installDependencies(IS_DEV) {
       ok(`better-sqlite3: ${verify.action}`);
     } else {
       fail(`better-sqlite3 binding unusable after rebuild: ${verify.error}`);
-      log(
-        'Try manually: cd ' + INSTALL_DIR + ' && npm rebuild better-sqlite3 --dangerously-allow-all-scripts',
-      );
+      log(`Try manually: ${nativeBindingRepairHint(INSTALL_DIR)}`);
       process.exit(1);
     }
 
@@ -643,7 +680,7 @@ async function installDependencies(IS_DEV) {
           `better-sqlite3 unusable in the package this installer runs from (${PROJECT_DIR}): ${selfVerify.error}`,
         );
         log(
-          `  The install itself is fine; the \`claude-mem-lite\` shell command will self-heal on first use, or run: cd ${PROJECT_DIR} && ${NATIVE_BINDING_REBUILD_CMD}`,
+          `  The install itself is fine; the \`claude-mem-lite\` shell command will self-heal on first use, or run: ${nativeBindingRepairHint(PROJECT_DIR)}`,
         );
       }
     }
@@ -662,14 +699,14 @@ function createCliSymlink() {
     const cliLink = join(localBin, 'claude-mem-lite');
     try {
       if (!existsSync(localBin)) mkdirSync(localBin, { recursive: true });
-      if (existsSync(cliLink)) unlinkSync(cliLink);
+      clearLinkPath(cliLink);
       symlinkSync(cliSource, cliLink);
       ok(`CLI: ${cliLink} → ${cliSource}`);
     } catch {
       // Fallback: try /usr/local/bin (may need sudo)
       try {
         const globalLink = '/usr/local/bin/claude-mem-lite';
-        if (existsSync(globalLink)) unlinkSync(globalLink);
+        clearLinkPath(globalLink);
         symlinkSync(cliSource, globalLink);
         ok(`CLI: ${globalLink} → ${cliSource}`);
       } catch {
@@ -1545,8 +1582,7 @@ async function uninstall() {
   for (const binDir of [join(homedir(), '.local', 'bin'), '/usr/local/bin']) {
     const cliLink = join(binDir, 'claude-mem-lite');
     try {
-      if (existsSync(cliLink)) {
-        unlinkSync(cliLink);
+      if (clearLinkPath(cliLink)) {
         ok(`CLI symlink removed: ${cliLink}`);
       }
     } catch {
@@ -1901,12 +1937,22 @@ async function doctor() {
     warn(msg);
   };
 
-  // Node version
+  // Node version. The floor is read from package.json#engines rather than restated here —
+  // see requiredNodeMajor. It is PRINTED on the ok line too, so the guard test has something
+  // to compare against the manifest; a floor nobody can observe is a floor nobody notices
+  // has gone stale, which is exactly how the `>= 18` literal outlived the v4.0.0 bump.
   const nodeVer = process.version;
-  if (parseInt(nodeVer.slice(1)) >= 18) {
-    ok(`Node.js: ${nodeVer}`);
+  let enginesNode = null;
+  try {
+    enginesNode = JSON.parse(readFileSync(join(PROJECT_DIR, 'package.json'), 'utf8')).engines?.node;
+  } catch {
+    /* unreadable manifest → requiredNodeMajor's fallback */
+  }
+  const nodeFloor = requiredNodeMajor(enginesNode);
+  if (parseInt(nodeVer.slice(1)) >= nodeFloor) {
+    ok(`Node.js: ${nodeVer} (>=${nodeFloor} required)`);
   } else {
-    fail(`Node.js ${nodeVer} too old (need >=18)`);
+    fail(`Node.js ${nodeVer} too old (need >=${nodeFloor})`);
     issues++;
   }
 
@@ -3094,7 +3140,7 @@ async function rebuildBinding() {
         ok(`better-sqlite3 binding ${verify.action} for Node ${process.version} — ${label} (${root})`);
       } else {
         fail(`better-sqlite3 binding still unusable in ${label}: ${verify.error}`);
-        log(`Try manually: cd ${root} && ${NATIVE_BINDING_REBUILD_CMD}`);
+        log(`Try manually: ${nativeBindingRepairHint(root)}`);
         failed++;
       }
     }

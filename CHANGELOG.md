@@ -2,6 +2,51 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v4.0.1 — the repair that reported success, and three more half-checks
+
+Audit round R8 (`docs/audits/20260906-013350.md`) read the install/uninstall/repair and
+optimize-pool code R7 left uncovered. Four fixes, no behaviour anyone asked for changes —
+each one restores what the surrounding code already claimed to do.
+
+**The repair command we printed could not repair anything.** Every user-facing "Repair:" line
+— `doctor`'s included — printed `npm rebuild better-sqlite3 --dangerously-allow-all-scripts`.
+On better-sqlite3 13 that prints "rebuilt dependencies successfully", exits 0, and compiles
+nothing, so a user on a platform 13 ships no prebuild for followed the instructions, saw
+success, and still had a dead binding. Re-measured in a sandbox on npm 12.0.2 with the
+prebuilt binaries present and with them deleted: no `.node` produced either way. The command
+that *does* heal was added in v4.0.0 but lived inside the automated chain and was shown to
+nobody; every hint now prints both, sequenced with `&&` (never `||` — the first command exits
+0 whether or not it did anything, which is the entire trap). **This is the second time this
+defect has shipped**: the hints previously said `--build-from-source`, which no-oped the same
+way. That fix was right for better-sqlite3 12 and expired, silently, when the dependency was
+bumped — so the new guard is about the *shape* of a hint rather than one command string.
+
+*Correction to the v4.0.0 note below*: it says `--dangerously-allow-all-scripts` does not help
+"because there is no script to allow". The conclusion holds; the reason does not.
+`npm install-scripts ls` reports `better-sqlite3@13.0.3 (install: node-gyp rebuild)` as
+BLOCKED by allowScripts on npm 11.19.0 and 12.0.2 alike, for a package that declares no
+install script anywhere — npm synthesizes one. npm's script block does still reach this
+dependency; what saves a covered platform is the shipped prebuild.
+
+**`doctor` said your Node was fine when it was the fault.** Its floor was a `>= 18` literal of
+its own, so after v4.0.0 raised the real floor to 22 it printed `✓ Node.js: v20.x` — on the
+one runtime where npm refuses to install the package and better-sqlite3 ships no prebuild.
+The floor now comes from `package.json#engines`, and is printed, so the two cannot drift
+apart unnoticed.
+
+**Three optimize pools could pick up retracted rows.** A superseded observation keeps
+`compressed_into = 0`, so a predicate written as `COALESCE(compressed_into,0) = 0` alone
+admits tombstones — the finding audit 2026-09-02 P0-3 closed on one pool and left on three
+siblings in the same file: the default re-enrich scope, the normalize vocabulary, and
+normalize's own `UPDATE`, which wrote concepts and `search_aliases` onto rows every read face
+hides. All three now share `liveObsFilterSql`.
+
+**A broken CLI symlink survived both uninstall and reinstall.** `existsSync` follows a
+symlink, so a dangling one reads as absent: `uninstall` left a dead `claude-mem-lite` on your
+PATH, and — worse — `install` skipped the removal, `symlinkSync` threw `EEXIST`, and you were
+told "CLI symlink failed — run manually". Re-running `install`, the documented repair, could
+not repair it. Seven call sites now clear by `lstat`.
+
 ## v4.0.0 — Node 22 floor, and better-sqlite3 13's prebuilt binaries
 
 **⚠️ BREAKING — this release requires Node >= 22.** Node 20 reached end of life in April

@@ -93,9 +93,15 @@ const NB_BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-broken');
 const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-lastheal');
 // Literal, not imported: the pure-`node:` charter above forbids importing lib/
 // here (this file must survive a broken install). Kept in sync with
-// lib/binding-probe.mjs::NATIVE_BINDING_REBUILD_CMD, which is the single home
-// everywhere the charter allows an import.
-const NB_MANUAL_CMD = 'npm rebuild better-sqlite3 --dangerously-allow-all-scripts';
+// lib/binding-probe.mjs::nativeBindingRepairHint, which is the single home
+// everywhere the charter allows an import — and pinned to it by
+// tests/audit-r8-binding-repair-hint.test.mjs, because a literal kept in sync by
+// a comment is a literal that drifts (A20260906-R8-P1-1).
+//
+// BOTH commands, `&&` not `||`: `npm rebuild` exits 0 without compiling on
+// better-sqlite3 13, so it can neither heal nor signal failure on its own.
+const NB_MANUAL_CMD =
+  'npm rebuild better-sqlite3 --dangerously-allow-all-scripts && npm run --prefix node_modules/better-sqlite3 build-release';
 
 // Resolvable invocation of the bundled CLI's repair path. Absolute via
 // INSTALL_DIR (import.meta.url) so it works on a plugin-only install, where
