@@ -15,10 +15,11 @@ import {
 } from '../lib/metrics.mjs';
 import { gcDailyShards } from '../lib/shard-gc.mjs';
 
-// The sweep `gcOldMetricShards` and `registry-recommend.gcOldShadowShards` now share
-// (audit 2026-09-05 P2-3). Both callers exercise it through their own directory
-// resolution; these cases pin the parts neither caller's test reaches — what counts as a
-// shard name, and that a caller may hand it a path that does not exist.
+// `gcOldMetricShards` delegates to the shared sweep (audit 2026-09-05 P2-3, extracted
+// when a second caller existed; the skill-registry one was removed in 2026-09). The
+// caller exercises it through its own directory resolution; these cases pin the parts
+// that caller's own test does not reach — what counts as a shard name, and that a
+// caller may hand it a path that does not exist.
 describe('gcDailyShards (the shared sweep)', () => {
   let tmp;
   beforeEach(() => {

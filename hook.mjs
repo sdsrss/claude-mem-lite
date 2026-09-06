@@ -165,10 +165,10 @@ async function loadCacheGuard() {
 // Audit 2026-09-02 P1-8. `hook.mjs` is ONE entry point for seven events, so every static
 // import is paid by every event — PostToolUse, the highest-frequency one, was loading 85
 // modules (1.37 MB) to use a handful. The six modules below are loaded inside the handler
-// that needs them instead: registry-recommend, patha-exclude-meter, hook-update,
-// hook-optimize, adopt-cli, upgrade-banner. Measured marginal cost of the four largest,
-// same process: hook-update 9.4 ms, registry-recommend 5.1, hook-optimize 5.9, the rest
-// 0.5-2.4 each.
+// that needs them instead: patha-exclude-meter, hook-update, hook-optimize, adopt-cli,
+// upgrade-banner. Measured marginal cost of the largest, same process: hook-update
+// 9.4 ms, hook-optimize 5.9, the rest 0.5-2.4 each. (registry-recommend, 5.1 ms, was a
+// sixth entry until the skill-registry subsystem was removed — see docs/audits/20260906-145304.md.)
 //
 // A failing dynamic import lands in the dispatcher's tail catch -> recordHookError, the
 // same place a failing static import would have landed the whole process; each site keeps
@@ -645,20 +645,6 @@ async function handlePostToolUse() {
   // Shadow skill-adoption telemetry. mem_use is pre-filtered above, so the Skill tool is
   // the only visible adoption signal (v1). Placed before the resp-length gate because a
   // skill load's response shape varies. Never throws.
-  if (tool_name === 'Skill') {
-    const ti = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
-    // hookData.session_id (CC UUID) pairs this adoption to the would-be reco from the
-    // UserPromptSubmit hook earlier in the same session (matched precision, B1).
-    // Lazy: only a `Skill` tool call needs this module, which is a small fraction of
-    // PostToolUse fires.
-    try {
-      const { recordSkillAdoption } = await import('./registry-recommend.mjs');
-      recordSkillAdoption('Skill', ti, inferProject(), hookData.session_id);
-    } catch {
-      /* telemetry only — never blocks capture */
-    }
-  }
-
   const resp = normalizeToolResponse(tool_response);
   if (!resp || resp.length < 10) return;
 
@@ -2254,14 +2240,7 @@ async function handleSessionStart() {
   } catch {
     /* best-effort */
   }
-  // Bound the shadow-recommendation log (daily JSONL shards, no GC at write time).
-  try {
-    const { gcOldShadowShards } = await import('./registry-recommend.mjs');
-    gcOldShadowShards();
-  } catch {
-    /* best-effort, never blocks SessionStart */
-  }
-  // Same for the opt-in metrics sink, which lives under DB_DIR. Runs even when
+  // Bound the opt-in metrics sink, which lives under DB_DIR. Runs even when
   // metrics are disabled, so shards left by a since-toggled-off run still get pruned.
   try {
     gcOldMetricShards(DB_DIR);

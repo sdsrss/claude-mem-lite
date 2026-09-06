@@ -157,7 +157,6 @@ describe('no shipped module keeps a private temp+rename writer', () => {
     // shared writer has no parameter for; routing it there
     // would silently widen the permissions on session state
     'hook-update.mjs', // update-state.json
-    'registry-recommend.mjs', // recommendation cooldown marker
     'lib/native-binding-hint.mjs', // ABI self-heal marker (runs when the DB cannot open)
     'scripts/user-prompt-search.js', // injected-ids marker, hot path, zero-import budget
   ]);

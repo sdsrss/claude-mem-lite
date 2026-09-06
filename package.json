@@ -148,7 +148,6 @@
     "server/fts-check.mjs",
     "registry.mjs",
     "registry-retriever.mjs",
-    "registry-recommend.mjs",
     "registry-scanner.mjs",
     "registry-github.mjs",
     "registry-importer.mjs",

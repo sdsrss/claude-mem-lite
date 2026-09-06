@@ -54,14 +54,6 @@ import {
   resourceUseHint,
 } from './lib/registry-core.mjs';
 import { searchResources } from './registry-retriever.mjs';
-import {
-  computeFunnel,
-  formatFunnel,
-  computeSweep,
-  formatSweep,
-  DEFAULT_SWEEP_FLOORS,
-  DEFAULT_SWEEP_MARGINS,
-} from './registry-recommend.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
   runMaintainOps,
@@ -2688,40 +2680,10 @@ import { cmdFtsCheck } from './cli/fts-check.mjs';
 function cmdRegistry(_memDb, args) {
   const { positional, flags } = parseArgs(args);
   const action = positional[0];
-  if (
-    !action ||
-    !['list', 'stats', 'search', 'import', 'remove', 'reindex', 'recommend-stats'].includes(action)
-  ) {
+  if (!action || !['list', 'stats', 'search', 'import', 'remove', 'reindex'].includes(action)) {
     fail(
-      '[mem] Usage: claude-mem-lite registry <list|stats|search|import|remove|reindex|recommend-stats> [--type skill|agent] [--query Q] [--name N] [--resource-type T]',
+      '[mem] Usage: claude-mem-lite registry <list|stats|search|import|remove|reindex> [--type skill|agent] [--query Q] [--name N] [--resource-type T]',
     );
-    return;
-  }
-
-  // recommend-stats reads the shadow-recommendation JSONL (filesystem), not the
-  // registry DB — handle it before opening rdb so it works without a registry DB.
-  if (action === 'recommend-stats') {
-    const days =
-      (typeof flags.days === 'string' || typeof flags.days === 'number') && +flags.days > 0
-        ? Math.floor(+flags.days)
-        : 7;
-    out(formatFunnel(computeFunnel(days)));
-    if (flags.sweep) {
-      // Offline ROC over the shipped gate thresholds (B3). Parse `--floors`/`--margins` as
-      // comma lists of finite numbers; fall back to the spanning defaults on bad/empty input.
-      const parseNums = (v, fallback) => {
-        if (typeof v !== 'string') return fallback;
-        const nums = v
-          .split(',')
-          .map((x) => Number(x.trim()))
-          .filter(Number.isFinite);
-        return nums.length ? nums : fallback;
-      };
-      const floors = parseNums(flags.floors, DEFAULT_SWEEP_FLOORS);
-      const margins = parseNums(flags.margins, DEFAULT_SWEEP_MARGINS);
-      out('');
-      out(formatSweep(computeSweep(days, floors, margins)));
-    }
     return;
   }
 
@@ -3460,7 +3422,6 @@ Commands:
     import              Import resource --name N --resource-type T [--repo-url U] [--local-path P] [--use-cases U]
     remove              Remove resource --name N --resource-type T
     reindex             Rebuild FTS5 index
-    recommend-stats     Shadow recommendation funnel [--days N] [--sweep] [--json]
 
   import-jsonl <file-or-dir>      Import Claude Code JSONL transcripts (cold-start backfill)
     --project P         Project name (default: inferred from cwd)

@@ -40,7 +40,6 @@ import {
 } from './prompt-search-utils.mjs';
 import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { getDeferredByIds } from '../lib/deferred-work.mjs';
-import { recommendSkill } from '../registry-recommend.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 
 import { DAY_MS } from '../lib/time-constants.mjs';
@@ -1114,34 +1113,6 @@ async function main() {
       }
     } catch {
       /* silent — never block on registry failure */
-    }
-
-    // ─── L2: Intent-based skill recommendation (shadow-first, v3.12) ─────
-    // Distinct from L1 (explicit-name pointer): fires on intent even when the
-    // user did not name a skill. Phase 1 = shadow only (logs, never emits).
-    // Reuses a readonly registry DB; cooldown/shadow writes go to the FS.
-    try {
-      if (existsSync(REGISTRY_DB_PATH)) {
-        // #8259: explicit-signal presence is the decisive lever for UPS injection
-        // quality (UPS cite-recall was 25.8% until gated on it). Logged in shadow so
-        // Phase 2 can decide whether live injection gates on it. Shadow measures broadly.
-        const hasSignal = !!(
-          extractErrorSignature(promptText) ||
-          extractFiles(promptText).length > 0 ||
-          detectIntent(promptText)
-        );
-        const rdb = new Database(REGISTRY_DB_PATH, { readonly: true });
-        rdb.pragma('busy_timeout = 500');
-        // CC session_id (hook stdin) is the cross-hook pairing key: PostToolUse adoptions
-        // in this same session join back to this reco for matched precision (B1).
-        try {
-          recommendSkill(rdb, promptText, inferProject(), { hasSignal, sessionId: hookData.session_id });
-        } finally {
-          rdb.close();
-        }
-      }
-    } catch {
-      /* silent — never block on recommendation failure */
     }
   } catch (e) {
     // Hooks must never break Claude Code — swallow, but RECORD: this catch wraps

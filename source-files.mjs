@@ -37,9 +37,6 @@ export const SOURCE_FILES = [
   'registry-scanner.mjs',
   'registry-retriever.mjs',
   'resource-discovery.mjs',
-  // registry-recommend.mjs: statically imported by hook.mjs (PostToolUse adoption probe)
-  // and scripts/user-prompt-search.js (UserPromptSubmit shadow recommendation).
-  'registry-recommend.mjs',
   // registry-enricher/-github/-importer are dynamically imported by server.mjs
   // (mem_registry tool) and mem-cli.mjs (registry CLI subcommands). Missing
   // them from SOURCE_FILES silently broke those code paths prior to this fix.
@@ -65,7 +62,7 @@ export const SOURCE_FILES = [
   'bash-utils.mjs',
   // Single source of truth for the CLAUDE_MEM_DIR → data-dir resolver (rejects a
   // stringified "undefined"/"null"/relative env instead of creating a stray dir).
-  // Statically imported by schema.mjs / cli.mjs / install.mjs / registry-recommend.mjs
+  // Statically imported by schema.mjs / cli.mjs / install.mjs
   // AND hook scripts (pre-tool-recall / post-tool-recall / pre-skill-bridge) — ship it
   // or auto-update leaves schema + every hook with ERR_MODULE_NOT_FOUND on each fire.
   'lib/resolve-data-dir.mjs',

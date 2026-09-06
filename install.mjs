@@ -2480,29 +2480,6 @@ async function doctor() {
     }
   }
 
-  // Env flags that are ACCEPTED but do nothing. A flag a user set and believes is
-  // in effect is a silent lie the rest of doctor cannot see: every other check here
-  // asks whether the install is healthy, and this install is perfectly healthy while
-  // behaving as though the flag were unset (audit 2026-08-22 P2-5).
-  // Dynamically imported, and the mode table is read from the module that owns it:
-  // a static import would drag the registry retriever's dependency chain into a tool
-  // whose whole job is to run when the tree is broken, and a local copy of the list
-  // is the drift shape this repo keeps paying for.
-  try {
-    const { getRequestedRecommendMode, RECOMMEND_MODE_UNIMPLEMENTED } =
-      await import('./registry-recommend.mjs');
-    const requested = getRequestedRecommendMode();
-    if (RECOMMEND_MODE_UNIMPLEMENTED.has(requested)) {
-      dwarn(
-        `CLAUDE_MEM_RECOMMEND_MODE=${requested}: accepted but NOT implemented — ` +
-          'live skill-recommendation injection is Phase 2 and does not exist. The engine ' +
-          'is running in shadow (logs only, injects nothing). Set shadow or off.',
-      );
-    }
-  } catch (e) {
-    dwarn('Env flags: check failed — ' + e.message);
-  }
-
   // Plugin cache versions
   const pluginCacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
   if (existsSync(pluginCacheBase)) {
