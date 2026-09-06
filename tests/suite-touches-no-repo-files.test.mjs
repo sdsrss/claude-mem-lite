@@ -58,7 +58,13 @@ function seed() {
 }
 
 function runInstall(home, proj, extraEnv) {
-  return execFileSync(process.execPath, [INSTALL_PATH, 'install'], {
+  // `--dev` symlinks node_modules instead of running `npm install`. Without it this case
+  // needs the network: install.mjs shells out to npm, better-sqlite3 has no prebuild for
+  // every Node, and node-gyp then downloads headers from nodejs.org — which is exactly how
+  // this file failed under `--coverage` on a slow link, for a reason with nothing to do
+  // with what it tests. Dev mode still runs dogfoodAutoAdopt (install.mjs:959 is
+  // unconditional), which is the branch under test.
+  return execFileSync(process.execPath, [INSTALL_PATH, 'install', '--dev'], {
     encoding: 'utf8',
     env: {
       ...process.env,

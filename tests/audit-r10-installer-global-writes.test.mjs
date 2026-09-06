@@ -265,7 +265,12 @@ describe('R10 P1-8 — a settings.json that is not valid JSON is never overwritt
 }`;
 
   function run(cmd, home) {
-    return execFileSync(process.execPath, [INSTALL_PATH, cmd], {
+    // `--dev` on install: it symlinks node_modules rather than shelling out to npm, which
+    // otherwise makes this case depend on nodejs.org being reachable (node-gyp downloads
+    // headers when better-sqlite3 has no prebuild for the running Node). readSettings is
+    // reached either way — it runs in configureHooks, after the dependency step.
+    const args = cmd === 'install' ? [cmd, '--dev'] : [cmd];
+    return execFileSync(process.execPath, [INSTALL_PATH, ...args], {
       encoding: 'utf8',
       env: { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', MEM_NO_AUTO_ADOPT: '1' },
       cwd: root,
