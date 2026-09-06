@@ -129,7 +129,7 @@ jobs:
         # baseline past BASELINE_STALE_AGE_DAYS then fails here first, on main, where
         # recapturing it is a one-line commit. That arms a DATED failure: the age test is
         # `floor((now - baseline.timestamp) / DAY) >= 30` and the baseline is stamped
-        # 2026-09-05T20:57:35Z, so main goes red from 2026-10-05 **20:57 UTC** — that
+        # 2026-09-06T19:48:29Z, so main goes red from 2026-10-06 **19:48 UTC** — that
         # day's earlier pushes are still green. Intended reminder, not automated.
         # R10 P3-23: this comment named 2026-09-01 / 2026-10-01 for a baseline that was
         # recaptured on 2026-09-05. Re-read benchmark/baseline.json's own `timestamp` when
