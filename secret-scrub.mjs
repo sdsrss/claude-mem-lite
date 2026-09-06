@@ -102,7 +102,11 @@ export const SECRET_PATTERNS = [
   // patterns above require `=`/`:`; the shell long-flag form uses a space. Long-form
   // only — `-p`/`-u` short flags collide with unit/user/update flags (too FP-risky).
   // `(?!-)` stops it eating a following `--flag` when --password has no value.
-  [/(--(?:password|passwd)[=\s]+)(?!-)[^\s'"]{6,}/gi, '$1***'],
+  // R10 P1-6: `token`, `api-key` and `secret` join the list. `vault login --token hvs.…`,
+  // `gh auth login --token …` and `op … --secret …` are the shapes that actually appear in
+  // Bash output. The {6,} floor is what keeps `--token abc` (a placeholder in a usage line)
+  // out, so do not lower it.
+  [/(--(?:password|passwd|token|api[-_]?key|secret)[=\s]+)(?!-)[^\s'"]{6,}/gi, '$1***'],
   // Bare-key QUOTED values — `api_key="..."`, `password: '...'`. The unquoted KV
   // patterns above stop at `'`/`"` (excluded from their value class), so a quoted
   // value matched 0 chars and slipped through. Consumes the opening quote, the value,
@@ -157,6 +161,17 @@ export const SECRET_PATTERNS = [
   // Authorization header credentials — Bearer (opaque), Basic (base64 user:pass),
   // and GitHub's `token` scheme all carry secrets after the scheme word.
   [/(Authorization:\s*(?:Bearer|Basic|token)\s+)[^\s,;'"}\]]+/gi, '$1***'],
+  // R10 P1-6: the same header as a QUOTED KEY — `{"Authorization":"Bearer …"}`. The
+  // pattern above needs `Authorization:` literally, and in JSON a quote sits between the
+  // name and the colon, so a `curl -v` / fetch header dump walked straight through. The
+  // scheme word is optional because a raw token as the whole value is just as common;
+  // `authorization` is not a benign key, and over-scrub is the safe direction here.
+  [/(['"](?:proxy-)?authorization['"]\s*:\s*)(['"])(?:(?:Bearer|Basic|token)\s+)?[^'"]{6,}\2/gi, '$1$2***$2'],
+  // R10 P1-6: Azure storage. AccountKey= is the account's master credential and sig= is a
+  // live SAS token; neither had any pattern. `sig` is anchored to a URL query position
+  // (`?`/`&`) rather than a word boundary — bare `\bsig=` eats `const sig=computeX(y)`.
+  [/\b(AccountKey|SharedAccessSignature)=[^\s;&'"]{16,}/gi, '$1=***'],
+  [/([?&]sig=)[^\s;&'"]{16,}/gi, '$1***'],
   // Supabase / generic long base64 keys (40+ chars, common in env vars)
   [
     /(\b(?:SUPABASE_KEY|SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|REDIS_URL)\s*[=:]\s*)[^\s,;'"}\]]+/gi,
@@ -172,8 +187,11 @@ export const SECRET_PATTERNS = [
   // amqp) incl. their TLS/alias variants (rediss/amqps/mssql/sqlserver) — managed
   // cloud DBs almost always use the TLS scheme, which the base-only list leaked.
   [
-    /\b(postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s,;'"}\]]+/gi,
-    '$1://***',
+    // R10 P1-6: `(\+[\w-]+)?` accepts the DBAPI-driver suffix every ORM writes —
+    // `postgresql+psycopg2://`, `mysql+pymysql://`, `mssql+pyodbc://`. Without it a
+    // SQLAlchemy create_engine() line leaked user:password in full.
+    /\b(postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?|rediss?|amqps?)(\+[\w-]+)?:\/\/[^\s,;'"}\]]+/gi,
+    '$1$2://***',
   ],
   // npm tokens (npm_...)
   [/\bnpm_[a-zA-Z0-9]{36,}\b/g, '***'],
@@ -228,7 +246,18 @@ export const SECRET_PATTERNS = [
   ],
   // Session cookies in headers / urlencoded bodies (sessionid=, session_id=, JSESSIONID=, PHPSESSID=).
   // 16+ chars filters out short test fixtures like sessionid=abc.
+  // R10 P1-6: plain `session=` — the Cookie / urlencoded form — gets its OWN pattern
+  // restricted to `=`. It must NOT join the alternation above, because that one also
+  // accepts `:`, and bare `session:` is prose and JS-object-key syntax, not a cookie.
+  // Measured over 182,361 non-empty lines of this repo's tracked text, old vs new
+  // back-to-back on the same bytes: the `[=:]` form over-scrubbed 6 real lines
+  // (`session: r.content_session_id,` in lib/search-core.mjs, `per session: ${...}` in
+  // benchmark/cite-recall.mjs). The `=`-only form left 1 (`session=content_session_id)`
+  // in a comment); the 24-char floor below leaves 0. 24 is not arbitrary — PHPSESSID is
+  // 26 chars, JSESSIONID and Django's sessionid are 32, so a real cookie clears it while
+  // an identifier-shaped word does not. The named-cookie branch keeps its 16-char floor.
   [/\b((?:session[_-]?id|sessionid|jsessionid|phpsessid)\s*[=:]\s*)[^\s,;'"}\]]{16,}/gi, '$1***'],
+  [/\b(session\s*=\s*)[^\s,;'"}\]]{24,}/gi, '$1***'],
   // ── DELIBERATELY NOT COVERED: bare high-entropy / "raw N-char" tokens ──────
   // A generic `[A-Fa-f0-9]{40}` / high-entropy regex would scrub this repo's own
   // legitimate data: 40-hex git SHAs, 32-hex MD5s, 64-hex SHA256s, and stored
