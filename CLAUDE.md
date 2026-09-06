@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 5.2.0 — **this exact string is a release guard.**
+- **Version**: 5.3.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0; EOL 2026-04 and better-sqlite3 13 requires >=22), ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -24,7 +24,7 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 | Dead code | `npm run dead-code` (knip — **read the measurement contract below first**) |
 | Shell | `shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-commit.sh scripts/setup.sh` |
 | Micro-bench | `npm run benchmark` (`node benchmark/benchmark.mjs`) · CI gate: `npm run benchmark:gate` (`benchmark/ci-gate.mjs`) |
-| **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **`benchmark/baseline.json` EXPIRES 30 days after its own `timestamp`**, and both `ci.yml` (on push) and `publish.yml` pass `--strict`, which turns that into a hard failure. Sampled 2026-09-05 → red from **2026-10-05**. In the release path the failure lands *after* the tag is pushed (v3.69.0/v3.69.1 stalled on exactly this), so recapture BEFORE tagging, in its own commit, naming the sampled tree. |
+| **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **`benchmark/baseline.json` EXPIRES 30 days after its own `timestamp`**, and both `ci.yml` (on push) and `publish.yml` pass `--strict`, which turns that into a hard failure. Sampled **2026-09-06T19:48:29Z** (`f1dde1a`, recaptured at `cc4fc5e`) → red from **2026-10-06 19:48 UTC**; `ci.yml:132` carries the same date and they must be changed together. In the release path the failure lands *after* the tag is pushed (v3.69.0/v3.69.1 stalled on exactly this), so recapture BEFORE tagging, in its own commit, naming the sampled tree. |
 | Audit metrics | `npm run audit:metrics` · `npm run audit:baseline` |
 
 Two CLI families, both canonical in `cli.mjs`:
@@ -230,9 +230,9 @@ scratch file at the repo root — moves the headline number).
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **357 files / 5711** (5711 passed, **0 skipped**) | `main` @ v5.2.0, 2026-09-06. **+18 cases, +1 file** over `c9c1acb`, attributed by NAME not subtraction. The +1 file and 4 of the cases are `tests/maintain-ops-invariant.test.mjs`; 4 more are the `maintain scan --ops` block, 4 the `fts-check` exit-code block and 1 the delete-preview missing-id case, all in `tests/cli.test.mjs`; 2 are the cleanup age-gate cases in `tests/audit-r10-installer-global-writes.test.mjs`; 1 is the delete-core missing-id case in `tests/twin-cores.test.mjs`; 1 is the deep-search baseline-untouchable guard in `tests/deep-search.test.mjs`; and **1 is generated** — `benchmark/deep-search-holdout.mjs` is a new `.mjs` under `benchmark/`, so `obs-id-caliber-sync` emits a case for it. **A new file under `tests/` does NOT move the generated term** — that sweep counts `benchmark/`, `lib/`, `scripts/` and the repo root only. Was **356 / 5693** at `c9c1acb`, after the prebuild-shadowing fix (`d846279..c9c1acb`). **+6 cases, 0 new files** — the six are appended to two existing files, and the generated term did not move because no source file was added. Was **356 / 5687** at `cc4fc5e`, after the R10 audit-fix series (`efdf505..cc4fc5e`, 15 commits). Was **343 / 5578** (5577 + 1 skipped) at `efdf505`. **The 1 skipped became 0 for a reason worth knowing**: `tests/pre-commit-hook-sync.test.mjs` skips when no git hook is installed, and this clone had none — `git config core.hooksPath .githooks` (R10 P2-20, now also `npm run hooks:install`) un-skipped it. A skip that permanent is a check that is off. **Watch the generated term**: `obs-id-caliber-sync` emits one case per `.mjs`/`.js` under `benchmark/`, `lib/`, `scripts/` and the repo root, so deleting `scripts/p0-forward-probe.mjs` (R10 P3-24) took one case with it — which is why the R10 batch that removed it netted +0 cases despite adding one. Pre-R10 history: the skill-registry removal took 359/5936 → 343/5578 in three attributed steps; v4.0.4 added 2 over v4.0.3's 359 / 5934; the `v4.0.0` figure was 357 / 5911 and was **byte-identical under vitest 4 and vitest 5 on the same tree**. |
-| Knip | **45** unused exports, **0** unused files, **0** duplicate exports, **3** unlisted binaries (`du`, `pgrep`, `claude-mem-lite`, all from `install.mjs`) | `main` @ `c9c1acb`, primary working tree — unchanged across the prebuild-shadowing fix, and **no entry names any file that change touched** (the new sandbox helpers are all imported by the phases; the new `lib/binding-probe.mjs` helper is module-local on purpose). Same figure at `cc4fc5e`. Was **48** at `efdf505`. **Attributed by NAME SET, not by subtracting counts** (doctrine rule 4): exactly three names left the list — `lib/scrub-record.mjs:TEXT_FIELDS_BY_TABLE`, `hook-optimize.mjs:executeSmartCompress` and `schema.mjs:isDbCorruptionError` — each because an R10 test now imports it. **Zero new unused exports across 15 commits.** The 3 unlisted binaries were present at `efdf505` too and are not new; the earlier rows simply never recorded that line. **The worktree-offset rule got a second data point**: this `efdf505` reading was taken in a `git worktree --detach` whose `node_modules` was SYMLINKED to the primary tree's, and it read 48 — matching the primary-tree figure, as the R9 reviewer also found (n=2 now). The discriminating arm — a detached worktree with its OWN `npm ci` — is still unrun, so keep measuring from the primary tree, but the rule is more likely about `node_modules` than about the checkout. |
-| Coverage | statements **85.80%** · branches **80.21%** · functions **90.46%** · lines **86.97%** | `main` @ v5.2.0, **vitest 5.0.0**, 2026-09-06, gate exit 0. Same caliber as the row it replaces (no `include` change), so comparable: 85.72 → 85.80, 80.16 → 80.21, 90.44 → 90.46, 86.88 → 86.97 — the only `lib/` lines added this round are the delete-core missing-id branch and `ALL_MAINTAIN_OPS`, both covered. Previous row, `c9c1acb`: **85.72 / 80.16 / 90.44 / 86.88**, gate exit 0. Same caliber as the row it replaces (no `include` change), so this one IS comparable: 85.68 → 85.72, 80.09 → 80.16, 90.42 → 90.44, 86.82 → 86.88 — the prebuild-quarantine tests cover the lines they added. Previous row, `cc4fc5e`: **85.68 / 80.09 / 90.42 / 86.82**. Same caliber as the previous row (the `include` allowlist did not change in R10), so this one IS comparable: 85.87 → 85.68 stmts, 80.15 → 80.09 branches, 90.28 → 90.42 functions, 87.05 → 86.82 lines. The movement is denominator, not regression — R10 added code to `lib/` (`proc-lock` steal protocol, `atomic-write` mode preservation, `deferred-work` scrub, `get-core` notices) faster than it added `lib/` tests, since several R10 guards drive root-level faces that are outside the gate. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **RE-MEASURE, NEVER CARRY — this row has been wrong three times**, twice by carrying and once by mis-attributing which files left the `include` list. **`lib/git-state.mjs` — CLOSED 2026-09-06, and it was never a caliber change.** Open since v3.99.0 on the grounds that its row (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards. Three facts settle it without a fourth guess and without re-running coverage: at `e694259` the file already existed (added `026508c`, 2026-04-15, untouched since `97c5cab`, 2026-05-10), `lib/**/*.mjs` was already in the coverage `include`, and all four tests that exercise it (`tests/git-state.test.mjs`, `tests/handoff.test.mjs`, `tests/handoff-simulation.test.mjs`, `tests/handoff-git-anchor-r3.test.mjs`) all existed there too — `git cat-file -e` on each. A file in scope and exercised was measured, so the row was in that report and the RECORDING dropped it. Treat the two rows as one population, not two calibers. Caliber note that probably caused it: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
+| Tests | **360 files / 5730** (5730 passed, **0 skipped**) | `main` @ v5.3.0, 2026-09-06. **+19 cases, +3 files** over v5.2.0, attributed by NAME not subtraction: `tests/tmp-fixture-dispose.test.mjs` (+1 file, 4 cases), `tests/bg-spawn-skip-flag-invariant.test.mjs` (+1 file, 5 cases), `tests/live-predicate-adjudication.test.mjs` (+1 file, 3 cases), and 7 appended to the existing `tests/deep-search.test.mjs` — the 7th being the zero-result disclosure case pre-ship review asked for. **The generated term did not move** — no `.mjs` was added under `benchmark/`, `lib/`, `scripts/` or the repo root, and a new file under `tests/` is outside that sweep. Previous row, **357 files / 5711** at v5.2.0: **+18 cases, +1 file** over `c9c1acb`, attributed by NAME not subtraction. The +1 file and 4 of the cases are `tests/maintain-ops-invariant.test.mjs`; 4 more are the `maintain scan --ops` block, 4 the `fts-check` exit-code block and 1 the delete-preview missing-id case, all in `tests/cli.test.mjs`; 2 are the cleanup age-gate cases in `tests/audit-r10-installer-global-writes.test.mjs`; 1 is the delete-core missing-id case in `tests/twin-cores.test.mjs`; 1 is the deep-search baseline-untouchable guard in `tests/deep-search.test.mjs`; and **1 is generated** — `benchmark/deep-search-holdout.mjs` is a new `.mjs` under `benchmark/`, so `obs-id-caliber-sync` emits a case for it. **A new file under `tests/` does NOT move the generated term** — that sweep counts `benchmark/`, `lib/`, `scripts/` and the repo root only. Was **356 / 5693** at `c9c1acb`, after the prebuild-shadowing fix (`d846279..c9c1acb`). **+6 cases, 0 new files** — the six are appended to two existing files, and the generated term did not move because no source file was added. Was **356 / 5687** at `cc4fc5e`, after the R10 audit-fix series (`efdf505..cc4fc5e`, 15 commits). Was **343 / 5578** (5577 + 1 skipped) at `efdf505`. **The 1 skipped became 0 for a reason worth knowing**: `tests/pre-commit-hook-sync.test.mjs` skips when no git hook is installed, and this clone had none — `git config core.hooksPath .githooks` (R10 P2-20, now also `npm run hooks:install`) un-skipped it. A skip that permanent is a check that is off. **Watch the generated term**: `obs-id-caliber-sync` emits one case per `.mjs`/`.js` under `benchmark/`, `lib/`, `scripts/` and the repo root, so deleting `scripts/p0-forward-probe.mjs` (R10 P3-24) took one case with it — which is why the R10 batch that removed it netted +0 cases despite adding one. Pre-R10 history: the skill-registry removal took 359/5936 → 343/5578 in three attributed steps; v4.0.4 added 2 over v4.0.3's 359 / 5934; the `v4.0.0` figure was 357 / 5911 and was **byte-identical under vitest 4 and vitest 5 on the same tree**. |
+| Knip | **45** unused exports, **0** unused files, **0** duplicate exports, **3** unlisted binaries (`du`, `pgrep`, `claude-mem-lite`, all from `install.mjs`) | `main` @ v5.3.0. **Name set identical to the `c9c1acb` baseline**; the only diff in the whole listing is two line numbers in `deep-search.mjs` (`REWRITE_SYSTEM` 195→246, `AUTO_DEEP_THROTTLE_MS` 253→304) pushed down by inserting `deepDisclosureNote` above them — which is itself absent from the list because both faces consume it. **Zero new unused exports across the six commits.** **Both arms of the worktree probe are stamped to THIS commit** (contract rule 1, doctrine rule 1): primary tree at `61a6f66` = 45, detached worktree with its own `npm ci` at `61a6f66` = 45, name sets diffed and byte-identical. Neither arm is comparable to the `2ebc159` pair that produced the ~15 gap — different tree, and `registry-retriever.mjs` no longer exists. Same figure at `c9c1acb` and `cc4fc5e`. Was **48** at `efdf505`. **Attributed by NAME SET, not by subtracting counts** (doctrine rule 4): exactly three names left the list — `lib/scrub-record.mjs:TEXT_FIELDS_BY_TABLE`, `hook-optimize.mjs:executeSmartCompress` and `schema.mjs:isDbCorruptionError` — each because an R10 test now imports it. **Zero new unused exports across 15 commits.** The 3 unlisted binaries were present at `efdf505` too and are not new; the earlier rows simply never recorded that line. **The worktree-offset rule got a second data point**: this `efdf505` reading was taken in a `git worktree --detach` whose `node_modules` was SYMLINKED to the primary tree's, and it read 48 — matching the primary-tree figure, as the R9 reviewer also found (n=2 now). The discriminating arm — a detached worktree with its OWN `npm ci` — is still unrun, so keep measuring from the primary tree, but the rule is more likely about `node_modules` than about the checkout. |
+| Coverage | statements **85.81%** · branches **80.20%** · functions **90.46%** · lines **86.97%** | `main` @ v5.3.0, **vitest 5.0.0**, 2026-09-06, gate exit 0. Same caliber as the row it replaces (no `include` change), so comparable: 85.80 → 85.81, 80.21 → 80.20, 90.46 → 90.46, 86.97 → 86.97 — flat, and that is the expected shape. `deep-search.mjs` (where `deepDisclosureNote` landed) is NOT in the `include` allowlist, so the only in-scope code this round added is the ~10-line `if (isDeep)` disclosure block in `mem-cli.mjs`, which the suite cannot reach (a multi-variant deep result needs a real LLM, and vitest.config.mjs blanks both API keys globally) — hence branches −0.01 and nothing else moving. Previous row, v5.2.0: **85.80 / 80.21 / 90.46 / 86.97**. Same caliber as the row it replaced (no `include` change), so comparable: 85.72 → 85.80, 80.16 → 80.21, 90.44 → 90.46, 86.88 → 86.97 — the only `lib/` lines added that round are the delete-core missing-id branch and `ALL_MAINTAIN_OPS`, both covered. Previous row, `c9c1acb`: **85.72 / 80.16 / 90.44 / 86.88**, gate exit 0. Same caliber as the row it replaces (no `include` change), so this one IS comparable: 85.68 → 85.72, 80.09 → 80.16, 90.42 → 90.44, 86.82 → 86.88 — the prebuild-quarantine tests cover the lines they added. Previous row, `cc4fc5e`: **85.68 / 80.09 / 90.42 / 86.82**. Same caliber as the previous row (the `include` allowlist did not change in R10), so this one IS comparable: 85.87 → 85.68 stmts, 80.15 → 80.09 branches, 90.28 → 90.42 functions, 87.05 → 86.82 lines. The movement is denominator, not regression — R10 added code to `lib/` (`proc-lock` steal protocol, `atomic-write` mode preservation, `deferred-work` scrub, `get-core` notices) faster than it added `lib/` tests, since several R10 guards drive root-level faces that are outside the gate. Gate (80 / 74 / 84 / 83) passes, `test:coverage` exit 0. **RE-MEASURE, NEVER CARRY — this row has been wrong three times**, twice by carrying and once by mis-attributing which files left the `include` list. **`lib/git-state.mjs` — CLOSED 2026-09-06, and it was never a caliber change.** Open since v3.99.0 on the grounds that its row (100 / 90.9 / 100 / 100) is absent from `e694259`'s report and present afterwards. Three facts settle it without a fourth guess and without re-running coverage: at `e694259` the file already existed (added `026508c`, 2026-04-15, untouched since `97c5cab`, 2026-05-10), `lib/**/*.mjs` was already in the coverage `include`, and all four tests that exercise it (`tests/git-state.test.mjs`, `tests/handoff.test.mjs`, `tests/handoff-simulation.test.mjs`, `tests/handoff-git-anchor-r3.test.mjs`) all existed there too — `git cat-file -e` on each. A file in scope and exercised was measured, so the row was in that report and the RECORDING dropped it. Treat the two rows as one population, not two calibers. Caliber note that probably caused it: the v8 text reporter truncates names past ~19 chars (`...n-tracker.mjs`), so a full-name grep returns nothing and reads as "not measured". |
 
 **`scripts/audit-metrics.mjs` module counts changed CALIBER in the R5 batch — do not diff
 across it.** `cycles()` and `untestedModules()` used to count `*.config.mjs` as source
@@ -281,22 +281,33 @@ Same code, same uncovered lines, different denominator. Aggregate 84.30 / 85.40 
 **Knip measurement contract** (full version + name-set history in
 `docs/measurement/baselines.md`):
 
-1. **Command + context are part of the number — but the context is `node_modules`, NOT the
-   checkout. SETTLED 2026-09-06; the old "measure only from the primary working tree" rule
-   is retired, do not reinstate it.** The discriminating arm finally ran: a
-   `git worktree --detach` at `61a6f66` with its **OWN `npm ci`** (a real directory, not a
-   symlink — verified) read **45 unused exports with a name set byte-identical** to the
-   primary tree's reading of the same commit, sets diffed rather than counts, both arms on
-   one fixed commit so no corpus can grow between them. That closes the n=2 the R9 reviewer
-   left open with a symlinked `node_modules` (48 = 48 there): a detached checkout does not
-   move the number, whether its `node_modules` is shared or its own.
-   The original "~15 LOWER in a detached worktree" observation therefore measured an
-   **incompletely installed `node_modules`**, not the checkout — knip resolves imports
-   through it, and a partial install makes real imports unresolvable, which reads as unused.
-   A fresh **CI** clone landing on the primary-tree side (n=2, identical name sets) was
-   always the same fact seen from the other end. **Practical rule: measure anywhere, from a
-   tree whose `npm ci` completed.** If a reading is ~15 low, suspect the install before the
-   checkout — and never mix a reading from a half-installed tree into the baseline.
+1. **Command + context are part of the number.** Measure from the **primary working tree**.
+   A `git worktree --detach` checkout once read ~15 LOWER on the same commit — reproduced
+   then, **cause still not established**. Never mix contexts. A fresh **CI** clone lands on
+   the working-tree side (n=2, identical name sets both rounds).
+   **2026-09-06: the discriminating arm ran and did NOT reproduce the offset, but it does
+   not settle the cause — do not read it as a retirement.** A `git worktree --detach` at
+   `61a6f66` with its **OWN `npm ci`** (a real directory, not a symlink — verified) read
+   **45** with a name set byte-identical to the primary tree's reading of the same commit
+   (sets diffed, not counts, one fixed commit in both arms). With R9's symlinked-`node_modules`
+   arm (48 = 48) that is two worktree arms and no offset, so the offset is **not** a property
+   of the checkout alone. Two reasons that is still not a cause:
+   (a) **The historical gap's population is largely gone.** `docs/measurement/baselines.md`
+   enumerated it as `utils.mjs:12-15`'s backward-compat re-exports **plus their `nlp.mjs` /
+   `registry-retriever.mjs` sources** — and `registry-retriever.mjs` was deleted with the
+   skill registry in v5.0.0. A non-reproduction against a different population is weak
+   evidence about the mechanism.
+   (b) **An earlier draft of this rule named the wrong mechanism, in the wrong direction.**
+   It said a partial `node_modules` makes imports unresolvable "which reads as unused" —
+   that would push the count **UP**, and the observed offset was **DOWN** (31 worktree vs 46
+   primary at `2ebc159`). Doctrine rule 10. The mechanisms that could lower a count are the
+   documented ones: knip dropping whole modules from the report (the `new URL(...)` blind
+   spot), gitignore evaluation, and `knip.json` listing `tests/**/*.test.mjs` as `entry`
+   while `project` excludes `tests/**`.
+   **Practical rule, unchanged: measure from the primary tree, and never mix a reading from
+   another context into the baseline.** What the new arm buys is that a worktree reading is
+   no longer presumed 15 low — it is worth diffing name sets against the primary tree rather
+   than discarding.
 2. **Never attribute a round's delta by subtracting two counts** (doctrine rule 4).
 3. **A count is a smoke alarm; the name set is the evidence.**
 4. **In `--reporter json`, every issue object carries a `files` key that is ALWAYS an
@@ -347,16 +358,33 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `mergeDuplicates`' keeper write — because `purgeStale` hard-deletes that sentinel, and
   deleting a retired row destroys the `superseded_by` that the Stop citation loop follows to
   credit a `#NN` to its successor (27 of 31 superseded rows carry one). Deliberately NOT
-  carrying it, each for a stated reason: `decayAndMarkIdle`'s decay arm / `boostAccessed` /
-  `demotePinned` move only `importance`, inert on a row every read path already hides;
-  `markAutoCompressible` writes `-1`, which both `purgeStale` (`-2`) and
-  `recoverOrphanedChildren` (`> 0`) skip, so it cannot delete or resurface anything;
-  `maintenanceStats` puts `superseded_at IS NULL` inside the **stale** CASE only, so each
-  forecast matches the op it predicts, and `hardDeleteCandidateCount`'s cleanup arm mirrors
-  `cleanupBroken`; `stats-core.computeStatsFeed` uses one predicate on both halves of a ratio
-  and reports superseded rows on their own line. Judged point by point 2026-09-06 across all
-  11 shipped sites (R8 §6-a, carried as open in R10 §7) — **zero changes warranted**, so a
-  future round finding "a bare predicate" has found the decision, not a defect.
+  carrying it, each for its OWN stated reason:
+  - `decayAndMarkIdle`'s **decay arm**, `boostAccessed`, `demotePinned` — move only
+    `importance`, inert on a row every read path already hides. (`lib/maintain-core.mjs:436-441`
+    says "**the first three**" for exactly this reason; a draft of this bullet flattened that
+    into all four and handed `cleanupBroken` an inertness claim that is false.)
+  - `markAutoCompressible` — writes `-1`, which both `purgeStale` (`-2`) and
+    `recoverOrphanedChildren` (`> 0`) skip, so it cannot delete or resurface anything.
+  - **`cleanupBroken` is the one HARD-DELETE site in this set** (`lib/maintain-core.mjs:405`)
+    and the only one where the harm above is reachable at all: it can delete a supersede
+    tombstone, taking `superseded_by` with it. Left bare because the rows it deletes have no
+    title, no narrative and no lesson, so they are excluded from every injection surface and
+    an id that was never injected is not one a `#NN` cites — a **likelihood** judgement, not
+    the inertness proof the three above have. Narrow but not impossible (a hand-typed `#NN`,
+    or a numeric `save --supersedes` chain later blanked by a degenerate cluster-merge).
+    Tracked as D#4; do not upgrade it to "inert".
+  - `maintenanceStats` — puts `superseded_at IS NULL` inside the **stale** CASE only, so each
+    forecast matches the op it predicts rather than one outer predicate that would be wrong
+    for `boostable` and `pinned`.
+  - `hardDeleteCandidateCount`'s cleanup arm — `cleanupBroken`'s predicate **minus** its
+    `lesson_learned` guard, so it deliberately OVER-counts by every lesson-bearing
+    empty-content row (`:635-637`: over-counting costs one extra bounded backup). Do not call
+    it a mirror; it is directionally-safe on purpose.
+  - `stats-core.computeStatsFeed` — one predicate on both halves of a ratio, with superseded
+    rows reported on their own line.
+  Judged point by point 2026-09-06 across all 11 shipped sites (R8 §6-a, carried as open in
+  R10 §7) — **zero code changes warranted**, but read each reason as written: they are not
+  the same reason, and one of them is a probability argument.
 - **The cross-hook injected-ids marker is a union across TABLES**, so ids need namespacing
   (`injectedIdKey` in `lib/injected-ids.mjs`: `P` prompts, `D` deferred, `E` events,
   observations bare). 91.6% of observation ids also exist as an event id.

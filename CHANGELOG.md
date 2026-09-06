@@ -2,6 +2,74 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.3.0 — deep search now tells you when the page may not be an answer
+
+The headline is a disclosure, not a retrieval change. `benchmark/deep-search-holdout.mjs`
+asks the benchmark's own queries of a corpus with their answers deleted, so the correct
+result is zero rows and every returned row is a false positive by construction. It reads
+**mean FP@10 = 10.00 across 12 of 12 queries**: deep search fills every slot, every time.
+`search "kubernetes helm chart"` correctly says *No results*; `--deep` on the same query
+returns 8 of 13 memories about an unrelated webshop.
+
+**This release does not fix that number.** Re-measured after the change: still 10.00,
+12/12, byte-identical, with the recall arm unmoved. The flood is the union across
+paraphrase variants, which is also where deep search's recall win comes from — three gates
+were tested against both arms and rejected, and suppressing OR-fallback on rewrites takes
+deep R@10 from 0.7383 to 0.3962 because the vocabulary-mismatch win *is* that fallback.
+`rrfFuseN` fuses by rank, so no magnitude signal survives the merge for a threshold to read.
+The discrimination is not available at that layer, so what ships is the honest alternative:
+tell the caller.
+
+**What changes for you**
+
+| Change | Was | Now |
+|---|---|---|
+| A deep result built from >1 query variant **that returned rows** | the caller saw `[deep search: rewrote into N variants]` and nothing about reliability | one added line: the rows may be **adjacent** to the query rather than answers, a corpus that cannot answer still fills the page, and "nothing here answers this" is a valid conclusion |
+| A deep search that returned **nothing** | — | unchanged: the existing zero-result message already says the rewrite ran and found nothing, so no caveat is appended (pre-ship review caught a draft that did) |
+| Auto-escalation (`deep` is AUTO by default on the MCP surface) | announced on **stderr only** — an MCP client reads tool results, so the caller running auto by default could never see it | in the result payload, with the pre-widening hit count |
+| `CLAUDE_MEM_SKIP_SUMMARY` | honoured at one of the two `llm-summary` spawn sites | honoured at both |
+
+**Upgrading**
+
+Nothing to do, and no data, schema, or config migration. The added line is the only
+user-visible difference; retrieval, ranking and the rows returned are unchanged. If it is
+noise for your setup, set `CLAUDE_MEM_DEEP_DISCLOSURE=off` — that suppresses the disclosure
+and nothing else. To defer the whole release, pin `5.2.0`. Minor rather than patch because
+output an agent reads changed by default.
+
+**Also in this release: five smaller things, four of them measurements**
+
+- **Test fixtures stopped leaking 9 of the 11 `/tmp` directories a suite run left behind.**
+  Two suites disposed the wrong path — one removed the `runtime` child of its `mkdtempSync`
+  root and leaked the parent on every test in the file, the other built a fresh directory
+  per helper call and kept no reference. Neither was a missing `afterEach`; all four leaking
+  suites had one. The remaining 2 per run are a different cause and stay deliberately:
+  removal succeeds, then a detached background worker recreates the data directory under the
+  HOME it was handed. `lib/tmp-fixture-sweep.mjs` reaps those at the next run past its 1h age
+  gate, so the residue was never unbounded — what it cost was the ability to count what a
+  task wrote to `os.tmpdir()`.
+- **The `/clear` half of cross-session handoff never fired, and the README now says so.**
+  `session_handoffs` on the maintainer's own install holds 4 `exit` rows and 0 `clear` rows:
+  SessionStart treats a surviving session file as the marker of a session that ended without
+  `Stop`, and `Stop` deletes that file. Documented rather than fixed — the fix depends on
+  whether Claude Code rotates its session id across `/clear`, which needs a real capture
+  first, and the two possible answers call for opposite changes.
+- **The `COALESCE(compressed_into,0)=0` question is judged for all 11 shipped sites** — no
+  code change was warranted, so none was made; the decision was already in
+  `lib/maintain-core.mjs` and the ledger carrying it as open was stale. Now pinned by a test.
+  Pre-ship review caught the write-up giving `cleanupBroken` the wrong reason: it is the one
+  **hard-delete** site in that set, so it is the only one where deleting a tombstone's
+  `superseded_by` is reachable, and it stays bare on a likelihood argument rather than the
+  inertness proof the other three have. Recorded as such, and filed as `D#4`.
+- **knip's worktree offset: the discriminating arm ran and did not reproduce it** (own
+  `npm ci`, 45 = 45, byte-identical name set, both arms stamped to one commit). The rule is
+  **not** retired: the historical gap's composition included `registry-retriever.mjs`, which
+  v5.0.0 deleted, so a non-reproduction against a different population does not establish the
+  cause. A draft of this release said it did, with a mechanism whose sign was backwards —
+  corrected in both `CLAUDE.md` and `docs/measurement/baselines.md`.
+- **A coverage row open since v3.99.0 is closed** as a recording omission rather than a
+  caliber change, from three facts checkable without re-running coverage.
+
 ## v5.2.0 — four commands that reported success for work they did not do
 
 Found by using the CLI and the hooks as a user for two rounds — saving, searching,
