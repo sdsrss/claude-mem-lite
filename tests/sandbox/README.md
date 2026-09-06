@@ -6,12 +6,24 @@ real `npm install` inside a fake plugin cache, and a real MCP server over stdio,
 full pass takes minutes and needs network.
 
 ```bash
-SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseA-plugin.mjs   # /plugin install …    43 checks
+SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseA-plugin.mjs   # /plugin install …    47 checks
 SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseB-npm.mjs      # npm i -g + install   45 checks
 SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseC-update.mjs   # version swap         15 checks
 ```
 
-Each exits non-zero if any check fails and prints a `PASS`/`FAIL` line per check.
+Each exits non-zero if any check fails and prints a `PASS`/`FAIL` line per check. **The
+counts above are also asserted** — each phase carries an `EXPECTED_CHECKS` constant and
+`summary()` fails the run when the tally does not match. That is not tidiness: phase B's
+whole self-heal section sat behind an `if (existsSync(bindingPath))` whose path went stale
+with better-sqlite3 13, so eight checks silently stopped running and the only witness was a
+run printing 37 where this file said 45 — a number nobody diffs. Change the constant when
+you add or remove a check on purpose, never to quiet a mismatch.
+
+**Never name the native addon's path.** `loadedBindingPath()` in `lib.mjs` asks
+better-sqlite3's own `lib/binding.js` which file it would load; 12 compiled
+`build/Release/better_sqlite3.node` and 13 ships `prebuilds/<platform>.node`, so the
+literal both phases used to carry pointed at a file that no longer exists and the self-heal
+checks were vacuous from v4.0.0 to v5.1.0.
 Sandboxes are created under `SBX_BASE`, falling back to `$TMPDIR`, and are **left on
 disk** so a failure can be inspected — delete them when you are done. Phase B alone
 leaves ~50 MB (a real `npm i -g` tree).

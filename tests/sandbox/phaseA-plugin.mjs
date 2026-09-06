@@ -14,11 +14,15 @@ import {
   check,
   summary,
   node,
+  run,
   snapshotRepo,
   makeFakeClaudeBin,
   sandboxEnv,
   mcpSession,
   runHook,
+  loadedBindingPath,
+  breakBinding,
+  bindingLoads,
   join,
   existsSync,
   readFileSync,
@@ -34,6 +38,12 @@ const SBX = mkdtempSync(join(sandboxBase(), 'memsbx-A-'));
 const HOME = join(SBX, 'home');
 const PROJECT = join(SBX, 'work', 'my-app');
 const VERSION = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version;
+
+// Every check this phase must run. A phase that quietly shrinks has stopped measuring:
+// phase B's self-heal section lost eight checks to a stale `if (existsSync(…))` and the
+// only symptom was a tally nobody compared. Change this when you add or remove a check
+// on purpose — never to silence it.
+const EXPECTED_CHECKS = 47;
 const MP = 'sdsrss';
 const CACHE = join(HOME, '.claude', 'plugins', 'cache', MP, 'claude-mem-lite', VERSION);
 const MARKET = join(HOME, '.claude', 'plugins', 'marketplaces', MP);
@@ -429,49 +439,60 @@ check('the update-check worker did not mutate the plugin cache', () => {
 // ── 10. Self-heal: stale-ABI native binding (the v3.60 field failure) ────────
 setPhase('A10: self-heal — stale-ABI better-sqlite3 binding');
 
-const bindingPath = join(CACHE, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
-check('binding file exists before we break it', () => existsSync(bindingPath));
-const goodBinding = existsSync(bindingPath) ? readFileSync(bindingPath) : null;
-// Corrupt the binding the way a Node major upgrade does: the file is present but
-// unloadable. (Real ABI churn produces the same dlopen failure class.)
-if (goodBinding)
-  writeFileSync(
-    bindingPath,
-    Buffer.concat([Buffer.from('\x7fELF broken-abi '), goodBinding.subarray(16, 4096)]),
-  );
-// Drop the ABI marker so setup.sh leaves the fast path and actually probes.
-for (const f of readdirSync(join(CACHE, 'node_modules')).filter((x) => x.startsWith('.mem-binding-ok-'))) {
-  rmSync(join(CACHE, 'node_modules', f), { force: true });
-}
+// The file to break is RESOLVED, never named. This block spent v4.0.0 through v5.1.0
+// corrupting `build/Release/better_sqlite3.node`, which better-sqlite3 13 does not
+// produce and no resolver loads — so the four "self-heal worked" checks below were
+// vacuous for the whole of that window, and only the control said so.
+const bindingPath = loadedBindingPath(CACHE);
+check('the addon the resolver actually loads exists before we break it', () => ({
+  ok: !!bindingPath,
+  detail: bindingPath ?? `no better-sqlite3 addon resolves under ${CACHE}`,
+}));
+// Corrupt it the way a bad prebuild does: present, plausible, will not dlopen.
+check('the break landed on that exact file', () => breakBinding(CACHE));
 check('binding is genuinely unloadable now (control)', () => {
-  const r = node(
-    [
-      '-e',
-      `const {createRequire}=require('node:module');const D=createRequire(${JSON.stringify(join(CACHE, 'package.json'))})('better-sqlite3');new D(':memory:').close()`,
-    ],
-    { env: ENV },
-  );
-  return { ok: r.code !== 0, detail: `exit=${r.code} ${r.stderr.split('\n')[0]}` };
+  const r = bindingLoads(CACHE, ENV);
+  return { ok: !r.ok, detail: r.detail };
 });
+// What SessionStart owes the user here is NOT a heal. The compile is
+// `node-gyp clean && node-gyp rebuild`, it takes ~41 s, and the hook budget is 20 s — a
+// truncated attempt deletes build/ and leaves nothing, so scripts/binding-probe-cli.mjs
+// passes sourceBuild:false on purpose (A20260906-R8b-P0-1). The contract is therefore:
+// degrade without crashing, say so, and hand over a repair THAT WORKS. This block used to
+// assert a heal, which is why it needed a binding npm rebuild could fix — a v12 assumption
+// that outlived v12.
+const DEPS_FLAG = join(HOME, '.claude-mem-lite', 'runtime', '.deps-broken');
 const heal = runHook(`bash "${CACHE}/scripts/setup.sh"`, {}, { env: ENV, cwd: PROJECT });
-check('setup.sh exits 0 while healing', () => ({
+check('setup.sh exits 0 rather than crashing the session', () => ({
   ok: heal.code === 0,
   detail: `exit=${heal.code} ${heal.stderr.split('\n').slice(-4).join(' | ')}`,
 }));
-check('binding is usable again after self-heal', () => {
-  const r = node(
-    [
-      '-e',
-      `const {createRequire}=require('node:module');const D=createRequire(${JSON.stringify(join(CACHE, 'package.json'))})('better-sqlite3');new D(':memory:').close()`,
-    ],
-    { env: ENV },
-  );
-  return { ok: r.code === 0, detail: `exit=${r.code} ${r.stderr.split('\n')[0]}` };
+check('it records .deps-broken instead of degrading silently', () => ({
+  ok: existsSync(DEPS_FLAG),
+  detail: existsSync(DEPS_FLAG) ? readFileSync(DEPS_FLAG, 'utf8').slice(0, 200) : 'no flag',
+}));
+check('the Repair line names the CLI, not the npm pair that cannot fix this shape', () => {
+  const repair = existsSync(DEPS_FLAG) ? (JSON.parse(readFileSync(DEPS_FLAG, 'utf8')).repair ?? '') : '';
+  // The dashboard prints this verbatim. `npm rebuild … && … build-release` compiles a
+  // binding the resolver will not choose while the dead prebuild is still in place, so a
+  // user who runs it watches it succeed and stays broken.
+  return { ok: repair.includes('rebuild-binding'), detail: repair.slice(0, 260) };
 });
-check('self-heal cleared .deps-broken (no false "hooks degraded" banner)', () => {
-  const f = join(HOME, '.claude-mem-lite', 'runtime', '.deps-broken');
-  return { ok: !existsSync(f), detail: existsSync(f) ? readFileSync(f, 'utf8') : '' };
+const repairRun = run(process.execPath, [join(CACHE, 'cli.mjs'), 'rebuild-binding'], {
+  env: ENV,
+  cwd: PROJECT,
+  timeout: 600_000,
 });
+check('running that repair exits 0', () => ({
+  ok: repairRun.code === 0,
+  detail: `exit=${repairRun.code} ${(repairRun.stdout || repairRun.stderr).slice(-300)}`,
+}));
+check('binding is usable again after the repair', () => bindingLoads(CACHE, ENV));
+const heal2 = runHook(`bash "${CACHE}/scripts/setup.sh"`, {}, { env: ENV, cwd: PROJECT });
+check('the next SessionStart clears .deps-broken (no stale "hooks degraded" banner)', () => ({
+  ok: heal2.code === 0 && !existsSync(DEPS_FLAG),
+  detail: `setup exit=${heal2.code} ${existsSync(DEPS_FLAG) ? readFileSync(DEPS_FLAG, 'utf8') : '(flag gone)'}`,
+}));
 check('hooks work again after the heal', () => {
   const r = runHook(`node "${CACHE}/scripts/hook-launcher.mjs" scripts/pre-tool-recall.js`, preTool, {
     env: ENV,
@@ -501,4 +522,4 @@ check('user data survives plugin uninstall (DB preserved)', () => ({
 }));
 
 console.log(`\nsandbox kept at: ${SBX}`);
-process.exit(summary() > 0 ? 1 : 0);
+process.exit(summary(EXPECTED_CHECKS) > 0 ? 1 : 0);

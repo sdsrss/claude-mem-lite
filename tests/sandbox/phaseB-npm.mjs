@@ -14,12 +14,14 @@ import {
   sandboxEnv,
   mcpSession,
   runHook,
+  loadedBindingPath,
+  breakBinding,
+  bindingLoads,
   join,
   existsSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
-  rmSync,
 } from './lib.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync } from 'node:fs';
@@ -33,12 +35,29 @@ const VERSION = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).ver
 const DATA = join(HOME, '.claude-mem-lite');
 const SESSION = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
 
+// Every check this phase must run — see summary()'s doc. B8 lost eight checks to a stale
+// path behind an `if`, and the tally was the only witness.
+// 45 = 42 `check(` call sites, one of which (the CLI-subcommand loop) runs four times.
+// Derived by enumerating the call sites, NOT by copying what a run printed — the README
+// carried 45 for a revision that had 44, which is how a wrong tally survives.
+const EXPECTED_CHECKS = 45;
+
+// A real user's settings.json is not empty, and "uninstall left nothing behind" is only
+// meaningful against something it MUST leave behind. The end-of-phase check used to count
+// surviving hook groups and then `return { ok: true }` — unfailable by construction, and
+// counting a file that had never held a foreign hook in the first place.
+const FOREIGN_HOOK = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo other-plugin-hook' }] };
+
 console.log(`sandbox: ${SBX}\nversion: ${VERSION}`);
 mkdirSync(join(HOME, '.claude'), { recursive: true });
 mkdirSync(join(HOME, 'tmp'), { recursive: true });
 mkdirSync(PROJECT, { recursive: true });
 mkdirSync(NPM_PREFIX, { recursive: true });
 makeFakeClaudeBin(HOME);
+writeFileSync(
+  join(HOME, '.claude', 'settings.json'),
+  JSON.stringify({ hooks: { PostToolUse: [FOREIGN_HOOK] } }, null, 2),
+);
 execFileSync('git', ['init', '-q'], { cwd: PROJECT });
 writeFileSync(join(PROJECT, 'app.js'), 'export const answer = 42;\n');
 
@@ -354,14 +373,18 @@ setPhase('B8: self-heal — broken binding in the managed install');
 // tree the CLI itself resolves healthy. This is the asymmetry doctor used to be
 // blind to: it answered about its own tree and called the system healthy.
 const nmHost = DATA;
-const bind = join(nmHost, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
-check('managed install has its own binding', () => ({ ok: existsSync(bind), detail: bind }));
-if (existsSync(bind)) {
-  const good = readFileSync(bind);
-  writeFileSync(bind, Buffer.concat([Buffer.from('\x7fELF broken-abi '), good.subarray(16, 4096)]));
-  for (const f of readdirSync(join(nmHost, 'node_modules')).filter((x) => x.startsWith('.mem-binding-ok-'))) {
-    rmSync(join(nmHost, 'node_modules', f), { force: true });
-  }
+// Resolved, not named. The literal `build/Release/better_sqlite3.node` this line used to
+// carry is a better-sqlite3 **12** path; 13 ships `prebuilds/<platform>.node`. So from
+// v4.0.0 the guard went red on its first check and the `if` swallowed the other EIGHT —
+// the entire self-heal-and-doctor half of the npm path, measured by nothing. The `if` is
+// gone: a tree with no addon now fails every check below, loudly.
+const bind = loadedBindingPath(nmHost);
+check('managed install has its own binding', () => ({
+  ok: !!bind,
+  detail: bind ?? `no better-sqlite3 addon resolves under ${nmHost}`,
+}));
+check('the break landed on the addon the resolver loads', () => breakBinding(nmHost));
+{
   check("control: the CLI's OWN tree is still healthy (so a green verdict would be the bug)", () => {
     const r = node(
       [
@@ -405,16 +428,7 @@ if (existsSync(bind)) {
     const r = run(CLI, ['rebuild-binding'], { env: ENV, cwd: PROJECT, timeout: 600_000 });
     return { ok: r.code === 0, detail: `exit=${r.code} ${(r.stdout || r.stderr).slice(-300)}` };
   });
-  check('binding loads again', () => {
-    const r = node(
-      [
-        '-e',
-        `const {createRequire}=require('node:module');const D=createRequire(${JSON.stringify(join(nmHost, 'package.json'))})('better-sqlite3');new D(':memory:').close()`,
-      ],
-      { env: ENV },
-    );
-    return { ok: r.code === 0, detail: `exit=${r.code} ${r.stderr.split('\n')[0]}` };
-  });
+  check('binding loads again', () => bindingLoads(nmHost, ENV));
   check('doctor is green again after the repair', () => {
     const r = run(CLI, ['doctor'], { env: ENV, cwd: PROJECT, timeout: 120_000 });
     return {
@@ -445,11 +459,14 @@ check('MCP registration removed', () => {
   return { ok: !/mem-lite/.test(txt), detail: txt.trim() || '(empty)' };
 });
 check('user DB survives a plain uninstall', () => existsSync(join(DATA, 'claude-mem-lite.db')));
-check('no orphan hook entries left behind', () => {
-  const raw = readFileSync(join(HOME, '.claude', 'settings.json'), 'utf8');
-  const s = JSON.parse(raw);
-  const n = Object.values(s.hooks || {}).flat().length;
-  return { ok: true, detail: `${n} non-mem hook group(s) preserved` };
+check('uninstall preserved the foreign hook group it never owned', () => {
+  const s = JSON.parse(readFileSync(join(HOME, '.claude', 'settings.json'), 'utf8'));
+  const groups = Object.values(s.hooks || {}).flat();
+  const kept = groups.filter((g) => JSON.stringify(g) === JSON.stringify(FOREIGN_HOOK));
+  return {
+    ok: kept.length === 1 && groups.length === 1,
+    detail: `${groups.length} group(s) left: ${JSON.stringify(groups).slice(0, 240)}`,
+  };
 });
 
 const pur = run(CLI, ['uninstall', '--purge'], { env: ENV, cwd: PROJECT, timeout: 180_000 });
@@ -463,4 +480,4 @@ check('--purge removes the data dir', () => ({
 }));
 
 console.log(`\nsandbox kept at: ${SBX}`);
-process.exit(summary() > 0 ? 1 : 0);
+process.exit(summary(EXPECTED_CHECKS) > 0 ? 1 : 0);

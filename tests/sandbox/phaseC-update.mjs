@@ -38,6 +38,9 @@ const NEW = join(CACHE_BASE, V_NEW);
 const DATA = join(HOME, '.claude-mem-lite');
 const SESSION = 'cccccccc-1111-2222-3333-444444444444';
 
+// Every check this phase must run — see summary()'s doc.
+const EXPECTED_CHECKS = 15;
+
 console.log(`sandbox: ${SBX}\n${V_OLD} -> ${V_NEW}`);
 mkdirSync(join(HOME, '.claude'), { recursive: true });
 mkdirSync(join(HOME, 'tmp'), { recursive: true });
@@ -214,4 +217,4 @@ check('setup.sh prunes to the latest 3 versions', () => {
 check('pruning did not delete the version currently running', () => existsSync(join(NEW, 'cli.mjs')));
 
 console.log(`\nsandbox kept at: ${SBX}`);
-process.exit(summary() > 0 ? 1 : 0);
+process.exit(summary(EXPECTED_CHECKS) > 0 ? 1 : 0);
