@@ -240,10 +240,26 @@ if (process.env.CLAUDE_MEM_HOOK_RUNNING && !BG_EVENTS.has(event)) process.exit(0
 // Uses flag-based approach to avoid calling file I/O inside signal handlers,
 // which can deadlock if the signal fires during a main-thread file operation.
 let _shutdownRequested = false;
+// R10 P3-2: the salvage belongs to the INTERACTIVE hook only. It was installed for every
+// invocation, background workers included — and the seven of them (llm-episode, llm-summary,
+// auto-compress, llm-optimize, auto-maintain, enrich-save, update-check) do not own the
+// live `ep-<project>.json` buffer. A `pkill node` or a machine shutdown therefore had every
+// running worker flush AND DELETE the buffer an interactive session was still appending to,
+// none of them holding the episode lock. Workers still exit promptly on a signal; they just
+// do not touch a buffer that is not theirs.
+const SALVAGES_EPISODE_ON_SIGNAL = !BG_EVENTS.has(event);
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     if (_shutdownRequested) process.exit(0); // Double-signal = force exit
     _shutdownRequested = true;
+    if (!SALVAGES_EPISODE_ON_SIGNAL) {
+      try {
+        flushHookStdout();
+      } catch {
+        /* never change the exit code for a receipt */
+      }
+      process.exit(0);
+    }
     // Schedule flush on next tick to avoid re-entering file I/O
     setTimeout(() => {
       try {
