@@ -12,7 +12,7 @@
 // was retired by v3.80.0, which already imports lib modules into that script.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename } from 'path';
 import { fileURLToPath } from 'url';
@@ -20,6 +20,7 @@ import { readFileSync } from 'fs';
 import { cooldownPathFor, cooldownSessionKey, COOLDOWN_FILE_PREFIX } from '../lib/cooldown-path.mjs';
 import { readPreRecallFileEdges } from '../lib/edge-attribution.mjs';
 import { loadCiteBackForEpisode } from '../lib/cite-back-hint.mjs';
+import { disposeFixtureDir } from './test-helpers.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 /**
@@ -34,17 +35,17 @@ const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)),
 // rule is about the IDIOM having one home, not about it fitting on one line (P1-3).
 const SANITIZE_RULE = /String\((sessionId|ccSessionId)\)\s*\.replace\(\/\[\^a-zA-Z0-9_\.-\]\/g/;
 
-let runtimeDir;
+let fixtureRoot, runtimeDir;
 beforeEach(() => {
-  runtimeDir = join(mkdtempSync(join(tmpdir(), 'mem-cooldown-')), 'runtime');
+  // D#2: keep the mkdtempSync root, not only the `runtime` child inside it. The
+  // afterEach used to remove the child and leak the parent on EVERY test in this file
+  // — 5 dirs per run, the largest single leaker in the suite.
+  fixtureRoot = mkdtempSync(join(tmpdir(), 'mem-cooldown-'));
+  runtimeDir = join(fixtureRoot, 'runtime');
   mkdirSync(runtimeDir, { recursive: true });
 });
 afterEach(() => {
-  try {
-    rmSync(runtimeDir, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+  disposeFixtureDir(fixtureRoot);
 });
 
 describe('cooldown path — one definition', () => {

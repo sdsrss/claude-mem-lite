@@ -17,7 +17,7 @@ import {
   bumpCitationAccess,
   computeCiteRecall,
 } from '../lib/citation-tracker.mjs';
-import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
+import { createTestDb, insertSession, insertObs, disposeFixtureDir } from './test-helpers.mjs';
 import { keyContextIdsFileName } from '../lib/injected-ids.mjs';
 
 describe('extractCitationsFromTranscript', () => {
@@ -299,11 +299,21 @@ describe('bumpCitationAccess', () => {
 });
 
 describe('extractUserTypedIds', () => {
+  // D#2: `write` used to drop the mkdtempSync root on the floor, and this describe had
+  // no afterEach at all — one leaked dir per call, four per run.
+  const roots = [];
   const write = (entries) => {
-    const f = join(mkdtempSync(join(tmpdir(), 'mem-usertyped-')), 't.jsonl');
+    const root = mkdtempSync(join(tmpdir(), 'mem-usertyped-'));
+    roots.push(root);
+    const f = join(root, 't.jsonl');
     writeFileSync(f, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
     return f;
   };
+
+  afterEach(() => {
+    for (const root of roots) disposeFixtureDir(root);
+    roots.length = 0;
+  });
 
   it('picks up an id the user typed in their own message', () => {
     const f = write([{ type: 'user', message: { content: 'please re-read #10716 before editing' } }]);

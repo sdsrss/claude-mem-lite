@@ -20,11 +20,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
+import { disposeFixtureDir } from './test-helpers.mjs';
 
 const HOOK_PATH = resolve(import.meta.dirname, '../hook.mjs');
 let tmpHome, projDir, dbPath, runtimeDir, env;
@@ -132,11 +133,15 @@ describe('SessionStart stdout envelope', () => {
   });
 
   afterEach(() => {
-    try {
-      rmSync(tmpHome, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
+    // D#2. This one still leaks 1 dir per run and that is the designed outcome, not a
+    // gap: removal SUCCEEDS (no report from the helper), then a detached worker of the
+    // hook subprocess — whose HOME is still this now-deleted path — re-runs
+    // resolveDataDir and recreates `.claude-mem-lite/runtime` plus a fresh 274KB DB.
+    // `work/` never comes back, which is how the shape is identified. That is the class
+    // lib/tmp-fixture-sweep.mjs:40-45 absorbs at the next run past its 1h age gate.
+    // Using the shared helper anyway so a real removal failure would now be REPORTED
+    // rather than swallowed by the `catch {}` this replaced.
+    disposeFixtureDir(tmpHome);
   });
 
   it('emits one JSON document when the memory block and the dashboard both have content', () => {

@@ -2,6 +2,7 @@
 // Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
+import { rmSync } from 'node:fs';
 import { initSchema } from '../schema.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
@@ -211,3 +212,47 @@ export function resolveSubprocessTimeout(raw) {
 }
 
 export const SUBPROCESS_TIMEOUT_MS = resolveSubprocessTimeout(process.env.MEM_TEST_SUBPROCESS_TIMEOUT_MS);
+
+/**
+ * Remove a `mkdtempSync` fixture directory: retried, and loud when it fails.
+ *
+ * D#2. One measured run of the four leaking suites left 11 dirs in /tmp — attributed by
+ * NAME SET, not by subtracting counts: mem-cooldown 5, mem-usertyped 4, mem-ssenv 1,
+ * mem-audit-t4-stop 1. Two distinct causes, and neither was "the test forgot an afterEach":
+ *
+ *   1. DETERMINISTIC (cooldown, usertyped — 9 of the 11, now 0). The afterEach removed the
+ *      wrong path: one wrapped `mkdtempSync(...)` in `join(root, 'runtime')` and disposed
+ *      only the child, the other built a fresh dir per helper call and kept no reference.
+ *   2. RECREATION AFTER DISPOSAL (ssenv, t4-stop — 2 of the 11, still 2 by design).
+ *      Removal SUCCEEDS, then a detached worker of the hook subprocess re-runs
+ *      resolveDataDir against the HOME it was handed — the path just deleted — and
+ *      recreates `.claude-mem-lite/runtime` plus a fresh 274KB DB. Identified by shape:
+ *      the fixture's own subdirs (`work/`, `audit/`) never come back, only the data dir.
+ *      lib/tmp-fixture-sweep.mjs:40-45 is the adjudicated backstop for this class.
+ *
+ * `maxRetries` here is DEFENSIVE, not the fix for either cause above: Node documents it
+ * as the remedy for ENOTEMPTY / EBUSY / EPERM / EMFILE / ENFILE, `force: true` covers only
+ * ENOENT, and the default retry count is 0. No leak in this repo has been measured to that
+ * errno — do not cite it as one.
+ *
+ * The bare `catch {}` these sites used is the reason the leak survived: a failure that
+ * recurred on every run was indistinguishable from success. This reports instead.
+ *
+ * @param {string|undefined|null} dir absolute path; nullish is a no-op (a beforeEach that
+ *   threw before assigning leaves the variable undefined, and the afterEach still runs).
+ * @param {object} [opts]
+ * @param {(p: string, o: object) => void} [opts.rm] injected remover, for this helper's
+ *   own tests. Production callers pass nothing.
+ * @returns {boolean} true when the directory is gone.
+ */
+export function disposeFixtureDir(dir, { rm = rmSync } = {}) {
+  if (!dir) return true;
+  try {
+    rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    return true;
+  } catch (err) {
+    // Deliberately loud. A silent catch here is what hid D#2.
+    console.warn(`[test-fixture] left ${dir} behind: ${err?.code || err?.message || err}`);
+    return false;
+  }
+}

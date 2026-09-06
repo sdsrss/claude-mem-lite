@@ -16,7 +16,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { insertSession, insertObs, SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
+import { insertSession, insertObs, SUBPROCESS_TIMEOUT_MS, disposeFixtureDir } from './test-helpers.mjs';
 import { memTimelineSchema, memMaintainSchema, memOptimizeSchema } from '../tool-schemas.mjs';
 import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
 
@@ -1172,11 +1172,13 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
   });
 
   afterEach(() => {
-    try {
-      rmSync(tmpHome, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
+    // D#2. Still 1 dir per run, and that is the designed outcome: removal SUCCEEDS, then
+    // a detached worker of the handleStop subprocess recreates `.claude-mem-lite/` and
+    // `.claude/` under the HOME it was handed — this now-deleted path. `audit/t4` never
+    // comes back, which is how the shape is identified. lib/tmp-fixture-sweep.mjs:40-45
+    // absorbs that class at the next run past its 1h age gate. The shared helper is used
+    // anyway so a real removal failure is REPORTED, not swallowed as it was before.
+    disposeFixtureDir(tmpHome);
   });
 
   it('running Stop twice for the same session produces at most one fast summary', () => {
