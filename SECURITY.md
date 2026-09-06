@@ -18,6 +18,13 @@ Please use **GitHub private vulnerability reporting** on this repository
 (Security tab → "Report a vulnerability"). Do not open a public issue for
 anything exploitable.
 
+<!-- R10 P1-9: this pointed at a feature that was switched OFF for the repository —
+     `gh api repos/sdsrss/claude-mem-lite/private-vulnerability-reporting` returned
+     {"enabled":false} — so the only route left to a reporter was the public issue this
+     paragraph tells them not to open. Enabled 2026-09-06; the same call now returns
+     {"enabled":true}. If it is ever turned off again, replace this section with a real
+     address rather than leaving a promise nothing can honour. -->
+
 Include if you can:
 
 - the attack surface (CLI command, MCP tool, hook script, install/update path,
