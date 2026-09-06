@@ -6,6 +6,9 @@
 // single-query baseline — never worse. The LLM is dependency-injected (fake),
 // so nothing here touches a real provider or imports the native LLM client.
 import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createTestDb, insertSession } from './test-helpers.mjs';
 import { _resetVocabCache } from '../tfidf.mjs';
 import { seedDatabase, seedVectors } from '../benchmark/benchmark.mjs';
@@ -400,7 +403,80 @@ import {
   shouldEscalateToDeep,
   resolveDeepMode,
   autoDeepLlmReady,
+  deepDisclosureNote,
 } from '../deep-search.mjs';
+
+describe('deepDisclosureNote — D#3, the caveat the caller could not otherwise see', () => {
+  // The holdout ruler reads mean FP@10 = 10.00 over 12/12 queries: with the answers deleted,
+  // deep still fills every slot. No threshold can fix that at this layer (three were tested
+  // against both arms and rejected; rrfFuseN fuses by RANK, so no magnitude reaches a floor),
+  // so the product's answer is disclosure. These cases pin what gets disclosed and when.
+
+  it('names the plain-search hit count when the widening was automatic', () => {
+    // The escalation fact previously existed on stderr ONLY, which the MCP surface's own
+    // caller cannot read — and MCP is where deep=auto is the DEFAULT.
+    const note = deepDisclosureNote({ escalated: true, escalatedObsCount: 2, variantCount: 4 });
+    expect(note).toContain('auto-escalated');
+    expect(note).toContain('2 hit(s)');
+    expect(note).toContain('ADJACENT');
+  });
+
+  it('says the deep search was asked for when it was not an escalation', () => {
+    const note = deepDisclosureNote({ escalated: false, variantCount: 4 });
+    expect(note).toContain('explicitly requested');
+    expect(note).not.toContain('auto-escalated');
+    expect(note).toContain('ADJACENT');
+  });
+
+  it('tells the caller that finding nothing is a valid answer', () => {
+    // The failure this exists to prevent is an agent treating a full page as confirmation.
+    // `search "kubernetes helm chart"` says No results and --deep returns 8 webshop rows;
+    // the caller has to be told the second shape is not evidence.
+    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 0, variantCount: 4 })).toMatch(
+      /valid conclusion/,
+    );
+  });
+
+  it('stays silent when the rewrite produced no usable variant', () => {
+    // variantCount <= 1 means deep IS the baseline — the union that floods never happened,
+    // and the existing "== baseline" note already says so. Warning here would train the
+    // caller to skip the line on the runs where it matters.
+    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 1, variantCount: 1 })).toBe('');
+    expect(deepDisclosureNote({ escalated: true, escalatedObsCount: 1, variantCount: 0 })).toBe('');
+    expect(deepDisclosureNote({ variantCount: undefined })).toBe('');
+    expect(deepDisclosureNote()).toBe('');
+  });
+
+  it('honours the CLAUDE_MEM_DEEP_DISCLOSURE=off opt-out, case-insensitively', () => {
+    // Required by the released-artifact checklist: a user-visible default change ships with
+    // a revert path that is not "pin the old version".
+    const args = { escalated: true, escalatedObsCount: 2, variantCount: 4 };
+    expect(deepDisclosureNote({ ...args, env: { CLAUDE_MEM_DEEP_DISCLOSURE: 'off' } })).toBe('');
+    expect(deepDisclosureNote({ ...args, env: { CLAUDE_MEM_DEEP_DISCLOSURE: 'OFF' } })).toBe('');
+    // Any other value keeps the disclosure — an off switch that trips on '0' or 'false'
+    // would silence it for anyone who set the var to the wrong word and thought otherwise.
+    expect(deepDisclosureNote({ ...args, env: { CLAUDE_MEM_DEEP_DISCLOSURE: '0' } })).not.toBe('');
+    expect(deepDisclosureNote({ ...args, env: {} })).not.toBe('');
+  });
+
+  it('is wired into BOTH faces, from one shared home', () => {
+    // Structural, and deliberately so. The positive end-to-end path needs an LLM to produce
+    // >1 variant, and the suite forbids real LLM calls globally (vitest.config.mjs blanks
+    // both API keys and sets CLAUDE_MEM_AUTO_DEEP_CLI=0) — which is exactly why the existing
+    // F13 "rewrote into N variants" disclosure has no test at all. What can be checked
+    // deterministically is that neither face hand-rolls its own wording: this repo's most
+    // expensive recurring defect is twin surfaces drifting apart.
+    // Assert the CALL, not the name: a first draft used toContain('deepDisclosureNote'),
+    // which a mutation renaming the symbol to deepDisclosureNoteXX satisfied by substring —
+    // the guard passed while the wiring was gone.
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    for (const face of ['server.mjs', 'mem-cli.mjs']) {
+      const src = readFileSync(join(root, face), 'utf8');
+      expect(src, `${face} must CALL the shared helper`).toMatch(/\bdeepDisclosureNote\(\{/);
+      expect(src, `${face} must not restate the caveat text`).not.toContain('may be ADJACENT');
+    }
+  });
+});
 
 describe('autoDeepLlmReady — LLM availability gate for AUTO escalation', () => {
   it('returns true when an llm is injected, regardless of env', () => {

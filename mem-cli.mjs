@@ -35,7 +35,13 @@ import {
   BROWSE_TIERS,
   BROWSE_TIER_LABELS,
 } from './lib/browse-core.mjs';
-import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
+import {
+  deepSearch,
+  resolveDeepMode,
+  shouldEscalateToDeep,
+  autoDeepLlmReady,
+  deepDisclosureNote,
+} from './deep-search.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
   runMaintainOps,
@@ -432,6 +438,18 @@ async function cmdSearch(db, args, { llm } = {}) {
         ? '[mem] Deep search: LLM-reranked the fused top-20\n'
         : '[mem] Deep search: rerank produced no usable order; kept fused order\n',
     );
+  }
+  // D#3. Same disclosure the MCP surface puts in its payload, on the channel this face
+  // already uses for deep notes — a Bash caller reads stderr alongside stdout, so unlike
+  // MCP there is no split here. One home for the text (deep-search.mjs) because two faces
+  // writing their own wording is this repo's most-paid-for defect class.
+  if (isDeep) {
+    const disclosure = deepDisclosureNote({
+      escalated: res.escalated,
+      escalatedObsCount: res.escalatedObsCount,
+      variantCount: deepVariants?.length ?? 0,
+    });
+    if (disclosure) process.stderr.write(`${disclosure}\n`);
   }
 
   // "nothing matched" (no offset) vs "this page is empty" (with offset) — the two

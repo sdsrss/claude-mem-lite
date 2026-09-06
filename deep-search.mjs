@@ -185,6 +185,57 @@ export function resolveDeepMode(explicitDeep, { surface, env = process.env } = {
   return surface === 'mcp' ? 'auto' : 'normal';
 }
 
+/**
+ * One-line disclosure for a deep result set, written to the channel the CALLER reads.
+ *
+ * D#3. benchmark/deep-search-holdout.mjs asks the suite's own queries of a corpus with
+ * their relevant_ids deleted, so the correct answer is zero rows and every returned row is
+ * a false positive by construction. It reads mean FP@10 = 10.00 across 12/12 queries: deep
+ * fills every slot, every time. The single-query baseline returns 1-2 rows on the same
+ * negatives — the flood is the UNION across paraphrase variants, which is also where deep's
+ * recall win comes from, so this is not a bug to be thresholded away. Three gates were
+ * tested against both arms and rejected; suppressing OR-fallback on rewrites takes deep
+ * R@10 from 0.7383 to 0.3962, because the vocab-mismatch win IS that fallback. rrfFuseN
+ * fuses by RANK, so no magnitude signal survives the merge for a downstream floor to read.
+ *
+ * The discrimination is not available at this layer, so the honest move is to hand the
+ * caller what the caller cannot otherwise see. Two things were missing:
+ *   1. `escalated` — that the widening happened BECAUSE the plain search was weak — was
+ *      announced on stderr only. On the MCP surface stderr never reaches the model, which
+ *      reads tool results; auto is the default there (resolveDeepMode, surface 'mcp'), so
+ *      the one caller who most needs the caveat was the one who could not see it.
+ *   2. Nothing said a full page can be entirely adjacent rows.
+ *
+ * Silent when `variantCount <= 1`: with no usable rewrite, deep IS the baseline, and the
+ * existing "== baseline" note already says so. Crying flood there would train callers to
+ * ignore the line.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.escalated] the result came from auto-escalation, not an explicit ask
+ * @param {number} [opts.escalatedObsCount] hits the plain search returned before widening
+ * @param {number} [opts.variantCount] query variants fused (1 = rewrite produced nothing)
+ * @param {object} [opts.env=process.env] opt-out: CLAUDE_MEM_DEEP_DISCLOSURE=off
+ * @returns {string} the note, or '' when it should not be shown
+ */
+export function deepDisclosureNote({
+  escalated = false,
+  escalatedObsCount = 0,
+  variantCount = 0,
+  env = process.env,
+} = {}) {
+  if (String(env.CLAUDE_MEM_DEEP_DISCLOSURE || '').toLowerCase() === 'off') return '';
+  if (!(variantCount > 1)) return '';
+  const why = escalated
+    ? `auto-escalated after the plain search returned ${escalatedObsCount} hit(s)`
+    : 'explicitly requested';
+  return (
+    `[deep search: ${why}. Rows above may be ADJACENT to the query rather than answers to it — ` +
+    `on a corpus that cannot answer, the widened query still fills the page (measured: 10 of 10 ` +
+    `slots on queries whose answers had been removed). Judge each row by its own text; ` +
+    `"nothing here actually answers this" is a valid conclusion.]`
+  );
+}
+
 // Echoes hook-llm.mjs MEMORY_INPUT_GUARD (kept inline rather than imported so
 // this module — and the tests that import it — never pull in hook-llm's
 // native-heavy chain; see #8729). Same security intent: the query is untrusted.

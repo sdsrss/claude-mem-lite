@@ -10,7 +10,13 @@ import { resolveProject as _resolveProjectShared } from './project-utils.mjs';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR } from './schema.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { deepSearch, resolveDeepMode, shouldEscalateToDeep, autoDeepLlmReady } from './deep-search.mjs';
+import {
+  deepSearch,
+  resolveDeepMode,
+  shouldEscalateToDeep,
+  autoDeepLlmReady,
+  deepDisclosureNote,
+} from './deep-search.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
   resolveAnchorToken,
@@ -576,6 +582,17 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
   }
   if (r.reranked && output.content?.[0]?.type === 'text') {
     output.content[0].text += '\n\n[deep search: LLM-reranked the top candidates by relevance]';
+  }
+  // D#3. The stderr line above is for humans and logs; an MCP client reads the tool RESULT,
+  // so the escalation fact and the adjacency caveat have to land in the payload or the one
+  // caller running deep=auto by default never sees either.
+  if (r.isDeep && output.content?.[0]?.type === 'text') {
+    const disclosure = deepDisclosureNote({
+      escalated: r.escalated,
+      escalatedObsCount: r.escalatedObsCount,
+      variantCount: r.variants?.length ?? 0,
+    });
+    if (disclosure) output.content[0].text += `\n\n${disclosure}`;
   }
   appendDeferredTrailer(output);
 
