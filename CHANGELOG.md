@@ -32,6 +32,18 @@ are simply no longer read or written. Remove them by hand if you want the disk s
 plugin to `v4.0.4` in your marketplace config. Nothing in this release migrates the memory
 DB, so downgrading is safe.
 
+**If you installed via npm, your upgrade cleans up after itself.** This is the first hook
+*removal* this project has shipped, and the upgrade machinery only ever handled additions:
+`configureHooks()` strips stale entries but runs only from `install`, while auto-update
+replaces `scripts/` wholesale. Left alone, an upgrade would delete
+`scripts/pre-skill-bridge.js` and leave `~/.claude/settings.json` pointing at it — every
+`Skill()` call printing two `[claude-mem-lite]` lines for a file that is not coming back.
+Auto-update now reconciles settings.json against what it just installed and drops hook
+entries whose target is gone; `doctor` reports such an entry instead of passing it, which it
+had been doing because it only inspected quoted tokens and the dead script is the launcher's
+unquoted argument. Plugin-channel installs were never affected (`hooks/hooks.json` is
+replaced wholesale). Found by independent review, not by the test suite.
+
 **Why.** The registry was a second package manager competing with Claude Code's own plugin
 and marketplace system, and it had lost. Its manifest seeded 15 repos including
 `obra/superpowers` — which Claude Code installs and auto-updates itself, so the registry
