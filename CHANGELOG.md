@@ -23,10 +23,10 @@ commands and two MCP tools disappear.
 discovers tools normally sees no difference. Memory retrieval, injection, citation tracking
 and every `mem_*` core tool are untouched.
 
-**Your data is not deleted.** `~/.claude-mem-lite/resource-registry.db` and
-`~/.claude-mem-lite/managed/` are simply no longer read or written. Remove them by hand if
-you want the disk space:
-`rm -rf ~/.claude-mem-lite/resource-registry.db ~/.claude-mem-lite/managed`.
+**Your data is not deleted.** `~/.claude-mem-lite/resource-registry.db`,
+`~/.claude-mem-lite/managed/` and the shadow log at `~/.claude-mem-lite/runtime/recommendations/`
+are simply no longer read or written. Remove them by hand if you want the disk space:
+`rm -rf ~/.claude-mem-lite/resource-registry.db ~/.claude-mem-lite/managed ~/.claude-mem-lite/runtime/recommendations`.
 
 **Revert path**: pin the previous release — `npm i -g claude-mem-lite@4.0.4`, or pin the
 plugin to `v4.0.4` in your marketplace config. Nothing in this release migrates the memory
