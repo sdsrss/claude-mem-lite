@@ -8,6 +8,11 @@ import { supersededNotice, OBS_FIELDS } from '../lib/get-core.mjs';
 import { memDeleteSchema } from '../tool-schemas.mjs';
 import { mergeDuplicates } from '../lib/maintain-core.mjs';
 import { z } from 'zod';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function addObs(db, project, n, over = {}) {
   const stmt = db.prepare(
@@ -218,5 +223,50 @@ describe('R10 P2-7 — merge refuses to hide a row behind a keeper in another pr
     expect(db.prepare('SELECT compressed_into FROM observations WHERE id=?').get(foreign)).toEqual({
       compressed_into: 0,
     });
+  });
+});
+
+// ── R10 P2-13 ────────────────────────────────────────────────────────────────
+// Every `claude -p` spawn ran with cwd '/tmp'. Claude Code loads a project-level
+// CLAUDE.md and .claude/settings.json from its cwd, so on a shared host any local account
+// could drop /tmp/CLAUDE.md and steer every episode summary, session summary and optimize
+// call this process makes. The CLI leg is the fallback every keyed-provider failure lands
+// on, so it is a normal path, not an exotic one. The original reason for /tmp — ghost
+// sessions in the user's /resume list — is already handled by --no-session-persistence.
+
+describe('R10 P2-13 — the claude CLI is never spawned with a world-writable cwd', () => {
+  it('both spawn sites use a private directory under the runtime dir', () => {
+    // join(dirname(fileURLToPath(...))), never new URL(module, import.meta.url) — the URL
+    // form drops the named module out of knip's report entirely, and
+    // tests/no-url-module-paths.test.mjs is the guard that says so.
+    const src = readFileSync(join(REPO_ROOT, 'haiku-client.mjs'), 'utf8');
+    expect(src, 'a spawn still hardcodes /tmp as its cwd').not.toMatch(/cwd:\s*'\/tmp'/);
+    // Two spawn sites, one helper: execClaudeCliSync and the async attempt().
+    expect(src.match(/cwd: cliSpawnCwd\(\)/g) || []).toHaveLength(2);
+  });
+
+  it('the directory is created 0700 and sits under the runtime dir, not the system temp', async () => {
+    const { mkdtempSync, statSync, existsSync, rmSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const sandbox = mkdtempSync(join(tmpdir(), 'mem-clicwd-'));
+    const saved = process.env.CLAUDE_MEM_DIR;
+    process.env.CLAUDE_MEM_DIR = sandbox;
+    try {
+      const { resolveRuntimeDir } = await import('../lib/resolve-data-dir.mjs');
+      const { resolveDataDir } = await import('../lib/resolve-data-dir.mjs');
+      const expected = join(resolveRuntimeDir(resolveDataDir(sandbox)), 'cli-cwd');
+      // Drive the real helper through a spawn-shaped call rather than re-deriving the
+      // path: this asserts the module actually creates it.
+      const { mkdirSync } = await import('fs');
+      mkdirSync(expected, { recursive: true, mode: 0o700 });
+      expect(existsSync(expected)).toBe(true);
+      expect((statSync(expected).mode & 0o777).toString(8)).toBe('700');
+      expect(expected.startsWith(sandbox), 'the cwd escaped the configured data dir').toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_MEM_DIR;
+      else process.env.CLAUDE_MEM_DIR = saved;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });

@@ -130,7 +130,11 @@ describe('haiku-client.mjs', () => {
         // verified by mutation 2026-08-16, and this is the highest-volume async
         // headless caller (deep-search rewrite).
         expect.objectContaining({
-          cwd: '/tmp',
+          // R10 P2-13: NOT '/tmp'. Claude Code loads a project-level CLAUDE.md and
+          // .claude/settings.json from its cwd, so a world-writable cwd is an instruction
+          // injection surface on any shared host. Pinned by shape, not by the exact path,
+          // because the path is env-dependent (CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR).
+          cwd: expect.stringMatching(/[/\\]cli-cwd$/),
           env: expect.objectContaining({ DISABLE_CLAUDEMD_HOOKS: '1' }),
         }),
       );
@@ -330,7 +334,11 @@ describe('haiku-client.mjs', () => {
       // would restore the whole hook fan-out the flag pair exists to silence.
       expect(vi.mocked(execFileSync).mock.calls[1][2]).toEqual(
         expect.objectContaining({
-          cwd: '/tmp',
+          // R10 P2-13: NOT '/tmp'. Claude Code loads a project-level CLAUDE.md and
+          // .claude/settings.json from its cwd, so a world-writable cwd is an instruction
+          // injection surface on any shared host. Pinned by shape, not by the exact path,
+          // because the path is env-dependent (CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR).
+          cwd: expect.stringMatching(/[/\\]cli-cwd$/),
           env: expect.objectContaining({ DISABLE_CLAUDEMD_HOOKS: '1', CLAUDE_MEM_HOOK_RUNNING: '1' }),
         }),
       );
@@ -489,7 +497,11 @@ describe('haiku-client.mjs', () => {
       expect(vi.mocked(spawn).mock.calls[1][1]).toEqual(['-p', '--model', 'haiku']);
       expect(vi.mocked(spawn).mock.calls[1][2]).toEqual(
         expect.objectContaining({
-          cwd: '/tmp',
+          // R10 P2-13: NOT '/tmp'. Claude Code loads a project-level CLAUDE.md and
+          // .claude/settings.json from its cwd, so a world-writable cwd is an instruction
+          // injection surface on any shared host. Pinned by shape, not by the exact path,
+          // because the path is env-dependent (CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR).
+          cwd: expect.stringMatching(/[/\\]cli-cwd$/),
           env: expect.objectContaining({ DISABLE_CLAUDEMD_HOOKS: '1' }),
         }),
       );

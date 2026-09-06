@@ -6,12 +6,39 @@
 // overridable via OPENROUTER_MODEL
 
 import { execFileSync, spawn } from 'child_process';
+import { mkdirSync } from 'fs';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { debugLog, debugCatch, parseJsonFromLLM } from './utils.mjs';
 import { DB_DIR } from './schema.mjs';
+import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { httpConnectProxyFor, postViaConnectProxy } from './lib/proxy-fetch.mjs';
+
+/**
+ * cwd for every `claude -p` spawn. R10 P2-13.
+ *
+ * This was `/tmp`, which is world-writable. Claude Code loads a project-level CLAUDE.md
+ * and .claude/settings.json from its cwd, so on a shared host ANY local account could
+ * create /tmp/CLAUDE.md and inject instructions into every episode summary, session
+ * summary and optimize call this process makes — and the CLI leg is the fallback every
+ * keyed provider failure lands on, so it is not an exotic path.
+ *
+ * The original reason for /tmp was ghost sessions in the user's /resume list, and that is
+ * already solved by --no-session-persistence on the same spawns. A private directory under
+ * the runtime dir (whose parent is 0700) keeps that property and removes the injection
+ * surface. Created lazily; if creation fails we still do not fall back to /tmp — an
+ * unwritable cwd fails the spawn loudly, which is the better failure.
+ */
+function cliSpawnCwd() {
+  const dir = join(resolveRuntimeDir(DB_DIR), 'cli-cwd');
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch {
+    /* already there, or unwritable — the spawn reports it */
+  }
+  return dir;
+}
 
 // ─── Model Resolution ────────────────────────────────────────────────────────
 
@@ -569,7 +596,7 @@ export function execClaudeCliSync(modelName, { input, timeout }) {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: '/tmp', // Prevent ghost sessions in the user's /resume list
+    cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
   };
   const args = claudeArgs(modelName);
   const started = Date.now();
@@ -654,7 +681,7 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
         // Same headless-tax flags + flag-compat retry as callModelCLI (rationale there).
         child = spawn(getClaudePath(), args, {
           env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
-          cwd: '/tmp',
+          cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (e) {

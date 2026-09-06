@@ -1374,12 +1374,25 @@ export function prunePluginCache() {
   // it is not among the newest 3 — so keep-latest-3 rm -rf'd the tree the running hooks and
   // MCP server import from. scripts/setup.sh step 8 carries the same guard for the same
   // reason; the two prune the same directory and must agree.
+  //
+  // R10 P2-9: CLAUDE_PLUGIN_ROOT alone is not enough, because prune also runs from a
+  // TERMINAL — `self-update` — where Claude Code never sets it. There the guard was
+  // vacuous and keep-latest-3 deleted the recorded live version outright. detectInstallShape
+  // now consults installed_plugins.json as well, so ask it rather than the env var, and
+  // keep the env var as the first-hand answer inside a hook.
   const runningRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  let recordedRoot = null;
+  try {
+    recordedRoot = detectInstallShape({ home: homedir() }).activePluginVersion?.root || null;
+  } catch {
+    /* best-effort — a failure here must not stop pruning entirely */
+  }
   const toRemove = entries.slice(PLUGIN_CACHE_KEEP);
   let removed = 0;
   for (const ver of toRemove) {
     const dir = join(cacheBase, ver);
     if (isSameDir(dir, runningRoot)) continue;
+    if (isSameDir(dir, recordedRoot)) continue;
     try {
       rmSync(dir, { recursive: true, force: true });
       removed++;

@@ -259,6 +259,11 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
         # cache) it falls outside the newest 3 — so this loop deleted the tree every hook
         # and the MCP server import from, mid-session. -ef compares device+inode, so it is
         # not fooled by a trailing slash, a `..` segment or a symlinked cache dir.
+        # R10 P2-9 checked this and it needs no change: the whole step is gated on
+        # CLAUDE_PLUGIN_ROOT being set (see the `if` above), so unlike prunePluginCache()
+        # — which also runs from a terminal, where Claude Code does not set it — this
+        # comparison is never made against an empty value. Do not "align" it by dropping
+        # that outer gate.
         # hook-update.mjs prunePluginCache() carries the same guard; the two prune the same
         # directory and must agree.
         if [[ "$CACHE_DIR/$ver" -ef "$CLAUDE_PLUGIN_ROOT" ]]; then
