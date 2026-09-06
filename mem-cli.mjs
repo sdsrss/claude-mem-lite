@@ -3030,7 +3030,7 @@ function cmdHelp() {
 Commands:
   search <query>        FTS5 search across observations, sessions, and prompts
     --query Q           Query as a flag (alias for the positional; use one, not both)
-    --source S          Table: observations|sessions|prompts (default: all)
+    --source S          Table: observations|sessions|prompts|events (default: all)
     --type T            Filter obs type (bugfix|decision|discovery|feature|refactor|change)
     --limit N           Max results (default 20)
     --project P         Filter by project
@@ -3038,6 +3038,11 @@ Commands:
     --to DATE           End date (YYYY-MM-DD or ISO 8601)
     --since DUR         Relative lower bound: 7d|24h|90m|2w|30s (ignored if --from set)
     --importance N      Minimum importance (1=routine, 2=notable, 3=critical)
+    --deep              Opt-in LLM multi-query / HyDE deep search (observations only).
+                        One extra model call plus N hybrid searches — the explicit
+                        "search harder" lever for vocabulary-mismatch misses.
+    --no-deep           Force normal search, overriding any env/default that enables deep
+    --rerank            LLM-rerank the fused top 20. Requires --deep; ignored without it
     --branch B          Filter by git branch
     --offset N          Skip first N results (pagination)
     --tier T            Filter by tier (working|active|archive, observations only)
@@ -3064,13 +3069,14 @@ Commands:
     D#123 (deferred item — FULL detail; defer list is title-only).
     Bare N defaults to obs. Mixed prefixes in one call route each token correctly.
     --ids 1,2           IDs as a flag (alias for the positional list)
-    --source S          Force record type (obs|session|prompt); overrides prefixes
+    --source S          Force record type (obs|session|prompt|event); overrides prefixes
                         (D# tokens exempt — they always read deferred_work).
     --fields f1,f2,...  Select specific fields to return (observations only).
 
   timeline              Show observations around an anchor (shows recent if no anchor)
-    --anchor ID         Center on this ID. Accepts N, #N, P#N, or S#N — P#/S# anchors
-                        resolve to the nearest-in-time observation in the same project.
+    --anchor ID         Center on this ID. Accepts N, #N, P#N, S#N or E#N — P#/S#/E#
+                        anchors resolve to the nearest-in-time observation in the
+                        same project.
     --query "text"      Find anchor by FTS5 search. Ranks by BM25 × time-decay,
                         so multi-term queries surface the BEST topical match
                         (highest term coverage), not the most recent. For

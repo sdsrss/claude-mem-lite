@@ -20,6 +20,7 @@ import {
   cjkBigrams,
   notLowSignalTitleClause,
   scrubSecrets,
+  getCurrentBranch,
 } from './utils.mjs';
 import { callModelJSONAsync, BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
@@ -28,7 +29,12 @@ import { getVocabulary, computeVector, cosineSimilarity } from './tfidf.mjs';
 import { MERGE_JACCARD_LOW, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { DB_DIR } from './schema.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
-import { normalizeScope, SCOPE_PROMPT_LEGEND, upsertObservationVector } from './lib/observation-write.mjs';
+import {
+  normalizeScope,
+  SCOPE_PROMPT_LEGEND,
+  upsertObservationVector,
+  insertObservationRow,
+} from './lib/observation-write.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 
@@ -1080,29 +1086,35 @@ JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive sum
         lesson_learned: lessonLearned,
         search_aliases: searchAliases,
       });
-      const result = db
-        .prepare(
-          `INSERT INTO observations
-        (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
-         files_read, files_modified, importance, lesson_learned, search_aliases, optimized_at,
-         created_at, created_at_epoch)
-        VALUES (?,?,?,?,?,'',?,?,?,'[]','[]',2,?,?,?,?,?)`,
-        )
-        .run(
-          sessionId,
-          project,
-          safe.text,
-          'discovery',
-          safe.title,
-          safe.narrative,
-          safe.concepts,
-          safe.facts,
-          safe.lesson_learned,
-          safe.search_aliases,
-          Date.now(),
-          new Date(medianEpoch).toISOString(),
-          medianEpoch,
-        );
+      // R10 P3-8: through the shared writer, not a fourth hand-spelled INSERT. The copy
+      // this replaces had already drifted from OBS_COLUMNS in three ways — no minhash_sig
+      // (so the summary was invisible to the MinHash prefilter that findDuplicates and
+      // selectFuzzyDedupeIds run, and could never be deduplicated against anything), no
+      // branch, and subtitle written as '' instead of the schema's NULL. That is exactly
+      // the drift lib/observation-write.mjs's docblock says the shared column list exists
+      // to make impossible.
+      //
+      // optimized_at is not in OBS_COLUMNS, so it stays a separate UPDATE below — the
+      // summary must be marked processed so the re-enrich pools do not pick it up.
+      const newId = insertObservationRow(db, {
+        memory_session_id: sessionId,
+        project,
+        text: safe.text,
+        type: 'discovery',
+        title: safe.title,
+        narrative: safe.narrative,
+        concepts: safe.concepts,
+        facts: safe.facts,
+        importance: 2,
+        minhash_sig: computeMinHash(`${title || ''} ${narrative || ''}`),
+        lesson_learned: safe.lesson_learned,
+        search_aliases: safe.search_aliases,
+        branch: getCurrentBranch(),
+        created_at: new Date(medianEpoch).toISOString(),
+        created_at_epoch: medianEpoch,
+      });
+      db.prepare('UPDATE observations SET optimized_at = ? WHERE id = ?').run(Date.now(), newId);
+      const result = { lastInsertRowid: newId };
 
       const sId = Number(result.lastInsertRowid);
 

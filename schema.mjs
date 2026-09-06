@@ -1241,9 +1241,25 @@ export function ensureDb() {
  * uncheckpointed transactions — silent data loss.
  */
 export function isDbCorruptionError(err) {
-  return /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i.test(
-    `${err?.code || ''} ${err?.message || ''}`,
-  );
+  // R10 P3-9: SQLITE_CORRUPT_VTAB is EXCLUDED. It means a damaged FTS5 index over an
+  // otherwise healthy file, and both halves of the WAL remedy are wrong for it — deleting
+  // the WAL discards committed-but-uncheckpointed transactions (the reason this predicate
+  // exists at all, per the docblock above), and it cannot repair an index that lives in the
+  // main database file. isFtsCorruptionError below routes it to rebuildFTS instead.
+  const text = `${err?.code || ''} ${err?.message || ''}`;
+  if (isFtsCorruptionError(err)) return false;
+  return /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i.test(text);
+}
+
+/**
+ * Whether an error is a damaged FTS5 INDEX rather than a damaged database file. SQLite
+ * reports these as SQLITE_CORRUPT_VTAB, whose message text is the same
+ * "database disk image is malformed" the file-level faults use — so the code is the only
+ * thing that separates them, and matching on message alone is what conflated them.
+ * The remedy is rebuildFTS, which the FTS content lets us do losslessly.
+ */
+export function isFtsCorruptionError(err) {
+  return /SQLITE_CORRUPT_VTAB/i.test(`${err?.code || ''}`);
 }
 
 /**
@@ -1263,6 +1279,39 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
   try {
     return ensureDb();
   } catch (firstErr) {
+    // R10 P3-9: FTS index damage first, because its remedy is both correct and lossless
+    // while the WAL remedy below is neither. Open a raw handle (ensureDb just failed, so
+    // its schema pass cannot be trusted to get far enough), rebuild every FTS table from
+    // its content table, then retry the real opener.
+    if (isFtsCorruptionError(firstErr)) {
+      warn?.(`FTS index corruption detected, rebuilding indexes: ${firstErr.message}`);
+      let raw = null;
+      try {
+        raw = new Database(DB_PATH);
+        const { errors } = rebuildFTS(raw);
+        if (errors.length) warn?.(`FTS rebuild reported: ${errors.join('; ')}`);
+      } catch (rebuildErr) {
+        warn?.(`FTS rebuild failed: ${rebuildErr.message}`);
+      } finally {
+        try {
+          raw?.close();
+        } catch {
+          /* best-effort */
+        }
+      }
+      try {
+        const db = ensureDb();
+        info?.('DB recovered after FTS rebuild');
+        return db;
+      } catch (retryErr) {
+        try {
+          retryErr.ftsRebuildAttempted = true;
+        } catch {
+          /* frozen error — fine */
+        }
+        throw retryErr;
+      }
+    }
     if (!isDbCorruptionError(firstErr)) throw firstErr;
     warn?.(`DB corruption detected, attempting WAL recovery: ${firstErr.message}`);
     try {

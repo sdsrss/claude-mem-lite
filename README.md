@@ -835,7 +835,7 @@ what is already stored — only whether new work runs.
 | `CLAUDE_MEM_SKIP_MAINTAIN` | Skip the 24h auto-maintain pass (decay, purge, backup). | _(runs)_ |
 | `CLAUDE_MEM_SKIP_OPTIMIZE` | Skip the LLM optimization pass (re-enrich, normalize, cluster-merge). | _(runs)_ |
 | `CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY` | Skip the MinHash near-duplicate pass, keeping exact dedup. | _(runs)_ |
-| `CLAUDE_MEM_SKIP_MARKER_GC` | Skip the runtime-marker sweep. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_MARKER_GC` | Skip the runtime-marker sweep. **Must be exactly `1`** — unlike the other `CLAUDE_MEM_SKIP_*` flags, which accept any truthy value, this one compares against the string `1`. That is deliberate: a truthy check makes `=0` mean "skip", which is the opposite of what anyone typing it intends. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h auto-update check against GitHub Releases. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SIG_VERIFY` | Skip Ed25519 signature verification of a downloaded update. **Escape hatch — leaves updates unauthenticated.** | _(verifies)_ |
 | `CLAUDE_MEM_NO_LESSON_RETRY` | `1` disables the one-shot retry that re-asks for a missing `lesson_learned`. | _(retries)_ |

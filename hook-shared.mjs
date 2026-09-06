@@ -315,6 +315,9 @@ export function sweepStaleProjectMarkers(
   // Kill switch (naming mirrors SKIP_COMPRESS / SKIP_OPTIMIZE / SKIP_SAVE_ENRICH):
   // this is the only sweep that deletes files a user might want to inspect, so a
   // released default that reclaims state needs a documented way back out.
+  // R10 P3-6: exact '1', not a truthy check, and that is on purpose — the truthy form the
+  // sibling CLAUDE_MEM_SKIP_* flags use makes `=0` mean "skip", the opposite of intent.
+  // README documents the difference; do not "align" this without aligning the others too.
   if (env.CLAUDE_MEM_SKIP_MARKER_GC === '1') return 0;
   let entries;
   try {
