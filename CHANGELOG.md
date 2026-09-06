@@ -2,6 +2,77 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — the second package manager, removed
+
+**BREAKING.** The skill/agent resource registry, the shadow skill-recommendation engine and
+the PreToolUse Skill bridge are gone. This is a `major` bump when it ships: three CLI
+commands and two MCP tools disappear.
+
+**What changes for you**
+
+| Removed | Was | Now |
+|---|---|---|
+| `claude-mem-lite registry <list\|stats\|search\|import\|remove\|reindex\|recommend-stats>` | managed the resource DB | `Unknown command` |
+| `claude-mem-lite import <github-url>` | imported skills/agents from a repo | `Unknown command` |
+| `claude-mem-lite enrich <name>` | Haiku capability summaries for registry rows | `Unknown command` |
+| MCP `mem_registry`, `mem_use` | hidden-but-callable by exact name | `Tool not found` |
+| Install step: 15 shallow clones, ~150 MB | seeded 186 preinstalled resources | not run |
+| `CLAUDE_MEM_RECOMMEND_MODE`, `CLAUDE_MEM_SKIP_REPOS`, `CLAUDE_MEM_REGISTRY_CONFINE`, `CLAUDE_MEM_IMPORT_MAX_{ITEMS,FILE_BYTES,TOTAL_BYTES}` | registry knobs | ignored |
+
+`tools/list` is **unchanged** — both removed tools were already hidden, so an agent that
+discovers tools normally sees no difference. Memory retrieval, injection, citation tracking
+and every `mem_*` core tool are untouched.
+
+**Your data is not deleted.** `~/.claude-mem-lite/resource-registry.db` and
+`~/.claude-mem-lite/managed/` are simply no longer read or written. Remove them by hand if
+you want the disk space:
+`rm -rf ~/.claude-mem-lite/resource-registry.db ~/.claude-mem-lite/managed`.
+
+**Revert path**: pin the previous release — `npm i -g claude-mem-lite@4.0.4`, or pin the
+plugin to `v4.0.4` in your marketplace config. Nothing in this release migrates the memory
+DB, so downgrading is safe.
+
+**Why.** The registry was a second package manager competing with Claude Code's own plugin
+and marketplace system, and it had lost. Its manifest seeded 15 repos including
+`obra/superpowers` — which Claude Code installs and auto-updates itself, so the registry
+cloned a second, frozen copy and then injected it over the top of the real one.
+
+The evidence is in `docs/audits/20260906-145304.md`. The parts worth repeating here:
+
+- **The recommendation engine could not produce output.** Phase 2 (live injection) was never
+  built; `live` resolved to `shadow` with a warning. In 74 days of the author's own use it
+  logged **0** recommendation rows, because every runtime path gated on a
+  `resource-registry.db` that the plugin install channel never creates — only the npm
+  `install` path did, and it is not how the plugin ships.
+- **The metric it was waiting for was not computable.** `resource-discovery` named rows
+  `plugin/skill`; the Skill tool passes `plugin:skill`; the scanner never populated
+  `invocation_name`. So the session-matched precision that v3.12.1 "fixed" was still
+  name-vs-slug for every namespaced skill — sandbox-verified. A gate waiting on a number its
+  own instrumentation cannot produce is a deadlock.
+- **The Skill bridge matched nothing.** Same mismatch: `superpowers:brainstorming` → NO MATCH.
+  For the bare flat skills it could match, it re-injected a body Claude Code was about to load
+  anyway. It was also this project's only surface that auto-injected third-party repo content,
+  carrying the triple defang added for audit 2026-08-14 M-4; that attack surface goes with it.
+
+**Also removed**: `install-metadata.mjs` (2,193 lines of curated metadata for the 186
+preinstalled resources, consumed only by the deleted indexing step), the UserPromptSubmit L1
+skill-name pointer, and `utils.mjs:isPathConfined` — orphaned once its last consumer went,
+and deleted on the precedent its own neighbouring comment records for `basenameAnySep`.
+
+**Three things a green test suite did not catch**, found by sweeping for the names instead:
+`tool-schemas.mjs` still exported the two orphaned zod schemas (and `contract.test.mjs` went
+on testing them); `audit-fixes.test.mjs`'s T3-P2-A passed *vacuously*, its only assertion
+sitting behind an `if` the new error text can never satisfy; and `install.mjs` /
+`hook-update.mjs` still copied a `registry/preinstalled.json` that no longer exists.
+
+**Measurements** (all re-taken, none carried): tests 359 files / 5936 → **340 / 5556**,
+attributed in three steps by same-tree A/B name-set diffs rather than by subtracting counts.
+Knip 49 → **48** — and the count is the least interesting part: mid-removal it read 49, the
+same number as v4.0.4, while the name set had changed on both sides. Coverage
+85.87 / 80.18 / 90.22 / 87.02 is a **caliber break**, not an improvement: three modules left
+the `vitest.config.mjs` include allowlist, so the denominator shrank. Net **−15,514** lines
+of product code, tests and manifest.
+
 ## v4.0.4 — the audit finding a guard had already rejected
 
 R8's independent review left four items for this round. Two of them were wrong, and the

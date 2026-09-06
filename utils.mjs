@@ -1,7 +1,7 @@
 // claude-mem-lite shared utilities
 // Used by server.mjs, hook.mjs, and tests
 
-import { basename, dirname, resolve, sep } from 'path';
+import { basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { buildLowSignalRegex } from './lib/low-signal-patterns.mjs';
 // Local binding for internal use: the `export … from './secret-scrub.mjs'` re-export below
@@ -72,18 +72,10 @@ export const COMPRESSED_PENDING_PURGE = -2;
 
 // ─── Path Safety ──────────────────────────────────────────────────────────
 
-/**
- * Check if a resolved path is confined within an allowed base directory.
- * Prevents path traversal attacks via '../' sequences.
- * @param {string} candidate Path to check
- * @param {string} allowedBase Base directory the path must stay within
- * @returns {boolean} true if safe
- */
-export function isPathConfined(candidate, allowedBase) {
-  const resolved = resolve(candidate);
-  const base = resolve(allowedBase);
-  return resolved === base || resolved.startsWith(base + sep);
-}
+// `isPathConfined` lived here until 2026-09. Its consumers were the skill-registry
+// enrichment confinement gate and mem_use's managed-path check, both removed with that
+// subsystem (docs/audits/20260906-145304.md); keeping the export would have added a dead
+// name to the knip baseline — the same call made for `basenameAnySep` below.
 
 // `basenameAnySep` lived here until 2026-08-22. Its sole production consumer was
 // `recallForFile` (hook-memory.mjs), which had no callers of its own and was

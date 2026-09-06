@@ -26,6 +26,10 @@ const CLI_COMMANDS = new Set([
   'defer',
   'help',
 ]);
+// Removed in v5.0.0 with the skill/agent resource registry (docs/audits/20260906-145304.md).
+// Kept as a named set so a stale script or muscle-memory invocation gets the reason rather
+// than a bare "Unknown command" plus a misleading edit-distance suggestion.
+const REMOVED_COMMANDS = new Set(['registry', 'import', 'enrich']);
 const INSTALL_COMMANDS = new Set([
   'install',
   'uninstall',
@@ -92,6 +96,18 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
 } else if (INSTALL_COMMANDS.has(cmd)) {
   const { main } = await import('./install.mjs');
   await main(process.argv.slice(2));
+} else if (REMOVED_COMMANDS.has(cmd)) {
+  // Released-artifact discoverability signal for the v5.0.0 skill-registry removal.
+  // Deliberately NOT routed through the edit-distance suggester below: its nearest
+  // match for `import` is `import-jsonl`, a different feature that accepts a path
+  // argument, so a stale `import <github-url>` would be pointed at something that
+  // could plausibly run. Naming the removal is the only honest answer.
+  process.stderr.write(
+    `[mem] "${cmd}" was removed in v5.0.0 — the skill/agent resource registry is gone.\n` +
+      "[mem] Claude Code's own plugins/marketplace replace it. See CHANGELOG.md for the\n" +
+      '[mem] migration note and the revert path (pin claude-mem-lite@4.0.4).\n',
+  );
+  process.exit(1);
 } else {
   process.stderr.write(`[mem] Unknown command: "${cmd}"\n`);
   // Suggest closest command by edit distance
