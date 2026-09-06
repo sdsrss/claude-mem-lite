@@ -994,7 +994,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // replaces `scripts/` wholesale. So an upgrade that REMOVES a hook script deletes
     // the file and leaves settings.json pointing at it; the launcher then reports a
     // broken install on every fire, for a file that is not coming back (R9 review P1-1,
-    // first hit by the v5.0.0 `PreToolUse:Skill` removal). Plugin-channel installs are
+    // first hit by the `PreToolUse:Skill` removal). Plugin-channel installs are
     // unaffected — hooks/hooks.json is replaced wholesale — so this is npm-channel only.
     //
     // The reconciler lives in lib/hook-prune.mjs, not install.mjs: install.mjs already

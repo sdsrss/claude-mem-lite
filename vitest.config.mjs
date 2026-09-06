@@ -99,7 +99,7 @@ export default defineConfig({
       // statements to 71.05% and blown every threshold, i.e. measured the harness exactly
       // as this comment always claimed.
       //
-      // registry.mjs itself was DELETED in v5.0.0 with the skill registry, so its `include`
+      // registry.mjs itself was DELETED with the skill registry, so its `include`
       // entry went with it. The install.mjs / server.mjs / hook.mjs rationale above is
       // unaffected and still the reason those three stay out.
       //

@@ -34,7 +34,7 @@ function run(args) {
 describe('removed registry commands name their removal', () => {
   it.each(['registry', 'import', 'enrich'])('`%s` says it was removed, not just unknown', (cmd) => {
     const out = run([cmd]);
-    expect(out, `no removal hint for "${cmd}":\n${out}`).toMatch(/removed in v5/i);
+    expect(out, `no removal hint for "${cmd}":\n${out}`).toMatch(/was removed along with/i);
     // The hint must be actionable: it points at where the reasoning lives.
     expect(out).toMatch(/CHANGELOG/);
   });
@@ -42,7 +42,7 @@ describe('removed registry commands name their removal', () => {
   it('does not fire for an ordinary typo — the hint would be a lie', () => {
     const out = run(['serach']);
     expect(out).toMatch(/Unknown command/);
-    expect(out, `a typo was told a feature had been removed:\n${out}`).not.toMatch(/removed in v5/i);
+    expect(out, `a typo was told a feature had been removed:\n${out}`).not.toMatch(/was removed along with/i);
   });
 
   it('`import` is not silently re-routed to import-jsonl', () => {
@@ -50,7 +50,7 @@ describe('removed registry commands name their removal', () => {
     // different feature. The hint must land instead of (or before) that suggestion,
     // and the command must not actually run.
     const out = run(['import', 'https://github.com/obra/superpowers']);
-    expect(out).toMatch(/removed in v5/i);
+    expect(out).toMatch(/was removed along with/i);
     expect(out).not.toMatch(/Imported \d+/);
   });
 });

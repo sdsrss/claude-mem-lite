@@ -2052,11 +2052,15 @@ export function pruneStaleInstallFiles(dataDir, sourceFiles) {
   // like 'lib/activity.mjs' — those belong to a subdir and prune never touches
   // subdirs anyway. For top-level entries ('server.mjs'), basename === entry.
   const topLevelAllowed = new Set(sourceFiles.filter((f) => !f.includes('/')).map((f) => f));
-  // resource-registry.db stayed on this list until v5.0.0 removed the registry. It is
-  // deliberately still protected: a user upgrading from <=4.x has one on disk, it can be
-  // 0 bytes (fresh-install transient state), and pruneStaleInstallFiles would then delete
-  // user data the CHANGELOG tells them to remove themselves. Drop it a major later.
-  const PROTECTED_DBS = new Set(['claude-mem-lite.db', 'resource-registry.db']);
+  // `resource-registry.db` came off this list with the registry itself. My first pass kept
+  // it on a wrong premise — "a user upgrading from <=4.x might lose data" — but the prune
+  // below gates on `st.size === 0`, so a registry DB with anything in it was never
+  // reachable here in the first place. The only file the entry saved was a ZERO-BYTE one,
+  // which holds no user data and is exactly the stale artifact this function exists to
+  // clear. Nothing creates the file any more, so the "fresh-install transient state"
+  // rationale that keeps `claude-mem-lite.db` here does not transfer. (R9 review F8a
+  // corrected the premise; the CHANGELOG still tells users where the real file lives.)
+  const PROTECTED_DBS = new Set(['claude-mem-lite.db']);
   const removed = [];
   let entries;
   try {

@@ -5,7 +5,7 @@
 // but it has exactly ONE caller, `install()`. Auto-update never runs it. Meanwhile
 // `buildSwitchablePaths` swaps `scripts/` wholesale, so an upgrade DELETES a hook
 // script from disk while `~/.claude/settings.json` still points at it. Result on the
-// npm channel after the v5.0.0 removal: every `Skill()` call fires
+// npm channel after the registry removal: every `Skill()` call fires
 // `hook-launcher.mjs scripts/pre-skill-bridge.js`, which prints two lines and arms
 // the broken-install marker for a file that is not coming back.
 //
@@ -16,7 +16,7 @@
 //      relative argument.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { pruneDanglingMemHooks } from '../lib/hook-prune.mjs';
@@ -126,6 +126,56 @@ describe('pruneDanglingMemHooks — the reconciler auto-update was missing', () 
     const before = JSON.stringify(input);
     pruneDanglingMemHooks(input, installDir);
     expect(JSON.stringify(input), 'input was mutated in place').toBe(before);
+  });
+});
+
+describe('resolution base is the command, not the caller (R9 review, adversarial pass)', () => {
+  // The reviewer's counter-example, which my own cases could not produce because both of
+  // my fixtures put the entry in the same directory. The launcher resolves its entry
+  // against ITS OWN dir (`hook-launcher.mjs:36` — `join(dirname(launcher), '..')`), so a
+  // pruner that resolves against the caller's installDir deletes a hook that runs fine
+  // whenever the two bases differ. Not reachable in production today (both INSTALL_DIR
+  // constants are homedir-hardcoded), which is exactly why it needs a test: the coupling
+  // is invisible until someone passes a different targetDir.
+  it('keeps a hook whose entry exists under ITS OWN install dir, not the caller-supplied one', () => {
+    const other = join(root, 'other-install');
+    mkdirSync(join(other, 'scripts'), { recursive: true });
+    writeFileSync(join(other, 'scripts', 'hook-launcher.mjs'), '// launcher');
+    // An entry name that exists ONLY under `other`. Using a name the beforeEach fixture
+    // also creates under installDir makes this case pass for the wrong reason — which is
+    // how the reviewer's first attempt at it went green, and mine after it.
+    writeFileSync(join(other, 'scripts', 'only-over-there.js'), '// live over there');
+    expect(existsSync(join(installDir, 'scripts', 'only-over-there.js'))).toBe(false); // premise
+    const cmd = `node "${join(other, 'scripts', 'hook-launcher.mjs')}" scripts/only-over-there.js`;
+    const s = { hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: cmd }] }] } };
+
+    // installDir deliberately points somewhere the entry does NOT exist.
+    const { settings, removed } = pruneDanglingMemHooks(s, installDir);
+    expect(removed, 'deleted a hook whose target exists where the launcher looks').toEqual([]);
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it('still removes a dead entry when the command names its own install dir', () => {
+    const other = join(root, 'other-install2');
+    mkdirSync(join(other, 'scripts'), { recursive: true });
+    writeFileSync(join(other, 'scripts', 'hook-launcher.mjs'), '// launcher');
+    const cmd = `node "${join(other, 'scripts', 'hook-launcher.mjs')}" scripts/pre-skill-bridge.js`;
+    const s = { hooks: { PreToolUse: [{ matcher: 'Skill', hooks: [{ type: 'command', command: cmd }] }] } };
+    const { removed } = pruneDanglingMemHooks(s, installDir);
+    expect(removed).toEqual(['scripts/pre-skill-bridge.js']);
+  });
+
+  it('a null entry in the configs array degrades to a no-op, never a throw', () => {
+    // isMemHook(null) threw on `cfg.hooks`; hook-update.mjs swallows it via debugCatch,
+    // so ONE malformed entry silently cancelled the whole prune and the dangling hook
+    // survived. Degraded, never destructive — but the reconcile is the point.
+    const s = { hooks: { PreToolUse: [null, ...settingsWith().hooks.PreToolUse] } };
+    let out;
+    expect(() => {
+      out = pruneDanglingMemHooks(s, installDir);
+    }).not.toThrow();
+    expect(out.removed).toEqual(['scripts/pre-skill-bridge.js']);
+    expect(out.settings.hooks.PreToolUse).toContain(null); // not ours; left as found
   });
 });
 
