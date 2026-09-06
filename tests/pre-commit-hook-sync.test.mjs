@@ -46,6 +46,34 @@ describe('pre-commit hook sync (P1-11)', () => {
     const entry = git('ls-files', '-s', '.githooks/pre-commit');
     expect(entry, '.githooks/pre-commit is not tracked — the shim must be committed').not.toBe('');
     expect(entry.split(/\s/)[0], 'shim is not mode 100755; git will skip it silently').toBe('100755');
+
+    // R10 P2-20, found by wiring core.hooksPath and watching the very next commit fail
+    // with "Permission denied": the shim's whole body is `exec .../scripts/pre-commit.sh`,
+    // and that file was tracked 100644. The shim could never have worked as committed, on
+    // any clone. Only the SHIM's mode was pinned here, so nothing said so.
+    const canonicalEntry = git('ls-files', '-s', CANONICAL);
+    expect(canonicalEntry, `${CANONICAL} is not tracked`).not.toBe('');
+    expect(
+      canonicalEntry.split(/\s/)[0],
+      `${CANONICAL} is not mode 100755, so the exec shim cannot run it`,
+    ).toBe('100755');
+  });
+
+  it('the escape hatch out of the skip below is discoverable', () => {
+    // R10 P2-20. The case after this one SKIPS when no hook is installed, which is correct
+    // for a fresh CI clone — but it means a contributor whose clone was never wired sees a
+    // green suite with the local gate switched off, indefinitely. That was the state of the
+    // maintainer's own machine when R10 measured it: no core.hooksPath, no .git/hooks/
+    // pre-commit, `1 passed | 1 skipped`. Nothing can make the skip an error without
+    // breaking CI, so pin the next best thing: the one-line fix exists and is written down.
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    expect(pkg.scripts['hooks:install'], 'no npm script wires core.hooksPath').toMatch(/core\.hooksPath/);
+    // Explicitly NOT `prepare` / `postinstall`: wiring git config as a side effect of
+    // `npm install` is user-global-ish state written without asking.
+    expect(pkg.scripts.prepare, 'hooks must not be wired by a lifecycle script').toBeUndefined();
+    expect(pkg.scripts.postinstall).toBeUndefined();
+    const contributing = readFileSync(join(REPO, 'CONTRIBUTING.md'), 'utf8');
+    expect(contributing, 'CONTRIBUTING does not tell anyone to run it').toContain('npm run hooks:install');
   });
 
   it('whatever hook git will run is the canonical script (or an exec shim to it)', (ctx) => {

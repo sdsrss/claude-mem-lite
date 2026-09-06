@@ -43,8 +43,8 @@
 // injected at all" — how this comment first read — is wrong. What it does not ask is
 // whether the lesson was ACTED on. Different mechanism from the prefix, different fix.
 
-import { describe, it, expect } from 'vitest';
-import { readFileSync, writeFileSync, mkdtempSync } from 'fs';
+import { describe, it, expect, afterAll } from 'vitest';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -66,8 +66,23 @@ import { EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
 // tests/citation-decay.test.mjs). The positive case below is what proves the
 // fixture can say YES at all — without it the three negative assertions would
 // be satisfied by a fixture the extractor simply cannot read.
+// R10 P2-18: every call mkdtemp'd a directory that nothing removed, and `d202-` is not a
+// prefix lib/tmp-fixture-sweep.mjs reclaims — so three dirs leaked into /tmp on every
+// `vitest run`, permanently. Collect and remove them.
+const TRANSCRIPT_DIRS = [];
+afterAll(() => {
+  for (const d of TRANSCRIPT_DIRS) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+});
+
 function writeTranscript(text) {
   const dir = mkdtempSync(join(tmpdir(), 'd202-'));
+  TRANSCRIPT_DIRS.push(dir);
   const path = join(dir, 'transcript.jsonl');
   writeFileSync(
     path,

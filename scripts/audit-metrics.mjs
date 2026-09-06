@@ -834,23 +834,34 @@ if (WANT_DEPS) {
 // `tests/audit-metrics-selfcheck.test.mjs` drives this mode and asserts it exits 0, and
 // asserts the harness can go non-zero.
 if (args.has('--self-check')) {
+  // R10 P2-18: THROW, do not process.exit(1) here. Every check below runs inside a
+  // try/finally that removes the probe directory, and process.exit skips finally — so each
+  // failing self-check left an `audit-metrics-selfcheck-` directory in /tmp, under a prefix
+  // lib/tmp-fixture-sweep.mjs does not reclaim.
+  //
+  // The exit itself is deferred past the finally for the same reason: exiting from inside
+  // the catch skips it just as surely as exiting from inside the try. The first cut of this
+  // fix did exactly that and a forced-failure probe still leaked one directory.
+  class SelfCheckFailure extends Error {}
   const fail = (msg) => {
-    process.stderr.write(`SELF-CHECK FAILED: ${msg}\n`);
-    process.exit(1);
+    throw new SelfCheckFailure(msg);
   };
+  let selfCheckFailure = null;
 
-  // 1. The file walk found a plausible corpus. A walk returning [] makes every figure
-  //    below it read as a clean, tiny, well-factored repo.
-  if (files.source.length < 60) fail(`source walk found ${files.source.length} files, expected >= 60`);
-  if (files.tests.length < 60) fail(`test walk found ${files.tests.length} files, expected >= 60`);
-
-  // 2. The duplicate detector can say YES and NO. Real files on disk, because
-  //    duplicateRate reads them itself. Without the NO arm a detector that flags
-  //    everything scores 100% and reads as a catastrophic finding; without the YES arm one
-  //    that flags nothing scores 0% and reads as a clean tree — and 0% is the answer that
-  //    gets believed.
+  // The probe directory is created FIRST and every check runs inside the try, so a failure
+  // in check 1 or 2 — which used to sit above this line — still reaches the finally.
   const probeDir = mkdtempSync(join(tmpdir(), 'audit-metrics-selfcheck-'));
   try {
+    // 1. The file walk found a plausible corpus. A walk returning [] makes every figure
+    //    below it read as a clean, tiny, well-factored repo.
+    if (files.source.length < 60) fail(`source walk found ${files.source.length} files, expected >= 60`);
+    if (files.tests.length < 60) fail(`test walk found ${files.tests.length} files, expected >= 60`);
+
+    // 2. The duplicate detector can say YES and NO. Real files on disk, because
+    //    duplicateRate reads them itself. Without the NO arm a detector that flags
+    //    everything scores 100% and reads as a catastrophic finding; without the YES arm one
+    //    that flags nothing scores 0% and reads as a clean tree — and 0% is the answer that
+    //    gets believed.
     const body = Array.from({ length: DUP_WINDOW + 2 }, (_, i) => `const dupProbe${i} = ${i} + 1;`).join(
       '\n',
     );
@@ -952,6 +963,9 @@ if (args.has('--self-check')) {
     if (!Number.isInteger(depsPop)) fail('could not read a module count out of depsMd() output');
     if (cyclePop !== reachPop || reachPop !== depsPop)
       fail(`module populations disagree: cycles=${cyclePop}, testReachability=${reachPop}, deps=${depsPop}`);
+  } catch (e) {
+    if (!(e instanceof SelfCheckFailure)) throw e;
+    selfCheckFailure = e;
   } finally {
     try {
       rmSync(probeDir, { recursive: true, force: true });
@@ -960,6 +974,10 @@ if (args.has('--self-check')) {
     }
   }
 
+  if (selfCheckFailure) {
+    process.stderr.write(`SELF-CHECK FAILED: ${selfCheckFailure.message}\n`);
+    process.exit(1);
+  }
   process.stdout.write('audit-metrics self-check: OK\n');
   process.exit(0);
 }

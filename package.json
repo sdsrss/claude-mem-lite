@@ -32,7 +32,8 @@
     "benchmark:gate": "node benchmark/ci-gate.mjs",
     "audit:inventory": "node scripts/audit-metrics.mjs --inventory",
     "audit:deps": "node scripts/audit-metrics.mjs --deps",
-    "audit:selfcheck": "node scripts/audit-metrics.mjs --self-check"
+    "audit:selfcheck": "node scripts/audit-metrics.mjs --self-check",
+    "hooks:install": "git config core.hooksPath .githooks && echo \"core.hooksPath -> .githooks (scripts/pre-commit.sh now runs on every commit)\""
   },
   "files": [
     "cli.mjs",

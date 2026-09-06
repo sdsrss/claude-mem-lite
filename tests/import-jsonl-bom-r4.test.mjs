@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { readFileSync, writeFileSync, mkdtempSync } from 'fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl } from '../lib/import-jsonl.mjs';
@@ -22,9 +22,17 @@ describe('importJsonl — leading UTF-8 BOM (R4)', () => {
   it('imports every line even when the file starts with a BOM (line 1 not dropped)', async () => {
     const raw = readFileSync(FIXTURE, 'utf8');
     const BOM = String.fromCharCode(0xfeff);
-    const bomPath = join(mkdtempSync(join(tmpdir(), 'bom-')), 'bom.jsonl');
-    writeFileSync(bomPath, BOM + raw); // prepend the BOM
-    const r = await importJsonl(db, bomPath, { project: 'proj' });
-    expect(r.prompts).toBe(2); // both prompts imported — the BOM-prefixed first line survived
+    // R10 P2-18: `bom-` is not a prefix lib/tmp-fixture-sweep.mjs reclaims, so this dir
+    // leaked into /tmp on every run, permanently. Remove it in a finally so a failing
+    // assertion still cleans up.
+    const dir = mkdtempSync(join(tmpdir(), 'bom-'));
+    try {
+      const bomPath = join(dir, 'bom.jsonl');
+      writeFileSync(bomPath, BOM + raw); // prepend the BOM
+      const r = await importJsonl(db, bomPath, { project: 'proj' });
+      expect(r.prompts).toBe(2); // both prompts imported — the BOM-prefixed first line survived
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

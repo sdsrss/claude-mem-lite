@@ -6,7 +6,7 @@
 //
 // Both differences the copy had are observable from outside, so they are tested from
 // outside: a real `hook.mjs stop` subprocess with the lock already held by a live PID.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, existsSync } from 'fs';
@@ -98,15 +98,30 @@ beforeEach(() => {
   project = episodeName();
 });
 
-afterEach(() => {
-  for (const d of PROJECT_DIRS.splice(0)) {
+// R10 P2-18. This afterEach was already here and still left directories behind, because
+// a contended Stop spawns a DETACHED llm-episode worker that writes into dataDir/runtime
+// after the parent has exited — it recreates the tree the cleanup just removed. You cannot
+// deterministically outlive a process you did not wait for, so this sweeps twice: once
+// per case, and once at the end, by which time the workers have finished. `stop-fallback-`
+// is also in TEST_FIXTURE_PREFIXES as the backstop for whatever still races.
+const ALL_DIRS = [];
+function sweep(dirs) {
+  for (const d of dirs) {
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {
       /* gone */
     }
   }
+}
+
+afterEach(() => {
+  const done = PROJECT_DIRS.splice(0);
+  ALL_DIRS.push(...done);
+  sweep(done);
 });
+
+afterAll(() => sweep(ALL_DIRS));
 
 describe('handleStop lock-contended fallback', () => {
   it('honours CLAUDE_MEM_SKIP_EPISODE_LLM, which the hand-copied version ignored', () => {

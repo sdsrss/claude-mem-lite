@@ -1,5 +1,5 @@
 // Tests for hook-context.mjs — adaptive time windows, token budgeting, CLAUDE.md updates
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -523,6 +523,17 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     try {
       unlinkSync(join(RUNTIME_DIR, `.legacy-claude-md-cleaned-${inferProject()}`));
     } catch {}
+  });
+
+  // R10 P2-18: the file was unlinked but the DIRECTORY never was, and `hook-ctx-test-` is
+  // not a prefix lib/tmp-fixture-sweep.mjs reclaims — so one dir leaked into /tmp on every
+  // run, permanently.
+  afterAll(() => {
+    try {
+      rmSync(testDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   });
 
   it('is a no-op when CLAUDE.md does not exist', () => {

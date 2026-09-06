@@ -28,9 +28,21 @@ in the PR — it is what unblocks review fastest.
 ## Local setup
 
 ```bash
-node --version      # must be >= 20; the package is ESM ("type": "module")
+node --version      # must be >= 22; the package is ESM ("type": "module")
 npm install
+npm run hooks:install   # one-off: point git at .githooks/
 ```
+
+**Run `npm run hooks:install` once per clone.** `.git/hooks/` is untracked, so a fresh
+clone has no pre-commit hook at all, and `scripts/pre-commit.sh` — the version-sync,
+format, lockfile and frozen-corpus gates — simply never runs on `git commit`. It is not
+wired automatically on purpose: an `npm install` that silently rewrote your git config
+would be a surprising thing for a dependency install to do.
+
+`tests/pre-commit-hook-sync.test.mjs` checks that whatever hook git *will* run is the
+canonical script, but it can only skip when no hook is installed at all — so a clone that
+never ran this command shows a green suite with the local gate switched off. CI still runs
+every one of those checks on push; the local hook is the second line, not the only one.
 
 ## The checks
 
