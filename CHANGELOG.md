@@ -2,6 +2,64 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.1.1 — the prebuild that shadows its own repair
+
+Found by playing a real user through the sandbox install harness
+(`tests/sandbox/phase{A,B,C}`) rather than by reading code. Two defects, one of them in
+the ruler.
+
+**What changes for you**
+
+| Change | Was | Now |
+|---|---|---|
+| A shipped better-sqlite3 prebuild that is present and will not load | unrepairable: `rebuild-binding` exited 1, `doctor` stayed red, the printed manual command could not fix it either | the heal moves the dead prebuild aside, compiles from source, and puts it back if that did not help |
+| The `Repair:` line in the degraded-hooks banner and in `doctor` | `npm rebuild … && npm run … build-release`, which cannot fix that shape | leads with `rebuild-binding`, which runs the whole chain; the npm pair stays as the no-CLI fallback |
+
+**The mechanism**
+
+better-sqlite3 13's `lib/binding.js` selects `prebuilds/<target>.node` on **existence
+alone** and prefers it over `build/`. So when the shipped prebuild is present but will not
+dlopen — a glibc older than the one it was built against, a truncated download, the wrong
+arch baked into an image — the addon the source-compile fallback produces is never the one
+loaded. Measured with a control: corrupt prebuild + healthy `build/Release` → `wrong ELF
+class`; prebuild moved aside → the DB opens; neither present → fails. v4.0.0 added the
+source build for "a platform 13 ships no prebuild for"; this is its neighbour, and nothing
+covered it.
+
+`ensureBetterSqlite3Working` now renames the shadowing prebuild to `<name>.node.unusable`
+before the source build, and restores it if the compile did not help either — an install
+that could not be repaired must not come back with one fewer file. The quarantine lives
+**only** in the source-build branch: doing it with no compile to follow turns "broken
+addon" into "no addon", and that branch is exactly what the 20 s SessionStart probe opts
+out of. `rebuild-binding` prints the move, because silently renaming a file inside
+someone's `node_modules` reads as corruption six months later.
+
+**The ruler was broken too**
+
+Both sandbox phases corrupted `build/Release/better_sqlite3.node` to simulate a dead
+addon. That is a better-sqlite3 **12** path. From v4.0.0 to v5.1.0 they were breaking a
+file no resolver loads: phase A left four "self-heal worked" checks vacuously green, and
+phase B's entire self-heal-and-doctor block sat behind an `if (existsSync(bindingPath))`,
+so eight checks silently stopped running — the only witness was a run printing 37 where
+the README said 45.
+
+- `loadedBindingPath()` asks better-sqlite3's own `getPrebuildPath()` which addon it would
+  load instead of naming one. The same literal has now gone stale twice on one dependency
+  bump.
+- Each phase asserts its own check count (`EXPECTED_CHECKS`, 47 / 45 / 15). A phase that
+  quietly shrinks has stopped measuring.
+- Phase B's "no orphan hook entries left behind" counted hook groups and then returned
+  `{ ok: true }` — unfailable, against a `settings.json` that had never held a foreign
+  hook. It now seeds one before install and asserts uninstall preserved it exactly.
+- Phase A's A10 stops asserting an unattended heal it was never owed: SessionStart refuses
+  the compile on purpose (~41 s against a 20 s hook cap, and a truncated `node-gyp clean`
+  leaves nothing). It now checks the contract that actually holds — degrade without
+  crashing, record `.deps-broken`, hand over a repair that works — by running the repair.
+
+Three phases green on the release tree: 47/47, 45/45, 15/15. Suite 5693 passed, 0 skipped;
+coverage 85.72 / 80.16 / 90.44 / 86.88 with the gate at 80/74/84/83; knip unchanged at
+45/0/0/3.
+
 ## v5.1.0 — the R10 audit, fixed
 
 Whole-project audit round R10 (`docs/audits/20260906-173816.md`) landed as 18 commits.
