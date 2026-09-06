@@ -23,7 +23,9 @@ import { tmpdir } from 'node:os';
 import {
   isNativeBindingError,
   healAndReexec,
+  ensureBetterSqlite3Working,
   NATIVE_BINDING_REBUILD_CMD,
+  NATIVE_BINDING_SOURCE_BUILD_CMD,
   BINDING_HEAL_GUARD_ENV,
 } from '../lib/binding-probe.mjs';
 import {
@@ -77,6 +79,57 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
   it('exports the exact rebuild command (npm >= 12 needs the allow-scripts bypass)', () => {
     expect(NATIVE_BINDING_REBUILD_CMD).toContain('npm rebuild better-sqlite3');
     expect(NATIVE_BINDING_REBUILD_CMD).toContain('--dangerously-allow-all-scripts');
+  });
+});
+
+// v4.0.0. better-sqlite3 13 carries NO install script — it ships prebuilds instead — so
+// `npm rebuild better-sqlite3` has nothing to run and exits 0 printing "rebuilt dependencies
+// successfully" while producing no `.node`. On a platform 13 ships no prebuild for, the heal
+// chain therefore reported success over a still-broken install. These pin the source-compile
+// fallback that closes it, and pin that it does NOT fire when the npm path already worked.
+describe('ensureBetterSqlite3Working — source-compile fallback when npm rebuild heals nothing', () => {
+  it('falls through to the source build when rebuild exits 0 but the binding is still dead', async () => {
+    const cmds = [];
+    let verifyCalls = 0;
+    const r = await ensureBetterSqlite3Working('/inst', {
+      probe: () => ({ ok: false, error: 'Could not locate the bindings file' }),
+      // Dead after the npm rebuild (call 1), alive after the source build (call 2).
+      verify: () => ({ ok: ++verifyCalls >= 2, error: 'still dead' }),
+      exec: (cmd) => cmds.push(cmd),
+    });
+    expect(r).toEqual({ ok: true, action: 'compiled' });
+    expect(cmds).toEqual([NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD]);
+  });
+
+  it('does NOT run the source build when npm rebuild already fixed it', async () => {
+    const cmds = [];
+    const r = await ensureBetterSqlite3Working('/inst', {
+      probe: () => ({ ok: false, error: 'dead' }),
+      verify: () => ({ ok: true }),
+      exec: (cmd) => cmds.push(cmd),
+    });
+    expect(r).toEqual({ ok: true, action: 'rebuilt' });
+    expect(cmds).toEqual([NATIVE_BINDING_REBUILD_CMD]);
+  });
+
+  it('reports the source build failing instead of claiming a heal', async () => {
+    const r = await ensureBetterSqlite3Working('/inst', {
+      probe: () => ({ ok: false, error: 'dead' }),
+      verify: () => ({ ok: false, error: 'still dead' }),
+      exec: (cmd) => {
+        if (cmd === NATIVE_BINDING_SOURCE_BUILD_CMD) throw new Error('no compiler');
+      },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('source build failed');
+    expect(r.error).toContain('no compiler');
+  });
+
+  it('the source-build command targets the package, not the project', () => {
+    // A bare `npm run build-release` in the project would run OUR script of that name (or
+    // none); it has to be --prefix'd into node_modules/better-sqlite3.
+    expect(NATIVE_BINDING_SOURCE_BUILD_CMD).toContain('--prefix node_modules/better-sqlite3');
+    expect(NATIVE_BINDING_SOURCE_BUILD_CMD).toContain('build-release');
   });
 });
 

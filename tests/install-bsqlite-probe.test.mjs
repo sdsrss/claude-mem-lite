@@ -28,6 +28,18 @@ const PKG_JSON = JSON.stringify(join(REPO_ROOT, 'package.json'));
 // up dlopen'd in THAT child. Has to be a child: this vitest worker may already
 // have loaded the addon for unrelated reasons, which would make the assertion
 // vacuous.
+//
+// The detector matches ANY `.node` under the better-sqlite3 package, not the literal
+// filename `better_sqlite3.node` (v4.0.0). better-sqlite3 13 ships prebuilt binaries as
+// `prebuilds/<platform>.node` — `prebuilds/linux-x64.node` here — where 12 built
+// `build/Release/better_sqlite3.node`. Under the old substring the addon still got
+// dlopen'd but went unseen, which did NOT merely break the control below: it made the
+// real assertion (`probeBindingInFreshProcess` must load nothing here) VACUOUSLY TRUE, so
+// the guard would have passed even if the fresh-process probe had started poisoning the
+// caller. The control is what caught it — that is what a control is for. Both layouts are
+// matched so the pattern survives a future move back or a platform that builds from source.
+const ADDON_IN_BSQLITE3 = /better[-_]sqlite3[\\/].*\.node$/;
+
 function loadedAfter(body) {
   const r = spawnSync(
     process.execPath,
@@ -39,7 +51,7 @@ function loadedAfter(body) {
     const result = await (${body});
     const { createRequire } = await import('node:module');
     const req = createRequire(${PKG_JSON});
-    const loaded = Object.keys(req.cache).some((k) => k.includes('better_sqlite3.node'));
+    const loaded = Object.keys(req.cache).some((k) => ${ADDON_IN_BSQLITE3.toString()}.test(k));
     console.log(JSON.stringify({ ok: result.ok, loaded }));
   `,
     ],

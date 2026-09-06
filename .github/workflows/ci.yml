@@ -85,7 +85,10 @@ jobs:
     needs: lint
     strategy:
       matrix:
-        node-version: [20, 22, 24]
+        # v4.0.0 dropped Node 20 (EOL 2026-04): better-sqlite3 13 requires >=22, and
+        # `engines` now says so. 26 joins in the same change — it is the current release
+        # line and closes audit A20260905-R5-P3-1, deferred until a matrix edit was due.
+        node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -153,19 +156,28 @@ jobs:
         run: node scripts/smoke-tarball.mjs
 
   # Same smoke on a PRISTINE npm >= 12, where install/lifecycle scripts are
-  # blocked by default (empty allow-scripts allowlist): plain `npm install`
-  # exits 0 with better-sqlite3 present-but-uncompiled — the -32000 class the
-  # whole self-heal chain (binding-probe --dangerously-allow-all-scripts,
-  # setup.sh 6b, launch.mjs, hook-update smoke gate) exists for. The `smoke`
-  # job above runs npm 10 where compilation just works, so WITHOUT this leg a
-  # regression in the heal chain is invisible to CI and only surfaces as a
-  # user-side -32000. SMOKE_EXPECT_SCRIPT_BLOCK=1 makes the job fail loudly if
-  # the block ever stops occurring (npm default change / runner pre-allowing
-  # scripts) instead of silently degrading into a duplicate of `smoke`.
-  # The flag also makes the smoke pin `allow-scripts=none` in the throwaway
-  # project's .npmrc (npm 12 rejects --allow-scripts/env for project installs
-  # with EALLOWSCRIPTS; project .npmrc is the sanctioned pin and beats any
-  # ambient runner allowlist).
+  # blocked by default (empty allow-scripts allowlist). The `smoke` job above runs
+  # npm 10 where compilation just works, so without this leg a regression here is
+  # invisible to CI and only surfaces as a user-side -32000. Both legs pin the block
+  # via `allow-scripts=none` in the throwaway project's .npmrc (npm 12 rejects
+  # --allow-scripts/env for project installs with EALLOWSCRIPTS; project .npmrc is the
+  # sanctioned pin and beats any ambient runner allowlist).
+  #
+  # v4.0.0 SPLIT THIS IN TWO, because better-sqlite3 13 ships `prebuilds/<platform>.node`
+  # in its own tarball and that retires the failure this job was built on. Measured:
+  # `npm install --ignore-scripts better-sqlite3@13` lands 8 prebuilds and opens a DB;
+  # the same install of 12 lands none and cannot. So under 13 a blocked script no longer
+  # produces a broken binding on any covered platform — the single old assertion
+  # ("the heal MUST fire") would now fail outright, and deleting it would have dropped
+  # heal coverage silently. Each leg asserts one thing and can fail on its own:
+  #
+  #   1. prebuilds intact  → the install must come up WITHOUT healing. Guards the
+  #      user-facing claim that npm's script block no longer reaches them. The smoke
+  #      also proves the block really happened by asserting node-gyp left no
+  #      build/Release — the cause, since the broken-binding symptom is gone.
+  #   2. prebuilds deleted → stands in for a platform no prebuild covers (exotic
+  #      libc/arch), where the shipped heal is still the only thing between the user and
+  #      a -32000. Keeps binding-probe / setup.sh 6b / launch.mjs / hook-update covered.
   smoke-npm12:
     runs-on: ubuntu-latest
     steps:
@@ -175,7 +187,12 @@ jobs:
           node-version: 24
       - name: Install npm 12
         run: npm install -g npm@^12 && npm --version
-      - name: Tarball smoke under npm-12 script block (heal path required)
+      - name: Script block must not reach the user (prebuilds intact, no heal expected)
         env:
           SMOKE_EXPECT_SCRIPT_BLOCK: '1'
+        run: node scripts/smoke-tarball.mjs
+      - name: Heal path still works where no prebuild covers the platform
+        env:
+          SMOKE_EXPECT_SCRIPT_BLOCK: '1'
+          SMOKE_FORCE_NO_PREBUILDS: '1'
         run: node scripts/smoke-tarball.mjs
