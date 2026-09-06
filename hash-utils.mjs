@@ -53,6 +53,27 @@ export function computeMinHash(text, numHashes = 64) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((t) => t.length > 2);
+  // R10 P3-10: CJK fallback, and ONLY as a fallback. The tokenizer above deletes every
+  // non-ASCII character, so a title or narrative written entirely in Chinese or Japanese
+  // produced zero tokens and this returned null — and a null signature makes the row
+  // invisible to the MinHash prefilter that findDuplicates and selectFuzzyDedupeIds run,
+  // so CJK-only rows could never be deduplicated against anything.
+  //
+  // Confined to rows that get NOTHING from the ASCII path, which is the whole point.
+  // Signatures are STORED, and estimateJaccardFromMinHash compares a stored signature
+  // against a freshly computed one; widening the tokenization for text that already
+  // signs would make the entire existing corpus incomparable with everything written
+  // afterwards — dedup degrading everywhere, silently, until a full rebuild. Every text
+  // that signs today still produces the same bytes.
+  //
+  // Character bigrams rather than nlp.mjs's dictionary segmentation: this module is
+  // dependency-free on purpose, and bigrams are the standard CJK shingle for exactly this
+  // job — no vocabulary to maintain and no dependence on a dictionary that lags usage.
+  if (tokens.length === 0) {
+    for (const run of text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]{2,}/g) || []) {
+      for (let i = 0; i + 2 <= run.length; i++) tokens.push(run.slice(i, i + 2));
+    }
+  }
   // Require at least 3 tokens for meaningful signature (avoids high collision on short texts)
   if (tokens.length < 3) return null;
 
