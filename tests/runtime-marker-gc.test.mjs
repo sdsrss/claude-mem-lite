@@ -190,6 +190,19 @@ describe('wiring', () => {
     expect(src).toMatch(/\bsweepStaleProjectMarkers\(/);
   });
 
+  it('the GC list carries no prefix nothing writes any more', () => {
+    // R10 P3-5. `.skill-cooldown-` / `.skill-reco-cooldown-` outlived the skill registry
+    // that wrote them (removed in v5.0.0) and sat in the sweep list for a round, matching
+    // nothing on every SessionStart. Pinning their ABSENCE is the check the suite could not
+    // make for itself: a dead prefix costs nothing visible, so nothing ever goes red for it.
+    for (const dead of ['.skill-cooldown-', '.skill-reco-cooldown-']) {
+      expect(GC_PROJECT_MARKER_PREFIXES).not.toContain(dead);
+      expect(GC_PRESERVED_MARKER_PREFIXES).not.toContain(dead);
+    }
+    // And the gate that WAS missing from both lists is now in the reclaimable one.
+    expect(GC_PROJECT_MARKER_PREFIXES).toContain('last-mark-compressible-');
+  });
+
   it('the preserved list still covers every side-effecting sentinel', () => {
     // Named explicitly so adding a new "adopt once" / "migrate once" marker
     // without classifying it shows up here rather than as silent data loss.
@@ -201,7 +214,7 @@ describe('wiring', () => {
   it('sweeps a realistic mixed directory to exactly the intended set', () => {
     put('session-tmp--sdscc-e2e-abc', 90); // deleted test sandbox
     put('cite-recall-scratchpad--fixture-1.json', 90);
-    put('.skill-reco-cooldown-projects--moa', 90);
+    put('last-mark-compressible-projects--moa.json', 90); // per-project auto-compress gate
     put('.auto-adopt-projects--moa', 90); // preserved
     put('.deferred-block-migrated-projects--moa', 90); // preserved
     put('ep-projects--moa.json', 90); // not ours

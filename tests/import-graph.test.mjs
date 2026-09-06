@@ -193,6 +193,8 @@ describe('module import graph', () => {
   it('imports no absolute filesystem paths', () => {
     // v3.56 P3-15: scripts/p0-forward-probe.mjs imported
     // '/mnt/data_ssd/dev/projects/mem/scoring-sql.mjs' — another machine's checkout.
+    // (That file was deleted in R10 P3-24; this is the history of why the check exists,
+    // not a live reference. The rule outlives the violator.)
     // `node --check` passes on that file (it parses, never resolves), so only a
     // resolution check catches it. An absolute specifier is never portable here;
     // sibling modules must be reached relatively.

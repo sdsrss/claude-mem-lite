@@ -531,8 +531,6 @@ describe('extractFiles', () => {
   });
 });
 
-// ─── Unit Tests: Registry Skill Name Matching ──────────────────────────────
-
 // ─── Unit Tests: Output Format ───────────────────────────────────────────────
 
 function formatResults(rows) {

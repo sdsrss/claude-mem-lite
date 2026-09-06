@@ -87,7 +87,14 @@ jobs:
       matrix:
         # v4.0.0 dropped Node 20 (EOL 2026-04): better-sqlite3 13 requires >=22, and
         # `engines` now says so. 26 joins in the same change — it is the current release
-        # line and closes audit A20260905-R5-P3-1, deferred until a matrix edit was due.
+        # line, and it closes the long-standing "local Node is ahead of the CI matrix" item
+        # that had been deferred until a matrix edit was due.
+        # R10 P3-28: this line used to cite A20260905-R5-P3-1. That ID belongs to a
+        # different finding entirely — the duplicate export of FALLBACK_OBS_WINDOW_MS in
+        # hook-shared.mjs, fixed in the same round. The matrix item comes from an earlier,
+        # un-prefixed round whose numbering collides across rounds, so it is described here
+        # rather than cited: a wrong ID is worse than no ID, since it sends the next reader
+        # to a closed and unrelated entry.
         node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,8 +129,11 @@ jobs:
         # baseline past BASELINE_STALE_AGE_DAYS then fails here first, on main, where
         # recapturing it is a one-line commit. That arms a DATED failure: the age test is
         # `floor((now - baseline.timestamp) / DAY) >= 30` and the baseline is stamped
-        # 2026-09-01T16:29:45Z, so main goes red from 2026-10-01 **16:29 UTC** — that
-        # morning's pushes are still green. Intended reminder, not automated.
+        # 2026-09-05T20:57:35Z, so main goes red from 2026-10-05 **20:57 UTC** — that
+        # day's earlier pushes are still green. Intended reminder, not automated.
+        # R10 P3-23: this comment named 2026-09-01 / 2026-10-01 for a baseline that was
+        # recaptured on 2026-09-05. Re-read benchmark/baseline.json's own `timestamp` when
+        # you touch this — a stamp copied by hand is a stamp that goes stale silently.
         #
         # It fires HERE FIRST, and that ordering is the mitigation for the release path:
         # publish.yml's gate is also strict, and a strict failure there happens inside

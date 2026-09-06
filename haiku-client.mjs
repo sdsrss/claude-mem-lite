@@ -237,7 +237,10 @@ export async function callHaikuJSON(prompt, opts) {
 
 /**
  * Non-blocking sibling of callHaikuJSON for callers reachable from an MCP request
- * handler (registry enrichment: mem_registry `enrich` / `import_url`). Same
+ * handler. R10 P3-28: this used to name `mem_registry enrich / import_url` as the caller,
+ * a tool removed in v5.0.0 — read as a live example, it sent readers looking for a handler
+ * that does not exist. The REASON is what still applies to whatever calls it next: an MCP
+ * request handler must not block the server event loop. Same
  * provider priority; the CLI leg — primary AND post-provider-failure fallback —
  * is the async spawn, so a keyed-provider outage cannot freeze the server event
  * loop for BG_LLM_TIMEOUT_MS (D#138 MEDIUM-3).
@@ -245,8 +248,9 @@ export async function callHaikuJSON(prompt, opts) {
  * `resolveModel().cli`, NOT the literal 'haiku': despite the name, callHaikuJSON
  * reaches the model through resolveModel() on ALL three legs (callHaikuAPI,
  * callOpenRouterAPI, callHaikuCLI), so it honours the documented CLAUDE_MEM_MODEL
- * knob. Pinning 'haiku' here would silently downgrade registry enrichment for
- * every user who set CLAUDE_MEM_MODEL=sonnet — pre-tag review finding, v3.68.0.
+ * knob. Pinning 'haiku' here would silently downgrade any caller's model for every user
+ * who set CLAUDE_MEM_MODEL=sonnet — pre-tag review finding, v3.68.0, when the caller in
+ * question was registry enrichment.
  *
  * Defaults also mirror callHaiku (10s / 500 tokens), not callModelJSONAsync's
  * 15s / 1000: a caller that omits opts must get the sync twin's budget.

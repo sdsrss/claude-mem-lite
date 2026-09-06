@@ -248,7 +248,13 @@ export function mergePendingEntries(episode) {
   let files;
   try {
     files = readdirSync(RUNTIME_DIR)
-      .filter((f) => f.startsWith('pending-'))
+      // R10 P3-4: `.json.tmp` is the WRITER's in-flight temp, not a pending entry.
+      // writePendingEntry writes `pending-<ts>-<rand>.json.tmp` then renames it into place;
+      // the bare `pending-` prefix matched the temp too, this loop's JSON.parse failed on a
+      // partial file, the catch deleted it as corrupt, and the writer's rename then failed
+      // ENOENT inside its own swallowed catch. One tool entry lost, silently, every time
+      // the two raced.
+      .filter((f) => f.startsWith('pending-') && f.endsWith('.json'))
       .sort();
   } catch {
     return;

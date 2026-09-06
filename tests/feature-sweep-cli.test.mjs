@@ -818,8 +818,6 @@ describe('CLI feature sweep: maintenance commands', () => {
   });
 });
 
-// ─── Registry surfaces ──────────────────────────────────────────────────────
-
 // ─── Project-adoption surfaces (cwd-scoped filesystem writes) ───────────────
 
 describe('CLI feature sweep: adoption commands', () => {

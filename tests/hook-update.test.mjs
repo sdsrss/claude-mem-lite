@@ -412,7 +412,7 @@ describe('hook update lifecycle', () => {
   });
 
   // Regression: scripts/ is curated to HOOK_SCRIPT_FILES only — dev-only
-  // helpers (mock-claude.mjs, extract-repos.mjs, p0-forward-probe.mjs…) and
+  // helpers (mock-claude.mjs, extract-repos.mjs…) and
   // any future subdirectories MUST NOT leak into ~/.claude-mem-lite/scripts/.
   // Pre-v2.55 hook-update did a recursive copy of the whole scripts/ tree and
   // shipped every dev-only file from the GitHub Releases tarball.

@@ -233,8 +233,11 @@ export const STALE_PROJECT_MARKER_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
   'session-', // project → memory-session-id pointer
   CITE_RECALL_FILE_PREFIX, // last session's cite-recall snapshot (nudge input)
-  '.skill-cooldown-', // suggestion throttle timestamp
-  '.skill-reco-cooldown-', // recommendation throttle timestamp
+  // R10 P3-5: the auto-compressible 24h gate. One file per project, regenerated on demand,
+  // and it was in NEITHER list — so a project the user stops working on kept its marker
+  // forever. `.skill-cooldown-` / `.skill-reco-cooldown-` left with the skill registry in
+  // v5.0.0; a prefix for files nothing writes any more is dead weight in a hot-path loop.
+  'last-mark-compressible-', // per-project auto-compress 24h gate
 ]);
 
 // Records of a completed side effect — never age out. `ep-`/`ep-flush-`/

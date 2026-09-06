@@ -3731,8 +3731,6 @@ describe('CLI fts-check command', () => {
   });
 });
 
-// ─── registry command ───────────────────────────────────────────────────────
-
 // ─── P2: memdir-audit CLI ────────────────────────────────────────────────────
 
 describe('CLI memdir-audit command', () => {

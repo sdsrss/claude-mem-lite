@@ -43,6 +43,10 @@ function stripComments(src) {
  * exactly this job, and the sweep was not looking at it. A guard whose directory list is
  * what hides the violation reports a closed class that is not closed. Now covers the repo
  * root and `scripts/` too, and `.js` as well as `.mjs`.
+ *
+ * (p0-forward-probe.mjs itself was deleted in R10 P3-24 — no consumer, and it hardcoded a
+ * transcript path from a machine that no longer exists. The directory list stays wide: the
+ * point was never that one file, it was that a narrow list hides the violation.)
  */
 function scanTargets() {
   const out = [];
@@ -130,8 +134,10 @@ describe('observation-id caliber — one owner', () => {
     expect(scanTargets()).toContain('benchmark/efficacy-observational.mjs');
     // The three directories added after the pre-tag review, each pinned by a real file
     // that scans transcripts for ids — narrowing the list back would go red here rather
-    // than silently shrinking the class the sweep claims to close.
-    expect(scanTargets()).toContain('scripts/p0-forward-probe.mjs');
+    // than silently shrinking the class the sweep claims to close. scripts/ used to be
+    // pinned twice, by user-prompt-search.js and by p0-forward-probe.mjs; the latter was
+    // deleted in R10 P3-24 (no consumer, and it hardcoded a machine-specific transcript
+    // path that no longer exists), so the directory keeps exactly one live pin.
     expect(scanTargets()).toContain('scripts/user-prompt-search.js');
     expect(scanTargets()).toContain('hook.mjs');
   });

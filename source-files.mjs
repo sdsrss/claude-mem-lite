@@ -314,7 +314,7 @@ export const SOURCE_FILES = [
  * Single source of truth for both install.mjs (initial install) and
  * hook-update.mjs (auto-update): pre-v2.55 hook-update copied the entire
  * scripts/ tree from the GitHub Releases tarball, which silently shipped
- * dev-only files (mock-claude.mjs, extract-repos.mjs, p0-forward-probe.mjs…)
+ * dev-only files (mock-claude.mjs, extract-repos.mjs…)
  * to every user's data dir on the first auto-update.
  */
 export const HOOK_SCRIPT_FILES = [

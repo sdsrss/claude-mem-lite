@@ -472,7 +472,11 @@ async function downloadAndInstall(tarballUrl, expectedVersion, assets = []) {
     const tarballPath = join(tmpDir, 'release.tar.gz');
     execFileSync(
       'curl',
-      ['-sL', '-H', 'Accept: application/vnd.github+json', tarballUrl, '-o', tarballPath],
+      // R10 P3-18: `-f` makes curl exit non-zero on an HTTP error instead of writing the
+      // error BODY to the output file. Without it a 404 or a rate-limit page was saved as
+      // release.tar.gz, tar failed on it, and the debug log reported "tarball corrupt" for
+      // what was really a network or auth problem — the wrong thing to go debug.
+      ['-fsL', '-H', 'Accept: application/vnd.github+json', tarballUrl, '-o', tarballPath],
       { timeout: 30000, stdio: 'pipe' },
     );
     execFileSync('tar', ['xzf', tarballPath, '-C', tmpDir, '--strip-components=1'], {
@@ -1216,7 +1220,7 @@ function copyReleaseIntoStaging(
   // scripts/ is curated to HOOK_SCRIPT_FILES — settings.json hook commands
   // resolve only to these 5 files, and plugin mode does not consume this
   // directory at all. Pre-v2.55 used cpSync({recursive:true}) which silently
-  // shipped dev-only files (mock-claude.mjs, extract-repos.mjs, p0-forward-probe.mjs…)
+  // shipped dev-only files (mock-claude.mjs, extract-repos.mjs…)
   // from the GitHub Releases tarball into every user's data dir.
   const stagingScripts = join(stagingDir, 'scripts');
   const sourceScripts = join(sourceDir, 'scripts');

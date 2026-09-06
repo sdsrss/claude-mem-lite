@@ -331,7 +331,13 @@ async function attemptHeal(reason) {
     return false;
   }
   const result = spawnSync(process.execPath, [installer, 'repair'], {
-    stdio: 'inherit',
+    // R10 P2-15: NOT 'inherit'. The installer prints progress on stdout, and this process's
+    // stdout is the hook channel — the host parses it as one JSON envelope. With 'inherit',
+    // `✓ repair: copied 3 files…` was prepended to `{"suppressOutput":true,…}`, the whole
+    // stream stopped being JSON, and it went down the plainText path with suppressOutput
+    // silently inoperative. The installer's own diagnostics belong on stderr, which the host
+    // shows to the user anyway; index 0 is ignored because repair reads no stdin.
+    stdio: ['ignore', 2, 2],
     timeout: 300000,
   });
   return result.status === 0;

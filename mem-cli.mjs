@@ -2661,8 +2661,6 @@ function cmdMaintain(db, args) {
 // cmdFtsCheck extracted to cli/fts-check.mjs (v2.41 split).
 import { cmdFtsCheck } from './cli/fts-check.mjs';
 
-// ─── Registry ─────────────────────────────────────────────────────────────────
-
 // ─── memdir-audit ────────────────────────────────────────────────────────────
 // Body-structure audit for ~/.claude/projects/<encoded>/memory/feedback_*.md
 // and project_*.md. CLI-only by design — running this every session would be
@@ -3255,7 +3253,16 @@ async function cmdImportJsonl(db, argv) {
     return;
   }
 
-  const project = flags.project || inferProject();
+  // R10 P3-13: two defects in one line. A bare `--project` (no value) parses to boolean
+  // `true`, which SQLite rejects at bind time with "SQLite3 can only bind numbers, strings…"
+  // — a stack trace instead of a usage message. And unlike every other write command this
+  // one never resolved the name, so `--project mem` imported under the literal string "mem"
+  // while `save --project mem` wrote to `projects--mem`.
+  if (flags.project !== undefined && typeof flags.project !== 'string') {
+    fail('[mem] --project needs a name, e.g. --project my-repo');
+    return;
+  }
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
   const fs = await import('fs');
   const { join: pjoin, resolve } = await import('path');
   const abs = resolve(target);
@@ -3386,6 +3393,13 @@ async function cmdOptimize(db, args) {
   const VALID_TASKS = ['re-enrich', 'normalize', 'cluster-merge', 'smart-compress'];
   const taskIdx = args.indexOf('--task');
   let tasks;
+  // R10 P3-15: a trailing bare `--task` used to fall through to "no filter" and run all
+  // four tasks — the opposite of what someone typing --task wants, and each task is LLM
+  // calls. Same treatment --max and --scope already get.
+  if (taskIdx >= 0 && (args[taskIdx + 1] === undefined || args[taskIdx + 1].startsWith('--'))) {
+    fail(`[mem] --task needs a value. One or more of: ${VALID_TASKS.join(', ')}`);
+    return;
+  }
   if (taskIdx >= 0 && args[taskIdx + 1]) {
     const parsed = args[taskIdx + 1]
       .split(',')
@@ -3431,7 +3445,11 @@ async function cmdOptimize(db, args) {
   let project;
   if (projectIdx >= 0 && args[projectIdx + 1]) {
     const raw = args[projectIdx + 1];
-    project = raw === '.' || raw === 'current' ? cliProject(db) : raw;
+    // R10 P3-14: resolve like every other project-scoped command. optimize was the one
+    // twin that took the raw string, so `--project api` matched 0 candidates while
+    // `save --project api` in the same process resolved to `mono--api-gateway`. Read mode:
+    // this selects rows to work on, it does not decide where a new row is filed.
+    project = raw === '.' || raw === 'current' ? cliProject(db) : resolveProject(db, raw) || raw;
   }
 
   if (!run && !runAll) {
@@ -3736,7 +3754,12 @@ export async function run(argv) {
       process.exitCode = 1;
       return;
     }
-    throw e;
+    // R10 P3-17: everything else used to be re-thrown, so the terminal — and, when the
+    // agent runs the CLI, the model's context — got a raw Node stack trace. Print the
+    // message, keep the stack behind CLAUDE_MEM_DEBUG for whoever is actually debugging.
+    process.stderr.write(`[mem] ${cmd || 'command'} failed: ${(e && e.message) || e}\n`);
+    if (process.env.CLAUDE_MEM_DEBUG) process.stderr.write(`${(e && e.stack) || ''}\n`);
+    process.exitCode = 1;
   } finally {
     try {
       db.close();

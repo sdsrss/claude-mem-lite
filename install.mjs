@@ -322,12 +322,12 @@ function installSourceFiles(IS_DEV) {
     const nmLink = join(DATA_DIR, 'node_modules');
     clearLinkPath(nmLink);
     symlinkSync(join(PROJECT_DIR, 'node_modules'), nmLink);
-    // Symlink registry/ directory
-    const regLink = join(DATA_DIR, 'registry');
-    clearLinkPath(regLink);
-    if (existsSync(join(PROJECT_DIR, 'registry'))) {
-      symlinkSync(join(PROJECT_DIR, 'registry'), regLink);
-    }
+    // R10 P3-28: the registry/ symlink is gone. The directory left with the skill registry
+    // in v5.0.0, so the existsSync guard was permanently false and the branch was dead —
+    // clearLinkPath still ran, silently removing a stale ~/.claude-mem-lite/registry link
+    // on the first dev install after upgrading, which is the one useful thing it did.
+    // Do that unconditionally instead of pretending the source directory might return.
+    clearLinkPath(join(DATA_DIR, 'registry'));
     // commands/ is intentionally NOT linked: Claude Code reads slash commands
     // from the plugin cache (~/.claude/plugins/cache/<mp>/<plugin>/<ver>/commands/)
     // or user-level ~/.claude/commands/, never from ~/.claude-mem-lite/commands/.
@@ -720,7 +720,12 @@ function configureHooks() {
       {
         type: 'command',
         command: nodeHook('hook.mjs', 'session-start'),
-        timeout: 10,
+        // R10 P2-16: 15, matching hooks/hooks.json. SessionStart is the heaviest hook
+        // (stdin read + leftover episode flush + auto-adopt + dashboard + context build +
+        // possibly a synchronous self-heal) and hook-launcher.mjs's own comments reason
+        // about its budget as 15 s. There is no reason for the settings.json install shape
+        // to get 5 seconds less than the plugin shape for the same work.
+        timeout: 15,
       },
     ],
   };

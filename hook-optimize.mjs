@@ -665,7 +665,11 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
   const cutoff = Date.now() - MERGE_TIME_WINDOW_MS;
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
-    SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts
+    -- R10 P3-7: search_aliases is in the list because the merge path reads
+    -- keeper.search_aliases when it rebuilds the keeper's vector. Without the column it was
+    -- always undefined, so a merge silently dropped the keeper's aliases from its vector
+    -- text. No effect while the vector arm is off by default, which is why it went unseen.
+    SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts, search_aliases
     FROM observations
     WHERE ${liveObsFilterSql('')}
       AND optimized_at IS NULL
