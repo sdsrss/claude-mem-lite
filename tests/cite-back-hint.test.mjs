@@ -21,6 +21,7 @@ import {
   countUnsavedBugfixShape,
   buildCiteRecallNudge,
   nextCiteLowStreak,
+  nextCiteStreakState,
   CITE_NUDGE_SILENCE_AFTER,
 } from '../lib/cite-back-hint.mjs';
 
@@ -651,6 +652,59 @@ describe('nextCiteLowStreak', () => {
 
   it('treats a non-numeric prior streak as 0', () => {
     expect(nextCiteLowStreak(undefined, { injected: 10, ratio: 0 })).toBe(1);
+  });
+});
+
+// R11-B-P1-2 — the streak's unit. `Stop` fires once per assistant TURN, so the writer
+// that called nextCiteLowStreak on every fire was counting turns while its docblock (and
+// the CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER default of 3) described sessions. Production
+// evidence at the time of the fix: lowStreak 58 against 26 transcripts on disk.
+describe('nextCiteStreakState (R11-B-P1-2)', () => {
+  const LOW = { injected: 10, ratio: 0.2 }; // ratio gate fires
+  const OK = { injected: 10, ratio: 0.8 }; // ratio gate does not fire
+
+  it('a session advances the streak by at most 1, however many Stops fire', () => {
+    let state = nextCiteStreakState(null, 'cc-a', LOW);
+    expect(state.lowStreak).toBe(1);
+    for (let turn = 0; turn < 8; turn++) {
+      state = nextCiteStreakState(state, 'cc-a', LOW);
+      expect(state.lowStreak).toBe(1);
+    }
+  });
+
+  it('a NEW session advances it again', () => {
+    const first = nextCiteStreakState(null, 'cc-a', LOW);
+    const second = nextCiteStreakState(first, 'cc-b', LOW);
+    const third = nextCiteStreakState(second, 'cc-c', LOW);
+    expect([first.lowStreak, second.lowStreak, third.lowStreak]).toEqual([1, 2, 3]);
+  });
+
+  it('a citation arriving in a LATER turn of the same session still resets the streak', () => {
+    // The contract is "cite next time you produce user-visible text", which is often
+    // several turns after injection — freezing the streak on the first fire would make
+    // the recovery unreachable.
+    const carried = { lowStreak: 2, streakBase: 2, lastStreakSession: 'cc-old' };
+    const early = nextCiteStreakState(carried, 'cc-a', LOW);
+    expect(early.lowStreak).toBe(3);
+    const late = nextCiteStreakState(early, 'cc-a', OK);
+    expect(late.lowStreak).toBe(0);
+  });
+
+  it('discards a pre-R11 payload, because its number counted turns', () => {
+    // No lastStreakSession field => written by the turn-counting writer. 58 is the real
+    // value this machine carried; it must not survive as a session count.
+    const legacy = { lowStreak: 58, ratio: 0.24, injected: 21 };
+    expect(nextCiteStreakState(legacy, 'cc-a', LOW).lowStreak).toBe(1);
+  });
+
+  it('keeps counting a post-R11 payload from a previous session', () => {
+    const carried = { lowStreak: 2, streakBase: 1, lastStreakSession: 'cc-old' };
+    expect(nextCiteStreakState(carried, 'cc-new', LOW).lowStreak).toBe(3);
+  });
+
+  it('records the session it counted, so the next read can tell same-session from new', () => {
+    expect(nextCiteStreakState(null, 'cc-a', LOW).lastStreakSession).toBe('cc-a');
+    expect(nextCiteStreakState(null, null, LOW).lastStreakSession).toBeNull();
   });
 });
 

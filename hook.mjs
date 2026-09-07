@@ -145,7 +145,7 @@ import {
   buildUnsavedBugfixHint,
   countUnsavedBugfixShape,
   buildCiteRecallNudge as libBuildCiteRecallNudge,
-  nextCiteLowStreak,
+  nextCiteStreakState,
 } from './lib/cite-back-hint.mjs';
 import { citeRecallPathFor } from './lib/cite-recall-path.mjs';
 import { detectUnpersistedDecision } from './lib/persist-reminder.mjs';
@@ -1411,11 +1411,19 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         const dest = citeRecallPathFor(RUNTIME_DIR, project);
         // Carry the consecutive-low-cite streak forward so the SessionStart
         // nag can self-silence after the project has ignored it N times.
-        let priorStreak = 0;
+        let prevPayload = null;
         try {
-          priorStreak = JSON.parse(readFileSync(dest, 'utf8')).lowStreak || 0;
+          prevPayload = JSON.parse(readFileSync(dest, 'utf8'));
         } catch {}
-        const lowStreak = nextCiteLowStreak(priorStreak, stats);
+        // R11-B-P1-2: the streak's unit is the SESSION, which is what the docblock has
+        // always said. Stop fires once per assistant TURN, so incrementing here silenced
+        // the nudge inside the first session — this machine read lowStreak 58 against 26
+        // transcripts before the fix.
+        const { lowStreak, streakBase, lastStreakSession } = nextCiteStreakState(
+          prevPayload,
+          ccSessionId,
+          stats,
+        );
         // G3: finalized-in-conversation + zero deliberate persistence →
         // decisionSignal rides the payload; next SessionStart reminds once.
         let decisionSignal = null;
@@ -1436,7 +1444,16 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         } catch (e) {
           debugCatch(e, 'handleStop-persist-reminder');
         }
-        const payload = { ...stats, ...bugfixStats, lowStreak, decisionSignal, project, savedAt: Date.now() };
+        const payload = {
+          ...stats,
+          ...bugfixStats,
+          lowStreak,
+          streakBase,
+          lastStreakSession,
+          decisionSignal,
+          project,
+          savedAt: Date.now(),
+        };
         writeFileSync(dest, JSON.stringify(payload), { mode: 0o600 });
       } catch (e) {
         debugCatch(e, 'handleStop-cite-recall-persist');
