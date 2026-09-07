@@ -201,7 +201,8 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
         ${projectClause}
       ORDER BY
         CASE type WHEN 'decision' THEN 0 WHEN 'bugfix' THEN 1 WHEN 'refactor' THEN 2 ELSE 3 END,
-        created_at_epoch DESC
+        created_at_epoch DESC,
+        id DESC
       LIMIT ?
     `);
     return project ? stmt.all(project, limit) : stmt.all(limit);
@@ -224,6 +225,16 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     -- the pool whenever the clock had not ticked. SQLite's tie order is deterministic here
     -- (8 rows on one epoch, 200 queries, one returned order), so this is not defending
     -- against a varying plan; it is making the stated order total.
+    --
+    -- COUNT THE POOLS, DO NOT GREP FOR THE ONE-LINE FORM. There are seven here and two of
+    -- them ('scopes' and 'wide') lead with a CASE ... term and span several lines, so
+    -- grepping for the joined "created_at_epoch DESC, id DESC" spelling sees five. This
+    -- comment is INSIDE a template literal, so it must never contain a backtick. The
+    -- first pass of this fix read
+    -- six and shipped 'wide' untiebroken -- the pool the DAILY unattended path passes
+    -- explicitly, on a budget of 6, where a boundary tie decides which rows the LLM ever
+    -- re-enriches. Caught later by a test driving scope 'wide'; the original boundary case
+    -- drove only 'narrow', so nothing went red.
     ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
   `);

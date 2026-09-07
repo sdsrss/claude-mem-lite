@@ -1666,4 +1666,56 @@ describe('pool ordering is total under exact ties (D#9)', () => {
       .map((r) => r.id);
     expect(survivors).toEqual([critical]);
   });
+
+  // The 'wide' pool was MISSED by the first pass of this fix, in the file the fix declared
+  // complete, and it is the one the daily unattended path actually uses: handleLLMOptimize
+  // via auto-maintain passes scope 'wide' explicitly (see hook-optimize.mjs) on a reenrich
+  // budget of 6. It was missed for the reason the ledger predicted -- a multi-line
+  // `ORDER BY CASE type ..., created_at_epoch DESC` that a grep for the one-line form does
+  // not match. The boundary case above only drives scope 'narrow', so nothing was red.
+  it('takes the NEWEST rows at the wide pool LIMIT boundary too', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // One type for all five, so the leading `CASE type` term is equal across the pool and
+    // the epoch tie is what decides. Without the id term SQLite returns ascending rowid and
+    // the daily pass re-enriches the three OLDEST rows, leaving the two newest unreachable
+    // for as long as the tie holds.
+    for (let i = 0; i < 5; i++) {
+      insertObs(db, {
+        type: 'bugfix',
+        title: `Fix a real defect in module ${i}.mjs`,
+        narrative: 'x'.repeat(150),
+      });
+    }
+    tieAllEpochs();
+    const all = db
+      .prepare('SELECT id FROM observations ORDER BY id')
+      .all()
+      .map((r) => r.id);
+    expect(all).toHaveLength(5); // premise: every row cleared the wide pool's predicate
+    const got = findReenrichCandidates(db, 3, { scope: 'wide' })
+      .map((r) => r.id)
+      .sort((a, b) => a - b);
+    expect(got).toEqual(all.slice(-3));
+  });
+
+  it('leaves the wide pool type ranking ahead of the id tiebreaker', async () => {
+    // Control: passes before and after the fix. The id term is a LAST resort here too --
+    // if it outranked the `CASE type` head, the daily pass would stop preferring decisions
+    // over bugfixes and simply take whatever was written last.
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    const decision = insertObs(db, {
+      type: 'decision',
+      title: 'Chose the pool predicate over widening save-enrich',
+      narrative: 'd'.repeat(150),
+    });
+    insertObs(db, {
+      type: 'bugfix',
+      title: 'Fix a real defect written afterwards',
+      narrative: 'b'.repeat(150),
+    });
+    tieAllEpochs();
+    const got = findReenrichCandidates(db, 1, { scope: 'wide' });
+    expect(got).toHaveLength(1);
+    expect(got[0].id).toBe(Number(decision.lastInsertRowid));
+  });
 });
