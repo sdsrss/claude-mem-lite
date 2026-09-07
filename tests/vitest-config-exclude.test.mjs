@@ -45,3 +45,16 @@ describe('vitest test.exclude (D#168)', () => {
     ).toBeGreaterThan(0);
   });
 });
+
+describe('vitest hook budget (D#7)', () => {
+  it('gives setup/teardown the same budget as the tests they serve', () => {
+    // Same override-does-not-extend trap as the case above, one field over: `testTimeout`
+    // was set and `hookTimeout` was not, so hooks silently kept vitest's 10 s default
+    // while the tests they set up had 20 s — in a suite where 153 of 362 files run
+    // mkdtemp / new Database / initSchema / execFileSync / rmSync inside before*/after*.
+    // That is the same class of work the 20 s was chosen for, so the split was an
+    // omission, not a policy. Deleting the line would be silent again without this.
+    expect(config.test.hookTimeout, 'hookTimeout must be configured at all').toBeTypeOf('number');
+    expect(config.test.hookTimeout).toBe(config.test.testTimeout);
+  });
+});

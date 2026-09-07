@@ -18,6 +18,52 @@ first. The one-line rule in CLAUDE.md is the load-bearing part; the evidence is 
 
 - **The cross-hook injected-ids marker is a union across TABLES, and every table but one already had a prefix.** `user-prompt-search.js` writes `P<id>` for `user_prompts` rows and `D<id>` for `deferred` rows with the comment "so obs ids can't collide in the shared injected-ids file"; observations are the incumbent namespace and stay bare. `events` never got one — and `events` is the table that literally shares the id space with `observations` (**91.6%** of observation ids also exist as an event id — 3432 of 3747, measured 2026-09-01T19:56Z; it read 90.1% six hours earlier, so stamp it, both tables grow). So a UPS-injected observation #42 made event #42 unreachable to the PreToolUse face for the 5-minute window, and vice versa. **A second consequence was published in v3.86.0's draft and is FALSE, kept here because the draft's method was "enumerate the readers"**: bare event ids do reach `hook.mjs`'s `pathAInjectedIds`, which is handed to `searchRelevantMemories` and `rankImperativeCandidates` as an OBSERVATION exclude list — but they suppress nothing, because `mergeCrossHookInjected` writes every id as a STRING while both consumers test `new Set(excludeIds).has(r.id)` against a NUMBER out of SQLite (measured: excluding `1` returns nothing, excluding `'1'` returns the row). That inertness is a separate live defect that covers observations too → **D#213**, which replaced D#212, which replaced D#193 — the entry was rewritten twice because the first two versions measured the marker's **writer** instead of its reader. The marker is written by `user-prompt-search.js` (the `fyi` face) and `pre-tool-recall.js` (`pretool`) and read in `hook.mjs handleUserPrompt` (the `ups` face), so the gated population is `ups ∩ (fyi ∪ pretool)`: upper bound **9.0%** — 23 of 256 (session, id) pairs over 14 of 71 sessions, 99 transcripts, 2026-09-02T12:12Z — and **not** the mirror-image 18.0% a v3.89.0 draft published. It stays open rather than fixed because this path already has a suppressor that DOES work (`shouldSkipByDedup` String-normalises both sides), so turning the per-row exclude on adds a second, finer suppression to an already-suppressed face in an unknown direction; the blocker is a ruler, since rebuilding a per-prompt exclude set needs the marker file, which rotates and is never persisted. `tests/pathA-exclude-inert.test.mjs` pins the current inert behaviour — delete it as part of any fix. A third consumer the draft missed in the opposite direction: `shouldSkipByDedup` DOES String-normalise both sides, so a colliding bare event id could push its overlap ratio past 0.8 and skip an entire UPS injection — namespacing fixes that as well. Measured by replaying every real session's UPS-injected id set against the injectable events of **the project the SESSION ran in**: **14 collisions in 11 of 60 sessions (18.3%)**, 2026-09-01T20:17Z. **Which project is the whole question, and v3.86.0's draft got it wrong inside a paragraph about populations**: `pre-tool-recall.js` calls `inferProject()` ONCE and feeds that one value to both `crossHookInjectedFile(project, sessionId)` and the events `WHERE project = ?`, so the session's project is the scoping that exists. The draft scoped by the injected observation's own `project` column instead and published **9 in 9 (15.5%)**, an under-count. **Not a rounding difference: 134 of 216 injected `ups` ids (62.0%) belong to a project OTHER than the session they were injected into** (2026-09-01T20:36Z; the review read 128/210 = 61% an hour earlier). The `ups` face's cross-project leg dominates, so the two scopings select genuinely different populations and only one of them is a question the dedup mechanism ever asks. The pre-tag claims review reconstructed the session-scoped reading independently at 12 in 10 and was right about the population; the residual gap to 14/11 is its stand-in directory→project mapping plus an hour of corpus growth. The predicate, stated because no harness is committed: seen-set = the shipped `extractInjectedBySurface(path).ups`; injectable events = `importance >= 2 AND superseded_at_epoch IS NULL AND file_paths NOT IN (NULL, '[]')`; session project recovered by a FORWARD match of each DB project against the transcript directory suffix (the reverse map is not invertible — `/` and `_` both flatten to `-`, and a reverse guess left 24 of 60 sessions unmapped, silently counting them as zero). Dropping the project condition entirely gives **72 in 41** — a population the project-scoped query can never reach, so state which one any figure came from. Fixed via `injectedIdKey(id, src)` in `lib/injected-ids.mjs` (`E<id>` for events); legacy in-flight files keep their old meaning for at most `DEDUP_STALE_MS` and then rotate, deliberately with no format version. D#188.
 
+## The suite gave its hooks half the budget it gave its tests (D#7)
+
+Evidence for the `hookTimeout` alignment, preserved here because **the run conclusion no
+longer carries it**: run `34084390501` was re-run and now reads `success` in
+`gh run list`, so the only surviving record of the red is attempt 1's job log, and
+GitHub expires those. Pulled 2026-09-07 from
+`repos/:owner/:repo/actions/jobs/101625623151/logs` (attempt 1, `test (22)`,
+conclusion **failure** per the API — the other eight jobs of that attempt were green,
+including `test (24)` and `test (26)`).
+
+Verbatim from the log:
+
+    FAIL tests/session-start-stdout-envelope.test.mjs > SessionStart stdout envelope
+         > emits one JSON document when the memory block and the dashboard both have content
+    Error: Hook timed out in 10000ms.
+    If this is a long-running hook, pass a timeout value as the last argument or
+    configure it globally with "hookTimeout".
+     ❯ tests/session-start-stdout-envelope.test.mjs:106:3
+       106|   beforeEach(() => {
+
+Four things that log settles, none of which were established when D#7 was filed:
+
+1. **It is `beforeEach` (:106), not the `afterEach` teardown.** That hook does
+   `mkdtempSync` + two `mkdirSync` + `new Database` + `journal_mode = WAL` +
+   `initSchema` + close — real I/O, not a hang.
+2. **`hookTimeout` appears NOWHERE in this repo.** `vitest.config.mjs` sets
+   `testTimeout: 20000` and leaves hooks on vitest's 10000 default, so the asymmetry was
+   never a decision — it is an unexamined default, and vitest's own error text names the
+   knob.
+3. **The magnitude the "load, not logic" hypothesis was missing.** That file reports
+   **14736 ms** in the failing CI run against **1.02 s** locally for the same six cases —
+   14.4x. Worker startup on the runner read **~129 ms** each (`at least ~15.48s faster
+   with isolate: false`) against ~89 ms locally. `ci.yml:106` runs `npm run test:coverage`
+   for the whole `[22, 24, 26]` matrix, so every arm carries the instrumentation.
+4. **The exposure is the suite, not the file.** Heuristic scan of `before*`/`after*`
+   bodies for `mkdtempSync|new Database|execFileSync|execSync|rmSync|initSchema`:
+   **153 of 362 test files**. (Crude brace-matcher — read it as a magnitude. The claim
+   does not rest on it: `hookTimeout` being absent does.)
+
+So raising it is not papering over a red — it is making the config state a decision the
+project already made for the same class of work. **What the log does NOT establish is
+the cause of that particular red**, and Node 24 / 26 passing the same run under the same
+instrumentation is unexplained; do not invent a mechanism for it. D#7 stays OPEN as an
+observation-until-recurrence, and the structural asymmetry being gone is what makes a
+recurrence informative rather than ambiguous.
+
 ## Skill recommendation (shadow-first) — REMOVED 2026-09
 
 The whole skill-registry subsystem (recommendation engine, PreToolUse Skill bridge, resource

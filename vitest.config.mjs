@@ -3,6 +3,20 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     testTimeout: 20000,
+    // Hooks do the same class of work the 20 s was chosen for, so they get the same
+    // budget. Before 2026-09-07 `hookTimeout` appeared NOWHERE in this repo: tests had
+    // 20 s and setup/teardown silently kept vitest's 10 s default, which was never a
+    // decision — 153 of 362 files run mkdtemp / new Database / initSchema / execFileSync
+    // / rmSync inside before*/after*, i.e. exactly the I/O the test budget exists for.
+    //
+    // Prompted by a CI red, deliberately NOT justified by it: `test (22)` failed once on
+    // "Hook timed out in 10000ms" in tests/session-start-stdout-envelope.test.mjs's
+    // beforeEach and the re-run was green, so the cause of that particular failure is
+    // unproven and D#7 stays open. What the log DID establish is the asymmetry's
+    // magnitude — that file runs 14736 ms on the CI runner against 1.02 s locally
+    // (14.4x), with ~129 ms/worker startup against ~89 ms, under coverage on all three
+    // matrix arms. Evidence: docs/measurement/findings.md.
+    hookTimeout: 20000,
     // D#168. Vitest's default discovery globs the whole repo, so a scratch file named
     // `*.test.mjs` under `tmp/` — the project's own gitignored scratch dir and a §5
     // safe-path — is collected and RUN as part of the suite. Restating the defaults is
