@@ -375,3 +375,60 @@ describe('R8 hook-optimize pools: a tombstone is not re-enriched, mined, or rewr
     db.close();
   });
 });
+
+// D#4 — the one HARD-DELETE site in this family, and the only one whose exemption was a
+// LIKELIHOOD argument rather than an inertness proof: cleanupBroken's rows have no title,
+// no narrative and no lesson, so they are absent from every injection surface, so an id
+// that was never injected is not one a #NN cites. Narrow, but a hand-typed #NN or a
+// numeric `save --supersedes` chain later blanked by a degenerate cluster-merge both reach
+// it — and what the delete takes with it is the `superseded_by` that
+// citation-tracker.redirectSupersededIds (:1363) follows to credit the successor.
+describe('D#4 cleanupBroken: a supersede tombstone is not swept up with the broken rows', () => {
+  it('keeps an empty-content tombstone that still carries a superseded_by redirect', async () => {
+    const db = freshDb();
+    const successor = add(db, { title: 'the corrected memory', text: 'live' });
+    const tomb = add(db, {
+      title: '',
+      narrative: '',
+      text: '',
+      supersededAt: TOMB,
+      supersededBy: successor,
+    });
+    const { cleanupBroken } = await import('../lib/maintain-core.mjs');
+    const { redirectSupersededIds } = await import('../lib/citation-tracker.mjs');
+
+    // Premise: without the guard this row matches every clause cleanupBroken selects on.
+    const alive = (id) => db.prepare('SELECT COUNT(*) AS n FROM observations WHERE id = ?').get(id).n;
+    expect(alive(tomb)).toBe(1);
+
+    // FAILS IF: the predicate stays `COALESCE(compressed_into,0) = 0` alone.
+    cleanupBroken(db, ctx(30));
+    expect(alive(tomb)).toBe(1);
+
+    // The point of keeping it: the #NN redirect still resolves to the successor.
+    expect([...redirectSupersededIds(db, 'proj-a', new Set([tomb]))]).toEqual([successor]);
+    db.close();
+  });
+
+  it('still deletes a broken row that carries no redirect (the guard is not a blanket refusal)', async () => {
+    // A retired row with no superseded_by hands redirectSupersededIds nothing — it falls
+    // through to `out.add(id)` (:1379-1381) exactly as a missing row would — so it stays
+    // reclaimable. This is why the guard is `superseded_by IS NULL` and not the full
+    // liveObsFilterSql, which would strand every empty retired row forever.
+    const db = freshDb();
+    const broken = add(db, { title: '', narrative: '', text: '' });
+    const retiredNoRedirect = add(db, {
+      title: '',
+      narrative: '',
+      text: '',
+      supersededAt: TOMB,
+    });
+    const { cleanupBroken } = await import('../lib/maintain-core.mjs');
+    const alive = (id) => db.prepare('SELECT COUNT(*) AS n FROM observations WHERE id = ?').get(id).n;
+
+    expect(cleanupBroken(db, ctx(30))).toBe(2);
+    expect(alive(broken)).toBe(0);
+    expect(alive(retiredNoRedirect)).toBe(0);
+    db.close();
+  });
+});
