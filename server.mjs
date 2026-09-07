@@ -30,6 +30,7 @@ import {
   parseDateBounds,
   parseDuration,
   coreRunSearchPipeline,
+  reachabilityNote,
 } from './lib/search-core.mjs';
 import {
   runMaintainOps,
@@ -594,6 +595,20 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
       rowCount: r.page?.length ?? 0,
     });
     if (disclosure) output.content[0].text += `\n\n${disclosure}`;
+  }
+  // D#5. Same split as the deep note: an MCP client reads the tool RESULT, not stderr,
+  // so a caller that pages past the candidate pool has to be told inside the payload or
+  // it reads "0 results" against a total it was just handed and concludes the corpus is
+  // empty. `reachable` is r.preFinalizeCount — the pre-slice candidate count — because
+  // perSourceLimit is PER SOURCE and a cross-source query fuses several of those pools.
+  if (output.content?.[0]?.type === 'text') {
+    const reachNote = reachabilityNote({
+      total: r.total,
+      reachable: r.preFinalizeCount,
+      offset,
+      isDeep: r.isDeep,
+    });
+    if (reachNote) output.content[0].text += `\n\n${reachNote}`;
   }
   appendDeferredTrailer(output);
 

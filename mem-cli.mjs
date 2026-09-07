@@ -120,6 +120,7 @@ import {
   parseDateBounds,
   parseDuration,
   coreRunSearchPipeline,
+  reachabilityNote,
 } from './lib/search-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { countRecentHookErrors } from './lib/hook-telemetry.mjs';
@@ -478,6 +479,19 @@ async function cmdSearch(db, args, { llm } = {}) {
     }
     return;
   }
+
+  // D#5. Same channel and same reasoning as the deep disclosure above: `total` is the
+  // real population, the candidate pool is offset-independent by design (D#30), and
+  // nothing else tells the caller that offsets past the pool are empty by construction.
+  // Emitted BEFORE the two return paths below so it covers both the past-the-pool page
+  // and a normal page whose total is unreachable — one call, not two wordings.
+  const reachNote = reachabilityNote({
+    total,
+    reachable: res.preFinalizeCount,
+    offset,
+    isDeep,
+  });
+  if (reachNote) process.stderr.write(`${reachNote}\n`);
 
   if (paged.length === 0) {
     if (jsonOutput) {
