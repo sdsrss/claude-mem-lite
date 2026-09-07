@@ -59,7 +59,11 @@ import { fileURLToPath } from 'url';
 // and leaves knip's coverage intact. Verified by re-running the same A/B: the
 // name comes back.
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-import { extractInjectedFromPreToolUse } from '../lib/citation-tracker.mjs';
+import {
+  extractInjectedFromPreToolUse,
+  extractCitationsFromTranscript,
+  extractUserTypedIds,
+} from '../lib/citation-tracker.mjs';
 import { EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
 
 // Same attachment shape the production hook writes (mirrors the fixture in
@@ -193,5 +197,61 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
     const types = m[1].split('|');
     expect(types).not.toContain('event');
     expect(types).toContain('bugfix'); // the list is real, not an empty match
+  });
+});
+
+// R11-B-P2-3 — closes the half the header above records as NOT closed.
+//
+// The namespacing was only ever enforced on the INJECTED side: `E#`/`P#`/`D#`/`S#` rows
+// fail INJECTED_ROW_RE / FYI_LINE_ID_RE / UPS_ID_RE by construction. The CITED side used
+// `/#(\d{1,7})\b/`, which sees `E#501` and reports 501 — a bare observation id.
+//
+// The docblock on unanchoredInjectedIdRe argues a loose numerator "costs nothing, because
+// a cited id only counts once it intersects an injected set that WAS anchored". R11
+// measured the exception: `extractUserTypedIds` feeds the access allow-list through the
+// SAME loose regex, so a user typing `D#9` and the assistant writing `D#9` intersect on
+// an unanchored token and credit observation 9. Over the real corpus that was 8 of 43
+// credited pairs sourced only from namespace tokens, 4 of them hitting live rows.
+//
+// The decay numerator read 0/51 on the same corpus — a bounded negative, not an
+// acquittal: 26/26 live observation ids on this machine are also event ids and also
+// prompt ids, so the collision needs only one co-occurrence to land.
+describe('R11-B-P2-3 — the CITED side honours the table namespace too', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'r11-ns-'));
+  afterAll(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  const assistantSaying = (text, name) => {
+    const p = join(tmpDir, `${name}.jsonl`);
+    writeFileSync(p, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }));
+    return p;
+  };
+  const userSaying = (text, name) => {
+    const p = join(tmpDir, `${name}.jsonl`);
+    writeFileSync(p, JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text }] } }));
+    return p;
+  };
+
+  it.each([
+    ['E#501', 501, 'events'],
+    ['P#77', 77, 'user_prompts'],
+    ['D#9', 9, 'deferred'],
+    ['S#12', 12, 'sessions'],
+  ])('a cited %s is not credited as observation %d (%s)', (token, id, _table) => {
+    const ids = extractCitationsFromTranscript(
+      assistantSaying(`resolved it per ${token} in the end`, `cited-${id}`),
+    );
+    expect([...ids]).not.toContain(id);
+  });
+
+  it('a bare #NN is still a citation (the fix must not close the channel)', () => {
+    const ids = extractCitationsFromTranscript(assistantSaying('as #500 warned', 'cited-bare'));
+    expect([...ids]).toContain(500);
+  });
+
+  it('the user-typed allow-list drops namespace tokens too', () => {
+    // This is the half that made the collision reachable: both sides of the intersection
+    // ran the same loose regex, so the anchored-denominator argument did not hold.
+    expect([...extractUserTypedIds(userSaying('D#9 approved, proceed', 'typed-ns'))]).not.toContain(9);
+    expect([...extractUserTypedIds(userSaying('look at #7 again', 'typed-bare'))]).toContain(7);
   });
 });

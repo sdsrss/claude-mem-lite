@@ -64,8 +64,21 @@ function scanTargets() {
 describe('observation-id caliber — one owner', () => {
   it('the owner exports the caliber and a fresh matcher', () => {
     expect(OBS_ID_DIGITS).toBe('\\d{1,7}');
-    expect(citationIdRe().source).toBe('#(\\d{1,7})\\b');
+    // R11-B-P2-3 restated this literal. It used to read '#(\\d{1,7})\\b'; the lookbehind
+    // is what makes "bare" true, because this product renders and teaches E#N / P#N /
+    // D#N / S#N and the CITED side read those as bare observation ids. The literal is
+    // still pinned rather than relaxed to a regex-shaped match: its job is to catch a
+    // SIXTH hand-copy of the caliber drifting from the owner, which a loose assertion
+    // cannot do. The behavioural half is below.
+    expect(citationIdRe().source).toBe('(?<![A-Za-z0-9])#(\\d{1,7})\\b');
     expect(citationIdRe().flags).toContain('g');
+  });
+
+  it('the numerator caliber ignores the other tables namespaces', () => {
+    // Behavioural twin of the literal above, so the guard survives a reformat of the
+    // pattern that preserves meaning — and fails if the meaning goes.
+    const line = 'per E#501 and D#9 and P#77 and S#12, but #500 stands';
+    expect([...line.matchAll(citationIdRe())].map((m) => m[1])).toEqual(['500']);
   });
 
   // One OWNER does not mean one SHAPE. citationIdRe() is a numerator caliber; applying it
