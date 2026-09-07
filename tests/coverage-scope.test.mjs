@@ -162,6 +162,23 @@ describe('coverage scope (audit P2-2)', () => {
     }
   });
 
+  // CLAUDE.md's Commands table prints the four floors, and nothing checked it against
+  // the config — the same "a doc states a number the code owns" shape the `**Version**:`
+  // release guard exists for. It is how the population sentence three sections down went
+  // three audits without anyone noticing it named 3 of 24 exclusions.
+  it('keeps the gate numbers in CLAUDE.md equal to the config', () => {
+    const doc = readFileSync(join(ROOT, 'CLAUDE.md'), 'utf8');
+    const m = doc.match(/gate: statements (\d+) \/ branches (\d+) \/ functions (\d+) \/ lines (\d+)\)/);
+    expect(m, 'CLAUDE.md no longer prints the coverage gate in the expected shape').not.toBeNull();
+    const [, statements, branches, functions, lines] = m.map(Number);
+    expect({ statements, branches, functions, lines }).toEqual({
+      statements: coverage.thresholds.statements,
+      branches: coverage.thresholds.branches,
+      functions: coverage.thresholds.functions,
+      lines: coverage.thresholds.lines,
+    });
+  });
+
   it('measures the retrieval core the measurement doctrine is about', () => {
     // CLAUDE.md's whole "Measurement doctrine" section is about retrieval quality,
     // and every one of these was outside the gate until 2026-09-07.
