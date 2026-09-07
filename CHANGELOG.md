@@ -2,6 +2,76 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — the TF-IDF vector arm is removed (Phase-2). Intended bump: **MAJOR**.
+
+**Upgrade note — two published surfaces are gone and two tables are dropped. The DEFAULT
+search path does not change.**
+
+`CLAUDE_MEM_VECTORS` no longer does anything, `claude-mem-lite maintain execute --ops
+rebuild_vectors` now exits 1 with `Unknown operation(s): rebuild_vectors` and a list of the
+valid ops, and schema v49 DROPs `observation_vectors` and `vocab_state` on the next open.
+Nothing else about retrieval moves: the arm has been gated OFF by default since v3.17.0, so
+for every user who did not set that env var this release is behaviour-identical — verified,
+not asserted (see the baseline-neutrality reading below). **To keep the arm, pin
+`claude-mem-lite@5.6.0`.** There is no in-product warning for a still-set
+`CLAUDE_MEM_VECTORS`, deliberately: re-enabling always required a vector rebuild too, and
+that is the command that now fails loudly, so the one path that mattered is the one that
+tells you.
+
+**Why now — and a correction to the reason v3.17.0 gave.** v3.17.0 disabled the arm and kept
+the code "pending Phase-2 removal". Its headline evidence was
+`benchmark/ci-gate.mjs: hybrid_over_bm25 = 0`. **That metric never measured the vector arm.**
+`benchmark/benchmark.mjs:300` defines `hybrid` as the eight SCORING MULTIPLIERS over BM25 and
+`:676` diffs it against `bm25_only`; neither term executes a vector path, and
+`production_hybrid` — the only mode that drives the real `searchObservationsHybrid` — is not
+in the `:611` matrix at all. The word "hybrid" means two different things in this repo
+(multiplier-hybrid in the matrix, FTS+vector-hybrid in the function name) and the collision
+is what let a wrong citation read as a right one for two and a half months.
+
+**The verdict survived re-measurement anyway, which is why this is a removal and not a
+restart.** v3.17.0 also ran the correct instrument, and a same-tree back-to-back A/B
+reproduces it to the digit — `--production-hybrid` R@10 **0.8998 off / 0.8980 on** — plus two
+columns it never reported: P@10 **0.8497 → 0.7819** and P95 **2.7158ms → 3.8716ms**. The
+deciding reading is the vocabulary-mismatch fixture, the arm's only reason to exist, where the
+ruler is nowhere near saturated (R@10 0.34) and therefore *can* say no: R@10 **0.3407 →
+0.3018 (−11.4%)**, P@10 0.1599 → 0.1458, nDCG 0.2988 → 0.2809, MRR 0.4250 → 0.4236, P95
+**+108.6%**. Negative on every column. Premise asserted rather than assumed: both arms seed
+200 vectors at vocab `ba73c835cd40`, dim 512, so the only variable is the gate, and both arms
+re-run byte-identical. On the real corpus the arm held **0 rows** in `observation_vectors` and
+**0** in `vocab_state` against 26 live observations. Restarting it would have meant shipping a
+retrieval arm this machine cannot evaluate (D#14).
+
+**Baseline-neutral, verified not inferred.** After the removal `--production-hybrid` reads
+0.8998 / 0.8497 / 0.9712 / 0.9611 — identical to the pre-removal arm — so
+`benchmark/baseline.json` needs no recapture. `--production-hybrid` also stops calling
+`seedVectors` and its docstring stops claiming it drives "the real FTS+vector+RRF path"; both
+were already false in the shipped default, since the search returned before reading a vector.
+
+**What is NOT removed.** `tfidf.mjs` was never the vector arm: `porterStem` stays because
+`search-scoring.mjs` uses it for PRF term extraction on the default path, `tokenize` stays with
+it, and `RRF_K` moves to `lib/rrf.mjs` because `deep-search.mjs` still RRF-fuses. MinHash and
+the dedup constants were never coupled to this arm and are untouched — all 26 live rows carry
+a `minhash_sig`. `--vector-sweep` goes with the arm it swept.
+
+**Two consequences that are not no-ops.** `clusterForCompression` loses its cosine branch;
+production behaviour is unchanged because `getVocabulary` returned null with the arm off, so
+the 14-day-window branch was already the only reachable path — but that weak heuristic is now
+the only one, with `buildCompressPrompt`'s `should_compress` veto as its sole guard (D#16
+decided that on measured evidence: 6/6 refusals on unrelated clusters, 0/6 false refusals on
+related ones). And `findSmartCompressCandidates`' untiebroken `ORDER BY` — D#9's "eighth
+ordering" — was excused on the grounds that the branch it could damage needed a default-off
+flag. **That excuse is now void and its priority went up, not down**: the sub-cluster anchor
+survives a stable JS sort, so SQL order still decides membership, unconditionally. Still no
+failing case, so still unjudged.
+
+Suite 366 files / 5850 → **363 / 5780**, exit 0, the −70 attributed by name with the
+arithmetic closing exactly. eslint 0, `format:check` 0. knip **44** unused exports and 3
+unlisted binaries, unmoved — and the name set was diffed same-tree rather than trusted for
+agreeing, because a round that deletes 19 exports and adds one is exactly where an unchanged
+count can hide a crossing: **zero entered, zero left**. Coverage 84.96 / 79.38 / 90.72 / 86.14,
+gate exit 0 — read the denominator, not the rise: statements 11614 → 11321. Less-covered code
+left the tree; nothing got better.
+
 ## v5.6.0 — the audit of three areas no round had ever read, and the five things it found
 
 **Upgrade note — read this one, it contains the first irreversible step in a while.**

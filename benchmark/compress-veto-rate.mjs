@@ -2,7 +2,7 @@
 //
 // WHY THIS EXISTS. D#10 shipped option (b): executeSmartCompressCluster now lets the model
 // refuse a cluster, and fails CLOSED on a missing verdict. That closes a real hole — on the
-// default config (CLAUDE_MEM_VECTORS unset) clusterForCompression has NO similarity check
+// clusterForCompression has NO similarity check at all since Phase-2 removed the vector arm
 // at all and groups by a 14-day window alone, so the veto is the only thing between the
 // heuristic and an unattended write that HIDES real rows. But "the veto exists" is not
 // "the veto works". Option (a) — make the vocabulary-less branch skip outright — was

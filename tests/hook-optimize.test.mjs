@@ -1216,12 +1216,16 @@ describe('smart-compress', () => {
   // title. Its sibling executeMergeCluster has had `should_merge` all along, so the two
   // LLM cluster paths disagreed about whether the model may say no.
   //
-  // That mattered because the relatedness check upstream is not always on. Measured
-  // 2026-09-07 with a control arm: three observations with nothing in common but project
-  // and era (a CSS variable bump, a Kafka consumer-group rename, a Terraform provider pin)
-  // over 12 days. With CLAUDE_MEM_VECTORS=1 clusterForCompression forms 0 clusters; on the
-  // DEFAULT config (vector arm off -> getVocabulary returns null -> the `if (vocab)` else
-  // branch groups by a 14-day window alone) it forms ONE cluster of all three.
+  // That mattered because there is no relatedness check upstream. Measured 2026-09-07,
+  // BEFORE the vector arm was removed, with a control arm that can no longer be run:
+  // three observations with nothing in common but project and era (a CSS variable bump, a
+  // Kafka consumer-group rename, a Terraform provider pin) over 12 days formed 0 clusters
+  // with the TF-IDF cosine branch live, and ONE cluster of all three on the DEFAULT config
+  // where that branch was unreachable and a 14-day window alone did the grouping.
+  //
+  // Phase-2 deleted the cosine branch, so the second reading is now the ONLY behaviour and
+  // this veto is the only guard left in front of it. The rationale below got stronger, not
+  // weaker; the subject of these cases is the veto, which is untouched.
   const cluster3 = (db) => {
     const oldEpoch = -(31 * 86400000);
     insertObs(db, {
