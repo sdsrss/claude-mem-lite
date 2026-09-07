@@ -2,6 +2,40 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.3.1 — the fix that would have measured zero, and the one hard delete that could take a redirect
+
+Two defects that had both been argued about before and never measured to the end.
+
+**`cleanupBroken` could hard-delete a supersede tombstone.** Of the eleven sites carrying a
+bare `COALESCE(compressed_into,0) = 0`, this is the only HARD DELETE, and the only one whose
+exemption from `liveObsFilterSql` rested on a *likelihood* argument rather than an inertness
+proof: its rows have no title, narrative or lesson, so they are absent from every injection
+surface, so an id never injected is not one a `#NN` cites. Narrow, but a hand-typed `#NN` or
+a numeric `save --supersedes` chain later blanked by a degenerate cluster-merge both reach
+it — and the delete takes with it the `superseded_by` that `redirectSupersededIds` follows to
+credit a corrected memory's citation to its successor. Now guarded with `superseded_by IS
+NULL`. Deliberately not the full `liveObsFilterSql`: a retired row whose `superseded_by` is
+null hands that redirect nothing, so it stays reclaimable. (D#4)
+
+**A clean test run stopped leaving 30 directories in /tmp.** The interesting part is that the
+obvious fix would have measured zero. Instrumenting the `afterEach` recorded 71 invocations
+in which `rmSync` threw **zero** times and `existsSync` was false immediately after every
+one — yet 12 of those paths existed again when the file finished. Nothing failed to delete; a
+detached hook worker re-runs `resolveDataDir` against the HOME it was handed, which the test
+has since deleted, and recreates it. Retrying the `afterEach` cannot touch that. Disposal
+moved to `afterAll`, by identity, in the nine suites measured to leak. Residue per full run:
+**30 → 2-3** across four readings, which is what makes the §7 residue count usable as a gate.
+The remaining few are recreations landing after `afterAll`; `lib/tmp-fixture-sweep.mjs`'s 1h
+backstop still owns those. (D#2)
+
+Also: the sandbox harness's three phases were run for the first time since two dependency
+majors (**47/47, 45/45, 15/15**, all exit 0) and the self-heal sections finally measured
+something — both logged the prebuild quarantine that had been vacuous from v4.0.0 to v5.1.0.
+And `scripts/hook-launcher.mjs`'s swap-barrier comment no longer claims to cover the repair
+path: `hook-update.mjs:719` is the tree's only writer of that marker, so `install.mjs`'s
+in-place copy runs unguarded. That is R10 P2-12, still open — the comment just stops
+asserting the opposite.
+
 ## v5.3.0 — deep search now tells you when the page may not be an answer
 
 The headline is a disclosure, not a retrieval change. `benchmark/deep-search-holdout.mjs`
