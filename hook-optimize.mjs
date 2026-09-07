@@ -1155,18 +1155,40 @@ export async function executeSmartCompressCluster(db, observations, project) {
       )
       .join('\n');
 
-    const prompt = `Summarize these related code memory observations into ONE comprehensive summary. Preserve all important decisions, lessons, and specific facts. Return ONLY valid JSON.
+    // D#10. This prompt used to OPEN with "Summarize these related code memory
+    // observations", asserting the premise it should have been testing, and the only bail
+    // was a missing title — so the model had no way to refuse. The sibling
+    // executeMergeCluster has had `should_merge` since it was written; these two LLM
+    // cluster paths disagreed about whether the model may say no, and this is the one that
+    // HIDES its inputs (compressed_into removes them from every injection and search
+    // surface and puts them out of recoverBuriedLessons' reach).
+    //
+    // It matters because the upstream relatedness check is not always on: clusterForCompression
+    // only computes cosine similarity when getVocabulary returns a vocabulary, and that is
+    // null whenever the vector arm is off — which is the default (CLAUDE_MEM_VECTORS !== '1').
+    // The else branch groups by a 14-day window ALONE. Measured with a control arm
+    // 2026-09-07: three unrelated observations over 12 days form 1 cluster with the arm off
+    // and 0 with it on. Until that branch is decided (D#10 option a), this veto is the only
+    // thing standing between the heuristic and an unattended write that hides real rows.
+    const prompt = `These code memory observations were grouped by a heuristic that may be wrong. FIRST decide whether they are one story worth collapsing into a single memory. Return ONLY valid JSON.
 
 Observations:
 ${obsDescriptions}
 
-JSON: {"title":"descriptive summary ≤120 chars","narrative":"comprehensive summary ≤800 chars preserving key decisions and lessons","concepts":["kw1","kw2"],"facts":["all specific facts preserved"],"lesson_learned":"most important synthesized lesson or 'none'","search_aliases":["alt search 1","alt search 2"]}`;
+JSON: {"should_compress":true,"title":"descriptive summary ≤120 chars","narrative":"comprehensive summary ≤800 chars preserving key decisions and lessons","concepts":["kw1","kw2"],"facts":["all specific facts preserved"],"lesson_learned":"most important synthesized lesson or 'none'","search_aliases":["alt search 1","alt search 2"]}
+should_compress: false when these are about unrelated systems, files or problems, or when a merged summary would lose more than it saves. Compressing HIDES the originals from search, so refuse when in doubt. When false, the other fields are ignored.
+When true: preserve all important decisions, lessons, and specific facts.`;
 
     const parsed = await callModelJSONAsync(prompt, 'sonnet', {
       timeout: BG_LLM_TIMEOUT_MS,
       maxTokens: 1000,
     });
-    if (!parsed || !parsed.title) return { compressed: false };
+    // Fail CLOSED, exactly as `should_merge` does: an omitted verdict refuses. The two
+    // failure directions are not symmetric — refusing wrongly means a compression did not
+    // happen, proceeding wrongly means unrelated observations were hidden from every
+    // surface. On a path that hides its inputs, silence is not consent.
+    if (!parsed || !parsed.should_compress) return { compressed: false };
+    if (!parsed.title) return { compressed: false };
 
     // Scrub BEFORE truncate (see re-enrich note): boundary cut on scrubbed text.
     const title = truncate(scrubSecrets(parsed.title || ''), 120);

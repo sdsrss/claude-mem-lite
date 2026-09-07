@@ -48,6 +48,9 @@ describe('R10 P3-8 — the smart-compress summary row is written like every othe
     }
     db.prepare('UPDATE observations SET created_at_epoch = ?, access_count = 0').run(old);
     callModelJSONAsync.mockResolvedValue({
+      // D#10: smart-compress fails CLOSED on a missing verdict, so every mock that
+      // wants a compression to happen must now say so explicitly.
+      should_compress: true,
       title: 'Weekly compaction summary',
       narrative: 'Four notes about the same compaction pass.',
       concepts: ['compaction', 'summary'],

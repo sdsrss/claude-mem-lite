@@ -1308,6 +1308,9 @@ describe('smart-compress', () => {
     const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
 
     callModelJSONAsync.mockResolvedValue({
+      // D#10: the verdict is now required. This mock predates it, and leaving it out
+      // would make the case assert the OLD contract (no way for the model to refuse).
+      should_compress: true,
       title: 'Utils.mjs maintenance: sanitize improvements and cleanup',
       narrative:
         'Series of changes to utils.mjs including sanitize function updates, test additions, and lint fixes.',
@@ -1329,6 +1332,100 @@ describe('smart-compress', () => {
     const summary = db.prepare('SELECT * FROM observations WHERE id = ?').get(result.summaryId);
     expect(summary.importance).toBe(2);
     expect(summary.title).toContain('Utils.mjs');
+  });
+
+  // D#10. This path HIDES its inputs — the originals get compressed_into set, which
+  // removes them from every injection and search surface and puts them out of
+  // recoverBuriedLessons' reach. It ran with no way for the model to refuse: the prompt
+  // ASSERTED the premise ("Summarize these related …") and the only bail was a missing
+  // title. Its sibling executeMergeCluster has had `should_merge` all along, so the two
+  // LLM cluster paths disagreed about whether the model may say no.
+  //
+  // That mattered because the relatedness check upstream is not always on. Measured
+  // 2026-09-07 with a control arm: three observations with nothing in common but project
+  // and era (a CSS variable bump, a Kafka consumer-group rename, a Terraform provider pin)
+  // over 12 days. With CLAUDE_MEM_VECTORS=1 clusterForCompression forms 0 clusters; on the
+  // DEFAULT config (vector arm off -> getVocabulary returns null -> the `if (vocab)` else
+  // branch groups by a 14-day window alone) it forms ONE cluster of all three.
+  const cluster3 = (db) => {
+    const oldEpoch = -(31 * 86400000);
+    insertObs(db, {
+      title: 'Bumped the sidebar hover colour',
+      narrative: 'CSS var change',
+      epochOffset: oldEpoch,
+    });
+    insertObs(db, {
+      title: 'Renamed the Kafka consumer group',
+      narrative: 'Billing topic',
+      epochOffset: oldEpoch - 1000,
+    });
+    insertObs(db, {
+      title: 'Pinned the Terraform AWS provider',
+      narrative: 'Spurious diffs',
+      epochOffset: oldEpoch - 2000,
+    });
+    return db.prepare('SELECT * FROM observations ORDER BY id').all();
+  };
+
+  it('refuses when the model says the cluster is not one story', async () => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const obs = cluster3(db);
+    callModelJSONAsync.mockResolvedValue({
+      should_compress: false,
+      title: 'Assorted unrelated maintenance',
+      narrative: 'These three changes have nothing to do with each other.',
+    });
+    const result = await executeSmartCompressCluster(db, obs, 'test');
+    expect(result.compressed).toBe(false);
+    // The assertion that matters is that the INPUTS survive visible, not just the return
+    // value: compressed_into is what removes them from every surface.
+    // Asserted with the system's OWN liveness predicate, not a literal: a fresh row's
+    // compressed_into is NULL, not 0, and COALESCE(...,0)=0 is what every read path uses.
+    const hidden = db
+      .prepare(
+        `SELECT COUNT(*) c FROM observations WHERE id IN (${obs.map(() => '?').join(',')}) AND COALESCE(compressed_into,0) <> 0`,
+      )
+      .get(...obs.map((o) => o.id)).c;
+    expect(hidden).toBe(0);
+  });
+
+  it('refuses when the model omits the verdict (fail closed, like should_merge)', async () => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const obs = cluster3(db);
+    // A response that is otherwise perfectly usable. Fail-closed is the deliberate
+    // direction: the bad outcome of refusing is "no compression happened", the bad
+    // outcome of proceeding is "unrelated observations were hidden".
+    callModelJSONAsync.mockResolvedValue({
+      title: 'Assorted maintenance',
+      narrative: 'Three changes.',
+      concepts: ['maintenance'],
+    });
+    const result = await executeSmartCompressCluster(db, obs, 'test');
+    expect(result.compressed).toBe(false);
+    // Asserted with the system's OWN liveness predicate, not a literal: a fresh row's
+    // compressed_into is NULL, not 0, and COALESCE(...,0)=0 is what every read path uses.
+    const hidden = db
+      .prepare(
+        `SELECT COUNT(*) c FROM observations WHERE id IN (${obs.map(() => '?').join(',')}) AND COALESCE(compressed_into,0) <> 0`,
+      )
+      .get(...obs.map((o) => o.id)).c;
+    expect(hidden).toBe(0);
+  });
+
+  it('asks for the verdict in the prompt it actually sends', async () => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const obs = cluster3(db);
+    callModelJSONAsync.mockResolvedValue({ should_compress: true, title: 'T', narrative: 'N' });
+    await executeSmartCompressCluster(db, obs, 'test');
+    // A veto nothing asks for is a veto that always fires — with fail-closed semantics
+    // that would silently stop ALL compression. Assert on the prompt the mock received,
+    // not on the source text.
+    const [prompt] = callModelJSONAsync.mock.calls[0];
+    // QUOTED, so it matches the JSON TEMPLATE and not the prose line that explains the
+    // field. The bare-string form was walked straight past by the real revert shape
+    // (delete the key from the template, keep the explanation) — mutation M16.
+    expect(prompt).toContain('"should_compress"');
+    expect(prompt).not.toContain('Summarize these related');
   });
 });
 
