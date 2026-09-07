@@ -2,6 +2,99 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.6.0 — the audit of three areas no round had ever read, and the five things it found
+
+**Upgrade note — read this one, it contains the first irreversible step in a while.**
+
+- **Schema 47 → 48, additive and automatic.** One nullable column,
+  `observations.last_access_session_id`. It migrates on first open; no action needed, no
+  data is moved, and existing counters are untouched.
+- **It is ONE-WAY.** `claude-mem-lite` refuses to open a database written by a newer schema,
+  so once v5.6.0 has opened your store, **v5.5.1 and earlier will error on it** with
+  `DB schema is v48 but this claude-mem-lite binary supports up to v47`. Downgrading means
+  pointing `CLAUDE_MEM_DIR` at a fresh directory or restoring a pre-upgrade backup. There is
+  no env flag that reverts the migration, and adding one would only create a third behaviour
+  nobody has measured.
+- **`access_count` changes meaning, and old values are not corrected.** Values written before
+  v5.6.0 are an UPPER BOUND, not a count (see below). They are left as they are, because the
+  true count is not recoverable from the inflated one.
+- **The cite-`#NN` nudge will start speaking again on projects where it had gone quiet.** That
+  is the fix working — it had silenced itself in the first session of every project — but if
+  you do not want it, `CLAUDE_MEM_NO_CITE_NUDGE=1` mutes it and
+  `CLAUDE_MEM_CITE_NUDGE_SILENCE_AFTER` tunes how fast it gives up.
+- **Citation numbers before and after this release are different calibers.** Anything you
+  captured from `benchmark/cite-recall.mjs`, `benchmark/efficacy-observational.mjs` or
+  `benchmark/citation-live-replay.mjs` cannot be subtracted from a post-v5.6.0 reading.
+
+**`bumpCitationAccess` was crediting one citation once per TURN, not once per session.**
+`Stop` fires at the end of every assistant turn and re-scans the whole transcript, so a `#NN`
+written in turn 2 was credited again in turns 3, 4, 5 and so on. It was the only one of
+Stop's five writers without an idempotency key — `applyCitationDecay` carries two, the two
+funnel writers are idempotent by construction — and its single multi-call test asserted the
+accumulation as though that were the contract. Replayed over 51 real transcripts at true turn
+boundaries: **338 credits across 43 distinct (session, id) pairs, 7.86×**, worst single
+session 18.75×. That feeds `boostAccessed` (`access_count > 3` → `importance + 1`, unattended
+daily) and suppresses the noise penalty, whose predicate reads `injection_count >
+access_count * 3`. Fixed with a third per-row session key beside the two the decay channel
+already uses, deliberately separate from them: decay resolves a main-thread-only id set
+behind a text floor while this channel resolves the whole transcript including sidechains, so
+a shared key would let either channel silence the other. Exact for one session at a time; two
+same-project sessions interleaving turns flip the stamp between them, the same bound the decay
+keys already accept. D#206's "at most 3 rows could have crossed the threshold" is retracted in
+all four places it lived — it was computed on the premise this fixes, and no replacement bound
+has been measured. (R11-B-P1-1)
+
+**`mem_search` handed back memories from the branch you excluded, at the worst possible
+moment.** When a typed search matched nothing, the MCP face fell back to listing recent rows
+of that type — carrying the live, type, project, date and importance filters, and not
+`branch`. Nothing downstream compensated. Because the fallback fires exactly when the search
+found nothing, those rows were the only rows you saw, with no correct result beside them for
+contrast, and `total` clamped to them so the page read like a legitimate hit. Measured through
+the published face: asking for `feature/x` returned rows from `main` and `feature/x`. The CLI
+was never affected. (R11-A-P1-1)
+
+**Four orderings in the retrieval core said "newest first" and returned oldest-first on a
+tie.** SQLite falls back to ascending rowid when an `ORDER BY` is not a total order, and two
+inserts reading `Date.now()` land in the same millisecond about 90% of the time. The sharpest
+was `findFtsAnchor`: it takes `LIMIT 1`, so the tie decided CONTENT — `timeline --query` and
+`mem_timeline` anchored on the oldest row of a tied group and shifted the whole navigation
+window. The other three are the no-query recent listing, the type-list fallback, and the CJK
+LIKE fallback that is the only path by which CJK prompt rows are reachable at all. The
+remaining sites in that file set are enumerated in the audit report and left, because they
+move candidate-pool membership and owe a measurement first. (R11-A-P2-3)
+
+**The cite-recall nudge had silenced itself everywhere, by counting the wrong unit.** Its
+self-silence streak is documented as "consecutive qualifying SESSIONS" and was incremented
+once per Stop, so at a typical six turns per session the default of 3 was reached inside the
+first session and never recovered. The runtime file on the development machine read
+`lowStreak = 58` for a project with 26 transcripts on disk. Existing payloads self-heal rather
+than needing hand-editing. Deliberately NOT changed: the ratio threshold. Swapping the gate's
+denominator to the ids hooks actually injected was measured over the same 51 transcripts — it
+cuts the qualifying population from 37 sessions to 7 and changes the fire rate not at all,
+because real cite-recall never exceeds 0.5 here while the threshold is 0.6. A threshold no
+session can satisfy guarantees the silence whatever the denominator is; picking a new one is a
+judgment about how often the nudge should speak, not a measurement gap. (R11-B-P1-2)
+
+**`E#501` was being read as observation 501.** This project renders, and teaches you to type
+back, `E#N` for events, `P#N` for prompts, `D#N` for deferred items and `S#N` for sessions.
+Every injected-side extractor drops those by construction; the cited side matched a bare
+`#(\d{1,7})` and did not. On the development store, 26 of 26 live observation ids are also
+event ids and also prompt ids. The docblock argued a loose numerator was free "because a cited
+id only counts once it intersects an anchored injected set" — the exception is that the
+user-typed allow-list runs the same matcher over your own messages, so both sides of the
+intersection were unanchored. Same-tree A/B: 9 of 44 credited pairs came in through a
+namespace token. It does not catch `issue #1234` or `[link](#42)`, and is not meant to.
+(R11-B-P2-3)
+
+**The round that found all five is `docs/audits/20260907-113002.md`** — 13,647 lines across
+the retrieval core, `lib/citation-tracker.mjs` and the unattended LLM write paths, the three
+areas R10 closed by naming as never read. No P0. Its §5 records the `ORDER BY` name set those
+partitions own (19 harmful, 15 clean), its §6 records four conclusions that did not survive
+checking, including a prior finding whose stated ranking direction is measurably backwards.
+Five findings are deliberately open with their reasons written down, and a pre-ship review
+found three more before the tag: a retraction that had landed in two of its four copies, a
+migration shipping without a test, and this upgrade note.
+
 ## v5.5.1 — the seventh pool a grep could not see, and three claims that did not survive review
 
 **Upgrade note:** one shipped behaviour changes and it is a fix, not a new default. No env
