@@ -9,14 +9,24 @@
 //   P2-6 MCP  search  empty query returned "Found N result(s):" with no label vs query flows
 //   P2-7 MCP  get     source=session/prompt miss didn't hint "try source='obs'" when ID exists
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { spawn } from 'child_process';
 import { mkdtempSync, rmSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { insertSession, insertObs, SUBPROCESS_TIMEOUT_MS, disposeFixtureDir } from './test-helpers.mjs';
+import {
+  insertSession,
+  insertObs,
+  SUBPROCESS_TIMEOUT_MS,
+  disposeFixtureDir,
+  makeFixtureTracker,
+} from './test-helpers.mjs';
+
+// afterEach disposal succeeds; a detached worker recreates the data dir afterwards.
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
 import { memTimelineSchema, memMaintainSchema, memOptimizeSchema } from '../tool-schemas.mjs';
 import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
 
@@ -1166,7 +1176,7 @@ describe('T4-P2-B: handleStop fast summary dedup', () => {
   let tmpHome, projDir;
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'mem-audit-t4-stop-'));
+    tmpHome = fixtures.track(mkdtempSync(join(tmpdir(), 'mem-audit-t4-stop-')));
     projDir = join(tmpHome, 'audit', 't4');
     mkdirSync(projDir, { recursive: true });
   });

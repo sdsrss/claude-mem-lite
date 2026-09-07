@@ -258,3 +258,67 @@ export function disposeFixtureDir(dir, { rm = rmSync } = {}) {
     return false;
   }
 }
+
+/**
+ * Collect fixture dirs and re-dispose them once, at the END of the test FILE.
+ *
+ * This is the RECREATION half of D#2, and it needs a different hook than the deterministic
+ * half `disposeFixtureDir` above serves. Measured 2026-09-07 on `main` @ v5.3.0, whole
+ * suite, attributed by NAME SET and then by instrumented creation site — not by subtracting
+ * counts: one clean `npx vitest run` (360 files / 5730 passed, exit 0) left **30** of this
+ * repo's fixture dirs in /tmp, plus one `ssr/` dir belonging to vite itself.
+ * `tests/e2e.test.mjs` alone accounted for 13 of the 30, all from ONE creation site (its
+ * top-level `beforeEach`), and the rest were integration-scenarios 5, adoption-replay 5, and
+ * six suites leaking exactly 1 each.
+ *
+ * The mechanism is NOT a failed removal, so do not "fix" it by retrying the afterEach:
+ * instrumenting the afterEach recorded 71 invocations, `rmSync` threw **zero** times, and
+ * `existsSync` was **false** immediately after every one of them — yet 12 of those paths
+ * existed again when the file finished. A detached worker of a hook subprocess re-runs
+ * `resolveDataDir` against the HOME it was handed, which the test has since deleted, and
+ * recreates it. The shape confirms it and is worth keeping as the diagnostic: a recreated
+ * dir holds ONLY `.claude-mem-lite/` (db + `runtime/`), never the fixture's own subdirs —
+ * `beforeEach` also makes `parent/testproj/`, and that never comes back.
+ *
+ * `afterAll` is late enough: the same instrumentation saw all 13 alive at that point. That
+ * is the whole reason this exists rather than more retries. It does NOT replace
+ * `lib/tmp-fixture-sweep.mjs` — a worker can still recreate a dir after `afterAll`, and the
+ * 1h sweeper at the next run's globalSetup remains the backstop for that and for SIGKILL.
+ * What it buys is that a clean run stops leaving residue behind at all, which is what makes
+ * the CLAUDE.md §7 residue count usable as a gate: today a real leak is indistinguishable
+ * from 30 dirs of expected background.
+ *
+ * Disposal is by IDENTITY — the list of paths this file created — never by prefix or mtime.
+ * A run-scoped sweep keyed on "created after this run started" would delete a concurrently
+ * running suite's in-flight fixtures, which is exactly the collateral-deletion risk
+ * `lib/tmp-fixture-sweep.mjs` refuses to take (see its allowlist comment).
+ *
+ * Deliberately takes no vitest import: `benchmark/*.mjs`, `eslint.config.mjs` and
+ * `hook-memory.mjs` all import this module outside a vitest context, so a top-level
+ * `import { afterAll } from 'vitest'` here would break them. The caller registers the hook.
+ *
+ * @example
+ *   const fixtures = makeFixtureTracker();
+ *   afterAll(() => fixtures.disposeAll());
+ *   beforeEach(() => { tmpHome = fixtures.track(makeTmpDir()); });
+ *
+ * @returns {{track: (dir: string) => string, disposeAll: () => number}} `track` returns its
+ *   argument so it can wrap a creation call inline; `disposeAll` returns how many dirs it
+ *   could not remove (0 when clean) and empties the list.
+ */
+export function makeFixtureTracker() {
+  const dirs = [];
+  return {
+    track(dir) {
+      if (dir) dirs.push(dir);
+      return dir;
+    },
+    disposeAll() {
+      let left = 0;
+      for (const dir of dirs.splice(0)) {
+        if (!disposeFixtureDir(dir)) left++;
+      }
+      return left;
+    },
+  };
+}

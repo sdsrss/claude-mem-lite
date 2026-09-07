@@ -8,22 +8,26 @@
 //   - Smart invocation scripts presence
 //   - Directory structure matches expected layout
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { makeFixtureTracker } from './test-helpers.mjs';
 
 const INSTALL_PATH = resolve('install.mjs');
 const SETUP_PATH = resolve('scripts/setup.sh');
 const PROJECT_DIR = resolve('.');
 // Use --dev mode for E2E tests: skips npm install (fast), uses symlinks, tests same hook logic
 
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
+
 function makeTmpDir() {
   const dir = join(tmpdir(), `mem-e2e-${randomUUID().slice(0, 8)}`);
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return fixtures.track(dir);
 }
 
 function makeFakeClaudeBin(home) {

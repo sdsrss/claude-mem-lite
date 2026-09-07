@@ -1,11 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { extractInjectionEvents } from '../benchmark/adoption-replay.mjs';
+import { makeFixtureTracker } from './test-helpers.mjs';
+
+// These fixtures had no disposal at all — one run left five `adopt-` dirs in /tmp.
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
 
 function fixture(lines) {
-  const dir = mkdtempSync(join(tmpdir(), 'adopt-'));
+  const dir = fixtures.track(mkdtempSync(join(tmpdir(), 'adopt-')));
   const f = join(dir, 's.jsonl');
   writeFileSync(f, lines.map((l) => JSON.stringify(l)).join('\n'));
   return f;

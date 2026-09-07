@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { resolve, join } from 'path';
 import { writeFileSync, mkdirSync, rmSync, readFileSync, mkdtempSync } from 'fs';
-import { createTestDb, insertSession, insertObs, SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
+import {
+  createTestDb,
+  insertSession,
+  insertObs,
+  SUBPROCESS_TIMEOUT_MS,
+  disposeFixtureDir,
+} from './test-helpers.mjs';
 import { initSchema } from '../schema.mjs';
 import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
@@ -15,6 +21,8 @@ const SCRIPT_PATH = resolve(import.meta.dirname, '../scripts/pre-tool-recall.js'
 // fast-path scripts must mirror schema.mjs env-var convention, and tests must
 // honor it too.
 const DEFAULT_SANDBOX = mkdtempSync(join(tmpdir(), 'pre-recall-sandbox-'));
+// One dir for the whole file, and it had no disposal at all — every run left it in /tmp.
+afterAll(() => disposeFixtureDir(DEFAULT_SANDBOX));
 
 // Helper: run script with piped stdin (spawn handles for-await stdin correctly)
 function runScriptRaw(inputStr, env = {}) {

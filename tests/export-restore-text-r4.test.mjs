@@ -5,7 +5,7 @@
 // transcript collapsed each row's content to its bare title — unrecoverable AND
 // unsearchable (`text` is its own FTS5 column). The pre-fix export SELECT omitted
 // `text`; restore reconstructed content from `narrative || title`.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
@@ -13,14 +13,17 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { insertSession, insertObs } from './test-helpers.mjs';
+import { insertSession, insertObs, makeFixtureTracker } from './test-helpers.mjs';
 
 const CLI_PATH = resolve('cli.mjs');
+
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
 
 function makeTmpDir() {
   const dir = join(tmpdir(), `mem-exptext-${randomUUID().slice(0, 8)}`);
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return fixtures.track(dir);
 }
 function initDb(dataDir) {
   mkdirSync(dataDir, { recursive: true });

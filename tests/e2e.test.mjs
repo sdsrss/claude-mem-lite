@@ -2,7 +2,7 @@
 // Tests the actual CLI entry point (node hook.mjs <event>) as a subprocess
 // Isolation via HOME env var → redirects ~/.claude-mem-lite/ to temp dir
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, unlinkSync } from 'fs';
 import { join, resolve, dirname } from 'path';
@@ -12,16 +12,23 @@ import Database from 'better-sqlite3';
 import { computeMinHash } from '../utils.mjs';
 import { initSchema } from '../schema.mjs';
 import { saveEvent } from '../lib/activity.mjs';
+import { makeFixtureTracker } from './test-helpers.mjs';
 
 const HOOK_PATH = resolve('hook.mjs');
 const MOCK_CLAUDE = resolve('scripts/mock-claude.mjs');
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
+// The afterEach below removes each sandbox and succeeds; a detached hook worker then
+// recreates the data dir under the HOME it was handed. See makeFixtureTracker's docblock —
+// this file was 13 of the 30 dirs one clean suite run used to leave in /tmp.
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
+
 function makeTmpDir() {
   const dir = join(tmpdir(), `mem-e2e-${randomUUID().slice(0, 8)}`);
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return fixtures.track(dir);
 }
 
 function initTestDb(tmpHome) {

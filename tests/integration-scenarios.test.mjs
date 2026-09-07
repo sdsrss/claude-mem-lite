@@ -4,7 +4,7 @@
 //
 // Inspired by code-graph-mcp's end-to-end scenario testing approach.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
@@ -12,7 +12,13 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { createTestDb, insertObs, insertSession, fileEdgeMatchOnly } from './test-helpers.mjs';
+import {
+  createTestDb,
+  insertObs,
+  insertSession,
+  fileEdgeMatchOnly,
+  makeFixtureTracker,
+} from './test-helpers.mjs';
 import { searchRelevantMemories } from '../hook-memory.mjs';
 import {
   shouldSkip,
@@ -115,10 +121,15 @@ const SKILL_DESCRIPTIONS = {
 let tmpHome;
 let projectDir;
 
+// Disposed at file end as well as per-test: a detached hook worker recreates the data dir
+// after afterEach removes it. See makeFixtureTracker's docblock.
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
+
 function makeTmpDir() {
   const dir = join(tmpdir(), `mem-scenario-${randomUUID().slice(0, 8)}`);
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return fixtures.track(dir);
 }
 
 function initTestDbOnDisk(tmpHome) {

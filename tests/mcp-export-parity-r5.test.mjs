@@ -5,7 +5,7 @@
 // taken via the (explicitly advertised) MCP export → restored via CLI silently collapsed
 // every empty-`narrative` row (import-jsonl / cold-start bodies live in `text`) to its bare
 // title: unrecoverable AND unsearchable. Fix = both surfaces share EXPORT_COLUMNS_SQL.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
@@ -13,16 +13,19 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { insertSession, insertObs } from './test-helpers.mjs';
+import { insertSession, insertObs, makeFixtureTracker } from './test-helpers.mjs';
 import { EXPORT_COLUMNS } from '../lib/export-columns.mjs';
 import { handleExportForTest } from '../server.mjs';
 
 const CLI_PATH = resolve('cli.mjs');
 
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
+
 function makeTmpDir() {
   const dir = join(tmpdir(), `mem-mcpexp-${randomUUID().slice(0, 8)}`);
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return fixtures.track(dir);
 }
 function initDb(dataDir) {
   mkdirSync(dataDir, { recursive: true });

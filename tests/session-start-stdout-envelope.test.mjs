@@ -18,14 +18,18 @@
 // (tests/feature-sweep-hooks.test.mjs::expectHookStdout): one envelope on one
 // line satisfies both models, mixed output only satisfies one.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { disposeFixtureDir } from './test-helpers.mjs';
+import { disposeFixtureDir, makeFixtureTracker } from './test-helpers.mjs';
+
+// afterEach disposal succeeds; a detached worker recreates the data dir afterwards.
+const fixtures = makeFixtureTracker();
+afterAll(() => fixtures.disposeAll());
 
 const HOOK_PATH = resolve(import.meta.dirname, '../hook.mjs');
 let tmpHome, projDir, dbPath, runtimeDir, env;
@@ -100,7 +104,7 @@ function seedEvent(title) {
 
 describe('SessionStart stdout envelope', () => {
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'mem-ssenv-'));
+    tmpHome = fixtures.track(mkdtempSync(join(tmpdir(), 'mem-ssenv-')));
     projDir = join(tmpHome, 'work', 'fresh');
     mkdirSync(projDir, { recursive: true });
     const dbDir = join(tmpHome, '.claude-mem-lite');
