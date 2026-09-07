@@ -1537,10 +1537,32 @@ async function handleStop() {
   // recreate at 432ms and watched a 300ms grace lose.
   if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) spawnBackground('llm-summary', sessionId, project);
 
-  // Clean session file AFTER spawning background
-  try {
-    unlinkSync(sessionFile());
-  } catch {}
+  // The session file deliberately SURVIVES Stop (R10-P1-1). It used to be unlinked here,
+  // on the model "Stop = /exit = the session is over". The host does not work that way:
+  // Stop fires at the end of EVERY assistant turn, so the unlink minted a fresh mem
+  // session on the next event and cost two things at once —
+  //
+  //   • `sdk_sessions` / `session_summaries` counted turns, not sessions. Measured on the
+  //     maintainer's live DB 2026-09-07: 58 prompts over 16 host sessions produced 56
+  //     distinct mem sessions and 56 summary rows, 0 of which carried the LLM-only fields.
+  //   • handleSessionStart's mid-restart probe reads this file to learn which session just
+  //     ended. With it deleted every turn the probe never fired, so the /clear handoff
+  //     branch was unreachable in production — 0 `clear` rows against 21 real sessions.
+  //
+  // Lifetime is bounded by SESSION_EXPIRY_MS (12h) in getSessionId(), and every
+  // SessionStart overwrites it via createSessionId(), so "one mem session per host
+  // session" holds without anything having to delete it.
+  //
+  // CLAUDE_MEM_LEGACY_STOP_UNLINK=1 restores the pre-v5.4.0 unlink. It exists because the
+  // measurements above are from ONE host build; a host that fires Stop once per session
+  // instead of once per turn would be better served by the old shape, and a user who hits
+  // that has no other lever. It is not a supported configuration — it re-breaks the /clear
+  // handoff by design.
+  if (process.env.CLAUDE_MEM_LEGACY_STOP_UNLINK === '1') {
+    try {
+      unlinkSync(sessionFile());
+    } catch {}
+  }
 }
 
 // ─── SessionStart Handler + CLAUDE.md Persistence (Tier 1 A, E) ─────────────
@@ -2336,12 +2358,19 @@ async function handleSessionStart() {
 
   // Read CC real session_id from hook stdin — used to scope handoff rows so parallel
   // sessions for the same project don't clobber each other (see docs/bug.txt).
+  // `source` (startup | clear | compact | resume) is read here too: since Stop stopped
+  // deleting the session file, the file's survival no longer tells us WHY this session
+  // started, and the host's own word is the only non-guess (R10-P1-1).
   let ccSessionId = null;
+  let startSource = null;
   try {
     const raw = await readStdin();
     const hookData = JSON.parse(raw.text);
     if (typeof hookData?.session_id === 'string' && hookData.session_id.length > 0) {
       ccSessionId = hookData.session_id;
+    }
+    if (typeof hookData?.source === 'string' && hookData.source.length > 0) {
+      startSource = hookData.source;
     }
   } catch {
     /* stdin unavailable — legacy behavior */
@@ -2390,19 +2419,32 @@ async function handleSessionStart() {
     }
   }
 
-  // Detect mid-session restart (/clear or /compact): if a recent session file exists,
-  // the previous session ended without Stop hook firing. Read BEFORE createSessionId()
-  // overwrites the session file. Normal /exit deletes the file, so this only triggers
-  // for /clear, /compact, or crash recovery.
+  // Detect mid-session restart (/clear or /compact) and carry the ending session forward.
+  // Read BEFORE createSessionId() overwrites the session file.
+  //
+  // The discriminator is the host's `source`, NOT the session file's survival. The old
+  // comment here read "normal /exit deletes the file, so this only triggers for /clear,
+  // /compact, or crash recovery" — but the deleter was Stop, which fires every turn, so
+  // the file was always gone and this branch never triggered (R10-P1-1). Now that Stop
+  // keeps the file, the file is always THERE, and asking it "why did this session start"
+  // would answer /clear for a plain launch too. Only the host knows.
+  //
+  // `startup` and `resume` mean the previous session ended on its own terms and already
+  // wrote its per-turn `exit` handoff, which UserPromptSubmit reads back — no clear
+  // snapshot is owed. A null source (no stdin: tests, legacy hosts) keeps the old
+  // file-presence behavior so nothing that used to reach this branch stops reaching it.
+  const isMidSessionRestart = startSource !== 'startup' && startSource !== 'resume';
   let prevSessionId = null;
   let prevProject = null;
-  try {
-    const data = JSON.parse(readFileSync(sessionFile(), 'utf8'));
-    if (Date.now() - data.startedAt < SESSION_EXPIRY_MS) {
-      prevSessionId = data.id;
-      prevProject = data.project;
-    }
-  } catch {} // No session file = fresh startup, nothing to recover
+  if (isMidSessionRestart) {
+    try {
+      const data = JSON.parse(readFileSync(sessionFile(), 'utf8'));
+      if (Date.now() - data.startedAt < SESSION_EXPIRY_MS) {
+        prevSessionId = data.id;
+        prevProject = data.project;
+      }
+    } catch {} // No session file = fresh startup, nothing to recover
+  }
 
   // Tier 1 A: Create unique session ID
   const sessionId = createSessionId();

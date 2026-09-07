@@ -320,9 +320,13 @@ describe('Suite 1: Full Session Lifecycle', () => {
     const epFile = getEpisodeFile(tmpHome);
     expect(epFile).toBeNull();
 
-    // Session file should be cleaned up
+    // Session file SURVIVES Stop, and still names the session that just ran. Restated
+    // from `expect(sf).toBeNull()` in the R10-P1-1 fix: Stop fires every turn, so deleting
+    // the file here re-minted a mem session per turn and left handleSessionStart's
+    // mid-restart probe permanently blind. See handleStop's docblock for the measurements.
     const sf = getSessionFile(tmpHome);
-    expect(sf).toBeNull();
+    expect(sf).not.toBeNull();
+    expect(getSessionIdFromFile(tmpHome)).toBe(sessionId);
   });
 
   it('full cycle: start → tool-use ×3 → stop → verify DB', () => {
@@ -2666,5 +2670,120 @@ describe('Suite: D#60 concurrent-session decay idempotency (G10)', () => {
     // Pre-fix: session B is skipped (streak 1, seen 1). Post-fix: both resolve.
     expect(o.uncited_streak).toBe(2);
     expect(o.decay_seen_count).toBe(2);
+  });
+});
+
+describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence', () => {
+  // Every other /clear test in this repo drives `session-start {source:'clear'}` WITHOUT a
+  // preceding `stop`, and tests/handoff-simulation.test.mjs asserts on its own local
+  // re-implementation of the SessionStart output rather than on the hook's. So the ONLY
+  // sequence a user can actually produce — Stop fires at the end of every assistant turn,
+  // then /clear — was untested, and the clear-handoff branch was unreachable in production:
+  // the maintainer's live DB held 0 `clear` rows against 21 sessions.
+  //
+  // Host semantics, measured 2026-09-07 and not assumed: of 21 real transcripts under
+  // ~/.claude/projects/<slug>/, 12 carry a `<command-name>/clear</command-name>` record,
+  // and in 12/12 that record's timestamp precedes its OWN file's first record by ~0.1s
+  // (delta -0.08…-0.19s). The command is issued in the old session and replayed into a NEW
+  // file under a NEW session id — i.e. the host ROTATES its session id across /clear.
+  // The rotated arm below is therefore the production shape; the kept-id arm is the
+  // counterfactual the audit asked for, and guards the prompt-scope fallback either way.
+  const CC_A = 'cc-11111111-1111-4111-8111-111111111111';
+  const CC_B = 'cc-22222222-2222-4222-8222-222222222222';
+  const PROMPT = 'fix the retry backoff in worker.mjs';
+
+  function turnThenClear(clearCcId) {
+    // CLAUDE_MEM_SKIP_SUMMARY: the detached llm-summary worker outlives this test and
+    // recreates the sandbox behind its cleanup (see handleStop's docblock).
+    const env = { HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1' };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC_A }), env });
+    runHook('user-prompt', { stdin: JSON.stringify({ prompt: PROMPT, session_id: CC_A }), env });
+    runHook('stop', { stdin: JSON.stringify({ session_id: CC_A }), env });
+    return runHook('session-start', {
+      stdin: JSON.stringify({ source: 'clear', session_id: clearCcId }),
+      env,
+    });
+  }
+
+  function clearHandoffRows() {
+    const db = openTestDb(tmpHome);
+    try {
+      return db.prepare("SELECT session_id, working_on FROM session_handoffs WHERE type = 'clear'").all();
+    } finally {
+      db.close();
+    }
+  }
+
+  it('rotated session id (production shape): /clear after a completed turn writes the handoff', () => {
+    const { stdout } = turnThenClear(CC_B);
+    const rows = clearHandoffRows();
+    expect(rows.length).toBe(1);
+    expect(rows[0].session_id).toBe(CC_B); // scoped to the NEW session, which is the reader
+    expect(rows[0].working_on).toContain('retry backoff'); // carried from the OLD session's prompt
+    expect(stdout).toContain('Working State (from /clear)');
+  });
+
+  it('kept session id: the same sequence with an unchanged session id', () => {
+    const { stdout } = turnThenClear(CC_A);
+    const rows = clearHandoffRows();
+    expect(rows.length).toBe(1);
+    expect(rows[0].session_id).toBe(CC_A);
+    expect(rows[0].working_on).toContain('retry backoff');
+    expect(stdout).toContain('Working State (from /clear)');
+  });
+
+  it('plain startup after a completed turn writes NO clear handoff', () => {
+    // The counter-case that keeps the fix honest: making the branch reachable must not make
+    // it fire on every session start. `source:'startup'` means the previous session ended
+    // normally — its per-turn `exit` handoff already carries continuity.
+    const env = { HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1' };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC_A }), env });
+    runHook('user-prompt', { stdin: JSON.stringify({ prompt: PROMPT, session_id: CC_A }), env });
+    runHook('stop', { stdin: JSON.stringify({ session_id: CC_A }), env });
+    const { stdout } = runHook('session-start', {
+      stdin: JSON.stringify({ source: 'startup', session_id: CC_B }),
+      env,
+    });
+    expect(clearHandoffRows().length).toBe(0);
+    expect(stdout).not.toContain('Working State (from /clear)');
+  });
+
+  it('one mem session per host session, not one per turn', () => {
+    // R10-P1-1(c). Stop deleted the session file at the end of EVERY turn, so getSessionId()
+    // minted a fresh mem session on the next event. Measured on the maintainer's live DB
+    // 2026-09-07: 58 prompts over 16 host sessions produced 56 distinct mem sessions and 56
+    // session_summaries rows, 0 of which carried the LLM-only fields.
+    const env = { HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1' };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC_A }), env });
+    for (const text of ['first turn', 'second turn', 'third turn']) {
+      runHook('user-prompt', { stdin: JSON.stringify({ prompt: text, session_id: CC_A }), env });
+      runHook('stop', { stdin: JSON.stringify({ session_id: CC_A }), env });
+    }
+    const db = openTestDb(tmpHome);
+    const n = db
+      .prepare('SELECT COUNT(DISTINCT content_session_id) c FROM user_prompts WHERE cc_session_id = ?')
+      .get(CC_A).c;
+    db.close();
+    expect(n).toBe(1);
+  });
+
+  it('CLAUDE_MEM_LEGACY_STOP_UNLINK=1 restores the pre-v5.4.0 per-turn unlink', () => {
+    // The documented revert path for this release. It must actually revert — an escape
+    // hatch nobody can observe is not an escape hatch, so this asserts the OLD symptom
+    // comes back: a fresh mem session per turn, and no clear handoff.
+    const env = { HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1', CLAUDE_MEM_LEGACY_STOP_UNLINK: '1' };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC_A }), env });
+    for (const text of ['first turn', 'second turn']) {
+      runHook('user-prompt', { stdin: JSON.stringify({ prompt: text, session_id: CC_A }), env });
+      runHook('stop', { stdin: JSON.stringify({ session_id: CC_A }), env });
+    }
+    runHook('session-start', { stdin: JSON.stringify({ source: 'clear', session_id: CC_B }), env });
+    const db = openTestDb(tmpHome);
+    const n = db
+      .prepare('SELECT COUNT(DISTINCT content_session_id) c FROM user_prompts WHERE cc_session_id = ?')
+      .get(CC_A).c;
+    db.close();
+    expect(n).toBe(2); // one per turn, as before v5.4.0
+    expect(clearHandoffRows().length).toBe(0);
   });
 });

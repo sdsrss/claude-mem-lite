@@ -56,7 +56,17 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // scopeSessionId is absent or == sessionId (legacy/test/no-stdin), fall back to the
   // unfiltered query (identical to pre-D#26 behavior).
   const ccScope = scopeSessionId && scopeSessionId !== sessionId ? scopeSessionId : null;
-  const prompts = ccScope
+  const unscopedPrompts = () =>
+    db
+      .prepare(
+        `
+        SELECT prompt_text FROM user_prompts
+        WHERE content_session_id = ?
+        ORDER BY prompt_number ASC LIMIT 5
+      `,
+      )
+      .all(sessionId);
+  let prompts = ccScope
     ? db
         .prepare(
           `
@@ -66,15 +76,15 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       `,
         )
         .all(sessionId, ccScope)
-    : db
-        .prepare(
-          `
-        SELECT prompt_text FROM user_prompts
-        WHERE content_session_id = ?
-        ORDER BY prompt_number ASC LIMIT 5
-      `,
-        )
-        .all(sessionId);
+    : unscopedPrompts();
+  // R10-P1-1: on the /clear path the scope is the NEW session's CC id while the prompts
+  // being handed off belong to the OLD one, and the host rotates that id across /clear
+  // (measured 12/12 on real transcripts, 2026-09-07) — so the scoped query returns 0 and
+  // the whole handoff was silently skipped. Fall back to the unscoped set when, and only
+  // when, the scoped one is EMPTY: D#26 exists to stop two live sessions being MERGED into
+  // one working_on, and there is nothing to merge with when this session contributed no
+  // prompts. The alternative at that point is not a cleaner row, it is no row at all.
+  if (ccScope && prompts.length === 0) prompts = unscopedPrompts();
   if (prompts.length === 0) return; // Empty session — nothing to hand off
 
   // Filter prompts whose only content is workflow/control language ("继续",

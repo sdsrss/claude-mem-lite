@@ -120,7 +120,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Schema auto-migration** -- Idempotent `ALTER TABLE` migrations run on every startup, safely adding new columns and indexes without data loss
 - **LLM concurrency control** -- File-based semaphore limits background workers to 2 concurrent LLM calls, preventing resource contention
 - **stdin overflow protection** -- Hook input truncated at 256KB with regex-based action salvage for oversized tool outputs
-- **Cross-session handoff** -- Captures session state (request, completed work, next steps, key files) on `/exit`, then injects context when the next session detects continuation intent via explicit keywords or FTS5 term overlap. **The `/clear` and `/compact` arm does not currently fire** (tracked as R10-P1-1). The measurement, first: on the maintainer's own install `session_handoffs` holds 4 `exit` rows and **0** `clear` rows — the `clear` snapshot has never once been written. The mechanism, as a hypothesis: SessionStart treats a session file left on disk as the marker of a previous session that ended without `Stop` (`hook.mjs:2393-2405`, whose own comment reads "Normal `/exit` deletes the file, so this only triggers for `/clear`, `/compact`, or crash recovery"), and that file is exactly what `Stop` deletes (`hook.mjs:1542`) — which would make the branch unreachable if `Stop` runs at the end of every assistant turn rather than once per session. **That last clause is NOT verified**, and it is the whole question: the fix differs depending on whether Claude Code rotates its session id across `/clear`, so a real `/clear` stdin capture comes before any code change
+- **Cross-session handoff** -- Captures session state (request, completed work, next steps, key files) on `/exit`, then injects context when the next session detects continuation intent via explicit keywords or FTS5 term overlap. **The `/clear` and `/compact` arm fires since v5.4.0** (R10-P1-1); before that it had never once written a row — `session_handoffs` on the maintainer's install held 4 `exit` rows and **0** `clear` rows. Two host facts settled it, both measured rather than assumed. (1) `Stop` runs at the end of every assistant *turn*, not once per session, and it deleted the session file that SessionStart reads to learn which session just ended — so the branch was unreachable, and mem sessions were minted per turn (58 prompts over 16 host sessions produced 56 mem sessions and 56 summary rows, 2026-09-07). (2) Claude Code **rotates its session id across `/clear`**: of 21 real transcripts, 12 carry a `/clear` command record, and in 12/12 that record's timestamp precedes its own file's first record by ~0.1s — the command is issued in the old session and replayed into a new file under a new id. So `Stop` no longer deletes the file, SessionStart asks the host's `source` (`startup`/`clear`/`compact`/`resume`) instead of guessing from the file, and the handoff's prompt lookup falls back to the unscoped set when the new session's id matches none. Revert path: `CLAUDE_MEM_LEGACY_STOP_UNLINK=1`
 - **Git-SHA continuation anchor** (v2.31.0) -- Handoff rows include `git_sha_at_handoff`; any handoff matching the current `HEAD` counts as continuation regardless of TTL. Code state is a stronger continuation signal than wall-clock time
 - **Startup dashboard** (v2.31.0) -- SessionStart hook aggregates `git status` + `~/.claude/tasks/*.json` + `~/.claude/plans/*.md` + most-recent exit handoff + recent event count into a single structured block injected via `hookSpecificOutput.additionalContext`
 - **Activity namespace** (v2.31.0) -- Dedicated `events` table + FTS5 for non-memdir types (`bugfix`, `lesson`, `bug`, `discovery`, `refactor`, `feature`, `observation`, `decision`) that don't compete with `WHAT_NOT_TO_SAVE` semantics on the observations table. CLI: `claude-mem-lite activity save|search|recent|show`. `hook-llm` routes non-memdir summary types through `persistHaikuSummary` so upgrades from observations→events are atomic. (v3.39: the `/lesson` and `/bug` slash commands were redirected from this events table to searchable **observations** — `mem_search` never read the events table, so explicit saves were unfindable; the events table remains the auto-capture activity log.)
@@ -431,9 +431,10 @@ FTS5 indexes: `observations_fts` (title, subtitle, narrative, text, facts, conce
 
 ```
 SessionStart
-  -> Generate session ID
-     (the /clear|/compact handoff branch here is currently unreachable — R10-P1-1,
-      see Cross-session handoff above)
+  -> Read the host's `source` (startup | clear | compact | resume) from stdin
+  -> On clear/compact: read the outgoing session from the session file, save its
+     'clear' handoff, emit the Working State block  (R10-P1-1, fixed v5.4.0)
+  -> Generate session ID (overwrites the session file)
   -> Mark stale sessions (>24h active) as abandoned
   -> Clean orphaned/stale lock files
   -> Query recent observations (24h)
@@ -462,8 +463,9 @@ Stop
   -> Flush final episode buffer
   -> Save handoff snapshot (type 'exit')
   -> Mark session completed
-  -> Delete the session file  <- what makes the SessionStart /clear branch unreachable
   -> Spawn LLM summary worker (poll-based wait)
+  -> Keep the session file  <- Stop fires per TURN; deleting it here re-minted a mem
+     session every turn and left the SessionStart /clear branch unreachable (v5.4.0)
 ```
 
 
@@ -828,6 +830,7 @@ what is already stored — only whether new work runs.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path. Until v5.3.0 only the `Stop` one honoured it. | _(runs)_ |
+| `CLAUDE_MEM_LEGACY_STOP_UNLINK` | Restore the pre-v5.4.0 behaviour where `Stop` deletes the session file. Documented revert path for the session-lifecycle change, not a supported configuration: it re-mints a mem session per turn and makes the `/clear` handoff unreachable again. Only reach for it on a host that fires `Stop` once per session rather than once per turn. | _(file kept)_ |
 | `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush — observations are still batched, just not summarized. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SAVE_ENRICH` | Skip the background Haiku call that backfills `lesson_learned` / search aliases after a save. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_COMPRESS` | Skip auto-compression of old observations. | _(runs)_ |
