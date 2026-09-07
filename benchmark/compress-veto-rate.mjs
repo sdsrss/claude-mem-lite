@@ -40,10 +40,18 @@
 // and nothing more. AMBIGUOUS is the population the 14-day fallback actually produces on a
 // busy repo: partly one story. It has NO ground truth, so it CANNOT produce a rate, and
 // asking for one would invite a reading the fixture cannot support. What repeated runs can
-// answer is whether the veto is DECISIVE or a coin flip — and a coin flip is its own
-// finding, because it means the same corpus compresses differently on two consecutive
-// nights. Hence: N runs per cluster, per-cluster verdict sequences, modal-fraction
-// stability, and no rate.
+// answer is whether the veto is DECISIVE or a coin flip. Hence: N runs per cluster,
+// per-cluster verdict sequences, modal-fraction stability, and no rate.
+//
+// AND THE REPS VARY MEMBER ORDER, NOT NOTHING. `DEFAULT_LLM_TEMPERATURE` is pinned to 0
+// (haiku-client.mjs:57) and the shipped path takes that default, so asking the identical
+// prompt three times is close to asking it once — the first version of this arm did that
+// and its stability of 1.000 was near-tautological, a blind instrument returning a
+// flattering number. Each rep now rotates the cluster instead, which is a variation
+// PRODUCTION exhibits: the pools order by `created_at_epoch DESC` with no tiebreaker
+// (D#9), so which member sorts first is arbitrary on the same-era rows a 14-day window
+// groups. The arm therefore answers something sharp and reachable at temperature 0 — is
+// the verdict invariant to presentation order, or an artefact of an arbitrary tie?
 //
 // Usage:
 //   node benchmark/compress-veto-rate.mjs                # all three arms, needs a model
@@ -467,13 +475,38 @@ export async function runArm(clusters, judge = judgeCluster) {
 }
 
 /**
+ * Rotate a cluster's members by `by`. Order is the ONE thing the repetition varies — see
+ * runArmRepeated. Pure; the caller's array is never touched.
+ */
+export function rotateCluster(cluster, by) {
+  const n = cluster.length;
+  if (n === 0) return [];
+  const k = ((by % n) + n) % n;
+  return cluster.slice(k).concat(cluster.slice(0, k));
+}
+
+/**
  * The AMBIGUOUS arm's aggregator. Deliberately returns NO rate.
  *
  * A rate needs a ground truth to be right or wrong about, and an ambiguous cluster has
  * none — a reasonable reviewer could rule either way. What repeated runs CAN answer is
- * whether the veto is decisive or a coin flip, and that is a property worth knowing on its
- * own: a coin flip means the same corpus compresses differently on two consecutive nights,
- * which is worse than either steady answer.
+ * whether the veto is DECISIVE or a coin flip.
+ *
+ * WHAT THE REPETITION VARIES, and why it is not the obvious thing. Asking the identical
+ * prompt N times would measure almost nothing here: `DEFAULT_LLM_TEMPERATURE` is pinned to
+ * 0 (haiku-client.mjs:57) and the shipped path uses that default, so a repeated call is
+ * close to asking one question once, and a stability of 1.000 would be near-tautological —
+ * a blind instrument reporting a flattering number, which is the failure mode this whole
+ * ruler is built around. The first version of this arm did exactly that and the reading was
+ * withdrawn.
+ *
+ * So each rep ROTATES the cluster's member order instead. That is a variation PRODUCTION
+ * actually exhibits: the merge/compress pools order by `created_at_epoch DESC` with no
+ * tiebreaker (D#9), so which member is presented first is arbitrary on same-era rows —
+ * exactly the rows a 14-day window groups. The question the arm now answers is therefore
+ * sharp and reachable at temperature 0: **is the verdict invariant to presentation order,
+ * or an artefact of which row happened to sort first?** A flip means the same cluster
+ * compresses or survives depending on a tie SQLite broke arbitrarily.
  *
  * Stability = the MODAL fraction over DECIDED runs (errors excluded, exactly as
  * `runArm.refuseRate` excludes them). A cluster that never decided reports `null` rather
@@ -483,12 +516,20 @@ export async function runArm(clusters, judge = judgeCluster) {
  * @param {Array<Array<object>>} clusters
  * @param {(c: Array<object>) => Promise<'compress'|'refuse'|'error'>} judge
  * @param {number} reps how many times to ask about EACH cluster (D#13: at least 3)
+ * @param {{permute?: boolean}} [opts] `permute: false` repeats the identical prompt — kept
+ *   only so a caller can demonstrate the degenerate case; never the default.
  */
-export async function runArmRepeated(clusters, judge = judgeCluster, reps = 3) {
+export async function runArmRepeated(clusters, judge = judgeCluster, reps = 3, opts = {}) {
+  const permute = opts.permute !== false;
   const out = [];
   for (const cluster of clusters) {
     const verdicts = [];
-    for (let r = 0; r < reps; r++) verdicts.push(await judge(cluster));
+    const orders = [];
+    for (let r = 0; r < reps; r++) {
+      const presented = permute ? rotateCluster(cluster, r) : cluster;
+      orders.push(presented.map((o) => o.title));
+      verdicts.push(await judge(presented));
+    }
     const decidedVerdicts = verdicts.filter((v) => v !== 'error');
     const tally = new Map();
     for (const v of decidedVerdicts) tally.set(v, (tally.get(v) ?? 0) + 1);
@@ -510,12 +551,20 @@ export async function runArmRepeated(clusters, judge = judgeCluster, reps = 3) {
       stability: decided >= 2 ? modalN / decided : null,
       unanimous: decided >= 2 && modalN === decided,
       cohesion: clusterCohesion(cluster),
+      // THE PREMISE, carried per cluster rather than assumed: how many genuinely different
+      // member orders this cluster was actually shown in. If this is 1 while reps > 1 the
+      // repetition varied nothing and the stability beside it means nothing.
+      distinctOrders: new Set(orders.map((o) => o.join(' '))).size,
     });
   }
   const scored = out.filter((c) => c.stability !== null);
   return {
     n: clusters.length,
     reps,
+    permuted: permute,
+    // Arm-level premise: the smallest number of distinct orders any cluster was shown in.
+    // 1 with reps > 1 means this arm is measuring nothing at temperature 0.
+    minDistinctOrders: out.length ? Math.min(...out.map((c) => c.distinctOrders)) : 0,
     clusters: out,
     meanStability: scored.length ? scored.reduce((a, c) => a + c.stability, 0) / scored.length : null,
     unanimousDecided: out.filter((c) => c.unanimous).length,
@@ -638,6 +687,38 @@ export function runSelfChecks() {
       `unanimous=${flipping.unanimousDecided} flipped=${flipping.flipped}`,
     );
 
+    // 8. THE ARM'S OWN PREMISE, and the reason it exists at all. At temperature 0 (pinned,
+    //    haiku-client.mjs:57) repeating an identical prompt measures nothing, so the reps
+    //    rotate member order instead. If the rotation stopped varying the input, every
+    //    stability number this arm prints would be tautological — so assert it, and assert
+    //    that the degenerate mode really is degenerate, which is what makes this a check
+    //    rather than a restatement.
+    const permuted = await runArmRepeated(AMBIGUOUS, async () => 'refuse', 3);
+    check(
+      'the repeated arm shows each cluster a different member order every rep',
+      permuted.permuted === true && permuted.minDistinctOrders === 3,
+      `minDistinctOrders=${permuted.minDistinctOrders} over reps=3`,
+    );
+    const unpermuted = await runArmRepeated(AMBIGUOUS, async () => 'refuse', 3, { permute: false });
+    check(
+      'without permutation the arm would vary nothing — the degenerate case is detectable',
+      unpermuted.minDistinctOrders === 1,
+      `minDistinctOrders=${unpermuted.minDistinctOrders}`,
+    );
+    check(
+      'rotation is a permutation, not a mutation',
+      (() => {
+        const src = AMBIGUOUS[0];
+        const rot = rotateCluster(src, 1);
+        return (
+          rot.length === src.length &&
+          rot[0] === src[1] &&
+          src[0].title === AMBIGUOUS[0][0].title &&
+          new Set(rot).size === new Set(src).size
+        );
+      })(),
+    );
+
     return {
       passed: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok),
@@ -709,13 +790,16 @@ async function main() {
     console.log(
       `  mean stability ${ambiguous.meanStability === null ? 'n/a' : ambiguous.meanStability.toFixed(3)}  (modal fraction over decided runs, x${ambiguous.reps})`,
     );
+    console.log(
+      `  premise        member order varied ${ambiguous.minDistinctOrders} ways per cluster (temperature is pinned to 0, so ORDER is what the reps vary)`,
+    );
     for (const [i, c] of ambiguous.clusters.entries()) {
       console.log(
         `    #${i} coh ${c.cohesion.toFixed(4)}  ${c.verdicts.join(' ')}${c.stability === null ? '  (undecided)' : ''}`,
       );
     }
-    console.log(`  A flip here means the same corpus compresses differently on two consecutive`);
-    console.log(`  nights — a worse property than either steady answer.`);
+    console.log(`  A flip here means the verdict depends on which member sorted first — and`);
+    console.log(`  production breaks that tie arbitrarily (D#9), so it would not be stable.`);
   }
   const errors = unrelated.error + related.error + (ambiguous?.error ?? 0);
   console.log(

@@ -17,6 +17,7 @@ import {
   UNRELATED,
   classify,
   clusterCohesion,
+  rotateCluster,
   runArm,
   runArmRepeated,
   runSelfChecks,
@@ -93,6 +94,14 @@ describe('compress-veto-rate ruler (D#10)', () => {
 // property than either verdict.
 describe('compress-veto-rate ambiguous arm (D#13)', () => {
   const constantJudge = (v) => async () => v;
+  // The arm hands the judge a rotated COPY of each cluster, so identity comparison does not
+  // work. Membership does, and it is the property rotation preserves.
+  const titlesOf = (c) =>
+    c
+      .map((o) => o.title)
+      .sort()
+      .join('|');
+  const isCluster = (c, i) => titlesOf(c) === titlesOf(AMBIGUOUS[i]);
 
   it('reports per-cluster verdicts and no rate, because there is no ground truth', async () => {
     const arm = await runArmRepeated(AMBIGUOUS, constantJudge('refuse'), 3);
@@ -119,11 +128,14 @@ describe('compress-veto-rate ambiguous arm (D#13)', () => {
   it('separates a decisive cluster from a coin-flip one', async () => {
     // Cluster 0 flips 2:1, every other cluster is unanimous. Stability is the MODAL
     // fraction, so the flipping cluster must read 2/3 and the rest 1.
+    //
+    // Identified by MEMBERSHIP, not by array identity: the arm hands the judge a ROTATED
+    // COPY (see runArmRepeated), so `cluster === AMBIGUOUS[0]` is false by design.
     const seq = ['refuse', 'compress', 'refuse'];
     let i = 0;
     const arm = await runArmRepeated(
       AMBIGUOUS,
-      async (cluster) => (cluster === AMBIGUOUS[0] ? seq[i++] : 'compress'),
+      async (cluster) => (isCluster(cluster, 0) ? seq[i++] : 'compress'),
       3,
     );
     expect(arm.clusters[0].stability).toBeCloseTo(2 / 3, 10);
@@ -164,10 +176,51 @@ describe('compress-veto-rate ambiguous arm (D#13)', () => {
     // that produced a verdict — not 0.5.
     const arm = await runArmRepeated(
       AMBIGUOUS.slice(0, 2),
-      async (cluster) => (cluster === AMBIGUOUS[0] ? 'refuse' : 'error'),
+      async (cluster) => (isCluster(cluster, 0) ? 'refuse' : 'error'),
       3,
     );
     expect(arm.meanStability).toBe(1);
+  });
+
+  it('varies member ORDER across reps, because temperature is pinned to 0', async () => {
+    // The reason the arm exists in this shape. Repeating an identical prompt at
+    // DEFAULT_LLM_TEMPERATURE = 0 measures almost nothing, so each rep rotates the cluster.
+    // Order is a variation PRODUCTION exhibits: the pools order by created_at_epoch DESC
+    // with no tiebreaker (D#9), so which member sorts first is arbitrary on same-era rows.
+    const seen = [];
+    const arm = await runArmRepeated(
+      AMBIGUOUS.slice(0, 1),
+      async (cluster) => {
+        seen.push(cluster.map((o) => o.title).join(' > '));
+        return 'refuse';
+      },
+      3,
+    );
+    expect(new Set(seen).size).toBe(3);
+    expect(arm.minDistinctOrders).toBe(3);
+    expect(arm.permuted).toBe(true);
+    // Membership is preserved — a rotation, not a resample.
+    for (const order of seen) {
+      expect(order.split(' > ').sort()).toEqual(AMBIGUOUS[0].map((o) => o.title).sort());
+    }
+  });
+
+  it('can be put into the degenerate mode, which is how the premise check can fail', async () => {
+    // If the permutation were ever a no-op the stability numbers would be tautological.
+    // `permute: false` is that state, and it reports itself rather than looking identical.
+    const arm = await runArmRepeated(AMBIGUOUS, constantJudge('refuse'), 3, { permute: false });
+    expect(arm.minDistinctOrders).toBe(1);
+    expect(arm.permuted).toBe(false);
+  });
+
+  it('rotates without mutating the caller’s cluster', () => {
+    const before = AMBIGUOUS[0].map((o) => o.title);
+    const rot = rotateCluster(AMBIGUOUS[0], 1);
+    expect(rot[0]).toBe(AMBIGUOUS[0][1]);
+    expect(rot[rot.length - 1]).toBe(AMBIGUOUS[0][0]);
+    expect(AMBIGUOUS[0].map((o) => o.title)).toEqual(before);
+    // A full turn is the identity.
+    expect(rotateCluster(AMBIGUOUS[0], AMBIGUOUS[0].length).map((o) => o.title)).toEqual(before);
   });
 
   it('sits between the other two arms in lexical cohesion, which is its premise', () => {
