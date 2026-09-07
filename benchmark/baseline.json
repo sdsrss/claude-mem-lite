@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-06T19:48:29.740Z",
+  "timestamp": "2026-09-07T08:00:55.132Z",
   "mode": "production_hybrid",
   "queryCount": 30,
   "metrics": {
@@ -8,7 +8,7 @@
     "ndcg_at_10": 0.9712,
     "mrr_at_10": 0.9611,
     "avg_tokens_injected": 108,
-    "p95_search_latency_ms": 3.2983
+    "p95_search_latency_ms": 2.2351
   },
   "perQuery": [
     {
