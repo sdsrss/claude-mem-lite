@@ -165,6 +165,8 @@ export const CODE_DIR = join(homedir(), '.claude-mem-lite');
 // in DEFAULT_MAINTAIN_OPS, unattended daily) and suppresses noisePenaltyClause, whose
 // predicate reads `injection_count > access_count * 3`. Additive + nullable: legacy rows
 // read NULL and are credited exactly once more, on their next citation, then stamp.
+// The column holds the LAST crediting session, not a set, so two same-project sessions
+// interleaving their turns flip it between them — see the scope note in bumpCitationAccess.
 export const CURRENT_SCHEMA_VERSION = 48;
 
 // Sentinel columns for the LATEST migration set(s). The fast-path uses these

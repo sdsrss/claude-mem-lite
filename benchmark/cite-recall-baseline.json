@@ -1,17 +1,37 @@
 {
-  "_doc": "Baseline for benchmark/cite-recall.mjs — re-run after each minor release and compare per-hook recall. See observation #8255 for methodology.",
+  "_doc": "Baseline for benchmark/cite-recall.mjs — re-run after each minor release and compare per-hook recall. See observation #8255 for methodology. CALIBER BREAK (R11 / v5.6.0): this file was captured with the PRE-v5.6.0 numerator caliber. citationIdRe() gained a (?<![A-Za-z0-9]) lookbehind, so E#N / P#N / D#N / S#N no longer read as bare observation ids — measured 9 of 44 credited (session, id) pairs came in that way. cite-recall.mjs:61 uses that same matcher for extractIds, so the numerator shrinks while the denominator does not: running --vs-baseline --fail-on-regression across this boundary reports a caliber artefact as a regression against the 0.05 REGRESSION_FLOOR. Recapture before comparing.",
   "version": "2.56.0",
   "scanned_at": "2026-05-09T17:30:00.000Z",
   "comparison_reference": {
     "label": "pre-v2.34.6 (2026-03-23 → 2026-04-22T14:10Z, 25 active sessions, 30d)",
     "rationale": "Anchor for the v2.34.6 PreToolUse:Read introduction. Future regressions in PreToolUse:Read recall below 80%, or UPS recall slipping below 20%, indicate something broke.",
     "selection_bias_read_edit_write_per_session": 47.1,
-    "session_cite_rate": 0.760,
+    "session_cite_rate": 0.76,
     "per_hook_recall": {
-      "PreToolUse:Edit": { "unique": 69, "occurrences": 773, "cited": 37, "recall": 0.536 },
-      "UserPromptSubmit": { "unique": 191, "occurrences": 476, "cited": 30, "recall": 0.157 },
-      "SessionStart:startup": { "unique": 29, "occurrences": 178, "cited": 7, "recall": 0.241 },
-      "SessionStart:clear": { "unique": 27, "occurrences": 55, "cited": 8, "recall": 0.296 }
+      "PreToolUse:Edit": {
+        "unique": 69,
+        "occurrences": 773,
+        "cited": 37,
+        "recall": 0.536
+      },
+      "UserPromptSubmit": {
+        "unique": 191,
+        "occurrences": 476,
+        "cited": 30,
+        "recall": 0.157
+      },
+      "SessionStart:startup": {
+        "unique": 29,
+        "occurrences": 178,
+        "cited": 7,
+        "recall": 0.241
+      },
+      "SessionStart:clear": {
+        "unique": 27,
+        "occurrences": 55,
+        "cited": 8,
+        "recall": 0.296
+      }
     }
   },
   "window": {

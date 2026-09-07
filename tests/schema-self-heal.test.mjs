@@ -3,11 +3,26 @@ import Database from 'better-sqlite3';
 import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 
 describe('initSchema self-heal — version-vs-columns mismatch (D#22)', () => {
-  // The self-heal sentinel is LATEST_MIGRATION_COLUMN, which moved to
-  // observations.scope in v44 (D#78 P3). It is NOT indexed, so DROP COLUMN
-  // works directly (unlike the v37 cc_session_id sentinel, which needed its
-  // index dropped first). This test intentionally tracks whatever the current
-  // sentinel column is — update it in lockstep when LATEST_MIGRATION_COLUMN moves.
+  // The self-heal sentinel list is LATEST_MIGRATION_COLUMNS (plural since v44). This
+  // file drives `observations.scope` (v44) — NOT the newest entry, and that is now
+  // deliberate rather than stale.
+  //
+  // The instruction here used to read "update it in lockstep when LATEST_MIGRATION_COLUMN
+  // moves", and it was not followed: the sentinel moved in v45, v46 and v48 while these
+  // cases went on driving v44, so the file silently became a test of an OLD sentinel that
+  // still happened to pass. The R11 pre-ship review caught that. The lockstep rule is
+  // replaced rather than restated, because a rule nobody executes twice is not a rule:
+  //
+  //   - This file covers the MECHANISM — `hasLatestMigrationColumn` uses `.every()`, so
+  //     ANY missing sentinel drops the fast path. Driving an older sentinel exercises that
+  //     just as well, and keeps working when the newest entry moves again.
+  //   - Each new sentinel gets its own `tests/schema-migration-v<N>.test.mjs` covering the
+  //     newest entry specifically (v41, v45, v48; v46 rides in
+  //     decay-first-cite-snapshot.test.mjs). That is where lockstep now lives, and a new
+  //     file per version is harder to forget than an edit to an old one.
+  //
+  // `scope` is NOT indexed, so DROP COLUMN works directly — unlike the v37 cc_session_id
+  // sentinel, which needed its index dropped first.
   it('falls through to migration re-apply when schema_version matches but latest sentinel column is missing', () => {
     const db = new Database(':memory:');
     initSchema(db); // clean init — DB at CURRENT_SCHEMA_VERSION with all columns
