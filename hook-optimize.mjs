@@ -1141,36 +1141,43 @@ export function clusterForCompression(candidates, db) {
   return clusters;
 }
 
-export async function executeSmartCompressCluster(db, observations, project) {
-  if (observations.length < 3) return { compressed: false };
+/**
+ * The smart-compress prompt. Exported so a RULER can measure the shipped text.
+ *
+ * Extracted for benchmark/compress-veto-rate.mjs (D#10). It has to be one string in one
+ * place: a ruler that retypes the prompt measures its own copy, which is exactly how
+ * tests/handoff-simulation.test.mjs came to assert on a re-implementation while the real
+ * hook emitted a block no user had ever seen.
+ *
+ * D#10. This prompt used to OPEN with "Summarize these related code memory observations",
+ * asserting the premise it should have been testing, and the only bail was a missing title
+ * — so the model had no way to refuse. The sibling executeMergeCluster has had
+ * `should_merge` since it was written; these two LLM cluster paths disagreed about whether
+ * the model may say no, and this is the one that HIDES its inputs (compressed_into removes
+ * them from every injection and search surface and puts them out of recoverBuriedLessons'
+ * reach).
+ *
+ * It matters because the upstream relatedness check is not always on:
+ * clusterForCompression only computes cosine similarity when getVocabulary returns a
+ * vocabulary, and that is null whenever the vector arm is off — which is the default
+ * (CLAUDE_MEM_VECTORS !== '1'). The else branch groups by a 14-day window ALONE. Measured
+ * with a control arm 2026-09-07: three unrelated observations over 12 days form 1 cluster
+ * with the arm off and 0 with it on. Until that branch is decided (D#10 option a), this
+ * veto is the only thing standing between the heuristic and an unattended write that hides
+ * real rows.
+ *
+ * @param {Array<object>} observations cluster members
+ * @returns {string}
+ */
+export function buildCompressPrompt(observations) {
+  const obsDescriptions = observations
+    .map(
+      (o, i) =>
+        `${i + 1}. [${o.type || 'change'}] "${truncate(o.title || '(untitled)', 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}${o.lesson_learned ? ` | Lesson: ${truncate(o.lesson_learned, 200)}` : ''}`,
+    )
+    .join('\n');
 
-  const gotSlot = await acquireLLMSlot();
-  if (!gotSlot) return { compressed: false };
-
-  try {
-    const obsDescriptions = observations
-      .map(
-        (o, i) =>
-          `${i + 1}. [${o.type || 'change'}] "${truncate(o.title || '(untitled)', 200)}" — ${truncate(o.narrative || '(no narrative)', 500)}${o.lesson_learned ? ` | Lesson: ${truncate(o.lesson_learned, 200)}` : ''}`,
-      )
-      .join('\n');
-
-    // D#10. This prompt used to OPEN with "Summarize these related code memory
-    // observations", asserting the premise it should have been testing, and the only bail
-    // was a missing title — so the model had no way to refuse. The sibling
-    // executeMergeCluster has had `should_merge` since it was written; these two LLM
-    // cluster paths disagreed about whether the model may say no, and this is the one that
-    // HIDES its inputs (compressed_into removes them from every injection and search
-    // surface and puts them out of recoverBuriedLessons' reach).
-    //
-    // It matters because the upstream relatedness check is not always on: clusterForCompression
-    // only computes cosine similarity when getVocabulary returns a vocabulary, and that is
-    // null whenever the vector arm is off — which is the default (CLAUDE_MEM_VECTORS !== '1').
-    // The else branch groups by a 14-day window ALONE. Measured with a control arm
-    // 2026-09-07: three unrelated observations over 12 days form 1 cluster with the arm off
-    // and 0 with it on. Until that branch is decided (D#10 option a), this veto is the only
-    // thing standing between the heuristic and an unattended write that hides real rows.
-    const prompt = `These code memory observations were grouped by a heuristic that may be wrong. FIRST decide whether they are one story worth collapsing into a single memory. Return ONLY valid JSON.
+  return `These code memory observations were grouped by a heuristic that may be wrong. FIRST decide whether they are one story worth collapsing into a single memory. Return ONLY valid JSON.
 
 Observations:
 ${obsDescriptions}
@@ -1178,6 +1185,16 @@ ${obsDescriptions}
 JSON: {"should_compress":true,"title":"descriptive summary ≤120 chars","narrative":"comprehensive summary ≤800 chars preserving key decisions and lessons","concepts":["kw1","kw2"],"facts":["all specific facts preserved"],"lesson_learned":"most important synthesized lesson or 'none'","search_aliases":["alt search 1","alt search 2"]}
 should_compress: false when these are about unrelated systems, files or problems, or when a merged summary would lose more than it saves. Compressing HIDES the originals from search, so refuse when in doubt. When false, the other fields are ignored.
 When true: preserve all important decisions, lessons, and specific facts.`;
+}
+
+export async function executeSmartCompressCluster(db, observations, project) {
+  if (observations.length < 3) return { compressed: false };
+
+  const gotSlot = await acquireLLMSlot();
+  if (!gotSlot) return { compressed: false };
+
+  try {
+    const prompt = buildCompressPrompt(observations);
 
     const parsed = await callModelJSONAsync(prompt, 'sonnet', {
       timeout: BG_LLM_TIMEOUT_MS,
