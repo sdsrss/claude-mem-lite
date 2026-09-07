@@ -32,12 +32,28 @@
 // the real corpus on this machine has ZERO smart-compress-eligible rows, so there is
 // nothing to sample. The unrelated arm reproduces the shape D#10 measured (members sharing
 // only project and era); the related arm is what a genuine multi-note work session looks
-// like. Both arms' premises are asserted by a self-check rather than assumed.
+// like. Every arm's premise is asserted by a self-check rather than assumed.
+//
+// THE THIRD ARM (D#13), and why it reports something different. The two arms above answer
+// an EASY question: they are separated by design (cohesion 0.1124 vs 0.0051), so "veto
+// 100% / false-refusal 0%" says the veto handles the CLEAR case — which is the D#10 shape
+// and nothing more. AMBIGUOUS is the population the 14-day fallback actually produces on a
+// busy repo: partly one story. It has NO ground truth, so it CANNOT produce a rate, and
+// asking for one would invite a reading the fixture cannot support. What repeated runs can
+// answer is whether the veto is DECISIVE or a coin flip — and a coin flip is its own
+// finding, because it means the same corpus compresses differently on two consecutive
+// nights. Hence: N runs per cluster, per-cluster verdict sequences, modal-fraction
+// stability, and no rate.
 //
 // Usage:
-//   node benchmark/compress-veto-rate.mjs                # both arms, needs a model
+//   node benchmark/compress-veto-rate.mjs                # all three arms, needs a model
+//   node benchmark/compress-veto-rate.mjs --reps 5       # ambiguous arm repetitions (default 3)
+//   node benchmark/compress-veto-rate.mjs --no-ambiguous # the two original arms only
 //   node benchmark/compress-veto-rate.mjs --json
 //   node benchmark/compress-veto-rate.mjs --self-check   # no network; exits 1 on failure
+//
+// COST is printed before the first call, because the ambiguous arm multiplies: a default
+// run is 6 + 6 + 6x3 = 30 model calls, not 12.
 //
 // Exit code: 0 for a plain run (it is a meter, not a gate). `--self-check` exits 1.
 
@@ -281,6 +297,131 @@ export const UNRELATED = [
   ],
 ];
 
+/**
+ * Clusters that are PARTLY one story — the population D#13 added, and the one the 14-day
+ * fallback actually produces on a busy repo.
+ *
+ * Two shapes, three of each: (1) two notes about the same subsystem plus one that merely
+ * landed the same week, (2) three notes that share a file or a surface but not a problem.
+ * There is NO ground truth here and that is the point — a reasonable reviewer could rule
+ * either way on any of them, so this arm reports verdict STABILITY across repeated runs
+ * rather than a rate. Its premise (cohesion strictly between the other two arms') is
+ * asserted by a self-check, so the fixture cannot quietly drift into being a second copy
+ * of one of the easy arms.
+ */
+export const AMBIGUOUS = [
+  // (1) same subsystem + a same-week stray
+  [
+    {
+      type: 'bugfix',
+      title: 'Search returned the same row twice after an update',
+      narrative:
+        'The derived text was rebuilt without clearing the old FTS row, so an edited observation matched twice.',
+    },
+    {
+      type: 'refactor',
+      title: 'Moved the search result renderer into one module',
+      narrative: 'The CLI and the MCP face each formatted results and had already drifted apart once.',
+    },
+    {
+      type: 'change',
+      title: 'Bumped the CI runner image to 24.04',
+      narrative: 'The old image shipped a toolchain too old for the native build step.',
+    },
+  ],
+  [
+    {
+      type: 'bugfix',
+      title: 'The scheduler skipped the 2am job on DST days',
+      narrative: 'Local-time arithmetic meant the hour simply did not exist twice a year.',
+    },
+    {
+      type: 'change',
+      title: 'The scheduler logs which timezone it resolved at startup',
+      narrative: 'Nothing recorded the resolved zone, so a wrong one was invisible until a job went missing.',
+    },
+    {
+      type: 'feature',
+      title: 'Added a CSV download to the billing page',
+      narrative: 'Finance was copying the invoice table out of the browser by hand.',
+    },
+  ],
+  [
+    {
+      type: 'bugfix',
+      title: 'Webhook retries hammered an endpoint that was already failing',
+      narrative: 'A fixed one-second retry turned a single 500 into several hundred requests a minute.',
+    },
+    {
+      type: 'decision',
+      title: 'Webhook delivery moves to exponential backoff with a cap',
+      narrative:
+        'Backoff was chosen over a circuit breaker because receivers recover at very different speeds.',
+    },
+    {
+      type: 'refactor',
+      title: 'Renamed the test helper directory to match the source layout',
+      narrative: 'Helpers lived under a name that no longer described anything after the package split.',
+    },
+  ],
+  // (2) same file or surface, different problems
+  [
+    {
+      type: 'bugfix',
+      title: 'The port was compared as a string and never matched',
+      narrative:
+        'Config read the value from the environment and left it as text, so the equality check failed.',
+    },
+    {
+      type: 'feature',
+      title: 'Config accepts a per-environment override file',
+      narrative: 'Staging and production diverged in three values and both were being edited by hand.',
+    },
+    {
+      type: 'change',
+      title: 'Config logs which source each value came from',
+      narrative: 'Nothing said whether a value came from the file, the environment or a default.',
+    },
+  ],
+  [
+    {
+      type: 'bugfix',
+      title: 'The email validator rejected plus-addressing',
+      narrative:
+        'A tightened pattern dropped the plus sign, so anyone using a tagged address could not sign up.',
+    },
+    {
+      type: 'change',
+      title: 'Indexed the account creation date for the admin list',
+      narrative: 'The admin list sorted by creation date over a full table scan and timed out past 50k rows.',
+    },
+    {
+      type: 'refactor',
+      title: 'Split the account serializer out of the model',
+      narrative: 'Presentation logic had accumulated on the model and two views needed different shapes.',
+    },
+  ],
+  [
+    {
+      type: 'bugfix',
+      title: 'A partial write still answered 200',
+      narrative:
+        'The handler returned before the stream finished, so a truncated object looked like a success.',
+    },
+    {
+      type: 'change',
+      title: 'The endpoint now requires a declared length',
+      narrative: 'Without one the proxy buffered the whole body and the limit could not be enforced early.',
+    },
+    {
+      type: 'discovery',
+      title: 'That route is the only one with no timeout',
+      narrative:
+        'Every other handler inherits the server default; this one was mounted before the default existed.',
+    },
+  ],
+];
+
 // ─── Classification ──────────────────────────────────────────────────────────
 
 /**
@@ -322,6 +463,64 @@ export async function runArm(clusters, judge = judgeCluster) {
     // Rate over DECIDED clusters, so errors cannot inflate it in either direction.
     refuseRate: decided > 0 ? count('refuse') / decided : null,
     verdicts,
+  };
+}
+
+/**
+ * The AMBIGUOUS arm's aggregator. Deliberately returns NO rate.
+ *
+ * A rate needs a ground truth to be right or wrong about, and an ambiguous cluster has
+ * none — a reasonable reviewer could rule either way. What repeated runs CAN answer is
+ * whether the veto is decisive or a coin flip, and that is a property worth knowing on its
+ * own: a coin flip means the same corpus compresses differently on two consecutive nights,
+ * which is worse than either steady answer.
+ *
+ * Stability = the MODAL fraction over DECIDED runs (errors excluded, exactly as
+ * `runArm.refuseRate` excludes them). A cluster that never decided reports `null` rather
+ * than 1 — otherwise a dead key would read as perfect agreement, the same blind-instrument
+ * hazard the three-way classification exists to prevent.
+ *
+ * @param {Array<Array<object>>} clusters
+ * @param {(c: Array<object>) => Promise<'compress'|'refuse'|'error'>} judge
+ * @param {number} reps how many times to ask about EACH cluster (D#13: at least 3)
+ */
+export async function runArmRepeated(clusters, judge = judgeCluster, reps = 3) {
+  const out = [];
+  for (const cluster of clusters) {
+    const verdicts = [];
+    for (let r = 0; r < reps; r++) verdicts.push(await judge(cluster));
+    const decidedVerdicts = verdicts.filter((v) => v !== 'error');
+    const tally = new Map();
+    for (const v of decidedVerdicts) tally.set(v, (tally.get(v) ?? 0) + 1);
+    let modal = null;
+    let modalN = 0;
+    for (const [v, n] of tally)
+      if (n > modalN) {
+        modal = v;
+        modalN = n;
+      }
+    const decided = decidedVerdicts.length;
+    out.push({
+      verdicts,
+      decided,
+      error: verdicts.length - decided,
+      modal,
+      // One decision is not evidence of stability, so `null` below 2 — same reason the
+      // all-error case is null rather than 1.
+      stability: decided >= 2 ? modalN / decided : null,
+      unanimous: decided >= 2 && modalN === decided,
+      cohesion: clusterCohesion(cluster),
+    });
+  }
+  const scored = out.filter((c) => c.stability !== null);
+  return {
+    n: clusters.length,
+    reps,
+    clusters: out,
+    meanStability: scored.length ? scored.reduce((a, c) => a + c.stability, 0) / scored.length : null,
+    unanimousDecided: out.filter((c) => c.unanimous).length,
+    flipped: out.filter((c) => c.stability !== null && !c.unanimous).length,
+    error: out.reduce((a, c) => a + c.error, 0),
   };
 }
 
@@ -407,6 +606,38 @@ export function runSelfChecks() {
       unrelCoh.map((c) => c.toFixed(4)).join(' '),
     );
 
+    // 6. The ambiguous arm's premise (D#13). Same shape as check 5 and for the same
+    //    reason: if this fixture drifted to either extreme the arm would silently become a
+    //    second copy of an easy question, and its stability reading would be quoted as if
+    //    it were about hard clusters. Mutation-verified against the real drift shape
+    //    (aliasing AMBIGUOUS to UNRELATED): reads FAIL, exit 1.
+    const ambCoh = AMBIGUOUS.map(clusterCohesion);
+    const meanAmb = ambCoh.reduce((a, b) => a + b, 0) / ambCoh.length;
+    check(
+      'the ambiguous arm sits strictly between the other two in cohesion',
+      meanAmb > meanUnrel && meanAmb < meanRel,
+      `unrelated ${meanUnrel.toFixed(4)} < ambiguous ${meanAmb.toFixed(4)} < related ${meanRel.toFixed(4)}`,
+    );
+
+    // 7. The repeated aggregator must not turn a dead key into agreement. Same hazard as
+    //    check 3's all-error arm, one layer up: `stability` is over DECIDED runs, so an
+    //    arm that never decided reports NO stability rather than a perfect 1.
+    const allErrorReps = await runArmRepeated(AMBIGUOUS, async () => 'error', 3);
+    check(
+      'an all-error repeated arm reports NO stability rather than 1',
+      allErrorReps.meanStability === null &&
+        allErrorReps.error === AMBIGUOUS.length * 3 &&
+        allErrorReps.unanimousDecided === 0,
+      `mean=${allErrorReps.meanStability} errors=${allErrorReps.error}`,
+    );
+    let flip = 0;
+    const flipping = await runArmRepeated(AMBIGUOUS, async () => (flip++ % 2 ? 'refuse' : 'compress'), 3);
+    check(
+      'a coin-flipping arm is not reported as unanimous',
+      flipping.unanimousDecided === 0 && flipping.flipped === AMBIGUOUS.length,
+      `unanimous=${flipping.unanimousDecided} flipped=${flipping.flipped}`,
+    );
+
     return {
       passed: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok),
@@ -430,12 +661,21 @@ async function main() {
     return;
   }
 
+  const repsArg = Number(process.argv[process.argv.indexOf('--reps') + 1]);
+  const reps = process.argv.includes('--reps') && Number.isInteger(repsArg) && repsArg >= 1 ? repsArg : 3;
+  const skipAmbiguous = process.argv.includes('--no-ambiguous');
+
   const stamp = new Date().toISOString();
+  const calls = RELATED.length + UNRELATED.length + (skipAmbiguous ? 0 : AMBIGUOUS.length * reps);
   console.log(`compress veto rate — ${stamp}, mode=${detectMode()}`);
-  console.log(`fixture: ${RELATED.length} related + ${UNRELATED.length} unrelated clusters, 3 obs each\n`);
+  console.log(
+    `fixture: ${RELATED.length} related + ${UNRELATED.length} unrelated + ${skipAmbiguous ? 0 : AMBIGUOUS.length} ambiguous x${reps} clusters, 3 obs each`,
+  );
+  console.log(`model calls this run: ${calls}\n`);
 
   const unrelated = await runArm(UNRELATED);
   const related = await runArm(RELATED);
+  const ambiguous = skipAmbiguous ? null : await runArmRepeated(AMBIGUOUS, judgeCluster, reps);
 
   const pct = (r) => (r === null ? 'n/a' : `${(r * 100).toFixed(1)}%`);
   const out = {
@@ -443,6 +683,8 @@ async function main() {
     mode: detectMode(),
     unrelated: { ...unrelated, vetoRate: unrelated.refuseRate },
     related: { ...related, falseRefusalRate: related.refuseRate },
+    // No rate here, on purpose — see runArmRepeated's docblock.
+    ambiguous,
   };
   if (json) {
     console.log(JSON.stringify(out, null, 2));
@@ -459,7 +701,23 @@ async function main() {
     `  false-refusal  ${pct(related.refuseRate)}  (${related.refuse}/${related.refuse + related.compress} decided)`,
   );
   console.log(`  verdicts       ${related.verdicts.join(' ')}`);
-  const errors = unrelated.error + related.error;
+  if (ambiguous) {
+    console.log(`\nAMBIGUOUS arm (partly one story — NO ground truth, so no rate is reported)`);
+    console.log(
+      `  decisive       ${ambiguous.unanimousDecided}/${ambiguous.n} clusters gave the same verdict every time; ${ambiguous.flipped} flipped`,
+    );
+    console.log(
+      `  mean stability ${ambiguous.meanStability === null ? 'n/a' : ambiguous.meanStability.toFixed(3)}  (modal fraction over decided runs, x${ambiguous.reps})`,
+    );
+    for (const [i, c] of ambiguous.clusters.entries()) {
+      console.log(
+        `    #${i} coh ${c.cohesion.toFixed(4)}  ${c.verdicts.join(' ')}${c.stability === null ? '  (undecided)' : ''}`,
+      );
+    }
+    console.log(`  A flip here means the same corpus compresses differently on two consecutive`);
+    console.log(`  nights — a worse property than either steady answer.`);
+  }
+  const errors = unrelated.error + related.error + (ambiguous?.error ?? 0);
   console.log(
     `\nerrors: ${errors}${errors ? '  — these are NOT counted as vetoes; rerun before quoting a rate' : ''}`,
   );

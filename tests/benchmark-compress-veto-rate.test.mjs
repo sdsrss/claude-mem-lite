@@ -12,11 +12,13 @@
 // importing it fires no model calls, and every case below drives the pure halves.
 import { describe, it, expect } from 'vitest';
 import {
+  AMBIGUOUS,
   RELATED,
   UNRELATED,
   classify,
   clusterCohesion,
   runArm,
+  runArmRepeated,
   runSelfChecks,
 } from '../benchmark/compress-veto-rate.mjs';
 
@@ -75,5 +77,120 @@ describe('compress-veto-rate ruler (D#10)', () => {
   it('runs its own self-checks green on this tree', async () => {
     const { failed } = await runSelfChecks();
     expect(failed.map((f) => f.name)).toEqual([]);
+  });
+});
+
+// ─── The ambiguous arm (D#13) ────────────────────────────────────────────────
+//
+// The two original arms answer an EASY question: their clusters are separated by design
+// (cohesion 0.1124 vs 0.0051), so "veto 100% / false-refusal 0%" says the veto handles the
+// CLEAR case. It says nothing about a cluster that is partly one story — which is the
+// population the 14-day fallback actually produces on a busy repo.
+//
+// An ambiguous cluster has NO ground truth, so it cannot produce a rate, and this arm
+// deliberately does not report one. What it CAN report is whether the veto is decisive or a
+// coin flip: the same corpus compressing differently on two consecutive nights is a worse
+// property than either verdict.
+describe('compress-veto-rate ambiguous arm (D#13)', () => {
+  const constantJudge = (v) => async () => v;
+
+  it('reports per-cluster verdicts and no rate, because there is no ground truth', async () => {
+    const arm = await runArmRepeated(AMBIGUOUS, constantJudge('refuse'), 3);
+    // The absence is the design. A `refuseRate` here would invite exactly the reading
+    // D#13 says the arm cannot support.
+    expect(arm).not.toHaveProperty('refuseRate');
+    expect(arm.clusters).toHaveLength(AMBIGUOUS.length);
+    for (const c of arm.clusters) expect(c.verdicts).toEqual(['refuse', 'refuse', 'refuse']);
+  });
+
+  it('asks each cluster reps times, not once', async () => {
+    let calls = 0;
+    await runArmRepeated(
+      AMBIGUOUS,
+      async () => {
+        calls++;
+        return 'compress';
+      },
+      4,
+    );
+    expect(calls).toBe(AMBIGUOUS.length * 4);
+  });
+
+  it('separates a decisive cluster from a coin-flip one', async () => {
+    // Cluster 0 flips 2:1, every other cluster is unanimous. Stability is the MODAL
+    // fraction, so the flipping cluster must read 2/3 and the rest 1.
+    const seq = ['refuse', 'compress', 'refuse'];
+    let i = 0;
+    const arm = await runArmRepeated(
+      AMBIGUOUS,
+      async (cluster) => (cluster === AMBIGUOUS[0] ? seq[i++] : 'compress'),
+      3,
+    );
+    expect(arm.clusters[0].stability).toBeCloseTo(2 / 3, 10);
+    expect(arm.clusters[0].unanimous).toBe(false);
+    expect(arm.clusters[0].modal).toBe('refuse');
+    for (const c of arm.clusters.slice(1)) {
+      expect(c.stability).toBe(1);
+      expect(c.unanimous).toBe(true);
+    }
+    expect(arm.flipped).toBe(1);
+    expect(arm.unanimousDecided).toBe(AMBIGUOUS.length - 1);
+  });
+
+  it('keeps errors out of the stability denominator', async () => {
+    // refuse/refuse/error is a cluster that decided twice and agreed twice — stable, on a
+    // denominator of 2. Counting the error either way would make a dead key read as
+    // instability (or as agreement), the same three-way hazard the rate arm is built around.
+    const seq = ['refuse', 'refuse', 'error'];
+    let i = 0;
+    const arm = await runArmRepeated(AMBIGUOUS.slice(0, 1), async () => seq[i++], 3);
+    expect(arm.clusters[0].decided).toBe(2);
+    expect(arm.clusters[0].error).toBe(1);
+    expect(arm.clusters[0].stability).toBe(1);
+    expect(arm.error).toBe(1);
+  });
+
+  it('reports no stability at all for a cluster that never decided', async () => {
+    // All-error must not read as "perfectly stable". Same failure mode as an all-error
+    // rate reading 100%.
+    const arm = await runArmRepeated(AMBIGUOUS.slice(0, 1), constantJudge('error'), 3);
+    expect(arm.clusters[0].stability).toBeNull();
+    expect(arm.clusters[0].unanimous).toBe(false);
+    expect(arm.meanStability).toBeNull();
+  });
+
+  it('excludes undecided clusters from meanStability rather than scoring them zero', async () => {
+    // Two clusters: one unanimous, one all-error. The mean is 1 over the single cluster
+    // that produced a verdict — not 0.5.
+    const arm = await runArmRepeated(
+      AMBIGUOUS.slice(0, 2),
+      async (cluster) => (cluster === AMBIGUOUS[0] ? 'refuse' : 'error'),
+      3,
+    );
+    expect(arm.meanStability).toBe(1);
+  });
+
+  it('sits between the other two arms in lexical cohesion, which is its premise', () => {
+    // The fixture claims to be "partly one story". If it were as disjoint as UNRELATED the
+    // arm would just be a second copy of the easy question; if it were as cohesive as
+    // RELATED it would be a second copy of the other easy question.
+    const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const rel = mean(RELATED.map(clusterCohesion));
+    const amb = mean(AMBIGUOUS.map(clusterCohesion));
+    const unrel = mean(UNRELATED.map(clusterCohesion));
+    expect(amb).toBeGreaterThan(unrel);
+    expect(amb).toBeLessThan(rel);
+  });
+
+  it('carries the same three clusters-of-three shape as the other arms', () => {
+    expect(AMBIGUOUS).toHaveLength(6);
+    for (const c of AMBIGUOUS) {
+      expect(c).toHaveLength(3);
+      for (const o of c) {
+        expect(typeof o.title).toBe('string');
+        expect(typeof o.narrative).toBe('string');
+        expect(o.title.length).toBeGreaterThan(0);
+      }
+    }
   });
 });
