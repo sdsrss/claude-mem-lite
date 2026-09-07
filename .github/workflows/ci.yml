@@ -145,6 +145,26 @@ jobs:
         # contributor for a reason that has nothing to do with their change and that they
         # have no way to clear (this repo started taking external PRs at v3.84.1).
         run: node benchmark/ci-gate.mjs ${{ github.event_name == 'push' && '--strict' || '' }}
+      - name: Multiplier wiring gate
+        # The gate above CANNOT say NO about the eight scoring multipliers, and that is
+        # measured, not suspected. Its only multiplier check is `hybrid_over_bm25` with
+        # floor -0.05 against a reading of +0.0002 R@10, so the whole chain can degrade to
+        # pure BM25 and stay 0.05 clear of the floor; the eight per-term ablation deltas
+        # `--matrix` prints are gated by nothing at all. Mutating the real tree on
+        # 2026-09-07 and reverting it: neutering MULT_EXPR.importance left the step above
+        # at exit 0 with all four checks PASS and `hybrid_over_bm25` going UP, because
+        # importance is a NEGATIVE contributor on the canonical fixture; changing
+        # MULT_EXPR.lesson's 0.3 to 0.5 left its output byte-identical, every digit.
+        #
+        # This step runs the discrimination ruler's own self-checks, which drive all four
+        # verdict families to failure (MEASURED / MISMATCH / DEAD / BLIND) on synthetic
+        # arms. It is deliberately NOT gated on `push` only: unlike the baseline-age check
+        # above there is no dated component and no outside-contributor trap — a PR that
+        # breaks a multiplier SHOULD go red on the PR.
+        #
+        # No network, no LLM, no fixture on disk; the whole self-check is well under a
+        # second, so it costs nothing to run on every event.
+        run: npm run benchmark:multipliers:gate
 
   # Real publishable-tarball install: npm pack → clean-dir npm install →
   # better-sqlite3 native rebuild → import entry + open DB. This is the ONLY CI
