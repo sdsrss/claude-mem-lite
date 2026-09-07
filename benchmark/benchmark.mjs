@@ -309,11 +309,21 @@ const MODE_TERMS = {
   no_cite: ['decay', 'type', 'project', 'importance', 'access', 'lesson', 'noise'],
 };
 
-function searchObservations(db, query, options = {}) {
+export function searchObservations(db, query, options = {}) {
   const mode = options.mode ?? 'hybrid';
   const limit = options.limit ?? 20;
   const project = options.project ?? null;
   const obsType = options.type ?? null;
+  // The project term is a BOOST, and it is separate from the project FILTER —
+  // mirroring search-engine.mjs:606, `projectBoost = args.project ? null :
+  // currentProject`. Boosting inside a set already filtered to that project
+  // multiplies every surviving row by the same 2.0, which is rank-invariant, so
+  // a harness that passes the filter value as the boost models a configuration
+  // production never runs. That conflation is why `no_project` reads exactly 0
+  // on the canonical matrix: 29 of 30 queries carry no project at all, and the
+  // one that does also filters on it. benchmark/multiplier-discrimination.mjs
+  // drives the other case (boost, no filter) and reads the 2.0 directly.
+  const boostProject = project ? null : (options.currentProject ?? null);
 
   if (mode === 'random') return searchRandom(db, query, { limit, project, obsType });
   if (mode === 'recency') return searchRecency(db, { limit, project, obsType });
@@ -340,7 +350,7 @@ function searchObservations(db, query, options = {}) {
       ? `${baseBm25} as score`
       : `${baseBm25} * ${terms.map((t) => MULT_EXPR[t]).join(' * ')} as score`;
 
-  const scoreParams = terms.flatMap((t) => MULT_PARAMS[t](now, project));
+  const scoreParams = terms.flatMap((t) => MULT_PARAMS[t](now, boostProject));
 
   const sql = `
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.importance,
