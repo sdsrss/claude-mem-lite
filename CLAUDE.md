@@ -89,6 +89,16 @@ optional**: the fallback `$TMPDIR` lands under `$HOME`, and Node resolves `node_
 the tree, so on a machine whose `~/node_modules` holds `better-sqlite3` the run silently
 measures the home tree and passes anyway. The harness now refuses such a base.
 
+**Last run: 2026-09-07, `main` @ v5.3.0, Node v26.8.1 / npm 11.19.0 — 47/47, 45/45, 15/15,
+all three exit 0, each phase's tally matching its own `EXPECTED_CHECKS`.** This is the run
+the two dependency majors (better-sqlite3 13, vitest 5) had been owed since v4.0.0; no
+regression surfaced. It is also the first run in which the **self-heal sections measured
+something**: A10 and B8 both logged `the shipped prebuild would not load — moved aside to
+…/prebuilds/linux-x64.node.unusable`, so `c9c1acb`'s quarantine is exercised in the real
+plugin cache AND the real managed install, not just asserted. Do not read a green harness
+as covering R10 P2-11 / P2-12 — none of phase B's nine sections constructs either shape
+(see `scripts/hook-launcher.mjs`'s swap-barrier comment).
+
 ## Architecture
 
 Seven hook events are registered in `hooks/hooks.json`: `SessionStart`, `PreCompact`,
@@ -365,14 +375,21 @@ Full evidence for the first three in `docs/measurement/findings.md`.
     into all four and handed `cleanupBroken` an inertness claim that is false.)
   - `markAutoCompressible` — writes `-1`, which both `purgeStale` (`-2`) and
     `recoverOrphanedChildren` (`> 0`) skip, so it cannot delete or resurface anything.
-  - **`cleanupBroken` is the one HARD-DELETE site in this set** (`lib/maintain-core.mjs:405`)
-    and the only one where the harm above is reachable at all: it can delete a supersede
-    tombstone, taking `superseded_by` with it. Left bare because the rows it deletes have no
-    title, no narrative and no lesson, so they are excluded from every injection surface and
-    an id that was never injected is not one a `#NN` cites — a **likelihood** judgement, not
-    the inertness proof the three above have. Narrow but not impossible (a hand-typed `#NN`,
-    or a numeric `save --supersedes` chain later blanked by a degenerate cluster-merge).
-    Tracked as D#4; do not upgrade it to "inert".
+  - **`cleanupBroken` is the one HARD-DELETE site in this set**, and since 2026-09-07 it is
+    the one site carrying a NARROWER guard rather than none: `AND superseded_by IS NULL`.
+    **This bullet used to say "left bare" — that is no longer true, and D#4 is closed.** It
+    was the only place the harm above was reachable at all (deleting a supersede tombstone
+    takes `superseded_by` with it), and the only exemption resting on a **likelihood**
+    judgement rather than an inertness proof: its rows have no title, narrative or lesson,
+    so they are absent from every injection surface, so an id never injected is not one a
+    `#NN` cites. Narrow but not impossible — a hand-typed `#NN`, or a numeric
+    `save --supersedes` chain later blanked by a degenerate cluster-merge — so it was fixed
+    rather than re-argued. **Not the full `liveObsFilterSql`, deliberately**: a retired row
+    whose `superseded_by` is null hands `redirectSupersededIds` nothing (it falls through to
+    `out.add(id)`, the same answer a missing row gives), so it stays reclaimable; filtering
+    on `superseded_at` would strand every empty retired row here forever. Guarded by two
+    cases in `tests/superseded-write-guards.test.mjs`, the first verified RED against the
+    real pre-fix predicate.
   - `maintenanceStats` — puts `superseded_at IS NULL` inside the **stale** CASE only, so each
     forecast matches the op it predicts rather than one outer predicate that would be wrong
     for `boostable` and `pinned`.
@@ -383,8 +400,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   - `stats-core.computeStatsFeed` — one predicate on both halves of a ratio, with superseded
     rows reported on their own line.
   Judged point by point 2026-09-06 across all 11 shipped sites (R8 §6-a, carried as open in
-  R10 §7) — **zero code changes warranted**, but read each reason as written: they are not
-  the same reason, and one of them is a probability argument.
+  R10 §7) — **zero code changes warranted at the time**, but read each reason as written:
+  they are not the same reason. **The one that was a probability argument is now a guard**
+  (`cleanupBroken`, 2026-09-07, D#4 closed); the other ten still stand on the reasons given
+  above, and re-deriving them is what that judgement round already paid for.
 - **The cross-hook injected-ids marker is a union across TABLES**, so ids need namespacing
   (`injectedIdKey` in `lib/injected-ids.mjs`: `P` prompts, `D` deferred, `E` events,
   observations bare). 91.6% of observation ids also exist as an event id.
