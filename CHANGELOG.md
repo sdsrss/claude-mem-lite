@@ -2,6 +2,55 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.4.0 — two host facts the code had modelled backwards
+
+**Upgrade note:** SessionStart now emits a `Working State (from /clear)` block after
+`/clear` or `/compact`, and one memory "session" now spans a whole Claude Code session
+instead of a single turn. No action required, and no data migration — `session_summaries`
+and `sdk_sessions` simply stop counting turns. If your host fires `Stop` once per session
+rather than once per turn, `CLAUDE_MEM_LEGACY_STOP_UNLINK=1` restores the old behaviour;
+it re-breaks the `/clear` handoff by design, and a test asserts that it does.
+
+**The `/clear` handoff had never once fired.** `session_handoffs` on the maintainer's
+install held 4 `exit` rows and **0** `clear` rows across 21 sessions. Two host facts, both
+now measured rather than assumed, explain it. `Stop` fires at the end of every assistant
+*turn*, not once per session — and it deleted the session file that SessionStart reads to
+learn which session just ended, so the branch was unreachable, and every turn minted a new
+mem session (58 prompts over 16 host sessions produced **56** mem sessions and 56 summary
+rows, 0 of which carried the LLM-only fields). And Claude Code **rotates its session id
+across `/clear`**: of 21 real transcripts, 12 carry a `/clear` command record, and in
+**12/12** that record's timestamp precedes its own file's first record by ~0.1s — the
+command is issued in the old session and replayed into a new file under a new id. That was
+R10 §8's blocking prerequisite, and it needed no capture switch; the answer was already on
+disk. Stop now keeps the session file, SessionStart asks the host's `source`
+(`startup|clear|compact|resume`) instead of guessing from the file's presence, and the
+handoff's prompt lookup falls back to the unscoped set when the new session's id matches
+none. Five cases, each mutation-verified against the real revert. (R10-P1-1)
+
+**`install` was pushing HEAD's `launch.mjs` into older plugin-cache versions.** Entry point
+and library are versioned together, so an old cache dir ran the new entry point against its
+own `lib/` — HEAD destructures `nativeBindingRepairHint`, which v3.95.0's binding-probe does
+not export, and the swallowed TypeError takes with it the one message that tells a user how
+to repair a dead binding. R10 §8 said not to touch `install()` without reproducing this in
+the sandbox harness, so the reproduction landed first, as phase B §B9 (the `3.95.0` dir came
+back 9802 B with the symbol in it). The sync is now gated on dev mode or a version match,
+and writes atomically. One correction to the report's premise, found by running it: this is
+not "every install / repair" but every install/repair on a machine that also ran `/plugin
+marketplace add` — the block sits inside a check for the marketplace clone, and a first
+version of the repro built only the cache, measured nothing, and reported success.
+(R10-P2-11)
+
+**R10-P2-12 did not reproduce, and is recorded as such.** Four parallel launcher loops put
+**229 of 480** hook fires inside a 2524 ms window of five back-to-back in-place installs,
+with no `ERR_MODULE_NOT_FOUND`, no non-zero exit and no new `hook-errors` bytes. The
+mechanism is unchanged — `install()` still copies in place without the swap barrier
+`hook-update.mjs` takes — so this is a bounded negative, not an acquittal, and the bound is
+that an idempotent re-install deploys the same module set and cannot produce the
+version-transition shape the report names. `install()` was left alone.
+
+Sandbox harness: phase B 45 → **56** checks; 47/47, 56/56, 15/15 across all three phases.
+Suite **360 files / 5744**, 0 skipped (was 360 / 5736).
+
 ## v5.3.1 — the fix that would have measured zero, and the one hard delete that could take a redirect
 
 Two defects that had both been argued about before and never measured to the end.
