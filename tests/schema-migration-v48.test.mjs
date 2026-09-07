@@ -67,7 +67,7 @@ describe('schema v48 — the access-channel session key', () => {
     initSchema(db);
 
     expect(hasCol(db, 'observations', 'last_access_session_id')).toBe(true);
-    expect(version(db)).toBe(48);
+    expect(version(db)).toBe(CURRENT_SCHEMA_VERSION);
     const row = db.prepare('SELECT access_count, title, last_access_session_id FROM observations').get();
     expect(row.access_count).toBe(7); // the counter is NOT reset by the migration
     expect(row.title).toBe('pre-existing row');
@@ -75,7 +75,7 @@ describe('schema v48 — the access-channel session key', () => {
     db.close();
   });
 
-  it('self-heals a half-migrated DB whose version row already says 48', () => {
+  it('self-heals a half-migrated DB whose version row already says it is current', () => {
     // The hole the sentinel exists for: the version row is stamped but the ALTER is not
     // on disk (interrupted migration, restore from an older backup, a peer on a newer
     // build). Without an entry in LATEST_MIGRATION_COLUMNS the fast path returns forever
@@ -83,7 +83,7 @@ describe('schema v48 — the access-channel session key', () => {
     const db = new Database(':memory:');
     initSchema(db);
     db.exec('ALTER TABLE observations DROP COLUMN last_access_session_id');
-    expect(version(db)).toBe(48); // premise: version says done
+    expect(version(db)).toBe(CURRENT_SCHEMA_VERSION); // premise: version says done
     expect(hasCol(db, 'observations', 'last_access_session_id')).toBe(false); // but it is not
 
     initSchema(db);

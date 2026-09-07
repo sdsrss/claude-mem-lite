@@ -17,7 +17,7 @@ import { writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { createTestDb } from '../tests/test-helpers.mjs';
-import { seedDatabase, seedVectors, searchProductionHybrid } from './benchmark.mjs';
+import { seedDatabase, searchProductionHybrid } from './benchmark.mjs';
 import { buildCorpus, recallAnyAtK, loadDataset } from './longmemeval.mjs';
 // Rerank core is shared with the production deep-search rerank stage (rerank.mjs)
 // so the lift measured here reflects the EXACT algorithm that ships.
@@ -35,7 +35,6 @@ export async function rerankEval(
   let baseRows;
   try {
     seedDatabase(db, data);
-    seedVectors(db);
     baseRows = searchProductionHybrid(db, entry.question, { limit: Math.max(topK, ...ks), project: null });
   } finally {
     db.close();

@@ -1921,61 +1921,6 @@ describe('schema_version fast path', () => {
 
 // ─── Task 2: mem_save atomic transaction ─────────────────────────────────────
 
-describe('mem_save atomic transaction', () => {
-  let db;
-  beforeEach(() => {
-    db = createTestDb();
-    const now = new Date();
-    db.prepare(
-      `
-      INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-      VALUES (?, ?, ?, ?, ?, 'active')
-    `,
-    ).run('manual-test', 'manual-test', 'test', now.toISOString(), now.getTime());
-  });
-  afterEach(() => {
-    db.close();
-  });
-
-  it('observation and vector are both inserted (simulating mem_save flow)', () => {
-    const now = Date.now();
-    const saveTx = db.transaction(() => {
-      const result = db
-        .prepare(
-          `
-        INSERT INTO observations (memory_session_id, project, text, type, title, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
-        VALUES (?, ?, ?, ?, ?, ?, '', '', '[]', '[]', 1, ?, ?)
-      `,
-        )
-        .run(
-          'manual-test',
-          'test',
-          'test content',
-          'discovery',
-          'test title',
-          'test content',
-          new Date(now).toISOString(),
-          now,
-        );
-      const obsId = Number(result.lastInsertRowid);
-      // Simulate vector insert
-      const fakeVec = Buffer.alloc(16);
-      db.prepare(
-        'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
-      ).run(obsId, fakeVec, 'test-v1', now);
-      return obsId;
-    });
-
-    const obsId = saveTx();
-    const obs = db.prepare('SELECT * FROM observations WHERE id = ?').get(obsId);
-    expect(obs).toBeDefined();
-    expect(obs.title).toBe('test title');
-    const vec = db.prepare('SELECT * FROM observation_vectors WHERE observation_id = ?').get(obsId);
-    expect(vec).toBeDefined();
-    expect(vec.vocab_version).toBe('test-v1');
-  });
-});
-
 // ─── mem_save observation_files population ───────────────────────────────────
 
 describe('mem_save observation_files population', () => {
@@ -2126,13 +2071,6 @@ describe('schema indexes', () => {
   });
   afterEach(() => {
     db.close();
-  });
-
-  it('idx_obs_vectors_version exists', () => {
-    const row = db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_obs_vectors_version'")
-      .get();
-    expect(row).toBeDefined();
   });
 
   it('idx_sessions_project exists', () => {
@@ -2391,6 +2329,5 @@ describe('tool-schemas exports', () => {
     const { memMaintainSchema } = await import('../tool-schemas.mjs');
     const desc = memMaintainSchema.operations.description;
     expect(desc).toContain('dedup=find/merge duplicate observations');
-    expect(desc).toContain('rebuild_vectors=rebuild TF-IDF vocabulary');
   });
 });

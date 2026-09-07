@@ -188,7 +188,6 @@ async function loadCacheGuard() {
 //     two functions and their callers async across a background-worker path costs more
 //     risk than the milliseconds are worth.
 import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
-import { getVocabulary } from './tfidf.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // Prevent recursive hooks from background claude -p calls
@@ -2589,13 +2588,6 @@ async function handleSessionStart() {
       });
     } catch (e) {
       debugCatch(e, 'session-start-v270-banner');
-    }
-
-    // Pre-load TF-IDF vocabulary cache for this session (from DB, ~1ms)
-    try {
-      getVocabulary(db);
-    } catch (e) {
-      debugCatch(e, 'session-start-vocab');
     }
   } finally {
     db.close();

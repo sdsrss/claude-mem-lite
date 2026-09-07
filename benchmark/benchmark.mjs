@@ -9,14 +9,7 @@ import { sanitizeFtsQuery, estimateTokens, cjkBigrams } from '../utils.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { computePerSourceWindow } from '../lib/search-core.mjs';
 import { deepSearch } from '../deep-search.mjs';
-import {
-  computeVector,
-  rebuildVocabulary,
-  _resetVocabCache,
-  VOCAB_DIM,
-  MIN_COSINE_SIMILARITY,
-  RRF_K,
-} from '../tfidf.mjs';
+import {} from '../tfidf.mjs';
 import { OBS_BM25, TYPE_QUALITY_CASE, noisePenaltyClause, citeFactorClause } from '../scoring-sql.mjs';
 import { recencyDecaySql, liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { createTestDb } from '../tests/test-helpers.mjs';
@@ -127,56 +120,18 @@ export function seedDatabase(db, data) {
   return { observations: data.observations.length, sessions: (data.sessions || []).length };
 }
 
-// ─── Seed Vectors ───────────────────────────────────────────────────────────
-//
-// seedDatabase only fills observations/observations_fts — the FTS arm. The real
-// production search (searchObservationsHybrid) ALSO runs a TF-IDF vector arm and
-// RRF-merges the two; without observation_vectors that arm is dead and the
-// k=60 / MIN_COSINE / VOCAB_DIM constants never get exercised on the real path.
-// seedVectors builds the vocabulary from the seeded corpus and stores a vector
-// per observation, exactly as the live save/compress paths do.
-export function seedVectors(db, { dim } = {}) {
-  _resetVocabCache();
-  const vocab = rebuildVocabulary(db, dim ? { dim } : undefined);
-  if (!vocab) return { vectors: 0, vocabVersion: null, dim: dim ?? VOCAB_DIM };
-
-  const obs = db
-    .prepare(
-      `
-    SELECT id, title, narrative, concepts FROM observations
-    WHERE ${liveObsFilterSql('')}
-  `,
-    )
-    .all();
-  const ins = db.prepare(
-    'INSERT OR REPLACE INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
-  );
-  const now = Date.now();
-  let n = 0;
-  db.transaction(() => {
-    for (const o of obs) {
-      const vec = computeVector([o.title, o.narrative, o.concepts].filter(Boolean).join(' '), vocab);
-      if (vec) {
-        ins.run(o.id, Buffer.from(vec.buffer), vocab.version, now);
-        n++;
-      }
-    }
-  })();
-  return { vectors: n, vocabVersion: vocab.version, dim: vocab.dim };
-}
-
-// production_hybrid: drive the REAL searchObservationsHybrid (FTS + vector + RRF),
-// not this file's FTS-only `searchObservations`. q.project is passed as the boost
-// (currentProject), mirroring the FTS 'hybrid' mode's project-boost semantics
-// rather than a hard filter. minCosine / rrfK are sweep overrides (undefined →
-// the production MIN_COSINE_SIMILARITY / RRF_K defaults). Requires seedVectors first.
+// production_hybrid: drive the REAL searchObservationsHybrid, not this file's FTS-only
+// `searchObservations`. q.project is passed as the boost (currentProject), mirroring the
+// FTS 'hybrid' mode's project-boost semantics rather than a hard filter.
 // Exported so external benchmark adapters (e.g. longmemeval.mjs) drive the exact
 // same production hybrid path instead of re-assembling ctx and drifting from it.
-export function searchProductionHybrid(
-  db,
-  query,
-  { limit = 10, project = null, obsType = null, minCosine, rrfK } = {},
-) {
+//
+// It used to say "(FTS + vector + RRF)" and require a seedVectors() call first. Both were
+// false in the shipped default long before Phase-2 removed the arm: searchObservationsHybrid
+// returned before reading a single vector whenever CLAUDE_MEM_VECTORS was unset, so the
+// seeding was paid for and discarded. Removing it does not move any number this mode
+// reports — verified by re-running --production-hybrid against the pre-removal reading.
+export function searchProductionHybrid(db, query, { limit = 10, project = null, obsType = null } = {}) {
   const ftsQuery = sanitizeFtsQuery(query);
   // Fidelity: use the SAME candidate-pool window the production CLI/MCP path uses
   // (lib/search-core.mjs computePerSourceWindow) instead of a hardcoded max(limit,20).
@@ -193,8 +148,6 @@ export function searchProductionHybrid(
     perSourceOffset,
     currentProject: project,
     limit,
-    minCosine,
-    rrfK,
   };
   const rows = searchObservationsHybrid(db, ctx);
   // Fidelity note — reRankWithContext is INTENTIONALLY not mirrored here (it is the
@@ -746,67 +699,6 @@ export function summarizePerQueryDelta(deltas, threshold = 0.001) {
 
 // ─── Vector Constant Sweep ──────────────────────────────────────────────────
 //
-// Sweeps VOCAB_DIM × MIN_COSINE × RRF_K over the REAL production_hybrid path to
-// pin the empirical values. The current production defaults (512 / 0.05 / 60)
-// are included as a row so the sweep both validates and locates them. dim
-// requires a vocab rebuild + vector re-seed; minCosine/rrfK are query-time, so
-// the dim loop is outermost.
-const SWEEP_DIMS = [256, 512, 768];
-const SWEEP_MIN_COSINE = [0.03, 0.05, 0.08];
-const SWEEP_RRF_K = [40, 60, 80];
-
-export function runVectorSweep(db, queries, opts = {}) {
-  const dims = opts.dims || SWEEP_DIMS;
-  const minCosines = opts.minCosines || SWEEP_MIN_COSINE;
-  const rrfKs = opts.rrfKs || SWEEP_RRF_K;
-  const rows = [];
-  for (const dim of dims) {
-    seedVectors(db, { dim });
-    for (const minCosine of minCosines) {
-      for (const rrfK of rrfKs) {
-        let R = 0,
-          P = 0,
-          N = 0,
-          M = 0;
-        for (const q of queries) {
-          const res = searchProductionHybrid(db, q.query, {
-            limit: 10,
-            project: q.project,
-            obsType: q.type,
-            minCosine,
-            rrfK,
-          });
-          R += computeRecallAtK(res, q.relevant_ids, 10);
-          P += computePrecisionAtK(res, q.relevant_ids, 10);
-          N += computeNDCG(res, q.relevant_ids, 10);
-          M += computeMRR(res, q.relevant_ids);
-        }
-        const n = queries.length;
-        rows.push({
-          dim,
-          minCosine,
-          rrfK,
-          recall_at_10: round(R / n),
-          precision_at_10: round(P / n),
-          ndcg_at_10: round(N / n),
-          mrr_at_10: round(M / n),
-        });
-      }
-    }
-  }
-  // Best config by nDCG (ties → higher MRR). `pinnedIsBest` tells you whether the
-  // current production defaults are already the sweep optimum on this fixture.
-  const sorted = rows.slice().sort((a, b) => b.ndcg_at_10 - a.ndcg_at_10 || b.mrr_at_10 - a.mrr_at_10);
-  const best = sorted[0];
-  const pinned = { dim: VOCAB_DIM, minCosine: MIN_COSINE_SIMILARITY, rrfK: RRF_K };
-  const pinnedIsBest =
-    !!best && best.dim === pinned.dim && best.minCosine === pinned.minCosine && best.rrfK === pinned.rrfK;
-  return { rows, best, pinned, pinnedIsBest };
-}
-
-// ─── Deep Search (LLM multi-query / HyDE) ─────────────────────────────────────
-//
-// Measures the production deep-search path (deep-search.mjs) on the
 // vocabulary-mismatch fixture against the single-query production_hybrid
 // baseline. Uses a fixture-backed FAKE llm (recorded rewrites) so the result is
 // deterministic and CI-able — it isolates FUSION quality from live Haiku rewrite
@@ -921,7 +813,6 @@ async function main() {
   const matrixMode = args.has('--matrix') || args.has('--baselines');
   const holdoutMode = args.has('--holdout');
   const productionHybridMode = args.has('--production-hybrid');
-  const vectorSweepMode = args.has('--vector-sweep');
   const deepSearchMode = args.has('--deep-search');
   const ablations = !args.has('--no-ablations');
 
@@ -945,10 +836,6 @@ async function main() {
     const rewritesFile = JSON.parse(readFileSync(rewritesPath, 'utf8'));
     const rewritesByQuery = rewritesFile.rewrites || rewritesFile;
 
-    const seeded = seedVectors(db);
-    console.error(
-      `Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`,
-    );
     console.error('Running deep-search benchmark (recorded rewrites, deterministic fake llm)...');
     const res = await runDeepSearch(db, dQueries, rewritesByQuery);
     console.log(JSON.stringify(res, null, 2));
@@ -970,37 +857,8 @@ async function main() {
     return;
   }
 
-  // --vector-sweep: pin VOCAB_DIM × MIN_COSINE × RRF_K on the real hybrid path.
-  if (vectorSweepMode) {
-    console.error('Running vector constant sweep over the real searchObservationsHybrid path...');
-    const sweep = runVectorSweep(db, queryData.queries);
-    console.log(JSON.stringify(sweep, null, 2));
-    console.error('\n─── Vector Sweep (real searchObservationsHybrid) ───');
-    console.error(
-      `  ${'dim'.padStart(5)} ${'minCos'.padStart(7)} ${'rrfK'.padStart(5)} ${'R@10'.padStart(7)} ${'P@10'.padStart(7)} ${'nDCG'.padStart(7)} ${'MRR'.padStart(7)}`,
-    );
-    for (const r of sweep.rows) {
-      console.error(
-        `  ${String(r.dim).padStart(5)} ${String(r.minCosine).padStart(7)} ${String(r.rrfK).padStart(5)} ${String(r.recall_at_10).padStart(7)} ${String(r.precision_at_10).padStart(7)} ${String(r.ndcg_at_10).padStart(7)} ${String(r.mrr_at_10).padStart(7)}`,
-      );
-    }
-    console.error(
-      `\n  Pinned defaults: dim=${sweep.pinned.dim} minCosine=${sweep.pinned.minCosine} rrfK=${sweep.pinned.rrfK}`,
-    );
-    console.error(
-      `  Best on fixture: dim=${sweep.best.dim} minCosine=${sweep.best.minCosine} rrfK=${sweep.best.rrfK} (nDCG=${sweep.best.ndcg_at_10})`,
-    );
-    console.error(`  → pinned defaults ${sweep.pinnedIsBest ? 'ARE' : 'are NOT'} the fixture optimum`);
-    db.close();
-    return;
-  }
-
-  // --production-hybrid: run the eval over the real FTS+vector+RRF path.
+  // --production-hybrid: run the eval over the real searchObservationsHybrid path.
   if (productionHybridMode) {
-    const seeded = seedVectors(db);
-    console.error(
-      `Seeded ${seeded.vectors} observation vectors (vocab ${seeded.vocabVersion}, dim ${seeded.dim})`,
-    );
     console.error('Running benchmark on the real searchObservationsHybrid path...');
     const results = runBenchmark(db, queryData.queries, 'production_hybrid');
     console.log(JSON.stringify(results, null, 2));

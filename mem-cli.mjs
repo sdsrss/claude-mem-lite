@@ -15,7 +15,6 @@ import { resolveProject } from './project-utils.mjs';
 // a project about to be born, and absorbing it into the enclosing repo strands the row once
 // the session's hooks start writing the subdirectory's own name. Hook-side is untouched.
 import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
-import { _resetVocabCache, vecTextForRow, vectorsEnabled } from './tfidf.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
 import {
@@ -104,7 +103,7 @@ import {
   formatSupersedeSkipped,
   formatSupersededNote,
 } from './lib/save-observation.mjs';
-import { normalizeScope, insertObservationVector, applyObsUpdate } from './lib/observation-write.mjs';
+import { normalizeScope, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile, countRecallableByFile } from './lib/recall-core.mjs';
 import { fetchRecent, RECENT_MAX } from './lib/recent-core.mjs';
@@ -2292,10 +2291,6 @@ function cmdRestore(db, argv) {
   const dupCheck = db.prepare(
     'SELECT id FROM observations WHERE project = ? AND title = ? AND created_at_epoch = ? LIMIT 1',
   );
-  // Final field state of a restored row, for the post-signalUpdate vector rebuild below.
-  const vecRow = db.prepare(
-    'SELECT title, narrative, concepts, lesson_learned, search_aliases FROM observations WHERE id = ?',
-  );
   const signalUpdate = db.prepare(`UPDATE observations SET
       text = COALESCE(?, text),
       subtitle = ?, concepts = ?, facts = ?, search_aliases = ?, files_read = ?, branch = COALESCE(?, branch),
@@ -2398,15 +2393,7 @@ function cmdRestore(db, argv) {
         r.last_accessed_at ?? null,
         res.id,
       );
-      // The FTS `text` column re-syncs through the observations _au trigger, but the
-      // TF-IDF vector has no trigger: saveObservation vectorized title+content+lesson,
-      // so every field signalUpdate just applied (concepts, search_aliases) was missing
-      // from the restored row's vector. Rebuild from the row's FINAL state through the
-      // canonical vecTextForRow — the same text every other (re)build path uses. Reading
-      // the row back (rather than reusing the locals) keeps this identical to
-      // maintain-core's rebuildVectors. Skipped entirely while the vector arm is off,
-      // which is the default (lib/observation-write.mjs).
-      if (vectorsEnabled()) insertObservationVector(db, res.id, vecTextForRow(vecRow.get(res.id)));
+      // The FTS `text` column re-syncs through the observations _au trigger.
       restored++;
     } catch (e) {
       malformed++;
@@ -2544,7 +2531,7 @@ function cmdMaintain(db, args) {
   const action = positional[0];
   if (!action || !['scan', 'execute'].includes(action)) {
     fail(
-      "[mem] Usage: claude-mem-lite maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.",
+      "[mem] Usage: claude-mem-lite maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.",
     );
     return;
   }
@@ -3197,7 +3184,7 @@ Commands:
     --project P         Filter by project
 
   maintain <scan|execute>  Memory maintenance
-    --ops O             Comma-separated: cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum
+    --ops O             Comma-separated: cleanup,decay,boost,demote_pinned,dedup,purge_stale,vacuum
                         Default when omitted: cleanup,decay,boost,demote_pinned (in that order)
     --merge-ids K:R,... For dedup: keepId:removeId pairs (e.g. 10:11,20:21:22)
     --project P         Filter by project

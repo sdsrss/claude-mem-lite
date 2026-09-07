@@ -7,8 +7,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createTestDb, insertSession } from './test-helpers.mjs';
-import { _resetVocabCache } from '../tfidf.mjs';
-import { seedDatabase, seedVectors, runBenchmark, runVectorSweep } from '../benchmark/benchmark.mjs';
+import { seedDatabase, runBenchmark } from '../benchmark/benchmark.mjs';
 import { OBS_BM25 } from '../scoring-sql.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,26 +53,9 @@ const QUERIES = [
 ];
 
 describe('benchmark production_hybrid scenario (P7)', () => {
-  it('seedVectors populates observation_vectors for the seeded corpus', () => {
-    _resetVocabCache();
-    const db = createTestDb();
-    seedDatabase(db, makeSeed());
-    const before = db.prepare('SELECT COUNT(*) AS c FROM observation_vectors').get().c;
-    expect(before).toBe(0);
-
-    const seeded = seedVectors(db);
-    expect(seeded.vectors).toBeGreaterThan(0);
-    expect(seeded.vocabVersion).toBeTruthy();
-    const after = db.prepare('SELECT COUNT(*) AS c FROM observation_vectors').get().c;
-    expect(after).toBe(seeded.vectors);
-    db.close();
-  });
-
   it('runBenchmark("production_hybrid") retrieves relevant obs over the real path', () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
 
     const results = runBenchmark(db, QUERIES, 'production_hybrid');
     // The real hybrid path should recall the topical clusters well above zero.
@@ -81,21 +63,6 @@ describe('benchmark production_hybrid scenario (P7)', () => {
     expect(results.metrics.mrr_at_10).toBeGreaterThan(0);
     // It actually returned ids (not an empty/broken path).
     expect(results.perQuery.every((q) => q.result_ids.length > 0)).toBe(true);
-    db.close();
-  });
-
-  it('runVectorSweep covers the pinned defaults and reports whether they win', () => {
-    _resetVocabCache();
-    const db = createTestDb();
-    seedDatabase(db, makeSeed());
-    seedVectors(db);
-
-    const sweep = runVectorSweep(db, QUERIES, { dims: [256, 512], minCosines: [0.05], rrfKs: [60] });
-    // Pinned default config (512/0.05/60) must be one of the swept rows.
-    expect(sweep.rows.some((r) => r.dim === 512 && r.minCosine === 0.05 && r.rrfK === 60)).toBe(true);
-    expect(sweep.pinned).toEqual({ dim: 512, minCosine: 0.05, rrfK: 60 });
-    expect(typeof sweep.pinnedIsBest).toBe('boolean');
-    expect(sweep.best).toBeTruthy();
     db.close();
   });
 });
@@ -132,7 +99,6 @@ describe('benchmark BM25 parity with production OBS_BM25 (FIX 1)', () => {
   });
 
   it('benchmark FTS modes retrieve a token that lives ONLY in search_aliases', () => {
-    _resetVocabCache();
     const db = createTestDb();
     // Seed a couple of normal rows so the FTS table is non-trivial.
     seedDatabase(db, {

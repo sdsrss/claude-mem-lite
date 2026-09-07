@@ -10,7 +10,6 @@ import {
   TYPE_QUALITY_CASE,
   DEFAULT_DECAY_HALF_LIFE_MS,
   notLowSignalTitleClause,
-  LOW_SIGNAL_TITLE,
   relaxFtsQueryToOr,
   debugLog,
   debugCatch,
@@ -18,7 +17,6 @@ import {
   noisePenaltyClause,
 } from './utils.mjs';
 import { citeFactorClause } from './scoring-sql.mjs';
-import { getVocabulary, computeVector, vectorSearch, rrfMerge, vectorsEnabled } from './tfidf.mjs';
 import { extractPRFTerms, expandQueryByConcepts } from './search-scoring.mjs';
 import { liveObsFilterSql, recencyDecaySql } from './lib/inject-search-core.mjs';
 
@@ -60,16 +58,6 @@ const SIMPLE_SCORE = `${OBS_BM25}
   * (0.5 + 0.5 * COALESCE(o.importance, 1))
   * (1.0 + 0.3 * (o.lesson_learned IS NOT NULL AND o.lesson_learned NOT IN ('', 'none')))
   * ${noisePenaltyClause('o')}`;
-
-// Shared column set for fetching an observation surfaced by the vector arm — used by BOTH
-// the RRF-merge branch (FTS also had results) and the FTS-empty fallback branch. Single
-// source so the two can't drift. v3.42 F4: the fallback branch's SELECT had dropped
-// lesson_learned while its RRF twin kept it, so a vector-only hit returned
-// lesson_learned: undefined — losing the lesson content AND the 1.5× lesson scoring boost
-// downstream. Both branches build `{ …, date: obs.created_at, lesson_learned: obs.lesson_learned }`
-// so the SELECT must carry created_at + lesson_learned.
-export const VEC_HIT_OBS_COLS =
-  'id, type, title, subtitle, project, created_at, created_at_epoch, importance, files_modified, branch, lesson_learned';
 
 export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset, includeNoise } = {}) {
   const scoreExpr = scoring === 'full' ? FULL_SCORE : SIMPLE_SCORE;
@@ -671,107 +659,6 @@ export function searchObservationsHybrid(db, ctx) {
     const primaryCount = results.length;
     expandObsByConceptCo(db, ctx, now, existingIds, results, includeNoise);
     expandObsByPRF(db, ctx, now, primaryCount, existingIds, results, includeNoise);
-  }
-
-  // Vector search + RRF hybrid merge
-  try {
-    if (!vectorsEnabled()) return results; // Phase-1: vector arm disabled → BM25-only path (audit 2026-06-27)
-    const vocab = getVocabulary(db);
-    if (!vocab) return results;
-    const queryText = ftsQuery.replace(/['"()]/g, ' ');
-    const queryVec = computeVector(queryText, vocab);
-    if (!queryVec) return results;
-    const vecResults = vectorSearch(db, queryVec, {
-      project: args.project ?? null,
-      type: args.obs_type ?? null,
-      vocabVersion: vocab.version,
-      minCosine: ctx.minCosine, // undefined → MIN_COSINE_SIMILARITY (benchmark sweep override)
-    });
-    if (vecResults.length === 0) return results;
-
-    // Prepared ONCE for both arms below. better-sqlite3 does not cache statements, so
-    // the `db.prepare()` this replaces recompiled the same SQL per vector hit — up to
-    // VECTOR_SCAN_LIMIT (500, tfidf.mjs) compilations per hybrid search, on the
-    // retrieval path. The two arms are mutually exclusive, so one statement serves both.
-    const vecHitObs = db.prepare(`SELECT ${VEC_HIT_OBS_COLS} FROM observations WHERE id = ?`);
-
-    if (results.length > 0) {
-      // RRF fuses by RANK (array index), so the BM25 side must already be in
-      // composite-score order. `results` here is [full-FTS sorted, …concept ×0.7,
-      // …PRF ×0.6] with augmentation rows APPENDED, so its index order is only
-      // BM25-rank for the first block — a downweighted PRF row at the tail would be
-      // handed to RRF as a worse rank than its score warrants, and a strong one as
-      // better. Sort by the calibrated composite score (negative = more relevant)
-      // first so index == composite rank and the type-quality/decay/cite multipliers
-      // actually shape the fused ranking instead of being discarded by insertion order.
-      results.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-      const rrfRanking = rrfMerge(results, vecResults, ctx.rrfK); // undefined → RRF_K
-      const resultMap = new Map(results.map((r) => [r.id, r]));
-      for (const vr of vecResults) {
-        if (!resultMap.has(vr.id)) {
-          const obs = vecHitObs.get(vr.id);
-          if (!obs) continue;
-          if (epochFrom !== null && obs.created_at_epoch < epochFrom) continue;
-          if (epochTo !== null && obs.created_at_epoch > epochTo) continue;
-          if (args.importance && (obs.importance ?? 1) < args.importance) continue;
-          if (args.branch && obs.branch !== args.branch) continue;
-          if (!includeNoise && obs.title && LOW_SIGNAL_TITLE.test(obs.title)) continue;
-          resultMap.set(vr.id, {
-            source: 'obs',
-            id: obs.id,
-            type: obs.type,
-            title: obs.title,
-            subtitle: obs.subtitle,
-            project: obs.project,
-            date: obs.created_at,
-            created_at: obs.created_at,
-            created_at_epoch: obs.created_at_epoch,
-            importance: obs.importance,
-            files_modified: obs.files_modified,
-            lesson_learned: obs.lesson_learned,
-            snippet: '',
-          });
-        }
-      }
-      // The WHOLE obs leg is now on the RRF scale (score = -rrfScore ≈ 1/(60+rank)), not
-      // BM25 — tag every row so cross-source lone-hit banding treats it correctly (P2-12).
-      const reordered = rrfRanking
-        .filter((rr) => resultMap.has(rr.id))
-        .map((rr) => ({ ...resultMap.get(rr.id), score: -rr.rrfScore, scoreScale: 'vector' }));
-      results.length = 0;
-      results.push(...reordered);
-    } else {
-      // FTS5 found nothing but vector found results
-      for (const vr of vecResults) {
-        const obs = vecHitObs.get(vr.id);
-        if (!obs) continue;
-        if (epochFrom !== null && obs.created_at_epoch < epochFrom) continue;
-        if (epochTo !== null && obs.created_at_epoch > epochTo) continue;
-        if (args.importance && (obs.importance ?? 1) < args.importance) continue;
-        if (args.branch && obs.branch !== args.branch) continue;
-        if (!includeNoise && obs.title && LOW_SIGNAL_TITLE.test(obs.title)) continue;
-        // Raw cosine similarity scale (≈0.1-1), also not BM25-comparable → tag it (P2-12).
-        results.push({
-          source: 'obs',
-          id: obs.id,
-          type: obs.type,
-          title: obs.title,
-          subtitle: obs.subtitle,
-          project: obs.project,
-          date: obs.created_at,
-          created_at: obs.created_at,
-          created_at_epoch: obs.created_at_epoch,
-          importance: obs.importance,
-          files_modified: obs.files_modified,
-          lesson_learned: obs.lesson_learned,
-          score: -vr.similarity,
-          snippet: '',
-          scoreScale: 'vector',
-        });
-      }
-    }
-  } catch (e) {
-    debugCatch(e, 'searchObservationsHybrid-vector');
   }
 
   return results;

@@ -79,8 +79,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createTestDb } from '../tests/test-helpers.mjs';
-import { _resetVocabCache } from '../tfidf.mjs';
-import { seedDatabase, seedVectors } from './benchmark.mjs';
+import { seedDatabase } from './benchmark.mjs';
 import { deepSearch, shouldEscalateToDeep, AUTO_DEEP_MIN_RESULTS } from '../deep-search.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { buildSearchFtsQuery, computePerSourceWindow } from '../lib/search-core.mjs';
@@ -151,10 +150,8 @@ export async function runHoldout({ corpus, suite, rewrites, limit = 10 } = {}) {
     };
 
     const held = new Set(q.relevant_ids ?? []);
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, { ...corpus, observations: corpus.observations.filter((o) => !held.has(o.id)) });
-    seedVectors(db);
     try {
       // The escalation column (D#8). Measured BEFORE the deep run, on the same corpus,
       // because the shipped `auto` mode takes this verdict from the plain search and only

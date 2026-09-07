@@ -25,12 +25,9 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
-import { vecTextForRow } from './tfidf.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
-  insertObservationVector,
-  upsertObservationVector,
   normalizeScope,
   SCOPE_PROMPT_LEGEND,
 } from './lib/observation-write.mjs';
@@ -210,22 +207,6 @@ function buildFtsTextField(obs) {
   };
 }
 
-// TF-IDF vector text. Must mirror the FTS-searchable content so the vector arm and
-// the BM25 arm rank on the same signal — including lesson_learned (highest FTS
-// weight) and search_aliases (finding #8: previously omitted, so even with vectors
-// enabled the paraphrase-bridge alias terms were invisible to cosine similarity).
-export function buildVecText(obs) {
-  // Single source (V-F1): map the camelCase obs onto vecTextForRow's row shape so save and
-  // every rebuild path encode the identical field set (title/narrative/concepts/lesson/aliases).
-  return vecTextForRow({
-    title: obs.title,
-    narrative: obs.narrative,
-    concepts: obs.concepts,
-    lesson_learned: obs.lessonLearned,
-    search_aliases: obs.searchAliases,
-  });
-}
-
 /**
  * Save an observation to the database with three-tier dedup.
  * @returns {number|null} The saved observation ID, or null if deduped.
@@ -399,7 +380,6 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
       });
 
       insertObservationFiles(db, id, obs.files);
-      insertObservationVector(db, id, buildVecText(obs));
 
       return id;
     })();
@@ -1289,22 +1269,6 @@ ${actionList}`;
           savedId = episode.savedId;
           savedTable = 'observations';
           debugLog('DEBUG', 'llm-episode', `upgraded pre-saved obs #${savedId}`);
-
-          // Update TF-IDF vector with enriched content. SQL + text derivation are
-          // lib/observation-write.mjs's (audit 2026-09-02 P1-4); `gate: false` keeps this
-          // path's prior behaviour, which never consulted vectorsEnabled().
-          upsertObservationVector(
-            db,
-            savedId,
-            {
-              title: obs.title,
-              narrative: obs.narrative,
-              concepts: conceptsText,
-              lesson_learned: safe.lesson_learned,
-              search_aliases: safe.search_aliases,
-            },
-            { gate: false, scope: 'handleLLMEpisode-vector' },
-          );
         }
       }
     } else {

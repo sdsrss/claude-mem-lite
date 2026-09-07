@@ -265,7 +265,7 @@ surface — reach them through the CLI column in the second table.
 | `mem_stats` | `claude-mem-lite stats` | Counts, type distribution, daily activity. |
 | `mem_delete` | `claude-mem-lite delete <id>` | Preview / confirm workflow, FTS5 cleanup. |
 | `mem_compress` | `claude-mem-lite compress` | Roll up old low-value observations (preview default; `--execute` to apply). |
-| `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | dedup / decay / cleanup / rebuild_vectors (`scan` previews, `execute` applies). |
+| `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | dedup / decay / cleanup / vacuum (`scan` previews, `execute` applies). |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM-powered re-enrich / normalize / cluster-merge (preview default; `--run` to apply). |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL dump, filters by project, type, date. |
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity + rebuild. |
@@ -804,7 +804,6 @@ benchmark and A/B harness are calibrated against — changing them invalidates t
 | `CLAUDE_MEM_DEEP_DISCLOSURE` | `off` suppresses the one-line caveat appended to a multi-variant deep result. The caveat exists because deep search fills the page even when the corpus cannot answer — measured at 10 of 10 slots on queries whose answers had been removed (`benchmark/deep-search-holdout.mjs`) — and `deep` is AUTO by default on the MCP surface, i.e. it escalates precisely when the honest answer is "nothing". It does not change retrieval, ranking, or which rows are returned. | _(on)_ |
 | `CLAUDE_MEM_REACH_DISCLOSURE` | `off` suppresses the one-line note that fires when a search's reported `total` exceeds what its pagination can hand back. The candidate pool is sized from `limit` alone and deliberately does not grow with `offset` (D#30 — an offset-scaled pool re-ranks its own prefix under RRF, so pages overlapped and gapped), while `total` is the full match count. Measured on a 128-row corpus: at the default limit of 20 the last non-empty offset is 59, so 60 of 128 rows are unreachable at any offset. The note reports that; it does not change retrieval, ranking, or which rows are returned. | _(on)_ |
 | `CLAUDE_MEM_AUTO_DEEP_CLI` | `0` disables the same auto-escalation on the CLI path only. | _(auto)_ |
-| `CLAUDE_MEM_VECTORS` | `1` re-enables the persisted TF-IDF vector arm (off by default; also needs a vector rebuild via `maintain`). | _(off)_ |
 | `CLAUDE_MEM_SCOPE_FILTER` | `1` stops environment-scoped observations from firing on file-triggered recall. They stay reachable via search. **Leave it off**: on the face it gates, `environment` is not the low-relevance class its premise assumes — it cites at least as well as `project` (47.5% vs 44.3%, intervals overlapping), and an earlier measurement left 173 recall groups empty with it on. | _(off)_ |
 | `CLAUDE_MEM_READS_CARRY` | An episode flush collects `reads-<project>.txt` only when it will actually save an observation, so a flush that records nothing no longer discards the Read paths it swept up (42.2% of the paths a flush consumed, measured over 1122 transcripts). `0` restores the pre-v3.83.0 behaviour. | _(on)_ |
 

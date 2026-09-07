@@ -34,13 +34,7 @@ describe('ensureDb deferred-cleanup wiring (audit P1-5)', () => {
         .prepare('SELECT name FROM migration_cleanups')
         .all()
         .map((r) => r.name);
-      expect(marks).toEqual(
-        expect.arrayContaining([
-          'orphan-observation-files',
-          'orphan-observation-vectors',
-          'normalize-project-names',
-        ]),
-      );
+      expect(marks).toEqual(expect.arrayContaining(['orphan-observation-files', 'normalize-project-names']));
     } finally {
       db.close();
     }
@@ -49,24 +43,25 @@ describe('ensureDb deferred-cleanup wiring (audit P1-5)', () => {
   test('ensureDb() re-runs an unmarked cleanup on the next open (orphan scrubbed)', () => {
     // First open marks all cleanups done. Simulate a prior transient failure by
     // clearing one sentinel and seeding an orphan, then reopen via ensureDb().
+    // Vehicle changed from observation_vectors to observation_files when Phase-2 removed
+    // the vector arm. The wiring under test — ensureDb re-running an UNMARKED cleanup — is
+    // the same, and so is what this fails on.
     const db1 = ensureDb();
     db1.pragma('foreign_keys = OFF');
     db1
-      .prepare(
-        'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
-      )
-      .run(424242, Buffer.alloc(8), 'v1', Date.now());
-    db1.prepare("DELETE FROM migration_cleanups WHERE name = 'orphan-observation-vectors'").run();
+      .prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)')
+      .run(424242, 'orphan-424242.mjs');
+    db1.prepare("DELETE FROM migration_cleanups WHERE name = 'orphan-observation-files'").run();
     db1.close();
 
     const db2 = ensureDb(); // must re-run the unmarked cleanup
     try {
-      expect(
-        db2.prepare('SELECT COUNT(*) AS c FROM observation_vectors WHERE observation_id = 424242').get().c,
-      ).toBe(0);
+      expect(db2.prepare('SELECT COUNT(*) AS c FROM observation_files WHERE obs_id = 424242').get().c).toBe(
+        0,
+      );
       expect(
         db2
-          .prepare("SELECT COUNT(*) AS c FROM migration_cleanups WHERE name = 'orphan-observation-vectors'")
+          .prepare("SELECT COUNT(*) AS c FROM migration_cleanups WHERE name = 'orphan-observation-files'")
           .get().c,
       ).toBe(1);
     } finally {

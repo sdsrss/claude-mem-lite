@@ -49,7 +49,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createTestDb } from '../tests/test-helpers.mjs';
-import { seedDatabase, seedVectors, runBenchmark } from './benchmark.mjs';
+import { seedDatabase, runBenchmark } from './benchmark.mjs';
 import { runScriptGuard, MULTISCRIPT_FIXTURES } from './multiscript-guard.mjs';
 import { runCrossSourceProbes } from './cross-source-probes.mjs';
 import { runDeferredProbes } from './deferred-probes.mjs';
@@ -91,7 +91,6 @@ export function seedAllFixtures(db) {
   for (const f of ['seed-data.json', 'seed-data-cjk.json']) {
     seedDatabase(db, JSON.parse(readFileSync(join(FIXTURES, f), 'utf8')));
   }
-  seedVectors(db);
 }
 
 /**

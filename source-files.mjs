@@ -227,7 +227,7 @@ export const SOURCE_FILES = [
   // missing it from the manifest would break `recent` and mem_recent on auto-update.
   'lib/recent-core.mjs',
   // Reciprocal Rank Fusion core (D#42 single source-of-truth); transitively
-  // reached via tfidf.mjs (rrfMerge) and deep-search.mjs (rrfFuseN).
+  // reached via deep-search.mjs (rrfFuseN).
   'lib/rrf.mjs',
   // Shared "compress old low-value observations into weekly summaries" core.
   // Statically imported by mem-cli.mjs (cmdCompress), server.mjs (mem_compress),

@@ -5,7 +5,7 @@
 // embeddings) against the LongMemEval long-term-memory benchmark, so we have a
 // standardized recall number comparable to the field instead of only our local
 // micro-benchmark. It reuses the existing benchmark seams (seedDatabase /
-// seedVectors / searchProductionHybrid) — the only new thing here is the dataset
+// searchProductionHybrid) — the only new thing here is the dataset
 // adapter and the recall_any@k metric.
 //
 // HONEST FRAMING (read before quoting any number):
@@ -40,7 +40,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { createTestDb } from '../tests/test-helpers.mjs';
-import { seedDatabase, seedVectors, searchProductionHybrid, computeNDCG, computeMRR } from './benchmark.mjs';
+import { seedDatabase, searchProductionHybrid, computeNDCG, computeMRR } from './benchmark.mjs';
 
 // ─── Corpus builder ──────────────────────────────────────────────────────────
 //
@@ -151,7 +151,6 @@ export function evalEntry(entry, { turns = 'user', temporal = false, ks = [1, 5,
   let retrieved = [];
   try {
     seedDatabase(db, data);
-    seedVectors(db); // build TF-IDF vocab + vectors so the RRF vector arm is live
     const rows = searchProductionHybrid(db, entry.question, { limit: fetchN, project: null });
     retrieved = rows.map((r) => idToSession.get(r.id)).filter(Boolean);
   } finally {

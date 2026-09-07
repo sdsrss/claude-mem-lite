@@ -174,7 +174,7 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 | 改某条 | \`${CLI} update <id> [--lesson "<≤500>"] [--title T] [--type T] [--importance 1-3] [--narrative T] [--concepts "a b c"]\` |
 | 事件日志 | \`${CLI} activity save --type <bugfix\\|lesson\\|bug\\|discovery\\|refactor\\|feature\\|observation\\|decision> "<title>" [--body T] [--files f1,f2]\` |
 
-\`maintain\` / \`optimize\` / \`compress\` 见上方「维护 / 管理类工具」；\`maintain --ops\` 取值 \`cleanup,decay,boost,demote_pinned,dedup,purge_stale,rebuild_vectors,vacuum\`，省略时默认 \`cleanup,decay,boost,demote_pinned\`（顺序有意义：demote_pinned 必须在 boost 之后）；\`--retain-days\` ∈ [7,365]。
+\`maintain\` / \`optimize\` / \`compress\` 见上方「维护 / 管理类工具」；\`maintain --ops\` 取值 \`cleanup,decay,boost,demote_pinned,dedup,purge_stale,vacuum\`，省略时默认 \`cleanup,decay,boost,demote_pinned\`（顺序有意义：demote_pinned 必须在 boost 之后）；\`--retain-days\` ∈ [7,365]。
 
 ## 卸载 / 关闭
 

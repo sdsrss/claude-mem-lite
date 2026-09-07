@@ -6,7 +6,6 @@
 import { describe, test, expect } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { COMPRESSED_AUTO } from '../utils.mjs';
-import { rebuildVocabulary, computeVector, vectorSearch } from '../tfidf.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from '../lib/compress-core.mjs';
 
 const DAY = 86400000;
@@ -179,60 +178,5 @@ describe('compressGroup', () => {
         summaryId,
       );
     }
-  });
-
-  test('writes an observation_vectors row for the summary so it is hybrid-recallable', () => {
-    // compressGroup writes observation_vectors — exercise with the vector arm ON
-    // (choke-point-gated OFF by default since the 2026-06 memory-quality audit).
-    const prevVec = process.env.CLAUDE_MEM_VECTORS;
-    process.env.CLAUDE_MEM_VECTORS = '1';
-    const db = createTestDb();
-    seed(db);
-    // Real words so the TF-IDF vocabulary builds and the summary narrative
-    // yields a non-empty vector (single-char titles get tokenized away).
-    const titles = [
-      'database migration rollback failure on deploy',
-      'database connection pool exhausted under load',
-      'database query timeout during batch import',
-    ];
-    const rows = titles.map((t) =>
-      insertObs(db, {
-        sessionId: 'sess-1',
-        project: 'proj-a',
-        type: 'bugfix',
-        title: t,
-        importance: 1,
-        epochOffset: OLD,
-      }),
-    );
-    const obs = rows.map((r) =>
-      db
-        .prepare('SELECT id, project, type, title, created_at_epoch FROM observations WHERE id = ?')
-        .get(Number(r.lastInsertRowid)),
-    );
-
-    // Pin the vocab cache to this DB's corpus so the test is order-independent.
-    const vocab = rebuildVocabulary(db);
-    expect(vocab).toBeTruthy();
-
-    const { summaryId } = compressGroup(db, 'proj-a', obs);
-
-    // 1. A vector row exists for the summary, tagged with the current vocab version.
-    const vrow = db
-      .prepare('SELECT vocab_version, vector FROM observation_vectors WHERE observation_id = ?')
-      .get(summaryId);
-    expect(vrow).toBeTruthy();
-    expect(vrow.vocab_version).toBe(vocab.version);
-    expect(vrow.vector.length).toBeGreaterThan(0);
-
-    // 2. The summary is actually retrievable by vector search (the point of P6:
-    //    FTS-miss queries that rely on vector recall can now reach compressed
-    //    summaries). Sources are compressed_into=summaryId so they're excluded.
-    const qvec = computeVector('database migration', vocab);
-    const hits = vectorSearch(db, qvec, { project: 'proj-a', vocabVersion: vocab.version });
-    expect(hits.some((h) => h.id === summaryId)).toBe(true);
-    db.close();
-    if (prevVec === undefined) delete process.env.CLAUDE_MEM_VECTORS;
-    else process.env.CLAUDE_MEM_VECTORS = prevVec;
   });
 });

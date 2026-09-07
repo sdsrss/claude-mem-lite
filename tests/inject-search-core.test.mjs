@@ -121,7 +121,6 @@ describe('consumer ledger — no inlined live-filter pairs in the converted file
     'hook-optimize.mjs',
     'mem-cli.mjs',
     'search-scoring.mjs',
-    'tfidf.mjs',
     'deep-search.mjs',
     'lib/recall-core.mjs',
     'lib/recent-core.mjs',

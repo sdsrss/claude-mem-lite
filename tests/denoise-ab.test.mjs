@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { summarizeTradeoff, runSnapshot, SUITES } from '../benchmark/denoise-ab.mjs';
 import { createTestDb } from './test-helpers.mjs';
-import { seedDatabase, seedVectors } from '../benchmark/benchmark.mjs';
+import { seedDatabase } from '../benchmark/benchmark.mjs';
 import { readFileSync } from 'fs';
 
 describe('summarizeTradeoff (pure verdict logic)', () => {
@@ -146,7 +146,6 @@ describe('runSnapshot (integration over both suites)', () => {
       readFileSync(new URL('../benchmark/fixtures/seed-data.json', import.meta.url), 'utf8'),
     );
     seedDatabase(db, corpus);
-    seedVectors(db);
 
     const snap = runSnapshot(db);
     // Both suites present, each with the four ranking metrics as finite numbers.

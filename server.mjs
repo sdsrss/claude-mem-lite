@@ -127,7 +127,6 @@ import {
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
 import { shouldQueueSaveEnrich, queueSaveEnrich } from './lib/save-enrich.mjs';
-import { _resetVocabCache } from './tfidf.mjs';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);

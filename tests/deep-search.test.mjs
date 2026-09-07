@@ -10,8 +10,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createTestDb, insertSession } from './test-helpers.mjs';
-import { _resetVocabCache } from '../tfidf.mjs';
-import { seedDatabase, seedVectors } from '../benchmark/benchmark.mjs';
+import { seedDatabase } from '../benchmark/benchmark.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { sanitizeFtsQuery } from '../utils.mjs';
 import {
@@ -211,10 +210,8 @@ function baselineCtx(query, project) {
 
 describe('deepSearch — fusion over real hybrid search', () => {
   it('recovers relevant obs that the literal query misses', async () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
 
     const llm = stubLLM({ variants: ['kubernetes pods', 'kubernetes cluster nodes'] });
     const { results, variants } = await deepSearch(
@@ -238,10 +235,8 @@ describe('deepSearch — fusion over real hybrid search', () => {
   });
 
   it('NEVER worse than baseline: a failed rewrite == single-query results', async () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
 
     // A query that DOES hit, so baseline is non-trivial.
     const q = 'kubernetes pods cluster';
@@ -351,10 +346,8 @@ describe('deepSearch — hard negatives (precision arm)', () => {
   // closing it: the original query's own OR-fallback rows are baseline, and the
   // baseline is untouchable.
   it('an OR-relaxed ORIGINAL query still contributes its rows (baseline is untouchable)', async () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, makeProseSeed());
-    seedVectors(db);
 
     // "deployment release package" has no AND match either, so the ORIGINAL
     // query itself relaxes to OR. That is the user's own wording, so those rows
@@ -680,7 +673,6 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
 
   it('weak count on a NEAR-EMPTY corpus does NOT escalate when db is passed', () => {
     const db = createTestDb();
-    _resetVocabCache();
     seedCorpus(db, 2); // below AUTO_DEEP_MIN_CORPUS (10)
     // 0 results = weak by count, but corpus too small → suppressed.
     expect(shouldEscalateToDeep([], {}, { db })).toBe(false);
@@ -689,7 +681,6 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
 
   it('weak count on a LARGE-ENOUGH corpus still escalates when db is passed', () => {
     const db = createTestDb();
-    _resetVocabCache();
     seedCorpus(db, 12); // >= AUTO_DEEP_MIN_CORPUS
     expect(shouldEscalateToDeep([], {}, { db })).toBe(true);
     db.close();
@@ -697,7 +688,6 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
 
   it('strong count never escalates regardless of corpus (count gate wins first)', () => {
     const db = createTestDb();
-    _resetVocabCache();
     seedCorpus(db, 50);
     const rows = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
     expect(shouldEscalateToDeep(rows, {}, { db })).toBe(false);
@@ -712,7 +702,6 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
 
   it('project scopes the folded-in corpus count', () => {
     const db = createTestDb();
-    _resetVocabCache();
     seedCorpus(db, 12, 'proj-x');
     seedCorpus(db, 2, 'proj-y');
     expect(shouldEscalateToDeep([], {}, { db, project: 'proj-x' })).toBe(true); // 12 >= 10
@@ -725,7 +714,6 @@ describe('shouldEscalateToDeep — folded-in corpus guard (FIX 2)', () => {
     // Passing db into shouldEscalateToDeep too must give the SAME verdict — double-gating
     // with the same predicate is never a regression.
     const db = createTestDb();
-    _resetVocabCache();
     seedCorpus(db, 2);
     const external = shouldEscalateToDeep([], {}) && hasEscalatableCorpus(db, null);
     const folded = shouldEscalateToDeep([], {}, { db });
@@ -771,9 +759,7 @@ describe('mem_search auto-escalation (MCP, default-on)', () => {
   //   Weak   (0 hits):  'zqxjv9471kpw' → no matches in any seeded row
   function seededDb() {
     const db = createTestDb();
-    _resetVocabCache();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
     return db;
   }
 
@@ -915,9 +901,7 @@ describe('mem_search auto-escalation (MCP, default-on)', () => {
 describe('CLI cmdSearch auto-escalation (D#39)', () => {
   function seededDb() {
     const db = createTestDb();
-    _resetVocabCache();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
     return db;
   }
 
@@ -1026,7 +1010,6 @@ describe('hasEscalatableCorpus — corpus-size guard', () => {
 
   function freshDb() {
     const db = createTestDb();
-    _resetVocabCache();
     return db;
   }
 
@@ -1111,7 +1094,6 @@ describe('corpus guard integration — escalation suppressed on near-empty store
     // Seed only 5 obs (< AUTO_DEEP_MIN_CORPUS) — the guard should block escalation
     // even though the result count is < AUTO_DEEP_MIN_RESULTS.
     const db = createTestDb();
-    _resetVocabCache();
     const tinyMk = (id, title, narrative) => ({
       id,
       session_id: 's1',
@@ -1136,7 +1118,6 @@ describe('corpus guard integration — escalation suppressed on near-empty store
       ],
       sessions: [],
     });
-    seedVectors(db);
 
     const llm = stubLLM({ variants: ['kubernetes pods'] });
     // 'zqxjv9471kpw' hits 0 obs → would normally escalate, but corpus < 10 → no escalation
@@ -1149,9 +1130,7 @@ describe('corpus guard integration — escalation suppressed on near-empty store
   it('MCP: >= 10 live obs + weak query → escalates (llm called 1 time)', async () => {
     // makeSeed() now has 15 obs → corpus guard passes → escalation fires on weak query
     const db = createTestDb();
-    _resetVocabCache();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
 
     const llm = stubLLM({ variants: ['kubernetes pods', 'k8s cluster scheduling'] });
     const res = await handleSearchForTest(db, { query: 'zqxjv9471kpw' }, { llm });
@@ -1166,9 +1145,7 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
   // prove the SERVER threads rerankLlm into deepSearch and gates it on explicit deep.
   function seededDb() {
     const db = createTestDb();
-    _resetVocabCache();
     seedDatabase(db, makeSeed());
-    seedVectors(db);
     return db;
   }
   // identity rerank: keep candidate order but parse cleanly → reranked=true (no-op safe).

@@ -1,13 +1,12 @@
 // tests/rrf.test.mjs — regression lock for the shared RRF core (D#42, lib/rrf.mjs).
 // The refactor extracted rrfAccumulate as the single source the two adapters delegate
-// to (tfidf.rrfMerge → minimal {id,rrfScore}; deep-search.rrfFuseN → full row,
+// to (deep-search.rrfFuseN → full row,
 // score=-rrfScore). Byte-identity with the old hand-written loops was verified by an
 // adversarial diff harness; these tests lock the load-bearing EDGE behaviors (id=0,
 // null/undefined-id skip, first-list-first ties, best-rank row) the prior suite left
 // uncovered, so a future edit to rrfAccumulate can't silently break the adapters.
 import { describe, it, expect } from 'vitest';
 import { rrfAccumulate } from '../lib/rrf.mjs';
-import { rrfMerge } from '../tfidf.mjs';
 import { rrfFuseN } from '../deep-search.mjs';
 
 describe('rrfAccumulate (shared RRF core)', () => {
@@ -59,13 +58,10 @@ describe('rrfAccumulate (shared RRF core)', () => {
   });
 });
 
+// One adapter left. tfidf.rrfMerge (the 2-list BM25+vector shape) went with the vector
+// arm in Phase-2, so the "do the two adapters agree" half of this file's purpose is gone
+// with it — what survives is the shape contract of the adapter that still ships.
 describe('RRF adapters preserve their output shapes', () => {
-  it('rrfMerge emits minimal { id, rrfScore }, first-list-first ties', () => {
-    const out = rrfMerge([{ id: 1 }, { id: 2 }], [{ id: 2 }, { id: 1 }], 60);
-    expect(out.map((r) => r.id)).toEqual([1, 2]);
-    expect(Object.keys(out[0]).sort()).toEqual(['id', 'rrfScore']);
-  });
-
   it('rrfFuseN emits full row with score=-rrfScore + rrfScore', () => {
     const out = rrfFuseN([[{ id: 1, title: 't' }]], 60);
     expect(out[0].id).toBe(1);

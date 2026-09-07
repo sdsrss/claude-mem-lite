@@ -1,8 +1,6 @@
 // Tests for mem-cli.mjs — CLI command layer
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { seedVectors } from '../benchmark/benchmark.mjs';
-// _resetVocabCache is imported below via the post-mock dynamic import (line ~101).
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -110,7 +108,6 @@ vi.mock('../utils.mjs', async (importOriginal) => {
 
 // Import run after mocks are set up
 const { run } = await import('../mem-cli.mjs');
-const { buildVocabulary, computeVector, _resetVocabCache } = await import('../tfidf.mjs');
 
 // ─── Argument Parsing ────────────────────────────────────────────────────────
 // parseArgs is not exported, but we can test its behavior through commands
@@ -241,72 +238,6 @@ describe('CLI search command', () => {
     const bugOnly = await captureStdout(() => run(['search', 'parser', '--type', 'bugfix']));
     expect(bugOnly).toContain('Bug in parser');
     expect(bugOnly).not.toContain('Discovered parser pattern');
-  });
-
-  it('--type filter must hold across the vector/RRF hybrid path (regression)', async () => {
-    _resetVocabCache();
-    // Mixed-type corpus with shared vocabulary so vector path engages.
-    // The non-bugfix rows must NOT leak through vector RRF merge.
-    insertObs(testDb, {
-      sessionId: 'mem-s1',
-      project: 'test--project',
-      type: 'bugfix',
-      title: 'Race in worker queue',
-      narrative: 'fixed worker queue race condition crash',
-    });
-    insertObs(testDb, {
-      sessionId: 'mem-s1',
-      project: 'test--project',
-      type: 'decision',
-      title: 'Worker queue architecture choice',
-      narrative: 'chose redis queue over rabbitmq for worker pool',
-    });
-    insertObs(testDb, {
-      sessionId: 'mem-s1',
-      project: 'test--project',
-      type: 'discovery',
-      title: 'Worker pool throughput pattern',
-      narrative: 'worker pool throughput scales with queue depth',
-    });
-    insertObs(testDb, {
-      sessionId: 'mem-s1',
-      project: 'test--project',
-      type: 'feature',
-      title: 'Worker pool autoscale feature',
-      narrative: 'added autoscale to worker pool queue',
-    });
-    // Build vocab + write vectors to engage hybrid path.
-    const vocab = buildVocabulary(testDb);
-    if (vocab) {
-      const rows = testDb.prepare('SELECT id, title, narrative FROM observations').all();
-      for (const r of rows) {
-        const vec = computeVector(`${r.title} ${r.narrative}`, vocab);
-        if (vec) {
-          testDb
-            .prepare(
-              'INSERT INTO observation_vectors (observation_id, vector, vocab_version, created_at_epoch) VALUES (?, ?, ?, ?)',
-            )
-            .run(r.id, Buffer.from(vec.buffer), vocab.version, Date.now());
-        }
-      }
-      testDb.prepare(
-        'INSERT INTO vocab_state (term, term_index, idf, version, created_at_epoch) VALUES (?, ?, ?, ?, ?)',
-      );
-      testDb.transaction(() => {
-        testDb.prepare('DELETE FROM vocab_state').run();
-        const ins = testDb.prepare(
-          'INSERT INTO vocab_state (term, term_index, idf, version, created_at_epoch) VALUES (?, ?, ?, ?, ?)',
-        );
-        for (const [term, entry] of vocab.terms) {
-          ins.run(term, entry.index, entry.idf, vocab.version, Date.now());
-        }
-      })();
-    }
-    const out = await captureStdout(() => run(['search', 'worker queue', '--type', 'bugfix']));
-    expect(out).toContain('Race in worker queue');
-    expect(out).not.toContain('architecture choice');
-    expect(out).not.toContain('throughput pattern');
-    expect(out).not.toContain('autoscale feature');
   });
 
   it('respects --limit', async () => {
@@ -844,63 +775,6 @@ describe('CLI get command', () => {
 });
 
 // ─── pagination stability WITH vectors (D#30 reopened) ───────────────────────
-// The #8642 guard test (cli-e2e) seeds NO observation_vectors, so it only proved
-// FTS-only pagination is stable. This block populates vectors so the FTS+vector
-// RRF fusion is live — the exact path that overlapped/gapped on the real DB before
-// computePerSourceWindow was made offset-independent.
-describe('CLI search pagination stability (hybrid FTS+vector RRF)', () => {
-  beforeEach(() => {
-    _resetVocabCache();
-    testDb = createTestDb();
-    insertSession(testDb, { id: 's1', project: 'test--project', memoryId: 'mem-s1' });
-    // 25 obs all matching "widget" with VARIED FTS weight (widget repeated 0–4×)
-    // and varied vector content (distinct term mixes) so fusion is non-trivial and
-    // candidate-pool-sensitive — a smaller pool would re-rank the prefix.
-    for (let i = 0; i < 25; i++) {
-      insertObs(testDb, {
-        sessionId: 'mem-s1',
-        project: 'test--project',
-        type: 'discovery',
-        title: `widget pipeline stage ${i} ${i % 3 === 0 ? 'cache' : 'queue'} handler`,
-        text: `widget pipeline payload ${i} ${'widget '.repeat(i % 5)}`,
-        epochOffset: -i * 1000,
-      });
-    }
-    seedVectors(testDb); // build vocab + observation_vectors over the corpus
-    _resetVocabCache(); // force the search to reload the seeded vocab
-  });
-  afterEach(() => {
-    testDb.close();
-  });
-
-  const idsOf = async (...args) => {
-    const out = await captureStdoutOnly(() =>
-      run(['search', 'widget', '--source', 'observations', '--json', ...args]),
-    );
-    return JSON.parse(out).results.map((r) => r.id);
-  };
-
-  it('paging limit=5 across offsets is disjoint and reconstructs the single query', async () => {
-    const vecCount = testDb.prepare('SELECT COUNT(*) AS c FROM observation_vectors').get().c;
-    expect(vecCount).toBeGreaterThan(0); // guard: vector arm is actually live
-    const p0 = await idsOf('--limit', '5', '--offset', '0');
-    const p1 = await idsOf('--limit', '5', '--offset', '5');
-    const p2 = await idsOf('--limit', '5', '--offset', '10');
-    const combined = await idsOf('--limit', '15', '--offset', '0');
-    const paged = [...p0, ...p1, ...p2];
-    expect(new Set(paged).size).toBe(paged.length); // no id on two pages
-    expect(paged).toEqual(combined); // identical order ⇒ stable
-  });
-
-  it('top-N is limit-stable for limits ≤ 20 (top-5 ⊂ top-10 ⊂ top-20)', async () => {
-    const t5 = await idsOf('--limit', '5');
-    const t10 = await idsOf('--limit', '10');
-    const t20 = await idsOf('--limit', '20');
-    expect(t10.slice(0, 5)).toEqual(t5);
-    expect(t20.slice(0, 10)).toEqual(t10);
-  });
-});
-
 // ─── timeline command ────────────────────────────────────────────────────────
 
 describe('CLI timeline command', () => {

@@ -25,16 +25,10 @@ import {
 import { callModelJSONAsync, BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { scrubRecord } from './lib/scrub-record.mjs';
-import { getVocabulary, computeVector, cosineSimilarity } from './tfidf.mjs';
 import { MERGE_JACCARD_LOW, AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { DB_DIR } from './schema.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
-import {
-  normalizeScope,
-  SCOPE_PROMPT_LEGEND,
-  upsertObservationVector,
-  insertObservationRow,
-} from './lib/observation-write.mjs';
+import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib/observation-write.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 
@@ -63,26 +57,6 @@ export function distributeBudget(total = 15) {
 }
 
 // ─── Shared Helpers ─────────────────────────────────────────────────────────
-
-/**
- * Rebuild TF-IDF vector for an observation. Non-critical — swallows errors.
- *
- * The SQL, the text derivation and the vocab lookup are lib/observation-write.mjs's since
- * audit 2026-09-02 P1-4; this is the optimize path's name for it. Accepts a legacy [parts]
- * array OR an observation row (preferred — vecTextForRow gives the same field set the save
- * path uses, so a rebuild matches the original write).
- *
- * `gate: false` preserves this path's behaviour exactly: it never checked
- * `vectorsEnabled()`. That is a redundancy rather than a hole — `getVocabulary` returns
- * null whenever the arm is off — but this refactor is not the place to decide it.
- *
- * The historical drift worth remembering: this copy wrote the column as `computed_at`
- * instead of `created_at_epoch`, and its own catch swallowed the error until an experiment
- * surfaced it. That is what a fifth copy of a statement buys.
- */
-export function rebuildVector(db, obsId, textPartsOrRow) {
-  upsertObservationVector(db, obsId, textPartsOrRow, { gate: false, scope: 'optimize-vector' });
-}
 
 // ─── Task 1: Re-enrich ─────────────────────────────────────────────────────
 
@@ -244,10 +218,12 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     -- NOT FIXED, AND NAMED SO THE COMPLETENESS CLAIM IS TRUE: findSmartCompressCandidates
     -- carries an eighth ordering, "ORDER BY project, created_at_epoch" -- ASCENDING, no id
     -- term, no LIMIT. It is outside the seven by construction and is left alone under Iron
-    -- Law #1: it feeds clusterForCompression, whose vector branch seeds clusters in SQL
-    -- order, so a tie could move cluster membership -- but that branch needs
-    -- CLAUDE_MEM_VECTORS=1 and is off by default, and no failing case has been built.
-    -- Unjudged, not cleared.
+    -- Law #1: it feeds clusterForCompression, and a tie can move cluster MEMBERSHIP
+    -- because that function's own sort is stable, so SQL order survives as the tiebreak
+    -- and decides where a 14-day sub-cluster window is anchored. Phase-2 removed the
+    -- vector branch this used to hide behind, so the hazard is no longer gated on a
+    -- default-off env flag -- it is unconditional now. Still no failing case has been
+    -- built, so it stays unjudged, not cleared; the removal RAISED its priority.
     -- This comment is INSIDE a template literal, so it must never contain a backtick.
     ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
@@ -327,8 +303,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           skipped++;
           continue;
         }
-        // No rebuildVector: scope is a filter column, absent from the FTS text
-        // field and from vecTextForRow — a rebuild here would be a no-op write.
+        // Nothing derived to rebuild: scope is a filter column, absent from the FTS text.
         processed++;
         continue;
       }
@@ -384,8 +359,6 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         }
         // Refresh the TF-IDF vector from the just-updated FTS text so the new
         // aliases reach the vector arm too — the narrow/wide branch rebuilds, this
-        // one must as well. No-ops when the vector arm is off / vocab unbuilt.
-        rebuildVector(db, cand.id, [safe.text]);
         processed++;
         continue;
       }
@@ -448,7 +421,6 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
           skipped++;
           continue;
         }
-        rebuildVector(db, cand.id, [safe.text]);
         processed++;
         continue;
       }
@@ -606,14 +578,6 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         skipped++;
         continue;
       }
-
-      rebuildVector(db, cand.id, {
-        title,
-        narrative,
-        concepts: conceptsText,
-        lesson_learned: safe.lesson_learned,
-        search_aliases: safe.search_aliases,
-      });
 
       processed++;
     } catch (e) {
@@ -778,14 +742,6 @@ export function applyNormalization(db, groups, { project = null } = {}) {
       });
       updateStmt.run(safe.concepts, safe.search_aliases, row.id);
       // V-F3: normalize mutated concepts + search_aliases (both vector fields) — rebuild the
-      // vector so it reflects the canonicalized terms (no-op when the vector arm is disabled).
-      rebuildVector(db, row.id, {
-        title: row.title,
-        narrative: row.narrative,
-        concepts: safe.concepts,
-        search_aliases: safe.search_aliases,
-        lesson_learned: row.lesson_learned,
-      });
       updated++;
     }
   }
@@ -1054,14 +1010,6 @@ Return ONLY valid JSON:
       return { merged: false };
     }
 
-    rebuildVector(db, keeper.id, {
-      title,
-      narrative,
-      concepts: conceptsText,
-      lesson_learned: lessonLearned,
-      search_aliases: keeper.search_aliases,
-    });
-
     debugLog('DEBUG', 'llm-optimize', `merged ${cluster.length} observations into #${keeper.id}`);
     return { merged: true, keeperId: keeper.id, mergedCount: others.length };
   } catch (e) {
@@ -1088,7 +1036,6 @@ export async function executeClusterMerge(db, maxClusters = 5, { project } = {})
 // ─── Task 4: Smart-compress ────────────────────────────────────────────────
 
 const COMPRESS_TIME_SPLIT_MS = 14 * DAY_MS;
-const COMPRESS_COSINE_THRESHOLD = 0.3;
 
 export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) {
   const cutoff = Date.now() - ageDays * DAY_MS;
@@ -1118,7 +1065,7 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
   return project ? stmt.all(cutoff, project) : stmt.all(cutoff);
 }
 
-export function clusterForCompression(candidates, db) {
+export function clusterForCompression(candidates) {
   if (candidates.length < 3) return [];
 
   const byProject = new Map();
@@ -1132,60 +1079,30 @@ export function clusterForCompression(candidates, db) {
   for (const [project, obs] of byProject) {
     if (obs.length < 3) continue;
 
-    let vocab;
-    try {
-      vocab = getVocabulary(db);
-    } catch {}
-
-    if (vocab) {
-      const vectors = obs.map((o) => {
-        const text = [o.title || '', o.narrative || ''].join(' ');
-        return computeVector(text, vocab);
-      });
-
-      const used = new Set();
-      for (let i = 0; i < obs.length; i++) {
-        if (used.has(i) || !vectors[i]) continue;
-        const cluster = [{ obs: obs[i], idx: i }];
-        used.add(i);
-
-        for (let j = i + 1; j < obs.length; j++) {
-          if (used.has(j) || !vectors[j]) continue;
-          const sim = cosineSimilarity(vectors[i], vectors[j]);
-          if (sim >= COMPRESS_COSINE_THRESHOLD) {
-            cluster.push({ obs: obs[j], idx: j });
-            used.add(j);
-          }
-        }
-
-        if (cluster.length >= 3) {
-          const sorted = cluster.map((c) => c.obs).sort((a, b) => a.created_at_epoch - b.created_at_epoch);
-          let subCluster = [sorted[0]];
-          for (let k = 1; k < sorted.length; k++) {
-            if (sorted[k].created_at_epoch - subCluster[0].created_at_epoch > COMPRESS_TIME_SPLIT_MS) {
-              if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
-              subCluster = [sorted[k]];
-            } else {
-              subCluster.push(sorted[k]);
-            }
-          }
-          if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
-        }
+    // The TF-IDF cosine branch that used to sit here is GONE with the vector arm
+    // (Phase-2). This is not a behaviour change: getVocabulary() returned null whenever
+    // the arm was off, which was the default, so grouping by time window alone was
+    // ALREADY the shipped path — the cosine branch was unreachable in production.
+    //
+    // Read that as a WARNING, not as reassurance. A 14-day window with no similarity
+    // check is a weak relatedness heuristic feeding an unattended write that HIDES its
+    // inputs, and it is now the only one. What stands between it and a bad compression is
+    // buildCompressPrompt's should_compress veto — measured 2026-09-07 at 6/6 refusals on
+    // unrelated clusters, 0/6 false refusals on related ones, and decisive (6/6 stable
+    // under member-order rotation) on partly-related ones. D#16 decided AGAINST making
+    // this branch skip outright, on that evidence. Do not re-open it without re-running
+    // benchmark/compress-veto-rate.mjs.
+    const sorted = obs.sort((a, b) => a.created_at_epoch - b.created_at_epoch);
+    let subCluster = [sorted[0]];
+    for (let k = 1; k < sorted.length; k++) {
+      if (sorted[k].created_at_epoch - subCluster[0].created_at_epoch > COMPRESS_TIME_SPLIT_MS) {
+        if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
+        subCluster = [sorted[k]];
+      } else {
+        subCluster.push(sorted[k]);
       }
-    } else {
-      // Fallback: group by time window only
-      const sorted = obs.sort((a, b) => a.created_at_epoch - b.created_at_epoch);
-      let subCluster = [sorted[0]];
-      for (let k = 1; k < sorted.length; k++) {
-        if (sorted[k].created_at_epoch - subCluster[0].created_at_epoch > COMPRESS_TIME_SPLIT_MS) {
-          if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
-          subCluster = [sorted[k]];
-        } else {
-          subCluster.push(sorted[k]);
-        }
-      }
-      if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
     }
+    if (subCluster.length >= 3) clusters.push({ project, observations: subCluster });
   }
 
   return clusters;
@@ -1207,14 +1124,14 @@ export function clusterForCompression(candidates, db) {
  * them from every injection and search surface and puts them out of recoverBuriedLessons'
  * reach).
  *
- * It matters because the upstream relatedness check is not always on:
- * clusterForCompression only computes cosine similarity when getVocabulary returns a
- * vocabulary, and that is null whenever the vector arm is off — which is the default
- * (CLAUDE_MEM_VECTORS !== '1'). The else branch groups by a 14-day window ALONE. Measured
- * with a control arm 2026-09-07: three unrelated observations over 12 days form 1 cluster
- * with the arm off and 0 with it on. Until that branch is decided (D#10 option a), this
- * veto is the only thing standing between the heuristic and an unattended write that hides
- * real rows.
+ * It matters because there is no upstream relatedness check at all any more.
+ * clusterForCompression used to compute cosine similarity when a TF-IDF vocabulary was
+ * available, but that vocabulary was null whenever the vector arm was off — the default —
+ * so the 14-day-window-ALONE branch was already what shipped, and Phase-2's removal of the
+ * arm made it the only branch. Measured with a control arm 2026-09-07, before the removal:
+ * three unrelated observations over 12 days form 1 cluster with the arm off and 0 with it
+ * on. This veto is therefore the ONLY thing standing between the heuristic and an
+ * unattended write that hides real rows.
  *
  * @param {Array<object>} observations cluster members
  * @returns {string}
@@ -1345,8 +1262,6 @@ export async function executeSmartCompressCluster(db, observations, project) {
       return sId;
     })();
 
-    rebuildVector(db, summaryId, { title, narrative, concepts: conceptsText });
-
     debugLog(
       'DEBUG',
       'llm-optimize',
@@ -1365,7 +1280,7 @@ export async function executeSmartCompress(db, maxClusters = 5, { project } = {}
   const candidates = findSmartCompressCandidates(db, 30, { project });
   if (candidates.length < 3) return { processed: 0, compressed: 0 };
 
-  const clusters = clusterForCompression(candidates, db);
+  const clusters = clusterForCompression(candidates);
   if (clusters.length === 0) return { processed: 0, compressed: 0 };
 
   let compressed = 0;
@@ -1420,7 +1335,7 @@ export function optimizePreview(db, { project, detail = false } = {}) {
   const clusterMerge = mergeClusters.length;
 
   const compressCandidates = findSmartCompressCandidates(db, 30, { project });
-  const compressClusters = clusterForCompression(compressCandidates, db);
+  const compressClusters = clusterForCompression(compressCandidates);
   const smartCompress = compressClusters.length;
 
   const result = {

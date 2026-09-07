@@ -323,39 +323,6 @@ describe('search-core', () => {
       expect(results[0].source).toBe('event'); // the strongest raw match leads
     });
 
-    // Audit P2-24 / P2-12 (2026-07-24): when the vector arm is on, the obs leg is
-    // scored on a non-BM25 scale — RRF fusion (≈1/(60+rank) ≈ 0.02) or raw cosine
-    // (≈0.1-1) — tagged scoreScale:'vector'. The raw-magnitude lone-hit banding assumes
-    // BM25-comparable scales, so a lone vector obs hit would get ratio ≈ 0.02/6 ≈ 0.003
-    // < 0.1 → -0.25 (sunk below sessions) even when it is the best obs answer. Such rows
-    // must be excluded from globalMaxAbs and banded neutrally instead.
-    it('bands a lone vector-scaled obs hit neutrally, not sunk by an incomparable BM25 ratio (P2-12)', () => {
-      const results = [
-        { source: 'obs', score: -0.024, scoreScale: 'vector' }, // lone RRF-fused obs hit
-        { source: 'session', score: -6 },
-        { source: 'session', score: -3 },
-      ];
-      normalizeCrossSourceScores(results, 'source');
-      expect(results[0].score).toBe(-0.5); // neutral mid, NOT the -0.25 the raw ratio gives
-      expect(results[1].score).toBe(-1); // BM25 sessions still normalized within-source
-      expect(results[2].score).toBe(-0.5);
-    });
-
-    it('excludes vector-scaled rows from globalMaxAbs so BM25 lone-hit ratios stay meaningful (P2-12)', () => {
-      const results = [
-        { source: 'obs', score: -0.03, scoreScale: 'vector' },
-        { source: 'obs', score: -0.02, scoreScale: 'vector' },
-        { source: 'session', score: -5 }, // lone BM25 session
-        { source: 'event', score: -5 },
-        { source: 'event', score: -1 },
-      ];
-      normalizeCrossSourceScores(results, 'source');
-      // globalMaxAbs must be 5 (events), NOT distorted by the tiny vector scores → session
-      // ratio 5/5 = 1 → -1.05, not sunk. (If vector rows counted, max still 5 here, but the
-      // guarantee is they never BECOME the reference.)
-      expect(results.find((r) => r.source === 'session').score).toBe(-1.05);
-    });
-
     it('a comparable (≥0.5× global max) lone hit lands between neutral and best (MED-1)', () => {
       const results = [
         { source: 'session', score: -6 },

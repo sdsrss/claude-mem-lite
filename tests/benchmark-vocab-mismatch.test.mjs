@@ -9,8 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createTestDb } from './test-helpers.mjs';
-import { _resetVocabCache } from '../tfidf.mjs';
-import { seedDatabase, seedVectors, runBenchmark } from '../benchmark/benchmark.mjs';
+import { seedDatabase, runBenchmark } from '../benchmark/benchmark.mjs';
 
 const fixtures = new URL('../benchmark/fixtures/', import.meta.url);
 const corpus = JSON.parse(readFileSync(new URL('seed-data.json', fixtures), 'utf8'));
@@ -31,10 +30,8 @@ describe('vocab-mismatch benchmark suite', () => {
   });
 
   it('production_hybrid recalls the documented deficit band (rescued above 0, far below keyword)', () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, corpus);
-    seedVectors(db);
 
     const r = runBenchmark(db, suite.queries, 'production_hybrid');
     // Observed R@10 ~0.33 (2026-06): TF-IDF vector + OR-fallback rescue ~1/3 of

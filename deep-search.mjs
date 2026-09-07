@@ -33,8 +33,7 @@
 
 import { searchObservationsHybrid } from './search-engine.mjs';
 import { sanitizeFtsQuery } from './utils.mjs';
-import { RRF_K } from './tfidf.mjs';
-import { rrfAccumulate } from './lib/rrf.mjs';
+import { RRF_K, rrfAccumulate } from './lib/rrf.mjs';
 import { llmRerankOrder, defaultRerankLLM } from './rerank.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 
@@ -425,7 +424,7 @@ export async function rewriteQuery(query, { llm = defaultLLM, retries = 1, cache
 /**
  * N-way Reciprocal Rank Fusion. Each ranked list contributes 1/(k + rank) to an
  * item's score (rank is 0-based array position; lists must already be in
- * relevance order). Same k=RRF_K and 1/(k+rank+1) formula as tfidf.rrfMerge,
+ * relevance order). k=RRF_K and the 1/(k+rank+1) formula come from lib/rrf.mjs,
  * generalized from 2 lists to N. A single list is returned in its original order
  * (scores are strictly decreasing in rank), which is what guarantees deepSearch
  * never reorders the baseline when the rewrite fails.

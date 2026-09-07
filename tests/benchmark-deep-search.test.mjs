@@ -8,8 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createTestDb } from './test-helpers.mjs';
-import { _resetVocabCache } from '../tfidf.mjs';
-import { seedDatabase, seedVectors, runDeepSearch } from '../benchmark/benchmark.mjs';
+import { seedDatabase, runDeepSearch } from '../benchmark/benchmark.mjs';
 
 const fixtures = new URL('../benchmark/fixtures/', import.meta.url);
 const corpus = JSON.parse(readFileSync(new URL('seed-data.json', fixtures), 'utf8'));
@@ -34,10 +33,8 @@ describe('deep-search benchmark suite', () => {
   });
 
   it('deep search lifts recall well above the single-query baseline', async () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, corpus);
-    seedVectors(db);
 
     const res = await runDeepSearch(db, suite.queries, rewritesByQuery);
 
@@ -70,10 +67,8 @@ describe('deep-search benchmark suite', () => {
   });
 
   it('falls back to baseline (never worse) when rewrites are missing', async () => {
-    _resetVocabCache();
     const db = createTestDb();
     seedDatabase(db, corpus);
-    seedVectors(db);
 
     // Empty rewrites map → fake llm returns null for every query → variants
     // collapse to [original] → deep must equal the single-query baseline.

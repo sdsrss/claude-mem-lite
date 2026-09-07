@@ -405,21 +405,10 @@ export const memOptimizeSchema = {
 export const memMaintainSchema = {
   action: z.enum(['scan', 'execute']).describe('scan=analyze candidates, execute=apply changes'),
   operations: z
-    .array(
-      z.enum([
-        'dedup',
-        'decay',
-        'cleanup',
-        'boost',
-        'demote_pinned',
-        'purge_stale',
-        'rebuild_vectors',
-        'vacuum',
-      ]),
-    )
+    .array(z.enum(['dedup', 'decay', 'cleanup', 'boost', 'demote_pinned', 'purge_stale', 'vacuum']))
     .optional()
     .describe(
-      'Operations: dedup=find/merge duplicate observations, decay=reduce importance of old low-value obs, cleanup=remove orphaned records, boost=promote frequently-accessed obs, demote_pinned=floor importance for obs injected>=8 times but never cited — to 1 with no lesson_learned, to 2 with one (v3.76.1: a lesson-bearing row keeps eligibility on every importance>=2 injection face) (clears pinned noise the decay op cannot reach; in the default set since v3.76.0 and ordered after boost, since boost would otherwise raise the row straight back — set CLAUDE_MEM_SKIP_DEMOTE_PINNED=1 to drop it from the DEFAULT set only), purge_stale=DELETE pending-purge obs older than retain_days (requires confirm=true; first call previews), rebuild_vectors=rebuild TF-IDF vocabulary and all observation vectors, vacuum=reclaim freelist dead space (whole-DB)',
+      'Operations: dedup=find/merge duplicate observations, decay=reduce importance of old low-value obs, cleanup=remove orphaned records, boost=promote frequently-accessed obs, demote_pinned=floor importance for obs injected>=8 times but never cited — to 1 with no lesson_learned, to 2 with one (v3.76.1: a lesson-bearing row keeps eligibility on every importance>=2 injection face) (clears pinned noise the decay op cannot reach; in the default set since v3.76.0 and ordered after boost, since boost would otherwise raise the row straight back — set CLAUDE_MEM_SKIP_DEMOTE_PINNED=1 to drop it from the DEFAULT set only), purge_stale=DELETE pending-purge obs older than retain_days (requires confirm=true; first call previews), vacuum=reclaim freelist dead space (whole-DB)',
     ),
   merge_ids: z
     .preprocess(
@@ -758,7 +747,7 @@ export const tools = [
   {
     name: 'mem_maintain',
     description:
-      'Two-phase maintenance: scan (safe) then execute (mutating). Handles dedup / decay / cleanup / boost / purge_stale / rebuild_vectors.\n' +
+      'Two-phase maintenance: scan (safe) then execute (mutating). Handles dedup / decay / cleanup / boost / purge_stale / vacuum.\n' +
       '\n' +
       'DO NOT use when:\n' +
       '  - Search quality is fine — this is scheduled maintenance, not per-query tuning\n' +

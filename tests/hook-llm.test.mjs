@@ -33,7 +33,6 @@ import {
   unwrapObservationEnvelope,
   isLowSignalLesson,
   hasEnrichmentContent,
-  buildVecText,
 } from '../hook-llm.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
@@ -2547,27 +2546,6 @@ describe('persistHaikuSummary (T9 routing)', () => {
 });
 
 // ─── buildDegradedTitle ─────────────────────────────────────────────────────
-
-describe('buildVecText (finding #8: vector text mirrors FTS content)', () => {
-  const obs = {
-    title: 'Fix pool deadlock',
-    narrative: 'reordered acquisition order',
-    concepts: ['deadlock', 'pool'],
-    lessonLearned: 'never acquire a second connection inside a callback',
-    searchAliases: 'connection hang db lock timeout',
-  };
-  it('includes lesson_learned and search_aliases (the paraphrase-bridge terms)', () => {
-    const vt = buildVecText(obs);
-    expect(vt).toContain('never acquire a second connection');
-    expect(vt).toContain('db lock timeout');
-  });
-  it('still includes title, narrative, and concepts', () => {
-    const vt = buildVecText(obs);
-    expect(vt).toContain('Fix pool deadlock');
-    expect(vt).toContain('reordered acquisition');
-    expect(vt).toContain('deadlock');
-  });
-});
 
 describe('buildDegradedTitle', () => {
   it('strips tab characters and CI status from error hints', () => {

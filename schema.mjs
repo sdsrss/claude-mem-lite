@@ -167,7 +167,7 @@ export const CODE_DIR = join(homedir(), '.claude-mem-lite');
 // read NULL and are credited exactly once more, on their next citation, then stamp.
 // The column holds the LAST crediting session, not a set, so two same-project sessions
 // interleaving their turns flip it between them — see the scope note in bumpCitationAccess.
-export const CURRENT_SCHEMA_VERSION = 48;
+export const CURRENT_SCHEMA_VERSION = 49;
 
 // Sentinel columns for the LATEST migration set(s). The fast-path uses these
 // to self-heal half-migrated DBs — schema_version bumped but column ALTERs
@@ -417,6 +417,24 @@ const MIGRATIONS = [
   // hasMainThreadAssistantText, so a session can credit access while decay never runs.
   // Sharing a key would make one channel silence the other.
   'ALTER TABLE observations ADD COLUMN last_access_session_id TEXT DEFAULT NULL',
+  // v49 (Phase-2): drop the TF-IDF vector arm's two tables. Measured before removing —
+  // the arm is net-negative on both benchmark fixtures, including the vocabulary-mismatch
+  // suite that is its only reason to exist, and holds 0 rows on the real corpus. See
+  // tests/vector-arm-removed.test.mjs.
+  //
+  // These are the first DROPs in this array, and they are safe in this loop for a reason
+  // worth stating: the catch below only swallows 'duplicate column name', but DROP TABLE
+  // IF EXISTS never throws on an absent table, so it is idempotent on its own. Fresh DBs
+  // no longer CREATE these (CORE_SCHEMA lost them in the same change), so there the DROP
+  // is a no-op; existing DBs get them removed on the next open.
+  //
+  // No LATEST_MIGRATION_COLUMNS sentinel is added, and that is deliberate rather than an
+  // oversight: that mechanism is a column-PRESENCE probe and cannot express an absence.
+  // The hole it would guard is "version says 49 but the tables are still here", whose
+  // consequence is two dead tables nothing reads or writes — no data loss, no wrong
+  // answer, reclaimed on any later VACUUM.
+  'DROP TABLE IF EXISTS observation_vectors',
+  'DROP TABLE IF EXISTS vocab_state',
 ];
 
 /**
@@ -839,33 +857,6 @@ export function initSchema(db) {
   // observation_files orphan cleanup moved to runDeferredCleanups() (audit P1-5):
   // it now runs retryably outside the version fast-path. See DEFERRED_CLEANUPS.
 
-  // Observation vectors table for TF-IDF vector search
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS observation_vectors (
-      observation_id INTEGER PRIMARY KEY,
-      vector BLOB NOT NULL,
-      vocab_version TEXT NOT NULL,
-      created_at_epoch INTEGER NOT NULL,
-      FOREIGN KEY(observation_id) REFERENCES observations(id) ON DELETE CASCADE
-    )
-  `);
-
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_vectors_version ON observation_vectors(vocab_version)`);
-
-  // observation_vectors orphan cleanup moved to runDeferredCleanups() (audit P1-5).
-
-  // Persisted vocabulary for stable TF-IDF vector indexing
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS vocab_state (
-      term TEXT NOT NULL,
-      term_index INTEGER NOT NULL,
-      idf REAL NOT NULL,
-      version TEXT NOT NULL,
-      created_at_epoch INTEGER NOT NULL
-    )
-  `);
-  db.exec('CREATE INDEX IF NOT EXISTS idx_vocab_state_version ON vocab_state(version)');
-
   // Project-name normalization moved to runDeferredCleanups() (audit P1-5) — it
   // now retries on a later open if it fails, instead of being lost behind the
   // version fast-path. See DEFERRED_CLEANUPS.
@@ -1070,14 +1061,6 @@ const DEFERRED_CLEANUPS = [
     name: 'orphan-observation-files',
     run: (db) =>
       db.prepare(`DELETE FROM observation_files WHERE obs_id NOT IN (SELECT id FROM observations)`).run(),
-  },
-  {
-    // v28 (v2.47) P0-1: orphaned observation_vectors — same FK-OFF root cause.
-    name: 'orphan-observation-vectors',
-    run: (db) =>
-      db
-        .prepare(`DELETE FROM observation_vectors WHERE observation_id NOT IN (SELECT id FROM observations)`)
-        .run(),
   },
   {
     // Project-name normalization: migrate short names ("mem") to canonical
