@@ -1497,3 +1497,173 @@ describe('pipeline', () => {
     expect(budget.normalize).toBe(1);
   });
 });
+
+// ─── Ties in the pools' ORDER BY (D#9) ──────────────────────────────────────
+//
+// Every pool here is `ORDER BY created_at_epoch DESC LIMIT n`, and every one of them feeds
+// JS-side work — so a tie at the LIMIT boundary makes pool MEMBERSHIP arbitrary, not just
+// display order. Two same-episode observations are exactly that tie: same project, same
+// importance, access_count 0, and a created_at_epoch that lands in the same millisecond
+// about 90% of the time (measured 2026-09-07: 272/300 same-ms, 28/300 straddled, with the
+// fixture's own `Date.now()`-per-insert epoch source).
+//
+// The mechanism was DISTINGUISHED before anything was changed, because two candidates fit
+// the observation and they need different fixes. SQLite's tie order here is DETERMINISTIC
+// (8 rows on one epoch, 200 queries over 20 fresh DBs, exactly one returned order), so it
+// is not the plan varying — it is the ties themselves differing per run. What makes that
+// harmful is the direction: on a tie SQLite returns ASCENDING rowid, i.e. the OLDEST row
+// first, while an untied pool returns the NEWEST first. So "which duplicate survives a
+// merge" flips depending on whether two writes straddled a millisecond.
+describe('pool ordering is total under exact ties (D#9)', () => {
+  // Recent on purpose: findMergeCandidates only considers rows inside a 30-day window, so a
+  // fixed literal epoch would put every fixture row outside the pool and the tests would go
+  // red on their PREMISE rather than on the tie. One value, shared by every row, is what
+  // forces the exact tie.
+  const FIXED_EPOCH = Date.now() - 60_000;
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  const tieAllEpochs = () => db.prepare('UPDATE observations SET created_at_epoch = ?').run(FIXED_EPOCH);
+
+  it('takes the NEWEST rows when a tie sits on the LIMIT boundary', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // Five eligible rows, all on one epoch, asking for three. `ORDER BY created_at_epoch
+    // DESC` says "newest first", so the three highest ids must come back. Without a
+    // tiebreaker SQLite returns ascending rowid and the pool silently takes the three
+    // OLDEST — the two newest rows are then unreachable for as long as the tie holds.
+    for (let i = 0; i < 5; i++) {
+      insertObs(db, { title: `tied row ${i}`, narrative: 'x'.repeat(150) });
+    }
+    tieAllEpochs();
+    const all = db
+      .prepare('SELECT id FROM observations ORDER BY id')
+      .all()
+      .map((r) => r.id);
+    const got = findReenrichCandidates(db, 3, { scope: 'narrow' })
+      .map((r) => r.id)
+      .sort((a, b) => a - b);
+    expect(got).toEqual(all.slice(-3));
+  });
+
+  it('gives findMergeCandidates a deterministic newest-first head', async () => {
+    const { findMergeCandidates } = await import('../hook-optimize.mjs');
+    // Two rows whose titles are similar enough to cluster, tied on epoch. The head is the
+    // row the keeper reduce falls back to on a full tie, so its identity is not cosmetic.
+    insertObs(db, { title: 'Fix FTS5 query sanitization bug in utils.mjs', narrative: 'a' });
+    insertObs(db, { title: 'Fix FTS5 query sanitization edge case in utils.mjs', narrative: 'b' });
+    tieAllEpochs();
+    const clusters = findMergeCandidates(db, 5);
+    expect(clusters.length).toBeGreaterThan(0);
+    const ids = db
+      .prepare('SELECT id FROM observations ORDER BY id')
+      .all()
+      .map((r) => r.id);
+    expect(clusters[0][0].id).toBe(Math.max(...ids));
+  });
+
+  it('keeps the NEWEST member when importance and access_count are also tied', async () => {
+    const { findMergeCandidates, executeMergeCluster } = await import('../hook-optimize.mjs');
+    // The shape D#9 names: two same-episode duplicates. Equal importance, access_count 0,
+    // same millisecond. The keeper reduce breaks that full tie by falling back to the SQL
+    // head, so before the tiebreaker the OLDER row wins here and the NEWER one is hidden —
+    // and which of the two it is depends on a millisecond boundary, not on the data.
+    insertObs(db, {
+      title: 'Fix FTS5 query sanitization bug in utils.mjs',
+      narrative: 'first write of the episode',
+      importance: 2,
+      accessCount: 0,
+    });
+    insertObs(db, {
+      title: 'Fix FTS5 query sanitization edge case in utils.mjs',
+      narrative: 'second write of the same episode',
+      importance: 2,
+      accessCount: 0,
+    });
+    tieAllEpochs();
+    const ids = db
+      .prepare('SELECT id FROM observations ORDER BY id')
+      .all()
+      .map((r) => r.id);
+    const newest = Math.max(...ids);
+
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'n',
+      merged_concepts: ['c'],
+      merged_facts: ['f'],
+      merged_lesson: null,
+      importance: 2,
+    });
+    const cluster = findMergeCandidates(db, 5)[0];
+    const result = await executeMergeCluster(db, cluster);
+    expect(result.merged).toBe(true);
+
+    const survivors = db
+      .prepare('SELECT id FROM observations WHERE COALESCE(compressed_into,0)=0')
+      .all()
+      .map((r) => r.id);
+    expect(survivors).toEqual([newest]);
+  });
+
+  it('breaks a full keeper tie by id even when the caller hands it any order', async () => {
+    // The reduce must be TOTAL on its own, not merely inherit an order from SQL. Handed the
+    // same two rows oldest-first, it must still keep the newest — otherwise the guard above
+    // only holds for callers that happen to go through findMergeCandidates.
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'A', narrative: 'a', importance: 2, accessCount: 0 });
+    insertObs(db, { title: 'B', narrative: 'b', importance: 2, accessCount: 0 });
+    tieAllEpochs();
+    const rows = db.prepare('SELECT * FROM observations ORDER BY id ASC').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'n',
+      merged_concepts: ['c'],
+      merged_facts: ['f'],
+      merged_lesson: null,
+      importance: 2,
+    });
+    const result = await executeMergeCluster(db, rows);
+    expect(result.merged).toBe(true);
+    const survivors = db
+      .prepare('SELECT id FROM observations WHERE COALESCE(compressed_into,0)=0')
+      .all()
+      .map((r) => r.id);
+    expect(survivors).toEqual([rows[rows.length - 1].id]);
+  });
+
+  it('leaves importance and access_count ahead of the id tiebreaker', async () => {
+    // The tiebreaker is a LAST resort. If it outranked the two real signals, merging would
+    // start keeping whichever row was written last regardless of how important it is — the
+    // exact regression the importance-first keeper was introduced to fix.
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Critical', narrative: 'a', importance: 3, accessCount: 0 });
+    insertObs(db, { title: 'Trivial but newer', narrative: 'b', importance: 1, accessCount: 9 });
+    tieAllEpochs();
+    const rows = db.prepare('SELECT * FROM observations ORDER BY id ASC').all();
+    const critical = rows.find((r) => r.importance === 3).id;
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'n',
+      merged_concepts: ['c'],
+      merged_facts: ['f'],
+      merged_lesson: null,
+      importance: 2,
+    });
+    await executeMergeCluster(db, rows);
+    const survivors = db
+      .prepare('SELECT id FROM observations WHERE COALESCE(compressed_into,0)=0')
+      .all()
+      .map((r) => r.id);
+    expect(survivors).toEqual([critical]);
+  });
+});

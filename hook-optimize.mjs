@@ -129,7 +129,8 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
         ${projectClause}
       ORDER BY
         CASE WHEN lesson_learned IS NOT NULL AND lesson_learned != '' THEN 0 ELSE 1 END,
-        created_at_epoch DESC
+        created_at_epoch DESC,
+        id DESC
       LIMIT ?
     `);
     return project ? stmt.all(project, limit) : stmt.all(limit);
@@ -149,7 +150,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
         AND LENGTH(COALESCE(narrative, '')) > 100
         AND ${notLowSignalTitleClause('')}
         ${projectClause}
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT ?
     `);
     return project ? stmt.all(project, limit) : stmt.all(limit);
@@ -182,7 +183,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
         AND LENGTH(COALESCE(narrative, '')) > 100
         AND ${notLowSignalTitleClause('')}
         ${projectClause}
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT ?
     `);
     return project ? stmt.all(project, limit) : stmt.all(limit);
@@ -215,7 +216,15 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
       AND search_aliases IS NULL
       AND optimized_at IS NULL
       ${projectClause}
-    ORDER BY created_at_epoch DESC
+    -- D#9: the id term is a REACHABILITY guard, not cosmetics. Every pool in this file is
+    -- ORDER BY created_at_epoch DESC LIMIT n feeding JS-side work, so a tie AT THE
+    -- BOUNDARY decides pool MEMBERSHIP. Measured 2026-09-07: two inserts land in the same
+    -- millisecond 272/300 times, and on a tie SQLite returns ASCENDING rowid -- the exact
+    -- opposite of the "newest first" this clause states -- so the newest rows fell out of
+    -- the pool whenever the clock had not ticked. SQLite's tie order is deterministic here
+    -- (8 rows on one epoch, 200 queries, one returned order), so this is not defending
+    -- against a varying plan; it is making the stated order total.
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
   `);
   return project ? stmt.all(project, limit) : stmt.all(limit);
@@ -632,7 +641,7 @@ export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
     WHERE ${liveObsFilterSql('')}
       AND concepts IS NOT NULL AND concepts != ''
       ${projectClause}
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC -- D#9: total order, see findReenrichCandidates
     LIMIT 2000
   `);
   const rows = project ? stmt.all(project) : stmt.all();
@@ -807,7 +816,10 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
       AND title IS NOT NULL AND title != ''
       AND created_at_epoch > ?
       ${projectClause}
-    ORDER BY created_at_epoch DESC
+    -- D#9: this pool's head is what the keeper reduce falls back to on a full tie, so an
+    -- arbitrary tie order decides WHICH DUPLICATE SURVIVES a merge. Same-episode rows are
+    -- exactly that tie (same project, same importance, access_count 0, same millisecond).
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT 200
   `);
   const rows = project ? stmt.all(cutoff, project) : stmt.all(cutoff);
@@ -876,14 +888,27 @@ Return ONLY valid JSON:
     });
     if (!parsed || !parsed.should_merge) return { merged: false };
 
-    // Keeper = highest importance, then highest access_count. Previously access_count
-    // alone, so a critical (importance=3) but never-accessed observation lost the keeper
-    // role to a trivial (importance=1) accessed one and was compressed away.
+    // Keeper = highest importance, then highest access_count, then highest id. Previously
+    // access_count alone, so a critical (importance=3) but never-accessed observation lost
+    // the keeper role to a trivial (importance=1) accessed one and was compressed away.
+    //
+    // D#9: the third term is the one that makes this TOTAL. Without it a full tie fell
+    // through to `cluster[0]` — the SQL head — and same-episode duplicates are exactly a
+    // full tie: same project, same importance, access_count 0, and a created_at_epoch in
+    // the same millisecond 272 times out of 300 (measured 2026-09-07). On a tie SQLite
+    // returns ASCENDING rowid while an untied pool returns the newest first, so which
+    // duplicate survived flipped on whether two writes straddled a millisecond. Ordering
+    // the pool alone would not have been enough: this reduce is exported to callers that
+    // build their own cluster, so it has to be total on its own. Highest id = written last
+    // = the version whose content the merged summary should be anchored on.
     const keeper = cluster.reduce((best, o) => {
       const oi = o.importance || 1,
         bi = best.importance || 1;
       if (oi !== bi) return oi > bi ? o : best;
-      return (o.access_count || 0) > (best.access_count || 0) ? o : best;
+      const oa = o.access_count || 0,
+        ba = best.access_count || 0;
+      if (oa !== ba) return oa > ba ? o : best;
+      return (o.id || 0) > (best.id || 0) ? o : best;
     }, cluster[0]);
     const others = cluster.filter((o) => o.id !== keeper.id);
     // Floor the merged importance at the cluster max — merging must never silently
