@@ -2,6 +2,118 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.5.0 — three rulers that can say NO, and the things they caught
+
+**Upgrade note:** three default behaviours change, all reversible by env var. `search` and
+`mem_search` now append a one-line note when the reported `total` exceeds what pagination
+can actually reach (`CLAUDE_MEM_REACH_DISCLOSURE=off`). The daily background optimize pass
+now does one more thing and one less: it backfills `concepts` on manual saves that no pool
+could previously reach, and smart-compress can now REFUSE a cluster instead of always
+summarising it. No data migration, no schema change. If a smart-compress model response
+omits the new `should_compress` field the cluster is skipped rather than compressed — that
+is deliberate, see below.
+
+**Search reported a `total` it could not paginate to.** `computePerSourceWindow` is
+offset-independent by design (D#30 — an offset-scaled pool re-ranks its own prefix under
+RRF, so pages overlapped and gapped), while `countSearchTotal` re-derives the full
+match+filter population. The two answer different questions and nothing said so. Measured on
+a 128-row corpus: the last non-empty offset is **59 / 59 / 89** for limits 10 / 20 / 30, so
+at `mem_search`'s default limit of 20, **60 of 128 rows (46.9%) are unreachable at any
+offset**. Both faces now disclose it through one shared helper, and the reachable count is
+`preFinalizeCount` rather than a re-derived formula — `perSourceLimit` is per SOURCE, so a
+cross-source query fuses up to four pools and a formula would understate its reach. Four
+mutations, four kills. (D#5)
+
+**The coverage gate could see 62.5% of the shipped tree, and the file's own comments named
+three exclusions out of twenty-four.** `coverage.include` was an allowlist, and an allowlist
+gives a new module no way to announce itself — absence reads identically to "deliberately
+out". This is the THIRD round to find code hiding there, and the first to remove the
+mechanism instead of the instance. **24 shipped modules, 10,137 lines against 30,305**, with
+no stated reason: `search-engine.mjs`, `scoring-sql.mjs`, `rerank.mjs`, `deep-search.mjs` —
+the retrieval core this project's whole measurement doctrine is about — plus all of `cli/**`
+(including the render layer `server.mjs` imports) and `server/fts-check.mjs`. `include` is
+now a denylist; staying out costs a named entry with a reason. `cli.mjs` is the one new
+exclusion, on measured grounds (zero in-process importers, ≥5 spawners, 0.0% over 63
+statements); `hook-precompact.mjs` was checked the same way and went IN at 58.3%. Population
+83 → 130 files. **Caliber break: the four coverage numbers are not comparable across this
+release.**
+
+**The scope guard had been modelling the wrong matcher for a whole major and nothing went
+red.** It described vitest 4 (absolute path, `{ contains: true }`) while vitest 5 matches the
+RELATIVE path with no `contains`; the old simple `include` made both semantics agree, so the
+staleness only surfaced when the config changed. It caught a real bug on the way past: under
+`contains: true` an exclude entry is a SUBSTRING test, so `'cli.mjs'` would also have
+excluded `mem-cli.mjs` — 3827 lines, the largest module in the gate — while the aggregate
+went UP. Model corrected, plus a tripwire that fails on the next vitest major.
+
+**The suite gave its hooks half the budget it gave its tests.** `hookTimeout` appeared
+nowhere in this repo: `testTimeout` was 20 s and setup/teardown silently kept vitest's 10 s
+default, in a suite where **153 of 362 files** run `mkdtemp` / `new Database` / `initSchema`
+/ `execFileSync` / `rmSync` inside `before*`/`after*`. Prompted by a CI red, deliberately not
+justified by it — that failure's cause is unproven and stays open. The archived attempt-1 log
+gives the magnitude the report was missing: the file ran **14736 ms** on the runner against
+**1.02 s** locally. (D#7)
+
+**Coverage is not deterministic, and one file is the whole of it.** Nine identical
+whole-suite runs on one unchanged tree: statements 9790/9791, branches 7362/7363/7364,
+functions and lines identical throughout. Localised by diffing per-file hit counts rather
+than subtracting totals — **exactly one file moves, `hook-optimize.mjs`**. The baseline row
+now carries a range and an explicit "do not attribute a ±0.01 movement"; several past rows
+tried to.
+
+**Manual saves never received concepts or facts, and the fix that closed P1-2 is what created
+the hole.** `save-enrich` fires on every successful manual save and writes `search_aliases` +
+`lesson_learned` + `scope` — exactly the four re-enrich pools' predicates — so a
+save-enriched row matched none of them, permanently. Its docblock's "the daily wide re-enrich
+stays the safety net" was true of `optimized_at` and false in effect. Measured on a real DB
+with a readonly handle: 16 live rows, 15 conceptless, **all four pools 0, the new pool 14**
+(the 15th is named, not subtracted: a 79-char narrative below the substantive gate). Fixed
+with a pool keyed on the column it fills, not by widening save-enrich's stated contract — a
+source-side fix cannot reach rows already on disk. Concepts are worth **+0.0846 R@10 /
++0.0579 nDCG** where they exist, against **+0.0002 R@10** for all eight scoring multipliers
+combined; that is what they are worth, NOT what backfilling recovers in production, which is
+still unmeasured. (D#6)
+
+**Two post-LLM writes R10 P3-3 never reached, and one of them destroys a pointer rather than
+staling a row.** A sweep of all 11 observation writes in `hook-optimize.mjs` found two
+siblings still bare. The importance:0 auto-hide sets `compressed_into = -1`, and
+`compressed_into` is the child → keeper link: if a concurrent merge or compress adopts the row
+during the 45 s call it holds a POSITIVE keeper id, and −1 over that destroys it, since
+orphan recovery filters `compressed_into > 0`. The paired write in `lib/maintain-core.mjs`
+already carried the predicate. Two of the eleven look bare and are not — they sit inside a
+transaction that re-checks liveness first. (D#12)
+
+**smart-compress had no way for the model to refuse, on the path that HIDES its inputs.** Its
+prompt asserted the premise it should have been testing ("Summarize these related …") and the
+only bail was a missing title, while its sibling `executeMergeCluster` has had `should_merge`
+all along. That mattered because the upstream relatedness check is not always on: measured
+with a control arm, three observations sharing only a project and an era, 12 days apart, form
+**0 clusters with `CLAUDE_MEM_VECTORS=1` and 1 cluster with the arm off** — the default, where
+`clusterForCompression` groups by a 14-day window alone. It now fails CLOSED, because refusing
+wrongly costs a skipped compression while proceeding wrongly hides real rows. Two existing
+mocks were updated rather than left asserting the old contract. (D#10)
+
+**And the veto was measured, not assumed.** `benchmark/compress-veto-rate.mjs`, two runs
+back-to-back with identical results: **veto 6/6 = 100% on unrelated clusters, false-refusal
+0/6 = 0% on related ones, 0 errors.** The bound belongs with the number — n=6 per arm, a
+hand-built fixture (the real corpus has zero eligible rows to sample), and the arms are
+separated by design at cohesion 0.1124 vs 0.0051, which a self-check asserts. So the veto
+handles the CLEAR case, which is exactly the shape found above; ambiguous clusters are
+unmeasured and are the named next step. The ruler classifies THREE ways on purpose:
+`executeSmartCompressCluster` returns `{compressed:false}` for a refusal and a dead API key
+alike, so a two-way ruler would have scored an outage as a perfect veto.
+
+**`benchmark:gate` cannot say NO about the eight scoring multipliers, and now something can.**
+Proven by mutating the real tree and reverting it: neutering `MULT_EXPR.importance` left the
+gate at exit 0 with all four checks passing and `hybrid_over_bm25` going UP; changing
+`MULT_EXPR.lesson`'s 0.3 to 0.5 left the output byte-identical. `multiplier-discrimination.mjs`
+recovers each multiplier's own ratio from tied-BM25 pairs, and **all eight are alive with
+their declared magnitude**. Wired into CI as its own gate.
+
+Suite **363 files / 5795**, 0 skipped (was 360 / 5744). Coverage 84.55 / 78.76 / 90.68 /
+85.87 over the new 130-file population, floors re-derived to 81 / 75 / 87 / 83 by the same
+~3-point rule that set the old ones. knip unmoved at 44 / 0 / 0 / 3.
+
 ## v5.4.0 — two host facts the code had modelled backwards
 
 **Upgrade note:** SessionStart now emits a `Working State (from /clear)` block after
