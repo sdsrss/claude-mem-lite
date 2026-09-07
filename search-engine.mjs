@@ -518,7 +518,8 @@ export function findFtsAnchor(
       AND (? IS NULL OR o.project = ?)
       AND ${liveObsFilterSql('o')}
     ORDER BY ${OBS_BM25}
-      * ${recencyDecaySql({ tsExpr: 'o.created_at_epoch', halfLifeSql: `${halfLifeMs}.0` })}
+      * ${recencyDecaySql({ tsExpr: 'o.created_at_epoch', halfLifeSql: `${halfLifeMs}.0` })},
+      o.id DESC
     LIMIT 1
   `;
   const stmt = db.prepare(sql);
@@ -579,7 +580,7 @@ export function searchObservationsHybrid(db, ctx) {
         `
       SELECT id, type, title, subtitle, project, created_at, created_at_epoch, files_modified, importance, lesson_learned
       FROM observations ${where}
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT ? OFFSET ?
     `,
       )
