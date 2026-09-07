@@ -1246,3 +1246,75 @@ describe('mem_search rerank threading (D#43 — opt-in, explicit-deep only)', ()
     db.close();
   });
 });
+
+// ─── The auto-escalation policy is invisible to both benchmark corpora (D#8) ────────────
+//
+// D#8 planned an A/B on the escalation constant: arm (a) escalate when plain hits < 3
+// (shipped), arm (b) escalate only when 1 <= hits < 3, precision measured by
+// benchmark/deep-search-holdout.mjs and recall by tests/benchmark-deep-search.test.mjs.
+// That A/B is NOT EXECUTABLE on these fixtures, and this block pins why rather than
+// leaving the next session to re-derive it.
+//
+// On both corpora every suite query returns far more than 3 plain hits, so
+// shouldEscalateToDeep is false for all of them and BOTH arms would read identically.
+// A Δ=0 from that comparison would be a blind-instrument zero, which is the exact
+// failure doctrine rule 9 exists to prevent — and the same trap D#14 was closed on.
+//
+// The MECHANISM is worth carrying: the escalation trigger is a COUNT, and the AND->OR
+// fallback's job is to make the count non-zero. It fires on 12/12 queries here, so it
+// systematically lifts the plain count over the floor and disarms the trigger. Auto can
+// therefore only fire when the OR search ALSO comes back near-empty.
+//
+// If either case goes RED the fixture has gained an escalating query, and D#8's A/B
+// becomes executable — reopen it rather than deleting the case.
+describe('auto-escalation reach on the benchmark fixtures (D#8)', () => {
+  it('the holdout (precision) corpus escalates on none of its queries', async () => {
+    const { runHoldout } = await import('../benchmark/deep-search-holdout.mjs');
+    const res = await runHoldout();
+    expect(res.perQuery.length).toBeGreaterThanOrEqual(12); // premise: the suite is loaded
+    expect(res.escalatingQueries).toBe(0);
+    // Not a near miss: the floor is 3 and the weakest query is far above it.
+    expect(res.minPlainHits).toBeGreaterThan(res.escalationFloor);
+    // The named mechanism, asserted rather than told: OR fallback on every query.
+    expect(res.orFallbackQueries).toBe(res.perQuery.length);
+  });
+
+  it('the full (recall) corpus escalates on none of its queries either', async () => {
+    // Same ruler, same queries, nothing deleted -- so `held` is 0 and the `fp` column is
+    // meaningless here. Only the plain-hit and escalation columns are read, which is why
+    // the holdout premise check lives in runSelfChecks() and not inside runHoldout().
+    const { runHoldout } = await import('../benchmark/deep-search-holdout.mjs');
+    const fixtures = join(dirname(fileURLToPath(import.meta.url)), '..', 'benchmark', 'fixtures');
+    const suite = JSON.parse(readFileSync(join(fixtures, 'test-queries-vocab-mismatch.json'), 'utf8'));
+    const res = await runHoldout({
+      suite: { queries: suite.queries.map((q) => ({ ...q, relevant_ids: [] })) },
+    });
+    expect(res.perQuery.every((p) => p.held === 0)).toBe(true); // premise: nothing removed
+    expect(res.escalatingQueries).toBe(0);
+    expect(res.minPlainHits).toBeGreaterThan(res.escalationFloor);
+  });
+});
+
+describe('the holdout ruler can say NO (self-checks)', () => {
+  it('rejects a run where the holdout removed nothing', async () => {
+    const { assertHoldoutRemovedRows } = await import('../benchmark/deep-search-holdout.mjs');
+    expect(() => assertHoldoutRemovedRows({ perQuery: [{ id: 'q1', held: 2 }] })).not.toThrow();
+    expect(() => assertHoldoutRemovedRows({ perQuery: [{ id: 'q1', held: 0 }] })).toThrow(/removed no rows/);
+  });
+
+  it('rejects a run whose rewrites degraded to the single-query baseline', async () => {
+    const { assertRewritesUsable } = await import('../benchmark/deep-search-holdout.mjs');
+    expect(() => assertRewritesUsable({ perQuery: [{ id: 'q1', variants: 4 }] })).not.toThrow();
+    expect(() => assertRewritesUsable({ perQuery: [{ id: 'q1', variants: 1 }] })).toThrow(
+      /no recorded rewrite/,
+    );
+  });
+
+  it('anchors the escalation column to the shipped predicate and floor', async () => {
+    const { assertEscalationColumnIsTheShippedPredicate } =
+      await import('../benchmark/deep-search-holdout.mjs');
+    // Passes on the real tree. Its counter-example is a product change, not a fixture
+    // one, so it is mutation-verified against deep-search.mjs rather than driven here.
+    expect(() => assertEscalationColumnIsTheShippedPredicate()).not.toThrow();
+  });
+});
