@@ -107,34 +107,66 @@ export default defineConfig({
       // below is an explicit allowlist that never named them, so their `exclude` entries
       // were belt-and-braces and removing one changed nothing — which is worth knowing
       // before anyone "fixes" scope by editing `exclude` alone and measures no difference.
-      include: [
-        'lib/**/*.mjs',
-        'utils.mjs',
-        'schema.mjs',
-        'search-scoring.mjs',
-        'mem-cli.mjs',
-        'hook-episode.mjs',
-        'hook-context.mjs',
-        'hook-semaphore.mjs',
-        'hook-shared.mjs',
-        'hook-llm.mjs',
-        'haiku-client.mjs',
-        'format-utils.mjs',
-        'hash-utils.mjs',
-        'bash-utils.mjs',
-        'secret-scrub.mjs',
-        'project-utils.mjs',
-        'tier.mjs',
-        'tfidf.mjs',
-        'nlp.mjs',
-        'stop-words.mjs',
-        'synonyms.mjs',
-      ],
-      // Entry files and MCP-only modules tested via E2E/integration, not unit coverage.
+      //
+      // ── 2026-09-07: `include` INVERTED from an allowlist to a denylist. ──
+      //
+      // The allowlist WAS the defect mechanism, and this is the THIRD time it has been
+      // found rather than the first: P2-2 above added `lib/**` after 22 hand-picked root
+      // modules had hidden ~70 shipped ones, P1-15 then re-litigated three named entry
+      // files — and both rounds fixed only the code they happened to be looking at. An
+      // allowlist gives a NEW module no way to announce itself: it is simply absent, and
+      // absence reads identically to "deliberately out".
+      //
+      // Measured 2026-09-07 at 02072c7, whole suite, each candidate temporarily added via
+      // `--coverage.include` (name set taken from coverage-final.json, NOT the text report,
+      // whose ~19-char truncation makes a full-name grep a false negative):
+      //
+      //     24 shipped modules were outside the gate with NO stated reason — 10,137 lines,
+      //     against 30,305 inside it. The gate could see 62.5% of shipped JS while this
+      //     file's own comments named exactly three exclusions.
+      //
+      // Among the invisible: search-engine.mjs (72.4% stmts / 275), hook-optimize.mjs
+      // (76.1% / 482), scoring-sql.mjs (100% / 24) — i.e. the retrieval core the whole
+      // measurement doctrine in CLAUDE.md is about — plus cli/** (840 lines, and
+      // cli/common.mjs is the shared render layer server.mjs imports, which CLAUDE.md
+      // requires be guarded) and server/fts-check.mjs. All are in package.json#files.
+      // None was under-covered enough to justify the silence: 17 of 19 root candidates
+      // read >= 72% statements, and adding every one of them keeps all four thresholds
+      // green.
+      //
+      // So: everything shipped is in scope by default, and staying out now costs a named
+      // entry in `exclude` with a reason. A new root/lib/cli module joins the gate the day
+      // it is written; a fourth round of this cannot happen silently.
+      include: ['lib/**/*.mjs', 'cli/**/*.mjs', 'server/**/*.mjs', '*.mjs'],
+      // Every exclusion is a process ENTRY POINT that only ever runs as a subprocess, so
+      // v8 coverage of the vitest parent cannot observe it — including one would measure
+      // the harness, not the code (the install.mjs 11.67% / server.mjs 25.89% readings
+      // above are what that looks like).
+      //
+      // `cli.mjs` joins them on the same evidence, taken 2026-09-07 rather than assumed:
+      // ZERO test files import it in-process, >= 5 spawn it, and with it in `include` it
+      // reads 0.0% over 63 statements / 3 functions. `hook-precompact.mjs` was checked the
+      // same way and went IN, not out — three suites import `handlePreCompact` directly
+      // (hook-precompact, precompact-stdout-shape, keyctx-marker-lifetime), so its 58.3%
+      // is a real gap the gate should hold, not an artefact of the harness.
+      //
+      // `*.config.mjs` keeps eslint.config.mjs / vitest.config.mjs out of the source
+      // population — the same conflation `scripts/audit-metrics.mjs` had to fix when its
+      // module count disagreed with itself (CLAUDE.md, `isGraphModule`).
+      //
       // `experiment/**` is listed because the `lib/**/*.mjs` include above is NOT anchored
       // to the repo root — it also matches `experiment/lib/*.mjs`, an unshipped scratch dir
       // that would otherwise drag the gate down with code nothing ships.
-      exclude: ['install.mjs', 'server.mjs', 'hook.mjs', 'benchmark/**', 'scripts/**', 'experiment/**'],
+      exclude: [
+        'install.mjs',
+        'server.mjs',
+        'hook.mjs',
+        'cli.mjs',
+        '*.config.mjs',
+        'benchmark/**',
+        'scripts/**',
+        'experiment/**',
+      ],
       // Re-baselined 2026-08-22 against the measured number, which the P2-2 re-scoping
       // had left 12 points below: the gate said 75/75/65 while the suite actually ran
       // 86.58 lines / 87.42 functions / 77.22 branches, i.e. coverage could fall by a
