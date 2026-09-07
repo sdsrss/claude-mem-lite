@@ -502,6 +502,84 @@ describe("re-enrich scope='concepts' (D#6 concepts backfill)", () => {
   });
 });
 
+// D#12. R10 P3-3 put a live-row guard on the general re-enrich UPDATE because a
+// BG_LLM_TIMEOUT_MS (45 s) round-trip sits between the SELECT that chose the row and
+// the write, and a concurrent hook can retire or compress it inside that window. The
+// D#6 concepts branch was written with the same guard. TWO SIBLING BRANCHES of the same
+// function were left without it, and their harm is not the same — see each case.
+describe('executeReenrich post-LLM writes are live-guarded (D#12)', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  // The high-harm one. compressed_into is the child -> keeper POINTER, and
+  // lib/maintain-core.mjs:316 recovers orphans with `WHERE compressed_into > 0`. Writing
+  // COMPRESSED_AUTO (-1) over a positive keeper id does not merely stamp a dead row: it
+  // destroys the link, putting the child out of recoverOrphanedChildren's reach AND out
+  // of recoverChildrenOf's. The sibling write in lib/maintain-core.mjs:631 already carries
+  // the guard, so this is a gap rather than a design choice.
+  it('does not overwrite a keeper pointer won during the round-trip (auto-hide path)', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'A fully degraded row', narrative: 'short body', type: 'change' });
+    const id = db.prepare('SELECT id FROM observations LIMIT 1').get().id;
+    // Premise: this really is a narrow candidate before the call.
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    expect(findReenrichCandidates(db, 10, { scope: 'narrow' }).map((r) => r.id)).toEqual([id]);
+
+    const KEEPER = 999;
+    callModelJSONAsync.mockImplementation(async () => {
+      // A concurrent cluster-merge / smart-compress lands mid-call and adopts this row.
+      db.prepare('UPDATE observations SET compressed_into = ? WHERE id = ?').run(KEEPER, id);
+      return { title: 'still worthless', importance: 0 };
+    });
+
+    const result = await executeReenrich(db, 10, { scope: 'narrow' });
+    const row = db.prepare('SELECT compressed_into, optimized_at FROM observations WHERE id = ?').get(id);
+    // The assertion that matters is the POINTER, not the skip: a test that only checked
+    // `processed === 0` would still pass if the row were stamped some other way.
+    expect(row.compressed_into).toBe(KEEPER);
+    expect(row.optimized_at).toBeNull();
+    expect(result.processed).toBe(0);
+  });
+
+  // The lower-harm one. A superseded row is hidden from every read path, so the FTS write
+  // is inert for retrieval — but it still counts as `processed` and rebuilds a vector for
+  // a dead row, and it is the one branch of executeReenrich that lacked what its three
+  // siblings carry.
+  it('does not write aliases to a row superseded during the round-trip', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, {
+      title: 'Fixed deadlock in the connection pool',
+      narrative:
+        'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained.',
+      text: 'deadlock connection pool worker timeout',
+      type: 'bugfix',
+      lessonLearned: 'Never acquire a second pool connection inside a callback holding the first',
+      searchAliases: null,
+    });
+    const id = db.prepare('SELECT id FROM observations LIMIT 1').get().id;
+    callModelJSONAsync.mockImplementation(async () => {
+      db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(Date.now(), id);
+      return { search_aliases: ['connection deadlock', 'pool hang'] };
+    });
+
+    const result = await executeReenrich(db, 10, { scope: 'aliases' });
+    // Premise: the row was selected and the model WAS called, so an unwritten row is the
+    // guard firing rather than an empty pool.
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+    expect(result.processed).toBe(0);
+    const row = db.prepare('SELECT search_aliases, text FROM observations WHERE id = ?').get(id);
+    expect(row.search_aliases).toBeNull();
+    expect(row.text).toBe('deadlock connection pool worker timeout');
+  });
+});
+
 // Bug #1: rebuildVector was writing to a non-existent column `computed_at`.
 // Every executeReenrich silently caught SqliteError: observation_vectors has no column named computed_at.
 // The catch is intentional (non-critical path), so the bug was invisible at runtime.

@@ -331,9 +331,23 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // scope rides this call for free (D#135 P3). COALESCE, not a plain set:
         // an omitted or off-enum value normalizes to null and must not erase a
         // classification an earlier face already wrote.
-        db.prepare(
-          `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope) WHERE id = ?`,
-        ).run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
+        // D#12: the live-row guard, on the WHERE and not merely on the SELECT that chose
+        // the row. The Haiku call above is up to BG_LLM_TIMEOUT_MS (45 s), long enough for
+        // a concurrent hook to supersede or auto-compress this row — R10 P3-3's finding,
+        // fixed then on the general branch only and carried by the concepts branch since
+        // D#6. This was the one branch of the four without it. `changes === 0` is a SKIP,
+        // not a success: it must not count as processed and must not rebuild a vector for
+        // a row that is no longer live.
+        const res = db
+          .prepare(
+            `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope)
+             WHERE id = ? AND ${liveObsFilterSql('')}`,
+          )
+          .run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
+        if (res.changes === 0) {
+          skipped++;
+          continue;
+        }
         // Refresh the TF-IDF vector from the just-updated FTS text so the new
         // aliases reach the vector arm too — the narrow/wide branch rebuilds, this
         // one must as well. No-ops when the vector arm is off / vocab unbuilt.
@@ -432,9 +446,24 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // hide a real observation until manual surgery. In wide scope, fall through and let
       // clampImportance floor it to 1 (kept visible, low-ranked) instead of hiding.
       if ((parsed.importance === 0 || parsed.importance === '0') && scope !== 'wide') {
-        db.prepare(
-          `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ? WHERE id = ?`,
-        ).run(Date.now(), cand.id);
+        // D#12, and this one is not a stale-write guard — it is a POINTER guard.
+        // `compressed_into` is the child -> keeper link, and COMPRESSED_AUTO is -1. If a
+        // concurrent cluster-merge or smart-compress adopts this row during the 45 s Haiku
+        // call, it holds a POSITIVE keeper id; overwriting that with -1 does not merely
+        // stamp a dead row, it destroys the link — lib/maintain-core.mjs:316 recovers
+        // orphans with `compressed_into > 0`, and recoverChildrenOf follows the same id.
+        // The sibling write in lib/maintain-core.mjs:631 already carries this predicate,
+        // so the codebase had decided the question and this site had not been updated.
+        const res = db
+          .prepare(
+            `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ?
+             WHERE id = ? AND ${liveObsFilterSql('')}`,
+          )
+          .run(Date.now(), cand.id);
+        if (res.changes === 0) {
+          skipped++;
+          continue;
+        }
         processed++;
         continue;
       }
