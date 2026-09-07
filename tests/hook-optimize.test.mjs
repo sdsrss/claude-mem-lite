@@ -1677,8 +1677,11 @@ describe('pool ordering is total under exact ties (D#9)', () => {
     const { findReenrichCandidates } = await import('../hook-optimize.mjs');
     // One type for all five, so the leading `CASE type` term is equal across the pool and
     // the epoch tie is what decides. Without the id term SQLite returns ascending rowid and
-    // the daily pass re-enriches the three OLDEST rows, leaving the two newest unreachable
-    // for as long as the tie holds.
+    // the daily pass re-enriches the three OLDEST rows — the inverse of the order the clause
+    // states. The two newest wait a run; they are not permanently unreachable, because
+    // `executeReenrich` stamps `optimized_at` in the same UPDATE as the enrichment, so a
+    // processed row leaves the pool. Starvation needs the pass to keep SKIPPING the same
+    // rows (no LLM slot, unparseable JSON — both `continue` without stamping).
     for (let i = 0; i < 5; i++) {
       insertObs(db, {
         type: 'bugfix',

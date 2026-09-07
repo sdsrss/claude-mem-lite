@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 5.5.0 — **this exact string is a release guard.**
+- **Version**: 5.5.1 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0; EOL 2026-04 and better-sqlite3 13 requires >=22), ESM (`"type": "module"`) · npm · better-sqlite3 + FTS5
@@ -458,25 +458,51 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   anything treating the first row as privileged picks arbitrary CONTENT — `executeMergeCluster`'s
   keeper reduce fell through to `cluster[0]` on a full tie, and same-episode duplicates ARE a
   full tie, so which duplicate survived depended on a millisecond boundary. Fixed in
-  `hook-optimize.mjs` only — **all SEVEN pools, and the first pass shipped six.** The count has
-  now been wrong twice in the same direction, both times because a `grep` for the one-line
-  `created_at_epoch DESC, id DESC` spelling cannot see a pool whose `ORDER BY` leads with a
+  `hook-optimize.mjs` only — **all SEVEN `ORDER BY … created_at_epoch DESC` sites in the file,
+  and the first pass shipped six.** **Two different counts live here and a draft of this bullet
+  conflated them, which pre-ship review caught**: `findReenrichCandidates` holds **five** pools
+  (five `db.prepare` blocks — `scopes`, `aliases`, `concepts`, `wide`, `narrow`); the **file**
+  holds seven such sites, those five plus `extractUniqueConcepts` and `findMergeCandidates`. So
+  "count the `db.prepare` blocks" answers *how many pools*, not *how many sites* — an earlier
+  draft handed the reader that method for the seven and it returns five. The count has now been
+  wrong twice in the same direction, both times because a `grep` for the one-line
+  `created_at_epoch DESC, id DESC` spelling cannot see an `ORDER BY` that leads with a
   multi-line `CASE …` term. Two do: `scopes` (found in the first pass) and **`wide` (missed —
   fixed 2026-09-07)**. `wide` was the costly one to miss: it is the scope the DAILY unattended
   path passes explicitly (`handleLLMOptimize` via auto-maintain, `reenrich` budget 6), so a
-  boundary tie decided which rows ever got re-enriched. It went unnoticed because the original
-  boundary test drove `scope: 'narrow'` only. **Count the `db.prepare` blocks in
-  `findReenrichCandidates`; do not grep.** Plus the keeper reduce, made total on its own because
-  it is exported and callers build their own clusters.
+  boundary tie decided **which rows reach the LLM on a given run** — not which rows are ever
+  reached, because `executeReenrich` stamps `optimized_at` in the same UPDATE as the enrichment
+  and a processed row leaves the pool. Permanent starvation needs the pass to keep *skipping*
+  the same rows (no LLM slot, or unparseable JSON — both `continue` without stamping), which is
+  reachable but conditional. It went unnoticed because the original boundary test drove
+  `scope: 'narrow'` only. Plus the keeper reduce, made total on its own because it is exported
+  and callers build their own clusters.
+  **An EIGHTH ordering in the same file is deliberately NOT fixed, and naming it is what makes
+  the completeness claim true**: `findSmartCompressCandidates` (`hook-optimize.mjs:1102`) runs
+  `ORDER BY project, created_at_epoch` — ascending, no `id`, no `LIMIT` — so it falls outside
+  the seven by construction and outside the 52 below (which excludes this file). It feeds
+  `clusterForCompression`, whose vector branch seeds clusters in SQL order, so a tie could move
+  cluster MEMBERSHIP on the path that hides rows. Left alone under Iron Law #1: that branch
+  requires `CLAUDE_MEM_VECTORS=1` and is off by default, and no failing case has been built.
+  Unjudged, not cleared.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
-  itself is not currently firing on this corpus**: a read-only probe of the real DB the same day
-  found **0 tie-groups across all four relevant tables** — observations 21 rows, session_handoffs
-  3, session_summaries 128, events 717 — grouping by the pool's own key plus `created_at_epoch`.
+  itself is not currently firing on this corpus**: a read-only probe of the real DB found
+  **0 tie-groups across all four relevant tables, under TWO groupings** — the pool's own key
+  plus `created_at_epoch`, and the strictly looser `created_at_epoch` alone, which is the
+  actual tie condition for an untiebroken `ORDER BY created_at_epoch DESC`. Row counts at the
+  second probe: observations 25, session_handoffs 3, session_summaries 133, events 771. **The
+  first stamp of this bullet said 21 / 3 / 128 / 717 and was stale within the same day** —
+  this session's own writes moved three of the four, which is doctrine rule 2 happening to the
+  rule that states it. The counts are a snapshot; the 0 is the finding.
   Read that as "has not happened here yet", not "cannot": the 272/300 same-millisecond rate D#9
   measured is the shape of a tight insert LOOP (fixtures, batch writes), and purge/compress
-  removes rows, so history is not fully represented. Re-probe with
+  removes rows, so history is not fully represented. **The 52 is also a count without a
+  recorded name set** — reproducible under the caliber stated here (`.mjs`/`.js` outside
+  `tests/` and `benchmark/`, `DESC` orderings only, comments and `CREATE INDEX` excluded; the
+  same sweep including ASC reads 65), but doctrine rule 4 wants the names, and nobody can
+  supersede a count they cannot diff. Re-probe with
   `SELECT project||'/'||type k, created_at_epoch e, COUNT(*) c FROM session_handoffs GROUP BY k, e
   HAVING c > 1` before spending a round on the remaining sites. Match `hook-memory.mjs:683`'s
   spelling (`importance DESC, created_at_epoch DESC, id DESC`) — it is the one face that already
@@ -603,10 +629,16 @@ Full evidence for the first three in `docs/measurement/findings.md`.
 - **Deep search answers questions the corpus cannot answer, and the recall ruler cannot
   see it.** Measured 2026-09-06 with `benchmark/deep-search-holdout.mjs` (the suite's own
   queries asked of a corpus with their `relevant_ids` deleted): **mean FP@10 = 10.00,
-  12/12 queries flooded** — every slot filled, every time. The single-query baseline
-  returns 1-2 rows on the same negatives; the union across four paraphrase variants is
-  what fills the page, and `rrfFuseN` fuses by RANK, so no magnitude signal survives into
-  the merge for a downstream floor to act on. The user-visible shape: `search "kubernetes
+  12/12 queries flooded** — every slot filled, every time. **The flood is NOT the paraphrase
+  union.** This bullet used to say the single-query baseline returns 1-2 rows on the same
+  negatives and that the union fills the page; measured 2026-09-07 on the same fixture, the
+  single-variant baseline already returns **mean 9.42 of 10** (min 5, max 10, n=12), so
+  fusion adds about half a slot to a page that was full. A counterfactual names the real
+  source: disabling the AND→OR fallback in `search-engine.mjs` takes **mean FP@10 from 10.00
+  to 0.08**, 0/12 queries flooded instead of 12/12 (mutation applied and reverted, checksums
+  both ways). That is a MECHANISM PROBE, not a candidate fix — the same fallback is the
+  vocab-mismatch recall win, per the rejected gate #1 below. `rrfFuseN` fuses by RANK, so no
+  magnitude signal survives into the merge for a downstream floor to act on. The user-visible shape: `search "kubernetes
   helm chart"` correctly says *No results*, and `--deep` on the same query returns 8 of 13
   webshop memories. **`mem_search`'s `deep` is AUTO by default** (`resolveDeepMode`,
   surface `mcp`), and auto-escalation fires exactly when the normal search was weak — i.e.
@@ -623,7 +655,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   2026-09-07, `main`, `seed-data.json` + the 12 vocab-mismatch queries). Auto fires when the
   plain observation search returns fewer than `AUTO_DEEP_MIN_RESULTS` (3) rows — a COUNT —
   while the OR fallback exists precisely to make that count non-zero. It fires on **12/12
-  queries on both corpora**, and the plain count at the pipeline's own window
+  queries in both populations** — one fixture, `seed-data.json`, read two ways: the holdout
+  population with each query's `relevant_ids` deleted, and the full population with nothing
+  deleted. They are two derived populations, not two independent datasets (doctrine rule 3).
+  The plain count at the pipeline's own window
   (`computePerSourceWindow` = `max(limit*3, 60)`, NOT `deepSearch`'s internal
   `max(limit, 20)`) reads **min 5 / mean 21.42 on the holdout arm**, with the full corpus
   the same shape. `shouldEscalateToDeep` is therefore **false on 12/12, both arms**.

@@ -191,12 +191,18 @@ export function resolveDeepMode(explicitDeep, { surface, env = process.env } = {
  * D#3. benchmark/deep-search-holdout.mjs asks the suite's own queries of a corpus with
  * their relevant_ids deleted, so the correct answer is zero rows and every returned row is
  * a false positive by construction. It reads mean FP@10 = 10.00 across 12/12 queries: deep
- * fills every slot, every time. The single-query baseline returns 1-2 rows on the same
- * negatives — the flood is the UNION across paraphrase variants, which is also where deep's
- * recall win comes from, so this is not a bug to be thresholded away. Three gates were
- * tested against both arms and rejected; suppressing OR-fallback on rewrites takes deep
- * R@10 from 0.7383 to 0.3962, because the vocab-mismatch win IS that fallback. rrfFuseN
+ * fills every slot, every time. THE FLOOD IS NOT THE PARAPHRASE UNION, and an earlier
+ * version of this paragraph said it was ("the single-query baseline returns 1-2 rows on the
+ * same negatives"). Measured 2026-09-07, same fixture: the single-variant baseline already
+ * returns mean 9.42 of 10 (min 5, max 10, n=12), so fusion adds about half a slot to a page
+ * that was already full. A counterfactual names the real source — disabling the AND->OR
+ * fallback in search-engine.mjs takes mean FP@10 from 10.00 to 0.08, with 0/12 queries
+ * flooded instead of 12/12. Read that as a MECHANISM PROBE, not a candidate fix: the same
+ * fallback IS the vocab-mismatch recall win, and suppressing it on rewrites takes deep R@10
+ * from 0.7383 to 0.3962. Three gates were tested against both arms and rejected. rrfFuseN
  * fuses by RANK, so no magnitude signal survives the merge for a downstream floor to read.
+ * The same counterfactual explains why auto-escalation never fires here (D#8): with the
+ * fallback off, plain hits drop to min 0 and the escalation reach goes 0/12 -> 12/12.
  *
  * The discrimination is not available at this layer, so the honest move is to hand the
  * caller what the caller cannot otherwise see. Two things were missing:

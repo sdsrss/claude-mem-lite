@@ -2,6 +2,58 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v5.5.1 — the seventh pool a grep could not see, and three claims that did not survive review
+
+**Upgrade note:** one shipped behaviour changes and it is a fix, not a new default. No env
+var, no schema change, no migration. The daily background re-enrich pass now picks the rows
+its own `ORDER BY` always claimed to pick.
+
+**The `wide` re-enrich pool's ordering was never made total, in the file v5.5.0 declared
+complete.** D#9 added an `id DESC` tiebreaker to `hook-optimize.mjs` and recorded "all six
+sites". There are seven. The missed one is the `wide` pool, and it is the one that matters
+most: it is the scope the daily unattended pass supplies explicitly, on a budget of 6. Its
+`ORDER BY` leads with a multi-line `CASE type …` term, so a grep for the joined
+`created_at_epoch DESC, id DESC` spelling cannot see it, and the original boundary test drove
+`scope: 'narrow'` only, so nothing went red. Reproduced before the fix: five rows forced onto
+one epoch with limit 3 returned ids `[1,2,3]`, the three OLDEST, where the clause states
+newest-first `[3,4,5]` — on a tie SQLite returns ascending rowid. What it cost was priority
+inversion inside a tie group, not permanent starvation: `executeReenrich` stamps
+`optimized_at` in the same UPDATE as the enrichment, so a processed row leaves the pool and
+the delayed rows come up on the next run. (D#9 follow-up)
+
+**The gate baseline's expiry is hand-copied into three files and the rule named two.**
+`benchmark/baseline.json` carries the machine-readable `timestamp`; `ci.yml` and `CLAUDE.md`
+each restate the derived expiry for a human deciding whether to recapture before tagging. The
+v5.5.0 recapture moved the first two and left the third naming the previous sample — in a
+commit whose own message cites the lesson that a hand-copied stamp goes stale silently.
+`tests/baseline-stamp-sync.test.mjs` now derives the expiry from `baseline.json` plus the
+gate's own `BASELINE_STALE_AGE_DAYS`, read from source so retuning the window moves the guard
+instead of invalidating it, and asserts the CLAUDE.md **recapture row** carries it. Row-scoped
+on purpose: pre-ship review drove a whole-file version to a green false pass by corrupting the
+row and mentioning the real stamp in history prose.
+
+**Auto-escalation is invisible to both deep-search rulers, and the flood is not what the
+docblock said.** Deep search escalates when the plain search returns fewer than three rows —
+a COUNT — while the AND→OR fallback exists to make that count non-zero. It fires on 12/12
+queries in both populations of the benchmark fixture, so `shouldEscalateToDeep` is false
+12/12 and every number those rulers report describes explicit `--deep`, not `auto`. A planned
+A/B on the escalation constant would have read the same in both arms; that Δ=0 would have
+been a blind instrument. `benchmark/deep-search-holdout.mjs` now prints the plain-hit and
+escalation columns and carries three self-checks, and the reach is pinned so a fixture that
+gains an escalating query goes red. Two shipped claims were corrected with measurements
+rather than argued: the single-variant baseline returns mean 9.42 of 10 on the holdout
+negatives, not the 1-2 rows `deep-search.mjs` asserted, and a counterfactual shows the flood
+is the AND→OR fallback — disabling it takes mean FP@10 from 10.00 to 0.08. That is a
+mechanism probe, not a candidate fix: the same fallback is the vocab-mismatch recall win.
+
+**Pre-ship review found the completeness claims counted two different things.**
+`findReenrichCandidates` holds five pools; the file holds seven `ORDER BY … DESC` sites. An
+earlier draft called the seven "pools" and then told the reader to count `db.prepare` blocks,
+which returns five. An eighth ordering in the same file — `findSmartCompressCandidates`,
+ascending, no `id`, no `LIMIT` — is now named as deliberately unfixed rather than silently
+excluded: it feeds a clustering path whose vector branch is off by default, and no failing
+case has been built for it.
+
 ## v5.5.0 — three rulers that can say NO, and the things they caught
 
 **Upgrade note:** three default behaviours change, all reversible by env var. `search` and

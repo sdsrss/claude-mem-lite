@@ -242,9 +242,16 @@ export function assertRewritesUsable(res) {
 }
 
 /**
- * The escalation column must be the SHIPPED verdict at the SHIPPED floor. A ruler that
- * re-implemented `hits < 3` would keep reading 0 after someone retuned the constant, and
- * the D#8 conclusion below would silently describe a policy that no longer ships.
+ * The escalation column must be the SHIPPED FLOOR PREDICATE at the SHIPPED floor. A ruler
+ * that re-implemented `hits < 3` would keep reading 0 after someone retuned the constant,
+ * and the D#8 conclusion below would silently describe a policy that no longer ships.
+ *
+ * It is the floor predicate, NOT the whole production decision, and the difference is worth
+ * stating rather than glossing: `lib/search-core.mjs` gates on
+ * `deepMode === 'auto' && autoDeepLlmReady(env, llm) && shouldEscalateToDeep(...)`, and this
+ * column omits the first two conjuncts. That direction is safe for the 0/N conclusion —
+ * adding conjuncts can only lower an escalation count — but it means the column OVER-reports
+ * relative to production, so never quote it as "production would escalate here".
  */
 export function assertEscalationColumnIsTheShippedPredicate() {
   const rows = (n) => Array.from({ length: n }, () => ({ source: 'obs' }));

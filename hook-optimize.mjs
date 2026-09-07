@@ -189,6 +189,9 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     return project ? stmt.all(project, limit) : stmt.all(limit);
   }
   if (scope === 'wide') {
+    // This pool's ORDER BY leads with a CASE term and spans lines, which is exactly why the
+    // first pass of the D#9 tiebreaker missed it. The full note lives in the default pool at
+    // the bottom of this function -- read it before touching any ORDER BY here.
     const stmt = db.prepare(`
       SELECT id, title, narrative, type, subtitle, concepts, facts, search_aliases, importance, project
       FROM observations
@@ -226,15 +229,26 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     -- (8 rows on one epoch, 200 queries, one returned order), so this is not defending
     -- against a varying plan; it is making the stated order total.
     --
-    -- COUNT THE POOLS, DO NOT GREP FOR THE ONE-LINE FORM. There are seven here and two of
-    -- them ('scopes' and 'wide') lead with a CASE ... term and span several lines, so
-    -- grepping for the joined "created_at_epoch DESC, id DESC" spelling sees five. This
-    -- comment is INSIDE a template literal, so it must never contain a backtick. The
-    -- first pass of this fix read
-    -- six and shipped 'wide' untiebroken -- the pool the DAILY unattended path passes
-    -- explicitly, on a budget of 6, where a boundary tie decides which rows the LLM ever
-    -- re-enriches. Caught later by a test driving scope 'wide'; the original boundary case
-    -- drove only 'narrow', so nothing went red.
+    -- TWO DIFFERENT COUNTS, AND AN EARLIER DRAFT OF THIS COMMENT CONFLATED THEM. This
+    -- function, findReenrichCandidates, holds FIVE pools -- five db.prepare blocks:
+    -- 'scopes', 'aliases', 'concepts', 'wide', and this default 'narrow' one. The FILE
+    -- holds SEVEN "ORDER BY ... created_at_epoch DESC" sites: those five plus
+    -- extractUniqueConcepts and findMergeCandidates. All seven now carry the id term.
+    -- DO NOT GREP FOR THE ONE-LINE FORM: two of the seven ('scopes' and 'wide') lead with
+    -- a CASE ... term and span several lines, so grepping the joined
+    -- "created_at_epoch DESC, id DESC" spelling sees only five. That is how the first pass
+    -- read six and shipped 'wide' untiebroken -- the pool the DAILY unattended path passes
+    -- explicitly, on a budget of 6, where a boundary tie decides which rows reach the LLM
+    -- on a given run. Caught later by a test driving scope 'wide'; the original boundary
+    -- case drove only 'narrow', so nothing went red.
+    -- NOT FIXED, AND NAMED SO THE COMPLETENESS CLAIM IS TRUE: findSmartCompressCandidates
+    -- carries an eighth ordering, "ORDER BY project, created_at_epoch" -- ASCENDING, no id
+    -- term, no LIMIT. It is outside the seven by construction and is left alone under Iron
+    -- Law #1: it feeds clusterForCompression, whose vector branch seeds clusters in SQL
+    -- order, so a tie could move cluster membership -- but that branch needs
+    -- CLAUDE_MEM_VECTORS=1 and is off by default, and no failing case has been built.
+    -- Unjudged, not cleared.
+    -- This comment is INSIDE a template literal, so it must never contain a backtick.
     ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
   `);
