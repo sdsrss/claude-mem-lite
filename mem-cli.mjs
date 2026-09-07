@@ -3216,7 +3216,7 @@ Commands:
     --run-all           Execute bypassing gates
     --task T            Comma-separated: re-enrich,normalize,cluster-merge,smart-compress
     --max N             Max items per task (1-100, default 15)
-    --scope S           re-enrich scope: narrow (default) | wide | aliases | scopes
+    --scope S           re-enrich scope: narrow (default) | wide | aliases | scopes | concepts
                         (aliases: backfill search_aliases on substantive rows that
                          lack them — incl. lesson-bearing manual saves — adds ONLY
                          aliases, never rewrites title/narrative/lesson)
@@ -3491,8 +3491,8 @@ async function cmdOptimize(db, args) {
   let reenrichScope = 'narrow';
   if (scopeIdx >= 0 && args[scopeIdx + 1] !== undefined) {
     const raw = args[scopeIdx + 1];
-    if (raw !== 'narrow' && raw !== 'wide' && raw !== 'aliases' && raw !== 'scopes') {
-      fail(`[mem] Invalid --scope "${raw}". Use: narrow, wide, aliases, scopes`);
+    if (raw !== 'narrow' && raw !== 'wide' && raw !== 'aliases' && raw !== 'scopes' && raw !== 'concepts') {
+      fail(`[mem] Invalid --scope "${raw}". Use: narrow, wide, aliases, scopes, concepts`);
       return;
     }
     reenrichScope = raw;
@@ -3516,7 +3516,7 @@ async function cmdOptimize(db, args) {
     out('[mem] 🔍 LLM Optimization Preview:');
     if (project) out(`  Project filter: ${project}`);
     out(
-      `  Re-enrich candidates: ${preview.reenrich}${preview.reenrichWide !== undefined && preview.reenrichWide !== null ? `  (wide scope: ${preview.reenrichWide})` : ''}${preview.reenrichAliases ? `  (aliases scope: ${preview.reenrichAliases})` : ''}${preview.reenrichScopes ? `  (scopes scope: ${preview.reenrichScopes})` : ''}`,
+      `  Re-enrich candidates: ${preview.reenrich}${preview.reenrichWide !== undefined && preview.reenrichWide !== null ? `  (wide scope: ${preview.reenrichWide})` : ''}${preview.reenrichAliases ? `  (aliases scope: ${preview.reenrichAliases})` : ''}${preview.reenrichScopes ? `  (scopes scope: ${preview.reenrichScopes})` : ''}${preview.reenrichConcepts ? `  (concepts scope: ${preview.reenrichConcepts})` : ''}`,
     );
     out(
       `  Normalize: ${preview.normalizeGateOpen ? `${preview.normalize} unique concepts` : 'gate closed (7-day interval)'}`,

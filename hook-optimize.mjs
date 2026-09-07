@@ -102,7 +102,7 @@ export function rebuildVector(db, obsId, textPartsOrRow) {
  *
  * @param {object} db better-sqlite3 database handle
  * @param {number} limit max candidates to return
- * @param {{ scope?: 'narrow' | 'wide' | 'aliases' | 'scopes', project?: string }} [opts] Optional project filter (e.g. inferProject()-resolved name) narrows candidates to a single project — opt-in to preserve prior cross-project default.
+ * @param {{ scope?: 'narrow' | 'wide' | 'aliases' | 'scopes' | 'concepts', project?: string }} [opts] Optional project filter (e.g. inferProject()-resolved name) narrows candidates to a single project — opt-in to preserve prior cross-project default.
  */
 export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', project } = {}) {
   const projectClause = project ? 'AND project = ?' : '';
@@ -146,6 +146,39 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND (search_aliases IS NULL OR search_aliases = '')
+        AND LENGTH(COALESCE(narrative, '')) > 100
+        AND ${notLowSignalTitleClause('')}
+        ${projectClause}
+      ORDER BY created_at_epoch DESC
+      LIMIT ?
+    `);
+    return project ? stmt.all(project, limit) : stmt.all(limit);
+  }
+  if (scope === 'concepts') {
+    // D#6 concepts backfill: substantive rows with no concepts, REGARDLESS of lesson,
+    // aliases or scope. Same shape and same reason as the two pools above, one column
+    // over — and this one exists because the P1-2 fix created it. save-enrich fires on
+    // every successful manual save and writes search_aliases (always) + lesson_learned
+    // (bugfix/decision) + scope, which are precisely narrow's, wide's, aliases' and
+    // scopes' predicates, so a save-enriched row matches NONE of the four and never
+    // receives concepts. Measured on the real DB 2026-09-07: 14/14 live observations
+    // conceptless, 14/14 with aliases, 0/14 with optimized_at, all four pools empty.
+    //
+    // Keyed on `concepts` ALONE, not on concepts+facts: idempotency here is "the column
+    // this pass fills becomes non-empty", the same contract aliases and scopes carry. A
+    // facts term in the predicate would re-select forever every row whose narrative
+    // yields no extractable fact.
+    //
+    // Deliberately NOT gated on optimized_at, for the reason the alias branch gives and
+    // one more: the general pass preserves-on-empty, so a re-enrich whose model returned
+    // no concepts leaves the row stamped AND conceptless. Gating on the stamp would
+    // strand exactly those rows — the R10 P2-2 shape, where one pass's bookkeeping
+    // evicts a row from a backfill it never visited.
+    const stmt = db.prepare(`
+      SELECT id, title, narrative, type, subtitle, concepts, facts, text, importance, project
+      FROM observations
+      WHERE ${liveObsFilterSql('')}
+        AND (concepts IS NULL OR concepts = '')
         AND LENGTH(COALESCE(narrative, '')) > 100
         AND ${notLowSignalTitleClause('')}
         ${projectClause}
@@ -304,6 +337,69 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // Refresh the TF-IDF vector from the just-updated FTS text so the new
         // aliases reach the vector arm too — the narrow/wide branch rebuilds, this
         // one must as well. No-ops when the vector arm is off / vocab unbuilt.
+        rebuildVector(db, cand.id, [safe.text]);
+        processed++;
+        continue;
+      }
+      if (scope === 'concepts') {
+        // Concepts-only backfill (D#6). Writes concepts + facts and APPENDS them to the
+        // existing FTS text — never rebuilds it, for the reason the alias branch gives:
+        // a rebuild from concepts/facts drops the original narrative and alias terms and
+        // regresses recall. Never touches the user's curated title / narrative / lesson /
+        // type / importance, and never stamps optimized_at, so the wide pass keeps its
+        // own candidates exactly as the alias and scopes passes leave them.
+        const conceptsPrompt = `Extract search concepts and concrete facts from this coding memory. Return ONLY valid JSON, no markdown fences.
+
+Title: ${truncate(cand.title || '(untitled)', 200)}
+Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
+
+JSON: {"concepts":["kw1","kw2"],"facts":["specific fact 1","specific fact 2"]}
+concepts: 3-8 short keyword phrases naming what this memory is ABOUT (systems, components, error classes, techniques).
+facts: 1-4 specific, checkable statements the narrative actually asserts. Omit rather than invent.`;
+        const parsed = await callModelJSONAsync(conceptsPrompt, 'haiku', {
+          timeout: BG_LLM_TIMEOUT_MS,
+          maxTokens: 300,
+        });
+        const pickStrings = (v) =>
+          Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s.trim().length > 0) : [];
+        const conceptArr = pickStrings(parsed && parsed.concepts);
+        // No concepts is a SKIP, not an empty write: writing '' would leave the row in
+        // this pool forever, and the pass would burn one Haiku call per cycle on it.
+        if (!conceptArr.length) {
+          skipped++;
+          continue;
+        }
+        const factArr = pickStrings(parsed && parsed.facts);
+        const conceptsOnly = conceptArr.slice(0, 10).join(' ');
+        const factsOnly = factArr.slice(0, 10).join(' ');
+        const appendedText = [
+          cand.text || '',
+          conceptsOnly,
+          factsOnly,
+          cjkBigrams(`${conceptsOnly} ${factsOnly}`),
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const safe = scrubRecord('observations', {
+          concepts: conceptsOnly,
+          facts: factsOnly,
+          text: appendedText,
+        });
+        // Fill-only-empty on `concepts` plus the live-row guard, both on the WHERE and
+        // not merely on the SELECT: the round-trip above is up to 45 s, long enough for a
+        // concurrent hook to supersede or compress the row (R10 P3-3) or for save-enrich
+        // to fill it. `facts` rides along with preserve-on-empty for the same reason the
+        // general pass preserves it — a partial answer must not wipe a filled column.
+        const res = db
+          .prepare(
+            `UPDATE observations SET concepts = ?, facts = COALESCE(NULLIF(?, ''), facts), text = ?
+             WHERE id = ? AND (concepts IS NULL OR concepts = '') AND ${liveObsFilterSql('')}`,
+          )
+          .run(safe.concepts, safe.facts, safe.text, cand.id);
+        if (res.changes === 0) {
+          skipped++;
+          continue;
+        }
         rebuildVector(db, cand.id, [safe.text]);
         processed++;
         continue;
@@ -1193,6 +1289,11 @@ export function optimizePreview(db, { project, detail = false } = {}) {
   // lesson_learned per row, so counting by materialising was the one place this
   // round pulled megabytes to print an integer. (pre-tag review NOTE 11)
   const reenrichScopes = countReenrichCandidates(db, 'scopes', project);
+  // D#6: the concepts-backfill backlog. Reported for the same reason as the three
+  // above — a pool whose size is invisible cannot be sized for a one-shot drain
+  // (`optimize --run --task re-enrich --scope concepts --max N`), and this pool is
+  // the one that holds every save-enriched manual save.
+  const reenrichConcepts = findReenrichCandidates(db, 5000, { scope: 'concepts', project }).length;
 
   const concepts = extractUniqueConcepts(db, 500, { project });
   const normalizeReady = shouldRunNormalize(project) && concepts.length >= 5;
@@ -1209,6 +1310,7 @@ export function optimizePreview(db, { project, detail = false } = {}) {
     reenrichWide,
     reenrichAliases,
     reenrichScopes,
+    reenrichConcepts,
     normalize: normalizeReady ? concepts.length : 0,
     normalizeGateOpen: shouldRunNormalize(project),
     clusterMerge,
@@ -1240,7 +1342,7 @@ export function optimizePreview(db, { project, detail = false } = {}) {
  *   is budgeted separately, up to the re-enrich slice again — see the rationale at
  *   the call site. Its calls are enum-classification only (maxTokens 60).
  * @param {boolean} [opts.force=false] Bypass time-based gates (e.g. normalize interval).
- * @param {'narrow'|'wide'|'aliases'} [opts.reenrichScope='narrow'] Scope for the re-enrich task.
+ * @param {'narrow'|'wide'|'aliases'|'concepts'} [opts.reenrichScope='narrow'] Scope for the re-enrich task.
  *   'wide' targets bugfix/refactor/feature/decision with narrative but no lesson (R-7).
  *   'aliases' (P1) backfills search_aliases on substantive alias-less rows regardless
  *   of lesson (lesson-bearing manual saves) — adds ONLY aliases, never rewrites content.
@@ -1295,16 +1397,32 @@ export async function optimizeRun(
             //     mis-prices it by an order of magnitude.
             // Cap is budget.reenrich, so the daily pass adds at most that many cheap
             // classification calls and an empty pool still costs nothing.
+            //
+            // D#6 adds a FOURTH claimant, 'concepts', and it SHARES the aliases half
+            // rather than taking one of its own. Sharing keeps the boundary this comment
+            // already describes: the main scope still gets at least half the budget, so
+            // adding a pool cannot starve the lesson enrichment that is the point of the
+            // pass. Aliases is served FIRST out of that shared half, on a stated
+            // ordering: an alias-less row is paraphrase-UNFINDABLE (a recall zero),
+            // while a conceptless row is findable and merely ranks worse — measured at
+            // +0.0846 R@10 on the benchmark fixture, which is real but is not a zero.
+            // Both pools drain (each is idempotent via the column it fills), so the
+            // ordering decides which drains first, not which gets served at all.
             const half = Math.max(1, Math.floor(budget.reenrich / 2));
             const aliasBudget = Math.min(
               half,
               findReenrichCandidates(db, half, { scope: 'aliases', project }).length,
             );
+            const conceptsBudget = Math.min(
+              half - aliasBudget,
+              findReenrichCandidates(db, Math.max(0, half - aliasBudget), { scope: 'concepts', project })
+                .length,
+            );
             const scopesBudget = Math.min(
               budget.reenrich,
               findReenrichCandidates(db, budget.reenrich, { scope: 'scopes', project }).length,
             );
-            const mainRes = await executeReenrich(db, budget.reenrich - aliasBudget, {
+            const mainRes = await executeReenrich(db, budget.reenrich - aliasBudget - conceptsBudget, {
               scope: reenrichScope,
               project,
             });
@@ -1312,14 +1430,31 @@ export async function optimizeRun(
               aliasBudget > 0
                 ? await executeReenrich(db, aliasBudget, { scope: 'aliases', project })
                 : { processed: 0, skipped: 0 };
+            const conceptsRes =
+              conceptsBudget > 0
+                ? await executeReenrich(db, conceptsBudget, { scope: 'concepts', project })
+                : { processed: 0, skipped: 0 };
             const scopesRes =
               scopesBudget > 0
                 ? await executeReenrich(db, scopesBudget, { scope: 'scopes', project })
                 : { processed: 0, skipped: 0 };
             results.reenrich = {
-              processed: (mainRes.processed || 0) + (aliasRes.processed || 0) + (scopesRes.processed || 0),
-              skipped: (mainRes.skipped || 0) + (aliasRes.skipped || 0) + (scopesRes.skipped || 0),
-              byScope: { [reenrichScope]: mainRes, aliases: aliasRes, scopes: scopesRes },
+              processed:
+                (mainRes.processed || 0) +
+                (aliasRes.processed || 0) +
+                (conceptsRes.processed || 0) +
+                (scopesRes.processed || 0),
+              skipped:
+                (mainRes.skipped || 0) +
+                (aliasRes.skipped || 0) +
+                (conceptsRes.skipped || 0) +
+                (scopesRes.skipped || 0),
+              byScope: {
+                [reenrichScope]: mainRes,
+                aliases: aliasRes,
+                concepts: conceptsRes,
+                scopes: scopesRes,
+              },
             };
           } else {
             results.reenrich = await executeReenrich(db, budget.reenrich, { scope: reenrichScope, project });

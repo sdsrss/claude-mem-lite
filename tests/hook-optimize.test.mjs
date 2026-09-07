@@ -244,6 +244,209 @@ describe("re-enrich scope='aliases' (P1 alias backfill)", () => {
     const obs = db.prepare('SELECT search_aliases FROM observations LIMIT 1').get();
     expect(obs.search_aliases).toContain('connection deadlock');
   });
+});
+
+// D#6 concepts-backfill (scope='concepts'). Same defect class as P1-2 above, one
+// column over, and the fix that closed P1-2 is what OPENED this one: save-enrich runs
+// on every successful manual save and writes search_aliases (always) + lesson_learned
+// (bugfix/decision) + scope. Those three columns ARE the other pools' predicates, so a
+// save-enriched row matches NONE of them — narrow needs lesson AND aliases null, wide
+// needs lesson null, aliases needs search_aliases null, scopes needs scope null. It
+// therefore never receives concepts or facts, permanently. save-enrich's docblock says
+// "the daily wide re-enrich stays the safety net"; that is true of optimized_at, which
+// it does not stamp, and false in effect, because its own lesson write evicts the row
+// from wide.
+//
+// Measured on the real DB 2026-09-07: 14/14 live observations have empty concepts AND
+// empty facts, 14/14 have search_aliases, 13/14 have a lesson, 0/14 have optimized_at,
+// and all four pools return 0 candidates. Worth closing, measured same day on the
+// benchmark fixture (200 obs, 543 unique terms, 30 queries, same-tree back-to-back A/B
+// with concepts blanked): hybrid R@10 0.8998 vs 0.8152 (+0.0846), nDCG +0.0579. For
+// scale, all EIGHT scoring multipliers together buy +0.0002 R@10 on that fixture.
+//
+// This is deliberately NOT the fix D#6 proposed (riding save-enrich's existing Haiku
+// call), for two reasons: that would change save-enrich's stated contract, which says
+// concepts/facts stay byte-identical, and it could only ever help FUTURE saves. A pool
+// keyed on the column it fills is what this file already does twice — see the aliases
+// block above and the 'scopes' pool — and it is the only option that reaches the
+// existing backlog.
+describe("re-enrich scope='concepts' (D#6 concepts backfill)", () => {
+  let db;
+  const substantive =
+    'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained.';
+  /** A row exactly as save-enrich leaves it: lesson + aliases + scope written, concepts empty. */
+  const saveEnriched = (over = {}) => ({
+    title: 'Fixed deadlock in the connection pool',
+    narrative: substantive,
+    text: 'deadlock connection pool worker timeout connection deadlock pool hang',
+    type: 'bugfix',
+    importance: 2,
+    lessonLearned: 'Never acquire a second pool connection inside a callback holding the first',
+    searchAliases: 'connection deadlock pool hang db lock timeout',
+    ...over,
+  });
+  const setScope = (value = 'module') =>
+    db.prepare('UPDATE observations SET scope = ? WHERE scope IS NULL').run(value);
+
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  it('selects a save-enriched row that all four existing pools skip', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    setScope();
+    // The premise, asserted rather than assumed: this row is invisible to every pool
+    // that exists today. If any of these stops being 0, the finding has changed.
+    expect(findReenrichCandidates(db, 10, { scope: 'narrow' }).length).toBe(0);
+    expect(findReenrichCandidates(db, 10, { scope: 'wide' }).length).toBe(0);
+    expect(findReenrichCandidates(db, 10, { scope: 'aliases' }).length).toBe(0);
+    expect(findReenrichCandidates(db, 10, { scope: 'scopes' }).length).toBe(0);
+
+    const found = findReenrichCandidates(db, 10, { scope: 'concepts' });
+    expect(found.length).toBe(1);
+    expect(found[0].title).toBe('Fixed deadlock in the connection pool');
+  });
+
+  it('is NOT gated on optimized_at — a fully re-enriched row that still lacks concepts qualifies', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    setScope();
+    // The general pass preserves-on-empty, so a re-enrich whose LLM returned no
+    // concepts leaves the row stamped AND conceptless. Gating on the stamp would
+    // strand exactly those rows, which is the R10 P2-2 shape.
+    db.prepare('UPDATE observations SET optimized_at = ?').run(Date.now());
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(1);
+  });
+
+  it('excludes rows that already have concepts (idempotent via the column it fills)', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // TWO rows, and the assertion is a name, not a count. Written the obvious way —
+    // one row, expect 0 — this case passed BEFORE the pool existed, because an
+    // unknown scope falls through to `narrow`, which also returns 0 here. A
+    // no-rows-returned assertion cannot tell "correctly excluded" from "pool absent".
+    insertObs(db, saveEnriched({ title: 'Already has concepts' }));
+    db.prepare("UPDATE observations SET concepts = 'deadlock pool'").run();
+    insertObs(db, saveEnriched({ title: 'Still conceptless' }));
+
+    const found = findReenrichCandidates(db, 10, { scope: 'concepts' });
+    expect(found.map((r) => r.title)).toEqual(['Still conceptless']);
+  });
+
+  it('excludes a superseded row', async () => {
+    const { findReenrichCandidates } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(1);
+    db.prepare('UPDATE observations SET superseded_at = ?').run(Date.now());
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(0);
+  });
+
+  it('writes ONLY concepts/facts, preserves the curated fields, and appends to FTS text', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    // Deliberately omits title/narrative/lesson: the general re-enrich SKIPS on a
+    // missing title, so a mock this thin proves the concepts path is its own branch.
+    callModelJSONAsync.mockResolvedValue({
+      concepts: ['connection pool', 'deadlock', 'callback reentrancy'],
+      facts: ['the pool never drained once every connection was checked out'],
+    });
+
+    const result = await executeReenrich(db, 10, { scope: 'concepts' });
+    expect(result.processed).toBe(1);
+
+    const obs = db.prepare('SELECT * FROM observations LIMIT 1').get();
+    expect(obs.concepts).toContain('callback reentrancy');
+    expect(obs.facts).toContain('never drained');
+    // Curated fields untouched — this is the contract the general pass cannot honour.
+    expect(obs.title).toBe('Fixed deadlock in the connection pool');
+    expect(obs.narrative).toBe(substantive);
+    expect(obs.lesson_learned).toBe(
+      'Never acquire a second pool connection inside a callback holding the first',
+    );
+    expect(obs.search_aliases).toBe('connection deadlock pool hang db lock timeout');
+    expect(obs.importance).toBe(2);
+    expect(obs.type).toBe('bugfix');
+    // Append, not rebuild: rebuilding text from concepts/facts would drop the original
+    // narrative and alias terms, which is the regression the aliases branch warns about.
+    expect(obs.text).toContain('deadlock connection pool worker timeout');
+    expect(obs.text).toContain('callback reentrancy');
+  });
+
+  it('never stamps optimized_at, so the wide pass keeps its own candidates', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    callModelJSONAsync.mockResolvedValue({ concepts: ['a concept'], facts: [] });
+    const result = await executeReenrich(db, 10, { scope: 'concepts' });
+    // Premise first: a null optimized_at proves nothing if the pass never ran, and
+    // before the pool existed this case passed for exactly that reason.
+    expect(result.processed).toBe(1);
+    expect(db.prepare('SELECT optimized_at FROM observations LIMIT 1').get().optimized_at).toBeNull();
+  });
+
+  it('skips instead of writing when the model returns no concepts', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    callModelJSONAsync.mockResolvedValue({ concepts: [], facts: [] });
+    const result = await executeReenrich(db, 10, { scope: 'concepts' });
+    expect(result.processed).toBe(0);
+    expect(result.skipped).toBe(1);
+    const obs = db.prepare('SELECT concepts, text FROM observations LIMIT 1').get();
+    expect(obs.concepts).toBe('');
+    expect(obs.text).toBe('deadlock connection pool worker timeout connection deadlock pool hang');
+  });
+
+  it('does not resurrect a row superseded during the LLM round-trip (R10 P3-3 shape)', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    // 45 s is long enough for a concurrent hook to retire the row; the guard belongs on
+    // the UPDATE's WHERE, not only on the SELECT that chose it.
+    callModelJSONAsync.mockImplementation(async () => {
+      db.prepare('UPDATE observations SET superseded_at = ?').run(Date.now());
+      return { concepts: ['too late'], facts: [] };
+    });
+    const result = await executeReenrich(db, 10, { scope: 'concepts' });
+    // Premise: the row WAS selected and the model WAS called, so an unwritten row is
+    // the guard firing rather than the pass never starting. Without this the case
+    // passed before the pool existed.
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+    expect(result.processed).toBe(0);
+    expect(db.prepare('SELECT concepts FROM observations LIMIT 1').get().concepts).toBe('');
+  });
+
+  it('reports the backlog under optimizePreview.reenrichConcepts', async () => {
+    const { optimizePreview } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    setScope();
+    const preview = optimizePreview(db);
+    // A backlog nobody can see cannot be sized for a one-shot drain, and the other
+    // three side-pools are all reported here. Premise on the same object: the other
+    // pools really are empty, so this 1 is the new pool and not a mislabelled count.
+    expect(preview.reenrichConcepts).toBe(1);
+    expect(preview.reenrich).toBe(0);
+    expect(preview.reenrichWide).toBe(0);
+    expect(preview.reenrichAliases).toBe(0);
+    expect(preview.reenrichScopes).toBe(0);
+  });
+
+  it('default-scope optimizeRun backfills concepts on a save-enriched row (D#6)', async () => {
+    const { optimizeRun } = await import('../hook-optimize.mjs');
+    insertObs(db, saveEnriched());
+    setScope();
+    // Every other sub-pass has 0 candidates here, so a concepts-shaped mock is
+    // unambiguous — and this is the assertion that matters, because a pool nothing
+    // schedules is the P1-2 defect repeated rather than fixed.
+    callModelJSONAsync.mockResolvedValue({
+      concepts: ['connection pool', 'deadlock'],
+      facts: ['the pool never drained'],
+    });
+    await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 10 }); // no reenrichScope → default
+    expect(db.prepare('SELECT concepts FROM observations LIMIT 1').get().concepts).toContain('deadlock');
+  });
 
   // Audit 2026-07-17 P4: the DAILY auto path (handleLLMOptimize via auto-maintain)
   // passes reenrichScope='wide' explicitly, which bypassed the v3.43 narrow+aliases
