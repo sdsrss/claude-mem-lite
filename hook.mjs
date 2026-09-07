@@ -1182,7 +1182,11 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
           sessionId: ccSessionId,
           subagentInjected: sub.injected,
         });
-        const n = bumpCitationAccess(db, ids, project, relevant);
+        // sessionId is the ACCESS channel's idempotency key (R11-B-P1-1). Stop fires once
+        // per assistant turn and `ids` above is a rescan of the WHOLE transcript, so
+        // without it every later turn re-credited the same citation — 7.86x on the real
+        // corpus, straight into boostAccessed's `access_count > 3`.
+        const n = bumpCitationAccess(db, ids, project, relevant, { sessionId: ccSessionId });
         debugLog(
           'DEBUG',
           'handleStop',

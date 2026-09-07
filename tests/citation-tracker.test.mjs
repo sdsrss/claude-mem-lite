@@ -182,12 +182,43 @@ describe('bumpCitationAccess', () => {
     expect(bumpCitationAccess(db, [999999], 'projects--test', ALL(999999))).toBe(0);
   });
 
-  it('accumulates across multiple citation rounds', () => {
+  // R11-B-P1-1. This case used to read `accumulates across multiple citation rounds`
+  // and assert 3 — it encoded the defect. `Stop` fires once per assistant TURN and
+  // rescans the WHOLE transcript, so "multiple rounds" is what one citation looks like
+  // from inside a single session: real-corpus replay read 338 credits over 43 distinct
+  // (session, id) pairs = 7.86x, feeding boostAccessed (access_count > 3 → importance+1).
+  // The unit of a credit is the CC SESSION, not the call.
+  it('accumulates across sessions, not within one', () => {
+    const id1 = newObs({ title: 'X', type: 'bugfix', project: 'projects--test' });
+    const acc = () => db.prepare('SELECT access_count FROM observations WHERE id = ?').get(id1).access_count;
+
+    expect(bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: 'cc-a' })).toBe(1);
+    expect(bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: 'cc-a' })).toBe(0);
+    expect(bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: 'cc-a' })).toBe(0);
+    expect(acc()).toBe(1);
+
+    // A later session is a new credit — the contract is "cite next time", and a
+    // citation in tomorrow's session is a second, real signal.
+    expect(bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: 'cc-b' })).toBe(1);
+    expect(acc()).toBe(2);
+  });
+
+  it('stamps the crediting session so a later Stop in it is a no-op', () => {
+    const id1 = newObs({ title: 'X', type: 'bugfix', project: 'projects--test' });
+    bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: 'cc-a' });
+    expect(
+      db.prepare('SELECT last_access_session_id FROM observations WHERE id = ?').get(id1)
+        .last_access_session_id,
+    ).toBe('cc-a');
+  });
+
+  it('a null sessionId keeps the pre-R11 behaviour, because there is no scope to dedupe within', () => {
+    // Not a compromise: no CC session means no session to be idempotent inside. The
+    // production caller (hook.mjs handleStop) always has one; this is the non-CC path.
     const id1 = newObs({ title: 'X', type: 'bugfix', project: 'projects--test' });
     bumpCitationAccess(db, [id1], 'projects--test', ALL(id1));
-    bumpCitationAccess(db, [id1], 'projects--test', ALL(id1));
-    bumpCitationAccess(db, [id1], 'projects--test', ALL(id1));
-    expect(db.prepare('SELECT access_count FROM observations WHERE id = ?').get(id1).access_count).toBe(3);
+    bumpCitationAccess(db, [id1], 'projects--test', ALL(id1), { sessionId: null });
+    expect(db.prepare('SELECT access_count FROM observations WHERE id = ?').get(id1).access_count).toBe(2);
   });
 
   it('accepts Set and Array iterables', () => {
@@ -234,8 +265,8 @@ describe('bumpCitationAccess', () => {
     // measured.
     const discussed = newObs({ title: 'X', type: 'bugfix', project: 'projects--test' });
     const env = { CLAUDE_MEM_CITATION_RELEVANCE_GATE: 'off' };
-    expect(bumpCitationAccess(db, [discussed], 'projects--test', new Set(), env)).toBe(1);
-    expect(bumpCitationAccess(db, [discussed], 'projects--test', undefined, env)).toBe(1);
+    expect(bumpCitationAccess(db, [discussed], 'projects--test', new Set(), { env })).toBe(1);
+    expect(bumpCitationAccess(db, [discussed], 'projects--test', undefined, { env })).toBe(1);
     expect(db.prepare('SELECT access_count FROM observations WHERE id = ?').get(discussed).access_count).toBe(
       2,
     );
@@ -251,7 +282,7 @@ describe('bumpCitationAccess', () => {
       { CLAUDE_MEM_CITATION_RELEVANCE_GATE: '0' },
       { CLAUDE_MEM_CITATION_RELEVANCE_GATE: 'false' },
     ]) {
-      expect(bumpCitationAccess(db, [discussed], 'projects--test', new Set(), env)).toBe(0);
+      expect(bumpCitationAccess(db, [discussed], 'projects--test', new Set(), { env })).toBe(0);
     }
     expect(db.prepare('SELECT access_count FROM observations WHERE id = ?').get(discussed).access_count).toBe(
       0,
@@ -269,7 +300,7 @@ describe('bumpCitationAccess', () => {
       dead,
     );
     bumpCitationAccess(db, [dead], 'projects--test', undefined, {
-      CLAUDE_MEM_CITATION_RELEVANCE_GATE: 'off',
+      env: { CLAUDE_MEM_CITATION_RELEVANCE_GATE: 'off' },
     });
     const acc = (id) => db.prepare('SELECT access_count FROM observations WHERE id = ?').get(id).access_count;
     expect(acc(keeper)).toBe(1);

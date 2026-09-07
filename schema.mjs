@@ -156,7 +156,16 @@ export const CODE_DIR = join(homedir(), '.claude-mem-lite');
 // every existing install at v46 a new index there would simply never be created. Same trap
 // the FTS5 migration hit — a DDL change that is not reachable from the version the DB
 // already reports is a no-op with a convincing diff.
-export const CURRENT_SCHEMA_VERSION = 47;
+// v48 (R11-B-P1-1): observations.last_access_session_id — the THIRD per-row session key
+// on this table, and it exists for the same reason as the other two. `Stop` fires once
+// per assistant TURN and rescans the whole transcript, so `bumpCitationAccess` re-credited
+// one citation on every later turn of the same session: real-corpus replay over 51
+// transcripts read 338 credits across 43 distinct (session, id) pairs = 7.86x, single
+// session worst case 18.75x. That feeds boostAccessed (access_count > 3 → importance + 1,
+// in DEFAULT_MAINTAIN_OPS, unattended daily) and suppresses noisePenaltyClause, whose
+// predicate reads `injection_count > access_count * 3`. Additive + nullable: legacy rows
+// read NULL and are credited exactly once more, on their next citation, then stamp.
+export const CURRENT_SCHEMA_VERSION = 48;
 
 // Sentinel columns for the LATEST migration set(s). The fast-path uses these
 // to self-heal half-migrated DBs — schema_version bumped but column ALTERs
@@ -177,6 +186,7 @@ export const CURRENT_SCHEMA_VERSION = 47;
 // pragma_table_info on a missing table returns zero rows (it does not throw), so
 // naming any column of the new table is a table-presence check.
 const LATEST_MIGRATION_COLUMNS = [
+  { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
   { table: 'observations', column: 'scope' }, // v44
@@ -397,6 +407,14 @@ const MIGRATIONS = [
   // destroy the distinction the column exists to record. Legacy rows stay NULL — they
   // are not evidence of anything and must not be read as first-cite-at-0.
   'ALTER TABLE observations ADD COLUMN decay_seen_at_first_cite INTEGER DEFAULT NULL',
+  // v48 (R11-B-P1-1): the access-channel idempotency key. Sibling of
+  // last_decided_session_id (v40, uncited/streak arm) and last_cited_session_id (v41,
+  // promote arm) — three channels fire out of one Stop hook, each needs its own key
+  // because they resolve different id sets: decay reads mainOnly, access reads the whole
+  // transcript including sidechains, and the decay pair is additionally gated on
+  // hasMainThreadAssistantText, so a session can credit access while decay never runs.
+  // Sharing a key would make one channel silence the other.
+  'ALTER TABLE observations ADD COLUMN last_access_session_id TEXT DEFAULT NULL',
 ];
 
 /**
