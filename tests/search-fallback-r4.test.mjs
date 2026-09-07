@@ -51,6 +51,61 @@ describe('R4 fix 10 — type-list fallback filters low-signal titles', () => {
   });
 });
 
+// R11-A-P1-1. Same shape as fix 10 one filter over: the fallback rebuilds its own WHERE
+// out of live/type/low-signal/project/epoch/importance and forgets `branch`, so the one
+// moment it fires — FTS matched nothing — it hands back rows from the branch the caller
+// explicitly excluded, with no correct result beside them for contrast. MCP only:
+// server.mjs sets obsTypeFallback true, mem-cli.mjs sets it false.
+describe('R11 — the type-list fallback honours the branch filter', () => {
+  function seedBranches() {
+    const db = createTestDb();
+    insertSession(db, { id: 's', project: 'p', memoryId: 's' });
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'bugfix',
+      title: 'Fixed the retry backoff on main',
+      narrative: 'real body',
+      branch: 'main',
+    }); // id 1
+    insertObs(db, {
+      sessionId: 's',
+      project: 'p',
+      type: 'bugfix',
+      title: 'Fixed the retry backoff on the feature branch',
+      narrative: 'real body',
+      branch: 'feature/x',
+    }); // id 2
+    return db;
+  }
+
+  it('returns only the requested branch when the fallback fires', async () => {
+    const db = seedBranches();
+    const res = await handleSearchForTest(
+      db,
+      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', branch: 'feature/x', deep: false },
+      {},
+    );
+    const ids = (res.results || []).map((r) => r.id);
+    db.close();
+    expect(ids).toContain(2); // the fallback still fires
+    expect(ids).not.toContain(1); // and no longer leaks the branch the caller excluded
+  });
+
+  it('without a branch filter the fallback still lists both (the fix does not over-narrow)', async () => {
+    const db = seedBranches();
+    const res = await handleSearchForTest(
+      db,
+      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', deep: false },
+      {},
+    );
+    const ids = (res.results || []).map((r) => r.id);
+    db.close();
+    expect(ids).toContain(1);
+    expect(ids).toContain(2);
+  });
+});
+
 describe('R4 fix 14 — lesson_learned="none" does not earn the ranking boost', () => {
   it('a "none"-lesson row ranks the same as a NULL-lesson row (no phantom boost)', async () => {
     const db = createTestDb();
