@@ -177,11 +177,29 @@ export default defineConfig({
       //
       // Raise these when the measurement rises. Lowering one is a decision that belongs
       // in a commit message, not a quiet edit.
+      //
+      // Re-derived 2026-09-07 for the denylist population above, by applying the SAME
+      // ~3-point rule to the new measurement rather than by judgement. This is not a
+      // loosening and not a tightening: the old floors were pinned ~3 under a population
+      // of 8579 statements, and against the 11586-statement population they had drifted
+      // to 4.5 / 2.8 / 6.7 / 4.7 under — looser than the rule they were set by, on three
+      // of four axes.
+      //
+      //     axis         measured   old floor (gap)   new floor (gap)
+      //     statements     84.49      80  (4.49)        81  (3.49)
+      //     lines          85.82      83  (2.82)        83  (2.82)   unchanged
+      //     functions      90.66      84  (6.66)        87  (3.66)
+      //     branches       78.66      74  (4.66)        75  (3.66)
+      //
+      // The aggregate FELL (85.83 -> 84.49 stmts) across that commit because the
+      // population grew by a third, not because anything regressed — every file measured
+      // before is measured identically now. CALIBER BREAK: these floors and the numbers
+      // they sit under are not comparable to any reading taken before the inversion.
       thresholds: {
-        statements: 80,
+        statements: 81,
         lines: 83,
-        functions: 84,
-        branches: 74,
+        functions: 87,
+        branches: 75,
       },
     },
   },
