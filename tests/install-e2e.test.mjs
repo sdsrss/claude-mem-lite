@@ -744,3 +744,100 @@ describe('E2E: Migration from older versions', () => {
     }
   });
 });
+
+describe('E2E: plugin-cache launch.mjs sync is version-gated (R10-P2-11)', () => {
+  // The reproduction lives in tests/sandbox/phaseB-npm.mjs §B9 and needs a real `npm i -g`,
+  // so it is not in `vitest run`. This drives the same function directly so a revert is
+  // caught in CI rather than at the next manual harness run — the harness is the reason
+  // this defect existed for releases, not the reason it will be caught.
+  //
+  // What it guards: install used to copy ITS OWN scripts/launch.mjs into every cached
+  // version dir. Entry point and library are versioned together, so an old dir then ran
+  // HEAD's launch.mjs against its own lib/ — HEAD destructures `nativeBindingRepairHint`,
+  // which v3.95.0's binding-probe does not export, and the swallowed TypeError takes the
+  // user's repair hint with it.
+  const OLD_VER = '3.95.0';
+  const SENTINEL = (v) => `// CACHE-SENTINEL ${v}\n`;
+
+  async function seedCache(home) {
+    const { MARKETPLACE_KEY } = await import('../lib/plugin-key.mjs');
+    const selfVersion = JSON.parse(readFileSync(join(PROJECT_DIR, 'package.json'), 'utf8')).version;
+    // The whole block is inside `if (existsSync(pluginDir))` — without the marketplace
+    // clone this test would pass by never running the code it claims to guard.
+    mkdirSync(join(home, '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY), { recursive: true });
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
+    for (const ver of [OLD_VER, selfVersion]) {
+      mkdirSync(join(cacheBase, ver, 'scripts'), { recursive: true });
+      writeFileSync(join(cacheBase, ver, 'scripts', 'launch.mjs'), SENTINEL(ver));
+      writeFileSync(join(cacheBase, ver, 'scripts', 'launch-preflight.mjs'), SENTINEL(ver));
+    }
+    return { cacheBase, selfVersion };
+  }
+
+  const readLaunch = (cacheBase, ver) => readFileSync(join(cacheBase, ver, 'scripts', 'launch.mjs'), 'utf8');
+
+  it('a non-dev install syncs only the matching version dir', async () => {
+    const { dedupePluginCacheAndHooks } = await import('../install.mjs');
+    const home = makeTmpDir();
+    const realHome = process.env.HOME;
+    try {
+      const { cacheBase, selfVersion } = await seedCache(home);
+      process.env.HOME = home;
+      dedupePluginCacheAndHooks({ managedHooks: true, isDev: false });
+
+      expect(readLaunch(cacheBase, OLD_VER)).toContain(`CACHE-SENTINEL ${OLD_VER}`);
+      expect(readLaunch(cacheBase, selfVersion)).not.toContain('CACHE-SENTINEL');
+      // The sync is not merely skipped for old dirs — the file it writes is the real one.
+      expect(readLaunch(cacheBase, selfVersion)).toBe(
+        readFileSync(join(PROJECT_DIR, 'scripts', 'launch.mjs'), 'utf8'),
+      );
+    } finally {
+      process.env.HOME = realHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('dev mode still syncs every version dir (issue #15 keeps working)', async () => {
+    const { dedupePluginCacheAndHooks } = await import('../install.mjs');
+    const home = makeTmpDir();
+    const realHome = process.env.HOME;
+    try {
+      const { cacheBase, selfVersion } = await seedCache(home);
+      process.env.HOME = home;
+      dedupePluginCacheAndHooks({ managedHooks: true, isDev: true });
+
+      expect(readLaunch(cacheBase, OLD_VER)).not.toContain('CACHE-SENTINEL');
+      expect(readLaunch(cacheBase, selfVersion)).not.toContain('CACHE-SENTINEL');
+    } finally {
+      process.env.HOME = realHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('no cached version dir ends up calling an export its own lib lacks', async () => {
+    // The behavioural statement of the defect, independent of how the gate is spelled.
+    const { dedupePluginCacheAndHooks } = await import('../install.mjs');
+    const home = makeTmpDir();
+    const realHome = process.env.HOME;
+    try {
+      const { cacheBase } = await seedCache(home);
+      mkdirSync(join(cacheBase, OLD_VER, 'lib'), { recursive: true });
+      writeFileSync(
+        join(cacheBase, OLD_VER, 'lib', 'binding-probe.mjs'),
+        'export function ensureBetterSqlite3Working() {}\nexport function probeBindingInFreshProcess() {}\n',
+      );
+      process.env.HOME = home;
+      dedupePluginCacheAndHooks({ managedHooks: true, isDev: false });
+
+      const launch = readLaunch(cacheBase, OLD_VER);
+      const probe = readFileSync(join(cacheBase, OLD_VER, 'lib', 'binding-probe.mjs'), 'utf8');
+      const missing = ['nativeBindingRepairHint', 'ensureBetterSqlite3Working'].filter(
+        (sym) => launch.includes(sym) && !probe.includes(`export function ${sym}`),
+      );
+      expect(missing).toEqual([]);
+    } finally {
+      process.env.HOME = realHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

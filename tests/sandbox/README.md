@@ -7,7 +7,7 @@ full pass takes minutes and needs network.
 
 ```bash
 SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseA-plugin.mjs   # /plugin install …    47 checks
-SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseB-npm.mjs      # npm i -g + install   45 checks
+SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseB-npm.mjs      # npm i -g + install   56 checks
 SBX_BASE=/tmp/claude/sbx node tests/sandbox/phaseC-update.mjs   # version swap         15 checks
 ```
 
@@ -65,7 +65,7 @@ cache populated the way Claude Code populates one (a git checkout, **no**
 | Phase | Covers |
 |---|---|
 | A | marketplace add → cold `setup.sh` (real `npm install`) → all six hook events → MCP `initialize`/`tools/list`/`tools/call` → bundled CLI → auto-update in plugin mode → stale-ABI self-heal → uninstall residue |
-| B | `npm pack` → `npm i -g` → `claude-mem-lite install` → settings.json hooks actually firing → MCP from the managed install → `self-update` → self-heal with the CLI's own tree healthy and the managed one broken → `uninstall` and `--purge` |
+| B | `npm pack` → `npm i -g` → `claude-mem-lite install` → settings.json hooks actually firing → MCP from the managed install → `self-update` → self-heal with the CLI's own tree healthy and the managed one broken → **plugin-cache launch.mjs sync (R10-P2-11)** → **an in-place install under live hook traffic (R10-P2-12)** → `uninstall` and `--purge` |
 | C | a new cache version dir arriving without `node_modules`, a hook firing from it before its deps exist, `setup.sh` provisioning it, memory surviving the version swap, cache pruning to the latest 3 |
 
 ## Conventions worth keeping
@@ -83,3 +83,13 @@ cache populated the way Claude Code populates one (a git checkout, **no**
 - **A control per destructive check.** Before asserting "doctor goes red", assert the
   thing is genuinely broken (the MCP server really fails to start) and that the tree
   doctor runs from is genuinely healthy — otherwise a red verdict proves nothing.
+- **A premise check per SHAPE the section needs.** B9 and B10 each cost a run to learn
+  this. B9's first version built a plugin cache and no marketplace clone, so the block it
+  targets (`if (existsSync(pluginDir))`) never ran and the section reported "install left
+  the old version alone" — the friendly answer, from code that had not executed. B10's
+  first version logged **0 of 400** hook fires inside the install window and read as a
+  clean run; two causes, both the probe's: `date +%s%3N` prints 19-digit nanoseconds on
+  this machine (the width is ignored), so every comparison was false by arithmetic, and
+  the loop's node cold start was longer than the 449 ms install it was supposed to
+  overlap. A stress probe that did not overlap is not a negative result, it is no result —
+  so both now assert the overlap and the shape before asserting the outcome.

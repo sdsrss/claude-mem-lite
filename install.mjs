@@ -509,7 +509,7 @@ function registerMcpServer() {
   }
 }
 
-function dedupePluginCacheAndHooks({ managedHooks } = {}) {
+export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) {
   // 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
   // clear them to prevent double execution. install.mjs hooks (in settings.json)
   // point to ~/.claude-mem-lite/ (latest code in dev mode via symlinks),
@@ -593,17 +593,47 @@ function dedupePluginCacheAndHooks({ managedHooks } = {}) {
       const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
       if (existsSync(cacheBase)) {
         const launchSyncFiles = ['launch.mjs', 'launch-preflight.mjs'];
+        // Read, not remembered: the cache dir names ARE versions, so the comparison has to
+        // be against what this installer actually is. A stale constant here would re-open
+        // R10-P2-11 on the next release without changing a line of this block.
+        let selfVersion = null;
+        try {
+          selfVersion = JSON.parse(readFileSync(join(PROJECT_DIR, 'package.json'), 'utf8')).version;
+        } catch {
+          /* no readable package.json — treat every version as non-matching (sync nothing) */
+        }
         let clearedHooks = 0;
         for (const ver of readdirSync(cacheBase)) {
           const verDir = join(cacheBase, ver);
 
-          // Sync launch.mjs + its preflight companion (issue #15)
-          if (existsSync(join(verDir, 'scripts'))) {
+          // Sync launch.mjs + its preflight companion (issue #15).
+          //
+          // R10-P2-11: this used to run for EVERY cached version. Issue #15 is a dev-mode
+          // routing fix — the point is that a dev tree's launch.mjs reaches the cache the
+          // MCP server starts from — but nothing gated it, so a plain `install` (and the
+          // repair that SessionStart spawns in the background) pushed the installer's entry
+          // point into every OLD version dir, where it runs against that version's own
+          // `lib/`. Entry point and library are versioned together: HEAD's launch.mjs:72-73
+          // destructures `nativeBindingRepairHint` from ../lib/binding-probe.mjs, which
+          // v3.95.0 does not export, so :110 throws inside a catch and the user's repair
+          // hint disappears — a silent downgrade of the one message that tells them how to
+          // fix a dead binding. Reproduced in tests/sandbox/phaseB-npm.mjs §B9 (the old
+          // dir came back 9802B with `nativeBindingRepairHint` in it), which is the
+          // reproduction R10 §8 required before touching install().
+          //
+          // Dev mode still syncs everything: that is the fix's whole purpose, and a dev
+          // tree has no old versions to protect. Otherwise only the version dir that
+          // matches this installer — same release, so same expectations of `lib/`.
+          const versionMatches = isDev || ver === selfVersion;
+          if (versionMatches && existsSync(join(verDir, 'scripts'))) {
             for (const f of launchSyncFiles) {
               const src = join(PROJECT_DIR, 'scripts', f);
               if (existsSync(src)) {
                 try {
-                  copyFileSync(src, join(verDir, 'scripts', f));
+                  // Atomic for the same reason the two hooks.json writes above are: a
+                  // torn launch.mjs is the MCP server's entry point, and the reader is
+                  // Claude Code starting it, not us.
+                  atomicWriteFileSync(join(verDir, 'scripts', f), readFileSync(src));
                 } catch {
                   /* keep going */
                 }
@@ -959,7 +989,7 @@ async function install() {
   // re-read settings.json) is what keeps a future reorder from silently turning the
   // dedup off — the dependency is data, not sequence.
   const managedHooks = configureHooks();
-  dedupePluginCacheAndHooks({ managedHooks });
+  dedupePluginCacheAndHooks({ managedHooks, isDev: IS_DEV });
   backupLegacyClaudeMemData();
   verifyDatabase();
   await dogfoodAutoAdopt();
