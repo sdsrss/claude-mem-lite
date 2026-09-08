@@ -279,7 +279,7 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
         `
       SELECT title FROM observations
       WHERE project = ? AND created_at_epoch > ?
-      ORDER BY created_at_epoch DESC LIMIT 10
+      ORDER BY created_at_epoch DESC, id DESC LIMIT 10
     `,
       )
       .all(project, fiveMinAgo);
@@ -313,7 +313,7 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
           `
         SELECT title FROM observations
         WHERE project = ? AND created_at_epoch > ? AND created_at_epoch <= ?
-        ORDER BY created_at_epoch DESC LIMIT 60
+        ORDER BY created_at_epoch DESC, id DESC LIMIT 60
       `,
         )
         .all(project, threeDaysAgo, fiveMinAgo);
@@ -331,7 +331,7 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
           `
         SELECT minhash_sig FROM observations
         WHERE project = ? AND created_at_epoch > ? AND minhash_sig IS NOT NULL
-        ORDER BY created_at_epoch DESC LIMIT 200
+        ORDER BY created_at_epoch DESC, id DESC LIMIT 200
       `,
         )
         .all(project, sevenDaysAgo);
@@ -1383,7 +1383,7 @@ export async function handleLLMSummary() {
       FROM observations
       WHERE memory_session_id = ?
         AND ${notLowSignalTitleClause('')}
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT 30
     `,
       )
@@ -1585,28 +1585,33 @@ ${obsList}`;
 // spinning up the full LLM dispatcher. Lets the e2e leak test verify that
 // the observations INSERT path scrubs all configured text fields.
 export const __insertObservationForTest = (db, obs) => {
+  // R11 C-P3-3: this used to hand-spell an 18-column INSERT of its own while the
+  // shipping writer above went through insertObservationRow's 19-column list, so the
+  // secret-scrub leak test asserted on a REPLICA of the write point rather than the
+  // write point. Column-list drift between the two is exactly what
+  // lib/observation-write.mjs exists to make impossible, and a test copy is the one
+  // caller that can drift without anyone noticing — it has no user.
   const safe = scrubRecord('observations', obs);
-  db.prepare(
-    `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, minhash_sig, lesson_learned, search_aliases, branch, created_at, created_at_epoch)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    obs.session_id,
-    obs.project,
-    safe.text,
-    'change',
-    safe.title,
-    safe.subtitle,
-    safe.narrative,
-    safe.concepts,
-    safe.facts,
-    obs.files_read,
-    obs.files_modified,
-    obs.importance,
-    obs.minhash_sig,
-    safe.lesson_learned,
-    safe.search_aliases,
-    obs.branch,
-    new Date().toISOString(),
-    Date.now(),
-  );
+  const now = new Date();
+  return insertObservationRow(db, {
+    memory_session_id: obs.session_id,
+    project: obs.project,
+    text: safe.text,
+    type: 'change',
+    title: safe.title,
+    subtitle: safe.subtitle,
+    narrative: safe.narrative,
+    concepts: safe.concepts,
+    facts: safe.facts,
+    files_read: obs.files_read,
+    files_modified: obs.files_modified,
+    importance: obs.importance,
+    minhash_sig: obs.minhash_sig,
+    lesson_learned: safe.lesson_learned,
+    search_aliases: safe.search_aliases,
+    branch: obs.branch,
+    created_at: now.toISOString(),
+    created_at_epoch: now.getTime(),
+    scope: normalizeScope(obs.scope),
+  });
 };

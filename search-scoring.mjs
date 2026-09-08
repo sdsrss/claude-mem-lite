@@ -1,5 +1,5 @@
-// claude-mem-lite shared search-scoring / ranking helpers: re-ranking, supersede
-// marking, PRF term extraction, concept-expansion — plus the MCP instructions
+// claude-mem-lite shared search-scoring / ranking helpers: re-ranking, PRF term
+// extraction, concept-expansion — plus the MCP instructions
 // builder and idle-cleanup/access-boost side helpers. Used by the MCP server,
 // the CLI (mem-cli), and search-engine; originally extracted from server.mjs for
 // testability (server.mjs has top-level side effects), hence the former
@@ -84,7 +84,13 @@ export function reRankWithContext(db, results, project) {
       `
     SELECT DISTINCT of2.filename FROM observation_files of2
     JOIN observations o ON o.id = of2.obs_id
-    WHERE o.project = ? AND o.created_at_epoch > ?
+    -- R11 A-P3-3: liveObsFilterSql, not the bare window. This is a READ path, so it is
+    -- outside the settled list of 11 observation WRITES, and it was granting a boost of
+    -- up to 1.3x from filenames contributed by rows no retrieval surface can return.
+    -- The superseded half is the one that fires unattended (exact auto-dedup tombstones
+    -- a duplicate save immediately); every automatic compressed_into writer gates on a
+    -- 14-day floor, so that half needs an explicit \`compress\` to reach a fresh row.
+    WHERE o.project = ? AND o.created_at_epoch > ? AND ${liveObsFilterSql('o')}
   `,
     )
     .all(project, twoHoursAgo);
@@ -254,7 +260,7 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
       JOIN observations o ON observations_fts.rowid = o.id
       WHERE observations_fts MATCH ? AND ${liveObsFilterSql('o')}
         AND (? IS NULL OR o.project = ?)
-      ORDER BY ${OBS_BM25}
+      ORDER BY ${OBS_BM25}, o.id DESC
       LIMIT 20
     `,
       )

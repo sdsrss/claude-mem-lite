@@ -81,7 +81,7 @@ export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset,
       AND (? IS NULL OR COALESCE(o.importance, 1) >= ?)
       AND (? IS NULL OR o.branch = ?)
       ${lowSignalClause}
-    ORDER BY score
+    ORDER BY score, o.id DESC
     LIMIT ?${withOffset ? ' OFFSET ?' : ''}`;
 }
 
@@ -401,7 +401,13 @@ export function attachBodyTokens(db, results) {
 function expandObsByConceptCo(db, ctx, now, existingIds, results, includeNoise = false) {
   const { ftsQuery, args, epochFrom, epochTo, limit } = ctx;
   if (results.length >= Math.ceil(limit / 2)) return;
-  const expanded = expandQueryByConcepts(db, ftsQuery, args.project);
+  // R11 A-P2-1: seed from the query that actually matched, byte-identical to
+  // expandObsByPRF below. M-2 fixed PRF's seed and stopped there, which left the two
+  // stages of one expansion disagreeing: expandQueryByConcepts re-runs its own FTS
+  // MATCH, so with the strict AND it reads zero top docs and returns [] in precisely
+  // the OR-rescue case — the vocabulary-mismatch shape both stages exist for.
+  const seedQuery = ctx.effectiveFtsQuery || ftsQuery;
+  const expanded = expandQueryByConcepts(db, seedQuery, args.project);
   if (expanded.length === 0) return;
   const expansionFts = expanded.map((c) => `"${c.replace(/"/g, '""')}"`).join(' OR ');
   try {
@@ -433,7 +439,7 @@ function expandObsByPRF(db, ctx, now, primaryCount, existingIds, results, includ
     JOIN observations o ON observations_fts.rowid = o.id
     WHERE observations_fts MATCH ? AND ${liveObsFilterSql('o')}
       AND (? IS NULL OR o.project = ?)
-    ORDER BY ${OBS_BM25}
+    ORDER BY ${OBS_BM25}, o.id DESC
     LIMIT 8
   `,
     )

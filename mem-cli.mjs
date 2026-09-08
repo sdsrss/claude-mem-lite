@@ -2855,7 +2855,7 @@ function cmdCitationStats(db, args) {
       FROM observations
      WHERE uncited_streak >= 2
        AND ${liveObsFilterSql('')}
-  ORDER BY uncited_streak DESC, importance ASC
+  ORDER BY uncited_streak DESC, importance ASC, id DESC
      LIMIT 20
   `,
     )
@@ -2877,7 +2877,7 @@ function cmdCitationStats(db, args) {
       FROM observations
      WHERE cited_count >= 1 AND COALESCE(uncited_streak, 0) = 0
        AND ${liveObsFilterSql('')}
-  ORDER BY cited_count DESC
+  ORDER BY cited_count DESC, id DESC
      LIMIT 10
   `,
     )
@@ -2891,7 +2891,7 @@ function cmdCitationStats(db, args) {
      WHERE demoted_at IS NOT NULL
        AND demoted_at >= ?
        AND ${liveObsFilterSql('')}
-  ORDER BY demoted_at DESC
+  ORDER BY demoted_at DESC, id DESC
      LIMIT 10
   `,
     )

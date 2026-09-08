@@ -120,3 +120,81 @@ describe('R11-A-P2-3 — retrieval-core ORDER BY is total under exact ties', () 
     expect(rows.map((r) => r.id)).toEqual([...ids].reverse());
   });
 });
+
+// ─── batch 2 (2026-09-08) ─────────────────────────────────────────────────────
+// The remaining 13 sites R11 judged harmful now carry `, id DESC` too. Only the ones
+// whose tie is observable end-to-end are pinned here; the rest — the PRF LIMIT 8 and
+// concept LIMIT 20 seed pools, hook-llm's three dedup windows, hook-llm's 30-row
+// session-summary window, save-observation's dedup window, and the three
+// citation-stats listings — change WHICH rows enter a population rather than the
+// order of anything a caller can read back, and pinning them would mean asserting on
+// an internal population. They are changed and NOT pinned; that is stated rather than
+// papered over.
+
+describe('R11-A-P2-3 batch 2 — the main pool and the cross-source recent listings', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 's', project: 'p', memoryId: 's' });
+  });
+  afterEach(() => db.close());
+
+  it('the main observation pool takes the NEWEST rows of a fully-tied group', () => {
+    // buildObsFtsQuery's ORDER BY is reused by four call sites, so this is the widest
+    // of the 17. Identical title+narrative gives identical BM25; one forced epoch gives
+    // identical decay; same type/importance/project gives identical multipliers — so
+    // every row's score is byte-identical and the tiebreak is the ONLY discriminator.
+    // FAILS IF: `, o.id DESC` is dropped — SQLite then returns ascending rowid and the
+    // LIMIT takes the three OLDEST, which is both the wrong direction and the wrong set.
+    const ids = [];
+    for (let i = 0; i < 5; i++) {
+      ids.push(
+        Number(
+          insertObs(db, {
+            sessionId: 's',
+            project: 'p',
+            type: 'bugfix',
+            title: 'retry backoff timeout',
+            narrative: 'a substantive body so the low-signal filter keeps it',
+          }).lastInsertRowid,
+        ),
+      );
+    }
+    db.prepare('UPDATE observations SET created_at_epoch = ?').run(TIED_EPOCH);
+    expect(db.prepare('SELECT COUNT(DISTINCT created_at_epoch) AS c FROM observations').get().c).toBe(1);
+
+    const res = searchObservationsHybrid(db, {
+      ftsQuery: 'retry',
+      args: { project: 'p' },
+      epochFrom: null,
+      epochTo: null,
+      perSourceLimit: 3,
+      perSourceOffset: 0,
+      currentProject: 'p',
+      limit: 3, // ceil(3/2)=2 <= 3 results, so the expansion stages stay out of this probe
+    });
+    const scores = res.map((r) => r.score);
+    expect(new Set(scores).size, 'premise: the scores must really be tied').toBe(1);
+    expect(res.map((r) => r.id)).toEqual([ids[4], ids[3], ids[2]]);
+  });
+
+  it('the cross-source recent listing of session summaries returns newest first', async () => {
+    // coreRunSearchPipeline's recentListingNoFts branch — one of the three lists that
+    // declared newest-first and delivered oldest-first on a tie.
+    const ids = [];
+    for (let i = 0; i < 4; i++) {
+      const r = db
+        .prepare(
+          `INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('s', 'p', `request ${i}`, `completed ${i}`, new Date(TIED_EPOCH).toISOString(), TIED_EPOCH);
+      ids.push(Number(r.lastInsertRowid));
+    }
+    expect(db.prepare('SELECT COUNT(DISTINCT created_at_epoch) AS c FROM session_summaries').get().c).toBe(1);
+
+    const res = await handleSearchForTest(db, { source: 'sessions', project: 'p', limit: 3 }, {});
+    expect(res.results?.length, 'premise: the recent listing must have returned rows').toBe(3);
+    expect(res.results.map((r) => r.id)).toEqual([ids[3], ids[2], ids[1]]);
+  });
+});

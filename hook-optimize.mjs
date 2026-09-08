@@ -1517,6 +1517,13 @@ export async function executeSmartCompressCluster(db, observations, project) {
       //
       // optimized_at is not in OBS_COLUMNS, so it stays a separate UPDATE below — the
       // summary must be marked processed so the re-enrich pools do not pick it up.
+      //
+      // R11 C-P3-2 read the three-item list above as a completeness claim and asked why
+      // the fourth OBS_COLUMNS entry, `scope`, is absent. It is absent on purpose: the
+      // merge prompt does not ask for one, so there is no value to pass, and NULL is the
+      // `scopes` backfill pool's own predicate (findReenrichCandidates, scope==='scopes')
+      // — which is deliberately NOT gated on optimized_at, so stamping this row processed
+      // does not evict it. Writing a guessed scope here would.
       const newId = insertObservationRow(db, {
         memory_session_id: sessionId,
         project,
