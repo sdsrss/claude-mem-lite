@@ -2,10 +2,20 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.4.0 — the repair path could not run on the install it repairs
 
 A full-lifecycle QA pass (install → use → update → self-heal → uninstall) against a pristine
 clone in a sandboxed `HOME`, plus the five open items it left behind.
+
+**The one to read if you read one.** When a plugin-cache install lost its `node_modules`, the
+self-heal detected it correctly, then could not run: the signature-verified repair path
+imported two path constants from a module that imports the native database driver — the exact
+thing that was missing. So it fell through to telling you to `curl` an unverified tarball of
+the default branch. Both halves are fixed: the repair path no longer needs the driver, and the
+fallback it prints now pins to a release.
+
+**Nothing here changes your data or your database.** The user-visible changes are in
+`status`, `doctor` and `uninstall`, and they are described below.
 
 ### The self-repair path could not run on the install it exists to repair
 
