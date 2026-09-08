@@ -15,12 +15,15 @@ project's row losing three of its five concepts to a term supplied by another pr
 
 **What changes for you:** cross-project synonym unification stops happening automatically, so
 `k8s` in one project and `kubernetes` in another are no longer folded together by the daily
-pass. Each project is still normalized, against its own vocabulary, in its own pass (bounded
-to 8 projects per run, since each is a model call where the old shape was one).
+pass. Each project is still normalized, against its own vocabulary, in its own pass — at most
+8 per run, since each pass is a model call where the old shape was one, and the surplus is
+carried to the next run rather than dropped. If you have more than 8 projects the rotation
+means each is reached every ceil(N/8) runs rather than every run.
 
 **To keep the old behaviour:** set `CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1`. It restores the
-single unscoped pass exactly, and logs a line saying why that is not recommended. An explicit
-`claude-mem-lite optimize --run --task normalize` is unaffected either way.
+single unscoped pass exactly, and prints a warning to stderr saying why that is not
+recommended. It is the ONLY route back: an explicit `claude-mem-lite optimize --run --task
+normalize` with no `--project` is an unscoped run too, so it fans out as well.
 
 Also in this change, all on the same path:
 

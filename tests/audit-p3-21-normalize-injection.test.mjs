@@ -71,7 +71,7 @@ vi.mock('../haiku-client.mjs', () => ({
 }));
 
 import { callModelJSONAsync } from '../haiku-client.mjs';
-import { executeNormalize, isConceptShaped } from '../hook-optimize.mjs';
+import { executeNormalize, isConceptShaped, pickProjectsToNormalize } from '../hook-optimize.mjs';
 import { MEMORY_INPUT_GUARD } from '../lib/memory-input-guard.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -128,7 +128,14 @@ describe('isConceptShaped — the layer-1 predicate on its own', () => {
     ['C#', 'hash'],
     ['数据库迁移', 'CJK'],
     ['café', 'non-ASCII latin — the reason this is a denylist, not a \\w allowlist'],
+    ['café', 'the same word DECOMPOSED (e + combining acute)'],
+    [
+      'caf´e',
+      'the keyboard spacing acute: NFKC folds it to space + accent, so a fold tested against the space class rejected it — review found the docblock example failing its own gate',
+    ],
     ['Übersicht', 'non-ASCII latin, leading'],
+    ['می‌رود', 'Persian with U+200C ZWNJ — REQUIRED orthography, not formatting'],
+    ['क‍ष', 'Devanagari with U+200D ZWJ'],
   ])('accepts %s (%s)', (token) => {
     expect(isConceptShaped(token)).toBe(true);
   });
@@ -178,6 +185,27 @@ describe('isConceptShaped — the layer-1 predicate on its own', () => {
   ])('%s is handled upstream by the split, not by the gate', (_name, cp) => {
     const joined = `ignore${String.fromCodePoint(cp)}every`;
     expect(joined.split(/\s+/).length, 'this one really is whitespace to JS').toBe(2);
+    // Second review, finding E: the line above ALONE tests V8, not this repository — no
+    // change here could make it fail. What makes the case ours is the consequence: because
+    // the split separates them, what reaches the gate is ordinary words, and the gate must
+    // ACCEPT those rather than reject the fragments.
+    for (const part of joined.split(/\s+/)) {
+      expect(isConceptShaped(part), `${part} reaches the gate as a plain word`).toBe(true);
+    }
+  });
+
+  // Blank on screen, but Lo/So by category — so the class list above does not reach them and
+  // each had to be named. Second review reached a real prompt with every one of these.
+  it.each([
+    ['U+3164 HANGUL FILLER', 'ㅤ'],
+    ['U+115F HANGUL CHOSEONG FILLER', 'ᅟ'],
+    ['U+1160 HANGUL JUNGSEONG FILLER', 'ᅠ'],
+    ['U+FFA0 HALFWIDTH HANGUL FILLER', 'ﾠ'],
+    ['U+2800 BRAILLE PATTERN BLANK', '⠀'],
+  ])('rejects a phrase joined with %s', (_name, ch) => {
+    const joined = `ignore${ch}every${ch}term`;
+    expect(joined.split(/\s+/).length, 'premise: one token after the split').toBe(1);
+    expect(isConceptShaped(joined)).toBe(false);
   });
 
   // Fullwidth lookalikes for the denied punctuation. Same review finding: denying `{` while
@@ -350,16 +378,27 @@ describe('R10-P3-21 tier 3: normalize is the cross-project rewrite path', () => 
     // nothing exercises is the same class of dead guard as an untested denylist clause: it
     // reads as an option and would be discovered broken by whoever needed it most.
     process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT = '1';
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       callModelJSONAsync.mockResolvedValue({ groups: [] });
       await executeNormalize(db, true);
       expect(callModelJSONAsync.mock.calls.length, 'one pass over the union, as before').toBe(1);
+      // Second review: the first version of this warning went through debugLog, which
+      // returns early unless CLAUDE_MEM_DEBUG is set — so it fired zero times in the
+      // detached worker that is the only place the hatch is used. A documented safety net
+      // nothing emits is worse than none, because it reads as present.
+      const warned = warn.mock.calls.flat().join(' ');
+      expect(warned, 'the user must be told a protection is off').toContain(
+        'CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1',
+      );
+      expect(warned).toContain('R10-P3-21');
       const user = callModelJSONAsync.mock.calls[0][0].user;
       // The point of the old shape, and the reason it is not the default: both projects in
       // one list, which is precisely how one project's term could name another's.
       expect(user).toContain('kubernetes');
       expect(user).toContain('tokenizer');
     } finally {
+      warn.mockRestore();
       delete process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT;
     }
   });
@@ -376,6 +415,69 @@ describe('R10-P3-21 tier 3: normalize is the cross-project rewrite path', () => 
       expect(callModelJSONAsync.mock.calls.length, `"${v}" must not opt out`).toBe(2);
     }
     delete process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT;
+  });
+
+  it('P2-1(b): projects past the per-run cap are DEFERRED, not starved forever', async () => {
+    // Second review: the first fan-out took `slice(0, 8)` off a deterministic ordering with
+    // nothing advancing between runs, so past the cap the same eight were picked every run
+    // forever and the ninth was never normalized — while the CHANGELOG said "each project is
+    // still normalized". Reproduced there across two runs as a byte-identical picked set.
+    db.close();
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'victim' });
+    // Each project carries a UNIQUE marker concept, so the prompts say which projects ran.
+    // Without that every prompt would be identical and "the second run differed" would be
+    // unobservable — the claim would be arithmetic rather than a measurement.
+    const names = Array.from({ length: 11 }, (_, i) => `proj${String(i).padStart(2, '0')}`);
+    for (const n of names) {
+      seedConcepts(db, n, `marker${n} kubernetes database retrieval pagination`);
+    }
+
+    const runOnce = async () => {
+      callModelJSONAsync.mockReset();
+      callModelJSONAsync.mockResolvedValue({ groups: [] });
+      const res = await executeNormalize(db, true);
+      const seen = callModelJSONAsync.mock.calls
+        .map(([p]) => (p.user.match(/marker(proj\d+)/) || [])[1])
+        .filter(Boolean);
+      return { res, seen };
+    };
+
+    const first = await runOnce();
+    expect(first.res.projects, 'capped at NORMALIZE_MAX_PROJECTS_PER_RUN').toBe(8);
+    expect(first.res.deferredProjects, '11 projects, 8 done, 3 held over').toBe(3);
+    expect(new Set(first.seen).size, 'eight DISTINCT projects, one prompt each').toBe(8);
+    // A "run twice and compare the picks" assertion belongs in the unit case below, not
+    // here: NORMALIZE_GATE_FILE is one file shared by every project and every concurrent
+    // run, so under vitest's parallel workers another suite calling executeNormalize
+    // rewrites the cursor mid-test. That version of this case passed alone and failed in
+    // the suite — the same wall-clock-flake shape as D#25, and not worth shipping twice.
+  });
+
+  it('P2-1(b): the rotation itself, driven directly so it is not a coin flip', () => {
+    const all = Array.from({ length: 11 }, (_, i) => `proj${String(i).padStart(2, '0')}`);
+
+    // No cursor: start at the head, as a first-ever run does.
+    const run1 = pickProjectsToNormalize(all, undefined);
+    expect(run1).toEqual(all.slice(0, 8));
+
+    // The cursor is the last project handled, so the next run resumes AFTER it and wraps.
+    const run2 = pickProjectsToNormalize(all, run1[run1.length - 1]);
+    expect(run2.slice(0, 3), 'the three deferred projects come first').toEqual([
+      'proj08',
+      'proj09',
+      'proj10',
+    ]);
+    expect(new Set([...run1, ...run2]).size, 'two runs reach all eleven').toBe(11);
+
+    // A cursor naming a project that no longer exists must not wedge the rotation; it
+    // restarts at the head rather than returning nothing.
+    expect(pickProjectsToNormalize(all, 'deleted-project')).toEqual(all.slice(0, 8));
+
+    // At or under the cap there is nothing to rotate and every project runs every time.
+    const few = all.slice(0, 8);
+    expect(pickProjectsToNormalize(few, 'proj03')).toEqual(few);
+    expect(pickProjectsToNormalize(all.slice(0, 3), undefined)).toEqual(all.slice(0, 3));
   });
 
   it('P2-1: one observation cannot monopolise its project prompt', async () => {

@@ -636,54 +636,53 @@ export function shouldRunNormalize(project = null) {
 const CONCEPT_MAX_LEN = 40;
 
 /**
- * Characters no real concept token has, and that an injection needs.
+ * The layer-1 shape gate, in three parts. Split deliberately: each part has a different
+ * reason to exist and the second review round showed they must not be applied to the same
+ * string.
  *
- * A DENYLIST, deliberately, not an allowlist of word characters: \w is ASCII-only in JS,
- * so an allowlist would reject `café` along with the payload, and silently narrowing a
- * retrieval feature is a poor trade for the harm here (a rejected token is dropped from
- * normalize’s prompt only — never from the row, and never from search).
+ * PUNCT — what a JSON group literal needs. Applied to the raw token AND to its NFKC fold, so
+ * a fullwidth lookalike (U+FF5B, U+FF02, U+FF3B) is judged as the character it imitates.
  *
- * INDEPENDENT REVIEW BROKE THE FIRST VERSION OF THIS, twice, and both holes came from the
- * same wrong premise — that JS \s is "whitespace":
+ * INVISIBLE — characters that occupy no width, so a phrase built with them reads to a
+ * tokenizer as one word while JS `\\s` (a FIXED LIST, not "whitespace") leaves it as one
+ * token for the caller. Unicode categories cover most; five are named explicitly because they
+ * are Lo/So — letters and symbols by category, blank on screen — and review reached a real
+ * prompt with each of them.
  *
- *   1. \s is a FIXED LIST. U+200B ZWSP, U+0085 NEL, U+00AD SHY, U+2060 WJ, U+FEFF,
- *      U+007F DEL and the whole C1 block are not in it, so a phrase joined with any of
- *      them survived the caller’s /\s+/ split as ONE token and passed a gate whose
- *      control clause stopped at U+001F. U+0085 was the worst: most tokenizers render it
- *      as a line break, which is exactly what that clause existed to prevent.
- *   2. Denying `{` while accepting `｛` leaves the JSON-literal shape expressible.
+ * NOT DENIED, both deliberate, both with the bound stated:
+ *   - U+200C ZWNJ and U+200D ZWJ are REQUIRED orthography in Persian, Hindi and other
+ *     scripts. Denying `\p{Cf}` wholesale silently made those concepts unrepresentable.
+ *     They are stripped before the test instead, which does mean a phrase joined with them
+ *     survives as one token — accepted because the fan-out confines any such payload to the
+ *     attacker's OWN project, and losing a script's orthography is the larger harm.
+ *   - `\p{Cn}` (unassigned) is gone: it binds this gate to the runtime's Unicode version,
+ *     so the same token could be accepted on one Node and rejected on the next.
  *
- * Hence Unicode CATEGORIES rather than a hand-listed range — Cc, Cf, Cs, Co, Cn and every
- * Z* separator — plus an NFKC pass so a fullwidth lookalike is judged as what it folds to.
- * Both the raw token and its NFKC form are tested, because normalization can also
- * introduce a denied character that was not there before.
+ * WHY THE FOLD IS PUNCT-ONLY: applying the invisible classes to the NFKC form rejected
+ * `caf\u00B4e` — the keyboard spacing acute folds to space + combining accent, and the space is
+ * `\p{Zs}`. That is the docblock's own `café` example failing its own gate, found in review.
  */
-const CONCEPT_SHAPE_DENY = /[{}[\]"'`\\<>]|\p{Cc}|\p{Cf}|\p{Cs}|\p{Co}|\p{Cn}|\p{Zs}|\p{Zl}|\p{Zp}/u;
+const CONCEPT_SHAPE_DENY_PUNCT = /[{}[\]"'`\\<>]/u;
+const CONCEPT_SHAPE_DENY_INVISIBLE =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zs}\p{Zl}\p{Zp}]|[\u3164\u115F\u1160\uFFA0\u2800]/u;
+/** Zero-width JOINERS, which are text rather than formatting. See the docblock above. */
+const CONCEPT_JOINERS = /[\u200C\u200D]/gu;
 
 /**
  * Is this token shaped like a concept rather than like a payload? (R10-P3-21 layer 1.)
  *
- * The bound that makes this workable is upstream and worth stating: extractUniqueConcepts
- * splits on /\s+/, so anything reaching here is already a single whitespace-free token —
- * prose instructions cannot survive that, and what remains expressible is the JSON-shaped
- * group literal, which needs the characters above.
+ * Note the bound this gate does NOT carry: it is not what stops one project reaching another
+ * — the per-project fan-out is. A token that slips through here still only ever appears in
+ * its own project's prompt.
  */
 export function isConceptShaped(token) {
   if (typeof token !== 'string') return false;
   if (token.length < 2 || token.length > CONCEPT_MAX_LEN) return false;
-  // Judged in BOTH forms. NFKC folds a fullwidth lookalike onto the character it imitates,
-  // so `auth｛groups` is denied for the same reason `auth{groups` is; testing the raw form
-  // as well covers the opposite direction, where normalization would remove the very
-  // character that should have disqualified the token.
-  if (CONCEPT_SHAPE_DENY.test(token)) return false;
-  let folded;
-  try {
-    folded = token.normalize('NFKC');
-  } catch {
-    // A lone surrogate can make normalize throw. Unjudgeable is not a concept.
-    return false;
-  }
-  return !CONCEPT_SHAPE_DENY.test(folded);
+  const body = token.replace(CONCEPT_JOINERS, '');
+  if (CONCEPT_SHAPE_DENY_PUNCT.test(body) || CONCEPT_SHAPE_DENY_INVISIBLE.test(body)) return false;
+  // `normalize` does not throw on a lone surrogate (measured) — an earlier try/catch here
+  // guarded against that and was dead code with a comment asserting the opposite.
+  return !CONCEPT_SHAPE_DENY_PUNCT.test(body.normalize('NFKC'));
 }
 
 /**
@@ -923,17 +922,26 @@ export async function executeNormalize(db, force = false, { project } = {}) {
   // What this costs, stated rather than hidden: the default path no longer unifies
   // vocabulary ACROSS projects, so `k8s` in one project and `kubernetes` in another stay
   // separate. That is a released-artifact user-visible default change and is why it is
-  // behind an escape hatch; cross-project normalization remains available on demand via an
-  // explicit unscoped CLI run. `applyNormalization`'s own comment has said since v2.72.0
+  // behind an escape hatch. That hatch is the ONLY route back — an explicit unscoped CLI run
+  // takes this same branch and fans out too, which an earlier draft of this comment (and the
+  // README and CHANGELOG with it) got wrong. `applyNormalization`'s own comment has said
+  // since v2.72.0
   // that `--project` exists to prevent exactly this contamination — the unattended caller
   // was simply still using the legacy unscoped mode.
   if (!project) {
     if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
-      debugLog(
-        'DEBUG',
-        'llm-optimize',
-        'normalize: cross-project mode restored by CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1 — ' +
-          'one project’s stored content can steer synonym groups applied to every project (R10-P3-21)',
+      // UNCONDITIONAL, not debugLog. Second review: debugLog returns early unless
+      // CLAUDE_MEM_DEBUG is set, which it is not in the detached background worker that
+      // runs this — so the warning documented as the escape hatch's safety net fired zero
+      // times in the only place the hatch is used. Same shape and prefix as install.mjs's
+      // CLAUDE_MEM_SKIP_SIG_VERIFY warning, which is the existing precedent for telling a
+      // user they have switched a protection off. It fires once per run and only when the
+      // flag is set deliberately, so it is not noise.
+      console.error(
+        '[claude-mem-lite] WARNING: CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1 — normalize is ' +
+          'running over every project at once, so one project’s stored content can steer the ' +
+          'synonym groups applied to all of them (R10-P3-21). Unset it to return to the ' +
+          'per-project default.',
       );
       const legacy = await normalizeOneProject(db, null);
       advanceNormalizeGate();
@@ -941,7 +949,7 @@ export async function executeNormalize(db, force = false, { project } = {}) {
     }
 
     const projects = listProjectsWithConcepts(db);
-    const picked = projects.slice(0, NORMALIZE_MAX_PROJECTS_PER_RUN);
+    const picked = pickProjectsToNormalize(projects, readNormalizeGate().cursor);
     let processed = 0;
     let groups = 0;
     for (const p of picked) {
@@ -949,23 +957,67 @@ export async function executeNormalize(db, force = false, { project } = {}) {
       processed += r.processed || 0;
       groups += r.groups || 0;
     }
-    advanceNormalizeGate();
-    return {
-      processed,
-      groups,
-      projects: picked.length,
-      deferredProjects: projects.length - picked.length,
-    };
+    const deferred = projects.length - picked.length;
+    advanceNormalizeGate(picked[picked.length - 1]);
+    if (deferred > 0) {
+      debugLog(
+        'DEBUG',
+        'llm-optimize',
+        `normalize: ${picked.length} project(s) this run, ${deferred} deferred to the next — ` +
+          `resuming after "${picked[picked.length - 1]}"`,
+      );
+    }
+    return { processed, groups, projects: picked.length, deferredProjects: deferred };
   }
 
   const single = await normalizeOneProject(db, project);
   return single;
 }
 
-/** Advance the shared 7-day timer. Only an unscoped run owns it — see shouldRunNormalize. */
-function advanceNormalizeGate() {
+/**
+ * The slice of projects this run handles, ROTATING so the surplus is deferred rather than
+ * starved (second review, P2-1).
+ *
+ * The first version took `projects.slice(0, MAX)` off a deterministic `n DESC, project ASC`
+ * ordering with nothing advancing between runs — so past the cap the same projects were
+ * picked every run forever and the rest were never normalized at all, while the CHANGELOG
+ * told users "each project is still normalized". Reproduced across two runs on one DB:
+ * byte-identical picked set.
+ *
+ * The cursor is the last project handled; the next run starts after it and wraps. A cursor
+ * naming a project that has since disappeared yields index -1, so the run restarts at the
+ * head — the same place a first-ever run starts, which is the behaviour we want anyway.
+ *
+ * Exported because it is the only part of the rotation that can be tested DETERMINISTICALLY.
+ * `NORMALIZE_GATE_FILE` is one file shared by every project and every concurrent run — the
+ * 7-day timer always had that property and the cursor inherits it — so an end-to-end
+ * "run twice and compare the picks" case is at the mercy of whatever else touched the file
+ * in between. Under vitest's parallel workers that is not hypothetical: such a case passed
+ * alone and failed in the suite. A pure function tested directly says the same thing without
+ * being a coin flip.
+ */
+export function pickProjectsToNormalize(all, cursor) {
+  if (all.length <= NORMALIZE_MAX_PROJECTS_PER_RUN) return all;
+  const start = (all.indexOf(cursor) + 1) % all.length;
+  return [...all.slice(start), ...all.slice(0, start)].slice(0, NORMALIZE_MAX_PROJECTS_PER_RUN);
+}
+
+/** The shared 7-day timer plus the rotation cursor. `{}` when absent or unreadable. */
+function readNormalizeGate() {
   try {
-    writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now() }));
+    return JSON.parse(readFileSync(NORMALIZE_GATE_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Advance the shared 7-day timer, and record where the rotation got to.
+ * Only an unscoped run owns either — see shouldRunNormalize.
+ */
+function advanceNormalizeGate(cursor = null) {
+  try {
+    writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now(), cursor }));
   } catch {
     /* best-effort */
   }
