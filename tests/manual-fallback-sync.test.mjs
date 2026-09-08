@@ -62,10 +62,17 @@ describe('manual tarball fallback stays one string', () => {
   });
 
   it('has no fifth surface carrying a divergent copy', () => {
+    // TWO markers, because one was not enough and pre-ship review proved it. Scanning only for
+    // the OLD `/tarball` form catches a regression to the default branch — not "a fifth
+    // surface": a fifth copy written with the release URL but a divergent tail sailed past.
+    // The second marker is the distinctive fragment of the CURRENT form, and any line carrying
+    // it must contain the constant verbatim.
+    //
     // Entity sweep, no file-type filter: the copies are spread across .mjs and .md, and a
     // type-filtered sweep is how an earlier retraction in this repo missed one.
     // Assembled, not written out: a literal here would make this file its own offender.
-    const marker = 'claude-mem-lite' + '/tarball';
+    const oldForm = 'claude-mem-lite' + '/tarball';
+    const newForm = 'releases/latest' + ' | grep -o'; // assembled: see oldForm
     const skipDirs = new Set(['node_modules', '.git', 'coverage', 'dist']);
     const offenders = [];
     const walk = (dir) => {
@@ -76,15 +83,24 @@ describe('manual tarball fallback stays one string', () => {
           walk(full);
           continue;
         }
-        if (!/\.(mjs|js|md|json|sh)$/.test(name)) continue;
+        if (!/\.(mjs|js|md|json|sh|ya?ml|txt)$/.test(name)) continue;
+        const rel = full.slice(ROOT.length + 1);
         const src = readFileSync(full, 'utf8');
-        if (!src.includes(marker)) continue;
         for (const line of src.split('\n')) {
           // A tagged tarball URL (`/tarball/v1.2.3`) is a different thing — hook-update.mjs
           // fixtures use it — and is not a copy of this command.
-          if (!line.includes(marker) || /tarball\/v\d/.test(line)) continue;
-          if (line.includes('/releases/latest')) continue;
-          offenders.push(`${full.slice(ROOT.length + 1)}: ${line.trim().slice(0, 90)}`);
+          if (/tarball\/v\d/.test(line)) continue;
+          if (line.includes(oldForm) && !line.includes('/releases/latest')) {
+            offenders.push(`${rel} (old form): ${line.trim().slice(0, 90)}`);
+            continue;
+          }
+          // A line that starts the current command must carry ALL of it. The .mjs copies are
+          // JS-escaped, so compare against both spellings.
+          if (!line.includes(newForm)) continue;
+          const escaped = MANUAL_TARBALL_FALLBACK.replace(/'/g, "\\'");
+          if (!line.includes(MANUAL_TARBALL_FALLBACK) && !line.includes(escaped)) {
+            offenders.push(`${rel} (divergent): ${line.trim().slice(0, 90)}`);
+          }
         }
       }
     };

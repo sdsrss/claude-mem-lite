@@ -362,7 +362,15 @@ export const MANUAL_TARBALL_FALLBACK =
  * It gets dirty on its own: with a DIRECTORY-source marketplace, `${CLAUDE_PLUGIN_ROOT}`
  * resolves inside the clone, and `scripts/launch.mjs` runs `npm install` there whenever
  * `node_modules/better-sqlite3` is missing — which is every materialization of a new version.
- * So the plugin's own launcher can create the state that stops the plugin updating.
+ * That install rewrites **`package-lock.json`**, which IS tracked, and that is what blocks the
+ * pull. So the plugin's own launcher can create the state that stops the plugin updating.
+ *
+ * **Do not add a `node_modules` special case here.** A first cut did, and pre-ship review
+ * measured it dead: the clone is a clone of THIS repo, whose `.gitignore` carries
+ * `/node_modules`, so `git status --porcelain` never sees it — the branch was reachable only
+ * from a fixture that omitted the `.gitignore` the real clone always has. An ignored
+ * `node_modules` also does not block a fast-forward, so reporting it would have been noise
+ * even if it were visible. The tracked-file dirt is the whole signal.
  *
  * Five outcomes, and `unknown` is one of them on purpose: "I could not run git" must not be
  * reported in the same voice as "the tree is clean".
@@ -385,13 +393,7 @@ export function marketplaceCloneHealth(
     .split('\n')
     .filter((l) => l.trim());
   if (entries.length === 0) return { kind: 'clean' };
-  return {
-    kind: 'dirty',
-    count: entries.length,
-    // Named separately because it points at the mechanism rather than at the user: a
-    // node_modules in a marketplace clone was almost certainly put there by our launcher.
-    hasNodeModules: entries.some((l) => /\bnode_modules\b/.test(l)),
-  };
+  return { kind: 'dirty', count: entries.length };
 }
 
 /**
@@ -1377,7 +1379,12 @@ async function status() {
   // configured` at a correctly-installed plugin user — two red marks describing
   // the intended state.
   const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
-  const pluginProvides = !!shape.activePluginVersion;
+  // A cache DIRECTORY is not an installed plugin — `/plugin uninstall` leaves version dirs
+  // behind (this project's own README documents that), and `activePluginVersion` falls back to
+  // "newest cache dir" when nothing recorded an install. Both branches below credit the
+  // manifest with providing something, so both need the registration, not the directory.
+  const pluginProvides =
+    !!shape.activePluginVersion && pluginIsRegistered({ home: homedir(), settings: readSettings() });
 
   // MCP. A plugin install answers this from the manifest and does NOT shell out.
   //
@@ -1391,9 +1398,11 @@ async function status() {
   // measured 2026-09-08 at 2.546s wall for three servers, one of them a remote HTTP endpoint.
   // A status command should not pay that, and a plugin user gains nothing from it.
   //
-  // `doctor` keeps the exec unconditionally: it is the deep check, and it is where the
-  // duplicate/legacy registration the README's "Mixed-install residue" section describes now
-  // gets detected — nothing detected it before.
+  // `doctor` GAINS the exec instead (it had none before this change) and runs it
+  // unconditionally: it is the deep check, and it is where the duplicate/legacy registration
+  // the README's "Mixed-install residue" section describes now gets detected — nothing
+  // detected it before. That means `doctor` now health-checks every MCP server on the
+  // machine; both READMEs say so under their `doctor` sections.
   if (pluginProvides) {
     push(
       'ok',
@@ -1881,12 +1890,19 @@ async function doctor() {
   try {
     const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 60000 });
     const bare = nonPluginMemRegistrations(list);
-    const viaPlugin = !!shape?.activePluginVersion;
+    // Registration, not directory — see pluginIsRegistered. Crediting a leftover cache dir
+    // here told a working npm-channel install to delete its ONLY MCP registration.
+    const viaPlugin =
+      !!shape?.activePluginVersion && pluginIsRegistered({ home: homedir(), settings: readSettings() });
     if (viaPlugin && bare.length > 0) {
       dwarn(
         `MCP registration: the plugin manifest provides the server AND a bare "${bare.join('", "')}" registration exists — the server is registered twice`,
       );
-      log('    Fix: claude mcp remove -s user ' + bare[0]);
+      // No `-s` flag, deliberately: `nonPluginMemRegistrations`'s own docblock says `mcp list`
+      // does not label scope, and this repo's tracked `.mcp.json` registers a bare `mem-lite`
+      // at PROJECT scope, which `-s user` cannot remove. `claude mcp remove` without the flag
+      // removes from whichever scope the entry is in. Every name, not just the first.
+      for (const name of bare) log(`    Fix: claude mcp remove ${name}`);
     } else if (viaPlugin) {
       ok('MCP registration: provided by the plugin manifest only (no duplicate)');
     } else if (bare.length > 0) {
@@ -1906,9 +1922,7 @@ async function doctor() {
   const marketplaceClone = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
   const clone = marketplaceCloneHealth(marketplaceClone);
   if (clone.kind === 'dirty') {
-    dwarn(
-      `Marketplace clone: ${clone.count} uncommitted change(s) in ${marketplaceClone}${clone.hasNodeModules ? ' (including node_modules/)' : ''}`,
-    );
+    dwarn(`Marketplace clone: ${clone.count} uncommitted change(s) in ${marketplaceClone}`);
     log(
       '    Claude Code updates a git-source marketplace by pulling this clone, and a dirty tree blocks the pull —',
     );
@@ -2576,6 +2590,41 @@ export function hasOtherMarketplacePlugins(
 ) {
   const plugins = getInstalledPluginEntries(installed);
   return Object.keys(plugins).some((key) => key !== pluginKey && key.endsWith(`@${marketplaceKey}`));
+}
+
+/**
+ * Whether Claude Code actually has this plugin INSTALLED — as opposed to a leftover version
+ * directory sitting in its cache.
+ *
+ * `detectInstallShape`'s `activePluginVersion` is not that question. Its own comment calls its
+ * third tier — the newest cache directory — "a guess, and after a rollback the wrong one", and
+ * a terminal has neither of the first two tiers (`CLAUDE_PLUGIN_ROOT`, `installed_plugins.json`)
+ * after `/plugin uninstall`. `/plugin uninstall` leaves the version dirs behind, which this
+ * project's own README now documents — so "a cache directory exists" is true on machines that
+ * have no plugin at all.
+ *
+ * Using it as "the plugin provides the MCP server" was measured to tell a working npm-channel
+ * install that its server was registered twice, with a remedy that removes its ONLY
+ * registration. Read from the two places that RECORD an installation instead.
+ *
+ * Deliberately NOT `!shape.managed`: a mixed install has both, and that is precisely the state
+ * the duplicate check exists for. Over-narrowing here is safe by construction — the caller
+ * falls back to asking `claude mcp list`, which is the pre-fix behaviour and correct.
+ *
+ * Exported for tests/mcp-registration-parse.test.mjs.
+ */
+export function pluginIsRegistered({ home = homedir(), settings = {} } = {}) {
+  if (isPluginExplicitlyDisabled(settings)) return false;
+  if (settings?.enabledPlugins?.[PLUGIN_KEY] === true) return true;
+  try {
+    const installed = JSON.parse(
+      readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'),
+    );
+    return PLUGIN_KEY in getInstalledPluginEntries(installed);
+  } catch {
+    // Missing or unparseable registry: not evidence of an installation.
+    return false;
+  }
 }
 
 /** Thrown when settings.json exists but is not parseable. Never a reason to write. */

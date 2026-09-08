@@ -70,9 +70,12 @@ jobs:
   #
   # tests/plugin-manifest.test.mjs encodes the documented field set locally, so it can say NO
   # on every machine — but only about rules it was told, and the reference moves. That gap is
-  # not hypothetical: `claude plugin validate . --strict` was never run here, and when it was
-  # (2026-09-08) `.claude-plugin/plugin.json` exited 1 over a rule the local guard has no way
-  # to know about. Both guards stay; they answer different questions.
+  # not hypothetical: the validator had never been run here, and when it was (2026-09-08) BOTH
+  # manifests exited 1 under --strict — the marketplace over `metadata.homepage` (a rule the
+  # local guard now does encode), and `.claude-plugin/plugin.json`, which `claude plugin
+  # validate . --strict` never reaches because `.` resolves to the marketplace manifest alone.
+  # That second one is why this runs a script instead of the bare command. Both guards stay;
+  # they answer different questions.
   #
   # The CLI is PINNED. A floating version would turn an upstream rule change into a red build
   # on an unrelated commit; pinning makes "we adopted a new rule" a reviewable bump of this

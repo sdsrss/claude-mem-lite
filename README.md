@@ -598,7 +598,12 @@ Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; sc
 
 ### doctor
 
-Checks Node.js version, dependencies, server/hook files, database integrity, FTS5 indexes, and stale processes.
+Checks Node.js version, dependencies, server/hook files, database integrity, FTS5 indexes,
+stale processes, MCP registration, and whether the marketplace clone can still be updated.
+
+It runs `claude mcp list` to answer the registration question, and that **health-checks every
+MCP server you have configured** — i.e. briefly launches each one, including remote endpoints.
+`status` deliberately does not: on a plugin install it answers from the manifest instead.
 
 ### status
 
@@ -645,11 +650,14 @@ Data in `~/.claude-mem-lite/` is preserved by default. Delete manually if needed
 rm -rf ~/.claude-mem-lite/
 ```
 
-**`/plugin uninstall` does not delete the plugin cache.** Claude Code keeps every version it
-materialized under `~/.claude/plugins/cache/`, each with its own `node_modules` — a few
-hundred MB after a while — and it has no uninstall hook a plugin can attach to, so nothing
-reclaims it. `claude-mem-lite uninstall` does, but after `/plugin uninstall` that command may
-no longer be on your PATH. Either run it **first**, or delete the directory yourself:
+**`/plugin uninstall` does not delete the plugin cache.** Claude Code materializes each
+version under `~/.claude/plugins/cache/`, with its own `node_modules`. While the plugin is
+installed these get pruned to the newest three (SessionStart does it, and so does the update
+path), so the directory is bounded — measured at 241 MB — not unbounded. But `/plugin
+uninstall` removes the manifest and there is no uninstall hook a plugin can attach to, so the
+hooks stop firing and whatever is left is never reclaimed. `claude-mem-lite uninstall` does
+reclaim it, but after `/plugin uninstall` that command may no longer be on your PATH. Either
+run it **first**, or delete the directory yourself:
 
 ```bash
 rm -rf ~/.claude/plugins/cache/sdsrss/claude-mem-lite

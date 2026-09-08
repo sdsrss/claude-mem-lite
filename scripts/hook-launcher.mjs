@@ -99,12 +99,16 @@ const BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'hook-launcher-broken');
 // SESSION-START only — never on the per-tool hot path, where an npm run would
 // stall the user's edit.
 // Marker dir: HOOK_RUNTIME_DIR (see its definition above for why it is override-aware).
-// BROKEN is cross-component state (hook scripts write it via lib/native-binding-hint.mjs,
-// this file clears it) and keeps its shared name. The COOLDOWN is this launcher's own record
-// of "I already tried to rebuild THIS install dir", so it is keyed per code home for the
-// same reason HEAL_MARKER is — an ABI rebuild heals one node_modules tree, not the machine.
+// BOTH stay machine-wide, unlike HEAL_MARKER above, and the difference is the SUBJECT of the
+// repair. HEAL_MARKER gates `cli.mjs repair`, which fixes THIS install dir. This pair gates
+// the native-binding rebuild, and `install.mjs rebuildBinding()` iterates
+// `shape.runtimeRoots` — "Every code home on this machine, not just the one this file sits
+// in", as its own comment puts it, which is also what install.mjs tells the user. Keying it
+// per code home would let N homes each spawn npm within one 6h window for a repair that
+// already covered all of them. A first cut of this change did exactly that; pre-ship review
+// caught that the justifying comment was false for the command it gates.
 const NB_BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-broken');
-const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, `native-binding-lastheal-${INSTALL_KEY}`);
+const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-lastheal');
 // Literal, not imported: the pure-`node:` charter above forbids importing lib/
 // here (this file must survive a broken install). Kept in sync with
 // lib/binding-probe.mjs::nativeBindingRepairHint, which is the single home

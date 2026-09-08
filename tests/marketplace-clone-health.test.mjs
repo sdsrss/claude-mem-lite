@@ -6,8 +6,9 @@
 //
 // The clone gets dirty on its own. With a DIRECTORY-source marketplace `${CLAUDE_PLUGIN_ROOT}`
 // resolves inside it, and scripts/launch.mjs runs `npm install` there whenever
-// node_modules/better-sqlite3 is absent — i.e. after every version materialization. So the
-// launcher can create the state that stops the launcher updating.
+// node_modules/better-sqlite3 is absent — i.e. after every version materialization. The dirt
+// that matters is the TRACKED file that install rewrites, package-lock.json; node_modules
+// itself is gitignored in this repo's clone and does not block a fast-forward.
 import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -21,7 +22,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = makeFixtureTracker();
 afterAll(() => fixtures.disposeAll());
 
-function makeClone({ dirty = false, nodeModules = false } = {}) {
+function makeClone({ dirty = false, nodeModules = false, gitignore = false, lockfile = false } = {}) {
   const dir = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-mp-clone-')));
   const git = (...args) =>
     execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -29,12 +30,18 @@ function makeClone({ dirty = false, nodeModules = false } = {}) {
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');
   writeFileSync(join(dir, '.claude-plugin'), 'x');
+  // The real clone carries this repo's own .gitignore. A fixture without it is a shape that
+  // cannot occur, and building one is how the first cut of this check tested a dead branch.
+  if (gitignore) writeFileSync(join(dir, '.gitignore'), '/node_modules\n');
+  if (lockfile) writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3}\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'init');
   if (nodeModules) {
     mkdirSync(join(dir, 'node_modules', 'better-sqlite3'), { recursive: true });
     writeFileSync(join(dir, 'node_modules', 'better-sqlite3', 'index.js'), '// stub\n');
   }
+  // Committed first, then rewritten — the shape `npm install` produces.
+  if (lockfile) writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"x":1}\n');
   if (dirty) writeFileSync(join(dir, 'marketplace.json'), '{}');
   return dir;
 }
@@ -48,13 +55,24 @@ describe('marketplaceCloneHealth', () => {
     const r = marketplaceCloneHealth(makeClone({ dirty: true }));
     expect(r.kind).toBe('dirty');
     expect(r.count).toBeGreaterThan(0);
-    expect(r.hasNodeModules).toBe(false);
   });
 
-  it('names node_modules separately — the launcher, not the user, put it there', () => {
-    const r = marketplaceCloneHealth(makeClone({ nodeModules: true }));
+  it('is not fooled by an IGNORED node_modules, which is the real clone shape', () => {
+    // Pre-ship review measured the first cut's `hasNodeModules` branch dead: the marketplace
+    // clone is a clone of THIS repo, whose .gitignore carries `/node_modules`, so porcelain
+    // never lists it — the branch was reachable only from a fixture that omitted the
+    // .gitignore the real clone always has. An ignored node_modules also does not block a
+    // fast-forward, so `clean` is the correct verdict, not a miss.
+    const r = marketplaceCloneHealth(makeClone({ nodeModules: true, gitignore: true }));
+    expect(r).toEqual({ kind: 'clean' });
+  });
+
+  it('DOES fire on the tracked file npm install rewrites', () => {
+    // package-lock.json is tracked, so `npm install` inside the clone dirties it — that is the
+    // mechanism the check exists for, and the one that actually blocks the updater's pull.
+    const r = marketplaceCloneHealth(makeClone({ nodeModules: true, gitignore: true, lockfile: true }));
     expect(r.kind).toBe('dirty');
-    expect(r.hasNodeModules).toBe(true);
+    expect(r.count).toBe(1);
   });
 
   it('reports absent when there is no clone', () => {
@@ -106,14 +124,13 @@ describe('doctor reports marketplace clone updatability', () => {
   };
 
   it('warns and explains the consequence when the clone is dirty', () => {
-    const out = runDoctor((target) => cloneInto(target, { nodeModules: true }));
+    const out = runDoctor((target) => cloneInto(target, { gitignore: true, lockfile: true }));
     expect(out).toMatch(/Marketplace clone: \d+ uncommitted change\(s\)/);
-    expect(out).toMatch(/including node_modules\//);
     expect(out).toMatch(/stops updating silently/);
   });
 
   it('reports clean for a committed clone (control)', () => {
-    const out = runDoctor((target) => cloneInto(target));
+    const out = runDoctor((target) => cloneInto(target, { gitignore: true }));
     expect(out).toMatch(/Marketplace clone: clean/);
   });
 

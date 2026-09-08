@@ -40,7 +40,10 @@ afterEach(() => {
 // leave the launcher healing instead of skipping), so a scheme change goes red here.
 const installKey = (root) => createHash('sha256').update(root).digest('hex').slice(0, 12);
 const healMarker = (root) => join(root, 'runtime', `hook-launcher-lastheal-${installKey(root)}`);
-const nbHealMarker = (root) => join(root, 'runtime', `native-binding-lastheal-${installKey(root)}`);
+// The native-binding cooldown stays MACHINE-WIDE on purpose: rebuildBinding() repairs every
+// code home on the machine, so one attempt covers them all. Only the repair cooldown above is
+// per code home.
+const nbHealMarker = (root) => join(root, 'runtime', 'native-binding-lastheal');
 
 function runLauncher(root, args, env = {}) {
   return spawnSync(process.execPath, [join(root, 'scripts', 'hook-launcher.mjs'), ...args], {

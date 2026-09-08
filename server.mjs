@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { truncate, typeIcon, inferProject, fmtDate, debugLog, debugCatch } from './utils.mjs';
 import { resolveProject as _resolveProjectShared } from './project-utils.mjs';
-import { ensureDbWithWalRecovery, DB_PATH, DB_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
 import {
@@ -182,7 +182,13 @@ try {
         import('./lib/install-shape.mjs'),
         import('./hook-update.mjs'),
       ]);
-      shape = shapeMod.detectInstallShape({ installDir: DB_DIR });
+      // CODE_DIR, not DB_DIR: `hasManagedCodeInstall` looks for server.mjs + hook.mjs inside
+      // whatever it is handed, and DB_DIR follows CLAUDE_MEM_DIR. Handing it the relocated DATA
+      // dir reports `managed: false` for a machine that has a managed install, so the remedy
+      // came out as "could not identify this install" or, with any plugin cache present, the
+      // plugin commands printed under a line naming ~/.claude-mem-lite. The three sibling call
+      // sites (mem-cli.mjs, hook.mjs, scripts/launch.mjs) all pass the CODE dir.
+      shape = shapeMod.detectInstallShape({ installDir: CODE_DIR });
       dev = updateMod.isDevMode();
     } catch {
       /* shape unknown → schemaSkewRemedy answers 'unknown', which is its job */

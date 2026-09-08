@@ -16,7 +16,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { nonPluginMemRegistrations } from '../install.mjs';
+import { nonPluginMemRegistrations, pluginIsRegistered } from '../install.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,10 +79,69 @@ describe('nonPluginMemRegistrations', () => {
   });
 });
 
+// The predicate that decides whether a plugin manifest is credited with providing anything.
+// It exists because `activePluginVersion` answers a DIFFERENT question — "is there a cache
+// directory" — and crediting a leftover one produced a destructive remedy (pre-ship review P1).
+describe('pluginIsRegistered', () => {
+  function home({ recorded = false, entries = null } = {}) {
+    const dir = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-reg-')));
+    mkdirSync(join(dir, '.claude', 'plugins'), { recursive: true });
+    if (recorded || entries) {
+      writeFileSync(
+        join(dir, '.claude', 'plugins', 'installed_plugins.json'),
+        JSON.stringify(entries ?? { 'claude-mem-lite@sdsrss': { version: '1.0.0' } }),
+      );
+    }
+    return dir;
+  }
+
+  it('is false for a cache directory with nothing recording an install', () => {
+    expect(pluginIsRegistered({ home: home(), settings: {} })).toBe(false);
+  });
+
+  it('is true when installed_plugins.json records it', () => {
+    expect(pluginIsRegistered({ home: home({ recorded: true }), settings: {} })).toBe(true);
+  });
+
+  it('accepts the nested `plugins` shape the registry also uses', () => {
+    const h = home({ entries: { plugins: { 'claude-mem-lite@sdsrss': [{ version: '1.0.0' }] } } });
+    expect(pluginIsRegistered({ home: h, settings: {} })).toBe(true);
+  });
+
+  it('is true when settings enable it, even with no registry file', () => {
+    expect(
+      pluginIsRegistered({ home: home(), settings: { enabledPlugins: { 'claude-mem-lite@sdsrss': true } } }),
+    ).toBe(true);
+  });
+
+  it('is false when the user explicitly disabled it, whatever the registry says', () => {
+    // An explicit `false` is a decision to honour — the same rule lib/plugin-key.mjs states.
+    expect(
+      pluginIsRegistered({
+        home: home({ recorded: true }),
+        settings: { enabledPlugins: { 'claude-mem-lite@sdsrss': false } },
+      }),
+    ).toBe(false);
+  });
+
+  it('is false — never throws — on an unparseable registry', () => {
+    // Both callers sit on diagnostic paths; a corrupt registry must not take doctor down.
+    const dir = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-reg-bad-')));
+    mkdirSync(join(dir, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'plugins', 'installed_plugins.json'), '{not json');
+    expect(pluginIsRegistered({ home: dir, settings: {} })).toBe(false);
+  });
+
+  it('ignores a sibling plugin from the same marketplace', () => {
+    const h = home({ entries: { 'other-plugin@sdsrss': { version: '1.0.0' } } });
+    expect(pluginIsRegistered({ home: h, settings: {} })).toBe(false);
+  });
+});
+
 // WIRING. The parser is only half the fix; the other half is that status must not SHELL OUT
 // on a plugin install. Proven by putting a `claude` on PATH that records every invocation.
 describe('status does not health-check every MCP server on a plugin install', () => {
-  function sandbox({ plugin }) {
+  function sandbox({ plugin, leftoverCache = false }) {
     const home = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-mcp-home-')));
     const bin = join(home, 'bin');
     mkdirSync(bin, { recursive: true });
@@ -96,7 +155,7 @@ describe('status does not health-check every MCP server on a plugin install', ()
     );
     chmodSync(join(bin, 'claude'), 0o755);
 
-    if (plugin) {
+    if (plugin || leftoverCache) {
       const ver = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '9.9.9');
       // scripts/launch.mjs is what lib/install-shape.mjs::listPluginCacheVersions keys on —
       // a version dir without it is not counted as a code home. The first draft of this
@@ -106,16 +165,20 @@ describe('status does not health-check every MCP server on a plugin install', ()
       writeFileSync(join(ver, '.mcp.json'), '{"mcpServers":{}}');
       writeFileSync(join(ver, 'package.json'), '{"name":"claude-mem-lite","version":"9.9.9"}');
       mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
-      writeFileSync(
-        join(home, '.claude', 'plugins', 'installed_plugins.json'),
-        JSON.stringify({ 'claude-mem-lite@sdsrss': { version: '9.9.9' } }),
-      );
+      // A leftover cache is a DIRECTORY with nothing recording an install — the state
+      // `/plugin uninstall` leaves behind, which this round's own README documents.
+      if (plugin) {
+        writeFileSync(
+          join(home, '.claude', 'plugins', 'installed_plugins.json'),
+          JSON.stringify({ 'claude-mem-lite@sdsrss': { version: '9.9.9' } }),
+        );
+      }
     }
     return { home, bin, log };
   }
 
-  function runStatus({ plugin }) {
-    const { home, bin, log } = sandbox({ plugin });
+  function runStatus({ plugin, leftoverCache = false }) {
+    const { home, bin, log } = sandbox({ plugin, leftoverCache });
     const dataDir = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-mcp-data-')));
     const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'status'], {
       cwd: REPO,
@@ -145,6 +208,19 @@ describe('status does not health-check every MCP server on a plugin install', ()
     expect(existsOrEmpty(log)).toBe('');
     expect(out).toMatch(/MCP server: provided by the plugin manifest/);
   });
+
+  it('does not credit a LEFTOVER cache directory with providing the server', () => {
+    // Pre-ship review's P1. `/plugin uninstall` leaves the version dirs behind (this round's
+    // own README says so), and detectInstallShape falls back to "newest cache dir" when
+    // nothing recorded an install — so a working npm-channel user with an old cache dir was
+    // told the manifest provides their server, and doctor told them to delete their only
+    // registration. The discriminator is the RECORD, not the directory.
+    const { out, log } = runStatus({ plugin: false, leftoverCache: true });
+    expect(out).toMatch(/MCP server: registered/);
+    expect(out).not.toMatch(/provided by the plugin manifest/);
+    // It must fall back to asking, which is the pre-fix behaviour and the correct one here.
+    expect(existsOrEmpty(log)).toMatch(/mcp list/);
+  });
 });
 
 // The counterpart: the exec moved to doctor, and it now answers a question nothing answered
@@ -153,7 +229,7 @@ describe('status does not health-check every MCP server on a plugin install', ()
 // bare-name registration alongside the manifest's), and orphan hooks had a check for their
 // half of it while MCP had none.
 describe('doctor detects a duplicate MCP registration', () => {
-  function runDoctor({ listOutput, claudeExit = 0 }) {
+  function runDoctor({ listOutput, claudeExit = 0, recorded = true }) {
     const home = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-dup-home-')));
     const bin = join(home, 'bin');
     mkdirSync(bin, { recursive: true });
@@ -167,10 +243,12 @@ describe('doctor detects a duplicate MCP registration', () => {
     mkdirSync(join(ver, 'scripts'), { recursive: true });
     writeFileSync(join(ver, 'scripts', 'launch.mjs'), '// stub\n');
     mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
-    writeFileSync(
-      join(home, '.claude', 'plugins', 'installed_plugins.json'),
-      JSON.stringify({ 'claude-mem-lite@sdsrss': { version: '9.9.9' } }),
-    );
+    if (recorded) {
+      writeFileSync(
+        join(home, '.claude', 'plugins', 'installed_plugins.json'),
+        JSON.stringify({ 'claude-mem-lite@sdsrss': { version: '9.9.9' } }),
+      );
+    }
 
     const dataDir = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-dup-data-')));
     return spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
@@ -195,7 +273,25 @@ describe('doctor detects a duplicate MCP registration', () => {
   it('warns, and names the removal command, when both registrations exist', () => {
     const out = runDoctor({ listOutput: `${PLUGIN_LINE}\n${BARE_LINE}` });
     expect(out).toMatch(/registered twice/);
-    expect(out).toMatch(/claude mcp remove -s user mem-lite/);
+    // No `-s` flag: mcp list does not label scope, and this repo's own tracked .mcp.json
+    // registers a bare mem-lite at PROJECT scope, which `-s user` cannot remove.
+    expect(out).toMatch(/Fix: claude mcp remove mem-lite/);
+    expect(out).not.toMatch(/-s user/);
+  });
+
+  it('names EVERY bare registration, not just the first', () => {
+    const out = runDoctor({ listOutput: `${PLUGIN_LINE}\n${BARE_LINE}\nmem: node /y/server.mjs - ✔` });
+    expect(out).toMatch(/Fix: claude mcp remove mem-lite/);
+    expect(out).toMatch(/Fix: claude mcp remove mem\b/);
+  });
+
+  it('does not call a leftover cache directory a duplicate', () => {
+    // The destructive half of pre-ship review's P1: this exact output, with a cache dir but
+    // nothing recording an install, told a working npm-channel install to remove its ONLY
+    // registration. It must now read as a plain registration instead.
+    const out = runDoctor({ listOutput: BARE_LINE, recorded: false });
+    expect(out).not.toMatch(/registered twice/);
+    expect(out).toMatch(/MCP registration: "mem-lite" registered/);
   });
 
   it('reports no duplicate when only the plugin provides it (control)', () => {

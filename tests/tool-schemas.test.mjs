@@ -156,8 +156,12 @@ describe('MCP tool descriptions use discouragement style', () => {
 // side as accepting `undefined` and drops the key from `required`. Isolated with a 5-arm
 // probe — `preprocess` alone keeps the key (which is why mem_get.ids was always correct),
 // `union(plain, string)` keeps it, and every shape wrapping a `.pipe()` loses it. So this is
-// a property of the `coerceInt.pipe(...)` idiom, and the ~20 optional fields that use it are
-// unaffected by construction.
+// a property of the `coerceInt.pipe(...)` idiom, and the optional fields that use it are
+// unaffected by construction. State the caliber rather than a bare "~20": the source carries
+// 20 `coerceInt` mentions, while 34 optional fields have a ZodPipe anywhere in their chain —
+// two different populations, and only the required ones could ever have been wrong. The
+// 5-arm probe that isolated the cause was a scratch script and is not in the repo; what
+// replaces it is the ground-truth sweep below, which re-derives the answer on every run.
 //
 // The assertion is written against GROUND TRUTH rather than a hand-maintained list of field
 // names: for every tool and every field, omit the field and ask zod whether it complains.

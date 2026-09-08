@@ -41,13 +41,18 @@ clone in a sandboxed `HOME`, plus the five open items it left behind.
   first, or the restore is re-corrupted by replay), says plainly when there is no snapshot,
   and says *"could not read that directory"* as a third, separate answer. An error it cannot
   classify still gets no invented fix.
-- **fix: `status` no longer starts every MCP server on your machine.** It shelled out to
-  `claude mcp list` — which health-checks, i.e. launches, every configured server (2.546s
-  wall for three here, one of them a remote HTTP endpoint) — to ask one question, and asked
-  it with a substring test that matched inside `plugin:claude-mem-lite:mem-lite:`. So a
-  plugin user was reported as holding a bare-name registration they do not have, and the
-  branch written for them was dead code. A plugin install now answers from the manifest
-  without shelling out at all.
+- **fix: on a plugin install, `status` no longer starts every MCP server on your machine.**
+  It shelled out to `claude mcp list` — which health-checks, i.e. launches, every configured
+  server (2.546s wall for three here, one of them a remote HTTP endpoint) — to ask one
+  question, and asked it with a substring test that matched inside
+  `plugin:claude-mem-lite:mem-lite:`. So a plugin user was reported as holding a bare-name
+  registration they do not have, and the branch written for them was dead code. A plugin
+  install now answers from the manifest without shelling out. **An npm / git-clone install
+  still shells out**, because for that shape the answer is not in any manifest.
+- **`doctor` now health-checks your MCP servers, which is new.** The exec moved there rather
+  than disappearing: it is the deep check, run rarely, and it is where the two checks below
+  need the data. So a `doctor` run launches every MCP server you have configured, including
+  remote endpoints. Both READMEs say so under their `doctor` sections.
 - **feat: `doctor` detects a duplicate MCP registration.** The README's "Mixed-install
   residue" section has described this state for releases — a plugin user who once ran the
   npx/git-clone installer keeps a bare-name registration alongside the manifest's — and
@@ -78,6 +83,43 @@ clone in a sandboxed `HOME`, plus the five open items it left behind.
   MARKETPLACE manifest; `.claude-plugin/plugin.json --strict` still exits 1, over a
   CLAUDE.md-at-plugin-root warning that is deliberate and now carried explicitly in the
   allowlist above. The marketplace fix itself stands.
+
+### What two independent pre-ship reviewers found in the above
+
+Both were given the same commit range and disjoint lenses (defects vs. are-the-author's-
+numbers-true). Between them: 2 P1, 6 P2, 7 P3. Every number in this changelog reproduced;
+the findings were in the code and the prose around them.
+
+- **fix: a LEFTOVER plugin-cache directory is no longer read as "the plugin is installed".**
+  This is the round's own new code, and the reviewer reproduced it end to end. `/plugin
+  uninstall` leaves version dirs behind — the very fact the README paragraph above adds — and
+  the install-shape probe falls back to "newest cache dir" when nothing recorded an install.
+  So a working npm-channel user with an old cache dir was told `the server is registered
+  twice` with a `Fix:` that would have removed their **only** registration, while `status`
+  printed a green line agreeing. Both surfaces now require an actual registration record
+  (`installed_plugins.json` or `enabledPlugins`), not a directory. Over-narrowing is safe here
+  by construction: the caller falls back to asking `claude mcp list`, which is the old
+  behaviour and the correct answer.
+- **fix: the duplicate-registration remedy dropped its `-s user` flag.** This repo's own
+  tracked `.mcp.json` registers a bare `mem-lite` at PROJECT scope, which `-s user` cannot
+  remove; `claude mcp remove` without a scope removes from whichever scope the entry is in.
+  It also names every bare registration now, not just the first.
+- **fix: the MCP server asked the schema-skew question of the DATA dir.** `server.mjs` passed
+  `DB_DIR` where its three sibling call sites pass `CODE_DIR`. With `CLAUDE_MEM_DIR` set, a
+  machine with a managed install was reported as having none — so the remedy came out as
+  "could not identify this install", or, with any plugin cache present, the plugin commands
+  printed under a line naming `~/.claude-mem-lite`. That is the exact failure v6.3.0 says it
+  fixed, reintroduced with the halves swapped.
+- **fix: the marketplace-clone check dropped a `node_modules` branch that could never fire.**
+  The clone is a clone of this repo, whose `.gitignore` carries `/node_modules`, so
+  `git status --porcelain` never sees it — the branch was reachable only from a fixture
+  missing the `.gitignore` the real clone always has. The dirt that actually blocks the
+  updater's pull is the TRACKED file `npm install` rewrites, `package-lock.json`, and that is
+  what the check now says and tests.
+- **fix: the native-binding heal cooldown stays machine-wide.** Making it per-code-home was
+  wrong for the command it gates: `rebuildBinding()` repairs every code home on the machine,
+  so one attempt covers them all. The comment justifying the change was false for the thing
+  it justified. The `repair` cooldown beside it is genuinely per-install and stays so.
 
 ### From the original QA pass
 

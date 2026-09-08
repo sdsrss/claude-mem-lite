@@ -478,7 +478,11 @@ npx claude-mem-lite doctor            # 诊断问题
 
 ### doctor
 
-检查 Node.js 版本、依赖、服务器/钩子文件、数据库完整性、FTS5 索引和残留进程。
+检查 Node.js 版本、依赖、服务器/钩子文件、数据库完整性、FTS5 索引、残留进程、MCP 注册状态，
+以及 marketplace clone 是否还能被更新。
+
+它用 `claude mcp list` 回答注册状态那一问，而这会**对你配置的每个 MCP server 做健康检查**——
+也就是逐个短暂启动，包括远程 endpoint。`status` 刻意不这么做：插件形态下它从 manifest 回答。
 
 ### status
 
@@ -525,10 +529,12 @@ npx claude-mem-lite uninstall --purge
 rm -rf ~/.claude-mem-lite/
 ```
 
-**`/plugin uninstall` 不会删 plugin cache。** Claude Code 会把它展开过的每个版本留在
-`~/.claude/plugins/cache/` 下，每个版本各带一份 `node_modules`——用一段时间就是几百 MB——而且它没有
-插件可挂的卸载生命周期钩子，所以没人回收它。`claude-mem-lite uninstall` 会回收，但
-`/plugin uninstall` 之后这个命令可能已经不在 PATH 上了。所以要么**先**跑它，要么自己删：
+**`/plugin uninstall` 不会删 plugin cache。** Claude Code 会把每个版本展开到
+`~/.claude/plugins/cache/` 下，各带一份 `node_modules`。插件还装着的时候，这些会被裁剪到最新
+三个版本（SessionStart 会做，更新路径也会做），所以这个目录是有上限的——实测 241 MB——而不是无限
+增长。但 `/plugin uninstall` 只移除 manifest，插件又没有可挂的卸载生命周期钩子，于是钩子停止触发，
+剩下的东西再也没人回收。`claude-mem-lite uninstall` 能回收它，但 `/plugin uninstall` 之后这个命令
+可能已经不在 PATH 上了。所以要么**先**跑它，要么自己删：
 
 ```bash
 rm -rf ~/.claude/plugins/cache/sdsrss/claude-mem-lite
