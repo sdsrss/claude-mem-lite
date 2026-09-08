@@ -20,7 +20,12 @@ import {
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
-import { DB_DIR, CODE_DIR } from './schema.mjs';
+// lib/data-paths.mjs, NOT schema.mjs: this module is what install.mjs::repair() imports to
+// reach the signature-verified release path, and schema.mjs statically imports
+// better-sqlite3 — so importing two path constants from there made the verified repair
+// unreachable on exactly the broken-install state it exists to repair (2026-09-08).
+// tests/repair-path-no-native-dep.test.mjs fails on any package edge reachable from here.
+import { DB_DIR, CODE_DIR } from './lib/data-paths.mjs';
 import { debugCatch, debugLog } from './utils.mjs';
 import { NATIVE_BINDING_SOURCE_BUILD_CMD } from './lib/binding-probe.mjs';
 // Local manifest is fallback only — the active manifest is loaded from the

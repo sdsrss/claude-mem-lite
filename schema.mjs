@@ -7,22 +7,20 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
-import { resolveDataDir } from './lib/resolve-data-dir.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
 import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
 
-// DATA location — DB, managed resources, registry DB, runtime/. Honors
-// CLAUDE_MEM_DIR so users can relocate state to a larger/faster volume.
-export const DB_DIR = resolveDataDir(process.env.CLAUDE_MEM_DIR);
-export const DB_PATH = join(DB_DIR, 'claude-mem-lite.db');
-// CODE / install location — server.mjs, hook.mjs, cli.mjs, package.json live
-// here. ALWAYS homedir-rooted: Claude Code's settings.json + MCP registration
-// bake ABSOLUTE paths to server.mjs/hooks, so the code must NOT follow the
-// CLAUDE_MEM_DIR relocation env var (mirrors install.mjs INSTALL_DIR). Equals
-// DB_DIR when CLAUDE_MEM_DIR is unset — the common, non-relocated case.
-export const CODE_DIR = join(homedir(), '.claude-mem-lite');
+// The three location constants now live in lib/data-paths.mjs — a leaf module with no
+// package imports — and are re-exported here so every existing importer is unchanged.
+// This file statically imports better-sqlite3, so holding a path constant here made the
+// native driver a load-time dependency of anything that wanted one; that is what put the
+// Ed25519-verified repair path out of reach on a tree with no node_modules. Imported AND
+// re-exported (not `export … from`) because schema.mjs uses DB_DIR / DB_PATH itself.
+// See lib/data-paths.mjs and tests/repair-path-no-native-dep.test.mjs.
+import { DB_DIR, DB_PATH, CODE_DIR } from './lib/data-paths.mjs';
+export { DB_DIR, DB_PATH, CODE_DIR };
 
 // Increment when schema changes (tables, columns, indexes, FTS, migrations)
 //

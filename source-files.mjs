@@ -55,6 +55,11 @@ export const SOURCE_FILES = [
   // AND hook scripts (pre-tool-recall / post-tool-recall) — ship it
   // or auto-update leaves schema + every hook with ERR_MODULE_NOT_FOUND on each fire.
   'lib/resolve-data-dir.mjs',
+  // DB_DIR / DB_PATH / CODE_DIR. Statically imported by schema.mjs (which re-exports all
+  // three) and by hook-update.mjs, which takes them from HERE so the verified repair path
+  // stays loadable without better-sqlite3. Missing from the manifest → auto-update leaves
+  // schema.mjs and the repair path with ERR_MODULE_NOT_FOUND on every fire.
+  'lib/data-paths.mjs',
   // lib/ — statically imported by hook-llm.mjs (activity) + hook-handoff.mjs (git-state, task-reader);
   // dynamically imported by hook.mjs (startup-dashboard) + mem-cli.mjs (doctor-benchmark, plan-reader).
   'lib/activity.mjs',
