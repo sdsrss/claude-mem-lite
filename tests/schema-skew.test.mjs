@@ -34,6 +34,7 @@ import {
   schemaSkewFromError,
   schemaSkewRemedy,
   formatSchemaSkewNotice,
+  schemaCompatProbeSource,
   probeSchemaCompatInFreshProcess,
   probeSchemaCompat,
 } from '../lib/schema-skew.mjs';
@@ -176,6 +177,29 @@ describe('formatSchemaSkewNotice', () => {
   });
 });
 
+describe('schemaCompatProbeSource — a path cannot break out of the -e script', () => {
+  // This function interpolates three filesystem paths into JavaScript source that is then
+  // handed to `node -e`. A plugin cache root or a CLAUDE_MEM_DIR is user-controlled, so
+  // every one goes through JSON.stringify — the same discipline binding-probe.mjs states
+  // for its own probe. Pinned here because the export exists for exactly this reason.
+  const hostile = '/tmp/a"; process.exit(42); //';
+
+  it('stays syntactically valid when the paths carry quotes and backslashes', () => {
+    const src = schemaCompatProbeSource(hostile, '/tmp/b\\"c.db');
+    // Parses without executing. A naive interpolation produces source that either fails to
+    // parse or parses into something else entirely; both are caught here.
+    expect(() => new Function(src)).not.toThrow();
+  });
+
+  it('embeds each path as a quoted string literal, not as code', () => {
+    const src = schemaCompatProbeSource(hostile, '/tmp/x.db');
+    expect(src).toContain(JSON.stringify(join(hostile, 'package.json')));
+    expect(src).toContain(JSON.stringify('/tmp/x.db'));
+    // The payload must never appear as bare source.
+    expect(src).not.toContain('"; process.exit(42); //');
+  });
+});
+
 describe('probeSchemaCompatInFreshProcess — asks the module, does not parse it', () => {
   it('reports ok when the home supports the DB version', () => {
     const r = probeSchemaCompatInFreshProcess(codeHomeSupporting(49), dbAtVersion(49));
@@ -193,6 +217,23 @@ describe('probeSchemaCompatInFreshProcess — asks the module, does not parse it
     const r = probeSchemaCompatInFreshProcess(dir, dbAtVersion(49));
     expect(r.status).toBe('unknown');
     expect(r.error).toBeTruthy();
+  });
+
+  it('reports unknown when the child produced no parseable stdout', () => {
+    // The native-crash shape: exit non-zero, stdout empty, the diagnosis only on stderr.
+    // Unreachable without a seam, and a defensive branch nothing drives is a dead guard.
+    const r = probeSchemaCompatInFreshProcess('/root', '/db', {
+      spawn: () => ({ stdout: '', stderr: 'Segmentation fault\n', status: null, signal: 'SIGSEGV' }),
+    });
+    expect(r).toEqual({ status: 'unknown', error: 'Segmentation fault' });
+  });
+
+  it('falls back to the exit status when the child leaves nothing on either stream', () => {
+    const r = probeSchemaCompatInFreshProcess('/root', '/db', {
+      spawn: () => ({ stdout: '', stderr: '', status: 3 }),
+    });
+    expect(r.status).toBe('unknown');
+    expect(r.error).toMatch(/exited 3/);
   });
 
   it('reports unknown when the DB is unreadable, rather than calling the home fine', () => {
