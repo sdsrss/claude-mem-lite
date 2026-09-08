@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — the TF-IDF vector arm is removed (Phase-2). Intended bump: **MAJOR**.
+## v6.0.0 — the TF-IDF vector arm is removed, and the metric that retired it never measured it
 
 **Upgrade note — two published surfaces are gone and two tables are dropped. The DEFAULT
 search path does not change.**
