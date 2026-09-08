@@ -218,23 +218,45 @@ try {
 // stderr is the one channel a launcher still has at that point. It reaches the plugin's own
 // log rather than the transcript, so this is a diagnosis for whoever goes looking, not a
 // substitute for the SessionStart notice — which is why both exist.
-async function importServerOrExplain(run) {
+async function importServerOrExplain(run, { dev = false } = {}) {
   try {
     await run();
   } catch (e) {
-    const { isSchemaSkewError, schemaSkewFromError, schemaSkewRemedy, formatSchemaSkewNotice } =
-      await import('../lib/schema-skew.mjs');
-    if (!isSchemaSkewError(e)) throw e;
-    const { detectInstallShape } = await import('../lib/install-shape.mjs');
-    const shape = detectInstallShape({ installDir: dataDir });
-    const skew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
+    // The classifier is loaded INSIDE its own try and any failure rethrows the ORIGINAL
+    // error. Importing it unconditionally destroyed `e`: this path exists to diagnose an
+    // install whose files are missing (issue #15), lib/schema-skew.mjs is a brand-new file,
+    // and resolveLaunchEntry can serve the server from dataDir while `../lib/…` still
+    // resolves against ROOT. Proven by review — with the module moved aside the process died
+    // naming ERR_MODULE_NOT_FOUND for the classifier while the real boot failure never
+    // appeared anywhere in the output.
+    let skewMod;
+    try {
+      skewMod = await import('../lib/schema-skew.mjs');
+    } catch {
+      throw e;
+    }
+    if (!skewMod.isSchemaSkewError(e)) throw e;
+    let shape = { managed: false, activePluginVersion: null };
+    try {
+      ({ ...shape } = await import('../lib/install-shape.mjs').then((m) =>
+        m.detectInstallShape({ installDir: dataDir }),
+      ));
+    } catch {
+      /* shape unknown → schemaSkewRemedy answers 'unknown', which is its job */
+    }
+    const skew = skewMod.schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
     process.stderr.write(
-      formatSchemaSkewNotice({
+      skewMod.formatSchemaSkewNotice({
         dbVersion: skew.dbVersion,
         binaryVersion: skew.binaryVersion,
-        remedy: schemaSkewRemedy({
+        // `dev` is passed because the useDevServer branch IS the dev install by definition —
+        // omitting it told a checkout to `npm i -g` over its own working tree. `root: ROOT`
+        // so a mixed managed+plugin machine gets the remedy for the tree that is behind.
+        remedy: skewMod.schemaSkewRemedy({
           managed: shape.managed,
           activePluginVersion: shape.activePluginVersion,
+          dev,
+          root: ROOT,
         }),
         codeHome: ROOT,
       }) + '\n',
@@ -244,7 +266,7 @@ async function importServerOrExplain(run) {
 }
 
 if (useDevServer) {
-  await importServerOrExplain(() => import(pathToFileURL(devServer).href));
+  await importServerOrExplain(() => import(pathToFileURL(devServer).href), { dev: true });
 } else {
   // Preflight: detect incomplete primary install (issue #15) — if relative
   // imports referenced by server.mjs are missing on disk, fall back to the

@@ -1497,7 +1497,12 @@ async function doctor() {
   // runs from whichever tree the user invoked, so new code here can diagnose an old cache.
   if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
-  } else if (rootProbes.length > 0) {
+  } else if (rootProbes.length === 0) {
+    // The fourth outcome the first cut had and did not print. The `fail` above already tells
+    // the reader no install owns a binding, but a block whose stated design point is "three
+    // outcomes, never two" must not answer a fourth case with silence.
+    dwarn('DB schema: not checked — no install on this machine owns a native binding to read it with');
+  } else {
     const compat = probeSchemaCompat(shape.runtimeRoots, DB_PATH);
     const behind = compat.filter((c) => c.status === 'skew');
     const unknown = compat.filter((c) => c.status === 'unknown');
@@ -1505,9 +1510,9 @@ async function doctor() {
       ok(`DB schema: v${compat[0]?.dbVersion} — readable by all ${compat.length} install(s)`);
     }
     if (behind.length > 0) {
-      // Dynamic + hoisted: only a skewed machine pays for it, and it reuses hook-update's
-      // isDevMode rather than re-deriving "is this a checkout", which that file has already
-      // had to correct twice (whole-dir symlink, then per-file drift).
+      // Dynamic: only a skewed machine pays for it, and it reuses hook-update's isDevMode
+      // rather than re-deriving "is this a checkout", which that file has already had to
+      // correct twice (whole-dir symlink, then per-file drift).
       let dev = false;
       try {
         const { isDevMode } = await import('./hook-update.mjs');
@@ -1515,16 +1520,18 @@ async function doctor() {
       } catch {
         /* unreadable → the initialiser stands: a non-dev install gets the common remedy */
       }
-      const remedy = schemaSkewRemedy({
-        managed: shape.managed,
-        activePluginVersion: shape.activePluginVersion,
-        dev,
-      });
       for (const b of behind) {
-        // fail, not warn: every write path is dead in this state and only the user can fix
-        // it. The remedy is computed per shape — the sentence schema.mjs throws says
-        // `npm i -g claude-mem-lite@latest`, which repairs nothing on a plugin install and
-        // reports success while doing it.
+        // PER ROOT, inside the loop. Computing one remedy for every skewed tree printed the
+        // machine's global answer beneath a label naming a different tree — on a mixed
+        // managed+plugin install that meant `self-update` under "plugin cache v5.6.0",
+        // which advances nothing. b.root is the tree that is actually behind.
+        const remedy = schemaSkewRemedy({
+          managed: shape.managed,
+          activePluginVersion: shape.activePluginVersion,
+          dev,
+          root: b.root,
+        });
+        // fail, not warn: every write path is dead in this state and only the user can fix it.
         fail(`DB schema v${b.dbVersion} is newer than ${b.label}, which supports up to v${b.supported}`);
         for (const c of remedy.commands) log(`    ${c}`);
         if (remedy.note) log(`    ${remedy.note}`);
@@ -1533,9 +1540,9 @@ async function doctor() {
     }
     for (const u of unknown) {
       // Deliberately its own outcome. "I could not determine what this install supports"
-      // printed as a green line is the v6.2.0 doctor defect verbatim — a check that says
-      // "nothing to check" and "I could not look" in the same voice ends the reader's
-      // search instead of directing it.
+      // printed as a green line is the defect the v6.2.0 round wrote and its pre-ship review
+      // caught before the tag — a check that says "nothing to check" and "I could not look"
+      // in the same voice ends the reader's search instead of directing it.
       dwarn(`DB schema: could not determine compatibility for ${u.label} (${u.error})`);
     }
   }

@@ -2301,7 +2301,7 @@ async function buildStartupDashboardText(db, project) {
  * skew there may be no usable binding to open with).
  *
  * Everything is dynamically imported: this is a cold path that must not cost the healthy
- * SessionStart an install-shape scan. And it goes through queueHookContext, never a bare
+ * SessionStart an install-shape scan. And it goes through the queue helpers, never a bare
  * console.log — SessionStart merges three would-be stdout contributors into ONE envelope,
  * and writing raw prose alongside it once made the host deliver the whole JSON object to
  * the model as literal text (tests/session-start-stdout-envelope.test.mjs).
@@ -2316,22 +2316,37 @@ async function emitSchemaSkewNotice() {
       import('./lib/schema-skew.mjs'),
     ]);
     const shape = shapeMod.detectInstallShape({ installDir: CODE_DIR });
+    // WHICH tree is running this hook, not which trees exist. CLAUDE_PLUGIN_ROOT is set in
+    // every hook process Claude Code spawns, so on a machine holding BOTH a managed install
+    // and a plugin cache it is the only thing that knows which one is behind. Deciding from
+    // the machine's global shape printed `claude-mem-lite self-update` beneath a line naming
+    // the plugin cache — a repair that cannot advance the tree it had just named.
+    const runningRoot = process.env.CLAUDE_PLUGIN_ROOT || CODE_DIR;
     const remedy = skewMod.schemaSkewRemedy({
       managed: shape.managed,
       activePluginVersion: shape.activePluginVersion,
       dev: updateMod.isDevMode(),
+      root: runningRoot,
     });
-    queueHookContext(
-      'SessionStart',
-      skewMod.formatSchemaSkewNotice({
-        dbVersion: skew.dbVersion,
-        binaryVersion: skew.binaryVersion,
-        remedy,
-        codeHome: shape.activePluginVersion
+    const notice = skewMod.formatSchemaSkewNotice({
+      dbVersion: skew.dbVersion,
+      binaryVersion: skew.binaryVersion,
+      remedy,
+      // Name the home only when the remedy is about that home, so the two can never disagree.
+      codeHome:
+        remedy.kind === 'plugin' && shape.activePluginVersion
           ? `plugin cache v${shape.activePluginVersion.version}`
           : undefined,
-      }),
-    );
+    });
+    // BOTH channels, and the HUMAN one is the point. queueHookContext reaches the model;
+    // lib/hook-stdout.mjs's queueHookSystemMessage is documented "for the HUMAN, not the
+    // model" and names v3.70.0 for making exactly this mistake — folding a banner into
+    // additionalContext "kept its content and lost its audience". A notice whose whole job is
+    // to hand the user a command must not depend on the assistant volunteering it.
+    // flushHookStdout merges both into one envelope, so this is additive: the model learns
+    // memory is unavailable, the user gets the repair.
+    queueHookSystemMessage(notice);
+    queueHookContext('SessionStart', notice);
   } catch (e) {
     // A hook must never crash the host session, and a notice that cannot render is still
     // better handled by staying quiet than by taking SessionStart down with it.

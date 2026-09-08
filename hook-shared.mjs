@@ -22,7 +22,12 @@ import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
 import { recordHookError } from './lib/hook-telemetry.mjs';
-import { isSchemaSkewError, schemaSkewFromError } from './lib/schema-skew.mjs';
+import {
+  isSchemaSkewError,
+  schemaSkewFromError,
+  shouldRecordSkew,
+  SKEW_MARKER_PREFIX,
+} from './lib/schema-skew.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
 // predicates and the handoff constants moved into `lib/` because two lib modules
 // imported them from here and dragged this file's whole import graph — haiku-client,
@@ -238,6 +243,7 @@ export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
   // forever. `.skill-cooldown-` / `.skill-reco-cooldown-` left with the skill registry in
   // v5.0.0; a prefix for files nothing writes any more is dead weight in a hot-path loop.
   'last-mark-compressible-', // per-project auto-compress 24h gate
+  SKEW_MARKER_PREFIX, // per-project schema-skew log dedup; regenerated on the next skewed open
 ]);
 
 // Records of a completed side effect — never age out. `ep-`/`ep-flush-`/
@@ -399,31 +405,6 @@ export function lastSchemaSkew() {
   return lastSkew;
 }
 
-// Skew is not a transient fault: it persists until the user installs newer code, and every
-// hook event is its own process, so the un-deduplicated recorder wrote one identical line
-// per DB open — measured at >=648 in a single day, still growing. Collapse to one record
-// per (session, dbVersion, binaryVersion). Keyed on the versions too, so a PARTIAL upgrade
-// (v48 → v49 while the DB moves to v50) is recorded rather than swallowed by the marker its
-// predecessor left.
-// Deliberately NOT tagged runtime-dir:stays-put: RUNTIME_DIR is already
-// resolveRuntimeDir(DB_DIR), so this honours CLAUDE_MEM_RUNTIME_DIR like everything else.
-// The tag belongs only on lines that build <data>/runtime/... themselves and bypass it.
-const SKEW_MARKER = join(RUNTIME_DIR, '.schema-skew-logged');
-function shouldRecordSkew(info) {
-  const key = `${getSessionId()}:${info?.dbVersion ?? '?'}:${info?.binaryVersion ?? '?'}`;
-  try {
-    if (readFileSync(SKEW_MARKER, 'utf8').trim() === key) return false;
-  } catch {
-    /* absent or unreadable → record, which fails toward reporting */
-  }
-  try {
-    writeFileSync(SKEW_MARKER, key, { mode: 0o600 });
-  } catch {
-    /* best-effort: an unwritable marker must not suppress the record */
-  }
-  return true;
-}
-
 export function openDb() {
   try {
     // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
@@ -435,9 +416,29 @@ export function openDb() {
     // Forward-incompat is its own family: it cannot be healed by anything this process can
     // do, it repeats on every single open, and it is the one failure the USER has to act on.
     // Record it once and hand the numbers to SessionStart, which is the surface that speaks.
+    // Forward-incompat is its own family: nothing this process can do heals it, it repeats on
+    // every single open, and it is the one failure the USER has to act on. Dedup lives in
+    // lib/schema-skew.mjs so the `ups` face — which opens the DB itself and logged its own 15
+    // of the day's 727 lines — shares one implementation instead of drifting from this one.
+    //
+    // shouldRecordSkew is TOTAL by contract. Nothing in this catch may throw: the first cut
+    // called getSessionId() here, which MINTS and writes a session id, so an unwritable
+    // runtime dir turned openDb() itself into a thrower. All 13 call sites are written to
+    // no-op on null and none of them expects an exception.
     if (isSchemaSkewError(e)) {
       lastSkew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
-      if (shouldRecordSkew(lastSkew)) recordHookError('hook-shared:db-open', e, RUNTIME_DIR);
+      // Guarded even though inferProject() reads env and cwd: "the only statement in this
+      // catch cannot throw" was true of the original one-line body and stopped being true
+      // the moment anything was added. An unscoped marker is a worse dedup, not a crash.
+      let project = '';
+      try {
+        project = inferProject();
+      } catch {
+        /* total: the marker degrades to one shared file */
+      }
+      if (shouldRecordSkew(RUNTIME_DIR, project, lastSkew)) {
+        recordHookError('hook-shared:db-open', e, RUNTIME_DIR);
+      }
       return null;
     }
     // Still null, still no throw — a hook must never crash the host session, and all

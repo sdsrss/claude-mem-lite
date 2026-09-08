@@ -11,19 +11,20 @@
 //
 // Two things this file pins that are easy to get wrong:
 //
-// 1. THE REMEDY MUST MATCH THE INSTALL SHAPE. The message schema.mjs has always thrown
+// 1. THE REMEDY MUST MATCH THE INSTALL SHAPE. The message schema.mjs has thrown since v2.41
 //    says `npm i -g claude-mem-lite@latest` — which does nothing for a plugin-cache
 //    install, and a plugin-cache install is exactly the shape that hits this (the cache is
 //    advanced by Claude Code's marketplace updater, so it lags whatever else wrote the DB).
 //    Sending a user down a repair that cannot work is worse than saying nothing.
 //
 // 2. THREE OUTCOMES, NEVER TWO. "this home is fine" and "I could not determine this home's
-//    version" must not print in the same voice — the v6.2.0 doctor check shipped with
-//    exactly that bug (a green "no hook command needs bash" on the shape where they are
-//    live). A count of zero is only reportable when something was actually read.
+//    version" must not print in the same voice — the v6.2.0 round wrote exactly that bug (a
+//    green "no hook command needs bash" on the shape where they are live) and its pre-ship
+//    review caught it before the tag, so it never shipped. A count of zero is only
+//    reportable when something was actually read.
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
@@ -33,6 +34,9 @@ import {
   isSchemaSkewError,
   schemaSkewFromError,
   schemaSkewRemedy,
+  shouldRecordSkew,
+  SKEW_MARKER_PREFIX,
+  SKEW_RELOG_INTERVAL_MS,
   formatSchemaSkewNotice,
   schemaCompatProbeSource,
   probeSchemaCompatInFreshProcess,
@@ -122,7 +126,7 @@ describe('schemaSkewRemedy — the command must match the install shape', () => 
     expect(r.kind).toBe('plugin');
     expect(r.commands.join('\n')).toContain('/plugin marketplace update sdsrss');
     expect(r.commands.join('\n')).toContain('/plugin update claude-mem-lite@sdsrss');
-    // The RED case: this is the string schema.mjs has always printed, and it repairs nothing here.
+    // The RED case: this is the string schema.mjs prints today, and it repairs nothing here.
     expect(r.commands.join('\n')).not.toContain('npm i -g');
   });
 
@@ -138,12 +142,83 @@ describe('schemaSkewRemedy — the command must match the install shape', () => 
     expect(r.commands.join('\n')).toMatch(/git pull/);
   });
 
+  it('on a MIXED managed+plugin machine, the root that is behind decides', () => {
+    // The empty square of the matrix, and the one that was wrong. hasManagedCodeInstall is
+    // true for anyone who ALSO has an npm/managed install, and for a dev checkout (existsSync
+    // follows symlinks) — so `activePluginVersion && !managed` fell through to the managed
+    // branch and printed `claude-mem-lite self-update` beneath a line reading "the code
+    // running here (plugin cache v5.6.0)". Neither command advances a plugin cache. That is
+    // verbatim the failure this module exists to prevent.
+    const cacheRoot = '/home/u/.claude/plugins/cache/sdsrss/claude-mem-lite/5.6.0';
+    const r = schemaSkewRemedy({
+      managed: true,
+      activePluginVersion: { version: '5.6.0', root: cacheRoot },
+      root: cacheRoot,
+    });
+    expect(r.kind).toBe('plugin');
+    expect(r.commands.join('\n')).toContain('/plugin update claude-mem-lite@sdsrss');
+    expect(r.commands.join('\n')).not.toContain('self-update');
+  });
+
+  it('on the same machine, a skewed MANAGED tree still gets the managed remedy', () => {
+    // The control: root-wins must not mean plugin-always.
+    const r = schemaSkewRemedy({
+      managed: true,
+      activePluginVersion: { version: '5.6.0', root: '/home/u/.claude/plugins/cache/x/5.6.0' },
+      root: '/home/u/.claude-mem-lite',
+    });
+    expect(r.kind).toBe('managed');
+    expect(r.commands.join('\n')).toContain('self-update');
+  });
+
   it('answers UNKNOWN rather than inventing a repair when no shape is detectable', () => {
     const r = schemaSkewRemedy({ managed: false, activePluginVersion: null });
     expect(r.kind).toBe('unknown');
     expect(r.commands).toEqual([]);
     // Must name what it looked at — "I could not look" and "nothing to do" are different answers.
     expect(r.note).toMatch(/~\/\.claude-mem-lite|plugin cache/);
+  });
+});
+
+describe('shouldRecordSkew is TOTAL — it is called from inside a catch that must not throw', () => {
+  it('returns true and does not throw when the runtime dir cannot be used', () => {
+    const dir = tmp('skew-marker-');
+    const blocker = join(dir, 'blocked');
+    writeFileSync(blocker, 'a regular file where a directory must go');
+    expect(() =>
+      shouldRecordSkew(join(blocker, 'runtime'), 'proj', { dbVersion: 49, binaryVersion: 48 }),
+    ).not.toThrow();
+    // Fails toward RECORDING: an unwritable marker must never silence the log.
+    expect(shouldRecordSkew(join(blocker, 'runtime'), 'proj', { dbVersion: 49, binaryVersion: 48 })).toBe(
+      true,
+    );
+  });
+
+  it('records once, then suppresses within the window, per project', () => {
+    const dir = tmp('skew-marker-');
+    const info = { dbVersion: 49, binaryVersion: 48 };
+    expect(shouldRecordSkew(dir, 'projA', info)).toBe(true);
+    expect(shouldRecordSkew(dir, 'projA', info)).toBe(false);
+    // A different project is a different marker — one global file made two projects
+    // overwrite each other's key and record on every fire.
+    expect(shouldRecordSkew(dir, 'projB', info)).toBe(true);
+    expect(shouldRecordSkew(dir, 'projB', info)).toBe(false);
+  });
+
+  it('re-records when the version pair changes, and after the window', () => {
+    const dir = tmp('skew-marker-');
+    expect(shouldRecordSkew(dir, 'p', { dbVersion: 49, binaryVersion: 48 })).toBe(true);
+    // A PARTIAL upgrade is new information, not the fault already logged.
+    expect(shouldRecordSkew(dir, 'p', { dbVersion: 50, binaryVersion: 49 })).toBe(true);
+    expect(shouldRecordSkew(dir, 'p', { dbVersion: 50, binaryVersion: 49 })).toBe(false);
+    const later = Date.now() + SKEW_RELOG_INTERVAL_MS + 1;
+    expect(shouldRecordSkew(dir, 'p', { dbVersion: 50, binaryVersion: 49 }, { now: later })).toBe(true);
+  });
+
+  it('does not let a project name escape the marker filename', () => {
+    const dir = tmp('skew-marker-');
+    expect(() => shouldRecordSkew(dir, '../../etc/passwd', { dbVersion: 1, binaryVersion: 0 })).not.toThrow();
+    expect(readdirSync(dir).every((f) => f.startsWith(SKEW_MARKER_PREFIX))).toBe(true);
   });
 });
 
@@ -217,6 +292,23 @@ describe('probeSchemaCompatInFreshProcess — asks the module, does not parse it
     const r = probeSchemaCompatInFreshProcess(dir, dbAtVersion(49));
     expect(r.status).toBe('unknown');
     expect(r.error).toBeTruthy();
+  });
+
+  it('still answers when the code home logs to stdout on import', () => {
+    // The counter-example review used to falsify this function's original docblock. Importing
+    // a tree runs its module scope, and anything it prints shares the probe's stdout — so a
+    // bare JSON.parse turned a healthy home into "could not determine". Not exotic: any
+    // module that logs on import, directly or through one of its own imports, does this.
+    const dir = tmp('skew-noisy-');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'stub', version: '0.0.0' }));
+    writeFileSync(
+      join(dir, 'schema.mjs'),
+      'console.log("chatty module scope");\nexport const CURRENT_SCHEMA_VERSION = 48;\n',
+    );
+    symlinkSync(join(REPO, 'node_modules'), join(dir, 'node_modules'), 'dir');
+
+    const r = probeSchemaCompatInFreshProcess(dir, dbAtVersion(49));
+    expect(r).toMatchObject({ status: 'skew', supported: 48, dbVersion: 49 });
   });
 
   it('reports unknown when the child produced no parseable stdout', () => {

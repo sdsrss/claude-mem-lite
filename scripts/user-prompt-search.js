@@ -39,6 +39,7 @@ import {
 import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { getDeferredByIds } from '../lib/deferred-work.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
+import { isSchemaSkewError, schemaSkewFromError, shouldRecordSkew } from '../lib/schema-skew.mjs';
 
 import { DAY_MS } from '../lib/time-constants.mjs';
 import { envNumber } from '../lib/env-number.mjs';
@@ -773,6 +774,25 @@ async function main() {
       // A failed DB open silently kills EVERY prompt-time injection while `stats`
       // reads zero errors (audit 2026-08-14 M-5) — record before the mandatory
       // swallow. Exact blindness class of the 2026-08-13 pre-recall:db-open outage.
+      //
+      // Schema skew is the one member of that family worth deduplicating: it persists until
+      // the user installs newer code, so it repeats on EVERY prompt. This face opens the DB
+      // itself rather than through hook-shared's openDb, so it needs the gate explicitly —
+      // it contributed 15 of one measured day's 727 identical lines, i.e. the flood was ~98%
+      // closed and not closed. Shared implementation, deliberately: a second copy of a
+      // dedup rule is this repo's twin-drift class.
+      if (isSchemaSkewError(e)) {
+        let project = '';
+        try {
+          project = inferProject();
+        } catch {
+          /* total — the marker degrades to one shared file, never a throw */
+        }
+        if (shouldRecordSkew(RUNTIME_DIR, project, schemaSkewFromError(e))) {
+          recordHookError('ups:db-open', e, RUNTIME_DIR);
+        }
+        return;
+      }
       recordHookError('ups:db-open', e, RUNTIME_DIR);
       return;
     }
