@@ -488,6 +488,7 @@ async function cmdSearch(db, args, { llm } = {}) {
     total,
     reachable: res.preFinalizeCount,
     offset,
+    postFilterDropped: res.postFilterDropped,
     isDeep,
   });
   if (reachNote) process.stderr.write(`${reachNote}\n`);

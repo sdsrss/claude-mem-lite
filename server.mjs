@@ -605,6 +605,7 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
       total: r.total,
       reachable: r.preFinalizeCount,
       offset,
+      postFilterDropped: r.postFilterDropped,
       isDeep: r.isDeep,
     });
     if (reachNote) output.content[0].text += `\n\n${reachNote}`;
