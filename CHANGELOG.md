@@ -2,6 +2,109 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+A full-lifecycle QA pass (install → use → update → self-heal → uninstall) against a pristine
+clone in a sandboxed `HOME`, plus the five open items it left behind.
+
+### The self-repair path could not run on the install it exists to repair
+
+- **fix: `repair` no longer needs `better-sqlite3` in order to replace a missing
+  `better-sqlite3`.** `hook-update.mjs` imported two PATH CONSTANTS from `schema.mjs`, and
+  `schema.mjs` statically imports the native driver — so on a tree with no `node_modules`
+  (what a plugin cache is until its first `npm install`), `install.mjs::repair()`'s
+  `await import('./hook-update.mjs')` threw `ERR_MODULE_NOT_FOUND`, the fail-closed catch
+  refused to auto-install unverified code, and the user was handed the manual tarball
+  one-liner instead. The Ed25519 signature check was therefore unreachable on the one state
+  the self-heal is for. The constants moved to `lib/data-paths.mjs`, a leaf module;
+  `schema.mjs` re-exports all three, so no importer changes. Measured: before, that import
+  fails naming `schema.mjs`; after, it loads with all five release functions present.
+- **fix: the manual fallback pinned to the DEFAULT BRANCH, not to a release.** All four
+  copies of it — `install.mjs`, `scripts/hook-launcher.mjs`, and both READMEs — fetched
+  `/tarball`, i.e. unreleased `main` HEAD, while the prose beside two of them promised "in
+  sync with the latest release". `repair()`'s own comment says running that unverified is the
+  behaviour it replaced. It now resolves the latest release tag first, and
+  `tests/manual-fallback-sync.test.mjs` pins all four surfaces to one constant and fails if a
+  fifth appears.
+- **fix: the 6h self-heal cooldown is now per code home.** The marker lived at one path under
+  a runtime dir that every install shape on a machine shares, so a failed heal attempt for
+  the plugin cache silenced the managed install's heal for six hours — and the two are
+  repaired by different commands. No migration: a pre-existing unsuffixed marker is ignored,
+  costing at most one extra attempt once.
+
+### Diagnostics that ended the reader's search without answering
+
+- **fix: `doctor` gives a remedy when the database will not open.** `✗ Database: file is not
+  a database` was the one ✗ on the screen with no next step, and the remedy already existed —
+  this project takes `VACUUM INTO` snapshots before every irreversible maintenance pass. It
+  now names the newest snapshot with a restore command (clearing the stale `-wal`/`-shm`
+  first, or the restore is re-corrupted by replay), says plainly when there is no snapshot,
+  and says *"could not read that directory"* as a third, separate answer. An error it cannot
+  classify still gets no invented fix.
+- **fix: `status` no longer starts every MCP server on your machine.** It shelled out to
+  `claude mcp list` — which health-checks, i.e. launches, every configured server (2.546s
+  wall for three here, one of them a remote HTTP endpoint) — to ask one question, and asked
+  it with a substring test that matched inside `plugin:claude-mem-lite:mem-lite:`. So a
+  plugin user was reported as holding a bare-name registration they do not have, and the
+  branch written for them was dead code. A plugin install now answers from the manifest
+  without shelling out at all.
+- **feat: `doctor` detects a duplicate MCP registration.** The README's "Mixed-install
+  residue" section has described this state for releases — a plugin user who once ran the
+  npx/git-clone installer keeps a bare-name registration alongside the manifest's — and
+  nothing detected it. Orphan hooks had a check; their MCP twin did not.
+- **feat: `doctor` reports whether the marketplace clone can still be fast-forwarded.**
+  Claude Code updates a git-source marketplace by pulling that clone; a dirty working tree
+  blocks the pull and the plugin stops updating with nothing saying so — which is the near
+  cause of the schema-skew lock-in v6.3.0 shipped a detector for the symptom of. The clone
+  gets dirty on its own: with a directory-source marketplace, `${CLAUDE_PLUGIN_ROOT}`
+  resolves inside it and `scripts/launch.mjs` runs `npm install` there.
+
+### Uninstall, and the manifest check
+
+- **fix: `uninstall` reclaims this plugin's cache even when a sibling plugin remains.** The
+  delete was gated on "no other plugin from this marketplace is installed", which is the
+  right rule for `cache/<marketplace>/` and the wrong one for
+  `cache/<marketplace>/claude-mem-lite/` — ours alone. Measured at 241 MB left behind on a
+  machine where the plugin was already gone. Both READMEs now also say that `/plugin
+  uninstall` does not touch the cache, and give the path, because after it the CLI may no
+  longer be on your PATH.
+- **feat: CI validates both manifests with the tool that loads them.** `npm run
+  validate:manifests` runs `claude plugin validate --strict --json` over the plugin AND
+  marketplace manifests against a pinned CLI, and grades three ways: any error fails, any
+  warning outside a short reasoned allowlist fails, and failure to RUN the validator fails
+  rather than skips.
+- **correction to the entry below.** The previous draft of this section said `claude plugin
+  validate --strict` "now exits 0". That was measured on `.` alone, which resolves to the
+  MARKETPLACE manifest; `.claude-plugin/plugin.json --strict` still exits 1, over a
+  CLAUDE.md-at-plugin-root warning that is deliberate and now carried explicitly in the
+  allowlist above. The marketplace fix itself stands.
+
+### From the original QA pass
+
+- **fix: the MCP server now prints the schema-skew remedy that actually works.** v6.3.0's
+  entry below claims "the MCP launcher report[s] the real cause"; for a forward-incompatible
+  database it did not. `scripts/launch.mjs` formats the shape-aware notice correctly, but
+  `server.mjs` opens the DB while being imported and catches that throw itself, printing
+  `err.message` and calling `process.exit(1)` — so the launcher's handler was unreachable for
+  this one error and users saw schema.mjs's raw text ending in `npm i -g
+  claude-mem-lite@latest`, which repairs nothing on a plugin-cache install. Measured against
+  the shipped v6.3.0 cache: it printed the `npm i -g` line; patched, the same shape prints
+  `/plugin marketplace update sdsrss` + `/plugin update claude-mem-lite@sdsrss`. Emitted from
+  `server.mjs` rather than by re-throwing, because the npm channel registers `claude mcp add
+  ... -- node <SERVER_PATH>` with no launcher above it.
+- **fix: three MCP tools advertised a required field as optional.** `mem_defer_drop.id` (a
+  core tool, listed in `tools/list`), `mem_delete.ids` and `mem_update.id`. zod 4's
+  `toJSONSchema({io:'input'})` reads a `ZodPipe`'s input side as accepting `undefined`, so the
+  `coerceInt.pipe(...)` idiom dropped the key from the published `required` array while the
+  runtime still rejected the call with `-32602`. An agent planning from the schema spent a
+  round trip discovering a requirement the schema was meant to state. Runtime behaviour is
+  unchanged — all six accept/reject cases per field are byte-identical.
+- **fix: the marketplace manifest passes `claude plugin validate --strict`.** `metadata`
+  carried a `homepage` key, which the runtime tolerates and `--strict` rejects as
+  unrecognized. The field moved to the plugin entry, where the reference documents it. (This
+  bullet originally claimed the whole repo exited 0 under `--strict`; see the correction
+  above.)
+
 ## v6.3.0 — when the database is newer than the code, say so
 
 `schema.mjs` has refused a database written by a newer claude-mem-lite since v2.41, and the
