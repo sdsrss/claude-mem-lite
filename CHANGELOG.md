@@ -18,12 +18,19 @@ project's row losing three of its five concepts to a term supplied by another pr
 pass. Each project is still normalized, against its own vocabulary, in its own pass — at most
 8 per run, since each pass is a model call where the old shape was one, and the surplus is
 carried to the next run rather than dropped. If you have more than 8 projects the rotation
-means each is reached every ceil(N/8) runs rather than every run.
+means each is reached every ceil(N/8) runs rather than every run — and the run itself is
+behind a 7-day gate, so with 25 projects a given one comes round about every 28 days.
+
+**This fix is forward-only.** Concept terms that earlier cross-project runs already unified
+are not restored, and nothing records which rows were rewritten that way; the change stops
+it happening again rather than undoing what happened.
 
 **To keep the old behaviour:** set `CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1`. It restores the
-single unscoped pass exactly, and prints a warning to stderr saying why that is not
-recommended. It is the ONLY route back: an explicit `claude-mem-lite optimize --run --task
-normalize` with no `--project` is an unscoped run too, so it fans out as well.
+single unscoped pass exactly. A foreground `optimize` run then prints a warning saying why
+that is not recommended; the daily unattended pass cannot print anything (its worker is
+spawned with stderr closed), so `claude-mem-lite doctor` reports the flag as a ⚠ instead.
+It is the ONLY route back: an explicit `claude-mem-lite optimize --run --task normalize`
+with no `--project` is an unscoped run too, so it fans out as well.
 
 Also in this change, all on the same path:
 

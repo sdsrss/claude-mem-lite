@@ -41,6 +41,12 @@ const RUNTIME_DIR = resolveRuntimeDir(DB_DIR);
 // ─── Budget ─────────────────────────────────────────────────────────────────
 
 export function distributeBudget(total = 15) {
+  // `normalize` is NOMINAL and nothing enforces it: it is never passed to executeNormalize,
+  // so its only effect is to take one unit off smartCompress's share. It read as an
+  // enforced cap while normalize was structurally one model call; since R10-P3-21 an
+  // unscoped run fans out to one call per project, so `--max N` no longer bounds the call
+  // count. The real bound is NORMALIZE_MAX_PROJECTS_PER_RUN. Do not "reconcile" the two by
+  // raising this to 8 — that would silently halve smartCompress on the default budget.
   const normalize = 1;
   const reenrich = Math.max(1, Math.floor(total * 0.4));
   const clusterMerge = Math.max(1, Math.floor(total * 0.3));
@@ -664,9 +670,13 @@ const CONCEPT_MAX_LEN = 40;
  *      review caught that one; it turned up by asking what `\p{Cf}` actually contains instead
  *      of trusting the class name.
  *
- * `\p{Cn}` is deliberately absent: unassigned is a moving target, so it would bind the gate
- * to the runtime's Unicode version. Default_Ignorable moves too, but only by gaining
- * formatting characters, which is the direction this gate wants anyway.
+ * `\p{Cn}` is deliberately absent. Both classes are bound to the runtime's Unicode version,
+ * so stability is not the discriminator — DIRECTION is. An older runtime calls a
+ * newly-assigned character unassigned, so `\p{Cn}` would REJECT real orthography, unbounded
+ * and on the user's own text; an older runtime simply has not heard of a newly-added
+ * default-ignorable, so this class ACCEPTS one it should not — bounded by the per-project
+ * fan-out to the attacker's own project, and by layer 3. Fail-open on the class Unicode is
+ * still growing beats fail-closed on the class it has already assigned.
  */
 const CONCEPT_SHAPE_DENY_PUNCT = /[{}[\]"'`\\<>]/u;
 const CONCEPT_SHAPE_DENY_INVISIBLE =
@@ -936,13 +946,20 @@ export async function executeNormalize(db, force = false, { project } = {}) {
   // was simply still using the legacy unscoped mode.
   if (!project) {
     if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
-      // UNCONDITIONAL, not debugLog. Second review: debugLog returns early unless
-      // CLAUDE_MEM_DEBUG is set, which it is not in the detached background worker that
-      // runs this — so the warning documented as the escape hatch's safety net fired zero
-      // times in the only place the hatch is used. Same shape and prefix as install.mjs's
-      // CLAUDE_MEM_SKIP_SIG_VERIFY warning, which is the existing precedent for telling a
-      // user they have switched a protection off. It fires once per run and only when the
-      // flag is set deliberately, so it is not noise.
+      // This reaches a FOREGROUND caller only, and that bound is the whole story of the
+      // line. Second review moved it off `debugLog` (which returns early unless
+      // CLAUDE_MEM_DEBUG is set, and the detached worker does not set it) and the test
+      // certifying the repair spied on `console.error` IN PROCESS — which proves the
+      // function emits, not that anyone receives. Nobody does, on the path that matters:
+      // `hook.mjs` reaches this via `spawnBackground('llm-optimize')`, and hook-shared.mjs
+      // spawns with `stdio: 'ignore'`, so the child's fd 2 IS /dev/null. Dropping the
+      // CLAUDE_MEM_DEBUG gate removed one of two blockers and the remaining one is
+      // sufficient on its own.
+      // So: useful for `claude-mem-lite optimize --run --task normalize`, silent for the
+      // daily unattended pass. The unattended disclosure is carried by `doctor`, which the
+      // user runs in their own terminal — same shape and prefix as install.mjs's
+      // CLAUDE_MEM_SKIP_SIG_VERIFY notice. Do not delete either half; they cover different
+      // paths, and tests/normalize-cross-project-disclosure.test.mjs pins both.
       console.error(
         '[claude-mem-lite] WARNING: CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1 — normalize is ' +
           'running over every project at once, so one project’s stored content can steer the ' +

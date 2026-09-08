@@ -1913,6 +1913,23 @@ async function doctor() {
     }
   }
 
+  // Protections the operator has switched off. `doctor` is the channel because the surface
+  // that would otherwise carry it cannot: the daily normalize runs in a worker spawned by
+  // hook-shared.mjs::spawnBackground with `stdio: 'ignore'`, so its `console.error` warning
+  // reaches /dev/null. That warning is still correct for the foreground CLI path; this is
+  // the unattended one. Same shape as the CLAUDE_MEM_SKIP_SIG_VERIFY notice.
+  // dwarn, not fail: the flag is set deliberately, so it must be VISIBLE without pushing
+  // doctor to exit 1 — a diagnostic that fails on a supported configuration stops being run.
+  // `=== '1'` mirrors executeNormalize exactly; warning on `true` would describe a machine
+  // that is in fact still fanning out.
+  if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
+    dwarn(
+      'CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1: the daily normalize runs over every project at ' +
+        "once, so one project's stored content can steer the synonym groups applied to all of " +
+        'them (R10-P3-21). Unset it for the per-project default.',
+    );
+  }
+
   // Plugin cache versions
   const pluginCacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
   if (existsSync(pluginCacheBase)) {
