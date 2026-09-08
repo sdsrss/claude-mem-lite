@@ -891,7 +891,7 @@ PreToolUse hooks already run `mem_recall` for past lessons before Read/Edit/Writ
 | Deferring to a future session | `mem_defer({title, priority:1|2|3, detail})`; when fixed, add `closes_deferred=[N]` to `mem_save` |
 | Looking up past work / history | `mem_search "keywords"` · `mem_recent` · `mem_timeline` |
 
-Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these `mem_*` tools are deferred behind ToolSearch this session, the Bash CLI (exact path in the detail doc) is one call vs two (ToolSearch + call).
+Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these `mem_*` tools are deferred behind ToolSearch this session, the Bash CLI `claude-mem-lite` is one call vs two (ToolSearch + call); the MCP server instructions carry the absolute path to use when it is not on PATH.
 
 Full tool + CLI tables, citation/decay rules, and save discipline → `.claude/plugin_claude_mem_lite.md`
 <!-- claude-mem-lite:end -->
@@ -910,6 +910,9 @@ structural queries (LSP only sees open files; this sees everything). Fastest pat
 | Symbol source / signature | `code-graph-mcp show X` |
 | Concept search (no exact name) | `code-graph-mcp search "…"` (vector: MCP `semantic_code_search`) |
 | grep + AST context | `code-graph-mcp grep "pat" [paths] [-t lang] [-g glob] [-c]` |
+
+Not on PATH? A plugin-only install keeps its own copy — same commands, run
+`~/.cache/code-graph/bin/code-graph-mcp` (or `npm i -g @sdsrs/code-graph` once).
 
 Still use Grep for literal strings/regex in non-code files; still Read files you'll edit.
 Full command + MCP-tool table: `.claude/plugin_code_graph_mcp.md`
