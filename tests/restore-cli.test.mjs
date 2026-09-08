@@ -210,12 +210,6 @@ describe('D#25 export → restore round-trip', () => {
     expect(r.stdout).toMatch(/2 restored/);
   });
 
-  // P3-8: restore saves via saveObservation (vector text = title + content + lesson),
-  // then re-applies concepts / facts / search_aliases / text with a raw UPDATE. The FTS
-  // `text` column re-syncs through the _au trigger, but nothing rebuilt the TF-IDF
-  // vector — so a restored row's vector silently omitted every field applied by that
-  // second write. Here "zqxwombat" lives ONLY in search_aliases, so the stored vector
-  // can match the canonical vector for the row's final field state only if the rebuild
   it('rejects a non-export file gracefully (no crash)', () => {
     const bad = join(dstDir, 'bad.txt');
     writeFileSync(bad, 'this is not an export\n');

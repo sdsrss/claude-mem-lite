@@ -3,7 +3,7 @@
 //
 // This suite measures recall when the user's words differ from the memory's
 // words (synonyms / natural-language descriptions). It MUST run on the
-// production_hybrid path (FTS + TF-IDF vector + RRF + OR-fallback). The
+// production_hybrid path (FTS + OR-fallback + query expansion). The
 // FTS-only path AND-joins multi-word NL queries and scores ~0 — a misleading
 // artifact, NOT the real retrieval capability. See benchmark/benchmark.mjs:189.
 import { describe, it, expect } from 'vitest';
@@ -34,11 +34,14 @@ describe('vocab-mismatch benchmark suite', () => {
     seedDatabase(db, corpus);
 
     const r = runBenchmark(db, suite.queries, 'production_hybrid');
-    // Observed R@10 ~0.33 (2026-06): TF-IDF vector + OR-fallback rescue ~1/3 of
-    // relevant memories; the remaining ~2/3 miss IS the vocabulary-mismatch gap
-    // (keyword baseline on this corpus is ~0.90). The band guards two ways:
-    //   lower (>0.15): catches a regression to ~0 — including accidentally
-    //     running the FTS-only path, or the vector arm going dark.
+    // Observed R@10 ~0.34: the OR-fallback rescue reaches ~1/3 of relevant memories; the
+    // remaining ~2/3 miss IS the vocabulary-mismatch gap (keyword baseline on this corpus
+    // is ~0.90). The 2026-06 reading credited the TF-IDF vector arm for part of that
+    // rescue; it did not earn it — a direct A/B before Phase-2 removed the arm read R@10
+    // 0.3407 OFF vs 0.3018 ON, i.e. the arm made this very number WORSE. The band guards
+    // two ways:
+    //   lower (>0.15): catches a regression to ~0 — e.g. accidentally running a path with
+    //     no OR-fallback, which is what actually carries this number.
     //   upper (<0.65): catches ground-truth drift or the gap silently closing
     //     (a real close is good — but then recapture the baseline deliberately).
     expect(r.metrics.recall_at_10).toBeGreaterThan(0.15);

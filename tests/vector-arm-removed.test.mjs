@@ -4,7 +4,7 @@
 // "pending Phase-2 removal". Phase-2 is this. The measurements that decided it are
 // stamped in tasks/specs/vector-arm-removal.md; the short version is that the arm is
 // net-NEGATIVE on both fixtures, including the vocabulary-mismatch suite that is the
-// only reason a vector arm would exist (R@10 0.3407 -> 0.3018, P95 +108.6%).
+// only reason a vector arm would exist (R@10 0.3407 -> 0.3018; P95 median-of-5 +88%).
 //
 // These cases are written to fail on the pre-removal tree. Each states which mechanism
 // it drives, because a removal guard that only greps source text goes vacuously green
@@ -62,7 +62,18 @@ const REMOVED_SYMBOLS = [
   'VOCAB_DIM',
   'MIN_COSINE_SIMILARITY',
   'VECTOR_SCAN_LIMIT',
+  // Added after pre-merge review drove the arm back in past a green suite. These three were
+  // removed by the same change and were simply not listed, so re-exporting a `rebuildVector`
+  // that writes observation_vectors was invisible here AND to the whole suite.
+  'rebuildVector',
+  'rebuildVectors',
+  'VEC_HIT_OBS_COLS',
 ];
+
+// Markdown that ships. Not source, but it is where a user and an agent LEARN the arm exists,
+// so a removed surface surviving here is a real leak — README.zh-CN.md was missed entirely on
+// the first pass because the sweep only knew the English op name.
+const SHIPPED_DOCS = ['README.md', 'README.zh-CN.md', 'adopt-content.mjs'];
 
 // Shipped code only. tests/ is excluded because a guard naming what it removed is not a
 // leak; benchmark/ is excluded for the same reason its own removal is a separate concern.
@@ -96,6 +107,11 @@ function shippedSourceFiles() {
 // reference is code. Note this strips to build the SEARCH WINDOW, not just to skip matched
 // lines — filtering only the matched line lets a deleted gate hide behind a surviving
 // comment, a shape that has walked past a guard in this repo before.
+//
+// Deliberately only WHOLE-LINE `//`, not trailing ones. A trailing comment therefore reads
+// as code and can produce a false positive, which review noted. That is the direction to
+// err in: stripping from the first `//` on a line would also eat a real reference sitting
+// after a string containing `//` (a URL), and a false NEGATIVE here lets the arm back in.
 function strippedCode(file) {
   return readFileSync(file, 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -135,6 +151,30 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     expect(offenders.map((f) => relative(ROOT, f))).toEqual([]);
   });
 
+  it('no shipped surface still names the dropped tables, except the DROPs that remove them', () => {
+    // REMOVED_TABLES used to be checked ONLY by the initSchema case, so raw SQL or prose
+    // naming observation_vectors / vocab_state was unforbidden anywhere else. That is how
+    // five README lines documenting both dropped tables as live schema survived the round.
+    //
+    // The one legitimate mention is the migration that removes them. Exempting it by exact
+    // statement rather than by filename keeps the check sharp: a re-added CREATE TABLE or a
+    // stray SELECT in schema.mjs is still caught.
+    const drops = REMOVED_TABLES.map((t) => `DROP TABLE IF EXISTS ${t}`);
+    const schema = readFileSync(join(ROOT, 'schema.mjs'), 'utf8');
+    // Premise: the exemption is only sound while the DROPs are actually there. Without this
+    // the day someone deletes the migration, the exemption silently protects nothing.
+    for (const d of drops) expect(schema, `schema.mjs must still run: ${d}`).toContain(d);
+
+    const files = [...shippedSourceFiles(), ...SHIPPED_DOCS.map((f) => join(ROOT, f))];
+    const hits = [];
+    for (const f of files) {
+      let code = strippedCode(f);
+      for (const d of drops) code = code.split(d).join('');
+      for (const t of REMOVED_TABLES) if (code.includes(t)) hits.push(`${relative(ROOT, f)}:${t}`);
+    }
+    expect(hits).toEqual([]);
+  });
+
   it('no shipped surface still advertises the rebuild_vectors op', () => {
     // Added AFTER this guard let five live homes through. The symbol sweep below matches
     // identifiers, and `rebuild_vectors` is a STRING — it survived in the mem_maintain Zod
@@ -143,7 +183,7 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     // because it reads ALL_MAINTAIN_OPS and those are separate copies of the same list.
     // Markdown is in scope here precisely because the README and the adoption doc are how
     // a user and an agent learn the op exists.
-    const files = [...shippedSourceFiles(), join(ROOT, 'README.md'), join(ROOT, 'adopt-content.mjs')];
+    const files = [...shippedSourceFiles(), ...SHIPPED_DOCS.map((f) => join(ROOT, f))];
     const hits = [...new Set(files.filter((f) => readFileSync(f, 'utf8').includes(REMOVED_OP)))];
     expect(hits.map((f) => relative(ROOT, f))).toEqual([]);
   });

@@ -565,12 +565,14 @@ export async function deepSearch(
     }
     // rrfFuseN fuses by array index as rank, so each list MUST already be in
     // composite-score order. searchObservationsHybrid appends downweighted
-    // concept(×0.7)/PRF(×0.6) expansion rows to the TAIL unsorted and, on the
-    // vectors-disabled path, returns BEFORE the sort its vector arm applies
-    // (search-engine.mjs:430) — so a sparse variant (common in deep search, the
-    // vocabulary-mismatch path) would hand a tail-ranked expansion row to RRF at a
-    // worse rank than its score earns. Sort so index == composite rank, mirroring
-    // the in-engine sort that already guards the vector-RRF merge.
+    // concept(×0.7)/PRF(×0.6) expansion rows to the TAIL unsorted and never sorts them —
+    // so a sparse variant (common in deep search, the vocabulary-mismatch path) would hand
+    // a tail-ranked expansion row to RRF at a worse rank than its score earns.
+    //
+    // THIS SORT IS NOW THE ONLY ONE. It used to be described as mirroring an in-engine sort
+    // that guarded the vector-RRF merge; that sort lived inside the vector block Phase-2
+    // deleted, so nothing upstream re-orders the list any more. Read the sentence that way
+    // before deleting this line as redundant — it is load-bearing, not a mirror.
     list.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
     return list;
   });

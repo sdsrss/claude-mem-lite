@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // LongMemEval benchmark adapter for claude-mem-lite.
 //
-// Measures our REAL production retrieval (FTS5/BM25 + TF-IDF + RRF, zero
+// Measures our REAL production retrieval (FTS5/BM25 + query expansion, zero
 // embeddings) against the LongMemEval long-term-memory benchmark, so we have a
 // standardized recall number comparable to the field instead of only our local
 // micro-benchmark. It reuses the existing benchmark seams (seedDatabase /
@@ -47,8 +47,8 @@ import { seedDatabase, searchProductionHybrid, computeNDCG, computeMRR } from '.
 // Each haystack session becomes ONE observation row. observations.id is an
 // INTEGER primary key, but LongMemEval session ids are strings, so we key rows by
 // an integer index and map back via idToSession. The session text lands in
-// `narrative` + `text` (both FTS-indexed via OBS_FTS_COLUMNS) and `narrative`
-// also feeds the TF-IDF vector arm, so both retrieval arms see the content.
+// `narrative` + `text` (both FTS-indexed via OBS_FTS_COLUMNS), so the whole turn
+// text is searchable alongside the title.
 // LongMemEval dates look like "2023/05/30 (Tue) 23:40". Strip the weekday paren
 // so Date.parse accepts the "YYYY/MM/DD HH:MM" remainder. Returns epoch ms, or
 // null on missing/unparseable input (caller falls back to offset 0). Timezone is
@@ -279,7 +279,7 @@ function main(argv) {
 
   const lines = [];
   lines.push(
-    `\nLongMemEval — claude-mem-lite (lexical FTS5+TF-IDF+RRF, turns=${opts.turns}${opts.temporal ? ', temporal' : ''}, n=${out.n})`,
+    `\nLongMemEval — claude-mem-lite (lexical FTS5 BM25, turns=${opts.turns}${opts.temporal ? ', temporal' : ''}, n=${out.n})`,
   );
   lines.push(
     `  recall_any@k:  ${opts.ks.map((k) => `@${k}=${fmtPct(out.overall.recallAny[String(k)])}`).join('  ')}   nDCG=${out.overall.ndcg.toFixed(3)}  MRR=${out.overall.mrr.toFixed(3)}`,

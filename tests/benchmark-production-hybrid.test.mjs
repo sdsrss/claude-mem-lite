@@ -1,7 +1,8 @@
 // P7: the benchmark's production_hybrid scenario drives the REAL
-// searchObservationsHybrid (FTS + TF-IDF vector + RRF), not the file-local
-// FTS-only search. These tests pin that the vector arm is actually seeded and
-// exercised, and that the constant sweep runs over the real path.
+// searchObservationsHybrid, not the file-local FTS-only search. It used to also pin that
+// the TF-IDF vector arm was seeded and exercised and that the constant sweep ran over the
+// real path; Phase-2 removed the arm and the sweep, and those two cases went with them.
+// What is left pins that the mode reaches the production function at all.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';

@@ -774,7 +774,6 @@ describe('CLI get command', () => {
   });
 });
 
-// ─── pagination stability WITH vectors (D#30 reopened) ───────────────────────
 // ─── timeline command ────────────────────────────────────────────────────────
 
 describe('CLI timeline command', () => {

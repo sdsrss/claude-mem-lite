@@ -9,7 +9,6 @@ import { sanitizeFtsQuery, estimateTokens, cjkBigrams } from '../utils.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { computePerSourceWindow } from '../lib/search-core.mjs';
 import { deepSearch } from '../deep-search.mjs';
-import {} from '../tfidf.mjs';
 import { OBS_BM25, TYPE_QUALITY_CASE, noisePenaltyClause, citeFactorClause } from '../scoring-sql.mjs';
 import { recencyDecaySql, liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { createTestDb } from '../tests/test-helpers.mjs';
@@ -697,8 +696,9 @@ export function summarizePerQueryDelta(deltas, threshold = 0.001) {
   return bins;
 }
 
-// ─── Vector Constant Sweep ──────────────────────────────────────────────────
+// ─── Deep Search (LLM multi-query / HyDE) ───────────────────────────────────
 //
+// Measures deep search's paraphrase-union recall on the
 // vocabulary-mismatch fixture against the single-query production_hybrid
 // baseline. Uses a fixture-backed FAKE llm (recorded rewrites) so the result is
 // deterministic and CI-able — it isolates FUSION quality from live Haiku rewrite

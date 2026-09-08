@@ -2,9 +2,9 @@
 
 # claude-mem-lite
 
-`claude-mem-lite` 是 **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**（Anthropic 官方 CLI 编程代理）的 **持久化记忆系统**（也称 **长期记忆 / 跨会话上下文 / Claude Code 记忆插件**）。它以 **[MCP](https://modelcontextprotocol.io/) 服务器** + Claude Code 钩子（hooks）的形式运行，在编码会话中自动捕获观察记录、决策、bug 修复，并通过 FTS5 全文检索 + TF-IDF 向量的混合检索召回历史上下文。
+`claude-mem-lite` 是 **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**（Anthropic 官方 CLI 编程代理）的 **持久化记忆系统**（也称 **长期记忆 / 跨会话上下文 / Claude Code 记忆插件**）。它以 **[MCP](https://modelcontextprotocol.io/) 服务器** + Claude Code 钩子（hooks）的形式运行，在编码会话中自动捕获观察记录、决策、bug 修复，并通过 FTS5 全文检索（BM25 + 查询扩展）召回历史上下文。
 
-与 [`mem0`](https://github.com/mem0ai/mem0)、MCP 官方参考实现的 [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) 服务器等通用 LLM 记忆框架相比，claude-mem-lite 专为 Claude Code 的钩子生命周期定制：episode 批处理把 LLM 调用量相比原版 [claude-mem](https://github.com/thedotmack/claude-mem) 减少 7-10 倍（综合成本估算下降约 600 倍 —— 见下方成本模型，属架构估算而非实测基准）；FTS5 + TF-IDF 混合检索在 30 个查询的基准上达到 **Recall@10 = 0.90 / Precision@10 = 0.85**（复现命令见[搜索质量](#搜索质量)一节）。
+与 [`mem0`](https://github.com/mem0ai/mem0)、MCP 官方参考实现的 [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) 服务器等通用 LLM 记忆框架相比，claude-mem-lite 专为 Claude Code 的钩子生命周期定制：episode 批处理把 LLM 调用量相比原版 [claude-mem](https://github.com/thedotmack/claude-mem) 减少 7-10 倍（综合成本估算下降约 600 倍 —— 见下方成本模型，属架构估算而非实测基准）；FTS5 检索在 30 个查询的基准上达到 **Recall@10 = 0.90 / Precision@10 = 0.85**（复现命令见[搜索质量](#搜索质量)一节）。
 
 无需外部服务。单一 SQLite 数据库。开销极低。
 
@@ -227,7 +227,7 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 | `mem_stats` | `claude-mem-lite stats` | 计数、类型分布、每日活动。 |
 | `mem_delete` | `claude-mem-lite delete <id>` | 预览 / 确认流程，FTS5 自动清理。 |
 | `mem_compress` | `claude-mem-lite compress` | 压缩旧的低价值观察（默认 preview；`--execute` 执行）。 |
-| `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | 去重 / decay / 清理 / 向量重建（`scan` 预览，`execute` 执行）。 |
+| `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | 去重 / decay / 清理 / vacuum（`scan` 预览，`execute` 执行）。 |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM 深度优化：re-enrich / normalize / cluster-merge（默认 preview；`--run` 执行）。 |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL 导出，支持项目/类型/日期过滤。 |
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 完整性检查与重建。 |
@@ -528,7 +528,7 @@ claude-mem-lite/
 ## 搜索质量
 
 基于 200 条观察和 30 个查询（标准 + 困难负样本类别）的基准测试结果，测量的是
-**production-hybrid** 检索路径（FTS5 BM25 + TF-IDF 向量 + RRF）——也就是 `mem_search` /
+**production-hybrid** 检索路径（真实的 `searchObservationsHybrid`）——也就是 `mem_search` /
 `recall` 实际走的那条路径：
 
 | 指标 | 得分（production-hybrid） |
@@ -543,9 +543,11 @@ claude-mem-lite/
 > 固定语料、固定查询集、无采样）。CI 参考快照是 `benchmark/baseline.json`，
 > `npm run benchmark:gate` 在偏离超过 5% 时让构建失败。本 README 中所有检索指标都以此为唯一来源。
 
-> **关于测量路径。** 本表早期版本报告的是 *lexical* 纯 FTS 路径（Precision@10 0.96、
-> P95 0.15ms）。混合向量臂用 precision@10 换取更高的 recall / nDCG / MRR——它会召回超出字面
-> 匹配的语义相关候选；门控现在测量混合路径，所以这些数字反映的是 `mem_search` 的真实行为。
+> **关于测量路径。** 本表测量的始终是 `mem_search` 实际走的那条路径，所以数字变过两次。
+> 早期版本报告的是更窄的纯 FTS 测量口径（Precision@10 0.96、P95 0.15ms）；后来一版把
+> precision 的下降归因于「TF-IDF 向量臂用 precision 换 recall」。**那个归因是错的，该说法已撤回**
+> ——门控的 `hybrid_over_bm25` 差值两个臂都不执行向量路径，根本量不到这笔交换。该臂后来被直接
+> A/B 实测，两个语料上都是负的，已移除；此处的数字就是不含向量臂的出货路径。
 
 ## 开发
 

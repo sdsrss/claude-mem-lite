@@ -1919,8 +1919,6 @@ describe('schema_version fast path', () => {
   });
 });
 
-// ─── Task 2: mem_save atomic transaction ─────────────────────────────────────
-
 // ─── mem_save observation_files population ───────────────────────────────────
 
 describe('mem_save observation_files population', () => {

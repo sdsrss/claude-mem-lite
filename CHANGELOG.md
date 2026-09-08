@@ -12,8 +12,14 @@ rebuild_vectors` now exits 1 with `Unknown operation(s): rebuild_vectors` and a 
 valid ops, and schema v49 DROPs `observation_vectors` and `vocab_state` on the next open.
 Nothing else about retrieval moves: the arm has been gated OFF by default since v3.17.0, so
 for every user who did not set that env var this release is behaviour-identical — verified,
-not asserted (see the baseline-neutrality reading below). **To keep the arm, pin
-`claude-mem-lite@5.6.0`.** There is no in-product warning for a still-set
+not asserted (see the baseline-neutrality reading below).
+
+**To keep the arm, pin `claude-mem-lite@5.6.0` BEFORE upgrading — this door only opens one
+way.** Once a v49 build has opened your database, 5.6.0 refuses it: `schema.mjs`'s
+forward-incompat guard throws *"DB schema is v49 but this claude-mem-lite binary supports up
+to v48"*. From there the only routes are re-upgrading or pointing `CLAUDE_MEM_DIR` at a fresh
+directory (or restoring a pre-upgrade backup). Verified with a probe, not inferred. There is
+no in-product warning for a still-set
 `CLAUDE_MEM_VECTORS`, deliberately: re-enabling always required a vector rebuild too, and
 that is the command that now fails loudly, so the one path that mattered is the one that
 tells you.
@@ -31,14 +37,19 @@ is what let a wrong citation read as a right one for two and a half months.
 **The verdict survived re-measurement anyway, which is why this is a removal and not a
 restart.** v3.17.0 also ran the correct instrument, and a same-tree back-to-back A/B
 reproduces it to the digit — `--production-hybrid` R@10 **0.8998 off / 0.8980 on** — plus two
-columns it never reported: P@10 **0.8497 → 0.7819** and P95 **2.7158ms → 3.8716ms**. The
+columns it never reported: P@10 **0.8497 → 0.7819** and, at the median of 5 runs per arm,
+P95 **2.2724ms → 3.9037ms (+72%)**. The
 deciding reading is the vocabulary-mismatch fixture, the arm's only reason to exist, where the
 ruler is nowhere near saturated (R@10 0.34) and therefore *can* say no: R@10 **0.3407 →
-0.3018 (−11.4%)**, P@10 0.1599 → 0.1458, nDCG 0.2988 → 0.2809, MRR 0.4250 → 0.4236, P95
-**+108.6%**. Negative on every column. Premise asserted rather than assumed: both arms seed
+0.3018 (−11.4%)**, P@10 0.1599 → 0.1458, nDCG 0.2988 → 0.2809, MRR 0.4250 → 0.4236, and P95
+median-of-5 **2.1243ms → 3.9904ms (+88%)**. Negative on every column. The latency figures are
+medians of 5 runs per arm because the first draft quoted single runs to four decimals and
+pre-merge review showed both were outside an eight-run envelope — in opposite directions. Premise asserted rather than assumed: both arms seed
 200 vectors at vocab `ba73c835cd40`, dim 512, so the only variable is the gate, and both arms
 re-run byte-identical. On the real corpus the arm held **0 rows** in `observation_vectors` and
-**0** in `vocab_state` against 26 live observations. Restarting it would have meant shipping a
+**0** in `vocab_state` against 26 live observations — a PRE-MIGRATION reading, taken read-only
+before v49 dropped the tables, and therefore one nobody can re-take. Recorded as measured on
+2026-09-07, not as a standing fact. Restarting it would have meant shipping a
 retrieval arm this machine cannot evaluate (D#14).
 
 **Baseline-neutral, verified not inferred.** After the removal `--production-hybrid` reads
@@ -64,12 +75,13 @@ flag. **That excuse is now void and its priority went up, not down**: the sub-cl
 survives a stable JS sort, so SQL order still decides membership, unconditionally. Still no
 failing case, so still unjudged.
 
-Suite 366 files / 5850 → **363 / 5780**, exit 0, the −70 attributed by name with the
+Suite 366 files / 5850 → **363 / 5781**, exit 0, the −69 attributed by name with the
 arithmetic closing exactly. eslint 0, `format:check` 0. knip **44** unused exports and 3
 unlisted binaries, unmoved — and the name set was diffed same-tree rather than trusted for
-agreeing, because a round that deletes 19 exports and adds one is exactly where an unchanged
-count can hide a crossing: **zero entered, zero left**. Coverage 84.96 / 79.38 / 90.72 / 86.14,
-gate exit 0 — read the denominator, not the rise: statements 11614 → 11321. Less-covered code
+agreeing, because a round that deletes 19 shipped-module exports and adds one is exactly where an unchanged
+count can hide a crossing: **zero entered, zero left**. Coverage 84.96 / 79.39 / 90.72 / 86.14,
+gate exit 0 — read the denominator, not the rise: statements 11639 → 11320 (measured on both
+trees; the first draft carried a stale pre-value). Less-covered code
 left the tree; nothing got better.
 
 ## v5.6.0 — the audit of three areas no round had ever read, and the five things it found

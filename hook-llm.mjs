@@ -351,7 +351,7 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
       search_aliases: obs.searchAliases || null,
     });
 
-    // Atomic: observation INSERT + observation_files + vector in one transaction.
+    // Atomic: observation INSERT + observation_files in one transaction.
     // Column list single-sourced in lib/observation-write (shared with manual mem_save).
     const savedId = db.transaction(() => {
       const id = insertObservationRow(db, {
@@ -1198,7 +1198,7 @@ ${actionList}`;
         debugLog('DEBUG', 'llm-episode', `upgrade-delete: obs #${episode.savedId} → event #${savedId}`);
       } else {
         // Non-event type (e.g. `change`) — upgrade pre-saved observations row in place
-        // so the enriched FTS text field + minhash + vector are refreshed atomically.
+        // so the enriched FTS text field + minhash are refreshed atomically.
         const { conceptsText, factsText, textField } = buildFtsTextField(obs);
         const minhashSig = computeMinHash((obs.title || '') + ' ' + (obs.narrative || ''));
         // Scrub LLM-output text fields at the UPDATE boundary, mirroring the

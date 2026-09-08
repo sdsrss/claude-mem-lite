@@ -4,10 +4,10 @@
 
 `claude-mem-lite` is a **persistent memory** (also called *long-term memory* or *cross-session context*) system for **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Anthropic's CLI coding agent. It runs as an **[MCP](https://modelcontextprotocol.io/) server** plus a set of Claude Code hooks, automatically capturing coding observations, decisions, and bug fixes during sessions, then providing hybrid full-text + semantic search to recall them later.
 
-Compared to general-purpose LLM memory frameworks like [`mem0`](https://github.com/mem0ai/mem0) or the MCP reference [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) server, claude-mem-lite is purpose-built for Claude Code's hook lifecycle: episode batching cuts LLM calls 7–10× vs the original [claude-mem](https://github.com/thedotmack/claude-mem) (an estimated ~600× lower total cost — see the cost model below; this is an architecture estimate, not a measured benchmark), while the hybrid FTS5 + TF-IDF retriever benchmarks at 0.90 Recall@10 / 0.85 Precision@10
+Compared to general-purpose LLM memory frameworks like [`mem0`](https://github.com/mem0ai/mem0) or the MCP reference [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) server, claude-mem-lite is purpose-built for Claude Code's hook lifecycle: episode batching cuts LLM calls 7–10× vs the original [claude-mem](https://github.com/thedotmack/claude-mem) (an estimated ~600× lower total cost — see the cost model below; this is an architecture estimate, not a measured benchmark), while the hybrid the FTS5 retriever benchmarks at 0.90 Recall@10 / 0.85 Precision@10
 (see [Search Quality](#search-quality) for the reproduction command).
 
-> 中文简介：claude-mem-lite 是 Claude Code 的轻量级**持久化记忆 / 长期记忆 / 跨会话上下文**插件，基于 MCP 协议 + 钩子机制，自动捕获编码会话中的决策、修复和上下文，并通过 FTS5 + TF-IDF 混合检索召回。详见 [中文 README](README.zh-CN.md)。
+> 中文简介：claude-mem-lite 是 Claude Code 的轻量级**持久化记忆 / 长期记忆 / 跨会话上下文**插件，基于 MCP 协议 + 钩子机制，自动捕获编码会话中的决策、修复和上下文，并通过 FTS5 全文检索召回。详见 [中文 README](README.zh-CN.md)。
 
 Zero external services. Single SQLite database. Minimal overhead.
 
@@ -66,7 +66,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 | **Target client** | Claude Code only | Any LLM app via SDK | Any MCP client | Claude Code only |
 | **Capture model** | Auto via hooks | Manual `memory.add()` | Manual tool calls (`create_entities`, `add_observations`) | Auto via hooks |
 | **Code-aware retrieval** | FTS5 + 100+ synonym pairs (incl. CJK↔EN) | General-purpose | Generic graph nodes | Code-aware |
-| **Search** | Hybrid: FTS5 BM25 + TF-IDF cosine via RRF | Hybrid: semantic + BM25 + entity linking | Knowledge-graph traversal | FTS5 + Chroma vector |
+| **Search** | FTS5 BM25 + query expansion (PRF, concept co-occurrence) | Hybrid: semantic + BM25 + entity linking | Knowledge-graph traversal | FTS5 + Chroma vector |
 | **Storage** | Single local SQLite | Pluggable; Qdrant or configurable vector store | Single JSONL file (knowledge graph) | SQLite + Chroma |
 | **LLM dependency** | Haiku per episode (5–10 ops batched) | LLM per add/search op | None (graph CRUD only) | Sonnet per tool call |
 | **Setup** | One command (`/plugin install` or `npx`) | SDK integration + vector store config | MCP install (per-client) | Bun + Python + Chroma |
@@ -76,7 +76,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 ## Features
 
 - **Automatic capture** -- Hooks into the Claude Code lifecycle (SessionStart, PreCompact, PreToolUse, PostToolUse, PostToolUseFailure, Stop, UserPromptSubmit — the seven events in `hooks/hooks.json`) to record observations without manual effort
-- **Hybrid search** -- FTS5 BM25 + TF-IDF vector cosine similarity, merged via Reciprocal Rank Fusion (RRF). FTS5 handles keyword matching; 512-dim TF-IDF vectors capture semantic similarity for recall beyond exact terms
+- **Lexical search with query expansion** -- FTS5 BM25 scoring, an AND->OR rescue pass, pseudo-relevance feedback and concept co-occurrence. A TF-IDF vector arm shipped alongside it until it was measured net-negative and removed; `--deep` still fuses multiple LLM-rewritten queries with Reciprocal Rank Fusion
 - **Timeline browsing** -- Navigate observations chronologically with anchor-based context windows
 - **Episode batching** -- Groups related file operations into coherent episodes before LLM encoding
 - **Error-triggered recall** -- Automatically searches memory when Bash errors occur, surfacing relevant past fixes
@@ -92,8 +92,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Two-tier dedup** -- Jaccard similarity (5-minute window) + MinHash signatures (7-day cross-session window) prevent duplicates
 - **Synonym expansion** -- Abbreviations like `K8s`, `DB`, `auth` automatically expand to full forms in FTS5 search (100+ pairs including CJK↔EN cross-language mappings)
 - **CJK synonym extraction** -- Unsegmented Chinese text is scanned for known vocabulary words (数据库→database, 搜索→search, etc.) enabling cross-language memory recall
-- **Stop-word filtering** -- English stop words filtered from both TF-IDF vocabulary (reclaiming ~18% of vector dimensions) and FTS queries (preventing false negatives from noise terms like "how", "the", "does")
-- **Persisted vocabulary** -- TF-IDF vocabulary persisted to `vocab_state` table, preventing vector staleness when document frequencies shift. Vectors stay valid until explicit rebuild
+- **Stop-word filtering** -- English stop words filtered from FTS queries, preventing false negatives from noise terms like "how", "the", "does"
 - **Pseudo-relevance feedback (PRF)** -- Top results seed expansion queries for broader recall
 - **Concept co-occurrence** -- Shared concepts across observations expand search to related topics
 - **Context-aware re-ranking** -- Active file overlap boosts relevance (exact match + directory-level half-weight)
@@ -124,10 +123,10 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Git-SHA continuation anchor** (v2.31.0) -- Handoff rows include `git_sha_at_handoff`; any handoff matching the current `HEAD` counts as continuation regardless of TTL. Code state is a stronger continuation signal than wall-clock time
 - **Startup dashboard** (v2.31.0) -- SessionStart hook aggregates `git status` + `~/.claude/tasks/*.json` + `~/.claude/plans/*.md` + most-recent exit handoff + recent event count into a single structured block injected via `hookSpecificOutput.additionalContext`
 - **Activity namespace** (v2.31.0) -- Dedicated `events` table + FTS5 for non-memdir types (`bugfix`, `lesson`, `bug`, `discovery`, `refactor`, `feature`, `observation`, `decision`) that don't compete with `WHAT_NOT_TO_SAVE` semantics on the observations table. CLI: `claude-mem-lite activity save|search|recent|show`. `hook-llm` routes non-memdir summary types through `persistHaikuSummary` so upgrades from observations→events are atomic. (v3.39: the `/lesson` and `/bug` slash commands were redirected from this events table to searchable **observations** — `mem_search` never read the events table, so explicit saves were unfindable; the events table remains the auto-capture activity log.)
-- **In-place observation updates** -- `mem_update` tool modifies existing observations atomically (field update + FTS text rebuild + vector re-computation in one transaction), preserving original IDs and references
+- **In-place observation updates** -- `mem_update` tool modifies existing observations atomically (field update + FTS text rebuild in one transaction), preserving original IDs and references
 - **Bulk export** -- `mem_export` tool exports observations as JSON or JSONL, with project/type/date filtering and 1000-row pagination cap with batch guidance
 - **FTS integrity management** -- `mem_fts_check` tool verifies FTS5 index health or rebuilds indexes on demand, useful after database recovery or when search results seem wrong
-- **Atomic multi-table writes** -- `saveObservation` wraps observations + observation_files + observation_vectors INSERTs in a single `db.transaction()`, preventing orphaned rows on crash
+- **Atomic multi-table writes** -- `saveObservation` wraps the observations + observation_files INSERTs in a single `db.transaction()`, preventing orphaned rows on crash
 - **Modular NLP pipeline** -- Synonym maps, stop words, scoring constants, and query building extracted into focused modules (`synonyms.mjs`, `stop-words.mjs`, `scoring-sql.mjs`, `nlp.mjs`) for independent testing and maintenance
 - **Porter-aligned PRF** -- Pseudo-relevance feedback terms are now stemmed with the same Porter algorithm used by FTS5, ensuring PRF expansion terms match the search index
 
@@ -413,16 +412,6 @@ key_files, key_decisions, match_keywords, created_at_epoch
 obs_id, filename
 ```
 
-**observation_vectors** -- TF-IDF vector embeddings for hybrid search
-```
-observation_id, vector (BLOB Float32Array), vocab_version, created_at_epoch
-```
-
-**vocab_state** -- Persisted TF-IDF vocabulary for stable vector indexing
-```
-term, term_index, idf, version, created_at_epoch
-```
-
 FTS5 indexes: `observations_fts` (title, subtitle, narrative, text, facts, concepts, lesson_learned), `session_summaries_fts`, `user_prompts_fts`
 
 ## How It Works
@@ -617,7 +606,7 @@ claude-mem-lite/
   hook-semaphore.mjs   # LLM concurrency control: file-based semaphore for background workers
   schema.mjs           # Database schema: single source of truth for tables, migrations, FTS5
   tool-schemas.mjs     # Shared Zod schemas for MCP tool validation
-  tfidf.mjs            # TF-IDF vector engine: tokenization, vocabulary building, vector computation, cosine similarity, RRF merge
+  tfidf.mjs            # tokenization + Porter stemming (name is historical: the TF-IDF vector engine it held was removed)
   tier.mjs             # Temporal tier system: activity-based time window classification
   utils.mjs            # Re-export hub: backward-compatible surface for all utility modules
   nlp.mjs              # FTS5 query building: synonym expansion, CJK bigrams, sanitization
@@ -650,7 +639,7 @@ claude-mem-lite/
 ## Search Quality
 
 Benchmarked on 200 observations across 30 queries (standard + hard-negative categories),
-measuring the **production-hybrid** retriever (FTS5 BM25 + TF-IDF vector + RRF) — the path
+measuring the **production-hybrid** retriever (the real `searchObservationsHybrid`) — the path
 `mem_search` / `recall` actually use. The CI gate (`npm run benchmark:gate`) runs this same
 path and fails on regression.
 
@@ -668,12 +657,14 @@ path and fails on regression.
 > `npm run benchmark:gate` fails the build when a run drifts more than 5% from it. This is
 > the single source for every retrieval figure quoted in this README.
 
-> **Note on the path measured.** Earlier versions of this table reported the *lexical*
-> FTS-only path (Precision@10 0.96, P95 0.15ms). The hybrid vector arm trades raw
-> precision@10 for higher recall / nDCG / MRR by surfacing semantically-related candidates
-> beyond exact lexical matches; the gate now measures the hybrid path so these numbers
-> reflect real `mem_search` behavior. For field-comparable recall, see the LongMemEval
-> section below.
+> **Note on the path measured.** This table measures whatever `mem_search` actually runs,
+> which is why the figures have moved twice. An older revision reported a narrower FTS-only
+> harness (Precision@10 0.96, P95 0.15ms); a later one attributed the lower precision to a
+> TF-IDF vector arm "trading precision for recall". **That attribution was wrong and the
+> claim is withdrawn** — the gate's `hybrid_over_bm25` delta never executed a vector path at
+> all, so it could not have measured that trade. The arm was later A/B'd directly, came out
+> negative on both fixtures, and was removed; these numbers are the shipped path with no
+> vector arm in it. For field-comparable recall, see the LongMemEval section below.
 
 ### Recall on LongMemEval (standard benchmark)
 
@@ -692,7 +683,7 @@ and `benchmark/longmemeval-rerank.mjs` (rerank).
 
 | Retriever (zero embeddings) | @1 | @5 | @10 |
 |---|---|---|---|
-| Lexical hybrid — FTS5 + TF-IDF + RRF | **83.4%** | **95.2%** | **96.0%** |
+| Lexical — FTS5 BM25 + query expansion | **83.4%** | **95.2%** | **96.0%** |
 | + one top-20 LLM rerank pass † | 92.8% | 96.8% | 97.4% |
 
 *n = 500 questions.* The lexical row was re-measured 2026-07-18: the v3.39–v3.45

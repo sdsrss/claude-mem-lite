@@ -67,7 +67,11 @@ describe('schema v48 — the access-channel session key', () => {
     initSchema(db);
 
     expect(hasCol(db, 'observations', 'last_access_session_id')).toBe(true);
+    // Two assertions on purpose. `CURRENT_SCHEMA_VERSION` alone reduces to "initSchema
+    // stamps whatever the constant says", which a future bump satisfies even if the v48
+    // ALTER never ran; the `>= 48` floor is the part specific to this file's subject.
     expect(version(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(version(db)).toBeGreaterThanOrEqual(48);
     const row = db.prepare('SELECT access_count, title, last_access_session_id FROM observations').get();
     expect(row.access_count).toBe(7); // the counter is NOT reset by the migration
     expect(row.title).toBe('pre-existing row');

@@ -345,8 +345,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // a concurrent hook to supersede or auto-compress this row — R10 P3-3's finding,
         // fixed then on the general branch only and carried by the concepts branch since
         // D#6. This was the one branch of the four without it. `changes === 0` is a SKIP,
-        // not a success: it must not count as processed and must not rebuild a vector for
-        // a row that is no longer live.
+        // not a success: it must not count as processed. (It also used to guard a vector
+        // rebuild on a dead row; that rebuild is gone, the liveness reason is not.)
         const res = db
           .prepare(
             `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope)
@@ -357,8 +357,6 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           skipped++;
           continue;
         }
-        // Refresh the TF-IDF vector from the just-updated FTS text so the new
-        // aliases reach the vector arm too — the narrow/wide branch rebuilds, this
         processed++;
         continue;
       }
@@ -741,7 +739,6 @@ export function applyNormalization(db, groups, { project = null } = {}) {
         search_aliases: newAliases,
       });
       updateStmt.run(safe.concepts, safe.search_aliases, row.id);
-      // V-F3: normalize mutated concepts + search_aliases (both vector fields) — rebuild the
       updated++;
     }
   }
@@ -786,11 +783,13 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
   const cutoff = Date.now() - MERGE_TIME_WINDOW_MS;
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
-    -- R10 P3-7: search_aliases is in the list because the merge path reads
-    -- keeper.search_aliases when it rebuilds the keeper's vector. Without the column it was
-    -- always undefined, so a merge silently dropped the keeper's aliases from its vector
-    -- text. No effect while the vector arm is off by default, which is why it went unseen.
-    SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts, search_aliases
+    -- search_aliases used to be in this list for R10 P3-7: the merge path read
+    -- keeper.search_aliases when it rebuilt the keeper's TF-IDF vector. Phase-2 removed that
+    -- rebuild, so the column had no reader left and went with it. Do NOT re-add it on the
+    -- strength of R10 P3-7 -- that finding is moot, not pending. executeMergeCluster reads
+    -- keeper.{id,importance,narrative,concepts,facts} and o.{id,title,type,narrative,
+    -- importance,access_count,lesson_learned}, and nothing else off these rows.
+    SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts
     FROM observations
     WHERE ${liveObsFilterSql('')}
       AND optimized_at IS NULL
