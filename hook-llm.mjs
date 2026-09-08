@@ -840,8 +840,11 @@ export function hasEnrichmentContent(parsed) {
  * @param {object} firstPass — parsed first-pass response (title, type, narrative)
  * @returns {{system: string, user: string}} prompt in split form
  */
-// Module-private: the only call site is the retry branch below. Same D#207 reasoning as
-// MEMORY_INPUT_GUARD — exported by habit, never imported.
+// Module-private: the only call site is the retry branch below. D#207's reasoning — a name
+// exported by habit and never imported is a permanently-unused entry in knip's report.
+// (MEMORY_INPUT_GUARD used to be the other example here; it is now exported from
+// lib/memory-input-guard.mjs and imported by two modules and two tests, so it no longer
+// illustrates the point.)
 function buildLessonRetryPrompt(episode, firstPass) {
   const actionList = episode.entries
     .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)

@@ -628,37 +628,37 @@ export function shouldRunNormalize(project = null) {
  * Measured 2026-09-08 over three populations — the real DB (1 row with concepts, 10
  * distinct tokens, max 13), `benchmark/fixtures/seed-data.json` (200 rows, 541 distinct,
  * max 22 = `infrastructure-as-code`) and `seed-data-cjk.json` (31 rows, 55 distinct,
- * max 9). Combined 606 distinct real tokens, longest 22. 40 is ~1.8x that, so the gate
+ * max 9). UNION 598 distinct real tokens — 606 is the SUM, and the populations overlap by
+ * 8 — longest 22. 40 is ~1.8x that, so the gate
  * has room for vocabulary this corpus has not seen yet. The real-DB arm is far too small
  * to calibrate on and is named here so nobody re-derives the number from it alone.
  */
 const CONCEPT_MAX_LEN = 40;
 
 /**
- * Characters that make a JSON-shaped injection expressible, and that no real concept has.
- * Zero of the 606 measured tokens contain any of them.
+ * Characters no real concept token has, and that an injection needs.
  *
- * A DENYLIST, deliberately, not an allowlist of word characters: `\w` is ASCII-only in JS,
- * so an allowlist would eat `café` along with the payload, and silently narrowing a
- * retrieval feature is a worse failure than the one being fixed. Control characters are
- * included because `\s` already excludes whitespace at the split, but not every C0 byte.
+ * A DENYLIST, deliberately, not an allowlist of word characters: \w is ASCII-only in JS,
+ * so an allowlist would reject `café` along with the payload, and silently narrowing a
+ * retrieval feature is a poor trade for the harm here (a rejected token is dropped from
+ * normalize’s prompt only — never from the row, and never from search).
+ *
+ * INDEPENDENT REVIEW BROKE THE FIRST VERSION OF THIS, twice, and both holes came from the
+ * same wrong premise — that JS \s is "whitespace":
+ *
+ *   1. \s is a FIXED LIST. U+200B ZWSP, U+0085 NEL, U+00AD SHY, U+2060 WJ, U+FEFF,
+ *      U+007F DEL and the whole C1 block are not in it, so a phrase joined with any of
+ *      them survived the caller’s /\s+/ split as ONE token and passed a gate whose
+ *      control clause stopped at U+001F. U+0085 was the worst: most tokenizers render it
+ *      as a line break, which is exactly what that clause existed to prevent.
+ *   2. Denying `{` while accepting `｛` leaves the JSON-literal shape expressible.
+ *
+ * Hence Unicode CATEGORIES rather than a hand-listed range — Cc, Cf, Cs, Co, Cn and every
+ * Z* separator — plus an NFKC pass so a fullwidth lookalike is judged as what it folds to.
+ * Both the raw token and its NFKC form are tested, because normalization can also
+ * introduce a denied character that was not there before.
  */
-// The C0 range below is written as ESCAPES, never as literal bytes. An earlier edit of
-// this line put real 0x00 and 0x1F characters into the source, and all three symptoms
-// were the same one: grep classified the file as binary and silently returned nothing,
-// and both the Edit tool and bash refused strings containing them. Same class as the
-// grep -a lesson already in MEMORY.md.
-//
-// A literal HYPHEN is absent on purpose - `infrastructure-as-code`, `react-hook-form`,
-// `better-sqlite3` and `utf-8` are all measured real concepts, and an earlier draft that
-// included one would have filtered every one of them. The hyphen below is a RANGE
-// operator. A literal space is unnecessary: the caller split on whitespace to get here.
-//
-// The C0 range is the POINT of the disable below, not an oversight: the caller splits
-// on /\s+/, which covers tab, newline, CR, FF, VT and space but NOT
-// 0x00-0x08 or 0x0E-0x1F, so those bytes reach here inside a "single token".
-// eslint-disable-next-line no-control-regex
-const CONCEPT_SHAPE_DENY = /[{}[\]"'`\\<>\u0000-\u001F]/;
+const CONCEPT_SHAPE_DENY = /[{}[\]"'`\\<>]|\p{Cc}|\p{Cf}|\p{Cs}|\p{Co}|\p{Cn}|\p{Zs}|\p{Zl}|\p{Zp}/u;
 
 /**
  * Is this token shaped like a concept rather than like a payload? (R10-P3-21 layer 1.)
@@ -669,13 +669,31 @@ const CONCEPT_SHAPE_DENY = /[{}[\]"'`\\<>\u0000-\u001F]/;
  * group literal, which needs the characters above.
  */
 export function isConceptShaped(token) {
-  return (
-    typeof token === 'string' &&
-    token.length >= 2 &&
-    token.length <= CONCEPT_MAX_LEN &&
-    !CONCEPT_SHAPE_DENY.test(token)
-  );
+  if (typeof token !== 'string') return false;
+  if (token.length < 2 || token.length > CONCEPT_MAX_LEN) return false;
+  // Judged in BOTH forms. NFKC folds a fullwidth lookalike onto the character it imitates,
+  // so `auth｛groups` is denied for the same reason `auth{groups` is; testing the raw form
+  // as well covers the opposite direction, where normalization would remove the very
+  // character that should have disqualified the token.
+  if (CONCEPT_SHAPE_DENY.test(token)) return false;
+  let folded;
+  try {
+    folded = token.normalize('NFKC');
+  } catch {
+    // A lone surrogate can make normalize throw. Unjudgeable is not a concept.
+    return false;
+  }
+  return !CONCEPT_SHAPE_DENY.test(folded);
 }
+
+/**
+ * Most concept tokens any SINGLE observation may contribute to the prompt (review P2-1).
+ *
+ * Measured 2026-09-08 on the same three populations as CONCEPT_MAX_LEN — busiest row: real
+ * DB **10**, `seed-data.json` **6**, `seed-data-cjk.json` **4** — so 32 is over 3x the
+ * highest observed and no measured row is affected. A monopoly bound, not a quality one.
+ */
+const CONCEPT_MAX_PER_ROW = 32;
 
 export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
   const projectClause = project ? 'AND project = ?' : '';
@@ -691,13 +709,22 @@ export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
 
   const conceptSet = new Set();
   for (const row of rows) {
+    let takenFromRow = 0;
     for (const c of row.concepts.split(/\s+/)) {
       const trimmed = c.trim();
-      // R10-P3-21 layer 1. This function's output is a PROMPT INGREDIENT: it is joined
-      // with ', ' and sent to Sonnet, whose answer is then written back across every
-      // project. So the shape gate belongs here, at the boundary where stored content
-      // becomes model input — not at the write, which is far too late.
-      if (isConceptShaped(trimmed)) conceptSet.add(trimmed);
+      // R10-P3-21 layer 1. This function's output is a PROMPT INGREDIENT — joined with ', '
+      // and sent to Sonnet — so the shape gate belongs here, at the boundary where stored
+      // content becomes model input, not at the write, which is far too late.
+      if (!isConceptShaped(trimmed)) continue;
+      // Independent review, P2-1: the slice below is first-come, so ONE row carrying 500
+      // shape-legal tokens filled the whole pool and evicted every other row. Since the
+      // per-project fan-out that is bounded to one project rather than the whole store, but
+      // one observation monopolising its own project's prompt is still a lever nobody asked
+      // for. Concepts are keywords for one memory; a row needing more than this many has a
+      // different problem than normalization can help with.
+      if (takenFromRow >= CONCEPT_MAX_PER_ROW) break;
+      takenFromRow++;
+      conceptSet.add(trimmed);
     }
   }
   return [...conceptSet].slice(0, limit);
@@ -710,7 +737,7 @@ export async function identifySynonymGroups(concepts) {
   try {
     // R10-P3-21 layer 2: static instructions in `system`, stored content in `user`, the
     // same split episode extraction and session summary already use (hook-llm.mjs:906,
-    // :1408). callModelJSONAsync has taken this shape since haiku-client.mjs:161's
+    // path). callModelJSONAsync has taken this shape since haiku-client.mjs's `splitPrompt`
     // splitPrompt — API mode maps it to a cached system role, CLI mode renders it with an
     // explicit boundary marker — so this is adopting an existing contract, not adding one.
     const system = `Analyze concept terms from a code memory database and identify synonym groups (terms that refer to the same concept). Include cross-language synonyms (English/Chinese). Return ONLY valid JSON.
@@ -743,7 +770,8 @@ ${MEMORY_INPUT_GUARD}`;
     // hallucination, or a future edit that weakens the prompt.
     //
     // Case-insensitive because applyNormalization's aliasMap lowercases on both sides
-    // (:738 and :774). A stricter check here would reject groups that function would have
+    // (`aliasMap.set`/`aliasMap.get`, both `.toLowerCase()`). A stricter check here would
+    // reject groups that function would have
     // applied, i.e. two predicates deciding one thing.
     const known = new Set(concepts.map((c) => c.toLowerCase()));
     return wellFormed.filter(
@@ -832,9 +860,40 @@ export function applyNormalization(db, groups, { project = null } = {}) {
   return { updated };
 }
 
-export async function executeNormalize(db, force = false, { project } = {}) {
-  if (!force && !shouldRunNormalize(project)) return { skipped: true, reason: 'gate' };
+/**
+ * Distinct projects holding live rows with concepts, most-populated first.
+ *
+ * Ordering is a total one (`n DESC, project ASC`) so the per-run cap below picks the same
+ * set on the same corpus rather than a tie-dependent one — D#9's lesson applied to a pool
+ * that is new rather than found.
+ */
+function listProjectsWithConcepts(db) {
+  return db
+    .prepare(
+      `
+    SELECT project, COUNT(*) n FROM observations
+    WHERE ${liveObsFilterSql('')}
+      AND concepts IS NOT NULL AND concepts != ''
+      AND project IS NOT NULL AND project != ''
+    GROUP BY project
+    ORDER BY n DESC, project ASC
+  `,
+    )
+    .all()
+    .map((r) => r.project);
+}
 
+/**
+ * Projects a single unscoped run will fan out over. Bounded because each one costs an LLM
+ * call, where the previous shape cost exactly one for the whole store. With the 7-day gate
+ * and the corpora this ships against (3 projects on the author's machine) the cap is not
+ * reached; it exists so a machine with fifty projects degrades by deferring work rather
+ * than by making one Stop hook issue fifty Sonnet calls.
+ */
+const NORMALIZE_MAX_PROJECTS_PER_RUN = 8;
+
+/** One project's normalize pass: its own vocabulary, its own prompt, its own rows. */
+async function normalizeOneProject(db, project) {
   const concepts = extractUniqueConcepts(db, 500, { project });
   if (concepts.length < 5) return { skipped: true, reason: 'too few concepts' };
 
@@ -842,19 +901,74 @@ export async function executeNormalize(db, force = false, { project } = {}) {
   if (groups.length === 0) return { processed: 0, groups: 0 };
 
   const result = applyNormalization(db, groups, { project });
+  return { processed: result.updated, groups: groups.length };
+}
 
-  // Only the UNSCOPED (whole-store) run advances the shared 7-day gate. A project-scoped run
-  // must not reset the global timer (it never consulted it — shouldRunNormalize(project) is
-  // always open), or one `--project X` run would silently block the next global normalize.
+export async function executeNormalize(db, force = false, { project } = {}) {
+  if (!force && !shouldRunNormalize(project)) return { skipped: true, reason: 'gate' };
+
+  // ── R10-P3-21 P1-1 ────────────────────────────────────────────────────────────────
+  // An unscoped run is a FAN-OUT over projects — one scoped pass each — never one pass
+  // over the union of every project's vocabulary.
+  //
+  // The first fix tried to keep the single union pass and police the model's ANSWER: every
+  // returned canonical and alias had to be a member of the input concept set. Independent
+  // review broke it in one line. The input set is built from `concepts`, which is exactly
+  // what an attacker writes to, so storing `pwned` as one of their own concepts makes it a
+  // legitimate member and the whole attack lands again. The victim row read
+  // "pwned pagination coverage" — byte-identical to the pre-fix reproduction. That is a
+  // property of ANY corpus-derived whitelist here, not a bug in that particular check, and
+  // it is why the fix had to move to the structure rather than the predicate.
+  //
+  // What this costs, stated rather than hidden: the default path no longer unifies
+  // vocabulary ACROSS projects, so `k8s` in one project and `kubernetes` in another stay
+  // separate. That is a released-artifact user-visible default change and is why it is
+  // behind an escape hatch; cross-project normalization remains available on demand via an
+  // explicit unscoped CLI run. `applyNormalization`'s own comment has said since v2.72.0
+  // that `--project` exists to prevent exactly this contamination — the unattended caller
+  // was simply still using the legacy unscoped mode.
   if (!project) {
-    try {
-      writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now() }));
-    } catch {
-      /* best-effort */
+    if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
+      debugLog(
+        'DEBUG',
+        'llm-optimize',
+        'normalize: cross-project mode restored by CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1 — ' +
+          'one project’s stored content can steer synonym groups applied to every project (R10-P3-21)',
+      );
+      const legacy = await normalizeOneProject(db, null);
+      advanceNormalizeGate();
+      return legacy;
     }
+
+    const projects = listProjectsWithConcepts(db);
+    const picked = projects.slice(0, NORMALIZE_MAX_PROJECTS_PER_RUN);
+    let processed = 0;
+    let groups = 0;
+    for (const p of picked) {
+      const r = await normalizeOneProject(db, p);
+      processed += r.processed || 0;
+      groups += r.groups || 0;
+    }
+    advanceNormalizeGate();
+    return {
+      processed,
+      groups,
+      projects: picked.length,
+      deferredProjects: projects.length - picked.length,
+    };
   }
 
-  return { processed: result.updated, groups: groups.length };
+  const single = await normalizeOneProject(db, project);
+  return single;
+}
+
+/** Advance the shared 7-day timer. Only an unscoped run owns it — see shouldRunNormalize. */
+function advanceNormalizeGate() {
+  try {
+    writeFileSync(NORMALIZE_GATE_FILE, JSON.stringify({ epoch: Date.now() }));
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ─── Task 3: Cluster-merge ─────────────────────────────────────────────────

@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — the daily normalize no longer lets one project rewrite another
+
+**Upgrade note — a user-visible default changes. The unattended `normalize` pass is now
+scoped PER PROJECT.**
+
+Until now the daily unattended optimize ran `normalize` unscoped: it took its concept
+vocabulary from every project's stored content, sent it to the model as one list, and wrote
+the answer back across every project. That made one observation's content able to steer
+synonym groups applied to rows in unrelated projects — reproduced end to end, with a victim
+project's row losing three of its five concepts to a term supplied by another project.
+
+**What changes for you:** cross-project synonym unification stops happening automatically, so
+`k8s` in one project and `kubernetes` in another are no longer folded together by the daily
+pass. Each project is still normalized, against its own vocabulary, in its own pass (bounded
+to 8 projects per run, since each is a model call where the old shape was one).
+
+**To keep the old behaviour:** set `CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1`. It restores the
+single unscoped pass exactly, and logs a line saying why that is not recommended. An explicit
+`claude-mem-lite optimize --run --task normalize` is unaffected either way.
+
+Also in this change, all on the same path:
+
+- Concept tokens are now shape-gated before they can enter a model prompt (length 2..40, a
+  Unicode-category denylist plus an NFKC fold, and a per-row cap of 32 so one observation
+  cannot monopolise the prompt). A rejected token is dropped from the normalize prompt only —
+  never from the row, and never from search.
+- That prompt now uses the `{system, user}` split and carries `MEMORY_INPUT_GUARD`, the same
+  control episode extraction and session summary already used. The constant moved to
+  `lib/memory-input-guard.mjs` so its two consumers cannot hand-copy it apart.
+- The model's answer is checked against the project's own vocabulary before being applied.
+
 ## v6.0.0 — the TF-IDF vector arm is removed, and the metric that retired it never measured it
 
 **Upgrade note — two published surfaces are gone and two tables are dropped. The DEFAULT
