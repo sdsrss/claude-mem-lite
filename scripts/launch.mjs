@@ -11,6 +11,36 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..');
 
 if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
+  // Platform gate BEFORE npm, not after it. package.json's `os` field is an npm install
+  // gate: npm exits EBADPLATFORM without resolving anything, so the catch below sees only
+  // "Command failed" and answers with a fixed cause list that cannot contain this cause.
+  // That is issue #28 — a Windows user got CONNECTION_CLOSED in /mcp plus a wrong reason,
+  // where the field was added (b6a2579, R10 P3-19) precisely so they would be TOLD.
+  // Letting npm fail and then guessing is the shape that failed; asking the manifest first
+  // is the shape that names both sides of the mismatch. Guarded import: lib/ can be absent
+  // in an incomplete install, which launch-preflight.mjs below diagnoses properly, and a
+  // missing diagnostic must never become a new failure mode.
+  try {
+    const { platformGate } = await import('../lib/platform-gate.mjs');
+    const gate = platformGate({ root: ROOT });
+    if (gate.blocked) {
+      process.stderr.write(
+        `[claude-mem-lite] npm install is blocked by this package's own platform list (npm EBADPLATFORM).\n`,
+      );
+      process.stderr.write(
+        `[claude-mem-lite]   package.json declares os: ${gate.declared.join(', ')} — this machine is ${gate.platform}\n`,
+      );
+      process.stderr.write(
+        `[claude-mem-lite] Nothing was installed, so the MCP server cannot start. See "Platform Support" in the README.\n`,
+      );
+      process.stderr.write(
+        `[claude-mem-lite] To install anyway: cd "${ROOT}" && npm install --omit=dev --force\n`,
+      );
+      process.exit(1);
+    }
+  } catch (e) {
+    process.stderr.write(`[claude-mem-lite] platform check skipped: ${e.message}\n`);
+  }
   process.stderr.write('[claude-mem-lite] Installing dependencies...\n');
   try {
     execSync('npm install --omit=dev', {
@@ -55,8 +85,13 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
       (e?.signal ? `npm killed by ${e.signal}` : '') ||
       'unknown error';
     process.stderr.write(`[claude-mem-lite] npm install failed in ${ROOT} — ${detail}\n`);
+    // "Likely cause: …" until issue #28: it asserted three causes, and the one that was
+    // actually firing (EBADPLATFORM, gated above) was not among them. stderr is inherited,
+    // so npm's own `npm error code <CODE>` line is already on this stream a few lines up —
+    // point at that instead of competing with it. A guess presented as a diagnosis costs
+    // more than no diagnosis: it sends the reader looking at their disk and their network.
     process.stderr.write(
-      `[claude-mem-lite] Likely cause: read-only directory, disk full, or network blocked.\n`,
+      `[claude-mem-lite] npm printed its own error above — read its "npm error code" line first. Common causes: read-only directory, disk full, network blocked.\n`,
     );
     process.stderr.write(`[claude-mem-lite] Repair: cd "${ROOT}" && npm install --omit=dev\n`);
     process.exit(1);

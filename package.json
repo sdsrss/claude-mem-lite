@@ -9,7 +9,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "bin": {
     "claude-mem-lite": "./cli.mjs"
@@ -106,6 +107,7 @@
     "lib/hook-stdout.mjs",
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",
+    "lib/platform-gate.mjs",
     "lib/hook-prune.mjs",
     "lib/proxy-fetch.mjs",
     "lib/llm-provider-probe.mjs",

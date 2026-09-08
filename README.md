@@ -134,16 +134,23 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **Linux** | Supported | Primary development and testing platform |
+| **Linux** | Supported | Primary development and testing platform; the whole CI matrix runs here |
 | **macOS** | Supported | Fully compatible (Intel and Apple Silicon) |
-| **Windows** | Not supported | Uses POSIX shell scripts (`post-tool-use.sh`, `setup.sh`) and Unix file locking; WSL2 may work but is untested |
+| **Windows** | Installs, not CI-covered | The MCP server, the CLI and the `node` hooks work (`better-sqlite3` ships `win32-x64` and `win32-arm64` prebuilds, so nothing is compiled). **Three hook commands run under `bash`** — `setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh` — and need Git for Windows or WSL on `PATH`; `claude-mem-lite doctor` reports it when `bash` cannot be found. No GitHub Actions runner exercises Windows, so this rests on user reports ([#28](https://github.com/sdsrss/claude-mem-lite/issues/28)), not on a green pipeline |
+| **WSL2** | Untested | Linux under the hood, so it should behave as the Linux row; nobody has reported either way |
+
+Until v6.1.x, `package.json` declared `os: ["darwin", "linux"]`. That is an npm *install*
+gate, not a runtime check: on Windows it made `npm install` exit `EBADPLATFORM`, which the
+plugin launcher runs on the first MCP start after every plugin update — so the server never
+came up and `/mcp` reported `CONNECTION_CLOSED`. `win32` is now in the list. A platform that
+is still outside it gets a message naming both sides of the mismatch instead of a guess.
 
 ## Requirements
 
 - **Node.js** >= 22
 - **Claude Code** CLI installed and configured (`claude` command available)
 - **SQLite3** support (provided by `better-sqlite3`, compiled on install)
-- **Platform**: Linux or macOS (see [Platform Support](#platform-support))
+- **Platform**: Linux or macOS; Windows installs and runs but is not CI-covered and needs Git Bash or WSL for three hooks (see [Platform Support](#platform-support))
 
 ## Installation
 

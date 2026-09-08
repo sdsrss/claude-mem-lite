@@ -142,6 +142,11 @@ export const SOURCE_FILES = [
   // + auto-update lock). Must ship or a partial install/update skips them.
   'lib/proc-lock.mjs',
   'lib/atomic-write.mjs',
+  // Dynamically imported by scripts/launch.mjs BEFORE `npm install` runs, to answer
+  // EBADPLATFORM with both sides of the mismatch instead of a guessed cause (issue #28).
+  // The import is guarded, so omitting this file would not crash the launcher — it would
+  // silently restore the wrong diagnosis, which is the failure this shipped to fix.
+  'lib/platform-gate.mjs',
   // Shared settings.json hook classification + dangling-entry reconciliation.
   // Statically imported by install.mjs AND dynamically by hook-update.mjs's
   // post-swap step — missing it from the manifest would break auto-update's

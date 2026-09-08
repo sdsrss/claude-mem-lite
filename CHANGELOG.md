@@ -2,6 +2,47 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — the platform list was telling nobody anything, it was just blocking them
+
+**Fixes [#28](https://github.com/sdsrss/claude-mem-lite/issues/28). On Windows the MCP server
+never started: `/mcp` reported `CONNECTION_CLOSED` and the launcher named three causes, none
+of them the real one.**
+
+`package.json` declared `os: ["darwin", "linux"]`. That is an npm **install** gate, not a
+runtime check — npm exits `EBADPLATFORM` before resolving anything. `scripts/launch.mjs` runs
+`npm install --omit=dev` whenever `node_modules/better-sqlite3` is absent, and Claude Code
+materializes every new plugin-cache version *without* `node_modules`, so that install is on
+the path of the first MCP launch after every plugin update. It failed, the launcher exited 1,
+and the stdio server died before it said anything useful.
+
+The field was added in v5.1.0 for a stated reason: *"a Windows user should be told rather than
+handed a string of silent catch blocks."* Blocking the install is the opposite of telling —
+the user lost the server and learned nothing. So the block is gone and the telling is built:
+
+- **`os` now includes `win32`.** Nothing is compiled: `better-sqlite3` 13 ships `win32-x64`
+  and `win32-arm64` prebuilds. The MCP server, the CLI and the `node` hooks are Node-only.
+- **The launcher checks the platform list before running npm** and, when the current platform
+  is outside it, prints both sides of the mismatch, the `EBADPLATFORM` code and the
+  `--force` escape instead of guessing. npm's `os` semantics are reproduced including
+  negation (`["!win32"]`), so the message cannot be wrong in the direction that matters.
+- **`Likely cause: read-only directory, disk full, or network blocked`** asserted three causes
+  and could not contain this one. It now points at npm's own `npm error code` line, which
+  inherited stderr has already printed, and demotes the list to *common* causes.
+- **`doctor` gained a hook-interpreter check.** Three hook commands run under `bash`
+  (`setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh`); when `bash` cannot be run, doctor
+  says so, names Git for Windows / WSL, and states that the MCP server and the `node` hooks
+  are unaffected. It is a ⚠, not an error — doctor still exits 0 on that configuration.
+
+**What changes for existing Linux and macOS users: nothing.** Both platforms were already on
+the list; the gate only ever rejected platforms that were absent from it. There is no state to
+migrate and no flag to set.
+
+**What Windows users should know:** this is not a claim of Windows support. No GitHub Actions
+runner exercises Windows, so the platform rests on user reports rather than a green pipeline,
+and the three `bash` hooks need Git for Windows or WSL on `PATH` — which Claude Code on
+Windows generally already has, since it shells out to `bash` for its own Bash tool. `README`'s
+Platform Support table now says exactly this.
+
 ## v6.1.0 — the daily normalize no longer lets one project rewrite another
 
 **Upgrade note — a user-visible default changes. The unattended `normalize` pass is now

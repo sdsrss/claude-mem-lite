@@ -1865,6 +1865,59 @@ async function doctor() {
     dwarn('Hook scripts: check failed — ' + e.message);
   }
 
+  // Hook interpreter. Some hook commands are `bash "<script>"` (the PostToolUse and
+  // Agent prefilters, plus setup.sh in the plugin manifest) — the rest are `node`. If bash
+  // cannot run, those commands fail and nothing says so; the check above grades whether the
+  // FILES are present, which they are.
+  //
+  // Keyed on whether bash runs, not on process.platform === 'win32'. A Windows user with
+  // Git for Windows on PATH — the normal case, since Claude Code shells out to bash for its
+  // own Bash tool — has a working configuration and must not be warned; a stripped
+  // container with no bash has a broken one and must be, whatever its platform. This is
+  // also what issue #28's P3-19 intent asked for: `os: [darwin, linux]` was added so a
+  // Windows user "should be told rather than handed a string of silent catch blocks", and
+  // blocking the install told them nothing. This is the telling.
+  try {
+    const manifestPath = join(PROJECT_DIR, 'hooks', 'hooks.json');
+    let bashCommands = 0;
+    if (existsSync(manifestPath)) {
+      const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      for (const matchers of Object.values(parsed?.hooks || {})) {
+        for (const m of matchers || []) {
+          for (const h of m?.hooks || []) {
+            if (String(h?.command || '').startsWith('bash ')) bashCommands++;
+          }
+        }
+      }
+    }
+    if (bashCommands === 0) {
+      ok('Hook interpreter: no hook command needs bash');
+    } else {
+      let bashOk = false;
+      try {
+        execFileSync('bash', ['-c', 'exit 0'], { stdio: 'ignore', timeout: 5000 });
+        bashOk = true;
+      } catch {
+        /* not resolvable, or not runnable — either way the hooks that need it cannot fire */
+      }
+      if (bashOk) {
+        ok(`Hook interpreter: bash present (${bashCommands} hook command(s) need it)`);
+      } else {
+        // dwarn, not an issue: everything else works. Saying "broken" about an install
+        // whose MCP server and node hooks are fine would be the mirror of the defect that
+        // sent this round's reporter looking at their disk and their network.
+        dwarn(
+          `Hook interpreter: bash not found on PATH — the ${bashCommands} hook command(s) that ` +
+            'invoke it cannot fire (episode Read-tracking and the subagent prefilter). The MCP ' +
+            'server and the node hooks are unaffected. On Windows, install Git for Windows or ' +
+            'use WSL; elsewhere this means a stripped PATH.',
+        );
+      }
+    }
+  } catch (e) {
+    dwarn('Hook interpreter: check failed — ' + e.message);
+  }
+
   // Stale temp files
   try {
     // hook-update + the episode workers write runtime/ + staging under DB_DIR
