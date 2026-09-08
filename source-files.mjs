@@ -131,6 +131,7 @@ export const SOURCE_FILES = [
   // Missing from the manifest → an updated install ships a doctor that throws
   // ERR_MODULE_NOT_FOUND on the command users run when something is already wrong.
   'lib/install-shape.mjs',
+  'lib/schema-skew.mjs',
   // Single-envelope stdout for hook processes — imported by hook.mjs. Claude Code
   // parses hook stdout as ONE JSON document; missing from the manifest → an updated
   // install throws ERR_MODULE_NOT_FOUND on every hook fire.

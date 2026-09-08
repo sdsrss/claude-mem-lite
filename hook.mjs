@@ -60,7 +60,9 @@ import {
   episodeHasSignificantContent,
   explainSignificance,
 } from './hook-episode.mjs';
-import { DB_DIR } from './schema.mjs';
+// CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
+// always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
+import { DB_DIR, CODE_DIR } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
@@ -82,6 +84,7 @@ import {
   spawnBackground,
   sweepOrphanEpisodeFiles,
   sweepStaleProjectMarkers,
+  lastSchemaSkew,
 } from './hook-shared.mjs';
 import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
 import { readFastSummarySource, insertFastSummary, FAST_SUMMARY_LIMITS } from './lib/fast-summary.mjs';
@@ -2290,6 +2293,52 @@ async function buildStartupDashboardText(db, project) {
   }
 }
 
+/**
+ * Tell the user their memory is version-skewed, on the one surface they read.
+ *
+ * Only fires when openDb() failed for THIS reason — hook-shared records the two version
+ * numbers as it catches, so nothing is re-derived and no second DB open is attempted (on a
+ * skew there may be no usable binding to open with).
+ *
+ * Everything is dynamically imported: this is a cold path that must not cost the healthy
+ * SessionStart an install-shape scan. And it goes through queueHookContext, never a bare
+ * console.log — SessionStart merges three would-be stdout contributors into ONE envelope,
+ * and writing raw prose alongside it once made the host deliver the whole JSON object to
+ * the model as literal text (tests/session-start-stdout-envelope.test.mjs).
+ */
+async function emitSchemaSkewNotice() {
+  try {
+    const skew = lastSchemaSkew();
+    if (!skew) return;
+    const [shapeMod, updateMod, skewMod] = await Promise.all([
+      import('./lib/install-shape.mjs'),
+      import('./hook-update.mjs'),
+      import('./lib/schema-skew.mjs'),
+    ]);
+    const shape = shapeMod.detectInstallShape({ installDir: CODE_DIR });
+    const remedy = skewMod.schemaSkewRemedy({
+      managed: shape.managed,
+      activePluginVersion: shape.activePluginVersion,
+      dev: updateMod.isDevMode(),
+    });
+    queueHookContext(
+      'SessionStart',
+      skewMod.formatSchemaSkewNotice({
+        dbVersion: skew.dbVersion,
+        binaryVersion: skew.binaryVersion,
+        remedy,
+        codeHome: shape.activePluginVersion
+          ? `plugin cache v${shape.activePluginVersion.version}`
+          : undefined,
+      }),
+    );
+  } catch (e) {
+    // A hook must never crash the host session, and a notice that cannot render is still
+    // better handled by staying quiet than by taking SessionStart down with it.
+    debugCatch(e, 'session-start-schema-skew');
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2471,7 +2520,16 @@ async function handleSessionStart() {
   const project = inferProject();
 
   const db = openDb();
-  if (!db) return;
+  if (!db) {
+    // A null DB used to end SessionStart in total silence. For most causes that is right —
+    // they are transient, or a repair path is already running. Forward-incompat is neither:
+    // it persists until the user installs newer code, it disables every write path, and the
+    // only other signal it produces is a `-32000 Connection closed` from the MCP host, which
+    // names nothing. Measured 2026-09-08: a whole day of it, >=648 log lines, zero words to
+    // the user. This is the surface the user actually reads.
+    await emitSchemaSkewNotice();
+    return;
+  }
 
   try {
     const now = new Date();

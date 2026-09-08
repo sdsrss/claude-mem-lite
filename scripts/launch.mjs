@@ -209,26 +209,62 @@ try {
   useDevServer = existsSync(devServer) && lstatSync(devServer).isSymbolicLink();
 } catch {}
 
+// The MCP server opens the DB while it is being imported, so a forward-incompat store
+// (schema.mjs's "DB schema is vN but this binary supports up to vN-1") throws right here
+// and kills the process before the stdio handshake. All the host can say about that is
+// `-32000 Connection closed`, which names nothing — measured 2026-09-08, a full day of it
+// with the real cause visible only in a JSONL file the user has no reason to open.
+//
+// stderr is the one channel a launcher still has at that point. It reaches the plugin's own
+// log rather than the transcript, so this is a diagnosis for whoever goes looking, not a
+// substitute for the SessionStart notice — which is why both exist.
+async function importServerOrExplain(run) {
+  try {
+    await run();
+  } catch (e) {
+    const { isSchemaSkewError, schemaSkewFromError, schemaSkewRemedy, formatSchemaSkewNotice } =
+      await import('../lib/schema-skew.mjs');
+    if (!isSchemaSkewError(e)) throw e;
+    const { detectInstallShape } = await import('../lib/install-shape.mjs');
+    const shape = detectInstallShape({ installDir: dataDir });
+    const skew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
+    process.stderr.write(
+      formatSchemaSkewNotice({
+        dbVersion: skew.dbVersion,
+        binaryVersion: skew.binaryVersion,
+        remedy: schemaSkewRemedy({
+          managed: shape.managed,
+          activePluginVersion: shape.activePluginVersion,
+        }),
+        codeHome: ROOT,
+      }) + '\n',
+    );
+    process.exit(1);
+  }
+}
+
 if (useDevServer) {
-  await import(pathToFileURL(devServer).href);
+  await importServerOrExplain(() => import(pathToFileURL(devServer).href));
 } else {
   // Preflight: detect incomplete primary install (issue #15) — if relative
   // imports referenced by server.mjs are missing on disk, fall back to the
   // hook-update.mjs-maintained ~/.claude-mem-lite/ copy when healthy, or exit
   // with a clear repair command instead of a Node ERR_MODULE_NOT_FOUND stack.
   const { resolveLaunchEntry } = await import('./launch-preflight.mjs');
-  try {
-    const entry = resolveLaunchEntry({
-      primaryRoot: ROOT,
-      fallbackRoot: dataDir,
-      warn: (msg) => process.stderr.write(msg + '\n'),
-    });
-    await import(pathToFileURL(entry.path).href);
-  } catch (e) {
-    if (e.code === 'INSTALL_INCOMPLETE') {
-      process.stderr.write(e.message + '\n');
-      process.exit(1);
+  await importServerOrExplain(async () => {
+    try {
+      const entry = resolveLaunchEntry({
+        primaryRoot: ROOT,
+        fallbackRoot: dataDir,
+        warn: (msg) => process.stderr.write(msg + '\n'),
+      });
+      await import(pathToFileURL(entry.path).href);
+    } catch (e) {
+      if (e.code === 'INSTALL_INCOMPLETE') {
+        process.stderr.write(e.message + '\n');
+        process.exit(1);
+      }
+      throw e;
     }
-    throw e;
-  }
+  });
 }

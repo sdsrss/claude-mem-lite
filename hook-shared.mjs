@@ -22,6 +22,7 @@ import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
 import { recordHookError } from './lib/hook-telemetry.mjs';
+import { isSchemaSkewError, schemaSkewFromError } from './lib/schema-skew.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
 // predicates and the handoff constants moved into `lib/` because two lib modules
 // imported them from here and dragged this file's whole import graph — haiku-client,
@@ -382,12 +383,63 @@ export function createSessionId() {
 
 // ─── Database ────────────────────────────────────────────────────────────────
 
+// Last forward-incompat ("the DB is newer than me") failure seen in THIS process, or null.
+// SessionStart needs the two version numbers to render its notice and openDb has just been
+// handed them, so this beats a second DB open — and on a skew there may be no working
+// binding to open with anyway.
+let lastSkew = null;
+
+/**
+ * The schema skew that made the most recent openDb() return null, or null.
+ * Cleared by any successful open, so a heal mid-session stops the notice.
+ *
+ * @returns {{dbVersion: number|null, binaryVersion: number|null}|null}
+ */
+export function lastSchemaSkew() {
+  return lastSkew;
+}
+
+// Skew is not a transient fault: it persists until the user installs newer code, and every
+// hook event is its own process, so the un-deduplicated recorder wrote one identical line
+// per DB open — measured at >=648 in a single day, still growing. Collapse to one record
+// per (session, dbVersion, binaryVersion). Keyed on the versions too, so a PARTIAL upgrade
+// (v48 → v49 while the DB moves to v50) is recorded rather than swallowed by the marker its
+// predecessor left.
+// Deliberately NOT tagged runtime-dir:stays-put: RUNTIME_DIR is already
+// resolveRuntimeDir(DB_DIR), so this honours CLAUDE_MEM_RUNTIME_DIR like everything else.
+// The tag belongs only on lines that build <data>/runtime/... themselves and bypass it.
+const SKEW_MARKER = join(RUNTIME_DIR, '.schema-skew-logged');
+function shouldRecordSkew(info) {
+  const key = `${getSessionId()}:${info?.dbVersion ?? '?'}:${info?.binaryVersion ?? '?'}`;
+  try {
+    if (readFileSync(SKEW_MARKER, 'utf8').trim() === key) return false;
+  } catch {
+    /* absent or unreadable → record, which fails toward reporting */
+  }
+  try {
+    writeFileSync(SKEW_MARKER, key, { mode: 0o600 });
+  } catch {
+    /* best-effort: an unwritable marker must not suppress the record */
+  }
+  return true;
+}
+
 export function openDb() {
   try {
     // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
     // silently dead (null DB) on a corrupt WAL until the next MCP server start.
-    return ensureDbWithWalRecovery();
+    const db = ensureDbWithWalRecovery();
+    lastSkew = null;
+    return db;
   } catch (e) {
+    // Forward-incompat is its own family: it cannot be healed by anything this process can
+    // do, it repeats on every single open, and it is the one failure the USER has to act on.
+    // Record it once and hand the numbers to SessionStart, which is the surface that speaks.
+    if (isSchemaSkewError(e)) {
+      lastSkew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
+      if (shouldRecordSkew(lastSkew)) recordHookError('hook-shared:db-open', e, RUNTIME_DIR);
+      return null;
+    }
     // Still null, still no throw — a hook must never crash the host session, and all
     // eight call sites in hook.mjs are written to no-op on null. But "returned null"
     // used to be the ONLY trace: nothing reached runtime/hook-errors/, so `stats`

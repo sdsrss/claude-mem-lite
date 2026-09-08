@@ -8,6 +8,10 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { resolveDataDir } from './lib/resolve-data-dir.mjs';
+// Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
+// class, and every consumer of the forward-incompat throw keys on this exact value.
+// schema-skew.mjs imports nothing local, so this closes no cycle.
+import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
 
 // DATA location — DB, managed resources, registry DB, runtime/. Honors
 // CLAUDE_MEM_DIR so users can relocate state to a larger/faster volume.
@@ -465,10 +469,21 @@ export function initSchema(db) {
         return db;
       }
       if (row.version > CURRENT_SCHEMA_VERSION) {
-        throw new Error(
+        // The MESSAGE is the long-standing contract (tests/schema.test.mjs and
+        // tests/wal-recovery.test.mjs both match on it, and older builds throw exactly
+        // this), so it is unchanged. The FIELDS are additive: every consumer downstream
+        // used to re-derive these numbers by regexing the sentence, and the `npm i -g`
+        // remedy baked into it is inert for a plugin-cache install — which is the shape
+        // that actually hits this. lib/schema-skew.mjs turns the fields into a
+        // shape-correct repair; see its header for the 2026-09-08 measurement.
+        const err = new Error(
           `DB schema is v${row.version} but this claude-mem-lite binary supports up to v${CURRENT_SCHEMA_VERSION}. ` +
             `A newer version wrote this DB; upgrade claude-mem-lite (npm i -g claude-mem-lite@latest) or point CLAUDE_MEM_DIR to a fresh directory.`,
         );
+        err.code = SCHEMA_SKEW_CODE;
+        err.dbVersion = row.version;
+        err.binaryVersion = CURRENT_SCHEMA_VERSION;
+        throw err;
       }
     }
   } catch (e) {

@@ -102,6 +102,7 @@
     "lib/lesson-bridge.mjs",
     "lib/binding-probe.mjs",
     "lib/install-shape.mjs",
+    "lib/schema-skew.mjs",
     "lib/hook-stdin.mjs",
     "lib/plugin-key.mjs",
     "lib/hook-stdout.mjs",

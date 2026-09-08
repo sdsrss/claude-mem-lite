@@ -228,7 +228,11 @@ function isPluginMode() {
 }
 
 // ── Dev Mode Detection ─────────────────────────────────────
-function isDevMode() {
+// Exported since the schema-skew notice needs it: a dev checkout must be told `git pull`,
+// never a command that would overwrite its working tree. Re-implementing the check at the
+// call site would make it the second copy of a predicate this file has already had to get
+// right twice (whole-dir symlink, then per-file drift) — the twin-drift class.
+export function isDevMode() {
   try {
     // A dev checkout always carries a .git dir. This catches a whole-directory
     // symlink (~/.claude-mem-lite -> /repo): lstat on server.mjs there follows the
