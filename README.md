@@ -228,6 +228,40 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+<!-- normalize-per-project-note:start -->
+## Upgrading to 6.1.0
+
+**One default changes, and only for the daily background pass.** Until 6.1.0 the unattended
+`normalize` task read the concept vocabulary of EVERY project at once, sent it to the model as
+one list, and wrote the answer back across every project — so one project's stored content
+could steer the synonym groups applied to an unrelated project's rows. It now runs one scoped
+pass per project.
+
+| | Before 6.1.0 | 6.1.0 |
+|---|---|---|
+| Unattended `normalize` | one pass over every project's vocabulary | one pass per project, at most 8 per run, rotating |
+| Cross-project synonym unification | automatic | does not happen |
+| `optimize --run --task normalize` with no `--project` | one cross-project pass | fans out the same way |
+
+**What you may notice:** `k8s` in one project and `kubernetes` in another are no longer folded
+together by the daily pass. Nothing is deleted, no row moves project, and search behaviour is
+unchanged — only which terms the background pass will unify.
+
+**It is forward-only.** Terms that earlier cross-project runs already unified stay unified.
+The replaced term is kept on the row as a search alias, so those rows are still findable under
+the old wording, but there is no record of which unification came from another project.
+
+**To keep the old behaviour:** set `CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1`. It restores the
+cross-project scope — and that scope is exactly the guard it gives up. The other two checks
+added in this release (a shape gate on concept tokens, and a check that the model's answer only
+uses terms the corpus already had) do still run on that path, but the second one is then judged
+against the union of every project's vocabulary, so it no longer keeps one project's term out
+of another project's rows. Set it only if you want cross-project unification and trust the
+contents of every project in the store. A foreground `optimize` run prints a warning when the
+flag is set, and `claude-mem-lite doctor` reports it as ⚠ — the daily pass runs in a worker
+with stderr closed, so it cannot warn you itself.
+<!-- normalize-per-project-note:end -->
+
 <!-- vector-arm-removal-note:start -->
 ## Upgrading to 6.0.0 (breaking)
 

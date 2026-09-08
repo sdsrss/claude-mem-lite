@@ -946,8 +946,12 @@ export async function executeNormalize(db, force = false, { project } = {}) {
   // was simply still using the legacy unscoped mode.
   if (!project) {
     if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
-      // This reaches a FOREGROUND caller only, and that bound is the whole story of the
-      // line. Second review moved it off `debugLog` (which returns early unless
+      // This reaches a caller that OWNS ITS STDERR, and that bound is the whole story of
+      // the line. Three callers reach here: the CLI (`optimize --run --task normalize`,
+      // the user's own terminal), the MCP server (`mem_optimize`, server.mjs:1545 — its
+      // stderr is the host's MCP log, so this does land somewhere a human can reach), and
+      // the daily unattended pass, which is the one that cannot.
+      // Second review moved it off `debugLog` (which returns early unless
       // CLAUDE_MEM_DEBUG is set, and the detached worker does not set it) and the test
       // certifying the repair spied on `console.error` IN PROCESS — which proves the
       // function emits, not that anyone receives. Nobody does, on the path that matters:

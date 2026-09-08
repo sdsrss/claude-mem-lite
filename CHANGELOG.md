@@ -22,13 +22,17 @@ means each is reached every ceil(N/8) runs rather than every run — and the run
 behind a 7-day gate, so with 25 projects a given one comes round about every 28 days.
 
 **This fix is forward-only.** Concept terms that earlier cross-project runs already unified
-are not restored, and nothing records which rows were rewritten that way; the change stops
-it happening again rather than undoing what happened.
+are not restored; the change stops it happening again rather than undoing what happened. The
+replaced term is kept on the row as a search alias, so such rows stay findable under the old
+wording — but nothing marks which unification came from another project, so there is no list
+to review.
 
 **To keep the old behaviour:** set `CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1`. It restores the
-single unscoped pass exactly. A foreground `optimize` run then prints a warning saying why
-that is not recommended; the daily unattended pass cannot print anything (its worker is
-spawned with stderr closed), so `claude-mem-lite doctor` reports the flag as a ⚠ instead.
+single unscoped pass's SCOPE — not the pre-fix handling of the content: the shape gate on
+concept tokens and the check that the model's answer only uses terms the corpus already had
+run on that path too, and stay on. A foreground `optimize` run then prints a warning saying
+why the flag is not recommended; the daily unattended pass cannot print anything (its worker
+is spawned with stderr closed), so `claude-mem-lite doctor` reports the flag as a ⚠ instead.
 It is the ONLY route back: an explicit `claude-mem-lite optimize --run --task normalize`
 with no `--project` is an unscoped run too, so it fans out as well.
 

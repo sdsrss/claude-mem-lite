@@ -121,11 +121,17 @@ describe('CLAUDE_MEM_NORMALIZE_CROSS_PROJECT disclosure', () => {
     const src = readFileSync(HOOK_SHARED, 'utf8');
     const at = src.indexOf('export function spawnBackground');
     expect(at, 'spawnBackground moved — re-point this tripwire').toBeGreaterThanOrEqual(0);
+    // Bounded by the function's OWN closing brace rather than a fixed byte count (pre-tag
+    // review, P3): a fixed slice drifts into whatever follows as the file grows, and then a
+    // `stdio` belonging to some other spawner can satisfy this guard while this one changed.
+    const end = src.indexOf('\n}', at);
+    expect(end, 'no closing brace found for spawnBackground').toBeGreaterThan(at);
     const body = src
-      .slice(at, at + 800)
+      .slice(at, end)
       .split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
       .join('\n');
+    expect(body.match(/stdio:/g) || [], 'exactly one stdio key in this function').toHaveLength(1);
     expect(body).toMatch(/stdio:\s*'ignore'/);
   });
 });
