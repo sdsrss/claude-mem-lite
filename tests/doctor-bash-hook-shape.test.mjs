@@ -20,7 +20,17 @@
 // must not borrow zero's voice.
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  symlinkSync,
+  copyFileSync,
+  existsSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -132,6 +142,63 @@ describe('resolveBashHookCount — the npm/managed shape (no manifest, settings.
       installDir: INSTALL_DIR,
     });
     expect(r.count).toBeNull();
+  });
+});
+
+describe('WIRING: doctor itself takes the unknown arm when no manifest is deployed', () => {
+  // The unit cases above prove the FUNCTION. They do not prove doctor calls it, and a
+  // mutation showed that gap is real: flipping doctor's `bashCommands === null` arm back to
+  // a green `ok` — which IS the P1 defect — left every case above passing. This drives the
+  // shipped doctor over the shape that has no manifest.
+  //
+  // The fixture is a copy of install.mjs with every other root entry symlinked and `hooks/`
+  // omitted. install.mjs must be a real COPY: `import.meta.dirname` resolves through a
+  // symlink to the repo, which would hand PROJECT_DIR the manifest this case exists to
+  // remove. Everything else is a symlink so its ~130 relative imports still resolve.
+  it('warns with both paths instead of reporting a green zero', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'doctor-nomanifest-'));
+    dirs.push(fixture);
+    const repo = join(import.meta.dirname, '..');
+    for (const entry of readdirSync(repo)) {
+      if (entry === 'install.mjs' || entry === 'hooks') continue;
+      symlinkSync(join(repo, entry), join(fixture, entry));
+    }
+    copyFileSync(join(repo, 'install.mjs'), join(fixture, 'install.mjs'));
+    expect(existsSync(join(fixture, 'hooks')), 'fixture premise: no hooks/ dir').toBe(false);
+
+    const home = mkdtempSync(join(tmpdir(), 'doctor-nomanifest-home-'));
+    dirs.push(home);
+    mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
+    let out;
+    try {
+      out = execFileSync(process.execPath, [join(fixture, 'install.mjs'), 'doctor', '--json'], {
+        env: {
+          ...process.env,
+          HOME: home,
+          CLAUDE_MEM_DIR: join(home, 'data'),
+          CLAUDE_MEM_SKIP_UPDATE: '1',
+          MEM_QUIET_HOOKS: '1',
+          MEM_NO_AUTO_ADOPT: '1',
+        },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+    } catch (e) {
+      out = e.stdout || '';
+    }
+    const report = JSON.parse(out.slice(out.indexOf('{')));
+    const lines = (report.checks || []).filter((c) => /Hook interpreter/.test(c.message || ''));
+    expect(lines.length, 'doctor skipped the interpreter check entirely').toBe(1);
+    expect(
+      lines[0].level,
+      `doctor reported a green line on the shape with no manifest: ${lines[0].message}`,
+    ).toBe('warn');
+    // It must name where it looked — an "unknown" that does not say what it read is not
+    // materially better than the false green it replaced.
+    expect(lines[0].message).toMatch(/hooks\.json/);
+    expect(lines[0].message).toMatch(/settings\.json/);
+    // And it must not have added an issue: still advisory.
+    expect(lines[0].message).not.toMatch(/no hook command needs bash/);
   });
 });
 
