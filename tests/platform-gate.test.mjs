@@ -153,13 +153,21 @@ describe('scripts/launch.mjs platform gate (issue #28)', () => {
     // The line this replaces asserted three causes, none of which can be this one.
     expect(stderr).not.toContain('read-only directory, disk full, or network blocked');
 
-    // The gate is only worth anything if it precedes the install: npm would fail with the
-    // same information, but the catch block would then mis-attribute it. If npm had run,
-    // it would have created node_modules (or died leaving one behind).
-    expect(
-      existsSync(join(root, 'node_modules')),
-      'npm ran anyway — the gate is placed after the install, not before it',
-    ).toBe(false);
+    // The gate is only worth anything if it PRECEDES the install — npm fails with the same
+    // information, and the catch block then mis-attributes it, which is the whole bug.
+    //
+    // The first version of this assertion checked that no node_modules was created, and a
+    // mutation run showed it was vacuous: npm's own EBADPLATFORM exit creates no
+    // node_modules either, so deleting the gate's `process.exit(1)` left all nine cases
+    // green. What separates the two orderings is what reaches stderr — the launcher's own
+    // pre-install marker, and npm's own error prefix, neither of which appears if the gate
+    // short-circuited. (Note `npm error` rather than EBADPLATFORM: this launcher's message
+    // names that code on purpose, so the code alone cannot tell the two sources apart.)
+    expect(stderr, 'npm ran anyway — the gate is placed after the install, not before it').not.toContain(
+      'Installing dependencies',
+    );
+    expect(stderr, 'npm itself reported — the gate did not short-circuit').not.toContain('npm error');
+    expect(existsSync(join(root, 'node_modules'))).toBe(false);
   });
 
   it('the shipped package.json declares win32, so this install path is not blocked', () => {
