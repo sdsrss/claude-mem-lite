@@ -3,7 +3,7 @@
 // No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs
 
 import { homedir } from 'os';
-import { ensureDbWithWalRecovery, DB_PATH, DB_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { truncate, typeIcon, inferProject, scrubSecrets, COMPRESSED_PENDING_PURGE } from './utils.mjs';
 import { resolveProject } from './project-utils.mjs';
@@ -79,6 +79,12 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 // router + remaining-command bodies during the incremental split. Future work:
 // move each cmdXxx into its own cli/<cmd>.mjs; mem-cli.mjs becomes pure dispatch.
 import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
+import {
+  isSchemaSkewError,
+  schemaSkewFromError,
+  schemaSkewRemedy,
+  formatSchemaSkewNotice,
+} from './lib/schema-skew.mjs';
 import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
 import {
   parseArgs,
@@ -3667,6 +3673,41 @@ export async function run(argv) {
         `[mem] Error: native DB binding unusable on Node ${process.version}${healed.error ? ` — ${healed.error}` : ''}`,
       );
       out(`[mem] Fix: ${CLI_INVOKE} rebuild-binding`);
+      process.exitCode = 1;
+      return;
+    }
+    // Schema skew gets the same treatment as the native-binding family above, and for the
+    // same reason: the raw message ends in `npm i -g claude-mem-lite@latest`, which repairs
+    // nothing on a plugin-cache install — the shape that actually hits this. Four surfaces
+    // were wired before this one, and this is the command a user reaches for right after
+    // `doctor` tells them something is wrong.
+    if (isSchemaSkewError(e)) {
+      const skew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
+      let shape = { managed: false, activePluginVersion: null };
+      let dev = false;
+      try {
+        const [shapeMod, updateMod] = await Promise.all([
+          import('./lib/install-shape.mjs'),
+          import('./hook-update.mjs'),
+        ]);
+        shape = shapeMod.detectInstallShape({ installDir: CODE_DIR });
+        dev = updateMod.isDevMode();
+      } catch {
+        /* shape unknown → schemaSkewRemedy answers 'unknown', which is its job */
+      }
+      out(
+        formatSchemaSkewNotice({
+          dbVersion: skew.dbVersion,
+          binaryVersion: skew.binaryVersion,
+          remedy: schemaSkewRemedy({
+            managed: shape.managed,
+            activePluginVersion: shape.activePluginVersion,
+            dev,
+            root: process.env.CLAUDE_PLUGIN_ROOT || CODE_DIR,
+          }),
+        }),
+      );
+      out(`[mem] DB path: ${DB_PATH}`);
       process.exitCode = 1;
       return;
     }

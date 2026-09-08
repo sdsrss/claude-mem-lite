@@ -194,6 +194,16 @@ describe('shouldRecordSkew is TOTAL — it is called from inside a catch that mu
     );
   });
 
+  it('is total even for a caller that passes no runtime dir at all', () => {
+    // The OUTER catch, which the inner ones cannot reach: join(undefined, …) throws
+    // TypeError before any filesystem call. Added because a mutation probe showed that catch
+    // was unreachable from every existing case — an untested revert path is the same dead-
+    // guard class this round fixed in three other places, and this one guards the contract
+    // that "nothing in openDb's catch may throw".
+    expect(() => shouldRecordSkew(undefined, 'p', { dbVersion: 1, binaryVersion: 0 })).not.toThrow();
+    expect(shouldRecordSkew(undefined, 'p', { dbVersion: 1, binaryVersion: 0 })).toBe(true);
+  });
+
   it('records once, then suppresses within the window, per project', () => {
     const dir = tmp('skew-marker-');
     const info = { dbVersion: 49, binaryVersion: 48 };

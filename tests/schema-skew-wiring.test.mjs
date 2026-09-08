@@ -218,6 +218,32 @@ describe('the hook-error log stops repeating one persistent fault', () => {
   });
 });
 
+describe('the CLI stops printing a repair that cannot work', () => {
+  it('replaces the raw throw with the shape-aware notice', () => {
+    // `recent` is the command a user reaches for right after doctor tells them something is
+    // wrong, and it used to print the raw message — which ends in `npm i -g
+    // claude-mem-lite@latest`, inert on the plugin-cache install that actually hits this.
+    const dataDir = skewedDataDir();
+    const r = run([join(REPO, 'cli.mjs'), 'recent'], dataDir);
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/Memory is OFF/);
+    expect(out).toContain('999');
+    expect(out).not.toContain('npm i -g claude-mem-lite@latest');
+    expect(r.status).not.toBe(0);
+  });
+
+  it('leaves every other DB-open failure reporting exactly as before', () => {
+    // The control: this branch must catch skew and nothing else. A file that is not a
+    // database is the adjacent failure, and it keeps the generic message.
+    const dir = mkdtempSync(join(tmpdir(), 'skew-corrupt-'));
+    fixtures.push(dir);
+    writeFileSync(join(dir, 'claude-mem-lite.db'), 'not a database at all');
+    const r = run([join(REPO, 'cli.mjs'), 'recent'], dir);
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).not.toMatch(/Memory is OFF/);
+  });
+});
+
 describe('doctor reports which code home cannot open the DB', () => {
   it('fails, names the version pair, and prints a repair command', () => {
     const dataDir = skewedDataDir();
