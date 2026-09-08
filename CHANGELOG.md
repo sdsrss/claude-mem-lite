@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — the platform list was telling nobody anything, it was just blocking them
+## v6.2.0 — the platform list was telling nobody anything, it was just blocking them
 
 **Fixes [#28](https://github.com/sdsrss/claude-mem-lite/issues/28). On Windows the MCP server
 never started: `/mcp` reported `CONNECTION_CLOSED` and the launcher named three causes, none
@@ -28,10 +28,13 @@ the user lost the server and learned nothing. So the block is gone and the telli
 - **`Likely cause: read-only directory, disk full, or network blocked`** asserted three causes
   and could not contain this one. It now points at npm's own `npm error code` line, which
   inherited stderr has already printed, and demotes the list to *common* causes.
-- **`doctor` gained a hook-interpreter check.** Three hook commands run under `bash`
-  (`setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh`); when `bash` cannot be run, doctor
-  says so, names Git for Windows / WSL, and states that the MCP server and the `node` hooks
-  are unaffected. It is a ⚠, not an error — doctor still exits 0 on that configuration.
+- **`doctor` gained a hook-interpreter check.** Hook commands that run under `bash`
+  (`setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh` in the plugin manifest; two of them
+  on an npm install) cannot fire without it, so when `bash` cannot be run doctor says so,
+  names Git for Windows / WSL, and states that the MCP server and the `node` hooks are
+  unaffected. It is a ⚠, not an error — doctor still exits 0 on that configuration. It reads
+  whichever hook registration is live for your install shape, and when it can read neither it
+  says *that*, rather than reporting a green "no hook needs bash" it has not earned.
 
 **What changes for existing Linux and macOS users: nothing.** Both platforms were already on
 the list; the gate only ever rejected platforms that were absent from it. There is no state to
