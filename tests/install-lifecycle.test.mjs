@@ -340,7 +340,11 @@ describe('install lifecycle checks', () => {
       const marketplaceDir = join(pluginsDir, 'marketplaces', 'sdsrss');
       const cacheDir = join(pluginsDir, 'cache', 'sdsrss');
       mkdirSync(marketplaceDir, { recursive: true });
-      mkdirSync(cacheDir, { recursive: true });
+      // Realistic layout: Claude Code materializes versions under
+      // cache/<marketplace>/<plugin>/<version>/, never straight into cache/<marketplace>/.
+      // The flat directory this fixture used to create meant uninstall's own-plugin cache
+      // branch was never exercised here, so the two deletes could not be told apart.
+      mkdirSync(join(cacheDir, 'claude-mem-lite', '2.10.0'), { recursive: true });
       mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
       writeFileSync(
         join(claudeDir, 'settings.json'),
@@ -388,7 +392,12 @@ describe('install lifecycle checks', () => {
       const output = runInstall('uninstall', home, ['--purge'], { PATH: `${binDir}:${process.env.PATH}` });
       expect(output).toContain('Removed from installed_plugins.json');
       expect(output).toContain('Marketplace directory removed');
+      // TWO deletes, and they are different scopes: our own version cache goes
+      // unconditionally, the marketplace-wide directory only when nothing else uses it.
+      // On this fixture (no sibling plugin) both fire.
       expect(output).toContain('Plugin cache removed');
+      expect(output).toContain('Marketplace cache directory removed');
+      expect(existsSync(cacheDir)).toBe(false);
       expect(output).toContain('Removed from known_marketplaces.json');
       expect(output).toContain('Data purged');
 

@@ -31,6 +31,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const INSTALL_DIR = join(__dirname, '..');
@@ -65,7 +66,16 @@ const DATA_DIR = MEM_DIR && isAbsolute(MEM_DIR) ? MEM_DIR : join(homedir(), '.cl
 // `tests/runtime-dir-single-home.test.mjs` asserts this file still carries the rule.
 const RUNTIME_DIR = join(DATA_DIR, 'runtime'); // runtime-dir:stays-put — serves swap-in-progress only; HOOK_RUNTIME_DIR carries the hook markers
 const HOOK_RUNTIME_DIR = process.env.CLAUDE_MEM_RUNTIME_DIR || RUNTIME_DIR;
-const HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'hook-launcher-lastheal');
+// Per CODE HOME, not per machine. The runtime dir is data-dir-relative and therefore SHARED
+// by every install shape on this box — a plugin cache version, a managed ~/.claude-mem-lite,
+// a dev checkout. With one global name, a failed heal attempt for root A silenced root B's
+// heal for the next six hours, and the two are repaired by different commands. The suffix is
+// derived from INSTALL_DIR, which is what `cli.mjs repair` below actually acts on.
+//
+// node:crypto only — the pure-`node:` charter above still holds. No migration: a pre-6.4.0
+// unsuffixed marker is simply ignored, which costs at most one extra heal attempt once.
+const INSTALL_KEY = createHash('sha256').update(INSTALL_DIR).digest('hex').slice(0, 12);
+const HEAL_MARKER = join(HOOK_RUNTIME_DIR, `hook-launcher-lastheal-${INSTALL_KEY}`);
 const HEAL_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 // Observable breakage state: written when the launcher degrades a broken install
 // to exit 0, cleared once the install is confirmed healthy. `doctor` reads it so
@@ -89,8 +99,12 @@ const BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'hook-launcher-broken');
 // SESSION-START only — never on the per-tool hot path, where an npm run would
 // stall the user's edit.
 // Marker dir: HOOK_RUNTIME_DIR (see its definition above for why it is override-aware).
+// BROKEN is cross-component state (hook scripts write it via lib/native-binding-hint.mjs,
+// this file clears it) and keeps its shared name. The COOLDOWN is this launcher's own record
+// of "I already tried to rebuild THIS install dir", so it is keyed per code home for the
+// same reason HEAL_MARKER is — an ABI rebuild heals one node_modules tree, not the machine.
 const NB_BROKEN_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-broken');
-const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, 'native-binding-lastheal');
+const NB_HEAL_MARKER = join(HOOK_RUNTIME_DIR, `native-binding-lastheal-${INSTALL_KEY}`);
 // Literal, not imported: the pure-`node:` charter above forbids importing lib/
 // here (this file must survive a broken install). Kept in sync with
 // lib/binding-probe.mjs::nativeBindingRepairHint, which is the single home
@@ -111,10 +125,13 @@ const CLI_REPAIR = `node ${join(INSTALL_DIR, 'cli.mjs')} repair`;
 
 // Last-resort recovery string for users whose `cli.mjs repair` path
 // itself failed (install.mjs missing / repair errored / retry still drifting).
-// Duplicated in install.mjs::repair() catch; both are reachable when local
-// scripts are broken, so neither can import a shared constant.
+// Duplicated from install.mjs::MANUAL_TARBALL_FALLBACK — the pure-`node:` charter above
+// forbids importing it, and this path is reachable exactly when local scripts are broken.
+// Pinned to that constant by tests/manual-fallback-sync.test.mjs, which also fails if a
+// fifth surface starts hardcoding its own. Resolves the latest RELEASE tag rather than
+// `/tarball` (the default branch, i.e. unreleased WIP).
 const TARBALL_FALLBACK =
-  'T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install';
+  'T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/releases/latest | grep -o \'"tarball_url"[^,]*\' | cut -d\'"\' -f4) && curl -sL "$U" | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install';
 
 const [, , entryArg, ...rest] = process.argv;
 if (!entryArg) {

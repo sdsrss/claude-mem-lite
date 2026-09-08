@@ -497,8 +497,10 @@ claude-mem-lite repair
 **如果 `repair` 自己也跑不起来**（bin 比 v2.84.0 旧，或 bin 也坏了），用这条单行命令——它把最新 tarball 拉到临时目录、跑 *那份* tarball 里的 `install.mjs`，完全不依赖你磁盘上的任何文件：
 
 ```bash
-T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install
+T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/releases/latest | grep -o '"tarball_url"[^,]*' | cut -d'"' -f4) && curl -sL "$U" | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install
 ```
+
+它会先解析出最新 **release** 的 tag。shell 单行命令无法像 `repair` 那样校验 release 签名，所以跑它等于你自己做了一次信任决定——这也是它排在最后、而不是被优先推荐的原因。
 
 跑完之后，`~/.claude-mem-lite/` 就和最新 release 对齐，`claude-mem-lite repair` 下次再遇到类似问题也能直接用了。
 
@@ -521,6 +523,15 @@ npx claude-mem-lite uninstall --purge
 数据默认保留在 `~/.claude-mem-lite/` 中。如需删除：
 ```bash
 rm -rf ~/.claude-mem-lite/
+```
+
+**`/plugin uninstall` 不会删 plugin cache。** Claude Code 会把它展开过的每个版本留在
+`~/.claude/plugins/cache/` 下，每个版本各带一份 `node_modules`——用一段时间就是几百 MB——而且它没有
+插件可挂的卸载生命周期钩子，所以没人回收它。`claude-mem-lite uninstall` 会回收，但
+`/plugin uninstall` 之后这个命令可能已经不在 PATH 上了。所以要么**先**跑它，要么自己删：
+
+```bash
+rm -rf ~/.claude/plugins/cache/sdsrss/claude-mem-lite
 ```
 
 ### 混装残留（用过多种安装方式的话务必看一下）

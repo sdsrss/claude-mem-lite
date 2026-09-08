@@ -617,8 +617,10 @@ claude-mem-lite repair
 **If `repair` itself fails** (the bin is older than v2.84.0, or the bin is also broken), run this one-liner — it pulls a fresh tarball into a temp dir and runs *that* tarball's `install.mjs`, bypassing every file on your disk:
 
 ```bash
-T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install
+T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/releases/latest | grep -o '"tarball_url"[^,]*' | cut -d'"' -f4) && curl -sL "$U" | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install
 ```
+
+It resolves the latest **release** tag first. A shell one-liner cannot verify the release signature the way `repair` does, so running it is a trust decision you are making explicitly — that is why it is the last resort and not the first suggestion.
 
 After it finishes, `~/.claude-mem-lite/` is back in sync with the latest release and `claude-mem-lite repair` is available for next time.
 
@@ -641,6 +643,16 @@ npx claude-mem-lite uninstall --purge
 Data in `~/.claude-mem-lite/` is preserved by default. Delete manually if needed:
 ```bash
 rm -rf ~/.claude-mem-lite/
+```
+
+**`/plugin uninstall` does not delete the plugin cache.** Claude Code keeps every version it
+materialized under `~/.claude/plugins/cache/`, each with its own `node_modules` — a few
+hundred MB after a while — and it has no uninstall hook a plugin can attach to, so nothing
+reclaims it. `claude-mem-lite uninstall` does, but after `/plugin uninstall` that command may
+no longer be on your PATH. Either run it **first**, or delete the directory yourself:
+
+```bash
+rm -rf ~/.claude/plugins/cache/sdsrss/claude-mem-lite
 ```
 
 ### Mixed-install residue (read this if you've used multiple install methods)

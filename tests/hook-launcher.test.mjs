@@ -4,11 +4,11 @@
 // because the launcher derives its install dir from __dirname and the whole
 // point of the wrapper is what happens at process boundaries.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, copyFileSync, existsSync, rmSync, readFileSync } from 'fs';
+import { mkdirSync, writeFileSync, copyFileSync, existsSync, rmSync, readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,19 @@ afterEach(() => {
   for (const d of tracked) rmSync(d, { recursive: true, force: true });
   tracked.clear();
 });
+
+// The two heal-cooldown markers are keyed per CODE HOME (the launcher hashes its own
+// INSTALL_DIR), because the runtime dir is shared by every install shape on the machine and
+// a global name let a failed heal for one root silence another's. The launcher's INSTALL_DIR
+// is `join(__dirname, '..')` = the install root, so the key is a hash of `root` itself.
+//
+// This derivation is duplicated from scripts/hook-launcher.mjs on purpose and is SELF-
+// CHECKING rather than hand-synced: the cases below both READ these paths (a wrong key
+// would find no marker) and WRITE them to simulate an armed cooldown (a wrong key would
+// leave the launcher healing instead of skipping), so a scheme change goes red here.
+const installKey = (root) => createHash('sha256').update(root).digest('hex').slice(0, 12);
+const healMarker = (root) => join(root, 'runtime', `hook-launcher-lastheal-${installKey(root)}`);
+const nbHealMarker = (root) => join(root, 'runtime', `native-binding-lastheal-${installKey(root)}`);
 
 function runLauncher(root, args, env = {}) {
   return spawnSync(process.execPath, [join(root, 'scripts', 'hook-launcher.mjs'), ...args], {
@@ -95,7 +108,7 @@ describe('hook-launcher self-heal', () => {
     expect(first.stderr).toMatch(/REPAIR-ATTEMPTED/);
     expect(first.status).toBe(0);
     expect(first.stderr).not.toMatch(/node:internal|ERR_MODULE_NOT_FOUND/);
-    expect(existsSync(join(root, 'runtime', 'hook-launcher-lastheal'))).toBe(true);
+    expect(existsSync(healMarker(root))).toBe(true);
 
     // Second invocation within cooldown skips repair and still degrades quietly
     // (clean guidance, exit 0, no stack trace) rather than failing every fire.
@@ -104,6 +117,45 @@ describe('hook-launcher self-heal', () => {
     expect(second.stderr).toMatch(/Self-heal skipped/);
     expect(second.status).toBe(0);
     expect(second.stderr).not.toMatch(/node:internal|ERR_MODULE_NOT_FOUND/);
+  });
+
+  it('does not let one code home arm the cooldown against another', () => {
+    // The runtime dir is SHARED by every install shape on a machine (a plugin cache version,
+    // a managed ~/.claude-mem-lite, a dev checkout), and each is repaired by its own
+    // `cli.mjs repair`. With a single global marker name, root A's failed attempt bought six
+    // hours of silence for root B — measured as a real gap 2026-09-08.
+    const shared = join(tmpdir(), `cml-launcher-shared-rt-${randomUUID().slice(0, 8)}`);
+    mkdirSync(shared, { recursive: true });
+    tracked.add(shared);
+    const env = { CLAUDE_MEM_RUNTIME_DIR: shared };
+
+    const rootA = makeInstall('cml-launcher-home-a');
+    const rootB = makeInstall('cml-launcher-home-b');
+    for (const r of [rootA, rootB]) {
+      writeFileSync(join(r, 'install.mjs'), 'console.error("REPAIR-ATTEMPTED");process.exit(1);\n');
+      writeFileSync(join(r, 'entry.mjs'), "import './missing-local.mjs';\n");
+    }
+
+    const a = runLauncher(rootA, ['entry.mjs', 'session-start'], env);
+    expect(a.stderr).toMatch(/REPAIR-ATTEMPTED/);
+
+    // Premise: A really did arm a cooldown in the SHARED dir. Without this the case could
+    // pass because nothing was written at all.
+    const armed = readdirSync(shared).filter((n) => n.startsWith('hook-launcher-lastheal-'));
+    expect(armed).toHaveLength(1);
+
+    const b = runLauncher(rootB, ['entry.mjs', 'session-start'], env);
+    expect(b.stderr).toMatch(/REPAIR-ATTEMPTED/);
+    expect(b.stderr).not.toMatch(/Self-heal skipped/);
+
+    // Two homes, two markers, same directory — that is the property, not just "B healed".
+    expect(readdirSync(shared).filter((n) => n.startsWith('hook-launcher-lastheal-'))).toHaveLength(2);
+
+    // Control: B's SECOND fire is still rate-limited by B's own marker, so this is
+    // namespacing, not a cooldown that stopped working.
+    const bAgain = runLauncher(rootB, ['entry.mjs', 'session-start'], env);
+    expect(bAgain.stderr).toMatch(/Self-heal skipped/);
+    expect(bAgain.stderr).not.toMatch(/REPAIR-ATTEMPTED/);
   });
 
   it('treats a missing bare dependency (e.g. better-sqlite3) as a broken install, not a foreign error', () => {
@@ -223,7 +275,7 @@ describe('hook-launcher self-heal', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('HEALED-OK');
     // cooldown cleared so an unrelated later breakage can heal immediately
-    expect(existsSync(join(root, 'runtime', 'hook-launcher-lastheal'))).toBe(false);
+    expect(existsSync(healMarker(root))).toBe(false);
     expect(existsSync(join(root, 'runtime', 'hook-launcher-broken'))).toBe(false);
   });
 
@@ -261,12 +313,12 @@ describe('hook-launcher self-heal', () => {
     writeFileSync(join(root, 'entry.mjs'), "import './missing-local.mjs';\n");
 
     runLauncher(root, ['entry.mjs']);
-    expect(existsSync(join(root, 'runtime', 'hook-launcher-lastheal'))).toBe(false);
+    expect(existsSync(healMarker(root))).toBe(false);
 
     const ss = runLauncher(root, ['entry.mjs', 'session-start']);
     expect(ss.stderr).toMatch(/REPAIR-ATTEMPTED/);
     expect(ss.stderr).not.toMatch(/Self-heal skipped/);
-    expect(existsSync(join(root, 'runtime', 'hook-launcher-lastheal'))).toBe(true);
+    expect(existsSync(healMarker(root))).toBe(true);
   });
 });
 
@@ -282,7 +334,7 @@ describe('hook-launcher self-heal', () => {
 // launcher's streams — the stub records itself on disk and these cases wait for that.
 describe('hook-launcher marker-driven self-heal (session-start)', () => {
   const BROKEN = (root) => join(root, 'runtime', 'hook-launcher-broken');
-  const COOLDOWN = (root) => join(root, 'runtime', 'hook-launcher-lastheal');
+  const COOLDOWN = healMarker;
   const RAN = (root) => join(root, 'repair-ran');
   const sleepSync = (ms) => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -397,7 +449,7 @@ describe('hook-launcher marker-driven self-heal (session-start)', () => {
 // dlopen'd the stale binary.
 describe('hook-launcher native-binding self-heal (session-start)', () => {
   const BROKEN = (root) => join(root, 'runtime', 'native-binding-broken');
-  const COOLDOWN = (root) => join(root, 'runtime', 'native-binding-lastheal');
+  const COOLDOWN = nbHealMarker;
   const RAN = (root) => join(root, 'rebuild-ran');
   const writeBroken = (root, reason = 'NODE_MODULE_VERSION 127 vs 137') => {
     mkdirSync(join(root, 'runtime'), { recursive: true });

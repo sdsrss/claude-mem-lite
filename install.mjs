@@ -54,7 +54,7 @@ const SERVER_PATH = join(INSTALL_DIR, 'server.mjs');
 const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
 // P2-7: both constants and the predicate come from lib/plugin-key.mjs, which hook.mjs also
 // imports — this pair used to be typed out in each.
-import { MARKETPLACE_KEY, PLUGIN_KEY, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
+import { MARKETPLACE_KEY, PLUGIN_KEY, PLUGIN_NAME, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import {
@@ -68,7 +68,9 @@ import {
   probeBetterSqlite3Binding,
   ensureBetterSqlite3Working,
   nativeBindingRepairHint,
+  isNativeBindingError,
 } from './lib/binding-probe.mjs';
+import { readSnapshots } from './lib/db-backup.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
@@ -331,6 +333,145 @@ function isDevInstall() {
   } catch {
     return false;
   }
+}
+
+// Last-resort recovery command, printed when the signature-verified repair path itself
+// fails. It resolves the latest RELEASE tarball via the GitHub API rather than fetching
+// `/tarball`, which serves the DEFAULT BRANCH — unreleased WIP. That mattered: repair()
+// exists because the old auto-path ran main HEAD unverified, and until 2026-09-08 the
+// fallback it printed on failure handed the user exactly that behaviour back. A shell
+// one-liner cannot check an Ed25519 signature, so this remains a trust decision the user
+// makes explicitly; pinning it to a release at least removes the unreleased-WIP half.
+//
+// FOUR surfaces carry this string — here, scripts/hook-launcher.mjs (pure-`node:` charter,
+// cannot import lib/), README.md and README.zh-CN.md. Exported so
+// tests/manual-fallback-sync.test.mjs can pin the other three to this one and fail if a
+// fifth appears; a string kept in sync by a comment is a string that drifts.
+export const MANUAL_TARBALL_FALLBACK =
+  'T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/releases/latest | grep -o \'"tarball_url"[^,]*\' | cut -d\'"\' -f4) && curl -sL "$U" | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install';
+
+/**
+ * Whether the local marketplace clone can still be fast-forwarded.
+ *
+ * This is the near cause of the failure v6.3.0 shipped a detector for. Claude Code updates a
+ * git-source marketplace by pulling that clone; a DIRTY working tree blocks the pull, the
+ * plugin silently stops updating, and eventually the database is written by a newer
+ * claude-mem-lite than the code that has to open it. On this machine the clone was pinned 22
+ * commits behind while everything reported green.
+ *
+ * It gets dirty on its own: with a DIRECTORY-source marketplace, `${CLAUDE_PLUGIN_ROOT}`
+ * resolves inside the clone, and `scripts/launch.mjs` runs `npm install` there whenever
+ * `node_modules/better-sqlite3` is missing — which is every materialization of a new version.
+ * So the plugin's own launcher can create the state that stops the plugin updating.
+ *
+ * Five outcomes, and `unknown` is one of them on purpose: "I could not run git" must not be
+ * reported in the same voice as "the tree is clean".
+ *
+ * Exported for tests/marketplace-clone-health.test.mjs.
+ */
+export function marketplaceCloneHealth(
+  dir,
+  run = (args) => execFileSync('git', args, { encoding: 'utf8', timeout: 20000 }),
+) {
+  if (!existsSync(dir)) return { kind: 'absent' };
+  if (!existsSync(join(dir, '.git'))) return { kind: 'not-git' };
+  let porcelain;
+  try {
+    porcelain = run(['-C', dir, 'status', '--porcelain']);
+  } catch (e) {
+    return { kind: 'unknown', reason: e?.code || e?.message || 'git failed' };
+  }
+  const entries = String(porcelain)
+    .split('\n')
+    .filter((l) => l.trim());
+  if (entries.length === 0) return { kind: 'clean' };
+  return {
+    kind: 'dirty',
+    count: entries.length,
+    // Named separately because it points at the mechanism rather than at the user: a
+    // node_modules in a marketplace clone was almost certainly put there by our launcher.
+    hasNodeModules: entries.some((l) => /\bnode_modules\b/.test(l)),
+  };
+}
+
+/**
+ * The `mem-lite` / `mem` registrations in `claude mcp list` output that are NOT provided by
+ * a plugin manifest.
+ *
+ * `claude mcp list` prints one `<name>: <command>` line per server, and a plugin-provided
+ * one is named `plugin:<plugin>:<server>`. The old test — `list.includes('mem-lite:')` —
+ * matched inside `plugin:claude-mem-lite:mem-lite:`, so it could not tell the two apart and
+ * always answered "registered" for a plugin user.
+ *
+ * Deliberately named for what it MEASURES: a bare-name registration, whatever its scope.
+ * `mcp list` does not label user vs project scope on the line itself, so calling this
+ * "user-scope" would claim more than the output supports.
+ *
+ * Exported for tests/mcp-registration-parse.test.mjs.
+ */
+export function nonPluginMemRegistrations(listOutput) {
+  const names = [];
+  for (const line of String(listOutput ?? '').split('\n')) {
+    // Anchored, no leading whitespace: the diagnostics block below the list is indented, and
+    // its `└ [Warning] [mem-lite] mcpServers.mem-lite: …` lines are not registrations.
+    const m = /^(\S+):\s+\S/.exec(line);
+    if (!m) continue;
+    const name = m[1];
+    if (name.startsWith('plugin:')) continue;
+    if (name === 'mem-lite' || name === 'mem') names.push(name);
+  }
+  return names;
+}
+
+/**
+ * The remedy line for a `doctor` database check that threw — or null when the failure is
+ * one this cannot classify.
+ *
+ * Returning null is deliberate and is the case worth defending: a diagnostic that always
+ * prints a fix eventually prints the wrong one, and the bare error message is a better
+ * answer than a confident irrelevance. The three CLASSIFIED outcomes are kept apart for the
+ * same reason — "restore this snapshot", "there is no snapshot", and "I could not read the
+ * directory to find out" are three different situations, and collapsing the last two ends
+ * the reader's search with a fact nobody checked.
+ *
+ * Shell commands only, no `claude-mem-lite <cmd>`: the remedy for a broken store must not
+ * itself depend on which install shape the user has (the plugin cache has no CLI on PATH).
+ *
+ * Exported for tests/doctor-db-remedy.test.mjs, which also drives the shipped doctor over a
+ * corrupt file — a pure function nothing calls is the wiring gap this repo keeps finding.
+ */
+export function dbCheckRemedy(dbPath, err) {
+  if (isNativeBindingError(err)) return `Repair: ${nativeBindingRepairHint(PROJECT_DIR)}`;
+  const msg = String(err?.message ?? err ?? '');
+  // SQLite's own spellings for "this file is not a usable database".
+  if (!/not a database|disk image is malformed|file is not a database/i.test(msg)) return null;
+
+  const clear = `rm -f "${dbPath}-wal" "${dbPath}-shm"`;
+  const snap = readSnapshots(dbPath);
+  if (!snap.ok) {
+    return (
+      `Could not read ${dirname(dbPath)} to look for a backup snapshot (${snap.reason}) — ` +
+      `fix that directory first, then look for ${basename(dbPath)}.*.bak beside the database.`
+    );
+  }
+  if (snap.snapshots.length === 0) {
+    return (
+      `No backup snapshot exists beside the database. Set the broken file aside so a fresh ` +
+      `store is created on the next session: ${clear} && mv "${dbPath}" "${dbPath}.corrupt" ` +
+      `— memories in that file are not recoverable without a backup.`
+    );
+  }
+  // Newest by mtime. Ties are broken by name, which carries an ISO stamp, so the answer is
+  // total rather than dependent on which of two same-millisecond files readdir returned
+  // first (the D#9 shape).
+  const newest = snap.snapshots
+    .slice()
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || (a.path < b.path ? 1 : -1))[0];
+  return (
+    `Restore the newest of ${snap.snapshots.length} backup snapshot(s): ` +
+    `${clear} && cp "${newest.path}" "${dbPath}" ` +
+    `— move the broken file aside first if you want to keep it for inspection.`
+  );
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -1136,11 +1277,23 @@ async function uninstall() {
     ok('Marketplace directory removed');
   }
 
-  // 5b. Remove cache directory
+  // 5b. Remove cache directories — OURS unconditionally, the marketplace-wide one gated.
+  //
+  // The gate exists so uninstalling this plugin does not delete a sibling plugin published
+  // under the same marketplace. That reasoning covers `cache/<marketplace>/`; it does not
+  // cover `cache/<marketplace>/claude-mem-lite/`, which is ours alone. Because only the
+  // gated branch existed, a user with any other sdsrss plugin installed kept every cached
+  // version of THIS one — measured at 241 MB on a machine where `/plugin uninstall` had
+  // already removed the manifest, i.e. bytes belonging to a plugin that was gone.
+  const ownCacheDir = join(pluginsDir, 'cache', marketplaceKey, PLUGIN_NAME);
+  if (existsSync(ownCacheDir)) {
+    rmSync(ownCacheDir, { recursive: true, force: true });
+    ok('Plugin cache removed');
+  }
   const cacheDir = join(pluginsDir, 'cache', marketplaceKey);
   if (canRemoveMarketplaceArtifacts && existsSync(cacheDir)) {
     rmSync(cacheDir, { recursive: true, force: true });
-    ok('Plugin cache removed');
+    ok('Marketplace cache directory removed');
   }
 
   // 5c. Clean known_marketplaces.json
@@ -1226,33 +1379,43 @@ async function status() {
   const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
   const pluginProvides = !!shape.activePluginVersion;
 
-  // MCP
-  try {
-    const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8' });
-    // Accept either the current "mem-lite" registration or the legacy "mem"
-    // name (pre-v2.78) so a user mid-upgrade still sees a green status until
-    // setup.sh / install.mjs purges the legacy entry on next run.
-    // v2.79.1: dropped a `/\bmem\b\s/` fallback regex — the `\b` word boundary
-    // also matched "mem-lite" (because `-` is a non-word char), so the regex
-    // was always-true noise (benign only because the mem-lite checks short-
-    // circuited first). `claude mcp list` formats as `<name>: <command>`, so
-    // the two colon-form checks below cover every shape.
-    const registered = list.includes('mem-lite:') || list.includes('mem:');
-    if (registered) {
-      push('ok', 'mcp', 'MCP server: registered', { registered });
-    } else if (pluginProvides) {
-      push(
-        'ok',
-        'mcp',
-        `MCP server: provided by the plugin manifest (v${shape.activePluginVersion.version} .mcp.json) — no user-scope registration expected`,
-        { registered: false, via: 'plugin' },
-      );
-    } else {
-      push('fail', 'mcp', 'MCP server: not registered', { registered });
+  // MCP. A plugin install answers this from the manifest and does NOT shell out.
+  //
+  // Two reasons, and the first is correctness rather than speed. `claude mcp list` prints a
+  // plugin server as `plugin:claude-mem-lite:mem-lite: …`, and the old substring test
+  // `list.includes('mem-lite:')` matched INSIDE that name — so a plugin user was reported as
+  // having a user-scope registration they do not have, and the branch written for them below
+  // was unreachable. That is the same accidental-match class as the `\bmem\b` regex this
+  // comment block used to describe. Second: the official help says approved servers are
+  // "health-checked", i.e. the call STARTS every MCP server configured on the machine —
+  // measured 2026-09-08 at 2.546s wall for three servers, one of them a remote HTTP endpoint.
+  // A status command should not pay that, and a plugin user gains nothing from it.
+  //
+  // `doctor` keeps the exec unconditionally: it is the deep check, and it is where the
+  // duplicate/legacy registration the README's "Mixed-install residue" section describes now
+  // gets detected — nothing detected it before.
+  if (pluginProvides) {
+    push(
+      'ok',
+      'mcp',
+      `MCP server: provided by the plugin manifest (v${shape.activePluginVersion.version} .mcp.json) — no user-scope registration expected`,
+      { registered: false, via: 'plugin' },
+    );
+  } else
+    try {
+      const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 60000 });
+      // Accept either the current "mem-lite" registration or the legacy "mem" name
+      // (pre-v2.78) so a user mid-upgrade still sees a green status until setup.sh /
+      // install.mjs purges the legacy entry on next run.
+      const registered = nonPluginMemRegistrations(list).length > 0;
+      if (registered) {
+        push('ok', 'mcp', 'MCP server: registered', { registered });
+      } else {
+        push('fail', 'mcp', 'MCP server: not registered', { registered });
+      }
+    } catch {
+      push('warn', 'mcp', 'Could not check MCP status', { registered: null });
     }
-  } catch {
-    push('warn', 'mcp', 'Could not check MCP status', { registered: null });
-  }
 
   // Hooks
   const settings = readSettings();
@@ -1707,6 +1870,60 @@ async function doctor() {
     ok('Orphan hooks: none (all hook targets present)');
   }
 
+  // MCP registration. This lives in doctor, not status: `claude mcp list` health-checks —
+  // i.e. STARTS — every MCP server configured on the machine (2.546s wall for three servers,
+  // measured 2026-09-08), which is a cost the deep check can carry and a status line cannot.
+  //
+  // What it buys beyond status: the DUPLICATE. The README's "Mixed-install residue" section
+  // has warned since v3 that a plugin user who once ran the npx/git-clone installer keeps a
+  // bare-name registration that double-registers the server — and nothing in the tool
+  // detected it. Orphan hooks had a check; its MCP twin did not.
+  try {
+    const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 60000 });
+    const bare = nonPluginMemRegistrations(list);
+    const viaPlugin = !!shape?.activePluginVersion;
+    if (viaPlugin && bare.length > 0) {
+      dwarn(
+        `MCP registration: the plugin manifest provides the server AND a bare "${bare.join('", "')}" registration exists — the server is registered twice`,
+      );
+      log('    Fix: claude mcp remove -s user ' + bare[0]);
+    } else if (viaPlugin) {
+      ok('MCP registration: provided by the plugin manifest only (no duplicate)');
+    } else if (bare.length > 0) {
+      ok(`MCP registration: "${bare.join('", "')}" registered`);
+    } else {
+      dwarn('MCP registration: no claude-mem-lite MCP server is registered and no plugin provides one');
+    }
+  } catch (e) {
+    // Third outcome, kept apart from "none found" on purpose: the `claude` CLI may not be on
+    // PATH at all, and a green "no duplicate" would end the reader's search on a check that
+    // never ran.
+    dwarn(`MCP registration: could not run \`claude mcp list\` (${e.code || e.message}) — not checked`);
+  }
+
+  // Marketplace clone updatability — see marketplaceCloneHealth for why this is the
+  // precondition behind the schema-skew lock-in v6.3.0 shipped a detector for.
+  const marketplaceClone = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
+  const clone = marketplaceCloneHealth(marketplaceClone);
+  if (clone.kind === 'dirty') {
+    dwarn(
+      `Marketplace clone: ${clone.count} uncommitted change(s) in ${marketplaceClone}${clone.hasNodeModules ? ' (including node_modules/)' : ''}`,
+    );
+    log(
+      '    Claude Code updates a git-source marketplace by pulling this clone, and a dirty tree blocks the pull —',
+    );
+    log(
+      '    the plugin then stops updating silently, which is how a machine ends up running code older than its DB.',
+    );
+    log(`    Inspect: git -C ${marketplaceClone} status`);
+  } else if (clone.kind === 'unknown') {
+    dwarn(`Marketplace clone: could not check ${marketplaceClone} (${clone.reason}) — not checked`);
+  } else if (clone.kind === 'clean') {
+    ok('Marketplace clone: clean (the marketplace updater can fast-forward it)');
+  }
+  // 'absent' / 'not-git' are silent: an npm-channel or npx user has no marketplace clone,
+  // and a check that reports on a thing you do not have is noise.
+
   // Database
   if (existsSync(DB_PATH)) {
     try {
@@ -1750,6 +1967,11 @@ async function doctor() {
       }
     } catch (e) {
       fail('Database: ' + e.message);
+      // Every other ✗ on this screen carries a remedy; this one used to be the exception,
+      // and a corrupt store is the failure a user is least able to diagnose unaided.
+      // dbCheckRemedy returns null rather than invent one for an error it cannot classify.
+      const remedy = dbCheckRemedy(DB_PATH, e);
+      if (remedy) log(`    ${remedy}`);
       issues++;
     }
   } else {
@@ -2624,9 +2846,7 @@ async function repair() {
     console.log('  Automatic repair fails closed rather than run unverified code.');
     console.log('  Manual fallback — run this in any shell (you are choosing to trust it):');
     console.log('');
-    console.log(
-      '  T=$(mktemp -d) && curl -sL https://api.github.com/repos/sdsrss/claude-mem-lite/tarball | tar xz -C "$T" --strip-components=1 && node "$T/install.mjs" install',
-    );
+    console.log(`  ${MANUAL_TARBALL_FALLBACK}`);
     console.log('');
     process.exit(1);
   } finally {
