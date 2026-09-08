@@ -66,6 +66,34 @@ jobs:
       - name: ShellCheck shipped scripts
         run: shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-commit.sh scripts/setup.sh
 
+  # The plugin and marketplace manifests, checked by the tool that actually loads them.
+  #
+  # tests/plugin-manifest.test.mjs encodes the documented field set locally, so it can say NO
+  # on every machine — but only about rules it was told, and the reference moves. That gap is
+  # not hypothetical: `claude plugin validate . --strict` was never run here, and when it was
+  # (2026-09-08) `.claude-plugin/plugin.json` exited 1 over a rule the local guard has no way
+  # to know about. Both guards stay; they answer different questions.
+  #
+  # The CLI is PINNED. A floating version would turn an upstream rule change into a red build
+  # on an unrelated commit; pinning makes "we adopted a new rule" a reviewable bump of this
+  # line, which is the same convention the SHA-pinned actions above follow. The cost is that
+  # new upstream rules arrive only when someone bumps it — bump it deliberately.
+  #
+  # No `continue-on-error`, and no skip when the CLI is missing: the script treats a failure
+  # to RUN as a failure. A spawn-based check that quietly passes where the tool is absent is
+  # the permanently-skipped-test shape this repo has already paid for once.
+  plugin-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install the Claude Code CLI (pinned)
+        run: npm install -g @anthropic-ai/claude-code@2.1.263
+      - name: Validate plugin + marketplace manifests
+        run: npm run validate:manifests
+
   audit:
     runs-on: ubuntu-latest
     steps:

@@ -46,4 +46,34 @@ describe('plugin manifests', () => {
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs session-start',
     );
   });
+
+  // `claude plugin validate . --strict` exited 1 on this repo: marketplace `metadata` carried
+  // a `homepage` key, which the runtime tolerates and --strict rejects as unrecognized. The
+  // field is real, it just belongs on the plugin ENTRY, where the reference documents it.
+  //
+  // Guarded HERE rather than by shelling out to `claude plugin validate`, deliberately: the
+  // CLI is not a dev dependency, so a spawn-based check would skip silently on any machine
+  // or CI runner that lacks it — the permanently-skipped-test shape this repo has been
+  // burned by before (tests/pre-commit-hook-sync.test.mjs). Encoding the documented field
+  // set costs one list that must be updated when the reference changes, and it can say NO
+  // on every machine.
+  it('uses only marketplace metadata fields the reference documents', () => {
+    const marketplace = readJson('.claude-plugin/marketplace.json');
+    // https://code.claude.com/docs/en/plugin-marketplaces — marketplace-level `metadata`
+    // accepts pluginRoot / description / version and nothing else.
+    const ALLOWED_METADATA = new Set(['pluginRoot', 'description', 'version']);
+    const unknown = Object.keys(marketplace.metadata ?? {}).filter((k) => !ALLOWED_METADATA.has(k));
+    expect(unknown).toEqual([]);
+  });
+
+  it('keeps the marketplace homepage on the plugin entry, where it is a valid field', () => {
+    // The counterpart to the check above: the fix must MOVE the field, not delete it, or the
+    // manifest validates by having lost information. `homepage` is documented on a plugin
+    // entry, so this is where it belongs.
+    const marketplace = readJson('.claude-plugin/marketplace.json');
+    const entry = marketplace.plugins?.find((p) => p.name === 'claude-mem-lite');
+    expect(entry).toBeTruthy();
+    expect(entry.homepage).toMatch(/^https:\/\//);
+    expect(marketplace.metadata?.homepage).toBeUndefined();
+  });
 });

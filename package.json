@@ -24,6 +24,7 @@
     "format": "prettier --write \"**/*.{mjs,js}\"",
     "format:check": "prettier --check \"**/*.{mjs,js}\"",
     "dead-code": "knip",
+    "validate:manifests": "node scripts/validate-plugin-manifests.mjs",
     "audit:metrics": "node scripts/audit-metrics.mjs --md",
     "audit:baseline": "node scripts/audit-metrics.mjs --run-tests --md",
     "test": "vitest run",
