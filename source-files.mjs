@@ -238,6 +238,10 @@ export const SOURCE_FILES = [
   // Statically imported by mem-cli.mjs (cmdMaintain), server.mjs (mem_maintain),
   // and hook.mjs (handleAutoMaintain) — missing it would break maintain on auto-update.
   'lib/maintain-core.mjs',
+  // Shipped-prompt security control shared by hook-llm.mjs (episode + summary) and
+  // hook-optimize.mjs (concept normalization). A bare string with no imports; it lives in
+  // lib/ so the two faces cannot hand-copy it apart from each other (R10-P3-21).
+  'lib/memory-input-guard.mjs',
   'lib/fast-summary.mjs',
   'lib/transcript-scan.mjs',
   // Pre-maintenance VACUUM INTO snapshot (MED-2). Statically imported by mem-cli.mjs,

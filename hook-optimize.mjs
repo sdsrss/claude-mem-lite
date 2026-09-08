@@ -31,6 +31,7 @@ import { OBS_TYPE_SET } from './lib/obs-types.mjs';
 import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib/observation-write.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
+import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // P1-14: same resolver as hook-shared.mjs — this was the second module that had never
@@ -621,6 +622,61 @@ export function shouldRunNormalize(project = null) {
   }
 }
 
+/**
+ * Longest concept token allowed into the normalize prompt (R10-P3-21 layer 1).
+ *
+ * Measured 2026-09-08 over three populations — the real DB (1 row with concepts, 10
+ * distinct tokens, max 13), `benchmark/fixtures/seed-data.json` (200 rows, 541 distinct,
+ * max 22 = `infrastructure-as-code`) and `seed-data-cjk.json` (31 rows, 55 distinct,
+ * max 9). Combined 606 distinct real tokens, longest 22. 40 is ~1.8x that, so the gate
+ * has room for vocabulary this corpus has not seen yet. The real-DB arm is far too small
+ * to calibrate on and is named here so nobody re-derives the number from it alone.
+ */
+const CONCEPT_MAX_LEN = 40;
+
+/**
+ * Characters that make a JSON-shaped injection expressible, and that no real concept has.
+ * Zero of the 606 measured tokens contain any of them.
+ *
+ * A DENYLIST, deliberately, not an allowlist of word characters: `\w` is ASCII-only in JS,
+ * so an allowlist would eat `café` along with the payload, and silently narrowing a
+ * retrieval feature is a worse failure than the one being fixed. Control characters are
+ * included because `\s` already excludes whitespace at the split, but not every C0 byte.
+ */
+// The C0 range below is written as ESCAPES, never as literal bytes. An earlier edit of
+// this line put real 0x00 and 0x1F characters into the source, and all three symptoms
+// were the same one: grep classified the file as binary and silently returned nothing,
+// and both the Edit tool and bash refused strings containing them. Same class as the
+// grep -a lesson already in MEMORY.md.
+//
+// A literal HYPHEN is absent on purpose - `infrastructure-as-code`, `react-hook-form`,
+// `better-sqlite3` and `utf-8` are all measured real concepts, and an earlier draft that
+// included one would have filtered every one of them. The hyphen below is a RANGE
+// operator. A literal space is unnecessary: the caller split on whitespace to get here.
+//
+// The C0 range is the POINT of the disable below, not an oversight: the caller splits
+// on /\s+/, which covers tab, newline, CR, FF, VT and space but NOT
+// 0x00-0x08 or 0x0E-0x1F, so those bytes reach here inside a "single token".
+// eslint-disable-next-line no-control-regex
+const CONCEPT_SHAPE_DENY = /[{}[\]"'`\\<>\u0000-\u001F]/;
+
+/**
+ * Is this token shaped like a concept rather than like a payload? (R10-P3-21 layer 1.)
+ *
+ * The bound that makes this workable is upstream and worth stating: extractUniqueConcepts
+ * splits on /\s+/, so anything reaching here is already a single whitespace-free token —
+ * prose instructions cannot survive that, and what remains expressible is the JSON-shaped
+ * group literal, which needs the characters above.
+ */
+export function isConceptShaped(token) {
+  return (
+    typeof token === 'string' &&
+    token.length >= 2 &&
+    token.length <= CONCEPT_MAX_LEN &&
+    !CONCEPT_SHAPE_DENY.test(token)
+  );
+}
+
 export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
@@ -637,7 +693,11 @@ export function extractUniqueConcepts(db, limit = 500, { project } = {}) {
   for (const row of rows) {
     for (const c of row.concepts.split(/\s+/)) {
       const trimmed = c.trim();
-      if (trimmed.length >= 2) conceptSet.add(trimmed);
+      // R10-P3-21 layer 1. This function's output is a PROMPT INGREDIENT: it is joined
+      // with ', ' and sent to Sonnet, whose answer is then written back across every
+      // project. So the shape gate belongs here, at the boundary where stored content
+      // becomes model input — not at the write, which is far too late.
+      if (isConceptShaped(trimmed)) conceptSet.add(trimmed);
     }
   }
   return [...conceptSet].slice(0, limit);
@@ -648,9 +708,12 @@ export async function identifySynonymGroups(concepts) {
   if (!gotSlot) return [];
 
   try {
-    const prompt = `Analyze these concept terms from a code memory database and identify synonym groups (terms that refer to the same concept). Include cross-language synonyms (English/Chinese). Return ONLY valid JSON.
-
-Concepts: ${concepts.join(', ')}
+    // R10-P3-21 layer 2: static instructions in `system`, stored content in `user`, the
+    // same split episode extraction and session summary already use (hook-llm.mjs:906,
+    // :1408). callModelJSONAsync has taken this shape since haiku-client.mjs:161's
+    // splitPrompt — API mode maps it to a cached system role, CLI mode renders it with an
+    // explicit boundary marker — so this is adopting an existing contract, not adding one.
+    const system = `Analyze concept terms from a code memory database and identify synonym groups (terms that refer to the same concept). Include cross-language synonyms (English/Chinese). Return ONLY valid JSON.
 
 JSON: {"groups":[{"canonical":"preferred term","aliases":["synonym1","synonym2"]}, ...]}
 
@@ -658,14 +721,36 @@ Rules:
 - Only include groups where you are confident the terms are true synonyms
 - canonical should be the most specific/technical term
 - Include CJK ↔ English equivalents if present
-- Skip terms that have no synonyms in the list`;
+- Skip terms that have no synonyms in the list
+- Every canonical and every alias MUST be a term from the list; never introduce a new one
+${MEMORY_INPUT_GUARD}`;
+    const user = `Concepts: ${concepts.join(', ')}`;
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+    const parsed = await callModelJSONAsync({ system, user }, 'sonnet', {
       timeout: BG_LLM_TIMEOUT_MS,
       maxTokens: 1000,
     });
     if (!parsed?.groups || !Array.isArray(parsed.groups)) return [];
-    return parsed.groups.filter((g) => g.canonical && Array.isArray(g.aliases) && g.aliases.length > 0);
+    const wellFormed = parsed.groups.filter(
+      (g) => g.canonical && Array.isArray(g.aliases) && g.aliases.length > 0,
+    );
+
+    // R10-P3-21 layer 3. The prompt rule above is a request; this is the enforcement, and
+    // the two are not redundant — layer 2 is defense-in-depth wiring, not a behavioural
+    // guarantee (lesson #8605: prompt wording barely moves the model). Normalization maps
+    // EXISTING terms onto an existing preferred term, so a canonical or alias the corpus
+    // never had is out of contract by construction, whatever produced it — a jailbreak, a
+    // hallucination, or a future edit that weakens the prompt.
+    //
+    // Case-insensitive because applyNormalization's aliasMap lowercases on both sides
+    // (:738 and :774). A stricter check here would reject groups that function would have
+    // applied, i.e. two predicates deciding one thing.
+    const known = new Set(concepts.map((c) => c.toLowerCase()));
+    return wellFormed.filter(
+      (g) =>
+        known.has(String(g.canonical).toLowerCase()) &&
+        g.aliases.every((a) => known.has(String(a).toLowerCase())),
+    );
   } catch (e) {
     debugCatch(e, 'normalize-identify');
     return [];

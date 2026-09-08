@@ -138,6 +138,7 @@
     "lib/save-enrich.mjs",
     "lib/persist-reminder.mjs",
     "lib/maintain-core.mjs",
+    "lib/memory-input-guard.mjs",
     "lib/fast-summary.mjs",
     "lib/transcript-scan.mjs",
     "lib/ups-query.mjs",
