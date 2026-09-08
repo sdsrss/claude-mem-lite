@@ -2,6 +2,57 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.3.0 — when the database is newer than the code, say so
+
+`schema.mjs` has refused a database written by a newer claude-mem-lite since v2.41, and the
+refusal is right: replaying old migrations over a newer layout would corrupt the store. What
+was missing is everything downstream of the throw. Until this release, hitting it meant your
+memory silently stopped working.
+
+Measured on a real machine, 2026-09-08: DB at schema v49, live plugin cache at 5.6.0 (which
+supports v48), because a newer install had opened the shared database first. The result was
+**over 648 identical lines in one day** in `runtime/hook-errors/`, still growing; the MCP
+server died before its handshake so the host reported only `-32000 Connection closed`; and
+SessionStart returned in silence. Nothing a user could see said memory was off.
+
+**What changes for you.** When any code home cannot open your database because something
+newer wrote it, you now get told, on surfaces you actually read:
+
+- **SessionStart** prints a notice naming both schema versions and the command that repairs
+  *your* install. It goes to the user-visible channel, not only into the assistant's context.
+- **`claude-mem-lite doctor`** grades each code home separately, so it names the tree that is
+  behind — a plugin cache, a managed install, or a checkout — rather than asserting something
+  global about "the install". This is the part that works today: doctor runs from whichever
+  copy you invoke, so newer code can diagnose an older cache.
+- **`claude-mem-lite <any command>`** and the **MCP launcher** report the real cause instead
+  of a raw exception or a bare connection error.
+- The hook-error log records the fault **once per project per hour** instead of once per
+  database open.
+
+**The repair command is now correct for your install shape.** The message this replaces
+always ended in `npm i -g claude-mem-lite@latest`, which does nothing for a plugin-cache
+install — and a plugin-cache install is exactly the shape that hits this, because the cache
+only moves when Claude Code's marketplace updater moves it. A plugin install is now told:
+
+```
+/plugin marketplace update sdsrss
+/plugin update claude-mem-lite@sdsrss
+```
+
+Both, in that order. The first matters more than it looks: Claude Code compares against your
+local marketplace clone, so a stale clone makes `/plugin update` a no-op that reports success.
+On the machine that motivated this release the clone was 22 commits behind.
+
+**Not a migration.** `CURRENT_SCHEMA_VERSION` is unchanged at v49, so upgrading to 6.3.0 does
+not touch your database and downgrading needs nothing special. If you want out of the new
+notice, pin the previous version (`npm i -g claude-mem-lite@6.2.0`, or hold the plugin at its
+current cache version); there is deliberately no switch to silence it, because a
+"your memory is off" message you can turn off is the silence this release exists to remove.
+
+**Known limit, stated plainly.** This cannot help a machine already running older code — the
+detection ships in the newer version, and the old binary is the one throwing. `doctor` is the
+exception, for the reason above.
+
 ## v6.2.0 — the platform list was telling nobody anything, it was just blocking them
 
 **Fixes [#28](https://github.com/sdsrss/claude-mem-lite/issues/28). On Windows the MCP server
