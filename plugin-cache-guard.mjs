@@ -117,8 +117,16 @@ export function hasInstallManagedHooks(opts) {
   }
 }
 
-/** Every `command` string under settings.json `hooks`, in registration order. */
-function settingsHookCommands(home) {
+/**
+ * Every `command` string under settings.json `hooks`, in registration order.
+ *
+ * Exported since the issue-#28 round: doctor's hook-interpreter check needs the LIVE
+ * registration, and on the npm / npx / `git clone` shape that is settings.json rather than
+ * `hooks/hooks.json` (which SOURCE_FILES does not deploy). Reading it here rather than
+ * hand-rolling a second walk keeps the two consumers on one parser — the twin-drift class
+ * this repo keeps paying for.
+ */
+export function settingsHookCommands(home) {
   const settingsPath = join(home, '.claude', 'settings.json');
   if (!existsSync(settingsPath)) return [];
   let s;

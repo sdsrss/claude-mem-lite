@@ -29,7 +29,7 @@ claude-mem-lite is a Claude Code plugin (also installable via npm/npx) that runs
 - `npx github:sdsrss/claude-mem-lite` (one-liner; installs to `~/.claude-mem-lite/`)
 - `git clone https://github.com/sdsrss/claude-mem-lite.git && node install.mjs install` (for development)
 
-Requires Node.js ≥ 22 (`package.json` `engines`; better-sqlite3 13 requires it and Node 20 reached EOL in 2026-04), Claude Code CLI. Linux/macOS only (uses POSIX shell scripts; `package.json` declares `os`).
+Requires Node.js ≥ 22 (`package.json` `engines`; better-sqlite3 13 requires it and Node 20 reached EOL in 2026-04), Claude Code CLI. Linux and macOS are supported and CI-covered; Windows installs and runs the MCP server, the CLI and the `node` hooks, but is not CI-covered and needs Git for Windows or WSL for the three `bash` hook commands.
 
 ## Related projects
 

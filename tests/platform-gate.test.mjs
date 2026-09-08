@@ -180,6 +180,20 @@ describe('scripts/launch.mjs platform gate (issue #28)', () => {
     expect(platformAllowed(declared, 'darwin')).toBe(true);
   });
 
+  it('the gate models every platform field this package actually declares', () => {
+    // `platformGate` reads `os` and nothing else, but npm's checkPlatform raises the SAME
+    // EBADPLATFORM for `cpu` and `libc`. Today that is complete because this package
+    // declares neither — so pin THAT, rather than the module's docblock quietly claiming
+    // `os` is the whole gate. If a later round adds an arm64-only dependency and a `cpu`
+    // field, this goes red instead of the launcher reporting "not blocked" while npm
+    // refuses and the catch block hands back the guessed cause this round exists to delete.
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    expect(
+      { cpu: pkg.cpu, libc: pkg.libc },
+      'package.json declares cpu/libc — extend lib/platform-gate.mjs to model them',
+    ).toEqual({ cpu: undefined, libc: undefined });
+  });
+
   it('package-lock.json carries the same os list as package.json', () => {
     // npm mirrors the root manifest's `os` into the lockfile's root entry, and the release
     // path regenerates the lockfile with npm@10.9.2. A hand-edited package.json with a

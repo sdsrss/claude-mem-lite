@@ -102,20 +102,20 @@
 |------|------|------|
 | **Linux** | 支持 | 主要开发和测试平台；整个 CI 矩阵都跑在这里 |
 | **macOS** | 支持 | 完全兼容（Intel 和 Apple Silicon） |
-| **Windows** | 可安装,但无 CI 覆盖 | MCP server、CLI 和 `node` 类 hook 均可用（`better-sqlite3` 自带 `win32-x64` / `win32-arm64` 预编译产物,无需编译）。**有三个 hook 命令走 `bash`** —— `setup.sh`、`post-tool-use.sh`、`pre-agent-inject.sh` —— 需要 PATH 上有 Git for Windows 或 WSL;`bash` 找不到时 `claude-mem-lite doctor` 会报出来。GitHub Actions 没有 Windows runner,所以这一行依据的是用户报告（[#28](https://github.com/sdsrss/claude-mem-lite/issues/28)）而不是绿色流水线 |
-| **WSL2** | 未测试 | 底层就是 Linux,预期与 Linux 行一致;但无人报告过实际结果 |
+| **Windows** | 可安装，但无 CI 覆盖 | MCP server、CLI 和 `node` 类 hook 均可用（`better-sqlite3` 自带 `win32-x64` / `win32-arm64` 预编译产物，无需编译）。**有三个 hook 命令走 `bash`** —— `setup.sh`、`post-tool-use.sh`、`pre-agent-inject.sh` —— 需要 PATH 上有 Git for Windows 或 WSL；`bash` 找不到时 `claude-mem-lite doctor` 会报出来。GitHub Actions 没有 Windows runner，所以这一行依据的是用户报告（[#28](https://github.com/sdsrss/claude-mem-lite/issues/28)）而不是绿色流水线 |
+| **WSL2** | 未测试 | 底层就是 Linux，预期与 Linux 行一致；但无人报告过实际结果 |
 
-v6.1.x 之前 `package.json` 声明的是 `os: ["darwin", "linux"]`。那是 npm 的**安装**门禁,不是运行时检查:
-在 Windows 上它让 `npm install` 以 `EBADPLATFORM` 退出,而插件启动器每次插件更新后的首次 MCP 启动都要跑这条
-安装 —— 于是 server 起不来,`/mcp` 报 `CONNECTION_CLOSED`。现在 `win32` 已加入该列表。仍不在列表内的平台会拿到
-一条同时点明"声明了什么"和"当前是什么"的消息,而不是一句猜测。
+v5.1.0 到 v6.1.0 之间，`package.json` 声明的是 `os: ["darwin", "linux"]`。那是 npm 的**安装**门禁，不是运行时检查：
+在 Windows 上它让 `npm install` 以 `EBADPLATFORM` 退出，而插件启动器每次插件更新后的首次 MCP 启动都要跑这条
+安装 —— 于是 server 起不来，`/mcp` 报 `CONNECTION_CLOSED`。现在 `win32` 已加入该列表。仍不在列表内的平台会拿到
+一条同时点明“声明了什么”和“当前是什么”的消息，而不是一句猜测。
 
 ## 环境要求
 
 - **Node.js** >= 22（v4.0.0 起：better-sqlite3 13 要求 >=22，Node 20 已于 2026-04 EOL；`package.json` 的 `engines` 是唯一事实来源）
 - **Claude Code** CLI 已安装并配置（`claude` 命令可用）
-- **SQLite3** 支持（由 `better-sqlite3` 提供，安装时编译）
-- **平台**：Linux 或 macOS；Windows 可安装运行,但无 CI 覆盖,且三个 hook 需要 Git Bash 或 WSL（参见[平台支持](#平台支持)）
+- **SQLite3** 支持（由 `better-sqlite3` 13 提供，它自带 8 个平台的预编译产物，这些平台上都不需要编译器；没有对应预编译产物的平台才会回退到源码编译）
+- **平台**：Linux 或 macOS；Windows 可安装运行，但无 CI 覆盖，且三个 hook 需要 Git Bash 或 WSL（参见[平台支持](#平台支持)）
 
 ## 安装
 
