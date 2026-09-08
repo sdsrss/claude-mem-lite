@@ -259,8 +259,27 @@ describe('saveObservation supersedes', () => {
   it('SWEEP: both faces render formatSupersedeSkipped on BOTH of their return paths (D#201)', () => {
     const faces = ['mem-cli.mjs', 'server.mjs'];
     const problems = [];
+    // COMMENTS ARE STRIPPED BEFORE ANYTHING IS SEARCHED, and the window is built from the
+    // stripped text too. Both halves matter: v6.5.0 added a comment at the save call site
+    // quoting the duplicate MESSAGE 16 lines above the real branch — so `search()` anchored on
+    // the comment, sliced a window with no call in it, and reported a false positive against
+    // correctly-wired code. The mirror-image failure is worse and is what this guard is for:
+    // a COMMENTED-OUT call site inside the window would satisfy the old form.
+    //
+    // The relation to the old guard is DIFFERENT, not strictly stronger, and the distinction
+    // is worth keeping: the new form accepts a source the old one rejected (this file's own
+    // mem-cli.mjs), which is the false positive being removed, while rejecting a source the
+    // old one accepted (a commented-out call). Both directions are mutation-verified.
+    // Only FULL-LINE comments are removed, deliberately — stripping `//` to end-of-line
+    // anywhere would eat the tail of any code line holding a `https://` literal and shift
+    // the window under us.
+    const stripComments = (src) =>
+      src
+        .split('\n')
+        .map((l) => (/^\s*(\/\/|\/\*|\*)/.test(l) ? '' : l))
+        .join('\n');
     for (const face of faces) {
-      const src = readFileSync(join(REPO, face), 'utf8');
+      const src = stripComments(readFileSync(join(REPO, face), 'utf8'));
       if (
         !/import\s*\{[^}]*\bformatSupersedeSkipped\b[^}]*\}\s*from\s*['"][^'"]*save-observation\.mjs['"]/.test(
           src,
@@ -474,5 +493,56 @@ describe('saveObservation supersedes', () => {
       }
       expect(problems).toEqual([]);
     });
+  });
+});
+
+// ─── --force / force: the escape hatch out of the 5-minute near-duplicate window ─────────
+//
+// The window is right by default — it is what stops hook-driven auto-saves re-accumulating
+// one story. But it also refused a LEGITIMATE distinct memory with no way past it: measured
+// 2026-09-08, three deliberately different notes about one file inside five minutes collapsed
+// to one save, the second and third answered "Skipped: similar to existing #N" at exit 0, and
+// the only workaround was to reword until Jaccard fell below 0.7 — i.e. degrade the memory to
+// get it stored.
+describe('near-duplicate guard: force', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  const save = (content, extra = {}) =>
+    saveObservation(db, { content, project: 'p', type: 'discovery', ...extra });
+
+  it('still refuses a near-duplicate by default (the guard is not weakened)', () => {
+    expect(save('the cart total rounds per line item and drifts a cent').kind).toBe('saved');
+    const second = save('the cart total rounds per line item and drifts a cent');
+    expect(second.kind).toBe('duplicate');
+    expect(second.existingId).toBe(1);
+  });
+
+  it('saves the same content when force is set', () => {
+    expect(save('the cart total rounds per line item and drifts a cent').kind).toBe('saved');
+    const forced = save('the cart total rounds per line item and drifts a cent', { force: true });
+    expect(forced.kind).toBe('saved');
+    expect(forced.id).toBe(2);
+  });
+
+  it('force does not disable anything else the save does', () => {
+    // The escape hatch skips ONE check. A caller reaching for it must not silently lose the
+    // lesson, the supersession, or the empty-content guard.
+    const first = save('an original conclusion about pagination');
+    expect(first.kind).toBe('saved');
+    const forced = save('an original conclusion about pagination', {
+      force: true,
+      lesson_learned: 'the corrected conclusion',
+      supersedes: [first.id],
+    });
+    expect(forced.kind).toBe('saved');
+    expect(forced.lessonCaptured).toBe(true);
+    expect(forced.supersededIds).toEqual([first.id]);
+    expect(() => saveObservation(db, { content: '   ', project: 'p', force: true })).toThrow(
+      /empty or whitespace-only/,
+    );
   });
 });

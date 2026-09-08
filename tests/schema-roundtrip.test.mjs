@@ -80,8 +80,11 @@ describe('schema round-trip parity (#8127)', () => {
       expect(parse(memDeleteSchema, { ids: '1,2,3', confirm: false }).success).toBe(true);
     });
     it('rejects P# prefix (by design — CLI cmdDelete test line ~1795 locks this)', () => {
-      // memDeleteSchema uses coerceIntArray which drops non-numeric tokens during split.
-      // "P#1" → NaN → filtered → empty array → min(1) fails.
+      // memDeleteSchema routes through boundedIntArray, whose `wholeIntOrRaw` LEAVES a
+      // non-numeric token as a STRING so zod rejects it by type (the documented discipline
+      // in tool-schemas.mjs: "left as a string, rejected by zod"). It is not parseInt'd to
+      // NaN, not filtered out, and the failing constraint is the element type, not min(1) —
+      // the previous version of this comment said all four of those and was wrong in each.
       expect(parse(memDeleteSchema, { ids: 'P#1', confirm: false }).success).toBe(false);
     });
   });

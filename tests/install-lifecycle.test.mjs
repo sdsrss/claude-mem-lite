@@ -14,7 +14,11 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
-import { clearPluginDisabledMarkerForDirectInstall, hasOtherMarketplacePlugins } from '../install.mjs';
+import {
+  clearPluginDisabledMarkerForDirectInstall,
+  hasOtherMarketplacePlugins,
+  projectScopedMemRegistrations,
+} from '../install.mjs';
 import { initSchema } from '../schema.mjs';
 
 const INSTALL_PATH = resolve('install.mjs');
@@ -413,6 +417,181 @@ describe('install lifecycle checks', () => {
         rmSync(home, { recursive: true, force: true });
       } catch {}
     }
+  });
+
+  // A plain uninstall said "Data preserved (use --purge to remove)". True, and it named
+  // the wrong half of what is left: on a real sandbox install the DB was 0.2MB while the
+  // now-unreachable code and node_modules were 53MB — the symlink, hooks and MCP entry are
+  // all gone, so nothing runs them, and nothing told the user they were still there.
+  // Both numbers are reported now, and this asserts the SPLIT: a byte planted in the DB
+  // must be counted as memory, a byte planted under node_modules must not.
+  it('uninstall reports both halves of what it leaves behind, split correctly', () => {
+    const home = makeTmpDir();
+    try {
+      const dataDir = join(home, '.claude-mem-lite');
+      mkdirSync(join(dataDir, 'node_modules', 'pkg'), { recursive: true });
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'settings.json'), '{}');
+      // 3 MiB of "memories" (DB + one snapshot, matching readSnapshots' prefix rule) and
+      // 7 MiB of "rest" — distinct sizes so a swapped or merged number cannot read as pass.
+      writeFileSync(join(dataDir, 'claude-mem-lite.db'), Buffer.alloc(2 * 1024 * 1024));
+      writeFileSync(join(dataDir, 'claude-mem-lite.db.v1.bak'), Buffer.alloc(1024 * 1024));
+      writeFileSync(join(dataDir, 'node_modules', 'pkg', 'big.bin'), Buffer.alloc(6 * 1024 * 1024));
+      writeFileSync(join(dataDir, 'cli.mjs'), Buffer.alloc(1024 * 1024));
+
+      const binDir = makeFakeClaudeBin(home);
+      const output = runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+
+      expect(output).toMatch(/Data preserved: memories in .*\.claude-mem-lite \(3\.0MB\)/);
+      expect(output).toMatch(/Also kept: the installed code \+ node_modules under .* \(7\.0MB\)/);
+      expect(output).toContain('`uninstall --purge` removes the directory, memories included');
+      // The claim the message makes about the memories has to be true.
+      expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(true);
+      expect(existsSync(join(dataDir, 'claude-mem-lite.db.v1.bak'))).toBe(true);
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // The probe must never be the thing that fails an uninstall: an unreadable or absent
+  // data dir degrades to the short sentence, it does not throw. Driven by removing the
+  // directory entirely, which is the shape a second uninstall run hits.
+  it('uninstall still completes when there is nothing left to measure', () => {
+    const home = makeTmpDir();
+    try {
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'settings.json'), '{}');
+      const binDir = makeFakeClaudeBin(home);
+      const output = runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+      expect(output).toContain('Done!');
+      expect(output).toMatch(/Data preserved: memories in .* \(0\.0MB\)/);
+      expect(output).not.toContain('Also kept:');
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // `install` used to run `claude mcp remove -s project <name>` as part of "purge any
+  // pre-existing registration before re-registering". That command edits `<cwd>/.mcp.json`,
+  // which belongs to whatever repository the user is standing in — not to this installer.
+  // Measured 2026-09-08: running the installer from a clone of THIS repo emptied the tracked
+  // root `.mcp.json` (the plugin's own MCP manifest, and a RELEASE_SIGNED_FILES entry) with
+  // no output saying so; the only thing that noticed was tests/plugin-manifest.test.mjs.
+  //
+  // The fake `claude` here implements that removal for real, so the case measures the
+  // consequence (a rewritten project file) rather than only the argv. Both are asserted:
+  // the argv, because that is the decision, and the file, because that is the harm.
+  it('install never edits the project-scoped .mcp.json it is standing in', () => {
+    const home = makeTmpDir();
+    try {
+      const projectDir = join(home, 'someones-repo');
+      const binDir = join(home, 'bin');
+      const logPath = join(home, 'claude-argv.log');
+      mkdirSync(projectDir, { recursive: true });
+      mkdirSync(binDir, { recursive: true });
+      mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
+      // Real node_modules, so `install` has no npm work to do and the case stays fast.
+      symlinkSync(resolve('node_modules'), join(home, '.claude-mem-lite', 'node_modules'));
+
+      const mcpPath = join(projectDir, '.mcp.json');
+      const original = JSON.stringify(
+        {
+          mcpServers: { 'mem-lite': { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/launch.mjs'] } },
+        },
+        null,
+        2,
+      );
+      writeFileSync(mcpPath, original);
+
+      const fakeClaude = join(binDir, 'claude');
+      writeFileSync(
+        fakeClaude,
+        [
+          '#!/usr/bin/env bash',
+          `printf '%s\\n' "$*" >> "${logPath}"`,
+          '# Implement `mcp remove -s project <name>` the way the real CLI does: edit ./.mcp.json',
+          'if [[ "$1" == "mcp" && "$2" == "remove" && "$3" == "-s" && "$4" == "project" ]]; then',
+          `  node -e 'const f=".mcp.json";const fs=require("fs");try{const d=JSON.parse(fs.readFileSync(f,"utf8"));delete d.mcpServers[process.argv[1]];fs.writeFileSync(f,JSON.stringify(d,null,2))}catch{}' "$5"`,
+          'fi',
+          'exit 0',
+        ].join('\n'),
+      );
+      execFileSync('chmod', ['+x', fakeClaude]);
+
+      const output = execFileSync(process.execPath, [INSTALL_PATH, 'install'], {
+        encoding: 'utf8',
+        cwd: projectDir,
+        env: { ...process.env, HOME: home, MEM_NO_AUTO_ADOPT: '1', PATH: `${binDir}:${process.env.PATH}` },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const argv = readFileSync(logPath, 'utf8');
+      expect(argv, 'user scope is ours to purge').toContain('mcp remove -s user mem-lite');
+      expect(argv, 'project scope is the repository owner’s').not.toContain('-s project');
+      expect(readFileSync(mcpPath, 'utf8')).toBe(original);
+      // Silence would be the other failure: the duplicate really does shadow the user-scope
+      // registration inside this directory, so it has to be reported, just not removed.
+      expect(output).toContain('at PROJECT scope');
+      expect(output).toContain('.mcp.json');
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // The predicate the warning is built from, driven directly so the shapes that must NOT
+  // warn are pinned too — a warning that fires on every project would train the user to
+  // ignore the one that matters.
+  describe('projectScopedMemRegistrations', () => {
+    const withMcpJson = (contents) => {
+      const dir = makeTmpDir();
+      if (contents !== null) writeFileSync(join(dir, '.mcp.json'), contents);
+      return dir;
+    };
+
+    it('names both of our registrations and nothing else', () => {
+      const dir = withMcpJson(
+        JSON.stringify({ mcpServers: { mem: {}, 'mem-lite': {}, 'someone-elses': {} } }),
+      );
+      try {
+        expect(projectScopedMemRegistrations(dir).names).toEqual(['mem', 'mem-lite']);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('stays quiet for a project that registers other servers only', () => {
+      const dir = withMcpJson(JSON.stringify({ mcpServers: { postgres: {}, github: {} } }));
+      try {
+        expect(projectScopedMemRegistrations(dir).names).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['no .mcp.json at all', null],
+      ['unparseable JSON', '{ not json'],
+      ['no mcpServers key', '{}'],
+      // Two shapes, because they fail on DIFFERENT clauses and an earlier version of this
+      // row used only the array — which `typeof [] === 'object'` let slide past the guard
+      // into the membership filter, so the case was green without the guard ever firing.
+      ['mcpServers is a scalar', '{"mcpServers": 3}'],
+      ['mcpServers is an array', '{"mcpServers": []}'],
+    ])('stays quiet and does not throw on %s', (_label, contents) => {
+      const dir = withMcpJson(contents);
+      try {
+        expect(() => projectScopedMemRegistrations(dir)).not.toThrow();
+        expect(projectScopedMemRegistrations(dir).names).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('plugin setup clears stale MCP registrations and links dependencies from data dir', () => {

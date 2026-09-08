@@ -201,3 +201,91 @@ describe('advertised JSON Schema `required` matches runtime enforcement', () => 
     expect(required.length).toBeGreaterThanOrEqual(5);
   });
 });
+
+// ─── The advertised BOUNDS must agree with what the runtime enforces ────────────────────
+//
+// Same `.pipe()` blind spot as the `required` sweep above, one layer down: zod 4 renders a
+// ZodPipe's INPUT side, so `coerceInt.pipe(z.number().int().min(1).max(100))` published the
+// bare `z.number().int()` — i.e. the safe-integer range — and the real 1..100 never reached
+// the model. Measured before the fix: 20 of 36 constrained fields disagreed, every one of
+// them in the direction that invites a rejected call. `mem_compress.age_days` advertised
+// ±9007199254740991 while the runtime demands >= 30, and `mem_delete.ids` — a DESTRUCTIVE
+// tool — advertised no array bounds at all against an enforced 1..50.
+//
+// Graded against ground truth, not a hand-kept list: the io:'output' rendering is what the
+// runtime actually validates, so any field where the two renderings differ is a field whose
+// published contract is false. Same reason as above — a list would have to be updated by
+// whoever adds the next piped bound, which is exactly the person who will not know to.
+describe('advertised JSON Schema bounds match runtime enforcement', () => {
+  const BOUND_KEYS = [
+    'minimum',
+    'maximum',
+    'exclusiveMinimum',
+    'exclusiveMaximum',
+    'minItems',
+    'maxItems',
+    'minLength',
+    'maxLength',
+  ];
+
+  /** Collect every constrained node of a JSON Schema, keyed by its path. */
+  const boundsByPath = (schema) => {
+    const out = {};
+    const walk = (node, path) => {
+      if (!node || typeof node !== 'object') return;
+      if (BOUND_KEYS.some((k) => node[k] !== undefined)) {
+        out[path] = JSON.stringify(Object.fromEntries(BOUND_KEYS.map((k) => [k, node[k]])));
+      }
+      if (node.properties) for (const [k, v] of Object.entries(node.properties)) walk(v, `${path}.${k}`);
+      if (node.items) walk(node.items, `${path}[]`);
+      if (Array.isArray(node.anyOf)) node.anyOf.forEach((v, i) => walk(v, `${path}|${i}`));
+    };
+    walk(schema, '');
+    return out;
+  };
+
+  const renderings = () =>
+    tools.map((tool) => {
+      const obj = z.object(tool.inputSchema);
+      return {
+        name: tool.name,
+        advertised: boundsByPath(z.toJSONSchema(obj, { io: 'input', unrepresentable: 'any' })),
+        enforced: boundsByPath(z.toJSONSchema(obj, { io: 'output', unrepresentable: 'any' })),
+      };
+    });
+
+  test('no tool advertises a bound the runtime does not enforce', () => {
+    const mismatches = [];
+    for (const { name, advertised, enforced } of renderings()) {
+      for (const path of new Set([...Object.keys(advertised), ...Object.keys(enforced)])) {
+        if (advertised[path] !== enforced[path]) {
+          mismatches.push(`${name}${path}: advertised=${advertised[path]} enforced=${enforced[path]}`);
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  // The premise, asserted rather than assumed: the sweep above passes vacuously on a tool
+  // set with no bounded field at all. 36 constrained fields exist today.
+  test('the bounded-field population it grades is non-empty', () => {
+    const count = renderings().reduce((n, r) => n + Object.keys(r.enforced).length, 0);
+    expect(count).toBeGreaterThanOrEqual(30);
+  });
+
+  // The bounds a caller most likely trips, pinned by value so a future refactor that
+  // publishes the safe-integer range again fails with a readable name rather than a diff.
+  test('the narrow bounds a caller would otherwise guess wrong are published', () => {
+    const published = Object.fromEntries(
+      tools.map((t) => [
+        t.name,
+        z.toJSONSchema(z.object(t.inputSchema), { io: 'input', unrepresentable: 'any' }),
+      ]),
+    );
+    expect(published.mem_recent.properties.limit).toMatchObject({ minimum: 1, maximum: 100 });
+    expect(published.mem_compress.properties.age_days).toMatchObject({ minimum: 30, maximum: 365 });
+    expect(published.mem_maintain.properties.retain_days).toMatchObject({ minimum: 7, maximum: 365 });
+    expect(published.mem_defer.properties.priority).toMatchObject({ minimum: 1, maximum: 3 });
+    expect(published.mem_delete.properties.ids).toMatchObject({ minItems: 1, maxItems: 50 });
+  });
+});

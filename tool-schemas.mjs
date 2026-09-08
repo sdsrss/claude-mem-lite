@@ -8,10 +8,29 @@ import { OBS_TYPES } from './lib/obs-types.mjs';
 export const OBS_TYPE_ENUM = z.enum([...OBS_TYPES]);
 
 // LLM-friendly coercion: accept string numbers and normalize to proper types
-const coerceInt = z.preprocess(
-  (v) => (typeof v === 'string' && /^-?\d+$/.test(v.trim()) ? parseInt(v.trim(), 10) : v),
-  z.number().int(),
-);
+const intOrRaw = (v) => (typeof v === 'string' && /^-?\d+$/.test(v.trim()) ? parseInt(v.trim(), 10) : v);
+
+// A bounded integer whose BOUNDS SURVIVE into the advertised JSON Schema.
+//
+// The idiom this replaces was `coerceInt.pipe(z.number().int().min(1).max(100))`, and it
+// published the wrong contract for the same reason `.pipe()` dropped fields out of
+// `required` (see the comment on memDeleteSchema.ids): zod 4's toJSONSchema({io:'input'})
+// renders a ZodPipe's INPUT side, which here is the bare `z.number().int()` — i.e. the
+// safe-integer range — so `limit` advertised ±9007199254740991 against an enforced 1..100
+// and `mem_compress.age_days` advertised the same against an enforced >= 30. An agent plans
+// its call from the published schema, so every such field invited a `-32602` round trip.
+// Measured before the change: 20 of 36 constrained fields disagreed.
+//
+// Putting the constraint INSIDE the preprocess (which is what coerceDeferredTokens,
+// coerceSupersedes and coerceMixedIdTokens already do, and why their minItems/maxItems were
+// always published correctly) renders the real bounds on both sides. Runtime behaviour is
+// unchanged: the same coercion runs first, the same constraint rejects the same values.
+// tests/tool-schemas.test.mjs grades the io:'input' rendering AGAINST the io:'output' one and
+// requires equality, so a future `.pipe()` bound fails there instead of shipping a false
+// contract. The comparison is what makes it a guard: grading against io:'output' alone would
+// be vacuous, because `.pipe()` renders the CORRECT bounds on that side — old and new are
+// identical in output mode, and only the input side ever lied.
+const boundedInt = (bounded) => z.preprocess(intOrRaw, bounded);
 
 // LLM-friendly coercion: accept "true"/"false"/"True"/"TRUE" strings as boolean
 const coerceBool = z.preprocess(
@@ -30,21 +49,26 @@ const coerceBool = z.preprocess(
 // incident — "3.9 -> 3 updated the wrong row" — which the CLI fixed and this did not.
 // Same discipline as coerceDeferredTokens below: hand a non-conforming token to zod
 // rather than silently repairing it.
-// Positive whole digits only. coerceIntArray has exactly one consumer, memDeleteSchema
+// Positive whole digits only. boundedIntArray has exactly one consumer, memDeleteSchema
 // below, and an observation id is a positive AUTOINCREMENT rowid — so "-3" is as much a
 // caller mistake as "1.5" and gets the same answer: left as a string, rejected by zod.
+// Takes its element bounds as an argument for the same reason boundedInt does: a `.pipe()`
+// applied afterwards renders on the input side and the advertised array loses minItems /
+// maxItems entirely — which on mem_delete, a DESTRUCTIVE tool, published "any number of
+// ids" against an enforced 1..50.
 const wholeIntOrRaw = (s) => (/^\d+$/.test(s) ? parseInt(s, 10) : s);
-const coerceIntArray = z.preprocess((v) => {
-  if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x));
-  if (typeof v === 'number') return [v];
-  if (typeof v === 'string') return v.split(',').map((s) => wholeIntOrRaw(s.trim()));
-  return v;
-}, z.array(z.number().int()));
+const boundedIntArray = (bounded) =>
+  z.preprocess((v) => {
+    if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x));
+    if (typeof v === 'number') return [v];
+    if (typeof v === 'string') return v.split(',').map((s) => wholeIntOrRaw(s.trim()));
+    return v;
+  }, bounded);
 
 // Coerce string arrays: accept array, comma-separated string, JSON-array string, or bare string.
 // MCP bridges sometimes JSON-stringify complex args — bare `z.array(z.string())` rejects those
 // with "expected array, received string" and the caller loses the field silently. Parity with
-// coerceIntArray: tolerate the same shapes so files/fields survive client serialization quirks.
+// boundedIntArray: tolerate the same shapes so files/fields survive client serialization quirks.
 const coerceStringArray = z.preprocess((v) => {
   if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? x : String(x)));
   if (typeof v === 'string') {
@@ -124,8 +148,7 @@ export const memSearchSchema = {
     .describe(
       'Relative lower bound from now: 7d/24h/90m/2w/30s. Use for "recent" queries instead of computing a date_from; ignored when date_from is set',
     ),
-  importance: coerceInt
-    .pipe(z.number().int().min(1).max(3))
+  importance: boundedInt(z.number().int().min(1).max(3))
     .optional()
     .describe('Minimum importance (1=routine, 2=notable, 3=critical)'),
   branch: z.string().optional().describe('Filter by git branch name'),
@@ -135,8 +158,8 @@ export const memSearchSchema = {
     .describe(
       'Filter by memory tier (working=current session, active=within decay window, archive=old/compressed)',
     ),
-  limit: coerceInt.pipe(z.number().int().min(1).max(100)).optional().describe('Max results (default 20)'),
-  offset: coerceInt.pipe(z.number().int().min(0)).optional().describe('Offset for pagination'),
+  limit: boundedInt(z.number().int().min(1).max(100)).optional().describe('Max results (default 20)'),
+  offset: boundedInt(z.number().int().min(0)).optional().describe('Offset for pagination'),
   sort: z
     .enum(['relevance', 'time', 'importance'])
     .optional()
@@ -180,7 +203,7 @@ export const memSearchSchema = {
 };
 
 export const memRecentSchema = {
-  limit: coerceInt.pipe(z.number().int().min(1).max(100)).optional().describe('Max results (default 10)'),
+  limit: boundedInt(z.number().int().min(1).max(100)).optional().describe('Max results (default 10)'),
   project: z.string().optional().describe('Filter by project (default: inferred from CWD)'),
   obs_type: OBS_TYPE_ENUM.optional().describe(
     'Filter observation type (e.g. bugfix, decision) — CLI `recent --type` parity',
@@ -218,20 +241,14 @@ export const memTimelineSchema = {
   anchor: coerceAnchor
     .optional()
     .describe(
-      'Anchor as observation ID (int) or prefixed token string: "#123", "P#123" (prompt → nearest obs), "S#123" (session → nearest obs), "E#123" (event → nearest obs). Takes precedence over query.',
+      'Anchor as observation ID (int) or prefixed token string: "#123", "P#123" (prompt), "S#123" (session), "E#123" (event). A P#/S#/E# anchor resolves to the nearest-in-time observation IN THAT ROW\'S OWN PROJECT; pass `project` to look elsewhere. Takes precedence over query.',
     ),
   query: z
     .string()
     .optional()
     .describe('FTS5 query to auto-find anchor. Ignored when anchor is also given; use one or the other.'),
-  before: coerceInt
-    .pipe(z.number().int().min(0).max(50))
-    .optional()
-    .describe('Items before anchor (default 5)'),
-  after: coerceInt
-    .pipe(z.number().int().min(0).max(50))
-    .optional()
-    .describe('Items after anchor (default 5)'),
+  before: boundedInt(z.number().int().min(0).max(50)).optional().describe('Items before anchor (default 5)'),
+  after: boundedInt(z.number().int().min(0).max(50)).optional().describe('Items after anchor (default 5)'),
   project: z.string().optional().describe('Filter by project'),
 };
 
@@ -261,8 +278,7 @@ export const memDeleteSchema = {
   // toJSONSchema({io:'input'}) reads a ZodPipe's input side as accepting `undefined` and
   // drops the key, so the advertised contract said optional while the server said required.
   // See tests/tool-schemas.test.mjs, which grades every field against runtime ground truth.
-  ids: coerceIntArray
-    .pipe(z.array(z.number().int()).min(1).max(50))
+  ids: boundedIntArray(z.array(z.number().int()).min(1).max(50))
     .nonoptional()
     .describe('Observation IDs to delete'),
   confirm: coerceBool.describe('false=preview what will be deleted, true=execute deletion'),
@@ -332,8 +348,7 @@ export const memSaveSchema = {
   // every `--type bugfix` filter, so it must not be a silent coercion.
   obs_type: OBS_TYPE_ENUM.optional().describe('Alias for `type` (parity with mem_search/mem_recent)'),
   project: z.string().optional().describe('Project name (default: inferred from CWD)'),
-  importance: coerceInt
-    .pipe(z.number().int().min(1).max(3))
+  importance: boundedInt(z.number().int().min(1).max(3))
     .optional()
     .describe('Importance level: 1=routine, 2=notable, 3=critical (default: 2 for explicit saves)'),
   files: coerceStringArray
@@ -351,6 +366,11 @@ export const memSaveSchema = {
     .describe(
       'Close one or more deferred_work items in the same project. Mixed array: bare integer = ordinal-within-project, "D#<n>" string = raw id. Transactional with the obs insert — a single invalid id rolls back the whole save.',
     ),
+  force: coerceBool
+    .optional()
+    .describe(
+      'Bypass the 5-minute near-duplicate guard. Default false — the guard stops repeated auto-saves collapsing into one story, and a "Skipped: similar to existing #N" answer is usually correct. Set true ONLY when you have read that message and this is genuinely a different fact.',
+    ),
   supersedes: coerceSupersedes
     .optional()
     .describe(
@@ -360,7 +380,7 @@ export const memSaveSchema = {
 
 export const memStatsSchema = {
   project: z.string().optional().describe('Filter by project'),
-  days: coerceInt.pipe(z.number().int().min(1).max(365)).optional().describe('Look back N days (default 30)'),
+  days: boundedInt(z.number().int().min(1).max(365)).optional().describe('Look back N days (default 30)'),
   quality: coerceBool
     .optional()
     .describe(
@@ -370,8 +390,7 @@ export const memStatsSchema = {
 
 export const memCompressSchema = {
   preview: coerceBool.optional().describe('true=count candidates, false=execute compression (default: true)'),
-  age_days: coerceInt
-    .pipe(z.number().int().min(30).max(365))
+  age_days: boundedInt(z.number().int().min(30).max(365))
     .optional()
     .describe('Min age in days (default: 30, minimum: 30)'),
   project: z.string().optional().describe('Filter by project'),
@@ -387,8 +406,7 @@ export const memOptimizeSchema = {
     .array(z.enum(['re-enrich', 'normalize', 'cluster-merge', 'smart-compress']))
     .optional()
     .describe('Which optimization tasks to run (default: all)'),
-  max_items: coerceInt
-    .pipe(z.number().int().min(1).max(100))
+  max_items: boundedInt(z.number().int().min(1).max(100))
     .optional()
     .default(15)
     .describe('Maximum LLM calls across all tasks (default: 15)'),
@@ -428,8 +446,7 @@ export const memMaintainSchema = {
     )
     .optional()
     .describe('For dedup: [[keepId, removeId1, removeId2], ...] — first ID in each group is kept'),
-  retain_days: coerceInt
-    .pipe(z.number().int().min(7).max(365))
+  retain_days: boundedInt(z.number().int().min(7).max(365))
     .optional()
     .describe('For purge_stale: keep observations newer than N days (default 30)'),
   confirm: coerceBool
@@ -442,7 +459,7 @@ export const memMaintainSchema = {
 
 export const memUpdateSchema = {
   // `.nonoptional()` for the published-`required` reason documented on memDeleteSchema.ids.
-  id: coerceInt.pipe(z.number().int().positive()).nonoptional().describe('Observation ID to update'),
+  id: boundedInt(z.number().int().positive()).nonoptional().describe('Observation ID to update'),
   // CLI parity (cmdUpdate): empty/whitespace title would render as `(untitled)`
   // in every listing — reject here like the CLI does, instead of persisting it.
   title: z
@@ -463,7 +480,7 @@ export const memUpdateSchema = {
   // "Updated observation #N: importance" and dropped the type silently. (obs_type alone
   // errored loudly with "No fields to update", so only the mixed call was dangerous.)
   obs_type: OBS_TYPE_ENUM.optional().describe('Alias for `type` (parity with mem_search/mem_recent)'),
-  importance: coerceInt.pipe(z.number().int().min(1).max(3)).optional().describe('New importance (1-3)'),
+  importance: boundedInt(z.number().int().min(1).max(3)).optional().describe('New importance (1-3)'),
   // 500-char cap mirrors memSaveSchema + cmdUpdate — update was the one path
   // that let overlong lessons leak into the DB via MCP.
   lesson_learned: z
@@ -497,8 +514,7 @@ export const memExportSchema = {
   // The default stays 200 because an MCP result is model context — a bare exploratory call
   // must not dump a whole store into the transcript — but a capped result now announces
   // itself as PARTIAL and names the limit that would return all of it.
-  limit: coerceInt
-    .pipe(z.number().int().min(1))
+  limit: boundedInt(z.number().int().min(1))
     .optional()
     .describe(
       'Max observations to export (default: 200 — a capped result is flagged PARTIAL and names the total; pass that total for a complete backup, no upper bound)',
@@ -507,7 +523,7 @@ export const memExportSchema = {
 
 export const memRecallSchema = {
   file: z.string().min(1).describe('File path or filename to recall observations for'),
-  limit: coerceInt.pipe(z.number().int().min(1).max(50)).optional().describe('Max results (default 10)'),
+  limit: boundedInt(z.number().int().min(1).max(50)).optional().describe('Max results (default 10)'),
   include_noise: coerceBool
     .optional()
     .describe(
@@ -522,16 +538,14 @@ export const memFtsCheckSchema = {
 export const memBrowseSchema = {
   project: z.string().optional().describe('Filter by project (default: inferred from CWD)'),
   tier: z.enum(['working', 'active', 'archive']).optional().describe('Show only this tier'),
-  limit: coerceInt
-    .pipe(z.number().int().min(1).max(100))
+  limit: boundedInt(z.number().int().min(1).max(100))
     .optional()
     .describe('Max entries per tier (default 5, or 20 when filtering by tier)'),
 };
 
 export const memDeferSchema = {
   title: z.string().min(1).max(200).describe('One-line subject of the deferred item'),
-  priority: coerceInt
-    .pipe(z.number().int().min(1).max(3))
+  priority: boundedInt(z.number().int().min(1).max(3))
     .optional()
     .describe('1=low, 2=normal, 3=urgent (default: 2)'),
   detail: z.string().max(2000).optional().describe('Optional longer description / constraint / why deferred'),
@@ -541,13 +555,13 @@ export const memDeferSchema = {
 
 export const memDeferListSchema = {
   project: z.string().optional().describe('Project name (default: inferred from CWD)'),
-  limit: coerceInt.pipe(z.number().int().min(1).max(50)).optional().describe('Max results (default 10)'),
+  limit: boundedInt(z.number().int().min(1).max(50)).optional().describe('Max results (default 10)'),
 };
 
 export const memDeferDropSchema = {
   id: z
     .union([
-      coerceInt.pipe(z.number().int().positive()),
+      boundedInt(z.number().int().positive()),
       z.string().regex(/^D#\d+$/, 'expected D#N or positive integer'),
     ])
     // `.nonoptional()` for the published-`required` reason documented on memDeleteSchema.ids.

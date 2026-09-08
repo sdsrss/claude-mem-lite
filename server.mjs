@@ -1138,6 +1138,8 @@ server.registerTool(
           files: args.files || [],
           lesson_learned: clampSaveText(args.lesson_learned, SAVE_TEXT_LIMITS.lesson_learned),
           supersedes: args.supersedes,
+          // Opt-in only — the near-duplicate window stays the default. CLI parity: `--force`.
+          force: args.force === true,
         },
         { closesTokens: args.closes_deferred, project },
       ));

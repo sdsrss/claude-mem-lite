@@ -17,7 +17,7 @@ import {
   statSync,
   lstatSync,
 } from 'fs';
-import { join, resolve, dirname, basename } from 'path';
+import { join, resolve, dirname, basename, sep } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
@@ -70,9 +70,9 @@ import {
   nativeBindingRepairHint,
   isNativeBindingError,
 } from './lib/binding-probe.mjs';
-import { readSnapshots } from './lib/db-backup.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
+import { isDbUnusableError, dbUnusableRemedy } from './lib/db-unusable.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
@@ -444,34 +444,22 @@ export function nonPluginMemRegistrations(listOutput) {
  */
 export function dbCheckRemedy(dbPath, err) {
   if (isNativeBindingError(err)) return `Repair: ${nativeBindingRepairHint(PROJECT_DIR)}`;
-  const msg = String(err?.message ?? err ?? '');
-  // SQLite's own spellings for "this file is not a usable database".
-  if (!/not a database|disk image is malformed|file is not a database/i.test(msg)) return null;
-
-  const clear = `rm -f "${dbPath}-wal" "${dbPath}-shm"`;
-  const snap = readSnapshots(dbPath);
-  if (!snap.ok) {
-    return (
-      `Could not read ${dirname(dbPath)} to look for a backup snapshot (${snap.reason}) — ` +
-      `fix that directory first, then look for ${basename(dbPath)}.*.bak beside the database.`
-    );
-  }
-  if (snap.snapshots.length === 0) {
+  // Classification and remedy both live in lib/db-unusable.mjs since v6.5.0, because the hook
+  // path now has to answer the same question in-session and two copies of a SQLite-message
+  // regex is this repo's named twin-drift class. Doctor keeps its own SENTENCE (one line, no
+  // leading banner); only the decision is shared.
+  if (!isDbUnusableError(err)) return null;
+  const remedy = dbUnusableRemedy(dbPath);
+  if (remedy.kind === 'unknown') return remedy.note;
+  if (remedy.kind === 'set-aside') {
     return (
       `No backup snapshot exists beside the database. Set the broken file aside so a fresh ` +
-      `store is created on the next session: ${clear} && mv "${dbPath}" "${dbPath}.corrupt" ` +
+      `store is created on the next session: ${remedy.command} ` +
       `— memories in that file are not recoverable without a backup.`
     );
   }
-  // Newest by mtime. Ties are broken by name, which carries an ISO stamp, so the answer is
-  // total rather than dependent on which of two same-millisecond files readdir returned
-  // first (the D#9 shape).
-  const newest = snap.snapshots
-    .slice()
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || (a.path < b.path ? 1 : -1))[0];
   return (
-    `Restore the newest of ${snap.snapshots.length} backup snapshot(s): ` +
-    `${clear} && cp "${newest.path}" "${dbPath}" ` +
+    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s): ${remedy.command} ` +
     `— move the broken file aside first if you want to keep it for inspection.`
   );
 }
@@ -655,6 +643,57 @@ function createCliSymlink() {
   }
 }
 
+/**
+ * Which of our MCP names a PROJECT-scoped `.mcp.json` in `cwd` registers.
+ *
+ * This exists because the installer used to run `claude mcp remove -s project <name>` as
+ * part of "purge any pre-existing registration before re-registering". That command edits
+ * `<cwd>/.mcp.json` — a file that belongs to whatever repository the user happens to be
+ * standing in, not to this installer's state. Measured 2026-09-08: running the installer
+ * from a clone of this repo emptied the tracked root `.mcp.json` (the plugin's own MCP
+ * manifest, and a RELEASE_SIGNED_FILES entry), and nothing said so; only a test noticed.
+ * For anyone else it is a silent edit to a checked-in file that breaks the registration
+ * for every teammate who pulls it.
+ *
+ * `uninstall` has always removed `-s user` only, so the scope discipline already existed
+ * on the other half of the lifecycle; this brings install into line with it and reports
+ * the duplicate instead — same doctrine as the README's mixed-install residue section,
+ * where the tool diagnoses and the user decides.
+ *
+ * @param {string} cwd directory to inspect
+ * @returns {{file: string, names: string[]}} names present, empty when there is nothing to say
+ */
+export function projectScopedMemRegistrations(cwd) {
+  const file = join(cwd, '.mcp.json');
+  try {
+    const servers = JSON.parse(readFileSync(file, 'utf8'))?.mcpServers;
+    // Array.isArray is load-bearing: `typeof [] === 'object'`, so without it an array
+    // falls through to the membership filter and the guard cannot fire on its own
+    // named input — which is how the test case for it was passing.
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return { file, names: [] };
+    return { file, names: ['mem', 'mem-lite'].filter((n) => n in servers) };
+  } catch {
+    // Absent, unreadable, or not JSON — nothing we can honestly report.
+    return { file, names: [] };
+  }
+}
+
+/**
+ * Say so when the directory we are standing in registers our server at PROJECT scope.
+ *
+ * Reporting rather than removing is the whole point — see projectScopedMemRegistrations.
+ */
+function warnProjectScopedMcpDuplicate() {
+  const projectScoped = projectScopedMemRegistrations(process.cwd());
+  if (projectScoped.names.length === 0) return;
+  warn(
+    `${projectScoped.file} also registers ${projectScoped.names.map((n) => `"${n}"`).join(' and ')} ` +
+      `at PROJECT scope — that duplicate wins inside this directory. Left untouched: it is your ` +
+      `repo's file. Remove it with \`claude mcp remove -s project <name>\` if you want the ` +
+      `user-scope registration to apply here.`,
+  );
+}
+
 function registerMcpServer() {
   // 3. Register MCP server (skip if plugin system already handles it)
   // Plugin MCP must stay at root .mcp.json so Claude Code registers plugin:*:mem-lite.
@@ -673,6 +712,12 @@ function registerMcpServer() {
     /* not installed via plugin system */
   }
 
+  // The DISCLOSURE is unconditional even though the removal it replaced was not: a
+  // project-scoped `mem`/`mem-lite` entry shadows the user-scope one inside that directory
+  // whichever way this install provides the server, so a plugin-mode user standing in such a
+  // repo has the same problem and used to get the same silence.
+  warnProjectScopedMcpDuplicate();
+
   if (pluginHandlesMcp) {
     log('MCP server: plugin system handles registration (skipping global)');
     // Clean up stale global registrations (both legacy "mem" and current "mem-lite")
@@ -685,13 +730,12 @@ function registerMcpServer() {
   } else {
     log('Registering MCP server...');
     try {
-      // Purge legacy "mem" and any pre-existing "mem-lite" before re-registering
+      // Purge legacy "mem" and any pre-existing "mem-lite" from OUR scope before
+      // re-registering. User scope only — see projectScopedMemRegistrations for why the
+      // project-scope removal that used to sit here was a bug, not a cleanup.
       for (const name of ['mem', 'mem-lite']) {
         try {
           execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
-        } catch {}
-        try {
-          execFileSync('claude', ['mcp', 'remove', '-s', 'project', name], { stdio: 'pipe' });
         } catch {}
       }
       execFileSync(
@@ -1338,10 +1382,88 @@ async function uninstall() {
       }
     }
   } else {
-    log('Data preserved (use --purge to remove)');
+    // "Data preserved" was true and incomplete, and the gap is what a user notices on
+    // disk: the DB here is fractions of a megabyte while the installed code and its
+    // node_modules — which uninstall has just made unreachable (symlink gone, hooks gone,
+    // MCP registration gone) — are tens of megabytes and were never named. Measured on a
+    // sandbox install right after uninstall: 56 MB total, 53 MB of it node_modules,
+    // against a 0.2 MB DB. Report both halves so nothing large is left unnamed.
+    //
+    // These are APPARENT bytes (`statSync().size`), which is what `du --apparent-size`
+    // reports and NOT what a bare `du -sh` does: block rounding over thousands of small
+    // node_modules files put the same tree at 44.4 MB apparent against 54.3 MB of blocks,
+    // a 22% gap. Do not "reconcile" this line against a plain `du` — they are two rulers.
+    const kept = preservedFootprint();
+    const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+    log(`Data preserved: memories in ${MEM_DATA_DIR} (${mb(kept.memoryBytes)}MB)`);
+    if (kept.restBytes > 0) {
+      log(
+        `  Also kept: the installed code + node_modules under ${DATA_DIR} (${mb(kept.restBytes)}MB) — ` +
+          `a later \`install\` reuses them; nothing runs them now.`,
+      );
+    }
+    log('  `uninstall --purge` removes the directory, memories included');
   }
 
   console.log('\n  Done!\n');
+}
+
+/**
+ * Split what a non-purge uninstall leaves behind into the two halves a user cares about:
+ * the memories, and everything else.
+ *
+ * "Memories" is every file whose name starts with `claude-mem-lite.db` in the data dir —
+ * the DB, its WAL/SHM, and the `.db.<tag>.bak` snapshots. That is DELIBERATELY WIDER than
+ * lib/db-backup.mjs::readSnapshots, which additionally requires the trailing dot and a
+ * `.bak` suffix: this wants everything that is the user's data, that wants snapshots only. "Rest" is the whole install directory minus that,
+ * so it covers the source files, node_modules, runtime/ and metrics/ in one number. The
+ * point of the split is the node_modules order-of-magnitude (53 MB against a 0.2 MB DB on
+ * a fresh sandbox install), not a per-subdirectory audit.
+ *
+ * Never throws: a missing dir, a permission error or a symlink loop all degrade to 0, and
+ * the caller prints the shorter sentence. An uninstall must not fail on a size probe.
+ *
+ * @returns {{memoryBytes: number, restBytes: number}} bytes, 0 when unmeasurable
+ */
+function preservedFootprint() {
+  const DB_PREFIX = 'claude-mem-lite.db';
+  const walk = (dir, onFile) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      try {
+        if (e.isDirectory()) walk(p, onFile);
+        else if (e.isFile()) onFile(p, e.name, statSync(p).size);
+      } catch {
+        /* raced deletion / unreadable entry — skip */
+      }
+    }
+  };
+
+  let memoryBytes = 0;
+  let restBytes = 0;
+  // The memories may live outside the install dir (CLAUDE_MEM_DIR), so measure each dir
+  // for what it actually holds rather than assuming the two are the same tree.
+  walk(MEM_DATA_DIR, (_p, name, size) => {
+    if (name.startsWith(DB_PREFIX)) memoryBytes += size;
+    else if (MEM_DATA_DIR === DATA_DIR) restBytes += size;
+  });
+  if (MEM_DATA_DIR !== DATA_DIR) {
+    // A relocated CLAUDE_MEM_DIR may still sit INSIDE the install dir, in which case walking
+    // DATA_DIR would count the DB and its snapshots a second time — reported 9.0MB against a
+    // true 6.0MB on a nested fixture. Skip the memory tree explicitly rather than assume the
+    // two are disjoint; `+ sep` so a sibling named `<dir>-old` is not swallowed too.
+    const memPrefix = MEM_DATA_DIR.endsWith(sep) ? MEM_DATA_DIR : MEM_DATA_DIR + sep;
+    walk(DATA_DIR, (p, _name, size) => {
+      if (p !== MEM_DATA_DIR && !p.startsWith(memPrefix)) restBytes += size;
+    });
+  }
+  return { memoryBytes, restBytes };
 }
 
 // ─── Cleanup Hooks ───────────────────────────────────────────────────────────

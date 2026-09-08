@@ -738,6 +738,50 @@ describe('CLI get command', () => {
     expect(output).toMatch(/No records found.*\[obs\]/);
   });
 
+  // A PARTIAL miss used to be silent: `get 1,9999` printed #1 and nothing about 9999, so an
+  // agent that asked for three ids and got two had no way to tell which one was missing —
+  // and the total-miss case above DOES report, so a partial miss read as complete success.
+  // Both siblings already got this right: MCP mem_get appends "Note: ID(s) … not found.",
+  // and CLI `delete` prints "not found and will be skipped". This is the CLI↔MCP twin-drift
+  // class, on the surface the plugin's own instructions tell agents to prefer.
+  describe('get reports IDs it could not find alongside the ones it did', () => {
+    beforeEach(() => {
+      insertObs(testDb, {
+        sessionId: 'mem-s1',
+        project: 'test--project',
+        type: 'bugfix',
+        title: 'A real observation',
+        text: 'real',
+      });
+    });
+
+    it('names the missing observation id', async () => {
+      const output = await captureStdout(() => run(['get', '1,9999']));
+      expect(output).toContain('A real observation');
+      expect(output).toMatch(/not found.*#9999|#9999.*not found/);
+    });
+
+    it('names the missing id with its own source prefix', async () => {
+      const output = await captureStdout(() => run(['get', '1,P#9999,S#9998,E#9997']));
+      expect(output).toContain('A real observation');
+      expect(output).toContain('P#9999');
+      expect(output).toContain('S#9998');
+      expect(output).toContain('E#9997');
+    });
+
+    it('says nothing when every id resolved', async () => {
+      const output = await captureStdout(() => run(['get', '1']));
+      expect(output).not.toMatch(/not found/);
+    });
+
+    // The note is diagnostic, so it belongs on stderr — `get` output is piped.
+    it('keeps stdout to records only', async () => {
+      const stdout = await captureStdoutOnly(() => run(['get', '1,9999']));
+      expect(stdout).toContain('A real observation');
+      expect(stdout).not.toMatch(/not found/);
+    });
+  });
+
   it('shows files from files_modified under the `files` label', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',

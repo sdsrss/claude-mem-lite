@@ -803,6 +803,70 @@ describe('buildSessionContextLines: Recent table cell safety', () => {
   });
 });
 
+// ─── "### Recent" must actually read newest-first ────────────────────────────────────────
+//
+// The table is headed "Recent (<date>)" and carries a Time column, so both a human and the
+// model read row 1 as "the last thing that happened". It was rendered in the greedy
+// knapsack's own pick order — value density — which is a SELECTION order, not a display
+// order. Observed in a real SessionStart injection: rows timed 14:34, 07:13, 11:20, 08:56,
+// 06:02, 13:46, 04:44, 07:27, 04:44, under that heading.
+//
+// The fix is display-only: which rows get picked (and the token budget that bounds them) is
+// unchanged; they are sorted by time before rendering. So the sweep below asserts the
+// rendered order AND a premise — that the selector's order really does differ here — since
+// a fixture where the two agree would pass without exercising anything.
+describe('buildSessionContextLines: Recent table is chronological', () => {
+  let db;
+  const HOUR = 3600000;
+  // Same-length titles so estimateTokens (the knapsack's cost term) cannot itself explain
+  // the ordering; the only axes that vary are age, importance and lesson_learned.
+  const rows = [
+    { title: 'aaaa newest row', epochOffset: -1 * HOUR, importance: 1, type: 'change' },
+    { title: 'bbbb second row', epochOffset: -10 * HOUR, importance: 1, type: 'change' },
+    { title: 'cccc third row!', epochOffset: -20 * HOUR, importance: 3, type: 'bugfix', lessonLearned: 'x' },
+    { title: 'dddd oldest row', epochOffset: -30 * HOUR, importance: 2, type: 'decision' },
+  ];
+
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-c', project: 'test' });
+    for (const r of rows) insertObs(db, { sessionId: 'sess-c', project: 'test', ...r });
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  it('renders the Recent table newest-first', () => {
+    const out = buildSessionContextLines(db, 'test');
+    const tag = (line) => line.slice(0, 40).match(/(aaaa|bbbb|cccc|dddd)/)?.[1];
+    const tableTags = out
+      .split('\n')
+      .filter((l) => l.startsWith('| #'))
+      .map(tag)
+      .filter(Boolean);
+    expect(tableTags).toEqual(['aaaa', 'bbbb', 'cccc', 'dddd']);
+  });
+
+  it('the selector order it corrects really does differ from time order (premise)', () => {
+    const picked = selectWithTokenBudget(db, 'test', 2000).observations;
+    const selectorTags = picked.map((o) => o.title.slice(0, 4));
+    expect(selectorTags).toHaveLength(4);
+    expect(selectorTags).not.toEqual(['aaaa', 'bbbb', 'cccc', 'dddd']);
+  });
+
+  it('sorting the display does not change WHICH rows the budget picked', () => {
+    const picked = new Set(selectWithTokenBudget(db, 'test', 2000).observations.map((o) => o.id));
+    const out = buildSessionContextLines(db, 'test');
+    const rendered = new Set(
+      out
+        .split('\n')
+        .filter((l) => l.startsWith('| #'))
+        .map((l) => Number(l.match(/^\| #(\d+)/)[1])),
+    );
+    expect(rendered).toEqual(picked);
+  });
+});
+
 describe('Key Context section quotas (D#196)', () => {
   let db;
   let savedEnv;

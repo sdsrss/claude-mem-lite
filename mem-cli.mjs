@@ -799,7 +799,7 @@ function renderObsRows(db, ids, requestedFields) {
     }
     parts.push(lines.join('\n'));
   }
-  return { text: parts.join('\n\n'), count: rows.length };
+  return { text: parts.join('\n\n'), count: rows.length, foundIds: rows.map((r) => r.id) };
 }
 
 function renderSessionRows(db, ids) {
@@ -819,7 +819,7 @@ function renderSessionRows(db, ids) {
     }
     parts.push(lines.join('\n'));
   }
-  return { text: parts.join('\n\n'), count: rows.length };
+  return { text: parts.join('\n\n'), count: rows.length, foundIds: rows.map((r) => r.id) };
 }
 
 // The CLI's established labels for the prompt/event detail faces. Sharing the FIELD SET
@@ -850,7 +850,7 @@ function renderPromptRows(db, ids) {
     }
     parts.push(lines.join('\n'));
   }
-  return { text: parts.join('\n\n'), count: rows.length };
+  return { text: parts.join('\n\n'), count: rows.length, foundIds: rows.map((r) => r.id) };
 }
 
 function renderEventRows(db, ids) {
@@ -867,7 +867,7 @@ function renderEventRows(db, ids) {
     }
     parts.push(lines.join('\n'));
   }
-  return { text: parts.join('\n\n'), count: rows.length };
+  return { text: parts.join('\n\n'), count: rows.length, foundIds: rows.map((r) => r.id) };
 }
 
 function cmdGet(db, args) {
@@ -954,34 +954,21 @@ function cmdGet(db, args) {
       );
     }
   }
-  if (bySrc.obs.length > 0) {
-    const s = renderObsRows(db, bySrc.obs, requestedFields);
-    if (s) {
-      sections.push(s.text);
-      totalFound += s.count;
+  // Per-bucket misses are collected as they happen, not inferred afterwards, so the note
+  // below can name an id with the prefix the caller typed.
+  const missing = [];
+  const takeSection = (result, ids, prefix) => {
+    if (result) {
+      sections.push(result.text);
+      totalFound += result.count;
     }
-  }
-  if (bySrc.session.length > 0) {
-    const s = renderSessionRows(db, bySrc.session);
-    if (s) {
-      sections.push(s.text);
-      totalFound += s.count;
-    }
-  }
-  if (bySrc.prompt.length > 0) {
-    const s = renderPromptRows(db, bySrc.prompt);
-    if (s) {
-      sections.push(s.text);
-      totalFound += s.count;
-    }
-  }
-  if (bySrc.event.length > 0) {
-    const s = renderEventRows(db, bySrc.event);
-    if (s) {
-      sections.push(s.text);
-      totalFound += s.count;
-    }
-  }
+    const found = new Set(result?.foundIds ?? []);
+    missing.push(...ids.filter((id) => !found.has(id)).map((id) => `${prefix}${id}`));
+  };
+  if (bySrc.obs.length > 0) takeSection(renderObsRows(db, bySrc.obs, requestedFields), bySrc.obs, '#');
+  if (bySrc.session.length > 0) takeSection(renderSessionRows(db, bySrc.session), bySrc.session, 'S#');
+  if (bySrc.prompt.length > 0) takeSection(renderPromptRows(db, bySrc.prompt), bySrc.prompt, 'P#');
+  if (bySrc.event.length > 0) takeSection(renderEventRows(db, bySrc.event), bySrc.event, 'E#');
 
   if (totalFound === 0) {
     // Deferred-only request that found nothing — the source-probe below is
@@ -1011,6 +998,15 @@ function cmdGet(db, args) {
   }
 
   out(sections.join('\n\n'));
+
+  // Partial misses were silent here while every sibling reported them: mem_get appends
+  // "Note: ID(s) … not found.", CLI `delete` prints "not found and will be skipped", and the
+  // total-miss branch above fails loudly. So `get 12,13,14` returning two records read as a
+  // complete answer, and nothing said which id was absent. stderr, not stdout: `get` output
+  // is piped, and the D#/unparseable notices above already use that channel.
+  if (missing.length > 0) {
+    process.stderr.write(`[mem] Note: ID(s) ${missing.join(', ')} not found\n`);
+  }
 }
 
 function cmdTimeline(db, args) {
@@ -1193,7 +1189,7 @@ function cmdSave(db, args) {
   if (text === null) return;
   if (!text.trim()) {
     fail(
-      '[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] — content may also be passed via --text/--content "<text>"',
+      '[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] [--force] — content may also be passed via --text/--content "<text>"',
     );
     return;
   }
@@ -1306,6 +1302,9 @@ function cmdSave(db, args) {
         files: saveFiles,
         lesson_learned: rawLesson,
         supersedes: supersedesIds || undefined,
+        // Opt-in only. The 5-minute near-duplicate window stays the default; this is for a
+        // caller who read "Skipped: similar to existing #N" and means the second one.
+        force: flags.force === true || flags.force === 'true',
       },
       { closesTokens, project },
     ));
@@ -3142,6 +3141,8 @@ Commands:
     --project P         Project name
     --files f1,f2       Comma-separated file paths
     --lesson T          Lesson learned (≤500 chars; alias: --lesson-learned)
+    --force             Save even if it looks like a near-duplicate of something
+                        saved in the last 5 minutes (that guard is on by default)
     --closes-deferred 1,D#42  Close deferred items in same transaction
 
   defer <action>        First-class deferred work (v2.70+)

@@ -585,7 +585,12 @@ export function buildSessionContextLines(
   } else if (!latestSummary && !effectiveQuiet()) {
     // Fallback: no summary AND no key observations — show recent activity.
     // Skipped under QUIET_HOOKS since the Recent table already carries titles.
-    const recentObs = (observations.length >= 3 ? observations : fallbackObs).slice(0, 3);
+    // Slice FIRST, then sort: the slice is the selection (top 3 by value density) and must
+    // stay that way; only the order they are printed in is corrected, same as the Recent
+    // table below. Sorting before the slice would silently change WHICH three are injected.
+    const recentObs = (observations.length >= 3 ? observations : fallbackObs)
+      .slice(0, 3)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
     if (recentObs.length > 0) {
       summaryLines.push('### Recent Activity');
       for (const o of recentObs) {
@@ -695,8 +700,18 @@ export function buildSessionContextLines(
   }
 
   // 6. Recent observations table
+  //
+  // SELECTION order (greedy knapsack, value density) is not DISPLAY order. This block used
+  // to render the picks in the order the knapsack happened to take them, under a heading
+  // that says "Recent" next to a Time column — so row 1 was not the newest row, and both a
+  // human and the model read it as if it were. Sorting here is display-only: `obsToShow` is
+  // already chosen, so the token budget and the row set are untouched (pinned by a case in
+  // tests/hook-context.test.mjs). Tiebroken on id for the same reason D#9 gives — an
+  // untiebroken tie flips direction, and two saves in one millisecond are common.
   const obsLines = [];
-  const obsToShow = observations.length >= 3 ? observations : fallbackObs;
+  const obsToShow = [...(observations.length >= 3 ? observations : fallbackObs)].sort(
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
+  );
   if (obsToShow.length > 0) {
     const today = now.toISOString().slice(0, 10);
     obsLines.push(`### Recent (${today})`);

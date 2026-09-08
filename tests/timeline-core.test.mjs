@@ -68,6 +68,89 @@ describe('timeline-core', () => {
       expect(r.anchorNote).toBe(`(anchored to #${obsId}, closest obs to S#${sid})`);
     });
 
+    // A prompt/session/event anchor names a row that CARRIES a project, and the
+    // before/after window then auto-scopes to whatever project the anchor landed in
+    // (fetchTimelineWindow: `project || anchorRow.project`). So a globally-nearest
+    // resolution does not just pick one odd row — it moves the whole window into another
+    // project, unlabelled. Reproduced on a real corpus: `timeline --anchor S#1` from a
+    // project whose own nearest obs was 130s away resolved to a foreign-project obs 96s
+    // away and rendered six rows of that project's history. Both surfaces document
+    // "resolve to the nearest-in-time observation in the same project".
+    describe('a prompt/session/event anchor stays inside its own project', () => {
+      const addForeign = (offsetMs) => {
+        insertSession(db, { id: 'sess-other', project: 'other' });
+        return Number(
+          insertObs(db, {
+            sessionId: 'sess-other',
+            project: 'other',
+            title: 'foreign obs',
+            epochOffset: offsetMs,
+          }).lastInsertRowid,
+        );
+      };
+
+      it('S#N ignores a nearer observation in a different project', () => {
+        const mine = addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const sid = addSummary();
+        const r = resolveAnchorToken(db, `S#${sid}`, {});
+        expect(r.ok).toBe(true);
+        expect(r.anchorId, 'must not cross into the foreign project').not.toBe(foreign);
+        expect(r.anchorId).toBe(mine);
+      });
+
+      it('E#N ignores a nearer observation in a different project', () => {
+        const mine = addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const eid = Number(
+          db
+            .prepare(
+              `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
+               VALUES ('test', 'lesson', 'an event', 'body', 2, ?)`,
+            )
+            .run(Date.now()).lastInsertRowid,
+        );
+        const r = resolveAnchorToken(db, `E#${eid}`, {});
+        expect(r.ok).toBe(true);
+        expect(r.anchorId).not.toBe(foreign);
+        expect(r.anchorId).toBe(mine);
+      });
+
+      it('P#N follows its session to a project, since user_prompts has no project column', () => {
+        const mine = addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const pid = Number(insertPrompt(db, { contentSessionId: 'sess-tc', text: 'hello' }).lastInsertRowid);
+        const r = resolveAnchorToken(db, `P#${pid}`, {});
+        expect(r.ok).toBe(true);
+        expect(r.anchorId).not.toBe(foreign);
+        expect(r.anchorId).toBe(mine);
+      });
+
+      it('an explicit project still overrides the source row (caller wins)', () => {
+        addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const sid = addSummary();
+        const r = resolveAnchorToken(db, `S#${sid}`, { project: 'other' });
+        expect(r.ok).toBe(true);
+        expect(r.anchorId).toBe(foreign);
+      });
+
+      // The premise: without the scoping, the foreign row IS the globally nearest one, so
+      // the three cases above would resolve to it. A fixture where it is not nearest would
+      // pass whatever the code does.
+      it('the foreign row is genuinely the globally-nearest candidate (premise)', () => {
+        addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const sid = addSummary();
+        const r = resolveAnchorToken(db, `S#${sid}`, { project: null });
+        const globallyNearest = db
+          .prepare('SELECT id FROM observations ORDER BY ABS(created_at_epoch - ?) ASC LIMIT 1')
+          .get(db.prepare('SELECT created_at_epoch e FROM session_summaries WHERE id = ?').get(sid).e);
+        expect(globallyNearest.id).toBe(foreign);
+        expect(r.ok).toBe(true);
+      });
+    });
+
     it('re-anchors a compressed observation to its live parent', () => {
       const parent = addObs({ title: 'parent' });
       const child = addObs({ title: 'child', compressedInto: parent });
