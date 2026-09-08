@@ -8,6 +8,14 @@ import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { truncate, typeIcon, inferProject, fmtDate, debugLog, debugCatch } from './utils.mjs';
 import { resolveProject as _resolveProjectShared } from './project-utils.mjs';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR } from './schema.mjs';
+// schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
+// the DB is touched — a static import here adds no cold-start cost.
+import {
+  isSchemaSkewError,
+  schemaSkewFromError,
+  schemaSkewRemedy,
+  formatSchemaSkewNotice,
+} from './lib/schema-skew.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
 import {
@@ -153,6 +161,48 @@ try {
     info: (m) => debugLog('INFO', 'server', m),
   });
 } catch (err) {
+  // Schema skew gets the same treatment as the CLI (mem-cli.mjs) and for the same reason:
+  // the raw message ends in `npm i -g claude-mem-lite@latest`, which repairs nothing on the
+  // plugin-cache install that actually hits this.
+  //
+  // This branch has to live HERE rather than in scripts/launch.mjs, which already knows how
+  // to format the notice. server.mjs opens the DB while it is being imported, so the throw
+  // is caught by this block and `process.exit(1)` runs before the launcher's own catch can
+  // ever see it — the launcher's handler is unreachable for this one error. Re-throwing
+  // instead would fix the plugin path and break the npm one, because install.mjs registers
+  // `claude mcp add ... -- node <SERVER_PATH>`, launching this file with no launcher above
+  // it to catch anything. Emitting from here covers both, and the launcher's copy stays as
+  // the handler for failures that happen before this module is reached.
+  if (isSchemaSkewError(err)) {
+    const skew = schemaSkewFromError(err) || { dbVersion: null, binaryVersion: null };
+    let shape = { managed: false, activePluginVersion: null };
+    let dev = false;
+    try {
+      const [shapeMod, updateMod] = await Promise.all([
+        import('./lib/install-shape.mjs'),
+        import('./hook-update.mjs'),
+      ]);
+      shape = shapeMod.detectInstallShape({ installDir: DB_DIR });
+      dev = updateMod.isDevMode();
+    } catch {
+      /* shape unknown → schemaSkewRemedy answers 'unknown', which is its job */
+    }
+    const codeHome = process.env.CLAUDE_PLUGIN_ROOT || import.meta.dirname;
+    console.error(
+      formatSchemaSkewNotice({
+        dbVersion: skew.dbVersion,
+        binaryVersion: skew.binaryVersion,
+        remedy: schemaSkewRemedy({
+          managed: shape.managed,
+          activePluginVersion: shape.activePluginVersion,
+          dev,
+          root: codeHome,
+        }),
+        codeHome,
+      }),
+    );
+    process.exit(1);
+  }
   // Fatal: log and exit with descriptive message (Claude Code shows stderr)
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
   if (err.walRecoveryAttempted) {

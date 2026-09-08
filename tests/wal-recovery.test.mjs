@@ -300,11 +300,27 @@ describe('non-corruption open failure', () => {
     // branch guards against; the branch choice above is the real contract.
     expect(served, 'server must not come up on a forward-version DB').toBe(false);
     expect(exitCode).toBe(1);
-    expect(stderr).toContain('Left WAL/SHM intact');
     expect(stderr, 'the WAL-delete recovery arm must NOT run for a non-corruption error').not.toContain(
       'DB corruption detected',
     );
-    expect(stderr).toMatch(/DB schema is v\d+/);
+
+    // RESTATED, not weakened. This pair used to read `toContain('Left WAL/SHM intact')` and
+    // `toMatch(/DB schema is v\d+/)` — both quoting the generic FATAL text that server.mjs
+    // printed for EVERY non-corruption open failure, forward-version included. Since the
+    // schema-skew branch landed, a forward-version DB is answered by the shape-aware notice
+    // and exits before that banner, so the old strings asserted the wording rather than the
+    // branch this case is named for. The branch contract is unchanged and still fully
+    // covered: no serve, exit 1, and no rmSync recovery arm (the three assertions above) —
+    // and the skew arm reaches `process.exit(1)` even earlier than the banner did, so the
+    // "MUST NOT delete the WAL" guarantee is strictly stronger, not looser.
+    //
+    // The generic banner still exists and still guards the non-corruption, non-skew case;
+    // tests/schema-skew-wiring.test.mjs owns that arm ('leaves every other DB-open failure
+    // reporting exactly as before'), so deleting the strings here loses no coverage.
+    expect(stderr, 'a forward-version DB must get the shape-aware skew notice').toContain('Memory is OFF');
+    expect(stderr, 'the notice must name the version it actually read').toContain(
+      `v${CURRENT_SCHEMA_VERSION + 5}`,
+    );
   }, 30000);
 });
 

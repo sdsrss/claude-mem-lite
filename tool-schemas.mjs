@@ -256,7 +256,15 @@ export const memGetSchema = {
 };
 
 export const memDeleteSchema = {
-  ids: coerceIntArray.pipe(z.array(z.number().int()).min(1).max(50)).describe('Observation IDs to delete'),
+  // `.nonoptional()` is not a runtime change — zod already rejected an omitted `ids` here.
+  // It is what keeps the field in the PUBLISHED JSON Schema's `required` array: zod 4's
+  // toJSONSchema({io:'input'}) reads a ZodPipe's input side as accepting `undefined` and
+  // drops the key, so the advertised contract said optional while the server said required.
+  // See tests/tool-schemas.test.mjs, which grades every field against runtime ground truth.
+  ids: coerceIntArray
+    .pipe(z.array(z.number().int()).min(1).max(50))
+    .nonoptional()
+    .describe('Observation IDs to delete'),
   confirm: coerceBool.describe('false=preview what will be deleted, true=execute deletion'),
 };
 
@@ -433,7 +441,8 @@ export const memMaintainSchema = {
 };
 
 export const memUpdateSchema = {
-  id: coerceInt.pipe(z.number().int().positive()).describe('Observation ID to update'),
+  // `.nonoptional()` for the published-`required` reason documented on memDeleteSchema.ids.
+  id: coerceInt.pipe(z.number().int().positive()).nonoptional().describe('Observation ID to update'),
   // CLI parity (cmdUpdate): empty/whitespace title would render as `(untitled)`
   // in every listing — reject here like the CLI does, instead of persisting it.
   title: z
@@ -541,6 +550,10 @@ export const memDeferDropSchema = {
       coerceInt.pipe(z.number().int().positive()),
       z.string().regex(/^D#\d+$/, 'expected D#N or positive integer'),
     ])
+    // `.nonoptional()` for the published-`required` reason documented on memDeleteSchema.ids.
+    // This is the CORE tool of the three — it ships in tools/list, so the drift was visible
+    // to every agent, and the tool's own description already calls the reason "required".
+    .nonoptional()
     .describe('Deferred item id — accepts D#N (raw id) or positive integer (ordinal-within-project)'),
   reason: z.string().min(1).max(500).describe('Why this item is being dropped (required for audit trail)'),
   project: z.string().optional().describe('Project name (default: inferred from CWD)'),

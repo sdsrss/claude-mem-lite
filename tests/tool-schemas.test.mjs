@@ -5,6 +5,7 @@
 // that blocks encouragement-style descriptions from slipping back in.
 
 import { describe, test, expect } from 'vitest';
+import { z } from 'zod';
 import { tools } from '../tool-schemas.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -138,5 +139,61 @@ describe('MCP tool descriptions use discouragement style', () => {
     expect(tool).toBeTruthy();
     expect(tool.description).toMatch(/fts-check <check\|rebuild>/);
     expect(tool.description).not.toMatch(/fts-check\s+\[?--rebuild/);
+  });
+});
+
+// ─── The advertised schema must agree with what the runtime enforces ────────────────────
+//
+// The MCP SDK publishes each tool's inputSchema as JSON Schema, and an agent plans its call
+// from THAT — not from the zod shape. They disagreed on three tools, always in the same
+// direction: a field the runtime rejects when omitted was advertised as optional, so the
+// model omits it, the server answers `-32602 Invalid arguments`, and a round trip is spent
+// discovering a requirement the schema was supposed to state. `mem_defer_drop.id` is the one
+// that matters most — it is a CORE tool, listed in tools/list, so every agent sees it.
+//
+// The cause is `.pipe()`, not `z.preprocess()`, and the distinction is what makes this
+// testable rather than guessable: zod 4's toJSONSchema({io:'input'}) treats a ZodPipe's input
+// side as accepting `undefined` and drops the key from `required`. Isolated with a 5-arm
+// probe — `preprocess` alone keeps the key (which is why mem_get.ids was always correct),
+// `union(plain, string)` keeps it, and every shape wrapping a `.pipe()` loses it. So this is
+// a property of the `coerceInt.pipe(...)` idiom, and the ~20 optional fields that use it are
+// unaffected by construction.
+//
+// The assertion is written against GROUND TRUTH rather than a hand-maintained list of field
+// names: for every tool and every field, omit the field and ask zod whether it complains.
+// A list would have to be updated by whoever adds the next piped required field, which is
+// exactly the person who will not know to.
+describe('advertised JSON Schema `required` matches runtime enforcement', () => {
+  test('no tool advertises a field as optional that the runtime rejects when omitted', () => {
+    const mismatches = [];
+    for (const tool of tools) {
+      const obj = z.object(tool.inputSchema);
+      const advertised = new Set(z.toJSONSchema(obj, { io: 'input', unrepresentable: 'any' }).required ?? []);
+      const omittedAll = obj.safeParse({});
+      for (const field of Object.keys(tool.inputSchema)) {
+        const enforced =
+          !omittedAll.success &&
+          omittedAll.error.issues.some((i) => i.path.length > 0 && i.path[0] === field);
+        if (enforced !== advertised.has(field)) {
+          mismatches.push(
+            `${tool.name}.${field}: advertised_required=${advertised.has(field)} runtime_enforced=${enforced}`,
+          );
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  // The premise, asserted rather than assumed: if this ever reads 0 the test above has no
+  // population and would pass on an empty tool list. Three tools carry a required piped
+  // field today (mem_delete.ids, mem_update.id, mem_defer_drop.id).
+  test('the required-field population it grades is non-empty', () => {
+    const required = tools.flatMap((tool) => {
+      const obj = z.object(tool.inputSchema);
+      const bad = obj.safeParse({});
+      if (bad.success) return [];
+      return [...new Set(bad.error.issues.map((i) => i.path[0]))].map((f) => `${tool.name}.${f}`);
+    });
+    expect(required.length).toBeGreaterThanOrEqual(5);
   });
 });

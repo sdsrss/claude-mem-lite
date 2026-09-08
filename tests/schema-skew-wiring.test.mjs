@@ -287,3 +287,68 @@ describe('doctor reports which code home cannot open the DB', () => {
     expect(out).not.toMatch(/is newer than/);
   });
 });
+
+// ─── The MCP server, which is the surface this module's own header names FIRST ──────────
+//
+// lib/schema-skew.mjs opens by describing the measured incident: "The MCP server died before
+// its handshake, so the host showed `-32000 Connection closed`." SessionStart, the CLI and
+// doctor each got a shape-aware notice; the server did not, and the reason is structural
+// rather than an oversight in wiring. `scripts/launch.mjs` DOES import this module and DOES
+// format the notice — but server.mjs opens the DB while it is being imported and catches the
+// throw itself, printing `err.message` and calling process.exit(1). The launcher's catch is
+// therefore unreachable for exactly this error, and `err.message` is schema.mjs's raw text,
+// which ends in `npm i -g claude-mem-lite@latest` — inert on the plugin cache that actually
+// hits this.
+//
+// BOTH entry points are driven, because they are genuinely two shapes and only one of them
+// goes through the launcher: the plugin registers `node scripts/launch.mjs` via .mcp.json,
+// while install.mjs's npm-channel branch registers `node <SERVER_PATH>` directly
+// (`claude mcp add ... -- node SERVER_PATH`). A fix that only re-throws from server.mjs would
+// leave the npm channel with an unhandled rejection, so the notice has to be emitted by
+// server.mjs itself and both arms have to prove it.
+describe('the MCP server stops printing a repair that cannot work', () => {
+  it('emits the shape-aware notice when launched directly (npm-channel shape)', () => {
+    const dataDir = skewedDataDir();
+    const r = run([join(REPO, 'server.mjs')], dataDir, { stdin: '' });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/Memory is OFF/);
+    expect(out).toContain('999');
+    expect(out).not.toContain('npm i -g claude-mem-lite@latest');
+    expect(r.status).not.toBe(0);
+  });
+
+  it('emits it through the plugin launcher too (scripts/launch.mjs shape)', () => {
+    const dataDir = skewedDataDir();
+    const r = run([join(REPO, 'scripts', 'launch.mjs')], dataDir, { stdin: '' });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/Memory is OFF/);
+    expect(out).toContain('999');
+    expect(out).not.toContain('npm i -g claude-mem-lite@latest');
+    expect(r.status).not.toBe(0);
+  });
+
+  it('leaves every other DB-open failure reporting exactly as before', () => {
+    // The control, mirroring the CLI one above: this branch must catch skew and nothing
+    // else. A file that is not a database keeps the generic FATAL wording, including the
+    // WAL/SHM sentence that is specific to the server's exit semantics.
+    const dir = mkdtempSync(join(tmpdir(), 'skew-srv-corrupt-'));
+    fixtures.push(dir);
+    writeFileSync(join(dir, 'claude-mem-lite.db'), 'not a database at all');
+    const r = run([join(REPO, 'server.mjs')], dir, { stdin: '' });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).not.toMatch(/Memory is OFF/);
+    expect(out).toMatch(/FATAL: Database cannot be opened/);
+  });
+
+  it('starts normally on a healthy database', () => {
+    // Keeps the pair above from passing by breaking the server outright: with stdin closed
+    // the stdio transport ends and the process exits 0, having printed no skew notice.
+    const dir = mkdtempSync(join(tmpdir(), 'skew-srv-ok-'));
+    fixtures.push(dir);
+    run([join(REPO, 'cli.mjs'), 'stats'], dir);
+    const r = run([join(REPO, 'server.mjs')], dir, { stdin: '' });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).not.toMatch(/Memory is OFF/);
+    expect(out).not.toMatch(/FATAL: Database cannot be opened/);
+  });
+});
