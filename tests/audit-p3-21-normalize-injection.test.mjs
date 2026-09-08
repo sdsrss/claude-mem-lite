@@ -55,8 +55,9 @@
 // the `concepts.length < 5` skip, so a corpus whose vocabulary is mostly punctuation would
 // turn normalize off rather than corrupt anything.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createTestDb, insertSession } from './test-helpers.mjs';
 
@@ -136,6 +137,12 @@ describe('isConceptShaped — the layer-1 predicate on its own', () => {
     ['Übersicht', 'non-ASCII latin, leading'],
     ['می‌رود', 'Persian with U+200C ZWNJ — REQUIRED orthography, not formatting'],
     ['क‍ष', 'Devanagari with U+200D ZWJ'],
+    [
+      `${String.fromCodePoint(0x600)}123`,
+      'U+0600 ARABIC NUMBER SIGN — \\p{Cf} but real orthography, and NOT default-ignorable',
+    ],
+    [`${String.fromCodePoint(0x6dd)}5`, 'U+06DD ARABIC END OF AYAH — same class'],
+    [`${String.fromCodePoint(0x70f)}ab`, 'U+070F SYRIAC ABBREVIATION MARK — same class'],
   ])('accepts %s (%s)', (token) => {
     expect(isConceptShaped(token)).toBe(true);
   });
@@ -204,6 +211,23 @@ describe('isConceptShaped — the layer-1 predicate on its own', () => {
     ['U+2800 BRAILLE PATTERN BLANK', '⠀'],
   ])('rejects a phrase joined with %s', (_name, ch) => {
     const joined = `ignore${ch}every${ch}term`;
+    expect(joined.split(/\s+/).length, 'premise: one token after the split').toBe(1);
+    expect(isConceptShaped(joined)).toBe(false);
+  });
+
+  // The rest of the default-ignorable family, which a hand-listed class kept missing one at a
+  // time. Third review found U+2065 (unassigned, so removing \p{Cn} had re-opened it) and the
+  // zero-width combining marks; naming the Unicode PROPERTY covers them and the ones nobody
+  // has thought of yet, which is the point of using it instead of a list.
+  it.each([
+    ['U+2065 unassigned default-ignorable', 0x2065],
+    ['U+034F COMBINING GRAPHEME JOINER', 0x034f],
+    ['U+FE0F VARIATION SELECTOR-16', 0xfe0f],
+    ['U+180B MONGOLIAN FREE VARIATION SELECTOR', 0x180b],
+    ['U+E0001 LANGUAGE TAG', 0xe0001],
+    ['U+061C ARABIC LETTER MARK', 0x061c],
+  ])('rejects a phrase joined with %s', (_name, cp) => {
+    const joined = `ignore${String.fromCodePoint(cp)}every`;
     expect(joined.split(/\s+/).length, 'premise: one token after the split').toBe(1);
     expect(isConceptShaped(joined)).toBe(false);
   });
@@ -452,6 +476,127 @@ describe('R10-P3-21 tier 3: normalize is the cross-project rewrite path', () => 
     // run, so under vitest's parallel workers another suite calling executeNormalize
     // rewrites the cursor mid-test. That version of this case passed alone and failed in
     // the suite — the same wall-clock-flake shape as D#25, and not worth shipping twice.
+  });
+
+  it('P2-1(c): the cursor is WIRED — read and written across real runs', async () => {
+    // Third review, and it landed on exactly the risk of the previous round's substitution:
+    // the unit case below proves the rotation FUNCTION is correct while proving nothing about
+    // whether anything calls it. Both halves of the wiring were mutable with the suite green
+    // — `pickProjectsToNormalize(projects, null)` and `advanceNormalizeGate()` each restore
+    // the original starvation, and neither turned a single case red.
+    //
+    // The flake diagnosis was right and the substitution was still avoidable: the gate file
+    // lives under RUNTIME_DIR, which honours CLAUDE_MEM_RUNTIME_DIR, so this case gets a
+    // PRIVATE one and stops competing with every other suite for a shared file. That needs a
+    // fresh module instance, because NORMALIZE_GATE_FILE is resolved once at module load —
+    // hence resetModules plus a dynamic import of BOTH the module and its mocked client, so
+    // the mock instance the fresh copy calls is the one this case inspects.
+    const gateDir = mkdtempSync(join(tmpdir(), 'mem-p321-gate-'));
+    try {
+      vi.stubEnv('CLAUDE_MEM_RUNTIME_DIR', gateDir);
+      vi.resetModules();
+      const { executeNormalize: freshNormalize } = await import('../hook-optimize.mjs');
+      const { callModelJSONAsync: freshClient } = await import('../haiku-client.mjs');
+
+      const fresh = createTestDb();
+      insertSession(fresh, { id: 'sess-1', project: 'victim' });
+      const names = Array.from({ length: 11 }, (_, i) => `proj${String(i).padStart(2, '0')}`);
+      for (const n of names) {
+        fresh
+          .prepare(
+            `INSERT INTO observations
+               (memory_session_id, project, text, type, title, subtitle, narrative, concepts,
+                facts, files_read, files_modified, importance, created_at, created_at_epoch)
+             VALUES ('sess-1', ?, 'b', 'discovery', ?, '', '', ?, '', '[]', '[]', 2, ?, ?)`,
+          )
+          .run(n, `o-${n}`, `marker${n} kubernetes database retrieval pagination`, '2026-01-01', 1);
+      }
+
+      const runOnce = async () => {
+        freshClient.mockReset();
+        freshClient.mockResolvedValue({ groups: [] });
+        await freshNormalize(fresh, true);
+        return freshClient.mock.calls
+          .map(([p]) => (p.user.match(/marker(proj\d+)/) || [])[1])
+          .filter(Boolean);
+      };
+
+      const first = await runOnce();
+      const second = await runOnce();
+      fresh.close();
+
+      expect(first, 'a first run starts at the head').toEqual(names.slice(0, 8));
+      // The claim neither half of the wiring could previously be held to.
+      expect(second.slice(0, 3), 'the second run RESUMES after the cursor').toEqual([
+        'proj08',
+        'proj09',
+        'proj10',
+      ]);
+      expect(new Set([...first, ...second]).size, 'all eleven reached in two runs').toBe(11);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      rmSync(gateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('the escape hatch PRESERVES the rotation cursor instead of resetting it', async () => {
+    // Third review, P3: the legacy branch called advanceNormalizeGate() with no argument,
+    // which writes `cursor: null`. Turning the flag on for one run and off again therefore
+    // sent the next fan-out back to the head, costing whichever projects were next in line
+    // another full cycle — a silent regression of the very starvation the rotation fixed.
+    const gateDir = mkdtempSync(join(tmpdir(), 'mem-p321-hatch-'));
+    try {
+      vi.stubEnv('CLAUDE_MEM_RUNTIME_DIR', gateDir);
+      vi.resetModules();
+      const { executeNormalize: freshNormalize } = await import('../hook-optimize.mjs');
+      const { callModelJSONAsync: freshClient } = await import('../haiku-client.mjs');
+
+      const fresh = createTestDb();
+      insertSession(fresh, { id: 'sess-1', project: 'victim' });
+      const names = Array.from({ length: 11 }, (_, i) => `proj${String(i).padStart(2, '0')}`);
+      for (const n of names) {
+        fresh
+          .prepare(
+            `INSERT INTO observations
+               (memory_session_id, project, text, type, title, subtitle, narrative, concepts,
+                facts, files_read, files_modified, importance, created_at, created_at_epoch)
+             VALUES ('sess-1', ?, 'b', 'discovery', ?, '', '', ?, '', '[]', '[]', 2, ?, ?)`,
+          )
+          .run(n, `o-${n}`, `marker${n} kubernetes database retrieval pagination`, '2026-01-01', 1);
+      }
+      const seen = () =>
+        freshClient.mock.calls.map(([p]) => (p.user.match(/marker(proj\d+)/) || [])[1]).filter(Boolean);
+
+      freshClient.mockReset();
+      freshClient.mockResolvedValue({ groups: [] });
+      await freshNormalize(fresh, true); // fan-out run 1 -> cursor at proj07
+
+      // One legacy run with the hatch on, then the hatch off again.
+      const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.stubEnv('CLAUDE_MEM_NORMALIZE_CROSS_PROJECT', '1');
+      freshClient.mockReset();
+      freshClient.mockResolvedValue({ groups: [] });
+      await freshNormalize(fresh, true);
+      expect(freshClient.mock.calls.length, 'premise: the hatch really took the legacy path').toBe(1);
+      vi.stubEnv('CLAUDE_MEM_NORMALIZE_CROSS_PROJECT', '');
+      warn.mockRestore();
+
+      freshClient.mockReset();
+      freshClient.mockResolvedValue({ groups: [] });
+      await freshNormalize(fresh, true);
+      fresh.close();
+
+      expect(seen().slice(0, 3), 'the rotation resumes where it was, not at the head').toEqual([
+        'proj08',
+        'proj09',
+        'proj10',
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      rmSync(gateDir, { recursive: true, force: true });
+    }
   });
 
   it('P2-1(b): the rotation itself, driven directly so it is not a coin flip', () => {

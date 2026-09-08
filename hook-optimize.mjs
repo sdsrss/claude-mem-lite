@@ -636,37 +636,43 @@ export function shouldRunNormalize(project = null) {
 const CONCEPT_MAX_LEN = 40;
 
 /**
- * The layer-1 shape gate, in three parts. Split deliberately: each part has a different
- * reason to exist and the second review round showed they must not be applied to the same
- * string.
+ * The layer-1 shape gate. Two classes plus a strip, and every part of it is here because a
+ * hand-drawn version of it rejected something real.
  *
  * PUNCT — what a JSON group literal needs. Applied to the raw token AND to its NFKC fold, so
- * a fullwidth lookalike (U+FF5B, U+FF02, U+FF3B) is judged as the character it imitates.
+ * a fullwidth lookalike (U+FF5B, U+FF02, U+FF3B) is judged as the character it imitates. The
+ * fold is judged against THIS class only: adding the invisible classes to the folded form
+ * rejected `caf\u00B4e`, because the keyboard spacing acute folds to space + combining accent
+ * and space is `\p{Zs}` — the docblock example failing its own gate.
  *
- * INVISIBLE — characters that occupy no width, so a phrase built with them reads to a
- * tokenizer as one word while JS `\\s` (a FIXED LIST, not "whitespace") leaves it as one
- * token for the caller. Unicode categories cover most; five are named explicitly because they
- * are Lo/So — letters and symbols by category, blank on screen — and review reached a real
- * prompt with each of them.
+ * INVISIBLE — `\p{Default_Ignorable_Code_Point}` is Unicode's own name for "present in the
+ * text, absent from the rendering", which is exactly the property that lets a phrase read to
+ * a tokenizer as one word while JS `\\s` (a FIXED LIST, not "whitespace") leaves it as one
+ * token for the caller. Plus the surrogate/private-use/separator categories, plus U+2800
+ * BRAILLE PATTERN BLANK — a real graphic character that happens to render blank, so Unicode
+ * correctly does not call it ignorable and we have to name it.
  *
- * NOT DENIED, both deliberate, both with the bound stated:
- *   - U+200C ZWNJ and U+200D ZWJ are REQUIRED orthography in Persian, Hindi and other
- *     scripts. Denying `\p{Cf}` wholesale silently made those concepts unrepresentable.
- *     They are stripped before the test instead, which does mean a phrase joined with them
- *     survives as one token — accepted because the fan-out confines any such payload to the
- *     attacker's OWN project, and losing a script's orthography is the larger harm.
- *   - `\p{Cn}` (unassigned) is gone: it binds this gate to the runtime's Unicode version,
- *     so the same token could be accepted on one Node and rejected on the next.
+ * THREE hand-drawn versions of this class each rejected real text, which is why it is now
+ * stated as a property rather than a list:
+ *   1. `[\u0000-\u001F]` stopped at U+001F, so U+0085 NEL and the C1 block walked through.
+ *   2. `\p{Cf}` swept up U+200C ZWNJ and U+200D ZWJ — REQUIRED orthography in Persian and
+ *      Hindi. They are stripped via `\p{Join_Control}` (which is exactly those two) before the
+ *      test. The cost: a phrase joined with them survives as one token, bounded by the
+ *      per-project fan-out to the attacker's own project.
+ *   3. `\p{Cf}` ALSO swept up U+0600, U+0601, U+06DD, U+070F and U+08E2 — Arabic and Syriac
+ *      format characters that are real orthography and are NOT default-ignorable. Neither
+ *      review caught that one; it turned up by asking what `\p{Cf}` actually contains instead
+ *      of trusting the class name.
  *
- * WHY THE FOLD IS PUNCT-ONLY: applying the invisible classes to the NFKC form rejected
- * `caf\u00B4e` — the keyboard spacing acute folds to space + combining accent, and the space is
- * `\p{Zs}`. That is the docblock's own `café` example failing its own gate, found in review.
+ * `\p{Cn}` is deliberately absent: unassigned is a moving target, so it would bind the gate
+ * to the runtime's Unicode version. Default_Ignorable moves too, but only by gaining
+ * formatting characters, which is the direction this gate wants anyway.
  */
 const CONCEPT_SHAPE_DENY_PUNCT = /[{}[\]"'`\\<>]/u;
 const CONCEPT_SHAPE_DENY_INVISIBLE =
-  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zs}\p{Zl}\p{Zp}]|[\u3164\u115F\u1160\uFFA0\u2800]/u;
-/** Zero-width JOINERS, which are text rather than formatting. See the docblock above. */
-const CONCEPT_JOINERS = /[\u200C\u200D]/gu;
+  /\p{Default_Ignorable_Code_Point}|[\p{Cc}\p{Cs}\p{Co}\p{Zs}\p{Zl}\p{Zp}]|\u2800/u;
+/** Exactly U+200C ZWNJ and U+200D ZWJ. Text, not formatting — see the docblock. */
+const CONCEPT_JOINERS = /\p{Join_Control}/gu;
 
 /**
  * Is this token shaped like a concept rather than like a payload? (R10-P3-21 layer 1.)
@@ -944,7 +950,12 @@ export async function executeNormalize(db, force = false, { project } = {}) {
           'per-project default.',
       );
       const legacy = await normalizeOneProject(db, null);
-      advanceNormalizeGate();
+      // PRESERVE the rotation cursor rather than clearing it (third review, P3). A bare
+      // advanceNormalizeGate() writes `cursor: null`, so toggling the flag on for one run and
+      // off again sent the next fan-out back to the head — silently costing the projects that
+      // were next in line another full cycle. The legacy pass covers every project anyway, so
+      // it has no opinion about where the rotation was.
+      advanceNormalizeGate(readNormalizeGate().cursor ?? null);
       return legacy;
     }
 
@@ -987,6 +998,14 @@ export async function executeNormalize(db, force = false, { project } = {}) {
  * The cursor is the last project handled; the next run starts after it and wraps. A cursor
  * naming a project that has since disappeared yields index -1, so the run restarts at the
  * head — the same place a first-ever run starts, which is the behaviour we want anyway.
+ *
+ * BOUND, measured by third review and stated rather than implied: "deferred, not starved"
+ * holds under a STABLE ordering. The primary sort key is row count, so a project that keeps
+ * gaining observations can keep jumping ahead of the cursor; driven adversarially, one project
+ * was held out for 200 runs. That needs the attacker to know the cursor and to churn row
+ * counts deliberately; under realistic churn every project is covered in ceil(n/8) runs, which
+ * the same review verified for n = 9, 10, 16, 17 and 25. The failure mode is a delay, not a
+ * loss, and the row it delays is one nothing else reads.
  *
  * Exported because it is the only part of the rotation that can be tested DETERMINISTICALLY.
  * `NORMALIZE_GATE_FILE` is one file shared by every project and every concurrent run — the
