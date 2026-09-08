@@ -62,7 +62,7 @@ import {
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
 // always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
-import { DB_DIR, CODE_DIR } from './schema.mjs';
+import { DB_DIR, DB_PATH, CODE_DIR } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
@@ -85,6 +85,7 @@ import {
   sweepOrphanEpisodeFiles,
   sweepStaleProjectMarkers,
   lastSchemaSkew,
+  lastDbUnusable,
 } from './hook-shared.mjs';
 import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
 import { readFastSummarySource, insertFastSummary, FAST_SUMMARY_LIMITS } from './lib/fast-summary.mjs';
@@ -2354,6 +2355,33 @@ async function emitSchemaSkewNotice() {
   }
 }
 
+/**
+ * The corruption twin of emitSchemaSkewNotice. Same channels, same reason they are BOTH used:
+ * queueHookContext reaches the model, queueHookSystemMessage reaches the human, and a notice
+ * whose whole job is handing the user a command must not depend on the assistant volunteering
+ * it (lib/hook-stdout.mjs names v3.70.0 for exactly that mistake).
+ *
+ * Dynamically imported like its twin: a cold path must not cost the healthy SessionStart a
+ * directory scan for backup snapshots.
+ */
+async function emitDbUnusableNotice() {
+  try {
+    if (!lastDbUnusable()) return;
+    const mod = await import('./lib/db-unusable.mjs');
+    // TWO DIFFERENT STRINGS, unlike the skew twin, and the asymmetry is the point: the
+    // human channel carries the repair command, the model channel carries only the fact.
+    // See formatDbUnusableModelNotice — this family's remedy overwrites the database.
+    queueHookSystemMessage(
+      mod.formatDbUnusableNotice({ dbPath: DB_PATH, remedy: mod.dbUnusableRemedy(DB_PATH) }),
+    );
+    queueHookContext('SessionStart', mod.formatDbUnusableModelNotice());
+  } catch (e) {
+    // A hook must never crash the host session, and a notice that cannot render is better
+    // handled by staying quiet than by taking SessionStart down with it.
+    debugCatch(e, 'session-start-db-unusable');
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2542,7 +2570,13 @@ async function handleSessionStart() {
     // only other signal it produces is a `-32000 Connection closed` from the MCP host, which
     // names nothing. Measured 2026-09-08: a whole day of it, >=648 log lines, zero words to
     // the user. This is the surface the user actually reads.
+    //
+    // A database file that is not a database is the same shape and got the same treatment:
+    // unhealable without the user, disables every path, and every OTHER surface (CLI exit 1,
+    // `status`, `doctor` with an exact repair command) already reports it — leaving the
+    // in-session one as the only silent one.
     await emitSchemaSkewNotice();
+    await emitDbUnusableNotice();
     return;
   }
 

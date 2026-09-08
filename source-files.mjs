@@ -137,6 +137,8 @@ export const SOURCE_FILES = [
   // ERR_MODULE_NOT_FOUND on the command users run when something is already wrong.
   'lib/install-shape.mjs',
   'lib/schema-skew.mjs',
+  'lib/db-unusable.mjs',
+  'lib/record-once.mjs',
   // Single-envelope stdout for hook processes — imported by hook.mjs. Claude Code
   // parses hook stdout as ONE JSON document; missing from the manifest → an updated
   // install throws ERR_MODULE_NOT_FOUND on every hook fire.

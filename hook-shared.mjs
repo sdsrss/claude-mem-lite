@@ -28,6 +28,8 @@ import {
   shouldRecordSkew,
   SKEW_MARKER_PREFIX,
 } from './lib/schema-skew.mjs';
+import { isDbUnusableError, DB_UNUSABLE_MARKER_PREFIX } from './lib/db-unusable.mjs';
+import { shouldRecordOnce } from './lib/record-once.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
 // predicates and the handoff constants moved into `lib/` because two lib modules
 // imported them from here and dragged this file's whole import graph — haiku-client,
@@ -244,6 +246,9 @@ export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
   // v5.0.0; a prefix for files nothing writes any more is dead weight in a hot-path loop.
   'last-mark-compressible-', // per-project auto-compress 24h gate
   SKEW_MARKER_PREFIX, // per-project schema-skew log dedup; regenerated on the next skewed open
+  // Same shape, same reason, and it was missed here first time round — the note above is
+  // about exactly this defect, two entries up.
+  DB_UNUSABLE_MARKER_PREFIX, // per-project unopenable-DB log dedup; regenerated on the next failing open
 ]);
 
 // Records of a completed side effect — never age out. `ep-`/`ep-flush-`/
@@ -405,12 +410,28 @@ export function lastSchemaSkew() {
   return lastSkew;
 }
 
+// Same idea, other unhealable family: the file exists and SQLite will not open it. Held as a
+// boolean rather than the error, because the only thing SessionStart needs is "which notice",
+// and keeping an Error alive here would tempt a caller into rendering a stack trace at a user.
+let lastUnusable = false;
+
+/**
+ * True when the most recent openDb() returned null because the database file is not a usable
+ * database. Cleared by any successful open, so a repair mid-session stops the notice.
+ *
+ * @returns {boolean}
+ */
+export function lastDbUnusable() {
+  return lastUnusable;
+}
+
 export function openDb() {
   try {
     // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
     // silently dead (null DB) on a corrupt WAL until the next MCP server start.
     const db = ensureDbWithWalRecovery();
     lastSkew = null;
+    lastUnusable = false;
     return db;
   } catch (e) {
     // Forward-incompat is its own family: it cannot be healed by anything this process can
@@ -423,10 +444,11 @@ export function openDb() {
     //
     // shouldRecordSkew is TOTAL by contract. Nothing in this catch may throw: the first cut
     // called getSessionId() here, which MINTS and writes a session id, so an unwritable
-    // runtime dir turned openDb() itself into a thrower. All 13 call sites are written to
+    // runtime dir turned openDb() itself into a thrower. All 12 openDb() call sites in hook.mjs are written to
     // no-op on null and none of them expects an exception.
     if (isSchemaSkewError(e)) {
       lastSkew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
+      lastUnusable = false;
       // Guarded even though inferProject() reads env and cwd: "the only statement in this
       // catch cannot throw" was true of the original one-line body and stopped being true
       // the moment anything was added. An unscoped marker is a worse dedup, not a crash.
@@ -441,8 +463,31 @@ export function openDb() {
       }
       return null;
     }
-    // Still null, still no throw — a hook must never crash the host session, and all
-    // eight call sites in hook.mjs are written to no-op on null. But "returned null"
+    // The OTHER unhealable family, and it was the silent one. A file that is not a database
+    // repeats on every fire exactly like a skew does, and until now took the generic branch
+    // below: one full stack trace per SessionStart fire (measured: 20 fires → 20 records, ~860 B
+    // each), no dedup, and no user-visible word anywhere in the session. Same treatment as skew
+    // — record once per project per hour, and hand SessionStart a flag to speak with.
+    //
+    // Nothing in this branch may throw: `isDbUnusableError` is a regex over a string and
+    // `shouldRecordOnce` is total by contract, which is exactly the property the first cut of
+    // the skew dedup lost by calling a function that WRITES.
+    if (isDbUnusableError(e)) {
+      lastUnusable = true;
+      lastSkew = null; // the two flags are a set: whichever family fired last is the true one
+      let project = '';
+      try {
+        project = inferProject();
+      } catch {
+        /* total: the marker degrades to one shared file */
+      }
+      if (shouldRecordOnce(RUNTIME_DIR, DB_UNUSABLE_MARKER_PREFIX, project, 'unusable')) {
+        recordHookError('hook-shared:db-open', e, RUNTIME_DIR);
+      }
+      return null;
+    }
+    // Still null, still no throw — a hook must never crash the host session, and all 12
+    // openDb() call sites in hook.mjs are written to no-op on null. But "returned null"
     // used to be the ONLY trace: nothing reached runtime/hook-errors/, so `stats`
     // reported 0 and doctor printed "no recent silent hook breakage" while every
     // capture path was dead (audit B1, 2026-08-14 — the same blindness that hid the

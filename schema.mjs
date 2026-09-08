@@ -11,6 +11,7 @@ import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
 import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
+import { isFtsCorruptionError } from './lib/db-unusable.mjs';
 
 // The three location constants now live in lib/data-paths.mjs — a leaf module with no
 // package imports — and are re-exported here so every existing importer is unchanged.
@@ -1267,16 +1268,10 @@ export function isDbCorruptionError(err) {
   return /SQLITE_CORRUPT|SQLITE_NOTADB|malformed|not a database|disk image/i.test(text);
 }
 
-/**
- * Whether an error is a damaged FTS5 INDEX rather than a damaged database file. SQLite
- * reports these as SQLITE_CORRUPT_VTAB, whose message text is the same
- * "database disk image is malformed" the file-level faults use — so the code is the only
- * thing that separates them, and matching on message alone is what conflated them.
- * The remedy is rebuildFTS, which the FTS content lets us do losslessly.
- */
-export function isFtsCorruptionError(err) {
-  return /SQLITE_CORRUPT_VTAB/i.test(`${err?.code || ''}`);
-}
+// Definition moved to lib/db-unusable.mjs (v6.5.0) so the hook path's own classifier and this
+// one cannot drift; re-exported here because four call sites and a test import it from
+// schema.mjs. Same pattern as DB_DIR / DB_PATH above.
+export { isFtsCorruptionError };
 
 /**
  * ensureDb with corruption-gated WAL recovery. Was inlined in server.mjs only,
