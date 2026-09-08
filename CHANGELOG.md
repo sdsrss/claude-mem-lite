@@ -75,7 +75,7 @@ flag. **That excuse is now void and its priority went up, not down**: the sub-cl
 survives a stable JS sort, so SQL order still decides membership, unconditionally. Still no
 failing case, so still unjudged.
 
-Suite 366 files / 5850 → **363 / 5781**, exit 0, the −69 attributed by name with the
+Suite 366 files / 5850 → **363 / 5782**, exit 0, the −68 attributed by name with the
 arithmetic closing exactly. eslint 0, `format:check` 0. knip **44** unused exports and 3
 unlisted binaries, unmoved — and the name set was diffed same-tree rather than trusted for
 agreeing, because a round that deletes 19 shipped-module exports and adds one is exactly where an unchanged

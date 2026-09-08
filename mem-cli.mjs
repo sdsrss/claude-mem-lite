@@ -2222,8 +2222,8 @@ function cmdExport(db, args) {
 }
 
 // ─── Restore ───────────────────────────────────────────────────────────────
-// Inverse of `export` — the backup/restore half README:690 promises. Reuses
-// lib/save-observation.mjs so FK / FTS / TF-IDF vector / minhash / files-junction
+// Inverse of `export` — the backup/restore half the README's CLI table promises. Reuses
+// lib/save-observation.mjs so FK / FTS / minhash / files-junction
 // stay consistent with cmdSave, then a targeted UPDATE re-applies the value-signals
 // (access/cited/uncited/injection/decay), branch, and concepts/facts/files_read that
 // saveObservation derives or zeros — so a restored backup keeps its citation-decay

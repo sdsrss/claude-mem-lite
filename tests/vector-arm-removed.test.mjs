@@ -29,7 +29,7 @@
 // read 0.8998 / 0.8497 / 0.9712 / 0.9611, to the digit.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { createTestDb } from './test-helpers.mjs';
@@ -70,38 +70,42 @@ const REMOVED_SYMBOLS = [
   'VEC_HIT_OBS_COLS',
 ];
 
-// Markdown that ships. Not source, but it is where a user and an agent LEARN the arm exists,
-// so a removed surface surviving here is a real leak — README.zh-CN.md was missed entirely on
-// the first pass because the sweep only knew the English op name.
-const SHIPPED_DOCS = ['README.md', 'README.zh-CN.md', 'adopt-content.mjs'];
-
-// Shipped code only. tests/ is excluded because a guard naming what it removed is not a
-// leak; benchmark/ is excluded for the same reason its own removal is a separate concern.
-function shippedSourceFiles() {
-  const out = [];
-  const skipDirs = new Set([
-    'node_modules',
-    '.git',
-    'tests',
-    'benchmark',
-    'coverage',
-    'docs',
-    'tasks',
-    'experiment',
-    '.github',
-  ]);
+// WHAT SHIPS, derived from `package.json#files` rather than from an extension walk plus a
+// hand-maintained list. The hand-maintained version was walked past twice by review: first
+// because a `rebuild_vectors` STRING is not an identifier, then because `commands/*.md`,
+// `scripts/*.sh` and `skill.md` are shipped, agent-facing, and not `.mjs`. Re-advertising the
+// arm in any of those left the whole suite green. `package.json#files` IS the definition of
+// shipped, so the list cannot drift from it again.
+//
+// npm implicitly adds README* on top of `files[]`; both READMEs are the product's front page,
+// so they are added here explicitly rather than relied on.
+function shippedFiles(exts) {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const entries = [...(pkg.files || []), 'README.md', 'README.zh-CN.md'];
+  const out = new Set();
+  const take = (full) => {
+    if (exts.some((e) => full.endsWith(e))) out.add(full);
+  };
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
-      if (skipDirs.has(name)) continue;
-      const st = statSync(full);
-      if (st.isDirectory()) walk(full);
-      else if (name.endsWith('.mjs') || name.endsWith('.js')) out.push(full);
+      if (statSync(full).isDirectory()) walk(full);
+      else take(full);
     }
   };
-  walk(ROOT);
-  return out;
+  for (const entry of entries) {
+    const full = join(ROOT, entry);
+    if (!existsSync(full)) continue; // npm-shrinkwrap.json is generated at publish time
+    statSync(full).isDirectory() ? walk(full) : take(full);
+  }
+  return [...out].sort();
 }
+
+// Identifiers only live in code.
+const shippedSourceFiles = () => shippedFiles(['.mjs', '.js']);
+// Table names, the env var and the op name are STRINGS, and a string can advertise the arm
+// from a markdown command file or a shell hook just as effectively as from a module.
+const shippedTextFiles = () => shippedFiles(['.mjs', '.js', '.md', '.sh', '.json']);
 
 // Source with comments removed. A comment naming what was deleted is history; a live
 // reference is code. Note this strips to build the SEARCH WINDOW, not just to skip matched
@@ -113,10 +117,18 @@ function shippedSourceFiles() {
 // err in: stripping from the first `//` on a line would also eat a real reference sitting
 // after a string containing `//` (a URL), and a false NEGATIVE here lets the arm back in.
 function strippedCode(file) {
-  return readFileSync(file, 'utf8')
+  return stripRemovalNote(readFileSync(file, 'utf8'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 }
+
+// The upgrade note in both READMEs has to NAME the env var, the maintain op and the two
+// dropped tables — that is its entire job, and the CHANGELOG does not ship, so this is the
+// only notice an npm user gets. Without an exemption the guard forbids the one document it
+// most needs to exist. Exempt it by SENTINEL rather than by filename, so the exemption
+// covers exactly the fenced block and cannot quietly grow to cover a whole file.
+const NOTE_FENCE = /<!-- vector-arm-removal-note:start -->[\s\S]*?<!-- vector-arm-removal-note:end -->/g;
+const stripRemovalNote = (text) => text.replace(NOTE_FENCE, '');
 
 describe('Phase-2: the TF-IDF vector arm is removed', () => {
   const prev = process.env[REMOVED_ENV];
@@ -126,6 +138,23 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
   afterEach(() => {
     if (prev === undefined) delete process.env[REMOVED_ENV];
     else process.env[REMOVED_ENV] = prev;
+  });
+
+  it('both READMEs carry the fenced upgrade note, and it names what was removed', () => {
+    // Premise for the exemption above. Without this, deleting the note (or letting the fence
+    // drift off it) would silently turn the exemption into a hole that protects nothing while
+    // still suppressing whatever sits between the sentinels.
+    for (const f of ['README.md', 'README.zh-CN.md']) {
+      const text = readFileSync(join(ROOT, f), 'utf8');
+      const fenced = text.match(NOTE_FENCE);
+      expect(fenced, `${f} must carry a fenced vector-arm removal note`).toHaveLength(1);
+      const note = fenced[0];
+      expect(note, `${f} note must name the env var`).toContain(REMOVED_ENV);
+      expect(note, `${f} note must name the removed maintain op`).toContain(REMOVED_OP);
+      for (const t of REMOVED_TABLES) expect(note, `${f} note must name ${t}`).toContain(t);
+      // ...and it must say the migration is one-way, which is the part a user acts on.
+      expect(note).toMatch(/v48|forward-incompat|5\.6\.0/);
+    }
   });
 
   it('initSchema creates neither vector table', () => {
@@ -147,7 +176,7 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     // this guard forbid documenting its own removal, which it did on the first run. The
     // check keeps all its teeth, because a live read is `process.env.CLAUDE_MEM_VECTORS`
     // in code and survives comment-stripping untouched.
-    const offenders = shippedSourceFiles().filter((f) => strippedCode(f).includes(REMOVED_ENV));
+    const offenders = shippedTextFiles().filter((f) => strippedCode(f).includes(REMOVED_ENV));
     expect(offenders.map((f) => relative(ROOT, f))).toEqual([]);
   });
 
@@ -165,7 +194,7 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     // the day someone deletes the migration, the exemption silently protects nothing.
     for (const d of drops) expect(schema, `schema.mjs must still run: ${d}`).toContain(d);
 
-    const files = [...shippedSourceFiles(), ...SHIPPED_DOCS.map((f) => join(ROOT, f))];
+    const files = shippedTextFiles();
     const hits = [];
     for (const f of files) {
       let code = strippedCode(f);
@@ -183,8 +212,10 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     // because it reads ALL_MAINTAIN_OPS and those are separate copies of the same list.
     // Markdown is in scope here precisely because the README and the adoption doc are how
     // a user and an agent learn the op exists.
-    const files = [...shippedSourceFiles(), ...SHIPPED_DOCS.map((f) => join(ROOT, f))];
-    const hits = [...new Set(files.filter((f) => readFileSync(f, 'utf8').includes(REMOVED_OP)))];
+    const files = shippedTextFiles();
+    const hits = [
+      ...new Set(files.filter((f) => stripRemovalNote(readFileSync(f, 'utf8')).includes(REMOVED_OP))),
+    ];
     expect(hits.map((f) => relative(ROOT, f))).toEqual([]);
   });
 

@@ -1,6 +1,8 @@
-// Shared observation-search engine — the single source of truth for
-// hybrid FTS5 + vector ranking, OR fallback, concept/PRF expansion, and
-// RRF merge. Both server.mjs (mem_search MCP tool) and mem-cli.mjs (search CLI)
+// Shared observation-search engine — the single source of truth for FTS5 BM25
+// ranking, OR fallback, and concept/PRF expansion. A TF-IDF vector arm and an RRF
+// merge were steps 5-6 here until Phase-2 removed them; RRF now lives only in
+// lib/rrf.mjs, reached from deep-search.mjs.
+// Both server.mjs (mem_search MCP tool) and mem-cli.mjs (search CLI)
 // import these helpers so identical queries return identical candidate sets
 // and rankings. See #8198 / #8212 for the prior paired-path divergence this
 // module exists to eliminate.
@@ -455,15 +457,18 @@ function expandObsByPRF(db, ctx, now, primaryCount, existingIds, results, includ
 }
 
 /**
- * Hybrid observation search — single source of truth for FTS + vector + RRF.
+ * Observation search — single source of truth for the FTS-side pipeline.
  *
  * Pipeline (paired-path with mem-cli.mjs cmdSearch via this module):
  *   1. FTS5 BM25 query (full scoring)
  *   2. OR fallback when AND returned 0 → sets ctx.orFallbackFired
  *   3. Concept co-occurrence expansion (when results sparse)
  *   4. PRF (pseudo-relevance feedback) expansion
- *   5. Vector search + RRF merge (re-ranks all results when both modes have hits)
- *   6. Vector-only fallback (when FTS5 found nothing)
+ *
+ * Steps 5 (vector search + RRF merge) and 6 (vector-only fallback) were removed with the
+ * TF-IDF vector arm in Phase-2. The function keeps the name `searchObservationsHybrid`
+ * because it is a published-ish surface with many callers; "hybrid" now means the
+ * multi-source fuse its callers do, not FTS+vector.
  *
  * @param {Database} db - better-sqlite3 instance
  * @param {object} ctx - { ftsQuery, args, epochFrom, epochTo, perSourceLimit,
@@ -610,7 +615,8 @@ export function searchObservationsHybrid(db, ctx) {
     );
   for (const r of rows) results.push(ftsRowToResult(r, { snippet: true }));
 
-  // OR fallback — must run BEFORE vector merge so orFallbackFired reflects FTS-only state.
+  // OR fallback. `orFallbackFired` must reflect the FTS-only state, so nothing that adds
+  // rows may run before this.
   if (rows.length === 0) {
     const orQuery = relaxFtsQueryToOr(ftsQuery);
     if (orQuery) {

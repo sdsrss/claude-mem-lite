@@ -2,9 +2,9 @@
 
 # claude-mem-lite
 
-`claude-mem-lite` is a **persistent memory** (also called *long-term memory* or *cross-session context*) system for **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Anthropic's CLI coding agent. It runs as an **[MCP](https://modelcontextprotocol.io/) server** plus a set of Claude Code hooks, automatically capturing coding observations, decisions, and bug fixes during sessions, then providing hybrid full-text + semantic search to recall them later.
+`claude-mem-lite` is a **persistent memory** (also called *long-term memory* or *cross-session context*) system for **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Anthropic's CLI coding agent. It runs as an **[MCP](https://modelcontextprotocol.io/) server** plus a set of Claude Code hooks, automatically capturing coding observations, decisions, and bug fixes during sessions, then providing full-text search with query expansion to recall them later.
 
-Compared to general-purpose LLM memory frameworks like [`mem0`](https://github.com/mem0ai/mem0) or the MCP reference [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) server, claude-mem-lite is purpose-built for Claude Code's hook lifecycle: episode batching cuts LLM calls 7–10× vs the original [claude-mem](https://github.com/thedotmack/claude-mem) (an estimated ~600× lower total cost — see the cost model below; this is an architecture estimate, not a measured benchmark), while the hybrid the FTS5 retriever benchmarks at 0.90 Recall@10 / 0.85 Precision@10
+Compared to general-purpose LLM memory frameworks like [`mem0`](https://github.com/mem0ai/mem0) or the MCP reference [`memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory) server, claude-mem-lite is purpose-built for Claude Code's hook lifecycle: episode batching cuts LLM calls 7–10× vs the original [claude-mem](https://github.com/thedotmack/claude-mem) (an estimated ~600× lower total cost — see the cost model below; this is an architecture estimate, not a measured benchmark), while the FTS5 retriever benchmarks at 0.90 Recall@10 / 0.85 Precision@10
 (see [Search Quality](#search-quality) for the reproduction command).
 
 > 中文简介：claude-mem-lite 是 Claude Code 的轻量级**持久化记忆 / 长期记忆 / 跨会话上下文**插件，基于 MCP 协议 + 钩子机制，自动捕获编码会话中的决策、修复和上下文，并通过 FTS5 全文检索召回。详见 [中文 README](README.zh-CN.md)。
@@ -227,6 +227,34 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
   managed/
     repos/               # Shallow-cloned source repos
 ```
+
+<!-- vector-arm-removal-note:start -->
+## Upgrading to 6.0.0 (breaking)
+
+**The default search path does not change.** 6.0.0 removes the TF-IDF vector arm, which has
+been disabled by default since 3.17.0 — if you never set CLAUDE_MEM_VECTORS, upgrading is
+behaviour-identical and there is nothing to do.
+
+Three surfaces are gone:
+
+| Removed | What happens now |
+|---|---|
+| `CLAUDE_MEM_VECTORS=1` | Inert. Setting it has no effect. |
+| `maintain execute --ops rebuild_vectors` | Exits 1: `Unknown operation(s): rebuild_vectors`. |
+| Tables `observation_vectors`, `vocab_state` | Dropped by schema migration v49 on first open. |
+
+**The migration is one-way.** Once a 6.0.0 build has opened your database, older versions
+refuse it — `schema.mjs`'s forward-incompat guard throws *"DB schema is v49 but this
+claude-mem-lite binary supports up to v48"*. If you want to stay on the vector arm, pin
+`claude-mem-lite@5.6.0` **before** upgrading. If you have already upgraded and need to go
+back, either re-upgrade, point `CLAUDE_MEM_DIR` at a fresh directory, or restore a
+pre-upgrade backup (`claude-mem-lite export` / the snapshots under your data dir).
+
+Why it was removed: measured directly against the shipped path, the arm was negative on both
+benchmark fixtures — including the vocabulary-mismatch suite that is the only reason a vector
+arm would exist (Recall@10 0.3407 → 0.3018, and roughly +88% P95 latency). No observations
+are lost; only the derived vector index is.
+<!-- vector-arm-removal-note:end -->
 
 ## Usage
 

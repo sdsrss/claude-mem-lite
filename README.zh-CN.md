@@ -192,6 +192,30 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+<!-- vector-arm-removal-note:start -->
+## 升级到 6.0.0（破坏性变更）
+
+**默认检索路径不变。** 6.0.0 移除了 TF-IDF 向量臂——它自 3.17.0 起就默认关闭，如果你从未设置过
+CLAUDE_MEM_VECTORS，升级前后行为完全一致，无需任何操作。
+
+三个面被移除：
+
+| 移除项 | 现在的行为 |
+|---|---|
+| `CLAUDE_MEM_VECTORS=1` | 失效。设置它不再有任何作用。 |
+| `maintain execute --ops rebuild_vectors` | 退出码 1：`Unknown operation(s): rebuild_vectors`。 |
+| `observation_vectors`、`vocab_state` 两张表 | 由 schema 迁移 v49 在首次打开时 DROP。 |
+
+**这个迁移是单向的。** 一旦 6.0.0 打开过你的数据库，旧版本就会拒绝它——`schema.mjs` 的
+forward-incompat 守卫会抛出 *"DB schema is v49 but this claude-mem-lite binary supports up to
+v48"*。想继续用向量臂，请在**升级之前**锁定 `claude-mem-lite@5.6.0`；如果已经升级又需要回退，
+只能重新升级、把 `CLAUDE_MEM_DIR` 指向一个新目录，或从升级前的备份恢复
+（`claude-mem-lite export` 或数据目录下的快照）。
+
+移除原因：直接对着出货路径实测，该臂在两个基准语料上都是负的——包括「词表不匹配」这个向量臂唯一
+的存在理由（Recall@10 0.3407 → 0.3018，P95 延迟约 +88%）。观察记录不会丢失，丢的只是派生的向量索引。
+<!-- vector-arm-removal-note:end -->
+
 ## 使用方法
 
 ### MCP 工具
