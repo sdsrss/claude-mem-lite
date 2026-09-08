@@ -2,6 +2,68 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.5.0 — the surface the user is looking at was the only silent one
+
+Two rounds of end-to-end use as a real user — fresh npm install, seven hook events driven with
+real payloads, all 18 MCP tools over stdio, adopt/unadopt, export/restore, uninstall, plus
+adversarial input and a 24-way concurrency probe — then two independent pre-ship reviewers on
+disjoint lenses. Five user-facing defects and, from the reviewers, one destructive
+misclassification that never shipped.
+
+**Upgrade note.** No migration, no schema change, nothing to do. `mem_save` gains an optional
+`force` field and the CLI gains `save --force`; both default off, so existing callers are
+unaffected. `mem_timeline`'s advertised parameter bounds change from the safe-integer range to
+the real ones — a caller that was sending an out-of-range value was already being rejected at
+runtime, it just could not tell from the schema. Revert path: pin `claude-mem-lite@6.4.0`.
+
+**A corrupt database made memory stop working and said nothing.** Every other surface reported
+it correctly — the CLI exits 1, `status` says "exists but check failed", `doctor` prints the
+exact repair command — while the hooks returned null and ended SessionStart with empty stdout
+*and* empty stderr, writing one ~860-byte stack trace per fire, forever. The user whose memory
+had stopped learned nothing until they happened to run `doctor`. Now it is reported once per
+project per hour and SessionStart says so, with the repair command for the machine it is on.
+
+Two things the reviewers stopped from shipping with it. **SQLite reports a damaged FTS5 *index*
+over a perfectly healthy file with the same "database disk image is malformed" text a real
+file-level fault uses** — this repo has known that since R10 P3-9 and has a predicate for it —
+so the first cut would have offered `cp <old backup> <db>` over a database whose rows were all
+intact. And the repair command was being handed verbatim to the *model* channel as well as the
+human one; the skew notice it was modelled on can do that because its commands are `git pull`
+and `plugin update`, whereas this one overwrites the database. The human now gets the command,
+the model gets only the fact and a pointer to `doctor`.
+
+**`claude-mem-lite install` silently rewrote the `.mcp.json` of whatever repository you ran it
+in.** It removed project-scoped registrations as part of purging stale ones — but that file
+belongs to your repo, not to this installer. Running it from a clone of this project emptied
+the plugin's own tracked MCP manifest with no output at all. Install now leaves it alone and
+tells you the duplicate exists.
+
+**The SessionStart "Recent" table was not in time order.** It has a Time column and says
+"Recent", and it was rendered in the token budgeter's internal pick order — so the first row
+was not the newest. Rows now sort newest-first; which rows get chosen, and the budget that
+bounds them, are unchanged.
+
+**Every MCP tool advertised parameter bounds it did not enforce.** 20 of 36 constrained fields
+published the safe-integer range (±9007199254740991) while the runtime enforced something much
+narrower — `mem_compress.age_days` really wants ≥30, and `mem_delete`, a destructive tool,
+advertised no array bounds against an enforced 1..50. An agent plans its call from the
+published schema, so each of those was an invited round trip. Cause: zod renders a `.pipe()`'s
+input side. Runtime behaviour is unchanged — verified by 7240 differential parses, 0
+divergences.
+
+**A `P#`/`S#`/`E#` timeline anchor could jump you into another project.** Both surfaces
+document it as resolving to the nearest observation *in the same project*; it resolved
+globally, and because the before/after window then scopes to whatever project the anchor
+landed in, one mis-resolved anchor moved the entire rendered timeline somewhere else with
+nothing marking it.
+
+**Smaller things.** `get 1,2,999` now names the id it could not find instead of silently
+returning two of three — MCP `mem_get` and CLI `delete` both already did. `save` gains
+`--force` for the case where the five-minute near-duplicate guard refuses a genuinely
+different memory and the only workaround was to reword it until the similarity check passed.
+`uninstall` reports what it actually leaves behind: on a real install the database is 0.2 MB
+and the code plus `node_modules` it also keeps is ~56 MB, which "Data preserved" did not say.
+
 ## v6.4.0 — the repair path could not run on the install it repairs
 
 A full-lifecycle QA pass (install → use → update → self-heal → uninstall) against a pristine
