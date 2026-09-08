@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — the daily normalize no longer lets one project rewrite another
+## v6.1.0 — the daily normalize no longer lets one project rewrite another
 
 **Upgrade note — a user-visible default changes. The unattended `normalize` pass is now
 scoped PER PROJECT.**
