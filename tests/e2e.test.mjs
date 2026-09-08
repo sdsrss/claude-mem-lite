@@ -2550,6 +2550,45 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     const { stdout } = runHook('session-start', { env: { HOME: tmpHome } });
     expect(stdout).not.toContain('finalized decision');
   });
+
+  // D#19 WIRING. lib/cite-back-hint.mjs has unit coverage for reading the gate* triple;
+  // this is the half that proves somebody WRITES it. Without this the reader could be
+  // perfect while trackCitationsAtStop never emits the keys and every payload silently
+  // falls back to the wide denominator — a fix that is proven and not connected.
+  it('Stop writes the hook-injected denominator beside the wide one', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const attach = (command, stdout) => ({
+      type: 'attachment',
+      attachment: { type: 'hook_success', command, stdout },
+    });
+    const transcript = writeTranscript([
+      // Three ids the PRE-TOOL-RECALL face put in front of the model.
+      attach(
+        'node "/x/scripts/pre-tool-recall.js"',
+        '  #101 [lesson] alpha\n  #102 [bugfix] beta\n  #103 [decision] gamma',
+      ),
+      // The model cites one of them, plus a #904 that was never injected — which is
+      // exactly the asymmetry the two denominators disagree about.
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'applying #102, and see #904' }] },
+      },
+    ]);
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: randomUUID(), transcript_path: transcript }),
+      env: { HOME: tmpHome },
+    });
+
+    const payloadFile = join(tmpHome, '.claude-mem-lite', 'runtime', 'cite-recall-parent--testproj.json');
+    const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+    expect(payload.gateInjected, 'the gate denominator is the 3 hook-injected ids').toBe(3);
+    expect(payload.gateRecalled, 'only #102 was both injected and cited').toBe(1);
+    expect(payload.gateRatio).toBeCloseTo(1 / 3, 5);
+    // The wide triple must still be written — it answers a different question and the
+    // gate falling back to it is the documented back-compat path.
+    expect(typeof payload.injected).toBe('number');
+    expect(typeof payload.ratio).toBe('number');
+  });
 });
 
 describe('Suite: G1+G2 enrich-save worker (spawned-env recursion guard)', () => {

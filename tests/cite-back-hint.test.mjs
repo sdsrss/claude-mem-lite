@@ -468,8 +468,9 @@ describe('countUnsavedBugfixShape', () => {
 
 // ─── buildCiteRecallNudge (B2, v2.83.1) ─────────────────────────────────────
 // SessionStart surface. Reads `runtime/cite-recall-<project>.json` written by
-// handleStop. Two independent gates: cite-recall ratio (default <0.6, min 5
-// injected) and unsaved-bugfix-shape count (>0). Empty string when both pass.
+// handleStop. Two independent gates: cite-recall ratio (default <0.4 of the
+// HOOK-INJECTED denominator, min 5 injected) and unsaved-bugfix-shape count (>0).
+// Empty string when both pass.
 
 describe('buildCiteRecallNudge', () => {
   let tmp;
@@ -491,14 +492,22 @@ describe('buildCiteRecallNudge', () => {
     expect(buildCiteRecallNudge('nope', tmp, {})).toBe('');
   });
 
-  it('surfaces ratio nudge when recall < 0.6 and injected >= 5', () => {
-    seed('p1', { injected: 10, recalled: 4, ratio: 0.4 });
+  it('surfaces ratio nudge when recall < threshold and injected >= 5', () => {
+    // Restated for the D#19 threshold move (0.6 → 0.4). The old fixture used ratio 0.4,
+    // which is now exactly the boundary — a case that would have flipped silently. Both
+    // sides of the boundary are pinned instead, since `<` is strict.
+    seed('p1', { injected: 10, recalled: 3, ratio: 0.3 });
     const out = buildCiteRecallNudge('p1', tmp, {});
-    expect(out).toContain('cite-recall 40%');
-    expect(out).toContain('(4/10)');
+    expect(out).toContain('cite-recall 30%');
+    expect(out).toContain('(3/10)');
   });
 
-  it('suppresses ratio nudge when recall >= 0.6', () => {
+  it('suppresses ratio nudge at exactly the threshold (strict <)', () => {
+    seed('p1b', { injected: 10, recalled: 4, ratio: 0.4 });
+    expect(buildCiteRecallNudge('p1b', tmp, {})).toBe('');
+  });
+
+  it('suppresses ratio nudge when recall >= threshold', () => {
     seed('p2', { injected: 10, recalled: 7, ratio: 0.7 });
     expect(buildCiteRecallNudge('p2', tmp, {})).toBe('');
   });
@@ -539,6 +548,56 @@ describe('buildCiteRecallNudge', () => {
   it('treats missing `unsaved` field as no nudge (back-compat with pre-v2.83.1 files)', () => {
     seed('p8', { injected: 10, recalled: 8, ratio: 0.8 }); // no unsaved key
     expect(buildCiteRecallNudge('p8', tmp, {})).toBe('');
+  });
+
+  // ─── D#19: the gate reads the HOOK-INJECTED denominator ───────────────────
+  // Measured 2026-09-08 over all 69 transcripts on this machine, read-only, through the
+  // shipped extractors. WIDE (computeCiteRecall, any `#NN`-shaped token in non-assistant
+  // text): 48 sessions qualify, median ratio 0.125, and the shipped 0.6 threshold fires
+  // on 46/48 = 96%. NARROW (extractAllInjected — the ids the hooks actually put in front
+  // of the model): 14 qualify, median 0.429, and 0.6 fires on 12/14 = 86%.
+  //
+  // D#19 recorded this as "the threshold is unsatisfiable, no session can exceed 0.5".
+  // That is FALSE on the current corpus — max is 0.833 on both denominators — and the
+  // corpus grew from 51 to 69 transcripts in between (doctrine rule 2). The real defect
+  // is that at 0.6 the gate is nearly always true, so it carries almost no information
+  // and `lowStreak` never resets, which silence-after-3 turns into a dead surface.
+
+  it('gates on the hook-injected denominator when the payload carries one', () => {
+    // FAILS IF: ratioGateFires reverts to `data.ratio`. The wide ratio here is 0.10,
+    // far under any threshold, while the model actually cited 4 of the 8 lessons the
+    // hooks injected — a session that does NOT deserve the nag.
+    seed('n1', { injected: 40, recalled: 4, ratio: 0.1, gateInjected: 8, gateRecalled: 4, gateRatio: 0.5 });
+    expect(buildCiteRecallNudge('n1', tmp, {})).toBe('');
+  });
+
+  it('reports the hook-injected numbers, not the wide ones', () => {
+    seed('n2', { injected: 40, recalled: 4, ratio: 0.1, gateInjected: 8, gateRecalled: 2, gateRatio: 0.25 });
+    const out = buildCiteRecallNudge('n2', tmp, {});
+    expect(out).toContain('cite-recall 25%');
+    expect(out).toContain('(2/8)');
+    // The denominator is named in the line itself — this is the discoverability signal
+    // for the change, in place of a one-shot upgrade banner.
+    expect(out).toContain('hooks injected');
+  });
+
+  it('falls back to the wide numbers for a payload written before this release', () => {
+    seed('n3', { injected: 10, recalled: 1, ratio: 0.1 }); // no gate* keys
+    expect(buildCiteRecallNudge('n3', tmp, {})).toContain('cite-recall 10%');
+  });
+
+  it('CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR=1 restores the pre-release gating', () => {
+    seed('n4', { injected: 40, recalled: 4, ratio: 0.1, gateInjected: 8, gateRecalled: 4, gateRatio: 0.5 });
+    const out = buildCiteRecallNudge('n4', tmp, { CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR: '1' });
+    expect(out).toContain('cite-recall 10%');
+    expect(out).toContain('(4/40)');
+  });
+
+  it('the min-injected floor also reads the hook-injected count', () => {
+    // Wide volume is plentiful (40) but only 3 lessons were actually injected — below
+    // the floor of 5, so there is not enough evidence to judge this session.
+    seed('n5', { injected: 40, recalled: 0, ratio: 0, gateInjected: 3, gateRecalled: 0, gateRatio: 0 });
+    expect(buildCiteRecallNudge('n5', tmp, {})).toBe('');
   });
 
   it('honors env override thresholds', () => {

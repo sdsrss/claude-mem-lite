@@ -2,6 +2,36 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.6.0 (unreleased) — a nag that fired 96% of the time was not telling you anything
+
+**Upgrade note.** No migration, no schema change, nothing to do. One user-visible default
+changes: the SessionStart cite-recall nag now judges — and reports — the lessons the *hooks
+injected*, at a threshold of 0.4 instead of 0.6. In practice it appears less often and means
+more when it does. Revert path: `CLAUDE_MEM_CITE_NUDGE_THRESHOLD=0.6` restores the old
+threshold and `CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR=1` restores the old denominator; both
+together are byte-for-byte the v6.5.0 behavior. Pinning `claude-mem-lite@6.5.0` also works.
+
+**The nag's denominator counted things nobody injected.** `computeCiteRecall` counts every
+`#NN`-shaped token in non-assistant text — tool_result bodies, file contents, CLI output,
+pasted reports. That is the right caliber for "which ids has the model seen at all" and it is
+not the question the nag asks, which is whether the model cited back the lessons the hooks put
+in front of it. Measured over all 69 transcripts on the development machine, read-only,
+2026-09-08: the wide ratio has median 0.125 while the hook-injected ratio has median 0.429, and
+the shipped 0.6 threshold fired on **46 of 48** qualifying sessions (96%). A gate that is 96%
+true carries almost no information — and because the self-silence streak only resets when the
+gate does *not* fire, it reached its limit of 3 within the first sessions of a project and the
+surface went quiet for good. Both numbers are now persisted; the gate, the streak and the
+printed line all read the same one, and the line names which denominator it used, so the change
+is visible without reading this file. A payload written by an older version has no
+hook-injected count, so it keeps being judged the old way at the new threshold.
+
+The deferred item this closes (D#19) recorded the problem as "the threshold is unsatisfiable,
+no session can exceed 0.5". That was **false** and is retracted: the maximum on the current
+corpus is 0.833 on both denominators. The corpus grew from 51 to 69 transcripts between the two
+readings — the project's own rule 2, this time inside the note that states it. The threshold is
+stamped, not calibrated: 14 sessions clear the volume floor under the new denominator, which is
+not enough to separate 0.35 from 0.45.
+
 ## v6.5.0 — the surface the user is looking at was the only silent one
 
 Two rounds of end-to-end use as a real user — fresh npm install, seven hook events driven with

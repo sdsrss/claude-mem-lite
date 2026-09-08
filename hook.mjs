@@ -1406,6 +1406,34 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
       // which was ~all of the cost.)
       try {
         const stats = computeCiteRecall(transcriptPath);
+        // D#19: the RATIO GATE's own denominator, alongside the wide one. `stats` counts
+        // every `#NN`-shaped token in non-assistant text — tool_result bodies, file
+        // contents, CLI output, pasted reports — which is the right caliber for "what has
+        // the model seen" and the wrong one for "did it cite back what the hooks gave it"
+        // (measured 11.2x inflation, R11-B-P2-2). Both are persisted; buildCiteRecallNudge
+        // gates on this pair and falls back to the wide one for older payloads.
+        //
+        // Cost is an array iteration, not a parse: this block runs after the decay loop's
+        // own extractInjectedBySurface on the same path, and lib/transcript-scan.mjs memoizes
+        // the parse. mainOnly mirrors the decay loop — an id injected only inside a subagent
+        // would otherwise enter the denominator while its citation lands in another
+        // transcript, scoring a miss the main thread never had a chance to avoid.
+        let gate = { gateInjected: null, gateRecalled: null, gateRatio: null };
+        try {
+          const gateInjectedIds = unionSurfaces(extractInjectedBySurface(transcriptPath, { mainOnly: true }));
+          const gateCited = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
+          let hit = 0;
+          for (const id of gateInjectedIds) if (gateCited.has(id)) hit++;
+          gate = {
+            gateInjected: gateInjectedIds.size,
+            gateRecalled: hit,
+            gateRatio: gateInjectedIds.size > 0 ? hit / gateInjectedIds.size : 0,
+          };
+        } catch (e) {
+          // Leaving the gate* keys null is the defined fallback, not a silent loss: the
+          // reader treats a payload without them exactly like a pre-release one.
+          debugCatch(e, 'handleStop-cite-recall-gate-denominator');
+        }
         // B2 (v2.83.1): also persist the bugfix-shape nudge/save delta so
         // the next SessionStart can surface "N unsaved bugfix-shape edits"
         // alongside cite-recall. Same scan target (transcript already in OS
@@ -1422,11 +1450,13 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // always said. Stop fires once per assistant TURN, so incrementing here silenced
         // the nudge inside the first session — this machine read lowStreak 58 against 26
         // transcripts before the fix.
-        const { lowStreak, streakBase, lastStreakSession } = nextCiteStreakState(
-          prevPayload,
-          ccSessionId,
-          stats,
-        );
+        // D#19: the streak advances on the SAME gate the nudge fires on, so the merged
+        // stats go in. Handing it the wide triple alone would let the streak climb on a
+        // verdict the SessionStart surface never reached — two policies, one counter.
+        const { lowStreak, streakBase, lastStreakSession } = nextCiteStreakState(prevPayload, ccSessionId, {
+          ...stats,
+          ...gate,
+        });
         // G3: finalized-in-conversation + zero deliberate persistence →
         // decisionSignal rides the payload; next SessionStart reminds once.
         let decisionSignal = null;
@@ -1449,6 +1479,7 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         }
         const payload = {
           ...stats,
+          ...gate,
           ...bugfixStats,
           lowStreak,
           streakBase,
