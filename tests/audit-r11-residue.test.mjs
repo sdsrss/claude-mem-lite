@@ -182,3 +182,92 @@ describe('R11 A-P3-3 — the active-file probe only counts LIVE observations', (
     db.close();
   });
 });
+
+// ─── D#21 — pagination stability through a pool-sensitive assembly path ───────
+// Removing the TF-IDF vector arm deleted tests/cli.test.mjs's two
+// "CLI search pagination stability (hybrid FTS+vector RRF)" cases along with it: they
+// asserted on `vecCount > 0` and could not be re-pointed. The unit-level guard on
+// computePerSourceWindow's offset-independence survived (tests/search-core.test.mjs), but
+// the layer above it — "a paged search whose result set was ASSEMBLED by a stage that
+// re-adds rows an SQL OFFSET already skipped" — has had no integration guard since. The
+// cli-e2e case is FTS-only by its own comment.
+//
+// The property under test is the one D#30 established: every source fetches from offset 0
+// and the caller slices exactly once post-merge, so pages must partition the result set.
+// The concept/PRF expansion stages are the pool-sensitive part that is still shipped.
+
+describe('D#21 — paging partitions a result set built by the expansion stages', () => {
+  it('two pages are disjoint and equal one double-length page', async () => {
+    const { sanitizeFtsQuery } = await import('../utils.mjs');
+    const { handleSearchForTest } = await import('../server.mjs');
+    const db = createTestDb();
+    insertSession(db, { id: 'd21-s', project: 'd21' });
+
+    // TWO direct hits, because expandQueryByConcepts only promotes a concept seen in at
+    // least two of the seed documents — with one hit the stage runs and finds nothing, and
+    // the fixture would be measuring the wrong absence. They also keep the strict pool
+    // below ceil(limit/2) so the expansion stages run at all. The five rows below carry
+    // only the shared concept, so they can enter ONLY through concept co-occurrence — the
+    // stage that re-adds rows independently of any SQL offset.
+    for (const n of ['one', 'two']) {
+      const direct = Number(
+        insertObs(db, {
+          sessionId: 'd21-s',
+          project: 'd21',
+          type: 'bugfix',
+          title: `quokka stall observed ${n}`,
+          narrative: `the quokka stalls under load ${n}`,
+        }).lastInsertRowid,
+      );
+      db.prepare('UPDATE observations SET concepts = ? WHERE id = ?').run('sidecarmesh', direct);
+    }
+    const expansionIds = [];
+    for (let i = 0; i < 5; i++) {
+      const id = Number(
+        insertObs(db, {
+          sessionId: 'd21-s',
+          project: 'd21',
+          type: 'bugfix',
+          title: `sidecarmesh teardown ${i}`,
+          narrative: `the sidecarmesh proxy drops peer ${i} during teardown`,
+        }).lastInsertRowid,
+      );
+      db.prepare('UPDATE observations SET concepts = ? WHERE id = ?').run('sidecarmesh', id);
+      expansionIds.push(id);
+    }
+
+    const page = async (offset, limit) =>
+      (await handleSearchForTest(db, { query: 'quokka', project: 'd21', limit, offset }, {})).results.map(
+        (r) => r.id,
+      );
+
+    // Both limits must sit on the SAME side of the expansion gate — it reads
+    // `results.length < ceil(limit/2)`, so limit 3 against a 2-row strict pool turns the
+    // stage OFF and the two reads would be comparing different assemblies rather than
+    // different pages of one. 6 and 12 both leave it on, and computePerSourceWindow floors
+    // both at MIN_FUSION_POOL = 60, so the candidate pool is identical too.
+    const whole = await page(0, 12);
+    expect(
+      whole.length,
+      'premise: the expansion stages must have produced more than one page',
+    ).toBeGreaterThan(3);
+    // Some expansion-only row must be in the page — not a specific one: which of the five
+    // survives the limit is a ranking question this case has no business pinning.
+    expect(
+      whole.filter((id) => expansionIds.includes(id)).length,
+      'premise: no expansion-only row reached the page, so the stage under test never ran',
+    ).toBeGreaterThan(0);
+
+    const first = await page(0, 6);
+    const second = await page(6, 6);
+    // Disjoint: a pool that grew with the offset would re-rank the prefix and repeat rows.
+    expect(
+      first.filter((id) => second.includes(id)),
+      'pages overlap',
+    ).toEqual([]);
+    // And together they are the same set, in the same order, as one un-paged read.
+    expect([...first, ...second]).toEqual(whole);
+    void sanitizeFtsQuery;
+    db.close();
+  });
+});
