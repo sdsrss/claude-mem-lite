@@ -26,11 +26,11 @@ export {
 export {
   cjkBigrams,
   extractCjkSynonymTokens,
-  extractCjkKeywords,
   extractCjkLikePatterns,
   SYNONYM_MAP,
   expandToken,
   sanitizeFtsQuery,
+  ftsQueryTokens,
   relaxFtsQueryToOr,
   FTS_STOP_WORDS,
   CJK_COMPOUNDS,
@@ -439,7 +439,9 @@ export function parseJsonFromLLM(text) {
 // ─── Handoff Utilities ──────────────────────────────────────────────────────
 
 /** Stop words for handoff keyword extraction (broader than ERROR_STOP_WORDS). */
-export const HANDOFF_STOP_WORDS = new Set([
+// Module-private since v6.6.0: hook-memory.mjs was its last importer, and it went away
+// with extractQueryTerms when the coverage denominator moved to the shared term source.
+const HANDOFF_STOP_WORDS = new Set([
   'the',
   'and',
   'for',

@@ -122,14 +122,22 @@ describe('R11-A-P2-3 — retrieval-core ORDER BY is total under exact ties', () 
 });
 
 // ─── batch 2 (2026-09-08) ─────────────────────────────────────────────────────
-// The remaining 13 sites R11 judged harmful now carry `, id DESC` too. Only the ones
-// whose tie is observable end-to-end are pinned here; the rest — the PRF LIMIT 8 and
-// concept LIMIT 20 seed pools, hook-llm's three dedup windows, hook-llm's 30-row
-// session-summary window, save-observation's dedup window, and the three
-// citation-stats listings — change WHICH rows enter a population rather than the
-// order of anything a caller can read back, and pinning them would mean asserting on
-// an internal population. They are changed and NOT pinned; that is stated rather than
-// papered over.
+// Seventeen sites gained `, id DESC` this round. TWO are pinned below — the ones whose tie
+// is observable end to end. The other FIFTEEN are changed and NOT pinned, and the whole
+// list is written out because a pre-ship review caught this note enumerating ten and
+// implying that was all of them:
+//
+//   pool membership, not readable order — search-engine's PRF seed (LIMIT 8),
+//   search-scoring's concept seed (LIMIT 20), hook-llm's three dedup windows (10 / 60 /
+//   200), hook-llm's 30-row session-summary window, lib/save-observation's dedup window;
+//   readable but only through a surface with its own ordering — lib/search-core's three
+//   cross-source `ORDER BY score` pools (sessions / prompts / events) and two of its three
+//   recent listings (prompts, events); display order only — mem-cli's three
+//   citation-stats listings.
+//
+// Pinning the first group would mean asserting on an internal population; the rest are
+// reachable but would need a fixture per surface. Stated rather than papered over — and
+// counted, because "the remaining N" with the wrong N is how a note stops being checkable.
 
 describe('R11-A-P2-3 batch 2 — the main pool and the cross-source recent listings', () => {
   let db;

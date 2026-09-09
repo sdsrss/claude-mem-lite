@@ -679,12 +679,23 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   first session: this machine read `lowStreak = 58` for a project with 26 transcripts on
   disk, and 2 of 3 projects had the cite-`#NN` nudge permanently silenced. Fixed via
   `nextCiteStreakState` (payloads with no `lastStreakSession` are pre-fix and discarded once,
-  so no file surgery). **The denominator swap R11 proposed was measured and NOT taken**: over
-  the same 51 transcripts, using `extractAllInjected` cuts the QUALIFYING population 37 → 7
-  but the gate still fires on 100% of qualifying sessions under BOTH denominators, because
-  real cite-recall never exceeds 0.5 here (min 0, p25 0, median 0.375, p75 0.5, max 0.5)
-  while `CLAUDE_MEM_CITE_NUDGE_THRESHOLD` defaults to 0.6. A threshold no session can satisfy
-  guarantees the silence regardless of what the denominator is.
+  so no file surgery). **RETRACTED 2026-09-09, and the retraction is the point.** This entry
+  said the denominator swap "was measured and NOT taken" because "real cite-recall never
+  exceeds 0.5 here (min 0, p25 0, median 0.375, p75 0.5, max 0.5) while the threshold
+  defaults to 0.6 — a threshold no session can satisfy". Re-measured over all 69 transcripts
+  on this machine: the maximum is **0.833** on both denominators (1.000 on the hook-injected
+  side if you take the whole 69 rather than the volume-qualifying subset — state which
+  population, the two differ), so the threshold IS satisfiable and the gate fires on 46/48 =
+  96% wide and 12/14 = 86% narrow, not 100%. The corpus grew 51 → 69 between the readings:
+  doctrine rule 2, inside the entry that states it. **What survives is the defect, in a
+  different shape**: a gate that is 96% true carries almost no information, and
+  `nextCiteLowStreak` resets only when the gate does NOT fire, so the streak still reaches
+  the silence-after-3 default and the surface still dies. v6.6.0 takes the swap that this
+  entry declined AND moves the threshold to 0.4 — see the CHANGELOG entry for the
+  distribution both decisions were read off. This paragraph is the fourth recurrence of
+  "a retraction must sweep all copies": the earlier three missed on wording, on entity and
+  on scope; this one was missed on FILE — the round corrected CLAUDE.md and the deferred
+  item and never grepped here.
 - **The `#NN` numerator caliber excludes the other tables' namespaces, and that changed the
   caliber of three rulers.** This product renders and teaches `E#N` / `P#N` / `D#N` / `S#N`;
   every injected-side extractor drops them by construction, and the cited side did not, so

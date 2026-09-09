@@ -558,7 +558,8 @@ describe('buildCiteRecallNudge', () => {
   // of the model): 14 qualify, median 0.429, and 0.6 fires on 12/14 = 86%.
   //
   // D#19 recorded this as "the threshold is unsatisfiable, no session can exceed 0.5".
-  // That is FALSE on the current corpus — max is 0.833 on both denominators — and the
+  // That is FALSE on the current corpus — max is 0.833 on both denominators among the
+  // volume-qualifying sessions the gate actually judges (1.000 across all 69) — and the
   // corpus grew from 51 to 69 transcripts in between (doctrine rule 2). The real defect
   // is that at 0.6 the gate is nearly always true, so it carries almost no information
   // and `lowStreak` never resets, which silence-after-3 turns into a dead surface.

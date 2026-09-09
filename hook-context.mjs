@@ -364,11 +364,36 @@ function fencedRanges(content) {
   return ranges;
 }
 
-/** The last index of `needle` that does not begin inside a fenced span, or -1. */
+/** True when `idx` sits inside a backtick-delimited inline code span on its own line. */
+function insideInlineCode(content, idx) {
+  const lineStart = content.lastIndexOf('\n', idx - 1) + 1;
+  // Count backtick RUNS before the position; an odd count means the position is inside a
+  // span. Runs, not characters: ``code with ` inside`` is one span opened by two ticks.
+  const before = content.slice(lineStart, idx);
+  const runs = before.match(/`+/g);
+  return runs !== null && runs.length % 2 === 1;
+}
+
+/**
+ * The last index of `needle` that is a real block's tag, or -1.
+ *
+ * Three exclusions, and the pre-ship review is why there are three rather than one. A
+ * legacy block written by the old `updateClaudeMd` put its tags at COLUMN 0 on their own
+ * lines, so anything else is prose ABOUT the tag:
+ *   - inside a fenced code span (```/~~~)          — the first cut, and only a third of it
+ *   - not at the start of a line                    — an inline mention mid-sentence
+ *   - indented four or more spaces                  — CommonMark's other code block
+ * Measured before the widening, with the shipped function: an inline span went 101 -> 55
+ * bytes and an indented block 95 -> 33, atomically, with no backup.
+ */
 function lastIndexOutsideFences(content, needle, ranges) {
   let idx = content.lastIndexOf(needle);
   while (idx !== -1) {
-    if (!ranges.some(([a, b]) => idx >= a && idx < b)) return idx;
+    const lineStart = content.lastIndexOf('\n', idx - 1) + 1;
+    const indent = content.slice(lineStart, idx);
+    const atLineStart = indent.length === 0;
+    const inFence = ranges.some(([a, b]) => idx >= a && idx < b);
+    if (atLineStart && !inFence && !insideInlineCode(content, idx)) return idx;
     idx = content.lastIndexOf(needle, idx - 1);
   }
   return -1;

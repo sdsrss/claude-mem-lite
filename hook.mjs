@@ -1624,8 +1624,9 @@ async function handleStop() {
 
 // Build the SessionStart nudge line shown when the prior session's cite-recall
 // fell below threshold. Empty string = no surface (insufficient signal, recall
-// already healthy, or feature opted-out via env). Default threshold 0.6,
-// min injected 5 — both env-overridable for ops tuning + tests.
+// already healthy, or feature opted-out via env). Default threshold 0.4 against the
+// HOOK-INJECTED denominator (v6.6.0, D#19), min injected 5 — both env-overridable for
+// ops tuning + tests; CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR=1 restores the wide one.
 // Thin wrapper: lib/cite-back-hint.mjs owns the logic so it stays unit-tested.
 // Passing module-level RUNTIME_DIR keeps the call site identical to pre-v2.83.1.
 function buildCiteRecallNudge(project) {

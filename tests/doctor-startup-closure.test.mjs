@@ -83,6 +83,25 @@ describe('doctor starts on the broken install it exists to diagnose', () => {
     expect(stdout).toMatch(/Node\.js/);
   });
 
+  // Pre-ship review 2026-09-09. Making dbCheckRemedy lazy did not remove the failure, it
+  // MOVED it: from load time into the Database check's catch, where an unhandled rejection
+  // aborts the run just as fatally. The compound shape is the one a real broken install
+  // has — a file is missing AND the database will not open — and `--json` still emitted
+  // zero bytes there. FAILS IF: the try/catch around the remedy call is removed.
+  it('still reports when a module is missing AND the database will not open', () => {
+    const root = buildCopyInstall(join(home, 'compound'));
+    rmSync(join(root, 'stop-words.mjs'));
+    // A file SQLite will refuse: right name, wrong bytes.
+    const dataDir = join(home, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'this is not a database');
+
+    const { stdout, stderr } = runDoctor(root);
+    expect(stderr).not.toMatch(/ERR_MODULE_NOT_FOUND/);
+    expect(stdout.length, 'doctor emitted nothing on the compound broken install').toBeGreaterThan(200);
+    expect(stdout, 'it must still name the database failure').toMatch(/Database/);
+  });
+
   it('still reports when a retrieval-subtree module is missing', () => {
     // stop-words.mjs has nothing to do with diagnosis. It was reachable ONLY as
     // install.mjs → lib/db-unusable.mjs → lib/db-backup.mjs → utils.mjs → here, which is

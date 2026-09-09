@@ -584,6 +584,33 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     expect(content).toContain('# Footer');
   });
 
+  // Pre-ship review (2026-09-09). The fence fix above closed ONE of the three markdown
+  // containers a person writes a tag in. Both of these were measured deleting user text
+  // with the shipped function: an inline code span 101 -> 55 bytes, a four-space indented
+  // block 95 -> 33. Fenced blocks are not how most people mention a tag mid-sentence.
+  //
+  // The discriminator that covers all three: a real legacy block was emitted by the old
+  // updateClaudeMd with its tags at COLUMN 0 on their own lines. An indented-code tag has
+  // four leading spaces; an inline-span tag has prose before it. So "outside a fence AND at
+  // the start of a line AND not inside a backtick span" keeps the removal power and drops
+  // every container. Widening the exclusion errs toward not touching the file, which is the
+  // only safe direction for a write into someone else's notes.
+  it('leaves an inline code span byte-identical', () => {
+    const original =
+      '# Notes\n\nThe hook wraps its output in `<claude-mem-context>` … `</claude-mem-context>` tags.\n\nAfter.\n';
+    writeFileSync(testClaudeMd, original);
+    cleanupClaudeMdLegacyBlock();
+    expect(readFileSync(testClaudeMd, 'utf8'), 'inline-span mention deleted').toBe(original);
+  });
+
+  it('leaves a four-space indented code block byte-identical', () => {
+    const original =
+      '# Notes\n\nIt prints:\n\n    <claude-mem-context>\n    ### Recent\n    </claude-mem-context>\n\nAfter.\n';
+    writeFileSync(testClaudeMd, original);
+    cleanupClaudeMdLegacyBlock();
+    expect(readFileSync(testClaudeMd, 'utf8'), 'indented-block mention deleted').toBe(original);
+  });
+
   it('removes existing context block, preserving surrounding content', () => {
     writeFileSync(
       testClaudeMd,

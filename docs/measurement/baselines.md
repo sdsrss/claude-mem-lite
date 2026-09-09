@@ -19,10 +19,14 @@ movements are named only so a reader knows which day a stamp was taken, not beca
 text differs in kind.
 
 - **2026-09-09, R12 (`main`, post-audit tree)** — CLAUDE.md's three rows were superseded
-  together, measured on the FINAL tree after every change in the round (doctrine rule 7):
-  **382 files / 6090 cases**, knip **43 / 0 / 3**, coverage **85.32 stmts · 79.58 branches ·
-  91.04 funcs · 86.48 lines** (vitest 5.0.0, v8 text reporter). Against the v6.5.0 row that
-  is +3 test files and +19 cases, and **that is not the round's delta in the usual sense**:
+  together, measured on the FINAL tree after every change in the round INCLUDING the
+  pre-ship repairs (doctrine rule 7): **382 files / 6097 cases**, knip **43 / 0 / 3**,
+  coverage **85.36 stmts · 79.61 branches · 91.05 funcs · 86.51 lines** (vitest 5.0.0, v8
+  text reporter). A pre-ship review caught an earlier draft of this line at 6090 while
+  CLAUDE.md said 6093 for the same stamp — two numbers taken at two moments and both
+  labelled "same tree", which is the drift this file exists to make impossible. Against the
+  v6.5.0 row that is +3 test files and +26 cases, and **that is not the round's delta in the
+  usual sense**:
   three hand-written test files went in (`audit-r11-residue`, `doctor-startup-closure`,
   `doctor-survives-bad-settings`) while the generated half — one case per source file under
   `benchmark/` / `lib/` / `scripts/` / the repo root, via `tests/obs-id-caliber-sync.test.mjs`

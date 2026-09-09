@@ -1258,6 +1258,39 @@ describe('A1 — the coverage denominator is capped with the same rule as the qu
     ).toBe(1);
   });
 
+  // Pre-ship review 2026-09-09: sharing the CHARACTER cut was necessary and not
+  // sufficient. sanitizeFtsQuery also caps at UPS_QUERY_CAPS.maxTokens = 64, and the
+  // coverage denominator had no token cap, so the ceiling stayed a function of prompt
+  // length BELOW the 2000-character cut where upsCappedText is a byte-for-byte no-op.
+  // Measured end to end against a row whose narrative IS the entire prompt: injected at
+  // 871 characters, ZERO at 1511. An ordinary prompt with a pasted error is that long.
+  it('a sub-cap prompt with more terms than the query cap still injects', () => {
+    const { searchRelevantMemories: search } = { searchRelevantMemories };
+    // 200 distinct filler terms — far past maxTokens = 64 — inside the char cap.
+    const filler = Array.from({ length: 200 }, (_, i) => `term${i}`).join(' ');
+    const prompt = `dispatch race fixture ${filler}`;
+    expect(prompt.length, 'premise: the prompt must be UNDER the char cap').toBeLessThan(2000);
+
+    const db2 = createTestDb();
+    insertSession(db2, { id: 'sub', project: 'sub-proj' });
+    const id = Number(
+      insertObs(db2, {
+        sessionId: 'sub',
+        project: 'sub-proj',
+        type: 'decision',
+        title: 'dispatch race fixture perfect match',
+        narrative: prompt, // covers every term there is
+        importance: 3,
+      }).lastInsertRowid,
+    );
+    const got = search(db2, prompt, 'sub-proj', []);
+    expect(
+      got.map((r) => r.id),
+      'the perfect-match row was filtered out by its own query',
+    ).toContain(id);
+    db2.close();
+  });
+
   it('control: with the coverage filter off, both prompts inject', () => {
     // Without this arm the case above passes for the wrong reason if someone changes the
     // default threshold to 0 — it would prove nothing about the denominator.

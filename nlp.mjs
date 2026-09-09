@@ -281,8 +281,21 @@ export const FTS_STOP_WORDS = new Set([...BASE_STOP_WORDS, ...CONTRACTION_FRAGME
  *   after stopword filtering and before expansion.
  * @returns {string|null} FTS5-safe query or null if empty
  */
-export function sanitizeFtsQuery(query, opts = {}) {
-  if (!query) return null;
+/**
+ * The tokens an FTS query is actually built from: cleaned, stop-word filtered, capped at
+ * `maxTokens`, and CJK-segmented — everything `sanitizeFtsQuery` does before per-token
+ * synonym expansion. Exported so a caller that must reason about the query's TERMS reads
+ * the same list the query was made of instead of re-deriving one.
+ *
+ * Pre-ship review 2026-09-09: the first cut of the A1 fix shared only `maxChars`. The
+ * coverage denominator therefore still counted every token in a sub-2000-character prompt
+ * while the query itself stopped at `maxTokens` = 64, so the coverage ceiling stayed a
+ * function of prompt length and a 1511-character prompt still zeroed the whole
+ * `<memory-context>` face — measured end to end against a row whose narrative WAS the
+ * prompt. Sharing the cut point was necessary and not sufficient; this is the term source.
+ */
+export function ftsQueryTokens(query, opts = {}) {
+  if (!query) return { tokens: [], cjkExtracted: false };
   const { maxChars = 0, maxTokens = 0 } = opts;
   const cleaned = (maxChars > 0 ? String(query).slice(0, maxChars) : query)
     // Strip ASCII control chars / NUL FIRST. A NUL survives tokenization (it's not
@@ -301,7 +314,7 @@ export function sanitizeFtsQuery(query, opts = {}) {
     .replace(/[{}()[\]^~*:"\\]/g, ' ')
     .replace(/(^|\s)-/g, '$1')
     .trim();
-  if (!cleaned) return null;
+  if (!cleaned) return { tokens: [], cjkExtracted: false };
   let tokens = cleaned
     .split(/\s+/)
     // Trim leading/trailing sentence punctuation (. , ? ! ; …) from each token.
@@ -392,7 +405,13 @@ export function sanitizeFtsQuery(query, opts = {}) {
     expandedTokens.push(t);
   }
   tokens = expandedTokens;
-  if (tokens.length === 0) return null;
+  return { tokens, cjkExtracted };
+}
+
+export function sanitizeFtsQuery(query, opts = {}) {
+  const { tokens: baseTokens, cjkExtracted } = ftsQueryTokens(query, opts);
+  if (baseTokens.length === 0) return null;
+  const tokens = baseTokens;
   // Replace single CJK character tokens with bigrams for better phrase matching.
   // Individual CJK chars ("系","统") are too noisy; bigrams ("系统") capture compound words.
   // Skip bigrams when CJK synonym extraction already produced meaningful tokens —

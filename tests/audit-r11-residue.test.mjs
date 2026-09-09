@@ -16,6 +16,18 @@ import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { reRankWithContext } from '../search-scoring.mjs';
 
 // ─── A-P2-1 / D#18 ────────────────────────────────────────────────────────────
+// RETRACTION (pre-ship review, 2026-09-09). The commit that shipped this fix claimed
+// "13 of 57 fixture queries execute the branch, so denoise-ab is NOT blind here". That is
+// a FALSE CONJUNCTION built from two true parts: 13 of 57 queries do fire the AND→OR
+// fallback, and for all 13 the concept list does change from [] to non-empty — but those
+// 13 each recover 6-60 rows, every one of them past the expansion gate
+// (`results.length < ceil(limit/2)` = 5), so expandObsByConceptCo never runs on them. The
+// intersection of "OR fallback fired" and "expansion gate open" over the corpus is 0/57,
+// measured twice independently. denoise-ab's Δ = 0.000 was therefore structural, and this
+// change is ZERO-MEASURED by that harness. The case below is its only evidence — which is
+// why it asserts behaviour and is mutation-verified, not why the A/B was reassuring.
+// Generalisable: a reach probe must measure the branch EXECUTING, not the conditions that
+// would let it.
 
 describe('R11 A-P2-1 — concept expansion fires when only the OR fallback matched', () => {
   // FAILS IF: expandObsByConceptCo's seed reverts to ctx.ftsQuery. The strict AND

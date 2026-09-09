@@ -8,8 +8,10 @@ All notable changes to claude-mem-lite are documented in this file.
 changes: the SessionStart cite-recall nag now judges — and reports — the lessons the *hooks
 injected*, at a threshold of 0.4 instead of 0.6. In practice it appears less often and means
 more when it does. Revert path: `CLAUDE_MEM_CITE_NUDGE_THRESHOLD=0.6` restores the old
-threshold and `CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR=1` restores the old denominator; both
-together are byte-for-byte the v6.5.0 behavior. Pinning `claude-mem-lite@6.5.0` also works.
+threshold and `CLAUDE_MEM_CITE_NUDGE_WIDE_DENOMINATOR=1` restores the old denominator. Both
+together restore the old GATING — not the old bytes: the nudge line still names which
+denominator it used, and the Stop-side payload carries the three `gate*` keys either way.
+Pinning `claude-mem-lite@6.5.0` is the byte-for-byte route.
 
 **The nag's denominator counted things nobody injected.** `computeCiteRecall` counts every
 `#NN`-shaped token in non-assistant text — tool_result bodies, file contents, CLI output,
@@ -27,7 +29,9 @@ hook-injected count, so it keeps being judged the old way at the new threshold.
 
 The deferred item this closes (D#19) recorded the problem as "the threshold is unsatisfiable,
 no session can exceed 0.5". That was **false** and is retracted: the maximum on the current
-corpus is 0.833 on both denominators. The corpus grew from 51 to 69 transcripts between the two
+corpus is 0.833 on both denominators AMONG THE SESSIONS THE GATE JUDGES (those clearing the
+volume floor); across all 69 transcripts the hook-injected side reaches 1.000. Which rows is a
+required field here, not a caveat. The corpus grew from 51 to 69 transcripts between the two
 readings — the project's own rule 2, this time inside the note that states it. The threshold is
 stamped, not calibrated: 14 sessions clear the volume floor under the new denominator, which is
 not enough to separate 0.35 from 0.45.

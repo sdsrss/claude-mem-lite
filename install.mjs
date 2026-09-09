@@ -1974,7 +1974,7 @@ async function doctor() {
     settings = readSettings();
   } catch (e) {
     fail(`settings.json: unreadable — ${e.message}`);
-    log('    The four checks that read it are skipped below; every other check still runs.');
+    log('    The three checks that read it are skipped below; every other check still runs.');
     issues++;
   }
   const hasHooks = settings !== null && hasMemHooksConfigured(settings);
@@ -2146,7 +2146,17 @@ async function doctor() {
       // Every other ✗ on this screen carries a remedy; this one used to be the exception,
       // and a corrupt store is the failure a user is least able to diagnose unaided.
       // dbCheckRemedy returns null rather than invent one for an error it cannot classify.
-      const remedy = await dbCheckRemedy(DB_PATH, e);
+      // Pre-ship review 2026-09-09: dbCheckRemedy became async and lazy (P1-1), which moved
+      // its failure mode from load time into THIS catch — and an unhandled rejection here
+      // aborts doctor exactly as the static import did, so `--json` still emitted zero bytes
+      // on the compound shape "a file is missing AND the database will not open". A remedy
+      // is an extra sentence on a check that has already failed; never let it take the run.
+      let remedy = null;
+      try {
+        remedy = await dbCheckRemedy(DB_PATH, e);
+      } catch (remedyErr) {
+        log(`    (could not build a repair hint: ${remedyErr.message})`);
+      }
       if (remedy) log(`    ${remedy}`);
       issues++;
     }
