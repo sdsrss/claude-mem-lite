@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## v6.6.0 (unreleased) — a nag that fired 96% of the time was not telling you anything
+## v6.6.0 — a nag that fired 96% of the time was not telling you anything
 
 **Upgrade note.** No migration, no schema change, nothing to do. One user-visible default
 changes: the SessionStart cite-recall nag now judges — and reports — the lessons the *hooks
