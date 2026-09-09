@@ -336,6 +336,44 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
  * removes the paired hint comment if present, and normalizes residual whitespace
  * at the seam. Uses atomic tmp+rename write.
  */
+/**
+ * Half-open [start, end) ranges of every fenced code span in a markdown document.
+ *
+ * A fence opens on a line whose first non-space run is three or more backticks or tildes,
+ * and closes on the next line opening with at least as many of the SAME character — CommonMark's
+ * rule, and the reason a ```` ```` ```` block can contain a ``` line. An unterminated fence
+ * runs to EOF.
+ */
+function fencedRanges(content) {
+  const ranges = [];
+  let open = null;
+  let offset = 0;
+  for (const line of content.split('\n')) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (m) {
+      if (!open) {
+        open = { char: m[1][0], len: m[1].length, start: offset };
+      } else if (m[1][0] === open.char && m[1].length >= open.len) {
+        ranges.push([open.start, offset + line.length]);
+        open = null;
+      }
+    }
+    offset += line.length + 1; // +1 for the '\n' split removed
+  }
+  if (open) ranges.push([open.start, content.length]);
+  return ranges;
+}
+
+/** The last index of `needle` that does not begin inside a fenced span, or -1. */
+function lastIndexOutsideFences(content, needle, ranges) {
+  let idx = content.lastIndexOf(needle);
+  while (idx !== -1) {
+    if (!ranges.some(([a, b]) => idx >= a && idx < b)) return idx;
+    idx = content.lastIndexOf(needle, idx - 1);
+  }
+  return -1;
+}
+
 export function cleanupClaudeMdLegacyBlock() {
   // v2.48 P2-4: idempotent marker. First run (whether it finds a block or not,
   // whether CLAUDE.md exists or not) drops a project-scoped marker in RUNTIME_DIR.
@@ -369,10 +407,21 @@ export function cleanupClaudeMdLegacyBlock() {
   const startTag = '<claude-mem-context>';
   const endTag = '</claude-mem-context>';
 
-  // Use lastIndexOf so documentation references to the tag earlier in the file
-  // (e.g. inside a code block in architecture notes) are not accidentally swept.
-  const startIdx = content.lastIndexOf(startTag);
-  const endIdx = content.lastIndexOf(endTag);
+  // A4 (audit 2026-09-08): `lastIndexOf` alone was NOT the protection the old comment
+  // here claimed. It shields a documentation reference only when a real block sits AFTER
+  // it; when the file's only occurrence IS the reference — the ordinary case for someone
+  // who wrote down what this plugin emits — both searches land on it, `startIdx < endIdx`
+  // holds, and the user's fenced sample is deleted with its two fences spliced into a
+  // broken ``````. Atomic write, no backup, once per project, so it shows up as a small
+  // stray diff days later. Measured on a plain 226-byte CLAUDE.md: 226 → 145.
+  //
+  // "The tag is alone on its line" does not discriminate — inside a fence it usually is.
+  // The fence itself is the signal, so fenced spans are excluded before the search, and an
+  // UNTERMINATED fence is treated as running to EOF: that errs toward leaving the file
+  // alone, which is the safe direction for a write into someone's own notes.
+  const fenced = fencedRanges(content);
+  const startIdx = lastIndexOutsideFences(content, startTag, fenced);
+  const endIdx = lastIndexOutsideFences(content, endTag, fenced);
   if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
     dropMarker();
     return;

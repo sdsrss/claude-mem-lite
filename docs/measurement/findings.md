@@ -531,7 +531,12 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   one epoch, 200 queries over 20 fresh DBs, exactly **one** returned order. It is that the ties
   themselves differ per run — two inserts reading `Date.now()` each (the
   `tests/test-helpers.mjs:75` shape, and the shape production writes take) land in the **same
-  millisecond 272/300 = 90.67%** and straddle 28/300. The damage is in the DIRECTION, which
+  millisecond 272/300 = 90.67%** and straddle 28/300. **That rate belongs to THAT population
+  and does not travel**: audit R12 partition B measured the UPS and pre-tool-recall faces
+  (45 obs trigger keys + 542 events keys + three projects' `searchRecent`) at **0.00%**
+  same-millisecond pairing with zero boundary ties, so the tiebreak question is unreachable
+  there — quoting 90.67% at those faces would be borrowing another population's number.
+  The damage is in the DIRECTION, which
   neither the audit nor I predicted: **on a tie SQLite returns ASCENDING rowid — oldest first —
   while an untied pool returns newest first**, so the stated "newest first" silently flips
   whenever the clock has not ticked. Two harm classes follow, and they are not the same:

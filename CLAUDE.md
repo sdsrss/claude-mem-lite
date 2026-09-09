@@ -105,7 +105,7 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **382 files / 6091**, 0 skipped | `main` @ 2026-09-09 (R12) |
+| Tests | **382 files / 6093**, 0 skipped | `main` @ 2026-09-09 (R12) |
 | Knip | **43** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
 | Coverage | **85.32** stmts · **79.58** branches · **91.04** funcs · **86.48** lines | same tree, vitest 5.0.0 |
 
@@ -133,7 +133,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 - **Search's reported `total` is NOT the number of rows you can page to** — `reachable` is `preFinalizeCount`, never a re-derived `max(limit*3,60)`. The disclosure goes **SILENT** under a post-filter rather than guess; do not "improve" it with `total - postFilterDropped`.
 - **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a ranking bound** — an importance demotion becomes an *eviction*. Found on five faces. Count such populations with the pool's own `liveObsFilterSql`, not a bare `WHERE importance = 3`.
-- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first, and two inserts share a millisecond **90.67%** of the time. Fixed at all seven `hook-optimize.mjs` sites; an eighth and 52 elsewhere are **unjudged, not cleared**. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
+- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first, and two inserts share a millisecond **90.67%** — one population's rate, not a property (UPS/pretool: **0.00%**). 24 sites fixed; the rest **unjudged, not cleared**. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
 - **Deep search floods on questions the corpus cannot answer** — holdout reads **FP@10 = 10.00, 12/12**. The flood is the **AND→OR fallback**, which is also the vocab-mismatch recall win, so three gates were tested against both arms and **rejected**.
 - **That same OR fallback DISARMS auto-escalation**, so both deep rulers describe EXPLICIT deep only and an escalation A/B reading Δ=0 is a blind instrument (rule 9).
 - **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. Use `multiplier-discrimination.mjs`; all eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.

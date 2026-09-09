@@ -549,6 +549,41 @@ describe('cleanupClaudeMdLegacyBlock', () => {
     expect(content).toBe(original);
   });
 
+  // A4 (audit 2026-09-08). The comment above `lastIndexOf` claims it protects
+  // documentation references to the tag — "e.g. inside a code block in architecture
+  // notes". It only does so when a REAL block sits after them. When the file's only
+  // occurrence IS the documentation reference, both lastIndexOf calls land on it,
+  // `startIdx < endIdx` holds, and the user's own prose is deleted: the fenced block is
+  // emptied and its two fences are spliced into a broken ``````. There is no backup, the
+  // write is atomic, and the marker means it happens exactly once per project — so it
+  // surfaces at some later `git diff` as what looks like a small edit.
+  //
+  // This repo is safe by accident: its CLAUDE.md carries the OPEN tag with no closing
+  // one, so endIdx is -1. That is also why the "no context block" case above misses it.
+  it('leaves a fenced documentation reference byte-identical', () => {
+    const original =
+      '# Notes\n\nThe SessionStart hook prints:\n\n```\n<claude-mem-context>\n### Recent\n</claude-mem-context>\n```\n\nThat is all it does.\n';
+    writeFileSync(testClaudeMd, original);
+    cleanupClaudeMdLegacyBlock();
+    expect(readFileSync(testClaudeMd, 'utf8'), 'the user documented the tag and we deleted it').toBe(
+      original,
+    );
+  });
+
+  // Mixed file: a real legacy block AND a fenced reference. Without this case a wrong fix
+  // — "skip the whole cleanup if the file contains ``` anywhere" — passes the case above.
+  it('removes a real block while leaving a fenced reference intact', () => {
+    writeFileSync(
+      testClaudeMd,
+      '# Notes\n\n```\n<claude-mem-context>\ndocumented sample\n</claude-mem-context>\n```\n\n<claude-mem-context>\nreal legacy content\n</claude-mem-context>\n\n# Footer\n',
+    );
+    cleanupClaudeMdLegacyBlock();
+    const content = readFileSync(testClaudeMd, 'utf8');
+    expect(content, 'the fenced sample must survive').toContain('documented sample');
+    expect(content, 'the real legacy block must still go').not.toContain('real legacy content');
+    expect(content).toContain('# Footer');
+  });
+
   it('removes existing context block, preserving surrounding content', () => {
     writeFileSync(
       testClaudeMd,
