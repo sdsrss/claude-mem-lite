@@ -72,7 +72,6 @@ import {
 } from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
-import { isDbUnusableError, dbUnusableRemedy } from './lib/db-unusable.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
@@ -442,12 +441,23 @@ export function nonPluginMemRegistrations(listOutput) {
  * Exported for tests/doctor-db-remedy.test.mjs, which also drives the shipped doctor over a
  * corrupt file — a pure function nothing calls is the wiring gap this repo keeps finding.
  */
-export function dbCheckRemedy(dbPath, err) {
+export async function dbCheckRemedy(dbPath, err) {
   if (isNativeBindingError(err)) return `Repair: ${nativeBindingRepairHint(PROJECT_DIR)}`;
   // Classification and remedy both live in lib/db-unusable.mjs since v6.5.0, because the hook
   // path now has to answer the same question in-session and two copies of a SQLite-message
   // regex is this repo's named twin-drift class. Doctor keeps its own SENTENCE (one line, no
   // leading banner); only the decision is shared.
+  //
+  // Audit 2026-09-08 P1-1: loaded HERE, not at the top of the file. `lib/db-unusable.mjs`
+  // reaches utils.mjs through db-backup, and utils.mjs pulls the whole retrieval/NLP
+  // subtree (nlp / synonyms / stop-words / scoring-sql / secret-scrub / …). As a static
+  // import that made every one of those files a prerequisite for doctor STARTING, on a
+  // command whose whole job is to tell a user which file is missing — so a copy install
+  // short one of them answered with a bare ERR_MODULE_NOT_FOUND stack. This function runs
+  // only inside the Database check's catch, so the cost of loading it lazily is paid by
+  // the rare failure rather than by every invocation. Same shape as the six dynamic
+  // imports doctor already uses.
+  const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
   const remedy = dbUnusableRemedy(dbPath);
   if (remedy.kind === 'unknown') return remedy.note;
@@ -1947,10 +1957,31 @@ async function doctor() {
   }
 
   // Plugin/hook lifecycle state
-  const settings = readSettings();
-  const hasHooks = hasMemHooksConfigured(settings);
-  const pluginDisabled = isPluginExplicitlyDisabled(settings);
-  if (pluginDisabled && hasHooks) {
+  //
+  // Audit 2026-09-08 P1-2: readSettings() THROWS on a settings.json that exists and does
+  // not parse. That is the right answer for install / uninstall — every write path merges
+  // into its return value, so refusing to act is the only safe move (R10 P1-8) — and the
+  // wrong one to inherit here. doctor never writes settings.json, and a hand-edited
+  // trailing comma is one of the most common self-inflicted "Claude Code is broken"
+  // states, i.e. precisely when someone runs doctor. Inheriting the throw aborted the run
+  // at this check: nine later checks never ran and `--json` emitted zero bytes.
+  //
+  // `null` means NOT READ, and each consumer says "not checked" rather than treating an
+  // empty object as "nothing is configured". "I could not look" is not "there is nothing
+  // there" — the same three-outcome rule the bash-hook and marketplace checks follow.
+  let settings = null;
+  try {
+    settings = readSettings();
+  } catch (e) {
+    fail(`settings.json: unreadable — ${e.message}`);
+    log('    The four checks that read it are skipped below; every other check still runs.');
+    issues++;
+  }
+  const hasHooks = settings !== null && hasMemHooksConfigured(settings);
+  const pluginDisabled = settings !== null && isPluginExplicitlyDisabled(settings);
+  if (settings === null) {
+    dwarn('Plugin lifecycle: not checked (settings.json unreadable)');
+  } else if (pluginDisabled && hasHooks) {
     fail('Plugin lifecycle: plugin is disabled but claude-mem-lite hooks still remain in settings.json');
     issues++;
   } else if (pluginDisabled) {
@@ -1988,8 +2019,10 @@ async function doctor() {
   // with require-error noise every session. README's Uninstall section warns
   // about the right ordering; this check flags the broken state so it surfaces
   // even when the user skipped the README.
-  const orphanPaths = collectOrphanHookPaths(settings);
-  if (orphanPaths.length > 0) {
+  const orphanPaths = settings === null ? null : collectOrphanHookPaths(settings);
+  if (orphanPaths === null) {
+    dwarn('Orphan hooks: not checked (settings.json unreadable)');
+  } else if (orphanPaths.length > 0) {
     fail(
       `Orphan hooks: ${orphanPaths.length} settings.json entr${orphanPaths.length === 1 ? 'y references a missing file' : 'ies reference missing files'}`,
     );
@@ -2014,9 +2047,16 @@ async function doctor() {
     const bare = nonPluginMemRegistrations(list);
     // Registration, not directory — see pluginIsRegistered. Crediting a leftover cache dir
     // here told a working npm-channel install to delete its ONLY MCP registration.
+    // Reuses the `settings` read above rather than calling readSettings() a second time:
+    // the second call carried the same throw, so guarding only the first would have moved
+    // the abort eleven checks later instead of removing it (P1-2).
     const viaPlugin =
-      !!shape?.activePluginVersion && pluginIsRegistered({ home: homedir(), settings: readSettings() });
-    if (viaPlugin && bare.length > 0) {
+      !!shape?.activePluginVersion && settings !== null && pluginIsRegistered({ home: homedir(), settings });
+    if (settings === null) {
+      dwarn(
+        `MCP registration: found ${bare.length} bare registration(s); whether the plugin also provides one is not checked (settings.json unreadable)`,
+      );
+    } else if (viaPlugin && bare.length > 0) {
       dwarn(
         `MCP registration: the plugin manifest provides the server AND a bare "${bare.join('", "')}" registration exists — the server is registered twice`,
       );
@@ -2106,7 +2146,7 @@ async function doctor() {
       // Every other ✗ on this screen carries a remedy; this one used to be the exception,
       // and a corrupt store is the failure a user is least able to diagnose unaided.
       // dbCheckRemedy returns null rather than invent one for an error it cannot classify.
-      const remedy = dbCheckRemedy(DB_PATH, e);
+      const remedy = await dbCheckRemedy(DB_PATH, e);
       if (remedy) log(`    ${remedy}`);
       issues++;
     }

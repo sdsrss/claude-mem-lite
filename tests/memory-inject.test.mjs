@@ -1180,3 +1180,90 @@ describe('rerank pool is a reachability bound, not a ranking gate (ALGO-3)', () 
     }
   });
 });
+
+// ─── A1 (audit 2026-09-08, injection face) ───────────────────────────────────
+// The <memory-context> face builds its FTS query through upsFtsQuery, which caps at
+// UPS_QUERY_CAPS.maxChars — but the term-coverage filter re-derived its DENOMINATOR from
+// the raw, uncapped prompt. Terms past the cap were never searched, so no matched row
+// could cover them, and past ~4000 characters no candidate clears the 0.4 floor: the
+// whole surface returns nothing, silently, indistinguishable from "no matches".
+//
+// hook-memory.mjs:340-343 says of this very event: "The caps are shared, not copied, so
+// the two faces of one event cannot drift apart again." The coverage denominator was a
+// third face nobody counted.
+
+describe('A1 — the coverage denominator is capped with the same rule as the query', () => {
+  let db;
+  const TERMS = 'dispatch race fixture';
+
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-a1', project: 'a1-proj' });
+    for (let i = 0; i < 20; i++) {
+      insertObs(db, {
+        sessionId: 'sess-a1',
+        project: 'a1-proj',
+        type: 'change',
+        title: `Unrelated noise ${i}`,
+        text: `noise filler content ${i}`,
+        importance: 2,
+      });
+    }
+    insertObs(db, {
+      sessionId: 'sess-a1',
+      project: 'a1-proj',
+      type: 'decision',
+      title: 'dispatch race fixture sync fix',
+      narrative: `dispatch race fixture sync fix ${Array.from({ length: 25 }, (_, i) => `alpha${i}`).join(' ')}`,
+      text: 'dispatch race fixture sync fix lesson root cause',
+      importance: 3,
+    });
+  });
+  afterEach(() => {
+    delete process.env.MEM_COVERAGE_THRESHOLD;
+    db?.close();
+  });
+
+  // `short` stays under the cap; `long` is the same prompt with a tail that begins with
+  // enough whitespace that the first maxChars of BOTH carry an identical token stream.
+  // The premise assertion below is what makes that a fact rather than an intention.
+  //
+  // The filler is a SMALL distinct vocabulary repeated to length, and the target row's
+  // narrative carries every one of those words: the AND query must actually match, or the
+  // arms would differ because of the strict-AND miss and the OR fallback's token gate
+  // rather than because of the coverage denominator.
+  const FILLER_WORDS = Array.from({ length: 25 }, (_, i) => `alpha${i}`);
+  function prompts() {
+    let body = `${TERMS} ${FILLER_WORDS.join(' ')}`;
+    while (body.length < 1983) body += ` ${FILLER_WORDS.join(' ')}`;
+    const short = body.slice(0, 1983);
+    const tail = ' '.repeat(40) + Array.from({ length: 60 }, (_, i) => `omega${i}`).join(' ');
+    return { short, long: short + tail };
+  }
+
+  it('a prompt longer than the cap still injects (the query is identical)', async () => {
+    const { upsFtsQuery } = await import('../lib/ups-query.mjs');
+    const { short, long } = prompts();
+    expect(short.length).toBeLessThan(2000);
+    expect(long.length).toBeGreaterThan(2000);
+    // Premise: the two prompts produce a byte-identical MATCH expression, so the
+    // candidate pool, the BM25 scores and the relevance floor are all held constant and
+    // the coverage denominator is the only variable left.
+    expect(upsFtsQuery(long), 'premise: the capped FTS query must be identical').toBe(upsFtsQuery(short));
+
+    expect(searchRelevantMemories(db, short, 'a1-proj', []).length).toBe(1);
+    expect(
+      searchRelevantMemories(db, long, 'a1-proj', []).length,
+      'the over-cap prompt injects nothing — the coverage denominator counted unsearched terms',
+    ).toBe(1);
+  });
+
+  it('control: with the coverage filter off, both prompts inject', () => {
+    // Without this arm the case above passes for the wrong reason if someone changes the
+    // default threshold to 0 — it would prove nothing about the denominator.
+    process.env.MEM_COVERAGE_THRESHOLD = '0';
+    const { short, long } = prompts();
+    expect(searchRelevantMemories(db, short, 'a1-proj', []).length).toBe(1);
+    expect(searchRelevantMemories(db, long, 'a1-proj', []).length).toBe(1);
+  });
+});

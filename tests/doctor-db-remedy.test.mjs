@@ -60,12 +60,12 @@ describe('readSnapshots separates empty from unreadable', () => {
 });
 
 describe('dbCheckRemedy', () => {
-  it('names the newest snapshot when one exists', () => {
+  it('names the newest snapshot when one exists', async () => {
     const { db } = withDb([
       'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
     ]);
-    const out = dbCheckRemedy(db, corrupt());
+    const out = await dbCheckRemedy(db, corrupt());
     expect(out).toContain('2026-09-06T00-00-00-000Z');
     expect(out).not.toContain('2026-09-01T00-00-00-000Z');
     expect(out).toContain('cp ');
@@ -74,44 +74,44 @@ describe('dbCheckRemedy', () => {
     expect(out).toContain('-shm');
   });
 
-  it('says so plainly when no snapshot exists, and does not offer a restore', () => {
+  it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
     const { db } = withDb();
-    const out = dbCheckRemedy(db, corrupt());
+    const out = await dbCheckRemedy(db, corrupt());
     expect(out).toMatch(/no backup snapshot/i);
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');
   });
 
-  it('distinguishes "could not look" from "there are none"', () => {
+  it('distinguishes "could not look" from "there are none"', async () => {
     const dir = dataDir();
     const notADir = join(dir, 'wall');
     writeFileSync(notADir, 'x');
-    const out = dbCheckRemedy(join(notADir, 'claude-mem-lite.db'), corrupt());
+    const out = await dbCheckRemedy(join(notADir, 'claude-mem-lite.db'), corrupt());
     expect(out).toMatch(/could not read/i);
     expect(out).toContain('ENOTDIR');
     // The whole point of the third outcome: it must NOT assert the absence it never checked.
     expect(out).not.toMatch(/no backup snapshot/i);
   });
 
-  it('hands a native-binding failure the binding repair chain, not a backup', () => {
+  it('hands a native-binding failure the binding repair chain, not a backup', async () => {
     const { db } = withDb();
     const err = new Error('Could not locate the bindings file. Tried:\n → build/Release/better_sqlite3.node');
-    const out = dbCheckRemedy(db, err);
+    const out = await dbCheckRemedy(db, err);
     expect(out).toMatch(/npm rebuild better-sqlite3/);
     expect(out).not.toMatch(/backup snapshot/i);
   });
 
-  it('invents no remedy for an error it cannot classify', () => {
+  it('invents no remedy for an error it cannot classify', async () => {
     // Control. A diagnostic that always prints a fix will eventually print the wrong one;
     // an unclassified failure keeps the bare message it had before.
     const { db } = withDb();
-    expect(dbCheckRemedy(db, new Error('EACCES: permission denied, open'))).toBeNull();
+    expect(await dbCheckRemedy(db, new Error('EACCES: permission denied, open'))).toBeNull();
   });
 
-  it('accepts the other spellings SQLite uses for a damaged file', () => {
+  it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {
-      expect(dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no backup snapshot/i);
+      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no backup snapshot/i);
     }
   });
 });

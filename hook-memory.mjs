@@ -13,7 +13,7 @@ import {
   extractCjkKeywords,
   neutralizeContextDelimiters,
 } from './utils.mjs';
-import { upsFtsQuery } from './lib/ups-query.mjs';
+import { upsFtsQuery, upsCappedText } from './lib/ups-query.mjs';
 import { citeFactorJs, TYPE_QUALITY, TYPE_QUALITY_DEFAULT } from './scoring-sql.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { recordMetric } from './lib/metrics.mjs';
@@ -509,7 +509,12 @@ export function searchRelevantMemories(
     let coverageFiltered = aboveThreshold;
     const coverageThreshold = getCoverageThreshold();
     if (coverageThreshold > 0) {
-      const queryTerms = extractQueryTerms(userPrompt);
+      // A1: the denominator must be cut at the same point the MATCH expression was.
+      // Reading the raw prompt here counted terms that were never searched, so a matched
+      // row could not possibly cover them and the ratio fell with prompt length until the
+      // whole surface went silent. upsCappedText is the shared cut, not a second copy of
+      // the constant — see lib/ups-query.mjs.
+      const queryTerms = extractQueryTerms(upsCappedText(userPrompt));
       if (queryTerms.length >= COVERAGE_MIN_QUERY_TERMS) {
         coverageFiltered = aboveThreshold.filter(
           (r) => candidateCoverage(r, queryTerms) >= coverageThreshold,
