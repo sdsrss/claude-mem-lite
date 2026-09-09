@@ -105,9 +105,9 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **379 files / 6071**, 0 skipped | `fix/e2e-round-and-db-unusable` @ 2026-09-08 |
+| Tests | **382 files / 6090**, 0 skipped | `main` @ 2026-09-09 (R12) |
 | Knip | **43** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
-| Coverage | **85.18** stmts · **79.45** branches · **91.02** funcs · **86.34** lines | same tree, vitest 5.0.0 |
+| Coverage | **85.32** stmts · **79.58** branches · **91.04** funcs · **86.48** lines | same tree, vitest 5.0.0 |
 
 Coverage `include` is a **denylist** — staying out costs a named `exclude`. Outside by
 design: `install.mjs`, `server.mjs`, `hook.mjs`, `cli.mjs`, `benchmark/**`, `scripts/**`

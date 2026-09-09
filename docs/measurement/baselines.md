@@ -18,6 +18,18 @@ So each section reads as one newest-first chain from today back to v3.85.0, and 
 movements are named only so a reader knows which day a stamp was taken, not because the
 text differs in kind.
 
+- **2026-09-09, R12 (`main`, post-audit tree)** — CLAUDE.md's three rows were superseded
+  together, measured on the FINAL tree after every change in the round (doctrine rule 7):
+  **382 files / 6090 cases**, knip **43 / 0 / 3**, coverage **85.32 stmts · 79.58 branches ·
+  91.04 funcs · 86.48 lines** (vitest 5.0.0, v8 text reporter). Against the v6.5.0 row that
+  is +3 test files and +19 cases, and **that is not the round's delta in the usual sense**:
+  three hand-written test files went in (`audit-r11-residue`, `doctor-startup-closure`,
+  `doctor-survives-bad-settings`) while the generated half — one case per source file under
+  `benchmark/` / `lib/` / `scripts/` / the repo root, via `tests/obs-id-caliber-sync.test.mjs`
+  — is unchanged, because the round added no source file in those directories. Knip is
+  recorded as a COUNT only: the name set was not diffed this round, so it says "no new
+  module went dark loudly", not "nothing went dead" (rule 4).
+
 ## Test-case count — history and why it is partly generated
 
 ### Superseded rows moved from CLAUDE.md 2026-09-08 (v6.5.0 → v4.0.0, newest first)
