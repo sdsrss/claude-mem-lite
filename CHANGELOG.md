@@ -4,12 +4,19 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## v6.7.0 — four surfaces that were running, and four that were not
 
-**Upgrade note.** No migration, no schema change, nothing to do. Two user-visible changes,
-both on surfaces that were previously reporting a wrong answer rather than no answer:
-`doctor` no longer runs its FTS integrity check or prints a ✓ for DB stats when the database
-is newer than the install reading it (it says "not checked" and why), and lesson recall now
-fires on `NotebookEdit`, where it had never fired at all. Nothing to revert: no flag gated
-the old behaviour, because the old behaviour was not a choice anyone made.
+**Upgrade note.** No migration, no schema change, nothing to do. Nothing to revert either:
+no flag gated the old behaviour, because the old behaviour was not a choice anyone made.
+Three things change on surfaces you may be looking at.
+
+1. `doctor` no longer runs its FTS integrity check or prints a ✓ for DB stats when the
+   database is newer than **the install you are running** (it says "not checked" and which
+   of three reasons applies). A second, older code home on the same machine — a stale
+   plugin cache beside a current CLI — does not trigger this.
+2. Lesson recall now fires on `NotebookEdit`, where it had never fired at all.
+3. **Expect a non-zero hook-error count where you saw zero.** `doctor` and `stats` read
+   `runtime/hook-errors/`, and prompts over 64 KB were being dropped silently; they are now
+   recorded as `ups:stdin`. A count appearing there after this upgrade is that pre-existing
+   drop becoming visible, not a new fault.
 
 **Recall never ran on notebooks.** `NotebookEdit` is in the PreToolUse matcher, but its
 schema is `{notebook_path, cell_id, cell_type, edit_mode, new_source}` with
@@ -30,9 +37,11 @@ order — shipped 0 rows, LIKE-escape alone 0 rows, JSON-then-LIKE 1 row. POSIX 
 
 **The prompt that pastes a large log was the one prompt recall went dark on.** Past
 `MAX_UPS_PROMPT_BYTES` (64 KB) the read returns a truncated prefix, `JSON.parse` throws, and
-the catch returned — the only swallows in that file without a `recordHookError`, in a file
-that writes the rule out twice. Three arms measured back-to-back: 318 B injects, 61 760 B
-injects, 72 000 B vanishes with exit 0 and an empty error log. Both catches now record.
+the catch returned. These were the only two swallows in that file that abandoned the whole
+face — twelve other bare catches remain, each skipping one row or one optional step — in a
+file that writes the rule out twice. Three arms measured back-to-back: 318 B injects,
+61 760 B injects, 72 000 B vanishes with exit 0 and an empty error log. Both catches now
+record.
 
 **`doctor` wrote to the database it had just declared unusable.** The schema-skew check
 exists because a DB written by a newer claude-mem-lite locks older code out permanently. It
@@ -47,8 +56,11 @@ records this as routine for: a plugin cache running behind the code that wrote t
 update, a trimmed tarball, a hand-deleted file — produced a bare `ERR_MODULE_NOT_FOUND` and
 zero bytes of stdout. Measured before the fix: 13 of 13 modules in that closure failed
 opaquely. A static import cannot be caught inside the module that declares it, so the catch
-now lives in `cli.mjs`, whose own static closure is exactly one file — itself. The two doctor
-remedies that named `install.mjs repair` as their fallback now name `cli.mjs`: same route,
+now lives in `cli.mjs`, whose own static closure is exactly one file — itself. It answers the
+same way for the two shapes an interrupted write actually produces, which are more common
+than an absent file: a truncated module (a `SyntaxError` carrying no filename at all) and a
+truncated `install.mjs` (which loads fine and simply has no `main`). All three doctor
+remedies that named `install.mjs repair`, and both READMEs, now name `cli.mjs`: same route,
 an entry that survives the state the line describes. Invoking `node install.mjs doctor`
 directly is still a bare stack; guarding that means splitting install.mjs, and the value is
 in the path the tooling prints.

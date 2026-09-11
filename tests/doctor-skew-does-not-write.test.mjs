@@ -11,10 +11,17 @@
 // screen reports "all indexes healthy" about a store the same screen just said
 // this install cannot use.
 //
-// The green line is also the proof of the write. `checkFTSIntegrity` cannot
-// complete on a readonly handle, so "all indexes healthy" appearing at all is a
-// write-capable open having happened. That is what these cases assert; the
-// audit's `-wal`/`-shm` sidecar assertion is deliberately NOT carried, because
+// The green line is the proof of the write — but not for the reason the first
+// draft of this comment gave, which review measured and found false.
+// `checkFTSIntegrity` does NOT throw on a readonly handle: its INSERT sits inside
+// a per-table try (schema.mjs), so it completes and returns
+// `{healthy: false, details: [... "CORRUPT (attempt to write a readonly database)"]}`.
+// The conclusion survives, by the other half: on a readonly handle the line that
+// appears says CORRUPT, so "all indexes healthy" appearing AT ALL means a
+// write-capable handle ran it. Assert the observable, not the mechanism you
+// assumed produced it.
+//
+// The audit's `-wal`/`-shm` sidecar assertion is deliberately NOT carried, because
 // `rwDb.close()` removes both and the residue is not observable after the run.
 //
 // The rebuild half is out of reach of a behavioural test — it needs skew AND a

@@ -72,11 +72,20 @@ export function projectNameFromDir(p) {
   return raw.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 100);
 }
 
-/** Escape LIKE metacharacters so a caller-supplied name is matched literally.
+/** Escape LIKE metacharacters so a caller-supplied value is matched literally.
  *  R10 P2-3: unescaped, `--project '%'` matched every project and ORDER BY COUNT(*)
- *  returned the biggest one; `_` matched any single character the same way. */
-function likeLiteral(s) {
-  return s.replace(/[\\%_]/g, '\\$&');
+ *  returned the biggest one; `_` matched any single character the same way.
+ *
+ *  THE only copy in the repo, and it lives here because this module is a leaf over
+ *  `node:path` alone — the ~30 ms cold-start hook scripts already import it, so the
+ *  shared home costs them nothing. `lib/file-edge-match.mjs` imports it rather than
+ *  keeping the second copy it had: that second copy escaped `%` and `_` and not the
+ *  escape character, which is the whole of R12 B-1. Backslash first is not optional —
+ *  under `ESCAPE '\'` SQLite reads `\` + any character as that character taken
+ *  literally, so an un-doubled backslash is consumed and the pattern silently stops
+ *  matching the string it was built from. */
+export function likeLiteral(s) {
+  return String(s ?? '').replace(/[\\%_]/g, '\\$&');
 }
 
 /**

@@ -101,15 +101,22 @@ import { DEDUP_STALE_MS as CROSS_HOOK_DEDUP_MS } from './prompt-search-utils.mjs
 // failure ALGO-4 exists to fix. The cap is right (an unbounded LIMIT is worse), the
 // reassurance was wrong.
 const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
-// The tools this script claims to handle. THREE surfaces carry this list, counted
-// rather than remembered: hooks/hooks.json's PreToolUse matcher for this script,
-// its settings.json twin at install.mjs:1064, and here. (install.mjs:975 looks like
-// a fourth and is not — different matcher, post-tool-recall.js.)
+// The tools this script claims to handle. FOUR surfaces carry this list — the
+// comment said three until review counted again, which is the second time in one
+// round that an enumeration here was written from memory:
+//   1. hooks/hooks.json's PreToolUse matcher for this script
+//   2. its settings.json twin at install.mjs:1064
+//   3. this constant
+//   4. benchmark/efficacy-harness.mjs, which builds its own settings.json
+// (install.mjs:975 looks like a fifth and is not — different matcher, for
+// post-tool-recall.js.)
 //
-// Drift between any two is invisible at runtime. Two guards chain to cover all
-// three: tests/hooks-pretool-whitelist-sync.test.mjs pins hooks.json against this
+// Drift between any two is invisible at runtime. Two guards chain to cover 1-3:
+// tests/hooks-pretool-whitelist-sync.test.mjs pins hooks.json against this
 // constant, and tests/audit-silent-20260814.test.mjs diffs hooks.json against the
-// install.mjs twin — so hooks.json is the hub and neither spoke can drift alone.
+// install.mjs twin — hooks.json is the hub and neither spoke can drift alone.
+// Surface 4 is covered by NEITHER: it is a benchmark harness, so drift there
+// silently changes what the benchmark measures rather than what users get.
 const HANDLED_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'Read'];
 // v2.33.1: cooldown path is session-scoped so same-file-twice within one
 // session never re-injects (was: global file, 5-min window). Cross-session:

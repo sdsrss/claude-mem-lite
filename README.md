@@ -549,7 +549,8 @@ node install.mjs install              # Install and configure
 node install.mjs uninstall            # Remove (keep data)
 node install.mjs uninstall --purge    # Remove and delete all data
 node install.mjs status               # Show current status
-node install.mjs doctor               # Diagnose issues
+node cli.mjs doctor                   # Diagnose issues  (cli.mjs, not install.mjs — see note)
+node cli.mjs repair                   # Recover a broken install from the latest signed release
 node install.mjs cleanup-hooks        # Remove only stale claude-mem-lite hooks from settings.json
 node install.mjs update               # Force-check for updates and install them (direct install / npx mode)
 
@@ -558,6 +559,13 @@ npx claude-mem-lite                   # Install / reinstall
 npx claude-mem-lite uninstall         # Remove (keep data)
 npx claude-mem-lite doctor            # Diagnose issues
 ```
+
+> `doctor` and `repair` are spelled `cli.mjs`, not `install.mjs`, on purpose. Those two are
+> the commands you reach for when the install is already broken, and `install.mjs` resolves
+> around a dozen static imports before its first line runs — one missing file and it exits
+> with a Node stack instead of telling you which file. `cli.mjs` has no static local imports
+> and catches that, naming the file and a repair command. Everything else in the list is
+> unaffected either way.
 
 Notes:
 - Plugin mode only reports available updates; it does not self-update plugin files.
@@ -594,7 +602,7 @@ git fetch --tags && git checkout v3.62.0
 # 4. To leave the pin later: git checkout main, then the normal update flow.
 ```
 
-Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; schema migrations are forward-only, so after rolling back more than one minor version check `node install.mjs doctor` before trusting search results.
+Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; schema migrations are forward-only, so after rolling back more than one minor version check `node cli.mjs doctor` before trusting search results.
 
 ### doctor
 

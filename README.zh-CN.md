@@ -461,7 +461,8 @@ node install.mjs install              # 安装并配置
 node install.mjs uninstall            # 移除（保留数据）
 node install.mjs uninstall --purge    # 移除并删除所有数据
 node install.mjs status               # 显示当前状态
-node install.mjs doctor               # 诊断问题
+node cli.mjs doctor                   # 诊断问题（用 cli.mjs 而非 install.mjs，见下方说明）
+node cli.mjs repair                   # 从最新签名发布恢复损坏的安装
 node install.mjs cleanup-hooks        # 只清理 settings.json 中残留的 claude-mem-lite hooks
 node install.mjs update               # 强制检查并安装更新（direct install / npx 模式）
 
@@ -472,6 +473,11 @@ npx claude-mem-lite doctor            # 诊断问题
 ```
 
 说明：
+- `doctor` 与 `repair` 写成 `cli.mjs` 而不是 `install.mjs`，是有意的。这两条恰恰是安装
+  已经坏掉时才会用到的命令，而 `install.mjs` 在执行第一行代码之前要解析十几个静态
+  import——少一个文件就直接吐一段 Node 栈，而不是告诉你少了哪个文件。`cli.mjs` 没有
+  任何本地静态 import，会捕获这种失败并说出缺失的文件和修复命令。列表中其余命令两种
+  写法都一样。
 - 插件模式只提示可用更新，不会自更新插件文件。
 - direct install / npx 模式保留自动更新，并使用 staged replacement；若依赖安装失败会回滚。
 - 如果你禁用了插件，但 `~/.claude/settings.json` 里还有旧的 mem hooks，可运行 `node install.mjs cleanup-hooks`。
