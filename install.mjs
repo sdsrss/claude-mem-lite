@@ -2357,7 +2357,7 @@ async function doctor() {
       warn(
         `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
           `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
-          `(or: node ${join(INSTALL_DIR, 'install.mjs')} repair)`,
+          `(or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`,
       );
       issues++;
     }
@@ -2378,7 +2378,11 @@ async function doctor() {
     const skipScripts = !shape.managed && !!shape.activePluginVersion;
     const { checkHookScriptDrift, HOOK_SCRIPT_ENTRY_POINTS } = await import('./lib/doctor-drift.mjs');
     const h = skipScripts ? null : checkHookScriptDrift(INSTALL_DIR, HOOK_SCRIPT_FILES);
-    const scriptRemedy = `claude-mem-lite self-update (or: node ${join(INSTALL_DIR, 'install.mjs')} repair)`;
+    // cli.mjs, not install.mjs: the reader of this line has an install that is
+    // missing files, and install.mjs is the one entry that cannot survive that —
+    // its static imports resolve before its first statement. cli.mjs has no static
+    // local imports and catches the failure (D#26). Same route, same command.
+    const scriptRemedy = `claude-mem-lite self-update (or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {

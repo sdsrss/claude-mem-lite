@@ -30,6 +30,43 @@ const CLI_COMMANDS = new Set([
 // Kept as a named set so a stale script or muscle-memory invocation gets the reason rather
 // than a bare "Unknown command" plus a misleading edit-distance suggestion.
 const REMOVED_COMMANDS = new Set(['registry', 'import', 'enrich']);
+
+// D#26 / R12 P1-1, second half. `doctor` and `repair` exist to tell a user which
+// file their install is missing. Until now, on exactly that install, they did not
+// run: install.mjs's ~13 static imports resolve BEFORE its first line executes, so
+// one absent module killed the command with a bare ERR_MODULE_NOT_FOUND and zero
+// bytes of stdout. A half-finished update, a trimmed tarball (this repo has
+// shipped three) or a hand-deleted file all land there — CLAUDE.md's "a recovery
+// path must not import the thing it recovers", on the startup edge.
+//
+// A static import cannot be caught inside the module that declares it, so the
+// catch lives one entry up. THIS file is the host because it is the published
+// `bin` and because its own static closure is one file — itself; every route
+// below is an `await import()`. Whatever this prints must therefore rely on
+// nothing but the language, the same charter scripts/hook-launcher.mjs follows:
+// no local import may appear here, or the fallback shares the fate it reports on.
+//
+// The remedy is deliberately NOT `install.mjs repair` — that is the file that
+// would not load. It has to come from outside the broken tree.
+async function loadInstaller() {
+  try {
+    return await import('./install.mjs');
+  } catch (e) {
+    if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e;
+    // `url` is the missing specifier; the message is the fallback for shapes that
+    // do not carry it. Never reprint the raw error: the stack is what this exists
+    // to replace.
+    const missing = e.url
+      ? e.url.replace(/^file:\/\//, '')
+      : String(e.message || '').split("'")[1] || 'a module';
+    const w = (s) => process.stderr.write(`[claude-mem-lite] ${s}\n`);
+    w(`This install is incomplete — it is missing: ${missing}`);
+    w('That is why this command cannot run: the file is loaded before any of its code executes.');
+    w('Repair: npm install -g claude-mem-lite@latest --force');
+    w('Or, in Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss');
+    process.exit(1);
+  }
+}
 const INSTALL_COMMANDS = new Set([
   'install',
   'uninstall',
@@ -90,11 +127,11 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
     const { run } = await import('./mem-cli.mjs');
     await run(['help']);
   } else {
-    const { main } = await import('./install.mjs');
+    const { main } = await loadInstaller();
     await main([]);
   }
 } else if (INSTALL_COMMANDS.has(cmd)) {
-  const { main } = await import('./install.mjs');
+  const { main } = await loadInstaller();
   await main(process.argv.slice(2));
 } else if (REMOVED_COMMANDS.has(cmd)) {
   // Released-artifact discoverability signal for the skill-registry removal. Deliberately
