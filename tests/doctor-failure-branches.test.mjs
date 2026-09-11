@@ -164,7 +164,17 @@ describe('doctor reports its failure branches', () => {
     // first cut accepted `['fail', 'warn']`, which is not an assertion about the level at
     // all: the branch already emits 'warn', so the fail→warn downgrade the file header says
     // it guards against was the one thing it could not see.
-    expect(entry.level).toBe('warn');
+    //
+    // Restated when severity split into two fields (R12 audit P2-4). The single `'warn'`
+    // pinned BOTH facts through one field, and they had disagreed all along: this row was
+    // rendered ⚠ and counted as an issue, so `--json` consumers filtering on `level ===
+    // 'fail'` never saw a finding the exit code was already non-zero for. The guard's
+    // subject is the downgrade, so it now pins the downgrade on both axes — `level` is what
+    // the counter and the exit code read, `glyph` is how loud the screen is. Strictly
+    // stronger than what it replaced; `issueWarn` → `dwarn` (the real downgrade edit) still
+    // turns it red, now via `level`.
+    expect(entry.level).toBe('fail');
+    expect(entry.glyph).toBe('warn');
   });
 });
 

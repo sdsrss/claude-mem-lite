@@ -1715,8 +1715,21 @@ async function doctor() {
     checks.push({ level: 'fail', message: msg });
     if (!json) console.log(`  ✗ ${msg}`);
   };
+  // Detail / remedy lines. These were `--json`'s blind spot: `log()` was a no-op under
+  // --json and EVERY repair instruction doctor gives goes through it, so the machine face
+  // received the diagnosis and none of the treatment (R12 audit P2-3 — 12 of 14 call sites
+  // carry a command). They attach to the check they follow, not to a report-level bucket,
+  // because the stated purpose of --json is acting on an individual check.
   const log = (msg) => {
-    if (!json) console.log(`  ${msg}`);
+    if (!json) {
+      console.log(`  ${msg}`);
+      return;
+    }
+    const last = checks[checks.length - 1];
+    // A detail before any check has nothing to attach to — same as today's drop, but the
+    // human face would show it, so this is the one line the two faces cannot share.
+    if (!last) return;
+    (last.details ??= []).push(msg.trim());
   };
 
   let issues = 0;
@@ -1729,6 +1742,21 @@ async function doctor() {
   const dwarn = (msg) => {
     warnings++;
     warn(msg);
+  };
+  // The fourth cell of the matrix, and the one that had no home: findings rendered at ⚠
+  // severity that nevertheless REQUIRE action. Four checks used to spell it `warn(...)`
+  // followed by `issues++`, which made `issues` count rows reporting `level:'warn'` — so
+  // `checks.filter(c => c.level === 'fail')`, the exact use --json documents, under-reported
+  // by four (R12 audit P2-4). Severity and glyph are separate facts: `level` is what the
+  // counter and the exit code are derived from, `glyph` is how loud the screen is. Promoting
+  // these to `fail()` instead would break the two guard files whose whole point is that an
+  // unlinked-but-reachable module must not be rendered as an error.
+  // Self-counting like `dwarn`, so neither source scan in doctor-summary.test.mjs needs to
+  // reach inside it; the end-to-end counter check in doctor-json-face-parity.test.mjs does.
+  const issueWarn = (msg) => {
+    issues++;
+    checks.push({ level: 'fail', glyph: 'warn', message: msg });
+    if (!json) console.log(`  ⚠ ${msg}`);
   };
 
   // Node version. The floor is read from package.json#engines rather than restated here —
@@ -1992,8 +2020,13 @@ async function doctor() {
         `Disk footprint: DB ${mb(dbBytes)}MB, ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB (budget ${mb(backupBudgetBytes())}MB)`,
       );
     }
-  } catch {
-    /* footprint check is informational — never block doctor */
+  } catch (e) {
+    // "Informational" was the reason this was silent, and silence is the one thing it must
+    // not be: the import above is of a sibling module, so the run where it fails is a broken
+    // install — doctor's entire audience. The line vanished with no trace, which reads
+    // identically to a check that was never written (R12 audit P3-7). Every other "I could
+    // not look" in this file has its own sentence; this is the same shape as the four.
+    dwarn('Disk footprint: check failed — ' + e.message);
   }
 
   // Plugin/hook lifecycle state
@@ -2354,8 +2387,7 @@ async function doctor() {
             `${r.missingModuleCount} missing module: ${nameList(r.missingModuleFiles, r.missingModuleCount)}`,
           );
         }
-        warn(`Dev drift: ${parts.join('; ')} (${devRemedy})`);
-        issues++;
+        issueWarn(`Dev drift: ${parts.join('; ')} (${devRemedy})`);
       } else if (r.missingModuleCount > 0) {
         // Informational, NOT an issue: in a pure-symlink install every entry point resolves
         // to the repo, and Node resolves each module's imports against that REALPATH — so an
@@ -2391,12 +2423,11 @@ async function doctor() {
       // `claude-mem-lite update` is the observation editor (`update <id>`); the
       // self-updater is `self-update`. Naming the wrong one sent the user to a
       // usage error at the exact moment their install was incomplete.
-      warn(
+      issueWarn(
         `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
           `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
           `(or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`,
       );
-      issues++;
     }
     // Complete copy install: no message — drift is a dev-install concern.
   } catch (e) {
@@ -2423,12 +2454,11 @@ async function doctor() {
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {
-      warn(
+      issueWarn(
         `Hook scripts: ${join(INSTALL_DIR, 'scripts')} ` +
           `${h.dirSymlink ? 'is a dangling symlink' : 'is absent'} — all ${HOOK_SCRIPT_ENTRY_POINTS.size} hook ` +
           `commands name absolute paths under it, so no hook can fire. Fix: ${scriptRemedy}`,
       );
-      issues++;
     } else if (h.missingCount > 0) {
       const parts = [];
       if (h.missingEntryFiles.length > 0) {
@@ -2441,8 +2471,7 @@ async function doctor() {
           `${h.missingModuleFiles.length} imported helper (${h.missingModuleFiles.join(', ')}) — ERR_MODULE_NOT_FOUND at hook time`,
         );
       }
-      warn(`Hook scripts: ${h.missingCount} missing — ${parts.join('; ')}. Fix: ${scriptRemedy}`);
-      issues++;
+      issueWarn(`Hook scripts: ${h.missingCount} missing — ${parts.join('; ')}. Fix: ${scriptRemedy}`);
     } else {
       ok(
         `Hook scripts: ${HOOK_SCRIPT_FILES.length} present ` +
@@ -2608,7 +2637,12 @@ async function doctor() {
       } else {
         ok(`Plugin cache: ${versions.length} version(s) (${sizeStr})`);
       }
-    } catch {}
+    } catch (e) {
+      // Was empty to the point of carrying no comment. `existsSync` already said the path is
+      // there, so reaching here means it is unreadable or not a directory — a fact about the
+      // plugin install worth one line (R12 audit P3-7).
+      dwarn(`Plugin cache: could not read ${pluginCacheBase} — ${e.message}`);
+    }
   }
 
   if (json) {
