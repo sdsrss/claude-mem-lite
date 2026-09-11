@@ -2,6 +2,64 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased — the machine face of `doctor`, and an import that re-imported itself
+
+**Upgrade note.** No schema change and no version bump. Two things to know:
+
+- **The first database open after upgrading backfills the file junction**, once, for any
+  observation that carries a modified-files list and has no edge. On a store that never ran
+  `import-jsonl` that query matches nothing and costs nothing.
+- **`doctor --json` output changes shape.** Checks with repair instructions gain a `details`
+  array, and four checks change the `level` they report from `warn` to `fail` while still
+  rendering ⚠ on screen (a new `glyph` field carries that). A wrapper filtering
+  `checks.filter(c => c.level === 'fail')` now sees four findings it used to miss; the
+  `issues` count, the summary line and the exit code are unchanged.
+
+**This supersedes one sentence in the v6.7.2 upgrade note below.** That note said observations
+imported before v6.7.2 stay unreachable by file and that the fix was forward-only. Item 6
+below makes them reachable; the v6.7.2 entry is left as written because it was true of that
+release.
+
+1. **`--json` gave the diagnosis and none of the treatment.** Every repair line doctor prints
+   goes through one helper, and that helper was a no-op under `--json`. A CI wrapper or an
+   agent reading the structured output was told `Database: file is not a database` and never
+   told about the `mv …db …db.corrupt` the same run printed for a human — 12 of the 14 detail
+   sites carry a command. They now attach to the check they belong to.
+
+2. **`issues` counted checks that reported themselves as warnings.** Four checks (dev drift,
+   managed files, and both hook-script branches) printed ⚠, pushed `level:'warn'`, and then
+   bumped the issue counter — so the documented contract that `issues` are ✗-level was false
+   in shipped code, and the one use `--json` exists for under-reported by exactly those four.
+   Severity and loudness are now separate fields rather than one field doing both jobs.
+
+3. **Two checks could vanish without a trace.** The disk-footprint and plugin-cache blocks
+   ended in a silent `catch`, so on the broken installs that are doctor's whole audience the
+   line did not go red or yellow — it disappeared, which reads exactly like a check nobody
+   wrote. Both now say what they could not do, like the four other "I could not look" exits
+   in the same file.
+
+4. **A scrubbed title made `import-jsonl` re-import the same row every run.** The stored
+   observation title is also the cross-run dedup key, and only one of the two sites that
+   build it ran through the secret scrubber. Any transcript whose title holds something the
+   scrubber rewrites — a bearer token in a `Bash` command, a path segment shaped like a key —
+   never matched itself, so each re-import added the row again, and since v6.7.2 a duplicate
+   row is also a duplicate file edge. One home for that string now, scrubbed once. Rows
+   already duplicated are not cleaned up by this fix — `maintain`'s `dedup` op, which is in
+   its default set, supersedes near-identical observations.
+
+5. **A `Read` carrying only `notebook_path` recorded a file it had not read.** Routing the
+   read column through the write column's path helper (v6.7.2) gave it a shape no tool emits.
+   An undeclared behaviour change, now reverted to `file_path`.
+
+6. **The file-junction backfill could only run on a database that had never stored an edge.**
+   It was gated on `COUNT(*) FROM observation_files === 0`, which answers "has this store
+   ever written an edge", not "has this backfill run" — so one real `mem_save` disabled it
+   forever, and everything imported before v6.7.2 stayed unreachable by file with no way to
+   repair it (re-importing skips the row at the dedup step, before the edge is written). It
+   now runs from the deferred-cleanup list, whose marker answers the question being asked and
+   whose failures retry on a later open. No schema-version bump: that would lock every older
+   code home out of the database permanently, which a derived table does not get to charge.
+
 ## v6.7.2 — imported transcripts were unreachable by file, and file recall ranked by clock
 
 **Upgrade note.** No migration and no schema change. Two things to know if you use
