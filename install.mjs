@@ -1799,6 +1799,10 @@ async function doctor() {
   // another tree's schema.mjs would poison the process that must report the answer. It is
   // also why this check is USEFUL TODAY rather than only after the next upgrade — doctor
   // runs from whichever tree the user invoked, so new code here can diagnose an old cache.
+  // Hoisted out of the branch below because two LATER checks have to honour it. The
+  // verdict is "this install cannot safely touch that file"; a verdict nothing
+  // downstream reads is a sentence, not a gate (R12 audit, partition C P2-5).
+  let dbSchemaSkewed = false;
   if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
   } else if (rootProbes.length === 0) {
@@ -1810,6 +1814,7 @@ async function doctor() {
     const compat = probeSchemaCompat(shape.runtimeRoots, DB_PATH);
     const behind = compat.filter((c) => c.status === 'skew');
     const unknown = compat.filter((c) => c.status === 'unknown');
+    dbSchemaSkewed = behind.length > 0;
     if (behind.length === 0 && unknown.length === 0) {
       ok(`DB schema: v${compat[0]?.dbVersion} — readable by all ${compat.length} install(s)`);
     }
@@ -2113,30 +2118,42 @@ async function doctor() {
       if (fts) {
         ok('FTS5 index: present');
         // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
-        try {
-          const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
-          const rwDb = new Database(DB_PATH);
-          rwDb.pragma('busy_timeout = 3000');
+        if (dbSchemaSkewed) {
+          // Everything past this point wants a WRITE handle on a file this install
+          // has just been told it is too old to write — which is the exact way a
+          // store gets locked out for good. The rebuild below is gated by sitting
+          // inside this else, not by a second condition that could drift from it.
+          //
+          // dwarn rather than silence: "I could not look" and "I looked and it is
+          // fine" have to stay distinguishable, or a green line ends the reader's
+          // search on a check that never ran.
+          dwarn('FTS5 integrity: not checked — the database is newer than this install');
+        } else {
           try {
-            const { healthy, details } = checkFTSIntegrity(rwDb);
-            if (healthy) {
-              ok('FTS5 integrity: all indexes healthy');
-            } else {
-              dwarn('FTS5 integrity issues detected:');
-              for (const d of details) log(`    ${d}`);
-              log('  Attempting FTS5 rebuild...');
-              const { rebuilt, errors } = rebuildFTS(rwDb);
-              if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-              if (errors.length > 0) {
-                fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                issues++;
+            const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
+            const rwDb = new Database(DB_PATH);
+            rwDb.pragma('busy_timeout = 3000');
+            try {
+              const { healthy, details } = checkFTSIntegrity(rwDb);
+              if (healthy) {
+                ok('FTS5 integrity: all indexes healthy');
+              } else {
+                dwarn('FTS5 integrity issues detected:');
+                for (const d of details) log(`    ${d}`);
+                log('  Attempting FTS5 rebuild...');
+                const { rebuilt, errors } = rebuildFTS(rwDb);
+                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
+                if (errors.length > 0) {
+                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                  issues++;
+                }
               }
+            } finally {
+              rwDb.close();
             }
-          } finally {
-            rwDb.close();
+          } catch (e) {
+            dwarn('FTS5 integrity check failed: ' + e.message);
           }
-        } catch (e) {
-          dwarn('FTS5 integrity check failed: ' + e.message);
         }
       } else {
         dwarn('FTS5 index: missing (will be created on server start)');
@@ -2499,7 +2516,12 @@ async function doctor() {
       // Align with stats / MCP mem_stats: session_summaries, not sdk_sessions
       const sessCount = db.prepare('SELECT COUNT(*) as cnt FROM session_summaries').get()?.cnt || 0;
       db.close();
-      ok(`DB stats: ${sizeMB}MB, ${obsCount} observations, ${sessCount} sessions`);
+      const stats = `DB stats: ${sizeMB}MB, ${obsCount} observations, ${sessCount} sessions`;
+      // The read succeeds on a too-new file — the tables are still there — so this
+      // line printed a ✓ about a store the screen had already called unusable two
+      // checks up. The numbers are real and worth showing; the checkmark is not.
+      if (dbSchemaSkewed) dwarn(`${stats} — but this install cannot use this database (see DB schema above)`);
+      else ok(stats);
     } catch (e) {
       dwarn('DB stats: ' + e.message);
     }
