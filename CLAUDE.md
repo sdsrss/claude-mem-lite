@@ -2,7 +2,7 @@
 
 Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 6.7.0 — **this exact string is a release guard.**
+- **Version**: 6.7.1 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0), ESM · npm · better-sqlite3 + FTS5

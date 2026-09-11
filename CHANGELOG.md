@@ -2,6 +2,42 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.7.1 — two model-facing retrieval paths that were quietly dropping rows
+
+**Upgrade note.** No migration, no schema change, nothing to do. Two recall paths return
+more now; nothing that used to be shown is hidden.
+
+1. **The file leg of prompt recall probed the wrong candidates.** When a prompt named a
+   file, `user-prompt-search` probed only the first three filename-shaped tokens it found,
+   in the order they appeared in your text. Version numbers, timestamp fragments and
+   member expressions (`v4.0.1`, `39.602Z`, `JSON.stringify`) all match that shape, and
+   duplicates were not removed, so on a prompt like "after v4.0.1 and 4.0.2, look at
+   `lib/install-shape.mjs`" the file you actually named never got probed. Candidates are
+   now ranked by path-shape and de-duplicated before the cap, and the cap went 3 to 6.
+
+   Measured over 216 live prompts, on the 50 that name at least one file the store can
+   reach: prompts where EVERY reachable file was pushed out of the window went from 14
+   (28.0%) to 2 (4.0%); prompts losing at least one went from 34 (68.0%) to 25 (50.0%).
+   Neither change gets there alone — raising the cap with the old ordering reaches 14.0%.
+
+   Cost is up to three more indexed lookups per prompt, and the mean is 0.56 of them
+   (~31µs) because only 20.0% of prompts name more than three distinct candidates.
+
+2. **`### Key Context` could show degraded titles.** The SessionStart query feeding
+   `### File Lessons` / `### Key Context` was the one model-facing observations query
+   without the low-signal title filter, so hook-llm's fallback titles (`Modified X`,
+   `Worked on X`, a raw error line) could take the highest-priority slots while the
+   sibling `### Recent` table excluded them in the same block. Rows whose title is
+   degraded but which carry a real lesson are still shown — that exemption is deliberate
+   and now has its own test. The same query also gained the id tiebreaker its
+   `ORDER BY created_at_epoch DESC` was missing, so a millisecond tie no longer inverts.
+
+**Guards.** A new ledger (`tests/lowsig-surface-ledger.test.mjs`) asserts the low-signal
+rule on the OUTPUT of five model-facing faces rather than scanning source, because the
+rule is spelled three different ways in this codebase (SQL literal, SQL via a variable,
+and a JS post-filter) and a text scan sees one of them. Exemptions are declared per face
+with a reason and asserted in the opposite direction.
+
 ## v6.7.0 — four surfaces that were running, and four that were not
 
 **Upgrade note.** No migration, no schema change, nothing to do. Nothing to revert either:
