@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased — the machine face of `doctor`, and an import that re-imported itself
+## v6.8.0 — the machine face of `doctor`, and an import that re-imported itself
 
 **Upgrade note.** No schema change and no version bump. Two things to know:
 
