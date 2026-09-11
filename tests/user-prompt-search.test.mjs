@@ -1399,6 +1399,86 @@ describe('user-prompt-search subprocess integration', () => {
       'prompt-fallback emitted more than PROMPT_FALLBACK_LIMIT rows — the pool leaked',
     ).toBe(1);
   });
+
+  // ─── R12 B-4: candidate order decides what the file leg can reach ──────────
+  //
+  // `extractFiles` returns regex matches in TEXT order and `searchByFile` probes
+  // only the first FILE_PROBE_CAP, so version-shaped tokens ahead of the file the
+  // prompt is actually about used to push it out of the window entirely. The two
+  // prompts below are a TIED PAIR — same tokens, same counts, only the order
+  // differs — so a difference between them can only be the window, not the
+  // fixture, the FTS leg or the signal gate. The control arm is the premise
+  // assertion: if it ever goes red the defect arm proves nothing.
+  //
+  // The noise count is load-bearing and must stay > FILE_PROBE_CAP: the tied pair
+  // can only bind the RANKER while the target sits outside the cap in text order.
+  const B4_FILE = 'lib/install-shape.mjs';
+  // SEVEN version tokens, not three. Three put the target at text-order index 3,
+  // which is inside the shipped cap of 6 — so the ordering case passed with or
+  // without the ranker and the round's headline mechanism had no guard at all.
+  // Both pre-ship reviewers found this independently. Seven puts the target at
+  // index 7 in text order (outside the cap) and index 0 after ranking, so this
+  // case now reds when `rankFileCandidates` is removed from its only consumer.
+  const B4_NOISE = 'v4.0.1 4.0.2 3.14.2 5.1.2 6.2.3 7.3.4 8.4.5';
+  const B4_TITLE = 'Quarantine the dead prebuild inside the source-build branch';
+
+  function seedB4Fixture() {
+    insertObs(db, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'bugfix',
+      title: B4_TITLE,
+      // Deliberately shares no term with either prompt: the file edge must be
+      // the ONLY route to this row, or a green defect arm would be vacuous.
+      text: 'prebuilds wins on existence alone, so compiling a second copy heals nothing',
+      importance: 2,
+      filesModified: JSON.stringify([B4_FILE]),
+    });
+    db.pragma('wal_checkpoint(FULL)');
+  }
+
+  it('recalls a file edge when the file is named FIRST (B-4 control arm)', async () => {
+    seedB4Fixture();
+    const { stdout } = await runScript({
+      prompt: `看一下 ${B4_FILE}，${B4_NOISE} 之后开始复现`,
+    });
+    expect(
+      stdout,
+      'premise: the file leg reaches this row at all — if this is red the defect arm below is meaningless',
+    ).toContain(B4_TITLE);
+  });
+
+  it('recalls the same file edge when three version tokens come first (B-4)', async () => {
+    seedB4Fixture();
+    const { stdout } = await runScript({
+      prompt: `${B4_NOISE} 之后开始复现，看一下 ${B4_FILE}`,
+    });
+    expect(
+      stdout,
+      'version-shaped tokens ate the three-candidate window and evicted the only reachable file',
+    ).toContain(B4_TITLE);
+  });
+
+  // Ordering is not the whole constraint. Decomposed on the same 213-prompt
+  // population: after ranking, ALL 12 still-harmed prompts were blocked purely
+  // by other file-SHAPED candidates and none by noise, because a prompt names a
+  // median of 4 reachable files. Ranking cannot help there — only the cap can,
+  // and a sweep put the knee at 6 (24.0% -> 4.0%, flat beyond).
+  //
+  // The five decoys below sit in the SAME score tier as the target (path
+  // separator + short alphabetic extension), so the ranker leaves text order
+  // intact and the target stays sixth. That is deliberate: this case must fail
+  // when the cap shrinks, not when the scoring changes.
+  it('probes past the third candidate when six files share one tier (B-4 cap)', async () => {
+    const DECOYS = ['src/a.mjs', 'src/b.mjs', 'src/c.mjs', 'src/d.mjs', 'src/e.mjs'];
+    seedB4Fixture();
+    const { stdout } = await runScript({
+      prompt: `对比 ${DECOYS.join(' ')} 和 ${B4_FILE} 的差别`,
+    });
+    expect(stdout, 'the only reachable file is the sixth candidate — a cap of 3 never probes it').toContain(
+      B4_TITLE,
+    );
+  });
 });
 
 // ─── DB Query Function Tests ─────────────────────────────────────────────────

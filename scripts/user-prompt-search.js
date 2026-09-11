@@ -18,7 +18,12 @@ import {
 import { readHookStdin } from '../lib/hook-stdin.mjs';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
-import { fileMatchClause, fileMatchParams, basenameAnySep } from '../lib/file-edge-match.mjs';
+import {
+  fileMatchClause,
+  fileMatchParams,
+  basenameAnySep,
+  rankFileCandidates,
+} from '../lib/file-edge-match.mjs';
 import { cjkPrecisionOk } from '../nlp.mjs';
 import { upsFtsQuery } from '../lib/ups-query.mjs';
 import { corpusFloorScale } from '../lib/relevance-floor.mjs';
@@ -465,6 +470,41 @@ export function searchByFts(
   return { rows, mode };
 }
 
+/**
+ * How many candidates the file leg probes, one prepared-statement execution each.
+ *
+ * Was 3, chosen when the leg was written and never measured.
+ *
+ * R12 B-4 named both halves of the mechanism in its own title —
+ * `files.slice(0, 3)` AND `extractFiles` text order — but its prescribed REMEDY
+ * is ordering only, and ordering alone does not get there. Measured over 216
+ * live user_prompts (2026-09-11), denominator 50 (prompts naming >=1 reachable
+ * file), all-reachable-lost, one run, each lever isolated:
+ *
+ *   text order, cap 3 (pre-fix)  28.0%    text order, cap 6  14.0%
+ *   ranked,     cap 6 (shipped)   4.0%
+ *
+ * Decomposing the residue at cap 3 showed why ordering alone stalls: all 12
+ * still-harmed prompts were blocked by other file-SHAPED candidates and NONE by
+ * noise, and the 50-prompt denominator names a median of 3 distinct reachable
+ * files (mean 3.04) — more than the window held. Sweeping the cap, ranked arm:
+ *
+ *   cap  3 -> 28.0%   4 -> 20.0%   5 -> 6.0%   6 -> 4.0%   8/10/12 -> 4.0%
+ *
+ * Six is the knee under this oracle (see rankFileCandidates for what the oracle
+ * over-counts, and why flatness past 6 is oracle-dependent). The residual two
+ * prompts name their shallowest reachable candidate 23 and 13 deep.
+ *
+ * Cost is linear in probes, and the ceiling is not the expectation: only 20.0%
+ * of candidate-bearing prompts have more than 3 unique candidates, so the mean
+ * is 0.56 extra probes per UserPromptSubmit (~31µs), against a ceiling of 3
+ * (+0.156ms measured on the live 41-observation store). On a synthetic
+ * 3747-observation store per-probe cost ranged 50-489µs, so the worst case is
+ * ~+1.5ms; that spread is an artifact of how the fixture was generated and is
+ * quoted as a bound, not as a property of any real corpus.
+ */
+const FILE_PROBE_CAP = 6;
+
 function searchByFile(db, files, project, limit) {
   if (files.length === 0) return [];
 
@@ -484,11 +524,16 @@ function searchByFile(db, files, project, limit) {
       AND o.created_at_epoch > ?
       AND ${fileMatchClause('of2')}
       AND ${notLowSignalTitleClause('o')}
-    ORDER BY o.created_at_epoch DESC
+    ORDER BY o.created_at_epoch DESC, o.id DESC
     LIMIT ?
   `);
 
-  for (const file of files.slice(0, 3)) {
+  // Rank before capping (R12 B-4). `files` arrives in the order `extractFiles`
+  // matched it, which is TEXT order — so three version tokens ahead of the file
+  // the prompt is about evicted it from this window entirely. rankFileCandidates
+  // reorders and de-duplicates; it never drops, so the cap still sees every
+  // candidate it used to, just best-first.
+  for (const file of rankFileCandidates(files).slice(0, FILE_PROBE_CAP)) {
     // Shared predicate (pre-tag review of v3.76.2, SF-1/S2). This leg used
     // `file.split('/').pop()` — weaker than node:path `basename`, since it misses '\'
     // even ON a Windows host — plus a bare `%<basename>` suffix LIKE with no path
