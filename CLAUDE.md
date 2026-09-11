@@ -105,7 +105,7 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **383 files / 6114**, 0 skipped | `main` @ 2026-09-11, v6.7.0 release tree |
+| Tests | **383 files / 6121**, 0 skipped | `main` @ 2026-09-11, v6.7.0 release tree |
 | Knip | **43** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
 | Coverage | **85.35** stmts · **79.59** branches · **91** funcs · **86.5** lines | same tree, vitest 5.0.0 |
 

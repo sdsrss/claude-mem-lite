@@ -1802,7 +1802,14 @@ async function doctor() {
   // Hoisted out of the branch below because two LATER checks have to honour it. The
   // verdict is "this install cannot safely touch that file"; a verdict nothing
   // downstream reads is a sentence, not a gate (R12 audit, partition C P2-5).
-  let dbSchemaSkewed = false;
+  //
+  // Two variables, because the two consumers ask different questions. `dbWriteBlocked`
+  // is about SAFETY — may this process open the file read-write — and carries its own
+  // reason so the line it gates is true. `dbUnusableHere` is about HONESTY — may this
+  // screen put a ✓ on a store this install cannot use. A read that succeeds on a
+  // too-new file is still a real number; a checkmark on it is not.
+  let dbWriteBlocked = null;
+  let dbUnusableHere = false;
   if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
   } else if (rootProbes.length === 0) {
@@ -1814,7 +1821,31 @@ async function doctor() {
     const compat = probeSchemaCompat(shape.runtimeRoots, DB_PATH);
     const behind = compat.filter((c) => c.status === 'skew');
     const unknown = compat.filter((c) => c.status === 'unknown');
-    dbSchemaSkewed = behind.length > 0;
+    // Ask about the tree THIS process runs from, not about the machine.
+    // probeSchemaCompat probes every code home on purpose — its docblock says so:
+    // "so a report can NAME the one that is behind instead of asserting something
+    // global about 'the install'". The first cut of this gate read `behind.length > 0`
+    // and then printed "this install", which is the assertion that docblock exists to
+    // prevent. On the shape this whole check was built for — a current npm-global CLI
+    // beside a stale plugin cache, reached routinely per the rationale above — the
+    // running process can read and write the store perfectly well, and gating on any
+    // home withheld checkFTSIntegrity + rebuildFTS, doctor's ONLY non-destructive DB
+    // repair, from the machine most likely to need it. Found in pre-ship review.
+    //
+    // `unknown` blocks the write too, and says so in its own words: the probe could
+    // not get both numbers, and "I could not tell" is not "safe to write". The three
+    // outcomes stay three, the way the schema check above already keeps them.
+    const self = compat.find((c) => c.root === PROJECT_DIR);
+    if (!self) {
+      dbWriteBlocked = 'could not identify the install this command is running from';
+    } else if (self.status === 'skew') {
+      dbWriteBlocked =
+        `this database (v${self.dbVersion}) is newer than the install you are running, ` +
+        `which supports up to v${self.supported}`;
+      dbUnusableHere = true;
+    } else if (self.status === 'unknown') {
+      dbWriteBlocked = 'could not determine whether the install you are running can read this database';
+    }
     if (behind.length === 0 && unknown.length === 0) {
       ok(`DB schema: v${compat[0]?.dbVersion} — readable by all ${compat.length} install(s)`);
     }
@@ -1905,8 +1936,12 @@ async function doctor() {
     } catch {
       /* unreadable marker → bare warning */
     }
+    // cli.mjs, matching hook-launcher.mjs's CLI_REPAIR and the two remedies further
+    // down: this check FIRES because something about the install is already
+    // misbehaving, which is the worst moment to hand out the one entry that cannot
+    // survive a missing module. Pre-ship review of v6.7.0 caught this one left behind.
     dwarn(
-      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${join(PROJECT_DIR, 'install.mjs')} repair\``,
+      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${join(PROJECT_DIR, 'cli.mjs')} repair\``,
     );
   } else {
     ok('Hook self-heal: no recent silent hook breakage');
@@ -2118,16 +2153,18 @@ async function doctor() {
       if (fts) {
         ok('FTS5 index: present');
         // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
-        if (dbSchemaSkewed) {
+        if (dbWriteBlocked) {
           // Everything past this point wants a WRITE handle on a file this install
           // has just been told it is too old to write — which is the exact way a
           // store gets locked out for good. The rebuild below is gated by sitting
           // inside this else, not by a second condition that could drift from it.
           //
-          // dwarn rather than silence: "I could not look" and "I looked and it is
-          // fine" have to stay distinguishable, or a green line ends the reader's
-          // search on a check that never ran.
-          dwarn('FTS5 integrity: not checked — the database is newer than this install');
+          // dwarn rather than silence, and the REASON is interpolated rather than
+          // assumed: "I could not look" and "I looked and it is fine" have to stay
+          // distinguishable, and so does "I did not look, and here is which of the
+          // three reasons applies" — a line that names the wrong reason ends the
+          // reader's search just as a false green does.
+          dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
         } else {
           try {
             const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
@@ -2524,7 +2561,10 @@ async function doctor() {
       // The read succeeds on a too-new file — the tables are still there — so this
       // line printed a ✓ about a store the screen had already called unusable two
       // checks up. The numbers are real and worth showing; the checkmark is not.
-      if (dbSchemaSkewed) dwarn(`${stats} — but this install cannot use this database (see DB schema above)`);
+      // Keyed on dbUnusableHere, not on dbWriteBlocked: "I could not confirm this
+      // install can read the DB" is not grounds to tell the user it cannot.
+      if (dbUnusableHere)
+        dwarn(`${stats} — but the install you are running cannot use this database (see DB schema above)`);
       else ok(stats);
     } catch (e) {
       dwarn('DB stats: ' + e.message);

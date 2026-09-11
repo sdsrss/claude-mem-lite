@@ -48,24 +48,58 @@ const REMOVED_COMMANDS = new Set(['registry', 'import', 'enrich']);
 //
 // The remedy is deliberately NOT `install.mjs repair` — that is the file that
 // would not load. It has to come from outside the broken tree.
+// THREE shapes, not one. The first cut caught only ERR_MODULE_NOT_FOUND, and pre-ship
+// review pointed out that an interrupted write leaves a file PRESENT and truncated far
+// more often than it leaves it absent: that arrives as a SyntaxError, and a truncated
+// install.mjs arrives as neither — the module loads and simply has no `main`, which
+// died at the call site with "main is not a function". All three are the same fact
+// about the world (this install's files are not intact) and get the same answer.
+// Anything else is rethrown: this is a classifier, not a swallow.
+function explainBrokenInstall(what) {
+  const w = (s) => process.stderr.write(`[claude-mem-lite] ${s}\n`);
+  w(`This install is incomplete — ${what}`);
+  w('That is why this command cannot run: these files load before any of their code executes.');
+  w('Repair: npm install -g claude-mem-lite@latest --force');
+  w('Or, in Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss');
+  process.exit(1);
+}
+
+/**
+ * Absolute path out of an error that carries one, or null.
+ *
+ * ERR_MODULE_NOT_FOUND carries `url`. An ESM SyntaxError carries NOTHING —
+ * measured on Node 26: `url` and `code` both undefined, message a bare
+ * "Unexpected end of input", every stack frame a node-internal loader. So the
+ * caller must be able to say its piece without a filename rather than printing
+ * "undefined", and naming the damaged file would take a `node --check` scan of
+ * the install, which is a bigger thing than this line.
+ */
+function fileFromError(e) {
+  const m = String(e?.url || e?.stack || e?.message || '').match(/file:\/\/(\/[^\s:)'"]+)/);
+  if (m) return m[1];
+  const quoted = String(e?.message || '').match(/'([^']+\.mjs)'/);
+  return quoted ? quoted[1] : null;
+}
+
 async function loadInstaller() {
+  let mod;
   try {
-    return await import('./install.mjs');
+    mod = await import('./install.mjs');
   } catch (e) {
-    if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e;
-    // `url` is the missing specifier; the message is the fallback for shapes that
-    // do not carry it. Never reprint the raw error: the stack is what this exists
-    // to replace.
-    const missing = e.url
-      ? e.url.replace(/^file:\/\//, '')
-      : String(e.message || '').split("'")[1] || 'a module';
-    const w = (s) => process.stderr.write(`[claude-mem-lite] ${s}\n`);
-    w(`This install is incomplete — it is missing: ${missing}`);
-    w('That is why this command cannot run: the file is loaded before any of its code executes.');
-    w('Repair: npm install -g claude-mem-lite@latest --force');
-    w('Or, in Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss');
-    process.exit(1);
+    if (e?.code === 'ERR_MODULE_NOT_FOUND') {
+      explainBrokenInstall(`it is missing: ${fileFromError(e) || 'a module'}`);
+    }
+    // Never reprint the parser's own output: the stack is what this exists to replace.
+    if (e instanceof SyntaxError) {
+      const at = fileFromError(e);
+      explainBrokenInstall(`this file is damaged or truncated: ${at || 'one of its modules'}`);
+    }
+    throw e;
   }
+  if (typeof mod?.main !== 'function') {
+    explainBrokenInstall('install.mjs loaded but exports no `main` — it is truncated');
+  }
+  return mod;
 }
 const INSTALL_COMMANDS = new Set([
   'install',

@@ -223,4 +223,42 @@ describe('the CLI entry explains a broken install instead of stack-tracing', () 
     // Report the NAME SET, not a count — a count says a smoke alarm went off.
     expect(failures, `${failures.length}/${imports.length} modules still fail opaquely`).toEqual([]);
   });
+
+  // Pre-ship review of this same round. The comment on the guard names "a
+  // half-finished update, a trimmed tarball" — and an interrupted write leaves a
+  // file PRESENT and truncated far more often than it leaves it absent. Those land
+  // as SyntaxError, not ERR_MODULE_NOT_FOUND, and a first cut rethrew them.
+  //
+  // A truncated install.mjs is the third shape: the module loads, `main` is simply
+  // not there, and the call site died with `main is not a function`.
+  // What this case does NOT assert, and why: it cannot name the damaged file. An
+  // ESM SyntaxError carries no file at all — measured on Node 26, `e.url` and
+  // `e.code` are undefined, the message is a bare "Unexpected end of input", and
+  // every stack frame is a node-internal loader. The first draft of this case
+  // asserted the filename on the assumption it would be in there; it is not, so
+  // the surface promises only what it can know. Naming it would mean scanning the
+  // install with `node --check`, which is a real diagnostic worth having and is
+  // deliberately not bolted onto a recovery path mid-ship.
+  it('explains a truncated module rather than rethrowing its SyntaxError', () => {
+    const root = buildCopyInstall(join(cliHome, 'cli-truncated'));
+    const victim = join(root, 'lib', 'atomic-write.mjs');
+    writeFileSync(victim, 'export function atomicWriteFileSync(p, d) { // unterminated\n');
+
+    const { stdout, stderr } = runCli(root, ['doctor']);
+    const out = `${stdout}${stderr}`;
+    expect(out, 'it must say the install is damaged').toMatch(/damaged or truncated/i);
+    expect(out).toMatch(/repair/i);
+    expect(out, 'a raw parser stack reached the user').not.toMatch(/SyntaxError|node:internal/);
+  });
+
+  it('explains a truncated install.mjs rather than dying on a missing export', () => {
+    const root = buildCopyInstall(join(cliHome, 'cli-noexport'));
+    writeFileSync(join(root, 'install.mjs'), '// truncated before anything was exported\n');
+
+    const { stdout, stderr } = runCli(root, ['doctor']);
+    const out = `${stdout}${stderr}`;
+    expect(out, 'install.mjs is not named').toContain('install.mjs');
+    expect(out).toMatch(/repair/i);
+    expect(out, 'the bare TypeError reached the user').not.toMatch(/is not a function/);
+  });
 });

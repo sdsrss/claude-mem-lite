@@ -54,7 +54,12 @@ async function main() {
   let filePath, sessionId;
   try {
     const e = JSON.parse(input);
-    filePath = e.tool_input?.file_path;
+    // Both spellings — this file's PostToolUse matcher includes NotebookEdit, whose
+    // schema has `notebook_path` and no `file_path`. The PreToolUse twin got this in
+    // v6.7.0 and this leg did not, which is the repo's most repeated failure shape:
+    // a fix that closes ONE of the inputs reaching the same line. Caught in pre-ship
+    // review of that very round.
+    filePath = e.tool_input?.file_path ?? e.tool_input?.notebook_path;
     sessionId = e.session_id || null;
   } catch {
     return;

@@ -94,4 +94,43 @@ describe('post-tool-recall (bind component 2)', () => {
     const out = await run({ tool_name: 'Edit', session_id: 'nope', tool_input: { file_path: fp } }, env());
     expect(out).toBe('');
   });
+
+  // v6.7.0 pre-ship review. The NotebookEdit fix landed on the PreToolUse side and
+  // this file — its verbatim twin, matched by the same `NotebookEdit` in its own
+  // PostToolUse matcher — was not touched. That is this repo's most repeated failure
+  // shape: a fix that closes ONE of the inputs reaching the same line. The two cases
+  // are a pair on purpose; the Edit one is the control that proves the notebook case
+  // is about the field name and not about the fixture.
+  const nb = () => join(root, 'notebook.ipynb');
+  it('warns on a NotebookEdit, which carries notebook_path and no file_path', async () => {
+    const path = nb();
+    writeFileSync(path, 'function purgeStale() { db.delete(); }');
+    writeFileSync(
+      cooldownPathFor(runtime, SID1),
+      JSON.stringify({
+        [path]: { ts: Date.now(), lessonIds: [42], lessonIdents: { 42: ['recoverChildrenOf'] } },
+      }),
+    );
+    const out = await run(
+      { tool_name: 'NotebookEdit', session_id: SID1, tool_input: { notebook_path: path, new_source: 'x' } },
+      env(),
+    );
+    expect(out, 'the PostToolUse leg is still reading file_path only').not.toBe('');
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+    expect(ctx).toContain('dropped `recoverChildrenOf`');
+  });
+
+  it('control: the same fixture under an Edit with file_path still warns', async () => {
+    const path = nb();
+    writeFileSync(path, 'function purgeStale() { db.delete(); }');
+    writeFileSync(
+      cooldownPathFor(runtime, SID2),
+      JSON.stringify({
+        [path]: { ts: Date.now(), lessonIds: [42], lessonIdents: { 42: ['recoverChildrenOf'] } },
+      }),
+    );
+    const out = await run({ tool_name: 'Edit', session_id: SID2, tool_input: { file_path: path } }, env());
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+    expect(ctx).toContain('dropped `recoverChildrenOf`');
+  });
 });

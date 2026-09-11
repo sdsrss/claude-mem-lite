@@ -596,7 +596,9 @@ function searchRecent(db, project, limit) {
 // 256 KB full-payload tier hook.mjs uses — both tiers live in utils.mjs (G19) — because the
 // payload here is a user PROMPT, not a tool response. `rejectOnTimeout` matches the previous
 // behaviour: the caller treats a timeout as "skip the injection".
-// Returns a bare string, as this script's callers expect.
+// Returns readHookStdin's `{ text, truncated }` whole: the caller records `truncated`
+// in its telemetry, and that flag is the difference between "the user sent malformed
+// JSON" and "we cut their prompt in half" (R12 B-3). It used to return a bare string.
 async function readStdin() {
   return readHookStdin({
     timeoutMs: 2000,
