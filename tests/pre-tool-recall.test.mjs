@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { resolve, join } from 'path';
-import { writeFileSync, mkdirSync, rmSync, readFileSync, mkdtempSync } from 'fs';
+import { writeFileSync, mkdirSync, rmSync, readFileSync, mkdtempSync, existsSync, readdirSync } from 'fs';
 import {
   createTestDb,
   insertSession,
   insertObs,
   SUBPROCESS_TIMEOUT_MS,
   disposeFixtureDir,
+  makeFixtureTracker,
 } from './test-helpers.mjs';
 import { initSchema } from '../schema.mjs';
 import Database from 'better-sqlite3';
@@ -2470,6 +2471,171 @@ describe('pre-tool-recall', () => {
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('recent lesson inside the window');
       expect(ctx).not.toContain('stale lesson outside the window');
+    });
+  });
+
+  // R12 audit, partition B. Two defects that share one root: the event this hook
+  // actually receives is not the event its parser encodes. B-2 is a field name
+  // (`NotebookEdit` carries `notebook_path`, never `file_path`) and B-1 is a LIKE
+  // escape (the events leg escapes `%` and `_` but not the escape character, so a
+  // Windows path's backslashes are eaten by `ESCAPE '\'`).
+  //
+  // Both were invisible to the existing guards for the same reason: every guard in
+  // this file builds its own event with `file_path`, and `tests/cite-back-hint.test.mjs`
+  // even forges a `file_path` onto a `.ipynb` entry. They asserted what the fix
+  // blocks, never what the host sends.
+  describe('event shapes the host actually sends (R12 B-1 / B-2)', () => {
+    const fixtures = makeFixtureTracker();
+    let tmpRoot;
+    let dbPath;
+    let runtimeDir;
+    let projectDir;
+
+    afterAll(() => fixtures.disposeAll());
+
+    beforeEach(() => {
+      tmpRoot = fixtures.track(mkdtempSync(join(tmpdir(), 'pre-recall-hostshape-')));
+      dbPath = join(tmpRoot, 'test.db');
+      runtimeDir = join(tmpRoot, 'runtime');
+      mkdirSync(runtimeDir, { recursive: true });
+      projectDir = join(tmpRoot, 'parent', 'hostshape');
+      mkdirSync(projectDir, { recursive: true });
+
+      const db = new Database(dbPath);
+      db.pragma('foreign_keys = OFF');
+      initSchema(db);
+      insertSession(db, { id: 'sess-hs', project: 'parent--hostshape', memoryId: 'mem-hs' });
+      db.close();
+    });
+
+    function runWithEnv(input) {
+      return runScript(input, {
+        CLAUDE_MEM_DB_PATH: dbPath,
+        CLAUDE_MEM_RUNTIME_DIR: runtimeDir,
+        CLAUDE_PROJECT_DIR: projectDir,
+      });
+    }
+
+    /** Seed one events-table lesson whose `file_paths` array is exactly `paths`. */
+    function seedEvent(paths, body) {
+      const db = new Database(dbPath);
+      db.pragma('foreign_keys = OFF');
+      initSchema(db);
+      db.prepare(
+        `INSERT INTO events (project, event_type, title, body, file_paths, importance, created_at_epoch)
+         VALUES (?, 'lesson', ?, ?, ?, 2, ?)`,
+      ).run('parent--hostshape', 'host-shape lesson', body, JSON.stringify(paths), Date.now());
+      db.close();
+    }
+
+    /** All hook-error records this block's runtime dir collected. */
+    function hookErrorRecords() {
+      const dir = join(runtimeDir, 'hook-errors');
+      if (!existsSync(dir)) return [];
+      const out = [];
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
+          if (!line) continue;
+          try {
+            out.push(JSON.parse(line));
+          } catch {
+            /* skip */
+          }
+        }
+      }
+      return out;
+    }
+
+    // B-2 ①. FAILS IF: the parser reads only `tool_input.file_path`.
+    it('recalls for a NotebookEdit, which carries notebook_path and no file_path', async () => {
+      seedEvent(['x.ipynb'], 'the notebook kernel must be restarted after an import edit');
+
+      const { stdout } = await runWithEnv({
+        tool_name: 'NotebookEdit',
+        tool_input: {
+          notebook_path: join(projectDir, 'x.ipynb'),
+          new_source: 'import pandas as pd',
+          edit_mode: 'replace',
+        },
+      });
+
+      expect(stdout).not.toBe('');
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('the notebook kernel must be restarted after an import edit');
+    });
+
+    // B-2 ②. The shape probe at pre-tool-recall.js exists to tell "Claude Code
+    // renamed the field" apart from "this event genuinely has no path". It could
+    // not: its whitelist of tools-we-handle was also its silence list, so the one
+    // population that carries the rename signal was the one it never recorded.
+    // FAILS IF: a handled tool arriving with no recognizable path field is silent.
+    it('records telemetry when a tool it handles arrives with no recognizable path field', async () => {
+      const { stdout } = await runWithEnv({ tool_name: 'Edit', tool_input: {} });
+
+      // Still silent on stdout — this is telemetry, not a user-facing message.
+      expect(stdout).toBe('');
+      const keys = hookErrorRecords().map((r) => r.scope);
+      expect(keys).toContain('pre-recall:no-path-field');
+    });
+
+    // Control for the case above: an unhandled tool keeps its own distinct key,
+    // so the two populations stay separable in the log.
+    it('keeps the unknown-tool key distinct from the missing-path-field key', async () => {
+      const { stdout } = await runWithEnv({ tool_name: 'Bash', tool_input: { command: 'ls' } });
+
+      expect(stdout).toBe('');
+      const keys = hookErrorRecords().map((r) => r.scope);
+      expect(keys).toContain('pre-recall:unknown-tool');
+      expect(keys).not.toContain('pre-recall:no-path-field');
+    });
+
+    // B-1 ①. The basename arm cannot save this: real rows store path-shaped
+    // entries (measured 1541/1541 on the author's corpus, bare basenames = 0), so
+    // the full-path arm is the only one that can match, and it is the escaped one.
+    // FAILS IF: the events leg escapes `%` and `_` without first escaping `\`.
+    it('matches a Windows-shaped full path, whose backslashes ESCAPE would otherwise eat', async () => {
+      const winPath = 'C:\\proj\\src\\utils.mjs';
+      seedEvent([winPath], 'close the handle before renaming on win32');
+
+      const { stdout } = await runWithEnv({
+        tool_name: 'Edit',
+        tool_input: { file_path: winPath },
+      });
+
+      expect(stdout).not.toBe('');
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('close the handle before renaming on win32');
+    });
+
+    // POSIX control. Green before and after the escaping fix — it is here so a
+    // mutation that reverts the escape helper shows up as ONE red case, proving the
+    // Windows case discriminates escaping rather than "any change at all".
+    it('still matches a POSIX full path after the escaping change', async () => {
+      const posixPath = join(projectDir, 'deep', 'utils.mjs');
+      seedEvent([posixPath], 'unlink is atomic on posix, rename is not');
+
+      const { stdout } = await runWithEnv({
+        tool_name: 'Edit',
+        tool_input: { file_path: posixPath },
+      });
+
+      expect(stdout).not.toBe('');
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('unlink is atomic on posix, rename is not');
+    });
+
+    // A literal `%` in a filename must stay literal — the wildcard escaping the
+    // new helper inherits has to survive the backslash escaping added in front of it.
+    it('treats a literal % in a filename as a literal, not a wildcard', async () => {
+      seedEvent([join(projectDir, 'a%b.mjs')], 'percent-named file lesson');
+
+      const { stdout } = await runWithEnv({
+        tool_name: 'Edit',
+        tool_input: { file_path: join(projectDir, 'aXXXb.mjs') },
+      });
+
+      expect(stdout).toBe('');
     });
   });
 });

@@ -20,7 +20,12 @@ import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
 import { citeFactorClause } from '../scoring-sql.mjs';
-import { fileMatchClause, fileMatchParams, basenameAnySep } from '../lib/file-edge-match.mjs';
+import {
+  fileMatchClause,
+  fileMatchParams,
+  basenameAnySep,
+  jsonArrayLikeNeedle,
+} from '../lib/file-edge-match.mjs';
 import { fileIntelFor } from '../lib/file-intel.mjs';
 import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/reread-guard.mjs';
 import { recordMetric } from '../lib/metrics.mjs';
@@ -96,6 +101,12 @@ import { DEDUP_STALE_MS as CROSS_HOOK_DEDUP_MS } from './prompt-search-utils.mjs
 // failure ALGO-4 exists to fix. The cap is right (an unbounded LIMIT is worse), the
 // reassurance was wrong.
 const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
+// The tools this script claims to handle. MUST equal the PreToolUse matcher in
+// hooks/hooks.json (and its twin in install.mjs's settings.json block) — the two
+// are one contract and drift between them is invisible at runtime, which is the
+// whole reason tests/audit-silent-20260814.test.mjs diffs the two hook sets.
+// tests/hooks-pretool-whitelist-sync.test.mjs pins this list against the manifest.
+const HANDLED_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'Read'];
 // v2.33.1: cooldown path is session-scoped so same-file-twice within one
 // session never re-injects (was: global file, 5-min window). Cross-session:
 // fresh file, fresh nudges — this is intended. No session_id → fall back to
@@ -379,7 +390,12 @@ try {
   try {
     const event = JSON.parse(input);
     toolInput = event.tool_input;
-    filePath = event.tool_input?.file_path;
+    // NotebookEdit is in our matcher but has no `file_path`: its schema is
+    // { notebook_path, cell_id, cell_type, edit_mode, new_source } with
+    // additionalProperties:false. Reading only `file_path` made this hook a
+    // no-op on every .ipynb edit (R12 audit, partition B-2). utils.mjs's
+    // `case 'NotebookEdit'` already knew the shape differs; this leg did not.
+    filePath = event.tool_input?.file_path ?? event.tool_input?.notebook_path;
     sessionId = event.session_id || null;
     toolName = event.tool_name || null;
     const off = event.tool_input?.offset;
@@ -400,17 +416,31 @@ try {
   }
 
   // Upstream-shape probe: hook ran but neither field nor input shape matches the
-  // contract we encode (event.tool_input.file_path, event.tool_name in
-  // Edit|Write|NotebookEdit|Read). Distinguishes "Claude Code renamed the field"
-  // from "event genuinely has no file_path" — without this trace, a CC upstream
-  // rename silently zeroes injection like code-graph's matcher bug.
+  // contract we encode (a path field on event.tool_input, event.tool_name in
+  // HANDLED_TOOLS). Distinguishes "Claude Code renamed the field" from "event
+  // genuinely has no path" — without this trace, a CC upstream rename silently
+  // zeroes injection like code-graph's matcher bug.
+  //
+  // The whitelist used to double as a SILENCE list, and that inverted the probe:
+  // a rename can only ever show up on a tool we handle, so the one population
+  // carrying the signal was the one population it declined to record. That is how
+  // NotebookEdit ran 100% dead and unobservable (R12 audit, partition B-2) — the
+  // probe written to catch exactly this had the tool in its whitelist. Each
+  // outcome now gets its own scope so the populations stay separable in the log.
   if (!filePath) {
-    if (toolName && !['Edit', 'Write', 'NotebookEdit', 'Read'].includes(toolName)) {
+    if (!toolName) {
+      recordHookError('pre-recall:no-toolname', new Error('event missing tool_name'), RUNTIME_DIR);
+    } else if (HANDLED_TOOLS.includes(toolName)) {
+      recordHookError(
+        'pre-recall:no-path-field',
+        new Error(`tool_name=${toolName} carried no known path field`),
+        RUNTIME_DIR,
+        { toolName, inputKeys: Object.keys(toolInput || {}).slice(0, 12) },
+      );
+    } else {
       recordHookError('pre-recall:unknown-tool', new Error(`tool_name=${toolName}`), RUNTIME_DIR, {
         toolName,
       });
-    } else if (!toolName) {
-      recordHookError('pre-recall:no-toolname', new Error('event missing tool_name'), RUNTIME_DIR);
     }
     process.exit(0);
   }
@@ -497,8 +527,10 @@ try {
     // Windows-shaped payload. Fixing the observations leg alone would have left this
     // hook recalling lessons but no events.
     const fname = basenameAnySep(filePath);
-    // Escape LIKE wildcards (still needed below for the events file_paths arms)
-    const escaped = fname.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    // Needle for the events leg's JSON-array column — see jsonArrayLikeNeedle for
+    // why the JSON escape has to run before the LIKE one. The observations leg
+    // below matches a plain column and gets its params from fileMatchParams.
+    const basenameNeedle = jsonArrayLikeNeedle(fname);
     // P0 (D#78): path-boundary match — editing utils.mjs must NOT pull lessons
     // stored under bash-utils.mjs (the old '%<basename>' suffix LIKE did).
     // Clause + params come from lib/file-edge-match.mjs, byte-shared with the
@@ -608,7 +640,7 @@ try {
     // patterns match both basename and full-path entries. JSON quoting
     // (`"<name>"`) prevents partial-match false positives like "foo.mjs"
     // matching "myfoo.mjs".
-    const filePathEscaped = filePath.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const fullPathNeedle = jsonArrayLikeNeedle(filePath);
     // v2.34.6: Read also tightens the events query — only rows with a non-empty
     // body (= lesson equivalent). Edit path keeps a wider net, but P0 (D#78)
     // closes the parallel-path drift vs the observations query: a bodyless row
@@ -643,7 +675,7 @@ try {
         LIMIT ${eventsLimit}
       `,
         )
-        .all(project, cutoff, `%"${escaped}"%`, `%"${filePathEscaped}"%`);
+        .all(project, cutoff, `%"${basenameNeedle}"%`, `%"${fullPathNeedle}"%`);
     } catch {
       /* events table may not exist on pre-v2.31 DBs — silent */
     }
