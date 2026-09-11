@@ -243,3 +243,93 @@ describe('countRecallableByFile', () => {
     expect(countRecallableByFile(db, 'promise.mjs')).toBe(0);
   });
 });
+
+// v6.7.2 pre-ship review, P1-1. Until this round, imported tool-uses wrote no
+// `observation_files` rows, so a backfill could not compete on this surface.
+// Making them reachable (D#35) put them in the same recency-ordered window as
+// curated lessons — and `ORDER BY created_at_epoch DESC` alone means one hot
+// file edited a dozen times in one session evicts the lesson about it outright.
+// The demotion was not attempted, so importance 3 lost to importance 1.
+//
+// The ORDER BY is now the spelling CLAUDE.md prescribes for this table,
+// `importance DESC, created_at_epoch DESC, id DESC`, which also closes the
+// missing-tiebreaker shape recorded there (a millisecond tie inverts to oldest
+// first, because SQLite falls back to ascending rowid).
+describe('recall-core — ranking, not just reachability', () => {
+  let db;
+  const FILE = '/repo/hot.mjs';
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-rank', project: 'test' });
+  });
+  afterEach(() => db.close());
+
+  function seedLessonThenNoise(noiseCount) {
+    insertObs(db, {
+      sessionId: 'sess-rank',
+      project: 'test',
+      type: 'bugfix',
+      title: 'REAL LESSON: hot.mjs races on the WAL handle',
+      importance: 3,
+      lessonLearned: 'checkpoint before reopening',
+      filesModified: JSON.stringify([FILE]),
+      epochOffset: -3600_000,
+    });
+    // Newer, importance 1, no lesson — the exact shape importJsonl writes.
+    for (let i = 0; i < noiseCount; i++) {
+      insertObs(db, {
+        sessionId: 'sess-rank',
+        project: 'test',
+        type: 'change',
+        title: `Edit: ${FILE}`,
+        importance: 1,
+        filesModified: JSON.stringify([FILE]),
+        epochOffset: -i * 1000,
+      });
+    }
+  }
+
+  it('premise: the lesson is recallable on its own', () => {
+    seedLessonThenNoise(0);
+    const { rows } = recallByFile(db, FILE, { limit: 10 });
+    expect(rows.map((r) => r.title)).toContain('REAL LESSON: hot.mjs races on the WAL handle');
+  });
+
+  it('keeps a high-importance lesson when newer low-importance rows fill the window', () => {
+    seedLessonThenNoise(12);
+    const { rows } = recallByFile(db, FILE, { limit: 10 });
+    expect(
+      rows.map((r) => r.title),
+      'twelve importance-1 edits evicted the importance-3 lesson from the default window',
+    ).toContain('REAL LESSON: hot.mjs races on the WAL handle');
+    expect(rows[0].importance, 'the most important row must lead').toBe(3);
+  });
+
+  it('breaks a created_at tie on id, newest first', () => {
+    // Two inserts can share a millisecond; without the id term SQLite returns
+    // ascending rowid, i.e. the OLDER row first.
+    for (const t of ['tie-a', 'tie-b']) {
+      insertObs(db, {
+        sessionId: 'sess-rank',
+        project: 'test',
+        type: 'bugfix',
+        title: t,
+        importance: 2,
+        filesModified: JSON.stringify([FILE]),
+        epochOffset: 0,
+      });
+    }
+    // FORCE the collision. `epochOffset: 0` is relative to Date.now(), so two
+    // calls can land a millisecond apart and the case passes without ever
+    // exercising a tie — it did on the first run.
+    db.prepare("UPDATE observations SET created_at_epoch = 1700000000000 WHERE title LIKE 'tie-%'").run();
+    const epochs = db
+      .prepare("SELECT DISTINCT created_at_epoch AS e FROM observations WHERE title LIKE 'tie-%'")
+      .all();
+    expect(epochs, 'premise: the two rows must actually share an epoch').toHaveLength(1);
+    const { rows } = recallByFile(db, FILE, { limit: 10 });
+    const tied = rows.filter((r) => r.title.startsWith('tie-'));
+    expect(tied).toHaveLength(2);
+    expect(tied[0].title, 'a tie must resolve to the higher id, not ascending rowid').toBe('tie-b');
+  });
+});

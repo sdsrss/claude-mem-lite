@@ -524,7 +524,7 @@ function searchByFile(db, files, project, limit) {
       AND o.created_at_epoch > ?
       AND ${fileMatchClause('of2')}
       AND ${notLowSignalTitleClause('o')}
-    ORDER BY o.created_at_epoch DESC, o.id DESC
+    ORDER BY o.importance DESC, o.created_at_epoch DESC, o.id DESC
     LIMIT ?
   `);
 
