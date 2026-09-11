@@ -6,6 +6,7 @@ import { writeFileSync, truncateSync, rmSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl, MAX_IMPORT_BYTES } from '../lib/import-jsonl.mjs';
+import { recallByFile } from '../lib/recall-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(__dirname, 'fixtures/sample-claude-jsonl/sample.jsonl');
@@ -344,5 +345,127 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── D#35 + the defect it was a symptom of ───────────────────────────────────
+//
+// Filed as "imported tool-uses build no file edge, because NotebookEdit carries
+// `notebook_path`". The spelling was real, but measuring it first showed the
+// cause was broader: import wrote `files_modified` as a JSON column and never
+// touched the `observation_files` junction at all, so a plain `Edit` with
+// `file_path` set was equally unreachable. Pre-fix reading on a two-row fixture:
+// files_modified = ["/repo/alpha.mjs"] and [], junction rows 0. The SECOND list
+// being empty is the point: the Edit column was already right and still unreachable.
+//
+// The assertions below are on RECALL, not on the column, because the column was
+// never the thing that was broken for `Edit` — `tests/test-helpers.mjs::insertObs`
+// mirrors the junction write, which is why no existing case could see the gap.
+describe('importJsonl — file edges reach the recall path', () => {
+  let db;
+  let dir;
+
+  function toolPair(name, input, id) {
+    return [
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'fe-1',
+        timestamp: '2026-09-11T00:00:00Z',
+        message: { content: [{ type: 'tool_use', id, name, input }] },
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'fe-1',
+        timestamp: '2026-09-11T00:00:01Z',
+        message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+      }),
+    ].join('\n');
+  }
+
+  beforeEach(() => {
+    db = createTestDb();
+    dir = mkdtempSync(join(tmpdir(), 'mem-fileedge-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function importFixture() {
+    const file = join(dir, 'fe.jsonl');
+    writeFileSync(
+      file,
+      [
+        toolPair('Edit', { file_path: '/repo/alpha.mjs', old_string: 'a', new_string: 'b' }, 'u1'),
+        toolPair('NotebookEdit', { notebook_path: '/repo/nb.ipynb', new_source: 'x' }, 'u2'),
+      ].join('\n') + '\n',
+    );
+    return importJsonl(db, file, { project: 'proj' });
+  }
+
+  it('premise: both tool pairs import as observations', async () => {
+    const r = await importFixture();
+    expect(r.observations, 'fixture did not import — the recalls below would be vacuous').toBe(2);
+  });
+
+  it('recalls an imported Edit by its file (the junction was never written)', async () => {
+    await importFixture();
+    const { rows } = recallByFile(db, '/repo/alpha.mjs', { limit: 10, includeNoise: true });
+    expect(rows.map((r) => r.title)).toContain('Edit: /repo/alpha.mjs');
+  });
+
+  it('recalls an imported NotebookEdit by its notebook_path (D#35)', async () => {
+    await importFixture();
+    const { rows } = recallByFile(db, '/repo/nb.ipynb', { limit: 10, includeNoise: true });
+    expect(
+      rows,
+      'NotebookEdit carries notebook_path and never file_path — the gate read the wrong key',
+    ).toHaveLength(1);
+  });
+
+  it('does not invent an edge for a tool that names no path', async () => {
+    const file = join(dir, 'bash.jsonl');
+    writeFileSync(file, toolPair('Bash', { command: 'ls -la' }, 'u9') + '\n');
+    await importJsonl(db, file, { project: 'proj' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM observation_files').get().n).toBe(0);
+  });
+
+  // The orphan path (tool_use with no tool_result, i.e. a truncated transcript)
+  // reaches the junction write through the same importToolPair — correct today,
+  // and untested until a pre-ship mutation gating the write on the truncation
+  // sentinel left the whole file green.
+  it('builds the edge on the orphan path too (truncated transcript)', async () => {
+    const file = join(dir, 'orphan.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'fe-orphan',
+        timestamp: '2026-09-11T00:00:00Z',
+        message: {
+          content: [{ type: 'tool_use', id: 'o1', name: 'Edit', input: { file_path: '/repo/trunc.mjs' } }],
+        },
+      }) + '\n',
+    );
+    const r = await importJsonl(db, file, { project: 'proj' });
+    expect(r.orphans, 'premise: this fixture must take the orphan path').toBe(1);
+    const { rows } = recallByFile(db, '/repo/trunc.mjs', { limit: 10, includeNoise: true });
+    expect(rows, 'a truncated transcript still records which file was being edited').toHaveLength(1);
+  });
+
+  // D#35 delivered as an empty label is D#35 not delivered: recall renders
+  // `o.title`, not the junction filename, so the path the fix stores has to
+  // reach the title too. Both title sites widened together — they are one
+  // dedup key.
+  it('titles an imported NotebookEdit with its notebook path', async () => {
+    await importFixture();
+    const { rows } = recallByFile(db, '/repo/nb.ipynb', { limit: 10, includeNoise: true });
+    expect(rows[0].title).toBe('NotebookEdit: /repo/nb.ipynb');
+  });
+
+  it('stays idempotent with the widened title (both key sites moved together)', async () => {
+    await importFixture();
+    const second = await importJsonl(db, join(dir, 'fe.jsonl'), { project: 'proj' });
+    expect(second.observations, 'a widened title on only one site would re-import forever').toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(2);
   });
 });

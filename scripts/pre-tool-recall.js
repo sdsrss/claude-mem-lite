@@ -25,6 +25,7 @@ import {
   fileMatchParams,
   basenameAnySep,
   jsonArrayLikeNeedle,
+  toolEditPath,
 } from '../lib/file-edge-match.mjs';
 import { fileIntelFor } from '../lib/file-intel.mjs';
 import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/reread-guard.mjs';
@@ -406,7 +407,7 @@ try {
     // additionalProperties:false. Reading only `file_path` made this hook a
     // no-op on every .ipynb edit (R12 audit, partition B-2). utils.mjs's
     // `case 'NotebookEdit'` already knew the shape differs; this leg did not.
-    filePath = event.tool_input?.file_path ?? event.tool_input?.notebook_path;
+    filePath = toolEditPath(event.tool_input);
     sessionId = event.session_id || null;
     toolName = event.tool_name || null;
     const off = event.tool_input?.offset;

@@ -30,6 +30,7 @@ import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
 import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES } from '../lib/hook-stdin.mjs';
 import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
+import { toolEditPath } from '../lib/file-edge-match.mjs';
 
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 
@@ -59,7 +60,7 @@ async function main() {
     // v6.7.0 and this leg did not, which is the repo's most repeated failure shape:
     // a fix that closes ONE of the inputs reaching the same line. Caught in pre-ship
     // review of that very round.
-    filePath = e.tool_input?.file_path ?? e.tool_input?.notebook_path;
+    filePath = toolEditPath(e.tool_input);
     sessionId = e.session_id || null;
   } catch {
     return;
