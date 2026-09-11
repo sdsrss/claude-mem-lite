@@ -2,6 +2,42 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.7.2 — imported transcripts were unreachable by file, and file recall ranked by clock
+
+**Upgrade note.** No migration and no schema change. Two things to know if you use
+`import-jsonl` or `restore`:
+
+- **Notebook rows imported before this release re-import once.** The observation title is
+  also the cross-run dedup key, and it now includes the notebook path (it used to render as
+  a bare `NotebookEdit: `). The next import of the same transcript adds each old notebook
+  row once more and matches forever after. Nothing else is affected.
+- **Observations imported before this release stay unreachable by file.** The fix is
+  forward-only: the one-shot migration that backfills the file junction runs only on a
+  database that has never had a junction row, and re-running the import does not repair
+  them — the dedup skips the row before the edge is written. Recall by file still finds
+  everything saved normally.
+
+1. **Imported tool-uses built no file edge at all.** `import-jsonl` wrote the modified-files
+   list as a JSON column and never populated the junction table that `recall`, `mem_recall`
+   and the prompt-recall leg all join, so nothing you backfilled from a transcript could be
+   found by asking about a file. This was filed as a `NotebookEdit` spelling bug — that tool
+   reports `notebook_path`, never `file_path` — and the spelling was real, but a plain `Edit`
+   whose path was recorded correctly was equally unreachable. Both are fixed, and which key a
+   tool spells its path with now has one home instead of three.
+
+2. **File recall ordered by timestamp alone.** With imported edits now reachable, a file you
+   touched a dozen times in one session filled the default ten-row window and pushed out the
+   lesson about it — an importance-1 row evicting an importance-3 one, on the default call.
+   `recall`, `mem_recall` and the prompt-recall leg now order by importance first, then
+   recency, then id. The id term also fixes a real tie: two rows written in the same
+   millisecond used to come back oldest-first.
+
+**Guards.** `doctor`'s reporter-discipline check was one-directional: it asserted every ⚠ is
+counted and nothing asserted the same for ✗, which is the counter the exit code reads — so a
+check could print an error, report it in `--json`, and still exit 0. The new check counts
+rather than detects, and it knows the difference between a counter inside a loop and one
+after it.
+
 ## v6.7.1 — two model-facing retrieval paths that were quietly dropping rows
 
 **Upgrade note.** No migration, no schema change, nothing to do. Two recall paths return
