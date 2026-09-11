@@ -1717,9 +1717,14 @@ async function doctor() {
   };
   // Detail / remedy lines. These were `--json`'s blind spot: `log()` was a no-op under
   // --json and EVERY repair instruction doctor gives goes through it, so the machine face
-  // received the diagnosis and none of the treatment (R12 audit P2-3 — 12 of 14 call sites
-  // carry a command). They attach to the check they follow, not to a report-level bucket,
-  // because the stated purpose of --json is acting on an individual check.
+  // received the diagnosis and none of the treatment (R12 audit P2-3). 7 of its 16 call
+  // sites carry a runnable command; the other 9 are paths, notes and prose. They attach to
+  // the check they follow, not to a report-level bucket, because the stated purpose of
+  // --json is acting on an individual check.
+  //
+  // The count was first written here as "12 of 14" and both halves were wrong — pre-ship
+  // review recounted. 16 is also the count at the previous release, so no edit of this
+  // round moved it.
   const log = (msg) => {
     if (!json) {
       console.log(`  ${msg}`);
@@ -1748,9 +1753,16 @@ async function doctor() {
   // followed by `issues++`, which made `issues` count rows reporting `level:'warn'` — so
   // `checks.filter(c => c.level === 'fail')`, the exact use --json documents, under-reported
   // by four (R12 audit P2-4). Severity and glyph are separate facts: `level` is what the
-  // counter and the exit code are derived from, `glyph` is how loud the screen is. Promoting
-  // these to `fail()` instead would break the two guard files whose whole point is that an
-  // unlinked-but-reachable module must not be rendered as an error.
+  // counter and the exit code are derived from, `glyph` is how loud the screen is.
+  //
+  // The first draft of this comment justified the split by claiming that promoting these
+  // four to `fail()` would break `doctor-missing-files-severity` and
+  // `doctor-hook-script-manifest`. Pre-ship review measured it: rendering them as ✗ with
+  // `level:'fail'` and no glyph leaves both files 13/13 GREEN, because each asserts
+  // `level === 'warn' || level === 'fail'` — a disjunction over the only two values those
+  // checks can carry, so it cannot say NO about a severity change in either direction.
+  // The real reason is their stated INTENT (an unlinked-but-reachable module must not read
+  // as an error), which nothing enforced until this round's `doctor-failure-branches` pin.
   // Self-counting like `dwarn`, so neither source scan in doctor-summary.test.mjs needs to
   // reach inside it; the end-to-end counter check in doctor-json-face-parity.test.mjs does.
   const issueWarn = (msg) => {

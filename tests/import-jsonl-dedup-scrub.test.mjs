@@ -10,9 +10,9 @@
 // EDGE, which is a duplicate in the file-recall window.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl } from '../lib/import-jsonl.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
@@ -59,6 +59,29 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     // Without this the test below passes for a reason that has nothing to do with the fix.
     const raw = `Bash: ${SECRET_CMD.slice(0, 80)}`;
     expect(scrubSecrets(raw), 'fixture no longer contains anything the scrubber rewrites').not.toBe(raw);
+  });
+
+  // The property the fix actually rests on is STRUCTURAL: each side applies the scrubber
+  // exactly once, to the same raw string. The first cut scrubbed inside `importedObsTitle`,
+  // which left storage scrubbed twice (`scrubRecord` scrubs `title` again) against the
+  // preview's once — equal only while `scrubSecrets` is idempotent.
+  //
+  // This is a source scan, and this repo prefers behavioural guards. It is a source scan
+  // because no input is known that makes the difference observable: 300,000 fuzzed titles
+  // plus six constructions aimed at the mechanism pre-ship review named all came back
+  // stable. So a behavioural case would assert nothing today and would go vacuous silently.
+  // If a drifting string is ever found, add it here as a case and this scan becomes the
+  // belt rather than the braces.
+  it('the title is scrubbed exactly once on each side, by construction', () => {
+    const src = readFileSync(resolve(import.meta.dirname, '../lib/import-jsonl.mjs'), 'utf8');
+    const fn = src.slice(src.indexOf('function importedObsTitle'), src.indexOf('function dedupKey'));
+    expect(fn, 'premise: importedObsTitle must be findable').toContain('toolEditPath');
+    expect(fn, 'importedObsTitle scrubs, so the storage path scrubs twice').not.toMatch(
+      /(^|[^a-zA-Z_.])scrubSecrets\(/,
+    );
+    // Both consumers hand the raw title to scrubRecord, which is the single scrub.
+    expect(src).toContain("scrubRecord('observations', { title: importedObsTitle(useEv) }).title");
+    expect(src).toMatch(/title: importedObsTitle\(toolUse\),/);
   });
 
   it('re-importing the same transcript does not duplicate the observation', async () => {

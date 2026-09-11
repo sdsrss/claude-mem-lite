@@ -1057,9 +1057,14 @@ const DEFERRED_CLEANUPS = [
     // database permanently (see lib/schema-skew.mjs), and on a plugin install that is
     // reached routinely — far too much to charge for a derived table.
     //
-    // One-shot by design: the import and save paths both write their own edges now, so rows
-    // arriving after this pass need nothing from it. `NOT EXISTS` keeps the scan to the rows
-    // that are actually missing an edge, which is zero on a store that never imported.
+    // One-shot by design: every live path that stores an observation routes its edges
+    // through the single junction writer (`insertObservationFiles`, lib/observation-write),
+    // so rows arriving after this pass need nothing from it. An earlier draft of this line
+    // said "the import and save paths both" — there are more than two entry points reaching
+    // that one writer (save, episode flush, insight promotion, restore, import), and the
+    // claim that matters is the single writer, not the count of callers.
+    // `NOT EXISTS` keeps the scan to the rows that are actually missing an edge, which is
+    // zero on a store that never imported.
     name: 'backfill-observation-files',
     run: (db) => {
       const rows = db

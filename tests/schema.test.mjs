@@ -221,6 +221,11 @@ describe('runDeferredCleanups sentinel + retry (audit P1-5)', () => {
       .map((r) => r.name);
     expect(marks).toContain('orphan-observation-files');
     expect(marks).toContain('normalize-project-names');
+    expect(marks).toContain('backfill-observation-files');
+    // Name-set, not count: a cleanup added without a marker of its own would re-run the
+    // whole scan on every open forever, and a bare `marks.length` cannot tell that from a
+    // cleanup that was renamed. Every entry in DEFERRED_CLEANUPS must appear here.
+    expect(new Set(marks).size, `unexpected marker set: ${marks.join(', ')}`).toBe(marks.length);
 
     // Marker is set → a newly-injected orphan is NOT re-cleaned (run-once).
     insertOrphanFile(db, 88881);

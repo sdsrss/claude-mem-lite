@@ -4,8 +4,10 @@
 //   P2-3 — every remedy line goes through `log()`, and `log()` was a no-op under `--json`.
 //          A `--json` consumer got `{level:'fail', message:'Database: file is not a database'}`
 //          and nothing else, while the same run told a human to
-//          `mv "…db" "…db.corrupt"`. Measured pre-fix: 12 of doctor's 14 `log(` sites carry
-//          repair instructions; zero of them reached the JSON.
+//          `mv "…db" "…db.corrupt"`. Measured pre-fix: 7 of doctor's 16 `log(` sites carry a
+//          runnable command; zero of them reached the JSON. (This file first said "12 of 14"
+//          — pre-ship review recounted both halves. 16 is the count at the previous release
+//          too, so nothing in this round moved it.)
 //   P2-4 — four checks call `warn()` (pushing `level:'warn'`) and then `issues++`. So
 //          `issues` counted rows that report themselves as warnings, and
 //          `buildDoctorSummary`'s documented contract ("`issues` are ✗-level") was false in

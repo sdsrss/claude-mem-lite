@@ -15,16 +15,24 @@ All notable changes to claude-mem-lite are documented in this file.
   `checks.filter(c => c.level === 'fail')` now sees four findings it used to miss; the
   `issues` count, the summary line and the exit code are unchanged.
 
-**This supersedes one sentence in the v6.7.2 upgrade note below.** That note said observations
-imported before v6.7.2 stay unreachable by file and that the fix was forward-only. Item 6
-below makes them reachable; the v6.7.2 entry is left as written because it was true of that
-release.
+**This supersedes two sentences in the v6.7.2 upgrade note below**, which is left as written
+because a changelog entry records what a release did.
+
+- That note said observations imported before v6.7.2 stay unreachable by file and that the
+  fix was forward-only. Item 6 makes them reachable by `recall` / `mem_recall` and by the
+  UserPromptSubmit leg. **Not** by the pre-tool recall leg, which gates on `importance >= 2`
+  against the `1` every imported row carries — that one needs a separate change and does not
+  get one here.
+- It also said a re-import matches "forever after". For titles the scrubber rewrites it did
+  not: the dedup key was built from the unscrubbed title while the stored one was scrubbed,
+  so that subset re-imported on every run. Item 4 is what makes "forever after" true, and
+  that defect pre-dates v6.7.2 rather than being introduced by it.
 
 1. **`--json` gave the diagnosis and none of the treatment.** Every repair line doctor prints
    goes through one helper, and that helper was a no-op under `--json`. A CI wrapper or an
    agent reading the structured output was told `Database: file is not a database` and never
-   told about the `mv …db …db.corrupt` the same run printed for a human — 12 of the 14 detail
-   sites carry a command. They now attach to the check they belong to.
+   told about the `mv …db …db.corrupt` the same run printed for a human — 7 of the 16 detail
+   sites carry a runnable command. They now attach to the check they belong to.
 
 2. **`issues` counted checks that reported themselves as warnings.** Four checks (dev drift,
    managed files, and both hook-script branches) printed ⚠, pushed `level:'warn'`, and then
@@ -43,9 +51,12 @@ release.
    build it ran through the secret scrubber. Any transcript whose title holds something the
    scrubber rewrites — a bearer token in a `Bash` command, a path segment shaped like a key —
    never matched itself, so each re-import added the row again, and since v6.7.2 a duplicate
-   row is also a duplicate file edge. One home for that string now, scrubbed once. Rows
-   already duplicated are not cleaned up by this fix — `maintain`'s `dedup` op, which is in
-   its default set, supersedes near-identical observations.
+   row is also a duplicate file edge. One home for that raw string now, scrubbed exactly once
+   on each side. Rows already duplicated are not cleaned up by this fix — the SessionStart
+   auto-maintain pass supersedes near-identical observations. (An earlier draft of this line
+   credited `maintain`'s `dedup` op and said it was in the default set. Neither is right:
+   `DEFAULT_MAINTAIN_OPS` is `cleanup, decay, boost, demote_pinned`, and `--ops dedup` merges
+   only the ids the caller names rather than searching for near-identical rows.)
 
 5. **A `Read` carrying only `notebook_path` recorded a file it had not read.** Routing the
    read column through the write column's path helper (v6.7.2) gave it a shape no tool emits.

@@ -133,7 +133,11 @@ describe('doctor reporter discipline (the caller side of the contract)', () => {
   // not by the width: that insertion point has an `issues++` three code lines
   // BEHIND it and none within sixteen ahead, so every forward-only width
   // catches it. The conclusion held; the evidence cited for it did not.
-  const REPORTER = /(^|[^a-zA-Z_.])(ok|warn|dwarn|fail)\(/;
+  // `issueWarn` is the fourth reporter (⚠ on screen, `level:'fail'` in --json, counts as an
+  // issue). It is self-counting like `dwarn`, so neither scan needs to reach inside it — but
+  // it still CLOSES a run of fails, and a scan blind to it would keep reading past the end of
+  // one check into the next one's counter. Pre-ship review found it missing here.
+  const REPORTER = /(^|[^a-zA-Z_.])(ok|warn|dwarn|issueWarn|fail)\(/;
 
   const isFail = (t) => /(^|[^a-zA-Z_.])fail\(/.test(t) && !/const\s+fail\s*=/.test(t);
 
