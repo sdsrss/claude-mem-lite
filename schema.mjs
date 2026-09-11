@@ -831,42 +831,9 @@ export function initSchema(db) {
     }
   }
 
-  // Data migration: populate observation_files from existing observations.files_modified JSON
-  // Only runs once: when observation_files is empty but observations has rows with files_modified
-  try {
-    const obsFilesCount = db.prepare('SELECT COUNT(*) as c FROM observation_files').get().c;
-    if (obsFilesCount === 0) {
-      const obsWithFiles = db
-        .prepare(
-          `SELECT id, files_modified FROM observations WHERE files_modified IS NOT NULL AND files_modified != '[]'`,
-        )
-        .all();
-      if (obsWithFiles.length > 0) {
-        const migrateFiles = db.transaction(() => {
-          const insertFile = db.prepare(
-            'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
-          );
-          for (const row of obsWithFiles) {
-            try {
-              const files = JSON.parse(row.files_modified);
-              if (Array.isArray(files)) {
-                for (const f of files) {
-                  if (typeof f === 'string' && f.length > 0) {
-                    insertFile.run(row.id, f);
-                  }
-                }
-              }
-            } catch {
-              /* skip malformed JSON */
-            }
-          }
-        });
-        migrateFiles();
-      }
-    }
-  } catch {
-    /* non-critical — migration can retry on next open */
-  }
+  // The files_modified -> observation_files backfill moved to runDeferredCleanups()
+  // (R12 pre-ship review P3-3). It used to live here gated on `COUNT(*) FROM
+  // observation_files === 0`, which is not the question: see DEFERRED_CLEANUPS.
 
   // observation_files orphan cleanup moved to runDeferredCleanups() (audit P1-5):
   // it now runs retryably outside the version fast-path. See DEFERRED_CLEANUPS.
@@ -1075,6 +1042,54 @@ const DEFERRED_CLEANUPS = [
     name: 'orphan-observation-files',
     run: (db) =>
       db.prepare(`DELETE FROM observation_files WHERE obs_id NOT IN (SELECT id FROM observations)`).run(),
+  },
+  {
+    // Backfill the junction from the files_modified JSON column. This ran inside initSchema
+    // for a long time, gated on `COUNT(*) FROM observation_files === 0` — which answers "has
+    // this store ever written an edge", not "has this backfill run". One real `mem_save`
+    // falsifies it forever, so every observation imported before v6.7.2 (the release that
+    // taught import-jsonl to write edges at all) stayed permanently unreachable by file, and
+    // re-importing could not repair them: cross-run dedup skips the row before the edge
+    // write. The marker here answers the question actually being asked, and an exception
+    // leaves it unset so the next open retries.
+    //
+    // Deliberately NOT a schema-version bump. A bump locks every older code home out of the
+    // database permanently (see lib/schema-skew.mjs), and on a plugin install that is
+    // reached routinely — far too much to charge for a derived table.
+    //
+    // One-shot by design: the import and save paths both write their own edges now, so rows
+    // arriving after this pass need nothing from it. `NOT EXISTS` keeps the scan to the rows
+    // that are actually missing an edge, which is zero on a store that never imported.
+    name: 'backfill-observation-files',
+    run: (db) => {
+      const rows = db
+        .prepare(
+          `SELECT o.id, o.files_modified FROM observations o
+            WHERE o.files_modified IS NOT NULL AND o.files_modified != '[]'
+              AND NOT EXISTS (SELECT 1 FROM observation_files f WHERE f.obs_id = o.id)`,
+        )
+        .all();
+      if (rows.length === 0) return;
+      const insertFile = db.prepare(
+        'INSERT OR IGNORE INTO observation_files (obs_id, filename) VALUES (?, ?)',
+      );
+      db.transaction(() => {
+        for (const row of rows) {
+          let files;
+          try {
+            files = JSON.parse(row.files_modified);
+          } catch {
+            // One unparseable row must not cost every row after it its edges — the whole
+            // pass is marked done afterwards, so "skipped" here means "never backfilled".
+            continue;
+          }
+          if (!Array.isArray(files)) continue;
+          for (const f of files) {
+            if (typeof f === 'string' && f.length > 0) insertFile.run(row.id, f);
+          }
+        }
+      })();
+    },
   },
   {
     // Project-name normalization: migrate short names ("mem") to canonical
