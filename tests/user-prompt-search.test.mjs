@@ -2,11 +2,21 @@
 // Since the script runs main() on import and reads from stdin, we test via:
 // 1. Subprocess execution with stdin piping (integration tests)
 // 2. Direct imports from prompt-search-utils.mjs (unit tests — no more code duplication)
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { resolve, join } from 'path';
-import { unlinkSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { sanitizeFtsQuery, relaxFtsQueryToOr } from '../utils.mjs';
+import {
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { sanitizeFtsQuery, relaxFtsQueryToOr, MAX_UPS_PROMPT_BYTES } from '../utils.mjs';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import {
@@ -15,6 +25,7 @@ import {
   insertObs,
   insertPrompt,
   SUBPROCESS_TIMEOUT_MS,
+  makeFixtureTracker,
 } from './test-helpers.mjs';
 import { typeIcon, truncate } from '../utils.mjs';
 import {
@@ -1896,5 +1907,75 @@ describe('D#N deferred-detail injection (subprocess)', () => {
   it('respects the explicit ignore-memory override', async () => {
     const { stdout } = await runScript({ prompt: 'ignore memory for now — D#1 需要一双新鲜的眼睛来看' });
     expect(stdout).toBe('');
+  });
+});
+
+// R12 audit, partition B-3. `readStdin` caps the payload at MAX_UPS_PROMPT_BYTES
+// (64 KB). Past the cap it hands back a truncated prefix, `JSON.parse` throws, and
+// `main`'s catch returns — the one swallow in this file with no `recordHookError`,
+// in a file that states the rule twice ("a failed DB open silently kills EVERY
+// prompt-time injection while `stats` reads zero errors — record before the
+// mandatory swallow"). The user pastes a large log, the face goes dark, and every
+// health surface reads clean.
+describe('oversized UserPromptSubmit payload leaves a trace (R12 B-3)', () => {
+  const fixtures = makeFixtureTracker();
+  let tmpRoot;
+  let runtimeDir;
+
+  afterAll(() => fixtures.disposeAll());
+
+  beforeEach(() => {
+    tmpRoot = fixtures.track(mkdtempSync(join(tmpdir(), 'ups-oversized-')));
+    runtimeDir = join(tmpRoot, 'runtime');
+    mkdirSync(runtimeDir, { recursive: true });
+  });
+
+  function runWithRuntime(hookData) {
+    return runScript(hookData, {
+      CLAUDE_MEM_DIR: tmpRoot,
+      CLAUDE_MEM_RUNTIME_DIR: runtimeDir,
+    });
+  }
+
+  function hookErrorScopes() {
+    const dir = join(runtimeDir, 'hook-errors');
+    if (!existsSync(dir)) return [];
+    const out = [];
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.jsonl')) continue;
+      for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          out.push(JSON.parse(line).scope);
+        } catch {
+          /* skip */
+        }
+      }
+    }
+    return out;
+  }
+
+  // Premise: the payload this case sends really does exceed the cap. Without this
+  // the case would still pass if someone raised MAX_UPS_PROMPT_BYTES, while
+  // measuring nothing.
+  it('the oversized fixture actually exceeds MAX_UPS_PROMPT_BYTES', () => {
+    const payload = JSON.stringify({ prompt: 'x'.repeat(70 * 1024) });
+    expect(Buffer.byteLength(payload)).toBeGreaterThan(MAX_UPS_PROMPT_BYTES);
+  });
+
+  // FAILS IF: the stdin/parse catches swallow without recording.
+  it('records telemetry when the payload is dropped for exceeding the cap', async () => {
+    await runWithRuntime({ prompt: `please read this log ${'x'.repeat(70 * 1024)}` });
+
+    expect(hookErrorScopes()).toContain('ups:stdin');
+  });
+
+  // Control that clamps the negative: the same shape of giant prompt, just under
+  // the cap, must NOT record. This is what makes the case above about the cap
+  // rather than about prompt size, malformed JSON, or an empty corpus.
+  it('does not record for a large payload that stays under the cap', async () => {
+    await runWithRuntime({ prompt: `please read this log ${'x'.repeat(40 * 1024)}` });
+
+    expect(hookErrorScopes()).not.toContain('ups:stdin');
   });
 });

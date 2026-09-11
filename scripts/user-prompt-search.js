@@ -598,12 +598,11 @@ function searchRecent(db, project, limit) {
 // behaviour: the caller treats a timeout as "skip the injection".
 // Returns a bare string, as this script's callers expect.
 async function readStdin() {
-  const { text } = await readHookStdin({
+  return readHookStdin({
     timeoutMs: 2000,
     maxBytes: MAX_UPS_PROMPT_BYTES,
     rejectOnTimeout: true,
   });
-  return text;
 }
 
 // ─── Format Output ──────────────────────────────────────────────────────────
@@ -653,17 +652,34 @@ async function main() {
   // Prevent recursion from background claude -p calls
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
 
+  // Both swallows below record first. They were this file's only silent ones, and
+  // they sit on the *entry* of the face: past MAX_UPS_PROMPT_BYTES the read hands
+  // back a truncated prefix, JSON.parse throws, the face goes dark, and every
+  // health surface — `stats`, `doctor` — reads zero errors. Measured three arms
+  // back-to-back at 318 B / 61 760 B / 72 000 B: only the third one vanished, so
+  // what is lost is the prompt that pasted a large log, which is exactly the
+  // prompt an error-signature recall is most useful on (R12 audit, partition B-3).
   let raw;
+  // No initializer: the parse catch below is reachable only after the destructure
+  // above succeeded, so every read of this is an assigned one.
+  let truncated;
   try {
-    raw = await readStdin();
-  } catch {
+    ({ text: raw, truncated } = await readStdin());
+  } catch (e) {
+    recordHookError('ups:stdin', e, RUNTIME_DIR, { stage: 'read' });
     return;
   }
 
   let hookData;
   try {
     hookData = JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    recordHookError('ups:stdin', e, RUNTIME_DIR, {
+      stage: 'parse',
+      inputLen: raw?.length ?? 0,
+      truncated,
+      capBytes: MAX_UPS_PROMPT_BYTES,
+    });
     return;
   }
   // JSON.parse('null'/'42'/'"x"') succeeds with a non-object; dereferencing .prompt on
