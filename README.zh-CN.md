@@ -208,8 +208,13 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 「这张表完全为空」——任何一次正常的 `mem_save` 都会让它永久为假。现在它按自己的标记每个库跑
 一次，失败则下次开库重试。从没跑过 `import-jsonl` 的库匹配不到任何行，代价为零。
 
-这些行会经 `recall` / `mem_recall` 和 UserPromptSubmit 这条路变得可达；**不会**经 pre-tool
-召回钩子变得可达——那条腿只收 `importance >= 2`，而导入的行一律是 `1`。
+这些行会经 `recall` / `mem_recall` 和 UserPromptSubmit 这条路变得可达。两个边界，都是实测的：
+
+- **不会**经 pre-tool 召回钩子变得可达——那条腿只收 `importance >= 2`，而导入的行一律是 `1`。
+- **不覆盖 6.7.2 之前导入的 `NotebookEdit` 行**。它们当时存下来的「修改过的文件」列表是空的
+  （那时的导入器读 `file_path`，而 `NotebookEdit` 给的是 `notebook_path`），而回填按该列非空
+  筛选，于是跳过它们。这一部分要靠重新导入该 transcript 来恢复——6.7.2 把路径写进了去重键所用的
+  标题，重导才开始有效。
 
 *`doctor --json` 的输出形状变了。* 带修复命令的检查项现在把命令放在 `details` 数组里——此前
 人类界面拿到命令、JSON 界面只拿到诊断。另外四个检查项（dev drift、managed files、hook 脚本的

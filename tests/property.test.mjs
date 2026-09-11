@@ -76,15 +76,49 @@ describe('sanitizeFtsQuery properties', () => {
 // ─── scrubSecrets ───────────────────────────────────────────────────────────
 
 describe('scrubSecrets properties', () => {
-  it('is idempotent: scrub(scrub(x)) === scrub(x)', () => {
-    fc.assert(
-      fc.property(fc.string({ maxLength: 1000 }), (input) => {
-        const once = scrubSecrets(input);
-        const twice = scrubSecrets(once);
-        return once === twice;
-      }),
-      { numRuns: 300 },
-    );
+  // This used to assert `scrub(scrub(x)) === scrub(x)` over `fc.string({maxLength:1000})`.
+  // Both halves were wrong. The property is FALSE, and the test could not have seen that:
+  // measured 0 of 100,000 draws from that generator are changed by the scrubber AT ALL, so
+  // it asserted `x === x` on strings that never reach the substitution path. A ruler that
+  // cannot say NO is not a ruler.
+  //
+  // The mechanism is ARRAY ORDER. A length-floored rule sits EARLIER in SECRET_PATTERNS than
+  // a rewrite whose replacement is LONGER than what it replaces, so a span can be under the
+  // floor on pass 1 and over it on pass 2:
+  //   `AccountKey=…{16,}` (consumer) runs before `https://u:p@` → `https://***:***@` (grower,
+  //   12 chars → 16). `AccountKey=https://a:b@h` declines at 12, then fires on the next pass.
+  // A second, independent shape: a replacement destroys the letter that the prose lookbehind
+  // `(?<![A-Za-z][ \t])` keys on, so `--token ghp_… secret: v` is prose on pass 1 and config
+  // on pass 2.
+  //
+  // Pinned rather than fixed: making the scrubber idempotent means reordering the pattern
+  // table, which changes what it catches and owes a re-measured pass over the corpus (D#46).
+  // Until then, callers must not assume it — see `importedObsTitle`, where the dedup key was
+  // resting on exactly this.
+  const NON_IDEMPOTENT = [
+    'Bash: AccountKey=https://a:b@h',
+    'Bash: curl "?sig=https://a:b@h"',
+    'AccountKey=-?postgres://@&',
+    'Bash: deploy --token ghp_1234567890abcdefghijk secret: hunter2correct',
+  ];
+
+  it('is NOT idempotent, and these are the shapes that prove it', () => {
+    for (const input of NON_IDEMPOTENT) {
+      const once = scrubSecrets(input);
+      const twice = scrubSecrets(once);
+      // Premise: the fixture must still reach the substitution path at all. A pattern edit
+      // that stops scrubbing these would otherwise turn the case below into `x === x`.
+      expect(once, `fixture no longer scrubbed at all: ${input}`).not.toBe(input);
+      expect(twice, `scrubSecrets became idempotent for: ${input}`).not.toBe(once);
+    }
+  });
+
+  it('the generator the old idempotence test used never reaches the substitution path', () => {
+    // The reason the false property went unnoticed for as long as it did. Kept as a case so
+    // nobody re-adds a property test over a generator that cannot produce a credential.
+    const samples = fc.sample(fc.string({ maxLength: 1000 }), 2000);
+    const touched = samples.filter((s) => scrubSecrets(s) !== s);
+    expect(touched, `generator now reaches the scrubber (${touched.length}/2000)`).toHaveLength(0);
   });
 
   it('preserves non-secret text unchanged', () => {

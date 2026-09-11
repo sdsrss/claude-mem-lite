@@ -2,6 +2,38 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.8.1 — corrections to what v6.8.0 claimed, and a property test that asserted a falsehood
+
+No behaviour change. v6.8.0's code was right; three things it SAID were not, and one test was
+asserting a property that does not hold.
+
+1. **`scrubSecrets` is not idempotent, and the test claiming it was could not have noticed.**
+   `tests/property.test.mjs` asserted `scrub(scrub(x)) === scrub(x)` over a generator that
+   produces no credentials — measured 0 of 100,000 draws changed by the scrubber at all, so
+   it asserted `x === x` and could never fail. The property is false by two independent
+   mechanisms, both about ordering inside the pattern table: a length-floored rule sits before
+   a rewrite whose replacement is longer than what it replaces (`AccountKey=https://a:b@h`
+   declines at 12 characters, then fires at 16 on the next pass), and a replacement can
+   destroy the letter a prose lookbehind keys on (`--token ghp_… secret: v` is prose on pass 1
+   and config on pass 2). The test now pins the real behaviour with a premise assertion, and
+   records why the old generator never reached the substitution path. Making the scrubber
+   idempotent means reordering the table and owes a re-measured pass over the corpus, so it is
+   deferred rather than rushed.
+
+2. **v6.8.0's import fix was load-bearing, not cosmetic.** Its own comments said no input was
+   known where the double-scrub mattered. One exists: at the pre-fix code a single transcript
+   with a `ghp_` token in the command imported three rows for three runs. The fix that shipped
+   is correct; the reasoning printed next to it was not, and there is now a behavioural case
+   for it rather than only a source scan.
+
+3. **The backfill does not reach `NotebookEdit` rows imported before v6.7.2.** Those were
+   stored with an empty modified-files list (the pre-v6.7.2 importer read `file_path`, which
+   NotebookEdit never sets), and the backfill selects on that column being non-empty —
+   measured: an `Edit` row gains its edge, such a notebook row gains none. For that subset the
+   repair is a re-import, which v6.7.2 made possible by changing their title. v6.8.0 said
+   re-importing could never repair them; that is true of the `Edit` case it was written about
+   and false of this one.
+
 ## v6.8.0 — the machine face of `doctor`, and an import that re-imported itself
 
 **Upgrade note.** No schema change and no version bump. Two things to know:

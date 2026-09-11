@@ -66,12 +66,13 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
   // which left storage scrubbed twice (`scrubRecord` scrubs `title` again) against the
   // preview's once — equal only while `scrubSecrets` is idempotent.
   //
-  // This is a source scan, and this repo prefers behavioural guards. It is a source scan
-  // because no input is known that makes the difference observable: 300,000 fuzzed titles
-  // plus six constructions aimed at the mechanism pre-ship review named all came back
-  // stable. So a behavioural case would assert nothing today and would go vacuous silently.
-  // If a drifting string is ever found, add it here as a case and this scan becomes the
-  // belt rather than the braces.
+  // Kept alongside the behavioural case below, not instead of it. I first wrote that "no
+  // input is known that makes the difference observable" — 300,000 fuzzed titles came back
+  // stable — and that was a statement about my generator, not about the scrubber: its
+  // alphabet had no `@`, and the grower that creates the drift needs one. Two reviewers each
+  // produced a drifting string within minutes. The behavioural case is the braces now; this
+  // scan is the belt, because it fails on the double-scrub shape even for the inputs where
+  // `scrubSecrets` happens to be stable.
   it('the title is scrubbed exactly once on each side, by construction', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../lib/import-jsonl.mjs'), 'utf8');
     const fn = src.slice(src.indexOf('function importedObsTitle'), src.indexOf('function dedupKey'));
@@ -82,6 +83,22 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     // Both consumers hand the raw title to scrubRecord, which is the single scrub.
     expect(src).toContain("scrubRecord('observations', { title: importedObsTitle(useEv) }).title");
     expect(src).toMatch(/title: importedObsTitle\(toolUse\),/);
+  });
+
+  // The case the source scan above could not be: a title on which `scrubSecrets` is NOT
+  // idempotent, so a double-scrubbed storage side and a single-scrubbed preview genuinely
+  // disagree. Measured against the pre-amendment code this imported 3 rows for 3 runs.
+  it('a title where the scrubber is not idempotent still deduplicates across runs', async () => {
+    const title = 'deploy --token ghp_1234567890abcdefghijk secret: hunter2correct';
+    // Premise: this input must actually drift under a second scrub, or the case is testing
+    // nothing that the plain dedup case above does not already cover.
+    const once = scrubSecrets(`Bash: ${title.slice(0, 80)}`);
+    expect(scrubSecrets(once), 'fixture is no longer non-idempotent').not.toBe(once);
+
+    const file = join(dir, 'nonidem.jsonl');
+    writeFileSync(file, toolPair('Bash', { command: title }, 'u7') + '\n');
+    for (let i = 0; i < 3; i++) await importJsonl(db, file, { project: 'proj' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(1);
   });
 
   it('re-importing the same transcript does not duplicate the observation', async () => {

@@ -248,9 +248,16 @@ table being completely empty, which one ordinary `mem_save` falsifies forever. I
 once per database, keyed on its own marker, and retries on a later open if it fails. A store
 that never ran `import-jsonl` matches no rows and pays nothing.
 
-Those rows become reachable through `recall` / `mem_recall` and the prompt-submit path. They
-do **not** become reachable through the pre-tool recall hook, which admits only
-`importance >= 2` and every imported row carries `1`.
+Those rows become reachable through `recall` / `mem_recall` and the prompt-submit path. Two
+limits, both measured:
+
+- Not through the pre-tool recall hook, which admits only `importance >= 2` while every
+  imported row carries `1`.
+- Not for `NotebookEdit` rows imported before 6.7.2. Those were stored with an empty
+  modified-files list, because the importer of the day read `file_path` and `NotebookEdit`
+  sets `notebook_path` instead — so the backfill, which selects on that column being
+  non-empty, passes over them. Re-importing the transcript is what recovers those, and 6.7.2
+  made that work by putting the path into the title the dedup key is built from.
 
 *`doctor --json` changes shape.* Checks that print a repair command now carry it in a
 `details` array — previously the human screen got the command and the JSON got only the
