@@ -2,6 +2,64 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.7.0 — four surfaces that were running, and four that were not
+
+**Upgrade note.** No migration, no schema change, nothing to do. Two user-visible changes,
+both on surfaces that were previously reporting a wrong answer rather than no answer:
+`doctor` no longer runs its FTS integrity check or prints a ✓ for DB stats when the database
+is newer than the install reading it (it says "not checked" and why), and lesson recall now
+fires on `NotebookEdit`, where it had never fired at all. Nothing to revert: no flag gated
+the old behaviour, because the old behaviour was not a choice anyone made.
+
+**Recall never ran on notebooks.** `NotebookEdit` is in the PreToolUse matcher, but its
+schema is `{notebook_path, cell_id, cell_type, edit_mode, new_source}` with
+`additionalProperties: false` — there is no `file_path`, and `file_path` is the only field
+the parser read. So every `.ipynb` edit took the "no path" exit. The probe written to catch
+exactly this — an upstream field rename silently zeroing injection — could not see it,
+because its whitelist of tools-we-handle doubled as its silence list, and a rename can only
+ever appear on a tool we handle. The whitelist is now a named constant pinned against the
+manifest, and each outcome gets its own telemetry scope.
+
+**The events leg of that same hook returned nothing on Windows.** It escaped `%` and `_` for
+its `ESCAPE '\'` clause and not the escape character, so SQLite ate every separator in a
+win32 path. The audit that found this prescribed escaping the backslash; measuring that fix
+showed it still reads zero rows. `events.file_paths` holds `JSON.stringify(paths)`, so a
+win32 separator is already two characters on disk and the two escapes have to compose in
+order — shipped 0 rows, LIKE-escape alone 0 rows, JSON-then-LIKE 1 row. POSIX hid it because
+`JSON.stringify` of a posix path is the identity.
+
+**The prompt that pastes a large log was the one prompt recall went dark on.** Past
+`MAX_UPS_PROMPT_BYTES` (64 KB) the read returns a truncated prefix, `JSON.parse` throws, and
+the catch returned — the only swallows in that file without a `recordHookError`, in a file
+that writes the rule out twice. Three arms measured back-to-back: 318 B injects, 61 760 B
+injects, 72 000 B vanishes with exit 0 and an empty error log. Both catches now record.
+
+**`doctor` wrote to the database it had just declared unusable.** The schema-skew check
+exists because a DB written by a newer claude-mem-lite locks older code out permanently. It
+printed that verdict as a `fail` — and nothing downstream read it, so two checks later doctor
+opened the same file read-write for `checkFTSIntegrity` (an `INSERT`, needing a write lock)
+with `rebuildFTS` on the same ungated path, under a screen reporting "all indexes healthy".
+A verdict nothing reads is a sentence, not a gate. The victim is the machine this repo
+records this as routine for: a plugin cache running behind the code that wrote the store.
+
+**`doctor` and `repair` did not start on the install they exist to diagnose.** install.mjs's
+~13 static imports resolve before its first statement, so one missing module — a half-finished
+update, a trimmed tarball, a hand-deleted file — produced a bare `ERR_MODULE_NOT_FOUND` and
+zero bytes of stdout. Measured before the fix: 13 of 13 modules in that closure failed
+opaquely. A static import cannot be caught inside the module that declares it, so the catch
+now lives in `cli.mjs`, whose own static closure is exactly one file — itself. The two doctor
+remedies that named `install.mjs repair` as their fallback now name `cli.mjs`: same route,
+an entry that survives the state the line describes. Invoking `node install.mjs doctor`
+directly is still a bare stack; guarding that means splitting install.mjs, and the value is
+in the path the tooling prints.
+
+Every fix ships with a mutation-verified guard and, where the negative could be confused for
+"the check never ran", a premise assertion and a control. One of those mutation runs found a
+defect in the probe harness rather than the code: `String.replace` expands `$&` in a
+replacement string, so an arm had been writing a syntax error into the file — which reads
+exactly like a guard that cannot discriminate. Arms now use a replacer function and must
+still parse.
+
 ## v6.6.0 — a nag that fired 96% of the time was not telling you anything
 
 **Upgrade note.** No migration, no schema change, nothing to do. One user-visible default

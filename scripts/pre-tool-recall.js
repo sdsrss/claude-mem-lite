@@ -101,11 +101,15 @@ import { DEDUP_STALE_MS as CROSS_HOOK_DEDUP_MS } from './prompt-search-utils.mjs
 // failure ALGO-4 exists to fix. The cap is right (an unbounded LIMIT is worse), the
 // reassurance was wrong.
 const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
-// The tools this script claims to handle. MUST equal the PreToolUse matcher in
-// hooks/hooks.json (and its twin in install.mjs's settings.json block) — the two
-// are one contract and drift between them is invisible at runtime, which is the
-// whole reason tests/audit-silent-20260814.test.mjs diffs the two hook sets.
-// tests/hooks-pretool-whitelist-sync.test.mjs pins this list against the manifest.
+// The tools this script claims to handle. THREE surfaces carry this list, counted
+// rather than remembered: hooks/hooks.json's PreToolUse matcher for this script,
+// its settings.json twin at install.mjs:1064, and here. (install.mjs:975 looks like
+// a fourth and is not — different matcher, post-tool-recall.js.)
+//
+// Drift between any two is invisible at runtime. Two guards chain to cover all
+// three: tests/hooks-pretool-whitelist-sync.test.mjs pins hooks.json against this
+// constant, and tests/audit-silent-20260814.test.mjs diffs hooks.json against the
+// install.mjs twin — so hooks.json is the hub and neither spoke can drift alone.
 const HANDLED_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'Read'];
 // v2.33.1: cooldown path is session-scoped so same-file-twice within one
 // session never re-injects (was: global file, 5-min window). Cross-session:
