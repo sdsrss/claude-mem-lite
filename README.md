@@ -236,6 +236,31 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 ```
 
 <!-- normalize-per-project-note:start -->
+## Upgrading to 6.8.0
+
+**Two things change on upgrade. Neither needs an action from you, and neither is a schema
+change — an older build can still open the database.**
+
+*The first open backfills the file-lookup table, once.* Observations imported from a
+transcript before 6.7.2 carry their modified-files list but no row in the junction table the
+file-recall paths join, so asking about a file never found them. The repair was gated on that
+table being completely empty, which one ordinary `mem_save` falsifies forever. It now runs
+once per database, keyed on its own marker, and retries on a later open if it fails. A store
+that never ran `import-jsonl` matches no rows and pays nothing.
+
+Those rows become reachable through `recall` / `mem_recall` and the prompt-submit path. They
+do **not** become reachable through the pre-tool recall hook, which admits only
+`importance >= 2` and every imported row carries `1`.
+
+*`doctor --json` changes shape.* Checks that print a repair command now carry it in a
+`details` array — previously the human screen got the command and the JSON got only the
+diagnosis. And four checks (dev drift, managed files, and both hook-script branches) now
+report `"level": "fail"` where they used to report `"warn"`, with a new `"glyph": "warn"`
+recording that they still render as ⚠ rather than ✗. They always counted toward the issue
+total and the exit code; the level now says so. If you filter on `level === "fail"` you will
+see four findings you were missing. The `issues` count, the summary line and the exit code
+are unchanged.
+
 ## Upgrading to 6.1.0
 
 **One default changes, and only for the daily background pass.** Until 6.1.0 the unattended
