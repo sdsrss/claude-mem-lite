@@ -580,7 +580,8 @@ export function buildSessionContextLines(
     SELECT o.id, o.type, o.title, o.lesson_learned, o.files_modified FROM observations o
     WHERE o.project = ? AND ${liveObsFilterSql('o')}
       AND COALESCE(o.importance, 1) >= 2
-    ORDER BY o.created_at_epoch DESC LIMIT ${KEY_CONTEXT_LIMIT}
+      AND ${notLowSignalTitleClause('o')}
+    ORDER BY o.created_at_epoch DESC, o.id DESC LIMIT ${KEY_CONTEXT_LIMIT}
   `,
     )
     .all(project);
