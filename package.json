@@ -224,13 +224,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.1",
     "acorn": "8.18.0",
-    "eslint": "^10.10.0",
-    "fast-check": "^4.10.0",
-    "knip": "^6.35.1",
+    "eslint": "^10.11.0",
+    "fast-check": "^4.10.2",
+    "knip": "^6.37.0",
     "picomatch": "^4.0.4",
-    "prettier": "3.9.6",
+    "prettier": "3.9.8",
     "vitest": "^5.0.0"
   }
 }
