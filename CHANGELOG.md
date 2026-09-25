@@ -37,8 +37,10 @@ dropping the dismissals, not a regression; do not compare readings across it.
 **error-recall no longer fires on a read behind `cd <dir> &&`.** Its read-only exemption
 looked only at the first word of a command, so `cd repo && grep TypeError src/` counted as a
 program that printed an error, and "Related memories found for this error" was injected
-after a command that had not failed. Every statement and pipeline element is now checked,
-and `sed`, `awk`, `ls`, `jq`, `diff` and a few text filters count as reads. Replayed over
+after a command that had not failed. Every statement and pipeline element is now checked
+(when the line's quotes balance; otherwise the old first-word rule still applies), and `sed`,
+`awk`, `ls`, `jq`, `diff` and a few text filters count as reads. Known limit: those verbs are
+exempt even in a writing form such as `sed -i`. Replayed over
 26,406 Bash results the host did not flag as failed: 151 stop firing (each one a read) and 23
 start. 21 of those 23 run a real program behind a read-verb first word (e.g. `grep …; python3 -`);
 2 only pipe a count from a saved log into `bc`, which is not on the read list, so they are new
