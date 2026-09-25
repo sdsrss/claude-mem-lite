@@ -12,6 +12,7 @@ import {
   injectedIdsFileName,
   injectedIdKey,
   EVENT_ID_PREFIX,
+  lessonIdTokens,
   readInjectedMarker,
   mergeInjectedMarker,
 } from '../lib/injected-ids.mjs';
@@ -485,7 +486,8 @@ try {
       const seenIds = typeof entry === 'object' && Array.isArray(entry.lessonIds) ? entry.lessonIds : [];
       const wasReadMode = typeof entry === 'object' && entry.mode === 'read';
       if (!isRead && wasReadMode && seenIds.length > 0 && !SALIENCE_LEGACY) {
-        const idList = seenIds.map((id) => `#${id}`).join(', ');
+        // Namespaced per table: a bare `#N` for an event id names a different memory.
+        const idList = lessonIdTokens(seenIds, entry.obsIds).join(', ');
         queueHookContext(
           'PreToolUse',
           [

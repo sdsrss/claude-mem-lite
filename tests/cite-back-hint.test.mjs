@@ -48,6 +48,15 @@ describe('buildCiteBackHint', () => {
     expect(hint).toContain('/lesson --file');
   });
 
+  // lessonIds mixes obs and event ids; the hint printed every one as a bare `#N`, which
+  // names an OBSERVATION. obsIds (D#78) says which is which.
+  it('keeps the E# namespace for event ids and the bare # for observation ids', () => {
+    const cooldown = { '/p/foo.mjs': { ts: Date.now(), lessonIds: [8447, 3520], obsIds: [8447] } };
+    const hint = buildCiteBackHint({ entries: [editEntry('/p/foo.mjs')] }, cooldown);
+    expect(hint).toContain('#8447, E#3520');
+    expect(hint).not.toMatch(/(?<![A-Za-z])#3520/);
+  });
+
   // B1 (v2.83): leader line carries explicit counts ("N file(s), M lesson(s)")
   // so the agent sees a quantified signal rather than a vague nudge. §10
   // Specificity binds: hedged hint text ("if you fixed it") is easier to
@@ -894,6 +903,18 @@ describe('extractCiteBackSignals (P5 ① — Stop-time positive signal)', () => 
     expect(ids.has(8447)).toBe(true);
     expect(ids.has(9012)).toBe(true);
     expect(ids.size).toBe(2);
+  });
+
+  // The Stop handler unions these ids into BOTH the decay injected set and the cited set,
+  // resolved against `observations`. Rendered bare, an event id promoted whichever
+  // observation shared its number — the D#202 collision, through the behavioural channel.
+  it('an event id in the hint is not read back as an observation citation', () => {
+    const hint = buildCiteBackHint(
+      { entries: [{ tool: 'Edit', files: ['/p/src/foo.mjs'], isError: false }] },
+      { '/p/src/foo.mjs': { ts: Date.now(), lessonIds: [8447, 3520], obsIds: [8447] } },
+    );
+    const ids = extractCiteBackSignals(writeTranscript([citeBackAttachment(hint)]));
+    expect([...ids]).toEqual([8447]);
   });
 
   it('ignores attachments without the cite-back leader (e.g. plain mem context)', () => {

@@ -1493,6 +1493,39 @@ describe('pre-tool-recall', () => {
       expect(ctx).toMatch(/system-injected/);
     });
 
+    // The ack line re-renders ids from the cooldown entry, which holds obs AND event ids
+    // in one list. It rendered every one as a bare `#N`, so a Read that injected
+    // `E#116` asked for a citation of "#116" — an OBSERVATION id, i.e. a different memory
+    // (found 2026-09-25, docs/audits/20260925-200912-session-history-analysis.md §8).
+    it('Read→Edit ack keeps the E# namespace for an event-sourced lesson', async () => {
+      const filePath = join(projectDir, 'evonly.mjs');
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      const evId = Number(
+        db
+          .prepare(
+            `INSERT INTO events (project, event_type, title, body, file_paths, importance, created_at_epoch)
+             VALUES ('parent--saltest', 'bugfix', 'event-sourced probe', 'close the handle before rename', ?, 2, ?)`,
+          )
+          .run(JSON.stringify([filePath]), Date.now()).lastInsertRowid,
+      );
+      db.close();
+      const read = await runScript(
+        { tool_name: 'Read', tool_input: { file_path: filePath }, session_id: 'sess-sal-ev' },
+        envFor(),
+      );
+      // Premise: the Read injected the event, under its namespaced id.
+      expect(JSON.parse(read.stdout).hookSpecificOutput.additionalContext).toContain(`E#${evId}`);
+
+      const { stdout } = await runScript(
+        { tool_name: 'Edit', tool_input: { file_path: filePath }, session_id: 'sess-sal-ev' },
+        envFor(),
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toMatch(/were shown when you Read/);
+      expect(ctx).toContain(`E#${evId}`);
+      expect(ctx).not.toMatch(new RegExp(`(?<![A-Za-z])#${evId}\\b`));
+    });
+
     it('Read→Edit→Edit: the ack nudge fires once — second Edit is silent', async () => {
       const filePath = join(projectDir, 'maintain.mjs');
       const session = 'sess-sal-5';
