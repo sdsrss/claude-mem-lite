@@ -2590,6 +2590,38 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     expect(typeof payload.injected).toBe('number');
     expect(typeof payload.ratio).toBe('number');
   });
+
+  // The gate asks whether the agent ANSWERED what the hooks showed it. `#NN n/a — why`
+  // is a complete answer, so it must count here even though the crediting callers drop
+  // it — otherwise the nudge nags an agent for following the convention to the letter.
+  it('Stop counts a `#NN n/a` answer in the gate numerator', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const transcript = writeTranscript([
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/x/scripts/pre-tool-recall.js"',
+          stdout: '  #101 [lesson] alpha\n  #102 [bugfix] beta\n  #103 [decision] gamma',
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '#102 applied; #101 n/a — no pool edge here' }],
+        },
+      },
+    ]);
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: randomUUID(), transcript_path: transcript }),
+      env: { HOME: tmpHome },
+    });
+    const payloadFile = join(tmpHome, '.claude-mem-lite', 'runtime', 'cite-recall-parent--testproj.json');
+    const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+    expect(payload.gateInjected).toBe(3);
+    expect(payload.gateRecalled, '#102 applied and #101 dismissed are both answers').toBe(2);
+  });
 });
 
 describe('Suite: G1+G2 enrich-save worker (spawned-env recursion guard)', () => {

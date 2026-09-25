@@ -258,6 +258,43 @@ describe('Stop end-to-end: citation_surface_log really receives rows (b2)', () =
     expect(by.fyi).toMatchObject({ injected_n: 4, cited_n: 0 });
   });
 
+  // `#NN n/a — <reason>` is the adoption doc's own way of saying a lesson did not apply.
+  // It used to take every crediting branch an application takes. Distinct outcomes for
+  // the applied row and the dismissed row on all three channels: the face funnel, the
+  // decay columns, and the access bump.
+  it('a dismissed lesson is not a hit, is not promoted, and earns no access', () => {
+    const ids = seedObservations();
+    const [applied, dismissed] = ids.pretool;
+    const transcriptPath = join(home, 'transcript.jsonl');
+    writeFileSync(
+      transcriptPath,
+      [
+        faceAttachment.pretool(ids.pretool),
+        assistantText(
+          `#${applied} applied — boundary match kept; #${dismissed} n/a — no LIKE query in this edit.`,
+        ),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n'),
+    );
+
+    runStop(transcriptPath);
+
+    const by = Object.fromEntries(surfaceRows().map((r) => [r.surface, r]));
+    expect(by.pretool).toMatchObject({ injected_n: 2, cited_n: 1 });
+    const db = new Database(dbPath, { readonly: true });
+    db.pragma('busy_timeout = 2000');
+    try {
+      const row = (id) =>
+        db.prepare('SELECT cited_count, uncited_streak, access_count FROM observations WHERE id = ?').get(id);
+      expect(row(applied)).toMatchObject({ cited_count: 1, uncited_streak: 0 });
+      expect(row(applied).access_count, 'the applied lesson is credited').toBeGreaterThan(0);
+      expect(row(dismissed)).toMatchObject({ cited_count: 0, uncited_streak: 1, access_count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
   // The counterpart to the recorder's overwrite-idempotency unit test, at the
   // process boundary: Claude Code fires Stop again on a resumed turn.
   it('a second Stop on the same session overwrites rather than doubling', () => {

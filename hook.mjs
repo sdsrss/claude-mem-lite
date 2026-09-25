@@ -1427,7 +1427,13 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         let gate = { gateInjected: null, gateRecalled: null, gateRatio: null };
         try {
           const gateInjectedIds = unionSurfaces(extractInjectedBySurface(transcriptPath, { mainOnly: true }));
-          const gateCited = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
+          // The nudge asks whether the agent ANSWERED what the hooks showed it, and
+          // `#NN n/a — <reason>` is a complete answer: counting it as silence would nag
+          // an agent for following the convention to the letter.
+          const gateCited = extractCitationsFromTranscript(transcriptPath, {
+            mainOnly: true,
+            includeDismissed: true,
+          });
           let hit = 0;
           for (const id of gateInjectedIds) if (gateCited.has(id)) hit++;
           gate = {

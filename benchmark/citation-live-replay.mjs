@@ -567,8 +567,9 @@ function main() {
     `transcripts scanned ${files}  ·  sessions carrying an injection ${inWindow.length}` +
       `  ·  projects ${new Set(inWindow.map((r) => r.project)).size}`,
   );
-  console.log('caliber: denominator = (session, id) PAIRS; numerator = that id cited as #NN in the');
-  console.log("         session's own assistant text (main thread; for `subagent`, the RECEIVING agent's).");
+  console.log('caliber: denominator = (session, id) PAIRS; numerator = that id cited as #NN, not answered');
+  console.log("         `#NN n/a`, in the session's own assistant text (main thread; for `subagent`, the");
+  console.log("         RECEIVING agent's). Before the dismissal fix a `#NN n/a` counted — a caliber break.");
   for (const [face, why] of Object.entries(NOT_REPLAYABLE)) {
     console.log(`not replayable here: ${face} — ${why}`);
   }
@@ -644,7 +645,8 @@ function main() {
  * response that also DID something, and how many only in prose?
  *
  * This is the prerequisite the deferred item names — it sizes the contamination, it does
- * not fix it. `applyCitationDecay` promotes on any `#NN` in assistant text, so a release
+ * not fix it. `applyCitationDecay` promotes on any `#NN` in assistant text short of a
+ * stated `#NN n/a` dismissal, so a release
  * note or an audit promotes every memory it discusses; the same signal feeds
  * citation_surface_log, citation-stats and this replay, so all three move together.
  *

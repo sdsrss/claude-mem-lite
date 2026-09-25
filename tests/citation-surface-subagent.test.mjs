@@ -142,7 +142,9 @@ describe('collectSubagentSurface — injected from the prompt, cited from the si
     const { injected, cited } = collectSubagentSurface(parent);
     expect([...injected].sort((a, b) => a - b)).toEqual([11, 22]);
     expect(cited.has(11)).toBe(true);
-    expect(cited.has(22)).toBe(true);
+    // `#22 n/a` is the receiving agent saying that lesson did not apply — read from the
+    // same sidechain, and (since the dismissal fix) not a citation.
+    expect(cited.has(22)).toBe(false);
     // …and the parent transcript carries neither the injection nor the cite,
     // which is exactly why the attachment extractors read this face as absent.
     const parentFaces = extractInjectedBySurface(parent);

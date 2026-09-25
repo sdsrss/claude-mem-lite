@@ -56,6 +56,17 @@ describe('computeThreadCiteRecall (per-file, precise hook-injection methodology)
     expect(r.ratio).toBe(0.5);
   });
 
+  // A compliance ratio: `#NN n/a` answers the lesson, so it counts as recalled here even
+  // though extractCitationsFromTranscript's default (the crediting callers) drops it.
+  it('counts a dismissal as recalled', () => {
+    const p = join(tmp, 't.jsonl');
+    writeJsonl(p, [
+      inject([10, 'bugfix'], [20, 'decision']),
+      cite('#10 applied; #20 n/a — no schema change here'),
+    ]);
+    expect(computeThreadCiteRecall(p).recalled).toBe(2);
+  });
+
   it('returns zeros for a missing transcript', () => {
     expect(computeThreadCiteRecall(join(tmp, 'nope.jsonl'))).toEqual({
       injected: 0,
