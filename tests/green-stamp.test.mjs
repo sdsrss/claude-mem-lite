@@ -109,6 +109,9 @@ describe('refusalReason — only a full, passing, unfiltered run over an unchang
     ['a shard', { config: { shard: { index: 1, count: 2 } } }, /shard/],
     ['--changed', { config: { changed: true } }, /changed/],
     ['--related', { config: { related: ['a.mjs'] } }, /related/],
+    ['--exclude', { config: { cliExclude: ['t/b.test.mjs'] } }, /--exclude/],
+    ['--dir', { config: { root: '/r', dir: '/r/sub' } }, /--dir/],
+    ['--project', { config: { project: ['x'] } }, /--project/],
     ['a file filter', { ranIds: ['/r/a.test.mjs'] }, /every test file/],
     ['an empty collection', { ranIds: [], allIds: [] }, /no test files/],
     ['an edit during the run', { endKey: 'k2' }, /changed while/],
@@ -173,4 +176,79 @@ describe('scripts/pre-commit.sh tests block — wiring', () => {
     const forced = runTestsBlock({ PRE_COMMIT_FULL_TEST: '1' });
     expect(forced.npmCalled).toBe(true);
   });
+});
+
+// refusalReason is fed a hand-built config above, which is exactly why it could not see this:
+// vitest 5 appends CLI `--exclude` to the resolved exclude list, so globTestSpecifications()
+// shrinks to match the run and "every collected file ran" held for a 1-of-431 run (pre-ship
+// defect review, P2-1). This case runs the real reporter inside a real vitest child.
+describe('green-stamp reporter under a real vitest run', () => {
+  function setupVitestFixture() {
+    for (const rel of [
+      ['scripts', 'green-stamp.mjs'],
+      ['scripts', 'green-stamp-reporter.mjs'],
+      ['lib', 'atomic-write.mjs'],
+    ]) {
+      mkdirSync(join(repo, rel[0]), { recursive: true });
+      copyFileSync(join(ROOT, ...rel), join(repo, ...rel));
+    }
+    execFileSync('ln', ['-s', join(ROOT, 'node_modules'), join(repo, 'node_modules')]);
+    writeFileSync(join(repo, '.gitignore'), 'ignored/\nnode_modules\n');
+    writeFileSync(
+      join(repo, 'vitest.config.mjs'),
+      "export default { test: { include: ['t/**/*.test.mjs'], reporters: ['default', './scripts/green-stamp-reporter.mjs'] } };\n",
+    );
+    mkdirSync(join(repo, 't'));
+    for (const n of ['a', 'b']) {
+      writeFileSync(join(repo, 't', `${n}.test.mjs`), "import { it } from 'vitest';\nit('ok', () => {});\n");
+    }
+    git('add', '-A');
+    git('commit', '-qm', 'fixture');
+  }
+  function vitest(...args) {
+    const env = { ...process.env };
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    return spawnSync(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env,
+    });
+  }
+
+  it('a full run stamps; an --exclude run does not', () => {
+    setupVitestFixture();
+    const partial = vitest('--exclude', 't/b.test.mjs');
+    expect(partial.status, partial.stderr).toBe(0);
+    expect(partial.stdout).toMatch(/Test Files\s+1 passed \(1\)/); // premise: the run WAS partial
+    expect(existsSync(stampPath(repo))).toBe(false);
+
+    const full = vitest();
+    expect(full.status, full.stderr).toBe(0);
+    expect(full.stdout).toMatch(/Test Files\s+2 passed \(2\)/);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    expect(checkStamp(repo, { env: env0 }).reuse).toBe(true);
+  }, 60000);
+
+  it('a failing full run on the stamped tree removes the stamp', () => {
+    setupVitestFixture();
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    // Same tree, red run (an env-dependent failure): the old green must not outlive it.
+    writeFileSync(
+      join(repo, 't', 'a.test.mjs'),
+      "import { it, expect } from 'vitest';\nit('env', () => { expect(process.env.GS_FAIL).toBeUndefined(); });\n",
+    );
+    git('commit', '-qam', 'env test');
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    const env = { ...process.env, GS_FAIL: '1' };
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    const red = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env,
+    });
+    expect(red.status).not.toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(false);
+  }, 60000);
 });

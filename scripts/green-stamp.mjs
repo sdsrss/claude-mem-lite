@@ -26,7 +26,7 @@
 // is per worktree, never committed and never user-global.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, lstatSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +88,10 @@ export function recordStamp(cwd, key, { now = Date.now() } = {}) {
   const path = stampPath(cwd);
   atomicWriteFileSync(path, JSON.stringify({ key, node: process.version, at: now }) + '\n');
   return path;
+}
+
+export function clearStamp(cwd) {
+  rmSync(stampPath(cwd), { force: true });
 }
 
 /**
