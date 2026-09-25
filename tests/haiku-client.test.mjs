@@ -44,6 +44,7 @@ import {
   detectMode,
   _resetMode,
   _resetHeadlessFlag,
+  _resetTemperatureCompat,
   _isUnknownFlagError,
   getClaudePath,
   callHaiku,
@@ -71,6 +72,12 @@ describe('haiku-client.mjs', () => {
     // exercise OpenRouter explicitly re-stub them.
     vi.stubEnv('OPENROUTER_API_KEY', '');
     vi.stubEnv('OPENROUTER_MODEL', '');
+    // Same hermeticity trap for the Anthropic base URL / tier overrides: a dev
+    // shell pointed at a gateway would reroute the api.anthropic.com assertions
+    // below. Gateway tests re-stub them explicitly.
+    vi.stubEnv('ANTHROPIC_BASE_URL', '');
+    vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', '');
+    vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', '');
     // Proxy vars in the dev/CI shell would route the OpenRouter path through the
     // CONNECT tunnel (real network) instead of the mocked fetch — same #8608 trap:
     // an env-gated transport silently breaks tests that rely on the default path.
@@ -79,6 +86,9 @@ describe('haiku-client.mjs', () => {
     // Module-level compat state: one case that trips the old-CLI fallback would
     // otherwise silently drop the flag from every later case's expected argv.
     _resetHeadlessFlag();
+    // Same for the per-model temperature-deprecation memory: a case that trips
+    // the retry would otherwise change every later case's request body.
+    _resetTemperatureCompat();
     vi.restoreAllMocks();
     // Re-apply mock for execFileSync since restoreAllMocks clears it
     vi.mocked(execFileSync).mockReset();
@@ -952,6 +962,113 @@ describe('haiku-client.mjs', () => {
 
       const result = await callHaiku('test prompt');
       expect(result).toBeNull();
+    });
+  });
+
+  // ─── Gateway overrides (ANTHROPIC_BASE_URL / tier model env) ──────────────
+  describe('gateway overrides', () => {
+    const okResponse = () => ({
+      ok: true,
+      json: async () => ({ content: [{ text: 'api response' }] }),
+    });
+
+    beforeEach(() => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-gateway-key');
+      _resetMode();
+    });
+
+    it('posts to ${ANTHROPIC_BASE_URL}/v1/messages, tolerating a trailing slash', async () => {
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://aif-example.services.ai.azure.com/anthropic/');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://aif-example.services.ai.azure.com/anthropic/v1/messages',
+      );
+      // Foundry key auth is the same x-api-key the public API path already sends.
+      expect(fetchMock.mock.calls[0][1].headers['x-api-key']).toBe('sk-gateway-key');
+    });
+
+    it('sends the deployment name from ANTHROPIC_DEFAULT_HAIKU_MODEL as body.model', async () => {
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-haiku-4-5');
+    });
+
+    it('maps the sonnet tier through ANTHROPIC_DEFAULT_SONNET_MODEL, per tier', async () => {
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
+      vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'claude-sonnet-5');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callLLMWithModel('test prompt', 'sonnet');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-sonnet-5');
+    });
+
+    it('keeps the public URL and built-in model ID when the overrides are unset', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      expect(fetchMock.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/messages');
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-haiku-4-5-20251001');
+    });
+  });
+
+  // ─── temperature-deprecation compat (Foundry claude-sonnet-5) ────────────
+  describe('temperature-deprecation compat', () => {
+    const deprecation400 = () => ({
+      ok: false,
+      status: 400,
+      text: async () =>
+        '{"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}',
+    });
+
+    beforeEach(() => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-gateway-key');
+      _resetMode();
+    });
+
+    it('retries without temperature when the model deprecates it, then caches the negative', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(deprecation400())
+        .mockResolvedValue({ ok: true, json: async () => ({ content: [{ text: 'retried' }] }) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(callHaiku('test prompt')).resolves.toEqual({ text: 'retried' });
+
+      // First attempt carried the 0-pin; the retry dropped it.
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).temperature).toBe(0);
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body).temperature).toBeUndefined();
+
+      // Cached: the next call starts from the accepted shape, no second 400.
+      await callHaiku('test prompt');
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body).temperature).toBeUndefined();
+    });
+
+    it('does not retry a 400 that does not name temperature', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => '{"type":"error","error":{"message":"max_tokens: must be >= 1"}}',
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(callHaiku('test prompt')).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 

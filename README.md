@@ -894,7 +894,10 @@ claude-mem-lite.
 |----------|-------------|---------|
 | `CLAUDE_MEM_DIR` | Custom data directory. All databases, runtime files, and managed resources are stored here. | `~/.claude-mem-lite/` |
 | `CLAUDE_MEM_MODEL` | LLM model for background calls (episode extraction, session summaries). Accepts `haiku` or `sonnet`. | `haiku` |
-| `ANTHROPIC_API_KEY` | Anthropic API key. When set, all background LLM calls go directly to the Anthropic Messages API (with prompt caching). Highest priority. | _(unset → CLI)_ |
+| `ANTHROPIC_API_KEY` | Anthropic API key. When set, all background LLM calls go directly to the Anthropic Messages API (with prompt caching) - or to the `ANTHROPIC_BASE_URL` gateway when that is set. Highest priority. | _(unset → CLI)_ |
+| `ANTHROPIC_BASE_URL` | Base URL for the direct Messages API when an Anthropic-compatible gateway serves the models (Azure AI Foundry, LiteLLM, Bedrock/Vertex proxies). No `/v1` suffix - the endpoint path is appended. The `claude -p` fallback reads the same variable, so one value covers both transports. | `https://api.anthropic.com` |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Model ID or gateway deployment name for the `haiku` tier. Set it when the gateway routes on deployment names rather than Anthropic model IDs (Azure Foundry deployments). The `claude -p` fallback resolves its `--model haiku` alias through it too. | built-in `claude-haiku-4-5-…` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Same as above for the `sonnet` tier. | built-in `claude-sonnet-4-5-…` |
 | `OPENROUTER_API_KEY` | OpenRouter API key (OpenAI-compatible). Used for background LLM calls when `ANTHROPIC_API_KEY` is **not** set. If neither key is set, calls fall back to the `claude -p` CLI. | _(unset)_ |
 | `OPENROUTER_MODEL` | Overrides the OpenRouter model slug for **all** background calls (e.g. `openai/gpt-4o-mini`, `qwen/qwen-2.5-72b-instruct`). When unset, the `CLAUDE_MEM_MODEL` tier maps to `anthropic/claude-haiku-4.5` (haiku) or `anthropic/claude-sonnet-4.5` (sonnet). | _(tier default)_ |
 | `CLAUDE_MEM_DEBUG` | Enable debug logging (`1` to enable). | _(disabled)_ |

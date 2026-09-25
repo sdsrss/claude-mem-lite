@@ -3,7 +3,12 @@
 // Provider priority: ANTHROPIC_API_KEY (direct Anthropic API) →
 // OPENROUTER_API_KEY (OpenRouter, OpenAI-compatible) → claude CLI fallback
 // Model configurable via CLAUDE_MEM_MODEL (haiku|sonnet); OpenRouter slug
-// overridable via OPENROUTER_MODEL
+// overridable via OPENROUTER_MODEL. The direct-API leg honours
+// ANTHROPIC_BASE_URL (no /v1 suffix - the path is appended) and per-tier
+// deployment names via ANTHROPIC_DEFAULT_{HAIKU,SONNET}_MODEL, the same vars
+// the `claude` CLI leg resolves its --model aliases through, so one env set
+// points both transports at a gateway (Azure AI Foundry, LiteLLM, Bedrock
+// proxies). Unset → public Anthropic API, unchanged.
 
 import { execFileSync, spawn } from 'child_process';
 import { mkdirSync } from 'fs';
@@ -48,6 +53,25 @@ const MODEL_MAP = {
   sonnet: 'claude-sonnet-4-5-20250929',
 };
 
+// Claude Code's tier-alias override vars, honored on the direct-API leg too:
+// gateway deployments route on the DEPLOYMENT name (Azure Foundry rejects the
+// Anthropic model ID when it differs), and one env set then covers both the
+// keyed API call and the `claude -p` fallback.
+const TIER_MODEL_ENV = {
+  haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+};
+
+/**
+ * Model ID the direct Messages API should send for a tier. The tier override
+ * env wins when set and non-blank, else the built-in Anthropic ID.
+ * @param {'haiku'|'sonnet'} tier
+ * @returns {string}
+ */
+function apiModelId(tier) {
+  return (process.env[TIER_MODEL_ENV[tier]] || '').trim() || MODEL_MAP[tier];
+}
+
 // Every background LLM call here is fixed-schema extraction / classification
 // (episode→JSON, type/merge classification, synonym + metadata extraction) whose
 // output is consumed deterministically (JSON.parse, MinHash dedup). Pin temperature
@@ -81,12 +105,13 @@ export const BG_LLM_TIMEOUT_MS = 45000;
 /**
  * Resolve the LLM model to use for background calls.
  * Reads CLAUDE_MEM_MODEL env var, defaults to 'haiku'.
- * @returns {{ cli: string, api: string }} CLI name and API model ID
+ * @returns {{ cli: string, api: string }} CLI name and API model ID (tier
+ *   deployment-name override when set, else the built-in Anthropic ID)
  */
 export function resolveModel() {
   const raw = (process.env.CLAUDE_MEM_MODEL || 'haiku').toLowerCase().trim();
   const cli = MODEL_MAP[raw] ? raw : 'haiku';
-  const api = MODEL_MAP[cli];
+  const api = apiModelId(cli);
   return { cli, api };
 }
 
@@ -450,11 +475,31 @@ export async function callModelJSONAsync(
   return res?.text ? parseJsonFromLLM(res.text) : null;
 }
 
+// Messages-API base URL. ANTHROPIC_BASE_URL (the Claude Code / Anthropic SDK
+// convention, no /v1 suffix - the path below is appended) points the direct leg
+// at any Anthropic-compatible gateway. Azure AI Foundry serves Claude at
+// https://<resource>.services.ai.azure.com/anthropic with the same x-api-key +
+// anthropic-version contract callModelAPI already sends. Trailing slashes are
+// tolerated; unset keeps the public API, so existing users are unchanged.
+function anthropicBaseUrl() {
+  return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
+}
+
+// Models that refused `temperature` with a 400 (see the retry in callModelAPI).
+// One name after the first rejection, so the cost is one failed request per
+// model per process rather than one per call.
+const _temperatureDeprecated = new Set();
+
+/** @internal test hook — module-level compat state must not leak across cases. */
+export function _resetTemperatureCompat() {
+  _temperatureDeprecated.clear();
+}
+
 async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  const modelId = MODEL_MAP[model];
+  const modelId = apiModelId(model);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
 
@@ -463,9 +508,14 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     const body = {
       model: modelId,
       max_tokens: maxTokens,
-      temperature,
       messages: [{ role: 'user', content: user }],
     };
+    // The 0-pin below is for JSON determinism, but newer models deprecate the
+    // field outright (Azure Foundry's claude-sonnet-5 answers 400
+    // "`temperature` is deprecated for this model."). Keep sending it until a
+    // model refuses, then drop it for that model only - the retry at the bottom
+    // pays for itself once.
+    if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
     // System slot is constant per call type (instructions, schema, type taxonomy)
     // — mark it cache_control:ephemeral so repeated calls within the 5-min cache
     // window pay the cached-input rate (~0.10× base). Sub-1024-token systems still
@@ -480,25 +530,43 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     // fetch — a silent outage behind a proxy, and one the new doctor check would
     // have certified as healthy because it probes the hop this code was ASSUMED
     // to use. (pre-tag review SHOULD-FIX 3)
-    const apiUrl = 'https://api.anthropic.com/v1/messages';
+    const apiUrl = `${anthropicBaseUrl()}/v1/messages`;
     const apiHeaders = {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     };
-    const apiProxy = httpConnectProxyFor(apiUrl);
-    const res = apiProxy
-      ? await postViaConnectProxy(apiProxy, apiUrl, {
-          headers: apiHeaders,
-          body: JSON.stringify(body),
-          timeout,
-        })
-      : await fetch(apiUrl, {
-          method: 'POST',
-          headers: apiHeaders,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+    const send = (payload) => {
+      const json = JSON.stringify(payload);
+      const apiProxy = httpConnectProxyFor(apiUrl);
+      return apiProxy
+        ? postViaConnectProxy(apiProxy, apiUrl, { headers: apiHeaders, body: json, timeout })
+        : fetch(apiUrl, {
+            method: 'POST',
+            headers: apiHeaders,
+            body: json,
+            signal: controller.signal,
+          });
+    };
+
+    let res = await send(body);
+
+    // Temperature-deprecation compat, same shape as the claude-CLI flag retry:
+    // retry once without the field, cache the negative so later calls skip it. A
+    // 400 whose body does not name the field keeps the old single-attempt path.
+    if (res.status === 400 && body.temperature !== undefined) {
+      let detail = '';
+      try {
+        detail = (await res.text?.()) || '';
+      } catch {
+        /* body already gone - treat as a non-matching 400 */
+      }
+      if (/temperature/i.test(detail) && /deprecat|unsupported|not support/i.test(detail)) {
+        _temperatureDeprecated.add(modelId);
+        delete body.temperature;
+        res = await send(body);
+      }
+    }
 
     if (!res.ok) {
       debugLog('WARN', `${model}-api`, `HTTP ${res.status}`);

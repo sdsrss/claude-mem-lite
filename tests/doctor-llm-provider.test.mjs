@@ -24,6 +24,9 @@ describe('llmProviderStatus', () => {
 
   function noProxy() {
     for (const v of PROXY_ENV) vi.stubEnv(v, '');
+    // Gateway override unset by default: the api host assertions below pin the
+    // public default; the base-URL tests re-stub it explicitly.
+    vi.stubEnv('ANTHROPIC_BASE_URL', '');
   }
 
   it('reports the CLI provider without probing anything when no key is set', async () => {
@@ -46,6 +49,28 @@ describe('llmProviderStatus', () => {
     expect(s.mode).toBe('api');
     expect(probe.mock.calls[0][0]).toBe('api.anthropic.com');
     expect(s.level).toBe('ok');
+  });
+
+  it('probes the ANTHROPIC_BASE_URL host when a gateway base URL is set', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://aif-example.services.ai.azure.com/anthropic');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(probe.mock.calls[0][0]).toBe('aif-example.services.ai.azure.com');
+    expect(probe.mock.calls[0][1]).toEqual({ port: 443 });
+    expect(s.level).toBe('ok');
+    expect(s.message).toContain('aif-example.services.ai.azure.com');
+  });
+
+  it('derives the port from a non-https gateway base URL', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    await llmProviderStatus({ _probe: probe });
+    expect(probe.mock.calls[0][0]).toBe('127.0.0.1');
+    expect(probe.mock.calls[0][1]).toEqual({ port: 4000 });
   });
 
   it('probes openrouter.ai when only OPENROUTER_API_KEY is set', async () => {
