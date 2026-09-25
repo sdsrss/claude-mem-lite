@@ -141,3 +141,62 @@ describe('detectBashSignificance — isHardError (bugfix-nudge gate)', () => {
     expect(sig.isHardError).toBe(false);
   });
 });
+
+// The read-only exemption used to look at ONE word: the first token left of the first
+// pipe. The host resets the cwd between Bash calls, so agents write `cd <repo> && …` on
+// over half their commands, and `cd` is not a read verb — every grep/sed of source that
+// quoted `TypeError:` fired error-recall on a command that had not failed. The same
+// one-word rule also exempted `grep x f; npx vitest run | tail` because it started with
+// grep. Replayed over 26,406 real exit-0 Bash results (2026-09-25): 151 reads went
+// silent, 23 compound commands that really ran a program started firing. Shapes below
+// are taken from that replay.
+describe('detectBashSignificance — read-only exemption checks every statement', () => {
+  const SOURCE_QUOTE =
+    'bash-utils.mjs:56: // a named error class (TypeError:/ReferenceError:/…) is a hard error\n' +
+    'bash-utils.mjs:58:   /\\bERR!|traceback|(?:type|reference)error:/i;\n';
+  const RED_RUN =
+    ' FAIL  tests/x.test.mjs > case\nAssertionError: expected 1 to be 2 // Object.is equality\n' +
+    '      Tests  1 failed | 7 passed (8)\n';
+  const hard = (command, out) => detectBashSignificance({ command }, out).isHardError;
+
+  it('treats `cd <dir> &&` / `;` / `|| exit` as set-up, not as the command', () => {
+    expect(hard("cd /home/ai/dev/claude-mem-lite && sed -n '56,75p' bash-utils.mjs", SOURCE_QUOTE)).toBe(
+      false,
+    );
+    expect(
+      hard('cd /home/ai/dev/claude-mem-lite; grep -n "HARD_ERROR_RE" bash-utils.mjs | head', SOURCE_QUOTE),
+    ).toBe(false);
+    expect(hard('cd /repo || exit 1; git log --oneline -3', SOURCE_QUOTE)).toBe(false);
+    expect(hard('SP=/tmp/x; cd /repo && awk "NR>=50" f | sort | uniq -c', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('does not split on a quoted `;` or on the `&` of a redirection', () => {
+    expect(hard('cd /repo && grep -nE "a;b|TypeError" f 2>&1 | head -20', SOURCE_QUOTE)).toBe(false);
+    expect(hard('grep -n x f &> /tmp/o.txt; cat /tmp/o.txt |& head', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('still fires when a later statement runs a program', () => {
+    expect(hard('cd /repo && npx vitest run tests/x.test.mjs 2>&1 | tail -30', RED_RUN)).toBe(true);
+    // Exempted by the one-word rule because it started with grep.
+    expect(hard('grep -n "x" tests/x.test.mjs; npx vitest run tests/x.test.mjs 2>&1 | tail', RED_RUN)).toBe(
+      true,
+    );
+    // Heredoc that writes a test, then runs it: the leading `cat` is not the command.
+    expect(
+      hard(
+        "cat > tests/x.test.mjs <<'EOF'\nit('a', () => {})\nEOF\nnpx vitest run tests/x.test.mjs",
+        RED_RUN,
+      ),
+    ).toBe(true);
+  });
+
+  it('still fires when a pipe feeds a program, whatever the first element is', () => {
+    expect(hard("printf '%s\\n' '{\"id\":1}' | timeout 25 node server.mjs", RED_RUN)).toBe(true);
+    expect(hard('cat input.json | node script.mjs', RED_RUN)).toBe(true);
+  });
+
+  it('falls back to the first-word rule when quotes do not balance', () => {
+    expect(hard('grep -n "unterminated f', SOURCE_QUOTE)).toBe(false);
+    expect(hard('npx vitest run "unterminated', RED_RUN)).toBe(true);
+  });
+});

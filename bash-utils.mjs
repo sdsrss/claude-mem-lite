@@ -28,6 +28,24 @@ const SEARCH_VERBS = new Set([
   'file',
   'which',
   'type',
+  // Print-a-file-or-listing verbs agents use to READ source (`sed -n 40,80p f`) — their
+  // output is file content, so an `Error:` in it is quoted text, not a failure.
+  'sed',
+  'awk',
+  'ls',
+  'jq',
+  'nl',
+  'stat',
+  'diff',
+  'code-graph-mcp',
+  // Pure filters, so `grep x f | sort | uniq -c` stays a read.
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'column',
+  'paste',
+  'strings',
 ]);
 // Command prefixes that wrap the real command (env-assignments handled separately).
 const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'time', 'command', 'nice', 'nohup', 'stdbuf', 'xargs']);
@@ -57,20 +75,114 @@ const GIT_READ_SUBCMDS = new Set([
 const HARD_ERROR_RE =
   /\bERR!|\bpanic\b|traceback|segfault|core dumped|\benoent\b|command not found|assertion\s?error|\n\s+at\s+\S|(?:type|reference|range|syntax|eval|uri)error:/i;
 
-// True when the command's PRIMARY operation (left of the first pipe, past any
-// env-assignments / wrapper like `sudo`/`env`/`time`) is a read/search — including
-// `git grep`/`git log`. Anchoring on the primary command (not "search verb appears
-// anywhere") is what lets `npm run build 2>&1 | tail` stay an error while `sudo grep`,
-// `git grep`, `cat f | head` are correctly exempt.
-function isReadOnlyCommand(cmd) {
-  const primary = cmd.split('|')[0];
-  const toks = primary.trim().split(/\s+/).filter(Boolean);
+// Commands that only set the shell up for the next one. They neither make a command
+// read-only nor stop it being one: `cd repo && grep …` is a grep. This matters because
+// the host resets the cwd between Bash calls, so agents prefix `cd <repo> &&` to over
+// half of their commands (5009 of 9096 in this repo's transcripts, 2026-09-25) — and
+// while `cd` counted as the primary verb, every such grep/sed of source that mentions
+// `TypeError:` fired error-recall on a command that had not failed.
+const NEUTRAL_VERBS = new Set([
+  'cd',
+  'pushd',
+  'popd',
+  'echo',
+  'printf',
+  'true',
+  ':',
+  'export',
+  'set',
+  'exit',
+]);
+
+/** 'read' | 'neutral' | 'other' for one simple command (one element of a pipeline). */
+function classifySimpleCommand(text) {
+  const toks = text.trim().split(/\s+/).filter(Boolean);
   let i = 0;
   while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
   const first = toks[i];
-  if (!first) return false;
-  if (SEARCH_VERBS.has(first)) return true;
-  return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]);
+  if (!first || NEUTRAL_VERBS.has(first)) return 'neutral';
+  if (SEARCH_VERBS.has(first)) return 'read';
+  return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]) ? 'read' : 'other';
+}
+
+/**
+ * Split a command line into statements (on `;`, newline, `&&`, `||`, `&`), each a list
+ * of its pipeline elements (on `|` and `|&`). Quote-aware, so the `;` in
+ * `grep -E "a;b"` separates nothing, and the `&` of a redirection (`2>&1`, `&>f`) is not
+ * a statement break. A backslash-newline continues the line. Returns null when the
+ * quotes do not balance (a heredoc body with an apostrophe, say) — the caller then falls
+ * back to the one-verb rule rather than guess.
+ */
+function splitStatements(cmd) {
+  const statements = [];
+  let pipeline = [];
+  let cur = '';
+  let quote = null;
+  const endElement = () => {
+    pipeline.push(cur);
+    cur = '';
+  };
+  const endStatement = () => {
+    endElement();
+    statements.push(pipeline);
+    pipeline = [];
+  };
+  for (let k = 0; k < cmd.length; k++) {
+    const ch = cmd[k];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') cur += cmd[k++];
+      cur += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      if (cmd[k + 1] !== '\n') cur += ch + (cmd[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    const next = cmd[k + 1];
+    if (ch === '|' && next !== '|') {
+      endElement();
+      if (next === '&') k++;
+      continue;
+    }
+    const isRedirectAmp = ch === '&' && (cmd[k - 1] === '>' || cmd[k - 1] === '<' || next === '>');
+    if (ch === ';' || ch === '\n' || (ch === '&' && !isRedirectAmp) || (ch === '|' && next === '|')) {
+      endStatement();
+      if ((ch === '&' && next === '&') || ch === '|') k++;
+      continue;
+    }
+    cur += ch;
+  }
+  if (quote) return null;
+  endStatement();
+  return statements;
+}
+
+// True when the command only READS: every element of every pipeline is a read/search
+// (including `git grep`/`git log`) or a neutral set-up like `cd`/`echo`, and at least one
+// is a read. Anchoring on the verbs actually executed (not "search verb appears
+// anywhere") is what lets `npm run build 2>&1 | tail` stay an error while `sudo grep`,
+// `git grep`, `cat f | head` and `cd repo && sed -n 1,9p f` are exempt. Every statement
+// and every pipe consumer is checked, so `grep x f; npm test | tail` and
+// `printf '…' | node server.mjs` are not exempted on the strength of their first word.
+function isReadOnlyCommand(cmd) {
+  const statements = splitStatements(cmd);
+  if (!statements) return classifySimpleCommand(cmd.split('|')[0]) === 'read';
+  let sawRead = false;
+  for (const pipeline of statements) {
+    for (const element of pipeline) {
+      const kind = classifySimpleCommand(element);
+      if (kind === 'other') return false;
+      if (kind === 'read') sawRead = true;
+    }
+  }
+  return sawRead;
 }
 
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
