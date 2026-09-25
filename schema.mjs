@@ -58,8 +58,10 @@ export { DB_DIR, DB_PATH, CODE_DIR };
 // closed_by_obs_id FK with ON DELETE SET NULL (audit trail preserved).
 // v32 (v2.73.2): citation-decay columns on observations — uncited_streak,
 // cited_count, last_decided_session_id. Stop hook resolves injected obs as
-// cited|uncited; 3 consecutive uncited → importance -1 (floor 0); 1 cited → +1
-// (cap 3). last_decided_session_id makes Stop idempotent across multi-fire.
+// cited|uncited; they feed citeFactorClause's bounded rank multiplier. (As shipped,
+// 3 consecutive uncited → importance -1 and 1 cited → +1; D#179/D#198 removed both
+// importance writes — the 3-session rollover now only resets the streak and stamps
+// demoted_at.) last_decided_session_id makes Stop idempotent across multi-fire.
 // v35 (v2.87.0): no DDL — version bumped only to force one full migration pass on
 // existing DBs, which runs the one-shot observation_files orphan cleanup (and
 // re-runs the v28 observation_vectors cleanup) to clear the backlog leaked while
@@ -363,8 +365,9 @@ const MIGRATIONS = [
   'ALTER TABLE observations ADD COLUMN last_injected_at INTEGER DEFAULT NULL',
   // v32 (citation-decay): per-obs feedback loop for pre-tool-recall injection
   // pool. Stop hook resolves each session's injected IDs as cited|uncited.
-  // 3 consecutive uncited sessions → importance -1 (floor 0). 1 cited session →
-  // importance +1 (cap 3). last_decided_session_id makes Stop idempotent across
+  // cited_count / uncited_streak feed citeFactorClause (a bounded rank multiplier);
+  // since D#179/D#198 the loop never writes importance (see applyCitationDecay).
+  // last_decided_session_id makes Stop idempotent across
   // multi-fire scenarios (Claude may fire Stop more than once per session).
   'ALTER TABLE observations ADD COLUMN uncited_streak INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE observations ADD COLUMN cited_count INTEGER NOT NULL DEFAULT 0',

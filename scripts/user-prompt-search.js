@@ -429,7 +429,8 @@ export function searchByFts(
   // docs/p0-injection-noise-baseline.txt.
   // A1 (v2.83): cite_factor closes the citation-decay → ranking loop. Obs the
   // assistant cited in past sessions (cited_count > 0) get boosted; obs with
-  // accumulating uncited_streak get dampened upstream of importance-decay.
+  // accumulating uncited_streak get dampened (citation-decay no longer writes importance,
+  // D#179/D#198, so this multiplier is the loop's only ranking effect).
   // Disjoint signal from noise_penalty (which uses injection_count vs
   // access_count) — see scoring-sql.mjs::citeFactorClause for the math.
   const sql = `

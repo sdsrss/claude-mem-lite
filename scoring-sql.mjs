@@ -248,7 +248,7 @@ export function notLowSignalTitleClause(alias = 'o') {
 //   cited≥10, streak=0 → 3.0  (capped — one viral obs can't dominate)
 //   cited=0, streak=2  → 0.5
 //   cited=0, streak=3+ → 0.4  (floored; citation-decay resets streak at 3
-//                              after demoting importance, so steady-state
+//                              and stamps demoted_at, so steady-state
 //                              streak is bounded by [0,2])
 //
 // Disjoint from noisePenaltyClause: noise penalty uses
