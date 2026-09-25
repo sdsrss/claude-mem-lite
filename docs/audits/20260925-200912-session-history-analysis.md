@@ -334,8 +334,9 @@
 |---|---|---|---|
 | B1 只读豁免被 `cd` 前缀绕过 | **已修** | `68b44cd` | 在本机 26,406 条未被标记失败的 Bash 结果上做新旧背靠背重放：isHardError 893 → 765，静默 151 条（逐条确认都只读），新增 23 条（都是首个动词为读取、后面跟着真实运行的复合命令）；6 个变异全部被杀 |
 | B2 `#NN n/a` 被计为引用 | **已修** | `00effdc` | 本机 1,877 次 `#NN` 提及中 313 次是否决，抽样 30/30 属实；`citation-live-replay` 前后两臂：pretool 65.8% → 46.0%，error_recall 19.1% → 15.3%，fyi 19.8% → 14.2%，ups 10.3% → 9.0%（这是**口径断点**，不要跨它做差）；6 个变异全部被杀 |
-| B3 adopt 文案过期 | 待授权（L3：LLM 可见文案） | — | — |
-| B4 Key Events 注入 | 待授权（L3：SessionStart 注入行为） | — | — |
-| pre-commit 复用绿灯 | 待授权（改提交门禁） | — | — |
+| B4 Key Events 注入 | **已改（默认关闭）** | `ce1ea51` | SessionStart 不再渲染 `### Key Events`，`CLAUDE_MEM_SESSION_EVENTS=1` 恢复；UserPromptSubmit 的 events 块与 PreToolUse 行保持。`tests/e2e.test.mjs` 两臂端到端（默认无、开启有）；2 个变异被杀。**摘要器输入的修复（排除变异探针窗口等）未做**，见下 |
+| B3 adopt 文案过期 | **已修** | `a6a28c0` | 文案改为代码现状：排序乘数有界上浮/下沉；`demote_pinned` 会把反复注入从未引用的行降到 2（无 lesson 降到 1）；`#NN n/a` 算回应不算采纳。第一稿写成"引用从不改 importance"，因 `demote_pinned` 不成立，提交前已更正。实体扫描另改 4 处注释；1 个变异被杀 |
+| pre-commit 复用绿灯 | **已做** | `8d374b1` | 同一棵树背靠背：强制完整 62.3 s → 复用 12.1 s。只有"全量、通过、无过滤、运行前后 key 相同"的 run 写 stamp；有未暂存改动即不复用；5 个变异被杀 |
+| 相邻：`E#116` 渲染成 `#116` | **已修** | `1934e25` | 修前复现：Read 注入 `E#1`，随后 ack 行写 "Lessons #1 were shown"。同一缺陷也在 cite-back 提示里，而 Stop 会把那里的 `#N` 读回并计入 observation 的 injected + cited 集合，即 event 编号会给同号的无关 observation 记一次引用。3 个变异被杀 |
 
-**修复过程中新发现的相邻问题（未修）**：PreToolUse 注入的是 `E#116`（event），随后 ack 指令却要求引用 "#116"，而裸 `#NN` 属于 observation 命名空间，两者是不同的记忆。模型照做就会把引用记到另一条 observation 上。已证实于本会话的注入原文。
+**未做**：B4 的第二半，即修摘要器输入（排除变异探针窗口、子代理空闲窗口和 agent 自己的工具失误，并要求教训引用窗口内的原文诊断）。它的验收需要修复后重抽 30 条 event 按同一标签复核，这一轮没有做。在它完成之前，SessionStart 的 Key Events 保持默认关闭。
