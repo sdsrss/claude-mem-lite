@@ -1050,8 +1050,8 @@ describe('Suite 5: User Prompt', () => {
 
   // Key Events is OFF by default at SessionStart. A 30-row audit of this repo's events
   // (docs/audits/20260925-200912-session-history-analysis.md §4.4.1) read 2 ACCURATE and
-  // 16 WRONG, and the section was injected 662 times with events.accessed_count = 0 on
-  // every row. The UserPromptSubmit FTS leg above is query-conditioned and stays on.
+  // 16 WRONG; the section had been injected 50 times (250 rows) into this project's main
+  // sessions. The UserPromptSubmit FTS leg above is query-conditioned and stays on.
   it('SessionStart does NOT emit Key Events unless CLAUDE_MEM_SESSION_EVENTS opts in', () => {
     const env = { HOME: tmpHome, MEM_QUIET_HOOKS: '', CLAUDE_MEM_SESSION_EVENTS: '' };
     runHook('session-start', { env });

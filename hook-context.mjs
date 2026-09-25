@@ -742,14 +742,14 @@ export function buildSessionContextLines(
   // canonical store for promoted bugfix/decision/lesson memories that
   // persistHaikuSummary upgrade-deletes out of observations. Without this section
   // SessionStart never shows them. E# prefix keeps citation extractors (bare-`#`
-  // anchored) from reading an event id as an observation id. Gated on isQuietHooks()
-  // ONLY (explicit low-noise opt-out), NOT effectiveQuiet: unlike Key Context, events
+  // anchored) from reading an event id as an observation id. Of the quiet switches it
+  // honours isQuietHooks() (explicit low-noise opt-out), NOT effectiveQuiet: unlike Key Context, events
   // never appear in the obs-only Recent table and are absent from the MEMORY.md
   // sentinel, so an adopted project (the default) would otherwise have zero
   // SessionStart surface for them. Never throws (recentInjectableEvents catches).
   //
   // Since v6.13.0 the section is also opt-in (sessionStartEventsEnabled): audited at
-  // 2/30 accurate, never followed up. The rationale lives on the predicate.
+  // 2/30 accurate. The rationale lives on the predicate.
   if (!isQuietHooks() && sessionStartEventsEnabled()) {
     const keyEvents = recentInjectableEvents(db, { project, limit: 5 });
     if (keyEvents.length > 0) {

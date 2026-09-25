@@ -12,11 +12,11 @@
 **先说结论。** 这 20 天产出很高：45 个发版、298 个提交、测试用例从约 5.8k 增长到 6.6k。代价与风险集中在三处：
 
 1. **产品自身的三个缺陷，恰好都落在"记忆有没有用"的测量链路上**（已证实）：
-   - **B1**：error-recall 的"只读命令豁免"被 `cd <dir> && …` 前缀绕过。本机 55% 的 Bash 命令带这个前缀，所以只读命令的输出一旦出现 `TypeError:` 这类字样就会注入"Related memories found for this error"。本次分析会话里就误触发了 6 次以上。
+   - **B1**：error-recall 的"只读命令豁免"被 `cd <dir> && …` 前缀绕过。本项目主会话里 55% 的 Bash 命令（5,009/9,096）带这个前缀，所以只读命令的输出一旦出现 `TypeError:` 这类字样就会注入"Related memories found for this error"。本次分析会话里就误触发了 6 次以上。
    - **B2**：引用追踪把 `#NN n/a`（agent 明确表示"该记忆与本次无关"）计为一次"引用"，从而重置衰减、清空 `demoted_at`，并累加 `access_count`。约 26% 的 `#NN` 提及属于这种否定语境。
    - **B3**：shipped 的 adopt 文案（`adopt-content.mjs:92`）仍告诉模型"连续 3 个会话未引用则 importance −1、被引用则 +1"，但代码早已不在衰减路径上改 importance。这是一条对模型可见、但已经过期的行为声明。
 2. **Key Events（events 表）注入量大、从未被读取，且抽样准确率低**：
-   - 本项目会话里注入了 662 行 Key Event，而 3776 行 events 的 `accessed_count` **全部为 0**。
+   - 本项目主会话里 Key Events 共注入 50 次、250 行。（初稿写的是"662 行"和"`accessed_count` 全部为 0 说明从没被按 id 读过"，两处都不成立，见 §4.4 的更正。）
    - 随机抽 30 条核验：**只有 2 条属实，16 条是错的**（事情没发生，或技术断言错误），11 条部分属实（§4.4.1）。另外已确认 E#3771、E#3769 两条是编造的"教训"（例如声称"禁用了一个 flaky 测试"，实际该测试一直在跑）。
 3. **会话过程的主要成本在上下文和等待，而不在模型能力**：
    - 请求上下文中位数 29.6 万 token，49% 的请求超过 30 万；
@@ -203,8 +203,8 @@
 
 ### 4.4 B4 —— Key Events：注入多、从未被读、准确率低
 
-- `events` 表共 3,776 行，**`accessed_count` 全部为 0**。唯一的写者是 `lib/activity.mjs:101` 的 `getEvent`，也就是 agent 从来没有按 id 取过任何一条 event。
-- importance ≥2 的占 74%（2,801 行）。本项目主会话共注入 Key Event 行 662 次。
+- `events` 表共 3,776 行，`accessed_count` 全部为 0。**更正（pre-ship claims 审阅）**：这不能说明 agent 从没按 id 读过 event——唯一写这一列的是 `lib/activity.mjs:101` 的 `getEvent`（只有 `activity get` 调它），而 `mem_get` 与 `get E#N` 走 `fetchEventDetail`，不累加。transcript 里能找到 `get E#860` 等按 id 读取。
+- importance ≥2 的占 74%（2,801 行）。本项目主会话共注入 Key Events 50 次、250 行（按 attachment 去重；初稿的 662 是逐行 grep、且每次注入在 transcript 里记录两遍）。
 - **已证实的错误样例**：
   - **E#3771**："Disabled flaky secret-leakage test; vitest runner error — vitest runner can fail with cryptic 'tool input straddling' errors…"。实际情况是：`tests/import-jsonl-dedup-scrub.test.mjs:162` 的用例 `'tool input straddling 4000'` 一直在运行，它测试的是"凭据横跨 4000 字符截断点"；该会话 transcript 中 `it.skip` 出现 0 次，git 历史里也没有禁用记录。摘要器把用例名误读成了错误信息。
   - **E#3769**："git hook runner does not follow symlinks"。我查看的该会话里 6 处 symlink 上下文，都是"测试夹具用 symlink 铺根目录"或 install 形态说明，这是一条凭空泛化出来的技术断言。
@@ -232,7 +232,7 @@
 5. **refactor 类型声称"无行为变化"，其实是行为修复**（4 条）。
 6. **教训过度泛化，并编造机理**（6 条，其中 #1106 与事实完全相反：cap 是从 3 **调高**到 6 以挽回召回，event 却说"加上限防性能退化"）。只有当窗口里 agent 用文字写出了诊断时，教训才准确（#579、#644）。
 
-**结论**（已证实，样本量 30）：Key Events 的错误率约为一半，而且它们以"Key Events"的权威口吻，在每次 SessionStart 注入给模型。这条注入通道的净效果很可能是负的。结合 `accessed_count` 全部为 0，建议优先处理（§6）。
+**结论**（已证实，样本量 30）：Key Events 的错误率约为一半，而且它们以"Key Events"的权威口吻，在每次 SessionStart 注入给模型。这条注入通道的净效果很可能是负的，建议优先处理（§6）。
 
 完整逐条证据见附录 A。
 
@@ -266,7 +266,7 @@
 |---|---|---|---|---|
 | **P1** | 修 B1：`isReadOnlyCommand` 剥掉开头的 `cd … &&/;` 段，并补全只读动词 | 55% 的 Bash 命令受影响；本会话误报 6 次以上 | `error-recall-live-replay.mjs` 前后两臂背靠背跑，只读命令触发数 → 0，真实失败触发的名集不变 | L1–L2 |
 | **P1** | 修 B2：解析 `#NN n/a`，不 promote、不 boost，单独计数 | 26% 的提及属于否定语境；最常"被引用"的行里就有 n/a | `citation-live-replay.mjs` 输出 applied / n/a / bare 三栏；构造一个 n/a 夹具，变异后必须变红 | L2 |
-| **P1** | Key Events：暂停在 SessionStart 注入 events（或只注入人工 / `mem_save` 来源的条目）；同时修摘要器的输入，排除变异探针窗口、子代理空闲窗口和工具失误，并要求教训引用窗口内 agent 的原文诊断 | 30 条样本中 2 条属实、16 条错误；662 次注入、0 次读取 | 修复后重抽 30 条，用同一套标签复核（ACCURATE 占比应显著高于 6.7% 的下界）；开关两臂比较 SessionStart 的引用率（先补 M3 的读数） | **L3**（改变 SessionStart 注入 = LLM 可见行为） |
+| **P1** | Key Events：暂停在 SessionStart 注入 events（或只注入人工 / `mem_save` 来源的条目）；同时修摘要器的输入，排除变异探针窗口、子代理空闲窗口和工具失误，并要求教训引用窗口内 agent 的原文诊断 | 30 条样本中 2 条属实、16 条错误；本项目主会话注入 50 次、250 行 | 修复后重抽 30 条，用同一套标签复核（ACCURATE 占比应显著高于 6.7% 的下界）；开关两臂比较 SessionStart 的引用率（先补 M3 的读数） | **L3**（改变 SessionStart 注入 = LLM 可见行为） |
 | **P1** | pre-commit 按 `git write-tree` 复用绿灯：agent 刚在同一棵树上跑过全量并通过，就跳过 `npm test` | 提交命令中位数 44 s、合计 4.35 h，与 agent 自己的全量 run 重复 | 记录 tree-hash → 结果，只有完全相同的 tree 才跳过；变异一个文件后 hash 变化，必须重跑 | L2（改 `scripts/pre-commit.sh`） |
 | **P2** | 修 B3：更新 `adopt-content.mjs:92` 与 `schema.mjs:61/366`，并按实体扫一遍所有拷贝 | 面向模型的过期行为声明 | `git grep "importance −1"` 等实体扫描为 0；adopt 渲染快照测试 | **L3**（adoption 文案） |
 | **P2** | 给 `citation-stats` 补 SessionStart face 的读数（M3），并停止对外展示 cited/injection 比率（M2） | 最大的注入 face 当前没有采纳率 | per-face 表新增一行；构造已知答案的夹具断言 | L2 |
@@ -333,10 +333,10 @@
 | 项 | 状态 | 提交 | 证据 |
 |---|---|---|---|
 | B1 只读豁免被 `cd` 前缀绕过 | **已修** | `68b44cd` | 在本机 26,406 条未被标记失败的 Bash 结果上做新旧背靠背重放：isHardError 893 → 765，静默 151 条（逐条确认都只读），新增 23 条（都是首个动词为读取、后面跟着真实运行的复合命令）；6 个变异全部被杀 |
-| B2 `#NN n/a` 被计为引用 | **已修** | `00effdc` | 本机 1,877 次 `#NN` 提及中 313 次是否决，抽样 30/30 属实；`citation-live-replay` 前后两臂：pretool 65.8% → 46.0%，error_recall 19.1% → 15.3%，fyi 19.8% → 14.2%，ups 10.3% → 9.0%（这是**口径断点**，不要跨它做差）；6 个变异全部被杀 |
+| B2 `#NN n/a` 被计为引用 | **已修** | `00effdc` | 本机顶层 transcript 中 1,884 次 `#NN` 提及有 328 次是否决（按发布的规则，2026-09-25T21:40Z；初稿写的 313/1,877 来自一版草稿规则），抽样 30/30 属实；`citation-live-replay` 前后两臂：pretool 65.8% → 46.0%，error_recall 19.1% → 15.3%，fyi 19.8% → 14.2%，ups 10.3% → 9.0%（这是**口径断点**，不要跨它做差）；6 个变异全部被杀 |
 | B4 Key Events 注入 | **已改（默认关闭）** | `ce1ea51` | SessionStart 不再渲染 `### Key Events`，`CLAUDE_MEM_SESSION_EVENTS=1` 恢复；UserPromptSubmit 的 events 块与 PreToolUse 行保持。`tests/e2e.test.mjs` 两臂端到端（默认无、开启有）；2 个变异被杀。**摘要器输入的修复（排除变异探针窗口等）未做**，见下 |
 | B3 adopt 文案过期 | **已修** | `a6a28c0` | 文案改为代码现状：排序乘数有界上浮/下沉；`demote_pinned` 会把反复注入从未引用的行降到 2（无 lesson 降到 1）；`#NN n/a` 算回应不算采纳。第一稿写成"引用从不改 importance"，因 `demote_pinned` 不成立，提交前已更正。实体扫描另改 4 处注释；1 个变异被杀 |
-| pre-commit 复用绿灯 | **已做** | `8d374b1` | 同一棵树背靠背：强制完整 62.3 s → 复用 12.1 s。只有"全量、通过、无过滤、运行前后 key 相同"的 run 写 stamp；有未暂存改动即不复用；5 个变异被杀 |
-| 相邻：`E#116` 渲染成 `#116` | **已修** | `1934e25` | 修前复现：Read 注入 `E#1`，随后 ack 行写 "Lessons #1 were shown"。同一缺陷也在 cite-back 提示里，而 Stop 会把那里的 `#N` 读回并计入 observation 的 injected + cited 集合，即 event 编号会给同号的无关 observation 记一次引用。3 个变异被杀 |
+| pre-commit 复用绿灯 | **已做** | `8d374b1` | 同一棵树背靠背：强制完整 62.3 s → 复用 12.1 s。只有"全量、通过、无过滤、运行前后 key 相同"的 run 写 stamp；有未暂存的已跟踪改动即不复用（未跟踪文件计入 key 但不会进提交，这与原先 pre-commit 自己跑套件时相同）；5 个变异被杀 |
+| 相邻：`E#116` 渲染成 `#116` | **已修** | `1934e25` | 修前复现：Read 注入 `E#1`，随后 ack 行写 "Lessons #1 were shown"。同一缺陷也在 cite-back 提示里，而 Stop 会把那里的 `#N` 读回并计入 observation 的 injected + cited 集合，即 event 编号会给同号的无关 observation 记一次引用（机理成立；本机 transcript 中这条提示只出现过 1 次，未观察到实际误记）。3 个变异被杀 |
 
 **未做**：B4 的第二半，即修摘要器输入（排除变异探针窗口、子代理空闲窗口和 agent 自己的工具失误，并要求教训引用窗口内的原文诊断）。它的验收需要修复后重抽 30 条 event 按同一标签复核，这一轮没有做。在它完成之前，SessionStart 的 Key Events 保持默认关闭。

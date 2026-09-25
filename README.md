@@ -242,8 +242,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 **One default changes: SessionStart no longer injects `### Key Events`.** That section listed
 the five newest importance ≥ 2 rows of the `events` table — activity the background summarizer
 records — at the top of every session, chosen by recency rather than by what you were doing. A
-check of 30 of them against git history and transcripts found 2 accurate and 16 wrong, and no
-event had ever been opened by id. Events are still stored, searchable with `mem_search`, and
+check of 30 of them against git history and transcripts found 2 accurate and 16 wrong. Events are still stored, searchable with `mem_search`, and
 injected when your prompt or the file being edited matches them. To restore the section, set
 `CLAUDE_MEM_SESSION_EVENTS=1`. No schema change and no migration: an older build still opens
 the database, so reverting is pinning `claude-mem-lite@6.12.2`.
@@ -915,7 +914,7 @@ claude-mem-lite.
 | `OPENROUTER_MODEL` | Overrides the OpenRouter model slug for **all** background calls (e.g. `openai/gpt-4o-mini`, `qwen/qwen-2.5-72b-instruct`). When unset, the `CLAUDE_MEM_MODEL` tier maps to `anthropic/claude-haiku-4.5` (haiku) or `anthropic/claude-sonnet-4.5` (sonnet). | _(tier default)_ |
 | `CLAUDE_MEM_DEBUG` | Enable debug logging (`1` to enable). | _(disabled)_ |
 | `MEM_QUIET_HOOKS` | Low-noise hooks. `1` drops the `File Lessons` / `Key Context` sections from SessionStart injection, the lesson suffix from `[mem] Related memories`, and the `WHEN TO USE` / `Decision rules` blocks from MCP server instructions. IDs and the `Recent` table still surface so `mem_get(ids=[…])` remains reachable. Intended for users running the invited-memory adopt path or who otherwise want minimal auto-injection. **Since v2.82.0 this env no longer gates auto-adopt — use `MEM_NO_AUTO_ADOPT=1` for that.** | _(disabled)_ |
-| `CLAUDE_MEM_SESSION_EVENTS` | `1`/`on` restores the SessionStart `### Key Events` section (recent high-importance rows from the `events` table). **Off by default since v6.13.0**: an audit of 30 events read 2 accurate and 16 wrong, and the section was never followed up (`events.accessed_count` 0 on every row). The UserPromptSubmit events block and PreToolUse recall are query-matched and stay on; `mem_search` still reaches every event. | _(off)_ |
+| `CLAUDE_MEM_SESSION_EVENTS` | `1`/`on` restores the SessionStart `### Key Events` section (recent high-importance rows from the `events` table). **Off by default since v6.13.0**: an audit of 30 events read 2 accurate and 16 wrong. The UserPromptSubmit events block and PreToolUse recall are query-matched and stay on; `mem_search` still reaches every event. | _(off)_ |
 | `MEM_NO_AUTO_ADOPT` | Global opt-out for auto-adopt (v2.82.0+). `1` prevents the per-SessionStart auto-write of the `CLAUDE.md` managed block across **all** projects. For per-project opt-out use `claude-mem-lite adopt --disable` instead (writes a durable `<memdir>/.mem-no-auto-adopt` sentinel that survives marker deletion). | _(disabled)_ |
 | `MEM_NO_ADOPT_HINT` | Silences the one-line "Invited-memory 未启用：`claude-mem-lite adopt`…" hint that SessionStart appends when the current project hasn't been adopted. Since v2.82.1 auto-adopt runs on every SessionStart for any install path, so this hint typically surfaces only when you've explicitly opted out (`MEM_NO_AUTO_ADOPT=1` or `claude-mem-lite adopt --disable`). | _(disabled)_ |
 
