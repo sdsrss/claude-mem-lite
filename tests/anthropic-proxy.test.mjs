@@ -28,6 +28,8 @@ describe('Anthropic API paths honour the proxy', () => {
     _resetMode();
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
     vi.stubEnv('OPENROUTER_API_KEY', '');
+    // Gateway override unset: the assertions below pin the default public host.
+    vi.stubEnv('ANTHROPIC_BASE_URL', '');
     vi.mocked(httpConnectProxyFor).mockReset().mockReturnValue(null);
     vi.mocked(postViaConnectProxy).mockReset();
     vi.stubGlobal('fetch', vi.fn());
