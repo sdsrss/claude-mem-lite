@@ -1048,12 +1048,37 @@ describe('Suite 5: User Prompt', () => {
     expect(stdout).not.toContain(`(#${evId})`);
   });
 
-  it('SessionStart surfaces recent high-importance events in a Key Events section (HIGH-1 SessionStart)', () => {
+  // Key Events is OFF by default at SessionStart. A 30-row audit of this repo's events
+  // (docs/audits/20260925-200912-session-history-analysis.md §4.4.1) read 2 ACCURATE and
+  // 16 WRONG, and the section was injected 662 times with events.accessed_count = 0 on
+  // every row. The UserPromptSubmit FTS leg above is query-conditioned and stays on.
+  it('SessionStart does NOT emit Key Events unless CLAUDE_MEM_SESSION_EVENTS opts in', () => {
+    const env = { HOME: tmpHome, MEM_QUIET_HOOKS: '', CLAUDE_MEM_SESSION_EVENTS: '' };
+    runHook('session-start', { env });
+    const db = openTestDb(tmpHome);
+    const evId = saveEvent(db, {
+      project: 'parent--testproj',
+      event_type: 'decision',
+      title: 'chose WAL + busy_timeout for concurrent sessions',
+      body: 'immediate transactions serialize writers across sessions',
+      importance: 3,
+    });
+    db.close();
+
+    const { stdout } = runHook('session-start', { env });
+    // Premise: SessionStart ran and emitted its payload, so the absence below is the gate
+    // and not a hook that never spoke. The opted-in twin below shows the same seed renders.
+    expect(stdout).toContain('"hookEventName":"SessionStart"');
+    expect(stdout).not.toContain('### Key Events');
+    expect(stdout).not.toContain(`E#${evId}`);
+  });
+
+  it('SessionStart surfaces recent high-importance events in a Key Events section when opted in (HIGH-1 SessionStart)', () => {
     // First session-start creates the DB + session; seed an event; the next
     // session-start emits the context block including the Key Events section.
     // MEM_QUIET_HOOKS is cleared: the dev shell may export it (=1), and runHook
     // spreads ...process.env, which would suppress the descriptive sections (#8608).
-    const nonQuiet = { HOME: tmpHome, MEM_QUIET_HOOKS: '' };
+    const nonQuiet = { HOME: tmpHome, MEM_QUIET_HOOKS: '', CLAUDE_MEM_SESSION_EVENTS: '1' };
     runHook('session-start', { env: nonQuiet });
     const db = openTestDb(tmpHome);
     const evId = saveEvent(db, {

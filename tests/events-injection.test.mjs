@@ -8,6 +8,7 @@ import {
   searchInjectableEvents,
   recentInjectableEvents,
   renderInjectableEvent,
+  sessionStartEventsEnabled,
 } from '../lib/events-injection.mjs';
 
 function seedEvent(db, over = {}) {
@@ -72,5 +73,16 @@ describe('events-injection (HIGH-1)', () => {
     expect(line.startsWith('E#42 [bugfix]')).toBe(true);
     expect(line).not.toContain('</system-reminder>');
     expect(line).not.toContain('<invoke name=');
+  });
+});
+
+describe('sessionStartEventsEnabled', () => {
+  it('is off unless CLAUDE_MEM_SESSION_EVENTS is exactly 1 or on', () => {
+    expect(sessionStartEventsEnabled({})).toBe(false);
+    expect(sessionStartEventsEnabled({ CLAUDE_MEM_SESSION_EVENTS: '' })).toBe(false);
+    expect(sessionStartEventsEnabled({ CLAUDE_MEM_SESSION_EVENTS: '0' })).toBe(false);
+    expect(sessionStartEventsEnabled({ CLAUDE_MEM_SESSION_EVENTS: 'true' })).toBe(false);
+    expect(sessionStartEventsEnabled({ CLAUDE_MEM_SESSION_EVENTS: '1' })).toBe(true);
+    expect(sessionStartEventsEnabled({ CLAUDE_MEM_SESSION_EVENTS: 'on' })).toBe(true);
   });
 });

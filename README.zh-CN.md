@@ -690,6 +690,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `OPENROUTER_MODEL` | 覆盖**所有**后台调用的 OpenRouter 模型 slug（如 `openai/gpt-4o-mini`、`qwen/qwen-2.5-72b-instruct`）。未设时按 `CLAUDE_MEM_MODEL` 分层映射到 `anthropic/claude-haiku-4.5`（haiku）或 `anthropic/claude-sonnet-4.5`（sonnet）。 | _(分层默认)_ |
 | `CLAUDE_MEM_DEBUG` | 启用调试日志（设为 `1` 启用）。 | _(禁用)_ |
 | `MEM_QUIET_HOOKS` | 低噪声 hook。设为 `1` 时，SessionStart 注入去掉 `File Lessons` / `Key Context` 两节，`[mem] Related memories` 去掉 lesson 后缀，MCP server instructions 去掉 `WHEN TO USE` / `Decision rules` 两段。ID 与 `Recent` 表仍保留，`mem_get(ids=[…])` 可继续展开细节。适用于启用了 invited-memory adopt 流程或偏好最小化自动注入的用户。**v2.82.0 起此 env 不再阻挡 auto-adopt——如需关闭 auto-adopt 用 `MEM_NO_AUTO_ADOPT=1`。** | _(禁用)_ |
+| `CLAUDE_MEM_SESSION_EVENTS` | 设为 `1`/`on` 时恢复 SessionStart 的 `### Key Events` 一节（`events` 表中最近的高重要度条目）。**v6.13.0 起默认关闭**：对 30 条 event 的核验只有 2 条属实、16 条错误，且该节从未被跟进读取（所有行 `events.accessed_count` 为 0）。UserPromptSubmit 的 events 块与 PreToolUse 召回按查询匹配，保持开启；`mem_search` 仍可检索全部 event。 | _(关闭)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 阻止每次 SessionStart 在**所有**项目自动写入 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
 | `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 

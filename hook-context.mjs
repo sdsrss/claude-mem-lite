@@ -32,7 +32,11 @@ import {
   UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
 import { extractUnfinishedSummary } from './hook-handoff.mjs';
-import { recentInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
+import {
+  recentInjectableEvents,
+  renderInjectableEvent,
+  sessionStartEventsEnabled,
+} from './lib/events-injection.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 // The canonical one (v3.84.0): this file carried a byte-identical private copy, which is
 // the same one-home rule this release enforced for the cooldown path and the dashboard.
@@ -743,7 +747,10 @@ export function buildSessionContextLines(
   // never appear in the obs-only Recent table and are absent from the MEMORY.md
   // sentinel, so an adopted project (the default) would otherwise have zero
   // SessionStart surface for them. Never throws (recentInjectableEvents catches).
-  if (!isQuietHooks()) {
+  //
+  // Since v6.13.0 the section is also opt-in (sessionStartEventsEnabled): audited at
+  // 2/30 accurate, never followed up. The rationale lives on the predicate.
+  if (!isQuietHooks() && sessionStartEventsEnabled()) {
     const keyEvents = recentInjectableEvents(db, { project, limit: 5 });
     if (keyEvents.length > 0) {
       summaryLines.push('### Key Events');

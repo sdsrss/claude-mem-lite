@@ -516,7 +516,10 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
     const ctx = envelopes[0].hookSpecificOutput.additionalContext;
     expect(ctx).toContain('<claude-mem-context>');
     expect(ctx).toContain('</claude-mem-context>');
-    expect(ctx).toContain('Session start sweep event');
+    // The seeded EVENT is counted by the dashboard above but no longer rendered: SessionStart
+    // Key Events is opt-in since v6.13.0 (CLAUDE_MEM_SESSION_EVENTS; tests/e2e.test.mjs pins
+    // both arms). The observation below is what carries the context-block assertion now.
+    expect(ctx).not.toContain('Session start sweep event');
     expect(ctx).toContain('Fixed the widget cache invalidation race');
     // Nothing may ride outside the envelope on this surface.
     expect(
