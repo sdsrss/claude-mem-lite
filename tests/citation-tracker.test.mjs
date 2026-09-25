@@ -168,6 +168,17 @@ describe('extractCitationsFromTranscript — dismissals are not citations', () =
     expect(cited('#2408、#2362、#2526 与本轮编辑无关。')).toEqual([]);
   });
 
+  // Pre-ship defect review P3-6: a marker that opens a clause which then states the lesson
+  // WAS applied is not a dismissal. The clause ends at the next id, so a verdict for a
+  // DIFFERENT lesson later on the line cannot rescue this one.
+  it('an application stated later in the same clause keeps the credit', () => {
+    expect(cited('#12 n/a for lib/a.mjs; applied to lib/b.mjs')).toEqual([12]);
+    expect(cited('#12 does not apply to tests but I applied it to lib')).toEqual([12]);
+    expect(cited('#12 与本次无关的部分已跳过，核心已采纳')).toEqual([12]);
+    expect(cited('#12 无关紧要的细节之外，已按它修复')).toEqual([12]);
+    expect(cited('#12 n/a; #13 applied')).toEqual([13]);
+  });
+
   it('reads a verdict past one short parenthetical gloss', () => {
     expect(cited('#1964（发版就绪流程要前置）与本次无关 —— n/a')).toEqual([]);
     expect(cited('#77 (the loader gate) does not apply here')).toEqual([]);
