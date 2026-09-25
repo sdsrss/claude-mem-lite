@@ -2,6 +2,61 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.0 — SessionStart stops injecting Key Events, and a lesson dismissed as n/a no longer counts as cited
+
+**Upgrade note — one default changes.** SessionStart no longer renders the `### Key Events`
+section. Set `CLAUDE_MEM_SESSION_EVENTS=1` (or `on`) to get it back. Events are still stored,
+still searchable with `mem_search`, and still injected when a prompt (UserPromptSubmit) or the
+file being touched (PreToolUse) matches them. No schema change, no migration: an older build
+still opens the database, so reverting is pinning `claude-mem-lite@6.12.2`.
+
+**Why Key Events is off.** The section showed the five newest importance ≥ 2 rows of the
+`events` table, which the background summarizer writes, at the top of every session. It was
+chosen by recency, not by what the session was doing, and nothing checked an event against the
+work it describes. We checked a random 30 of this project's live events against git history
+and session transcripts: 2 accurate, 11 partly accurate, 16 wrong, 1 generic. The most common
+failure is the summarizer reading a deliberate test mutation as a product bug. In this
+project's main sessions the section had been injected 662 times, and `accessed_count` was 0
+on all 3,776 event rows, i.e. no event had ever been opened by id.
+
+**A lesson answered `#NN n/a` no longer counts as cited.** The adoption doc asks the agent to
+answer each surfaced lesson with `'#NN applied'` or `'#NN n/a — <reason>'`, but the tracker
+counted any `#NN` as a citation. So a lesson the agent had just said did not apply was
+promoted like one it used: `cited_count` + 1, its uncited streak reset, `access_count` bumped
+toward the boost op, and a hit recorded on its injection face. A `#NN` directly followed by
+`n/a`, "not applicable", "irrelevant", 不适用, 无关 and similar now earns none of that. The
+reminder that nags when lessons go unanswered still counts it as an answer. Over every
+transcript on the maintainer's machine, 313 of 1,877 `#NN` mentions were such dismissals.
+**This is a caliber break for cite rates:** `citation-stats` and the funnel read lower from
+this version on, e.g. PreToolUse 65.8% → 46.0% on the same transcripts. That is the metric
+dropping the dismissals, not a regression; do not compare readings across it.
+
+**error-recall no longer fires on a read behind `cd <dir> &&`.** Its read-only exemption
+looked only at the first word of a command, so `cd repo && grep TypeError src/` counted as a
+program that printed an error, and "Related memories found for this error" was injected
+after a command that had not failed. Every statement and pipeline element is now checked,
+and `sed`, `awk`, `ls`, `jq`, `diff` and a few text filters count as reads. Replayed over
+26,406 Bash results the host did not flag as failed: 151 stop firing (each one a read) and 23
+start (each one runs a real program behind a read-verb first word, e.g. `grep …; python3 -`).
+
+**Event ids keep their `E#` prefix in two more places.** A Read that injected lesson `E#116`
+was followed, at the next Edit of that file, by "Lessons #116 were shown" — and a bare `#116`
+names a different memory, the observation with that number. The same happened in the
+"edited N file(s) with prior lessons" hint after an edit, and there it also credited that
+unrelated observation with a citation at the end of the turn.
+
+**The adopted detail doc describes citations correctly.** `.claude/plugin_claude_mem_lite.md`
+still said an uncited lesson loses 1 importance after three sessions and a cited one gains 1.
+Citations have not changed importance since D#179/D#198. They move a lesson's ranking inside
+bounds, and a separate maintenance op lowers importance for lessons injected many times and
+never cited. The doc now says that, and that `n/a` is an answer, not an adoption. Adopted
+projects pick up the new text at their next SessionStart.
+
+**For maintainers.** `scripts/pre-commit.sh` skips `npm test` when a full, passing, unfiltered
+vitest run already covered exactly the tree being committed (a reporter stamps it in the git
+dir). Anything unstaged, any file difference, a failed or filtered run → it runs the suite as
+before; `PRE_COMMIT_FULL_TEST=1` forces it. On the same tree, back to back: 62.3 s → 12.1 s.
+
 ## v6.12.2 — an imported command no longer stores the start of a token, and pasted remedies quote any path exactly
 
 **Upgrade note.** No schema change, no migration, no config. One stored-data effect, below:

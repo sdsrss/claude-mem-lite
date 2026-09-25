@@ -237,6 +237,21 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.13.0
+
+**One default changes: SessionStart no longer injects `### Key Events`.** That section listed
+the five newest importance ≥ 2 rows of the `events` table — activity the background summarizer
+records — at the top of every session, chosen by recency rather than by what you were doing. A
+check of 30 of them against git history and transcripts found 2 accurate and 16 wrong, and no
+event had ever been opened by id. Events are still stored, searchable with `mem_search`, and
+injected when your prompt or the file being edited matches them. To restore the section, set
+`CLAUDE_MEM_SESSION_EVENTS=1`. No schema change and no migration: an older build still opens
+the database, so reverting is pinning `claude-mem-lite@6.12.2`.
+
+**Citation readings drop at this version, and that is a measurement change.** A lesson the
+agent answers with `#NN n/a` is no longer counted as cited, so `citation-stats` per-face rates
+read lower from here on. Do not compare a reading taken before 6.13.0 with one taken after.
+
 ## Upgrading to 6.11.0
 
 **One default changes: re-enrich stops leaving part of its budget idle.** It reserves half of
