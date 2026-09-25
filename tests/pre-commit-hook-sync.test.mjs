@@ -155,7 +155,9 @@ describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
   });
 
   it('the pre-commit hook runs the suite through npm test, whose script sets an on-disk TMPDIR', () => {
-    expect(readFileSync(join(REPO, CANONICAL), 'utf8')).toMatch(/^npm test\b/m);
+    // Indented since the suite call moved under the green-stamp reuse branch; a command, not
+    // prose: the line must START with it, so an `echo "… npm test …"` cannot satisfy this.
+    expect(readFileSync(join(REPO, CANONICAL), 'utf8')).toMatch(/^\s*npm test\b/m);
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
     for (const script of ['test', 'test:coverage']) {
       expect(pkg.scripts[script], script).toMatch(/TMPDIR="\$HOME\/\.cache\/tmp" vitest run/);

@@ -135,12 +135,23 @@ npm run format:check || {
   exit 1
 }
 
-echo "[pre-commit] Running tests..."
-# `npm test`, not bare `vitest run`: its script puts TMPDIR on disk. Every run leaves a
-# vitest ssr cache (45 MB for a full-suite run), and /tmp here is a RAM-backed tmpfs (D#55).
-npm test || {
-  echo "[pre-commit] ❌ Tests failed. Fix errors before committing."
-  exit 1
-}
+# ── Tests ────────────────────────────────────────────────────────────────────
+# Reuse a full green run on this exact tree instead of repeating it: the agent's habit is
+# "run the full suite, then commit", which made every commit pay the suite twice (395
+# commits, 44.2 s median, 4.35 h — docs/audits/20260925-200912-session-history-analysis.md).
+# The stamp is written only by scripts/green-stamp-reporter.mjs after a full, passing,
+# unfiltered run whose tree did not change while it ran, and is honoured only with nothing
+# unstaged. Any miss runs the suite exactly as before. Force it: PRE_COMMIT_FULL_TEST=1.
+if STAMP_MSG=$(node scripts/green-stamp.mjs check); then
+  echo "[pre-commit] Tests: reusing green run — $STAMP_MSG"
+else
+  echo "[pre-commit] Running tests ($STAMP_MSG)..."
+  # `npm test`, not bare `vitest run`: its script puts TMPDIR on disk. Every run leaves a
+  # vitest ssr cache (45 MB for a full-suite run), and /tmp here is a RAM-backed tmpfs (D#55).
+  npm test || {
+    echo "[pre-commit] ❌ Tests failed. Fix errors before committing."
+    exit 1
+  }
+fi
 
 echo "[pre-commit] ✅ All checks passed."

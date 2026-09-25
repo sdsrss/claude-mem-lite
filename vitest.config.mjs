@@ -87,6 +87,11 @@ export default defineConfig({
     // never reached). Runs once before the suite; 1h age guard never touches the
     // current run. See lib/tmp-fixture-sweep.mjs.
     globalSetup: ['./tests/global-setup.mjs'],
+    // `default` restated because `reporters` REPLACES the default list. The second one
+    // records a green stamp after a full, passing, unfiltered run over an unchanged tree,
+    // which scripts/pre-commit.sh reuses to skip re-running the suite on that exact tree.
+    // Contract and conditions: scripts/green-stamp.mjs.
+    reporters: ['default', './scripts/green-stamp-reporter.mjs'],
     coverage: {
       provider: 'v8',
       // Audit 2026-08-22 P2-2: this list used to be 22 hand-picked root modules, so
