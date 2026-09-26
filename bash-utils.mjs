@@ -94,6 +94,46 @@ const NEUTRAL_VERBS = new Set([
   'exit',
 ]);
 
+// code-graph-mcp subcommands that only query the index. The rest (serve, the index
+// rebuilds, doctor's repairs, benchmark) run work whose failures error-recall should see.
+const CODE_GRAPH_READ_SUBCMDS = new Set([
+  'grep',
+  'search',
+  'ast-search',
+  'callgraph',
+  'impact',
+  'affected',
+  'show',
+  'map',
+  'tour',
+  'overview',
+  'deps',
+  'trace',
+  'similar',
+  'refs',
+  'dead-code',
+  'centrality',
+  'cycles',
+  'surprising',
+  'report',
+  'health-check',
+  'stats',
+  'help',
+  '--help',
+  '--version',
+]);
+
+// Forms of a SEARCH_VERBS verb that write a file or run a program, so their output is not
+// file content (v6.13.0 defect review P3-5). Args are the whitespace tokens after the verb;
+// quotes are not stripped, which only matters for a flag written inside quotes.
+const WRITES_OR_RUNS = {
+  sed: (args) => args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')),
+  sort: (args) => args.some((a) => /^-[A-Za-z]*o/.test(a) || a.startsWith('--output')),
+  awk: (_args, text) => /\bsystem\s*\(|\|\s*(?:getline\b|")|\|&/.test(text),
+  find: (args) => args.some((a) => /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/.test(a)),
+  'code-graph-mcp': (args) => !CODE_GRAPH_READ_SUBCMDS.has(args[0]),
+};
+
 /** 'read' | 'neutral' | 'other' for one simple command (one element of a pipeline). */
 function classifySimpleCommand(text) {
   const toks = text.trim().split(/\s+/).filter(Boolean);
@@ -101,23 +141,125 @@ function classifySimpleCommand(text) {
   while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
   const first = toks[i];
   if (!first || NEUTRAL_VERBS.has(first)) return 'neutral';
-  if (SEARCH_VERBS.has(first)) return 'read';
+  if (SEARCH_VERBS.has(first)) return WRITES_OR_RUNS[first]?.(toks.slice(i + 1), text) ? 'other' : 'read';
   return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]) ? 'read' : 'other';
+}
+
+/**
+ * Remove what the shell does not run as a command: heredoc bodies (they are stdin) and
+ * `#` comments. Quote-aware. An apostrophe in either used to unbalance the quotes and send
+ * the whole line to a first-word fallback (v6.13.0 defect review P3-4).
+ */
+function stripNonCommands(cmd) {
+  let out = '';
+  let quote = null;
+  const pending = []; // heredoc delimiters opened on the current line: { word, dash }
+  for (let k = 0; k < cmd.length; k++) {
+    const ch = cmd[k];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') out += cmd[k++];
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      out += ch + (cmd[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === '#' && (k === 0 || /[\s;&|()]/.test(cmd[k - 1]))) {
+      while (k + 1 < cmd.length && cmd[k + 1] !== '\n') k++;
+      continue;
+    }
+    if (ch === '<' && cmd[k + 1] === '<' && cmd[k + 2] !== '<' && cmd[k - 1] !== '<') {
+      const m = /^<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([^\s;&|<>()'"]+))/.exec(cmd.slice(k));
+      if (m) {
+        pending.push({ word: m[2] ?? m[3] ?? m[4], dash: m[1] === '-' });
+        out += m[0];
+        k += m[0].length - 1;
+        continue;
+      }
+    }
+    if (ch === '\n' && pending.length > 0) {
+      out += ch;
+      // Skip each body in order, up to and including its delimiter line.
+      let pos = k + 1;
+      for (const { word, dash } of pending.splice(0)) {
+        while (pos < cmd.length) {
+          let end = cmd.indexOf('\n', pos);
+          if (end === -1) end = cmd.length;
+          const line = cmd.slice(pos, end);
+          pos = end + 1;
+          if ((dash ? line.replace(/^\t+/, '') : line) === word) break;
+        }
+      }
+      k = pos - 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Index just past the `)` that closes a substitution whose body starts at `start`, or -1
+ * when it never closes. Quote-aware; nested parentheses count.
+ */
+function closingParen(cmd, start) {
+  let depth = 1;
+  let quote = null;
+  for (let k = start; k < cmd.length; k++) {
+    const ch = cmd[k];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') k++;
+      continue;
+    }
+    if (ch === '\\') k++;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0) return k + 1;
+  }
+  return -1;
 }
 
 /**
  * Split a command line into statements (on `;`, newline, `&&`, `||`, `&`), each a list
  * of its pipeline elements (on `|` and `|&`). Quote-aware, so the `;` in
  * `grep -E "a;b"` separates nothing, and the `&` of a redirection (`2>&1`, `&>f`) is not
- * a statement break. A backslash-newline continues the line. Returns null when the
- * quotes do not balance (a heredoc body with an apostrophe, say) — the caller then falls
- * back to the one-verb rule rather than guess.
+ * a statement break. A backslash-newline continues the line. The bodies of `$(…)`,
+ * backticks, `<(…)` and `>(…)` — outside quotes or inside double quotes, where they run
+ * all the same — are cut out into `subs` for the caller to judge on their own. Returns
+ * null when the quotes or a substitution do not close.
  */
 function splitStatements(cmd) {
   const statements = [];
+  const subs = [];
   let pipeline = [];
   let cur = '';
   let quote = null;
+  // Cut a substitution body out at `k` (the index of `$`, `<`, `>` or the backtick);
+  // returns the index of its last character, or -1 when it never closes.
+  const takeSub = (k) => {
+    if (cmd[k] === '`') {
+      const end = cmd.indexOf('`', k + 1);
+      if (end === -1) return -1;
+      subs.push(cmd.slice(k + 1, end));
+      cur += ' SUBST ';
+      return end;
+    }
+    const arithmetic = cmd[k] === '$' && cmd[k + 2] === '(';
+    const end = closingParen(cmd, k + 2);
+    if (end === -1) return -1;
+    if (!arithmetic) subs.push(cmd.slice(k + 2, end - 1));
+    cur += ' SUBST ';
+    return end - 1;
+  };
   const endElement = () => {
     pipeline.push(cur);
     cur = '';
@@ -129,7 +271,13 @@ function splitStatements(cmd) {
   };
   for (let k = 0; k < cmd.length; k++) {
     const ch = cmd[k];
+    const opensSub = ch === '`' || ((ch === '$' || ch === '<' || ch === '>') && cmd[k + 1] === '(');
     if (quote) {
+      if (quote === '"' && (ch === '`' || (ch === '$' && cmd[k + 1] === '('))) {
+        k = takeSub(k);
+        if (k === -1) return null;
+        continue;
+      }
       if (ch === quote) quote = null;
       else if (ch === '\\' && quote === '"') cur += cmd[k++];
       cur += ch;
@@ -143,6 +291,11 @@ function splitStatements(cmd) {
     if (ch === "'" || ch === '"') {
       quote = ch;
       cur += ch;
+      continue;
+    }
+    if (opensSub) {
+      k = takeSub(k);
+      if (k === -1) return null;
       continue;
     }
     const next = cmd[k + 1];
@@ -161,7 +314,7 @@ function splitStatements(cmd) {
   }
   if (quote) return null;
   endStatement();
-  return statements;
+  return { statements, subs };
 }
 
 // True when the command only READS: every element of every pipeline is a read/search
@@ -171,18 +324,32 @@ function splitStatements(cmd) {
 // `git grep`, `cat f | head` and `cd repo && sed -n 1,9p f` are exempt. Every statement
 // and every pipe consumer is checked, so `grep x f; npm test | tail` and
 // `printf '…' | node server.mjs` are not exempted on the strength of their first word.
+// Substitution bodies are judged the same way, so `grep x $(npm test)` runs a program.
+// A line that still does not parse once heredoc bodies and comments are gone is 'other':
+// the old fallback judged it by its first word and silenced exactly the heredoc-then-run
+// shape (v6.13.0 defect review P3-4).
 function isReadOnlyCommand(cmd) {
-  const statements = splitStatements(cmd);
-  if (!statements) return classifySimpleCommand(cmd.split('|')[0]) === 'read';
+  return commandKind(stripNonCommands(cmd)) === 'read';
+}
+
+/** 'read' | 'neutral' | 'other' for a whole command line (see isReadOnlyCommand). */
+function commandKind(cmd) {
+  const parsed = splitStatements(cmd);
+  if (!parsed) return 'other';
   let sawRead = false;
-  for (const pipeline of statements) {
+  for (const body of parsed.subs) {
+    const kind = commandKind(body);
+    if (kind === 'other') return 'other';
+    if (kind === 'read') sawRead = true;
+  }
+  for (const pipeline of parsed.statements) {
     for (const element of pipeline) {
       const kind = classifySimpleCommand(element);
-      if (kind === 'other') return false;
+      if (kind === 'other') return 'other';
       if (kind === 'read') sawRead = true;
     }
   }
-  return sawRead;
+  return sawRead ? 'read' : 'neutral';
 }
 
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied

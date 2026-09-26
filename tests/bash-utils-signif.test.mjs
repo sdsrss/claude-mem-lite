@@ -195,8 +195,65 @@ describe('detectBashSignificance — read-only exemption checks every statement'
     expect(hard('cat input.json | node script.mjs', RED_RUN)).toBe(true);
   });
 
-  it('falls back to the first-word rule when quotes do not balance', () => {
-    expect(hard('grep -n "unterminated f', SOURCE_QUOTE)).toBe(false);
+  // v6.13.0 defect review P3-4: an apostrophe in a heredoc body or a `#` comment unbalanced
+  // the quotes, and the fallback then judged the whole line by its first word, so a
+  // heredoc that writes a test and then runs it was silenced whenever the body said "don't".
+  it('reads past heredoc bodies and comments, which are not commands', () => {
+    expect(
+      hard(
+        "cat > tests/x.test.mjs <<'EOF'\n// don't regress\nit('a', () => {})\nEOF\nnpx vitest run tests/x.test.mjs",
+        RED_RUN,
+      ),
+    ).toBe(true);
+    expect(hard("cat <<-EOF > f\n\tit's data; npm test\n\tEOF\nnpx vitest run", RED_RUN)).toBe(true);
+    expect(hard("sed -n 1,5p f # it's here\nnpm test", RED_RUN)).toBe(true);
+    // ...and a body or comment full of program names does not make a read into a run.
+    expect(hard("grep -n x f # don't run npm test here", SOURCE_QUOTE)).toBe(false);
+    expect(hard("cat <<'EOF' | grep TypeError\nit's npm test; node x\nEOF", SOURCE_QUOTE)).toBe(false);
+    expect(hard('cd /repo && grep -n "a#b" f', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('is not read-only when the quotes still do not balance', () => {
+    expect(hard('grep -n "unterminated f', SOURCE_QUOTE)).toBe(true);
     expect(hard('npx vitest run "unterminated', RED_RUN)).toBe(true);
+  });
+
+  // v6.13.0 defect review P3-5: some read verbs write files or run programs.
+  it.each([
+    ["sed -i 's/a/b/' f", true],
+    ['sed -i.bak -e s/a/b/ f', true],
+    ['sed --in-place s/a/b/ f', true],
+    ["sed -n '40,80p' f", false],
+    ['sed -E -n s/x/y/p f', false],
+    ['sort -o f f', true],
+    ['sort --output=f f', true],
+    ['sort -u f | uniq -c', false],
+    ['awk \'BEGIN{system("npm test")}\'', true],
+    ['awk \'{ "npm test" | getline r }\'', true],
+    ['awk \'{ print | "sh" }\' f', true],
+    ["awk '{print $1}' f", false],
+    ['find . -name x -exec npm test \\;', true],
+    ['find . -name "*.tmp" -delete', true],
+    ['find . -name "*.mjs"', false],
+    ['find . | xargs sed -i s/a/b/', true],
+    ['code-graph-mcp reindex', true],
+    ['code-graph-mcp rebuild-index --confirm', true],
+    ['code-graph-mcp', true],
+    ['code-graph-mcp grep "x" lib', false],
+    ['code-graph-mcp impact detectBashSignificance', false],
+  ])('%s → hard error %s', (command, expected) => {
+    expect(hard(command, RED_RUN)).toBe(expected);
+  });
+
+  it('judges command and process substitutions by what they run', () => {
+    expect(hard('grep x $(npm test)', RED_RUN)).toBe(true);
+    expect(hard('grep x "$(npm test)"', RED_RUN)).toBe(true);
+    expect(hard('diff <(npm test) expected.txt', RED_RUN)).toBe(true);
+    expect(hard('grep x `npm test`', RED_RUN)).toBe(true);
+    expect(hard('grep x $(cd /r && npm test | tail)', RED_RUN)).toBe(true);
+    expect(hard('grep -n TypeError $(git ls-files lib)', SOURCE_QUOTE)).toBe(false);
+    expect(hard('diff <(sort a) <(sort b)', SOURCE_QUOTE)).toBe(false);
+    expect(hard('grep -c x f | head -$((1 + 2))', SOURCE_QUOTE)).toBe(false);
+    expect(hard('grep x $(npm test', RED_RUN)).toBe(true); // unbalanced
   });
 });
