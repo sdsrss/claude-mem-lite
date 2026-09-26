@@ -2266,14 +2266,14 @@ describe('handleLLMSummary', () => {
     expect(parseSummaryNotes(row.notes)).toMatchObject({ done: 'report', left: 'report' });
   });
 
-  it('a report without a Done takes one from an older row when the model gives none', async () => {
+  it('a Not-done-only report row with no Done takes one from an older row when the model gives none', async () => {
     insertSession(db, { id: 'test-session', project: 'test-proj' });
     const t0 = Date.now() - 60000;
     addRow('test-session', { completed: 'OLD-DONE', notes: 'llm', epoch: t0 });
     const id = addRow('test-session', {
       completed: '',
       remaining: 'LEFT',
-      notes: REPORT_NOTES,
+      notes: formatSummaryNotes({ done: 'titles', left: 'report', lines: '' }),
       epoch: t0 + 1000,
     });
     addObs();

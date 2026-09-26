@@ -678,13 +678,18 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   except a `report` Done / Not done, floors an empty field on the row itself and then on the
   session's older rows newest first, and **does not move the timestamp** (D#79); its INSERT,
   for a session with no row, is dated at the session's last prompt, not at the worker's
-  finish. Rows from older versions (`fast`, `llm`, '', bare Failed text) read as the
-  least-protected provenance, so a pre-upgrade report tagged `fast` can be replaced by titles
-  once (the delta review's P3-2, accepted). Two review rounds shaped this: the first cut let
+  finish. Rows from older versions map to titles (`fast`, bare Failed / Uncertain text) or
+  model (`llm`, '', NULL), never to report, so a pre-upgrade report Done stored under either
+  titles value can be replaced by titles once (the delta review's P3-2, accepted), and an
+  EMPTY Done takes the titles whatever its tag (third review P3-1: a model-created row with
+  no Done, or a legacy '' row, otherwise blocked them). Three review rounds shaped this: the first cut let
   /clear keep a first-turn title fallback as if it were a report and let the model overwrite a
   fresh report (defect review P2-1..P2-3); the repair's single per-row report tag then read a
   Not-done-only or Failed-only tail as a full report and froze stale titles as its Done
-  (delta review P2-1, P2-2) — hence one tag per field.
+  (delta review P2-1, P2-2) — hence one tag per field. The third review (on `d4b3d73`) found
+  0 P1 / 0 P2; its P3s are repaired except P3-6, reasoned only and older than this work: two
+  workers of consecutive turns can land out of order, so an older model reply can overwrite a
+  newer one's model fields until the next worker (no report field is affected).
   D#79's precondition — an upgraded row of session A dated after the first row of a
   same-project session that STARTED after A — held for **0 of 193** such pairs (3 within 10
   minutes): a built failure, not an observed one. D#80's shapes could not reach the upgrade
@@ -701,7 +706,8 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `tests/{fast-summary,hook-llm,e2e,stats-core,install-session-count}.test.mjs`; the first
   run left 4 alive (a report arriving on a later turn left untagged on either field, Failed
   lines unscrubbed — the scrub case's notes cut fell inside the secret — and Stop dropping
-  those lines), each now killed by a case added for it. The legacy duplicates were then removed from the maintainer's DB by a one-off
+  those lines), each now killed by a case added for it. On the final tree (after the third review's
+  repairs) the set is 43 arms, all killed. The legacy duplicates were then removed from the maintainer's DB by a one-off
   script (11:13Z, user-authorised, backup kept): 465 → 318 rows, 147 deleted, 31 empty fields
   of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
   projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other

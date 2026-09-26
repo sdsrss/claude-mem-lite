@@ -234,7 +234,7 @@ describe('one summary row per session', () => {
     mergeModelSummary(db, { sessionId: sid, project: 'p', fields, now: new Date(T + 60_000) });
   const secret = 'gh' + 'p_' + 'B'.repeat(36); // see the scrub-order case above
 
-  it('parseSummaryNotes / formatSummaryNotes round-trip, and legacy values read as the least protected', () => {
+  it('parseSummaryNotes / formatSummaryNotes round-trip, and legacy values map to titles or model, never report', () => {
     for (const p of [
       { done: 'report', left: 'report', lines: '' },
       { done: 'titles', left: 'other', lines: 'Failed: x Uncertain: y' },
@@ -369,6 +369,31 @@ describe('one summary row per session', () => {
     expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
     stop('s1', {}, 'turn2 titles');
     expect(one('s1').completed).toBe('turn2 titles');
+  });
+
+  it('an empty Done takes the titles whatever tag the row carries (third review P3-1)', () => {
+    // The worker can create the row itself (Stop's first write failed) with a reply that has
+    // no Done; a legacy row can carry '' notes and an empty Done. Neither may block titles.
+    model('s1', { lessons: '["x"]' });
+    expect(parseSummaryNotes(one('s1').notes).done, 'a row with no Done is not a model Done').toBe('titles');
+    stop('s1', {}, 'later titles');
+    expect(one('s1').completed).toBe('later titles');
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
+       VALUES ('s2', 'p', 'r', '', '', 'x', ?)`,
+    ).run(T);
+    stop('s2', {}, 'titles now');
+    expect(one('s2').completed).toBe('titles now');
+    expect(parseSummaryNotes(one('s2').notes).done).toBe('titles');
+  });
+
+  it('model: the rewritten notes stay within the notes limit (third review P3-3)', () => {
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'r', 'c', ?, 'x', ?)`,
+    ).run('Failed: ' + 'x'.repeat(392), T);
+    model('s1', { request: 'r2' });
+    expect(one('s1').notes.length).toBeLessThanOrEqual(FAST_SUMMARY_LIMITS.stop.notes);
   });
 
   it('model: an empty field falls back to the row, then to older rows newest first', () => {
