@@ -604,21 +604,35 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   handoff table reads **2 of 173** same-project pairs (rowid) because it is rewritten on every
   Stop rather than once. Read-only, 2026-09-26T08:21Z; a snapshot of how often each table is
   rewritten, not a structural guarantee.
-  **2026-09-26, D#75: six more reads in the same family.** `hook-context.mjs`'s observation
+  **2026-09-26, D#75: five more reads in the same family, and one writer.** `hook-context.mjs`'s observation
   pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
   read (LIMIT 1), plus `lib/fast-summary.mjs`'s observation titles (LIMIT 5), now end on
-  `id DESC`; a built tie picked the OLDEST rows on each, and the first two feed a stable sort
-  with a per-type cap of 3, so the tie decided which rows were injected even below the LIMIT.
-  `hook-llm.mjs`'s `existingFast` had no ORDER BY at all and upgraded the LOWEST-id fast row
-  of a session; with two fast rows (Stop plus the unguarded SessionStart /clear path — 74 live
-  sessions have more than one) that stamped the newest `created_at_epoch` below a higher id,
-  the one shape that makes the summaries' `id DESC` tiebreakers pick the older write. It now
-  upgrades the highest id. Each of the six was reverted alone and killed by its own case only.
+  `id DESC`; a built tie picked the OLDEST rows on each. Both pools feed a stable sort, so a
+  tie decides injected rows even below the LIMIT — for observations through the per-type cap
+  of 3, for sessions only when the 2000-token budget binds (the new session case tests AT the
+  LIMIT; the v6.13.4 claims review measured the below-LIMIT budget case, [1,2,3] → [3,4,5]).
+  `hook-llm.mjs`'s `existingFast` had no ORDER BY and upgraded the LOWEST-id fast row of a
+  session (by index order). A first draft (`43571e3`) switched it to the highest id, to keep
+  `id` order equal to write order, and the v6.13.4 defect review found that to be a
+  regression: with two fast rows (Stop plus the unguarded SessionStart /clear-or-/compact path — 74
+  sessions had exactly two `notes = 'fast'` rows at 08:38Z, 75 at 08:50Z) the lower id is the
+  Stop row, whose structural Done / Not done extract is what the UPDATE's COALESCE floor keeps
+  when Haiku returns a field empty, and in all 5 live pairs whose content differs the higher id
+  is the emptier row. It now says `ORDER BY id ASC`, which is the old behaviour spelled out,
+  pinned by a case with a degraded Haiku reply. The draft's premise was also wrong: upgrading
+  is not "the one shape" that breaks id order — a late upgrade of the PREVIOUS session's row
+  re-stamps it above the next session's newer row with no tie at all (same review, P3-1;
+  D#79). So on session_summaries `id DESC` resolves an insert/insert tie correctly and is
+  best-effort beyond that. Each of the five hook-context / fast-summary tiebreakers, reverted
+  alone, is killed by its own case only.
   Live tie groups 0 over 162 observations and 452 summaries (read-only, 2026-09-26T08:38Z).
   Judged and left: the two `session_handoffs` reads at `hook-context.mjs` "Working State"
   (same reason as above; the session-scoped arm is also PK-unique, one row at most). Not
   judged here: the `deferred_work` ordering (`priority DESC, created_at_epoch ASC`, whose open
-  question is whether the ROW_NUMBER ordinal and the display order agree on a tie).
+  question is whether the ROW_NUMBER ordinal and the display order agree on a tie),
+  `hook-llm.mjs`'s `linkRelatedObservations` read (`ORDER BY created_at_epoch DESC LIMIT 50`
+  upstream of a JS file-overlap filter, so a reachability bound), and `hook.mjs`'s
+  `buildFallbackFastSummary` (`sdk_sessions … ORDER BY completed_at_epoch DESC LIMIT 1`).
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie

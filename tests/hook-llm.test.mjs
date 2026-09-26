@@ -1963,25 +1963,43 @@ describe('handleLLMSummary', () => {
     expect(summaries[0].completed).toBe('Basic auth flow with login/logout');
   });
 
-  it('with two fast rows for one session, upgrades the newest, so id order stays write order (D#75)', async () => {
-    // Stop writes a fast row and SessionStart's /clear path writes another for the same
-    // session unguarded, so two can exist (74 live sessions, 2026-09-26). Upgrading the
-    // lower id stamped it with the newest created_at_epoch below a higher id, which is the
-    // one shape that breaks the id DESC tiebreakers on session_summaries.
+  it('with two fast rows for one session, upgrades the Stop row, whose structural content the floor keeps (D#75)', async () => {
+    // Stop writes a fast row carrying the structural Done / Not done extract, and
+    // SessionStart's /clear or /compact path can write a second, emptier one for one session (5 of
+    // 75 live two-row sessions differ in content, the higher id emptier in all 5). The
+    // UPDATE's COALESCE floor keeps the UPGRADED row's content when Haiku returns a field
+    // empty, so the upgrade must target the Stop row. Upgrading the highest id instead
+    // (tried in 43571e3) dropped the structural lines from Last Session: v6.13.4 defect
+    // review P2-1.
     insertSession(db, { id: 'test-session', project: 'test-proj' });
     const fast = db.prepare(
       `
       INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, created_at, created_at_epoch)
-      VALUES (?, ?, ?, '', '', 'fast completed', '', '', '[]', '[]', 'fast', ?, ?)
+      VALUES (?, ?, ?, '', '', ?, '', ?, '[]', '[]', 'fast', ?, ?)
     `,
     );
     const t0 = Date.now() - 60000;
-    const older = Number(
-      fast.run('test-session', 'test-proj', 'stop fast', new Date(t0).toISOString(), t0).lastInsertRowid,
+    const stopRow = Number(
+      fast.run(
+        'test-session',
+        'test-proj',
+        'stop fast',
+        'STRUCT-DONE item',
+        'STRUCT-NOTDONE item',
+        new Date(t0).toISOString(),
+        t0,
+      ).lastInsertRowid,
     );
-    const newer = Number(
-      fast.run('test-session', 'test-proj', 'clear fast', new Date(t0 + 1000).toISOString(), t0 + 1000)
-        .lastInsertRowid,
+    const clearRow = Number(
+      fast.run(
+        'test-session',
+        'test-proj',
+        'clear fast',
+        '',
+        '',
+        new Date(t0 + 1000).toISOString(),
+        t0 + 1000,
+      ).lastInsertRowid,
     );
     db.prepare(
       `
@@ -1989,20 +2007,26 @@ describe('handleLLMSummary', () => {
       VALUES (?, ?, '', 'feature', 'obs title', '', 'Narrative text', '', '', '[]', '[]', 1, ?, ?)
     `,
     ).run('test-session', 'test-proj', new Date().toISOString(), Date.now());
+    // The degraded shape the floor exists for: request present, completed / remaining empty.
+    callLLM.mockReturnValueOnce(
+      JSON.stringify({ request: 'llm request', completed: '', remaining_items: '' }),
+    );
 
     await handleLLMSummary();
 
     const rows = db
       .prepare(
-        'SELECT id, notes, created_at_epoch FROM session_summaries WHERE memory_session_id = ? ORDER BY id',
+        'SELECT id, notes, completed, remaining_items FROM session_summaries WHERE memory_session_id = ? ORDER BY id',
       )
       .all('test-session');
     expect(
       rows.map((r) => r.id),
       'premise: upgraded in place, no third row',
-    ).toEqual([older, newer]);
-    expect(rows.find((r) => r.notes === 'llm')?.id).toBe(newer);
-    expect(rows[0].created_at_epoch).toBeLessThanOrEqual(rows[1].created_at_epoch);
+    ).toEqual([stopRow, clearRow]);
+    const llm = rows.find((r) => r.notes === 'llm');
+    expect(llm?.id).toBe(stopRow);
+    expect(llm.completed).toBe('STRUCT-DONE item');
+    expect(llm.remaining_items).toBe('STRUCT-NOTDONE item');
   });
 
   it('skips summary when no observations exist', async () => {
