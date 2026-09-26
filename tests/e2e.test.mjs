@@ -439,8 +439,9 @@ describe('Suite 1: Full Session Lifecycle', () => {
 
   it('the llm-summary worker Stop spawns receives the epoch Stop recorded (P3-6)', async () => {
     // The worker drops its reply once completed_at_epoch is later than the epoch it was handed,
-    // so the two must be the SAME value: a fresh clock read at either end makes every worker
-    // superseded by its own Stop, and a missing argument makes none ever superseded. The session
+    // so the two must be the SAME value: a fresh clock read for the UPDATE makes every worker
+    // superseded by its own Stop, while one for the spawn, or a missing argument, makes none
+    // ever superseded — a reply from an older turn can land last again. The session
     // has no observation, so the real detached worker exits `no-obs` without a model call and
     // its metric row reports what it received.
     runHook('session-start', { env: { HOME: tmpHome } });
@@ -458,7 +459,7 @@ describe('Suite 1: Full Session Lifecycle', () => {
     // The detached child outlives runHook; wait for its row, then for the process itself, so it
     // cannot recreate the sandbox behind afterEach.
     const alive = () =>
-      execFileSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
+      execFileSync('ps', ['-ww', '-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
     const deadline = Date.now() + 10_000;
     while ((!workerRow() || alive()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
 

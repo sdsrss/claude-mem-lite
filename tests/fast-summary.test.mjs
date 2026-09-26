@@ -501,7 +501,7 @@ describe('one summary row per session', () => {
 // consecutive turns can finish out of order, so the older reply landed last and overwrote the
 // newer one's model fields. A worker now carries its Stop's epoch; sdk_sessions.completed_at_epoch
 // holds the session's LATEST Stop, and a worker whose Stop is older than that writes nothing —
-// the newer Stop's worker summarizes a superset of its input.
+// the newer Stop's worker summarizes the newer window.
 describe('a model reply from a superseded Stop does not land (P3-6)', () => {
   const T = NOW.getTime();
   const setLatestStop = (sid, epoch) =>

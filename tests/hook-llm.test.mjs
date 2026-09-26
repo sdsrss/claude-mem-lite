@@ -2115,8 +2115,8 @@ describe('handleLLMSummary', () => {
   });
 
   // Every exit of the worker leaves one `summary_worker` metric row (CLAUDE_MEM_METRICS=1), so
-  // the P3-6 trade — a superseded worker yields, and a later worker whose call fails leaves the
-  // row an earlier turn behind — and D#92's call count can be read off real use.
+  // the P3-6 trade — a superseded worker yields, and a later worker that writes nothing leaves
+  // the row an earlier turn behind — and D#95's call count can be read off real use.
   describe('reports its outcome as a summary_worker metric', () => {
     const originalArgv5 = process.argv[5];
     const T = Date.now() - 60_000;

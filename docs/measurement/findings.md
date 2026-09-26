@@ -770,7 +770,8 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   (pre-ship defect review P3-1). Unmeasured; the metric below pairs the two by session. Evidence: 8 single-site mutations (the UPDATE guard, the
   spawn argument, the UPDATE's epoch read from a fresh clock, `>` → `>=`, the `<= 0` guard, each
   of the two checks, the merge call's argument) are each killed by a case in
-  `tests/{fast-summary,hook-llm,e2e,bg-spawn-skip-flag-invariant}.test.mjs`. The spawn wire was
+  `tests/{fast-summary,hook-llm,e2e}.test.mjs` (the one in `bg-spawn-skip-flag-invariant` was the
+  source scan, since removed). The spawn wire was
   first held by a source scan, on the stated reason that the spawn is off in every e2e case;
   false — several e2e Stop cases spawn the real worker against `scripts/mock-claude.mjs` (claims
   review P2-1). It is now behavioural: an e2e Stop spawns the real worker on a session with no
@@ -786,9 +787,11 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   was filed as D#92. But the worker calls the model only when the session has an
   observation, and on the DB (read-only, 7 days, 15:03Z) **4 of 157 hook sessions** hold one,
   with **6 prompts** between them (a first count read "9 of 162" by including 5 `manual-*`
-  mem_save pseudo-sessions, which no worker runs for); **7** carry a model-written summary by
-  `parseSummaryNotes` (4 `notes = 'llm'`, 3 legacy `''` — a first count of 4 missed the
-  latter), so rows were written and the observations deleted after. The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
+  mem_save pseudo-sessions, which no worker runs for). **7 finished sessions** carry a
+  model-written summary by `parseSummaryNotes` (4 `notes = 'llm'`, 3 legacy `''` — a first
+  count of 4 missed the latter), so rows were written and the observations deleted after. The
+  live session's own row is an 8th at 15:22Z (`donemodel leftreport`); its tag is rewritten
+  every turn, so a count that includes it is a snapshot (delta review P2-1). The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
   (`hook-llm.mjs:452`) deletes it when Haiku classes it as an event type, and the worker
   waits for that flush before its `SELECT … FROM observations WHERE memory_session_id = ?` —
   auto-captured work lives in `events` now (observation ids 256–281 that day: 19 of 26
@@ -802,8 +805,11 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `slot-timeout`, `superseded-before-call`, `no-content`, `superseded-at-write`, `written`,
   `error`, with `session`, `stopEpoch` and the model call's `llmMs`. As first shipped
   (`91e45ba`) the row had neither session nor epoch value, so this paragraph's claim that it
-  measures the P3-6 trade was false (claims review P1-1); with both, a `superseded-*` row
-  followed by a non-`written` row of the same session is that trade.
+  measures the P3-6 trade was false (claims review P1-1). With both, the trade is a
+  `superseded-*` row of a session with no `written` row at a LATER `stopEpoch` — pair by
+  `stopEpoch`, not file order: the successor usually writes before the superseded worker's
+  `superseded-at-write` row lands. A worker killed by SIGTERM / SIGINT (the hook's signal
+  handler, `hook.mjs:261`), including mid-call, writes no row (delta review P3-4, not fixed).
   **`buildFallbackFastSummary` now checks "has no summary" in its WHERE** (pre-ship defect
   review P3-4): it selected the most recent completed session and checked for a summary after
   `LIMIT 1`, so once every Stop records itself a parallel live session with a summary took the
