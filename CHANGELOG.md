@@ -2,6 +2,25 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.3 — the resume summary picks the newest row on a same-millisecond tie
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.2`.
+
+- **Session handoff: the `<session-summary>` block attaches the newest summary when two share a
+  timestamp.** Both reads behind it (by session id, and the nearest-in-time fallback) ordered
+  by time alone, so a same-millisecond tie came back oldest first. They now break the tie by
+  newest id. This was latent on the maintainer's database (no two of a project's summary rows
+  share a millisecond, over 452). The handoff rows themselves are deliberately left as they
+  are: that table has no id column, and its row order is not write order because a rewrite
+  keeps the original row.
+- **Development only (not in the package):** the test proving that a Ctrl-C'd vitest run clears
+  the pre-commit green stamp now sends the signal only once the test body is running, instead
+  of after a fixed 4 s sleep; a signal that arrived before the reporter registered its exit
+  hook left the stamp in place and failed the test. It also no longer hangs to its timeout when
+  the child exits early, and it signals vitest's whole process group, so no worker outlives the
+  case.
+
 ## v6.13.2 — handoff key files reach past empty rows; error-recall sees heredoc-then-run commands
 
 **Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
