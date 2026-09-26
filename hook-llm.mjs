@@ -924,6 +924,11 @@ export async function handleLLMEpisode() {
   // events; treating them as a separate role + boundary marker reduces the
   // attack surface for memory poisoning via crafted file content.
   const SHARED_OBS_SCHEMA_TAIL = `${MEMORY_INPUT_GUARD}
+Ground every claim ONLY in the actions listed above — a truncated action description can look
+like an unresolved problem (e.g. cut off right before a trailing "...: 0" that meant the check
+passed). If a listed action's outcome isn't clear from what's shown, describe what was DONE,
+not a verdict you're inferring. Never state that something was "verified", "confirmed", or
+"passed" unless that exact result appears in the actions above.
 type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
 Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
 importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.

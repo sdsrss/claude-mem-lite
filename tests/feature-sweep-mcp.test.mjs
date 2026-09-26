@@ -312,7 +312,9 @@ describe('MCP feature sweep: public tools', () => {
 
   itTool('mem_get', async () => {
     const text = await call('mem_get', { ids: [String(SEED_BUGFIX_ID), '999999'] });
-    expect(text).toContain(`── #${SEED_BUGFIX_ID} ──`);
+    // 2026-09-26: the header carries an explicit-save-vs-auto-captured provenance
+    // marker after the id now — check the id is there rather than the exact old shape.
+    expect(text).toMatch(new RegExp(`── #${SEED_BUGFIX_ID}[^\\n]*──`));
     expect(text).toContain(`lesson_learned: ${SEED_LESSON}`);
     expect(text).toContain('importance: 3');
     // `files` reaches the row, and is rendered under the `files` label — the raw

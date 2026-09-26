@@ -17,7 +17,7 @@ import {
   formatSchemaSkewNotice,
 } from './lib/schema-skew.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
-import { searchObservationsHybrid } from './search-engine.mjs';
+import { searchObservationsHybrid, snippetAddsInfo } from './search-engine.mjs';
 import {
   deepSearch,
   resolveDeepMode,
@@ -114,7 +114,12 @@ import {
   bucketIdTokens,
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
-import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
+import {
+  saveWithClosures,
+  formatSupersedeSkipped,
+  formatSupersededNote,
+  isManualSave,
+} from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
@@ -468,11 +473,18 @@ function formatSearchOutput(
   const tok = (r) => (r.bodyTokens ? ` ~${r.bodyTokens}t` : '');
   for (const r of paginatedResults) {
     if (r.source === 'obs') {
+      // Provenance (audit 2026-09-26): an explicit mem_save and an auto-captured
+      // observation are otherwise indistinguishable in this render.
+      const provenance = r.is_manual ? ' ✍' : '';
       lines.push(
-        `#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
+        `#${r.id} ${typeIcon(r.type)} [${r.type}]${provenance} ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
       );
-      if (r.snippet && r.snippet.length > 10 && r.snippet !== r.title) {
+      if (snippetAddsInfo(r.snippet, r.title)) {
         lines.push(`     ${truncate(r.snippet, 100)}`);
+      }
+      // Query-independent: survives regardless of which term matched (lib/caveat-marker.mjs).
+      if (r.caveatSnippet) {
+        lines.push(`     ⚠ ${truncate(r.caveatSnippet, 140)}`);
       }
     } else if (r.source === 'session') {
       lines.push(
@@ -481,9 +493,14 @@ function formatSearchOutput(
     } else if (r.source === 'prompt') {
       lines.push(`P#${r.id} 💬 ${truncate(r.text)} | ${fmtDate(r.date)}${tok(r)}`);
     } else if (r.source === 'event') {
+      // Every events-table row is auto-captured by construction (persistHaikuSummary
+      // is the only insert path) — unconditional marker, same signal as the obs face.
       lines.push(
-        `E#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
+        `E#${r.id} ${typeIcon(r.type)} [${r.type}] 🤖 ${truncate(r.title || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
       );
+      if (r.caveatSnippet) {
+        lines.push(`     ⚠ ${truncate(r.caveatSnippet, 140)}`);
+      }
     }
   }
 
@@ -899,7 +916,10 @@ server.registerTool(
       const renderFields = obsFieldFilter || OBS_FIELDS;
       for (const row of rows) {
         foundBySource.obs.add(row.id);
-        const lines = [`── #${row.id} ──`];
+        // Provenance (audit 2026-09-26, parity with CLI get's renderObsRows): an
+        // explicit mem_save vs. a background auto-captured observation.
+        const provenance = isManualSave(row.memory_session_id) ? '✍ explicit save' : '🤖 auto-captured';
+        const lines = [`── #${row.id} — ${provenance} ──`];
         // Retraction first (shared with the CLI `get` via get-core) — see supersededNotice.
         const retracted = supersededNotice(row);
         if (retracted) lines.push(retracted);

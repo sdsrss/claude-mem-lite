@@ -322,7 +322,9 @@ describe('MCP audit fixes (stdio)', () => {
     const text = resp.result?.content?.[0]?.text || '';
     expect(resp.result?.isError).not.toBe(true);
     expect(text).toMatch(/dropped:\s*bogus_field/);
-    expect(text).toMatch(/── #1 ──/);
+    // 2026-09-26: the header carries a provenance marker (explicit save vs.
+    // auto-captured) after the id — match loosely rather than the exact old shape.
+    expect(text).toMatch(/── #1[^\n]*──/);
     expect(text).toMatch(/title:/);
   });
 
@@ -333,7 +335,7 @@ describe('MCP audit fixes (stdio)', () => {
     await initialize(proc);
     const resp = await callTool('mem_get', { ids: [1, 999999] });
     const text = resp.result?.content?.[0]?.text || '';
-    expect(text).toMatch(/── #1 ──/);
+    expect(text).toMatch(/── #1[^\n]*──/);
     expect(text).toMatch(/Note: ID\(s\) #?999999 not found/);
   });
 

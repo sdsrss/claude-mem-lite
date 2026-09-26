@@ -21,6 +21,8 @@ import {
 import { citeFactorClause } from './scoring-sql.mjs';
 import { extractPRFTerms, expandQueryByConcepts } from './search-scoring.mjs';
 import { liveObsFilterSql, recencyDecaySql } from './lib/inject-search-core.mjs';
+import { isManualSave } from './lib/save-observation.mjs';
+import { extractCaveatSnippet } from './lib/caveat-marker.mjs';
 
 // Scoring expressions — full adds project boost + access bonus; simple is for
 // expansion paths where boost would over-amplify already-loose matches.
@@ -67,8 +69,8 @@ export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset,
   const lowSignalClause = includeNoise ? '' : `AND ${notLowSignalTitleClause('o')}`;
   return `
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.created_at_epoch, o.importance,
-           o.files_modified, o.lesson_learned,
-           ${withSnippet ? "snippet(observations_fts, 2, '»', '«', '…', 10) as match_snippet," : ''}
+           o.files_modified, o.lesson_learned, o.memory_session_id,
+           ${withSnippet ? "snippet(observations_fts, -1, '»', '«', '…', 16) as match_snippet," : ''}
            ${scoreExpr}${mult} as score
     FROM observations_fts
     JOIN observations o ON observations_fts.rowid = o.id
@@ -330,6 +332,24 @@ export function countSearchTotal(
   return total;
 }
 
+/**
+ * True when an FTS snippet() excerpt says something a plain field (title, or another
+ * candidate snippet) doesn't already say. snippet() wraps every matched term in »«, so a
+ * naive `snippet !== title` is nearly always true even when the best match IS the title —
+ * the excerpt is just the title with highlight markers added, and displaying both lines
+ * back to back is pure repetition. Strip the markers before comparing (2026-09-26: this
+ * masked the redundancy in mem-cli.mjs's new "prefer snippet over lesson_learned" branch —
+ * a title-column match always "won" the not-equal check and hid a real lesson).
+ * @param {string} snippet
+ * @param {...(string|null|undefined)} against
+ * @returns {boolean}
+ */
+export function snippetAddsInfo(snippet, ...against) {
+  if (typeof snippet !== 'string' || snippet.length <= 10) return false;
+  const bare = snippet.replace(/[»«]/g, '');
+  return against.every((a) => bare !== a);
+}
+
 export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
   return {
     source: 'obs',
@@ -350,6 +370,7 @@ export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
     importance: r.importance,
     lesson_learned: r.lesson_learned,
     snippet: snippet ? r.match_snippet || '' : '',
+    is_manual: isManualSave(r.memory_session_id),
   };
 }
 
@@ -394,6 +415,12 @@ export function attachBodyTokens(db, results) {
       parts = [r.text, r.prompt_text];
     }
     r.bodyTokens = estimateTokens(parts.filter(Boolean).join(' '));
+    // Query-independent pending/caveat surfacing (see lib/caveat-marker.mjs): scans the
+    // FULL body regardless of where the query matched, so a caveat far from both the
+    // query terms and the lesson_learned line still reaches the search snippet.
+    if (src === 'obs' || src === 'event') {
+      r.caveatSnippet = extractCaveatSnippet(parts.filter(Boolean).join(' '));
+    }
   }
   return results;
 }
@@ -540,6 +567,23 @@ export function findFtsAnchor(
   return null;
 }
 
+// A majority-of-terms coverage gate was tried here (2026-09-26) against the "mcp server
+// obsidian sync" false positive (a row surfaced on a single incidental "obsidian" overlap,
+// unrelated to the query). REVERTED: measured against benchmark/deep-search-holdout.mjs, it
+// also rejected genuinely relevant vocabulary-mismatch rescues that share only 1 of 3 query
+// words with their target doc — e.g. "container orchestration platform" -> a doc titled
+// "Switched container registry from Docker Hub to ECR" (1-of-3 overlap, same shape as the
+// false positive, but a real, benchmark-pinned relevant hit). A field-scoped variant (reject
+// only matches whose sole evidence is in the low-weight search_aliases column) also does not
+// separate the two: cocina's actual false-positive row had "Obsidian" in its NARRATIVE too,
+// not only in search_aliases. No coverage-fraction or matched-column heuristic tried
+// distinguishes "genuinely too little overlap" from "correct single-word rescue" on this
+// fixture, and this fallback exists specifically to serve the second case — the deep-search
+// benchmark's `escalatingQueries: 0` assertion on the vocab-mismatch corpus is the guarantee
+// a looser gate would break. Left as-is; a real fix needs a relevance-floor mechanism (see
+// lib/relevance-floor.mjs, built for the same class of problem on other injection surfaces)
+// calibrated and benchmarked properly, not a quick term-count heuristic.
+
 export function searchObservationsHybrid(db, ctx) {
   const { ftsQuery, args, epochFrom, epochTo, perSourceLimit, perSourceOffset, currentProject, limit } = ctx;
   const results = [];
@@ -577,7 +621,7 @@ export function searchObservationsHybrid(db, ctx) {
     const rows = db
       .prepare(
         `
-      SELECT id, type, title, subtitle, project, created_at, created_at_epoch, files_modified, importance, lesson_learned
+      SELECT id, type, title, subtitle, project, created_at, created_at_epoch, files_modified, importance, lesson_learned, memory_session_id
       FROM observations ${where}
       ORDER BY created_at_epoch DESC, id DESC
       LIMIT ? OFFSET ?
@@ -597,6 +641,7 @@ export function searchObservationsHybrid(db, ctx) {
         files_modified: r.files_modified,
         importance: r.importance,
         lesson_learned: r.lesson_learned,
+        is_manual: isManualSave(r.memory_session_id),
       });
     }
     return results;

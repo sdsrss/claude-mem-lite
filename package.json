@@ -130,6 +130,7 @@
     "lib/error-recall-core.mjs",
     "lib/tool-refusal.mjs",
     "lib/relevance-floor.mjs",
+    "lib/caveat-marker.mjs",
     "lib/get-core.mjs",
     "lib/browse-core.mjs",
     "lib/save-observation.mjs",
