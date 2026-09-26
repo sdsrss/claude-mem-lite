@@ -26,6 +26,8 @@ import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
+import { recordMetric } from './lib/metrics.mjs';
+import { DB_DIR } from './schema.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -1384,6 +1386,17 @@ export async function handleLLMSummary() {
     // before the model call and again in the write's transaction: a later Stop's worker reads
     // a superset of this input, and two workers can finish out of order (P3-6).
     const spawnEpoch = Number(process.argv[5]);
+    // One `summary_worker` metric row per exit (CLAUDE_MEM_METRICS=1): how often a worker is
+    // superseded, how often the model returns nothing, and how many calls a session costs
+    // (D#92) are otherwise invisible — this process runs detached with no stderr.
+    let llmMs;
+    const outcome = (name) =>
+      recordMetric(DB_DIR, {
+        event: 'summary_worker',
+        outcome: name,
+        epoch: Number.isFinite(spawnEpoch) && spawnEpoch > 0,
+        ...(llmMs === undefined ? {} : { llmMs }),
+      });
 
     // Exclude LOW_SIGNAL hook-llm fallback titles ("Error: files +2 more: ...",
     // "Modified X", "Worked on X", etc.) from the Haiku summary input — they
@@ -1401,7 +1414,7 @@ export async function handleLLMSummary() {
       )
       .all(sessionId);
 
-    if (recentObs.length < 1) return;
+    if (recentObs.length < 1) return outcome('no-obs');
 
     const obsList = recentObs
       .map(
@@ -1437,16 +1450,18 @@ ${obsList}`;
 
     if (!(await acquireLLMSlot())) {
       debugLog('WARN', 'llm-summary', 'semaphore timeout, skipping summary');
-      return;
+      return outcome('slot-timeout');
     }
 
     let raw, llmParsed;
     try {
       if (summarySuperseded(db, sessionId, spawnEpoch)) {
         debugLog('DEBUG', 'llm-summary', 'a later Stop owns this session summary, skipping');
-        return;
+        return outcome('superseded-before-call');
       }
+      const callStart = Date.now();
       raw = await callLLM(prompt, BG_LLM_TIMEOUT_MS);
+      llmMs = Date.now() - callStart;
       llmParsed = parseJsonFromLLM(raw);
     } finally {
       releaseLLMSlot();
@@ -1510,8 +1525,14 @@ ${obsList}`;
         lessons: lessonsJson,
         key_decisions: decisionsJson,
       });
-      if (!mergeModelSummary(db, { sessionId, project, fields: safe, now, spawnEpoch }))
+      if (mergeModelSummary(db, { sessionId, project, fields: safe, now, spawnEpoch })) {
+        outcome('written');
+      } else {
         debugLog('DEBUG', 'llm-summary', 'a later Stop landed during the model call, reply dropped');
+        outcome('superseded-at-write');
+      }
+    } else {
+      outcome('no-content');
     }
   } finally {
     db.close();

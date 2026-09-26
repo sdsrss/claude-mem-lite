@@ -23,6 +23,11 @@ vi.mock('../hook-shared.mjs', async () => {
   };
 });
 
+vi.mock('../lib/metrics.mjs', async () => {
+  const actual = await vi.importActual('../lib/metrics.mjs');
+  return { ...actual, recordMetric: vi.fn() };
+});
+
 import {
   saveObservation,
   handleLLMEpisode,
@@ -36,6 +41,7 @@ import {
 } from '../hook-llm.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
+import { recordMetric } from '../lib/metrics.mjs';
 import { buildSessionContextLines } from '../hook-context.mjs';
 import { parseSummaryNotes, formatSummaryNotes } from '../lib/fast-summary.mjs';
 const REPORT_NOTES = formatSummaryNotes({ done: 'report', left: 'report', lines: '' });
@@ -2105,6 +2111,66 @@ describe('handleLLMSummary', () => {
       await handleLLMSummary();
 
       expect(rowsOf().map((r) => r.request)).toEqual(['Implementing auth system']);
+    });
+  });
+
+  // Every exit of the worker leaves one `summary_worker` metric row (CLAUDE_MEM_METRICS=1), so
+  // the P3-6 trade — a superseded worker yields, and a later worker whose call fails leaves the
+  // row an earlier turn behind — and D#92's call count can be read off real use.
+  describe('reports its outcome as a summary_worker metric', () => {
+    const originalArgv5 = process.argv[5];
+    const T = Date.now() - 60_000;
+    const outcomes = () =>
+      recordMetric.mock.calls.map(([, p]) => p).filter((p) => p.event === 'summary_worker');
+    const latestStop = (epoch) =>
+      db
+        .prepare('UPDATE sdk_sessions SET completed_at_epoch = ? WHERE content_session_id = ?')
+        .run(epoch, 'test-session');
+    beforeEach(() => {
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+    });
+    afterEach(() => {
+      process.argv[5] = originalArgv5;
+    });
+
+    it('no observations', async () => {
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['no-obs']);
+    });
+
+    it('written, with the model call timed and the epoch flagged', async () => {
+      addObs();
+      latestStop(T);
+      process.argv[5] = String(T);
+      await handleLLMSummary();
+      const [p] = outcomes();
+      expect(outcomes()).toHaveLength(1);
+      expect(p).toMatchObject({ outcome: 'written', epoch: true });
+      expect(p.llmMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('superseded before the call, and at the write', async () => {
+      addObs();
+      latestStop(T + 2000);
+      process.argv[5] = String(T + 1000);
+      await handleLLMSummary();
+      latestStop(T + 1000);
+      callLLM.mockImplementationOnce(() => {
+        latestStop(T + 2000);
+        return JSON.stringify({ request: 'stale' });
+      });
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['superseded-before-call', 'superseded-at-write']);
+    });
+
+    it('no content when the model returns nothing, and slot-timeout when no slot comes', async () => {
+      addObs();
+      callLLM.mockReturnValueOnce(null);
+      await handleLLMSummary();
+      acquireLLMSlot.mockResolvedValueOnce(false);
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['no-content', 'slot-timeout']);
+      expect(outcomes()[0].epoch, 'no argv epoch').toBe(false);
     });
   });
 
