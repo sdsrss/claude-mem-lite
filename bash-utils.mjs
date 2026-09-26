@@ -62,6 +62,7 @@ const GIT_READ_SUBCMDS = new Set([
   'shortlog',
   'reflog',
   'status',
+  'rev-parse',
 ]);
 
 // Hard failure fingerprints — a real crash / thrown exception / non-zero-exit marker,
@@ -92,6 +93,13 @@ const NEUTRAL_VERBS = new Set([
   'export',
   'set',
   'exit',
+  // Print a path or a date; used inside `$(…)` to build a read's arguments.
+  'pwd',
+  'date',
+  'basename',
+  'dirname',
+  'realpath',
+  'readlink',
 ]);
 
 // code-graph-mcp subcommands that only query the index. The rest (serve, the index
@@ -118,6 +126,7 @@ const CODE_GRAPH_READ_SUBCMDS = new Set([
   'report',
   'health-check',
   'stats',
+  'outcome',
   'help',
   '--help',
   '--version',
@@ -129,9 +138,13 @@ const CODE_GRAPH_READ_SUBCMDS = new Set([
 const WRITES_OR_RUNS = {
   sed: (args) => args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')),
   sort: (args) => args.some((a) => /^-[A-Za-z]*o/.test(a) || a.startsWith('--output')),
-  awk: (_args, text) => /\bsystem\s*\(|\|\s*(?:getline\b|")|\|&/.test(text),
+  // `-f` reads the program from a file (or a heredoc on stdin) this check cannot see.
+  awk: (args, text) =>
+    args.some((a) => /^-f/.test(a) || a.startsWith('--file')) ||
+    /\bsystem\s*\(|\|\s*(?:getline\b|")|\|&/.test(text),
   find: (args) => args.some((a) => /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/.test(a)),
-  'code-graph-mcp': (args) => !CODE_GRAPH_READ_SUBCMDS.has(args[0]),
+  'code-graph-mcp': (args) =>
+    !CODE_GRAPH_READ_SUBCMDS.has(args[0]) && !(args[0] === 'snapshot' && args[1] === 'inspect'),
 };
 
 /** 'read' | 'neutral' | 'other' for one simple command (one element of a pipeline). */
@@ -145,20 +158,48 @@ function classifySimpleCommand(text) {
   return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]) ? 'read' : 'other';
 }
 
+// `$'…'` (ANSI-C quoting): a backslash escapes the next character, including `'`.
+const ANSI_QUOTE = "$'";
+// Stands in for a cut-out substitution. No surrounding spaces: `f=$(…)` must stay one
+// assignment word, or the placeholder becomes the verb.
+const SUBST = '__SUBST__';
+const MAX_SUBST_DEPTH = 32;
+
 /**
  * Remove what the shell does not run as a command: heredoc bodies (they are stdin) and
  * `#` comments. Quote-aware. An apostrophe in either used to unbalance the quotes and send
  * the whole line to a first-word fallback (v6.13.0 defect review P3-4).
+ *
+ * An UNQUOTED delimiter (`<<EOF`) is the exception: bash expands `$(…)` and backticks in
+ * that body, so each body line is kept as `: "<line>"`, a no-op whose substitutions
+ * splitStatements still cuts out and judges. `$((…))` and `((…))` are copied whole so a
+ * `<<` shift inside them is not read as a heredoc (v6.13.2 pre-ship defect review).
  */
 function stripNonCommands(cmd) {
   let out = '';
   let quote = null;
-  const pending = []; // heredoc delimiters opened on the current line: { word, dash }
+  const pending = []; // heredoc delimiters opened on the current line: { word, dash, expand }
   for (let k = 0; k < cmd.length; k++) {
     const ch = cmd[k];
+    if (quote === ANSI_QUOTE) {
+      if (ch === '\\') {
+        out += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === "'") quote = null;
+      out += ch;
+      continue;
+    }
     if (quote) {
+      // Keep the backslash AND the character it escapes (the old `out += cmd[k++]; out += ch`
+      // wrote the backslash twice and dropped the escaped character).
+      if (ch === '\\' && quote === '"') {
+        out += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
       if (ch === quote) quote = null;
-      else if (ch === '\\' && quote === '"') out += cmd[k++];
       out += ch;
       continue;
     }
@@ -167,19 +208,40 @@ function stripNonCommands(cmd) {
       k++;
       continue;
     }
+    if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      out += "$'";
+      k++;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       quote = ch;
       out += ch;
       continue;
+    }
+    const arithmetic =
+      (ch === '$' && cmd[k + 1] === '(' && cmd[k + 2] === '(') ||
+      (ch === '(' && cmd[k + 1] === '(' && cmd[k - 1] !== '$');
+    if (arithmetic) {
+      const end = closingParen(cmd, ch === '$' ? k + 2 : k + 1);
+      if (end !== -1) {
+        out += cmd.slice(k, end);
+        k = end - 1;
+        continue;
+      }
     }
     if (ch === '#' && (k === 0 || /[\s;&|()]/.test(cmd[k - 1]))) {
       while (k + 1 < cmd.length && cmd[k + 1] !== '\n') k++;
       continue;
     }
     if (ch === '<' && cmd[k + 1] === '<' && cmd[k + 2] !== '<' && cmd[k - 1] !== '<') {
-      const m = /^<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([^\s;&|<>()'"]+))/.exec(cmd.slice(k));
+      const m = /^<<(-?)[ \t]*((?:'[^'\n]*'|"[^"\n]*"|\\.|[^\s;&|<>()'"\\])+)/.exec(cmd.slice(k));
       if (m) {
-        pending.push({ word: m[2] ?? m[3] ?? m[4], dash: m[1] === '-' });
+        pending.push({
+          word: m[2].replace(/\\(.)/g, '$1').replace(/['"]/g, ''),
+          dash: m[1] === '-',
+          expand: !/['"\\]/.test(m[2]),
+        });
         out += m[0];
         k += m[0].length - 1;
         continue;
@@ -187,15 +249,16 @@ function stripNonCommands(cmd) {
     }
     if (ch === '\n' && pending.length > 0) {
       out += ch;
-      // Skip each body in order, up to and including its delimiter line.
+      // Consume each body in order, up to and including its delimiter line.
       let pos = k + 1;
-      for (const { word, dash } of pending.splice(0)) {
+      for (const { word, dash, expand } of pending.splice(0)) {
         while (pos < cmd.length) {
           let end = cmd.indexOf('\n', pos);
           if (end === -1) end = cmd.length;
           const line = cmd.slice(pos, end);
           pos = end + 1;
           if ((dash ? line.replace(/^\t+/, '') : line) === word) break;
+          if (expand) out += `: "${line.replace(/\\(?=")/g, '\\\\').replace(/"/g, '\\"')}"\n`;
         }
       }
       k = pos - 1;
@@ -216,12 +279,15 @@ function closingParen(cmd, start) {
   for (let k = start; k < cmd.length; k++) {
     const ch = cmd[k];
     if (quote) {
-      if (ch === quote) quote = null;
-      else if (ch === '\\' && quote === '"') k++;
+      if (ch === '\\' && quote !== "'") k++;
+      else if (ch === quote[quote.length - 1]) quote = null;
       continue;
     }
     if (ch === '\\') k++;
-    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      k++;
+    } else if (ch === "'" || ch === '"') quote = ch;
     else if (ch === '(') depth++;
     else if (ch === ')' && --depth === 0) return k + 1;
   }
@@ -250,14 +316,17 @@ function splitStatements(cmd) {
       const end = cmd.indexOf('`', k + 1);
       if (end === -1) return -1;
       subs.push(cmd.slice(k + 1, end));
-      cur += ' SUBST ';
+      cur += SUBST;
       return end;
     }
     const arithmetic = cmd[k] === '$' && cmd[k + 2] === '(';
     const end = closingParen(cmd, k + 2);
     if (end === -1) return -1;
-    if (!arithmetic) subs.push(cmd.slice(k + 2, end - 1));
-    cur += ' SUBST ';
+    const body = cmd.slice(k + 2, end - 1);
+    // An arithmetic body is not a command, but a substitution inside it still runs.
+    if (!arithmetic) subs.push(body);
+    else if (/\$\(|`/.test(body)) subs.push(`: ${body}`);
+    cur += SUBST;
     return end - 1;
   };
   const endElement = () => {
@@ -272,19 +341,39 @@ function splitStatements(cmd) {
   for (let k = 0; k < cmd.length; k++) {
     const ch = cmd[k];
     const opensSub = ch === '`' || ((ch === '$' || ch === '<' || ch === '>') && cmd[k + 1] === '(');
+    if (quote === ANSI_QUOTE) {
+      if (ch === '\\') {
+        cur += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === "'") quote = null;
+      cur += ch;
+      continue;
+    }
     if (quote) {
       if (quote === '"' && (ch === '`' || (ch === '$' && cmd[k + 1] === '('))) {
         k = takeSub(k);
         if (k === -1) return null;
         continue;
       }
+      if (ch === '\\' && quote === '"') {
+        cur += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
       if (ch === quote) quote = null;
-      else if (ch === '\\' && quote === '"') cur += cmd[k++];
       cur += ch;
       continue;
     }
     if (ch === '\\') {
       if (cmd[k + 1] !== '\n') cur += ch + (cmd[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      cur += "$'";
       k++;
       continue;
     }
@@ -333,12 +422,15 @@ function isReadOnlyCommand(cmd) {
 }
 
 /** 'read' | 'neutral' | 'other' for a whole command line (see isReadOnlyCommand). */
-function commandKind(cmd) {
+function commandKind(cmd, depth = 0) {
+  // Each level rescans its body; past this depth the line is judged 'other' rather than
+  // recursing into a RangeError on the hot path of every Bash event.
+  if (depth > MAX_SUBST_DEPTH) return 'other';
   const parsed = splitStatements(cmd);
   if (!parsed) return 'other';
   let sawRead = false;
   for (const body of parsed.subs) {
-    const kind = commandKind(body);
+    const kind = commandKind(body, depth + 1);
     if (kind === 'other') return 'other';
     if (kind === 'read') sawRead = true;
   }

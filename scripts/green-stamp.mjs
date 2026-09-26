@@ -20,11 +20,13 @@
 //      tests/obs-id-caliber-sync.test.mjs emits a case per source file, scratch included.
 //   4. The stamp expires after STAMP_MAX_AGE_MS: a date-dependent test (the benchmark
 //      baseline expires by date) can go red on bytes that never changed.
-//   5. A run that does not load the reporter cannot judge itself, so `setup` below (a
-//      vitest globalSetup) clears the stamp when the resolved reporters lack it: a
-//      `--reporter=dot` run REPLACES the configured reporters, and a red one used to leave
-//      the older green in place (v6.13.0 delta review P3-1). A green one clears it too;
-//      that costs one full run at the next commit, which is the safe direction.
+//   5. A run under vitest.config.mjs that does not load the reporter cannot judge itself,
+//      so `setup` below (a vitest globalSetup registered there) clears the stamp when the
+//      resolved reporters lack it. A run under ANOTHER config file loads neither and leaves
+//      the stamp alone; the reporter refuses to write under one, and no second config
+//      exists in the repo. A `--reporter=dot` run REPLACES the configured reporters, and a
+//      red one used to leave the older green in place (v6.13.0 delta review P3-1). A green
+//      one clears it too; that costs one full run at the next commit, the safe direction.
 //
 // Nothing here can make a red suite pass: a miss runs `npm test` exactly as before, and
 // CI still runs the full matrix on push. `PRE_COMMIT_FULL_TEST=1` forces the run.
@@ -130,8 +132,9 @@ export function loadsStampReporter(reporters) {
 }
 
 /**
- * vitest globalSetup (registered in vitest.config.mjs): a run whose reporters do not include
- * the stamp reporter can neither certify nor de-certify its tree, so it clears the stamp.
+ * vitest globalSetup (registered in vitest.config.mjs, so it runs only under that config): a
+ * run whose reporters do not include the stamp reporter can neither certify nor de-certify
+ * its tree, so it clears the stamp.
  */
 export function setup(project) {
   const config = project?.vitest?.config;

@@ -66,8 +66,10 @@ export default class GreenStampReporter {
 
   async onTestRunEnd(testModules, unhandledErrors, reason) {
     // A red run is evidence against any stamp, whatever its filter: a flaky or env-dependent
-    // failure on the stamped tree must not leave the older green to be reused (P3-1).
-    if (reason === 'failed' || unhandledErrors.length > 0) {
+    // failure on the stamped tree must not leave the older green to be reused (P3-1). Any
+    // reason but 'passed': vitest reports a run cut short by --bail or Ctrl-C as
+    // 'interrupted' even when a test failed (v6.13.2 pre-ship defect review P3-1).
+    if (reason !== 'passed' || unhandledErrors.length > 0) {
       try {
         clearStamp(this.cwd);
       } catch {

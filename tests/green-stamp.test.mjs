@@ -132,6 +132,9 @@ describe('checkStamp', () => {
     });
     recordStamp(repo, computeTreeKey(repo), { now: now - 1000 });
     expect(checkStamp(repo, { env: env0 }).reuse).toBe(true);
+    // A stamp dated in the future (clock skew) is not trusted either.
+    recordStamp(repo, computeTreeKey(repo), { now: now + 3_600_000 });
+    expect(checkStamp(repo, { env: env0 }).reuse).toBe(false);
   });
 
   it('PRE_COMMIT_FULL_TEST=1 forces the run', () => {
@@ -310,6 +313,27 @@ describe('green-stamp reporter under a real vitest run', () => {
     });
     expect(red.status).not.toBe(0);
     expect(existsSync(stampPath(repo))).toBe(false);
+    // A red run cut short by --bail ends as 'interrupted', not 'failed' (pre-ship defect
+    // review v6.13.2 P3-1); it is still evidence against the stamp.
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    const bail = spawnSync(
+      process.execPath,
+      [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--bail=1'],
+      { cwd: repo, encoding: 'utf8', env },
+    );
+    expect(bail.status).not.toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(false);
+  }, 60000);
+
+  it('a partial run that loads the reporter keeps the stamp', () => {
+    setupVitestFixture();
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    const one = vitest('t/a.test.mjs');
+    expect(one.status, one.stderr).toBe(0);
+    expect(plain(one.stdout)).toMatch(/Test Files\s+1 passed \(1\)/);
+    expect(existsSync(stampPath(repo))).toBe(true);
   }, 60000);
 
   it('a --reporter run, which never loads the stamp reporter, removes the stamp (delta review P3-1)', () => {

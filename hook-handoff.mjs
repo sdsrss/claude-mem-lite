@@ -349,10 +349,12 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // Same namespace widening as `completed` above — see the reasoning there. Measured
   // 2026-09-21: 8 of the 17 live handoff rows stored key_files as the empty array.
   //
-  // The cap counts rows that CONTRIBUTE a file (D#67, the D#40 shape). This read was
+  // The cap counts rows that CONTRIBUTE a new file (D#67, the D#40 shape). This read was
   // `LIMIT 10` → isValidFile, so rows the filter empties ('[]', directories, /tmp paths)
-  // used up the window: on the live DB 2026-09-26, 3 of 14 per-session windows lost 17 real
-  // files that way. Streaming keeps the filter exactly as it was.
+  // could use up the window. A latent defect: the v6.13.2 pre-ship claims review replayed
+  // the live DB 2026-09-26 with this read's own WHERE and window, and 0 of 45 stored
+  // handoffs and 0 of 310 sessions lost a file (the largest window held 11 rows).
+  // Streaming keeps the filter exactly as it was.
   let contributing = 0;
   for (const row of db
     .prepare(
@@ -370,8 +372,11 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       continue;
     }
     const valid = Array.isArray(files) ? files.filter(isValidFile) : [];
-    if (valid.length === 0) continue;
+    const before = fileSet.size;
     valid.forEach((f) => fileSet.add(f));
+    // A row that only repeats a listed file (the common case: one file edited again and
+    // again) contributes nothing either (v6.13.2 pre-ship defect review P3-7).
+    if (fileSet.size === before) continue;
     if (++contributing === 10) break;
   }
 

@@ -4,8 +4,9 @@
 // 1. key_files read `files_modified ... ORDER BY created_at_epoch DESC LIMIT 10`, THEN a JS
 //    filter dropped every entry that is not a file ('[]', directories, /tmp paths). The SQL
 //    LIMIT was a reachability bound: rows contributing nothing used up the window and
-//    evicted older real files. Measured on the live DB 2026-09-26T06:13Z over 14
-//    per-session windows: 3 windows lost files this way, 17 files in all.
+//    could evict older real files. Latent on the live DB: the v6.13.2 pre-ship claims
+//    review replayed it 2026-09-26 with the read's own WHERE and window, and 0 of 45
+//    stored handoffs lost a file. The first fixture below builds the shape.
 // 2. `completed` (LIMIT 15) and the carry-forward subject fallback (LIMIT 1) ordered by
 //    created_at_epoch DESC alone, so a tie came back ascending rowid and the cap kept the
 //    OLDEST rows.
@@ -70,6 +71,14 @@ describe('key_files: rows with no valid file do not use up the window (D#67)', (
 
     const files = JSON.parse(handoff().key_files);
     expect(files.sort()).toEqual(['src/real-0.mjs', 'src/real-1.mjs', 'src/real-2.mjs']);
+  });
+
+  it('does not spend the cap on rows that repeat a file already listed', () => {
+    prompt('ship the fix');
+    for (let i = 0; i < 3; i++) obs({ title: `edit ${i}`, files: [`src/real-${i}.mjs`], epoch: 1_000 + i });
+    for (let i = 0; i < 12; i++) obs({ title: `again ${i}`, files: ['src/hot.mjs'], epoch: 2_000 + i });
+    const files = JSON.parse(handoff().key_files);
+    expect(files.sort()).toEqual(['src/hot.mjs', 'src/real-0.mjs', 'src/real-1.mjs', 'src/real-2.mjs']);
   });
 
   it('still stops after ten contributing rows, newest first', () => {

@@ -245,6 +245,64 @@ describe('detectBashSignificance — read-only exemption checks every statement'
     expect(hard(command, RED_RUN)).toBe(expected);
   });
 
+  // v6.13.2 pre-ship defect review: shapes the heredoc/comment stripper and the
+  // substitution splitter got wrong, each against the rule above.
+  it('runs the substitutions of an UNQUOTED heredoc body, which bash expands', () => {
+    expect(hard('cat > notes.md <<EOF\n$(npm test)\nEOF', RED_RUN)).toBe(true);
+    expect(hard('cat > notes.md <<EOF\nrun `npm test` first\nEOF', RED_RUN)).toBe(true);
+    expect(hard('cat > notes.md <<-EOF\n\t$(npm test)\n\tEOF', RED_RUN)).toBe(true);
+    expect(hard('cat <<EOF | grep x\nit\'s "fine" at $(pwd)\nEOF', SOURCE_QUOTE)).toBe(false);
+    // A quoted delimiter, in any spelling, keeps the body literal.
+    expect(hard("cat <<'EOF' | grep x\n$(npm test)\nEOF", SOURCE_QUOTE)).toBe(false);
+    expect(hard('cat <<\\EOF | grep x\n$(npm test)\nEOF', SOURCE_QUOTE)).toBe(false);
+    expect(hard('cat <<E"OF" | grep x\n$(npm test)\nEOF', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('finds the end of a heredoc whose delimiter is escaped or partly quoted', () => {
+    expect(hard('cat <<\\EOF > f\nbody\nEOF\nnpm test', RED_RUN)).toBe(true);
+    expect(hard('cat <<E"OF" > f\nbody\nEOF\nnpm test', RED_RUN)).toBe(true);
+  });
+
+  it('does not read a here-string, an arithmetic shift or a mid-word # as a heredoc or comment', () => {
+    expect(hard("grep x <<< 'abc'\nnpm test", RED_RUN)).toBe(true);
+    expect(hard('grep -c x $((1<<2)) f\nnpm test', RED_RUN)).toBe(true);
+    expect(hard('(( x <<= 2 ))\nnpm test', RED_RUN)).toBe(true);
+    expect(hard('grep x a#b\nnpm test', RED_RUN)).toBe(true);
+    expect(hard('grep ${x#p} f; npm test', RED_RUN)).toBe(true);
+    expect(hard('grep -c x $((1<<2)) f', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('keeps an assignment from a read-only substitution read-only', () => {
+    expect(hard('f=$(git ls-files lib | head -1); grep -n TypeError $f', SOURCE_QUOTE)).toBe(false);
+    expect(hard('x="$(git grep -l y)"; grep -n TypeError $x', SOURCE_QUOTE)).toBe(false);
+    expect(hard('f=$(npm test); grep x $f', RED_RUN)).toBe(true);
+    expect(hard('$(npm test)', RED_RUN)).toBe(true);
+    expect(hard('cd "$(git rev-parse --show-toplevel)" && grep -n TypeError f', SOURCE_QUOTE)).toBe(false);
+    expect(hard('grep -n TypeError "$(date +%F)".log', SOURCE_QUOTE)).toBe(false);
+    expect(hard('code-graph-mcp outcome', SOURCE_QUOTE)).toBe(false);
+    expect(hard('code-graph-mcp snapshot inspect f.db', SOURCE_QUOTE)).toBe(false);
+    expect(hard('code-graph-mcp snapshot create --out f.db', RED_RUN)).toBe(true);
+    expect(hard("grep $'a\\'b' f", SOURCE_QUOTE)).toBe(false);
+    expect(hard("grep $'a\\'b' f; npm test", RED_RUN)).toBe(true);
+  });
+
+  it('judges a substitution inside arithmetic, and an awk program it cannot see', () => {
+    expect(hard('grep x $(( $(npm test) + 1 )) f', RED_RUN)).toBe(true);
+    expect(hard('awk -f /dev/stdin f <<\'EOF\'\nBEGIN{system("npm test")}\nEOF', RED_RUN)).toBe(true);
+    expect(hard('awk -f prog.awk f', RED_RUN)).toBe(true);
+  });
+
+  it('counts nested parentheses when closing a substitution', () => {
+    expect(hard('grep x $(echo $( (npm test) ) )', RED_RUN)).toBe(true);
+    expect(hard('grep x $(git log --format=%s | sed "s/(x)//") f', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('does not throw on deeply nested substitutions', () => {
+    const deep = 'grep x ' + '$('.repeat(5000) + 'git log' + ')'.repeat(5000);
+    expect(() => hard(deep, RED_RUN)).not.toThrow();
+    expect(hard(deep, RED_RUN)).toBe(true);
+  });
+
   it('judges command and process substitutions by what they run', () => {
     expect(hard('grep x $(npm test)', RED_RUN)).toBe(true);
     expect(hard('grep x "$(npm test)"', RED_RUN)).toBe(true);

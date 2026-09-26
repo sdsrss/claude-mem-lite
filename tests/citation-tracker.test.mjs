@@ -204,6 +204,9 @@ describe('extractCitationsFromTranscript — dismissals are not citations', () =
     expect(cited('#12 unrelated')).toEqual([]);
     expect(cited('#12 irrelevant since nothing was edited')).toEqual([]);
     expect(cited('#12 unrelated, and #13 n/a')).toEqual([]);
+    expect(cited('#12 not relevant anymore')).toEqual([]);
+    expect(cited('#12 unrelated though')).toEqual([]);
+    expect(cited('#12 irrelevant today')).toEqual([]);
   });
 
   it('keeps a mention whose verdict is not directly attached', () => {
