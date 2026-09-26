@@ -2794,7 +2794,10 @@ function cmdMemdirAudit(args) {
 // main decay loop excludes (it runs mainOnly). aggregateProjectCiteRecall scans THIS
 // project's transcripts: top-level <session>.jsonl = main, and
 // <session>/subagents/agent-*.jsonl = sidechain (descends ONE level into the literal
-// subagents/ dir only, no unbounded recursion). Same methodology, so comparable.
+// subagents/ dir only, no unbounded recursion). Main and sidechain use the same
+// methodology here, so they compare with each other. It is a compliance ratio that counts
+// a `#NN n/a` dismissal as an answer, so it does NOT compare with the per-face rates,
+// including the `subagent` face, which exclude dismissals since v6.13.0.
 function _reportSidechainCiteRecall({ days, json }) {
   const cutoff = Date.now() - days * 86400 * 1000;
   // memdir = ~/.claude/projects/<encoded>/memory; transcripts are its siblings.

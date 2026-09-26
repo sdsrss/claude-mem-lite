@@ -189,6 +189,23 @@ describe('extractCitationsFromTranscript — dismissals are not citations', () =
     expect(cited('#77 (the loader gate) does not apply here')).toEqual([]);
   });
 
+  // Defect review P3-6 remainder: an English marker used as an adjective on a noun ("#12
+  // irrelevant rows are now filtered") describes the change, not the lesson.
+  it('reads irrelevant / unrelated / not relevant before a noun as a description, not a verdict', () => {
+    expect(cited('#12 irrelevant rows are now filtered (as the lesson said)')).toEqual([12]);
+    expect(cited('#12: unrelated tests failed first')).toEqual([12]);
+    expect(cited('#12 not relevant results are dropped now')).toEqual([12]);
+    // The verdict shapes stay dismissals.
+    expect(cited('#12 irrelevant here')).toEqual([]);
+    expect(cited('#12 unrelated to this change')).toEqual([]);
+    expect(cited('#12 unrelated — it is about notebooks')).toEqual([]);
+    expect(cited('#12 not relevant: read-only path')).toEqual([]);
+    expect(cited('#12 irrelevant.')).toEqual([]);
+    expect(cited('#12 unrelated')).toEqual([]);
+    expect(cited('#12 irrelevant since nothing was edited')).toEqual([]);
+    expect(cited('#12 unrelated, and #13 n/a')).toEqual([]);
+  });
+
   it('keeps a mention whose verdict is not directly attached', () => {
     // The marker must follow the id; "somewhere nearby" would take credit from used lessons.
     expect(cited('#56 applied — counted the surfaces first; the rest was n/a.')).toEqual([56]);

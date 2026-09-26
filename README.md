@@ -249,7 +249,8 @@ the database, so reverting is pinning `claude-mem-lite@6.12.2`.
 
 **Citation readings drop at this version, and that is a measurement change.** A lesson the
 agent answers with `#NN n/a` is no longer counted as cited, so `citation-stats` per-face rates
-read lower from here on. Do not compare a reading taken before 6.13.0 with one taken after.
+read lower from here on (`--sidechain` excepted: it counts an `n/a` as an answer). Do not compare
+a reading taken before 6.13.0 with one taken after.
 
 ## Upgrading to 6.11.0
 
