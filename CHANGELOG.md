@@ -17,7 +17,8 @@ work it describes. We checked a random 30 of this project's live events against 
 and session transcripts: 2 accurate, 11 partly accurate, 16 wrong, 1 generic. The two most
 common failures (6 each) were the summarizer reading a deliberate test mutation as a product
 bug and a lesson generalised past its evidence with an invented mechanism. In this project's
-main sessions the section had been injected 50 times, 250 rows in all.
+main sessions (not counting the analysis session itself) the section had been injected 50
+times, 250 rows in all.
 
 **A lesson answered `#NN n/a` no longer counts as cited.** The adoption doc asks the agent to
 answer each surfaced lesson with `'#NN applied'` or `'#NN n/a — <reason>'`, but the tracker
@@ -27,7 +28,8 @@ toward the boost op, and a hit recorded on its injection face. A `#NN` directly 
 `n/a`, "not applicable", "irrelevant", 不适用, 无关 and similar now earns none of that. The
 reminder that nags when lessons go unanswered still counts it as an answer. One exception
 remains: when the agent then edits the file the lesson was about, that edit still counts as
-acting on it. Over the top-level transcripts on the maintainer's machine, 328 of 1,884 `#NN`
+acting on it (that credit arrives through the "edited N file(s) with prior lessons" hint,
+which has not once rendered in the maintainer's transcripts). Over the top-level transcripts on the maintainer's machine, 328 of about 1,880 `#NN`
 mentions were such dismissals. **This is a caliber break for cite rates:** `citation-stats`
 per-face rates and the funnel read lower from this version on (`citation-stats --sidechain`
 does not: it measures whether a lesson was answered, and an `n/a` is an answer). On the same transcripts,

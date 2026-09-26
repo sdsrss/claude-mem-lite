@@ -7,6 +7,12 @@
 // runs the suite, so a wrong NO here costs 44 s and a wrong YES is what the conditions
 // below exist to prevent. A `--reporter` flag on the command line replaces this reporter
 // along with the default one: that run records nothing, which is the safe direction.
+//
+// Known limits (delta review, v6.13.0), both in the wrong-YES direction:
+// - A FAILING run with `--reporter=…` never loads this reporter, so it cannot clear an older
+//   green stamp on the same tree; a failed run clears it only when this reporter is loaded.
+// - A second config file that loads this reporter with a narrower `include` would certify
+//   its own narrower population. The repo has one config; do not add a second that loads it.
 
 import { resolve } from 'node:path';
 import { computeTreeKey, recordStamp, clearStamp } from './green-stamp.mjs';

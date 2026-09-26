@@ -15,8 +15,8 @@
    - **B1**：error-recall 的"只读命令豁免"被 `cd <dir> && …` 前缀绕过。本项目主会话里 55% 的 Bash 命令（5,009/9,096）带这个前缀，所以只读命令的输出一旦出现 `TypeError:` 这类字样就会注入"Related memories found for this error"。本次分析会话里就误触发了 6 次以上。
    - **B2**：引用追踪把 `#NN n/a`（agent 明确表示"该记忆与本次无关"）计为一次"引用"，从而重置衰减、清空 `demoted_at`，并累加 `access_count`。约 26% 的 `#NN` 提及属于这种否定语境。
    - **B3**：shipped 的 adopt 文案（`adopt-content.mjs:92`）仍告诉模型"连续 3 个会话未引用则 importance −1、被引用则 +1"，但代码早已不在衰减路径上改 importance。这是一条对模型可见、但已经过期的行为声明。
-2. **Key Events（events 表）注入量大、从未被读取，且抽样准确率低**：
-   - 本项目主会话里 Key Events 共注入 50 次、250 行。（初稿写的是"662 行"和"`accessed_count` 全部为 0 说明从没被按 id 读过"，两处都不成立，见 §4.4 的更正。）
+2. **Key Events（events 表）每次会话开头都注入，且抽样准确率低**：
+   - 本项目主会话里 Key Events 共注入 50 次、250 行（不含本分析会话；含则 52 次、260 行）。（初稿写的是"662 行"和"`accessed_count` 全部为 0 说明从没被按 id 读过"，两处都不成立，见 §4.4 的更正。）
    - 随机抽 30 条核验：**只有 2 条属实，16 条是错的**（事情没发生，或技术断言错误），11 条部分属实（§4.4.1）。另外已确认 E#3771、E#3769 两条是编造的"教训"（例如声称"禁用了一个 flaky 测试"，实际该测试一直在跑）。
 3. **会话过程的主要成本在上下文和等待，而不在模型能力**：
    - 请求上下文中位数 29.6 万 token，49% 的请求超过 30 万；
@@ -201,10 +201,10 @@
 - `schema.mjs:61`、`:366` 的注释是同一句过期说法。
 - 这是 findings.md 里"撤回必须扫全部拷贝"这类问题的又一个实例：面向模型的那份拷贝没有扫到。
 
-### 4.4 B4 —— Key Events：注入多、从未被读、准确率低
+### 4.4 B4 —— Key Events：每会话注入、按时间挑选、准确率低
 
-- `events` 表共 3,776 行，`accessed_count` 全部为 0。**更正（pre-ship claims 审阅）**：这不能说明 agent 从没按 id 读过 event——唯一写这一列的是 `lib/activity.mjs:101` 的 `getEvent`（只有 `activity get` 调它），而 `mem_get` 与 `get E#N` 走 `fetchEventDetail`，不累加。transcript 里能找到 `get E#860` 等按 id 读取。
-- importance ≥2 的占 74%（2,801 行）。本项目主会话共注入 Key Events 50 次、250 行（按 attachment 去重；初稿的 662 是逐行 grep、且每次注入在 transcript 里记录两遍）。
+- `events` 表共 3,776 行，`accessed_count` 全部为 0。**更正（pre-ship claims 审阅）**：这不能说明 agent 从没按 id 读过 event——唯一写这一列的是 `lib/activity.mjs:101` 的 `getEvent`（只有 CLI `activity show` 调它），而 `mem_get` 与 `get E#N` 走 `fetchEventDetail`，不累加。transcript 里能找到 `get E#860` 等按 id 读取。
+- importance ≥2 的占 74%（2,801 行）。本项目主会话共注入 Key Events 50 次、250 行（不含本分析会话；按 attachment 去重；初稿的 662 是逐行 grep、且每次注入在 transcript 里记录两遍）。
 - **已证实的错误样例**：
   - **E#3771**："Disabled flaky secret-leakage test; vitest runner error — vitest runner can fail with cryptic 'tool input straddling' errors…"。实际情况是：`tests/import-jsonl-dedup-scrub.test.mjs:162` 的用例 `'tool input straddling 4000'` 一直在运行，它测试的是"凭据横跨 4000 字符截断点"；该会话 transcript 中 `it.skip` 出现 0 次，git 历史里也没有禁用记录。摘要器把用例名误读成了错误信息。
   - **E#3769**："git hook runner does not follow symlinks"。我查看的该会话里 6 处 symlink 上下文，都是"测试夹具用 symlink 铺根目录"或 install 形态说明，这是一条凭空泛化出来的技术断言。
@@ -224,7 +224,7 @@
 
 分类型：bugfix 21 条中 WRONG 12 条；refactor 5 条中 WRONG 2 条、PARTLY 3 条，这些 refactor 都声称"无行为变化"，实际上是行为修复。
 
-**失败形状**（同一形状会反复出现，按出现频率排列）：
+**失败形状**（同一形状会反复出现，括号内为条数；两类并列最多，各 6 条：变异词汇、过度泛化）：
 1. **把测试探针和变异的词汇读成产品缺陷**（6 条）："M1"/"G1" 变异臂名、md5/sha256 校验行、先变异再还原的步骤，被写成 bug、"corruption"、"hash-based errors"。本仓库对每个守卫都做变异验证，所以这个形状会持续产生错误记录。
 2. **把子代理或沙箱里的活动记到产品头上**（3 条）：主线程空闲等评审时，评审者在解压树里写的探针、夹具 typo 被写成"Fixed X in search-scoring"；夹具路径 `/repo/alpha.mjs` 还泄漏进了 `file_paths`。
 3. **把 agent 自己的工具失误当成教训**（3 条）：python 补丁 "anchor not found"、Edit 工具的 "String to replace not found" 被写成 schema 接线、格式化缓存方面的"教训"。
@@ -333,10 +333,10 @@
 | 项 | 状态 | 提交 | 证据 |
 |---|---|---|---|
 | B1 只读豁免被 `cd` 前缀绕过 | **已修** | `68b44cd` | 在本机 26,406 条未被标记失败的 Bash 结果上做新旧背靠背重放：isHardError 893 → 765，静默 151 条（逐条确认都只读），新增 23 条（都是首个动词为读取、后面跟着真实运行的复合命令）；6 个变异全部被杀 |
-| B2 `#NN n/a` 被计为引用 | **已修** | `00effdc` | 本机顶层 transcript 中 1,884 次 `#NN` 提及有 328 次是否决（按发布的规则，2026-09-25T21:40Z；初稿写的 313/1,877 来自一版草稿规则），抽样 30/30 属实；`citation-live-replay` 前后两臂：pretool 65.8% → 46.0%，error_recall 19.1% → 15.3%，fyi 19.8% → 14.2%，ups 10.3% → 9.0%（这是**口径断点**，不要跨它做差）；6 个变异全部被杀 |
+| B2 `#NN n/a` 被计为引用 | **已修** | `00effdc` | 本机顶层 transcript 中约 1,880 次 `#NN` 提及有 328 次是否决（按发布的规则，2026-09-25T21:40Z；两种统计方法读 1,881 / 1,884；初稿写的 313/1,877 来自一版草稿规则），抽样 30/30 属实；`citation-live-replay` 前后两臂：pretool 65.8% → 46.0%，error_recall 19.1% → 15.3%，fyi 19.8% → 14.2%，ups 10.3% → 9.0%（这是**口径断点**，不要跨它做差）；6 个变异全部被杀 |
 | B4 Key Events 注入 | **已改（默认关闭）** | `ce1ea51` | SessionStart 不再渲染 `### Key Events`，`CLAUDE_MEM_SESSION_EVENTS=1` 恢复；UserPromptSubmit 的 events 块与 PreToolUse 行保持。`tests/e2e.test.mjs` 两臂端到端（默认无、开启有）；2 个变异被杀。**摘要器输入的修复（排除变异探针窗口等）未做**，见下 |
 | B3 adopt 文案过期 | **已修** | `a6a28c0` | 文案改为代码现状：排序乘数有界上浮/下沉；`demote_pinned` 会把反复注入从未引用的行降到 2（无 lesson 降到 1）；`#NN n/a` 算回应不算采纳。第一稿写成"引用从不改 importance"，因 `demote_pinned` 不成立，提交前已更正。实体扫描另改 4 处注释；1 个变异被杀 |
 | pre-commit 复用绿灯 | **已做** | `8d374b1` | 同一棵树背靠背：强制完整 62.3 s → 复用 12.1 s。只有"全量、通过、无过滤、运行前后 key 相同"的 run 写 stamp；有未暂存的已跟踪改动即不复用（未跟踪文件计入 key 但不会进提交，这与原先 pre-commit 自己跑套件时相同）；5 个变异被杀 |
-| 相邻：`E#116` 渲染成 `#116` | **已修** | `1934e25` | 修前复现：Read 注入 `E#1`，随后 ack 行写 "Lessons #1 were shown"。同一缺陷也在 cite-back 提示里，而 Stop 会把那里的 `#N` 读回并计入 observation 的 injected + cited 集合，即 event 编号会给同号的无关 observation 记一次引用（机理成立；本机 transcript 中这条提示只出现过 1 次，未观察到实际误记）。3 个变异被杀 |
+| 相邻：`E#116` 渲染成 `#116` | **已修** | `1934e25` | 修前复现：Read 注入 `E#1`，随后 ack 行写 "Lessons #1 were shown"。同一缺陷也在 cite-back 提示里，而 Stop 会把那里的 `#N` 读回并计入 observation 的 injected + cited 集合，即 event 编号会给同号的无关 observation 记一次引用（机理成立；本机 transcript 中这条提示的渲染出现 0 次，未观察到实际误记）。3 个变异被杀 |
 
 **未做**：B4 的第二半，即修摘要器输入（排除变异探针窗口、子代理空闲窗口和 agent 自己的工具失误，并要求教训引用窗口内的原文诊断）。它的验收需要修复后重抽 30 条 event 按同一标签复核，这一轮没有做。在它完成之前，SessionStart 的 Key Events 保持默认关闭。

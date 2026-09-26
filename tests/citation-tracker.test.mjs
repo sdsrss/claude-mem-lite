@@ -131,7 +131,7 @@ describe('extractCitationsFromTranscript', () => {
 
 // `#NN n/a — <reason>` is the agent saying a lesson did NOT apply, and it used to promote
 // the row exactly like an application. Shapes are taken from real assistant text on the
-// authoring machine (313 of 1877 `#NN` mentions were dismissals, 2026-09-25).
+// authoring machine (328 of ~1,880 `#NN` mentions were dismissals, 2026-09-25).
 describe('extractCitationsFromTranscript — dismissals are not citations', () => {
   let tmp;
   beforeEach(() => {
@@ -177,6 +177,11 @@ describe('extractCitationsFromTranscript — dismissals are not citations', () =
     expect(cited('#12 与本次无关的部分已跳过，核心已采纳')).toEqual([12]);
     expect(cited('#12 无关紧要的细节之外，已按它修复')).toEqual([12]);
     expect(cited('#12 n/a; #13 applied')).toEqual([13]);
+    // …and the override must not fire on the dismissal's own explanation (delta review P3-2).
+    expect(cited('#12 n/a — does not apply here')).toEqual([]);
+    expect(cited('#12 n/a — it applies to the server path, not this file')).toEqual([]);
+    expect(cited('#12 不适用，不采纳')).toEqual([]);
+    expect(cited('#12 n/a, not applied')).toEqual([]);
   });
 
   it('reads a verdict past one short parenthetical gloss', () => {
