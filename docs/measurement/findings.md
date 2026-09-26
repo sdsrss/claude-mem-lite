@@ -604,6 +604,21 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   handoff table reads **2 of 173** same-project pairs (rowid) because it is rewritten on every
   Stop rather than once. Read-only, 2026-09-26T08:21Z; a snapshot of how often each table is
   rewritten, not a structural guarantee.
+  **2026-09-26, D#75: six more reads in the same family.** `hook-context.mjs`'s observation
+  pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
+  read (LIMIT 1), plus `lib/fast-summary.mjs`'s observation titles (LIMIT 5), now end on
+  `id DESC`; a built tie picked the OLDEST rows on each, and the first two feed a stable sort
+  with a per-type cap of 3, so the tie decided which rows were injected even below the LIMIT.
+  `hook-llm.mjs`'s `existingFast` had no ORDER BY at all and upgraded the LOWEST-id fast row
+  of a session; with two fast rows (Stop plus the unguarded SessionStart /clear path — 74 live
+  sessions have more than one) that stamped the newest `created_at_epoch` below a higher id,
+  the one shape that makes the summaries' `id DESC` tiebreakers pick the older write. It now
+  upgrades the highest id. Each of the six was reverted alone and killed by its own case only.
+  Live tie groups 0 over 162 observations and 452 summaries (read-only, 2026-09-26T08:38Z).
+  Judged and left: the two `session_handoffs` reads at `hook-context.mjs` "Working State"
+  (same reason as above; the session-scoped arm is also PK-unique, one row at most). Not
+  judged here: the `deferred_work` ordering (`priority DESC, created_at_epoch ASC`, whose open
+  question is whether the ROW_NUMBER ordinal and the display order agree on a tie).
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie

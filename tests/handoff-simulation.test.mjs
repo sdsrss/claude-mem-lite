@@ -87,7 +87,7 @@ function simulateSessionStartOutput(db, project, prevClearHandoff) {
     .prepare(
       `
     SELECT request, completed, next_steps, remaining_items, lessons, key_decisions, created_at
-    FROM session_summaries WHERE project = ? ORDER BY created_at_epoch DESC LIMIT 1
+    FROM session_summaries WHERE project = ? ORDER BY created_at_epoch DESC, id DESC LIMIT 1
   `,
     )
     .get(project);
@@ -542,7 +542,7 @@ describe('Scenario 5: fast summary deduplication', () => {
     const existingFast = db
       .prepare(
         `
-      SELECT id FROM session_summaries WHERE memory_session_id = ? AND notes = 'fast' LIMIT 1
+      SELECT id FROM session_summaries WHERE memory_session_id = ? AND notes = 'fast' ORDER BY id DESC LIMIT 1
     `,
       )
       .get('sess-1');

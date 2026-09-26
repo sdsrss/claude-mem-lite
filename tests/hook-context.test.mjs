@@ -1151,3 +1151,67 @@ function extractSection(text, header) {
   }
   return lines.slice(startIdx, endIdx).join('\n');
 }
+
+// ─── D#75: created_at_epoch ties break newest-id-first ──────────────────────
+// Four reads here ordered by created_at_epoch DESC alone, so a same-millisecond tie came
+// back ascending id (oldest first): the obs and session pools feed a stable sort and a
+// LIMIT, the fallback feeds LIMIT 5, and the latest-summary read is LIMIT 1. Latent: 0 tie
+// groups over the live DB's 162 observations and 452 summaries (read-only, 2026-09-26).
+
+describe('D#75: created_at_epoch ties break newest-id-first', () => {
+  let db;
+  const E = Date.now() - 1000;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-tie', project: 'tie' });
+  });
+  afterEach(() => db.close());
+
+  function obs(project, title) {
+    return db
+      .prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+         VALUES ('sess-tie', ?, '', 'discovery', ?, '', '', '', '', '[]', '[]', 1, datetime('now'), ?)`,
+      )
+      .run(project, title, E).lastInsertRowid;
+  }
+  function summary(request) {
+    return db
+      .prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
+         VALUES ('sess-tie', 'tie', ?, 'done', datetime('now'), ?)`,
+      )
+      .run(request, E).lastInsertRowid;
+  }
+
+  it('the observation pool keeps the newest tied rows', () => {
+    const ids = [1, 2, 3, 4, 5].map((i) => Number(obs('tie', `tie discovery number ${i}`)));
+    const picked = selectWithTokenBudget(db, 'tie').observations.map((o) => o.id);
+    expect(picked.length, 'premise: the per-type cap of 3 chose among the five').toBe(3);
+    expect(picked.sort((a, b) => a - b)).toEqual(ids.slice(2));
+  });
+
+  it('the session pool keeps the newest tied rows at its LIMIT', () => {
+    const ids = [...Array(12)].map((_, i) => Number(summary(`tied request ${i}`)));
+    const picked = selectWithTokenBudget(db, 'tie').summaries.map((s) => s.id);
+    expect(picked.length, 'premise: the whole pool of 10 fit the budget').toBe(10);
+    expect(picked.sort((a, b) => a - b)).toEqual(ids.slice(2));
+  });
+
+  it('the cross-project fallback keeps the newest tied rows', () => {
+    const ids = [...Array(7)].map((_, i) => Number(obs('elsewhere', `fallback discovery ${i}`)));
+    const out = buildSessionContextLines(db, 'tie');
+    expect(out, 'premise: the Recent table rendered').toMatch(/### Recent/);
+    const shown = [...out.matchAll(/^\| #(\d+) \|/gm)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    expect(shown).toEqual(ids.slice(2));
+  });
+
+  it('Last Session is the newest tied summary', () => {
+    summary('older tied request');
+    summary('newer tied request');
+    const out = buildSessionContextLines(db, 'tie');
+    expect(out, 'premise: the Last Session block rendered').toMatch(/### Last Session/);
+    expect(out).toContain('Request: newer tied request');
+    expect(out).not.toContain('Request: older tied request');
+  });
+});

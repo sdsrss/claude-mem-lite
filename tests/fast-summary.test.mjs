@@ -177,3 +177,16 @@ describe('FAST_SUMMARY_LIMITS', () => {
     expect(FAST_SUMMARY_LIMITS.exitRestart).toEqual(FAST_SUMMARY_LIMITS.sessionStart);
   });
 });
+
+describe('readFastSummarySource: a created_at_epoch tie keeps the newest titles (D#75)', () => {
+  it('lists the five highest ids of seven tied observations', () => {
+    for (let i = 0; i < 7; i++) {
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+         VALUES ('s1', 'p', '', 'change', ?, '', '', '', '', '[]', '[]', 1, datetime('now'), 1000)`,
+      ).run(`tied title ${i}`);
+    }
+    const { completed } = readFastSummarySource(db, 's1');
+    expect(completed.split('; ')).toEqual([6, 5, 4, 3, 2].map((i) => `tied title ${i}`));
+  });
+});

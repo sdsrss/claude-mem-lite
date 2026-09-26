@@ -2145,7 +2145,7 @@ function saveHandoffAndFastSummary(
 
     // Build fast synchronous summary for immediate context availability.
     // Background llm-summary will produce a richer Haiku version later;
-    // context injection query (ORDER BY created_at_epoch DESC) auto-prefers latest.
+    // context injection query (ORDER BY created_at_epoch DESC, id DESC) auto-prefers latest.
     try {
       const { request: fastRequestRaw, completed: fastCompletedRaw } = readFastSummarySource(
         db,

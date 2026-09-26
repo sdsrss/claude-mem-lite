@@ -217,7 +217,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
         OR (created_at_epoch > ? AND importance >= 2)
         OR (created_at_epoch > ? AND importance >= 3)
       )
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ${KEYCTX_POOL_OBS}
   `,
     )
@@ -229,7 +229,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     SELECT id, request, completed, next_steps, created_at_epoch
     FROM session_summaries
     WHERE project = ? AND created_at_epoch > ?
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ${KEYCTX_POOL_SESS}
   `,
     )
@@ -601,7 +601,7 @@ export function buildSessionContextLines(
           (created_at_epoch > ? AND importance >= 1)
           OR (created_at_epoch > ? AND importance >= 2)
         )
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT 5
     `,
       )
@@ -615,7 +615,7 @@ export function buildSessionContextLines(
     SELECT request, completed, next_steps, remaining_items, lessons, key_decisions, created_at
     FROM session_summaries
     WHERE project = ?
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT 1
   `,
     )

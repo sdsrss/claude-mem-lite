@@ -1487,6 +1487,7 @@ ${obsList}`;
           `
         SELECT id FROM session_summaries
         WHERE memory_session_id = ? AND notes = 'fast'
+        ORDER BY id DESC
         LIMIT 1
       `,
         )

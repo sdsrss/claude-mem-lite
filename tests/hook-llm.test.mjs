@@ -1963,6 +1963,48 @@ describe('handleLLMSummary', () => {
     expect(summaries[0].completed).toBe('Basic auth flow with login/logout');
   });
 
+  it('with two fast rows for one session, upgrades the newest, so id order stays write order (D#75)', async () => {
+    // Stop writes a fast row and SessionStart's /clear path writes another for the same
+    // session unguarded, so two can exist (74 live sessions, 2026-09-26). Upgrading the
+    // lower id stamped it with the newest created_at_epoch below a higher id, which is the
+    // one shape that breaks the id DESC tiebreakers on session_summaries.
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const fast = db.prepare(
+      `
+      INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, created_at, created_at_epoch)
+      VALUES (?, ?, ?, '', '', 'fast completed', '', '', '[]', '[]', 'fast', ?, ?)
+    `,
+    );
+    const t0 = Date.now() - 60000;
+    const older = Number(
+      fast.run('test-session', 'test-proj', 'stop fast', new Date(t0).toISOString(), t0).lastInsertRowid,
+    );
+    const newer = Number(
+      fast.run('test-session', 'test-proj', 'clear fast', new Date(t0 + 1000).toISOString(), t0 + 1000)
+        .lastInsertRowid,
+    );
+    db.prepare(
+      `
+      INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+      VALUES (?, ?, '', 'feature', 'obs title', '', 'Narrative text', '', '', '[]', '[]', 1, ?, ?)
+    `,
+    ).run('test-session', 'test-proj', new Date().toISOString(), Date.now());
+
+    await handleLLMSummary();
+
+    const rows = db
+      .prepare(
+        'SELECT id, notes, created_at_epoch FROM session_summaries WHERE memory_session_id = ? ORDER BY id',
+      )
+      .all('test-session');
+    expect(
+      rows.map((r) => r.id),
+      'premise: upgraded in place, no third row',
+    ).toEqual([older, newer]);
+    expect(rows.find((r) => r.notes === 'llm')?.id).toBe(newer);
+    expect(rows[0].created_at_epoch).toBeLessThanOrEqual(rows[1].created_at_epoch);
+  });
+
   it('skips summary when no observations exist', async () => {
     insertSession(db, { id: 'test-session', project: 'test-proj' });
 
