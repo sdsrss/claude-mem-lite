@@ -25,7 +25,7 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
-import { mergeModelSummary } from './lib/fast-summary.mjs';
+import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -1380,6 +1380,10 @@ export async function handleLLMSummary() {
   try {
     const sessionId = process.argv[3] || getSessionId();
     const project = process.argv[4] || inferProject();
+    // The spawning Stop's epoch (absent for the /clear spawn and pre-upgrade workers). Checked
+    // before the model call and again in the write's transaction: a later Stop's worker reads
+    // a superset of this input, and two workers can finish out of order (P3-6).
+    const spawnEpoch = Number(process.argv[5]);
 
     // Exclude LOW_SIGNAL hook-llm fallback titles ("Error: files +2 more: ...",
     // "Modified X", "Worked on X", etc.) from the Haiku summary input — they
@@ -1438,6 +1442,10 @@ ${obsList}`;
 
     let raw, llmParsed;
     try {
+      if (summarySuperseded(db, sessionId, spawnEpoch)) {
+        debugLog('DEBUG', 'llm-summary', 'a later Stop owns this session summary, skipping');
+        return;
+      }
       raw = await callLLM(prompt, BG_LLM_TIMEOUT_MS);
       llmParsed = parseJsonFromLLM(raw);
     } finally {
@@ -1502,7 +1510,8 @@ ${obsList}`;
         lessons: lessonsJson,
         key_decisions: decisionsJson,
       });
-      mergeModelSummary(db, { sessionId, project, fields: safe, now });
+      if (!mergeModelSummary(db, { sessionId, project, fields: safe, now, spawnEpoch }))
+        debugLog('DEBUG', 'llm-summary', 'a later Stop landed during the model call, reply dropped');
     }
   } finally {
     db.close();

@@ -1075,13 +1075,20 @@ function flushEpisodeAtStop(sessionId, project) {
  * parallel-safe row identity). Without the split, CC UUID-based queries miss
  * user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
  */
-function markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot }) {
+function markSessionCompletedAndSaveHandoff(
+  db,
+  { sessionId, project, ccSessionId, episodeSnapshot, stopEpoch },
+) {
+  // Every Stop, not only the first: Stop fires per assistant turn, and `status = 'active'` alone
+  // matched the first turn only, so completed_at kept the first turn's end for the whole
+  // session. completed_at_epoch is now the session's LATEST Stop, which the llm-summary worker
+  // compares against its own Stop's epoch to learn that a later worker owns the row (P3-6).
   db.prepare(
     `
     UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ?
-    WHERE content_session_id = ? AND status = 'active'
+    WHERE content_session_id = ? AND status IN ('active', 'completed')
   `,
-  ).run(new Date().toISOString(), Date.now(), sessionId);
+  ).run(new Date(stopEpoch).toISOString(), stopEpoch, sessionId);
   // Save handoff snapshot for cross-session continuity.
   // sessionId = mem-internal (query key); ccSessionId = CC UUID (scope key for
   // parallel-safe row identity). Without the split, CC UUID-based queries miss
@@ -1577,11 +1584,13 @@ async function handleStop() {
 
   flushEpisodeAtStop(sessionId, project);
 
-  // Mark session completed + save handoff (sync, instant)
+  // Mark session completed + save handoff (sync, instant). The same epoch goes to the summary
+  // worker below, so it can tell whether a later Stop has superseded it.
+  const stopEpoch = Date.now();
   const db = openDb();
   if (db) {
     try {
-      markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot });
+      markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot, stopEpoch });
       // Citations first: they read the subagent transcripts before the parent, so the parent is
       // parsed once and stays memoized (D#152). The summary reads the parent's tail on every
       // turn; run before them, it parsed the parent a second time in any session with subagents.
@@ -1600,7 +1609,8 @@ async function handleStop() {
   // waits on, then recreates the sandbox tree behind the test's cleanup. Any
   // grace period for that is a race, not a barrier — the post-tag review timed a
   // recreate at 432ms and watched a 300ms grace lose.
-  if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) spawnBackground('llm-summary', sessionId, project);
+  if (!process.env.CLAUDE_MEM_SKIP_SUMMARY)
+    spawnBackground('llm-summary', sessionId, project, String(stopEpoch));
 
   // The session file deliberately SURVIVES Stop (R10-P1-1). It used to be unlinked here,
   // on the model "Stop = /exit = the session is over". The host does not work that way:

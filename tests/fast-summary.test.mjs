@@ -496,3 +496,57 @@ describe('one summary row per session', () => {
     expect(one('s3').remaining_items.length).toBeLessThanOrEqual(20);
   });
 });
+
+// P3-6 (v6.13.5 third review): Stop spawns one model worker per turn, and two workers of
+// consecutive turns can finish out of order, so the older reply landed last and overwrote the
+// newer one's model fields. A worker now carries its Stop's epoch; sdk_sessions.completed_at_epoch
+// holds the session's LATEST Stop, and a worker whose Stop is older than that writes nothing —
+// the newer Stop's worker summarizes a superset of its input.
+describe('a model reply from a superseded Stop does not land (P3-6)', () => {
+  const T = NOW.getTime();
+  const setLatestStop = (sid, epoch) =>
+    db.prepare('UPDATE sdk_sessions SET completed_at_epoch = ? WHERE content_session_id = ?').run(epoch, sid);
+  const seedRow = (sid) =>
+    insertFastSummary(db, {
+      sessionId: sid,
+      project: 'p',
+      now: NOW,
+      values: { request: 'opening', completed: 'titles' },
+      limits: FAST_SUMMARY_LIMITS.stop,
+    });
+  const model = (sid, spawnEpoch) =>
+    mergeModelSummary(db, {
+      sessionId: sid,
+      project: 'p',
+      fields: { request: 'model request', next_steps: 'model next' },
+      now: new Date(T + 60_000),
+      spawnEpoch,
+    });
+  const read = (sid) =>
+    db.prepare('SELECT request, next_steps FROM session_summaries WHERE memory_session_id = ?').all(sid);
+
+  it('skips the write when a newer Stop exists, and reports it', () => {
+    seedRow('s1');
+    setLatestStop('s1', T + 2000);
+    expect(model('s1', T + 1000)).toBe(false);
+    expect(read('s1')).toEqual([{ request: 'opening', next_steps: '' }]);
+  });
+
+  it('skips the INSERT too, for a session with no row yet', () => {
+    setLatestStop('s1', T + 2000);
+    expect(model('s1', T + 1000)).toBe(false);
+    expect(read('s1')).toEqual([]);
+  });
+
+  it('writes when its own Stop is the latest, when no epoch was passed, and when none is stored', () => {
+    for (const sid of ['s1', 's2', 's3', 's4']) seedRow(sid);
+    setLatestStop('s1', T + 1000);
+    setLatestStop('s2', T + 2000);
+    setLatestStop('s4', T + 2000);
+    expect(model('s1', T + 1000), 'its own Stop').toBe(true);
+    expect(model('s2', undefined), 'a spawn without an epoch (/clear, a pre-upgrade worker)').toBe(true);
+    expect(model('s3', T + 1000), 'no Stop recorded').toBe(true);
+    expect(model('s4', Number('')), 'an empty argv epoch is not epoch 0').toBe(true);
+    for (const sid of ['s1', 's2', 's3', 's4']) expect(read(sid)[0].request, sid).toBe('model request');
+  });
+});

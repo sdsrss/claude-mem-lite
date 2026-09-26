@@ -2054,6 +2054,60 @@ describe('handleLLMSummary', () => {
   const rowsOf = (sid = 'test-session') =>
     db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ? ORDER BY id').all(sid);
 
+  // P3-6: a worker carries its Stop's epoch in argv[5]; once a later Stop has been recorded
+  // (sdk_sessions.completed_at_epoch), that later Stop's worker owns the row. Checked twice:
+  // before the model call (saves the call) and in the write's transaction (the later Stop can
+  // land during the round trip).
+  describe('a worker whose Stop was superseded (P3-6)', () => {
+    const originalArgv5 = process.argv[5];
+    const T = Date.now() - 60_000;
+    const latestStop = (epoch) =>
+      db
+        .prepare('UPDATE sdk_sessions SET completed_at_epoch = ? WHERE content_session_id = ?')
+        .run(epoch, 'test-session');
+    beforeEach(() => {
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+      addObs();
+      addRow('test-session', { request: 'fast request', epoch: T });
+    });
+    afterEach(() => {
+      process.argv[5] = originalArgv5;
+    });
+
+    it('does not call the model when a later Stop is already recorded', async () => {
+      latestStop(T + 2000);
+      process.argv[5] = String(T + 1000);
+
+      await handleLLMSummary();
+
+      expect(callLLM).not.toHaveBeenCalled();
+      expect(rowsOf().map((r) => r.request)).toEqual(['fast request']);
+    });
+
+    it('does not write when a later Stop lands during the model call', async () => {
+      latestStop(T + 1000);
+      process.argv[5] = String(T + 1000);
+      callLLM.mockImplementationOnce(() => {
+        latestStop(T + 2000);
+        return JSON.stringify({ request: 'stale model request', completed: 'stale' });
+      });
+
+      await handleLLMSummary();
+
+      expect(callLLM, 'premise: the pre-call check let it through').toHaveBeenCalledTimes(1);
+      expect(rowsOf().map((r) => r.request)).toEqual(['fast request']);
+    });
+
+    it('writes when its own Stop is the latest', async () => {
+      latestStop(T + 1000);
+      process.argv[5] = String(T + 1000);
+
+      await handleLLMSummary();
+
+      expect(rowsOf().map((r) => r.request)).toEqual(['Implementing auth system']);
+    });
+  });
+
   it('a second run upgrades the same row instead of inserting another', async () => {
     insertSession(db, { id: 'test-session', project: 'test-proj' });
     addObs();

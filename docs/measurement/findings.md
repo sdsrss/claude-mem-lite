@@ -687,9 +687,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   fresh report (defect review P2-1..P2-3); the repair's single per-row report tag then read a
   Not-done-only or Failed-only tail as a full report and froze stale titles as its Done
   (delta review P2-1, P2-2) — hence one tag per field. The third review (on `d4b3d73`) found
-  0 P1 / 0 P2; its P3s are repaired except P3-6, reasoned only and older than this work: two
-  workers of consecutive turns can land out of order, so an older model reply can overwrite a
-  newer one's model fields until the next worker (no report field is affected).
+  0 P1 / 0 P2; its P3s were repaired in v6.13.5 except P3-6, reasoned only and older than this
+  work: two workers of consecutive turns can land out of order, so an older model reply can
+  overwrite a newer one's model fields until the next worker (no report field is affected).
+  P3-6 was repaired after the release — see the P3-6 entry below.
   D#79's precondition — an upgraded row of session A dated after the first row of a
   same-project session that STARTED after A — held for **0 of 193** such pairs (3 within 10
   minutes): a built failure, not an observed one. D#80's shapes could not reach the upgrade
@@ -712,7 +713,40 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
   projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other
   installs keep theirs. NOT done: the LLM worker still calls the model once per turn for a
-  session with observations.
+  session with observations (measured below, with P3-6).
+- **2026-09-26, P3-6: a model reply from a superseded Stop no longer lands.** Measured first,
+  read-only, 7 days of this machine's main transcripts (a turn counted only when it holds an
+  assistant message; its end is the last one): 913 gaps between consecutive turn ends in 95
+  sessions — **27 under 10 s, 46 under 20 s** (27 of those 46 open with a
+  `<task-notification>`, so they carry no new user prompt), p25 110 s, p50 373 s; a session's
+  LAST gap was under 20 s in **4 of 86**. One summary call via OpenRouter took 4545 / 4885 /
+  4903 ms (3 calls, one sitting), before the worker's wait for its episode flush. So overlap is
+  real but rare, and the ordering key cannot be the prompt number: task-notification turns
+  tie on it. The key is the Stop itself. `sdk_sessions.completed_at_epoch` turned out to be
+  **frozen at the FIRST turn** — Stop's UPDATE was guarded on `status = 'active'`, which only
+  the first Stop matches (one live session: `completed_at` 10:30, last prompt 12:31); its one
+  reader, `buildFallbackFastSummary`, is nearly unreachable now that every Stop writes a row.
+  Now every Stop records its epoch there (`status IN ('active', 'completed')`) and hands the
+  SAME value to the worker as argv[5]; `summarySuperseded` (`lib/fast-summary.mjs`) is checked
+  before the model call (the later Stop's worker reads a superset of the input, so the call is
+  saved) and again inside `mergeModelSummary`'s transaction (the later Stop can land during the
+  round trip). A spawn without an epoch — /clear, a pre-upgrade worker — always writes. The
+  trade: if the later worker's model call then fails, the row keeps the model fields of an
+  earlier turn, the same staleness P3-6 produced, now needing overlap AND a failed call rather
+  than overlap AND a reversed finish. Evidence: 8 single-site mutations (the UPDATE guard, the
+  spawn argument, the UPDATE's epoch read from a fresh clock, `>` → `>=`, the `<= 0` guard, each
+  of the two checks, the merge call's argument) are each killed by a case in
+  `tests/{fast-summary,hook-llm,e2e,bg-spawn-skip-flag-invariant}.test.mjs`; the spawn wire is
+  a source scan because the spawn is off in every e2e case and a real worker calls the model.
+  **Stop's 5 s timeout** (Uncertain in the v6.13.5 report): the 4 largest main transcripts of
+  the week (to 27.8 MB with 18 subagent files; one with 68) timed 164–251 ms for a whole Stop
+  through `scripts/hook-launcher.mjs`, sandboxed on a backup copy of the DB, summary spawn off;
+  `collectSubagentSurface` read 18 and 68 files in 97 and 59 ms, so the subagent arm ran.
+  **Per-turn model calls**, same transcripts: 1008 turns in 95 sessions, and only a
+  session's last reply survives — at one call per turn, (1008 − 95) / 1008 ≈ 91% of calls
+  are overwritten (the real population, turns of sessions with an observation, was not
+  counted); the supersede check saves only those whose successor Stop lands before the call. Summarizing once at
+  session end needs a new hook event — not done.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie

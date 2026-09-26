@@ -363,6 +363,32 @@ describe('Suite 1: Full Session Lifecycle', () => {
 
     db.close();
   });
+
+  it('every Stop records itself as the latest, not only the first (P3-6)', () => {
+    // Stop fires per assistant turn. The UPDATE was guarded on status = 'active', so it ran on
+    // the first turn only and completed_at kept the first turn's end for the whole session.
+    // The summary worker now uses this column to tell whether a later Stop superseded it.
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+    const epochOf = () => {
+      const db = openTestDb(tmpHome);
+      try {
+        return db
+          .prepare('SELECT completed_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?')
+          .get(sessionId).e;
+      } finally {
+        db.close();
+      }
+    };
+
+    runHook('stop', { env: { HOME: tmpHome } });
+    const first = epochOf();
+    runHook('stop', { env: { HOME: tmpHome } });
+    const second = epochOf();
+
+    expect(first, 'premise: the first Stop recorded one').toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+  });
 });
 
 describe('Suite 2: Episode Buffer Management', () => {
