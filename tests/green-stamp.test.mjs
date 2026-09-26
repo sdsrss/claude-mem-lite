@@ -183,6 +183,8 @@ describe('scripts/pre-commit.sh tests block — wiring', () => {
 // shrinks to match the run and "every collected file ran" held for a 1-of-431 run (pre-ship
 // defect review, P2-1). This case runs the real reporter inside a real vitest child.
 describe('green-stamp reporter under a real vitest run', () => {
+  // eslint-disable-next-line no-control-regex
+  const plain = (t) => t.replace(/\x1b\[[0-9;]*m/g, '');
   function setupVitestFixture() {
     for (const rel of [
       ['scripts', 'green-stamp.mjs'],
@@ -207,7 +209,8 @@ describe('green-stamp reporter under a real vitest run', () => {
   }
   function vitest(...args) {
     const env = { ...process.env };
-    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
+    env.NO_COLOR = '1'; // CI forces colour, and ANSI codes split "Test Files" from its count
     return spawnSync(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', ...args], {
       cwd: repo,
       encoding: 'utf8',
@@ -219,12 +222,12 @@ describe('green-stamp reporter under a real vitest run', () => {
     setupVitestFixture();
     const partial = vitest('--exclude', 't/b.test.mjs');
     expect(partial.status, partial.stderr).toBe(0);
-    expect(partial.stdout).toMatch(/Test Files\s+1 passed \(1\)/); // premise: the run WAS partial
+    expect(plain(partial.stdout)).toMatch(/Test Files\s+1 passed \(1\)/); // premise: the run WAS partial
     expect(existsSync(stampPath(repo))).toBe(false);
 
     const full = vitest();
     expect(full.status, full.stderr).toBe(0);
-    expect(full.stdout).toMatch(/Test Files\s+2 passed \(2\)/);
+    expect(plain(full.stdout)).toMatch(/Test Files\s+2 passed \(2\)/);
     expect(existsSync(stampPath(repo))).toBe(true);
     expect(checkStamp(repo, { env: env0 }).reuse).toBe(true);
   }, 60000);
@@ -242,7 +245,8 @@ describe('green-stamp reporter under a real vitest run', () => {
     expect(vitest().status).toBe(0);
     expect(existsSync(stampPath(repo))).toBe(true);
     const env = { ...process.env, GS_FAIL: '1' };
-    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
+    env.NO_COLOR = '1'; // CI forces colour, and ANSI codes split "Test Files" from its count
     const red = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run'], {
       cwd: repo,
       encoding: 'utf8',
