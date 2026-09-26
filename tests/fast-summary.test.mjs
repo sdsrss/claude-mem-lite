@@ -8,7 +8,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { readFastSummarySource, insertFastSummary, FAST_SUMMARY_LIMITS } from '../lib/fast-summary.mjs';
+import {
+  readFastSummarySource,
+  insertFastSummary,
+  newestSummaryId,
+  fillFastSummaryGaps,
+  refreshStructuredSummary,
+  FAST_SUMMARY_LIMITS,
+} from '../lib/fast-summary.mjs';
 import { insertSession } from './test-helpers.mjs';
 
 let db;
@@ -188,5 +195,110 @@ describe('readFastSummarySource: a created_at_epoch tie keeps the newest titles 
     }
     const { completed } = readFastSummarySource(db, 's1');
     expect(completed.split('; ')).toEqual([6, 5, 4, 3, 2].map((i) => `tied title ${i}`));
+  });
+});
+
+// One row per session: the two writers that run against a session that already has a row.
+describe('writes that land on an existing row', () => {
+  const addRow = (sid, { request = '', completed = '', remaining = '', notes = 'fast', epoch }) =>
+    Number(
+      db
+        .prepare(
+          `INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed,
+             next_steps, remaining_items, files_read, files_edited, notes, created_at, created_at_epoch)
+           VALUES (?, 'p', ?, '', '', ?, '', ?, '[]', '[]', ?, ?, ?)`,
+        )
+        .run(sid, request, completed, remaining, notes, new Date(epoch).toISOString(), epoch).lastInsertRowid,
+    );
+  const get = (id) => db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(id);
+  const secret = 'gh' + 'p_' + 'B'.repeat(36); // see the scrub-order case above
+
+  it('newestSummaryId: newest by epoch, id breaking a tie; null for a session with none', () => {
+    const t = NOW.getTime();
+    addRow('s1', { epoch: t + 5 });
+    const tiedLow = addRow('s1', { epoch: t + 9 });
+    const tiedHigh = addRow('s1', { epoch: t + 9 });
+    addRow('s2', { epoch: t + 99 });
+    expect(tiedHigh).toBeGreaterThan(tiedLow);
+    expect(newestSummaryId(db, 's1')).toBe(tiedHigh);
+    expect(newestSummaryId(db, 's3')).toBeNull();
+  });
+
+  it('fillFastSummaryGaps fills only empty fields and moves the row to now', () => {
+    // Two rows with opposite empty / non-empty columns, so each column is seen both ways.
+    const a = addRow('s1', {
+      request: '',
+      completed: 'KEPT-DONE',
+      remaining: '',
+      epoch: NOW.getTime() - 1000,
+    });
+    const b = addRow('s2', {
+      request: 'KEPT-REQ',
+      completed: '',
+      remaining: 'KEPT-LEFT',
+      epoch: NOW.getTime() - 1000,
+    });
+    const later = new Date(NOW.getTime() + 60000);
+    const values = { request: 'new request', completed: 'new done', remaining: 'new left' };
+    for (const id of [a, b])
+      fillFastSummaryGaps(db, { id, values, limits: FAST_SUMMARY_LIMITS.sessionStart, now: later });
+    expect([get(a).request, get(a).completed, get(a).remaining_items]).toEqual([
+      'new request',
+      'KEPT-DONE',
+      'new left',
+    ]);
+    expect([get(b).request, get(b).completed, get(b).remaining_items]).toEqual([
+      'KEPT-REQ',
+      'new done',
+      'KEPT-LEFT',
+    ]);
+    expect(get(a).created_at_epoch).toBe(later.getTime());
+    expect(get(a).created_at).toBe(later.toISOString());
+  });
+
+  it('fillFastSummaryGaps scrubs before truncating', () => {
+    const id = addRow('s1', { epoch: NOW.getTime() });
+    fillFastSummaryGaps(db, {
+      id,
+      values: { request: 'r', completed: 'prefix ' + secret },
+      limits: { ...FAST_SUMMARY_LIMITS.sessionStart, completed: 20 },
+      now: NOW,
+    });
+    expect(get(id).completed).not.toContain('gh' + 'p_B');
+    expect(get(id).completed.length).toBeLessThanOrEqual(20);
+  });
+
+  it('refreshStructuredSummary: a new Done replaces, an absent Done keeps, Not done always replaces', () => {
+    const id = addRow('s1', { completed: 'OLD-DONE', remaining: 'OLD-LEFT', epoch: NOW.getTime() });
+    refreshStructuredSummary(db, { id, values: { remaining: 'NEW-LEFT' }, limits: FAST_SUMMARY_LIMITS.stop });
+    expect(get(id).completed).toBe('OLD-DONE');
+    expect(get(id).remaining_items).toBe('NEW-LEFT');
+    refreshStructuredSummary(db, { id, values: { completed: 'NEW-DONE' }, limits: FAST_SUMMARY_LIMITS.stop });
+    expect(get(id).completed).toBe('NEW-DONE');
+    expect(get(id).remaining_items, 'a report with no Not done says nothing is left').toBe('');
+    expect(get(id).created_at_epoch, 'the timestamp is not touched').toBe(NOW.getTime());
+  });
+
+  it('refreshStructuredSummary: notes follow the latest report and keep a provenance tag', () => {
+    const id = addRow('s1', { notes: 'Failed: old', epoch: NOW.getTime() });
+    const limits = FAST_SUMMARY_LIMITS.stop;
+    refreshStructuredSummary(db, { id, values: { completed: 'd', notes: 'Uncertain: new' }, limits });
+    expect(get(id).notes).toBe('Uncertain: new');
+    refreshStructuredSummary(db, { id, values: { completed: 'd' }, limits });
+    expect(get(id).notes, 'stale Failed / Uncertain text is not kept as if it were current').toBe('fast');
+    db.prepare("UPDATE session_summaries SET notes = 'llm' WHERE id = ?").run(id);
+    refreshStructuredSummary(db, { id, values: { completed: 'd' }, limits });
+    expect(get(id).notes).toBe('llm');
+  });
+
+  it('refreshStructuredSummary scrubs before truncating', () => {
+    const id = addRow('s1', { epoch: NOW.getTime() });
+    refreshStructuredSummary(db, {
+      id,
+      values: { completed: 'prefix ' + secret },
+      limits: { ...FAST_SUMMARY_LIMITS.stop, completed: 20 },
+    });
+    expect(get(id).completed).not.toContain('gh' + 'p_B');
+    expect(get(id).completed.length).toBeLessThanOrEqual(20);
   });
 });

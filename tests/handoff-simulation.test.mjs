@@ -9,6 +9,7 @@ import {
   extractUnfinishedSummary,
 } from '../hook-handoff.mjs';
 import { buildSummaryLines } from '../hook-context.mjs';
+import { newestSummaryId } from '../lib/fast-summary.mjs';
 import { truncate } from '../utils.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
 import * as taskReaderModule from '../lib/task-reader.mjs';
@@ -538,20 +539,16 @@ describe('Scenario 5: fast summary deduplication', () => {
     expect(summaries1.length).toBe(1);
     expect(summaries1[0].notes).toBe('fast');
 
-    // Simulate LLM summary upgrade (what handleLLMSummary does)
-    const existingFast = db
-      .prepare(
-        `
-      SELECT id FROM session_summaries WHERE memory_session_id = ? AND notes = 'fast' ORDER BY id ASC LIMIT 1
-    `,
-      )
-      .get('sess-1');
-    expect(existingFast).toBeTruthy();
+    // Stand-in for handleLLMSummary's upgrade, which tests/hook-llm.test.mjs drives for real.
+    // This case is about buildSummaryLines over an upgraded row, so it only borrows the
+    // production row selector (and, like production, leaves the timestamp alone).
+    const existingId = newestSummaryId(db, 'sess-1');
+    expect(existingId).not.toBeNull();
 
     db.prepare(
       `
       UPDATE session_summaries
-      SET request=?, completed=?, next_steps=?, remaining_items=?, notes='llm', created_at_epoch=?
+      SET request=?, completed=?, next_steps=?, remaining_items=?, notes='llm'
       WHERE id = ?
     `,
     ).run(
@@ -559,8 +556,7 @@ describe('Scenario 5: fast summary deduplication', () => {
       'JWT auth middleware with refresh tokens',
       'Add integration tests',
       'Rate limiting',
-      Date.now(),
-      existingFast.id,
+      existingId,
     );
 
     // After upgrade: should be exactly 1 summary, not 2

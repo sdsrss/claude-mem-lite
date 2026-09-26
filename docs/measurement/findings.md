@@ -603,7 +603,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   row is one of them, `id` order disagrees with `created_at_epoch` order on **0**; the
   handoff table reads **2 of 173** same-project pairs (rowid) because it is rewritten on every
   Stop rather than once. Read-only, 2026-09-26T08:21Z; a snapshot of how often each table is
-  rewritten, not a structural guarantee.
+  rewritten, not a structural guarantee. **Moved, not gone (D#79, same day):** the LLM upgrade
+  no longer touches `created_at_epoch`; SessionStart's /clear path now moves an EXISTING row to
+  `now` instead of inserting one (`fillFastSummaryGaps`), so that write is where `id` and
+  `created_at_epoch` order can now disagree, and `id DESC` on this table stays best-effort.
   **2026-09-26, D#75: five more reads in the same family, and one writer.** `hook-context.mjs`'s observation
   pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
   read (LIMIT 1), plus `lib/fast-summary.mjs`'s observation titles (LIMIT 5), now end on
@@ -623,8 +626,9 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   reach the upgrade today (09:17Z): the pairs picture what the two writers produce, not a
   firing rate. A Stop row whose tail carries Failed / Uncertain lines is not stored as
   `notes = 'fast'` at all, and two further shapes lose the structural lines whatever the
-  order — D#80 (delta review P3-2..P3-4). It now says `ORDER BY id ASC`, which is the old behaviour spelled out,
-  pinned by a case with a degraded Haiku reply. The draft's premise was also wrong: upgrading
+  order — D#80 (delta review P3-2..P3-4). It then said `ORDER BY id ASC`, the old behaviour spelled out;
+  that was replaced the same day by one summary row per session (next bullet), which retires
+  the question of which fast row to upgrade. The draft's premise was also wrong: upgrading
   is not "the one shape" that breaks id order — a late upgrade of the PREVIOUS session's row
   re-stamps it above the next session's newer row with no tie at all (same review, P3-1;
   D#79). So on session_summaries `id DESC` resolves an insert/insert tie correctly and is
@@ -634,10 +638,43 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   Judged and left: the two `session_handoffs` reads at `hook-context.mjs` "Working State"
   (same reason as above; the session-scoped arm is also PK-unique, one row at most). Not
   judged here: the `deferred_work` ordering (`priority DESC, created_at_epoch ASC`, whose open
-  question is whether the ROW_NUMBER ordinal and the display order agree on a tie),
-  `hook-llm.mjs`'s `linkRelatedObservations` read (`ORDER BY created_at_epoch DESC LIMIT 50`
-  upstream of a JS file-overlap filter, so a reachability bound), and `hook.mjs`'s
-  `buildFallbackFastSummary` (`sdk_sessions … ORDER BY completed_at_epoch DESC LIMIT 1`).
+  question is whether the ROW_NUMBER ordinal and the display order agree on a tie).
+  Judged later the same day: `hook-llm.mjs`'s `linkRelatedObservations` scan (`ORDER BY
+  created_at_epoch DESC LIMIT 50`, upstream of a JS file-overlap filter whose first 5
+  candidates get linked) now ends on `id DESC` — a built tie of 7 rows linked ids 1..5, the
+  OLDEST, and links 7..3 after; the new case is red with the tiebreaker reverted. `hook.mjs`'s
+  `buildFallbackFastSummary` (`sdk_sessions … ORDER BY completed_at_epoch DESC LIMIT 1`) is
+  judged and LEFT: 0 same-project `completed_at_epoch` ties in `sdk_sessions` (read-only,
+  09:40Z), the table is written only by `INSERT OR IGNORE` so `id` is creation order, and the
+  path runs only for a startup within 2 minutes of an /exit whose session has no summary yet.
+- **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
+  assumed one Stop per session, which has been false since R10-P1-1 (Stop fires per assistant
+  turn and the mem session survives it). Three consequences, measured read-only at 09:34Z:
+  (1) the LLM worker, spawned by EVERY Stop, upgraded the `notes = 'fast'` row once and then
+  INSERTed on every later turn: **458 rows for 312 sessions**; one session 37 rows in 65
+  minutes (37 distinct `completed`), another 15. Session search for that session's own words
+  returned it for **10 of 10** hits ("test suites") and **9 of 10** ("shell scripts"), and
+  `stats` counts rows as sessions. (2) Stop's fast baseline was guarded on "no row yet", so its
+  structural Done / Not done came from the FIRST turn only: over 7 days of this machine's
+  transcripts (09:40Z, 107 sessions with a prompt), **20 of the 31** sessions that wrote §10
+  markers had a first-turn extract that differs from their last report, and 14 of the 31 had
+  no marker on turn 1 at all. (3) SessionStart's /clear path inserted a second row beside
+  Stop's (76 sessions). Now every writer lands on the session's newest row
+  (`newestSummaryId`) and inserts only when there is none: Stop refreshes it from any tail
+  carrying Done / Not done, /clear fills its empty fields and moves it to `now`, and the LLM
+  upgrade overwrites with the model's fields, floors an empty one on the row itself and then
+  on the session's older rows newest first, keeps a Failed / Uncertain `notes`, and **does not
+  move the timestamp** (D#79). D#79's precondition — an upgraded row of session A dated after
+  the first row of a same-project session that STARTED after A — held for **0 of 193** such
+  pairs (3 within 10 minutes), so D#79 was a built failure, not an observed one; D#80 could
+  not fire live either (none of the two-row sessions has an observation). Evidence: each of
+  22 single-site mutations (selector, re-stamp, floor per field, floor order, notes, Stop
+  refresh, /clear fill per column, fill timestamp, tie order) is killed by its intended case
+  in `tests/{hook-llm,fast-summary,e2e}.test.mjs`. `stats` (CLI + MCP), `status` and `doctor`
+  now count DISTINCT `memory_session_id` for their "N sessions" (each of the four counts red
+  when reverted alone). NOT done: the 146 surplus legacy rows stay
+  (deleting them is a data change for the user to authorise), and the LLM worker still calls
+  the model once per turn for a session with observations.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie

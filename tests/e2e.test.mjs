@@ -985,6 +985,106 @@ describe('Suite 4: Session Summary', { retry: 2 }, () => {
   });
 });
 
+describe('Suite 4b: one summary row per session across turns and /clear', () => {
+  // Stop fires once per assistant TURN and the mem session survives it, so the summary
+  // writers run many times against a session that already has a row. Stop used to write
+  // only on the first turn (its existence guard predates the per-turn Stop), which kept the
+  // first turn's Done / Not done forever; and SessionStart's /clear path INSERTed a second
+  // row beside it. Both now land on the session's one row.
+  const env = () => ({ HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1' });
+  let transcript;
+  const turn = (prompt, reply) => {
+    const lines = [
+      { type: 'user', message: { role: 'user', content: prompt } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } },
+    ];
+    writeFileSync(transcript, lines.map((l) => JSON.stringify(l) + '\n').join(''), { flag: 'a' });
+  };
+  const stop = () =>
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+      env: env(),
+    });
+  const rowsOf = (sid) => {
+    const db = openTestDb(tmpHome);
+    try {
+      return db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ? ORDER BY id').all(sid);
+    } finally {
+      db.close();
+    }
+  };
+  const seedPrompt = (sid) => {
+    const db = openTestDb(tmpHome);
+    try {
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES (?, 'opening request', 1, ?, ?)`,
+      ).run(sid, new Date().toISOString(), Date.now());
+    } finally {
+      db.close();
+    }
+  };
+
+  beforeEach(() => {
+    transcript = join(tmpHome, 'transcript-4b.jsonl');
+    writeFileSync(transcript, '');
+  });
+
+  it("a later turn's report replaces the first turn's Done / Not done", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+
+    turn('start', 'Done: FIRST-DONE\nNot done: FIRST-LEFT');
+    stop();
+    const first = rowsOf(sid);
+    expect(first, 'premise: the first Stop wrote the row').toHaveLength(1);
+    expect(first[0].completed).toContain('FIRST-DONE');
+    expect(first[0].remaining_items).toContain('FIRST-LEFT');
+
+    turn('go on', 'Done: SECOND-DONE');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('SECOND-DONE');
+    expect(rows[0].remaining_items, 'a report with nothing left clears the old Not done').toBe('');
+    expect(rows[0].created_at_epoch, 'the refresh does not move the row').toBe(first[0].created_at_epoch);
+  });
+
+  it('a turn without a report leaves the row alone', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: KEPT-DONE\nNot done: KEPT-LEFT');
+    stop();
+    turn('a question', 'It is in lib/fast-summary.mjs.');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('KEPT-DONE');
+    expect(rows[0].remaining_items).toContain('KEPT-LEFT');
+  });
+
+  it('/clear fills the empty fields of the previous session row instead of inserting another', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Not done: STOP-LEFT');
+    stop();
+    const before = rowsOf(sid);
+    expect(before, 'premise: Stop wrote one row').toHaveLength(1);
+    expect(before[0].remaining_items).toContain('STOP-LEFT');
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env: env() });
+
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].request).toBe('opening request');
+    expect(rows[0].remaining_items, 'existing content wins over the /clear values').toContain('STOP-LEFT');
+    expect(rows[0].created_at_epoch).toBeGreaterThanOrEqual(before[0].created_at_epoch);
+  });
+});
+
 describe('Suite 5: User Prompt', () => {
   it('user-prompt stores scrubbed text in DB', () => {
     runHook('session-start', { env: { HOME: tmpHome } });

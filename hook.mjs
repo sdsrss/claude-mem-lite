@@ -88,7 +88,14 @@ import {
   lastDbUnusable,
 } from './hook-shared.mjs';
 import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
-import { readFastSummarySource, insertFastSummary, FAST_SUMMARY_LIMITS } from './lib/fast-summary.mjs';
+import {
+  readFastSummarySource,
+  insertFastSummary,
+  newestSummaryId,
+  refreshStructuredSummary,
+  fillFastSummaryGaps,
+  FAST_SUMMARY_LIMITS,
+} from './lib/fast-summary.mjs';
 import { formatHookError } from './lib/native-binding-hint.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
 import { queueHookContext, queueHookSystemMessage, flushHookStdout } from './lib/hook-stdout.mjs';
@@ -1089,58 +1096,69 @@ function markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionI
 
 /** Fast summary baseline — ensures a summary exists even if the background LLM fails. */
 function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
-  // Fast summary baseline — ensures summary exists even if background LLM fails.
-  // T4-P2-B: guard against Stop firing twice for the same session (rare but possible;
-  // mirrors handleSessionStart line 795 hasSummary guard). Uses mem-internal sessionId
-  // as the WHERE key per the top-of-file dual-id invariant (#7789).
+  // Stop fires once per assistant TURN and the mem session survives it (R10-P1-1), so this
+  // runs on every turn of a session. The first turn with anything to say INSERTs the row
+  // (T4-P2-B's guard: never a second row); every later turn whose tail carries a Done or
+  // Not done section REFRESHES that row from it. The guard alone used to stop there, so the
+  // row kept the FIRST turn's report: over 7 days of this machine's transcripts (09:40Z), 20
+  // of the 31 sessions that wrote §10 markers had a first-turn extract different from their
+  // last report. Uses the mem-internal sessionId as the WHERE key per the top-of-file
+  // dual-id invariant (#7789).
   try {
-    const existingSummary = db
-      .prepare('SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1')
-      .get(sessionId);
-    if (!existingSummary) {
-      const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
-
-      // Structural extraction from the assistant's tail message.
-      // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
-      // tail is deterministically parseable without Haiku. Prior baseline left
-      // remaining_items=='' for every session whose Haiku pass failed (≈66%
-      // in prod data), losing the user-visible "Not done" list.
-      let structuredCompleted = '';
-      let structuredNotDone = '';
-      let structuredNotes = '';
-      try {
-        const tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
-        if (tail) {
-          const s = extractStructuredSummary(tail);
-          structuredCompleted = s.done;
-          structuredNotDone = s.notDone;
-          const notesParts = [];
-          if (s.failed) notesParts.push(`Failed: ${s.failed}`);
-          if (s.uncertain) notesParts.push(`Uncertain: ${s.uncertain}`);
-          structuredNotes = notesParts.join('\n');
-        }
-      } catch (e) {
-        debugCatch(e, 'handleStop-structured-extract');
+    // Structural extraction from the assistant's tail message.
+    // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
+    // tail is deterministically parseable without Haiku. Prior baseline left
+    // remaining_items=='' for every session whose Haiku pass failed (≈66%
+    // in prod data), losing the user-visible "Not done" list. The parse is
+    // the memoised one trackCitationsAtStop reads too, so this costs no extra pass.
+    let structuredCompleted = '';
+    let structuredNotDone = '';
+    let structuredNotes = '';
+    try {
+      const tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
+      if (tail) {
+        const s = extractStructuredSummary(tail);
+        structuredCompleted = s.done;
+        structuredNotDone = s.notDone;
+        const notesParts = [];
+        if (s.failed) notesParts.push(`Failed: ${s.failed}`);
+        if (s.uncertain) notesParts.push(`Uncertain: ${s.uncertain}`);
+        structuredNotes = notesParts.join('\n');
       }
+    } catch (e) {
+      debugCatch(e, 'handleStop-structured-extract');
+    }
 
-      const finalCompleted = structuredCompleted || obsCompleted;
-      const finalRemaining = structuredNotDone;
-      const finalNotes = structuredNotes || 'fast';
-
-      if (fastRequestRaw || finalCompleted || finalRemaining) {
-        insertFastSummary(db, {
-          sessionId,
-          project,
-          now: new Date(),
-          values: {
-            request: fastRequestRaw,
-            completed: finalCompleted,
-            remaining: finalRemaining,
-            notes: finalNotes,
-          },
+    const existingId = newestSummaryId(db, sessionId);
+    if (existingId !== null) {
+      if (structuredCompleted || structuredNotDone) {
+        refreshStructuredSummary(db, {
+          id: existingId,
+          values: { completed: structuredCompleted, remaining: structuredNotDone, notes: structuredNotes },
           limits: FAST_SUMMARY_LIMITS.stop,
         });
       }
+      return;
+    }
+
+    const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
+    const finalCompleted = structuredCompleted || obsCompleted;
+    const finalRemaining = structuredNotDone;
+    const finalNotes = structuredNotes || 'fast';
+
+    if (fastRequestRaw || finalCompleted || finalRemaining) {
+      insertFastSummary(db, {
+        sessionId,
+        project,
+        now: new Date(),
+        values: {
+          request: fastRequestRaw,
+          completed: finalCompleted,
+          remaining: finalRemaining,
+          notes: finalNotes,
+        },
+        limits: FAST_SUMMARY_LIMITS.stop,
+      });
     }
   } catch (e) {
     debugCatch(e, 'handleStop-fast-summary');
@@ -2144,8 +2162,8 @@ function saveHandoffAndFastSummary(
     }
 
     // Build fast synchronous summary for immediate context availability.
-    // Background llm-summary will produce a richer Haiku version later;
-    // context injection query (ORDER BY created_at_epoch DESC, id DESC) auto-prefers latest.
+    // The background llm-summary spawned above upgrades this same row in place later,
+    // without moving its timestamp.
     try {
       const { request: fastRequestRaw, completed: fastCompletedRaw } = readFastSummarySource(
         db,
@@ -2166,14 +2184,24 @@ function saveHandoffAndFastSummary(
         if (errors.length > 0) fastRemainingRaw = errors.join('; ');
       }
 
+      // One row per session: when Stop already wrote the previous session's row, fill its
+      // empty fields rather than INSERT a second one beside it (76 live sessions have two).
+      // The gate is unchanged, so the row moves to `now` exactly when the second row used to
+      // be written with it.
       if (fastRequestRaw || fastCompletedRaw) {
-        insertFastSummary(db, {
-          sessionId: prevSessionId,
-          project: prevProject || project,
-          now,
-          values: { request: fastRequestRaw, completed: fastCompletedRaw, remaining: fastRemainingRaw },
-          limits: FAST_SUMMARY_LIMITS.sessionStart,
-        });
+        const values = { request: fastRequestRaw, completed: fastCompletedRaw, remaining: fastRemainingRaw };
+        const existingId = newestSummaryId(db, prevSessionId);
+        if (existingId !== null) {
+          fillFastSummaryGaps(db, { id: existingId, values, limits: FAST_SUMMARY_LIMITS.sessionStart, now });
+        } else {
+          insertFastSummary(db, {
+            sessionId: prevSessionId,
+            project: prevProject || project,
+            now,
+            values,
+            limits: FAST_SUMMARY_LIMITS.sessionStart,
+          });
+        }
       }
     } catch (e) {
       debugCatch(e, 'session-start-fast-summary');

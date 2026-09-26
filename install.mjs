@@ -1604,7 +1604,8 @@ async function status() {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
       const obs = db.prepare('SELECT COUNT(*) as c FROM observations').get();
-      const sess = db.prepare('SELECT COUNT(*) as c FROM session_summaries').get();
+      // DISTINCT, like stats: a session can own several summary rows (legacy duplicates).
+      const sess = db.prepare('SELECT COUNT(DISTINCT memory_session_id) as c FROM session_summaries').get();
       db.close();
       push('ok', 'database', `Database: ${obs.c} observations, ${sess.c} sessions`, {
         exists: true,
@@ -2603,8 +2604,9 @@ async function doctor() {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
       const obsCount = db.prepare('SELECT COUNT(*) as cnt FROM observations').get()?.cnt || 0;
-      // Align with stats / MCP mem_stats: session_summaries, not sdk_sessions
-      const sessCount = db.prepare('SELECT COUNT(*) as cnt FROM session_summaries').get()?.cnt || 0;
+      // Align with stats / MCP mem_stats: session_summaries, not sdk_sessions, counted DISTINCT
+      const sessCount =
+        db.prepare('SELECT COUNT(DISTINCT memory_session_id) as cnt FROM session_summaries').get()?.cnt || 0;
       db.close();
       const stats = `DB stats: ${sizeMB}MB, ${obsCount} observations, ${sessCount} sessions`;
       // The read succeeds on a too-new file — the tables are still there — so this

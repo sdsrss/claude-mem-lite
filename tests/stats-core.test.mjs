@@ -30,6 +30,28 @@ function seed(db) {
 }
 
 describe('computeStatsFeed', () => {
+  it('counts sessions, not summary rows: a session with several rows is one session', () => {
+    // Every Stop used to spawn an LLM summary that INSERTed after the first upgrade, so one
+    // live session had 37 rows; `stats` printed each as a session (458 "sessions", 312 real).
+    const db = createTestDb();
+    try {
+      const now = seed(db);
+      const sum = db.prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, request, created_at, created_at_epoch)
+         VALUES (?, ?, 'r', datetime('now'), ?)`,
+      );
+      sum.run('ms1', 'proj-a', now - 100);
+      sum.run('ms1', 'proj-a', now - 50);
+      sum.run('ms2', 'proj-b', now - 40 * 86400000);
+      const all = computeStatsFeed(db, { project: null, days: 30, now });
+      expect(all.sessTotal.c).toBe(2);
+      expect(all.sessRecent.c).toBe(1);
+      expect(computeStatsFeed(db, { project: 'proj-a', days: 30, now }).sessTotal.c).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it('returns totals, distributions, health and tier data with the twin-block row shapes', () => {
     const db = createTestDb();
     try {

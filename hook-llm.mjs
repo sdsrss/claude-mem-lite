@@ -25,6 +25,7 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
+import { newestSummaryId } from './lib/fast-summary.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -561,7 +562,7 @@ function linkRelatedObservations(db, savedId, obs, episode) {
         `
       SELECT id, files_modified FROM observations
       WHERE id != ? AND created_at_epoch > ? AND project = ?
-      ORDER BY created_at_epoch DESC LIMIT 50
+      ORDER BY created_at_epoch DESC, id DESC LIMIT 50
     `,
       )
       .all(newObs.id, Date.now() - RELATED_OBS_WINDOW_MS, episode.project);
@@ -1481,24 +1482,15 @@ ${obsList}`;
           ? JSON.stringify(llmParsed.key_decisions)
           : null;
 
-      // Upgrade existing fast summary instead of creating a duplicate. With two fast rows
-      // for one session (Stop, then SessionStart's unguarded /clear or /compact path), the LOWEST id is
-      // the Stop row, which carries the structural Done / Not done extract that the COALESCE
-      // floor below preserves. Upgrading the highest id lost that content from Last Session
-      // (v6.13.4 defect review P2-1), so the order is spelled out rather than left to the
-      // index. No order covers every shape: the floor reads only the upgraded row (D#80).
-      const existingFast = db
-        .prepare(
-          `
-        SELECT id FROM session_summaries
-        WHERE memory_session_id = ? AND notes = 'fast'
-        ORDER BY id ASC
-        LIMIT 1
-      `,
-        )
-        .get(sessionId);
+      // Upgrade the session's summary row instead of creating another. This worker runs after
+      // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path, so it
+      // lands on the session's NEWEST row whatever its notes: selecting only `notes = 'fast'`
+      // found nothing once the first run had upgraded that row, and each later turn INSERTed
+      // (one live session: 37 rows in 65 minutes), nor did it see a Stop row whose notes carry
+      // Failed / Uncertain lines (D#80). See lib/fast-summary.mjs for the other two writers.
+      const existingId = newestSummaryId(db, sessionId);
 
-      if (existingFast) {
+      if (existingId !== null) {
         // Preserve structural-extractor content (completed / remaining_items written
         // by handleStop fast-baseline from CLAUDE.md §10 markers) when Haiku returns
         // empty for that field. Without COALESCE, a degraded Haiku pass would erase
@@ -1521,34 +1513,60 @@ ${obsList}`;
           lessons: lessonsJson,
           key_decisions: decisionsJson,
         });
+        // The floor is the upgraded row first, then the session's other rows newest first, so
+        // which row is upgraded no longer decides what a degraded reply keeps: a Stop row's
+        // structural lines survive an upgrade of the /clear row beside it (D#80). Rows older
+        // than the newest exist only from before one-row-per-session or from a race. The
+        // upgraded row's own fields are read by the UPDATE itself, so a concurrent worker's
+        // write to that row is part of the floor.
+        const siblings = db
+          .prepare(
+            `
+          SELECT request, investigated, learned, completed, next_steps, remaining_items, lessons, key_decisions
+          FROM session_summaries
+          WHERE memory_session_id = ? AND id != ?
+          ORDER BY created_at_epoch DESC, id DESC
+        `,
+          )
+          .all(sessionId, existingId);
+        const floor = (col) =>
+          siblings.find((r) => typeof r[col] === 'string' && r[col] !== '')?.[col] ?? null;
+        // The row's timestamp is NOT moved (D#79). It used to be set to now, and this worker can
+        // finish after the NEXT session has written its first row, which put the previous
+        // session back on top of Last Session with no tie at all. The timestamp is when the
+        // session wrote, which is what Last Session and search recency order by.
         db.prepare(
           `
           UPDATE session_summaries
-          SET request = COALESCE(NULLIF(?, ''), request),
-              investigated = COALESCE(NULLIF(?, ''), investigated),
-              learned = COALESCE(NULLIF(?, ''), learned),
-              completed = COALESCE(NULLIF(?, ''), completed),
-              next_steps = COALESCE(NULLIF(?, ''), next_steps),
-              remaining_items = COALESCE(NULLIF(?, ''), remaining_items),
-              lessons = COALESCE(?, lessons),
-              key_decisions = COALESCE(?, key_decisions),
-              notes = 'llm',
-              created_at = ?,
-              created_at_epoch = ?
+          SET request = COALESCE(NULLIF(?, ''), NULLIF(request, ''), ?, request),
+              investigated = COALESCE(NULLIF(?, ''), NULLIF(investigated, ''), ?, investigated),
+              learned = COALESCE(NULLIF(?, ''), NULLIF(learned, ''), ?, learned),
+              completed = COALESCE(NULLIF(?, ''), NULLIF(completed, ''), ?, completed),
+              next_steps = COALESCE(NULLIF(?, ''), NULLIF(next_steps, ''), ?, next_steps),
+              remaining_items = COALESCE(NULLIF(?, ''), NULLIF(remaining_items, ''), ?, remaining_items),
+              lessons = COALESCE(?, NULLIF(lessons, ''), ?, lessons),
+              key_decisions = COALESCE(?, NULLIF(key_decisions, ''), ?, key_decisions),
+              notes = CASE WHEN COALESCE(notes, '') IN ('fast', '') THEN 'llm' ELSE notes END
           WHERE id = ?
         `,
         ).run(
           safe.request,
+          floor('request'),
           safe.investigated,
+          floor('investigated'),
           safe.learned,
+          floor('learned'),
           safe.completed,
+          floor('completed'),
           safe.next_steps,
+          floor('next_steps'),
           safe.remaining_items,
+          floor('remaining_items'),
           safe.lessons,
+          floor('lessons'),
           safe.key_decisions,
-          now.toISOString(),
-          now.getTime(),
-          existingFast.id,
+          floor('key_decisions'),
+          existingId,
         );
       } else {
         const safe = scrubRecord('session_summaries', {
