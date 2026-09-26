@@ -799,6 +799,10 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
   const now = Date.now();
   // Fetch recent handoffs and find the most recent non-expired one.
   // A newer but expired 'clear' handoff must not shadow a still-valid 'exit' handoff.
+  // No id tiebreaker on this or the Stage -1/0/2 reads above, on purpose: session_handoffs has
+  // no id column, and its rowid is not recency because the writer is an UPSERT that keeps the
+  // row's original rowid. `rowid DESC` would therefore choose wrongly on exactly the rewritten
+  // rows. A correct tiebreak needs a column; see findings.md, the created_at_epoch tie bullet.
   const handoffs = currentCcSessionId
     ? db
         .prepare(
@@ -1032,7 +1036,7 @@ function renderHandoffFromRow(handoff, db, project) {
         `
       SELECT completed, next_steps, remaining_items FROM session_summaries
       WHERE memory_session_id = ? AND project = ?
-      ORDER BY created_at_epoch DESC LIMIT 1
+      ORDER BY created_at_epoch DESC, id DESC LIMIT 1
     `,
       )
       .get(handoff.session_id, project);
@@ -1046,7 +1050,7 @@ function renderHandoffFromRow(handoff, db, project) {
           `
         SELECT completed, next_steps, remaining_items FROM session_summaries
         WHERE project = ?
-        ORDER BY ABS(created_at_epoch - ?) ASC LIMIT 1
+        ORDER BY ABS(created_at_epoch - ?) ASC, id DESC LIMIT 1
       `,
         )
         .get(project, handoff.created_at_epoch ?? 0);

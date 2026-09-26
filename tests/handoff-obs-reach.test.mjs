@@ -10,9 +10,13 @@
 // 2. `completed` (LIMIT 15) and the carry-forward subject fallback (LIMIT 1) ordered by
 //    created_at_epoch DESC alone, so a tie came back ascending rowid and the cap kept the
 //    OLDEST rows.
+// 3. renderHandoffFromRow's <session-summary> append read session_summaries twice with no
+//    id tiebreaker (exact memory_session_id arm, and the nearest-in-time fallback), so a
+//    created_at_epoch tie attached the OLDER summary. Latent: 0 tie groups over the live
+//    DB's 450 summary rows, read-only, 2026-09-26.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
-import { buildAndSaveHandoff } from '../hook-handoff.mjs';
+import { buildAndSaveHandoff, renderHandoffInjection } from '../hook-handoff.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
 import * as taskReaderModule from '../lib/task-reader.mjs';
 
@@ -114,5 +118,42 @@ describe('carry-forward subject: a created_at_epoch tie picks the newest row (D#
     const row = handoff();
     expect(row.working_on, 'premise: the fallback arm ran').toMatch(/^\(carry-forward subject\)/);
     expect(row.working_on).toBe('(carry-forward subject) subject 2');
+  });
+});
+
+describe('<session-summary>: a created_at_epoch tie attaches the newest summary', () => {
+  function summary(sid, completed, epoch) {
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
+       VALUES (?, ?, 'req', ?, datetime('now'), ?)`,
+    ).run(sid, P, completed, epoch);
+  }
+  function handoffRow(sid, epoch) {
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+       VALUES (?, 'exit', ?, 'work', ?)`,
+    ).run(P, sid, epoch);
+  }
+
+  it('exact memory_session_id arm', () => {
+    const now = Date.now();
+    handoffRow(S, now);
+    summary(S, 'older turn', now);
+    summary(S, 'newer turn', now);
+    const out = renderHandoffInjection(db, P);
+    expect(out, 'premise: the summary block rendered').toContain('<session-summary');
+    expect(out).toContain('newer turn');
+    expect(out).not.toContain('older turn');
+  });
+
+  it('nearest-in-time fallback arm', () => {
+    const now = Date.now();
+    handoffRow('cc-uuid-not-a-memory-session-id', now);
+    summary(S, 'older summary', now - 5);
+    summary(S, 'newer summary', now - 5);
+    const out = renderHandoffInjection(db, P);
+    expect(out, 'premise: the summary block rendered').toContain('<session-summary');
+    expect(out).toContain('newer summary');
+    expect(out).not.toContain('older summary');
   });
 });

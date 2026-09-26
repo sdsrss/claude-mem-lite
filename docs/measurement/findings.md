@@ -581,6 +581,16 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   lowercased basename + epoch, file lists exploded) read 0/103 observation rows and 0/2681 event
   rows (read-only, 2026-09-25T17:38Z). Whether D#15's 52 below counted these two was not
   re-derived, so do not subtract them from it.
+  **2026-09-26: the `hook-handoff.mjs` reads left over from D#67 were judged.** The two
+  `session_summaries` reads behind the `<session-summary>` append (exact `memory_session_id`
+  arm and the nearest-in-time fallback) now end on `id DESC`; a built tie attached the OLDER
+  summary on both, and each tiebreaker was mutated alone and killed by its own case. The eight
+  `session_handoffs` reads (Stage -1 / 0 / 2 and `pickHandoffToInject`, both arms each) are
+  **judged and deliberately left untiebroken**: the table has no id column, and its rowid is
+  not recency because the writer is an UPSERT that keeps the row's original rowid, so
+  `rowid DESC` would pick the wrong row on exactly the rows that were rewritten. A real
+  tiebreaker needs a column, i.e. a migration. Live tie rate 0 groups over 51 handoff rows and
+  0 over 450 summary rows (read-only, 2026-09-26, key = project + `created_at_epoch`).
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
