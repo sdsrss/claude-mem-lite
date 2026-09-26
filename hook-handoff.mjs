@@ -165,7 +165,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       WHERE project = ? AND ${liveObsFilterSql('')}
         AND COALESCE(importance, 1) >= 3
         AND ${notLowSignalTitleClause('')}
-      ORDER BY created_at_epoch DESC LIMIT 1
+      ORDER BY created_at_epoch DESC, id DESC LIMIT 1
     `,
       )
       .get(project);
@@ -248,7 +248,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       `
     SELECT title, type, narrative FROM observations
     WHERE (memory_session_id = ? OR project = ?) AND COALESCE(compressed_into, 0) = 0 ${obsWindowClause}
-    ORDER BY created_at_epoch DESC LIMIT 15
+    ORDER BY created_at_epoch DESC, id DESC LIMIT 15
   `,
     )
     .all(sessionId, project, ...obsWindowParams);
@@ -348,21 +348,31 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   if (episodeSnapshot?.files) episodeSnapshot.files.filter(isValidFile).forEach((f) => fileSet.add(f));
   // Same namespace widening as `completed` above — see the reasoning there. Measured
   // 2026-09-21: 8 of the 17 live handoff rows stored key_files as the empty array.
-  const obsFiles = db
+  //
+  // The cap counts rows that CONTRIBUTE a file (D#67, the D#40 shape). This read was
+  // `LIMIT 10` → isValidFile, so rows the filter empties ('[]', directories, /tmp paths)
+  // used up the window: on the live DB 2026-09-26, 3 of 14 per-session windows lost 17 real
+  // files that way. Streaming keeps the filter exactly as it was.
+  let contributing = 0;
+  for (const row of db
     .prepare(
       `
     SELECT files_modified FROM observations
     WHERE (memory_session_id = ? OR project = ?) AND files_modified IS NOT NULL ${obsWindowClause}
-    ORDER BY created_at_epoch DESC LIMIT 10
+    ORDER BY created_at_epoch DESC, id DESC
   `,
     )
-    .all(sessionId, project, ...obsWindowParams);
-  for (const row of obsFiles) {
+    .iterate(sessionId, project, ...obsWindowParams)) {
+    let files;
     try {
-      JSON.parse(row.files_modified)
-        .filter(isValidFile)
-        .forEach((f) => fileSet.add(f));
-    } catch {}
+      files = JSON.parse(row.files_modified);
+    } catch {
+      continue;
+    }
+    const valid = Array.isArray(files) ? files.filter(isValidFile) : [];
+    if (valid.length === 0) continue;
+    valid.forEach((f) => fileSet.add(f));
+    if (++contributing === 10) break;
   }
 
   // 5. Key decisions — high importance observations (skip low-signal degraded titles).
