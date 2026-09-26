@@ -2,6 +2,14 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.1 — v6.13.0, published
+
+**Upgrade note.** Identical product code to v6.13.0; read the v6.13.0 entry below for what
+changes (SessionStart no longer injects `### Key Events` by default). v6.13.0 was tagged but
+never published: one of its new tests failed on the release runner because the runner forces
+coloured output, so the publish step was skipped. That test now reads the output without
+colour. Nothing else changed.
+
 ## v6.13.0 — SessionStart stops injecting Key Events, and a lesson dismissed as n/a no longer counts as cited
 
 **Upgrade note — one default changes.** SessionStart no longer renders the `### Key Events`
