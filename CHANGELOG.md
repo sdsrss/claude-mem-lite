@@ -2,6 +2,43 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.2 — handoff key files reach past empty rows; error-recall sees heredoc-then-run commands
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.1`.
+
+- **Session handoff: Key Files can no longer lose real files to rows that contribute none.** The
+  read took the newest ten `files_modified` rows and only then dropped entries that are not
+  files (`[]`, directories, `/tmp` paths), so such rows could use up the window. This was
+  latent on the maintainer's database (0 of 45 stored handoffs lost a file). The read now
+  counts only rows that add a file not already listed. The same read, `Completed` and the
+  carry-forward subject also break a same-millisecond tie by newest id, so the cap keeps the
+  latest rows rather than the oldest.
+- **Error-recall no longer treats "write a file with a heredoc, then run it" as a read.** An
+  apostrophe in a heredoc body or a `#` comment made the command look unparseable, and the
+  fallback judged it by its first word (`cat`), so a red test run right after it recalled
+  nothing. Heredoc bodies and comments are now skipped, except that the `$(…)` and backticks
+  bash expands inside an unquoted heredoc are still judged. `sed -i`, `sort -o`, `awk` with
+  `-f`, `system()` or a pipe, `find -exec` / `-delete`, and `code-graph-mcp` subcommands that
+  rebuild the index are no longer counted as reads, and the bodies of `$(…)`, backticks and
+  `<(…)` are judged as commands of their own. Words are split with quotes intact, so
+  `x="a b" grep …` is still a grep. A command that still cannot be parsed is no longer
+  exempt. Replayed over 15,260 successful Bash results in the maintainer's transcripts: 7
+  newly fire, each a command that did run a program, and 1 false alarm is gone (a pure read
+  that the old first-word rule took for a program run).
+- **A lesson called "irrelevant rows …" is no longer read as dismissed.** `irrelevant`,
+  `unrelated` and `not relevant` now dismiss a lesson only when they are the verdict (followed
+  by the end of the clause, punctuation or words like "here", "to", "since"), not when they
+  describe a noun. Over 1,900 `#NN` mentions in the maintainer's transcripts this changed one
+  verdict.
+- **Docs:** both READMEs now say `citation-stats --sidechain` is the exception to the v6.13.0
+  caliber break (it counts an `n/a` as an answer).
+- **Development only (not in the package):** the pre-commit green stamp is now cleared by any
+  vitest run that does not load its reporter (a `--reporter=…` run), by a red run cut short
+  with `--bail`, and by a run killed with Ctrl-C; it is written only under the root
+  `vitest.config.mjs`, expires after 24 hours, and its tree key covers symlink targets and
+  gitlinks.
+
 ## v6.13.1 — v6.13.0, published
 
 **Upgrade note.** Identical product code to v6.13.0; read the v6.13.0 entry below for what
