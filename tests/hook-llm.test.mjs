@@ -1964,9 +1964,9 @@ describe('handleLLMSummary', () => {
   });
 
   it('with two fast rows for one session, upgrades the Stop row, whose structural content the floor keeps (D#75)', async () => {
-    // Stop writes a fast row carrying the structural Done / Not done extract, and
-    // SessionStart's /clear or /compact path can write a second, emptier one for one session (5 of
-    // 75 live two-row sessions differ in content, the higher id emptier in all 5). The
+    // Stop writes a fast row carrying the structural Done / Not done extract (when its tail
+    // has no Failed / Uncertain lines), and SessionStart's /clear or /compact path can write a
+    // second one for the same session (75 live sessions have two; 5 differ in content). The
     // UPDATE's COALESCE floor keeps the UPGRADED row's content when Haiku returns a field
     // empty, so the upgrade must target the Stop row. Upgrading the highest id instead
     // (tried in 43571e3) dropped the structural lines from Last Session: v6.13.4 defect

@@ -1484,9 +1484,9 @@ ${obsList}`;
       // Upgrade existing fast summary instead of creating a duplicate. With two fast rows
       // for one session (Stop, then SessionStart's unguarded /clear or /compact path), the LOWEST id is
       // the Stop row, which carries the structural Done / Not done extract that the COALESCE
-      // floor below preserves; the later row is the emptier one. Upgrading the highest id
-      // lost that content from Last Session (v6.13.4 defect review P2-1), so the order is
-      // spelled out rather than left to the index.
+      // floor below preserves. Upgrading the highest id lost that content from Last Session
+      // (v6.13.4 defect review P2-1), so the order is spelled out rather than left to the
+      // index. No order covers every shape: the floor reads only the upgraded row (D#80).
       const existingFast = db
         .prepare(
           `

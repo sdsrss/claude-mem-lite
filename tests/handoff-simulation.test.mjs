@@ -542,7 +542,7 @@ describe('Scenario 5: fast summary deduplication', () => {
     const existingFast = db
       .prepare(
         `
-      SELECT id FROM session_summaries WHERE memory_session_id = ? AND notes = 'fast' ORDER BY id DESC LIMIT 1
+      SELECT id FROM session_summaries WHERE memory_session_id = ? AND notes = 'fast' ORDER BY id ASC LIMIT 1
     `,
       )
       .get('sess-1');

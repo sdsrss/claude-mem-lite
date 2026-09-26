@@ -608,8 +608,8 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
   read (LIMIT 1), plus `lib/fast-summary.mjs`'s observation titles (LIMIT 5), now end on
   `id DESC`; a built tie picked the OLDEST rows on each. Both pools feed a stable sort, so a
-  tie decides injected rows even below the LIMIT — for observations through the per-type cap
-  of 3, for sessions only when the 2000-token budget binds (the new session case tests AT the
+  tie decides injected rows even below the LIMIT whenever the 2000-token budget binds, and for
+  observations also through the per-type cap of 3 (the new session case tests AT the
   LIMIT; the v6.13.4 claims review measured the below-LIMIT budget case, [1,2,3] → [3,4,5]).
   `hook-llm.mjs`'s `existingFast` had no ORDER BY and upgraded the LOWEST-id fast row of a
   session (by index order). A first draft (`43571e3`) switched it to the highest id, to keep
@@ -617,8 +617,13 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   regression: with two fast rows (Stop plus the unguarded SessionStart /clear-or-/compact path — 74
   sessions had exactly two `notes = 'fast'` rows at 08:38Z, 75 at 08:50Z) the lower id is the
   Stop row, whose structural Done / Not done extract is what the UPDATE's COALESCE floor keeps
-  when Haiku returns a field empty, and in all 5 live pairs whose content differs the higher id
-  is the emptier row. It now says `ORDER BY id ASC`, which is the old behaviour spelled out,
+  when Haiku returns a field empty. Of the 75 live pairs 5 differ; in 4 the higher id has less
+  of every compared column, and in 342/348 it has an 11-char request the lower lacks while the
+  lower has 210 chars of completed. None of the 75 sessions has an observation, so none can
+  reach the upgrade today (09:17Z): the pairs picture what the two writers produce, not a
+  firing rate. A Stop row whose tail carries Failed / Uncertain lines is not stored as
+  `notes = 'fast'` at all, and two further shapes lose the structural lines whatever the
+  order — D#80 (delta review P3-2..P3-4). It now says `ORDER BY id ASC`, which is the old behaviour spelled out,
   pinned by a case with a degraded Haiku reply. The draft's premise was also wrong: upgrading
   is not "the one shape" that breaks id order — a late upgrade of the PREVIOUS session's row
   re-stamps it above the next session's newer row with no tie at all (same review, P3-1;
