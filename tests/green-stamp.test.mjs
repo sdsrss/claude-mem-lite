@@ -349,7 +349,17 @@ describe('green-stamp reporter under a real vitest run', () => {
       cwd: repo,
       env,
       stdio: 'ignore',
+      detached: true, // its own process group, so a signal reaches vitest's workers too
     });
+    // Signal the GROUP, as a terminal's Ctrl-C does: signalling the vitest main alone orphaned
+    // the fork worker running the fixture body, 4 of 6 runs (v6.13.3 delta review P3-1).
+    const signalGroup = (sig) => {
+      try {
+        process.kill(-child.pid, sig);
+      } catch {
+        /* ESRCH: the whole group has already exited */
+      }
+    };
     // A signal-killed child has exitCode null and signalCode set, so liveness reads both, and
     // the exit listener is attached before any wait so it cannot miss an early exit (v6.13.3
     // defect review P3-3: a dead child passed the premise and hung the case to its timeout).
@@ -361,13 +371,13 @@ describe('green-stamp reporter under a real vitest run', () => {
       }
       expect(existsSync(ready), 'premise: the slow test body started').toBe(true);
       expect(alive(), 'premise: the run was still going when interrupted').toBe(true);
-      child.kill('SIGINT'); // this child only
+      signalGroup('SIGINT'); // this child's group only
       await exited;
     } finally {
-      if (alive()) {
-        child.kill('SIGKILL'); // a failed premise must not leave it running past the fixture
-        await exited;
-      }
+      // A failed premise must not leave the main or a worker running past the fixture.
+      const wasAlive = alive();
+      signalGroup('SIGKILL');
+      if (wasAlive) await exited;
     }
     expect(existsSync(stampPath(repo))).toBe(false);
   }, 60000);
