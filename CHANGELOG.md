@@ -2,6 +2,24 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.6 — a late background summary no longer overwrites a newer one
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.5`.
+
+- **The background session summary keeps the newest reply.** Each turn starts a background
+  summary, and two of them could finish out of order, so an older turn's summary could replace
+  a newer one until the next turn. A summary started by an earlier turn now writes nothing once
+  a later turn has ended; it also skips its model call when that is already known.
+- **A session's `completed_at` is its latest turn.** It kept the first turn's end time for the
+  whole session.
+- **The quick summary written at startup after an `/exit` finds the session that exited**
+  even when another session of the same project, still open, ended a turn more recently.
+- **Background summary outcomes can be measured.** With `CLAUDE_MEM_METRICS=1`, each run of the
+  background summary writes one `summary_worker` row to the metrics log: its outcome (written,
+  superseded, no observations, empty reply, no LLM slot, no database, error), the session, and
+  how long the model call took. Off by default.
+
 ## v6.13.5 — one summary per session, and "Last Session" shows your latest report
 
 **Upgrade note.** Fixes only; no schema change and no migration. Duplicate summary rows that
