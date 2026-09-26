@@ -648,6 +648,37 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   09:40Z), its rows are created only by `INSERT OR IGNORE` so `id` is creation order (the
   ordered column itself is set by an UPDATE at Stop), and the
   path runs only for a startup within 2 minutes of an /exit whose session has no summary yet.
+  **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
+  by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
+  was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
+  itself is not currently firing on this corpus**: a read-only probe of the real DB found
+  **0 tie-groups across all four relevant tables, under TWO groupings** — the pool's own key
+  plus `created_at_epoch`, and the strictly looser `created_at_epoch` alone, which is the
+  actual tie condition for an untiebroken `ORDER BY created_at_epoch DESC`. Row counts at the
+  second probe: observations 25, session_handoffs 3, session_summaries 133, events 771. **The
+  first stamp of this bullet said 21 / 3 / 128 / 717 and was stale within the same day** —
+  this session's own writes moved three of the four, which is doctrine rule 2 happening to the
+  rule that states it. The counts are a snapshot; the 0 is the finding.
+  Read that as "has not happened here yet", not "cannot": the 272/300 same-millisecond rate D#9
+  measured is the shape of a tight insert LOOP (fixtures, batch writes), and purge/compress
+  removes rows, so history is not fully represented. **The 52 is also a count without a
+  recorded name set** — reproducible under the caliber stated here (`.mjs`/`.js` outside
+  `tests/` and `benchmark/`, `DESC` orderings only, comments and `CREATE INDEX` excluded; the
+  same sweep including ASC reads 65), but doctrine rule 4 wants the names, and nobody can
+  supersede a count they cannot diff. **R11 §5 records the name set for three partitions** —
+  the retrieval core, the citation chain and the LLM write paths — judged one by one:
+  **19 harmful, 15 clean**. Four of the harmful are now total (`search-engine.mjs`
+  `findFtsAnchor` and the no-query recent listing; `lib/search-core.mjs` type-list fallback
+  and prompts CJK LIKE fallback); the rest are named and left, most because they move
+  candidate-pool membership and therefore owe a denoise-ab first. **Do not subtract 19/15
+  from the 52** — different caliber: R11 counted ASC orderings and `hook-optimize.mjs`, both
+  of which the 52 excludes by construction. `findFtsAnchor` is the one worth remembering:
+  with `LIMIT 1` the tie decided the timeline ANCHOR, so the whole navigation window moved,
+  which is the CONTENT harm class rather than the pool-boundary one. Re-probe with
+  `SELECT project||'/'||type k, created_at_epoch e, COUNT(*) c FROM session_handoffs GROUP BY k, e
+  HAVING c > 1` before spending a round on the remaining sites. Match `hook-memory.mjs:683`'s
+  spelling (`importance DESC, created_at_epoch DESC, id DESC`) — it is the one face that already
+  got this right.
 - **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
   assumed one Stop per mem session. Stop always fired per assistant turn; since R10-P1-1 the
   mem session also survives it, so every writer runs many times against a session that
@@ -713,14 +744,15 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
   projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other
   installs keep theirs. NOT done: the LLM worker still calls the model once per turn for a
-  session with observations (measured below, with P3-6).
+  session with observations — a much smaller population than it reads (next entry).
 - **2026-09-26, P3-6: a model reply from a superseded Stop no longer lands.** Measured first,
   read-only, 7 days of this machine's main transcripts (a turn counted only when it holds an
   assistant message; its end is the last one): 913 gaps between consecutive turn ends in 95
   sessions — **27 under 10 s, 46 under 20 s** (27 of those 46 open with a
   `<task-notification>`, so they carry no new user prompt), p25 110 s, p50 373 s; a session's
   LAST gap was under 20 s in **4 of 86**. One summary call via OpenRouter took 4545 / 4885 /
-  4903 ms (3 calls, one sitting), before the worker's wait for its episode flush. So overlap is
+  4903 ms (3 calls, one sitting), via the `claude -p` fallback 10057 / 10250 / 9875 ms, before
+  the worker's wait for its episode flush. So overlap is
   real but rare, and the ordering key cannot be the prompt number: task-notification turns
   tie on it. The key is the Stop itself. `sdk_sessions.completed_at_epoch` turned out to be
   **frozen at the FIRST turn** — Stop's UPDATE was guarded on `status = 'active'`, which only
@@ -742,42 +774,24 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   the week (to 27.8 MB with 18 subagent files; one with 68) timed 164–251 ms for a whole Stop
   through `scripts/hook-launcher.mjs`, sandboxed on a backup copy of the DB, summary spawn off;
   `collectSubagentSurface` read 18 and 68 files in 97 and 59 ms, so the subagent arm ran.
-  **Per-turn model calls**, same transcripts: 1008 turns in 95 sessions, and only a
-  session's last reply survives — at one call per turn, (1008 − 95) / 1008 ≈ 91% of calls
-  are overwritten (the real population, turns of sessions with an observation, was not
-  counted); the supersede check saves only those whose successor Stop lands before the call. Summarizing once at
-  session end needs a new hook event — not done.
-  **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
-  by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
-  was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
-  itself is not currently firing on this corpus**: a read-only probe of the real DB found
-  **0 tie-groups across all four relevant tables, under TWO groupings** — the pool's own key
-  plus `created_at_epoch`, and the strictly looser `created_at_epoch` alone, which is the
-  actual tie condition for an untiebroken `ORDER BY created_at_epoch DESC`. Row counts at the
-  second probe: observations 25, session_handoffs 3, session_summaries 133, events 771. **The
-  first stamp of this bullet said 21 / 3 / 128 / 717 and was stale within the same day** —
-  this session's own writes moved three of the four, which is doctrine rule 2 happening to the
-  rule that states it. The counts are a snapshot; the 0 is the finding.
-  Read that as "has not happened here yet", not "cannot": the 272/300 same-millisecond rate D#9
-  measured is the shape of a tight insert LOOP (fixtures, batch writes), and purge/compress
-  removes rows, so history is not fully represented. **The 52 is also a count without a
-  recorded name set** — reproducible under the caliber stated here (`.mjs`/`.js` outside
-  `tests/` and `benchmark/`, `DESC` orderings only, comments and `CREATE INDEX` excluded; the
-  same sweep including ASC reads 65), but doctrine rule 4 wants the names, and nobody can
-  supersede a count they cannot diff. **R11 §5 records the name set for three partitions** —
-  the retrieval core, the citation chain and the LLM write paths — judged one by one:
-  **19 harmful, 15 clean**. Four of the harmful are now total (`search-engine.mjs`
-  `findFtsAnchor` and the no-query recent listing; `lib/search-core.mjs` type-list fallback
-  and prompts CJK LIKE fallback); the rest are named and left, most because they move
-  candidate-pool membership and therefore owe a denoise-ab first. **Do not subtract 19/15
-  from the 52** — different caliber: R11 counted ASC orderings and `hook-optimize.mjs`, both
-  of which the 52 excludes by construction. `findFtsAnchor` is the one worth remembering:
-  with `LIMIT 1` the tie decided the timeline ANCHOR, so the whole navigation window moved,
-  which is the CONTENT harm class rather than the pool-boundary one. Re-probe with
-  `SELECT project||'/'||type k, created_at_epoch e, COUNT(*) c FROM session_handoffs GROUP BY k, e
-  HAVING c > 1` before spending a round on the remaining sites. Match `hook-memory.mjs:683`'s
-  spelling (`importance DESC, created_at_epoch DESC, id DESC`) — it is the one face that already
-  got this right.
+  **Per-turn model calls — the first reading here was of the wrong population.** It said
+  "1008 turns in 95 sessions, so at one call per turn ≈ 91% of calls are overwritten", and
+  was filed as D#92. But the worker calls the model only when the session has an
+  observation, and on a backup copy of the DB (same day, read-only, 7 days) **9 of 162
+  sessions** hold one, with **6 prompts** between them; **4** sessions carry a model-written
+  summary. The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
+  (`hook-llm.mjs:452`) deletes it when Haiku classes it as an event type, and the worker
+  waits for that flush before its `SELECT … FROM observations WHERE memory_session_id = ?` —
+  auto-captured work lives in `events` now (observation ids 256–281 that day: 19 of 26
+  gone). A sandboxed run of the real worker on the previous session read `no-obs` for that
+  reason. So the per-turn cost is small, and the larger gap is that the model summary mostly
+  never runs; Last Session rests on Stop's report extract. D#92 was dropped for D#94 (feed
+  events, whose summarizer D#69 measured at 2/30 accurate, or retire the model summary — an
+  LLM-visible change). To read the real rates, each worker exit now writes a
+  `summary_worker` metric row under `CLAUDE_MEM_METRICS=1` (`91e45ba`): `no-obs`,
+  `slot-timeout`, `superseded-before-call`, `no-content`, `superseded-at-write`, `written`,
+  with the model call's `llmMs` — which also measures the P3-6 trade above (a `no-content`
+  following a superseded worker).
 - **`COALESCE(compressed_into,0)=0` alone is NOT the liveness predicate** — `liveObsFilterSql`
   also requires `superseded_at IS NULL`. **Which sites need the full one is settled; do not
   re-derive it.** Carrying it: the two `COMPRESSED_PENDING_PURGE` writers
