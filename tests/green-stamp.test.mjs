@@ -331,12 +331,16 @@ describe('green-stamp reporter under a real vitest run', () => {
     setupVitestFixture();
     writeFileSync(
       join(repo, 't', 'a.test.mjs'),
-      "import { it } from 'vitest';\nit('slow', async () => { if (process.env.GS_SLOW) await new Promise((r) => setTimeout(r, 20000)); });\n",
+      "import { it } from 'vitest';\nimport { writeFileSync } from 'node:fs';\nit('slow', async () => { if (process.env.GS_SLOW) { writeFileSync(process.env.GS_READY, ''); await new Promise((r) => setTimeout(r, 20000)); } });\n",
     );
     git('commit', '-qam', 'slow test');
     expect(vitest().status).toBe(0);
     expect(existsSync(stampPath(repo))).toBe(true);
-    const env = { ...process.env, GS_SLOW: '1', NO_COLOR: '1' };
+    // Signal only once the test body runs: a SIGINT that lands before vitest has loaded the
+    // reporter takes node's default action, so no exit hook runs and the stamp survives. A
+    // fixed 4 s sleep reproduced that at 100 ms, 3/3, which is where a loaded machine lands.
+    const ready = join(repo, 'ready.marker');
+    const env = { ...process.env, GS_SLOW: '1', GS_READY: ready, NO_COLOR: '1' };
     for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
     const { spawn } = await import('child_process');
     const child = spawn(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run'], {
@@ -344,7 +348,10 @@ describe('green-stamp reporter under a real vitest run', () => {
       env,
       stdio: 'ignore',
     });
-    await new Promise((r) => setTimeout(r, 4000));
+    for (let t = 0; t < 400 && !existsSync(ready) && child.exitCode === null; t++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(existsSync(ready), 'premise: the slow test body started').toBe(true);
     expect(child.exitCode, 'premise: the run was still going when interrupted').toBeNull();
     child.kill('SIGINT'); // this child only
     await new Promise((r) => child.on('exit', r));
