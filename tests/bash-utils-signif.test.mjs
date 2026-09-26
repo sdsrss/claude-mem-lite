@@ -318,6 +318,7 @@ describe('detectBashSignificance — read-only exemption checks every statement'
 
   it('tells $((arithmetic)) from $( (subshell) ... ) the way bash does', () => {
     expect(hard('grep x $((npm test) | head) f', RED_RUN)).toBe(true);
+    expect(hard('grep x $((npm test) ) f', RED_RUN)).toBe(true);
     expect(hard('grep x $(( (1+2) * 3 )) f', SOURCE_QUOTE)).toBe(false);
     expect(hard('grep x $(echo $((1+2))) f', SOURCE_QUOTE)).toBe(false);
   });
