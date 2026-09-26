@@ -1166,6 +1166,15 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rowsOf(sid)[0].completed).toContain('REPORT-DONE');
   });
 
+  it("Stop keeps the report's Failed / Uncertain lines", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: X\nFailed: BUILD-BROKE');
+    stop();
+    expect(rowsOf(sid)[0]?.notes).toContain('Failed: BUILD-BROKE');
+  });
+
   it('/clear fills the empty fields of the previous session row instead of inserting another', () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);

@@ -605,7 +605,7 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   Stop rather than once. Read-only, 2026-09-26T08:21Z; a snapshot of how often each table is
   rewritten, not a structural guarantee. **Moved, not gone (D#79, same day):** the LLM upgrade
   no longer touches `created_at_epoch`; SessionStart's /clear path now moves an EXISTING row to
-  `now` instead of inserting one (`fillFastSummaryGaps`), so that write is where `id` and
+  `now` instead of inserting one (`writeClearSummary`), so that write is where `id` and
   `created_at_epoch` order can now disagree, and `id DESC` on this table stays best-effort.
   **2026-09-26, D#75: five more reads in the same family, and one writer.** `hook-context.mjs`'s observation
   pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
@@ -667,18 +667,24 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   read 94 / 35 / 28 / 22 — same direction). (3) The same guard froze the observation-title
   fallback of a session that never writes markers at its first turn.
   Now every writer lands on the session's newest row (`newestSummaryId`) and inserts only
-  when there is none, and **`notes` records where Done / Not done came from** —
-  `REPORT_NOTES` or Failed / Uncertain lines (the assistant's report), `llm` (the model),
-  `fast` (observation titles) — with precedence report > model > titles: Stop refreshes the
-  row from any tail carrying Done / Not done, or else refreshes a `fast` row's titles; /clear
-  fills gaps, replaces a `fast` row's titles, never touches a report's Not done (where `''`
-  means "nothing left") and moves the row to `now`; the LLM upgrade writes the model's
-  fields except a report's Done / Not done, floors an empty field on the row itself and then
-  on the session's older rows newest first, and **does not move the timestamp** (D#79); its
-  INSERT, for a session with no row, is dated at the session's last recorded activity
-  (`sdk_sessions`), not at the worker's finish. The first cut of this change let /clear keep
-  a first-turn title fallback as if it were a report and let the model overwrite a fresh
-  report (v6.13.5 pre-ship defect review P2-1..P2-3); the provenance tag is the repair.
+  when there is none (`writeStopSummary`, `writeClearSummary`, `mergeModelSummary` in
+  `lib/fast-summary.mjs`, each a read-modify-write in one IMMEDIATE transaction), and **the
+  head of `notes` records, per FIELD, where Done and Not done came from** —
+  `done<report|model|titles> left<report|other>`, then the latest report's Failed / Uncertain
+  lines — with precedence report > model > titles for Done and report > other for Not done.
+  Stop refreshes Done from a report's Done, else a `titles` Done from the current titles, and
+  Not done from any report ('' = nothing left); /clear fills gaps, replaces a `titles` Done,
+  never touches a `report` Not done and moves the row to `now`; the model fills everything
+  except a `report` Done / Not done, floors an empty field on the row itself and then on the
+  session's older rows newest first, and **does not move the timestamp** (D#79); its INSERT,
+  for a session with no row, is dated at the session's last prompt, not at the worker's
+  finish. Rows from older versions (`fast`, `llm`, '', bare Failed text) read as the
+  least-protected provenance, so a pre-upgrade report tagged `fast` can be replaced by titles
+  once (the delta review's P3-2, accepted). Two review rounds shaped this: the first cut let
+  /clear keep a first-turn title fallback as if it were a report and let the model overwrite a
+  fresh report (defect review P2-1..P2-3); the repair's single per-row report tag then read a
+  Not-done-only or Failed-only tail as a full report and froze stale titles as its Done
+  (delta review P2-1, P2-2) — hence one tag per field.
   D#79's precondition — an upgraded row of session A dated after the first row of a
   same-project session that STARTED after A — held for **0 of 193** such pairs (3 within 10
   minutes): a built failure, not an observed one. D#80's shapes could not reach the upgrade
@@ -688,13 +694,14 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   in every session with subagents (the memo holds one file; 126 of 191 main transcripts have
   a subagents folder, claims review) — an e2e case counts the parent reads (1).
   `stats` (CLI + MCP), `status` and `doctor` now count DISTINCT `memory_session_id` for "N
-  sessions". Evidence: 41 single-site mutations (selector, re-stamp, floor per field and per
-  branch, floor order both ways, notes and report tags, each precedence rule, Stop's refresh
-  gate and title refresh, /clear fill per column and timestamp, INSERT stamp, Stop call
-  order, tie order, the four counts) are each killed by a case in
-  `tests/{hook-llm,fast-summary,e2e,stats-core,install-session-count}.test.mjs`; the first
-  run left 2 alive (a turn-1 report tagged `fast`, a report row's empty Done), each now
-  killed by a case added for it. The legacy duplicates were then removed from the maintainer's DB by a one-off
+  sessions". Evidence, on the per-field version: 40 single-site mutations (each Stop / /clear
+  / model precedence rule, each provenance tag written, the legacy mappings, the floor and its
+  order both ways, the target row, the INSERT stamp, no re-stamp, scrubbing, the Stop call
+  order and its Failed lines, tie order, the four counts) are each killed by a case in
+  `tests/{fast-summary,hook-llm,e2e,stats-core,install-session-count}.test.mjs`; the first
+  run left 4 alive (a report arriving on a later turn left untagged on either field, Failed
+  lines unscrubbed — the scrub case's notes cut fell inside the secret — and Stop dropping
+  those lines), each now killed by a case added for it. The legacy duplicates were then removed from the maintainer's DB by a one-off
   script (11:13Z, user-authorised, backup kept): 465 → 318 rows, 147 deleted, 31 empty fields
   of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
   projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other

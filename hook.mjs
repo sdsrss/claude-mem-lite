@@ -91,11 +91,8 @@ import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook
 import {
   readFastSummarySource,
   insertFastSummary,
-  newestSummaryId,
-  refreshStructuredSummary,
-  refreshObservationTitles,
-  fillFastSummaryGaps,
-  REPORT_NOTES,
+  writeStopSummary,
+  writeClearSummary,
   FAST_SUMMARY_LIMITS,
 } from './lib/fast-summary.mjs';
 import { formatHookError } from './lib/native-binding-hint.mjs';
@@ -1100,8 +1097,9 @@ function markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionI
 function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
   // Stop fires once per assistant TURN and the mem session survives it (R10-P1-1), so this
   // runs on every turn of a session. The first turn with anything to say INSERTs the row
-  // (T4-P2-B's guard: never a second row); every later turn whose tail carries a Done or
-  // Not done section REFRESHES that row from it. The guard alone used to stop there, so the
+  // (T4-P2-B's guard: never a second row); every later turn REFRESHES that row from its tail's
+  // report, or, without one, from the current observation titles where the row's Done is
+  // still titles (lib/fast-summary.mjs writeStopSummary). The guard alone used to stop there, so the
   // row kept the FIRST turn's report: over 7 days of this machine's transcripts (09:40Z), 20
   // of the 31 sessions that wrote §10 markers had a first-turn extract different from their
   // last report. Uses the mem-internal sessionId as the WHERE key per the top-of-file
@@ -1131,47 +1129,14 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
       debugCatch(e, 'handleStop-structured-extract');
     }
 
-    const hasReport = Boolean(structuredCompleted || structuredNotDone);
-    const existingId = newestSummaryId(db, sessionId);
-    if (existingId !== null) {
-      if (hasReport) {
-        refreshStructuredSummary(db, {
-          id: existingId,
-          values: { completed: structuredCompleted, remaining: structuredNotDone, notes: structuredNotes },
-          limits: FAST_SUMMARY_LIMITS.stop,
-        });
-      } else {
-        // No report this turn: a row that never held one keeps its observation-title fallback
-        // current instead of the first turn's (a no-op on a report or model row).
-        refreshObservationTitles(db, {
-          id: existingId,
-          completed: readFastSummarySource(db, sessionId).completed,
-          limits: FAST_SUMMARY_LIMITS.stop,
-        });
-      }
-      return;
-    }
-
-    const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
-    const finalCompleted = structuredCompleted || obsCompleted;
-    const finalRemaining = structuredNotDone;
-    // The tag records where completed / remaining_items came from (lib/fast-summary.mjs).
-    const finalNotes = structuredNotes || (hasReport ? REPORT_NOTES : 'fast');
-
-    if (fastRequestRaw || finalCompleted || finalRemaining) {
-      insertFastSummary(db, {
-        sessionId,
-        project,
-        now: new Date(),
-        values: {
-          request: fastRequestRaw,
-          completed: finalCompleted,
-          remaining: finalRemaining,
-          notes: finalNotes,
-        },
-        limits: FAST_SUMMARY_LIMITS.stop,
-      });
-    }
+    writeStopSummary(db, {
+      sessionId,
+      project,
+      report: { done: structuredCompleted, notDone: structuredNotDone, lines: structuredNotes },
+      source: readFastSummarySource(db, sessionId),
+      now: new Date(),
+      limits: FAST_SUMMARY_LIMITS.stop,
+    });
   } catch (e) {
     debugCatch(e, 'handleStop-fast-summary');
   }
@@ -2199,24 +2164,18 @@ function saveHandoffAndFastSummary(
         if (errors.length > 0) fastRemainingRaw = errors.join('; ');
       }
 
-      // One row per session: when Stop already wrote the previous session's row, fill its
-      // gaps rather than INSERT a second one beside it (80 live sessions had two, 2026-09-26).
+      // One row per session: when Stop already wrote the previous session's row, this updates
+      // it rather than INSERTing a second one beside it (80 live sessions had two, 2026-09-26).
       // The gate is unchanged, so the row moves to `now` exactly when the second row used to
       // be written with it.
       if (fastRequestRaw || fastCompletedRaw) {
-        const values = { request: fastRequestRaw, completed: fastCompletedRaw, remaining: fastRemainingRaw };
-        const existingId = newestSummaryId(db, prevSessionId);
-        if (existingId !== null) {
-          fillFastSummaryGaps(db, { id: existingId, values, limits: FAST_SUMMARY_LIMITS.sessionStart, now });
-        } else {
-          insertFastSummary(db, {
-            sessionId: prevSessionId,
-            project: prevProject || project,
-            now,
-            values,
-            limits: FAST_SUMMARY_LIMITS.sessionStart,
-          });
-        }
+        writeClearSummary(db, {
+          sessionId: prevSessionId,
+          project: prevProject || project,
+          values: { request: fastRequestRaw, completed: fastCompletedRaw, remaining: fastRemainingRaw },
+          limits: FAST_SUMMARY_LIMITS.sessionStart,
+          now,
+        });
       }
     } catch (e) {
       debugCatch(e, 'session-start-fast-summary');

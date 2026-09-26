@@ -25,7 +25,7 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
-import { newestSummaryId, HAS_REPORT_SQL } from './lib/fast-summary.mjs';
+import { mergeModelSummary } from './lib/fast-summary.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -1483,142 +1483,26 @@ ${obsList}`;
           : null;
 
       // Upgrade the session's summary row instead of creating another. This worker runs after
-      // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path, so it
-      // lands on the session's NEWEST row whatever its notes: selecting only `notes = 'fast'`
-      // found nothing once the first run had upgraded that row, and each later turn INSERTed
-      // (one live session: 37 rows in 65 minutes), nor did it see a Stop row whose notes carry
-      // Failed / Uncertain lines (D#80). See lib/fast-summary.mjs for the other two writers.
-      const existingId = newestSummaryId(db, sessionId);
-
-      if (existingId !== null) {
-        // Preserve structural-extractor content (completed / remaining_items written
-        // by handleStop fast-baseline from CLAUDE.md §10 markers) when Haiku returns
-        // empty for that field. Without COALESCE, a degraded Haiku pass would erase
-        // the deterministic floor — the exact regression that made 72% of prod
-        // session_summaries ship with empty remaining_items.
-        //
-        // Scrub LLM-output text fields at the UPDATE boundary. lessons /
-        // key_decisions are JSON.stringify(array<string>); we scrub the JSON
-        // string here to match the sibling INSERT path. scrubSecrets uses
-        // opaque placeholders that preserve JSON structure; element-level
-        // pre-scrub remains safer in principle but would diverge from the
-        // merged INSERT contract.
-        const safe = scrubRecord('session_summaries', {
-          request: asText(llmParsed.request),
-          investigated: asText(llmParsed.investigated),
-          learned: asText(llmParsed.learned),
-          completed: asText(llmParsed.completed),
-          next_steps: asText(llmParsed.next_steps),
-          remaining_items: asText(llmParsed.remaining_items),
-          lessons: lessonsJson,
-          key_decisions: decisionsJson,
-        });
-        // The floor is the upgraded row first, then the session's other rows newest first, so
-        // which row is upgraded no longer decides what a degraded reply keeps: a Stop row's
-        // structural lines survive an upgrade of the /clear row beside it (D#80). Rows older
-        // than the newest exist only from before one-row-per-session or from a race. The
-        // upgraded row's own fields are read by the UPDATE itself, so a concurrent worker's
-        // write to that row is part of the floor.
-        const siblings = db
-          .prepare(
-            `
-          SELECT request, investigated, learned, completed, next_steps, remaining_items, lessons, key_decisions
-          FROM session_summaries
-          WHERE memory_session_id = ? AND id != ?
-          ORDER BY created_at_epoch DESC, id DESC
-        `,
-          )
-          .all(sessionId, existingId);
-        const floor = (col) =>
-          siblings.find((r) => typeof r[col] === 'string' && r[col] !== '')?.[col] ?? null;
-        // A row whose Done / Not done are the assistant's own report keeps them: the model only
-        // fills a Done the report lacks, and never replaces a Not done, where '' is the report
-        // saying nothing is left (lib/fast-summary.mjs, REPORT_NOTES). The report is the agent's
-        // statement of the session's state; the model is prompted to INFER remaining_items.
-        //
-        // The row's timestamp is NOT moved (D#79). It used to be set to now, and this worker can
-        // finish after the NEXT session has written its first row, which put the previous
-        // session back on top of Last Session with no tie at all. The timestamp stays when
-        // the session's own writers put it: Stop's first write, or /clear's move to the session's
-        // end. Last Session and search recency order by it.
-        db.prepare(
-          `
-          UPDATE session_summaries
-          SET request = COALESCE(NULLIF(?, ''), NULLIF(request, ''), ?, request),
-              investigated = COALESCE(NULLIF(?, ''), NULLIF(investigated, ''), ?, investigated),
-              learned = COALESCE(NULLIF(?, ''), NULLIF(learned, ''), ?, learned),
-              completed = CASE WHEN ${HAS_REPORT_SQL}
-                THEN COALESCE(NULLIF(completed, ''), NULLIF(?, ''), ?, completed)
-                ELSE COALESCE(NULLIF(?, ''), NULLIF(completed, ''), ?, completed) END,
-              next_steps = COALESCE(NULLIF(?, ''), NULLIF(next_steps, ''), ?, next_steps),
-              remaining_items = CASE WHEN ${HAS_REPORT_SQL} THEN remaining_items
-                ELSE COALESCE(NULLIF(?, ''), NULLIF(remaining_items, ''), ?, remaining_items) END,
-              lessons = COALESCE(?, NULLIF(lessons, ''), ?, lessons),
-              key_decisions = COALESCE(?, NULLIF(key_decisions, ''), ?, key_decisions),
-              notes = CASE WHEN COALESCE(notes, '') IN ('fast', '') THEN 'llm' ELSE notes END
-          WHERE id = ?
-        `,
-        ).run(
-          safe.request,
-          floor('request'),
-          safe.investigated,
-          floor('investigated'),
-          safe.learned,
-          floor('learned'),
-          safe.completed,
-          floor('completed'),
-          safe.completed,
-          floor('completed'),
-          safe.next_steps,
-          floor('next_steps'),
-          safe.remaining_items,
-          floor('remaining_items'),
-          safe.lessons,
-          floor('lessons'),
-          safe.key_decisions,
-          floor('key_decisions'),
-          existingId,
-        );
-      } else {
-        const safe = scrubRecord('session_summaries', {
-          request: asText(llmParsed.request),
-          investigated: asText(llmParsed.investigated),
-          learned: asText(llmParsed.learned),
-          completed: asText(llmParsed.completed),
-          next_steps: asText(llmParsed.next_steps),
-          remaining_items: asText(llmParsed.remaining_items),
-          lessons: lessonsJson,
-          key_decisions: decisionsJson,
-        });
-        // Dated at the session's own last recorded activity, not at this worker's finish time:
-        // the worker can finish after the NEXT session has written its first row (D#79).
-        const activity = db
-          .prepare(
-            'SELECT COALESCE(completed_at_epoch, started_at_epoch) AS e FROM sdk_sessions WHERE content_session_id = ?',
-          )
-          .get(sessionId)?.e;
-        const stamp =
-          Number.isFinite(activity) && activity > 0 && activity <= now.getTime() ? new Date(activity) : now;
-        db.prepare(
-          `
-          INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, lessons, key_decisions, created_at, created_at_epoch)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '', ?, ?, ?, ?)
-        `,
-        ).run(
-          sessionId,
-          project,
-          safe.request,
-          safe.investigated,
-          safe.learned,
-          safe.completed,
-          safe.next_steps,
-          safe.remaining_items,
-          safe.lessons,
-          safe.key_decisions,
-          stamp.toISOString(),
-          stamp.getTime(),
-        );
-      }
+      // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path; selecting
+      // only a `notes = 'fast'` row found nothing once the first run had upgraded it, and each
+      // later turn INSERTed (one live session: 37 rows in 65 minutes). mergeModelSummary lands
+      // on the session's newest row and keeps a report's Done / Not done over the model's
+      // (lib/fast-summary.mjs).
+      //
+      // Scrub LLM-output text fields at the write boundary. lessons / key_decisions are
+      // JSON.stringify(array<string>); scrubSecrets uses opaque placeholders that preserve
+      // JSON structure, so the JSON string is scrubbed whole.
+      const safe = scrubRecord('session_summaries', {
+        request: asText(llmParsed.request),
+        investigated: asText(llmParsed.investigated),
+        learned: asText(llmParsed.learned),
+        completed: asText(llmParsed.completed),
+        next_steps: asText(llmParsed.next_steps),
+        remaining_items: asText(llmParsed.remaining_items),
+        lessons: lessonsJson,
+        key_decisions: decisionsJson,
+      });
+      mergeModelSummary(db, { sessionId, project, fields: safe, now });
     }
   } finally {
     db.close();

@@ -37,7 +37,8 @@ import {
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
 import { buildSessionContextLines } from '../hook-context.mjs';
-import { REPORT_NOTES } from '../lib/fast-summary.mjs';
+import { parseSummaryNotes, formatSummaryNotes } from '../lib/fast-summary.mjs';
+const REPORT_NOTES = formatSummaryNotes({ done: 'report', left: 'report', lines: '' });
 
 // v2.58: callLLM now accepts string OR {system, user} (cso F#4 fix). Tests
 // asserting prompt content should normalize both forms before string-matching.
@@ -1982,7 +1983,7 @@ describe('handleLLMSummary', () => {
     expect(row.completed).toBe('Basic auth flow with login/logout'); // Haiku richer → overwritten
     expect(row.remaining_items).toBe('structured-notdone: Gap #3 data backfill'); // Haiku empty → preserved
     expect(row.next_steps).toBe('Add refresh token rotation');
-    expect(row.notes).toBe('llm');
+    expect(parseSummaryNotes(row.notes).done).toBe('model');
   });
 
   it('upgrades existing fast summary instead of creating duplicate', async () => {
@@ -2011,7 +2012,7 @@ describe('handleLLMSummary', () => {
       .all('test-session');
     // Should have exactly 1 summary (upgraded, not duplicated)
     expect(summaries.length).toBe(1);
-    expect(summaries[0].notes).toBe('llm');
+    expect(parseSummaryNotes(summaries[0].notes).done).toBe('model');
     expect(summaries[0].request).toBe('Implementing auth system');
     expect(summaries[0].completed).toBe('Basic auth flow with login/logout');
   });
@@ -2083,7 +2084,7 @@ describe('handleLLMSummary', () => {
     expect(rows.map((r) => r.id)).toEqual([stopRow]);
     expect(rows[0].request).toBe('llm request');
     expect(rows[0].completed).toBe('STRUCT-DONE item');
-    expect(rows[0].notes, 'the Failed / Uncertain text is kept, not overwritten by a tag').toBe('Failed: x');
+    expect(parseSummaryNotes(rows[0].notes).lines, 'the Failed / Uncertain text is kept').toBe('Failed: x');
   });
 
   it('with two rows for one session, Last Session keeps the Stop row structural lines (D#75)', async () => {
@@ -2262,7 +2263,7 @@ describe('handleLLMSummary', () => {
     const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(id);
     expect([row.completed, row.remaining_items]).toEqual(['DONE-REPORT', 'NOTDONE-REPORT']);
     expect([row.request, row.next_steps]).toEqual(['model request', 'model next']);
-    expect(row.notes, 'the row is still tagged as holding a report').toBe(REPORT_NOTES);
+    expect(parseSummaryNotes(row.notes)).toMatchObject({ done: 'report', left: 'report' });
   });
 
   it('a report without a Done takes one from an older row when the model gives none', async () => {
@@ -2302,14 +2303,15 @@ describe('handleLLMSummary', () => {
     expect(db.prepare('SELECT remaining_items r FROM session_summaries WHERE id = ?').get(id).r).toBe('');
   });
 
-  it('a session with no row yet is inserted at its own last activity, not at the worker finish time (D#79)', async () => {
+  it("a session with no row yet is inserted at its last prompt, not at the worker's finish (D#79)", async () => {
     insertSession(db, { id: 'test-session', project: 'test-proj' });
     insertSession(db, { id: 'next-session', project: 'test-proj' });
-    const ended = Date.now() - 60000;
+    const lastPrompt = Date.now() - 60000;
     db.prepare(
-      "UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ? WHERE content_session_id = 'test-session'",
-    ).run(new Date(ended).toISOString(), ended);
-    addRow('next-session', { request: 'next session', epoch: ended + 5000 });
+      `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+       VALUES ('test-session', 'first', 1, 'x', ?), ('test-session', 'last', 2, 'x', ?)`,
+    ).run(lastPrompt - 30000, lastPrompt);
+    addRow('next-session', { request: 'next session', epoch: lastPrompt + 5000 });
     addObs();
     degraded();
 
@@ -2317,7 +2319,7 @@ describe('handleLLMSummary', () => {
 
     const row = rowsOf()[0];
     expect(row?.request, 'premise: the worker inserted the row').toBe('llm request');
-    expect(row.created_at_epoch).toBe(ended);
+    expect(row.created_at_epoch).toBe(lastPrompt);
     expect(lastSession()).toContain('Request: next session');
   });
 
