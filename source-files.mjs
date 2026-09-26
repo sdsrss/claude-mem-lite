@@ -216,6 +216,10 @@ export const SOURCE_FILES = [
   // injection faces: scripts/user-prompt-search.js (standalone hook) and
   // lib/error-recall-core.mjs. Missing here = UserPromptSubmit dies on auto-update.
   'lib/relevance-floor.mjs',
+  // Query-independent pending/caveat detection for search snippets (2026-09-26).
+  // Imported by search-engine.mjs (attachBodyTokens) — reached by cli.mjs, mem-cli.mjs,
+  // server.mjs and hook.mjs (via the shared search pipeline).
+  'lib/caveat-marker.mjs',
   // Shared UserPromptSubmit query caps — imported by BOTH hooks that event fires
   // (scripts/user-prompt-search.js and hook.mjs user-prompt via hook-memory.mjs).
   'lib/ups-query.mjs',

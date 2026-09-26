@@ -265,6 +265,28 @@ function scrubTruncate(str, max) {
   return truncate(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)), max);
 }
 
+// Bash output commonly puts the pass/fail verdict at the END of the line
+// ("866 total ingredient lines\ndigit-start but no amount/unit parsed: 0") —
+// a plain head-only truncate() cuts right before that number, leaving a
+// fragment that reads as an open problem instead of a passed check. Measured
+// live (cocina 2026-09-26, entry E5): scrubTruncate(resp, 60) on that exact
+// string yields "...no amount/unit p…", amputating the ": 0" that says the
+// check found nothing wrong — the LLM episode summarizer, given only that
+// fragment, wrote a bugfix narrative for a check that had actually passed.
+// Keeping head + tail instead of head-only preserves the verdict either way
+// (leading "flagged: 12/866" or trailing "...: 0" survive) at the same
+// scrub-then-cut discipline as scrubTruncate. Bash-only: Edit/Grep/etc. inputs
+// are short, structured values (a pattern, a diff side) where this failure
+// mode doesn't apply.
+function scrubTruncateEnds(str, max) {
+  if (typeof str !== 'string' || str === '') return truncate(str, max);
+  const clean = _scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)).replace(/\n/g, ' ').trim();
+  if (clean.length <= max) return truncate(clean, max);
+  const headLen = Math.ceil(max * 0.65);
+  const tailLen = max - headLen - 1; // 1 char reserved for the ellipsis
+  return `${truncate(clean.slice(0, headLen), headLen)}…${clean.slice(-tailLen)}`;
+}
+
 export function makeEntryDesc(toolName, input, resp, opts) {
   switch (toolName) {
     case 'Edit':
@@ -280,7 +302,7 @@ export function makeEntryDesc(toolName, input, resp, opts) {
       const isErr =
         opts?.isError ??
         (/\berror\b|\bfail(ed|ure)?\b|\bexception\b|\bpanic\b/i.test(resp) && resp.length > 30);
-      const snippet = scrubTruncate(resp, 60);
+      const snippet = scrubTruncateEnds(resp, 100);
       return isErr ? `${cmd} → ERROR: ${snippet}` : `${cmd} → ${snippet}`;
     }
     case 'Grep':

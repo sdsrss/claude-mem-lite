@@ -1201,6 +1201,18 @@ describe('makeEntryDesc', () => {
     expect(desc).toContain('ERROR');
   });
 
+  // Regression (cocina 2026-09-26, entry E5): a check that reports its PASS count at
+  // the end of the line ("...parsed: 0", meaning zero problems) was cut mid-number by a
+  // head-only truncate, and the LLM episode summarizer — seeing only the truncated,
+  // ambiguous-looking head — wrote a fabricated bugfix narrative for a check that had
+  // actually passed. The desc must carry the trailing verdict either way.
+  it('keeps a trailing pass/fail count out of a Bash output that would otherwise be cut mid-number', () => {
+    const resp =
+      "866 total ingredient lines\ndigit-start but no amount/unit parsed: 0\n\nstill leading 'de'/'del': 0\n\ngarnish/serving prefix stripped: 0";
+    const desc = makeEntryDesc('Bash', { command: 'python3 check_digits.py' }, resp, { isError: false });
+    expect(desc).toMatch(/:\s*0\b/);
+  });
+
   it('describes Grep tool', () => {
     const desc = makeEntryDesc('Grep', { pattern: 'TODO' }, 'src/foo.js:10: TODO fix');
     expect(desc).toContain('Search');

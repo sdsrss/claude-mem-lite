@@ -24,7 +24,7 @@ import { resolveProject } from './project-utils.mjs';
 // the session's hooks start writing the subdirectory's own name. Hook-side is untouched.
 import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
-import { searchObservationsHybrid } from './search-engine.mjs';
+import { searchObservationsHybrid, snippetAddsInfo } from './search-engine.mjs';
 import {
   fetchObsDetail,
   fetchPromptDetail,
@@ -119,6 +119,7 @@ import {
   saveWithClosures,
   formatSupersedeSkipped,
   formatSupersededNote,
+  isManualSave,
 } from './lib/save-observation.mjs';
 import { normalizeScope, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
@@ -564,6 +565,12 @@ async function cmdSearch(db, args, { llm } = {}) {
         importance: r.importance ?? null,
         files_modified: r.files_modified || null,
         body_tokens: r.bodyTokens ?? null,
+        // provenance: r.source === 'event' rows are auto-captured by construction (no
+        // manual write path reaches the events table — see persistHaikuSummary);
+        // r.is_manual (obs only) distinguishes an explicit mem_save from an
+        // auto-captured observation (audit 2026-09-26).
+        provenance: r.source === 'event' ? 'auto' : r.is_manual ? 'explicit' : 'auto',
+        caveat: r.caveatSnippet || null,
       };
     });
     out(
@@ -610,12 +617,29 @@ async function cmdSearch(db, args, { llm } = {}) {
       if (r.lesson_learned) {
         out(`  -> ${truncate(r.lesson_learned, 80)}`);
       }
+      // Events are auto-captured by construction (persistHaikuSummary is the only
+      // insert path) — a caveat is worth surfacing even where lesson_learned wasn't.
+      if (r.caveatSnippet) {
+        out(`  ⚠ ${r.caveatSnippet}`);
+      }
     } else {
       const date = fmtDateShort(r.created_at);
       const title = truncate(r.title || r.subtitle || '(untitled)', 80);
-      out(`#${r.id} ${typeIcon(r.type)} ${date}${timeStr} ${title}${tok(r)}`);
-      if (r.lesson_learned) {
+      // Provenance (audit 2026-09-26): within `#` results, a manual mem_save and an
+      // auto-captured observation are otherwise indistinguishable at a glance.
+      const provenance = r.is_manual ? ' ✍' : '';
+      out(`#${r.id} ${typeIcon(r.type)} ${date}${timeStr}${provenance} ${title}${tok(r)}`);
+      // Prefer the real FTS match context (wherever the query actually hit) over the
+      // hand-picked lesson_learned line when it says something the lesson doesn't.
+      if (snippetAddsInfo(r.snippet, r.title, r.lesson_learned)) {
+        out(`  -> ${truncate(r.snippet, 100)}`);
+      } else if (r.lesson_learned) {
         out(`  -> ${truncate(r.lesson_learned, 80)}`);
+      }
+      // Query-independent: survives regardless of which term matched or whether a
+      // lesson was ever written (see lib/caveat-marker.mjs).
+      if (r.caveatSnippet) {
+        out(`  ⚠ ${r.caveatSnippet}`);
       }
     }
   }
@@ -792,7 +816,12 @@ function renderObsRows(db, ids, requestedFields) {
   const fields = requestedFields || OBS_FIELDS;
   const parts = [];
   for (const r of rows) {
-    const lines = [`#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}`];
+    // Provenance: an explicit `mem_save` vs. a background auto-captured observation
+    // are otherwise indistinguishable in this render (audit 2026-09-26 — a fabricated
+    // auto-captured event sat unlabeled next to a verified manual save). `memory_session_id`
+    // already carries this (see isManualSave), just not legibly to a skimming reader.
+    const provenance = isManualSave(r.memory_session_id) ? ' ✍ explicit save' : ' 🤖 auto-captured';
+    const lines = [`#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}${provenance}`];
     // Retraction first (shared with mem_get via get-core) — see supersededNotice.
     const retracted = supersededNotice(r);
     if (retracted) lines.push(retracted);
@@ -870,7 +899,12 @@ function renderEventRows(db, ids) {
   if (rows.length === 0) return null;
   const parts = [];
   for (const r of rows) {
-    const lines = [`E#${r.id} [${r.event_type}] ${r.created_at ? fmtDateShort(r.created_at) : ''}`];
+    // Every row in the events table is auto-captured by construction — mem_save never
+    // writes here (persistHaikuSummary is the only insert path) — so this is unconditional,
+    // for the same at-a-glance provenance signal as the observations face.
+    const lines = [
+      `E#${r.id} [${r.event_type}] ${r.created_at ? fmtDateShort(r.created_at) : ''} 🤖 auto-captured`,
+    ];
     for (const f of EVENT_DETAIL_FIELDS) {
       if (f === 'id' || f === 'event_type' || f === 'created_at') continue; // in the header
       const val = r[f];

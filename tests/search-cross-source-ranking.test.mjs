@@ -125,3 +125,68 @@ describe('cross-source ranking direction (real pipeline)', () => {
     expect(eventIdx).toBeGreaterThan(0); // the passing mention does not take the top slot
   });
 });
+
+// ── Explicit-save provenance floor (2026-09-26, cocina "tandoor" audit) ──────
+//
+// Deliberately a SMALL, single-project corpus — the opposite setup from the suite
+// above, which pads to 12 background rows per table specifically to keep BM25's
+// IDF away from zero. This reproduces the real failure: a brand-new or small
+// project's observations table has too few rows for IDF to discriminate at all,
+// so an explicit mem_save that is the ONLY observation on-topic scores ~0 and
+// SINGLE_MATCH_BANDS reads that as a grazing match — well behind a multi-hit
+// auto-captured event leg that (being the higher-cardinality, auto-populated
+// table) still has real IDF spread. Without the floor in normalizeCrossSourceScores,
+// this test fails with the manual save buried behind every event.
+describe('explicit-save floor on a near-zero-IDF (small) corpus', () => {
+  let smallDb;
+
+  beforeAll(() => {
+    smallDb = createTestDb();
+    insertSession(smallDb, { id: 'manual-cocina', project: 'cocina' });
+    insertSession(smallDb, { id: 'auto-sess-1', project: 'cocina' });
+
+    // The ONLY two observations in the whole store — real-shape near-zero-IDF corpus.
+    insertObs(smallDb, {
+      sessionId: 'manual-cocina', // explicit mem_save convention (isManualSave)
+      project: 'cocina',
+      type: 'feature',
+      title: 'Import Tandoor completo: 66 recetas, 98.61% ingredientes bien',
+      narrative: 'Tandoor import de las 66 recetas del vault Obsidian, verificado.',
+      importance: 3,
+      epochOffset: -1000,
+    });
+    insertObs(smallDb, {
+      sessionId: 'auto-sess-1',
+      project: 'cocina',
+      type: 'bugfix',
+      title: 'unrelated staple matching fix',
+      narrative: 'no mention of the search term at all',
+      importance: 2,
+      epochOffset: -2000,
+    });
+
+    const insE = smallDb.prepare(`
+      INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const eventTitles = [
+      'Fixed Tandoor ingredient-parser endpoint in recipe importer',
+      'Fixed staple ingredient matching in Tandoor recipe imports',
+      'Verified Tandoor integration in cocina import validation',
+      'Spanish fractional cooking measurement parsing for Tandoor import',
+      'Created Tandoor-Vault recipe bridge modules',
+    ];
+    eventTitles.forEach((title, i) => {
+      insE.run('cocina', 'discovery', title, 'auto-captured episode body', 1, Date.now() - 3000 - i * 500);
+    });
+  });
+
+  test('a matching explicit mem_save outranks auto-captured events on a tiny corpus', async () => {
+    const res = await handleSearchForTest(smallDb, { query: 'tandoor', deep: false, limit: 10 }, {});
+    const rows = res.results.map((r) => ({ source: r.source, id: r.id, title: r.title }));
+    const eventRows = rows.filter((r) => r.source === 'event');
+    expect(eventRows.length).toBeGreaterThanOrEqual(4); // real multi-hit auto competition present
+    expect(rows[0].source).toBe('obs'); // the explicit save leads all of them
+    expect(rows[0].title).toContain('66 recetas');
+  });
+});

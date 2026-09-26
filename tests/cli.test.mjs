@@ -145,9 +145,14 @@ describe('CLI argument parsing (via commands)', () => {
       });
     }
     const output = await captureStdout(() => run(['search', 'alpha', '--limit', '2']));
-    // Should have header + 2 result lines
-    const lines = output.trim().split('\n');
-    expect(lines.length).toBeLessThanOrEqual(3); // header + 2 results max
+    // Count result HEADER lines, not raw output lines: a result can carry an extra
+    // snippet/caveat sub-line (2026-09-26), so line count no longer maps 1:1 to result
+    // count — same reasoning as the sibling '--limit 3' test above.
+    const resultLines = output
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('#'));
+    expect(resultLines.length).toBeLessThanOrEqual(2);
   });
 
   it('recent parses count from positional arg', async () => {
