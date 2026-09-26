@@ -336,9 +336,11 @@ describe('green-stamp reporter under a real vitest run', () => {
     git('commit', '-qam', 'slow test');
     expect(vitest().status).toBe(0);
     expect(existsSync(stampPath(repo))).toBe(true);
-    // Signal only once the test body runs: a SIGINT that lands before vitest has loaded the
-    // reporter takes node's default action, so no exit hook runs and the stamp survives. A
-    // fixed 4 s sleep reproduced that at 100 ms, 3/3, which is where a loaded machine lands.
+    // Signal only once the test body runs: a SIGINT that lands before the reporter has
+    // registered its exit hook leaves the stamp in place, whether node's default action kills
+    // the process (seen at 100 ms, 3/3) or vitest handles the signal and exits 130 (seen at
+    // 180-210 ms by the v6.13.3 claims review). The old fixed 4 s sleep only made that window
+    // unlikely; the marker rules it out.
     const ready = join(repo, 'ready.marker');
     const env = { ...process.env, GS_SLOW: '1', GS_READY: ready, NO_COLOR: '1' };
     for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
@@ -348,13 +350,25 @@ describe('green-stamp reporter under a real vitest run', () => {
       env,
       stdio: 'ignore',
     });
-    for (let t = 0; t < 400 && !existsSync(ready) && child.exitCode === null; t++) {
-      await new Promise((r) => setTimeout(r, 100));
+    // A signal-killed child has exitCode null and signalCode set, so liveness reads both, and
+    // the exit listener is attached before any wait so it cannot miss an early exit (v6.13.3
+    // defect review P3-3: a dead child passed the premise and hung the case to its timeout).
+    const exited = new Promise((r) => child.once('exit', r));
+    const alive = () => child.exitCode === null && child.signalCode === null;
+    try {
+      for (let t = 0; t < 400 && !existsSync(ready) && alive(); t++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(existsSync(ready), 'premise: the slow test body started').toBe(true);
+      expect(alive(), 'premise: the run was still going when interrupted').toBe(true);
+      child.kill('SIGINT'); // this child only
+      await exited;
+    } finally {
+      if (alive()) {
+        child.kill('SIGKILL'); // a failed premise must not leave it running past the fixture
+        await exited;
+      }
     }
-    expect(existsSync(ready), 'premise: the slow test body started').toBe(true);
-    expect(child.exitCode, 'premise: the run was still going when interrupted').toBeNull();
-    child.kill('SIGINT'); // this child only
-    await new Promise((r) => child.on('exit', r));
     expect(existsSync(stampPath(repo))).toBe(false);
   }, 60000);
 

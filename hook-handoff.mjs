@@ -801,8 +801,9 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
   // A newer but expired 'clear' handoff must not shadow a still-valid 'exit' handoff.
   // No id tiebreaker on this or the Stage -1/0/2 reads above, on purpose: session_handoffs has
   // no id column, and its rowid is not recency because the writer is an UPSERT that keeps the
-  // row's original rowid. `rowid DESC` would therefore choose wrongly on exactly the rewritten
-  // rows. A correct tiebreak needs a column; see findings.md, the created_at_epoch tie bullet.
+  // row's original rowid. `rowid DESC` would therefore pick the older write whenever a tie
+  // involves a row rewritten after the other was first inserted. A correct tiebreak needs a
+  // column; see findings.md, the created_at_epoch tie bullet.
   const handoffs = currentCcSessionId
     ? db
         .prepare(

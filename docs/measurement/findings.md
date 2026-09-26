@@ -588,9 +588,17 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `session_handoffs` reads (Stage -1 / 0 / 2 and `pickHandoffToInject`, both arms each) are
   **judged and deliberately left untiebroken**: the table has no id column, and its rowid is
   not recency because the writer is an UPSERT that keeps the row's original rowid, so
-  `rowid DESC` would pick the wrong row on exactly the rows that were rewritten. A real
+  `rowid DESC` picks the older write whenever a tie involves a row rewritten after the
+  other was first inserted (the v6.13.3 claims review: "can be wrong", not "is"). A real
   tiebreaker needs a column, i.e. a migration. Live tie rate 0 groups over 51 handoff rows and
   0 over 450 summary rows (read-only, 2026-09-26, key = project + `created_at_epoch`).
+  **`session_summaries` has the same shape on one path**, which the first draft of this
+  paragraph missed (v6.13.3 defect review P3-1): `hook-llm.mjs`'s fast-to-LLM UPDATE rewrites
+  `created_at_epoch` and keeps the row's `id`, so there too `id` is insertion order, not write
+  order, and a tie between an upgraded row and a later insert picks the older write (built by
+  the review, not observed). What separates the two decisions is measured, not structural: over
+  same-project pairs, `id` order disagrees with `created_at_epoch` order on **0 of 16,158**
+  summary pairs and **2 of 173** handoff pairs (rowid), read-only, 2026-09-26T07:56Z.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
