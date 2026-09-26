@@ -37,6 +37,7 @@ import {
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
 import { buildSessionContextLines } from '../hook-context.mjs';
+import { REPORT_NOTES } from '../lib/fast-summary.mjs';
 
 // v2.58: callLLM now accepts string OR {system, user} (cso F#4 fix). Tests
 // asserting prompt content should normalize both forms before string-matching.
@@ -2021,7 +2022,7 @@ describe('handleLLMSummary', () => {
   // run found no `notes = 'fast'` row and INSERTed another (one live session: 37 rows in 65
   // minutes). The worker now upgrades the session's NEWEST row whatever its notes, fills an
   // empty field from the session's other rows before giving up on it, and leaves the row's
-  // timestamp alone. Each case asserts on the rendered Last Session, which is what a reader sees.
+  // timestamp alone. The cases about what a reader sees assert on the rendered Last Session.
   const summaryRow = (db2) =>
     db2.prepare(
       `
@@ -2202,6 +2203,137 @@ describe('handleLLMSummary', () => {
 
     expect(db.prepare('SELECT next_steps FROM session_summaries WHERE id = ?').get(newer).next_steps).toBe(
       'OLD-next',
+    );
+  });
+
+  it("the upgraded row's own content beats its older rows for every field", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const cols = [
+      'request',
+      'investigated',
+      'learned',
+      'completed',
+      'next_steps',
+      'remaining_items',
+      'lessons',
+      'key_decisions',
+    ];
+    const set = (id, prefix) =>
+      db
+        .prepare(`UPDATE session_summaries SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+        .run(...cols.map((c) => `${prefix}-${c}`), id);
+    set(addRow('test-session', { epoch: t0 }), 'OLD');
+    const newer = addRow('test-session', { notes: 'llm', epoch: t0 + 1000 });
+    set(newer, 'OWN');
+    addObs();
+    // A reply with nothing usable in any field the floor covers except one it must still carry.
+    callLLM.mockReturnValueOnce(JSON.stringify({ lessons: [], key_decisions: [], request: ' ' }));
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(newer);
+    for (const c of cols.filter((x) => x !== 'request')) expect(row[c], c).toBe(`OWN-${c}`);
+  });
+
+  // Provenance (review of c12cf88): a row holding the assistant's own Done / Not done report
+  // keeps it — the model fills its other fields and a Done it lacks, never its Not done.
+  it("a report's Done / Not done survive a full model reply; the model still fills the other fields", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const id = addRow('test-session', {
+      request: 'stop request',
+      completed: 'DONE-REPORT',
+      remaining: 'NOTDONE-REPORT',
+      notes: REPORT_NOTES,
+      epoch: Date.now() - 60000,
+    });
+    addObs();
+    callLLM.mockReturnValueOnce(
+      JSON.stringify({
+        request: 'model request',
+        completed: 'model paraphrase',
+        remaining_items: 'model inferred',
+        next_steps: 'model next',
+      }),
+    );
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(id);
+    expect([row.completed, row.remaining_items]).toEqual(['DONE-REPORT', 'NOTDONE-REPORT']);
+    expect([row.request, row.next_steps]).toEqual(['model request', 'model next']);
+    expect(row.notes, 'the row is still tagged as holding a report').toBe(REPORT_NOTES);
+  });
+
+  it('a report without a Done takes one from an older row when the model gives none', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { completed: 'OLD-DONE', notes: 'llm', epoch: t0 });
+    const id = addRow('test-session', {
+      completed: '',
+      remaining: 'LEFT',
+      notes: REPORT_NOTES,
+      epoch: t0 + 1000,
+    });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT completed, remaining_items FROM session_summaries WHERE id = ?').get(id);
+    expect([row.completed, row.remaining_items]).toEqual(['OLD-DONE', 'LEFT']);
+  });
+
+  it("a report's cleared Not done is not refilled from an older row", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { remaining: 'STALE-LEFT', notes: 'llm', epoch: t0 });
+    const id = addRow('test-session', {
+      completed: 'ALL-DONE',
+      remaining: '',
+      notes: REPORT_NOTES,
+      epoch: t0 + 1000,
+    });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(db.prepare('SELECT remaining_items r FROM session_summaries WHERE id = ?').get(id).r).toBe('');
+  });
+
+  it('a session with no row yet is inserted at its own last activity, not at the worker finish time (D#79)', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    insertSession(db, { id: 'next-session', project: 'test-proj' });
+    const ended = Date.now() - 60000;
+    db.prepare(
+      "UPDATE sdk_sessions SET status = 'completed', completed_at = ?, completed_at_epoch = ? WHERE content_session_id = 'test-session'",
+    ).run(new Date(ended).toISOString(), ended);
+    addRow('next-session', { request: 'next session', epoch: ended + 5000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const row = rowsOf()[0];
+    expect(row?.request, 'premise: the worker inserted the row').toBe('llm request');
+    expect(row.created_at_epoch).toBe(ended);
+    expect(lastSession()).toContain('Request: next session');
+  });
+
+  it('among older rows the floor takes the newest non-empty value', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { completed: 'OLDEST-DONE', epoch: t0 });
+    addRow('test-session', { completed: 'MIDDLE-DONE', epoch: t0 + 1000 });
+    const newest = addRow('test-session', { epoch: t0 + 2000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(db.prepare('SELECT completed c FROM session_summaries WHERE id = ?').get(newest).c).toBe(
+      'MIDDLE-DONE',
     );
   });
 

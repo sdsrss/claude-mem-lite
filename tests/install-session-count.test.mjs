@@ -1,6 +1,7 @@
 // `status` and `doctor` print "N sessions" from session_summaries, and a session can own
 // several summary rows (legacy ones from before one row per session: 458 rows for 312
-// sessions on the live DB, 2026-09-26). Both said "Align with stats", and stats now counts
+// sessions on the live DB before a one-off dedup, 2026-09-26). doctor's count says "Align
+// with stats", status prints the same number, and stats now counts
 // DISTINCT sessions, so both faces are driven here against a seeded DB with that shape.
 import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -59,7 +60,7 @@ function run(home, args) {
       encoding: 'utf8',
     });
   } catch (e) {
-    // Both commands exit non-zero on an un-installed HOME; the report is on stdout.
+    // doctor exits non-zero on an un-installed HOME (status --json exits 0); the report is on stdout.
     return e.stdout || '';
   }
 }

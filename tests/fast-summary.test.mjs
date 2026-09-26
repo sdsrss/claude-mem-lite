@@ -14,6 +14,8 @@ import {
   newestSummaryId,
   fillFastSummaryGaps,
   refreshStructuredSummary,
+  refreshObservationTitles,
+  REPORT_NOTES,
   FAST_SUMMARY_LIMITS,
 } from '../lib/fast-summary.mjs';
 import { insertSession } from './test-helpers.mjs';
@@ -224,18 +226,21 @@ describe('writes that land on an existing row', () => {
     expect(newestSummaryId(db, 's3')).toBeNull();
   });
 
-  it('fillFastSummaryGaps fills only empty fields and moves the row to now', () => {
-    // Two rows with opposite empty / non-empty columns, so each column is seen both ways.
+  it('fillFastSummaryGaps fills only the empty fields of a model-written row and moves it to now', () => {
+    // Two model-written rows (their content beats this path's, so only gaps are filled) with
+    // opposite empty / non-empty columns, so each column is seen both ways.
     const a = addRow('s1', {
       request: '',
       completed: 'KEPT-DONE',
       remaining: '',
+      notes: 'llm',
       epoch: NOW.getTime() - 1000,
     });
     const b = addRow('s2', {
       request: 'KEPT-REQ',
       completed: '',
       remaining: 'KEPT-LEFT',
+      notes: 'llm',
       epoch: NOW.getTime() - 1000,
     });
     const later = new Date(NOW.getTime() + 60000);
@@ -279,16 +284,18 @@ describe('writes that land on an existing row', () => {
     expect(get(id).created_at_epoch, 'the timestamp is not touched').toBe(NOW.getTime());
   });
 
-  it('refreshStructuredSummary: notes follow the latest report and keep a provenance tag', () => {
+  it('refreshStructuredSummary: notes carry the latest report, tagged as a report either way', () => {
     const id = addRow('s1', { notes: 'Failed: old', epoch: NOW.getTime() });
     const limits = FAST_SUMMARY_LIMITS.stop;
     refreshStructuredSummary(db, { id, values: { completed: 'd', notes: 'Uncertain: new' }, limits });
     expect(get(id).notes).toBe('Uncertain: new');
     refreshStructuredSummary(db, { id, values: { completed: 'd' }, limits });
-    expect(get(id).notes, 'stale Failed / Uncertain text is not kept as if it were current').toBe('fast');
+    expect(get(id).notes, 'stale Failed / Uncertain text is not kept as if it were current').toBe(
+      REPORT_NOTES,
+    );
     db.prepare("UPDATE session_summaries SET notes = 'llm' WHERE id = ?").run(id);
     refreshStructuredSummary(db, { id, values: { completed: 'd' }, limits });
-    expect(get(id).notes).toBe('llm');
+    expect(get(id).notes, 'a report replaces the model tag: the row now holds a report').toBe(REPORT_NOTES);
   });
 
   it('refreshStructuredSummary scrubs before truncating', () => {
@@ -300,5 +307,77 @@ describe('writes that land on an existing row', () => {
     });
     expect(get(id).completed).not.toContain('gh' + 'p_B');
     expect(get(id).completed.length).toBeLessThanOrEqual(20);
+  });
+
+  // Provenance (review of c12cf88): `notes` says where completed / remaining_items came from,
+  // and each writer's precedence follows it — report > model > observation titles.
+  it('fillFastSummaryGaps replaces a no-report row observation-title fallback with the fresh titles', () => {
+    const id = addRow('s1', { completed: 'turn1 early obs', notes: 'fast', epoch: NOW.getTime() });
+    fillFastSummaryGaps(db, {
+      id,
+      values: { request: 'r', completed: 'later obs 5; later obs 4', remaining: 'handoff left' },
+      limits: FAST_SUMMARY_LIMITS.sessionStart,
+      now: NOW,
+    });
+    expect(get(id).completed).toBe('later obs 5; later obs 4');
+    expect(get(id).remaining_items).toBe('handoff left');
+  });
+
+  it('fillFastSummaryGaps leaves a report row Done / Not done alone, including a cleared Not done', () => {
+    const id = addRow('s1', {
+      completed: 'ALL-DONE',
+      remaining: '',
+      notes: REPORT_NOTES,
+      epoch: NOW.getTime(),
+    });
+    fillFastSummaryGaps(db, {
+      id,
+      values: { request: 'r', completed: 'titles', remaining: 'HANDOFF-UNFINISHED' },
+      limits: FAST_SUMMARY_LIMITS.sessionStart,
+      now: NOW,
+    });
+    expect(get(id).completed).toBe('ALL-DONE');
+    expect(get(id).remaining_items, "the report's 'nothing left' stands").toBe('');
+    expect(get(id).request).toBe('r');
+  });
+
+  it('refreshObservationTitles updates only a no-report row, and only with something to say', () => {
+    const limits = FAST_SUMMARY_LIMITS.stop;
+    const fast = addRow('s1', { completed: 'old titles', notes: 'fast', epoch: NOW.getTime() });
+    const report = addRow('s2', { completed: 'REPORT', notes: REPORT_NOTES, epoch: NOW.getTime() });
+    const llm = addRow('s3', { completed: 'MODEL', notes: 'llm', epoch: NOW.getTime() });
+    for (const id of [fast, report, llm])
+      refreshObservationTitles(db, { id, completed: 'new titles', limits });
+    expect([get(fast).completed, get(report).completed, get(llm).completed]).toEqual([
+      'new titles',
+      'REPORT',
+      'MODEL',
+    ]);
+    refreshObservationTitles(db, { id: fast, completed: '', limits });
+    expect(get(fast).completed).toBe('new titles');
+  });
+
+  it('refreshObservationTitles scrubs before truncating', () => {
+    const id = addRow('s1', { notes: 'fast', epoch: NOW.getTime() });
+    refreshObservationTitles(db, {
+      id,
+      completed: 'prefix ' + secret,
+      limits: { ...FAST_SUMMARY_LIMITS.stop, completed: 20 },
+    });
+    expect(get(id).completed).not.toContain('gh' + 'p_B');
+    expect(get(id).completed.length).toBeLessThanOrEqual(20);
+  });
+
+  it('refreshStructuredSummary scrubs remaining_items and notes before truncating too', () => {
+    const id = addRow('s1', { epoch: NOW.getTime() });
+    refreshStructuredSummary(db, {
+      id,
+      values: { remaining: 'prefix ' + secret, notes: 'Failed: prefix ' + secret },
+      limits: { ...FAST_SUMMARY_LIMITS.stop, remaining: 20, notes: 25 },
+    });
+    expect(get(id).remaining_items).not.toContain('gh' + 'p_B');
+    expect(get(id).remaining_items.length).toBeLessThanOrEqual(20);
+    expect(get(id).notes).not.toContain('gh' + 'p_B');
+    expect(get(id).notes.length).toBeLessThanOrEqual(25);
   });
 });

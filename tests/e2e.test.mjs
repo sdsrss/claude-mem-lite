@@ -1065,6 +1065,107 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rows[0].remaining_items).toContain('KEPT-LEFT');
   });
 
+  it('a later turn that reports only a Not done replaces the old Not done and keeps the Done', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: KEPT-DONE\nNot done: OLD-LEFT');
+    stop();
+    turn('go on', 'Not done: NEW-LEFT');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('KEPT-DONE');
+    expect(rows[0].remaining_items).toContain('NEW-LEFT');
+    expect(rows[0].remaining_items).not.toContain('OLD-LEFT');
+  });
+
+  it('without a report, each Stop refreshes the observation titles instead of keeping the first turn', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const addObs = (title) => {
+      const db = openTestDb(tmpHome);
+      try {
+        db.prepare(
+          `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+           VALUES (?, 'parent--testproj', '', 'change', ?, '', '', '', '', '[]', '[]', 1, ?, ?)`,
+        ).run(sid, title, new Date().toISOString(), Date.now());
+      } finally {
+        db.close();
+      }
+    };
+    addObs('FIRST-TURN-OBS');
+    turn('start', 'Looked around.');
+    stop();
+    expect(rowsOf(sid)[0]?.completed, 'premise: the first Stop stored the titles').toContain(
+      'FIRST-TURN-OBS',
+    );
+    addObs('LATER-TURN-OBS');
+    turn('go on', 'Changed a file.');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('LATER-TURN-OBS');
+  });
+
+  it('a Stop in a session with subagents parses the parent transcript once', () => {
+    // lib/transcript-scan.mjs memoizes ONE file, and reading a subagent transcript evicts the
+    // parent. Stop's citation tracking reads the subagents first so the parent is parsed once
+    // (D#152); the summary refresh now runs every turn and has to come after that, not before.
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: X');
+    const subDir = join(transcript.slice(0, -'.jsonl'.length), 'subagents');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(
+      join(subDir, 'agent-1.jsonl'),
+      JSON.stringify({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'sub' }] },
+      }) + '\n',
+    );
+    const countFile = join(tmpHome, 'parent-reads.txt');
+    const preload = join(tmpHome, 'count-reads.cjs');
+    writeFileSync(
+      preload,
+      `const fs = require('fs'); const { syncBuiltinESMExports } = require('module');
+       const orig = fs.readFileSync; let n = 0;
+       fs.readFileSync = function (p, ...rest) { if (String(p) === process.env.COUNT_PATH) n++; return orig.call(this, p, ...rest); };
+       syncBuiltinESMExports();
+       process.on('exit', () => fs.writeFileSync(process.env.COUNT_FILE, String(n)));`,
+    );
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+      env: { ...env(), NODE_OPTIONS: `--require ${preload}`, COUNT_PATH: transcript, COUNT_FILE: countFile },
+    });
+    expect(rowsOf(sid)[0]?.completed, 'premise: the Stop ran the summary writer').toContain('X');
+    expect(Number(readFileSync(countFile, 'utf8'))).toBe(1);
+  });
+
+  it("/clear keeps a first-turn report's Done instead of replacing it with observation titles", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const db = openTestDb(tmpHome);
+    try {
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+         VALUES (?, 'parent--testproj', '', 'change', 'SOME-OBS-TITLE', '', '', '', '', '[]', '[]', 1, ?, ?)`,
+      ).run(sid, new Date().toISOString(), Date.now());
+    } finally {
+      db.close();
+    }
+    turn('start', 'Done: REPORT-DONE');
+    stop();
+    expect(rowsOf(sid)[0]?.completed, 'premise: the report went in, not the titles').toContain('REPORT-DONE');
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env: env() });
+
+    expect(rowsOf(sid)[0].completed).toContain('REPORT-DONE');
+  });
+
   it('/clear fills the empty fields of the previous session row instead of inserting another', () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);

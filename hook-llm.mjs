@@ -25,7 +25,7 @@ import {
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
-import { newestSummaryId } from './lib/fast-summary.mjs';
+import { newestSummaryId, HAS_REPORT_SQL } from './lib/fast-summary.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -1460,8 +1460,8 @@ ${obsList}`;
     // alone dropped the whole INSERT/UPDATE (losing the session's highest-value fields:
     // lessons + key_decisions) whenever Haiku returned an empty request string but a rich
     // `{completed, lessons, key_decisions}` — a common degraded shape. Downstream tolerates an
-    // empty request: INSERT writes '' and the UPDATE COALESCE(NULLIF(?, ''), request) preserves
-    // the prior value. Use asText in the gate so a non-string / empty-array field can't falsely
+    // empty request: INSERT writes '' and the UPDATE keeps the row's own request (or an older row's)
+    // when the reply's is empty. Use asText in the gate so a non-string / empty-array field can't falsely
     // trigger it.
     const hasSummaryContent =
       llmParsed &&
@@ -1531,19 +1531,28 @@ ${obsList}`;
           .all(sessionId, existingId);
         const floor = (col) =>
           siblings.find((r) => typeof r[col] === 'string' && r[col] !== '')?.[col] ?? null;
+        // A row whose Done / Not done are the assistant's own report keeps them: the model only
+        // fills a Done the report lacks, and never replaces a Not done, where '' is the report
+        // saying nothing is left (lib/fast-summary.mjs, REPORT_NOTES). The report is the agent's
+        // statement of the session's state; the model is prompted to INFER remaining_items.
+        //
         // The row's timestamp is NOT moved (D#79). It used to be set to now, and this worker can
         // finish after the NEXT session has written its first row, which put the previous
-        // session back on top of Last Session with no tie at all. The timestamp is when the
-        // session wrote, which is what Last Session and search recency order by.
+        // session back on top of Last Session with no tie at all. The timestamp stays when
+        // the session's own writers put it: Stop's first write, or /clear's move to the session's
+        // end. Last Session and search recency order by it.
         db.prepare(
           `
           UPDATE session_summaries
           SET request = COALESCE(NULLIF(?, ''), NULLIF(request, ''), ?, request),
               investigated = COALESCE(NULLIF(?, ''), NULLIF(investigated, ''), ?, investigated),
               learned = COALESCE(NULLIF(?, ''), NULLIF(learned, ''), ?, learned),
-              completed = COALESCE(NULLIF(?, ''), NULLIF(completed, ''), ?, completed),
+              completed = CASE WHEN ${HAS_REPORT_SQL}
+                THEN COALESCE(NULLIF(completed, ''), NULLIF(?, ''), ?, completed)
+                ELSE COALESCE(NULLIF(?, ''), NULLIF(completed, ''), ?, completed) END,
               next_steps = COALESCE(NULLIF(?, ''), NULLIF(next_steps, ''), ?, next_steps),
-              remaining_items = COALESCE(NULLIF(?, ''), NULLIF(remaining_items, ''), ?, remaining_items),
+              remaining_items = CASE WHEN ${HAS_REPORT_SQL} THEN remaining_items
+                ELSE COALESCE(NULLIF(?, ''), NULLIF(remaining_items, ''), ?, remaining_items) END,
               lessons = COALESCE(?, NULLIF(lessons, ''), ?, lessons),
               key_decisions = COALESCE(?, NULLIF(key_decisions, ''), ?, key_decisions),
               notes = CASE WHEN COALESCE(notes, '') IN ('fast', '') THEN 'llm' ELSE notes END
@@ -1556,6 +1565,8 @@ ${obsList}`;
           floor('investigated'),
           safe.learned,
           floor('learned'),
+          safe.completed,
+          floor('completed'),
           safe.completed,
           floor('completed'),
           safe.next_steps,
@@ -1579,6 +1590,15 @@ ${obsList}`;
           lessons: lessonsJson,
           key_decisions: decisionsJson,
         });
+        // Dated at the session's own last recorded activity, not at this worker's finish time:
+        // the worker can finish after the NEXT session has written its first row (D#79).
+        const activity = db
+          .prepare(
+            'SELECT COALESCE(completed_at_epoch, started_at_epoch) AS e FROM sdk_sessions WHERE content_session_id = ?',
+          )
+          .get(sessionId)?.e;
+        const stamp =
+          Number.isFinite(activity) && activity > 0 && activity <= now.getTime() ? new Date(activity) : now;
         db.prepare(
           `
           INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, lessons, key_decisions, created_at, created_at_epoch)
@@ -1595,8 +1615,8 @@ ${obsList}`;
           safe.remaining_items,
           safe.lessons,
           safe.key_decisions,
-          now.toISOString(),
-          now.getTime(),
+          stamp.toISOString(),
+          stamp.getTime(),
         );
       }
     }

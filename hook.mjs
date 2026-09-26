@@ -93,7 +93,9 @@ import {
   insertFastSummary,
   newestSummaryId,
   refreshStructuredSummary,
+  refreshObservationTitles,
   fillFastSummaryGaps,
+  REPORT_NOTES,
   FAST_SUMMARY_LIMITS,
 } from './lib/fast-summary.mjs';
 import { formatHookError } from './lib/native-binding-hint.mjs';
@@ -1109,8 +1111,8 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
     // tail is deterministically parseable without Haiku. Prior baseline left
     // remaining_items=='' for every session whose Haiku pass failed (≈66%
-    // in prod data), losing the user-visible "Not done" list. The parse is
-    // the memoised one trackCitationsAtStop reads too, so this costs no extra pass.
+    // in prod data), losing the user-visible "Not done" list. handleStop calls this
+    // AFTER trackCitationsAtStop so the parse is the one it left memoized.
     let structuredCompleted = '';
     let structuredNotDone = '';
     let structuredNotes = '';
@@ -1129,12 +1131,21 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
       debugCatch(e, 'handleStop-structured-extract');
     }
 
+    const hasReport = Boolean(structuredCompleted || structuredNotDone);
     const existingId = newestSummaryId(db, sessionId);
     if (existingId !== null) {
-      if (structuredCompleted || structuredNotDone) {
+      if (hasReport) {
         refreshStructuredSummary(db, {
           id: existingId,
           values: { completed: structuredCompleted, remaining: structuredNotDone, notes: structuredNotes },
+          limits: FAST_SUMMARY_LIMITS.stop,
+        });
+      } else {
+        // No report this turn: a row that never held one keeps its observation-title fallback
+        // current instead of the first turn's (a no-op on a report or model row).
+        refreshObservationTitles(db, {
+          id: existingId,
+          completed: readFastSummarySource(db, sessionId).completed,
           limits: FAST_SUMMARY_LIMITS.stop,
         });
       }
@@ -1144,7 +1155,8 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     const { request: fastRequestRaw, completed: obsCompleted } = readFastSummarySource(db, sessionId);
     const finalCompleted = structuredCompleted || obsCompleted;
     const finalRemaining = structuredNotDone;
-    const finalNotes = structuredNotes || 'fast';
+    // The tag records where completed / remaining_items came from (lib/fast-summary.mjs).
+    const finalNotes = structuredNotes || (hasReport ? REPORT_NOTES : 'fast');
 
     if (fastRequestRaw || finalCompleted || finalRemaining) {
       insertFastSummary(db, {
@@ -1605,8 +1617,11 @@ async function handleStop() {
   if (db) {
     try {
       markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot });
-      writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
+      // Citations first: they read the subagent transcripts before the parent, so the parent is
+      // parsed once and stays memoized (D#152). The summary reads the parent's tail on every
+      // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
+      writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
     } finally {
       db.close();
     }
@@ -2185,7 +2200,7 @@ function saveHandoffAndFastSummary(
       }
 
       // One row per session: when Stop already wrote the previous session's row, fill its
-      // empty fields rather than INSERT a second one beside it (76 live sessions have two).
+      // gaps rather than INSERT a second one beside it (80 live sessions had two, 2026-09-26).
       // The gate is unchanged, so the row moves to `now` exactly when the second row used to
       // be written with it.
       if (fastRequestRaw || fastCompletedRaw) {

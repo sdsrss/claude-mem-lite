@@ -645,36 +645,61 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   OLDEST, and links 7..3 after; the new case is red with the tiebreaker reverted. `hook.mjs`'s
   `buildFallbackFastSummary` (`sdk_sessions … ORDER BY completed_at_epoch DESC LIMIT 1`) is
   judged and LEFT: 0 same-project `completed_at_epoch` ties in `sdk_sessions` (read-only,
-  09:40Z), the table is written only by `INSERT OR IGNORE` so `id` is creation order, and the
+  09:40Z), its rows are created only by `INSERT OR IGNORE` so `id` is creation order (the
+  ordered column itself is set by an UPDATE at Stop), and the
   path runs only for a startup within 2 minutes of an /exit whose session has no summary yet.
 - **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
-  assumed one Stop per session, which has been false since R10-P1-1 (Stop fires per assistant
-  turn and the mem session survives it). Three consequences, measured read-only at 09:34Z:
-  (1) the LLM worker, spawned by EVERY Stop, upgraded the `notes = 'fast'` row once and then
-  INSERTed on every later turn: **458 rows for 312 sessions**; one session 37 rows in 65
-  minutes (37 distinct `completed`), another 15. Session search for that session's own words
-  returned it for **10 of 10** hits ("test suites") and **9 of 10** ("shell scripts"), and
-  `stats` counts rows as sessions. (2) Stop's fast baseline was guarded on "no row yet", so its
-  structural Done / Not done came from the FIRST turn only: over 7 days of this machine's
-  transcripts (09:40Z, 107 sessions with a prompt), **20 of the 31** sessions that wrote §10
-  markers had a first-turn extract that differs from their last report, and 14 of the 31 had
-  no marker on turn 1 at all. (3) SessionStart's /clear path inserted a second row beside
-  Stop's (76 sessions). Now every writer lands on the session's newest row
-  (`newestSummaryId`) and inserts only when there is none: Stop refreshes it from any tail
-  carrying Done / Not done, /clear fills its empty fields and moves it to `now`, and the LLM
-  upgrade overwrites with the model's fields, floors an empty one on the row itself and then
-  on the session's older rows newest first, keeps a Failed / Uncertain `notes`, and **does not
-  move the timestamp** (D#79). D#79's precondition — an upgraded row of session A dated after
-  the first row of a same-project session that STARTED after A — held for **0 of 193** such
-  pairs (3 within 10 minutes), so D#79 was a built failure, not an observed one; D#80 could
-  not fire live either (none of the two-row sessions has an observation). Evidence: each of
-  22 single-site mutations (selector, re-stamp, floor per field, floor order, notes, Stop
-  refresh, /clear fill per column, fill timestamp, tie order) is killed by its intended case
-  in `tests/{hook-llm,fast-summary,e2e}.test.mjs`. `stats` (CLI + MCP), `status` and `doctor`
-  now count DISTINCT `memory_session_id` for their "N sessions" (each of the four counts red
-  when reverted alone). NOT done: the 146 surplus legacy rows stay
-  (deleting them is a data change for the user to authorise), and the LLM worker still calls
-  the model once per turn for a session with observations.
+  assumed one Stop per mem session. Stop always fired per assistant turn; since R10-P1-1 the
+  mem session also survives it, so every writer runs many times against a session that
+  already has a row. Three consequences, measured read-only at 09:34Z: (1) duplicate rows,
+  **458 for 312 sessions** — one session 37 rows in 65 minutes (37 distinct `completed`),
+  another 15. By writer (re-measured on the 11:13Z pre-dedup backup, 465 / 318): of 147
+  surplus rows **87 came from SessionStart's /clear-or-/compact path** inserting beside
+  Stop's row (84 still `fast`, 3 later upgraded by the model) and **60 from the LLM worker**,
+  spawned by every Stop, which upgraded the `notes = 'fast'` row once and then INSERTed on
+  every later turn of a session with observations. Session search for the 37-row session's
+  own words returned it for **10 of 10** hits ("test suites") and **9 of 10** ("shell
+  scripts"), and `stats` counted rows as sessions. (2) Stop's fast baseline was guarded on "no
+  row yet", so its Done / Not done came from the FIRST turn only: over 7 days of this
+  machine's transcripts (09:40Z, 107 sessions with a prompt), **20 of the 31** sessions that
+  wrote §10 markers had a first-turn extract that differs from their last report; at least
+  14 of those 20 had no marker on turn 1 at all (a reviewer's later re-count on a grown set
+  read 94 / 35 / 28 / 22 — same direction). (3) The same guard froze the observation-title
+  fallback of a session that never writes markers at its first turn.
+  Now every writer lands on the session's newest row (`newestSummaryId`) and inserts only
+  when there is none, and **`notes` records where Done / Not done came from** —
+  `REPORT_NOTES` or Failed / Uncertain lines (the assistant's report), `llm` (the model),
+  `fast` (observation titles) — with precedence report > model > titles: Stop refreshes the
+  row from any tail carrying Done / Not done, or else refreshes a `fast` row's titles; /clear
+  fills gaps, replaces a `fast` row's titles, never touches a report's Not done (where `''`
+  means "nothing left") and moves the row to `now`; the LLM upgrade writes the model's
+  fields except a report's Done / Not done, floors an empty field on the row itself and then
+  on the session's older rows newest first, and **does not move the timestamp** (D#79); its
+  INSERT, for a session with no row, is dated at the session's last recorded activity
+  (`sdk_sessions`), not at the worker's finish. The first cut of this change let /clear keep
+  a first-turn title fallback as if it were a report and let the model overwrite a fresh
+  report (v6.13.5 pre-ship defect review P2-1..P2-3); the provenance tag is the repair.
+  D#79's precondition — an upgraded row of session A dated after the first row of a
+  same-project session that STARTED after A — held for **0 of 193** such pairs (3 within 10
+  minutes): a built failure, not an observed one. D#80's shapes could not reach the upgrade
+  in any two-row session (none has an observation); 3 sessions with 3+ rows did hold two
+  `llm` rows, with no content loss seen. Stop now calls the summary writer AFTER citation
+  tracking: run before it, the per-turn tail read parsed the parent transcript a second time
+  in every session with subagents (the memo holds one file; 126 of 191 main transcripts have
+  a subagents folder, claims review) — an e2e case counts the parent reads (1).
+  `stats` (CLI + MCP), `status` and `doctor` now count DISTINCT `memory_session_id` for "N
+  sessions". Evidence: 41 single-site mutations (selector, re-stamp, floor per field and per
+  branch, floor order both ways, notes and report tags, each precedence rule, Stop's refresh
+  gate and title refresh, /clear fill per column and timestamp, INSERT stamp, Stop call
+  order, tie order, the four counts) are each killed by a case in
+  `tests/{hook-llm,fast-summary,e2e,stats-core,install-session-count}.test.mjs`; the first
+  run left 2 alive (a turn-1 report tagged `fast`, a report row's empty Done), each now
+  killed by a case added for it. The legacy duplicates were then removed from the maintainer's DB by a one-off
+  script (11:13Z, user-authorised, backup kept): 465 → 318 rows, 147 deleted, 31 empty fields
+  of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
+  projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other
+  installs keep theirs. NOT done: the LLM worker still calls the model once per turn for a
+  session with observations.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
