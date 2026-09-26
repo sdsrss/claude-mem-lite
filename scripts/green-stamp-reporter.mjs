@@ -6,13 +6,12 @@
 // exactly that tree. Every other outcome writes nothing, and "no stamp" means the gate
 // runs the suite, so a wrong NO here costs 44 s and a wrong YES is what the conditions
 // below exist to prevent. A `--reporter` flag on the command line replaces this reporter
-// along with the default one: that run records nothing, which is the safe direction.
+// along with the default one, so such a run can neither record nor clear here; the
+// globalSetup `setup` in scripts/green-stamp.mjs clears the stamp for it instead.
 //
-// Known limits (delta review, v6.13.0), both in the wrong-YES direction:
-// - A FAILING run with `--reporter=…` never loads this reporter, so it cannot clear an older
-//   green stamp on the same tree; a failed run clears it only when this reporter is loaded.
-// - A second config file that loads this reporter with a narrower `include` would certify
-//   its own narrower population. The repo has one config; do not add a second that loads it.
+// Only vitest.config.mjs at the root certifies: a second config file that loads this
+// reporter with a narrower `include` would certify its own narrower population, because
+// globTestSpecifications() resolves against it (v6.13.0 delta review P3-3).
 
 import { resolve } from 'node:path';
 import { computeTreeKey, recordStamp, clearStamp } from './green-stamp.mjs';
@@ -21,7 +20,17 @@ import { computeTreeKey, recordStamp, clearStamp } from './green-stamp.mjs';
  * Why a finished run may NOT certify its tree, or null when it may.
  * Pure over its inputs so every condition can be driven to fail in a test.
  */
-export function refusalReason({ reason, unhandledErrors, config, ranIds, allIds, startKey, endKey }) {
+export function refusalReason({
+  reason,
+  unhandledErrors,
+  config,
+  configFile,
+  root,
+  ranIds,
+  allIds,
+  startKey,
+  endKey,
+}) {
   if (reason !== 'passed') return `run ${reason}`;
   if (unhandledErrors.length > 0) return 'unhandled errors';
   if (config.testNamePattern) return 'test name filter';
@@ -35,6 +44,7 @@ export function refusalReason({ reason, unhandledErrors, config, ranIds, allIds,
   if (Array.isArray(config.cliExclude) && config.cliExclude.length > 0) return '--exclude run';
   if (config.dir && resolve(config.dir) !== resolve(config.root || '.')) return '--dir run';
   if (config.project && [].concat(config.project).length > 0) return '--project run';
+  if (!configFile || resolve(configFile) !== resolve(root || '.', 'vitest.config.mjs')) return '--config run';
   if (allIds.length === 0) return 'no test files collected';
   const ran = new Set(ranIds);
   if (ran.size !== new Set(allIds).size || allIds.some((id) => !ran.has(id)))
@@ -71,6 +81,8 @@ export default class GreenStampReporter {
         reason,
         unhandledErrors,
         config: this.ctx.config,
+        configFile: this.ctx.vite?.config?.configFile,
+        root: this.cwd,
         ranIds: testModules.map((m) => m.moduleId),
         allIds: all.map((s) => s.moduleId),
         startKey: this.startKey,

@@ -2,13 +2,30 @@
 // case here drives one of the conditions that must make it RUN the suite instead, because
 // a wrong "reuse" is the only failure this feature can add. Contract: scripts/green-stamp.mjs.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, copyFileSync, chmodSync } from 'fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  copyFileSync,
+  chmodSync,
+  symlinkSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawnSync } from 'child_process';
 import { disposeFixtureDir } from './test-helpers.mjs';
-import { computeTreeKey, checkStamp, recordStamp, stampPath } from '../scripts/green-stamp.mjs';
+import {
+  computeTreeKey,
+  checkStamp,
+  recordStamp,
+  stampPath,
+  loadsStampReporter,
+  STAMP_MAX_AGE_MS,
+} from '../scripts/green-stamp.mjs';
+import vitestConfig from '../vitest.config.mjs';
 import { refusalReason } from '../scripts/green-stamp-reporter.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,6 +71,28 @@ describe('computeTreeKey', () => {
   });
 });
 
+describe('computeTreeKey — entries that are not regular files (v6.13.0 defect review P3-2)', () => {
+  it('changes when a symlink is added or retargeted', () => {
+    writeFileSync(join(repo, 'b.mjs'), 'export const b = 1;\n');
+    const k = computeTreeKey(repo);
+    symlinkSync('a.mjs', join(repo, 'link.mjs'));
+    const linked = computeTreeKey(repo);
+    expect(linked).not.toBe(k); // untracked, not ignored: vitest would see it
+    git('add', 'link.mjs');
+    execFileSync('ln', ['-sfn', 'b.mjs', join(repo, 'link.mjs')]);
+    git('add', 'link.mjs');
+    expect(computeTreeKey(repo)).not.toBe(linked);
+  });
+
+  it('changes when a gitlink is re-pointed in the index', () => {
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    git('update-index', '--add', '--cacheinfo', `160000,${head},sub`);
+    const k = computeTreeKey(repo);
+    git('update-index', '--cacheinfo', `160000,${'1'.repeat(40)},sub`);
+    expect(computeTreeKey(repo)).not.toBe(k);
+  });
+});
+
 describe('checkStamp', () => {
   it('reuses a stamp recorded on this exact tree', () => {
     expect(checkStamp(repo, { env: env0 })).toMatchObject({ reuse: false, reason: 'no green stamp' });
@@ -82,6 +121,19 @@ describe('checkStamp', () => {
     });
   });
 
+  it('refuses a stamp older than the age cap (defect review P3-1)', () => {
+    // A time-dependent test (the benchmark baseline expires by date) can go red on a tree
+    // whose bytes never changed, so a content key alone cannot certify it forever.
+    const now = Date.now();
+    recordStamp(repo, computeTreeKey(repo), { now: now - STAMP_MAX_AGE_MS - 1000 });
+    expect(checkStamp(repo, { env: env0 })).toMatchObject({
+      reuse: false,
+      reason: expect.stringMatching(/older than/),
+    });
+    recordStamp(repo, computeTreeKey(repo), { now: now - 1000 });
+    expect(checkStamp(repo, { env: env0 }).reuse).toBe(true);
+  });
+
   it('PRE_COMMIT_FULL_TEST=1 forces the run', () => {
     recordStamp(repo, computeTreeKey(repo));
     expect(checkStamp(repo, { env: { PRE_COMMIT_FULL_TEST: '1' } }).reuse).toBe(false);
@@ -90,11 +142,13 @@ describe('checkStamp', () => {
 
 describe('refusalReason — only a full, passing, unfiltered run over an unchanged tree certifies', () => {
   const ok = {
+    configFile: '/r/vitest.config.mjs',
     reason: 'passed',
     unhandledErrors: [],
     config: {},
     ranIds: ['/r/a.test.mjs', '/r/b.test.mjs'],
     allIds: ['/r/b.test.mjs', '/r/a.test.mjs'],
+    root: '/r',
     startKey: 'k',
     endKey: 'k',
   };
@@ -112,6 +166,8 @@ describe('refusalReason — only a full, passing, unfiltered run over an unchang
     ['--exclude', { config: { cliExclude: ['t/b.test.mjs'] } }, /--exclude/],
     ['--dir', { config: { root: '/r', dir: '/r/sub' } }, /--dir/],
     ['--project', { config: { project: ['x'] } }, /--project/],
+    ['another config file (delta review P3-3)', { configFile: '/r/alt.config.mjs' }, /--config/],
+    ['no config file', { configFile: undefined }, /--config/],
     ['a file filter', { ranIds: ['/r/a.test.mjs'] }, /every test file/],
     ['an empty collection', { ranIds: [], allIds: [] }, /no test files/],
     ['an edit during the run', { endKey: 'k2' }, /changed while/],
@@ -198,7 +254,7 @@ describe('green-stamp reporter under a real vitest run', () => {
     writeFileSync(join(repo, '.gitignore'), 'ignored/\nnode_modules\n');
     writeFileSync(
       join(repo, 'vitest.config.mjs'),
-      "export default { test: { include: ['t/**/*.test.mjs'], reporters: ['default', './scripts/green-stamp-reporter.mjs'] } };\n",
+      "export default { test: { include: ['t/**/*.test.mjs'], globalSetup: ['./scripts/green-stamp.mjs'], reporters: ['default', './scripts/green-stamp-reporter.mjs'] } };\n",
     );
     mkdirSync(join(repo, 't'));
     for (const n of ['a', 'b']) {
@@ -255,4 +311,36 @@ describe('green-stamp reporter under a real vitest run', () => {
     expect(red.status).not.toBe(0);
     expect(existsSync(stampPath(repo))).toBe(false);
   }, 60000);
+
+  it('a --reporter run, which never loads the stamp reporter, removes the stamp (delta review P3-1)', () => {
+    setupVitestFixture();
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    const dot = vitest('--reporter=dot');
+    expect(dot.status, dot.stderr).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(false);
+    // Loading it explicitly beside another reporter keeps the full-run contract.
+    expect(vitest('--reporter=dot', '--reporter=./scripts/green-stamp-reporter.mjs').status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+  }, 60000);
+});
+
+describe('green-stamp wiring in this repo', () => {
+  it('vitest.config.mjs loads both the reporter and the setup that clears for runs without it', () => {
+    const { reporters, globalSetup } = vitestConfig.test;
+    expect(loadsStampReporter(reporters)).toBe(true);
+    expect(globalSetup).toContain('./scripts/green-stamp.mjs');
+  });
+
+  it('loadsStampReporter recognises the reporter by file name in any entry shape', () => {
+    expect(
+      loadsStampReporter([
+        ['default', {}],
+        ['./scripts/green-stamp-reporter.mjs', {}],
+      ]),
+    ).toBe(true);
+    expect(loadsStampReporter(['/abs/scripts/green-stamp-reporter.mjs'])).toBe(true);
+    expect(loadsStampReporter([['dot', {}]])).toBe(false);
+    expect(loadsStampReporter(undefined)).toBe(false);
+  });
 });

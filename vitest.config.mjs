@@ -86,7 +86,8 @@ export default defineConfig({
     // Reap test-fixture dirs leaked by prior interrupted/SIGKILL'd runs (afterEach
     // never reached). Runs once before the suite; 1h age guard never touches the
     // current run. See lib/tmp-fixture-sweep.mjs.
-    globalSetup: ['./tests/global-setup.mjs'],
+    // The second clears the green stamp for a run that does not load its reporter (below).
+    globalSetup: ['./tests/global-setup.mjs', './scripts/green-stamp.mjs'],
     // `default` restated because `reporters` REPLACES the default list. The second one
     // records a green stamp after a full, passing, unfiltered run over an unchanged tree,
     // which scripts/pre-commit.sh reuses to skip re-running the suite on that exact tree.
