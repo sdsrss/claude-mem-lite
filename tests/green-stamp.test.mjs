@@ -326,6 +326,31 @@ describe('green-stamp reporter under a real vitest run', () => {
     expect(existsSync(stampPath(repo))).toBe(false);
   }, 60000);
 
+  it('a run killed by SIGINT before it ends removes the stamp', async () => {
+    // vitest run exits on SIGINT without calling onTestRunEnd (v6.13.2 delta review FALSE-1).
+    setupVitestFixture();
+    writeFileSync(
+      join(repo, 't', 'a.test.mjs'),
+      "import { it } from 'vitest';\nit('slow', async () => { if (process.env.GS_SLOW) await new Promise((r) => setTimeout(r, 20000)); });\n",
+    );
+    git('commit', '-qam', 'slow test');
+    expect(vitest().status).toBe(0);
+    expect(existsSync(stampPath(repo))).toBe(true);
+    const env = { ...process.env, GS_SLOW: '1', NO_COLOR: '1' };
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
+    const { spawn } = await import('child_process');
+    const child = spawn(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run'], {
+      cwd: repo,
+      env,
+      stdio: 'ignore',
+    });
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(child.exitCode, 'premise: the run was still going when interrupted').toBeNull();
+    child.kill('SIGINT'); // this child only
+    await new Promise((r) => child.on('exit', r));
+    expect(existsSync(stampPath(repo))).toBe(false);
+  }, 60000);
+
   it('a partial run that loads the reporter keeps the stamp', () => {
     setupVitestFixture();
     expect(vitest().status).toBe(0);

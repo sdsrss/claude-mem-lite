@@ -102,8 +102,9 @@ const NEUTRAL_VERBS = new Set([
   'readlink',
 ]);
 
-// code-graph-mcp subcommands that only query the index. The rest (serve, the index
-// rebuilds, doctor's repairs, benchmark) run work whose failures error-recall should see.
+// code-graph-mcp subcommands that only query the index (plus `snapshot inspect`, handled in
+// WRITES_OR_RUNS). The rest (serve, the index rebuilds, doctor's repairs, benchmark,
+// adopt / unadopt / uninstall, snapshot create) run work whose failures error-recall should see.
 const CODE_GRAPH_READ_SUBCMDS = new Set([
   'grep',
   'search',
@@ -149,13 +150,60 @@ const WRITES_OR_RUNS = {
 
 /** 'read' | 'neutral' | 'other' for one simple command (one element of a pipeline). */
 function classifySimpleCommand(text) {
-  const toks = text.trim().split(/\s+/).filter(Boolean);
+  const toks = shellWords(text);
   let i = 0;
   while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
   const first = toks[i];
   if (!first || NEUTRAL_VERBS.has(first)) return 'neutral';
   if (SEARCH_VERBS.has(first)) return WRITES_OR_RUNS[first]?.(toks.slice(i + 1), text) ? 'other' : 'read';
   return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]) ? 'read' : 'other';
+}
+
+/**
+ * Split one simple command into words on whitespace OUTSIDE quotes, so `x="a b" grep …`
+ * stays an assignment followed by grep (v6.13.2 delta review FALSE-2). Quotes are kept in
+ * the words; only the split point is quote-aware.
+ */
+function shellWords(text) {
+  const words = [];
+  let cur = '';
+  let inWord = false;
+  let quote = null;
+  for (let k = 0; k < text.length; k++) {
+    const ch = text[k];
+    if (quote) {
+      if (ch === '\\' && quote !== "'") {
+        cur += ch + (text[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === quote[quote.length - 1]) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (inWord) words.push(cur);
+      cur = '';
+      inWord = false;
+      continue;
+    }
+    inWord = true;
+    if (ch === '\\') {
+      cur += ch + (text[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === '$' && text[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      cur += "$'";
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    cur += ch;
+  }
+  if (inWord) words.push(cur);
+  return words;
 }
 
 // `$'…'` (ANSI-C quoting): a backslash escapes the next character, including `'`.
@@ -178,6 +226,9 @@ const MAX_SUBST_DEPTH = 32;
 function stripNonCommands(cmd) {
   let out = '';
   let quote = null;
+  // Set once a `((` never closes: every later attempt would rescan to the end of the input,
+  // which made unclosed parentheses quadratic (v6.13.2 delta review P3-1).
+  let arithUnclosed = false;
   const pending = []; // heredoc delimiters opened on the current line: { word, dash, expand }
   for (let k = 0; k < cmd.length; k++) {
     const ch = cmd[k];
@@ -219,16 +270,17 @@ function stripNonCommands(cmd) {
       out += ch;
       continue;
     }
-    const arithmetic =
+    const opensArith =
       (ch === '$' && cmd[k + 1] === '(' && cmd[k + 2] === '(') ||
       (ch === '(' && cmd[k + 1] === '(' && cmd[k - 1] !== '$');
-    if (arithmetic) {
-      const end = closingParen(cmd, ch === '$' ? k + 2 : k + 1);
-      if (end !== -1) {
+    if (opensArith && !arithUnclosed) {
+      const end = arithmeticEnd(cmd, ch === '$' ? k + 1 : k);
+      if (end >= 0) {
         out += cmd.slice(k, end);
         k = end - 1;
         continue;
       }
+      if (end === ARITH_UNCLOSED) arithUnclosed = true;
     }
     if (ch === '#' && (k === 0 || /[\s;&|()]/.test(cmd[k - 1]))) {
       while (k + 1 < cmd.length && cmd[k + 1] !== '\n') k++;
@@ -258,7 +310,12 @@ function stripNonCommands(cmd) {
           const line = cmd.slice(pos, end);
           pos = end + 1;
           if ((dash ? line.replace(/^\t+/, '') : line) === word) break;
-          if (expand) out += `: "${line.replace(/\\(?=")/g, '\\\\').replace(/"/g, '\\"')}"\n`;
+          if (expand) {
+            const esc = line.replace(/\\(?=")/g, '\\\\').replace(/"/g, '\\"');
+            // A trailing backslash would escape the wrapper's closing quote.
+            const odd = /\\*$/.exec(esc)[0].length % 2 === 1;
+            out += `: "${esc}${odd ? '\\' : ''}"\n`;
+          }
         }
       }
       k = pos - 1;
@@ -267,6 +324,21 @@ function stripNonCommands(cmd) {
     out += ch;
   }
   return out;
+}
+
+const ARITH_UNCLOSED = -2;
+
+/**
+ * For `((` whose first `(` is at `open` (after the `$` of `$((`, or a bare `((`): the index
+ * just past the closing `))` when bash reads it as arithmetic, -1 when it is a command form
+ * instead, ARITH_UNCLOSED when the inner `(` never closes. bash tries arithmetic first and
+ * falls back when the inner `(` does not close on `))`, so `$((npm test) | head)` is a
+ * command substitution holding a subshell (v6.13.2 delta review P3-3).
+ */
+function arithmeticEnd(cmd, open) {
+  const inner = closingParen(cmd, open + 2);
+  if (inner === -1) return ARITH_UNCLOSED;
+  return cmd[inner] === ')' ? inner + 1 : -1;
 }
 
 /**
@@ -319,13 +391,19 @@ function splitStatements(cmd) {
       cur += SUBST;
       return end;
     }
-    const arithmetic = cmd[k] === '$' && cmd[k + 2] === '(';
+    if (cmd[k] === '$' && cmd[k + 2] === '(') {
+      const arithEnd = arithmeticEnd(cmd, k + 1);
+      if (arithEnd >= 0) {
+        // An arithmetic body is not a command, but a substitution inside it still runs.
+        const body = cmd.slice(k + 3, arithEnd - 2);
+        if (/\$\(|`/.test(body)) subs.push(`: ${body}`);
+        cur += SUBST;
+        return arithEnd - 1;
+      }
+    }
     const end = closingParen(cmd, k + 2);
     if (end === -1) return -1;
-    const body = cmd.slice(k + 2, end - 1);
-    // An arithmetic body is not a command, but a substitution inside it still runs.
-    if (!arithmetic) subs.push(body);
-    else if (/\$\(|`/.test(body)) subs.push(`: ${body}`);
+    subs.push(cmd.slice(k + 2, end - 1));
     cur += SUBST;
     return end - 1;
   };

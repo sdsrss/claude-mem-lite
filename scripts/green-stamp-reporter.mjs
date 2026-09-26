@@ -57,6 +57,19 @@ export default class GreenStampReporter {
   onInit(ctx) {
     this.ctx = ctx;
     this.cwd = ctx.config.root;
+    // `vitest run` exits on SIGINT/SIGTERM without calling onTestRunEnd, so a red run cut
+    // short with Ctrl-C would leave the older green in place (v6.13.2 delta review FALSE-1).
+    // Any exit that did not reach onTestRunEnd clears the stamp; a green run cut short loses
+    // its reuse, the safe direction.
+    this.ended = false;
+    process.once('exit', () => {
+      if (this.ended) return;
+      try {
+        clearStamp(this.cwd);
+      } catch {
+        /* no stamp, or not a git checkout */
+      }
+    });
     try {
       this.startKey = computeTreeKey(this.cwd);
     } catch {
@@ -65,10 +78,12 @@ export default class GreenStampReporter {
   }
 
   async onTestRunEnd(testModules, unhandledErrors, reason) {
+    this.ended = true;
     // A red run is evidence against any stamp, whatever its filter: a flaky or env-dependent
     // failure on the stamped tree must not leave the older green to be reused (P3-1). Any
-    // reason but 'passed': vitest reports a run cut short by --bail or Ctrl-C as
-    // 'interrupted' even when a test failed (v6.13.2 pre-ship defect review P3-1).
+    // reason but 'passed': vitest reports a run cut short by --bail (or a watch-mode
+    // keypress) as 'interrupted' even when a test failed (v6.13.2 pre-ship defect review
+    // P3-1). Ctrl-C under `vitest run` never reaches here; the exit hook above covers it.
     if (reason !== 'passed' || unhandledErrors.length > 0) {
       try {
         clearStamp(this.cwd);

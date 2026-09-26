@@ -297,6 +297,44 @@ describe('detectBashSignificance — read-only exemption checks every statement'
     expect(hard('grep x $(git log --format=%s | sed "s/(x)//") f', SOURCE_QUOTE)).toBe(false);
   });
 
+  // v6.13.2 delta review: shapes the repair itself got wrong or left unpinned.
+  it('tokenises a command with quotes intact, so a quoted space does not split a word', () => {
+    expect(hard('x="a\\ b" grep TypeError f', SOURCE_QUOTE)).toBe(false);
+    expect(hard('x="a b" grep -n TypeError f', SOURCE_QUOTE)).toBe(false);
+    expect(hard("LC_ALL='C x' grep -n TypeError f", SOURCE_QUOTE)).toBe(false);
+    expect(hard('x="a b" npm test', RED_RUN)).toBe(true);
+  });
+
+  it('keeps an unquoted heredoc line ending in a backslash, and its quotes, inside the wrapper', () => {
+    expect(hard('cat <<EOF | grep x\nfoo \\\nbar\nEOF', SOURCE_QUOTE)).toBe(false);
+    expect(hard("cat <<EOF | grep x\na\\\nit's\n$(npm test)\nit's\na\\\nEOF", RED_RUN)).toBe(true);
+    expect(hard('cat <<EOF | grep x\na"b\'c\n$(npm test)\nd\'e"f\nEOF', RED_RUN)).toBe(true);
+  });
+
+  it("reads $'...' with escapes in every scanner", () => {
+    expect(hard("grep $'\\'<<EOF' f \\'\nnpm test", RED_RUN)).toBe(true);
+    expect(hard("x=$(grep $'a\\'b' f); grep TypeError $x", SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('tells $((arithmetic)) from $( (subshell) ... ) the way bash does', () => {
+    expect(hard('grep x $((npm test) | head) f', RED_RUN)).toBe(true);
+    expect(hard('grep x $(( (1+2) * 3 )) f', SOURCE_QUOTE)).toBe(false);
+    expect(hard('grep x $(echo $((1+2))) f', SOURCE_QUOTE)).toBe(false);
+  });
+
+  it('treats the path helpers as neutral inside a substitution', () => {
+    expect(
+      hard('grep -n TypeError "$(basename x)" "$(dirname y)" "$(realpath z)" "$(readlink w)"', SOURCE_QUOTE),
+    ).toBe(false);
+  });
+
+  it('stays linear on unclosed parentheses', () => {
+    const cmd = 'grep x ' + '(('.repeat(50_000);
+    const t = Date.now();
+    hard(cmd, RED_RUN);
+    expect(Date.now() - t).toBeLessThan(1500);
+  });
+
   it('does not throw on deeply nested substitutions', () => {
     const deep = 'grep x ' + '$('.repeat(5000) + 'git log' + ')'.repeat(5000);
     expect(() => hard(deep, RED_RUN)).not.toThrow();
