@@ -2,6 +2,21 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.4 — session-start context keeps the newest rows on a same-millisecond tie
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.3`.
+
+- **Session-start context: rows that share a timestamp now resolve newest first.** The
+  observation and session pools, the cross-project fallback, the "Last Session" block and the
+  quick session summary's list of recent titles ordered by time alone, so a same-millisecond
+  tie came back oldest first and could decide which rows were injected. They now break the
+  tie by newest id. Latent on the maintainer's database (no tied rows among 162 observations
+  and 452 summaries).
+- **Internal:** which quick summary an LLM summary upgrades is now stated explicitly (the
+  session's oldest quick summary, as before), with a test that the Done / Not done lines it
+  carries survive a partial LLM reply.
+
 ## v6.13.3 — the resume summary picks the newest row on a same-millisecond tie
 
 **Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
