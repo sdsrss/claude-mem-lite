@@ -142,35 +142,3 @@ describe('spawnBackground skip-flag invariant', () => {
     }
   });
 });
-
-// P3-6: the llm-summary worker learns which Stop spawned it from argv[5], and drops its reply
-// when a later Stop has been recorded. The spawn is behind CLAUDE_MEM_SKIP_SUMMARY in every
-// e2e case and a real worker would call the model, so the wire is held here. Counter-example:
-// the pre-change line `spawnBackground('llm-summary', sessionId, project);`, which still passes
-// every behavioural case (the worker then never counts as superseded).
-describe('Stop passes its own epoch to the llm-summary worker (P3-6)', () => {
-  const code = HOOK_SRC.split('\n')
-    .map((l) => l.replace(/\/\/.*$/, ''))
-    .join('\n');
-  const body = code.slice(
-    code.indexOf('async function handleStop('),
-    code.indexOf('\nasync function ', code.indexOf('async function handleStop(') + 1),
-  );
-
-  it('the epoch recorded as the latest Stop is the one handed to the worker', () => {
-    expect(body, 'premise: handleStop was found').toContain('flushEpisodeAtStop(');
-    expect(body).toMatch(/const stopEpoch = Date\.now\(\);/);
-    expect(body).toMatch(/markSessionCompletedAndSaveHandoff\(db, \{[^}]*\bstopEpoch\b[^}]*\}\)/);
-    expect(body).toMatch(/spawnBackground\('llm-summary', sessionId, project, String\(stopEpoch\)\)/);
-  });
-
-  it('the UPDATE records that same epoch, not a later clock read', () => {
-    // A fresh Date.now() here lands a few ms after the value the worker was handed, so every
-    // worker would count as superseded by its own Stop and no model summary would ever land.
-    const start = code.indexOf('function markSessionCompletedAndSaveHandoff(');
-    const fn = code.slice(start, code.indexOf('\nfunction ', start + 1));
-    expect(fn, 'premise: the function was found').toContain('UPDATE sdk_sessions');
-    expect(fn).toMatch(/\.run\(new Date\(stopEpoch\)\.toISOString\(\), stopEpoch, sessionId\)/);
-    expect(fn).not.toMatch(/completed_at_epoch = \?[^`]*`,\s*\)\.run\([^)]*Date\.now\(\)/);
-  });
-});

@@ -2256,38 +2256,32 @@ function buildFallbackFastSummary(db, { project, now, prevSessionId }) {
       const recentSession = db
         .prepare(
           `
-        SELECT content_session_id, project FROM sdk_sessions
+        SELECT content_session_id, project FROM sdk_sessions s
         WHERE project = ? AND status = 'completed' AND completed_at_epoch > ?
+          AND NOT EXISTS (SELECT 1 FROM session_summaries WHERE memory_session_id = s.content_session_id)
         ORDER BY completed_at_epoch DESC LIMIT 1
       `,
         )
         .get(project, Date.now() - 120000); // within last 2 minutes
 
+      // "Has no summary" is in the WHERE, not checked after LIMIT 1: every Stop now records
+      // itself (P3-6), so a parallel session still live ranks by its latest turn and, holding a
+      // summary, would take the one slot from the session that actually exited.
       if (recentSession) {
-        const hasSummary = db
-          .prepare(
-            `
-          SELECT 1 FROM session_summaries WHERE memory_session_id = ? LIMIT 1
-        `,
-          )
-          .get(recentSession.content_session_id);
-
-        if (!hasSummary) {
-          const { request: frRaw, completed: fcRaw } = readFastSummarySource(
-            db,
-            recentSession.content_session_id,
-          );
-          if (frRaw || fcRaw) {
-            // No remaining_items on this path: an /exit restart has no handoff and no
-            // episode snapshot to infer one from. It was a bare '' in the SQL before.
-            insertFastSummary(db, {
-              sessionId: recentSession.content_session_id,
-              project,
-              now,
-              values: { request: frRaw, completed: fcRaw },
-              limits: FAST_SUMMARY_LIMITS.exitRestart,
-            });
-          }
+        const { request: frRaw, completed: fcRaw } = readFastSummarySource(
+          db,
+          recentSession.content_session_id,
+        );
+        if (frRaw || fcRaw) {
+          // No remaining_items on this path: an /exit restart has no handoff and no
+          // episode snapshot to infer one from. It was a bare '' in the SQL before.
+          insertFastSummary(db, {
+            sessionId: recentSession.content_session_id,
+            project,
+            now,
+            values: { request: frRaw, completed: fcRaw },
+            limits: FAST_SUMMARY_LIMITS.exitRestart,
+          });
         }
       }
     } catch (e) {

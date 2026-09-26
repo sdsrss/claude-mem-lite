@@ -760,38 +760,54 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   reader, `buildFallbackFastSummary`, is nearly unreachable now that every Stop writes a row.
   Now every Stop records its epoch there (`status IN ('active', 'completed')`) and hands the
   SAME value to the worker as argv[5]; `summarySuperseded` (`lib/fast-summary.mjs`) is checked
-  before the model call (the later Stop's worker reads a superset of the input, so the call is
-  saved) and again inside `mergeModelSummary`'s transaction (the later Stop can land during the
-  round trip). A spawn without an epoch — /clear, a pre-upgrade worker — always writes. The
-  trade: if the later worker's model call then fails, the row keeps the model fields of an
-  earlier turn, the same staleness P3-6 produced, now needing overlap AND a failed call rather
-  than overlap AND a reversed finish. Evidence: 8 single-site mutations (the UPDATE guard, the
+  before the model call (the later Stop's worker reads the newer window, so the call is saved)
+  and again inside `mergeModelSummary`'s transaction (the later Stop can land during the round
+  trip). A spawn without an epoch — /clear, a pre-upgrade worker — always writes. The trade:
+  if the later worker then writes nothing, the row keeps the model fields of an earlier turn,
+  the same staleness P3-6 produced. The later worker writes nothing when its model reply is
+  empty, when it gets no LLM slot, or when it finds no observation — the newer window is not a
+  strict superset, since the episode upgrade-delete can remove what the earlier worker read
+  (pre-ship defect review P3-1). Unmeasured; the metric below pairs the two by session. Evidence: 8 single-site mutations (the UPDATE guard, the
   spawn argument, the UPDATE's epoch read from a fresh clock, `>` → `>=`, the `<= 0` guard, each
   of the two checks, the merge call's argument) are each killed by a case in
-  `tests/{fast-summary,hook-llm,e2e,bg-spawn-skip-flag-invariant}.test.mjs`; the spawn wire is
-  a source scan because the spawn is off in every e2e case and a real worker calls the model.
-  **Stop's 5 s timeout** (Uncertain in the v6.13.5 report): the 4 largest main transcripts of
-  the week (to 27.8 MB with 18 subagent files; one with 68) timed 164–251 ms for a whole Stop
+  `tests/{fast-summary,hook-llm,e2e,bg-spawn-skip-flag-invariant}.test.mjs`. The spawn wire was
+  first held by a source scan, on the stated reason that the spawn is off in every e2e case;
+  false — several e2e Stop cases spawn the real worker against `scripts/mock-claude.mjs` (claims
+  review P2-1). It is now behavioural: an e2e Stop spawns the real worker on a session with no
+  observation, and its metric row's `stopEpoch` must equal the stored `completed_at_epoch`
+  (killed by a spawn without the argument, and by a fresh clock read at either end).
+  **Stop's 5 s timeout** (Uncertain in the v6.13.5 report): the week's 4 largest transcripts
+  by main plus subagent bytes (to 27.8 MB, of which 3.5 MB main and 18 subagent files; one with
+  68 subagent files; the largest main file alone, 13.2 MB, is among them) timed 164–251 ms for a whole Stop
   through `scripts/hook-launcher.mjs`, sandboxed on a backup copy of the DB, summary spawn off;
   `collectSubagentSurface` read 18 and 68 files in 97 and 59 ms, so the subagent arm ran.
   **Per-turn model calls — the first reading here was of the wrong population.** It said
   "1008 turns in 95 sessions, so at one call per turn ≈ 91% of calls are overwritten", and
   was filed as D#92. But the worker calls the model only when the session has an
-  observation, and on a backup copy of the DB (same day, read-only, 7 days) **9 of 162
-  sessions** hold one, with **6 prompts** between them; **4** sessions carry a model-written
-  summary. The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
+  observation, and on the DB (read-only, 7 days, 15:03Z) **4 of 157 hook sessions** hold one,
+  with **6 prompts** between them (a first count read "9 of 162" by including 5 `manual-*`
+  mem_save pseudo-sessions, which no worker runs for); **7** carry a model-written summary by
+  `parseSummaryNotes` (4 `notes = 'llm'`, 3 legacy `''` — a first count of 4 missed the
+  latter), so rows were written and the observations deleted after. The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
   (`hook-llm.mjs:452`) deletes it when Haiku classes it as an event type, and the worker
   waits for that flush before its `SELECT … FROM observations WHERE memory_session_id = ?` —
   auto-captured work lives in `events` now (observation ids 256–281 that day: 19 of 26
   gone). A sandboxed run of the real worker on the previous session read `no-obs` for that
   reason. So the per-turn cost is small, and the larger gap is that the model summary mostly
-  never runs; Last Session rests on Stop's report extract. D#92 was dropped for D#94 (feed
-  events, whose summarizer D#69 measured at 2/30 accurate, or retire the model summary — an
-  LLM-visible change). To read the real rates, each worker exit now writes a
-  `summary_worker` metric row under `CLAUDE_MEM_METRICS=1` (`91e45ba`): `no-obs`,
+  never runs; Last Session rests on Stop's report extract. D#92 was dropped for D#95 (via two
+  re-filings that corrected counts): feed events — whose summarizer
+  `docs/audits/20260925-200912-session-history-analysis.md:212` labelled 2/30 accurate (D#69)
+  — or retire the model summary, an LLM-visible change. To read the real rates, each worker
+  exit writes a `summary_worker` metric row under `CLAUDE_MEM_METRICS=1`: `no-db`, `no-obs`,
   `slot-timeout`, `superseded-before-call`, `no-content`, `superseded-at-write`, `written`,
-  with the model call's `llmMs` — which also measures the P3-6 trade above (a `no-content`
-  following a superseded worker).
+  `error`, with `session`, `stopEpoch` and the model call's `llmMs`. As first shipped
+  (`91e45ba`) the row had neither session nor epoch value, so this paragraph's claim that it
+  measures the P3-6 trade was false (claims review P1-1); with both, a `superseded-*` row
+  followed by a non-`written` row of the same session is that trade.
+  **`buildFallbackFastSummary` now checks "has no summary" in its WHERE** (pre-ship defect
+  review P3-4): it selected the most recent completed session and checked for a summary after
+  `LIMIT 1`, so once every Stop records itself a parallel live session with a summary took the
+  slot from the session that exited — an e2e case with both shapes is red on the old SQL.
 - **`COALESCE(compressed_into,0)=0` alone is NOT the liveness predicate** — `liveObsFilterSql`
   also requires `superseded_at IS NULL`. **Which sites need the full one is settled; do not
   re-derive it.** Carrying it: the two `COMPRESSED_PENDING_PURGE` writers

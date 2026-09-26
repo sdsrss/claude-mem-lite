@@ -1376,27 +1376,32 @@ export async function handleLLMSummary() {
     );
   }
 
+  // The spawning Stop's epoch (absent for the /clear spawn and pre-upgrade workers). Checked
+  // before the model call and again in the write's transaction, because two workers of one
+  // session can finish out of order (P3-6); the later Stop's worker reads the newer window.
+  const parsedEpoch = Number(process.argv[5]);
+  const spawnEpoch = Number.isFinite(parsedEpoch) && parsedEpoch > 0 ? parsedEpoch : null;
+  // One `summary_worker` metric row per exit (CLAUDE_MEM_METRICS=1), carrying the session and
+  // the Stop epoch so a superseded worker can be paired with its successor's outcome, and how
+  // many model calls a session costs can be counted (D#95). This process runs detached with no
+  // stderr, so nothing else shows it.
+  const metricSession = process.argv[3] || null;
+  let llmMs;
+  const outcome = (name) =>
+    recordMetric(DB_DIR, {
+      event: 'summary_worker',
+      outcome: name,
+      session: metricSession,
+      stopEpoch: spawnEpoch,
+      ...(llmMs === undefined ? {} : { llmMs }),
+    });
+
   const db = openDb();
-  if (!db) return;
+  if (!db) return outcome('no-db');
 
   try {
     const sessionId = process.argv[3] || getSessionId();
     const project = process.argv[4] || inferProject();
-    // The spawning Stop's epoch (absent for the /clear spawn and pre-upgrade workers). Checked
-    // before the model call and again in the write's transaction: a later Stop's worker reads
-    // a superset of this input, and two workers can finish out of order (P3-6).
-    const spawnEpoch = Number(process.argv[5]);
-    // One `summary_worker` metric row per exit (CLAUDE_MEM_METRICS=1): how often a worker is
-    // superseded, how often the model returns nothing, and how many calls a session costs
-    // (D#92) are otherwise invisible — this process runs detached with no stderr.
-    let llmMs;
-    const outcome = (name) =>
-      recordMetric(DB_DIR, {
-        event: 'summary_worker',
-        outcome: name,
-        epoch: Number.isFinite(spawnEpoch) && spawnEpoch > 0,
-        ...(llmMs === undefined ? {} : { llmMs }),
-      });
 
     // Exclude LOW_SIGNAL hook-llm fallback titles ("Error: files +2 more: ...",
     // "Modified X", "Worked on X", etc.) from the Haiku summary input — they
@@ -1534,6 +1539,9 @@ ${obsList}`;
     } else {
       outcome('no-content');
     }
+  } catch (e) {
+    outcome('error');
+    throw e;
   } finally {
     db.close();
   }

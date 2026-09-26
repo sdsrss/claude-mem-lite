@@ -2145,7 +2145,7 @@ describe('handleLLMSummary', () => {
       await handleLLMSummary();
       const [p] = outcomes();
       expect(outcomes()).toHaveLength(1);
-      expect(p).toMatchObject({ outcome: 'written', epoch: true });
+      expect(p).toMatchObject({ outcome: 'written', session: 'test-session', stopEpoch: T });
       expect(p.llmMs).toBeGreaterThanOrEqual(0);
     });
 
@@ -2170,7 +2170,20 @@ describe('handleLLMSummary', () => {
       acquireLLMSlot.mockResolvedValueOnce(false);
       await handleLLMSummary();
       expect(outcomes().map((p) => p.outcome)).toEqual(['no-content', 'slot-timeout']);
-      expect(outcomes()[0].epoch, 'no argv epoch').toBe(false);
+      expect(outcomes()[0].stopEpoch, 'no argv epoch').toBe(null);
+    });
+
+    it('no-db when the database will not open, carrying the argv session', async () => {
+      openDb.mockReturnValueOnce(null);
+      await handleLLMSummary();
+      expect(outcomes()).toEqual([expect.objectContaining({ outcome: 'no-db', session: 'test-session' })]);
+    });
+
+    it('error when the write throws, and the throw still reaches the caller', async () => {
+      addObs();
+      db.exec('DROP TABLE session_summaries');
+      await expect(handleLLMSummary()).rejects.toThrow();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['error']);
     });
   });
 

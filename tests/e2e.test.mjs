@@ -389,6 +389,91 @@ describe('Suite 1: Full Session Lifecycle', () => {
     expect(first, 'premise: the first Stop recorded one').toBeGreaterThan(0);
     expect(second).toBeGreaterThan(first);
   });
+
+  it('the /exit-restart fallback summary finds the exited session behind a live one with a summary', () => {
+    // buildFallbackFastSummary picks a session of this project completed in the last 2 minutes
+    // and writes a summary if it has none. Since every Stop records itself (P3-6), a parallel
+    // session still live ranks by its LATEST turn; with "has no summary" checked after
+    // `LIMIT 1`, that live session won the slot and the one that exited was never examined.
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup' }), env: { HOME: tmpHome } });
+    const db = openTestDb(tmpHome);
+    const project = db.prepare('SELECT project FROM sdk_sessions LIMIT 1').get().project;
+    const now = Date.now();
+    const addSession = (id, completedAgo) =>
+      db
+        .prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch,
+             status, completed_at, completed_at_epoch)
+           VALUES (?, ?, ?, ?, ?, 'completed', ?, ?)`,
+        )
+        .run(
+          id,
+          id,
+          project,
+          new Date(now - 60_000).toISOString(),
+          now - 60_000,
+          new Date(now - completedAgo).toISOString(),
+          now - completedAgo,
+        );
+    addSession('exited-x', 30_000);
+    addSession('live-y', 10_000);
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
+       VALUES ('exited-x', 1, 'the exited session request', ?, ?)`,
+    ).run(new Date(now - 50_000).toISOString(), now - 50_000);
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, created_at, created_at_epoch)
+       VALUES ('live-y', ?, 'live summary', ?, ?)`,
+    ).run(project, new Date(now - 10_000).toISOString(), now - 10_000);
+    db.close();
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup' }), env: { HOME: tmpHome } });
+
+    const db2 = openTestDb(tmpHome);
+    const rows = db2
+      .prepare("SELECT request FROM session_summaries WHERE memory_session_id = 'exited-x'")
+      .all();
+    db2.close();
+    expect(rows.map((r) => r.request)).toEqual(['the exited session request']);
+  });
+
+  it('the llm-summary worker Stop spawns receives the epoch Stop recorded (P3-6)', async () => {
+    // The worker drops its reply once completed_at_epoch is later than the epoch it was handed,
+    // so the two must be the SAME value: a fresh clock read at either end makes every worker
+    // superseded by its own Stop, and a missing argument makes none ever superseded. The session
+    // has no observation, so the real detached worker exits `no-obs` without a model call and
+    // its metric row reports what it received.
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+    runHook('stop', { env: { HOME: tmpHome, CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FLUSH_TIMEOUT: '0' } });
+
+    const metricsDir = join(tmpHome, '.claude-mem-lite', 'metrics');
+    const workerRow = () => {
+      if (!existsSync(metricsDir)) return null;
+      for (const f of readdirSync(metricsDir))
+        for (const line of readFileSync(join(metricsDir, f), 'utf8').split('\n'))
+          if (line.includes('"summary_worker"')) return JSON.parse(line);
+      return null;
+    };
+    // The detached child outlives runHook; wait for its row, then for the process itself, so it
+    // cannot recreate the sandbox behind afterEach.
+    const alive = () =>
+      execFileSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
+    const deadline = Date.now() + 10_000;
+    while ((!workerRow() || alive()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+
+    const db = openTestDb(tmpHome);
+    const stored = db
+      .prepare('SELECT completed_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?')
+      .get(sessionId).e;
+    db.close();
+    const row = workerRow();
+    expect(row, 'premise: the worker ran and wrote its metric row').toMatchObject({
+      outcome: 'no-obs',
+      session: sessionId,
+    });
+    expect(row.stopEpoch).toBe(stored);
+  });
 });
 
 describe('Suite 2: Episode Buffer Management', () => {
