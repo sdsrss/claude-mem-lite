@@ -2,6 +2,33 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.13.5 — one summary per session, and "Last Session" shows your latest report
+
+**Upgrade note.** Fixes only; no schema change and no migration. Duplicate summary rows that
+earlier versions already wrote are left as they are; new sessions no longer create them.
+Reverting is pinning `claude-mem-lite@6.13.4`.
+
+- **Session summaries: one row per session.** A session could collect many summary rows: the
+  background summary added one on each later turn once it had upgraded the first, and `/clear`
+  or `/compact` added a second beside the one written at the end of the first turn. One
+  session on the maintainer's database had 37 rows, and they filled all ten top results of a
+  session search for its own words. Every writer now updates the session's one row.
+- **"Last Session" shows the latest Done / Not done you reported.** The stored report was the
+  one from the session's first turn; each later report now replaces it. The background model
+  summary no longer overwrites a Done or Not done the assistant wrote (it still fills the other
+  fields and anything the report left out), and a report that says nothing is left is no
+  longer refilled with older unfinished items. A turn with only Failed / Uncertain lines is
+  not treated as a report. Without a report, the session shows the model's summary or its most
+  recent observation titles, instead of the first turn's titles.
+- **"Last Session" is no longer displaced by a late background summary.** A summary finishing
+  after the next session had started could put the previous session back on top.
+- **`stats`, `status` and `doctor` count sessions, not summary rows.**
+- **Related-memory links prefer the newest matches** when several share a timestamp
+  (previously the oldest).
+- **Stop reads the conversation transcript once per turn** in sessions that use subagents.
+- **`get` on a session summary** shows where its Done and Not done came from at the start of
+  `Notes` (for example `donereport leftreport`).
+
 ## v6.13.4 — session-start context keeps the newest rows on a same-millisecond tie
 
 **Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
