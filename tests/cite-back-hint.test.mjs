@@ -18,6 +18,7 @@ import {
   loadCiteBackForEpisode,
   extractCiteBackSignals,
   buildUnsavedBugfixHint,
+  claimBugfixNudge,
   countUnsavedBugfixShape,
   buildCiteRecallNudge,
   nextCiteLowStreak,
@@ -196,6 +197,67 @@ describe('buildUnsavedBugfixHint', () => {
     expect(hint).toMatch(/2 file\(s\)/);
     expect(hint).toContain('a.mjs');
     expect(hint).toContain('b.mjs');
+  });
+
+  // Sandbox usage evaluation 2026-09-29 (docs/audits/20260929-sandbox-usage-eval.md): the
+  // nudge fired 10 times in 32 sessions, every time on a TDD red in a FEATURE session, and
+  // never in the one bugfix session; real use averaged 3.2 nudges per nudged session.
+  describe('TDD red and once per session (report §9-B)', () => {
+    it('does NOT fire on a TDD red: a test edited, then the hard failure, then the source', () => {
+      const episode = {
+        entries: [
+          editEntry('/p/test/invoice.test.mjs'),
+          bashHardErr(),
+          editEntry('/p/src/invoice.mjs'),
+          bashOk(),
+        ],
+      };
+      expect(buildUnsavedBugfixHint(episode)).toBeNull();
+    });
+
+    it('recognises the usual test-file spellings', () => {
+      for (const t of [
+        '/p/tests/a.mjs',
+        '/p/src/a.spec.ts',
+        '/p/pkg/a_test.go',
+        '/p/test_a.py',
+        '/p/__tests__/a.js',
+      ]) {
+        const episode = { entries: [editEntry(t), bashHardErr(), editEntry('/p/src/a.mjs'), bashOk()] };
+        expect(buildUnsavedBugfixHint(episode), t).toBeNull();
+      }
+    });
+
+    it('still fires on a regression fix: the failure came before any edit', () => {
+      const episode = { entries: [bashHardErr(), editEntry('/p/src/money.mjs'), bashOk()] };
+      expect(buildUnsavedBugfixHint(episode)).toMatch(/Unsaved bugfix-shape/);
+    });
+
+    it('still fires when a source file was edited before the failure', () => {
+      const episode = {
+        entries: [editEntry('/p/src/money.mjs'), bashHardErr(), editEntry('/p/src/money.mjs'), bashOk()],
+      };
+      expect(buildUnsavedBugfixHint(episode)).toMatch(/Unsaved bugfix-shape/);
+    });
+
+    it('stays silent once this session has been nudged', () => {
+      const episode = { entries: [bashHardErr(), editEntry('/p/src/money.mjs'), bashOk()] };
+      expect(buildUnsavedBugfixHint(episode, { alreadyNudged: true })).toBeNull();
+    });
+
+    it('claimBugfixNudge grants the first claim per session only', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cml-nudge-claim-'));
+      try {
+        expect(claimBugfixNudge(dir, 'sess-a')).toBe(true);
+        expect(claimBugfixNudge(dir, 'sess-a')).toBe(false);
+        expect(claimBugfixNudge(dir, 'sess-b')).toBe(true);
+        // No session id → cannot dedupe, so never suppress.
+        expect(claimBugfixNudge(dir, null)).toBe(true);
+        expect(claimBugfixNudge(dir, null)).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('returns null on no-error episodes', () => {

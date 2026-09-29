@@ -159,7 +159,7 @@ const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
 const VERDICT_DIRECTIVE =
   "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
 const ACK_DIRECTIVE =
-  'apply each lesson to this edit or rule it out. If one changes the edit, name its #NN once where you describe that change; a lesson that did not apply needs no mention.';
+  'apply each lesson to this edit or rule it out. If one changes the edit, add its bare tag (#NN) once at the end of the sentence describing that change; a lesson that did not apply needs no mention, and memory ids get no other mention in your reply.';
 // v-bind salience forcing-function (#8771 audit: ack ≠ act). Instead of a cheap
 // '#NN applied / n/a' verdict, demand the model bind the lesson to the concrete
 // line it's editing and quote the satisfying edit line. Selected by

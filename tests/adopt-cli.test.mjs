@@ -248,18 +248,23 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  it('first call: migrates + writes block + doc + marker, returns adopted', () => {
+  // Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): the first SessionStart used to
+  // write CLAUDE.md + .claude/plugin_claude_mem_lite.md into every project, unasked — 4 of 4
+  // sandbox repos, swept into the next `git add -A`. The steering now rides SessionStart
+  // context (action 'inject'); only an explicit `adopt` writes files.
+  it('first call on an unadopted project: migrates, writes NOTHING under cwd, returns inject', () => {
     seedLegacy(fakeCwd);
     const r = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
     expect(r.ok).toBe(true);
-    expect(r.action).toBe('adopted');
+    expect(r.action).toBe('inject');
     expect(hasAutoAdoptMarker(markerDir, 'proj-x')).toBe(true);
-    expect(existsSync(claudeMd(fakeCwd))).toBe(true);
-    expect(existsSync(detailDoc(fakeCwd))).toBe(true);
+    expect(existsSync(claudeMd(fakeCwd))).toBe(false);
+    expect(existsSync(join(fakeCwd, '.claude'))).toBe(false);
     expect(memdirIsAdopted(memdirPath(fakeCwd), PLUGIN_SLUG)).toBe(false); // legacy migrated
   });
 
-  it('second call is idempotent: already-adopted, CLAUDE.md unchanged', () => {
+  it('a project adopted explicitly is kept in sync: already-adopted, CLAUDE.md unchanged', () => {
+    cmdAdopt([]);
     silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
     const before = readFileSync(claudeMd(fakeCwd), 'utf8');
     const r = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
@@ -268,7 +273,7 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
   });
 
   it('refreshes when the installed block version drifts', () => {
-    silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
+    cmdAdopt([]);
     // Simulate an older version installed.
     const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(
       `${PLUGIN_SLUG}:begin v1`,
@@ -281,7 +286,7 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
   });
 
   it('CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 freezes the block against drift', () => {
-    silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
+    cmdAdopt([]);
     const stale = readFileSync(claudeMd(fakeCwd), 'utf8').replace(
       `${PLUGIN_SLUG}:begin v1`,
       `${PLUGIN_SLUG}:begin v0`,
@@ -366,8 +371,8 @@ describe('cmdAdopt --disable / --enable', () => {
 
     cmdAdopt(['--enable']);
     const r2 = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
-    expect(r2.action).toBe('adopted');
-    expect(existsSync(claudeMd(fakeCwd))).toBe(true);
+    expect(r2.action).toBe('inject'); // re-armed: steering is injected again, still no files
+    expect(existsSync(claudeMd(fakeCwd))).toBe(false);
   });
 
   it('--status reports current-project adoption state', () => {

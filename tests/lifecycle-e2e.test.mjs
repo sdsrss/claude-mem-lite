@@ -163,8 +163,23 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     expect(s.enabledPlugins['other@vendor']).toBe(true);
   });
 
-  it('SessionStart auto-adopts: v1 English block, preserves user content, writes detail doc + marker', () => {
+  // Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): SessionStart no longer writes
+  // the block into the project — it injects the steering. The block and detail doc now come
+  // from an explicit `adopt`, and every later step of this lifecycle runs against that.
+  it('SessionStart writes nothing into the project, but records the marker and creates the DB', () => {
+    const before = readFileSync(join(PROJ, 'CLAUDE.md'), 'utf8');
     run('hook.mjs', ['session-start'], { allowFail: true });
+    expect(adoptedBlock(PROJ).present).toBe(false);
+    expect(readFileSync(join(PROJ, 'CLAUDE.md'), 'utf8')).toBe(before);
+    expect(existsSync(join(PROJ, '.claude', 'plugin_claude_mem_lite.md'))).toBe(false);
+    const markers = readdirSync(join(dataDir, 'runtime')).filter((f) => f.startsWith('.auto-adopt-'));
+    expect(markers.length).toBeGreaterThan(0);
+    // DB is lazy-created on first hook use (install does not create it).
+    expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(true);
+  });
+
+  it('explicit adopt writes the v1 English block, preserves user content, writes the detail doc', () => {
+    run('cli.mjs', ['adopt'], { allowFail: true });
     const a = adoptedBlock(PROJ);
     expect(a.present).toBe(true);
     expect(a.count).toBe(1);
@@ -174,13 +189,9 @@ describe('plugin lifecycle: install → adopt → update → uninstall → unado
     expect(a.raw).toContain('use tabs'); // pre-existing user content survives
     expect(a.raw).toContain('My own project notes');
     expect(existsSync(join(PROJ, '.claude', 'plugin_claude_mem_lite.md'))).toBe(true);
-    const markers = readdirSync(join(dataDir, 'runtime')).filter((f) => f.startsWith('.auto-adopt-'));
-    expect(markers.length).toBeGreaterThan(0);
-    // DB is lazy-created on first hook use (install does not create it).
-    expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(true);
   });
 
-  it('second SessionStart is idempotent (no duplicate block)', () => {
+  it('a SessionStart after adopt is idempotent (no duplicate block)', () => {
     run('hook.mjs', ['session-start'], { allowFail: true });
     expect(adoptedBlock(PROJ).count).toBe(1);
   });

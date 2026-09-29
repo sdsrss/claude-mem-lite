@@ -15,7 +15,7 @@ import {
   estimateJaccardFromMinHash,
   cjkBigrams,
   isEditEntry,
-  entryEditedFiles,
+  splitEpisodeFiles,
   LOW_SIGNAL_TITLE,
   debugCatch,
   debugLog,
@@ -817,20 +817,7 @@ export function buildImmediateObservation(episode) {
     importance = ruleImportance;
   }
 
-  // Separate files_modified (from Edit/Write tools) from files_read (everything else)
-  const modifiedFiles = new Set();
-  const searchedFiles = new Set();
-  for (const entry of episode.entries) {
-    if (!entry.files) continue;
-    // A Bash entry can do both: `cp a b` reads a and writes b.
-    const edited = new Set(entryEditedFiles(entry));
-    for (const f of entry.files) (edited.has(f) ? modifiedFiles : searchedFiles).add(f);
-  }
-  // Merge bash-tracked reads and search tool files into filesRead
-  const allReads = new Set([...(episode.filesRead || []), ...searchedFiles]);
-  // Remove files that were both searched AND modified — they're modified
-  for (const f of modifiedFiles) allReads.delete(f);
-
+  const { modified, read } = splitEpisodeFiles(episode);
   return {
     type: inferredType,
     title,
@@ -838,8 +825,8 @@ export function buildImmediateObservation(episode) {
     narrative: episode.entries.map((e) => e.desc).join('; '),
     concepts: [],
     facts: [],
-    files: [...modifiedFiles],
-    filesRead: [...allReads],
+    files: modified,
+    filesRead: read,
     importance,
   };
 }
@@ -985,6 +972,7 @@ export async function handleLLMEpisode() {
   // forever). Guard defensively, mirroring buildImmediateObservation's `|| []`.
   const episodeFiles = Array.isArray(episode.files) ? episode.files : [];
   const fileList = episodeFiles.map((f) => basename(f)).join(', ') || '(multiple)';
+  const edgeFiles = splitEpisodeFiles(episode);
 
   // Defense-in-depth (cso F#4): split static instructions (system) from
   // per-call data (user). Episode descriptions and file paths come from tool
@@ -992,7 +980,7 @@ export async function handleLLMEpisode() {
   // attack surface for memory poisoning via crafted file content.
   const SHARED_OBS_SCHEMA_TAIL = `${MEMORY_INPUT_GUARD}
 Grounding: state only outcomes the user message shows. An action description may be cut short ("…"); if its result is not visible, say what was run, not how it turned out. Never write that something passed, failed, was verified or confirmed unless that result appears in the user message.
-type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
+type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause; a test that failed only until this episode's implementation landed (written first, then made to pass) is TDD, not a bugfix — type that feature or refactor. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
 Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
 importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.
 lesson_learned: The non-obvious insight a future session would benefit from, resting ONLY on the DIAGNOSIS lines: copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim no mechanism that line does not state. Example: FTS5's "default tokenizer doesn't split CJK" — index bigrams instead. No DIAGNOSIS line, or none that states a cause → output JSON null; a lesson without such a quote is discarded. Do NOT invent a lesson. A mutation/probe run (a file changed on purpose, a checksum, a restore) and the agent's own script errors are not product bugs. Do NOT write the strings "none"/"n/a"/"todo"/"tbd"/"-" — those will be discarded as noise.
@@ -1227,8 +1215,11 @@ ${diagnosisBlock(diag)}`;
         narrative: truncate(scrubSecrets(parsed.narrative || ''), 500),
         concepts: Array.isArray(parsed.concepts) ? parsed.concepts.slice(0, 10) : [],
         facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 10) : [],
-        files: episodeFiles,
-        filesRead: episode.filesRead || [],
+        // Edges go to what the episode EDITED (splitEpisodeFiles). A read-only episode
+        // (a `discovery`) edited nothing, and what it read is the only place its lesson
+        // can attach, so it keeps every touched file as before.
+        files: edgeFiles.modified.length > 0 ? edgeFiles.modified : episodeFiles,
+        filesRead: edgeFiles.modified.length > 0 ? edgeFiles.read : episode.filesRead || [],
         // v2.33.1: when lesson is low-signal, don't trust Haiku's importance
         // inflation. v2.54.0: extended from {change, discovery} to all types
         // except `decision` after audit (2026-04-30) showed bugfix lesson

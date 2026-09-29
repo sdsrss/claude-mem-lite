@@ -2,7 +2,6 @@
 // claude-mem-lite CLI — lightweight command layer for direct memory access
 // No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs
 
-import { homedir } from 'os';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
@@ -2776,7 +2775,7 @@ function _resolveMemdirsForAudit(flags) {
     return [flags.memdir];
   }
   if (flags.all === true || flags.all === 'true') {
-    const projectsRoot = join(homedir(), '.claude', 'projects');
+    const projectsRoot = join(claudeConfigDir(), 'projects');
     if (!existsSync(projectsRoot)) return [];
     let entries;
     try {
@@ -3194,6 +3193,7 @@ Commands:
     --force             Save even if it looks like a near-duplicate of something
                         saved in the last 5 minutes (that guard is on by default)
     --closes-deferred 1,D#42  Close deferred items in same transaction
+    --supersedes 12,E#34 Retire memories this save corrects (E#<n> = an event)
 
   defer <action>        First-class deferred work (v2.70+)
     add "<title>"       Mark deferred work for next session (≤200 chars)
@@ -3647,6 +3647,7 @@ import { cmdDoctor } from './cli/doctor.mjs';
 // cmdActivity (T7 v2.31) extracted to cli/activity.mjs (v2.41 split).
 import { cmdActivity } from './cli/activity.mjs';
 import { cmdVerifyApply } from './cli/verify-apply.mjs';
+import { claudeConfigDir } from './lib/data-paths.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 import { HOOK_TEXT_CAP } from './lib/hook-text-cap.mjs';

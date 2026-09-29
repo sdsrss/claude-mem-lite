@@ -475,6 +475,7 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
     it('a Last Session line that fills the budget leaves the Key Context ids out of the marker', () => {
       vi.stubEnv('CLAUDE_PROJECT_DIR', ROOT); // unadopted → Key Context renders
       vi.stubEnv('CLAUDE_MEM_QUIET_HOOKS', '');
+      vi.stubEnv('MEM_NO_AUTO_ADOPT', '1'); // §9-A: injected steering would count as adopted
       vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
       const db = new Database(':memory:');
       initSchema(db);

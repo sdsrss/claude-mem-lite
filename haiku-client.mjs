@@ -619,13 +619,57 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
 const HEADLESS_FLAG = '--no-session-persistence';
 let _headlessFlagOk = true;
 
+// ─── Isolation from the user's configuration (2026-09-29) ────────────────────
+//
+// The note above accepted the user's global context as cheap. Measured, it is not
+// (docs/audits/20260929-sandbox-usage-eval.md): a headless `claude -p` loads the USER's
+// whole setup — plugins and their SessionStart hooks, MCP servers, the skills listing,
+// tool schemas, ~/.claude/CLAUDE.md — for a call whose entire input is our prompt, and it
+// thinks at length before answering a JSON extraction. On three real episode prompts from
+// a default-user sandbox run: 32.7k context tokens and 1.2k-4.1k output tokens per call,
+// $0.009-0.044, 16-47 s. With the flags below plus MAX_THINKING_TOKENS=0 the same prompts
+// read ~8k tokens and wrote ~300-400, $0.006, ~5 s, and every reply still parsed as JSON.
+//
+// `--setting-sources project` is OAuth-safe (unlike `--bare`): the spawn cwd is our private
+// cliSpawnCwd, so "project" is empty and user settings, plugins, hooks and CLAUDE.md drop
+// out. Two ways it can fail, both handled by one retry WITHOUT these flags (and the process
+// then stays on the plain args, the same caching rule as the headless flag):
+//   - an older CLI that does not know one of them rejects it in argv parsing;
+//   - a user whose AUTH lives in user settings (`apiKeyHelper`) is not logged in without them.
+// Env inherited from the session (Bedrock/Vertex switches, base URLs) is untouched.
+const ISOLATION_FLAGS = [
+  '--setting-sources',
+  'project',
+  '--strict-mcp-config',
+  '--disable-slash-commands',
+  '--tools',
+  '',
+];
+let _isolationOk = true;
+
 /** @internal test hook — module-level compat state must not leak across cases. */
 export function _resetHeadlessFlag() {
   _headlessFlagOk = true;
+  _isolationOk = true;
 }
 
 function claudeArgs(modelName) {
-  return _headlessFlagOk ? ['-p', '--model', modelName, HEADLESS_FLAG] : ['-p', '--model', modelName];
+  const args = _headlessFlagOk ? ['-p', '--model', modelName, HEADLESS_FLAG] : ['-p', '--model', modelName];
+  return _isolationOk ? [...args, ...ISOLATION_FLAGS] : args;
+}
+
+/**
+ * The environment every headless spawn runs with. MAX_THINKING_TOKENS=0: these are
+ * structured extraction calls, and the thinking the CLI enables by default was most of
+ * their output tokens and latency (measured above).
+ */
+function cliSpawnEnv() {
+  return {
+    ...process.env,
+    CLAUDE_MEM_HOOK_RUNNING: '1',
+    DISABLE_CLAUDEMD_HOOKS: '1',
+    MAX_THINKING_TOKENS: '0',
+  };
 }
 
 // A retry is only ever worth it when the diagnostic NAMES the token it rejected —
@@ -652,6 +696,57 @@ export function _isUnknownFlagError(diagnostic) {
   return FLAG_TOKEN.test(diagnostic) && (PARSE_REJECTION.test(diagnostic) || /usage:/i.test(diagnostic));
 }
 
+// Same anchoring rule as FLAG_TOKEN: the parser must NAME one of the isolation flags.
+const ISOLATION_TOKEN = /setting-sources|strict-mcp-config|disable-slash-commands|--tools\b/;
+// What the CLI prints when it has no credentials — the apiKeyHelper case above.
+const AUTH_REJECTION = /not logged in|please run \/login|invalid api key|authentication_error|oauth token/i;
+
+/** An isolated spawn failed because of the isolation: an unknown flag, or no auth without user settings. */
+export function _isIsolationRejection(diagnostic) {
+  if (!diagnostic) return false;
+  if (AUTH_REJECTION.test(diagnostic)) return true;
+  return ISOLATION_TOKEN.test(diagnostic) && (PARSE_REJECTION.test(diagnostic) || /usage:/i.test(diagnostic));
+}
+
+/**
+ * The one retry a failed FIRST attempt earns, judged on the args that attempt carried (not
+ * the live flags — a concurrent sibling may have flipped them). Isolation is checked first:
+ * its flags ride after the headless flag, so dropping them keeps `--no-session-persistence`.
+ * `onSuccess` caches the downgrade only after the retry ran clean.
+ * @returns {{args: string[], onSuccess: () => void}|null}
+ */
+function compatRetry(modelName, firstArgs, diagnostic, face) {
+  const iso = firstArgs.indexOf(ISOLATION_FLAGS[0]);
+  if (iso !== -1 && _isIsolationRejection(diagnostic)) {
+    return {
+      args: firstArgs.slice(0, iso),
+      onSuccess: () => {
+        _isolationOk = false;
+        debugLog(
+          'WARN',
+          face,
+          'claude CLI failed with the isolation flags (old CLI, or auth kept in user settings); dropped for this process',
+        );
+      },
+    };
+  }
+  if (firstArgs.includes(HEADLESS_FLAG) && _isUnknownFlagError(diagnostic)) {
+    return {
+      args: ['-p', '--model', modelName],
+      onSuccess: () => {
+        _headlessFlagOk = false;
+        _isolationOk = false;
+        debugLog(
+          'WARN',
+          face,
+          `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`,
+        );
+      },
+    };
+  }
+  return null;
+}
+
 // stdout as well as stderr: a parser that prints its rejection (or usage banner)
 // on stdout is otherwise invisible here, and FLAG_TOKEN keeps the widened input
 // from loosening the match.
@@ -675,7 +770,7 @@ export function execClaudeCliSync(modelName, { input, timeout }) {
     input,
     timeout,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
+    env: cliSpawnEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
   };
@@ -691,22 +786,18 @@ export function execClaudeCliSync(modelName, { input, timeout }) {
     // latency-bound ceiling. lesson-bridge runs this leg at 2500ms on PreToolUse,
     // where the CLI is measured at 8–13s and therefore times out routinely.
     if (e?.killed || e?.signal) throw e;
-    // `args`, not the live flag: what matters is whether THIS attempt carried it.
+    // `args`, not the live flags: what matters is what THIS attempt carried.
     // Symmetry with the async leg, where the distinction is load-bearing (a
     // sibling can flip the flag across an await). Here execFileSync blocks the
     // event loop for the whole child, so no other JS can interleave and the two
     // readings are behaviourally identical — the substitution is deliberately
     // mutation-silent, kept so the two legs cannot drift apart in meaning.
-    if (!args.includes(HEADLESS_FLAG) || !_isUnknownFlagError(cliDiagnostic(e))) throw e;
+    const retry = compatRetry(modelName, args, cliDiagnostic(e), 'cli-compat');
+    if (!retry) throw e;
     const remaining = timeout - (Date.now() - started);
     if (remaining < RETRY_MIN_BUDGET_MS) throw e;
-    const out = execFileSync(getClaudePath(), ['-p', '--model', modelName], { ...opts, timeout: remaining });
-    _headlessFlagOk = false;
-    debugLog(
-      'WARN',
-      'cli-compat',
-      `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`,
-    );
+    const out = execFileSync(getClaudePath(), retry.args, { ...opts, timeout: remaining });
+    retry.onSuccess();
     return out;
   }
 }
@@ -761,7 +852,7 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
       try {
         // Same headless-tax flags + flag-compat retry as callModelCLI (rationale there).
         child = spawn(getClaudePath(), args, {
-          env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1', DISABLE_CLAUDEMD_HOOKS: '1' },
+          env: cliSpawnEnv(),
           cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -848,30 +939,27 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
   // deep-search escalations). Gating on the exit code before `first.result` also
   // covers a CLI that prints its usage banner to stdout and exits non-zero —
   // otherwise that banner is returned as the model's answer and nothing retries.
-  const rejected =
-    firstArgs.includes(HEADLESS_FLAG) &&
-    typeof first.code === 'number' &&
-    first.code !== 0 &&
-    _isUnknownFlagError(`${first.stderr}\n${first.stdout.slice(0, 4096)}`);
-  if (!rejected) return first.result;
+  const retry =
+    typeof first.code === 'number' && first.code !== 0
+      ? compatRetry(
+          modelName,
+          firstArgs,
+          `${first.stderr}\n${first.stdout.slice(0, 4096)}`,
+          `${model}-cli-async`,
+        )
+      : null;
+  if (!retry) return first.result;
   // The rejection is instantaneous (the child dies in argv parsing), so the retry
   // normally gets nearly the whole budget; spend only what is left of it.
   const remaining = timeout - (Date.now() - started);
   if (remaining < RETRY_MIN_BUDGET_MS) return first.result;
-  const second = await attempt(['-p', '--model', modelName], remaining);
+  const second = await attempt(retry.args, remaining);
   // Cache on the retry's EXIT, not its payload. Empty output is a designed
   // outcome here (emit-nothing prompts, an `N/A` that trims away), so keying on
   // text left the long-lived MCP server re-probing — two spawns per call, for the
   // life of the process — on exactly the old CLI this exists to rescue. The sync
   // twin caches on any non-throwing run; this now means the same thing.
-  if (second.code === 0) {
-    _headlessFlagOk = false;
-    debugLog(
-      'WARN',
-      `${model}-cli-async`,
-      `claude CLI rejected ${HEADLESS_FLAG}; dropped for this process (the headless session tax returns — upgrade Claude Code to avoid it)`,
-    );
-  }
+  if (second.code === 0) retry.onSuccess();
   return second.result;
 }
 

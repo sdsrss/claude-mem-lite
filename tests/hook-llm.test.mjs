@@ -39,6 +39,7 @@ import {
   isLowSignalLesson,
   hasEnrichmentContent,
 } from '../hook-llm.mjs';
+import { splitEpisodeFiles } from '../utils.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
 import { recordMetric } from '../lib/metrics.mjs';
@@ -316,6 +317,107 @@ describe('handleLLMEpisode', () => {
       } catch {}
     }
     vi.clearAllMocks();
+  });
+
+  // Sandbox usage evaluation 2026-09-29: the summarizer stored every file the episode
+  // MENTIONED as the lesson's edges, so a coupon lesson was recalled on every later
+  // `cat package.json` / README read (21 of 79 injections, 0 of them about package.json).
+  describe('edges go to the files the episode edited', () => {
+    const EDIT_EPISODE = {
+      sessionId: 'ep-sess',
+      project: 'test-proj',
+      files: [
+        '/w/app/package.json',
+        '/w/app/README.md',
+        '/w/app/src/invoice.mjs',
+        '/w/app/test/invoice.test.mjs',
+      ],
+      filesRead: [],
+      entries: [
+        {
+          tool: 'Bash',
+          desc: 'cat package.json README.md',
+          files: ['/w/app/package.json', '/w/app/README.md'],
+        },
+        {
+          tool: 'Bash',
+          desc: "python3 - <<'EOF' … src/invoice.mjs",
+          files: ['/w/app/src/invoice.mjs'],
+          bashWrites: ['/w/app/src/invoice.mjs'],
+        },
+        { tool: 'Edit', desc: 'invoice.test.mjs: add coupon cases', files: ['/w/app/test/invoice.test.mjs'] },
+      ],
+    };
+    it('an event (feature) keeps only the edited files in file_paths', async () => {
+      writeFileSync(tmpFile, JSON.stringify(EDIT_EPISODE));
+      await handleLLMEpisode();
+      const ev = db.prepare('SELECT file_paths FROM events WHERE project = ?').get('test-proj');
+      expect(JSON.parse(ev.file_paths).sort()).toEqual([
+        '/w/app/src/invoice.mjs',
+        '/w/app/test/invoice.test.mjs',
+      ]);
+    });
+
+    it('a bugfix event is keyed the same way — the reads it made are not its subject', async () => {
+      callLLM.mockReturnValue(
+        JSON.stringify({
+          type: 'bugfix',
+          title: 'Coupon applied after tax',
+          narrative: 'Moved the coupon before taxFor',
+          concepts: [],
+          facts: [],
+          importance: 2,
+          lesson_learned: 'Apply the coupon to the pre-tax subtotal, then tax the discounted amount',
+        }),
+      );
+      writeFileSync(tmpFile, JSON.stringify(EDIT_EPISODE));
+      await handleLLMEpisode();
+      const ev = db.prepare('SELECT event_type, file_paths FROM events WHERE project = ?').get('test-proj');
+      expect(ev.event_type).toBe('bugfix');
+      expect(JSON.parse(ev.file_paths).sort()).toEqual([
+        '/w/app/src/invoice.mjs',
+        '/w/app/test/invoice.test.mjs',
+      ]);
+    });
+
+    it('a read-only episode (discovery) still attaches to what it read', async () => {
+      callLLM.mockReturnValue(
+        JSON.stringify({
+          type: 'discovery',
+          title: 'allocate() rounds each share',
+          narrative: 'Read money.mjs',
+          concepts: [],
+          facts: [],
+          importance: 2,
+          lesson_learned: 'allocate() rounds each share independently, so the sum can overshoot',
+        }),
+      );
+      writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          sessionId: 'ep-sess',
+          project: 'test-proj',
+          files: ['/w/app/src/money.mjs'],
+          filesRead: [],
+          entries: [{ tool: 'Bash', desc: 'cat src/money.mjs', files: ['/w/app/src/money.mjs'] }],
+        }),
+      );
+      await handleLLMEpisode();
+      const ev = db.prepare('SELECT file_paths FROM events WHERE project = ?').get('test-proj');
+      expect(JSON.parse(ev.file_paths)).toEqual(['/w/app/src/money.mjs']);
+    });
+
+    it('splitEpisodeFiles: a Bash write is an edit, a Bash read is a read, `cp a b` is both', () => {
+      expect(
+        splitEpisodeFiles({
+          entries: [
+            { tool: 'Bash', files: ['/p/a.mjs', '/p/b.mjs'], bashWrites: ['/p/b.mjs'] },
+            { tool: 'Bash', files: ['/p/README.md'] },
+          ],
+          filesRead: ['/p/x.mjs'],
+        }),
+      ).toEqual({ modified: ['/p/b.mjs'], read: ['/p/x.mjs', '/p/a.mjs', '/p/README.md'] });
+    });
   });
 
   it('scrubs a secret that straddles the title/narrative truncation boundary', async () => {

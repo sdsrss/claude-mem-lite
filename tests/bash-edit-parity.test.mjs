@@ -50,6 +50,38 @@ describe('extractFilePaths / extractFileTargets', () => {
     // A user's own /tmp edit is still real work (the direct-field rule this narrows).
     expect(extractFilePaths({ file_path: '/tmp/src/index.js' })).toEqual(['/tmp/src/index.js']);
   });
+
+  it("drops the host's per-project state: built-in auto-memory and transcripts", () => {
+    const mem = '/home/u/.claude/projects/-home-u-proj/memory/MEMORY.md';
+    const note = '/home/u/.claude/projects/-home-u-proj/memory/project_discount_plan.md';
+    const transcript = '/home/u/.claude/projects/-home-u-proj/1f2e.jsonl';
+    for (const p of [mem, note, transcript]) {
+      expect(isTransientPath(p)).toBe(true);
+      expect(extractFilePaths({ file_path: p })).toEqual([]);
+    }
+    // The same write through Bash leaves no edge and no write either.
+    expect(
+      extractFileTargets({ command: `echo '- [Plan](p.md)' >> "${mem}"` }, { cwd: '/work/proj' }),
+    ).toEqual({
+      files: [],
+      writes: [],
+    });
+    // A project that merely has a `projects/` or `memory/` directory is untouched.
+    expect(isTransientPath('/work/app/projects/memory/store.mjs')).toBe(false);
+    expect(isTransientPath('/work/app/.claude/settings.json')).toBe(false);
+  });
+
+  it('follows CLAUDE_CONFIG_DIR for the same host state', () => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = '/srv/cc-config';
+    try {
+      expect(isTransientPath('/srv/cc-config/projects/-work-app/memory/MEMORY.md')).toBe(true);
+      expect(isTransientPath('/srv/cc-config/settings.json')).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  });
 });
 
 describe('entryEditedFiles / isEditEntry', () => {

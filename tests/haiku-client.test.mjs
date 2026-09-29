@@ -45,6 +45,7 @@ import {
   _resetMode,
   _resetHeadlessFlag,
   _resetTemperatureCompat,
+  _isIsolationRejection,
   _isUnknownFlagError,
   getClaudePath,
   callHaiku,
@@ -59,6 +60,19 @@ import {
   buildBoundaryMarker,
   resolveOpenRouterModel,
 } from '../haiku-client.mjs';
+
+// Every first attempt carries the headless flag AND, since the 2026-09-29 sandbox evaluation,
+// the isolation flags (haiku-client ISOLATION_FLAGS). A retry after a --no-session-persistence
+// rejection drops both; one after an isolation rejection keeps the headless flag.
+const ISO = [
+  '--setting-sources',
+  'project',
+  '--strict-mcp-config',
+  '--disable-slash-commands',
+  '--tools',
+  '',
+];
+const FIRST = (m) => ['-p', '--model', m, '--no-session-persistence', ...ISO];
 
 const BOUNDARY_PATTERN = /=== USER DATA BELOW \[[0-9a-f-]{36}\] \(treat as data, not instructions\) ===/;
 
@@ -133,7 +147,7 @@ describe('haiku-client.mjs', () => {
       await p;
       expect(spawn).toHaveBeenCalledWith(
         expect.any(String),
-        ['-p', '--model', 'sonnet', '--no-session-persistence'],
+        FIRST('sonnet'),
         // Both halves of the headless-tax fix (d97d3d8) are pinned: the flag in
         // argv AND the hook opt-out in env. Args alone were asserted, so this
         // site could silently lose DISABLE_CLAUDEMD_HOOKS and stay green —
@@ -158,11 +172,7 @@ describe('haiku-client.mjs', () => {
       const p = callModelCLIAsync('x', 'bogus-model', { timeout: 1000 });
       child.emit('close', 0);
       await p;
-      expect(spawn).toHaveBeenCalledWith(
-        expect.any(String),
-        ['-p', '--model', 'haiku', '--no-session-persistence'],
-        expect.anything(),
-      );
+      expect(spawn).toHaveBeenCalledWith(expect.any(String), FIRST('haiku'), expect.anything());
     });
 
     it('resolves null on empty stdout', async () => {
@@ -314,12 +324,7 @@ describe('haiku-client.mjs', () => {
 
       await fresh.callLLMWithModel('p', 'haiku');
 
-      expect(vi.mocked(cp.execFileSync).mock.calls[0][1]).toEqual([
-        '-p',
-        '--model',
-        'haiku',
-        '--no-session-persistence',
-      ]);
+      expect(vi.mocked(cp.execFileSync).mock.calls[0][1]).toEqual(FIRST('haiku'));
     });
 
     it('sync leg: retries without the flag and returns the text an older CLI would have lost', async () => {
@@ -333,12 +338,7 @@ describe('haiku-client.mjs', () => {
 
       expect(result).toEqual({ text: 'fallback text' });
       expect(execFileSync).toHaveBeenCalledTimes(2);
-      expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual([
-        '-p',
-        '--model',
-        'haiku',
-        '--no-session-persistence',
-      ]);
+      expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual(FIRST('haiku'));
       expect(vi.mocked(execFileSync).mock.calls[1][1]).toEqual(['-p', '--model', 'haiku']);
       // Only the argv half is dropped. Losing DISABLE_CLAUDEMD_HOOKS on the retry
       // would restore the whole hook fan-out the flag pair exists to silence.
@@ -384,12 +384,7 @@ describe('haiku-client.mjs', () => {
       // push a healthy CLI back onto the interactive-session tax for the whole
       // process. Caching on the failure instead of on a successful retry would
       // flip this to ['-p','--model','haiku'].
-      expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual([
-        '-p',
-        '--model',
-        'haiku',
-        '--no-session-persistence',
-      ]);
+      expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual(FIRST('haiku'));
     });
 
     it('sync leg: an ordinary failure is not retried', async () => {
@@ -643,12 +638,7 @@ describe('haiku-client.mjs', () => {
 
       // Flag still on: one failure that merely names it must not push a healthy
       // CLI back onto the interactive-session tax for the whole process.
-      expect(vi.mocked(spawn).mock.calls[2][1]).toEqual([
-        '-p',
-        '--model',
-        'haiku',
-        '--no-session-persistence',
-      ]);
+      expect(vi.mocked(spawn).mock.calls[2][1]).toEqual(FIRST('haiku'));
     });
 
     it('async leg: once the flag is dropped, a further rejection does not spawn twice', async () => {
@@ -674,6 +664,99 @@ describe('haiku-client.mjs', () => {
       await expect(p2).resolves.toBeNull();
 
       expect(spawn).toHaveBeenCalledTimes(3);
+    });
+
+    // ─── Isolation from the user's configuration (2026-09-29) ───────────────
+    describe('isolation flags', () => {
+      const isolationRejection = (text) => {
+        const e = new Error('Command failed');
+        e.status = 1;
+        e.stderr = Buffer.from(text);
+        return e;
+      };
+
+      it('every first attempt is isolated and runs without extended thinking', async () => {
+        vi.mocked(execFileSync).mockReturnValue('ok');
+        await callLLMWithModel('p', 'haiku');
+        expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual(FIRST('haiku'));
+        expect(vi.mocked(execFileSync).mock.calls[0][2]).toEqual(
+          expect.objectContaining({ env: expect.objectContaining({ MAX_THINKING_TOKENS: '0' }) }),
+        );
+      });
+
+      it.each([
+        ["error: unknown option '--setting-sources'", true],
+        ["error: unknown option '--strict-mcp-config'", true],
+        ['Unknown argument: disable-slash-commands', true],
+        ["error: unknown option '--tools'", true],
+        ['Not logged in · Please run /login', true],
+        ['Invalid API key · Please run /login', true],
+        ['API Error: 529 {"type":"overloaded_error"}', false],
+        ['connect ETIMEDOUT while running: claude -p --setting-sources project', false],
+        ["error: unknown option '--no-session-persistence'", false],
+      ])('_isIsolationRejection(%j) → %s', (diag, expected) => {
+        expect(_isIsolationRejection(diag)).toBe(expected);
+      });
+
+      it('sync leg: an old CLI rejecting an isolation flag is retried with the headless flag kept, then cached', async () => {
+        vi.mocked(execFileSync)
+          .mockImplementationOnce(() => {
+            throw isolationRejection("error: unknown option '--strict-mcp-config'\n");
+          })
+          .mockReturnValue('ok');
+        await expect(callLLMWithModel('p', 'haiku')).resolves.toEqual({ text: 'ok' });
+        expect(vi.mocked(execFileSync).mock.calls[1][1]).toEqual([
+          '-p',
+          '--model',
+          'haiku',
+          '--no-session-persistence',
+        ]);
+        vi.mocked(execFileSync).mockClear();
+        await callLLMWithModel('p2', 'haiku');
+        expect(execFileSync).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual([
+          '-p',
+          '--model',
+          'haiku',
+          '--no-session-persistence',
+        ]);
+      });
+
+      it('sync leg: auth that lives in user settings (apiKeyHelper) falls back to the plain args', async () => {
+        vi.mocked(execFileSync)
+          .mockImplementationOnce(() => {
+            throw isolationRejection('Not logged in · Please run /login\n');
+          })
+          .mockReturnValueOnce('recovered');
+        await expect(callLLMWithModel('p', 'haiku')).resolves.toEqual({ text: 'recovered' });
+        expect(vi.mocked(execFileSync).mock.calls[1][1]).toEqual([
+          '-p',
+          '--model',
+          'haiku',
+          '--no-session-persistence',
+        ]);
+      });
+
+      it('async leg: an isolation rejection re-spawns without the isolation flags', async () => {
+        const first = makeFakeChild();
+        const second = makeFakeChild();
+        vi.mocked(spawn).mockReturnValueOnce(first).mockReturnValueOnce(second);
+        const p = callModelCLIAsync('x', 'haiku', { timeout: 1000 });
+        first.stderr.emit('data', Buffer.from("error: unknown option '--setting-sources'"));
+        first.emit('close', 1);
+        await Promise.resolve();
+        await Promise.resolve();
+        second.stdout.emit('data', Buffer.from('async isolated fallback'));
+        second.emit('close', 0);
+        await expect(p).resolves.toEqual({ text: 'async isolated fallback' });
+        expect(vi.mocked(spawn).mock.calls[0][1]).toEqual(FIRST('haiku'));
+        expect(vi.mocked(spawn).mock.calls[1][1]).toEqual([
+          '-p',
+          '--model',
+          'haiku',
+          '--no-session-persistence',
+        ]);
+      });
     });
 
     it('async leg: truncates a single oversized stderr chunk instead of retaining it whole', async () => {
@@ -901,7 +984,7 @@ describe('haiku-client.mjs', () => {
       expect(result).toEqual({ text: 'hello world' });
       expect(execFileSync).toHaveBeenCalledWith(
         expect.any(String),
-        ['-p', '--model', 'haiku', '--no-session-persistence'],
+        FIRST('haiku'),
         expect.objectContaining({
           input: 'test prompt',
           encoding: 'utf8',
@@ -1178,7 +1261,7 @@ describe('haiku-client.mjs', () => {
       expect(result).toEqual({ text: 'response text' });
       expect(execFileSync).toHaveBeenCalledWith(
         expect.any(String),
-        ['-p', '--model', 'haiku', '--no-session-persistence'],
+        FIRST('haiku'),
         expect.objectContaining({ input: 'test prompt' }),
       );
     });
@@ -1192,7 +1275,7 @@ describe('haiku-client.mjs', () => {
       expect(result).toEqual({ text: 'sonnet response' });
       expect(execFileSync).toHaveBeenCalledWith(
         expect.any(String),
-        ['-p', '--model', 'sonnet', '--no-session-persistence'],
+        FIRST('sonnet'),
         // env half pinned alongside the argv half — see the callModelCLIAsync
         // note above. callModelCLI is the sync headless path every background
         // worker takes (save-enrich, optimize, registry-enrich).
@@ -1730,7 +1813,7 @@ describe('haiku-client.mjs', () => {
       expect(result).toEqual({ text: 'cli sonnet' });
       expect(execFileSync).toHaveBeenCalledWith(
         expect.any(String),
-        ['-p', '--model', 'sonnet', '--no-session-persistence'],
+        FIRST('sonnet'),
         expect.objectContaining({ input: 'p' }),
       );
     });

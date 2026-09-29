@@ -17,6 +17,19 @@ import { buildSessionContextLines } from '../hook-context.mjs';
 import { idsShownWhole } from '../lib/hook-text-cap.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
+// Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): SessionStart now INJECTS the
+// steering for a project without the managed block, and injected steering counts as adopted
+// (quiet). The unadopted fixtures in this file mean "no block AND auto-adopt off".
+let _origNoAutoAdopt;
+beforeEach(() => {
+  _origNoAutoAdopt = process.env.MEM_NO_AUTO_ADOPT;
+  process.env.MEM_NO_AUTO_ADOPT = '1';
+});
+afterEach(() => {
+  if (_origNoAutoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+  else process.env.MEM_NO_AUTO_ADOPT = _origNoAutoAdopt;
+});
+
 describe('Key Context booking survives the delimiter defang (D#115 P3-1)', () => {
   let tmpHome, origHome, origCwd, origQuiet, db;
 

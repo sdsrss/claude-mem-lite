@@ -154,9 +154,9 @@ node install.mjs install
 1. **安装依赖** -- `npm install --omit=dev`（编译原生 `better-sqlite3`）
 2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 18 个工具（9 个核心通过 `tools/list` 暴露 + 9 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
 
-> **自动 adopt 会写进你的项目，且每次 SessionStart 都跑（v3.13+）。** 插件向**项目自己的 `<cwd>/CLAUDE.md`**（通常是会进 git 的文件）写入一个 slug 限定的**托管块**，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件。该块是一条提升 Claude 主动调用 `mem_recall` / `mem_save` 的 system-authority 指针；块以外的内容逐字保留，也能与其它插件的块共存于同一文件。这是**每次** SessionStart 都做的幂等同步，不只是第一次——块被删掉会重新写回，出货模板变了会刷新。**任何安装路径都生效**（npm、npx、`/plugin`、手动），**无需再手动跑 `/adopt`**。
+> **自动 adopt 不再把托管块加进你项目的 `CLAUDE.md`（6.19.4 之后的下一个版本起）。** 每次 SessionStart，插件都会送达引导文本（提升 Claude 主动调用 `mem_recall` / `mem_save` 的触发表）。在还没有托管块的 git 仓库里，它把托管块写进仓库根目录的 `CLAUDE.local.md`（Claude Code 像加载 `CLAUDE.md` 一样加载它，子代理也能看到），并把这个文件加进仓库的 `.git/info/exclude`（你的 ignore 规则已覆盖时不加），所以 git 不列出、也不提交它；第一次写入时你会看到一条**一次性提示**。Claude Code 在插件的启动钩子运行之前就读取了指令文件，所以创建这个文件的那个会话改为在上下文里注入一次引导（该会话的子代理看不到）。不在 git 仓库里、仓库根是 `$HOME`、`CLAUDE.local.md` 已被 git 跟踪或是符号链接，或者仓库根是一个 `npm publish` 会把它带上的 npm 包（没有 `"private": true`，没有把它排除在外的 `files` 列表，没有 `files` 列表时也没有列出它的 `.npmignore`）时，什么都不写，改为每个会话把引导**注入**上下文，并一次性提示可以运行 `/adopt`（在 `$HOME` 下不提示）。托管块指向的详情文件放在插件自己的数据目录，以 `~/` 路径书写。`.git/info/exclude` 只对 git 生效：docker 构建上下文、归档和其他打包工具都可能把 `CLAUDE.local.md` 打进去（可发布的 npm 包根目录不会保留这个文件：目录变成 npm 包之前写入的托管块，会在下一次会话启动时移除）。旧版本会在你打开的每个项目里，未经询问就向项目自己的 `<cwd>/CLAUDE.md`（通常会进 git）写入托管块，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件；这些项目保留托管块，本版本的第一个会话会因为文本变化刷新它——想把某个项目迁到本地文件，在那里运行 `claude-mem-lite unadopt` 并提交这次删除。为什么不全部改成注入：沙箱实测中（一个项目，Claude Opus 5.5），8 个会话里模型主动记录的次数，注入时平均 1.5 次，写在 `CLAUDE.local.md` 或 `CLAUDE.md` 时 5.25 次；而且子代理完全看不到注入的文本。**任何安装路径都生效**（npm、npx、`/plugin`、手动）；两条提示都可以用 `MEM_NO_ADOPT_HINT=1` 关闭。
 >
-> 关闭方式：项目级 `claude-mem-lite adopt --disable`（重新启用用 `--enable`）；全局 `export MEM_NO_AUTO_ADOPT=1`；只冻结模板刷新用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。`claude-mem-lite unadopt` 可移除托管块与详情文件。手动 `/adopt` 仍保留用于编辑后重写或 `--all` 批量场景。
+> **想把托管块改写进 `CLAUDE.md`**（例如与团队共享）？运行 `claude-mem-lite adopt`：它向 `<cwd>/CLAUDE.md` 写入 slug 限定的托管块和详情文件，块以外的内容逐字保留，并删除 `CLAUDE.local.md` 里的那份。带托管块的项目在**每次 SessionStart** 都会同步，出货模板变了会刷新，且不会再叠加本地副本或注入，从子目录启动的会话也一样。插件创建过、又被你删掉（或被 `claude-mem-lite unadopt` 删掉）的 `CLAUDE.local.md` 托管块不会被写回，改为注入，直到运行 `claude-mem-lite adopt --enable`。关闭方式：项目级 `claude-mem-lite adopt --disable`（同时删除 `CLAUDE.local.md` 托管块；`CLAUDE.md` 托管块保留到 `unadopt`；重新启用用 `--enable`）；全局 `export MEM_NO_AUTO_ADOPT=1`（已写入的托管块保留并继续加载，直到 `unadopt`）；只冻结模板刷新用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。`claude-mem-lite unadopt` 会移除 `CLAUDE.md` 托管块、详情文件，以及 `CLAUDE.local.md` 托管块和它的 exclude 条目。
 3. **配置钩子** -- 全部七个生命周期事件：`SessionStart`、`PreCompact`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`、`UserPromptSubmit`
 4. **创建数据目录** -- `~/.claude-mem-lite/`（隐藏目录），存放数据库与运行时文件
 5. **自动迁移** -- 自动检测 `~/.claude-mem/`（原版 claude-mem）或 `~/claude-mem-lite/`（v0.5 前的非隐藏目录），将数据库和运行时文件迁移到 `~/.claude-mem-lite/`，原目录保持不变
@@ -451,12 +451,12 @@ instruction-following 权威。
 
 ```bash
 claude-mem-lite adopt              # 当前项目注入
-claude-mem-lite adopt --all        # 扫描 ~/.claude/projects/* 全部注入
+claude-mem-lite adopt --all        # 旧方案清理：在所有项目里删除旧的 memory 目录哨兵
 claude-mem-lite adopt --status     # 列出已 adopt / 已禁用项目 + 当前 gate 快照
 claude-mem-lite adopt --dry-run    # 只打印不写入
 claude-mem-lite adopt --disable    # 当前项目关闭 auto-adopt（写 .mem-no-auto-adopt 哨兵）
 claude-mem-lite adopt --enable     # 当前项目重新启用 auto-adopt（删哨兵）
-claude-mem-lite unadopt            # 精确移除 sentinel + 详情文档（runtime marker 保留以尊重显式撤销）
+claude-mem-lite unadopt            # 移除 CLAUDE.md 托管块和详情文档，以及 CLAUDE.local.md 托管块（之后不再写回）
 ```
 
 Slash 命令 `/adopt` 和 `/unadopt` 是上述 CLI 的包装。
@@ -482,15 +482,17 @@ Slash 命令 `/adopt` 和 `/unadopt` 是上述 CLI 的包装。
 - Hash 守护：你手动改了 sentinel 段 → 下一次 adopt 报 `UserEditedError`，
   除非显式 `--force`。
 - 预算门：MEMORY.md 已 >180 行时拒绝新增（避开 Claude Code 200 行截断）。
-- **任何安装路径每次 SessionStart 都自动 adopt（v2.82.1+；v3.13 起写入目标由
-  memdir 改为 `<cwd>/CLAUDE.md`）。** 同步是幂等的——托管块被删会写回，出货模板
-  变化会刷新（用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` 冻结）。项目级关闭：
-  `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，
-  存活于 marker 删除 / 插件重装）。全局关闭：`export MEM_NO_AUTO_ADOPT=1`。
-  v2.82.1 前因 `CLAUDE_PLUGIN_ROOT` gate 与 `install.mjs` 写出的 hook 命令
-  不匹配，auto-adopt 实质 5 周零触发——见 CHANGELOG v2.82.1。
-- 保守 hook 层源码永不删——条件瘦身仅基于 sentinel 存在性做 runtime 判断，
-  未 adopt 的项目仍看完整 verbose 输出。
+- **任何安装路径每次 SessionStart 都自动 adopt，且不再把托管块加进 `CLAUDE.md`（6.19.4
+  之后的下一个版本起）。** 没有托管块的 git 项目，引导写进 git 根目录的 `CLAUDE.local.md`
+  （经 `.git/info/exclude` 排除在 git 之外），不在 git 里时注入 SessionStart 上下文；带
+  `CLAUDE.md` 托管块的项目（显式 adopt 或旧版本写入）保持同步，出货模板变化会刷新（用
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` 冻结），且不会再叠加本地副本或注入，从子目录启动的会话
+  也一样。插件创建过、又被你（或 `unadopt`）删掉的 `CLAUDE.local.md` 托管块不会被写回；
+  `adopt --enable` 可重新启用。项目级关闭：`claude-mem-lite adopt --disable`（写
+  `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除 / 插件重装；在仓库根目录运行时，对从子目录启动的
+  会话同样生效；并删除本地托管块）。全局关闭：`export MEM_NO_AUTO_ADOPT=1`（已写入的托管块保留，直到 `unadopt`）。
+- 保守 hook 层源码永不删——条件瘦身按"引导已送达"（有托管块或注入开启）做 runtime
+  判断，关闭了引导的项目仍看完整 verbose 输出。
 
 完整设计见 `docs/plans/2026-04-16-invited-memory-pattern.md`（含其它插件
 可复用的模板）。
@@ -786,8 +788,8 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `CLAUDE_MEM_BASH_RECALL` | 在查看（`cat`、`sed -n`、`head`…）或写入（`sed -i`、`cat > f`、python 补丁…）文件的 Bash 命令执行前做文件召回，与 Read / Edit 召回相同。bash 预过滤让其他命令不启动 Node。设为 `off` 只关闭这一路。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_GROUNDING` | 自动捕获的 event 只有在教训引用了本窗口自己的诊断文字（失败输出行、编辑新增的注释或提交信息）时才保留教训；否则保留这一行但去掉教训，importance 降为 1，低于所有注入面的门槛。设为 `off` 保留未引用原文的教训。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果和**工具输出**（命令打印的文字或工具返回的内容，能控制这段输出的人就能写它）有连续 4 个词相同，就不会进入注入面：event 保留这一行和教训、仍可搜索，importance 降为 1；`change` 类 observation 的 importance 之后会被读取次数抬高，所以改为去掉教训，没有教训的这一行随后会像其他同类行一样被丢弃（只有设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` 才保留）。连续 4 个虚词（例如 "is not in the"）也算，所以引用你自己的注释或提交信息的教训，只要碰巧和同一窗口的输出共有这样一串词，也会被降级。这一行的标题不在检查范围内。设为 `off` 恢复模型给出的 importance 和教训。 | _(开启)_ |
-| `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 阻止每次 SessionStart 在**所有**项目自动写入 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
-| `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
+| `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 在**所有**项目停止自动 adopt——不注入引导文本、不新建 `CLAUDE.local.md`，也不同步已有的 `CLAUDE.md` 或 `CLAUDE.local.md` 托管块（这些托管块会保留并继续加载，直到 `claude-mem-lite unadopt`）。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
+| `MEM_NO_ADOPT_HINT` | 静音项目第一次得到 `CLAUDE.local.md`、或第一次以注入方式被引导时给你的一次性提示（后者建议运行 `/adopt`，在 `$HOME` 下除外），以及当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 
 ## 许可证
 

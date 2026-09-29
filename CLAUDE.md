@@ -2,7 +2,7 @@
 
 Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 6.19.4 — **this exact string is a release guard.**
+- **Version**: 6.20.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0), ESM · npm · better-sqlite3 + FTS5
@@ -168,7 +168,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 - **Tests use a `:memory:` DB**; schema changes must sync to test files.
 - **A test that reads repo source as TEXT must use `dirname(fileURLToPath(...))` + `join()`, never `new URL('../x.mjs', import.meta.url)`** — the URL form drops that module out of knip's report entirely. Guarded by `tests/no-url-module-paths.test.mjs`.
 - **`MEM_NO_AUTO_ADOPT=1` is a GLOBAL opt-out every auto-adopt caller must honour** — any test spawning `install` or `repair` must set it, or the suite rewrites this repo's own CLAUDE.md and sidecar.
-- **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at an unadopted temp dir and assert a premise first.
+- **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at a temp dir, set `MEM_NO_AUTO_ADOPT=1`, assert a premise.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.
 - **Tool name mapping**: Claude Code's Agent tool is `'Agent'`, not `'Task'`; Skill via `event.tool_input?.skill`. Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for CLI injection.
 - **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the four shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.

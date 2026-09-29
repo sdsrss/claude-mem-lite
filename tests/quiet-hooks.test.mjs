@@ -137,10 +137,25 @@ describe('server.mjs instructions-mode stderr trace', () => {
     const fresh = mkdtempSync(join(tmpdir(), 'mem-trace-'));
     try {
       // Minimal env — strip MEM_QUIET_HOOKS + point CLAUDE_PROJECT_DIR at a clean dir
-      // so effectiveQuiet returns false.
-      const env = { ...hermeticEnv(fresh), CLAUDE_PROJECT_DIR: fresh, PWD: fresh };
+      // so effectiveQuiet returns false. §9-A: a clean dir with auto-adopt ON is steered by
+      // injection (and quiet), so "not adopted" also needs auto-adopt off.
+      const env = { ...hermeticEnv(fresh), CLAUDE_PROJECT_DIR: fresh, PWD: fresh, MEM_NO_AUTO_ADOPT: '1' };
       const r = await runServer(env);
       expect(r.stderr).toContain('[mem] instructions: BASE+VERBOSE reason=none');
+    } finally {
+      try {
+        rmSync(fresh, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  it('emits BASE reason=adopted:steering for a clean dir while auto-adopt injects (§9-A)', async () => {
+    const fresh = mkdtempSync(join(tmpdir(), 'mem-trace-'));
+    try {
+      const env = { ...hermeticEnv(fresh), CLAUDE_PROJECT_DIR: fresh, PWD: fresh };
+      delete env.MEM_NO_AUTO_ADOPT;
+      const r = await runServer(env);
+      expect(r.stderr).toContain('[mem] instructions: BASE reason=adopted:steering');
     } finally {
       try {
         rmSync(fresh, { recursive: true, force: true });
@@ -220,7 +235,7 @@ describe('server.mjs instructions-mode stderr trace', () => {
 
 describe('buildSessionContextLines — QUIET_HOOKS gating', () => {
   let db;
-  let original, origHome, origCwd, tmpHome;
+  let original, origHome, origCwd, origNoAdopt, tmpHome;
 
   beforeEach(() => {
     db = createTestDb();
@@ -259,8 +274,11 @@ describe('buildSessionContextLines — QUIET_HOOKS gating', () => {
     mkdirSync(fakeCwd, { recursive: true });
     origHome = process.env.HOME;
     origCwd = process.env.CLAUDE_PROJECT_DIR;
+    origNoAdopt = process.env.MEM_NO_AUTO_ADOPT;
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
+    // §9-A: injected steering counts as adopted; "unadopted" = no block AND auto-adopt off.
+    process.env.MEM_NO_AUTO_ADOPT = '1';
 
     original = process.env.MEM_QUIET_HOOKS;
   });
@@ -271,6 +289,8 @@ describe('buildSessionContextLines — QUIET_HOOKS gating', () => {
     else process.env.HOME = origHome;
     if (origCwd === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = origCwd;
+    if (origNoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+    else process.env.MEM_NO_AUTO_ADOPT = origNoAdopt;
     rmSync(tmpHome, { recursive: true, force: true });
     if (original === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = original;

@@ -69,6 +69,7 @@ export const SOURCE_FILES = [
   'lib/paused-reader.mjs',
   'lib/plan-reader.mjs',
   'lib/git-state.mjs',
+  'lib/local-steering.mjs',
   'lib/startup-dashboard.mjs',
   'lib/doctor-benchmark.mjs',
   'lib/doctor-drift.mjs',

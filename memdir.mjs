@@ -12,6 +12,7 @@
 import { readFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
+import { claudeConfigDir } from './lib/data-paths.mjs';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 
@@ -60,8 +61,51 @@ export function encodeProjectPath(absPath) {
 /**
  * Absolute path to the project's memdir. Caller runs mkdir-p as needed.
  */
+// `<memdir>/.mem-no-auto-adopt` is the durable, project-scoped escape hatch.
+// Survives marker deletion, sentinel removal, and plugin reinstalls — that's
+// the point: "user said no for this project" should not be reversible by
+// `rm ~/.claude-mem-lite/runtime/.auto-adopt-*`. Managed via
+// `claude-mem-lite adopt --disable` / `--enable`. silentAutoAdopt checks it
+// at entry and skips WITHOUT writing the runtime marker, so toggling
+// `--enable` re-arms auto-adopt on the next SessionStart. Kept in the memdir
+// (not the project tree) so it survives `unadopt` cleaning out .claude/.
+const DISABLE_SENTINEL_BASENAME = '.mem-no-auto-adopt';
+
+export function disableSentinelPath(memdir) {
+  return join(memdir, DISABLE_SENTINEL_BASENAME);
+}
+
+export function isAutoAdoptDisabled(memdir) {
+  return existsSync(disableSentinelPath(memdir));
+}
+
 export function memdirPath(projectCwd) {
-  return join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
+  return join(claudeConfigDir(), 'projects', encodeProjectPath(projectCwd), 'memory');
+}
+
+/**
+ * Where versions before 6.20.0 put this project's memdir: always under ~/.claude, whatever
+ * CLAUDE_CONFIG_DIR said. Null when that is where memdirPath points anyway.
+ * @param {string} projectCwd
+ * @returns {string|null}
+ */
+export function legacyMemdirPath(projectCwd) {
+  const legacy = join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
+  return legacy === memdirPath(projectCwd) ? null : legacy;
+}
+
+/**
+ * The per-project opt-out, read where it lives now AND where an earlier version wrote it: a
+ * user with CLAUDE_CONFIG_DIR set who ran `adopt --disable` before 6.20.0 has the sentinel
+ * under ~/.claude, and moving memdirPath must not silently re-arm auto-adopt for them
+ * (pre-tag defect review P2-3).
+ * @param {string} projectCwd
+ * @returns {boolean}
+ */
+export function isAutoAdoptDisabledFor(projectCwd) {
+  if (isAutoAdoptDisabled(memdirPath(projectCwd))) return true;
+  const legacy = legacyMemdirPath(projectCwd);
+  return legacy !== null && isAutoAdoptDisabled(legacy);
 }
 
 function memoryFile(memdir) {

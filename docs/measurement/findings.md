@@ -967,7 +967,11 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   whole module. Guarded by `tests/no-url-module-paths.test.mjs`.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is
   adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at an
-  unadopted temp dir and assert a premise first.
+  unadopted temp dir and assert a premise first. **Since report §9-A (2026-09-29,
+  docs/audits/20260929-sandbox-usage-eval.md) a temp dir alone is not unadopted:** auto-adopt
+  injects the steering instead of writing the block, and injected steering counts as adopted
+  (`isSteeringInjectedHere`). The fixture also needs `MEM_NO_AUTO_ADOPT=1` (or the project's
+  `.mem-no-auto-adopt` sentinel).
 - Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for
   CLI injection.
 - **`MEM_NO_AUTO_ADOPT=1` is a GLOBAL opt-out and every auto-adopt caller must honour it.**

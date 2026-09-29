@@ -19,8 +19,17 @@
 // you're changing it.
 
 import { randomUUID } from 'crypto';
-import { join } from 'path';
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
+import { join, resolve as resolvePath } from 'path';
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  existsSync,
+  realpathSync,
+} from 'fs';
 import { homedir } from 'os';
 import {
   inferProject,
@@ -125,6 +134,7 @@ import {
   hardDeleteCandidateCount,
   purgeStale,
   recoverOrphanedChildren,
+  runWideEdgeCleanupOnce,
   recoverBuriedLessons,
   sweepDeferredWorkOrphans,
 } from './lib/maintain-core.mjs';
@@ -168,6 +178,8 @@ import {
   loadCiteBackForEpisode,
   extractCiteBackSignals,
   buildUnsavedBugfixHint,
+  claimBugfixNudge,
+  BUGFIX_NUDGE_MARKER_PREFIX,
   countUnsavedBugfixShape,
   buildCiteRecallNudge as libBuildCiteRecallNudge,
   nextCiteStreakState,
@@ -354,7 +366,7 @@ if (!event) process.exit(0);
 // Regression chain: v2.33.1 introduced the receipt; v2.33.3 misdiagnosed the
 // Stop rejection as event-name mismatch; v2.33.4 is the root-cause fix.
 const RECEIPT_EVENTS = new Set(['PostToolUse', 'SessionStart', 'UserPromptSubmit']);
-function flushEpisode(episode, hookEventName = 'PostToolUse') {
+function flushEpisode(episode, hookEventName = 'PostToolUse', receiverSession = null) {
   if (!episode || episode.entries.length === 0) return;
 
   // Acquire the DB ONCE, up front, and bail before touching anything destructive when it
@@ -369,7 +381,7 @@ function flushEpisode(episode, hookEventName = 'PostToolUse') {
   const db = openDb();
   if (!db) return;
   try {
-    flushEpisodeWithDb(db, episode, hookEventName);
+    flushEpisodeWithDb(db, episode, hookEventName, receiverSession);
   } finally {
     try {
       db.close();
@@ -449,7 +461,7 @@ function summaryInputSubs(subs) {
   return out;
 }
 
-function flushEpisodeWithDb(db, episode, hookEventName) {
+function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) {
   // Split by CC session so concurrent same-project sessions flush as separate
   // observations. planEpisodeFlush returns [episode] BY REFERENCE for the common
   // single-session (or all-legacy) case → flushEpisodeGroup(episode) is identical
@@ -583,8 +595,12 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       const lines = [];
       // v2.83: error→fix nudge lifted to lib/cite-back-hint.mjs::buildUnsavedBugfixHint
       // so the wording (count + "Save now" verb) stays in sync with cite-back.
+      // §9-B: TDD reds stay silent (inside the builder), and a session is nudged once — the
+      // claim is taken only when the hint would actually be shown.
+      // Keyed by the session that RECEIVES this receipt — the hook invocation's own — not by
+      // whose entries the buffer holds: one project buffer can mix concurrent sessions.
       const bugfixHint = buildUnsavedBugfixHint(episode);
-      if (bugfixHint) lines.push(bugfixHint);
+      if (bugfixHint && claimBugfixNudge(RUNTIME_DIR, receiverSession)) lines.push(bugfixHint);
       // v2.81: cite-back hint — fires when this episode edits a file that
       // PreToolUse:Read/Edit nudged earlier in the same session. Precision
       // signal (we know the file was warned about); orthogonal to the
@@ -712,7 +728,6 @@ async function handlePostToolUse() {
   if (SKIP_PREFIXES.some((p) => tool_name.startsWith(p))) return;
 
   const resp = normalizeToolResponse(tool_response);
-  if (!resp || resp.length < 10) return;
 
   const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   // The hook's cwd resolves relative Bash paths (`sed -i … lib/x.mjs`); `bashWrites` is
@@ -721,6 +736,10 @@ async function handlePostToolUse() {
     cwd: typeof hookData.cwd === 'string' ? hookData.cwd : null,
     projectDir: inferProjectDir(),
   });
+  // A silent write (`sed -i`, `cat > f <<EOF`, a heredoc script) prints nothing and is still
+  // an edit. It used to clear this floor only by accident: an empty Bash response became the
+  // JSON of the whole response object, which is what the handoff then replayed.
+  if ((!resp || resp.length < 10) && !(tool_name === 'Bash' && bashWrites.length > 0)) return;
 
   // Tier 1 B: Detect significant Bash commands
   const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
@@ -848,7 +867,11 @@ async function handlePostToolUse() {
 
       // Phase transition → flush current episode, start new
       if (bufferFull || timeGap || (!fileRelated && episode.entries.length >= 2)) {
-        flushEpisode(episode);
+        flushEpisode(
+          episode,
+          'PostToolUse',
+          typeof hookData.session_id === 'string' ? hookData.session_id : null,
+        );
         episode = null;
       }
     }
@@ -1822,7 +1845,9 @@ function gcStalePreRecallCooldowns() {
       // shape as the cooldown files, same 24h GC (dedup window is 5 min).
       const isCooldown = name.startsWith('pre-recall-cooldown-') && name.endsWith('.json');
       const isInjectedMarker =
-        name.startsWith('.claude-mem-injected-') || name.startsWith('.claude-mem-keyctx-'); // D#123 Key Context marker — same per-session growth, same 24h GC
+        name.startsWith('.claude-mem-injected-') ||
+        name.startsWith('.claude-mem-keyctx-') || // D#123 Key Context marker — same per-session growth, same 24h GC
+        name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX); // §9-B once-per-session nudge claim — same shape
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);
@@ -1975,6 +2000,17 @@ function runSessionStartAutoMaintain(db, project) {
       const orphansRecovered = recoverOrphanedChildren(db, mctx);
       if (orphansRecovered > 0)
         debugLog('DEBUG', 'auto-maintain', `recovered ${orphansRecovered} orphaned compression children`);
+
+      // Report §9-D one-shot: narrow the event edges written before episodes were keyed to
+      // their edited files. Own snapshot (only when something changes) and own marker, so it
+      // runs once per database and never on a foreground hook.
+      const edgePrune = runWideEdgeCleanupOnce(db);
+      if (edgePrune.ran && edgePrune.changed > 0)
+        debugLog(
+          'DEBUG',
+          'auto-maintain',
+          `narrowed ${edgePrune.changed} events (${edgePrune.removed} edges)`,
+        );
 
       // Heal lesson rows citation-decay buried at importance 0 under the old floor=0.
       // Non-destructive (0→1 on lesson-bearing rows only); idempotent no-op once none remain.
@@ -2592,6 +2628,79 @@ async function emitDbUnusableNotice() {
   }
 }
 
+/**
+ * Report §9-A: the managed-block steering for a project that carries no block, delivered as
+ * SessionStart context instead of a file in the user's repository. The detail doc it points at
+ * is written into the plugin's own data dir (refreshed only when its text changed), because a
+ * reference to `.claude/plugin_claude_mem_lite.md` would name a file that no longer exists.
+ * Never throws: a failure here costs the steering, not the session start.
+ * @returns {Promise<string>}
+ */
+async function buildInjectedSteering() {
+  try {
+    const { buildClaudeMdBlock } = await import('./adopt-content.mjs');
+    const { ensureSteeringDetailDoc } = await import('./lib/local-steering.mjs');
+    return buildClaudeMdBlock({ detailDocRef: ensureSteeringDetailDoc() });
+  } catch (e) {
+    debugCatch(e, 'session-start-steering');
+    return '';
+  }
+}
+
+// §9-A follow-up (user decision 2026-09-29): injected steering did not drive bugfix saves the
+// way the written CLAUDE.md block did (sandbox S3: 0/8 injected vs 7/12 written, p≈0.015). The
+// user, not the model, decides whether the plugin may write into the repository: offer the
+// block ONCE per project on the human systemMessage channel. A preserved runtime marker keeps
+// it to once; MEM_NO_ADOPT_HINT=1 (the existing adopt-hint switch) silences it.
+const ADOPT_OFFER_MARKER_PREFIX = '.adopt-offered-';
+function realOrResolved(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolvePath(p);
+  }
+}
+function offerAdoptOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  // /adopt at $HOME would write ~/CLAUDE.md, an ancestor of every project below it — the case
+  // lib/local-steering.mjs refuses (pre-tag claims review, P3). Do not suggest it there.
+  const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // Real paths: the host passes the real one, and $HOME may be a symlink to it (delta review P3-14).
+  if (realOrResolved(cwd) === realOrResolved(homedir())) return;
+  try {
+    const marker = join(RUNTIME_DIR, `${ADOPT_OFFER_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      'claude-mem-lite: memory guidance for this project is injected at session start, and nothing is written to your repository. ' +
+        'Run /adopt (or `claude-mem-lite adopt`) to put it in CLAUDE.md instead — the agent then saves lessons after fixes more reliably. ' +
+        'Shown once per project; `claude-mem-lite adopt --disable` turns the guidance off for this project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-adopt-offer');
+  }
+}
+
+// r3 (tasks/specs/sandbox-eval-l3.md): inside a git work tree auto-adopt writes the block into
+// CLAUDE.local.md. A file appearing in the user's tree unannounced is the surprise 9-A set
+// out to remove, so the human is told once per project what it is, that git will not see it,
+// and how to undo it. Same channel, marker family and switch as the /adopt offer above.
+const LOCAL_NOTE_MARKER_PREFIX = '.local-steering-noted-';
+function noteLocalSteeringOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${LOCAL_NOTE_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      'claude-mem-lite: memory guidance for this project is in CLAUDE.local.md at the repository root. Git ignores it (it is added to .git/info/exclude unless your ignore rules already cover it), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
+        'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-local-note');
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2662,12 +2771,18 @@ async function handleSessionStart() {
   // noise; it must NOT also disable side-effect work (PostToolUse writes the
   // DB unconditionally — auto-adopt follows the same rule). Failures are
   // swallowed; the marker is still written for telemetry/back-compat.
+  // Report §9-A: 'inject' means the project carries no managed block and nothing was written;
+  // the steering text then joins this SessionStart's context (injectSteeringPart below).
+  let adoptAction = null;
+  let adoptWritten = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
       const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
       const { silentAutoAdopt } = await import('./adopt-cli.mjs');
       const r = silentAutoAdopt({ cwd, markerDir: RUNTIME_DIR, markerKey: project });
+      adoptAction = r.action;
+      adoptWritten = r.written ?? null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -2733,7 +2848,7 @@ async function handleSessionStart() {
       } else {
         const prevEpisode = readEpisode();
         if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
-          flushEpisode(prevEpisode, 'SessionStart');
+          flushEpisode(prevEpisode, 'SessionStart', ccSessionId);
         }
       }
     } finally {
@@ -2831,6 +2946,21 @@ async function handleSessionStart() {
     if (dashboardText) stdoutParts.push(dashboardText);
     if (fullContext.trim()) {
       stdoutParts.push(`<claude-mem-context>\n${fullContext}\n</claude-mem-context>`);
+    }
+    if (adoptAction === 'inject') {
+      const steering = await buildInjectedSteering();
+      if (steering) stdoutParts.push(steering);
+      offerAdoptOnce(project);
+    } else if (adoptAction === 'local') {
+      // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it
+      // does not load it (release-tree sandbox: first sessions had no steering, 0/4). Inject
+      // the same block once; from the next session the file carries it. An update needs no
+      // copy: the session already loaded the previous text.
+      if (adoptWritten === 'created') {
+        const steering = await buildInjectedSteering();
+        if (steering) stdoutParts.push(steering);
+      }
+      noteLocalSteeringOnce(project);
     }
 
     // Auto-update banner (audit P3d): NON-BLOCKING — read from cached state
@@ -3481,20 +3611,22 @@ function extractStdio(obj) {
   return null;
 }
 function normalizeToolResponse(toolResponse) {
+  // `!== null`, not truthiness: a command that printed nothing extracts to '', and that is
+  // its output. Treating '' as "not a stdio object" fell through to JSON.stringify.
   if (typeof toolResponse === 'string') {
     // Try to parse JSON strings like '{"stdout":"...","stderr":"..."}'
     if (toolResponse.startsWith('{"stdout"') || toolResponse.startsWith('{"stderr"')) {
       try {
         const parsed = JSON.parse(toolResponse);
         const extracted = extractStdio(parsed);
-        if (extracted) return extracted.replace(ANSI_RE, '');
+        if (extracted !== null) return extracted.replace(ANSI_RE, '');
       } catch {}
     }
     return toolResponse.replace(ANSI_RE, '');
   }
   if (toolResponse && typeof toolResponse === 'object') {
     const extracted = extractStdio(toolResponse);
-    if (extracted) return extracted.replace(ANSI_RE, '');
+    if (extracted !== null) return extracted.replace(ANSI_RE, '');
     return JSON.stringify(toolResponse).replace(ANSI_RE, '');
   }
   return '';

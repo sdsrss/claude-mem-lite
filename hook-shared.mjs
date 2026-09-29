@@ -261,6 +261,10 @@ export const GC_PROJECT_MARKER_PREFIXES = Object.freeze([
 // observations is far past the point where flushing them would mis-date them.
 export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   '.auto-adopt-',
+  // §9-A follow-up: the one-time "run /adopt" offer to the user. Deleting it would re-offer.
+  '.adopt-offered-',
+  // r3: the one-time note that CLAUDE.local.md was written. Deleting it would repeat the note.
+  '.local-steering-noted-',
   '.deferred-block-migrated-',
   '.legacy-claude-md-cleaned-',
   // v3.66.1: these two shipped in the GC list for one release and had to come

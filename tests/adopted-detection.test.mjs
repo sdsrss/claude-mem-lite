@@ -40,16 +40,21 @@ function setupSandbox() {
 }
 
 describe('isAdoptedHere / effectiveQuiet', () => {
-  let tmpHome, fakeCwd, origHome, origCwd, origQuiet;
+  let tmpHome, fakeCwd, origHome, origCwd, origQuiet, origNoAdopt;
 
   beforeEach(() => {
     ({ tmpHome, fakeCwd } = setupSandbox());
     origHome = process.env.HOME;
     origCwd = process.env.CLAUDE_PROJECT_DIR;
     origQuiet = process.env.MEM_QUIET_HOOKS;
+    origNoAdopt = process.env.MEM_NO_AUTO_ADOPT;
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
     delete process.env.MEM_QUIET_HOOKS;
+    // Report §9-A: with auto-adopt on, SessionStart INJECTS the steering and that counts as
+    // adopted. The unadopted baseline these cases measure against is "no block, auto-adopt
+    // off" — tests/steering-injection.test.mjs covers the injected arm.
+    process.env.MEM_NO_AUTO_ADOPT = '1';
   });
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
@@ -58,6 +63,8 @@ describe('isAdoptedHere / effectiveQuiet', () => {
     else process.env.CLAUDE_PROJECT_DIR = origCwd;
     if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = origQuiet;
+    if (origNoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+    else process.env.MEM_NO_AUTO_ADOPT = origNoAdopt;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -119,16 +126,21 @@ describe('isAdoptedHere / effectiveQuiet', () => {
 });
 
 describe('Phase D conditional trim — buildServerInstructions via effectiveQuiet', () => {
-  let tmpHome, fakeCwd, origHome, origCwd, origQuiet;
+  let tmpHome, fakeCwd, origHome, origCwd, origQuiet, origNoAdopt;
 
   beforeEach(() => {
     ({ tmpHome, fakeCwd } = setupSandbox());
     origHome = process.env.HOME;
     origCwd = process.env.CLAUDE_PROJECT_DIR;
     origQuiet = process.env.MEM_QUIET_HOOKS;
+    origNoAdopt = process.env.MEM_NO_AUTO_ADOPT;
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
     delete process.env.MEM_QUIET_HOOKS;
+    // Report §9-A: with auto-adopt on, SessionStart INJECTS the steering and that counts as
+    // adopted. The unadopted baseline these cases measure against is "no block, auto-adopt
+    // off" — tests/steering-injection.test.mjs covers the injected arm.
+    process.env.MEM_NO_AUTO_ADOPT = '1';
   });
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
@@ -137,6 +149,8 @@ describe('Phase D conditional trim — buildServerInstructions via effectiveQuie
     else process.env.CLAUDE_PROJECT_DIR = origCwd;
     if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = origQuiet;
+    if (origNoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+    else process.env.MEM_NO_AUTO_ADOPT = origNoAdopt;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -158,16 +172,18 @@ describe('Phase D conditional trim — buildServerInstructions via effectiveQuie
 });
 
 describe('Phase D conditional trim — buildSessionContextLines via effectiveQuiet', () => {
-  let tmpHome, fakeCwd, origHome, origCwd, origQuiet, db;
+  let tmpHome, fakeCwd, origHome, origCwd, origQuiet, origNoAdopt, db;
 
   beforeEach(() => {
     ({ tmpHome, fakeCwd } = setupSandbox());
     origHome = process.env.HOME;
     origCwd = process.env.CLAUDE_PROJECT_DIR;
     origQuiet = process.env.MEM_QUIET_HOOKS;
+    origNoAdopt = process.env.MEM_NO_AUTO_ADOPT;
     process.env.HOME = tmpHome;
     process.env.CLAUDE_PROJECT_DIR = fakeCwd;
     delete process.env.MEM_QUIET_HOOKS;
+    process.env.MEM_NO_AUTO_ADOPT = '1'; // §9-A: the unadopted baseline is "no block, auto-adopt off"
 
     db = createTestDb();
     insertSession(db, { id: 'sess-1', project: 'test' });
@@ -200,6 +216,8 @@ describe('Phase D conditional trim — buildSessionContextLines via effectiveQui
     else process.env.CLAUDE_PROJECT_DIR = origCwd;
     if (origQuiet === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = origQuiet;
+    if (origNoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+    else process.env.MEM_NO_AUTO_ADOPT = origNoAdopt;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 

@@ -280,6 +280,38 @@ describe('Suite 1: Full Session Lifecycle', () => {
     expect(episode.files).not.toContain('/work/proj');
   });
 
+  // The host's real payload for a silent command: every stream empty. It used to survive the
+  // 10-char floor only because normalizeToolResponse fell back to JSON.stringify of the whole
+  // object — so the desc stored and replayed in the handoff read
+  // `cmd → {"stdout":"","stderr":"","interrupted":false,…}` (sandbox evaluation 2026-09-29).
+  it('post-tool-use (silent Bash write) is an edit with no response blob in its desc', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cd /work/proj && sed -i "s/a/b/" lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      cwd: '/elsewhere',
+    });
+    const { exitCode } = runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    expect(exitCode).toBe(0);
+    const e = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8')).entries[0];
+    expect(e.bashWrites).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.desc).not.toMatch(/stdout|interrupted|\{/);
+    expect(e.desc).toMatch(/^cd \/work\/proj && sed -i/);
+  });
+
+  it('post-tool-use (silent Bash read) records nothing — there is no output and no edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'grep -n nothing-matches lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      cwd: '/work/proj',
+    });
+    runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    expect(getEpisodeFile(tmpHome)).toBeNull();
+  });
+
   it('post-tool-use (Bash read) keeps the file as an edge but not as an edit', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const stdin = JSON.stringify({
@@ -737,6 +769,43 @@ describe('Suite 2: Episode Buffer Management', () => {
     expect(parsed.hookSpecificOutput.hookEventName).toBe('PostToolUse');
     expect(parsed.hookSpecificOutput.additionalContext).toMatch(/Unsaved bugfix-shape/);
     expect(parsed.hookSpecificOutput.additionalContext).not.toMatch(/episode flushed/);
+  });
+
+  // §9-B (docs/audits/20260929-sandbox-usage-eval.md): the nudge repeated on every qualifying
+  // flush — 3.2 times per nudged session in real use. One session hears it once.
+  it('PostToolUse: the unsaved-bugfix nudge is said once per session', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const cycle = (sessionId, tag) => {
+      const withSession = (payload) => JSON.stringify({ ...JSON.parse(payload), session_id: sessionId });
+      runHook('post-tool-use', {
+        stdin: withSession(
+          makeToolPayload(
+            'Bash',
+            { command: `npx vitest run tests/${tag}.test.js` },
+            `FAIL tests/${tag}.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)`,
+          ),
+        ),
+        env: { HOME: tmpHome },
+      });
+      let nudged = 0;
+      for (let i = 1; i < 11; i++) {
+        const { stdout } = runHook('post-tool-use', {
+          stdin: withSession(
+            makeToolPayload(
+              'Edit',
+              { file_path: `/work/app/src/${tag}.js`, old_string: `o${i}`, new_string: `n${i}` },
+              'OK — edited file',
+            ),
+          ),
+          env: { HOME: tmpHome },
+        });
+        if (stdout && stdout.includes('Unsaved bugfix-shape')) nudged++;
+      }
+      return nudged;
+    };
+    expect(cycle('sess-once-a', 'first'), 'premise: a regression-fix flush nudges').toBe(1);
+    expect(cycle('sess-once-a', 'second'), 'the same session is not nudged again').toBe(0);
+    expect(cycle('sess-once-b', 'third'), 'another session is').toBe(1);
   });
 
   it('SessionStart flush receipt + dashboard arrive as ONE envelope', () => {
@@ -2802,9 +2871,15 @@ describe('Suite 11: first-run auto-adopt', () => {
     const p = join(cwd, 'CLAUDE.md');
     return existsSync(p) && readFileSync(p, 'utf8').includes('claude-mem-lite:begin v1');
   }
+  // Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): auto-adopt no longer WRITES the
+  // block; SessionStart injects the same steering text. "Steered" = the block is in the file
+  // OR the steering heading rode this SessionStart's stdout. Every case below that used to
+  // assert a written file now asserts steering was delivered AND nothing was written.
+  const STEERING_HEADING = '## claude-mem-lite — persistent memory';
+  const injected = (stdout) => String(stdout || '').includes(STEERING_HEADING);
 
-  it('CLAUDE_PLUGIN_ROOT + first run → adopts + writes marker', () => {
-    runHook('session-start', {
+  it('CLAUDE_PLUGIN_ROOT + first run → injects the steering, writes the marker, writes no file', () => {
+    const { stdout } = runHook('session-start', {
       env: {
         HOME: tmpHome,
         CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
@@ -2812,7 +2887,9 @@ describe('Suite 11: first-run auto-adopt', () => {
         MEM_NO_AUTO_ADOPT: undefined,
       },
     });
-    expect(adopted(projectDir)).toBe(true);
+    expect(injected(stdout)).toBe(true);
+    expect(adopted(projectDir)).toBe(false);
+    expect(existsSync(join(projectDir, '.claude', 'plugin_claude_mem_lite.md'))).toBe(false);
     // Marker key is inferProject() output — contains "testproj"
     const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
     const markers = readdirSync(runtimeDir).filter((f) => f.startsWith('.auto-adopt-'));
@@ -2825,11 +2902,12 @@ describe('Suite 11: first-run auto-adopt', () => {
   // practice for every user installed via install.mjs (the common path).
   // Regression-locking the npm-mode case here is part of the #4948 promise to
   // catch this on the next install/upgrade.
-  it('no CLAUDE_PLUGIN_ROOT (npm/manual install) → DOES adopt', () => {
-    runHook('session-start', {
+  it('no CLAUDE_PLUGIN_ROOT (npm/manual install) → DOES steer', () => {
+    const { stdout } = runHook('session-start', {
       env: { HOME: tmpHome, MEM_QUIET_HOOKS: undefined, MEM_NO_AUTO_ADOPT: undefined },
     });
-    expect(adopted(projectDir)).toBe(true);
+    expect(injected(stdout)).toBe(true);
+    expect(adopted(projectDir)).toBe(false);
     const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
     const markers = readdirSync(runtimeDir).filter((f) => f.startsWith('.auto-adopt-'));
     expect(markers.length).toBeGreaterThan(0);
@@ -2837,15 +2915,16 @@ describe('Suite 11: first-run auto-adopt', () => {
 
   // Only MEM_NO_AUTO_ADOPT=1 should block adoption now (CLAUDE_PLUGIN_ROOT
   // gate removed in v2.82.1).
-  it('no CLAUDE_PLUGIN_ROOT + MEM_NO_AUTO_ADOPT=1 → does NOT adopt', () => {
-    runHook('session-start', {
+  it('no CLAUDE_PLUGIN_ROOT + MEM_NO_AUTO_ADOPT=1 → does NOT steer', () => {
+    const { stdout } = runHook('session-start', {
       env: { HOME: tmpHome, MEM_NO_AUTO_ADOPT: '1', MEM_QUIET_HOOKS: undefined },
     });
     expect(adopted(projectDir)).toBe(false);
+    expect(injected(stdout)).toBe(false);
   });
 
-  it('CLAUDE_PLUGIN_ROOT + MEM_NO_AUTO_ADOPT=1 → does NOT adopt', () => {
-    runHook('session-start', {
+  it('CLAUDE_PLUGIN_ROOT + MEM_NO_AUTO_ADOPT=1 → does NOT steer', () => {
+    const { stdout } = runHook('session-start', {
       env: {
         HOME: tmpHome,
         CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
@@ -2854,13 +2933,16 @@ describe('Suite 11: first-run auto-adopt', () => {
       },
     });
     expect(adopted(projectDir)).toBe(false);
+    expect(injected(stdout)).toBe(false);
   });
 
   // v2.82.0: MEM_QUIET_HOOKS no longer gates auto-adopt. It's a stdout
   // suppression knob, not a side-effect kill-switch (PostToolUse still
   // writes the DB under it). Auto-adopt should fire just the same.
-  it('CLAUDE_PLUGIN_ROOT + MEM_QUIET_HOOKS=1 → DOES adopt (quiet is stdout-only)', () => {
-    runHook('session-start', {
+  // Steering is not the noise MEM_QUIET_HOOKS silences: the written block applied under it,
+  // so the injected one does too.
+  it('CLAUDE_PLUGIN_ROOT + MEM_QUIET_HOOKS=1 → DOES steer (quiet trims noise, not steering)', () => {
+    const { stdout } = runHook('session-start', {
       env: {
         HOME: tmpHome,
         CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
@@ -2868,15 +2950,16 @@ describe('Suite 11: first-run auto-adopt', () => {
         MEM_NO_AUTO_ADOPT: undefined,
       },
     });
-    expect(adopted(projectDir)).toBe(true);
+    expect(injected(stdout)).toBe(true);
+    expect(adopted(projectDir)).toBe(false);
   });
 
   // v2.82.0: per-project opt-out via .mem-no-auto-adopt sentinel.
-  it('CLAUDE_PLUGIN_ROOT + .mem-no-auto-adopt sentinel → does NOT adopt', () => {
+  it('CLAUDE_PLUGIN_ROOT + .mem-no-auto-adopt sentinel → does NOT steer', () => {
     const memdir = encodedMemdir(tmpHome, projectDir);
     mkdirSync(memdir, { recursive: true });
     writeFileSync(join(memdir, '.mem-no-auto-adopt'), '{}');
-    runHook('session-start', {
+    const { stdout } = runHook('session-start', {
       env: {
         HOME: tmpHome,
         CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
@@ -2885,34 +2968,38 @@ describe('Suite 11: first-run auto-adopt', () => {
       },
     });
     expect(adopted(projectDir)).toBe(false);
+    expect(injected(stdout)).toBe(false);
   });
 
-  // v3.13: the SessionStart sync is now IDEMPOTENT and ungated by the one-shot
-  // marker (it is the migration vehicle). So removing the block by hand and
-  // re-running re-adopts — only `--disable` / MEM_NO_AUTO_ADOPT stops it. This
-  // replaces the pre-v3.13 "marker present → skips" behavior.
-  it('block removed but marker present → next SessionStart RE-ADOPTS (sync is ungated)', () => {
+  // v3.13 made the sync ungated by the one-shot marker. Since §9-A a block the user removed by
+  // hand is NOT written back: the next SessionStart injects the steering instead. A block that
+  // is present (explicit `adopt`, or an older version) keeps being synced — see adopt-cli tests.
+  it('block removed by hand → next SessionStart injects, and does not write it back', () => {
     const env = {
       HOME: tmpHome,
       CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
       MEM_QUIET_HOOKS: undefined,
       MEM_NO_AUTO_ADOPT: undefined,
     };
-    runHook('session-start', { env });
-    expect(adopted(projectDir)).toBe(true);
+    writeFileSync(
+      join(projectDir, 'CLAUDE.md'),
+      '<!-- claude-mem-lite:begin v1 -->\nold block\n<!-- claude-mem-lite:end -->\n',
+    );
+    const first = runHook('session-start', { env });
+    expect(adopted(projectDir)).toBe(true); // a present block is kept in sync
+    expect(injected(first.stdout)).toBe(false); // …and not injected on top of it
 
-    // Simulate a manual block removal while the runtime marker still exists.
     rmSync(join(projectDir, 'CLAUDE.md'), { force: true });
     rmSync(join(projectDir, '.claude'), { recursive: true, force: true });
-    expect(adopted(projectDir)).toBe(false);
 
-    runHook('session-start', { env });
-    expect(adopted(projectDir)).toBe(true); // re-adopted
+    const second = runHook('session-start', { env });
+    expect(adopted(projectDir)).toBe(false);
+    expect(injected(second.stdout)).toBe(true);
   });
 
   // Full migration integration: a project carrying the legacy memory-dir
   // sentinel gets it stripped AND the CLAUDE.md block written on SessionStart.
-  it('legacy memory-dir sentinel is migrated to the CLAUDE.md block on SessionStart', () => {
+  it('legacy memory-dir sentinel is stripped on SessionStart and the steering injected instead', () => {
     const memdir = encodedMemdir(tmpHome, projectDir);
     mkdirSync(memdir, { recursive: true });
     // seed a legacy v1 block + a state sidecar (so the migration proves authorship)
@@ -2927,7 +3014,7 @@ describe('Suite 11: first-run auto-adopt', () => {
     writeFileSync(join(memdir, 'plugin_claude_mem_lite.md'), '# legacy');
     expect(legacySentinelPresent(tmpHome, projectDir)).toBe(true);
 
-    runHook('session-start', {
+    const { stdout } = runHook('session-start', {
       env: {
         HOME: tmpHome,
         CLAUDE_PLUGIN_ROOT: '/tmp/fake-plugin-root',
@@ -2936,10 +3023,11 @@ describe('Suite 11: first-run auto-adopt', () => {
       },
     });
 
+    expect(injected(stdout)).toBe(true); // …the steering rides SessionStart instead
     expect(legacySentinelPresent(tmpHome, projectDir)).toBe(false); // legacy stripped
     expect(existsSync(join(memdir, 'plugin_claude_mem_lite.md'))).toBe(false);
     expect(readFileSync(join(memdir, 'MEMORY.md'), 'utf8')).toContain('- keep'); // user prose kept
-    expect(adopted(projectDir)).toBe(true); // new block written
+    expect(adopted(projectDir)).toBe(false); // §9-A: no block written into the project…
   });
 });
 

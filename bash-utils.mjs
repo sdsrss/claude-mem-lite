@@ -605,6 +605,30 @@ export function isDataPrintingCommand(cmd) {
   return printKind(stripNonCommands(cmd)) === 'print';
 }
 
+/**
+ * The output with the BODY lines of every unified-diff hunk removed. A hunk starts at an
+ * `@@ … @@` line and runs over lines beginning with `+`, `-`, ` ` or `\`; anything else
+ * (an empty line, git's own `error: patch failed`, the next command's output) ends it.
+ * Headers (`diff --git`, `---`, `+++`) are kept: they name files, not code.
+ * @param {string} text
+ * @returns {string}
+ */
+function withoutDiffHunks(text) {
+  if (typeof text !== 'string' || !/^@@ /m.test(text)) return text;
+  const kept = [];
+  let inHunk = false;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('@@ ')) {
+      inHunk = true;
+      continue;
+    }
+    if (inHunk && /^[-+ \\]/.test(line)) continue;
+    inHunk = false;
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
 
@@ -629,12 +653,14 @@ export function detectBashSignificance(input, response) {
   // stays a real failure while `sudo grep`, `git grep`, `git log --grep`, `cat f | head`
   // remain exempt and `run-cat-tests` doesn't trip a substring match.
   const isSearchCmd = isReadOnlyCommand(cmd);
+  // Every check below reads `scan`, not `response`: lines inside a unified-diff hunk are the
+  // CONTENT of the file a command edited (`sed -i … && git diff`, a script printing its own
+  // diff), and `throw new Error(` there is code, not a failure.
+  const scan = withoutDiffHunks(response);
   const looksLikeError =
     !isSearchCmd &&
-    /\berror\b|\bERR!|fail(ed|ure)?|exception|panic|traceback|errno|enoent|command not found/i.test(
-      response,
-    ) &&
-    response.length > 15;
+    /\berror\b|\bERR!|fail(ed|ure)?|exception|panic|traceback|errno|enoent|command not found/i.test(scan) &&
+    scan.length > 15;
   // Green test summary exemption — "0 fail/failed/failures" in test-runner
   // output (bun/jest/pytest) gets matched by the broad `fail(ed|ure)?` token
   // above, driving episode.isError=true for passing runs. A live cluster-merge
@@ -642,7 +668,19 @@ export function detectBashSignificance(input, response) {
   // from this path. Flip back to non-error iff a "0 fail" marker is present
   // AND no hard-error signal (panic / ENOENT / AssertionError / TypeError /
   // explicit FAIL banner / npm ERR!) coexists in the output.
-  const hasGreenTestSummary = looksLikeError && /\b0\s+(fail|failed|failures)\b/i.test(response);
+  // node's built-in runner and TAP print the label first — "ℹ fail 0" / "# fail 0" — so the
+  // count-first form never saw them and every green node:test run was an error (sandbox
+  // corpus 2026-09-29: the handoff replayed passing `npm test` runs as "→ ERROR").
+  // A green summary counts only when NO summary in the output is red: a command that ran two
+  // suites prints one summary each, and a node:test run whose failures were all timeouts says
+  // "fail 0" next to "cancelled 1" (pre-tag defect review, item 7 F1). Red = a nonzero fail /
+  // cancelled count in either summary form.
+  const hasGreenTestSummary =
+    looksLikeError &&
+    /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan) &&
+    !/\b[1-9]\d*\s+(fail|failed|failures|failing)\b|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
+      scan,
+    );
   // NOTE: do not add `\bFAIL\s` here — with /i flag it would re-match the
   // very `0 fail\n` token green-summary is trying to exempt. A real test
   // failure produces "N fail" (N≥1) which never triggers hasGreenTestSummary,
@@ -650,13 +688,13 @@ export function detectBashSignificance(input, response) {
   const hasHardErrorSignal =
     hasGreenTestSummary &&
     /\bERR!|panic|traceback|enoent|command not found|exception|AssertionError|TypeError:|SyntaxError:/i.test(
-      response,
+      scan,
     );
   const isError = looksLikeError && !(hasGreenTestSummary && !hasHardErrorSignal);
   // Strict subset of isError: a genuine failure fingerprint, not just the word "error"
   // in benign output. Consumers that must avoid false positives (the bugfix-shape
   // save-nudge) gate on this instead of isError.
-  const isHardError = isError && HARD_ERROR_RE.test(response);
+  const isHardError = isError && HARD_ERROR_RE.test(scan);
   // Match actual test runner invocations, not commands that merely reference "test" as a keyword
   const isTest =
     /\b(npm\s+test|npm\s+run\s+test|yarn\s+test|pnpm\s+test|pnpm\s+run\s+test|bun\s+test|go\s+test|cargo\s+test)\b/i.test(

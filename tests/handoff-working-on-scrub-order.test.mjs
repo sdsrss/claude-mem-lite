@@ -34,7 +34,7 @@
 // release push over (GH013), and it was a fixture for this very feature.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
-import { buildAndSaveHandoff } from '../hook-handoff.mjs';
+import { buildAndSaveHandoff, WORKING_ON_FIRST_MAX } from '../hook-handoff.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
 import * as taskReaderModule from '../lib/task-reader.mjs';
@@ -55,8 +55,11 @@ afterEach(() => {
 const PROJECT = 'wo-proj';
 const SESSION = 'hook-wo-proj-1234abcd';
 
-// truncate(str, 200) keeps `str.slice(0, 199)` and appends U+2026, so the cut lands at 199.
-const CUT = 199;
+// truncate(str, N) keeps `str.slice(0, N - 1)` and appends U+2026. The FIRST subject prompt
+// is cut at WORKING_ON_FIRST_MAX (600 since the 2026-09-29 sandbox evaluation; 200 before),
+// later prompts at 200 — both cuts truncate the SCRUBBED text, and both are exercised below.
+const CUT = WORKING_ON_FIRST_MAX - 1;
+const LATER_CUT = 199;
 
 function seedSession(db) {
   db.prepare(
@@ -114,7 +117,7 @@ describe('working_on is scrubbed BEFORE it is truncated', () => {
   ])('premise: the %s fixture straddles the cut and is otherwise redactable', (_n, token, headLen) => {
     const { prompt, head, start } = straddling(token, headLen);
 
-    expect(prompt.length, 'fixture never reaches the truncation path').toBeGreaterThan(200);
+    expect(prompt.length, 'fixture never reaches the truncation path').toBeGreaterThan(CUT + 1);
     expect(start, 'token starts after the cut — nothing would be retained').toBeLessThan(CUT);
     expect(start + token.length, 'token ends before the cut — it would not straddle').toBeGreaterThan(CUT);
     expect(head).toHaveLength(headLen);
@@ -143,6 +146,21 @@ describe('working_on is scrubbed BEFORE it is truncated', () => {
     expect(stored, 'the retained head of the credential survived into the column').not.toContain(head);
   });
 
+  it("does not store the retained head of a credential straddling a LATER prompt's 200 cut", () => {
+    const start = LATER_CUT - 19;
+    const later = 'q'.repeat(start - 1) + ' ' + GH_TOKEN + ' and the rest of the sentence runs past the cap';
+    // Premise, as for the first prompt: the head survives a truncate-then-scrub at this cut.
+    expect(scrubSecrets(later.slice(0, LATER_CUT))).toContain(GH_TOKEN.slice(0, 19));
+    seedSession(db);
+    addPrompt(db, 'first prompt: rotate the release credentials', 1);
+    addPrompt(db, later, 2);
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+
+    const stored = workingOnOf(db);
+    expect(stored, 'premise: the later prompt was stored').toContain('qqqq');
+    expect(stored).not.toContain(GH_TOKEN.slice(0, 19));
+  });
+
   it('redacts a credential that sits well inside the cap (control)', () => {
     // Control for the arm above: this one never reaches the truncation boundary, so it was
     // ALREADY redacted before the fix. If this ever goes red the fix broke the ordinary path.
@@ -157,8 +175,8 @@ describe('working_on is scrubbed BEFORE it is truncated', () => {
 
   it('leaves an ordinary over-long prompt byte-identical up to the cut (control)', () => {
     // Guards the other direction: scrubbing earlier must not over-redact ordinary prose.
-    const prose = 'refactor the handoff builder and keep the renderer contract stable. '.repeat(6);
-    expect(prose.length).toBeGreaterThan(200);
+    const prose = 'refactor the handoff builder and keep the renderer contract stable. '.repeat(12);
+    expect(prose.length).toBeGreaterThan(CUT + 1);
     seedSession(db);
     addPrompt(db, prose);
     buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);

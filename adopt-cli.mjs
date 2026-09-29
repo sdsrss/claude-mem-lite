@@ -14,10 +14,14 @@
 // every memdir). New-scheme adoption happens per-project on SessionStart (cwd known).
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
-import { homedir } from 'os';
-import { join, isAbsolute } from 'path';
+import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
+import { join, isAbsolute, resolve } from 'path';
 import {
   memdirPath,
+  disableSentinelPath,
+  isAutoAdoptDisabled,
+  isAutoAdoptDisabledFor,
+  legacyMemdirPath,
   removePluginSection,
   removePluginDoc,
   isAdopted as memdirIsAdopted,
@@ -29,12 +33,36 @@ import {
   isAdopted as claudeMdIsAdopted,
   hasResidue as claudeMdHasResidue,
   needsRefresh,
+  readBlock,
   migrateLegacyMemoryDir,
   hasLegacyMemdirSentinel,
   claudeMdPath,
   detailDocPath,
 } from './claudemd.mjs';
 import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
+import {
+  localSteeringRoot,
+  readLocalSteering,
+  writeLocalSteering,
+  removeLocalSteering,
+  ensureSteeringDetailDoc,
+  localMdPath,
+  forgetLocalSteering,
+  tildePath,
+} from './lib/local-steering.mjs';
+
+/**
+ * Remove the auto-written CLAUDE.local.md block for the project at `cwd`, if there is one.
+ * @returns {{action: 'removed'|'partial'|'absent', residue?: string, path?: string}}
+ */
+function dropLocalSteering(cwd) {
+  const root = localSteeringRoot(cwd);
+  if (!root) return { action: 'absent' };
+  // Runs even when the block is already gone (deleted by hand): removeLocalSteering then drops
+  // the exclude lines it added (pre-tag defect review, mutation M7).
+  const r = removeLocalSteering(root, PLUGIN_SLUG);
+  return r.action === 'absent' ? { action: 'absent' } : { ...r, path: localMdPath(root) };
+}
 
 function log(msg) {
   console.log(msg);
@@ -45,7 +73,7 @@ function detectCwd() {
 }
 
 function projectsRoot() {
-  return join(homedir(), '.claude', 'projects');
+  return join(claudeConfigDir(), 'projects');
 }
 
 function listAllMemdirs() {
@@ -66,7 +94,7 @@ function listAllMemdirs() {
 }
 
 function claudeConfigPath() {
-  return join(homedir(), '.claude.json');
+  return claudeStatePath();
 }
 
 // Real adopted-project paths come from Claude Code's own ~/.claude.json `projects`
@@ -93,23 +121,9 @@ function hasFlag(args, flag) {
 }
 
 // ─── Per-project auto-adopt opt-out sentinel ─────────────────────────────────
-// `<memdir>/.mem-no-auto-adopt` is the durable, project-scoped escape hatch.
-// Survives marker deletion, sentinel removal, and plugin reinstalls — that's
-// the point: "user said no for this project" should not be reversible by
-// `rm ~/.claude-mem-lite/runtime/.auto-adopt-*`. Managed via
-// `claude-mem-lite adopt --disable` / `--enable`. silentAutoAdopt checks it
-// at entry and skips WITHOUT writing the runtime marker, so toggling
-// `--enable` re-arms auto-adopt on the next SessionStart. Kept in the memdir
-// (not the project tree) so it survives `unadopt` cleaning out .claude/.
-const DISABLE_SENTINEL_BASENAME = '.mem-no-auto-adopt';
-
-export function disableSentinelPath(memdir) {
-  return join(memdir, DISABLE_SENTINEL_BASENAME);
-}
-
-export function isAutoAdoptDisabled(memdir) {
-  return existsSync(disableSentinelPath(memdir));
-}
+// The `.mem-no-auto-adopt` escape hatch lives in memdir.mjs since report §9-A: lib/quiet-scope.mjs
+// has to ask it too (injected steering counts as adopted), and lib/ may not import this face.
+export { disableSentinelPath, isAutoAdoptDisabled };
 
 /**
  * cmdAdopt — write the CLAUDE.md managed block + detail doc for the current
@@ -151,7 +165,15 @@ function adoptOne(cwd, { force, dryRun }) {
     const mig = migrateLegacyMemoryDir(cwd, PLUGIN_SLUG, { force });
     const r = writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
     const migNote = mig.action === 'removed' ? ' (+migrated legacy memdir)' : '';
-    log(`[adopt] ${cwd} → ${r.action}${migNote}`);
+    // CLAUDE.md now carries the block; a CLAUDE.local.md copy would load it twice.
+    const local = dropLocalSteering(cwd);
+    const localNote =
+      local.action === 'absent'
+        ? ''
+        : local.action === 'skipped-symlink'
+          ? ` (left ${local.path} alone: it is a symlink)`
+          : ` (+removed the block from ${local.path})`;
+    log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}`);
     return r;
   } catch (e) {
     log(`[adopt] ${cwd} → error: ${e.message}`);
@@ -215,14 +237,19 @@ function migrateAll(args) {
  * existing users whose marker predates v3.13 still migrate). Order:
  *   1. respect per-project `.mem-no-auto-adopt` opt-out → skip.
  *   2. migrate legacy memory-dir sentinel away (idempotent; no-op once gone).
- *   3. adopt the CLAUDE.md scheme if absent; else refresh if shipped content
- *      drifted (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1).
+ *   3. a managed block in CLAUDE.md → keep it in sync, refreshing if shipped content drifted
+ *      (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1), and drop a local copy (no double steering).
+ *   4. otherwise, inside a git work tree → the block in <top-level>/CLAUDE.local.md, kept
+ *      out of commits via info/exclude; return 'local' (`written` says what changed). In a
+ *      subdirectory, a root CLAUDE.md block → 'already-adopted', a root opt-out → 'disabled'.
+ *   5. otherwise (no git, $HOME, a tracked or symlinked CLAUDE.local.md, an npm-publishable
+ *      root, any git failure) → write nothing, return 'inject' (the caller puts the steering
+ *      into SessionStart context) — or 'already-adopted' when that file carries the block.
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
 export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
-  const memdir = memdirPath(cwd);
   try {
-    if (isAutoAdoptDisabled(memdir)) {
+    if (isAutoAdoptDisabledFor(cwd)) {
       return { ok: true, action: 'disabled', reason: 'disabled-by-sentinel' };
     }
     migrateLegacyMemoryDir(cwd, PLUGIN_SLUG);
@@ -231,6 +258,50 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     const doc = getDetailDoc();
     const version = CURRENT_SENTINEL_VERSION;
 
+    // Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): a project with NO managed
+    // block is no longer written into. The first SessionStart used to add CLAUDE.md and
+    // .claude/plugin_claude_mem_lite.md to every repository the user opened — 4 of 4 sandbox
+    // repos, swept into the next `git add -A` — and the startup dashboard then reported them
+    // as the user's uncommitted work. The same text now rides SessionStart context
+    // ('inject'); only an explicit `adopt` writes files. A project that already carries the
+    // block (adopted explicitly, or by an older version) is kept in sync exactly as before,
+    // including a half state whose detail doc went missing.
+    //
+    // r3 (tasks/specs/sandbox-eval-l3.md, report §8.5): injection kept the repository clean but
+    // cost most of the proactive memory writes (1.5 vs 5.25 per trajectory) and never reached
+    // subagents (0/12). Inside a git work tree the block now goes to CLAUDE.local.md, which the
+    // host loads like CLAUDE.md and info/exclude keeps out of commits (5.25 writes, 12/12).
+    const hasBlock = readBlock(cwd, PLUGIN_SLUG).body !== null;
+    if (!hasBlock) {
+      if (markerDir && markerKey) writeMarker(markerDir, markerKey);
+      const root = localSteeringRoot(cwd);
+      if (root) {
+        // A session started below the top-level (pre-tag claims review P2-3, P1-4): the host
+        // loads the root's CLAUDE.md as an ancestor, so a block there already steers this
+        // session; and an opt-out recorded for the root covers the file that lives there.
+        if (resolve(root) !== resolve(cwd)) {
+          if (readBlock(root, PLUGIN_SLUG).body !== null)
+            return { ok: true, action: 'already-adopted', reason: 'root-claude-md' };
+          // Off for the project means off here too: no file, no injected copy, no /adopt offer
+          // (delta review P2-2; lib/quiet-scope.mjs mirrors it).
+          if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'disabled', reason: 'root-disabled' };
+        }
+        const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
+        const r = writeLocalSteering(root, {
+          slug: PLUGIN_SLUG,
+          version,
+          block: localBlock,
+          frozen: process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1',
+        });
+        if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
+        // A refused file that carries the block anyway (tracked, or behind a link) is loaded by
+        // the host: injecting it too would load it twice.
+        if (r.present) return { ok: true, action: 'already-adopted', reason: `local-${r.reason}` };
+        return { ok: true, action: 'inject', reason: `local-${r.reason}` };
+      }
+      return { ok: true, action: 'inject' };
+    }
+    dropLocalSteering(cwd);
     let action = 'already-adopted';
     if (!claudeMdIsAdopted(cwd, PLUGIN_SLUG)) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
@@ -267,11 +338,29 @@ export function hasAutoAdoptMarker(markerDir, markerKey) {
 /**
  * cmdDisable — `claude-mem-lite adopt --disable [--all]`.
  * Writes `<memdir>/.mem-no-auto-adopt` so SessionStart auto-adopt skips this
- * project permanently. Does NOT remove an existing block — pair with `unadopt`.
+ * project permanently. Does NOT remove a CLAUDE.md block (the user asked for that one, by
+ * running adopt) — pair with `unadopt`. DOES remove the CLAUDE.local.md block, which
+ * auto-adopt wrote on its own: "turn the guidance off here" has to mean it stops loading.
  */
 function cmdDisable(args) {
   const all = hasFlag(args, '--all');
-  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
+  const localTargets = all ? listKnownProjectDirs() : [detectCwd()];
+  for (const dir of localTargets) {
+    const r = dropLocalSteering(dir);
+    if (r.action !== 'absent') log(`[adopt --disable] ${r.path} → ${r.action}`);
+    if (r.residue) log(`  ⚠ ${r.residue}`);
+  }
+  // Known projects too, not only memdirs that already exist: Claude Code creates `memory/`
+  // only when its auto-memory is used, and a project without one was left armed (pre-tag
+  // defect review P2-4).
+  const targets = all
+    ? [
+        ...new Set([
+          ...listAllMemdirs().map((m) => m.memdir),
+          ...listKnownProjectDirs().map((d) => memdirPath(d)),
+        ]),
+      ]
+    : [memdirPath(detectCwd())];
 
   if (targets.length === 0) {
     log('[adopt --disable] no memdirs found');
@@ -304,7 +393,19 @@ function cmdDisable(args) {
  */
 function cmdEnable(args) {
   const all = hasFlag(args, '--all');
-  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
+  // Re-arm the CLAUDE.local.md block too: a block the user or `unadopt` removed is not written
+  // back until this forgets that it was (lib/local-steering.mjs).
+  for (const dir of all ? listKnownProjectDirs() : [detectCwd()]) {
+    const root = localSteeringRoot(dir);
+    if (root && forgetLocalSteering(root))
+      log(`[adopt --enable] ${localMdPath(root)} → will be written again`);
+  }
+  // The legacy ~/.claude memdir too: isAutoAdoptDisabledFor still honours a sentinel an earlier
+  // version left there, so --enable must be able to remove it.
+  const cwdNow = detectCwd();
+  const targets = all
+    ? listAllMemdirs().map((m) => m.memdir)
+    : [memdirPath(cwdNow), legacyMemdirPath(cwdNow)].filter(Boolean);
 
   if (targets.length === 0) {
     log('[adopt --enable] no memdirs found');
@@ -342,6 +443,11 @@ function statusAll() {
   log('[adopt --status] current project:');
   log(`  cwd:        ${cwd}`);
   log(`  CLAUDE.md:  ${adoptedHere ? `✓ adopted (${CURRENT_SENTINEL_VERSION})` : '✗ not adopted'}`);
+  const localRoot = localSteeringRoot(cwd);
+  const localHere = localRoot && readLocalSteering(localRoot, PLUGIN_SLUG).body !== null;
+  log(
+    `  local:      ${localHere ? `✓ ${localMdPath(localRoot)} (auto-written, excluded from git)` : localRoot ? '✗ none' : '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)'}`,
+  );
   if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
     log('  legacy:     ⚠ memory-dir sentinel still present (migrates on next SessionStart, or run `adopt`)');
   }
@@ -404,8 +510,21 @@ function unadoptAll(args) {
   // 1. New scheme: scrub CLAUDE.md managed blocks across known project paths.
   const projectDirs = listKnownProjectDirs();
   let blocks = 0,
-    partial = 0;
+    partial = 0,
+    locals = 0;
   for (const dir of projectDirs) {
+    // The CLAUDE.local.md block auto-adopt writes (r3) is swept first and independently: a
+    // project carries one or the other, and either way nothing of ours should survive.
+    const root = localSteeringRoot(dir);
+    if (root && readLocalSteering(root, PLUGIN_SLUG).body !== null) {
+      if (dryRun) log(`[unadopt --all --dry-run] ${localMdPath(root)} → would-remove`);
+      else {
+        const lr = removeLocalSteering(root, PLUGIN_SLUG);
+        log(`[unadopt --all] ${localMdPath(root)} → ${lr.action}`);
+        if (lr.residue) log(`  ⚠ ${lr.residue}`);
+      }
+      locals++;
+    }
     // hasResidue, not isAdopted: the sweep must also catch PARTIAL residue
     // (block without detail doc, or an orphaned doc/state sidecar) —
     // isAdopted's block-AND-doc gate skipped those projects forever.
@@ -452,7 +571,7 @@ function unadoptAll(args) {
   log('');
   const partialNote = partial > 0 ? ` (+${partial} partial-residue cleanup(s))` : '';
   log(
-    `[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}.`,
+    `[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} and ${locals} CLAUDE.local.md block(s) across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}.`,
   );
   if (projectDirs.length === 0) {
     log(
@@ -472,6 +591,9 @@ export function cmdUnadopt(args = []) {
 
   const cwd = detectCwd();
   if (dryRun) {
+    const root = localSteeringRoot(cwd);
+    if (root && readLocalSteering(root, PLUGIN_SLUG).body !== null)
+      log(`[unadopt --dry-run] would-remove the block in ${localMdPath(root)}`);
     const blockState = claudeMdHasResidue(cwd, PLUGIN_SLUG)
       ? 'would-remove CLAUDE.md block + detail doc'
       : 'no CLAUDE.md block';
@@ -488,6 +610,9 @@ export function cmdUnadopt(args = []) {
   const mig = migrateLegacyMemoryDir(cwd, PLUGIN_SLUG, { force });
   const migNote = mig.action === 'removed' ? ' (+cleaned legacy memdir)' : '';
   log(`[unadopt] ${cwd} → ${r.action}${migNote}`);
+  const local = dropLocalSteering(cwd);
+  if (local.action !== 'absent') log(`[unadopt] ${local.path} → ${local.action}`);
+  if (local.residue) log(`  ⚠ ${local.residue}`);
   // 'partial' is the outcome that used to print as 'absent': the sidecar files are gone but
   // an unpaired sentinel still holds steering text in the user's CLAUDE.md, and only they can
   // decide where that text ends. Silence here is what let it survive every sweep.

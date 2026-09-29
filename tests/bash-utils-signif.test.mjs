@@ -37,6 +37,35 @@ describe('detectBashSignificance — green test summary exemption', () => {
     expect(sig.isError).toBe(false);
   });
 
+  // Sandbox corpus 2026-09-29 (docs/audits/20260929-sandbox-usage-eval.md): node's built-in
+  // runner prints the LABEL first ("ℹ fail 0"; TAP: "# fail 0"), so every green `npm test`
+  // of a node:test project was stored as "→ ERROR", replayed under "Recent activity" in the
+  // handoff, and read by the episode summarizer as a fixed bug.
+  it('does NOT mark a green node:test (spec reporter) summary as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'npm test 2>&1 | tail -8' },
+      '✔ parseMoney (0.7ms)\n✔ allocate (0.2ms)\nℹ tests 12\nℹ suites 0\nℹ pass 12\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0',
+    );
+    expect(sig.isError).toBe(false);
+    expect(sig.isTest).toBe(true);
+  });
+
+  it('does NOT mark a green TAP summary ("# fail 0") as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'node --test --test-reporter=tap' },
+      'TAP version 13\nok 1 - parseMoney\n1..1\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0',
+    );
+    expect(sig.isError).toBe(false);
+  });
+
+  it('DOES mark a red node:test summary ("ℹ fail 2") as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'npm test' },
+      '✖ allocate sums to total (1.1ms)\nℹ tests 12\nℹ pass 10\nℹ fail 2\nℹ cancelled 0',
+    );
+    expect(sig.isError).toBe(true);
+  });
+
   it('DOES mark "5 fail" bun-test output as error (red run)', () => {
     const sig = detectBashSignificance(
       { command: 'bun test logger.test.ts' },
@@ -67,6 +96,22 @@ describe('detectBashSignificance — green test summary exemption', () => {
       'npm ERR! code ENOENT\nnpm ERR! Install failed: package not found',
     );
     expect(sig.isError).toBe(true);
+  });
+
+  // A write that prints a diff quotes the code it edited. `throw new Error(` inside a hunk is
+  // file content; git's own `error: patch failed` outside any hunk is still a failure.
+  it('does NOT read error words inside a unified-diff hunk as a failure', () => {
+    const diff =
+      'diff --git a/src/invoice.mjs b/src/invoice.mjs\nindex 1..2 100644\n--- a/src/invoice.mjs\n+++ b/src/invoice.mjs\n' +
+      '@@ -1,3 +1,4 @@\n export function lineTotal(line) {\n+  if (bad) throw new Error(`bad discount for ${line.desc}`);\n   return line.qty * line.unitPrice;\n-  // TypeError: old comment\n }\n';
+    const sig = detectBashSignificance({ command: "sed -i 's/a/b/' src/invoice.mjs && git diff" }, diff);
+    expect(sig.isError).toBe(false);
+    expect(sig.isHardError).toBe(false);
+    const failed = detectBashSignificance(
+      { command: 'git apply fix.patch && git diff' },
+      `error: patch failed: src/invoice.mjs:1\nerror: src/invoice.mjs: patch does not apply\n${diff}`,
+    );
+    expect(failed.isError).toBe(true);
   });
 
   it('does NOT mark grep output containing "error" as error', () => {
@@ -352,5 +397,126 @@ describe('detectBashSignificance — read-only exemption checks every statement'
     expect(hard('diff <(sort a) <(sort b)', SOURCE_QUOTE)).toBe(false);
     expect(hard('grep -c x f | head -$((1 + 2))', SOURCE_QUOTE)).toBe(false);
     expect(hard('grep x $(npm test', RED_RUN)).toBe(true); // unbalanced
+  });
+});
+
+// Pre-tag defect review (item 7, F1): the label-first green summary matched ANY "ℹ fail 0" in the
+// output, so a command that ran two suites — one green, one red — read green, and so did a run
+// whose only failures were timeouts ("ℹ fail 0" next to "ℹ cancelled 1"). Real node 22 output.
+describe('detectBashSignificance — a green summary does not hide a red one', () => {
+  const GREEN_RUN = [
+    '✔ ok (0.513118ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 1',
+    'ℹ fail 0',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 53.530078',
+  ].join('\n');
+  const RED_RUN = [
+    '✖ sum (0.790855ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 0',
+    'ℹ fail 1',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 63.864786',
+    '',
+    '✖ failing tests:',
+    '',
+    'test at b.test.mjs:2:1',
+    '✖ sum (0.790855ms)',
+    '  Error: boom: total mismatch',
+    '      at TestContext.<anonymous> (file:///work/r/b.test.mjs:2:24)',
+  ].join('\n');
+  const TIMEOUT_RUN = [
+    '✖ slow (51.153443ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 0',
+    'ℹ fail 0',
+    'ℹ cancelled 1',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 545.788902',
+    '',
+    '✖ failing tests:',
+    '',
+    'test at c.test.mjs:2:1',
+    '✖ slow (51.153443ms)',
+    "  'test timed out after 50ms'",
+  ].join('\n');
+  const sig = (out) => detectBashSignificance({ command: 'npm test 2>&1 | tail -30' }, out);
+
+  it('premise: a green run alone is not an error', () => {
+    expect(sig(GREEN_RUN).isError).toBe(false);
+  });
+
+  it('a green run followed by a red run is an error', () => {
+    expect(sig(`${GREEN_RUN}\n${RED_RUN}`).isError).toBe(true);
+  });
+
+  it('a run whose only failures were cancelled (timeouts) is an error', () => {
+    expect(sig(TIMEOUT_RUN).isError).toBe(true);
+  });
+});
+
+// The count-first summaries (bun, jest) need the same rule: a workspace loop that prints
+// "0 fail" for one package and "1 fail" for the next is red.
+describe('detectBashSignificance — count-first summaries, one green and one red', () => {
+  it('bun-style "0 fail" followed by "1 fail" is an error', () => {
+    const out = [
+      'pkg-a/src/sum.test.ts:',
+      '✓ sums [0.12ms]',
+      '',
+      ' 5 pass',
+      ' 0 fail',
+      ' 9 expect() calls',
+      'Ran 5 tests across 1 files. [18.00ms]',
+      'pkg-b/src/split.test.ts:',
+      '✗ splits [0.40ms]',
+      '',
+      ' 4 pass',
+      ' 1 fail',
+      ' 7 expect() calls',
+      'Ran 5 tests across 1 files. [21.00ms]',
+    ].join('\n');
+    expect(detectBashSignificance({ command: 'bun test --cwd packages' }, out).isError).toBe(true);
+  });
+});
+
+// Pre-tag delta review, round 2: mutations B2 (red rule without `failing`) and B6/B7 (red counts
+// limited to one digit, in each summary form) survived the suite.
+describe('detectBashSignificance — every red summary shape outvotes a green one', () => {
+  const sig = (command, out) => detectBashSignificance({ command }, out);
+
+  it('mocha "N failing" after another suite’s green "0 fail" is an error', () => {
+    const out = [
+      ' 5 pass',
+      ' 0 fail',
+      'Ran 5 tests across 1 files. [18.00ms]',
+      '',
+      '  3 passing (12ms)',
+      '  1 failing',
+      '',
+      '  1) split',
+      '       returns parts:',
+      '     expected 2 to equal 3',
+    ].join('\n');
+    expect(sig('bun test && npx mocha', out).isError).toBe(true);
+  });
+
+  it('a two-digit count-first red ("10 fail") after a green "0 fail" is an error', () => {
+    const out = [' 5 pass', ' 0 fail', 'Ran 5 tests', ' 2 pass', ' 10 fail', 'Ran 12 tests'].join('\n');
+    expect(sig('bun test --cwd packages', out).isError).toBe(true);
+  });
+
+  it('a two-digit label-first red ("ℹ cancelled 10") beside "ℹ fail 0" is an error', () => {
+    const out = ['ℹ tests 10', 'ℹ pass 0', 'ℹ fail 0', 'ℹ cancelled 10', 'ℹ duration_ms 545.7'].join('\n');
+    expect(sig('node --test', out).isError).toBe(true);
   });
 });

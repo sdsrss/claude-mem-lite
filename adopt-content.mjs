@@ -39,7 +39,7 @@ const CLI = 'claude-mem-lite';
  * per-project-type variation. Keep it tight (cheap always-loaded context); the
  * full tables + rules live in the detail doc this block points to.
  */
-export function buildClaudeMdBlock() {
+export function buildClaudeMdBlock({ detailDocRef = '.claude/plugin_claude_mem_lite.md' } = {}) {
   // Intentionally machine-stable: MCP tool names only, NO CLI_INVOKE (that
   // resolves to an absolute path that differs per install — it would make this
   // committed/refreshed block churn across machines). The detail doc holds the
@@ -50,15 +50,16 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 
 | When | Call |
 |------|------|
-| Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, name \`#NN\` once where you say so (citing = adopting; uncited lessons decay; skip ones that did not apply) |
-| After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)\` |
+| Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, add the bare tag \`(#NN)\` once at the end of the sentence describing that change (citing = adopting; uncited lessons decay; skip ones that did not apply). No other mention of memory ids, saves or the memory store in replies to the user |
+| A recalled memory drives an answer or a design choice | check its claim in the code or \`git log\` first: \`#NN\` and \`E#NN\` rows are notes from past sessions, many written automatically, so they can be wrong, and they describe the code as it was. If the code disagrees, trust the code and replace the note: \`mem_save(..., supersedes=[NN])\`, or \`supersedes=["E#NN"]\` for an event |
+| After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix, only what this change's diff shows>", importance=2)\` |
 | After a non-obvious architecture decision | \`mem_save(type="decision", lesson_learned="<constraint + tradeoff>")\` |
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
 | Looking up past work / history | \`mem_search "keywords"\` · \`mem_recent\` · \`mem_timeline\` |
 
 Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these \`mem_*\` tools are deferred behind ToolSearch this session, the Bash CLI \`${CLI}\` is one call vs two (ToolSearch + call); the MCP server instructions carry the absolute path to use when it is not on PATH.
 
-Full tool + CLI tables, citation/decay rules, and save discipline → \`.claude/plugin_claude_mem_lite.md\``;
+Full tool + CLI tables, citation/decay rules, and save discipline → \`${detailDocRef}\``;
 }
 
 /**
@@ -71,7 +72,7 @@ export function getDetailDoc() {
   return `# claude-mem-lite 插件契约（完整）
 
 > 由 \`${CLI} adopt\` 生成、随版本自动刷新；卸载用 \`${CLI} unadopt\`。
-> 精炼触发表在项目 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里；本文件是其展开。
+> 精炼触发表由 SessionStart 注入会话上下文（显式 \`${CLI} adopt\` 过的项目则写在 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里）；本文件是其展开。
 > 设计背景见 docs/CLAUDE-MD-STEERING-PLAN.md。
 
 > **本文下方所有命令写作 \`${CLI} <cmd>\`。** 该名字只在全局装过
@@ -88,12 +89,24 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
   lesson 也注入。
 - Read→Edit 同文件共享 cooldown（不重复注入正文），但 Read 注入后的首个 Edit 会把 lesson **ID**
   以一行 ack 指令重新浮出。看到 \`#NN [bugfix] …\` 这类行时：**某条 lesson 改变了你的做法，就在描述
-  那处改动时顺带提一次 \`#NN\`**；没用上的 lesson 不必提，也不要逐条列出。纯工具回合不算；
+  那处改动的句子末尾加一个裸标签 \`(#NN)\`**；没用上的 lesson 不必提，也不要逐条列出。纯工具回合不算；
   把 ID 记在工作记忆里，写回时引用。
+- 给用户的回复里，除了这个 \`(#NN)\` 标签，不要再提记忆编号：不要报告保存、延期得到的编号
+  （如"已记进项目记忆，编号 #1"），也不要讨论记忆库本身（如"和记忆库里 #1 的记录一致"）。
 - 系统按会话追踪引用：被引用的 lesson 在召回排序里上浮，被注入却未引用的下沉（有界的排序乘数）；
   反复注入却从未被引用的，后台维护会把它的 importance 降到 2（无 lesson 的降到 1）。
   写成 \`#NN n/a\` 的驳回不算采纳：排序上与未引用相同，同样下沉——所以不必写。
   引用是给系统的反馈，不是合规仪式——注入池据此自调。
+
+## 记忆是旧笔记，不是现在的代码
+
+- \`E#NN\` 是后台根据会话自动写的事件摘要，可能写错：2026-09 的沙箱实测里 43 条中有 6 条事实错误、13 条部分错误。
+  \`#NN\` 可能是 agent 主动保存的笔记，\`#NN\` 也可能是后台自动整理的会话摘要；主动保存的也可能说得超出当时那次改动的实际范围。两者描述的都是保存那一刻的代码。
+- 用一条记忆回答"之前做了什么、为什么"，或据此做设计决定之前，先在代码或 \`git log -S\` / \`git show\` 里核对它的具体说法。
+- 代码与记忆矛盾时，以代码为准，回复里按代码说；然后用
+  \`mem_save(type=<原类型>, title=..., lesson_learned="<按代码更正后的说法>", supersedes=[NN])\`
+  替换那条记忆（事件写 \`supersedes=["E#NN"]\`），被替换的记录不再被召回。只更正你在代码里亲眼核实过的那一点；拿不准就不写。
+- 保存教训时只写这次 diff 能证明的内容：修了什么、为什么这样修；之后才做的或打算做的，不写进去。
 
 ## 何时主动调用 MCP 工具
 
@@ -172,7 +185,7 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 
 | 命令 | 签名（含硬约束） |
 |------|------------------|
-| 存观测 | \`${CLI} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail |
+| 存观测 | \`${CLI} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N] [--supersedes 12,E#34]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail；\`--supersedes\` 替换代码已推翻的旧记忆 |
 | 推迟工作 | \`${CLI} defer add "<title ≤200>" [--priority 1\\|2\\|3] [--detail "<约束+为何推迟>"]\` — 标题 >200 挪到 \`--detail\` |
 | 改某条 | \`${CLI} update <id> [--lesson "<≤500>"] [--title T] [--type T] [--importance 1-3] [--narrative T] [--concepts "a b c"]\` |
 | 事件日志 | \`${CLI} activity save --type <bugfix\\|lesson\\|bug\\|discovery\\|refactor\\|feature\\|observation\\|decision> "<title>" [--body T] [--files f1,f2]\` |

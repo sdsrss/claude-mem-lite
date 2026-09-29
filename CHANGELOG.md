@@ -2,6 +2,117 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.20.0 — memory guidance moves out of CLAUDE.md; recalled memories are checked and corrected
+
+**Upgrade note: auto-adopt no longer adds its block to your project's `CLAUDE.md`.**
+
+- **What changes.** Until now the first session in a project added a managed block to
+  `<project>/CLAUDE.md` and wrote `<project>/.claude/plugin_claude_mem_lite.md`, so the plugin's
+  files ended up in your next commit. From 6.20.0, in a git repository that does not already
+  carry the block, the same guidance goes to `CLAUDE.local.md` at the repository root. Claude
+  Code loads that file like `CLAUDE.md`, and the plugin adds it to the repository's
+  `.git/info/exclude` (unless your ignore rules already cover it), so git does not list or
+  commit it. Claude Code reads its instruction files before the plugin's startup hook runs, so
+  the session that creates the file gets the guidance added to its context instead, once;
+  subagents started in that session do not see it. Nothing is written, and the guidance is added
+  to each session's context, outside git, in a repository rooted at `$HOME`, where
+  `CLAUDE.local.md` is tracked or is a symbolic link, and where the repository root is an npm
+  package that `npm publish` would ship the file with (no `"private": true`, no `files` list
+  that leaves it out, and, without a `files` list, no `.npmignore` naming it). A block written
+  before the root became such a package is taken out at the next session start. Where a tracked
+  or linked `CLAUDE.local.md` already carries the block, the plugin leaves it as it is and does
+  not add the guidance to the context as well.
+- **Projects an earlier version adopted keep the block in `CLAUDE.md`.** That is every project
+  an earlier version opened, unless auto-adopt was off there or the block was removed. The
+  first 6.20.0 session there refreshes the block, because the guidance text changed (see Changed
+  below), which shows up as changes to `CLAUDE.md` and to two files under `.claude/`; commit
+  them, or move the project off `CLAUDE.md`: run `claude-mem-lite unadopt` there and commit the
+  removal, and the next session writes `CLAUDE.local.md` instead, except where the previous
+  bullet says nothing is written. A session started in a subdirectory of such a repository adds
+  no local copy.
+- **The plugin does not write back a local file you removed.** Once it has created
+  `CLAUDE.local.md` in a repository, deleting the file or its block, or running
+  `claude-mem-lite unadopt`, leaves it out; the guidance is then added to each session's
+  context. `claude-mem-lite adopt --enable` lets it write the file again, and
+  `claude-mem-lite adopt` puts the block in `CLAUDE.md` instead. If you added your own notes to
+  a file the plugin created, removing the block leaves the file, and git still ignores it. The
+  plugin never edits a `CLAUDE.local.md` that is a symbolic link.
+- **Turning the guidance off.** `claude-mem-lite adopt --disable` stops auto-adopt for the
+  project, including sessions started in its subdirectories when you run it at the repository
+  root, and removes the local block; a block in `CLAUDE.md` stays until `unadopt`.
+  `MEM_NO_AUTO_ADOPT=1` stops auto-adopt everywhere, but leaves blocks already written, which
+  keep loading without being refreshed.
+- **Packaging.** `.git/info/exclude` is read by git only. The plugin does not keep the file in
+  a publishable npm package root (above), but docker build contexts, archives and other
+  packagers can include `CLAUDE.local.md`. It holds the guidance text and a `~/`-relative path
+  to the plugin's detail doc, nothing about your project. Worktrees of one repository share the
+  exclude entry, and it stays while any of them still has the block.
+- **How you notice.** The first time a project gets the local file, or gets the guidance added
+  to its context, you see a one-time notice saying which and how to undo it.
+  `MEM_NO_ADOPT_HINT=1` silences both notices.
+- **Why not add it to the context everywhere.** In a sandbox evaluation on one project
+  (4 runs of 8 sessions per setup, Claude Opus 5.5), the agent saved plans, decisions and bug
+  lessons 1.5 times per run with the guidance in the context, and 5.25 times with it in
+  `CLAUDE.md` or in a `CLAUDE.local.md` present from the start. When the work was handed to a
+  subagent, the subagent never saw guidance from the context (0 of 12 sessions) and saw either
+  file every time. The completed work was the same in every setup (64 of 64 checks). Details:
+  `docs/audits/20260929-sandbox-usage-eval.md` §8.5–§8.7.
+
+**Changed**
+
+- **The guidance asks the agent to check a recalled memory before relying on it, and to correct
+  one the code contradicts.** Memories written automatically (all `E#` ids and many `#` ids) can
+  be wrong, and a lesson an agent saved can claim more than its change did. The guidance now says so, asks for a check in the
+  code or `git log` before a memory drives an answer or a design choice, and names
+  `mem_save(..., supersedes=[N])` (`["E#N"]` for an event) as the correction; the replaced
+  memory is no longer recalled. With two false memories planted, answers were right with the old
+  and the new guidance alike, but the old guidance corrected 0 of 16 while the new one replaced
+  14 of 16 with notes that matched the code (§8.6). `claude-mem-lite help` and the detail doc now
+  list `save --supersedes`.
+- **Citations are a bare `(#NN)` tag at the end of the sentence.** The guidance no longer asks
+  the agent to name ids elsewhere, and asks it not to report saves or discuss the memory store in
+  replies.
+- **The "unsaved bugfix" reminder is shown at most once per session, and not when a test that
+  was just written fails before its implementation lands.** Background summaries type that
+  red-then-green sequence as a feature or refactor, not a bugfix (an instruction in their
+  prompt; its effect on the stored types was not measured).
+- **Old events stop being recalled on files they only read.** A one-time pass in the daily
+  maintenance removes `package.json`, lock files, `README*`, `CLAUDE.md`, `AGENTS.md` and
+  `.gitignore` links from an event that keeps a link to some other file, and removes links to
+  Claude Code's own per-project files, scratch space, `node_modules` and tool results. It takes a
+  database snapshot first when it can (and proceeds if the snapshot fails), and runs once.
+
+**Fixed**
+
+- A passing `node:test` run and a printed diff were stored as errors, so the next session was told
+  about failures that never happened.
+- Claude Code's own per-project files (`~/.claude/projects/<dir>/`, including its `MEMORY.md`)
+  were recorded as project files and recalled as such.
+- The automatic lessons of a session that edited files were attached to every file it read;
+  they are attached to the files it edited.
+- A Bash command with no output was stored as its raw JSON envelope; it is stored as the command.
+  A silent command that writes a file is still recorded as an edit.
+- The resumed-session summary listed passing commands as errors, and edits made through Bash as
+  bare commands; it now lists failures and edits by file name. It keeps the first 600 characters
+  of the first task statement instead of 200, and when the session edited files its key files
+  are those files.
+- The startup summary counted the plugin's own files as your uncommitted work.
+- With `CLAUDE_CONFIG_DIR` set, the per-project opt-out, `adopt --status`, `unadopt --all`,
+  `memdir-audit --all` and the task and plan lists looked in `~/.claude` instead of the
+  configured directory. An opt-out that an earlier version wrote under `~/.claude` still
+  counts. (The installer, the post-update clean-up and the check for a plugin
+  switched off in `settings.json` still use `~/.claude/settings.json` and `~/.claude.json`.)
+
+**Performance**
+
+- Background summaries that go through the `claude` CLI (neither `ANTHROPIC_API_KEY` nor
+  `OPENROUTER_API_KEY` set) no longer load your Claude Code configuration and no longer use
+  extended thinking. Replaying real summaries on our test machine: about 8,000 instead of 32,000
+  context tokens, $0.002–0.007 instead of $0.009–0.044, and 5–6 seconds instead of 16–76 seconds
+  per call, with the same summary type in 7 of 7 paired replays. The saving depends on how much
+  configuration your Claude Code loads; a `claude` too old for the isolation flags falls back to
+  the previous call.
+
 ## v6.19.4 — ip-address security floor
 
 Fixes only; no schema change, no migration, no new setting.

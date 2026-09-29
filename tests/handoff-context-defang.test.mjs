@@ -61,6 +61,19 @@ import { buildSessionContextLines } from '../hook-context.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
 import * as taskReaderModule from '../lib/task-reader.mjs';
 
+// Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): SessionStart now INJECTS the
+// steering for a project without the managed block, and injected steering counts as adopted
+// (quiet). The unadopted fixtures in this file mean "no block AND auto-adopt off".
+let _origNoAutoAdopt;
+beforeEach(() => {
+  _origNoAutoAdopt = process.env.MEM_NO_AUTO_ADOPT;
+  process.env.MEM_NO_AUTO_ADOPT = '1';
+});
+afterEach(() => {
+  if (_origNoAutoAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+  else process.env.MEM_NO_AUTO_ADOPT = _origNoAutoAdopt;
+});
+
 beforeEach(() => {
   vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
     changed: [],

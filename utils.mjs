@@ -162,6 +162,34 @@ export function isEditEntry(e) {
   return Boolean(e) && (EDIT_TOOLS.has(e.tool) || entryEditedFiles(e).length > 0);
 }
 
+/**
+ * The files an episode EDITED, and everything else it touched. `episode.files` is every
+ * path any entry mentioned — `cat package.json`, `ls src`, a README it skimmed — and it is
+ * not the right edge set for a lesson: `files` becomes `files_modified` and the
+ * observation_files / events.file_paths recall keys, and the
+ * handoff's Key Files. In the sandbox usage evaluation
+ * (docs/audits/20260929-sandbox-usage-eval.md) the episode summarizer stored that whole
+ * list, so 21 of 79 PreToolUse lesson injections fired on `package.json` and none of the
+ * 21 concerned it.
+ * @param {{entries?: object[], files?: string[], filesRead?: string[]}} episode
+ * @returns {{modified: string[], read: string[]}}
+ */
+export function splitEpisodeFiles(episode) {
+  const modified = new Set();
+  const searched = new Set();
+  for (const entry of episode?.entries || []) {
+    if (!entry?.files) continue;
+    // A Bash entry can do both: `cp a b` reads a and writes b.
+    const edited = new Set(entryEditedFiles(entry));
+    for (const f of entry.files) (edited.has(f) ? modified : searched).add(f);
+  }
+  // Merge bash-tracked reads and search tool files into filesRead
+  const read = new Set([...(episode?.filesRead || []), ...searched]);
+  // Remove files that were both searched AND modified — they're modified
+  for (const f of modified) read.delete(f);
+  return { modified: [...modified], read: [...read] };
+}
+
 // Stdin caps for the hook entry points (G19). Two DELIBERATE tiers, not drift:
 // full hook payloads carry tool_response bodies (256KB), while the UserPromptSubmit
 // search surface caps the prompt itself at 64KB (#9494 huge-prompt guard — search
@@ -391,6 +419,8 @@ export function makeEntryDesc(toolName, input, resp, opts) {
       const isErr =
         opts?.isError ??
         (/\berror\b|\bfail(ed|ure)?\b|\bexception\b|\bpanic\b/i.test(resp) && resp.length > 30);
+      // A silent command (a `sed -i`, a heredoc write) has no output to show.
+      if (!resp) return cmd;
       const snippet = scrubTruncateEnds(resp, 100);
       return isErr ? `${cmd} → ERROR: ${snippet}` : `${cmd} → ${snippet}`;
     }

@@ -990,9 +990,15 @@ describe('Key Context section quotas (D#196)', () => {
     // has nothing to do with the quotas. Point the adoption probe at a directory that
     // carries no managed block. Same hazard the Recent-table cases above call out:
     // green in the maintainer's tree, red (or vacuous) from any clone.
-    savedEnv = { dir: process.env.CLAUDE_PROJECT_DIR, quiet: process.env.MEM_QUIET_HOOKS };
+    savedEnv = {
+      dir: process.env.CLAUDE_PROJECT_DIR,
+      quiet: process.env.MEM_QUIET_HOOKS,
+      noAdopt: process.env.MEM_NO_AUTO_ADOPT,
+    };
     process.env.CLAUDE_PROJECT_DIR = mkdtempSync(join(tmpdir(), 'keyctx-notadopted-'));
     delete process.env.MEM_QUIET_HOOKS;
+    // §9-A: injected steering counts as adopted; "not adopted" is no block AND auto-adopt off.
+    process.env.MEM_NO_AUTO_ADOPT = '1';
   });
   afterEach(() => {
     try {
@@ -1004,6 +1010,8 @@ describe('Key Context section quotas (D#196)', () => {
     else process.env.CLAUDE_PROJECT_DIR = savedEnv.dir;
     if (savedEnv.quiet === undefined) delete process.env.MEM_QUIET_HOOKS;
     else process.env.MEM_QUIET_HOOKS = savedEnv.quiet;
+    if (savedEnv.noAdopt === undefined) delete process.env.MEM_NO_AUTO_ADOPT;
+    else process.env.MEM_NO_AUTO_ADOPT = savedEnv.noAdopt;
     try {
       db.close();
     } catch {
