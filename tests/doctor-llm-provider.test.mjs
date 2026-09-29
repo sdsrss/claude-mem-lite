@@ -122,6 +122,27 @@ describe('llmProviderStatus', () => {
     expect(s.level).toBe('ok');
   });
 
+  it('WARNS when the base URL carries a query string or fragment', async () => {
+    // Otherwise the appended /v1/messages lands inside the query, not the path.
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com/anthropic?route=x');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('WARNS on an http host that only looks loopback (127.attacker.example)', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.attacker.example:4000');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it('probes openrouter.ai when only OPENROUTER_API_KEY is set', async () => {
     noProxy();
     vi.stubEnv('ANTHROPIC_API_KEY', '');

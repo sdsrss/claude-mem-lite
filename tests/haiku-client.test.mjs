@@ -1128,6 +1128,15 @@ describe('haiku-client.mjs', () => {
       expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4000/v1/messages');
     });
 
+    it('does not follow redirects on the credentialed native fetch', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      expect(fetchMock.mock.calls[0][1].redirect).toBe('error');
+    });
+
     it('keeps the public URL and built-in model ID when the overrides are unset', async () => {
       const fetchMock = vi.fn().mockResolvedValue(okResponse());
       vi.stubGlobal('fetch', fetchMock);

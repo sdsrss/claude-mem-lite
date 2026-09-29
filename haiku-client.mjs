@@ -556,6 +556,10 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
             headers: apiHeaders,
             body: json,
             signal: controller.signal,
+            // A gateway must not be able to walk the x-api-key to another origin
+            // via a redirect. The tunnel path already surfaces a 3xx without
+            // following it; reject here so the native path behaves the same.
+            redirect: 'error',
           });
     };
 
