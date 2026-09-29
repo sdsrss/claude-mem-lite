@@ -992,6 +992,7 @@ describe('haiku-client.mjs', () => {
     });
 
     it('sends the deployment name from ANTHROPIC_DEFAULT_HAIKU_MODEL as body.model', async () => {
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://aif-example.services.ai.azure.com/anthropic');
       vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
       const fetchMock = vi.fn().mockResolvedValue(okResponse());
       vi.stubGlobal('fetch', fetchMock);
@@ -1003,6 +1004,7 @@ describe('haiku-client.mjs', () => {
     });
 
     it('maps the sonnet tier through ANTHROPIC_DEFAULT_SONNET_MODEL, per tier', async () => {
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://aif-example.services.ai.azure.com/anthropic');
       vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
       vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'claude-sonnet-5');
       const fetchMock = vi.fn().mockResolvedValue(okResponse());
@@ -1012,6 +1014,35 @@ describe('haiku-client.mjs', () => {
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.model).toBe('claude-sonnet-5');
+    });
+
+    it('ignores the tier overrides with NO base URL — they are CLI aliases on Bedrock/Vertex', async () => {
+      // The scoping the review asked for: api.anthropic.com must not receive a
+      // provider-specific alias (404 + CLI fallback), nor a silently bigger model.
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'us.anthropic.claude-haiku-x');
+      vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'claude-opus-4-5');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-haiku-4-5-20251001');
+    });
+
+    it('does not tunnel an http:// gateway — the CONNECT tunnel is TLS-only', async () => {
+      // Before the fix this crashed the process: the proxy was selected for the
+      // http target, then https.request threw ERR_INVALID_PROTOCOL inside the
+      // CONNECT callback where no try/catch could see it.
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000');
+      vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4000/v1/messages');
     });
 
     it('keeps the public URL and built-in model ID when the overrides are unset', async () => {
@@ -1064,6 +1095,21 @@ describe('haiku-client.mjs', () => {
         ok: false,
         status: 400,
         text: async () => '{"type":"error","error":{"message":"max_tokens: must be >= 1"}}',
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(callHaiku('test prompt')).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry when temperature is mentioned but not as the backticked field', async () => {
+      // The body must name the BACKTICKED field; a bare mention inside unrelated
+      // prose must not buy a retry plus a permanent body change for that model.
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () =>
+          '{"type":"error","error":{"message":"temperature sampling is unsupported here"}}',
       });
       vi.stubGlobal('fetch', fetchMock);
 

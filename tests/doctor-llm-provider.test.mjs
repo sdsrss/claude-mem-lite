@@ -73,6 +73,55 @@ describe('llmProviderStatus', () => {
     expect(probe.mock.calls[0][1]).toEqual({ port: 4000 });
   });
 
+  it('passes the gateway port to the proxy CONNECT probe, not the 443 default', async () => {
+    for (const v of PROXY_ENV) vi.stubEnv(v, '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('OPENROUTER_API_KEY', '');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com:8443');
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
+    const probe = vi.fn();
+    const proxyProbe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe, _proxyProbe: proxyProbe });
+    expect(probe).not.toHaveBeenCalled();
+    expect(proxyProbe.mock.calls[0][1]).toBe('gw.example.com');
+    // The bug: the tunnel defaulted to 443 while requests went to 8443.
+    expect(proxyProbe.mock.calls[0][2]).toEqual({ timeout: 4000, port: 8443 });
+    expect(s.level).toBe('ok');
+  });
+
+  it('WARNS when ANTHROPIC_BASE_URL is set but unusable, instead of a green default', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'not a url');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(s.message).toMatch(/ANTHROPIC_BASE_URL/);
+    // Probing api.anthropic.com here is the false green this check exists to kill.
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('WARNS on plain http to a non-loopback gateway (the key would go unencrypted)', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://gw.example.com:4000');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(s.message).toMatch(/http/i);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('treats a blank base URL as unset (trim before the default)', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', '   ');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(probe.mock.calls[0][0]).toBe('api.anthropic.com');
+    expect(s.level).toBe('ok');
+  });
+
   it('probes openrouter.ai when only OPENROUTER_API_KEY is set', async () => {
     noProxy();
     vi.stubEnv('ANTHROPIC_API_KEY', '');

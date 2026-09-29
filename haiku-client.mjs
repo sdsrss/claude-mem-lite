@@ -4,11 +4,13 @@
 // OPENROUTER_API_KEY (OpenRouter, OpenAI-compatible) → claude CLI fallback
 // Model configurable via CLAUDE_MEM_MODEL (haiku|sonnet); OpenRouter slug
 // overridable via OPENROUTER_MODEL. The direct-API leg honours
-// ANTHROPIC_BASE_URL (no /v1 suffix - the path is appended) and per-tier
-// deployment names via ANTHROPIC_DEFAULT_{HAIKU,SONNET}_MODEL, the same vars
-// the `claude` CLI leg resolves its --model aliases through, so one env set
-// points both transports at a gateway (Azure AI Foundry, LiteLLM, Bedrock
-// proxies). Unset → public Anthropic API, unchanged.
+// ANTHROPIC_BASE_URL (no /v1 suffix — the path is appended) and, when that base
+// URL is set and usable, per-tier deployment names via
+// ANTHROPIC_DEFAULT_{HAIKU,SONNET}_MODEL — the same vars the `claude` CLI leg
+// resolves its --model aliases through, so one env set points both transports at
+// a gateway (Azure AI Foundry, LiteLLM, Bedrock proxies). Without a base URL the
+// tier vars stay CLI-only: they are also the Bedrock/Vertex aliases and must not
+// leak to api.anthropic.com. Unset base URL → public Anthropic API, unchanged.
 
 import { execFileSync, spawn } from 'child_process';
 import { mkdirSync } from 'fs';
@@ -19,6 +21,7 @@ import { debugLog, debugCatch, parseJsonFromLLM } from './utils.mjs';
 import { DB_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { httpConnectProxyFor, postViaConnectProxy } from './lib/proxy-fetch.mjs';
+import { resolveAnthropicBaseUrl } from './lib/anthropic-base-url.mjs';
 
 /**
  * cwd for every `claude -p` spawn. R10 P2-13.
@@ -63,12 +66,20 @@ const TIER_MODEL_ENV = {
 };
 
 /**
- * Model ID the direct Messages API should send for a tier. The tier override
- * env wins when set and non-blank, else the built-in Anthropic ID.
+ * Model ID the direct Messages API should send for a tier.
+ *
+ * Scoped to a usable ANTHROPIC_BASE_URL on purpose: these vars are ALSO the
+ * Claude Code aliases on Bedrock/Vertex, where the value is a provider-specific
+ * ID. Someone who set them for the CLI and has an ANTHROPIC_API_KEY would
+ * otherwise send that ID straight to api.anthropic.com (a 404 + CLI fallback on
+ * every call), and pointing the haiku alias at a bigger model would silently
+ * change model and cost. No base URL → the built-in Anthropic ID, as before.
  * @param {'haiku'|'sonnet'} tier
  * @returns {string}
  */
 function apiModelId(tier) {
+  const { configured, error } = resolveAnthropicBaseUrl();
+  if (!configured || error) return MODEL_MAP[tier];
   return (process.env[TIER_MODEL_ENV[tier]] || '').trim() || MODEL_MAP[tier];
 }
 
@@ -475,16 +486,6 @@ export async function callModelJSONAsync(
   return res?.text ? parseJsonFromLLM(res.text) : null;
 }
 
-// Messages-API base URL. ANTHROPIC_BASE_URL (the Claude Code / Anthropic SDK
-// convention, no /v1 suffix - the path below is appended) points the direct leg
-// at any Anthropic-compatible gateway. Azure AI Foundry serves Claude at
-// https://<resource>.services.ai.azure.com/anthropic with the same x-api-key +
-// anthropic-version contract callModelAPI already sends. Trailing slashes are
-// tolerated; unset keeps the public API, so existing users are unchanged.
-function anthropicBaseUrl() {
-  return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
-}
-
 // Models that refused `temperature` with a 400 (see the retry in callModelAPI).
 // One name after the first rejection, so the cost is one failed request per
 // model per process rather than one per call.
@@ -502,6 +503,11 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
   const modelId = apiModelId(model);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  // One deadline for the whole call. The AbortController bounds the fetch path
+  // across the temperature retry; the proxy tunnel takes what is LEFT of the
+  // deadline per send, so a retry cannot buy a second full timeout (a 1000ms
+  // budget that took 1633ms on the tunnel path). (pre-tag review on #33)
+  const deadline = Date.now() + timeout;
 
   try {
     const { system, user } = splitPrompt(prompt);
@@ -530,7 +536,7 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     // fetch — a silent outage behind a proxy, and one the new doctor check would
     // have certified as healthy because it probes the hop this code was ASSUMED
     // to use. (pre-tag review SHOULD-FIX 3)
-    const apiUrl = `${anthropicBaseUrl()}/v1/messages`;
+    const apiUrl = `${resolveAnthropicBaseUrl().url}/v1/messages`;
     const apiHeaders = {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
@@ -540,7 +546,11 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
       const json = JSON.stringify(payload);
       const apiProxy = httpConnectProxyFor(apiUrl);
       return apiProxy
-        ? postViaConnectProxy(apiProxy, apiUrl, { headers: apiHeaders, body: json, timeout })
+        ? postViaConnectProxy(apiProxy, apiUrl, {
+            headers: apiHeaders,
+            body: json,
+            timeout: Math.max(1, deadline - Date.now()),
+          })
         : fetch(apiUrl, {
             method: 'POST',
             headers: apiHeaders,
@@ -552,8 +562,11 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     let res = await send(body);
 
     // Temperature-deprecation compat, same shape as the claude-CLI flag retry:
-    // retry once without the field, cache the negative so later calls skip it. A
-    // 400 whose body does not name the field keeps the old single-attempt path.
+    // retry once without the field, cache the negative so later calls skip it.
+    // The body must name the BACKTICKED field — matching bare "temperature" also
+    // catches unrelated 400s that merely mention it, and a false match costs a
+    // request plus the 0-pin for that model for the rest of the process. A 400
+    // that does not name the field keeps the old single-attempt path.
     if (res.status === 400 && body.temperature !== undefined) {
       let detail = '';
       try {
@@ -561,7 +574,7 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
       } catch {
         /* body already gone - treat as a non-matching 400 */
       }
-      if (/temperature/i.test(detail) && /deprecat|unsupported|not support/i.test(detail)) {
+      if (/`temperature`/i.test(detail) && /deprecat|unsupported|not support/i.test(detail)) {
         _temperatureDeprecated.add(modelId);
         delete body.temperature;
         res = await send(body);

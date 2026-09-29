@@ -125,6 +125,7 @@
     "lib/hook-prune.mjs",
     "lib/proxy-fetch.mjs",
     "lib/llm-provider-probe.mjs",
+    "lib/anthropic-base-url.mjs",
     "lib/release-digest.mjs",
     "lib/mem-override.mjs",
     "lib/injected-ids.mjs",

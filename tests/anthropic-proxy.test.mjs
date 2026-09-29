@@ -18,7 +18,7 @@ vi.mock('../lib/proxy-fetch.mjs', async (importOriginal) => {
 });
 
 import { httpConnectProxyFor, postViaConnectProxy } from '../lib/proxy-fetch.mjs';
-import { callModelJSON, callHaikuJSON, _resetMode } from '../haiku-client.mjs';
+import { callModelJSON, callHaikuJSON, _resetMode, _resetTemperatureCompat } from '../haiku-client.mjs';
 
 const PROXY = 'http://127.0.0.1:10808';
 const REPLY = { content: [{ text: '{"ok":true}' }] };
@@ -76,4 +76,51 @@ describe('Anthropic API paths honour the proxy', () => {
       expect(postViaConnectProxy.mock.calls[0][0]).toBe(PROXY);
     });
   }
+});
+
+// Pre-tag review on #33, issue 3: on the tunnel path each send got a FRESH full
+// timeout, so the temperature retry bought a second budget (a 1000ms call took
+// ~1633ms). The fetch path shared one AbortController; the tunnel must share one
+// deadline too.
+describe('temperature retry shares ONE deadline over the tunnel', () => {
+  beforeEach(() => {
+    _resetMode();
+    _resetTemperatureCompat();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('OPENROUTER_API_KEY', '');
+    vi.stubEnv('ANTHROPIC_BASE_URL', '');
+    vi.mocked(httpConnectProxyFor).mockReset().mockReturnValue(PROXY);
+    vi.mocked(postViaConnectProxy).mockReset();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    _resetMode();
+    vi.useRealTimers();
+  });
+
+  it('hands the retry the REMAINING budget, not a fresh full timeout', async () => {
+    vi.useFakeTimers();
+    vi.mocked(postViaConnectProxy)
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(800);
+        return {
+          ok: false,
+          status: 400,
+          text: async () => '`temperature` is deprecated for this model.',
+        };
+      })
+      .mockImplementationOnce(async () => ({ ok: true, status: 200, json: () => REPLY }));
+
+    const out = await callModelJSON('hello', 'haiku', { timeout: 1000, maxTokens: 50 });
+    expect(out).toEqual({ ok: true });
+
+    const first = postViaConnectProxy.mock.calls[0][2].timeout;
+    const second = postViaConnectProxy.mock.calls[1][2].timeout;
+    expect(first).toBe(1000);
+    // 800ms was spent on the first attempt; the retry gets the remaining ~200ms.
+    expect(second).toBeLessThan(first);
+    expect(second).toBeLessThanOrEqual(200);
+  });
 });
