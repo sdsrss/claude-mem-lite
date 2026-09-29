@@ -5,6 +5,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { shellWord } from '../cli-path.mjs';
 import {
   isDbUnusableError,
   dbUnusableRemedy,
@@ -101,7 +102,7 @@ describe('dbUnusableRemedy', () => {
     const r = dbUnusableRemedy(db);
     expect(r.kind).toBe('set-aside');
     expect(r.snapshotCount).toBe(0);
-    expect(r.command).toContain(`mv "${db}" "${db}.corrupt"`);
+    expect(r.command).toContain(`mv ${shellWord(db)} ${shellWord(`${db}.corrupt`)}`);
     expect(r.command, 'stale WAL/SHM would resurrect the broken state').toContain(`${db}-wal`);
   });
 

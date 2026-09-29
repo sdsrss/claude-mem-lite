@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { insertSession, insertObs } from './test-helpers.mjs';
+import { isAutoWritten } from '../lib/provenance.mjs';
 
 const CLI_PATH = resolve('cli.mjs');
 
@@ -287,5 +288,60 @@ describe('D#25 export → restore round-trip', () => {
     const count = db.prepare('SELECT COUNT(*) c FROM observations').get().c;
     db.close();
     expect(count).toBe(3); // 1 pre-existing + 2 restored, no collision
+  });
+});
+
+// D#157: restore handed saveObservation no writer, so every restored row was stored under
+// `manual-<project>` and rendered as an explicit save, including rows the hook, a merge or an
+// import wrote (lib/provenance.mjs reads authorship from this id).
+describe('D#157 restore keeps whether a row was an explicit save', () => {
+  const dirs = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('an explicit save restores as one, a machine-written row as machine-written', () => {
+    const src = makeTmpDir();
+    const dst = makeTmpDir();
+    const out = makeTmpDir();
+    dirs.push(src, dst, out);
+    const db = initDb(src);
+    const writers = {
+      'an explicit save': 'manual-srcproj',
+      'a hook capture': 'hook-srcproj-1a2b3c4d',
+      'a merge keeper': 'compress-srcproj',
+      'an older import': '11111111-2222-3333-4444-555555555555',
+    };
+    for (const [title, id] of Object.entries(writers)) {
+      insertSession(db, { id: `cc-${title}`, project: 'srcproj', memoryId: id });
+      insertObs(db, {
+        sessionId: id,
+        project: 'srcproj',
+        title,
+        narrative: `${title} about the widget cache`,
+      });
+    }
+    db.close();
+    const file = join(out, 'backup.jsonl');
+    writeFileSync(file, runCli(['export', '--format', 'jsonl'], src).stdout);
+    const r = runCli(['restore', file], dst);
+    expect(r.stdout).toMatch(/4 restored/);
+    const ddb = new Database(join(dst, 'claude-mem-lite.db'));
+    const ids = Object.fromEntries(
+      ddb
+        .prepare('SELECT title, memory_session_id FROM observations')
+        .all()
+        .map((o) => [o.title, o.memory_session_id]),
+    );
+    const hookSessions = ddb
+      .prepare("SELECT COUNT(*) c FROM sdk_sessions WHERE memory_session_id LIKE 'hook-%'")
+      .get().c;
+    ddb.close();
+    expect(ids['an explicit save']).toBe('manual-srcproj');
+    for (const title of ['a hook capture', 'a merge keeper', 'an older import']) {
+      expect(isAutoWritten(ids[title]), `${title}: ${ids[title]}`).toBe(true);
+    }
+    // A restored hook row does not become a hook session, which browse would take for the current one.
+    expect(hookSessions).toBe(0);
   });
 });

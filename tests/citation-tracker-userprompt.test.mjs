@@ -277,6 +277,36 @@ describe('extractInjectedFromErrorRecall', () => {
     expect([...ids].sort((a, b) => a - b)).toEqual([100]);
   });
 
+  it('extracts IDs from the PostToolUseFailure delivery too (hook.mjs post-tool-failure, JSON envelope)', () => {
+    // A failure the host flags goes to PostToolUseFailure, not PostToolUse (CLAUDE.md), and
+    // that hook runs `hook.mjs post-tool-failure`, never post-tool-use.sh. The matcher keyed
+    // on `post-tool-use` alone, so every recall delivered this way stayed out of citation
+    // decay and every cite-rate ruler (C1 denominator count, 2026-09-27: 158 attachments carrying 389 ids).
+    // Command and envelope copied from a real transcript attachment.
+    const path = writeTranscript([
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs post-tool-failure',
+          stdout: JSON.stringify({
+            suppressOutput: true,
+            hookSpecificOutput: {
+              hookEventName: 'PostToolUseFailure',
+              additionalContext:
+                '[claude-mem-lite] Related memories found for this error:\n' +
+                '  #62 [decision] a prior decision\n' +
+                '  #225 [bugfix] a prior fix\n' +
+                '  → Use mem_get(ids=[62,225]) for details.',
+            },
+          }),
+        },
+      },
+    ]);
+    const ids = extractInjectedFromErrorRecall(path);
+    expect([...ids].sort((a, b) => a - b)).toEqual([62, 225]);
+  });
+
   it('ignores episode-flushed receipts (no error-recall header)', () => {
     const path = writeTranscript([
       {

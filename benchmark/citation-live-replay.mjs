@@ -53,6 +53,7 @@
  *   node benchmark/citation-live-replay.mjs --dump c.json       # freeze the corpus
  *   node benchmark/citation-live-replay.mjs --corpus c.json     # re-score a frozen one
  *   node benchmark/citation-live-replay.mjs --by-project --json
+ *   node benchmark/citation-live-replay.mjs --since 2026-09-28 --by-framing   # A1 recall-framing A/B
  *
  * `--split` cuts on the session START timestamp (the first parsable one in the
  * transcript), so a session that began before the boundary and ran for hours after it
@@ -72,6 +73,7 @@ import {
   extractCitationsFromTranscript,
   classifyCitationContext,
   collectSubagentSurface,
+  pretoolFramingOf,
 } from '../lib/citation-tracker.mjs';
 import { readTranscriptEntries } from '../lib/transcript-scan.mjs';
 import { wilson95 } from './wilson.mjs';
@@ -209,6 +211,8 @@ function scanSession(project, path) {
   // requestId. Must run BEFORE collectSubagentSurface, which parses the sidechain files
   // and evicts the single-slot entry memo the three extractors above share.
   const ctx = classifyCitationContext(path, { mainOnly: true });
+  // A1 A/B arm, read off the injected text (lib/recall-framing.mjs). Same memo as above.
+  const framing = pretoolFramingOf(path, { mainOnly: true });
   const faces = {};
   for (const face of ATTACHMENT_FACES) {
     const inj = [...bySurface[face]];
@@ -238,6 +242,7 @@ function scanSession(project, path) {
     ts,
     anyCite: cited.size > 0,
     citedTotal: cited.size,
+    framing,
     faces,
   };
 }
@@ -567,8 +572,9 @@ function main() {
     `transcripts scanned ${files}  ·  sessions carrying an injection ${inWindow.length}` +
       `  ·  projects ${new Set(inWindow.map((r) => r.project)).size}`,
   );
-  console.log('caliber: denominator = (session, id) PAIRS; numerator = that id cited as #NN in the');
-  console.log("         session's own assistant text (main thread; for `subagent`, the RECEIVING agent's).");
+  console.log('caliber: denominator = (session, id) PAIRS; numerator = that id cited as #NN, not answered');
+  console.log("         `#NN n/a`, in the session's own assistant text (main thread; for `subagent`, the");
+  console.log("         RECEIVING agent's). Before the dismissal fix a `#NN n/a` counted — a caliber break.");
   for (const [face, why] of Object.entries(NOT_REPLAYABLE)) {
     console.log(`not replayable here: ${face} — ${why}`);
   }
@@ -608,6 +614,20 @@ function main() {
     );
   }
 
+  if (has('--by-framing')) {
+    // A1: the recall framing A/B. Arms are assigned per SESSION, so both come from this one
+    // walk and nothing between them is corpus growth. Read the `pretool` row; the other
+    // faces are shown because the arm is a session property, not a face one. `mixed` and
+    // unlabelled sessions (no PreToolUse block, or pre-A/B dumps) are counted, not scored.
+    console.log('\n─── recall framing arms (A1; lib/recall-framing.mjs) ───');
+    const counts = {};
+    for (const r of inWindow) counts[r.framing ?? 'none'] = (counts[r.framing ?? 'none'] || 0) + 1;
+    console.log(`sessions by arm: ${JSON.stringify(counts)}`);
+    for (const arm of ['legacy', 'factual']) {
+      report(`framing = ${arm}`, aggregate(inWindow.filter((r) => r.framing === arm)));
+    }
+  }
+
   if (has('--by-project')) {
     console.log('\n─── per project ───');
     console.table(byProject(inWindow));
@@ -644,7 +664,8 @@ function main() {
  * response that also DID something, and how many only in prose?
  *
  * This is the prerequisite the deferred item names — it sizes the contamination, it does
- * not fix it. `applyCitationDecay` promotes on any `#NN` in assistant text, so a release
+ * not fix it. `applyCitationDecay` promotes on any `#NN` in assistant text short of a
+ * stated `#NN n/a` dismissal, so a release
  * note or an audit promotes every memory it discusses; the same signal feeds
  * citation_surface_log, citation-stats and this replay, so all three move together.
  *

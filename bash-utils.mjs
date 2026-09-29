@@ -9,6 +9,8 @@ import { basename } from 'path';
 // import this file. Cold-start scripts are unaffected — scripts/pre-tool-recall.js
 // deliberately imports nothing from the utils.mjs barrel that re-exports this.
 import { toolEditPath } from './lib/file-edge-match.mjs';
+import { bashFileTargets, isTransientPath, isScratchCommandPath } from './lib/bash-file-targets.mjs';
+export { isTransientPath };
 
 // Read/search commands whose output legitimately contains "error"-like keywords without
 // being a failure. Matched against the PRIMARY command (see isReadOnlyCommand).
@@ -28,6 +30,24 @@ const SEARCH_VERBS = new Set([
   'file',
   'which',
   'type',
+  // Print-a-file-or-listing verbs agents use to READ source (`sed -n 40,80p f`) — their
+  // output is file content, so an `Error:` in it is quoted text, not a failure.
+  'sed',
+  'awk',
+  'ls',
+  'jq',
+  'nl',
+  'stat',
+  'diff',
+  'code-graph-mcp',
+  // Pure filters, so `grep x f | sort | uniq -c` stays a read.
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'column',
+  'paste',
+  'strings',
 ]);
 // Command prefixes that wrap the real command (env-assignments handled separately).
 const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'time', 'command', 'nice', 'nohup', 'stdbuf', 'xargs']);
@@ -44,6 +64,7 @@ const GIT_READ_SUBCMDS = new Set([
   'shortlog',
   'reflog',
   'status',
+  'rev-parse',
 ]);
 
 // Hard failure fingerprints — a real crash / thrown exception / non-zero-exit marker,
@@ -57,27 +78,535 @@ const GIT_READ_SUBCMDS = new Set([
 const HARD_ERROR_RE =
   /\bERR!|\bpanic\b|traceback|segfault|core dumped|\benoent\b|command not found|assertion\s?error|\n\s+at\s+\S|(?:type|reference|range|syntax|eval|uri)error:/i;
 
-// True when the command's PRIMARY operation (left of the first pipe, past any
-// env-assignments / wrapper like `sudo`/`env`/`time`) is a read/search — including
-// `git grep`/`git log`. Anchoring on the primary command (not "search verb appears
-// anywhere") is what lets `npm run build 2>&1 | tail` stay an error while `sudo grep`,
-// `git grep`, `cat f | head` are correctly exempt.
-function isReadOnlyCommand(cmd) {
-  const primary = cmd.split('|')[0];
-  const toks = primary.trim().split(/\s+/).filter(Boolean);
+// Commands that only set the shell up for the next one. They neither make a command
+// read-only nor stop it being one: `cd repo && grep …` is a grep. This matters because
+// the host resets the cwd between Bash calls, so agents prefix `cd <repo> &&` to over
+// half of their commands (5009 of 9096 in this repo's transcripts, 2026-09-25) — and
+// while `cd` counted as the primary verb, every such grep/sed of source that mentions
+// `TypeError:` fired error-recall on a command that had not failed.
+const NEUTRAL_VERBS = new Set([
+  'cd',
+  'pushd',
+  'popd',
+  'echo',
+  'printf',
+  'true',
+  ':',
+  'export',
+  'set',
+  'exit',
+  // Print a path or a date; used inside `$(…)` to build a read's arguments.
+  'pwd',
+  'date',
+  'basename',
+  'dirname',
+  'realpath',
+  'readlink',
+]);
+
+// code-graph-mcp subcommands that only query the index (plus `snapshot inspect`, handled in
+// WRITES_OR_RUNS). The rest (serve, the index rebuilds, doctor's repairs, benchmark,
+// adopt / unadopt / uninstall, snapshot create) run work whose failures error-recall should see.
+const CODE_GRAPH_READ_SUBCMDS = new Set([
+  'grep',
+  'search',
+  'ast-search',
+  'callgraph',
+  'impact',
+  'affected',
+  'show',
+  'map',
+  'tour',
+  'overview',
+  'deps',
+  'trace',
+  'similar',
+  'refs',
+  'dead-code',
+  'centrality',
+  'cycles',
+  'surprising',
+  'report',
+  'health-check',
+  'stats',
+  'outcome',
+  'help',
+  '--help',
+  '--version',
+]);
+
+// Forms of a SEARCH_VERBS verb that write a file or run a program, so their output is not
+// file content (v6.13.0 defect review P3-5). Args are the whitespace tokens after the verb;
+// quotes are not stripped, which only matters for a flag written inside quotes.
+const WRITES_OR_RUNS = {
+  sed: (args) => args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')),
+  sort: (args) => args.some((a) => /^-[A-Za-z]*o/.test(a) || a.startsWith('--output')),
+  // `-f` reads the program from a file (or a heredoc on stdin) this check cannot see.
+  awk: (args, text) =>
+    args.some((a) => /^-f/.test(a) || a.startsWith('--file')) ||
+    /\bsystem\s*\(|\|\s*(?:getline\b|")|\|&/.test(text),
+  find: (args) => args.some((a) => /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/.test(a)),
+  'code-graph-mcp': (args) =>
+    !CODE_GRAPH_READ_SUBCMDS.has(args[0]) && !(args[0] === 'snapshot' && args[1] === 'inspect'),
+};
+
+/** 'read' | 'neutral' | 'other' for one simple command (one element of a pipeline). */
+function classifySimpleCommand(text) {
+  const toks = shellWords(text);
   let i = 0;
   while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
   const first = toks[i];
-  if (!first) return false;
-  if (SEARCH_VERBS.has(first)) return true;
-  return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]);
+  if (!first || NEUTRAL_VERBS.has(first)) return 'neutral';
+  if (SEARCH_VERBS.has(first)) return WRITES_OR_RUNS[first]?.(toks.slice(i + 1), text) ? 'other' : 'read';
+  return first === 'git' && GIT_READ_SUBCMDS.has(toks[i + 1]) ? 'read' : 'other';
+}
+
+/**
+ * Split one simple command into words on whitespace OUTSIDE quotes, so `x="a b" grep …`
+ * stays an assignment followed by grep (v6.13.2 delta review FALSE-2). Quotes are kept in
+ * the words; only the split point is quote-aware.
+ */
+function shellWords(text) {
+  const words = [];
+  let cur = '';
+  let inWord = false;
+  let quote = null;
+  for (let k = 0; k < text.length; k++) {
+    const ch = text[k];
+    if (quote) {
+      if (ch === '\\' && quote !== "'") {
+        cur += ch + (text[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === quote[quote.length - 1]) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (inWord) words.push(cur);
+      cur = '';
+      inWord = false;
+      continue;
+    }
+    inWord = true;
+    if (ch === '\\') {
+      cur += ch + (text[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === '$' && text[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      cur += "$'";
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    cur += ch;
+  }
+  if (inWord) words.push(cur);
+  return words;
+}
+
+// `$'…'` (ANSI-C quoting): a backslash escapes the next character, including `'`.
+const ANSI_QUOTE = "$'";
+// Stands in for a cut-out substitution. No surrounding spaces: `f=$(…)` must stay one
+// assignment word, or the placeholder becomes the verb.
+const SUBST = '__SUBST__';
+const MAX_SUBST_DEPTH = 32;
+
+/**
+ * Remove what the shell does not run as a command: heredoc bodies (they are stdin) and
+ * `#` comments. Quote-aware. An apostrophe in either used to unbalance the quotes and send
+ * the whole line to a first-word fallback (v6.13.0 defect review P3-4).
+ *
+ * An UNQUOTED delimiter (`<<EOF`) is the exception: bash expands `$(…)` and backticks in
+ * that body, so each body line is kept as `: "<line>"`, a no-op whose substitutions
+ * splitStatements still cuts out and judges. `$((…))` and `((…))` are copied whole so a
+ * `<<` shift inside them is not read as a heredoc (v6.13.2 pre-ship defect review).
+ */
+function stripNonCommands(cmd) {
+  let out = '';
+  let quote = null;
+  // Set once a `((` never closes: every later attempt would rescan to the end of the input,
+  // which made unclosed parentheses quadratic (v6.13.2 delta review P3-1).
+  let arithUnclosed = false;
+  const pending = []; // heredoc delimiters opened on the current line: { word, dash, expand }
+  for (let k = 0; k < cmd.length; k++) {
+    const ch = cmd[k];
+    if (quote === ANSI_QUOTE) {
+      if (ch === '\\') {
+        out += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === "'") quote = null;
+      out += ch;
+      continue;
+    }
+    if (quote) {
+      // Keep the backslash AND the character it escapes (the old `out += cmd[k++]; out += ch`
+      // wrote the backslash twice and dropped the escaped character).
+      if (ch === '\\' && quote === '"') {
+        out += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      out += ch + (cmd[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      out += "$'";
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    const opensArith =
+      (ch === '$' && cmd[k + 1] === '(' && cmd[k + 2] === '(') ||
+      (ch === '(' && cmd[k + 1] === '(' && cmd[k - 1] !== '$');
+    if (opensArith && !arithUnclosed) {
+      const end = arithmeticEnd(cmd, ch === '$' ? k + 1 : k);
+      if (end >= 0) {
+        out += cmd.slice(k, end);
+        k = end - 1;
+        continue;
+      }
+      if (end === ARITH_UNCLOSED) arithUnclosed = true;
+    }
+    if (ch === '#' && (k === 0 || /[\s;&|()]/.test(cmd[k - 1]))) {
+      while (k + 1 < cmd.length && cmd[k + 1] !== '\n') k++;
+      continue;
+    }
+    if (ch === '<' && cmd[k + 1] === '<' && cmd[k + 2] !== '<' && cmd[k - 1] !== '<') {
+      const m = /^<<(-?)[ \t]*((?:'[^'\n]*'|"[^"\n]*"|\\.|[^\s;&|<>()'"\\])+)/.exec(cmd.slice(k));
+      if (m) {
+        pending.push({
+          word: m[2].replace(/\\(.)/g, '$1').replace(/['"]/g, ''),
+          dash: m[1] === '-',
+          expand: !/['"\\]/.test(m[2]),
+        });
+        out += m[0];
+        k += m[0].length - 1;
+        continue;
+      }
+    }
+    if (ch === '\n' && pending.length > 0) {
+      out += ch;
+      // Consume each body in order, up to and including its delimiter line.
+      let pos = k + 1;
+      for (const { word, dash, expand } of pending.splice(0)) {
+        while (pos < cmd.length) {
+          let end = cmd.indexOf('\n', pos);
+          if (end === -1) end = cmd.length;
+          const line = cmd.slice(pos, end);
+          pos = end + 1;
+          if ((dash ? line.replace(/^\t+/, '') : line) === word) break;
+          if (expand) {
+            const esc = line.replace(/\\(?=")/g, '\\\\').replace(/"/g, '\\"');
+            // A trailing backslash would escape the wrapper's closing quote.
+            const odd = /\\*$/.exec(esc)[0].length % 2 === 1;
+            out += `: "${esc}${odd ? '\\' : ''}"\n`;
+          }
+        }
+      }
+      k = pos - 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+const ARITH_UNCLOSED = -2;
+
+/**
+ * For `((` whose first `(` is at `open` (after the `$` of `$((`, or a bare `((`): the index
+ * just past the closing `))` when bash reads it as arithmetic, -1 when it is a command form
+ * instead, ARITH_UNCLOSED when the inner `(` never closes. bash tries arithmetic first and
+ * falls back when the inner `(` does not close on `))`, so `$((npm test) | head)` is a
+ * command substitution holding a subshell (v6.13.2 delta review P3-3).
+ */
+function arithmeticEnd(cmd, open) {
+  const inner = closingParen(cmd, open + 2);
+  if (inner === -1) return ARITH_UNCLOSED;
+  return cmd[inner] === ')' ? inner + 1 : -1;
+}
+
+/**
+ * Index just past the `)` that closes a substitution whose body starts at `start`, or -1
+ * when it never closes. Quote-aware; nested parentheses count.
+ */
+function closingParen(cmd, start) {
+  let depth = 1;
+  let quote = null;
+  for (let k = start; k < cmd.length; k++) {
+    const ch = cmd[k];
+    if (quote) {
+      if (ch === '\\' && quote !== "'") k++;
+      else if (ch === quote[quote.length - 1]) quote = null;
+      continue;
+    }
+    if (ch === '\\') k++;
+    else if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      k++;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0) return k + 1;
+  }
+  return -1;
+}
+
+/**
+ * Split a command line into statements (on `;`, newline, `&&`, `||`, `&`), each a list
+ * of its pipeline elements (on `|` and `|&`). Quote-aware, so the `;` in
+ * `grep -E "a;b"` separates nothing, and the `&` of a redirection (`2>&1`, `&>f`) is not
+ * a statement break. A backslash-newline continues the line. The bodies of `$(…)`,
+ * backticks, `<(…)` and `>(…)` — outside quotes or inside double quotes, where they run
+ * all the same — are cut out into `subs` for the caller to judge on their own. Returns
+ * null when the quotes or a substitution do not close.
+ */
+function splitStatements(cmd) {
+  const statements = [];
+  const subs = [];
+  let pipeline = [];
+  let cur = '';
+  let quote = null;
+  // Cut a substitution body out at `k` (the index of `$`, `<`, `>` or the backtick);
+  // returns the index of its last character, or -1 when it never closes.
+  const takeSub = (k) => {
+    if (cmd[k] === '`') {
+      const end = cmd.indexOf('`', k + 1);
+      if (end === -1) return -1;
+      subs.push(cmd.slice(k + 1, end));
+      cur += SUBST;
+      return end;
+    }
+    if (cmd[k] === '$' && cmd[k + 2] === '(') {
+      const arithEnd = arithmeticEnd(cmd, k + 1);
+      if (arithEnd >= 0) {
+        // An arithmetic body is not a command, but a substitution inside it still runs.
+        const body = cmd.slice(k + 3, arithEnd - 2);
+        if (/\$\(|`/.test(body)) subs.push(`: ${body}`);
+        cur += SUBST;
+        return arithEnd - 1;
+      }
+    }
+    const end = closingParen(cmd, k + 2);
+    if (end === -1) return -1;
+    subs.push(cmd.slice(k + 2, end - 1));
+    cur += SUBST;
+    return end - 1;
+  };
+  const endElement = () => {
+    pipeline.push(cur);
+    cur = '';
+  };
+  const endStatement = () => {
+    endElement();
+    statements.push(pipeline);
+    pipeline = [];
+  };
+  for (let k = 0; k < cmd.length; k++) {
+    const ch = cmd[k];
+    const opensSub = ch === '`' || ((ch === '$' || ch === '<' || ch === '>') && cmd[k + 1] === '(');
+    if (quote === ANSI_QUOTE) {
+      if (ch === '\\') {
+        cur += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === "'") quote = null;
+      cur += ch;
+      continue;
+    }
+    if (quote) {
+      if (quote === '"' && (ch === '`' || (ch === '$' && cmd[k + 1] === '('))) {
+        k = takeSub(k);
+        if (k === -1) return null;
+        continue;
+      }
+      if (ch === '\\' && quote === '"') {
+        cur += ch + (cmd[k + 1] ?? '');
+        k++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      if (cmd[k + 1] !== '\n') cur += ch + (cmd[k + 1] ?? '');
+      k++;
+      continue;
+    }
+    if (ch === '$' && cmd[k + 1] === "'") {
+      quote = ANSI_QUOTE;
+      cur += "$'";
+      k++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (opensSub) {
+      k = takeSub(k);
+      if (k === -1) return null;
+      continue;
+    }
+    const next = cmd[k + 1];
+    if (ch === '|' && next !== '|') {
+      endElement();
+      if (next === '&') k++;
+      continue;
+    }
+    const isRedirectAmp = ch === '&' && (cmd[k - 1] === '>' || cmd[k - 1] === '<' || next === '>');
+    if (ch === ';' || ch === '\n' || (ch === '&' && !isRedirectAmp) || (ch === '|' && next === '|')) {
+      endStatement();
+      if ((ch === '&' && next === '&') || ch === '|') k++;
+      continue;
+    }
+    cur += ch;
+  }
+  if (quote) return null;
+  endStatement();
+  return { statements, subs };
+}
+
+// True when the command only READS: every element of every pipeline is a read/search
+// (including `git grep`/`git log`) or a neutral set-up like `cd`/`echo`, and at least one
+// is a read. Anchoring on the verbs actually executed (not "search verb appears
+// anywhere") is what lets `npm run build 2>&1 | tail` stay an error while `sudo grep`,
+// `git grep`, `cat f | head` and `cd repo && sed -n 1,9p f` are exempt. Every statement
+// and every pipe consumer is checked, so `grep x f; npm test | tail` and
+// `printf '…' | node server.mjs` are not exempted on the strength of their first word.
+// Substitution bodies are judged the same way, so `grep x $(npm test)` runs a program.
+// A line that still does not parse once heredoc bodies and comments are gone is 'other':
+// the old fallback judged it by its first word and silenced exactly the heredoc-then-run
+// shape (v6.13.0 defect review P3-4).
+function isReadOnlyCommand(cmd) {
+  return commandKind(stripNonCommands(cmd)) === 'read';
+}
+
+/** 'read' | 'neutral' | 'other' for a whole command line (see isReadOnlyCommand). */
+function commandKind(cmd, depth = 0) {
+  // Each level rescans its body; past this depth the line is judged 'other' rather than
+  // recursing into a RangeError on the hot path of every Bash event.
+  if (depth > MAX_SUBST_DEPTH) return 'other';
+  const parsed = splitStatements(cmd);
+  if (!parsed) return 'other';
+  let sawRead = false;
+  for (const body of parsed.subs) {
+    const kind = commandKind(body, depth + 1);
+    if (kind === 'other') return 'other';
+    if (kind === 'read') sawRead = true;
+  }
+  for (const pipeline of parsed.statements) {
+    for (const element of pipeline) {
+      const kind = classifySimpleCommand(element);
+      if (kind === 'other') return 'other';
+      if (kind === 'read') sawRead = true;
+    }
+  }
+  return sawRead ? 'read' : 'neutral';
+}
+
+// ─── Data printers and writers (error-recall N2) ─────────────────────────────
+
+// Interpreters whose INLINE program (`-e`/`-c`/a heredoc on stdin) is the agent's own
+// throwaway code. Run by a script FILE they are a program like any other.
+const INLINE_INTERPRETER_RE = /^(?:node|nodejs|bun|python(?:\d+(?:\.\d+)?)?)$/;
+
+// A redirection operator token (`>`, `2>>`, `&>`, `<`, `<<-`), optionally glued to its target.
+const REDIRECT_TOKEN_RE = /^(?:\d*|&)(?:>>?\|?|<<?-?)(.*)$/;
+
+/**
+ * True when one simple command runs an INLINE program or prints a CI log — the shapes
+ * whose output at exit 0 is data (a transcript line, a log excerpt, a script's own
+ * `assert`), not a failure of anything the corpus could explain.
+ */
+function isPrinterElement(text) {
+  const toks = shellWords(text);
+  let i = 0;
+  while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
+  const prog = toks[i];
+  if (!prog) return false;
+  const args = toks.slice(i + 1);
+  // `gh run view … --log[-failed]`: a CI log is somebody else's failure, reprinted. `--json`
+  // is gh's structured READ (list/view/status only), typically feeding a run id to the former.
+  if (prog === 'gh')
+    return args.some((a) => a === '--log' || a === '--log-failed' || /^--json(?:=|$)/.test(a));
+  if (!INLINE_INTERPRETER_RE.test(prog)) return false;
+  const py = prog.startsWith('python');
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (py ? a === '-c' || a === '-' : /^-(?:e|p|pe|ep)$|^--(?:eval|print)(?:=|$)/.test(a)) return true;
+    const redirect = REDIRECT_TOKEN_RE.exec(a);
+    if (redirect) {
+      if (!redirect[1]) k++; // `<< EOF` / `> f`: the next word is the operand, not a script
+      continue;
+    }
+    // A positional is a script file (or `-m`'s module): a program, not an inline print.
+    if (!a.startsWith('-') || (py && a === '-m')) return false;
+  }
+  // No positional at all: the program comes from stdin, i.e. a heredoc.
+  return /<</.test(text);
+}
+
+/** 'print' | 'read' | 'neutral' | 'other' — commandKind with printers admitted. */
+function printKind(cmd, depth = 0) {
+  if (depth > MAX_SUBST_DEPTH) return 'other';
+  const parsed = splitStatements(cmd);
+  if (!parsed) return 'other';
+  let sawPrint = false;
+  for (const body of parsed.subs) {
+    const kind = printKind(body, depth + 1);
+    if (kind === 'other') return 'other';
+    if (kind === 'print') sawPrint = true;
+  }
+  for (const pipeline of parsed.statements) {
+    for (const element of pipeline) {
+      if (isPrinterElement(element)) {
+        sawPrint = true;
+        continue;
+      }
+      if (classifySimpleCommand(element) === 'other') return 'other';
+    }
+  }
+  return sawPrint ? 'print' : 'read';
+}
+
+/**
+ * True when the command's only programs are inline scripts (`node -e/-p`, `python3 -c`,
+ * `python3 - <<EOF`, a heredoc-fed interpreter) or `gh … --log[-failed]`, plus reads
+ * (isReadOnlyCommand's verbs) and neutral set-up. Parsed with the same statement/pipeline
+ * splitter, so `node -e '…'; npm test` and `python3 - <<PY … PY` followed by a vitest run
+ * are NOT printers: the real run is judged on its own.
+ *
+ * Deliberately a SEPARATE predicate from isReadOnlyCommand, not a new verb in it: that one
+ * also decides `isError` for the episode narrative and the bugfix save-nudge, and an inline
+ * script that crashes is a real error there. Only error-recall's injection is narrowed.
+ */
+export function isDataPrintingCommand(cmd) {
+  if (typeof cmd !== 'string' || !cmd) return false;
+  return printKind(stripNonCommands(cmd)) === 'print';
 }
 
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
-function isExcludedPath(p) {
-  return p.startsWith('/dev/') || p.startsWith('/proc/') || p.startsWith('/tmp/');
-}
 
 /**
  * Detect significance signals in a Bash command and its response.
@@ -438,16 +967,24 @@ export function planErrorRecall(cmd, response) {
 // ─── File Paths ──────────────────────────────────────────────────────────────
 
 /**
- * Extract file paths from tool input (file_path, path, filePath, or command args).
- * Deduplicates and excludes /dev/, /proc/, and /tmp/ paths.
+ * Files a tool call touched, split so callers can tell an edit from a read.
+ * `files`: every file edge (direct path fields + all Bash targets);
+ * `writes`: the subset a Bash command WROTE (`sed -i`, `cat > f`, a python patch, …) —
+ * the Bash counterpart of an Edit/Write `file_path`, consumed via `entryEditedFiles`.
  * @param {object} input Tool input object
- * @returns {string[]} Unique array of file paths
+ * @param {{cwd?: string|null, projectDir?: string|null}} [opts] the hook's `cwd`, to resolve
+ *   relative Bash paths; the project root, whose files count even when it lives under /tmp
+ * @returns {{files: string[], writes: string[]}}
  */
-export function extractFilePaths(input) {
+export function extractFileTargets(input, opts = {}) {
   const paths = [];
-  // Direct fields (Edit/Write file_path) are kept unconditionally — an explicit edit to a
+  const writes = [];
+  if (!input || typeof input !== 'object') return { files: [], writes: [] };
+  // Direct fields (Edit/Write file_path) are kept even under /tmp — an explicit edit to a
   // /tmp path is real work the user chose to make, unlike a /tmp path that merely appears as
   // a transient argument inside a Bash command (excluded as noise in the command branch below).
+  // Session-scoped paths (isTransientPath) are the exception: they are the agent's own
+  // scratch, not the user's work.
   //
   // `toolEditPath`, not a fourth hand-spelling of the same rule: this function knew
   // file_path/path/filePath and not `notebook_path`, while hooks.json matches PostToolUse
@@ -456,27 +993,39 @@ export function extractFilePaths(input) {
   // files, so the observation built from it got no observation_files edge and no file-keyed
   // recall could reach it. Same root cause as R12 B-2; the fourth site, and the one its
   // own follow-up note did not name.
-  const editedPath = toolEditPath(input);
-  if (editedPath) paths.push(editedPath);
-  if (input.path) paths.push(input.path);
-  if (input.filePath) paths.push(input.filePath);
-  if (input.command) {
-    // Match absolute paths; extension optional to support Makefile, Dockerfile etc.
-    const match = input.command.match(/(?:^|\s)(\/[\w./-]+\w)/g);
-    if (match) {
-      for (const m of match) {
-        const p = m.trim();
-        if (
-          !isExcludedPath(p) &&
-          // Skip single-component paths like /exit, /clear — likely slash commands, not files
-          (p.indexOf('/', 1) !== -1 || /\.\w+$/.test(p))
-        ) {
-          paths.push(p);
-        }
-      }
-    }
+  for (const p of [toolEditPath(input), input.path, input.filePath]) {
+    if (typeof p === 'string' && p && !isTransientPath(p)) paths.push(p);
   }
-  return [...new Set(paths)];
+  if (typeof input.command === 'string' && input.command) {
+    // Shell-aware: cwd prefixes, relative and quoted paths, write-verb targets and
+    // interpreter-script literals (lib/bash-file-targets.mjs). The `cd` target itself is
+    // never an edge — it made every `cd <repo> && …` command look like it touched the
+    // repo root and nothing else.
+    const keep = (p) =>
+      !isScratchCommandPath(p, opts.projectDir) &&
+      !isTransientPath(p) &&
+      // Skip single-component paths like /exit, /clear — likely slash commands, not files
+      (p.indexOf('/', 1) !== -1 || /\.\w+$/.test(p));
+    const t = bashFileTargets(input.command, { cwd: opts.cwd || null });
+    for (const p of t.writes) {
+      if (!keep(p)) continue;
+      writes.push(p);
+      paths.push(p);
+    }
+    for (const p of [...t.reads, ...t.mentions]) if (keep(p)) paths.push(p);
+  }
+  return { files: [...new Set(paths)], writes: [...new Set(writes)] };
+}
+
+/**
+ * Extract file paths from tool input (file_path, path, filePath, or command args).
+ * Deduplicates and excludes /dev/, /proc/, /tmp/ command paths and session-scoped paths.
+ * @param {object} input Tool input object
+ * @param {{cwd?: string|null}} [opts] the hook's `cwd`, to resolve relative Bash paths
+ * @returns {string[]} Unique array of file paths
+ */
+export function extractFilePaths(input, opts = {}) {
+  return extractFileTargets(input, opts).files;
 }
 
 // ─── Episode Logic ───────────────────────────────────────────────────────────

@@ -79,6 +79,17 @@ export default [
     // directory here decides its code may rot unchecked. This one has no code to rot —
     // nothing imports it and nothing ships it (audit 2026-09-02 P2-1; D#168 closed the
     // same hole for `tmp/`).
-    ignores: ['node_modules/**', 'coverage/**', 'benchmark/**', '.tmp/**', 'tmp/**', 'docs/**', 'tasks/**'],
+    // `.claude/**` holds `isolation: "worktree"` agent checkouts — whole copies of the repo
+    // mid-edit (vitest.config.mjs excludes them for the same reason). Nothing under it is tracked.
+    ignores: [
+      'node_modules/**',
+      'coverage/**',
+      'benchmark/**',
+      '.tmp/**',
+      'tmp/**',
+      'docs/**',
+      'tasks/**',
+      '.claude/**',
+    ],
   },
 ];

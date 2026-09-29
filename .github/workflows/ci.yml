@@ -64,7 +64,7 @@ jobs:
       # pre-agent-inject.sh ran on every Agent dispatch for a whole release before
       # anything linted it.
       - name: ShellCheck shipped scripts
-        run: shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-commit.sh scripts/setup.sh
+        run: shellcheck scripts/post-tool-use.sh scripts/pre-agent-inject.sh scripts/pre-tool-recall-bash.sh scripts/pre-commit.sh scripts/setup.sh
 
   # The plugin and marketplace manifests, checked by the tool that actually loads them.
   #

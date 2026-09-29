@@ -64,4 +64,4 @@ server builds its instructions once at boot, so the MCP-instructions trim
 (or re-attaches the mem-lite MCP server). A `/exit` + fresh session is enough.
 Same caveat applies in reverse for `/unadopt`.
 
-!node ${CLAUDE_PLUGIN_ROOT}/cli.mjs adopt $ARGUMENTS
+!node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" adopt $ARGUMENTS

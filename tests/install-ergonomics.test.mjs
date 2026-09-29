@@ -10,6 +10,7 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { collectOrphanHookPaths } from '../install.mjs';
+import { shellWord } from '../cli-path.mjs';
 import { NATIVE_BINDING_REBUILD_CMD, NATIVE_BINDING_SOURCE_BUILD_CMD } from '../lib/binding-probe.mjs';
 
 const INSTALL_PATH = resolve('install.mjs');
@@ -422,7 +423,7 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
 
       expect(output).toMatch(/Orphan hooks:.*settings\.json/);
       expect(output).toContain('/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs');
-      expect(output).toMatch(/Repair:.*install\.mjs uninstall/);
+      expect(output).toMatch(/Repair:.*install\.mjs"? uninstall/);
     } finally {
       try {
         rmSync(home, { recursive: true, force: true });
@@ -481,7 +482,7 @@ describe('status distinguishes "no symlink" from "symlink off PATH"', () => {
 
       const output = runStatus(home);
       expect(output).toContain(`installed at ${join(binDir, 'claude-mem-lite')}`);
-      expect(output).toContain(`export PATH="${binDir}:$PATH"`);
+      expect(output).toContain(`export PATH=${shellWord(binDir)}:"$PATH"`);
       // The reinstall remedy is the WRONG answer here; its absence is the fix.
       expect(output).not.toContain('run install again to create symlink');
     } finally {

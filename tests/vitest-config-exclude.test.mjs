@@ -26,6 +26,8 @@ describe('vitest test.exclude (D#168)', () => {
     // honours it. The eslint half of that round was probe-verified instead, because eslint
     // CAN be run as a subprocess — see the round's note in the audit report.
     expect(exclude).toContain('tasks/**');
+    // A worktree agent's full checkout lives under `.claude/worktrees/` (2026-09-27).
+    expect(exclude).toContain('.claude/**');
   });
 
   it('re-states every default it replaces — `exclude` overrides, it does not extend', () => {

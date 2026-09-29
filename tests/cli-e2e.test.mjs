@@ -3,7 +3,7 @@
 // Isolation via CLAUDE_MEM_DIR env var → redirects DB to temp dir
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -1090,6 +1090,39 @@ Stale file-derived data that MUST NOT appear
     expect(stdout).toContain('DB-derived request');
     expect(stdout).toContain('DB-derived completed');
     expect(stdout).not.toContain('Stale file-derived data');
+  });
+
+  it('--chars reports the block size against the hook cap on stderr, leaving stdout the block', () => {
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'));
+    const now = Date.now();
+    const sessionId = `cli-e2e-chars-${randomUUID().slice(0, 8)}`;
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+       VALUES (?, ?, 'mem-cli-e2e-chars', ?, ?, 'completed')`,
+    ).run(sessionId, sessionId, new Date(now).toISOString(), now);
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, next_steps, created_at, created_at_epoch)
+       VALUES (?, 'mem-cli-e2e-chars', 'chars request', 'chars completed', 'chars next', ?, ?)`,
+    ).run(sessionId, new Date(now).toISOString(), now);
+    db.close();
+    const env = { ...process.env, CLAUDE_MEM_DIR: dataDir, CLAUDE_PROJECT_DIR: projectDir };
+    delete env.CLAUDE_MEM_HOOK_RUNNING;
+    const r = spawnSync(
+      process.execPath,
+      [CLI_PATH, 'context', '--project', 'mem-cli-e2e-chars', '--chars'],
+      {
+        encoding: 'utf8',
+        env,
+        timeout: 10000,
+      },
+    );
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('chars completed'); // premise: a real block was rendered
+    const m = r.stderr.match(/\[mem\] context: (\d+) characters \(hook cap 10000\)/);
+    expect(m, r.stderr).not.toBeNull();
+    // The count is the block as SessionStart hands it to the envelope, wrapper included.
+    expect(Number(m[1])).toBe(r.stdout.replace(/\n$/, '').length);
+    expect(r.stderr).not.toMatch(/Unknown flag/);
   });
 });
 

@@ -21,6 +21,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { shellWord } from '../cli-path.mjs';
 
 const INSTALL_PATH = resolve(import.meta.dirname, '../install.mjs');
 const REPO = resolve(import.meta.dirname, '..');
@@ -178,8 +179,8 @@ describe('doctor: a stale binding is found in whichever install owns it', () => 
     // "succeeded" while the broken install stayed broken.
     // Quoted since v4.0.2 (roots can contain spaces). The INTENT is unchanged and is what
     // this line has always been about: the repair must name THIS tree, not the healthy one.
-    expect(r.stdout).toContain(`cd "${managed}"`);
-    expect(r.stdout).not.toMatch(new RegExp(`cd ${REPO}\\b`));
+    expect(r.stdout).toContain(`cd ${shellWord(managed)} `);
+    expect(r.stdout).not.toContain(`cd ${shellWord(REPO)} `);
   });
 
   it('exits 1 when a CERTIFIED code home cannot load better-sqlite3 at all', () => {

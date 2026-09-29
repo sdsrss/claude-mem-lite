@@ -43,4 +43,4 @@ Once unadopted, the conservative hook layer (SessionStart `File Lessons` /
 `Key Context`, MCP instructions `WHEN TO USE`) returns to verbose mode on the
 next session start.
 
-!node ${CLAUDE_PLUGIN_ROOT}/cli.mjs unadopt $ARGUMENTS
+!node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" unadopt $ARGUMENTS

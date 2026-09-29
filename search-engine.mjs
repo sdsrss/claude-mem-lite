@@ -21,6 +21,7 @@ import {
 import { citeFactorClause } from './scoring-sql.mjs';
 import { extractPRFTerms, expandQueryByConcepts } from './search-scoring.mjs';
 import { liveObsFilterSql, recencyDecaySql } from './lib/inject-search-core.mjs';
+import { isAutoWritten } from './lib/provenance.mjs';
 
 // Scoring expressions — full adds project boost + access bonus; simple is for
 // expansion paths where boost would over-amplify already-loose matches.
@@ -69,7 +70,8 @@ export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset,
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.created_at_epoch, o.importance,
            o.files_modified, o.lesson_learned,
            ${withSnippet ? "snippet(observations_fts, 2, '»', '«', '…', 10) as match_snippet," : ''}
-           ${scoreExpr}${mult} as score
+           ${scoreExpr}${mult} as score,
+           ${OBS_BM25} as raw_bm25
     FROM observations_fts
     JOIN observations o ON observations_fts.rowid = o.id
     WHERE observations_fts MATCH ?
@@ -330,6 +332,19 @@ export function countSearchTotal(
   return total;
 }
 
+/**
+ * True when an FTS excerpt says something the title does not. snippet() wraps matches in »« and
+ * cuts with …, and a save's title is the start of its narrative, so an excerpt that is only a
+ * piece of the title repeats it once markers and ellipses are stripped.
+ * @param {string|null|undefined} snippet
+ * @param {string|null|undefined} title
+ */
+export function snippetAddsInfo(snippet, title) {
+  if (typeof snippet !== 'string' || snippet.length <= 10) return false;
+  const bare = snippet.replace(/[»«]/g, '').replace(/^…|…$/g, '').trim();
+  return !(title || '').includes(bare);
+}
+
 export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
   return {
     source: 'obs',
@@ -346,6 +361,9 @@ export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
     created_at: r.created_at,
     created_at_epoch: r.created_at_epoch,
     score: scoreMultiplier ? r.score * scoreMultiplier : r.score,
+    // bm25 before FULL_SCORE's multipliers, which can shrink it 50x: only this can say whether
+    // FTS5 clamped the IDF (normalizeCrossSourceScores, CLAMPED_IDF_SCALE).
+    rawScore: r.raw_bm25,
     files_modified: r.files_modified,
     importance: r.importance,
     lesson_learned: r.lesson_learned,
@@ -362,7 +380,8 @@ export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
 // heavy obs fields are batch-fetched by id HERE rather than carried on every result. The source
 // key is read as `source || _source` because the two render paths disagree (#8654): MCP sets
 // `source`+`text`, CLI sets `_source`+`prompt_text`. estimateTokens floors at 1, so a missing row
-// or empty body yields 1 — never 0/NaN.
+// or empty body yields 1 — never 0/NaN. The same by-id read sets `auto` (lib/provenance.mjs) on
+// the rendered page only, so no result producer has to carry memory_session_id.
 export function attachBodyTokens(db, results) {
   if (!Array.isArray(results) || results.length === 0) return results;
   const obsIds = results
@@ -373,7 +392,7 @@ export function attachBodyTokens(db, results) {
     try {
       const ph = obsIds.map(() => '?').join(',');
       const rows = db
-        .prepare(`SELECT id, narrative, facts, text FROM observations WHERE id IN (${ph})`)
+        .prepare(`SELECT id, narrative, facts, text, memory_session_id FROM observations WHERE id IN (${ph})`)
         .all(...obsIds);
       for (const row of rows) bodyById.set(row.id, row);
     } catch (e) {
@@ -385,6 +404,7 @@ export function attachBodyTokens(db, results) {
     let parts;
     if (src === 'obs') {
       const row = bodyById.get(r.id) || {};
+      r.auto = isAutoWritten(row.memory_session_id);
       parts = [r.title, r.subtitle, r.lesson_learned, row.narrative, row.facts, row.text];
     } else if (src === 'session') {
       parts = [r.request, r.completed, r.working_on];

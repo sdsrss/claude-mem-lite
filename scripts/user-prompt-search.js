@@ -48,6 +48,7 @@ import { isSchemaSkewError, schemaSkewFromError, shouldRecordSkew } from '../lib
 
 import { DAY_MS } from '../lib/time-constants.mjs';
 import { envNumber } from '../lib/env-number.mjs';
+import { writePlainHookText, resetPlainHookText, idsShownWhole } from '../lib/hook-text-cap.mjs';
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 // Telemetry sink (lib/hook-telemetry.mjs contract): env override for tests, else
@@ -429,7 +430,8 @@ export function searchByFts(
   // docs/p0-injection-noise-baseline.txt.
   // A1 (v2.83): cite_factor closes the citation-decay → ranking loop. Obs the
   // assistant cited in past sessions (cited_count > 0) get boosted; obs with
-  // accumulating uncited_streak get dampened upstream of importance-decay.
+  // accumulating uncited_streak get dampened (citation-decay no longer writes importance,
+  // D#179/D#198, so this multiplier is the loop's only ranking effect).
   // Disjoint signal from noise_penalty (which uses injection_count vs
   // access_count) — see scoring-sql.mjs::citeFactorClause for the math.
   const sql = `
@@ -627,7 +629,7 @@ function searchRecent(db, project, limit) {
       AND ${liveObsFilterSql('')}
       AND created_at_epoch > ?
       AND ${notLowSignalTitleClause('')}
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
   `,
     )
@@ -658,10 +660,12 @@ async function readStdin() {
 // path can mem_get the ID for full detail.
 const QUIET_HOOKS = process.env.MEM_QUIET_HOOKS === '1';
 
+/** @returns {{text: string, entries: {id: number, text: string}[]}|null} */
 function formatResults(rows) {
   if (!rows || rows.length === 0) return null;
 
   const lines = ['[mem] FYI — Related memories (continue your task):'];
+  const entries = [];
   for (const r of rows) {
     const icon = typeIcon(r.type);
     // Defang replayed obs text before truncation: a poisoned title/lesson carrying tool-XML
@@ -671,31 +675,36 @@ function formatResults(rows) {
       !QUIET_HOOKS && r.lesson_learned
         ? ` — ${truncate(neutralizeContextDelimiters(r.lesson_learned), 50)}`
         : '';
-    lines.push(`#${r.id} ${icon} ${title}${lesson}`);
+    entries.push({ id: r.id, text: `#${r.id} ${icon} ${title}${lesson}` });
   }
-  return lines.join('\n');
+  lines.push(...entries.map((e) => e.text));
+  return { text: lines.join('\n'), entries };
 }
 
 // v2.34.5 Gap 1: distinct header signals to Claude that these are prior
 // *user questions*, not codebase lessons — helps the reader interpret the
 // row correctly (surface-form match, not a saved insight). Truncate to 80
 // chars (slightly longer than obs titles because prompts carry more context).
+/** @returns {{text: string, entries: {id: string, text: string}[]}|null} ids as `P<id>`, the marker's spelling */
 function formatPromptResults(rows) {
   if (!rows || rows.length === 0) return null;
   const lines = ['[mem] FYI — Past similar questions (continue your task):'];
+  const entries = [];
   for (const r of rows) {
     // prompt_text is a raw prior USER prompt — the highest-risk replayed class (this is
     // exactly the column that carried malformed tool-XML into the handoff bug). Defang the
     // delimiters, then collapse whitespace + truncate.
     const text = truncate(neutralizeContextDelimiters(r.prompt_text || '').replace(/\s+/g, ' '), 80);
-    lines.push(`P#${r.id} 💬 ${text}`);
+    entries.push({ id: `P${r.id}`, text: `P#${r.id} 💬 ${text}` });
   }
-  return lines.join('\n');
+  lines.push(...entries.map((e) => e.text));
+  return { text: lines.join('\n'), entries };
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  resetPlainHookText();
   // Prevent recursion from background claude -p calls
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
 
@@ -776,35 +785,53 @@ async function main() {
       // convention) so obs ids can't collide in the shared injected-ids file.
       const dedupIds = openRows.map((r) => `D${r.id}`);
       if (openRows.length > 0 && !shouldSkipByDedup(dedupIds, injectedIdsFile, hookData.session_id)) {
-        const lines = ['[mem] Deferred work referenced in prompt (open items, full detail):'];
-        for (const r of openRows) {
+        const items = openRows.map((r) => {
           const pTag = r.priority === 3 ? '🔴' : r.priority === 1 ? '⚪' : '🟡';
-          lines.push(`D#${r.id} ${pTag} [P${r.priority}] ${neutralizeContextDelimiters(r.title || '')}`);
+          const item = [`D#${r.id} ${pTag} [P${r.priority}] ${neutralizeContextDelimiters(r.title || '')}`];
           if (r.detail) {
-            // Full detail, defanged, never truncated — the point of this surface.
-            for (const dl of neutralizeContextDelimiters(r.detail).split('\n')) lines.push(`  ${dl}`);
+            // Full detail, defanged, never truncated here — the point of this surface. The
+            // hook-output cap may still cut it; see the booking below.
+            for (const dl of neutralizeContextDelimiters(r.detail).split('\n')) item.push(`  ${dl}`);
           }
-        }
-        process.stdout.write(lines.join('\n') + '\n');
+          return { id: `D${r.id}`, text: item.join('\n') };
+        });
+        const shown = writePlainHookText(
+          [
+            '[mem] Deferred work referenced in prompt (open items, full detail):',
+            ...items.map((e) => e.text),
+          ].join('\n'),
+        );
+        // Which items to book (D#108). The FIRST item is booked once its head line reached the
+        // model: this is the first block in the handler's budget, so a first item the cap cut is
+        // cut the same way on every re-injection, and booking only whole items re-sent a
+        // too-long one (~9.6K chars) on every prompt naming it, uncharged (pre-tag review P2-1).
+        // Every LATER item must be shown whole: its cut depends on the siblings ahead of it, so
+        // named alone it may fit, and booking it on its head suppressed its unseen tail
+        // (pre-tag delta review P3-1).
+        const shownIds = idsShownWhole(
+          shown,
+          items.map((e, i) => (i === 0 ? { id: e.id, text: e.text.split('\n')[0] } : e)),
+        );
         // Merge into the dedup file so a re-referencing prompt within the stale
         // window skips re-injection. A later FTS-path write replaces ids wholesale
         // (accepted: worst case is one cheap re-injection after an obs-emitting
         // prompt inside the same 5-min window).
         // union: the M-6 same-session/staleness gate + the atomic write live in
-        // lib/injected-ids.mjs (audit 2026-09-02 P1-2). `dedupIds` are `D<id>` strings, so
+        // lib/injected-ids.mjs (audit 2026-09-02 P1-2). `shownIds` are `D<id>` strings, so
         // the lib's union-side String() is the identity here — same bytes as before.
         try {
-          mergeInjectedMarker(injectedIdsFile, dedupIds, {
-            sessionId: hookData.session_id,
-            maxAgeMs: DEDUP_STALE_MS,
-            mode: 'union',
-            // This leg is GATED by shouldSkipByDedup, so it has to charge the cap it reads.
-            // Before B-5 it did, because the cap was the shared `count` this write bumps;
-            // moving the cap to `upsCount` left the gated population {main leg, D#N leg}
-            // larger than the charged population {main leg}. Same spender/charged mismatch
-            // B-5 fixed, on the sibling call site.
-            bumpUpsCount: true,
-          });
+          if (shownIds.length > 0)
+            mergeInjectedMarker(injectedIdsFile, shownIds, {
+              sessionId: hookData.session_id,
+              maxAgeMs: DEDUP_STALE_MS,
+              mode: 'union',
+              // This leg is GATED by shouldSkipByDedup, so it has to charge the cap it reads.
+              // Before B-5 it did, because the cap was the shared `count` this write bumps;
+              // moving the cap to `upsCount` left the gated population {main leg, D#N leg}
+              // larger than the charged population {main leg}. Same spender/charged mismatch
+              // B-5 fixed, on the sibling call site.
+              bumpUpsCount: true,
+            });
         } catch {}
       }
     }
@@ -1076,8 +1103,15 @@ async function main() {
         ? formatResults(rows)
         : formatPromptResults(promptRows)
       : null;
-    if (output) {
-      process.stdout.write(output + '\n');
+    // Rows the hook-output cap kept (D#108). The D# block above shares this handler's
+    // budget, and when it spends it these rows shrink to a one-line note: booking them
+    // anyway put them in the dedup marker, which suppresses them on BOTH UserPromptSubmit
+    // faces for the window, and bumped the injection_count noise signal for rows never seen.
+    const shownIds = output ? idsShownWhole(writePlainHookText(output.text), output.entries) : [];
+    if (shownIds.length > 0) {
+      const shownSet = new Set(shownIds);
+      const bookedIds = candidateIds.filter((id) => shownSet.has(id));
+      const bookedRows = rows.filter((r) => shownSet.has(r.id));
       // Write injected IDs for dedup with hook.mjs handleUserPrompt + self-dedup
       // replace, NOT union: this leg writes the prompt's own result set wholesale, and it
       // is the ONE writer that puts raw observation numbers (mixed with `P<id>` strings)
@@ -1085,7 +1119,7 @@ async function main() {
       // reason — stringifying here would flip the D#213 exclude from inert to live, which
       // is a behaviour change with its own ruler and its own decision to make.
       try {
-        mergeInjectedMarker(injectedIdsFile, candidateIds, {
+        mergeInjectedMarker(injectedIdsFile, bookedIds, {
           sessionId: hookData.session_id,
           maxAgeMs: DEDUP_STALE_MS,
           mode: 'replace',
@@ -1100,13 +1134,13 @@ async function main() {
       // Per-row try/catch: observations_au trigger reinserts FTS on any UPDATE
       // (project_non_obvious.md); an FTS corruption on one row must not abort
       // counter bumps for other rows.
-      if (rows.length > 0) {
+      if (bookedRows.length > 0) {
         try {
           const now = Date.now();
           const bumpStmt = db.prepare(
             'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?',
           );
-          for (const r of rows) {
+          for (const r of bookedRows) {
             try {
               bumpStmt.run(now, r.id);
             } catch {}

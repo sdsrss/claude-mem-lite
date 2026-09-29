@@ -235,4 +235,38 @@ describe('D#123 — exclude-set mirrors rendered Key Context, never a query', ()
       `(#${targetId})`,
     );
   });
+
+  // D#108. FAILS IF: the marker is written from the RENDERED rows instead of the rows the
+  // 10,000-character hook cap kept. The Last Session line comes before Key Context, so an
+  // over-long one pushes Key Context past the cap; the target is then not in context, and
+  // excluding it at prompt time would hide it everywhere. The e2e case above is the premise
+  // that the same seed, uncut, is booked.
+  it('a Key Context row the hook cap cut is not written to the marker', () => {
+    const db = new Database(dbPath);
+    const now = Date.now();
+    const targetId = seed(db, {
+      title: 'Zebra quantum flux dedup ledger target',
+      epoch: now - 60000,
+      importance: 3,
+      lesson: 'zebra quantum flux: always flush the ledger',
+      files: JSON.stringify(['lib/zebra.mjs']),
+    });
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, lessons, created_at, created_at_epoch)
+       VALUES ('d123-mem', ?, 'req', ?, ?, ?)`,
+    ).run(
+      PROJECT,
+      JSON.stringify(['l'.repeat(4000), 'm'.repeat(4000), 'n'.repeat(4000)]),
+      new Date(now).toISOString(),
+      now,
+    );
+    db.close();
+
+    const startOut = fireHook('session-start', { MEM_QUIET_HOOKS: undefined });
+    const ctx = JSON.parse(startOut).hookSpecificOutput.additionalContext;
+    expect(ctx, 'premise: the cap fired').toContain('not shown — hook output limit');
+    expect(ctx, 'premise: the target line was cut').not.toContain(`(#${targetId})`);
+    const marker = JSON.parse(readFileSync(markerPath(), 'utf8'));
+    expect(marker.ids, 'a cut row must not enter the exclude-set').not.toContain(targetId);
+  });
 });

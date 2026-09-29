@@ -74,6 +74,10 @@ describe('rankFileCandidates — ordering', () => {
     // basenameAnySep strips trailing separators, so comparing token to basename
     // said "has a path" for `foo.mjs/`, which has no internal separator.
     expect(rankFileCandidates(['src/real.mjs', 'foo.mjs/'])[0]).toBe('src/real.mjs');
+    // The case above cannot fail: with the bonus restored both tokens score the same and
+    // text order still puts src/real.mjs first (D#48). Against a token with no separator at
+    // all, the bonus is the only thing that can move `foo.mjs/` ahead.
+    expect(rankFileCandidates(['bare.mjs', 'foo.mjs/'])).toEqual(['bare.mjs', 'foo.mjs/']);
   });
 
   it('keeps text order inside one tier', () => {

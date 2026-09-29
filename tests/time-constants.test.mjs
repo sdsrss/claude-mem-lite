@@ -33,6 +33,8 @@ const SKIP_DIRS = new Set([
   'docs',
   'tasks',
   '.loop',
+  // agent worktrees: whole repo checkouts under `.claude/worktrees/` (2026-09-27)
+  '.claude',
 ]);
 
 function runtimeSources(dir = ROOT, acc = []) {

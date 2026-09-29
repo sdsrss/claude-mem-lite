@@ -326,6 +326,7 @@ export const KNOWN_CLI_FLAGS = new Set([
   'benchmark',
   'body',
   'branch',
+  'chars',
   'closes-deferred',
   'concepts',
   'confirm',
@@ -399,6 +400,13 @@ export const KNOWN_CLI_FLAGS = new Set([
   // warn-on-every-unknown-flag flip turned the omission into a false warning on a
   // documented, working command.
   'prompts-limit',
+  // `verify-apply --apply --digest <d>` / `--undo <backup>` — read as flags.apply / .digest / .undo in
+  // cli/verify-apply.mjs. Missing here, a working apply printed "Unknown flag --apply — ignored,
+  // it had no effect" beside its own read-back. Pinned by tests/verify-apply-cli.test.mjs.
+  'apply',
+  'digest',
+  'print-project',
+  'undo',
   // Entries here MUST be read by a `claude-mem-lite` subcommand. A flag that no
   // command reads is worse than an absent one: it converts the "ignored, it had no
   // effect" warning into silence, so the user's dropped flag reads as accepted.
@@ -408,6 +416,22 @@ export const KNOWN_CLI_FLAGS = new Set([
   // about the file it did not write. `has` went the same round: no reader, no help
   // entry, and (per the v3.34.0 notes) the source of the misleading "did you mean
   // --has?" suggestion. Locked by tests/cli-flag-allowlist.test.mjs.
+]);
+
+/**
+ * Flags exactly ONE subcommand reads, mapped to that command. KNOWN_CLI_FLAGS is a union, so
+ * without this `recent --apply` was accepted in silence while `--apply` did nothing there.
+ * Every other command mem-cli dispatches now reports such a flag, and the typo suggester stops
+ * offering it there. Install-family commands (doctor, status, …) route to install.mjs and are
+ * not covered. Only flags with a single reader
+ * belong here; tests/cli-flag-allowlist.test.mjs derives that from the sources.
+ */
+export const COMMAND_SCOPED_FLAGS = new Map([
+  ['apply', 'verify-apply'],
+  ['chars', 'context'],
+  ['digest', 'verify-apply'],
+  ['print-project', 'verify-apply'],
+  ['undo', 'verify-apply'],
 ]);
 
 /** Levenshtein distance, early-exit past `max` (cheap enough for a handful of flags). */
@@ -437,16 +461,25 @@ function editDistance(a, b, max = 2) {
  * project — a typo produced a wrong result with zero signal. Returns [{flag, suggestion}].
  * Unknown flags with NO close match are omitted: they may be a valid flag we didn't
  * catalog, so silence beats a false alarm. Warning-only by contract — never fails.
+ * A flag in COMMAND_SCOPED_FLAGS given to any other `cmd` is reported too, with `owner` set.
  * @param {object} flags Parsed flags from parseArgs.
- * @returns {Array<{flag: string, suggestion: string}>}
+ * @param {string} [cmd] The subcommand being run; without it scoped flags are not checked.
+ * @returns {Array<{flag: string, suggestion: string|null, owner?: string}>}
  */
-export function suggestUnknownFlags(flags) {
+export function suggestUnknownFlags(flags, cmd) {
   const result = [];
   for (const key of Object.keys(flags)) {
+    const owner = COMMAND_SCOPED_FLAGS.get(key);
+    if (cmd && owner && owner !== cmd) {
+      result.push({ flag: key, suggestion: null, owner });
+      continue;
+    }
     if (!key || KNOWN_CLI_FLAGS.has(key)) continue;
     let best = null,
       bestDist = 3;
     for (const known of KNOWN_CLI_FLAGS) {
+      const knownOwner = COMMAND_SCOPED_FLAGS.get(known);
+      if (cmd && knownOwner && knownOwner !== cmd) continue;
       const d = editDistance(key, known);
       if (d < bestDist) {
         bestDist = d;

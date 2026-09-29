@@ -14,7 +14,7 @@ import {
   statSync,
   constants as fsConstants,
 } from 'fs';
-import { inferProject, EDIT_TOOLS } from './utils.mjs';
+import { inferProject, isEditEntry } from './utils.mjs';
 import { RUNTIME_DIR } from './hook-shared.mjs';
 
 /**
@@ -454,7 +454,7 @@ export function explainSignificance(episode) {
   const base = { readCount, grepCount, grepDecisive: false };
 
   // 1. File edits → always significant (code changes matter)
-  if (entries.some((e) => EDIT_TOOLS.has(e.tool))) return { ...base, significant: true, rule: 1 };
+  if (entries.some(isEditEntry)) return { ...base, significant: true, rule: 1 };
 
   // 2. Test/build errors → significant (actionable failures)
   // Plain bash errors without edits are noise (e.g. typos, exploration errors)

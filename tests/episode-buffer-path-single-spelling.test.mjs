@@ -20,7 +20,7 @@
 // introduced this file are the exact shape it must reject.
 //
 // POPULATION, stated before the criteria (the walkShipped lesson, CLAUDE.md § Testing this
-// repo): `walkShipped` is every shipped `.mjs`/`.js` and is blind to the three shipped bash
+// repo): `walkShipped` is every shipped `.mjs`/`.js` and is blind to the four shipped bash
 // hooks. Measured 2026-09-14: none of them names the episode buffer, and the second describe
 // below keeps it that way instead of leaving it as a fact someone has to remember.
 

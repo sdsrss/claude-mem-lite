@@ -60,7 +60,7 @@
 - **Episode 批处理** -- 将相关文件操作分组为连贯的 episode，再进行 LLM 编码
 - **错误触发回忆** -- Bash 出错时自动搜索记忆，浮现相关的历史修复方案
 - **主动文件历史** -- 编辑文件时，自动显示该文件相关的历史观察记录
-- **会话摘要** -- 会话结束时通过后台 worker（使用 `claude -p`）生成 LLM 摘要
+- **会话摘要** -- 每次 Stop 时写入（助手最终回复带 Done / Not done 段落时取其内容，否则——最终回复里没有任何报告段落时——取其前 120 个字符，再否则取首条提示和最近的 observation 标题），会话有 observation 时再由后台模型摘要升级
 - **项目作用域上下文** -- 将最近的记忆注入 `CLAUDE.md` 和会话启动上下文
 - **观察类型** -- 分类为 `decision`、`bugfix`、`feature`、`refactor`、`discovery` 或 `change`
 - **重要度分级** -- LLM 为每条观察分配 1-3 级重要度（日常/关注/关键）
@@ -103,7 +103,7 @@
 |------|------|------|
 | **Linux** | 支持 | 主要开发和测试平台；整个 CI 矩阵都跑在这里 |
 | **macOS** | 支持 | 完全兼容（Intel 和 Apple Silicon） |
-| **Windows** | 可安装，但无 CI 覆盖 | MCP server、CLI 和 `node` 类 hook 均可用（`better-sqlite3` 自带 `win32-x64` / `win32-arm64` 预编译产物，无需编译）。**有三个 hook 命令走 `bash`** —— `setup.sh`、`post-tool-use.sh`、`pre-agent-inject.sh` —— 需要 PATH 上有 Git for Windows 或 WSL；`bash` 找不到时 `claude-mem-lite doctor` 会报出来。GitHub Actions 没有 Windows runner，所以这一行依据的是用户报告（[#28](https://github.com/sdsrss/claude-mem-lite/issues/28)）而不是绿色流水线 |
+| **Windows** | 可安装，但无 CI 覆盖 | MCP server、CLI 和 `node` 类 hook 均可用（`better-sqlite3` 自带 `win32-x64` / `win32-arm64` 预编译产物，无需编译）。**有四个 hook 命令走 `bash`** —— `setup.sh`、`post-tool-use.sh`、`pre-agent-inject.sh`、`pre-tool-recall-bash.sh` —— 需要 PATH 上有 Git for Windows 或 WSL；`bash` 找不到时 `claude-mem-lite doctor` 会报出来。GitHub Actions 没有 Windows runner，所以这一行依据的是用户报告（[#28](https://github.com/sdsrss/claude-mem-lite/issues/28)）而不是绿色流水线 |
 | **WSL2** | 未测试 | 底层就是 Linux，预期与 Linux 行一致；但无人报告过实际结果 |
 
 v5.1.0 到 v6.1.0 之间，`package.json` 声明的是 `os: ["darwin", "linux"]`。那是 npm 的**安装**门禁，不是运行时检查：
@@ -116,7 +116,7 @@ v5.1.0 到 v6.1.0 之间，`package.json` 声明的是 `os: ["darwin", "linux"]`
 - **Node.js** >= 22（v4.0.0 起：better-sqlite3 13 要求 >=22，Node 20 已于 2026-04 EOL；`package.json` 的 `engines` 是唯一事实来源）
 - **Claude Code** CLI 已安装并配置（`claude` 命令可用）
 - **SQLite3** 支持（由 `better-sqlite3` 13 提供，它自带 8 个平台的预编译产物，这些平台上都不需要编译器；没有对应预编译产物的平台才会回退到源码编译）
-- **平台**：Linux 或 macOS；Windows 可安装运行，但无 CI 覆盖，且三个 hook 需要 Git Bash 或 WSL（参见[平台支持](#平台支持)）
+- **平台**：Linux 或 macOS；Windows 可安装运行，但无 CI 覆盖，且四个 hook 需要 Git Bash 或 WSL（参见[平台支持](#平台支持)）
 
 ## 安装
 
@@ -129,7 +129,7 @@ v5.1.0 到 v6.1.0 之间，`package.json` 声明的是 `os: ["darwin", "linux"]`
 
 插件模式会管理自己的运行时与钩子。SessionStart 时它现在只会**检查并提示**新版本，不会直接覆盖插件目录中的文件。插件模式请通过 Claude 的插件更新流程完成升级。
 
-> **插件安装本身即完整** —— hooks、MCP 工具、以及捆绑的 slash 命令（`/mem`、`/lesson`、`/bug`、`/adopt`）全部从插件内运行，无需第二步。slash 命令以从插件目录解析出的绝对路径调用捆绑 CLI（`${CLAUDE_PLUGIN_ROOT}/cli.mjs <cmd>`），因此不依赖 `PATH` 上的任何东西。全局 `claude-mem-lite` **shell** 命令（用于你自己在终端里跑查询）是**可选**的 —— `npm i -g claude-mem-lite` —— 且是**独立**的 npm 安装：插件的自动更新**不会**刷新它，想保持同步就重新跑 `npm i -g claude-mem-lite@latest`。插件要完整工作**并不需要**它。
+> **插件安装本身即完整** —— hooks、MCP 工具、以及捆绑的 slash 命令（`/mem`、`/lesson`、`/bug`、`/adopt`）全部从插件内运行，无需第二步。slash 命令以从插件目录解析出的绝对路径调用捆绑 CLI（`node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" <cmd>`），因此不依赖 `PATH` 上的任何东西。全局 `claude-mem-lite` **shell** 命令（用于你自己在终端里跑查询）是**可选**的 —— `npm i -g claude-mem-lite` —— 且是**独立**的 npm 安装：插件的自动更新**不会**刷新它，想保持同步就重新跑 `npm i -g claude-mem-lite@latest`。插件要完整工作**并不需要**它。
 
 ### 方式二：npx（一行命令）
 
@@ -198,6 +198,96 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
   managed/
     repos/               # 浅克隆的源代码仓库
 ```
+
+## 升级到 6.19.0
+
+**搜索输出有变化，没有开关。** 没有 schema 变更、不需要迁移，回退只需固定 `claude-mem-lite@6.18.0`。
+
+- **`search` / `mem_search` 用 `🤖` 标出机器写入的 observation**，`get` / `mem_get` 在标题行注明。
+  hook 采集、导入和压缩生成的行带这个标记；显式保存的和 events 不带。只要显示的行里有带标记的，
+  结果行就会解释它的含义；`search --json` 的 observation 行多一个 `auto` 字段。
+- **`mem_search` 只在摘录比标题多出信息时才显示摘录行。**
+- 修复：新的按项目存储里，单条搜索命中不再排在最后；Bash 步骤存下的描述会保留输出的结尾；
+  密钥擦除器能识别 markdown 标签后面的值，并且在构造输入下保持线性时间。
+
+## 升级到 6.18.0
+
+**一处默认行为改变，有开关。** 没有 schema 变更、不需要迁移。固定 `claude-mem-lite@6.17.1`
+后不再写新的这一行；已经写入的那一行会保留到该会话下一次有 observation 标题时被替换，6.17.1
+会把它不认识的标签当作普通文本留在该行的 `notes` 里。
+
+- **没有报告时，Last Session 也能说明上次会话是怎么结束的。** 最终回复里没有 Done / Not done /
+  Failed / Uncertain 段落时，`Completed:` 取该回复的前 120 个字符（去掉代码块和行首标记），原先这里
+  是 observation 标题，而它通常是空的；/clear 交接里标为 `<session-summary source="last-reply">`。
+  有报告或模型摘要时仍以它们为准。之后不足 400 字符的回复（如“不客气！”）不会替换之前那一条。
+  设 `CLAUDE_MEM_SUMMARY_TAIL=0` 恢复为 observation 标题，进行中的会话从下一轮起生效。
+  回复里只要被密钥擦除器检出任何内容，就不写这一行。
+
+## 升级到 6.17.0
+
+**两处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
+`claude-mem-lite@6.16.0`。
+
+- **编辑前的 lesson 提示只在某条 lesson 改变了这次改动时，才请模型提一次它的 `#NN`。** 不再要求在
+  下一条回复里对每条 lesson 逐一表态“采纳 / 不适用”——那会让回复里出现成串的 lesson 编号。恢复旧提示：
+  `CLAUDE_MEM_SALIENCE=verdict`（6.17.1 起它会注明自己优先于托管行和详细文档，那两处保持新写法）。
+  已接入的项目会在下次 SessionStart 时把 CLAUDE.md 托管行和详细文档换成对应的新写法；想保留旧文本设 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。
+- **SessionStart 的 "Deferred Work" 列表（5 行）在还有更多未完成事项时，末尾加一行 "+N more open"。**
+  没有开关，回退请固定 6.16.0。
+
+## 升级到 6.16.0
+
+**三处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
+`claude-mem-lite@6.15.0`。
+
+- **文件召回块的第一行，每个会话分到两种写法之一。** 一半会话保留原来的 "system-injected context,
+  continue your planned action"，另一半改成说明这些笔记来自哪里的事实陈述（Claude Code 的 hooks
+  指南建议这样写）。两种写法先比较引用率，再决定默认用哪个。关闭（全部用旧写法）：
+  `CLAUDE_MEM_RECALL_FRAMING=legacy`。
+- **超过宿主 1 万字符 hook 上限的记忆文本会按整行裁剪**，末尾一行列出被略去的 id；以前宿主会把它换成
+  2,000 字符的预览。没有开关，回退请固定 6.15.0。
+- **Bash 命令失败后展示的教训，现在也计入引用衰减**，和其他注入面一致：一直没被引用的会逐渐排到后面。
+  没有开关，回退请固定 6.15.0。
+
+## 升级到 6.15.0
+
+**两处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
+`claude-mem-lite@6.14.0`。
+
+- **自动捕获的教训如果复述了工具打印的文字，不再自动注入。** 否则能控制命令输出的一方（仓库里的测试、
+  抓取的网页、MCP 服务）就能让自己写的一句话被存成教训，之后的会话都会看到。这样的 event 仍可搜索，
+  importance 降为 1；`change` 类 observation 则去掉教训。连续 4 个词相同就算，虚词也算，所以偶尔也会
+  误降你自己的教训。关闭：`CLAUDE_MEM_LESSON_OUTPUT_CAP=off`。
+- **Last Session 能读到你用 markdown 标题写的 Done / Not done 报告**（`## Done`、`**Not done**`），
+  不再退回模型写的摘要。没有开关，回退请固定 6.14.0。
+
+## 升级到 6.14.0
+
+**五个默认行为变化，其中三个有关闭开关。** 没有 schema 变更、没有迁移：旧版本仍能打开数据库，
+全部回退就是固定到 `claude-mem-lite@6.13.6`。
+
+- **查看或写入文件的 Bash 命令执行前，也会做文件召回**（`cat`、`sed -n`、`head`；`sed -i`、
+  `cat > f`、python 补丁）。新模型的读写大多走 Bash，实测引用率最高的召回面几乎不再触发。
+  **第四个 hook 命令走 `bash`**：`pre-tool-recall-bash.sh`；在 Windows 上与另外三个一样需要
+  Git Bash 或 WSL。关闭：`CLAUDE_MEM_BASH_RECALL=off`。
+- **error recall 不再回应你故意制造的失败**（刚写好或刚改过的测试文件跑红），也不回应只打印数据、
+  退出码为 0 的命令。没有开关，回退请固定 6.13.6。从这个版本起 `citation-stats` 里的
+  `error_recall` 计数会下降，不要跨版本直接比较。
+- **自动捕获的教训必须引用原文。** episode 摘要器忽略变异测试探针、agent 自己失败的内联脚本，以及
+  不修改项目的子代理调用；不引用窗口内任何原文的教训会被丢弃（event 保留，importance 降为 1）。
+  关闭：`CLAUDE_MEM_EPISODE_INPUT_FILTER=off` / `CLAUDE_MEM_LESSON_GROUNDING=off`。
+- **不再注入 `[mem] episode flushed: N entries` 这一行。** 它后面的提示不变。
+
+## 升级到 6.13.0
+
+**只有一个默认行为变化：SessionStart 不再注入 `### Key Events`。** 这一节在每个会话开头列出
+`events` 表里最新的 5 条 importance ≥ 2 的记录（后台摘要器记下的活动），按时间挑选，与你当前在做
+什么无关。对照 git 历史和会话记录核验其中 30 条：2 条属实、16 条错误。event 仍然会存储、可以用 `mem_search` 检索，当你的提问或正在编辑的文件与之匹配时
+仍会注入。想恢复这一节，设置 `CLAUDE_MEM_SESSION_EVENTS=1`。没有 schema 变更、没有迁移：旧版本
+仍能打开数据库，回退就是固定到 `claude-mem-lite@6.12.2`。
+
+**引用率读数会从这个版本起下降，这是口径变化。** agent 用 `#NN n/a` 回应的 lesson 不再计为引用，
+所以 `citation-stats` 各注入面的引用率从此偏低（`--sidechain` 除外：它把 `n/a` 算作已回应）。不要拿 6.13.0 之前和之后的读数直接比较。
 
 ## 升级到 6.11.0
 
@@ -341,6 +431,7 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 /mem <query>               # search 的简写
 /lesson <text>             # 保存非显而易见的经验到 events 表（v2.31.0）
 /bug <text>                # 记录已知 bug + 复现步骤到 events 表（v2.31.0）
+/verify                    # 对照当前代码核查记忆；你确认后才改正过期的记忆
 ```
 
 ### 高效搜索工作流
@@ -415,7 +506,7 @@ text, narrative, concepts, facts, files_read, files_modified,
 importance, related_ids, created_at, created_at_epoch
 ```
 
-**session_summaries** -- LLM 生成的会话摘要
+**session_summaries** -- 每个会话的摘要（Stop 时写入，后台模型摘要升级）
 ```
 id, memory_session_id, project, request, investigated,
 learned, completed, next_steps, files_read, files_edited, notes
@@ -474,6 +565,7 @@ Stop
   -> 刷新最终 episode 缓冲区
   -> 保存交接快照（/exit 时）
   -> 标记会话为已完成
+  -> 写入会话摘要行（同步，不调模型）
   -> 启动 LLM 摘要 worker（轮询等待）
 ```
 
@@ -689,6 +781,11 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `OPENROUTER_MODEL` | 覆盖**所有**后台调用的 OpenRouter 模型 slug（如 `openai/gpt-4o-mini`、`qwen/qwen-2.5-72b-instruct`）。未设时按 `CLAUDE_MEM_MODEL` 分层映射到 `anthropic/claude-haiku-4.5`（haiku）或 `anthropic/claude-sonnet-4.5`（sonnet）。 | _(分层默认)_ |
 | `CLAUDE_MEM_DEBUG` | 启用调试日志（设为 `1` 启用）。 | _(禁用)_ |
 | `MEM_QUIET_HOOKS` | 低噪声 hook。设为 `1` 时，SessionStart 注入去掉 `File Lessons` / `Key Context` 两节，`[mem] Related memories` 去掉 lesson 后缀，MCP server instructions 去掉 `WHEN TO USE` / `Decision rules` 两段。ID 与 `Recent` 表仍保留，`mem_get(ids=[…])` 可继续展开细节。适用于启用了 invited-memory adopt 流程或偏好最小化自动注入的用户。**v2.82.0 起此 env 不再阻挡 auto-adopt——如需关闭 auto-adopt 用 `MEM_NO_AUTO_ADOPT=1`。** | _(禁用)_ |
+| `CLAUDE_MEM_SESSION_EVENTS` | 设为 `1`/`on` 时恢复 SessionStart 的 `### Key Events` 一节（`events` 表中最近的高重要度条目）。**v6.13.0 起默认关闭**：对 30 条 event 的核验只有 2 条属实、16 条错误。UserPromptSubmit 的 events 块与 PreToolUse 召回按查询匹配，保持开启；`mem_search` 仍可检索全部 event。 | _(关闭)_ |
+| `CLAUDE_MEM_EPISODE_INPUT_FILTER` | 决定 episode 摘要器能从哪些输入里学。子代理的工具调用不进入 episode 缓冲（修改项目内文件的除外）；变异探针（改文件 → 跑红 → 还原）和 agent 自己失败的内联脚本（补丁的 `anchor not found`）在保存或摘要前被剔除——在 30 条已核验 event 上重放，这一项直接去掉 16 条错误中的 3 条；配合 `CLAUDE_MEM_LESSON_GROUNDING`，16 条错误教训一条都不会被注入。设为 `off` 恢复未过滤的输入。 | _(开启)_ |
+| `CLAUDE_MEM_BASH_RECALL` | 在查看（`cat`、`sed -n`、`head`…）或写入（`sed -i`、`cat > f`、python 补丁…）文件的 Bash 命令执行前做文件召回，与 Read / Edit 召回相同。bash 预过滤让其他命令不启动 Node。设为 `off` 只关闭这一路。 | _(开启)_ |
+| `CLAUDE_MEM_LESSON_GROUNDING` | 自动捕获的 event 只有在教训引用了本窗口自己的诊断文字（失败输出行、编辑新增的注释或提交信息）时才保留教训；否则保留这一行但去掉教训，importance 降为 1，低于所有注入面的门槛。设为 `off` 保留未引用原文的教训。 | _(开启)_ |
+| `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果和**工具输出**（命令打印的文字或工具返回的内容，能控制这段输出的人就能写它）有连续 4 个词相同，就不会进入注入面：event 保留这一行和教训、仍可搜索，importance 降为 1；`change` 类 observation 的 importance 之后会被读取次数抬高，所以改为去掉教训，没有教训的这一行随后会像其他同类行一样被丢弃（只有设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` 才保留）。连续 4 个虚词（例如 "is not in the"）也算，所以引用你自己的注释或提交信息的教训，只要碰巧和同一窗口的输出共有这样一串词，也会被降级。这一行的标题不在检查范围内。设为 `off` 恢复模型给出的 importance 和教训。 | _(开启)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 阻止每次 SessionStart 在**所有**项目自动写入 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
 | `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 

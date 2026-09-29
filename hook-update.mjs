@@ -76,11 +76,12 @@ export async function checkForUpdate(options = {}) {
     const state = readState();
     if (!force && !shouldCheck(state)) {
       // Return cached update info if previously detected
-      if (state.updateAvailable && state.latestVersion) {
+      const running = pendingCachedUpdate(state);
+      if (running) {
         return {
           updateAvailable: true,
           updated: false,
-          from: state.installedVersion,
+          from: running,
           to: state.latestVersion,
           installDeferred: pluginMode || !allowInstall,
           pluginMode,
@@ -160,18 +161,31 @@ export function getCachedUpdateBanner() {
   try {
     if (isDevMode() || process.env.CLAUDE_MEM_SKIP_UPDATE) return null;
     const state = readState();
-    if (state.updateAvailable && state.latestVersion) {
+    const running = pendingCachedUpdate(state);
+    if (running) {
       // Cached "available" state only persists for deferred installs (plugin mode
       // / allowInstall=false); a successful auto-install clears updateAvailable.
       const hint = isPluginMode()
         ? ' — plugin mode only checks for updates; reinstall/update the plugin to apply it'
         : '';
-      return `\n📦 claude-mem-lite: v${state.latestVersion} available (current: v${state.installedVersion})${hint}\n`;
+      return `\n📦 claude-mem-lite: v${state.latestVersion} available (current: v${running})${hint}\n`;
     }
     return null;
   } catch {
     return null;
   }
+}
+
+// Issue #35. A cached `updateAvailable` is a claim about the version that was
+// running when the check ran, and in plugin mode the update itself is applied by
+// Claude Code — downloadAndInstall never runs, so nothing clears the flag. Judge
+// the cache against the version running NOW: returns that version when the cached
+// latest is still ahead of it, else null. Every cached face (the SessionStart
+// banner, the throttled checkForUpdate and install.mjs `doctor`) asks this, so none can nag alone.
+export function pendingCachedUpdate(state) {
+  if (!state.updateAvailable || !state.latestVersion) return null;
+  const running = getCurrentVersion();
+  return compareVersions(state.latestVersion, running) > 0 ? running : null;
 }
 
 // True when a network refresh is due (24h throttle) and updates aren't disabled.

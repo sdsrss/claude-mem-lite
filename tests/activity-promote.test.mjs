@@ -41,6 +41,16 @@ describe('promoteInsightEvents', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM observations').get().n).toBe(0);
   });
 
+  // D#138: events are machine-written (episode summaries), so a promoted one is not an explicit save.
+  it('a promoted event is marked machine-written', async () => {
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    seedEvent();
+    promoteInsightEvents(db, { execute: true });
+    const obs = db.prepare("SELECT memory_session_id FROM observations WHERE project = 'sp'").get();
+    expect(obs.memory_session_id).toBe('promote-sp');
+    expect(isAutoWritten(obs.memory_session_id)).toBe(true);
+  });
+
   it('promotes a lesson-bearing event into an observation and marks the source', () => {
     const evId = seedEvent();
     const r = promoteInsightEvents(db, { execute: true });

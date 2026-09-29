@@ -553,7 +553,7 @@ for (const spec of usable) {
     row[arm] = { n: cells.length, pass: cells.filter((c) => c.pass === 1).length };
   }
   // arm-B per-protocol (fired-only) subset: a secondary, OPTIMISTIC diagnostic that
-  // excludes fail-open-to-ACK cells. Never the headline; feeds the Δ_fired lines below.
+  // excludes fail-open cells (bridge fell back to its plain directive). Never the headline; feeds the Δ_fired lines below.
   if (ARMS.includes('B')) {
     const fired = results.cells.filter(
       (c) => c.commit === spec.hash && c.arm === 'B' && c.pass !== null && c.bridgeFired !== false,
@@ -586,17 +586,19 @@ function pairedMeanDelta(left, right) {
 const fmtD = (d) => (d.meanD == null ? 'n/a' : (d.meanD * 100).toFixed(1) + 'pp');
 
 // ITT (intention-to-treat) headline, one line per injected arm vs C. For arm B this
-// includes fail-open-to-ACK cells — the trustworthy "what flipping the flag does" number.
+// includes fail-open cells (bridge fell back to its plain directive) — the trustworthy "what flipping the flag does" number.
 for (const arm of ARMS.filter((a) => a !== 'C')) {
   const d = pairedMeanDelta(arm, 'C');
   const label = arm === 'B' ? 'Δ_ITT(B−C)' : `Δ(${arm}−C)`;
   console.log(
     `\nCOMMIT-LEVEL mean ${label} = ${fmtD(d)} over ${d.n} commits.` +
-      (arm === 'B' ? '  [ITT — trustworthy/primary: includes fail-open-to-ACK cells]' : ''),
+      (arm === 'B'
+        ? '  [ITT — trustworthy/primary: includes fail-open cells (bridge fell back to its plain directive)]'
+        : ''),
   );
 }
 // arm B extra deltas: ITT vs A, plus the fired-only (per-protocol) subset. Fired-only
-// EXCLUDES fail-open-to-ACK cells → OPTIMISTIC, so it is a diagnostic, NOT the headline.
+// EXCLUDES fail-open cells (bridge fell back to its plain directive) → OPTIMISTIC, so it is a diagnostic, NOT the headline.
 if (ARMS.includes('B')) {
   if (ARMS.includes('A')) {
     const d = pairedMeanDelta('B', 'A');
@@ -606,7 +608,7 @@ if (ARMS.includes('B')) {
   }
   const dfc = pairedMeanDelta('B_fired', 'C');
   console.log(
-    `COMMIT-LEVEL mean Δ_fired(B−C) = ${fmtD(dfc)} over ${dfc.n} commits.  [fired-only (per-protocol — excludes fail-open-to-ACK cells; OPTIMISTIC)]`,
+    `COMMIT-LEVEL mean Δ_fired(B−C) = ${fmtD(dfc)} over ${dfc.n} commits.  [fired-only (per-protocol — excludes fail-open cells (bridge fell back to its plain directive); OPTIMISTIC)]`,
   );
   if (ARMS.includes('A')) {
     const dfa = pairedMeanDelta('B_fired', 'A');

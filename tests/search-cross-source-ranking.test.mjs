@@ -26,10 +26,11 @@ beforeAll(() => {
     VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  // Background corpora on BOTH legs. In a 1-2 row FTS table BM25's IDF term
-  // collapses toward zero, so every raw magnitude is noise and the cross-source
-  // ratio banding is meaningless — production tables hold thousands of rows on
-  // each leg. 12 unrelated rows per table is enough to restore stable IDF.
+  // Background corpora on BOTH legs, so these two scenarios measure the ratio bands
+  // and not IDF. In a 1-2 row FTS table FTS5 clamps the IDF to 1e-6 and the raw
+  // magnitude stops carrying match strength; that shape is real (a new per-project
+  // store) and has its own scenario below (#36). 12 unrelated rows per table keep
+  // the IDF informative here.
   for (let i = 0; i < 12; i++) {
     insE.run(
       'test',
@@ -123,5 +124,74 @@ describe('cross-source ranking direction (real pipeline)', () => {
     expect(rows[0].source).toBe('obs'); // strong obs page leads
     const eventIdx = rows.findIndex((r) => r.source === 'event');
     expect(eventIdx).toBeGreaterThan(0); // the passing mention does not take the top slot
+  });
+});
+
+// #36: a new per-project store (CLAUDE_MEM_DIR set per project). The observations table holds
+// two rows and the query term is in one of them, so FTS5's IDF is ln((2-1+0.5)/(1+0.5)) = 0,
+// which FTS5 clamps to 1e-6. The lone obs hit's raw bm25 is then ~1e-6 while the events leg
+// (14 rows, term in 5) scores near -1: the cross-source ratio is ~1e-6 and the band read it as
+// a grazing match (-0.25), last behind every event. A clamped IDF says the term does not
+// discriminate WITHIN that table; it says nothing about how well the row matches.
+describe('#36: a lone obs hit whose IDF FTS5 clamped (real pipeline)', () => {
+  let small;
+
+  beforeAll(() => {
+    small = createTestDb();
+    insertSession(small, { id: 'manual-tiny', project: 'tiny' });
+    insertObs(small, {
+      sessionId: 'manual-tiny',
+      project: 'tiny',
+      type: 'feature',
+      title: 'Tandoor import complete: 66 recipes, ingredients parsed',
+      text: 'imported every tandoor recipe and checked the ingredient lines',
+      importance: 3,
+      epochOffset: -1000,
+    });
+    insertObs(small, {
+      sessionId: 'manual-tiny',
+      project: 'tiny',
+      type: 'decision',
+      title: 'Units normalised to grams before parsing',
+      text: 'metric units only, conversion happens at import time',
+      importance: 3,
+      epochOffset: -2000,
+    });
+    const insE = small.prepare(`
+      INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (let i = 0; i < 14; i++) {
+      const hit = i % 3 === 0; // 5 of 14 mention the term
+      insE.run(
+        'tiny',
+        'discovery',
+        hit ? `ran tandoor export step ${i}` : `edited parser module ${i}`,
+        hit ? `tandoor api call ${i} returned recipes` : `adjusted unit table entry ${i}`,
+        1,
+        Date.now() - 5000 - i * 1000,
+      );
+    }
+  });
+
+  test('premise: FTS5 clamps the obs IDF, so the raw obs score is at the clamp scale', () => {
+    const [row] = small
+      .prepare(
+        `SELECT bm25(observations_fts) AS s FROM observations_fts WHERE observations_fts MATCH 'tandoor'`,
+      )
+      .all();
+    expect(Math.abs(row.s)).toBeLessThan(1e-5);
+  });
+
+  test('the lone clamped obs hit is not sunk below every event', async () => {
+    const res = await handleSearchForTest(small, { query: 'tandoor', deep: false }, {});
+    const rows = res.results.map((r) => ({ source: r.source, score: r.score }));
+    expect(rows.filter((r) => r.source === 'event').length).toBe(5);
+    const obs = rows.filter((r) => r.source === 'obs');
+    expect(obs).toHaveLength(1);
+    // Scored like the best row of any other source (-1), not as a grazing match (-0.25).
+    expect(obs[0].score).toBe(-1);
+    const lastEventIdx = rows.findLastIndex((r) => r.source === 'event');
+    expect(rows.findIndex((r) => r.source === 'obs')).toBeLessThan(lastEventIdx);
   });
 });

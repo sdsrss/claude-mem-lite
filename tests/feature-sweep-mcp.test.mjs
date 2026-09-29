@@ -41,6 +41,7 @@
 //      tests/global-setup.mjs reaps it even if the run is SIGKILL'd.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { insertDeferred } from '../lib/deferred-work.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
@@ -391,6 +392,16 @@ describe('MCP feature sweep: public tools', () => {
     });
   });
 
+  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
+  it('mem_defer past 50 open items prints its ordinal', async () => {
+    const P = 'mcpsweep-defer-deep';
+    withDb((db) => {
+      for (let i = 1; i <= 55; i++) insertDeferred(db, { project: P, title: `deep item ${i}`, priority: 2 });
+    });
+    const text = await call('mem_defer', { title: 'deep item last', priority: 1, project: P });
+    expect(text).toMatch(/\(item 56\)/);
+  });
+
   itTool('mem_defer_list', async () => {
     // Seeds its own rows (no dependency on the mem_defer case) in its own project.
     const P = 'mcpsweep-deferlist';
@@ -412,6 +423,25 @@ describe('MCP feature sweep: public tools', () => {
     // Priority order (3 before 1) and the detail affordance are part of the contract.
     expect(list.indexOf('Split the retry helper')).toBeLessThan(list.indexOf('Document the backoff ceiling'));
     expect(list).toContain('Full detail: mem_get ids=["D#<id>"]');
+    // Two items fit the default page: no "more" line (it would claim hidden rows).
+    expect(list).not.toMatch(/more open item/);
+
+    // A page smaller than the open set says so instead of dropping rows silently.
+    const paged = await call('mem_defer_list', { project: P, limit: 1 });
+    expect(paged).toContain('Split the retry helper out of transport');
+    expect(paged).not.toContain('Document the backoff ceiling');
+    expect(paged).toContain('1 more open item not shown — pass a larger limit (max 50)');
+
+    // At the largest page the reader cannot raise the limit, so the line must not tell them
+    // to (D#115 P3-7). Seeded straight into the DB: 51 tool calls would be the slow part.
+    const PMAX = 'mcpsweep-deferlist-max';
+    withDb((db) => {
+      for (let i = 1; i <= 51; i++) insertDeferred(db, { project: PMAX, title: `max page item ${i}` });
+    });
+    const full = await call('mem_defer_list', { project: PMAX, limit: 50 });
+    expect(full.match(/max page item \d+/g), 'premise: the page holds 50 rows').toHaveLength(50);
+    expect(full).toContain('1 more open item not shown — this is already the largest page (50)');
+    expect(full).not.toContain('pass a larger limit');
   });
 
   itTool('mem_defer_drop', async () => {

@@ -22,4 +22,14 @@ import { join, dirname } from 'node:path';
 // module from its unused-export report entirely. Enforced by
 // tests/no-url-module-paths.test.mjs.
 export const CLI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
-export const CLI_INVOKE = `node ${CLI_PATH}`;
+/**
+ * A path as one shell word: as-is when it is plain, single-quoted otherwise. Conditional on
+ * purpose — CLI_INVOKE is LLM-visible (MCP instructions, every "Equivalent CLI" hint), so an
+ * ordinary install path must stay byte-identical; only a path with a space or a shell
+ * metacharacter gets quotes, which it needs to survive as ONE argument.
+ * @param {string} s
+ * @returns {string}
+ */
+export const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+export const CLI_INVOKE = `node ${shellWord(CLI_PATH)}`;

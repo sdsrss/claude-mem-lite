@@ -44,8 +44,9 @@ const SRC = readFileSync(join(REPO, 'mem-cli.mjs'), 'utf8');
  *                (`cmdArgs.includes('--benchmark')` …), and `doctor` is already exempt.
  *   cmdActivity — cli/activity.mjs. Calls parseArgs itself; nothing is read off raw argv.
  *   cmdFtsCheck — cli/fts-check.mjs. Same.
+ *   cmdVerifyApply — cli/verify-apply.mjs. Calls parseArgs itself; nothing is read off raw argv.
  */
-const HANDLER_NOT_IN_THIS_FILE = new Set(['cmdDoctor', 'cmdActivity', 'cmdFtsCheck']);
+const HANDLER_NOT_IN_THIS_FILE = new Set(['cmdDoctor', 'cmdActivity', 'cmdFtsCheck', 'cmdVerifyApply']);
 
 /** Commands routed before the dispatcher's switch, so they never appear in it. */
 const ROUTED_BEFORE_THE_SWITCH = new Set(['adopt', 'unadopt', 'memdir-audit']);

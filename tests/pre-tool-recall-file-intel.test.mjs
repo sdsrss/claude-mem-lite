@@ -82,7 +82,7 @@ describe('pre-tool-recall file intelligence (feature ①)', () => {
     expect(ctx).toContain('📄 widget.mjs');
     expect(ctx).toContain('tok');
     expect(ctx).toContain('Widget rendering helpers and layout math');
-    expect(ctx).toMatch(/system-injected/);
+    expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
   });
 
   it('stays silent on a small file below the token threshold', async () => {

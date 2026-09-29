@@ -152,6 +152,15 @@ function openTestDb(tmpHome) {
   return db;
 }
 
+// No test here observes a background worker, and one outlives the file: session-start spawns
+// auto-maintain, whose llm-optimize tail recreates `<tmpHome>/.claude-mem-lite/` after
+// afterAll has disposed it — one /tmp/mem-scenario-* per run, 3/3 without these, 0 with (D#116).
+const NO_BACKGROUND_WORKERS = {
+  CLAUDE_MEM_SKIP_MAINTAIN: '1',
+  CLAUDE_MEM_SKIP_COMPRESS: '1',
+  CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+};
+
 function runScript(scriptPath, { stdin, env = {}, args = [] } = {}) {
   const mergedEnv = {
     ...process.env,
@@ -161,6 +170,7 @@ function runScript(scriptPath, { stdin, env = {}, args = [] } = {}) {
     CLAUDE_MEM_HOOK_RUNNING: undefined,
     CLAUDE_MEM_DEBUG: '1',
     CLAUDE_MEM_SKIP_UPDATE: '1',
+    ...NO_BACKGROUND_WORKERS,
     ...env,
   };
   for (const k of Object.keys(mergedEnv)) {
@@ -190,6 +200,7 @@ function runBash(scriptPath, { stdin, env = {} } = {}) {
     HOME: env.HOME || tmpHome,
     CLAUDE_PROJECT_DIR: env.CLAUDE_PROJECT_DIR || projectDir,
     CLAUDE_MEM_HOOK_RUNNING: undefined,
+    ...NO_BACKGROUND_WORKERS,
     ...env,
   };
   for (const k of Object.keys(mergedEnv)) {

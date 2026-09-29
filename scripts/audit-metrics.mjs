@@ -3,7 +3,7 @@
 //
 //   node scripts/audit-metrics.mjs            # JSON to stdout, reuses coverage/ + runs eslint/knip/prettier
 //   node scripts/audit-metrics.mjs --md       # Markdown table instead of JSON
-//   node scripts/audit-metrics.mjs --run-tests  # also runs `vitest run --coverage` first (slow, ~1 min)
+//   node scripts/audit-metrics.mjs --run-tests  # also runs `npm run test:coverage` first (slow, ~1 min)
 //   node scripts/audit-metrics.mjs --no-tools   # skip eslint / knip / prettier / coverage (pure static scan)
 //   node scripts/audit-metrics.mjs --inventory  # Markdown module table (layer / lines / header / exports) for docs/ARCHITECTURE.md
 //   node scripts/audit-metrics.mjs --deps       # Markdown dependency section (layer matrix, upward edges, hubs, mermaid) for docs/ARCHITECTURE.md
@@ -536,10 +536,20 @@ function prettierCheck() {
 // name reach the report together.
 const VITEST_FAIL_TAIL_LINES = 200;
 
+// Through the repo's `test:coverage` script, never `node_modules/.bin/vitest` directly (D#60):
+// that script is the one home for the on-disk TMPDIR, and a direct spawn inherits whatever
+// TMPDIR the caller has — /tmp, a RAM-backed tmpfs, which each run's ssr cache fills (D#55).
 function runVitestCoverage() {
   const r = spawnSync(
-    bin('vitest'),
-    ['run', '--coverage', '--coverage.reporter=json-summary', '--coverage.reporter=text'],
+    'npm',
+    [
+      'run',
+      '--silent',
+      'test:coverage',
+      '--',
+      '--coverage.reporter=json-summary',
+      '--coverage.reporter=text',
+    ],
     { cwd: REPO, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
   );
   const out = (r.stdout || '') + (r.stderr || '');

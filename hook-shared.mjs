@@ -30,6 +30,7 @@ import {
 } from './lib/schema-skew.mjs';
 import { isDbUnusableError, DB_UNUSABLE_MARKER_PREFIX } from './lib/db-unusable.mjs';
 import { shouldRecordOnce } from './lib/record-once.mjs';
+import { hookSessionId } from './lib/provenance.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
 // predicates and the handoff constants moved into `lib/` because two lib modules
 // imported them from here and dragged this file's whole import graph — haiku-client,
@@ -385,7 +386,7 @@ export function getSessionId() {
 
 export function createSessionId() {
   const project = inferProject();
-  const id = `hook-${project}-${randomUUID().slice(0, 8)}`;
+  const id = hookSessionId(project, randomUUID().slice(0, 8));
   const file = sessionFile();
   const tmp = file + `.tmp-${process.pid}`;
   writeFileSync(tmp, JSON.stringify({ id, startedAt: Date.now(), project }), { mode: 0o600 });

@@ -2,7 +2,7 @@
 
 Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 6.11.0 — **this exact string is a release guard.**
+- **Version**: 6.19.4 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0), ESM · npm · better-sqlite3 + FTS5
@@ -17,7 +17,7 @@ before retrieval, measurement, release, migration or schema work.**
 
 | Task | Command |
 |------|---------|
-| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` |
+| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · before tagging `npm run test:ci-env` (CI env) |
 | Coverage | `npm run test:coverage` (gate: statements 81 / branches 75 / functions 87 / lines 83) |
 | Lint · shell | `npx eslint .` · `shellcheck scripts/*.sh` |
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |
@@ -29,7 +29,7 @@ before retrieval, measurement, release, migration or schema work.**
 
 Two CLI families, both canonical in `cli.mjs` (`claude-mem-lite help` for flags):
 **`CLI_COMMANDS`** = `search recent recall get timeline browse context save update delete
-defer compress maintain optimize fts-check restore export import-jsonl stats citation-stats
+defer compress maintain optimize fts-check restore verify-apply export import-jsonl stats citation-stats
 activity memdir-audit adopt unadopt help`; **`INSTALL_COMMANDS`** = `install uninstall status
 doctor cleanup cleanup-hooks self-update repair rebuild-binding release`.
 
@@ -43,8 +43,8 @@ series. Sandbox harness `tests/sandbox/` (`SBX_BASE` mandatory) after any depend
 ## Architecture
 
 Seven hook events in `hooks/hooks.json`: `SessionStart`, `PreCompact`, `PreToolUse`,
-`PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has TWO
-matchers, not three**; `install.mjs`'s settings.json twin must stay equal to it.
+`PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has THREE
+matchers** (Bash via a prefilter); `install.mjs`'s settings.json twin must stay equal.
 
 `code-graph-mcp overview .` maps the tree; the modules whose ROLE the filename does not give
 away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone
@@ -105,9 +105,9 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **422 files / 6528**, 0 skipped (1 skips without git hooks) | `main` @ `9c41144`, 2026-09-22, v6.11.0 tree |
+| Tests | **428 files / 6628**, 0 skipped (1 skips without git hooks) | `main` @ `c8cfab5`, 2026-09-25, v6.12.1 tree |
 | Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree, knip 6.35.1 |
-| Coverage | **85.82** stmts · **80.07** branches · **91.05** funcs · **87.01** lines | same tree, vitest 5.0.0 |
+| Coverage | **85.34** stmts · **79.75** branches · **90.72** funcs · **86.58** lines | same tree, vitest 5.0.0 |
 
 Coverage `include` is a **denylist** — staying out costs a named `exclude`. Outside by
 design: `install.mjs`, `server.mjs`, `hook.mjs`, `cli.mjs`, `benchmark/**`, `scripts/**`
@@ -133,7 +133,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 - **Search's reported `total` is NOT the number of rows you can page to** — `reachable` is `preFinalizeCount`, never a re-derived `max(limit*3,60)`. The disclosure goes **SILENT** under a post-filter rather than guess; do not "improve" it with `total - postFilterDropped`.
 - **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a ranking bound** — an importance demotion becomes an *eviction*. Found on five faces. Count such populations with the pool's own `liveObsFilterSql`, not a bare `WHERE importance = 3`.
-- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first, and two inserts share a millisecond **90.67%** — one population's rate, not a property (UPS/pretool: **0.00%**). 24 sites fixed; the rest **unjudged, not cleared**. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
+- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first; same-ms inserts: **90.67%** in one population, **0.00%** in UPS/pretool. **All 76 judged** (N3); `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
 - **Deep search floods on questions the corpus cannot answer** — holdout reads **FP@10 = 10.00, 12/12**. The flood is the **AND→OR fallback**, which is also the vocab-mismatch recall win, so three gates were tested against both arms and **rejected**.
 - **That same OR fallback DISARMS auto-escalation**, so both deep rulers describe EXPLICIT deep only and an escalation A/B reading Δ=0 is a blind instrument (rule 9).
 - **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. Use `multiplier-discrimination.mjs`; all eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.
@@ -171,7 +171,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at an unadopted temp dir and assert a premise first.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.
 - **Tool name mapping**: Claude Code's Agent tool is `'Agent'`, not `'Task'`; Skill via `event.tool_input?.skill`. Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for CLI injection.
-- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the three shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
+- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the four shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
 <!-- claude-mem-lite:begin v1 -->
 ## claude-mem-lite — persistent memory
 
@@ -179,7 +179,7 @@ PreToolUse hooks already run `mem_recall` for past lessons before Read/Edit/Writ
 
 | When | Call |
 |------|------|
-| Before Edit/Write | hook already recalled; if a `#NN` lesson was injected, cite `#NN` next time you produce user-visible text (citing = adopting the feedback; uncited lessons decay) |
+| Before Edit/Write | hook already recalled; if an injected `#NN` lesson changed what you did, name `#NN` once where you say so (citing = adopting; uncited lessons decay; skip ones that did not apply) |
 | After fixing a non-trivial bug | `mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)` |
 | After a non-obvious architecture decision | `mem_save(type="decision", lesson_learned="<constraint + tradeoff>")` |
 | Deferring to a future session | `mem_defer({title, priority:1|2|3, detail})`; when fixed, add `closes_deferred=[N]` to `mem_save` |

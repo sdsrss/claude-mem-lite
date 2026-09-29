@@ -54,9 +54,11 @@ describe('observation_files table schema', () => {
   });
 });
 
-// ─── Data Migration ─────────────────────────────────────────────────────────
+// ─── The insertObs test helper writes the junction ───────────────────────────
+// Not the backfill: that pass is covered in schema-backfill-observation-files.test.mjs.
+// Other suites rely on this helper side effect, so it keeps a self-test (D#47 P3-2).
 
-describe('observation_files data migration', () => {
+describe('insertObs test helper populates observation_files', () => {
   let db;
   beforeEach(() => {
     db = createTestDb();

@@ -334,6 +334,61 @@ describe('search-core', () => {
       expect(results.find((r) => r.source === 'session').score).toBe(-0.75);
     });
 
+    // #36: FTS5 replaces an idf <= 0 with 1e-6, so a lone row whose term is in at least half
+    // of its table scores ~1e-6 whatever the match. Of two such rows the better was already
+    // normalized to -1 within its source; a single one was banded -0.25 and sank below every event.
+    it('scores a lone row at the clamped-IDF scale like a multi-row best, not as grazing (#36)', () => {
+      const lone = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -4.4e-6, rawScore: -2.2e-6 },
+      ];
+      normalizeCrossSourceScores(lone, 'source');
+      const pair = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -4.4e-6, rawScore: -2.2e-6 },
+        { source: 'obs', score: -2.2e-6, rawScore: -1.1e-6 },
+      ];
+      normalizeCrossSourceScores(pair, 'source');
+      expect(lone[2].score).toBe(-1);
+      expect(lone[2].score).toBe(pair[2].score);
+    });
+
+    it('still bands a weak lone row just above the clamped-IDF scale (#36 boundary)', () => {
+      const results = [
+        { source: 'obs', score: -10 },
+        { source: 'obs', score: -5 },
+        { source: 'event', score: -2e-4 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
+    // v6.19.0 pre-tag review P3-3: FULL_SCORE's multipliers shrink an obs row down to 0.02x,
+    // so a demoted row whose IDF is informative (0.18) scored 1.35e-4 and, tested on its
+    // final score against 1e-3, went from last to first. This row is ten times weaker, so its
+    // final score is under the 1e-4 scale too and only its raw bm25 (6.8e-4) keeps it banded.
+    it('bands a demoted lone obs by its final score when its raw bm25 is not clamped', () => {
+      const results = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -1.35e-5, rawScore: -6.8e-4 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
+    it('keeps the bands for a lone obs row that carries no raw bm25', () => {
+      const results = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -2e-6 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
     // Audit 2026-07-17 L3: the CJK LIKE-fallback prompt rows carry score 0 — the
     // LOWEST confidence signal in the pipeline. The single-row clamp promoted a lone
     // 0-score row to the neutral mid, floating it above weakly-matched real FTS hits.

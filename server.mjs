@@ -17,7 +17,8 @@ import {
   formatSchemaSkewNotice,
 } from './lib/schema-skew.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
-import { searchObservationsHybrid } from './search-engine.mjs';
+import { searchObservationsHybrid, snippetAddsInfo } from './search-engine.mjs';
+import { autoHeaderNote, autoLegend, autoTag } from './lib/provenance.mjs';
 import {
   deepSearch,
   resolveDeepMode,
@@ -75,7 +76,7 @@ import { buildLessonNudge } from './lib/save-nudge.mjs';
 import { formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
-import { CLI_INVOKE } from './cli-path.mjs';
+import { CLI_INVOKE, shellWord } from './cli-path.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -124,6 +125,7 @@ import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
+  openOrdinalOf,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -132,6 +134,7 @@ import {
   searchDeferredWork,
   formatDeferredSearchTrailer,
   formatDeferListRow,
+  formatDeferMoreHint,
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
@@ -214,7 +217,7 @@ try {
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
   if (err.walRecoveryAttempted) {
     console.error(
-      `[claude-mem-lite] Try: rm "${DB_PATH}-wal" "${DB_PATH}-shm" or reinstall with: node install.mjs install`,
+      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
   } else {
     console.error(
@@ -460,7 +463,7 @@ function formatSearchOutput(
   // explicitly requested OR semantics — there's no "fallback" in that path.
   const fallbackHint = orFallbackFired && !args.or ? ' (relaxed AND→OR)' : '';
   lines.push(
-    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}\n`,
+    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
   );
 
   // `~Nt` = estimated tokens to fetch this row's full body via mem_get (attachBodyTokens).
@@ -469,9 +472,9 @@ function formatSearchOutput(
   for (const r of paginatedResults) {
     if (r.source === 'obs') {
       lines.push(
-        `#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
+        `#${r.id} ${typeIcon(r.type)} [${r.type}]${autoTag(r)} ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
       );
-      if (r.snippet && r.snippet.length > 10 && r.snippet !== r.title) {
+      if (snippetAddsInfo(r.snippet, r.title)) {
         lines.push(`     ${truncate(r.snippet, 100)}`);
       }
     } else if (r.source === 'session') {
@@ -899,7 +902,7 @@ server.registerTool(
       const renderFields = obsFieldFilter || OBS_FIELDS;
       for (const row of rows) {
         foundBySource.obs.add(row.id);
-        const lines = [`── #${row.id} ──`];
+        const lines = [`── #${row.id}${autoHeaderNote(row)} ──`];
         // Retraction first (shared with the CLI `get` via get-core) — see supersededNotice.
         const retracted = supersededNotice(row);
         if (retracted) lines.push(retracted);
@@ -1219,8 +1222,7 @@ server.registerTool(
     });
     // Compute the ordinal for the freshly-inserted row so the response is
     // immediately actionable ("ok, I deferred this as item 1").
-    const open = listOpenWithOrdinal(db, project, 50);
-    const ord = open.find((o) => o.id === r.id)?.ordinal ?? null;
+    const ord = openOrdinalOf(db, project, r.id);
     return {
       content: [
         {
@@ -1251,6 +1253,8 @@ server.registerTool(
     for (const r of list) {
       lines.push(formatDeferListRow(r));
     }
+    const moreHint = formatDeferMoreHint(list, 'pass a larger limit (max 50)', 50);
+    if (moreHint) lines.push(moreHint);
     const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
     if (staleHint) lines.push(staleHint);
     // Affordance for the detail field — list stays title-only by design.
@@ -1750,7 +1754,9 @@ async function runExport(db, args) {
   // reads back (v3.42 HIGH-2: this handler used to carry a narrower 16-col SELECT, silently
   // dropping text/aliases/citation-signals on the advertised MCP backup→restore flow).
   const probed = db
-    .prepare(`SELECT ${EXPORT_COLUMNS_SQL} FROM observations ${where} ORDER BY created_at_epoch DESC LIMIT ?`)
+    .prepare(
+      `SELECT ${EXPORT_COLUMNS_SQL} FROM observations ${where} ORDER BY created_at_epoch DESC, id DESC LIMIT ?`,
+    )
     .all(...params, exportLimit + 1);
   const rows = probed.slice(0, exportLimit);
   const moreAvailable = probed.length > exportLimit;

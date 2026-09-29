@@ -246,6 +246,15 @@ describe('buildAndSaveHandoff', () => {
         { tool: 'Edit', desc: 'Edit hook.mjs: add handoff logic', isSignificant: true, isError: false },
         { tool: 'Read', desc: 'Read schema.mjs', isSignificant: false, isError: false },
         { tool: 'Bash', desc: 'Bash error: test failed', isSignificant: false, isError: true },
+        // A Bash edit is in-flight work exactly like the Edit above (N1, R2 audit)…
+        {
+          tool: 'Bash',
+          desc: 'sed -i dispatch.mjs',
+          files: ['/proj/dispatch.mjs'],
+          bashWrites: ['/proj/dispatch.mjs'],
+        },
+        // …and a Bash read is not.
+        { tool: 'Bash', desc: 'cat config.mjs', files: ['/proj/config.mjs'] },
       ],
       files: ['/proj/hook.mjs', '/proj/schema.mjs'],
     };
@@ -254,6 +263,8 @@ describe('buildAndSaveHandoff', () => {
 
     const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj'`).get();
     expect(row.unfinished).toContain('handoff logic');
+    expect(row.unfinished).toContain('sed -i dispatch.mjs');
+    expect(row.unfinished).not.toContain('cat config.mjs');
     expect(row.unfinished).toContain('test failed');
     expect(row.unfinished).not.toContain('Read schema');
   });
@@ -903,6 +914,30 @@ describe('renderHandoffInjection', () => {
     expect(result).toContain('finished stuff');
     expect(result).toContain('do next thing');
     expect(result).toContain('</session-summary>');
+  });
+
+  // Pre-ship review P3-7: the tag said source="haiku" on every row, including rows whose Done
+  // came from the Stop report or observation titles. The label comes from the row's own notes
+  // tag now, and names who wrote the Done text.
+  it('labels the session summary with the provenance its notes record', () => {
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'work', ?)`,
+    ).run(Date.now());
+    seedSession(db, 's1', 'p');
+    const put = (notes) => {
+      db.prepare('DELETE FROM session_summaries').run();
+      db.prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
+        VALUES ('s1', 'p', 'req', 'finished stuff', ?, datetime('now'), ?)`,
+      ).run(notes, Date.now());
+      return renderHandoffInjection(db, 'p').match(/<session-summary source="([a-z-]+)">/)?.[1];
+    };
+    expect(put('donereport leftreport')).toBe('report');
+    expect(put('donetail leftother')).toBe('last-reply'); // D#121: the head of the final reply
+    expect(put('fast')).toBe('titles');
+    expect(put('llm')).toBe('haiku');
+    expect(put(null)).toBe('haiku'); // legacy rows: written by the model before tags existed
   });
 
   it('enriches with the project summary even when handoff.session_id is a CC-UUID (prod id mismatch)', () => {

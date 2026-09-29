@@ -733,6 +733,19 @@ describe('CLI get command', () => {
     expect(output).toContain('Second observation');
   });
 
+  it('names a machine-written row in its header and leaves an explicit save unmarked', async () => {
+    insertSession(testDb, { id: 'manual-test--project', project: 'test--project' });
+    insertObs(testDb, {
+      sessionId: 'manual-test--project',
+      project: 'test--project',
+      title: 'Saved on purpose',
+    });
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', title: 'Captured by the hook' });
+    const lines = (await captureStdout(() => run(['get', '1,2']))).split('\n');
+    expect(lines.find((l) => l.startsWith('#1 ['))).toMatch(/^#1 \[discovery\] \S+$/);
+    expect(lines.find((l) => l.startsWith('#2 ['))).toMatch(/ · 🤖 auto-written, not an explicit save$/);
+  });
+
   it('shows "No records found" for non-existent ID', async () => {
     const output = await captureStdout(() => run(['get', '9999']));
     expect(output).toMatch(/No records found.*\[obs\]/);
@@ -2540,6 +2553,30 @@ describe('CLI stats command extended', () => {
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_MEM_METRICS;
       else process.env.CLAUDE_MEM_METRICS = prev;
+    }
+  });
+
+  it('counts enrich-save ok/total from the metric rows it reads (D#30)', async () => {
+    // readMetrics(DB_DIR) reads the per-run containment sandbox that every test file shares,
+    // so which rows this file saw depended on which OTHER files had run: the loop body read
+    // 0 hits under coverage with this file alone and 55 alongside the metric writers, same
+    // tree, back to back (2026-09-25). The ok/total arithmetic was covered by accident and
+    // asserted by nothing. Stub the reader so it is asserted on purpose.
+    const metrics = await import('../lib/metrics.mjs');
+    const spy = vi
+      .spyOn(metrics, 'readMetrics')
+      .mockReturnValue([
+        { event: 'enrich_save', enriched: true },
+        { event: 'enrich_save', enriched: false },
+        { event: 'enrich_save', enriched: true },
+        { event: 'error_recall' },
+      ]);
+    try {
+      const output = await captureStdout(() => run(['stats']));
+      expect(spy).toHaveBeenCalled(); // premise: the stub is the reader stats used
+      expect(output).toContain('✚ enrich-save 2/3 ok');
+    } finally {
+      spy.mockRestore();
     }
   });
 

@@ -51,6 +51,32 @@ if [[ "$tool" == "Read" ]]; then
   # 2>/dev/null: a settings.json unlinked between the -r test and the read must stay
   # silent — Claude Code surfaces hook stderr.
   _mem_plugin_disabled 2>/dev/null && exit 0
+  # D#69: a subagent's Read is not the main thread's context. The host sets a non-empty
+  # `agent_id` only inside a subagent; hook.mjs keeps those calls out of the episode
+  # buffer, but a Read never reaches it, so without this a reviewer reading an extracted
+  # tree became files_read of the main thread's next observation (pre-ship review P3-5).
+  # Same off switch as hook.mjs (lib/episode-input-filter.mjs episodeInputFilterEnabled:
+  # 0/off/false/no, any case). Glob classes, not ${v,,}: bash 3.2 (macOS) lacks it.
+  # ALL subagent Reads, unlike hook.mjs (which keeps a subagent call that edits the
+  # project): this path cannot know whether the subagent will edit later, a Read only
+  # feeds files_read, and the edit itself still reaches the buffer through hook.mjs.
+  # The field can sit past the 256 KB head window (after a large tool_response): a
+  # truncated payload — one that does not end in `}` — has its unread rest scanned too.
+  # `grep -c`, not `-q`: it reads to EOF, so the writer never gets an EPIPE
+  # (pre-ship delta review P3-7).
+  _mem_sub=0
+  if [[ "$input" =~ \"agent_id\"[[:space:]]*:[[:space:]]*\"[^\"]+\" ]]; then
+    _mem_sub=1
+  elif ! [[ "$input" =~ \}[[:space:]]*$ ]] &&
+    grep -c '"agent_id"[[:space:]]*:[[:space:]]*"[^"]' >/dev/null 2>&1; then
+    _mem_sub=1
+  fi
+  if [[ $_mem_sub == 1 ]]; then
+    case "${CLAUDE_MEM_EPISODE_INPUT_FILTER:-}" in
+      0|[oO][fF][fF]|[fF][aA][lL][sS][eE]|[nN][oO]) ;;
+      *) exit 0 ;;
+    esac
+  fi
   if [[ "$input" =~ \"file_path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
     file_path="${BASH_REMATCH[1]}"
     _dir="${CLAUDE_PROJECT_DIR:-$PWD}"

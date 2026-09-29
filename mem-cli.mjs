@@ -25,6 +25,7 @@ import { resolveProject } from './project-utils.mjs';
 import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
+import { autoHeaderNote, autoLegend, autoTag, isAutoWritten, writerSessionId } from './lib/provenance.mjs';
 import {
   fetchObsDetail,
   fetchPromptDetail,
@@ -162,6 +163,7 @@ import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
+  openOrdinalOf,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -170,6 +172,7 @@ import {
   searchDeferredWork,
   formatDeferredSearchTrailer,
   formatDeferListRow,
+  formatDeferMoreHint,
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
@@ -564,6 +567,8 @@ async function cmdSearch(db, args, { llm } = {}) {
         importance: r.importance ?? null,
         files_modified: r.files_modified || null,
         body_tokens: r.bodyTokens ?? null,
+        // Events carry no session id, so only observations can say who wrote them.
+        ...(r.source === 'obs' ? { auto: r.auto === true } : {}),
       };
     });
     out(
@@ -587,7 +592,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Pluralize on total — "Found 1 of 44 result" reads wrong; the population (44) drives
   // grammatical number, not the page slice (1).
   out(
-    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${queryLabel(query)}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}`,
+    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${queryLabel(query)}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paged)}`,
   );
   // `~Nt` = est. tokens to fetch this row's full body via mem_get (attachBodyTokens, paired with
   // MCP). Conditional so a row that skipped enrichment renders cleanly, not "~undefinedt".
@@ -613,7 +618,7 @@ async function cmdSearch(db, args, { llm } = {}) {
     } else {
       const date = fmtDateShort(r.created_at);
       const title = truncate(r.title || r.subtitle || '(untitled)', 80);
-      out(`#${r.id} ${typeIcon(r.type)} ${date}${timeStr} ${title}${tok(r)}`);
+      out(`#${r.id} ${typeIcon(r.type)}${autoTag(r)} ${date}${timeStr} ${title}${tok(r)}`);
       if (r.lesson_learned) {
         out(`  -> ${truncate(r.lesson_learned, 80)}`);
       }
@@ -792,7 +797,7 @@ function renderObsRows(db, ids, requestedFields) {
   const fields = requestedFields || OBS_FIELDS;
   const parts = [];
   for (const r of rows) {
-    const lines = [`#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}`];
+    const lines = [`#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}${autoHeaderNote(r)}`];
     // Retraction first (shared with mem_get via get-core) — see supersededNotice.
     const retracted = supersededNotice(r);
     if (retracted) lines.push(retracted);
@@ -1444,9 +1449,8 @@ function cmdDeferAdd(db, args) {
     return;
   }
   // Compute the freshly-inserted row's ordinal for an immediately-actionable
-  // response ("ok, deferred this as item N"). Mirrors server.mjs:980.
-  const open = listOpenWithOrdinal(db, project, 50);
-  const ord = open.find((o) => o.id === r.id)?.ordinal ?? '?';
+  // response ("ok, deferred this as item N"), as mem_defer does.
+  const ord = openOrdinalOf(db, project, r.id) ?? '?';
   out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".`);
 }
 
@@ -1463,6 +1467,8 @@ function cmdDeferList(db, args) {
   for (const r of list) {
     out(`  ${formatDeferListRow(r)}`);
   }
+  const moreHint = formatDeferMoreHint(list, 'raise --limit (max 100)', 100);
+  if (moreHint) out(`  ${moreHint}`);
   const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
   if (staleHint) out(`  ${staleHint}`);
   // Affordance for the detail field — list stays title-only by design (it is
@@ -1825,7 +1831,14 @@ function cmdContext(db, args) {
     // produce (the CLI twin of why <skill-loaded> is excluded from CONTEXT_DELIMITER_RE).
     // The untrusted half is already neutralized one layer up: buildSessionContextLines
     // defangs every row it renders, so only the trusted wrapper is written raw here.
-    outVerbatim(`<claude-mem-context>\n${block}\n</claude-mem-context>`);
+    const wrapped = `<claude-mem-context>\n${block}\n</claude-mem-context>`;
+    outVerbatim(wrapped);
+    if (flags.chars) {
+      // stderr, so stdout stays byte-for-byte the block. This is the <claude-mem-context>
+      // part only: SessionStart also prepends the startup dashboard to the same field, and
+      // lib/hook-text-cap.mjs trims the whole field at the cap.
+      process.stderr.write(`[mem] context: ${wrapped.length} characters (hook cap ${HOOK_TEXT_CAP})\n`);
+    }
   }
 }
 
@@ -2206,7 +2219,7 @@ function cmdExport(db, args) {
       `
     SELECT ${EXPORT_COLUMNS_SQL}
     FROM observations WHERE ${wheres.join(' AND ')}
-    ORDER BY created_at_epoch DESC LIMIT ?
+    ORDER BY created_at_epoch DESC, id DESC LIMIT ?
   `,
     )
     .all(...params, limit);
@@ -2255,8 +2268,18 @@ function cmdExport(db, args) {
 // (access/cited/uncited/injection/decay), branch, and concepts/facts/files_read that
 // saveObservation derives or zeros — so a restored backup keeps its citation-decay
 // history and original timing (created_at via the `now` param). Source ids are
-// discarded (local AUTOINCREMENT; export omits related_ids); session provenance
-// collapses to saveObservation's manual-<project> bucket (documented MVP tradeoff).
+// discarded (local AUTOINCREMENT; export omits related_ids). Session ids are not restored,
+// only whether a row was an explicit save: see RESTORE_SESSION_ID_PREFIX.
+// A machine-written row (any exported id but `manual-`) is restored under `restore-<project>`, so
+// lib/provenance.mjs still reads it as auto-written; before D#157 every row went under
+// `manual-<project>` and rendered as an explicit save. The exported id is not reused: saveObservation
+// stores it as both session ids of an active session row, and a bare session uuid
+// (rows imported from older stores) is the shape sdk_sessions refuses, a `hook-` id could become
+// browse's current session (the only active hook row once Stop has marked the real one completed)
+// until a SessionStart sweeps it, and under --project the id names another project. A row exported
+// without the column restores as an explicit save, as before.
+const RESTORE_SESSION_ID_PREFIX = 'restore-';
+
 function cmdRestore(db, argv) {
   const { positional, flags } = parseArgs(argv);
   const file = positional[0];
@@ -2383,6 +2406,9 @@ function cmdRestore(db, argv) {
         files,
         lesson_learned: r.lesson_learned || null,
         now: new Date(createdEpoch),
+        sessionId: isAutoWritten(r.memory_session_id)
+          ? writerSessionId(RESTORE_SESSION_ID_PREFIX, project)
+          : undefined,
       });
       if (res.kind !== 'saved') {
         skipped++;
@@ -2794,7 +2820,10 @@ function cmdMemdirAudit(args) {
 // main decay loop excludes (it runs mainOnly). aggregateProjectCiteRecall scans THIS
 // project's transcripts: top-level <session>.jsonl = main, and
 // <session>/subagents/agent-*.jsonl = sidechain (descends ONE level into the literal
-// subagents/ dir only, no unbounded recursion). Same methodology, so comparable.
+// subagents/ dir only, no unbounded recursion). Main and sidechain use the same
+// methodology here, so they compare with each other. It is a compliance ratio that counts
+// a `#NN n/a` dismissal as an answer, so it does NOT compare with the per-face rates,
+// including the `subagent` face, which exclude dismissals since v6.13.0.
 function _reportSidechainCiteRecall({ days, json }) {
   const cutoff = Date.now() - days * 86400 * 1000;
   // memdir = ~/.claude/projects/<encoded>/memory; transcripts are its siblings.
@@ -3207,6 +3236,14 @@ Commands:
     --project P         Override the restored project for every row
     --dry-run           Preview what would be restored without writing
 
+  verify-apply <file>   Apply agent-verified memory corrections (/verify writes these).
+                        Dry run by default: prints the changes and a plan digest.
+    --apply             Back up the target rows, apply in one transaction, read back
+    --digest D          Required with --apply: the digest the approved dry run printed
+    --project P         Project the targets must belong to (default: current)
+    --undo <backup>     Restore the rows from a backup written by --apply
+    --print-project     Print the project name used when --project is omitted
+
   compress              Compress old low-value observations
     --execute           Execute compression (preview by default)
     --age-days N        Min age in days (default 30)
@@ -3262,7 +3299,7 @@ Commands:
                           daily_activity,data_health,tier_distribution})
                         or quality shape when --quality --json combined
 
-  context               Show current CLAUDE.md context block
+  context               Show the SessionStart context block (--chars: its size vs the hook cap, on stderr)
     --json              Output as structured JSON
 
   browse                Tier-grouped memory dashboard
@@ -3609,8 +3646,10 @@ import { cmdDoctor } from './cli/doctor.mjs';
 
 // cmdActivity (T7 v2.31) extracted to cli/activity.mjs (v2.41 split).
 import { cmdActivity } from './cli/activity.mjs';
+import { cmdVerifyApply } from './cli/verify-apply.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+import { HOOK_TEXT_CAP } from './lib/hook-text-cap.mjs';
 // ─── Main Entry Point ────────────────────────────────────────────────────────
 
 /**
@@ -3683,11 +3722,13 @@ async function runDispatch(argv) {
   // project — a misspelled flag changed results with zero signal. Warn (stderr, non-fatal)
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
-  for (const { flag, suggestion } of suggestUnknownFlags(parseArgs(cmdArgs).flags)) {
+  for (const { flag, suggestion, owner } of suggestUnknownFlags(parseArgs(cmdArgs).flags, cmd)) {
     process.stderr.write(
-      suggestion
-        ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
-        : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
+      owner
+        ? `[mem] --${flag} is read only by ${owner}; ${cmd} does not read it.\n`
+        : suggestion
+          ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
+          : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
     );
   }
 
@@ -3890,6 +3931,9 @@ async function runDispatch(argv) {
         break;
       case 'activity':
         await cmdActivity(db, cmdArgs);
+        break;
+      case 'verify-apply':
+        cmdVerifyApply(db, cmdArgs);
         break;
       default:
         out(`[mem] Unknown command: ${cmd}`);

@@ -19,6 +19,7 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
+import { insertDeferred } from '../lib/deferred-work.mjs';
 
 const CLI_PATH = resolve('cli.mjs');
 
@@ -374,6 +375,39 @@ describe('get D#N — deferred detail read surface', () => {
     runCli(['defer', 'add', 'item A']);
     const { stdout } = runCli(['defer', 'list']);
     expect(stdout).toMatch(/get D#/);
+  });
+
+  // FAILS IF: a page smaller than the open set drops rows without saying so — 11 open items
+  // listed as 10, with nothing telling the reader one exists.
+  it('defer list says how many open items the page left out', () => {
+    for (let i = 1; i <= 12; i++) runCli(['defer', 'add', `paged item ${i}`]);
+    const { stdout } = runCli(['defer', 'list']);
+    expect(stdout.match(/paged item \d+/g)).toHaveLength(10);
+    expect(stdout).toContain('2 more open items not shown — raise --limit (max 100)');
+    const all = runCli(['defer', 'list', '--limit', '12']).stdout;
+    expect(all.match(/paged item \d+/g)).toHaveLength(12);
+    expect(all).not.toMatch(/more open item/);
+  });
+
+  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
+  it('defer add past 50 open items prints its ordinal', () => {
+    runCli(['defer', 'add', 'deep item 0']);
+    const { project } = db.prepare('SELECT project FROM deferred_work LIMIT 1').get();
+    for (let i = 1; i <= 55; i++) insertDeferred(db, { project, title: `deep item ${i}`, priority: 2 });
+    const { stdout } = runCli(['defer', 'add', 'deep item last', '--priority', '1']);
+    expect(stdout).toMatch(/\(item 57\)/);
+  });
+
+  // FAILS IF: a page already at --limit's maximum still tells the reader to raise it
+  // (D#115 P3-7). The first row goes through the CLI so the seeded rest share its project.
+  it('defer list at the largest page does not advise raising --limit', () => {
+    runCli(['defer', 'add', 'max page item 0']);
+    const { project } = db.prepare('SELECT project FROM deferred_work LIMIT 1').get();
+    for (let i = 1; i <= 100; i++) insertDeferred(db, { project, title: `max page item ${i}` });
+    const { stdout } = runCli(['defer', 'list', '--limit', '100']);
+    expect(stdout.match(/max page item \d+/g), 'premise: the page holds 100 rows').toHaveLength(100);
+    expect(stdout).toContain('1 more open item not shown — this is already the largest page (100)');
+    expect(stdout).not.toContain('raise --limit');
   });
 });
 

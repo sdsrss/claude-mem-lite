@@ -9,6 +9,9 @@ import { homedir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..');
+// Quote a path as ONE shell word for a printed command. A copy of cli-path.mjs's, not an
+// import (node: builtins only here); tests/cli-path-invocation.test.mjs keeps them equal.
+const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
 if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
   // Platform gate BEFORE npm, not after it. package.json's `os` field is an npm install
@@ -34,7 +37,7 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
         `[claude-mem-lite] Nothing was installed, so the MCP server cannot start. See "Platform Support" in the README.\n`,
       );
       process.stderr.write(
-        `[claude-mem-lite] To install anyway: cd "${ROOT}" && npm install --omit=dev --force\n`,
+        `[claude-mem-lite] To install anyway: cd ${shellWord(ROOT)} && npm install --omit=dev --force\n`,
       );
       process.exit(1);
     }
@@ -93,7 +96,7 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
     process.stderr.write(
       `[claude-mem-lite] npm printed its own error above — read its "npm error code" line first. Common causes: read-only directory, disk full, network blocked.\n`,
     );
-    process.stderr.write(`[claude-mem-lite] Repair: cd "${ROOT}" && npm install --omit=dev\n`);
+    process.stderr.write(`[claude-mem-lite] Repair: cd ${shellWord(ROOT)} && npm install --omit=dev\n`);
     process.exit(1);
   }
 }

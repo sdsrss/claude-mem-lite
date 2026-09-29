@@ -20,9 +20,11 @@ export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // `tests`, `benchmark`, `experiment` and `docs` are excluded because a guard's own fixture
 // text would otherwise trip its own sweep; `tasks` holds working copies of shipped files
-// (`tasks/bak-*/`) that are not shipped. Everything a user actually installs is in scope.
+// (`tasks/bak-*/`) that are not shipped; `.claude` holds agent worktrees — whole checkouts
+// under `.claude/worktrees/` — and nothing shipped. Everything a user actually installs is in scope.
 const SKIP_DIRS = new Set([
   'node_modules',
+  '.claude',
   '.git',
   'coverage',
   'tmp',

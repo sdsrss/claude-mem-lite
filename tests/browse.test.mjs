@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { computeTier, TIER_CASE_SQL, tierSqlParams } from '../tier.mjs';
+import { getActiveMemorySessionId, collectBrowseTiers } from '../lib/browse-core.mjs';
+import { saveObservation } from '../lib/save-observation.mjs';
 
 const NOW = Date.now();
 const HOUR = 3600000;
@@ -181,5 +183,55 @@ describe('mem_stats tier distribution query', () => {
     expect(dist.working).toBeGreaterThanOrEqual(1);
     expect(dist.active).toBeGreaterThanOrEqual(1);
     expect(dist.archive).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// D#153: the tier classifier's "current session" was the project's newest ACTIVE session row of
+// any writer. A project's first mem_save inserts `manual-<project>` as an active row (a first
+// merge, promote or narrow re-enrich inserts `compress-`/`promote-`/`enrich-` the same way). It is
+// newer than the hook's session, and after the first Stop the hook's row is `completed` in any
+// case, so browse's working tier listed that writer's rows, of any age, until a SessionStart 24h
+// later marked the row abandoned.
+describe('browse current session (D#153)', () => {
+  const HOOK = 'hook-test-1a2b3c4d';
+  const OLD_SAVE = 'an explicit save from last month';
+  let db;
+  const setup = () => {
+    db = createTestDb();
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+       VALUES (?, ?, 'test', ?, ?, 'active')`,
+    ).run(HOOK, HOOK, new Date(NOW - HOUR).toISOString(), NOW - HOUR);
+    saveObservation(db, { content: 'the widget cache keys on the tenant id', project: 'test' });
+    insertObs(db, { sessionId: 'manual-test', title: OLD_SAVE, type: 'change', epochOffset: -30 * DAY });
+  };
+  afterEach(() => db.close());
+  const workingTitles = () =>
+    collectBrowseTiers(db, {
+      project: 'test',
+      tierFilter: 'working',
+      limit: 50,
+      now: Date.now(),
+      currentSessionId: getActiveMemorySessionId(db, 'test'),
+    }).tierData.working.rows.map((r) => r.title);
+
+  it('is the hook session, not the writer row inserted after it', () => {
+    setup();
+    // Premise: the writer row is the project's newest active session.
+    const newest = db
+      .prepare(
+        "SELECT memory_session_id FROM sdk_sessions WHERE project = 'test' AND status = 'active' ORDER BY started_at_epoch DESC LIMIT 1",
+      )
+      .get();
+    expect(newest.memory_session_id).toBe('manual-test');
+    expect(getActiveMemorySessionId(db, 'test')).toBe(HOOK);
+    expect(workingTitles()).not.toContain(OLD_SAVE);
+  });
+
+  it('is no session once Stop has marked the hook row completed', () => {
+    setup();
+    db.prepare("UPDATE sdk_sessions SET status = 'completed' WHERE memory_session_id = ?").run(HOOK);
+    expect(getActiveMemorySessionId(db, 'test')).toBe('');
+    expect(workingTitles()).not.toContain(OLD_SAVE);
   });
 });

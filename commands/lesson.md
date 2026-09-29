@@ -42,7 +42,7 @@ field. `--lesson` is capped at 500 chars (longer values are rejected), so for a
 long lesson keep the full text in the positional content and trim `--lesson` to
 the core insight:
 
-    node ${CLAUDE_PLUGIN_ROOT}/cli.mjs save "<full text>" \
+    node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" save "<full text>" \
       --type discovery \
       --title "<first 60 chars of text>" \
       --lesson "<core insight, ≤500 chars>" \

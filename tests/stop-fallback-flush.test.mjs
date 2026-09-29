@@ -77,6 +77,10 @@ function runStop(extraEnv = {}) {
       PWD: cwd,
       MEM_QUIET_HOOKS: '1',
       CLAUDE_MEM_SKIP_UPDATE: '1',
+      // Stop also spawns the detached llm-summary worker, which polls up to 15 s for flush
+      // files and then recreates dataDir after afterAll's sweep: one stop-fallback-* per run
+      // (D#116). Nothing here reads its output.
+      CLAUDE_MEM_SKIP_SUMMARY: '1',
       ...extraEnv,
     },
     encoding: 'utf8',

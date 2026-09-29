@@ -24,7 +24,7 @@
 // the user's runtime directory. A guard that compared only the writer and the reader would
 // pass while that third site silently stopped reaping.
 //
-// POPULATION: this is one of the three shipped bash hooks that `walkShipped` (".mjs/.js") is
+// POPULATION: this is one of the four shipped bash hooks that `walkShipped` (".mjs/.js") is
 // structurally blind to — the blind spot that hid two setup.sh defects for twelve audit
 // rounds. Both shipped languages are named explicitly here rather than swept.
 

@@ -64,7 +64,7 @@ import {
   extractCitationsFromTranscript,
   extractUserTypedIds,
 } from '../lib/citation-tracker.mjs';
-import { EVENT_ID_PREFIX } from '../lib/injected-ids.mjs';
+import { EVENT_ID_PREFIX, lessonIdTokens } from '../lib/injected-ids.mjs';
 
 // Same attachment shape the production hook writes (mirrors the fixture in
 // tests/citation-decay.test.mjs). The positive case below is what proves the
@@ -216,6 +216,17 @@ describe('D#202 — event-sourced rows are namespaced in the lessons block', () 
 // The decay numerator read 0/51 on the same corpus — a bounded negative, not an
 // acquittal: 26/26 live observation ids on this machine are also event ids and also
 // prompt ids, so the collision needs only one co-occurrence to land.
+describe('lessonIdTokens — re-rendering a cooldown entry keeps the table namespace', () => {
+  it('splits a mixed list by the obs multiset, including a shared number', () => {
+    expect(lessonIdTokens([116, 7, 116], [7, 116])).toEqual(['#116', '#7', 'E#116']);
+    expect(lessonIdTokens([5], [])).toEqual(['E#5']);
+  });
+  it('an entry written before obsIds existed keeps the old bare rendering', () => {
+    expect(lessonIdTokens([5, 6], undefined)).toEqual(['#5', '#6']);
+    expect(lessonIdTokens(undefined, [1])).toEqual([]);
+  });
+});
+
 describe('R11-B-P2-3 — the CITED side honours the table namespace too', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'r11-ns-'));
   afterAll(() => rmSync(tmpDir, { recursive: true, force: true }));

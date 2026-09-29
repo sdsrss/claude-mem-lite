@@ -55,7 +55,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { SKIP_TOOLS, SKIP_PREFIXES } from '../skip-tools.mjs';
-import { isRelatedToEpisode, extractFilePaths, makeEntryDesc } from '../utils.mjs';
+import { isRelatedToEpisode, makeEntryDesc } from '../utils.mjs';
+import { extractFileTargets } from '../bash-utils.mjs';
 import { buildImmediateObservation } from '../hook-llm.mjs';
 import { isNoiseObservation, isLowYieldChangeObs } from '../lib/low-signal-patterns.mjs';
 import { detectBashSignificance } from '../bash-utils.mjs';
@@ -322,7 +323,8 @@ export function replayProject(events, project, { forceSignificance = null } = {}
       continue;
     }
 
-    const files = extractFilePaths(ev.input || {});
+    // Same call and cwd the shipped hook makes (hook.mjs handlePostToolUse).
+    const { files, writes: bashWrites } = extractFileTargets(ev.input || {}, { cwd: ev.cwd || null });
     if (episode) {
       const timeGap = ev.ts - episode.lastAt > EPISODE_TIME_GAP_MS;
       const bufferFull = episode.entries.length >= EPISODE_BUFFER_SIZE;
@@ -344,6 +346,7 @@ export function replayProject(events, project, { forceSignificance = null } = {}
       // make every episode look like an empty narrative and over-report drops.
       desc: makeEntryDesc(ev.tool, ev.input || {}, ev.response, bashSig),
       files,
+      ...(ev.tool === 'Bash' && bashWrites.length ? { bashWrites } : {}),
       ts: ev.ts,
       isError: bashSig?.isError || false,
       isHardError: bashSig?.isHardError || false,

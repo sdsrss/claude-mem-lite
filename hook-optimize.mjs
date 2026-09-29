@@ -32,6 +32,7 @@ import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
+import { MANUAL_SESSION_ID_PREFIX, writerSessionId } from './lib/provenance.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // P1-14: same resolver as hook-shared.mjs — this was the second module that had never
@@ -101,7 +102,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // injects lesson-bearing rows — classifying those first is what makes the
     // lever usable before the backlog is fully drained.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, lesson_learned, importance, project
+      SELECT id, title, narrative, type, lesson_learned, importance, project, text, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND scope IS NULL
@@ -124,7 +125,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // deliberately NOT gated on optimized_at, so a lesson-less row can still be
     // picked up by wide scope for lesson enrichment afterward.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, subtitle, concepts, facts, text, search_aliases, importance, project
+      SELECT id, title, narrative, type, subtitle, concepts, facts, text, search_aliases, importance, project, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND (search_aliases IS NULL OR search_aliases = '')
@@ -157,7 +158,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // strand exactly those rows — the R10 P2-2 shape, where one pass's bookkeeping
     // evicts a row from a backfill it never visited.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, subtitle, concepts, facts, text, importance, project
+      SELECT id, title, narrative, type, subtitle, concepts, facts, text, importance, project, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND (concepts IS NULL OR concepts = '')
@@ -222,15 +223,12 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     -- explicitly, on a budget of 6, where a boundary tie decides which rows reach the LLM
     -- on a given run. Caught later by a test driving scope 'wide'; the original boundary
     -- case drove only 'narrow', so nothing went red.
-    -- NOT FIXED, AND NAMED SO THE COMPLETENESS CLAIM IS TRUE: findSmartCompressCandidates
-    -- carries an eighth ordering, "ORDER BY project, created_at_epoch" -- ASCENDING, no id
-    -- term, no LIMIT. It is outside the seven by construction and is left alone under Iron
-    -- Law #1: it feeds clusterForCompression, and a tie can move cluster MEMBERSHIP
-    -- because that function's own sort is stable, so SQL order survives as the tiebreak
-    -- and decides where a 14-day sub-cluster window is anchored. Phase-2 removed the
-    -- vector branch this used to hide behind, so the hazard is no longer gated on a
-    -- default-off env flag -- it is unconditional now. Still no failing case has been
-    -- built, so it stays unjudged, not cleared; the removal RAISED its priority.
+    -- The EIGHTH ordering, findSmartCompressCandidates' ASCENDING "project,
+    -- created_at_epoch", ends on id too since the N3 census (2026-09-26). It feeds
+    -- clusterForCompression, whose stable sort keeps SQL order as the tiebreak. An ASC tie
+    -- already came back in ascending rowid (R11 section 5, 60 of 60 runs), so the term pins
+    -- that order instead of leaving it to the query plan; it changes no measured output.
+    -- tests/order-by-created-at-guard.test.mjs now holds every such ordering in the tree.
     -- This comment is INSIDE a template literal, so it must never contain a backtick.
     ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
@@ -302,10 +300,16 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         }
         // `AND scope IS NULL` is the fill-only-empty guard: a save-enrich worker or
         // an episode upgrade can land between candidate selection and this write,
-        // and a classifier round-trip is long enough for that to be real.
+        // and a classifier round-trip is long enough for that to be real. The live guard
+        // and `text IS ? AND optimized_at IS ?` are the aliases branch's, for its reasons:
+        // the classification was made from the text read before the call, so it may land
+        // only on a live row still holding that text (a /verify approval changes both).
         const res = db
-          .prepare('UPDATE observations SET scope = ? WHERE id = ? AND scope IS NULL')
-          .run(scopeValue, cand.id);
+          .prepare(
+            `UPDATE observations SET scope = ?
+             WHERE id = ? AND scope IS NULL AND ${liveObsFilterSql('')} AND text IS ? AND optimized_at IS ?`,
+          )
+          .run(scopeValue, cand.id, cand.text, cand.optimized_at);
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -354,12 +358,25 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // D#6. This was the one branch of the four without it. `changes === 0` is a SKIP,
         // not a success: it must not count as processed. (It also used to guard a vector
         // rebuild on a dead row; that rebuild is gone, the liveness reason is not.)
+        // `text IS ? AND optimized_at IS ?`: the new text is the text read BEFORE the call plus
+        // the aliases, so it may only land on a row still holding that text. A /verify approval
+        // during the call rebuilds text and stamps optimized_at; without the compare the stale
+        // text came back and the corrected row matched searches for the claim it had just
+        // dropped (pre-ship review of 9786874, P2-2). A skip here is retried next cycle,
+        // against the row as it is then.
         const res = db
           .prepare(
             `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope)
-             WHERE id = ? AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND text IS ? AND optimized_at IS ?`,
           )
-          .run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
+          .run(
+            safe.search_aliases,
+            safe.text,
+            normalizeScope(parsed.scope),
+            cand.id,
+            cand.text,
+            cand.optimized_at,
+          );
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -395,7 +412,12 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
           skipped++;
           continue;
         }
-        const factArr = pickStrings(parsed && parsed.facts);
+        // Model facts only on a row no pass has stamped. `facts` is displayed as the memory's
+        // own claims, and a stamped row is either one the general re-enrich pass already wrote
+        // facts for, or one a user approved through /verify — where this pass replaced the
+        // approved facts with model text (pre-ship review of 9786874, P1-1). Concepts are
+        // search keywords and still fill.
+        const factArr = cand.optimized_at === null ? pickStrings(parsed && parsed.facts) : [];
         const conceptsOnly = conceptArr.slice(0, 10).join(' ');
         const factsOnly = factArr.slice(0, 10).join(' ');
         const appendedText = [
@@ -416,12 +438,15 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
         // concurrent hook to supersede or compress the row (R10 P3-3) or for save-enrich
         // to fill it. `facts` rides along with preserve-on-empty for the same reason the
         // general pass preserves it — a partial answer must not wipe a filled column.
+        // `text IS ? AND optimized_at IS ?` for the reason the alias branch gives, and one
+        // more: it is what makes the facts decision above still true at write time.
         const res = db
           .prepare(
             `UPDATE observations SET concepts = ?, facts = COALESCE(NULLIF(?, ''), facts), text = ?
-             WHERE id = ? AND (concepts IS NULL OR concepts = '') AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND (concepts IS NULL OR concepts = '') AND ${liveObsFilterSql('')}
+               AND text IS ? AND optimized_at IS ?`,
           )
-          .run(safe.concepts, safe.facts, safe.text, cand.id);
+          .run(safe.concepts, safe.facts, safe.text, cand.id, cand.text, cand.optimized_at);
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -468,7 +493,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         const res = db
           .prepare(
             `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ?
-             WHERE id = ? AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL`,
           )
           .run(Date.now(), cand.id);
         if (res.changes === 0) {
@@ -552,13 +577,41 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // scopes branch already guards with `AND scope IS NULL`; this is the same idea.
       // 0 changes is a skip, not a success: it must not count as processed and must not
       // rebuild a vector for a row that is no longer live.
+      // `optimized_at IS NULL` is the same idea for the pool's OTHER predicate: narrow and wide
+      // select only unstamped rows, and a /verify approval stamps the row it approves. Without
+      // the re-check an edit approved during the call was overwritten — narrow wrote model
+      // text over it, wide wrote back the pre-edit narrative it read before the call
+      // (tests/verify-reenrich-race.test.mjs). It also stops two overlapping runs rewriting a
+      // row twice.
+      //
+      // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
+      // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
+      // keeper does (D#146, D#138). Wide keeps the stored title and narrative (it fills the lesson
+      // and the side fields), so the row stays an explicit save. The writer's session row is
+      // best-effort.
+      let rewriteSessionId = null;
+      if (!isWide) {
+        const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);
+        if (cur?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
+          const enrichSessionId = writerSessionId('enrich-', cand.project);
+          try {
+            db.prepare(
+              `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+               VALUES (?, ?, ?, ?, ?, 'active')`,
+            ).run(enrichSessionId, enrichSessionId, cand.project, new Date().toISOString(), Date.now());
+            rewriteSessionId = enrichSessionId;
+          } catch (e) {
+            debugCatch(e, 'reenrich writer session');
+          }
+        }
+      }
       const res = db
         .prepare(
           `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
           text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
-          scope=COALESCE(?, scope)
-        WHERE id = ? AND ${liveObsFilterSql('')}
+          scope=COALESCE(?, scope), memory_session_id = COALESCE(?, memory_session_id)
+        WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL
       `,
         )
         .run(
@@ -577,6 +630,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           // scope, or emits an off-enum value, must never blank an existing label —
           // and THIS update stamps optimized_at, so the loss would be permanent.
           normalizeScope(parsed.scope),
+          rewriteSessionId,
           cand.id,
         );
       if (res.changes === 0) {
@@ -1078,7 +1132,7 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
     -- keeper.search_aliases when it rebuilt the keeper's TF-IDF vector. Phase-2 removed that
     -- rebuild, so the column had no reader left and went with it. Do NOT re-add it on the
     -- strength of R10 P3-7 -- that finding is moot, not pending. executeMergeCluster reads
-    -- keeper.{id,importance,narrative,concepts,facts} and o.{id,title,type,narrative,
+    -- keeper.{id,project,importance,narrative,concepts,facts} and o.{id,title,type,narrative,
     -- importance,access_count,lesson_learned}, and nothing else off these rows.
     SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts
     FROM observations
@@ -1248,6 +1302,20 @@ Return ONLY valid JSON:
         .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
         .get(keeper.id);
       if (!keeperLive) return false;
+      // findMergeCandidates selects only live rows with optimized_at NULL. A member stamped
+      // since then was edited through /verify (or rewritten by another pass) during the model
+      // call; a member no longer live was retired or replaced (a /verify retire or replace
+      // supersedes the original without stamping it), or superseded by another writer. The
+      // merged text was written from all of them as they were, so folding it in would bring
+      // a withdrawn claim back inside the keeper (tests/verify-reenrich-race.test.mjs).
+      // Abort the whole cluster rather than merge part.
+      const clusterIds = cluster.map((o) => o.id);
+      const unchanged = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NULL AND ${liveObsFilterSql('')}`,
+        )
+        .get(...clusterIds).n;
+      if (unchanged !== clusterIds.length) return false;
 
       // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
       // full text survives as a recoverable compressed_into child (mirroring
@@ -1267,10 +1335,33 @@ Return ONLY valid JSON:
          SELECT ${snapColList}, ? FROM observations WHERE id = ?`,
       ).run(keeper.id, keeper.id);
 
+      // The keeper now holds model text. Search reads authorship from memory_session_id, so an
+      // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
+      // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
+      // is the original save. writerSessionId keeps the id out of the uuid shape sdk_sessions
+      // refuses (D#147); the row stays best-effort, so no refusal can fail the merge (v6.19.1
+      // pre-tag F5a).
+      let rewriteSessionId = null;
+      const keeperSession = db
+        .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+        .get(keeper.id);
+      if (keeperSession?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
+        const compressSessionId = writerSessionId('compress-', keeper.project);
+        try {
+          db.prepare(
+            `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+             VALUES (?, ?, ?, ?, ?, 'active')`,
+          ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
+          rewriteSessionId = compressSessionId;
+        } catch (e) {
+          debugCatch(e, 'cluster-merge writer session');
+        }
+      }
       db.prepare(
         `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
-          importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?
+          importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?,
+          memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ?
       `,
       ).run(
@@ -1283,6 +1374,7 @@ Return ONLY valid JSON:
         safe.lesson_learned,
         minhashSig,
         Date.now(),
+        rewriteSessionId,
         keeper.id,
       );
 
@@ -1296,7 +1388,11 @@ Return ONLY valid JSON:
       return true;
     })();
     if (!mergeApplied) {
-      debugLog('DEBUG', 'llm-optimize', `cluster-merge aborted: keeper #${keeper.id} no longer live`);
+      debugLog(
+        'DEBUG',
+        'llm-optimize',
+        `cluster-merge aborted: keeper #${keeper.id} no longer live, or a member changed during the call`,
+      );
       return { merged: false };
     }
 
@@ -1331,7 +1427,7 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
   const cutoff = Date.now() - ageDays * DAY_MS;
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
-    SELECT id, title, narrative, lesson_learned, project, type, created_at_epoch
+    SELECT id, title, narrative, lesson_learned, project, type, created_at_epoch, optimized_at
     FROM observations
     -- liveObsFilterSql, not compressed_into alone (audit 2026-09-02 P0-3): auto-dedup losers
     -- carry superseded_at with compressed_into=0 and match this predicate exactly (imp=1,
@@ -1350,7 +1446,7 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
       AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
       AND created_at_epoch < ?
       ${projectClause}
-    ORDER BY project, created_at_epoch
+    ORDER BY project, created_at_epoch, id
   `);
   return project ? stmt.all(cutoff, project) : stmt.all(cutoff);
 }
@@ -1488,7 +1584,26 @@ export async function executeSmartCompressCluster(db, observations, project) {
     const medianEpoch = epochs[Math.floor(epochs.length / 2)];
 
     const summaryId = db.transaction(() => {
-      const sessionId = `compress-${project}`;
+      // The summary was written from the members as they were BEFORE the Sonnet call. A member
+      // whose stamp changed since was edited through /verify (or rewritten by another pass);
+      // a member no longer live was retired or replaced (neither stamps the original) or
+      // superseded by another writer. A summary of their earlier text would put the withdrawn
+      // claim back as a live row and hide the rest behind it (pre-ship review of 9786874,
+      // P2-1; delta review of the first repair). Abort the whole cluster, as cluster-merge does.
+      // Callers pass rows as findSmartCompressCandidates selects them, optimized_at included:
+      // a row without the column reads as unstamped, so a stamped member would abort (safe).
+      const nowRow = db.prepare(
+        `SELECT optimized_at FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
+      );
+      if (
+        observations.some((o) => {
+          const cur = nowRow.get(o.id);
+          return !cur || (cur.optimized_at ?? null) !== (o.optimized_at ?? null);
+        })
+      ) {
+        return null;
+      }
+      const sessionId = writerSessionId('compress-', project);
       const now = new Date();
       db.prepare(
         `INSERT OR IGNORE INTO sdk_sessions
@@ -1551,7 +1666,8 @@ export async function executeSmartCompressCluster(db, observations, project) {
       // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
       // by a Sonnet round-trip, so a member may already be compressed into another summary or
       // tombstoned. Re-pointing it here would silently remove a row from that summary's child
-      // set. Members that lost liveness stay where they are; the summary still lands.
+      // set. The check at the top of this transaction now aborts in that case; the guard stays
+      // so this UPDATE can never re-point a dead row on its own.
       db.prepare(
         `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
       ).run(sId, ...obsIds);
@@ -1559,6 +1675,10 @@ export async function executeSmartCompressCluster(db, observations, project) {
       return sId;
     })();
 
+    if (summaryId === null) {
+      debugLog('DEBUG', 'llm-optimize', 'smart-compress aborted: a member changed during the call');
+      return { compressed: false };
+    }
     debugLog(
       'DEBUG',
       'llm-optimize',

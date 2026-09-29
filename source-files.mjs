@@ -81,6 +81,8 @@ export const SOURCE_FILES = [
   'lib/stats-quality.mjs',
   'lib/low-signal-patterns.mjs',
   'lib/private-strip.mjs',
+  // Which writer produced an observation (explicit save vs machine-written); search + get marks.
+  'lib/provenance.mjs',
   'lib/citation-tracker.mjs',
   // v3.47 (D#78 P1): per-(obs,file) edge attribution. Imported by hook.mjs
   // (handleStop edge resolution). Missing from manifest → tarball hook.mjs
@@ -90,6 +92,7 @@ export const SOURCE_FILES = [
   // scripts/pre-tool-recall.js (hook fast-path) and lib/edge-attribution.mjs.
   'lib/file-edge-match.mjs',
   'lib/cite-back-hint.mjs',
+  'lib/bash-file-targets.mjs',
   // The one definition of the pre-recall cooldown path — shared by its writer
   // (scripts/pre-tool-recall.js) and both readers (cite-back-hint, edge-attribution).
   'lib/cite-recall-path.mjs',
@@ -149,6 +152,8 @@ export const SOURCE_FILES = [
   'lib/hook-stdin.mjs',
   'lib/plugin-key.mjs',
   'lib/hook-stdout.mjs',
+  'lib/hook-text-cap.mjs',
+  'lib/recall-framing.mjs',
   // audit P0/P1: inter-process install lock + atomic config writes — imported by
   // install.mjs (settings.json + install lock) and hook-update.mjs (.claude.json
   // + auto-update lock). Must ship or a partial install/update skips them.
@@ -175,6 +180,7 @@ export const SOURCE_FILES = [
   'cli/fts-check.mjs',
   'cli/doctor.mjs',
   'cli/activity.mjs',
+  'cli/verify-apply.mjs',
   'server/fts-check.mjs',
   // v2.32 invited-memory: memdir primitives + adopt/unadopt CLI
   // v3.13 CLAUDE.md-steering: claudemd.mjs project-tree managed block + migration
@@ -207,6 +213,9 @@ export const SOURCE_FILES = [
   // injection) and by benchmark/error-recall-suite.mjs (offline calibration) — the
   // hook is the one that breaks on a missing manifest entry.
   'lib/error-recall-core.mjs',
+  // N2: error-recall's suppression gate (deliberate TDD RED, exit-0 data printers).
+  // Statically imported by hook.mjs on BOTH PostToolUse and PostToolUseFailure.
+  'lib/error-recall-gate.mjs',
   // D#170: the PostToolUseFailure gate. hook.mjs imports it on the failure path and
   // benchmark/error-recall-live-replay.mjs scores the SAME predicate, so a missing
   // registration would ship a hook that cannot load its own filter.
@@ -270,6 +279,10 @@ export const SOURCE_FILES = [
   // hook-context.mjs (SessionStart) — missing it from the manifest would break both
   // hooks on auto-update.
   'lib/events-injection.mjs',
+  // D#69 episode-summarizer input filters + lesson grounding check. Statically imported
+  // by hook.mjs (PostToolUse capture, episode flush) and hook-llm.mjs (llm-episode) —
+  // missing it from the manifest would break both on auto-update.
+  'lib/episode-input-filter.mjs',
   // Shared delete orchestration (snapshot + related_ids cleanup + child recovery
   // + delete txn). Statically imported by server.mjs (mem_delete) and mem-cli.mjs
   // (cmdDelete) — extracted to kill the byte-duplicated twin. Missing it from the
@@ -307,6 +320,9 @@ export const SOURCE_FILES = [
   // module-level `process.exit(0)` side effects that abort vitest workers on
   // direct import. Statically imported by hook.mjs SessionStart handler.
   'lib/upgrade-banner.mjs',
+  // /verify's write half (validate -> backup -> one transaction -> read-back -> undo).
+  // Statically imported by cli/verify-apply.mjs.
+  'lib/verify-apply-core.mjs',
   // Per-table scrub helper for defense-in-depth at text-write INSERT paths.
   // Statically imported by hook-llm, hook-handoff, hook-optimize, hook,
   // mem-cli; reached transitively from server.mjs and cli.mjs.
@@ -351,6 +367,9 @@ export const HOOK_SCRIPT_FILES = [
   // prefilter leaves the registered hook command pointing at a file that is not there.
   'pre-agent-inject.sh',
   'pre-agent-inject.js',
+  // PreToolUse:Bash prefilter; execs pre-tool-recall.js (listed above) for file-touching
+  // commands. Both ends must ship, for the same reason as the pair above.
+  'pre-tool-recall-bash.sh',
   // v2.84: self-heal wrapper that detects ERR_MODULE_NOT_FOUND under the
   // install dir and runs install.mjs repair before retrying the entry.
   // hooks.json + install.mjs settings template invoke node hook entries
@@ -401,6 +420,7 @@ const PLUGIN_DECLARATION_FILES = [
   'commands/unadopt.md',
   'commands/lesson.md',
   'commands/bug.md',
+  'commands/verify.md',
 ];
 
 // The complete set of files the release signature MUST cover: every runtime .mjs

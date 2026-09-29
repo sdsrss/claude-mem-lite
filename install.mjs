@@ -97,6 +97,7 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { shellWord } from './cli-path.mjs';
 import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -272,7 +273,7 @@ export function hookManifestRepairHint(cacheRoot, marketplaceRoot) {
   const src = join(marketplaceRoot, 'hooks', 'hooks.json');
   const dst = join(cacheRoot, 'hooks', 'hooks.json');
   return pluginCacheHookEvents(marketplaceRoot).ok
-    ? `cp "${src}" "${dst}" && restart Claude Code`
+    ? `cp ${shellWord(src)} ${shellWord(dst)} && restart Claude Code`
     : `no usable marketplace copy to restore from — reinstall the plugin (/plugin uninstall then /plugin install), then restart Claude Code`;
 }
 
@@ -723,7 +724,7 @@ function registerMcpServer() {
       ok('MCP server registered: mem-lite');
     } catch (e) {
       fail('MCP registration failed: ' + e.message);
-      warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node ' + SERVER_PATH);
+      warn(`Try manually: claude mcp add -s user -t stdio mem-lite -- node ${shellWord(SERVER_PATH)}`);
     }
   }
 }
@@ -912,6 +913,9 @@ function configureHooks() {
   // Second bash prefilter, same idea one event over: skip the Node start for a
   // default-off feature (audit 2026-08-22 P2-5, see the script's header).
   const AGENT_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-agent-inject.sh');
+  // Third: the Bash leg of file recall, which starts Node only for commands that look like
+  // they view or write a file (see the script's header).
+  const BASH_RECALL_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-tool-recall-bash.sh');
   // v2.84: every Node hook invocation routes through hook-launcher.mjs so an
   // ERR_MODULE_NOT_FOUND from a partial-install drift auto-heals via
   // install.mjs repair instead of permanently bricking the hook chain.
@@ -1038,6 +1042,19 @@ function configureHooks() {
     ],
   };
 
+  // Bash leg of the same recall (docs/audits/20260926-154904-session-history-analysis-r2.md,
+  // N1): on Opus 5.5 most reads and edits are Bash commands. Parity with hooks/hooks.json.
+  const memPreToolRecallBash = {
+    matcher: 'Bash',
+    hooks: [
+      {
+        type: 'command',
+        command: `bash "${BASH_RECALL_PREFILTER_PATH}"`,
+        timeout: 3,
+      },
+    ],
+  };
+
   // P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
   // Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
   // can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
@@ -1057,13 +1074,13 @@ function configureHooks() {
   };
 
   // Filter out existing mem hooks, then append fresh ones
-  // PreToolUse has two separate matchers, so we register both
+  // PreToolUse has three separate matchers, so we register all three
   // Event set MUST stay equal to hooks/hooks.json's (minus scripts/setup.sh, which
   // bootstraps the plugin cache and has no settings.json counterpart) —
   // tests/audit-silent-20260814.test.mjs diffs a real `install --dev` run's
   // settings.json against the shipped manifest and reds on any new divergence.
   const hookConfigs = {
-    PreToolUse: [memPreToolRecall, memPreAgentInject],
+    PreToolUse: [memPreToolRecall, memPreToolRecallBash, memPreAgentInject],
     PostToolUse: [memPostToolUse, memPostToolRecall],
     PostToolUseFailure: [memPostToolFailure],
     PreCompact: [memPreCompact],
@@ -1603,7 +1620,8 @@ async function status() {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
       const obs = db.prepare('SELECT COUNT(*) as c FROM observations').get();
-      const sess = db.prepare('SELECT COUNT(*) as c FROM session_summaries').get();
+      // DISTINCT, like stats: a session can own several summary rows (legacy duplicates).
+      const sess = db.prepare('SELECT COUNT(DISTINCT memory_session_id) as c FROM session_summaries').get();
       db.close();
       push('ok', 'database', `Database: ${obs.c} observations, ${sess.c} sessions`, {
         exists: true,
@@ -1674,7 +1692,7 @@ async function status() {
         push(
           'warn',
           'cli',
-          `CLI: installed at ${join(binDir, 'claude-mem-lite')} but ${binDir} is not on PATH — add it: export PATH="${binDir}:$PATH"`,
+          `CLI: installed at ${join(binDir, 'claude-mem-lite')} but ${binDir} is not on PATH — add it: export PATH=${shellWord(binDir)}:"$PATH"`,
           { available: false, linked: join(binDir, 'claude-mem-lite') },
         );
       } else {
@@ -1754,8 +1772,9 @@ async function doctor() {
       return;
     }
     const last = checks[checks.length - 1];
-    // A detail before any check has nothing to attach to — same as today's drop, but the
-    // human face would show it, so this is the one line the two faces cannot share.
+    // Unreachable today: the Node-version check at the top of doctor() always records a
+    // check before the first log(). Kept as a guard — a detail with no check to attach to is
+    // dropped under --json, where the human face would have printed it.
     if (!last) return;
     (last.details ??= []).push(msg.trim());
   };
@@ -2004,7 +2023,7 @@ async function doctor() {
     // misbehaving, which is the worst moment to hand out the one entry that cannot
     // survive a missing module. Pre-ship review of v6.7.0 caught this one left behind.
     dwarn(
-      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${join(PROJECT_DIR, 'cli.mjs')} repair\``,
+      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} repair\``,
     );
   } else {
     ok('Hook self-heal: no recent silent hook breakage');
@@ -2020,7 +2039,7 @@ async function doctor() {
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
     fail(
-      `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${join(PROJECT_DIR, 'cli.mjs')} rebuild-binding\` (repairs every broken install, not just this one)`,
+      `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} rebuild-binding\` (repairs every broken install, not just this one)`,
     );
     issues++;
   } else if (breakage) {
@@ -2136,7 +2155,9 @@ async function doctor() {
     );
     for (const p of orphanPaths.slice(0, 5)) log(`    missing: ${p}`);
     if (orphanPaths.length > 5) log(`    ... +${orphanPaths.length - 5} more`);
-    log(`    Repair: node ${join(PROJECT_DIR, 'install.mjs')} uninstall    # removes the dead hook entries`);
+    log(
+      `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} uninstall    # removes the dead hook entries`,
+    );
     issues++;
   } else if (hasHooks) {
     ok('Orphan hooks: none (all hook targets present)');
@@ -2348,7 +2369,19 @@ async function doctor() {
       if (state.lastCheck) parts.push(`last check: ${state.lastCheck}`);
       if (state.latestVersion) parts.push(`latest: v${state.latestVersion}`);
       if (state.lastUpdate) parts.push(`last update: ${state.lastUpdate}`);
-      if (state.updateAvailable) parts.push('update pending');
+      // Judged against the version running now, like the banner (#35): in plugin mode
+      // nothing clears the cached flag once Claude Code has applied the update. Dynamic, as
+      // elsewhere in doctor, so a hook-update that cannot load costs only this judgement.
+      if (state.updateAvailable) {
+        let pending = true;
+        try {
+          const { pendingCachedUpdate } = await import('./hook-update.mjs');
+          pending = pendingCachedUpdate(state) !== null;
+        } catch {
+          /* cannot judge — report the cached flag as it stands */
+        }
+        if (pending) parts.push('update pending');
+      }
       if (state.rateLimited) parts.push('rate-limited');
       if (state.lastError) parts.push(`last error: ${state.lastError}`);
       ok(`Update state: ${parts.join(', ') || 'empty'}`);
@@ -2406,12 +2439,12 @@ async function doctor() {
   // already there.
   const noCodeInstall =
     !shape.managed && !shape.activePluginVersion && !hasAnyManagedCode(INSTALL_DIR, SOURCE_FILES);
-  const installRemedy = `node ${join(PROJECT_DIR, 'install.mjs')} install`;
+  const installRemedy = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install`;
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;
     const { checkDevDrift } = await import('./lib/doctor-drift.mjs');
     const r = skipDrift ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
-    const devRemedy = `re-run: node ${join(PROJECT_DIR, 'install.mjs')} install --dev`;
+    const devRemedy = `re-run: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install --dev`;
     const nameList = (files, count) => {
       const suffix = count > files.length ? ` +${count - files.length} more` : '';
       return `${files.join(', ')}${suffix}`;
@@ -2483,7 +2516,7 @@ async function doctor() {
               `a damaged one. Fix: ${installRemedy}`
           : `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
               `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
-              `(or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`,
+              `(or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`,
       );
     }
     // Complete copy install: no message — drift is a dev-install concern.
@@ -2511,7 +2544,7 @@ async function doctor() {
     // `noCodeInstall` above: the `repair` route runs from an entry point that is itself absent.
     const scriptRemedy = noCodeInstall
       ? installRemedy
-      : `claude-mem-lite self-update (or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`;
+      : `claude-mem-lite self-update (or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {
@@ -2599,8 +2632,9 @@ async function doctor() {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
       const obsCount = db.prepare('SELECT COUNT(*) as cnt FROM observations').get()?.cnt || 0;
-      // Align with stats / MCP mem_stats: session_summaries, not sdk_sessions
-      const sessCount = db.prepare('SELECT COUNT(*) as cnt FROM session_summaries').get()?.cnt || 0;
+      // Align with stats / MCP mem_stats: session_summaries, not sdk_sessions, counted DISTINCT
+      const sessCount =
+        db.prepare('SELECT COUNT(DISTINCT memory_session_id) as cnt FROM session_summaries').get()?.cnt || 0;
       db.close();
       const stats = `DB stats: ${sizeMB}MB, ${obsCount} observations, ${sessCount} sessions`;
       // The read succeeds on a too-new file — the tables are still there — so this

@@ -34,7 +34,7 @@ export async function cmdDoctor(db, args) {
         WHERE s.project = ?
           AND p.prompt_text IS NOT NULL
           AND length(p.prompt_text) >= 15
-        ORDER BY p.created_at_epoch DESC
+        ORDER BY p.created_at_epoch DESC, p.id DESC
         LIMIT ?
       `,
         )

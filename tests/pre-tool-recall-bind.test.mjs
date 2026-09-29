@@ -72,13 +72,13 @@ describe('pre-tool-recall bind directive (component 1)', () => {
     expect(ctx).toMatch(/state the one concrete check it forces/);
     expect(ctx).not.toContain("'#NN applied'");
   });
-  it('Edit by default (current) keeps the v2.98 ack directive', async () => {
+  it('Edit by default (current) keeps an ack directive — the applied-only one since D#98', async () => {
     const { stdout } = await runScript(
       { tool_name: 'Edit', session_id: 'b2', tool_input: { file_path: fp } },
       env(),
     );
     const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-    expect(ctx).toContain("'#NN applied'");
+    expect(ctx).toContain('a lesson that did not apply needs no mention');
     expect(ctx).not.toMatch(/state the one concrete check/);
   });
   it('Edit under legacy emits lessons but NO directive', async () => {
@@ -88,7 +88,7 @@ describe('pre-tool-recall bind directive (component 1)', () => {
     );
     const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
     expect(ctx).toContain('[mem] Lessons for maintain-core.mjs:');
-    expect(ctx).not.toMatch(/concrete check|#NN applied/);
+    expect(ctx).not.toMatch(/concrete check|#NN applied|needs no mention/);
   });
 
   it('bind: records present lesson identifiers in the cooldown for the edited file', async () => {

@@ -50,7 +50,7 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 
 | When | Call |
 |------|------|
-| Before Edit/Write | hook already recalled; if a \`#NN\` lesson was injected, cite \`#NN\` next time you produce user-visible text (citing = adopting the feedback; uncited lessons decay) |
+| Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, name \`#NN\` once where you say so (citing = adopting; uncited lessons decay; skip ones that did not apply) |
 | After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)\` |
 | After a non-obvious architecture decision | \`mem_save(type="decision", lesson_learned="<constraint + tradeoff>")\` |
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
@@ -87,9 +87,12 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 - **Edit / Write** 路径：decision-support——最多 3 条、240 字符、高重要度 bugfix/decision 即使无
   lesson 也注入。
 - Read→Edit 同文件共享 cooldown（不重复注入正文），但 Read 注入后的首个 Edit 会把 lesson **ID**
-  以一行 ack 指令重新浮出。看到 \`#NN [bugfix] …\` 这类行时：**下次产出用户可见文字时引用 \`#NN\`**
-  （\`'#NN applied'\` 或 \`'#NN n/a — <理由>'\`）。纯工具回合不算；把 ID 记在工作记忆里，写回时引用。
-- 系统按会话追踪引用：未引用的 lesson 连续 3 个会话后 importance −1（地板 0），被引用的 +1（封顶 3）。
+  以一行 ack 指令重新浮出。看到 \`#NN [bugfix] …\` 这类行时：**某条 lesson 改变了你的做法，就在描述
+  那处改动时顺带提一次 \`#NN\`**；没用上的 lesson 不必提，也不要逐条列出。纯工具回合不算；
+  把 ID 记在工作记忆里，写回时引用。
+- 系统按会话追踪引用：被引用的 lesson 在召回排序里上浮，被注入却未引用的下沉（有界的排序乘数）；
+  反复注入却从未被引用的，后台维护会把它的 importance 降到 2（无 lesson 的降到 1）。
+  写成 \`#NN n/a\` 的驳回不算采纳：排序上与未引用相同，同样下沉——所以不必写。
   引用是给系统的反馈，不是合规仪式——注入池据此自调。
 
 ## 何时主动调用 MCP 工具

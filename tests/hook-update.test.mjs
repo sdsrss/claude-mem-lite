@@ -1199,6 +1199,64 @@ describe('non-blocking SessionStart helpers (P3d)', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  // Issue #35: in plugin mode the update is applied by Claude Code, never by
+  // downloadAndInstall, so nothing clears the cached `updateAvailable` flag. A check
+  // that ran shortly before the user updated kept printing "v1.2.0 available
+  // (current: v1.0.0)" on a v1.2.0 plugin until the 24h throttle expired. The cached
+  // flag must be judged against the version that is RUNNING, on both cached faces.
+  function pluginOnlyAt(version) {
+    const home = makeDir('mem-update-home'); // no ~/.claude-mem-lite code tree
+    const pluginRoot = makeDir('mem-update-plugin');
+    writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version }, null, 2));
+    return { home, pluginRoot };
+  }
+  const staleAfterPluginUpdate = {
+    lastCheck: new Date().toISOString(), // inside the 24h window → shouldCheck false
+    installedVersion: '1.0.0',
+    latestVersion: '1.2.0',
+    updateAvailable: true,
+  };
+
+  it('getCachedUpdateBanner is silent once the running plugin reached the cached latest (#35)', async () => {
+    const { home, pluginRoot } = pluginOnlyAt('1.2.0');
+    const dataDir = makeDataDir('1.0.0');
+    seedState(dataDir, staleAfterPluginUpdate);
+    const { getCachedUpdateBanner } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: pluginRoot,
+      HOME: home,
+    });
+    expect(getCachedUpdateBanner()).toBeNull();
+  });
+
+  it('getCachedUpdateBanner names the running version, not the cached one (#35)', async () => {
+    const { home, pluginRoot } = pluginOnlyAt('1.1.0'); // updated, but not all the way
+    const dataDir = makeDataDir('1.0.0');
+    seedState(dataDir, staleAfterPluginUpdate);
+    const { getCachedUpdateBanner } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: pluginRoot,
+      HOME: home,
+    });
+    const banner = getCachedUpdateBanner();
+    expect(banner).toContain('v1.2.0 available');
+    expect(banner).toContain('current: v1.1.0');
+  });
+
+  it('throttled checkForUpdate does not report a cached update the running plugin already has (#35)', async () => {
+    const { home, pluginRoot } = pluginOnlyAt('1.2.0');
+    const dataDir = makeDataDir('1.0.0');
+    seedState(dataDir, staleAfterPluginUpdate);
+    globalThis.fetch = vi.fn();
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: pluginRoot,
+      HOME: home,
+    });
+    expect(await checkForUpdate()).toBeNull();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('isUpdateCheckDue is false when CLAUDE_MEM_SKIP_UPDATE is set', async () => {
     const { home } = makeCodeHome('1.0.0'); // non-symlink server.mjs → isDevMode() false
     const dataDir = makeDataDir('1.0.0');

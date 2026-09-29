@@ -322,7 +322,8 @@ describe('MCP audit fixes (stdio)', () => {
     const text = resp.result?.content?.[0]?.text || '';
     expect(resp.result?.isError).not.toBe(true);
     expect(text).toMatch(/dropped:\s*bogus_field/);
-    expect(text).toMatch(/── #1 ──/);
+    // seedDb writes under a machine session id ('audit-mem'), so the header names it.
+    expect(text).toContain('── #1 · 🤖 auto-written, not an explicit save ──');
     expect(text).toMatch(/title:/);
   });
 
@@ -333,7 +334,8 @@ describe('MCP audit fixes (stdio)', () => {
     await initialize(proc);
     const resp = await callTool('mem_get', { ids: [1, 999999] });
     const text = resp.result?.content?.[0]?.text || '';
-    expect(text).toMatch(/── #1 ──/);
+    // seedDb writes under a machine session id ('audit-mem'), so the header names it.
+    expect(text).toContain('── #1 · 🤖 auto-written, not an explicit save ──');
     expect(text).toMatch(/Note: ID\(s\) #?999999 not found/);
   });
 

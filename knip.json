@@ -16,6 +16,7 @@
     "benchmark/imperative-pool-replay.mjs",
     "benchmark/rerank-pool-replay.mjs",
     "benchmark/episode-flush-replay.mjs",
+    "benchmark/key-events-input-replay.mjs",
     "benchmark/keyctx-pool-replay.mjs",
     "benchmark/patha-exclude-report.mjs",
     "benchmark/deep-search-holdout.mjs",

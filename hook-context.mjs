@@ -32,7 +32,11 @@ import {
   UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
 import { extractUnfinishedSummary } from './hook-handoff.mjs';
-import { recentInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
+import {
+  recentInjectableEvents,
+  renderInjectableEvent,
+  sessionStartEventsEnabled,
+} from './lib/events-injection.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 // The canonical one (v3.84.0): this file carried a byte-identical private copy, which is
 // the same one-home rule this release enforced for the cooldown path and the dashboard.
@@ -213,7 +217,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
         OR (created_at_epoch > ? AND importance >= 2)
         OR (created_at_epoch > ? AND importance >= 3)
       )
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ${KEYCTX_POOL_OBS}
   `,
     )
@@ -225,7 +229,7 @@ export function selectWithTokenBudget(db, project, budget = 2000) {
     SELECT id, request, completed, next_steps, created_at_epoch
     FROM session_summaries
     WHERE project = ? AND created_at_epoch > ?
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ${KEYCTX_POOL_SESS}
   `,
     )
@@ -576,7 +580,12 @@ export function buildSessionContextLines(
   currentCcSessionId = null,
   collector = null,
 ) {
-  if (collector) collector.keyContextIds = [];
+  if (collector) {
+    collector.keyContextIds = [];
+    // The same rows as {id, text: rendered line}, so a caller can book only the ones the
+    // hook-output cap keeps (D#108; lib/hook-text-cap.mjs idsShownWhole).
+    collector.keyContextLines = [];
+  }
   // 1. Token-budgeted observation selection
   const selected = selectWithTokenBudget(db, project, 2000);
   const observations = selected.observations;
@@ -597,7 +606,7 @@ export function buildSessionContextLines(
           (created_at_epoch > ? AND importance >= 1)
           OR (created_at_epoch > ? AND importance >= 2)
         )
-      ORDER BY created_at_epoch DESC
+      ORDER BY created_at_epoch DESC, id DESC
       LIMIT 5
     `,
       )
@@ -611,7 +620,7 @@ export function buildSessionContextLines(
     SELECT request, completed, next_steps, remaining_items, lessons, key_decisions, created_at
     FROM session_summaries
     WHERE project = ?
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT 1
   `,
     )
@@ -701,20 +710,36 @@ export function buildSessionContextLines(
     // asserted in tests/hook-context.test.mjs rather than left as a claim, because "it
     // only adds" is exactly the kind of sentence this repo keeps finding to be false.
     const { fileLessonQuota, keyContextQuota } = sectionQuotas(fileLessons.length, keyContext.length);
+    // The collector records the line as the caller will SEE it: this function's return runs
+    // neutralizeContextDelimiters over the whole body, and idsShownWhole matches exact lines,
+    // so a row carrying a delimiter tag was shown yet never booked (D#115 P3-1). Matches the
+    // block-level pass for any tag closed on its own line. Two cases still differ, and leave a
+    // shown row unbooked as before this fix: an UNclosed tag whose attribute tail
+    // (CONTEXT_DELIMITER_RE's `[^>]*` does not stop at a newline) runs to a later row's `>` —
+    // the rows at the two ends of that span; and the block pass failing closed (32+ nested
+    // forged tags, defangToFixpoint strips every `<` / `>`) — any shown row holding `<` or
+    // `>`. 0 of 178 live importance>=2 rows carry a tag (2026-09-27).
+    const bookedLine = (e) => ({ id: e.id, text: neutralizeContextDelimiters(e.line) });
 
     if (fileLessons.length > 0 && !quiet) {
       const shown = fileLessons.slice(0, fileLessonQuota);
       summaryLines.push('### File Lessons');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');
-      if (collector) collector.keyContextIds.push(...shown.map((e) => e.id));
+      if (collector) {
+        collector.keyContextIds.push(...shown.map((e) => e.id));
+        collector.keyContextLines.push(...shown.map(bookedLine));
+      }
     }
     if (keyContext.length > 0 && !quiet) {
       const shown = keyContext.slice(0, keyContextQuota);
       summaryLines.push('### Key Context');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');
-      if (collector) collector.keyContextIds.push(...shown.map((e) => e.id));
+      if (collector) {
+        collector.keyContextIds.push(...shown.map((e) => e.id));
+        collector.keyContextLines.push(...shown.map(bookedLine));
+      }
     }
   } else if (!latestSummary && !effectiveQuiet()) {
     // Fallback: no summary AND no key observations — show recent activity.
@@ -738,12 +763,15 @@ export function buildSessionContextLines(
   // canonical store for promoted bugfix/decision/lesson memories that
   // persistHaikuSummary upgrade-deletes out of observations. Without this section
   // SessionStart never shows them. E# prefix keeps citation extractors (bare-`#`
-  // anchored) from reading an event id as an observation id. Gated on isQuietHooks()
-  // ONLY (explicit low-noise opt-out), NOT effectiveQuiet: unlike Key Context, events
+  // anchored) from reading an event id as an observation id. Of the quiet switches it
+  // honours isQuietHooks() (explicit low-noise opt-out), NOT effectiveQuiet: unlike Key Context, events
   // never appear in the obs-only Recent table and are absent from the MEMORY.md
   // sentinel, so an adopted project (the default) would otherwise have zero
   // SessionStart surface for them. Never throws (recentInjectableEvents catches).
-  if (!isQuietHooks()) {
+  //
+  // Since v6.13.0 the section is also opt-in (sessionStartEventsEnabled): audited at
+  // 2/30 accurate. The rationale lives on the predicate.
+  if (!isQuietHooks() && sessionStartEventsEnabled()) {
     const keyEvents = recentInjectableEvents(db, { project, limit: 5 });
     if (keyEvents.length > 0) {
       summaryLines.push('### Key Events');
@@ -843,11 +871,12 @@ export function buildSessionContextLines(
       `
     SELECT id, title, priority,
            ROW_NUMBER() OVER (
-             ORDER BY priority DESC, created_at_epoch ASC
-           ) AS ordinal
+             ORDER BY priority DESC, created_at_epoch ASC, id ASC
+           ) AS ordinal,
+           COUNT(*) OVER () AS open_total
     FROM deferred_work
     WHERE project = ? AND status = 'open'
-    ORDER BY priority DESC, created_at_epoch ASC
+    ORDER BY priority DESC, created_at_epoch ASC, id ASC
     LIMIT 5
   `,
     )
@@ -860,6 +889,19 @@ export function buildSessionContextLines(
       const pTag = d.priority === 3 ? '🔴' : d.priority === 1 ? '⚪' : '🟡';
       deferredLines.push(`${d.ordinal}. ${pTag} [P${d.priority}] ${truncate(d.title, 120)} (D#${d.id})`);
     }
+    // The list is capped at 5 and used to stop there silently, so 10 open items read as a
+    // 5-item backlog. The total is the same statement's COUNT(*) OVER (), taken before LIMIT.
+    const openTotal = Number(deferredItems[0].open_total);
+    const hidden = openTotal - deferredItems.length;
+    // Both listing surfaces page at 10, so the line names the knob rather than promising "all".
+    // Their maxima differ (mem_defer_list 50, `defer list` 100): past 50 only the CLI can list
+    // them, past 100 nothing lists them all (v6.17.1 pre-tag review).
+    if (hidden > 0)
+      deferredLines.push(
+        openTotal <= 50
+          ? `+${hidden} more open — mem_defer_list / \`defer list\` with a larger limit lists them`
+          : `+${hidden} more open — \`defer list --limit 100\` lists ${openTotal <= 100 ? 'them' : 'the first 100'}`,
+      );
     deferredLines.push('');
   }
 

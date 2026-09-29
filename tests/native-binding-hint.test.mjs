@@ -78,7 +78,7 @@ describe('formatHookError', () => {
     // resolvable absolute path, not bare `claude-mem-lite` (off-PATH on plugin
     // installs); `rebuild-binding`, not `repair` — see the rationale on
     // CLI_REBUILD_BINDING in lib/native-binding-hint.mjs
-    expect(line).toContain('cli.mjs rebuild-binding');
+    expect(line).toMatch(/cli\.mjs'? rebuild-binding/); // shellWord quotes only a path that needs it (D#61)
     expect(line).not.toContain('claude-mem-lite repair');
     // the verbose original message must NOT leak through
     expect(line).not.toContain('NODE_MODULE_VERSION');

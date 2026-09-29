@@ -77,7 +77,7 @@ describe('pre-tool-recall repeated-read guard (feature ②)', () => {
     const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
     expect(ctx).toContain('🔁');
     expect(ctx).toContain('big.mjs');
-    expect(ctx).toMatch(/system-injected/);
+    expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
   });
 
   it('stays silent on a small file re-read (below the token floor)', async () => {

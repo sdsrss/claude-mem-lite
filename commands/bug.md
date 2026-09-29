@@ -49,7 +49,7 @@ goes in `--lesson` so it lands in the high-weight `lesson_learned` field.
 body in the positional content and trim `--lesson` to the core description if
 longer:
 
-    node ${CLAUDE_PLUGIN_ROOT}/cli.mjs save "<body>" \
+    node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" save "<body>" \
       --type bugfix \
       --title "<first 60 chars of description>" \
       --lesson "<description, ≤500 chars>" \

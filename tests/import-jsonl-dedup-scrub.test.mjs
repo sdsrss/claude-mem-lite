@@ -9,13 +9,27 @@
 // junction entries. Once file edges were written (D#35), a duplicate row became a duplicate
 // EDGE, which is a duplicate in the file-recall window.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl } from '../lib/import-jsonl.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
+
+// Every scrubSecrets input, in order; the real function still runs. scrub-record.mjs
+// imports the same module id, so scrubRecord's calls are counted too.
+const scrubCalls = vi.hoisted(() => []);
+vi.mock('../secret-scrub.mjs', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    scrubSecrets: (s, ...rest) => {
+      if (typeof s === 'string') scrubCalls.push(s);
+      return real.scrubSecrets(s, ...rest);
+    },
+  };
+});
 
 // Long enough to trip the bearer-token pattern; short enough to survive the 80-char title cut.
 const SECRET_CMD = 'curl -H "Authorization: Bearer sk-ant-api03-abcdefghijklmnop" https://x';
@@ -61,28 +75,22 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     expect(scrubSecrets(raw), 'fixture no longer contains anything the scrubber rewrites').not.toBe(raw);
   });
 
-  // The property the fix actually rests on is STRUCTURAL: each side applies the scrubber
-  // exactly once, to the same raw string. The first cut scrubbed inside `importedObsTitle`,
-  // which left storage scrubbed twice (`scrubRecord` scrubs `title` again) against the
-  // preview's once — equal only while `scrubSecrets` is idempotent.
-  //
-  // Kept alongside the behavioural case below, not instead of it. I first wrote that "no
-  // input is known that makes the difference observable" — 300,000 fuzzed titles came back
-  // stable — and that was a statement about my generator, not about the scrubber: its
-  // alphabet had no `@`, and the grower that creates the drift needs one. Two reviewers each
-  // produced a drifting string within minutes. The behavioural case is the braces now; this
-  // scan is the belt, because it fails on the double-scrub shape even for the inputs where
-  // `scrubSecrets` happens to be stable.
-  it('the title is scrubbed exactly once on each side, by construction', () => {
-    const src = readFileSync(resolve(import.meta.dirname, '../lib/import-jsonl.mjs'), 'utf8');
-    const fn = src.slice(src.indexOf('function importedObsTitle'), src.indexOf('function dedupKey'));
-    expect(fn, 'premise: importedObsTitle must be findable').toContain('toolEditPath');
-    expect(fn, 'importedObsTitle scrubs, so the storage path scrubs twice').not.toMatch(
-      /(^|[^a-zA-Z_.])scrubSecrets\(/,
-    );
-    // Both consumers hand the raw title to scrubRecord, which is the single scrub.
-    expect(src).toContain("scrubRecord('observations', { title: importedObsTitle(useEv) }).title");
-    expect(src).toMatch(/title: importedObsTitle\(toolUse\),/);
+  // The property the dedup rests on: each side scrubs the title exactly ONCE, through the
+  // same function. Counted behaviourally — every scrubSecrets call whose input is a title
+  // (`Bash: …`; the body starts with the input JSON) — because the source-text scan this
+  // replaced (D#47 P3-9) false-redded on a comment, a Prettier re-wrap and a variable
+  // rename, and stayed green when the helper scrubbed through scrubRecord instead of
+  // scrubSecrets. A second scrub on either side, or a side that stops scrubbing, moves the
+  // count off two.
+  it('the title is scrubbed exactly once on each side', async () => {
+    const file = join(dir, 'count.jsonl');
+    writeFileSync(file, toolPair('Bash', { command: 'echo count-once-marker' }, 'u10') + '\n');
+    scrubCalls.length = 0;
+    await importJsonl(db, file, { project: 'proj' });
+    const titles = scrubCalls.filter((s) => s.startsWith('Bash: echo count-once-marker'));
+    expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n, 'premise: imported').toBe(1);
+    expect(titles, 'preview once + storage once').toHaveLength(2);
+    expect(titles[0]).toBe(titles[1]); // both sides scrubbed the SAME raw string
   });
 
   // This case used to carry a title on which `scrubSecrets` was NOT idempotent, so a
@@ -118,6 +126,96 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     writeFileSync(file, toolPair('Bash', { command: title }, 'u7') + '\n');
     for (let i = 0; i < 3; i++) await importJsonl(db, file, { project: 'proj' });
     expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(1);
+  });
+
+  // D#47 P3-8: the title was cut to 80 characters and THEN scrubbed, so a token straddling
+  // the cut arrived too short for its own pattern (`ghp_` needs 30+) and was stored as a
+  // plaintext prefix: here `ghp_` plus 14 secret characters. Assembled, never written whole
+  // — a literal this realistic trips push protection on the whole release.
+  it('a token straddling the 80-character title cut is scrubbed, not stored as a prefix', async () => {
+    const token = 'gh' + 'p_' + 'A1b2C3d4'.repeat(4) + 'Z9x8';
+    const cmd = `echo ${'x'.repeat(56)} ${token} | gh auth login --with-token`;
+    // Premise: the cut really does split the token, leaving a prefix the scrubber passes.
+    const cutFirst = scrubSecrets(`Bash: ${cmd.slice(0, 80)}`);
+    expect(cutFirst, 'premise: the old order leaks a token prefix').toMatch(/gh[p]_[A-Za-z0-9]{8,}/);
+
+    const file = join(dir, 'straddle.jsonl');
+    writeFileSync(file, toolPair('Bash', { command: cmd }, 'u8') + '\n');
+    await importJsonl(db, file, { project: 'proj' });
+    const { title } = db.prepare('SELECT title FROM observations').get();
+    expect(title).not.toMatch(/gh[p]_[A-Za-z0-9]{8,}/);
+    expect(title, 'the cut still bounds the stored detail').toHaveLength('Bash: '.length + 80);
+    // And the stored title is still the cross-run key.
+    await importJsonl(db, file, { project: 'proj' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(1);
+  });
+
+  // The same cut-then-scrub order sat on the three other length caps in this file (pre-ship
+  // review, v6.12.2): the tool input and an array-shaped tool result are each cut to 4000
+  // characters for the body (`text` + `narrative`, both search-indexed), and a prompt to
+  // 10000. Each case puts the token across its own cap.
+  describe('the body and prompt caps scrub before they cut', () => {
+    const token = 'gh' + 'p_' + 'A1b2C3d4'.repeat(4) + 'Z9x8';
+    const LEAK = /gh[p]_[A-Za-z0-9]{8,}/;
+    const straddle = (cap, lead = 0) => `${'x'.repeat(cap - 20 - lead)} ${token} tail`;
+
+    it('tool input straddling 4000', async () => {
+      // JSON.stringify adds `{"command":"` (12 chars) before the command text.
+      const cmd = straddle(4000, 12);
+      expect(JSON.stringify({ command: cmd }).slice(0, 4000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'in.jsonl');
+      writeFileSync(file, toolPair('Bash', { command: cmd }, 'b1') + '\n');
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT text, narrative FROM observations').get();
+      expect(row.text).not.toMatch(LEAK);
+      expect(row.narrative).not.toMatch(LEAK);
+    });
+
+    it('array-shaped tool result straddling 4000', async () => {
+      const content = [{ type: 'text', text: straddle(4000, 22) }];
+      expect(JSON.stringify(content).slice(0, 4000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'res.jsonl');
+      const [use, res] = toolPair('Bash', { command: 'cat log' }, 'b2').split('\n');
+      const r = JSON.parse(res);
+      r.message.content[0].content = content;
+      writeFileSync(file, `${use}\n${JSON.stringify(r)}\n`);
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT text, narrative FROM observations').get();
+      expect(row.text).not.toMatch(LEAK);
+      expect(row.narrative).not.toMatch(LEAK);
+    });
+
+    it('user prompt straddling 10000', async () => {
+      const text = straddle(10000);
+      expect(text.slice(0, 10000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'prompt.jsonl');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'scrub-1',
+          timestamp: '2026-09-11T00:00:00Z',
+          message: { content: text },
+        }) + '\n',
+      );
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT prompt_text FROM user_prompts').get();
+      expect(row, 'premise: the prompt imported').toBeTruthy();
+      expect(row.prompt_text).not.toMatch(LEAK);
+      expect(row.prompt_text.length, 'the cap still bounds it').toBeLessThanOrEqual(10000);
+    });
+  });
+
+  it('control: a secret past the cut leaves the kept 80 characters byte-identical', async () => {
+    // The axis the reorder moves is "which text the scrubber sees"; it now sees text beyond
+    // the cut, so pin that nothing inside the kept window changes because of it.
+    const cmd = `${'git log --oneline -20 && echo done '.repeat(3)}\npassword: hunter2correct`;
+    expect(cmd.indexOf('password'), 'premise: the secret starts past the cut').toBeGreaterThan(80);
+    const file = join(dir, 'control.jsonl');
+    writeFileSync(file, toolPair('Bash', { command: cmd }, 'u9') + '\n');
+    await importJsonl(db, file, { project: 'proj' });
+    const { title } = db.prepare('SELECT title FROM observations').get();
+    expect(title).toBe(`Bash: ${cmd.slice(0, 80)}`);
   });
 
   it('re-importing the same transcript does not duplicate the observation', async () => {

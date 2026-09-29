@@ -17,7 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -117,6 +118,86 @@ describe('pre-commit hook sync (P1-11)', () => {
           `  git config core.hooksPath .githooks`,
         'warning',
       );
+    }
+  });
+});
+
+// D#55: every vitest run leaves one `<TMPDIR>/<id>/ssr` cache (45 MB for a full-suite run,
+// 610 files; single-file runs 44 K-5.4 MB), and /tmp here is a 12 GB tmpfs. 627 of them
+// filled it and the Bash tool died with no output. 6e5439c moved `npm test` / `test:coverage`
+// to an on-disk TMPDIR, but the pre-commit hook still ran bare `npx vitest run`, so each
+// commit wrote one full-suite cache to /tmp. One home for the TMPDIR choice: the package.json scripts. The population
+// below is the git hook, the CI workflows, and `npm run audit:baseline`, which spawns the suite
+// from scripts/audit-metrics.mjs (D#60 — it used to run `node_modules/.bin/vitest` with the
+// inherited environment, so every baseline wrote its cache to /tmp).
+describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
+  const callers = [
+    'scripts/pre-commit.sh',
+    '.githooks/pre-commit',
+    ...readdirSync(join(REPO, '.github', 'workflows')).map((f) => `.github/workflows/${f}`),
+  ];
+
+  it('no automated caller runs vitest directly', () => {
+    const bare = [];
+    for (const rel of callers) {
+      readFileSync(join(REPO, rel), 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (/^\s*#/.test(line)) return;
+          // `npx vitest` with no `run` also runs the suite once outside a TTY (pre-ship review P3-7).
+          // Exempt only prose that names the command in backticks (sandbox-install.yml:81); a
+          // quoted YAML `run: 'npx vitest run'` is still an invocation (pre-ship claims review).
+          if (/\b(npx\s+vitest|vitest\s+run)\b/.test(line) && !/`[^`]*vitest[^`]*`/.test(line))
+            bare.push(`${rel}:${i + 1}`);
+        });
+    }
+    expect(bare).toEqual([]);
+  });
+
+  it('the pre-commit hook runs the suite through npm test, whose script sets an on-disk TMPDIR', () => {
+    // Indented since the suite call moved under the green-stamp reuse branch; a command, not
+    // prose: the line must START with it, so an `echo "… npm test …"` cannot satisfy this.
+    expect(readFileSync(join(REPO, CANONICAL), 'utf8')).toMatch(/^\s*npm test\b/m);
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    for (const script of ['test', 'test:coverage']) {
+      expect(pkg.scripts[script], script).toMatch(/TMPDIR="\$HOME\/\.cache\/tmp" vitest run/);
+    }
+  });
+
+  it("audit:baseline runs the suite through the repo's test:coverage script (D#60)", () => {
+    // Behavioural rather than a scan of audit-metrics.mjs: point it at a fixture repo whose
+    // `test:coverage` records the arguments it was handed. Spawning vitest any other way
+    // finds no `node_modules/.bin/vitest` here and parses nothing.
+    const fx = mkdtempSync(join(tmpdir(), 'mem-d60-'));
+    try {
+      writeFileSync(
+        join(fx, 'package.json'),
+        JSON.stringify({ name: 'fx', version: '0.0.0', scripts: { 'test:coverage': 'node rec.mjs' } }),
+      );
+      writeFileSync(
+        join(fx, 'rec.mjs'),
+        "import { writeFileSync } from 'node:fs';\n" +
+          "writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)));\n" +
+          "console.log(' Test Files  1 passed (1)\\n      Tests  2 passed (2)');\n",
+      );
+      const out = execFileSync(
+        process.execPath,
+        [join(REPO, 'scripts', 'audit-metrics.mjs'), '--run-tests'],
+        {
+          env: { ...process.env, AUDIT_METRICS_REPO: fx },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      const { vitest } = JSON.parse(out);
+      expect(vitest.status).toBe(0);
+      expect(vitest.tests).toBe('Tests 2 passed');
+      // The reporters coverageSummary() reads must still be requested.
+      expect(JSON.parse(readFileSync(join(fx, 'argv.json'), 'utf8'))).toEqual(
+        expect.arrayContaining(['--coverage.reporter=json-summary']),
+      );
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
     }
   });
 });

@@ -129,7 +129,10 @@ describe('R10 P1-6 — credential shapes that reached the LLM provider verbatim'
   it('the existing false-positive protection set does not regress', () => {
     // These three are the FP guards the earlier rounds installed. A --token / session=
     // widening is exactly the change that would break them.
-    expect(scrubSecrets('the token: alice')).toBe('the token: alice');
+    // 'alicebob', not 'alice': a 5-char value is under the {6,} floor and survives with or
+    // without the prose lookbehind, so the old line could not fail (D#54). With the
+    // lookbehind removed, this one is scrubbed to 'the token: ***'.
+    expect(scrubSecrets('the token: alicebob')).toBe('the token: alicebob');
     expect(scrubSecrets('token_count = 42')).toBe('token_count = 42');
     expect(scrubSecrets('Marker token: xyzpdq')).toBe('Marker token: xyzpdq');
     // Short values below the length floor stay put.

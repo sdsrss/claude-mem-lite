@@ -14,6 +14,7 @@ const CLI_COMMANDS = new Set([
   'update',
   'export',
   'restore',
+  'verify-apply',
   'compress',
   'maintain',
   'optimize',

@@ -2,6 +2,755 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.4 — ip-address security floor
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **`ip-address` up to 10.5.0 has two moderate advisories**: GHSA-rpw4-54j3-4h4q (`isLinkLocal()`
+  recognises only `fe80::/64` of the `fe80::/10` range) and GHSA-2vr4-cq9g-pvrc (the NAT64
+  local-use range `64:ff9b:1::/48` is not recognised). It comes in through the MCP SDK's rate
+  limiter, which only the SDK's HTTP authorization router loads; claude-mem-lite runs its MCP
+  server over stdio and never loads either. 6.19.4 requires `ip-address` 10.6.0 or later:
+  - an install from the npm registry uses the package's lock file and gets 10.7.2, where 6.19.3's
+    lock file pinned 10.5.0;
+  - `npx claude-mem-lite` sets up `~/.claude-mem-lite` without a lock file and takes the newest
+    version allowed when it runs (a 6.19.3 set-up made after the fixed versions came out already
+    has one);
+  - a plugin whose dependencies are linked from `~/.claude-mem-lite/node_modules` keeps the tree
+    that is already there.
+
+## v6.19.3 — capture in uuid-shaped projects; browse and restore provenance
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Nothing was captured in a project whose hook session id took the uuid shape.** The hook
+  names each session `hook-<project>-<8 hex>` and stores the id in both session columns. When the
+  project name (`<parent>--<directory>`, such as `dev--abc-efgh-jklm-opq` for
+  `~/dev/abc-efgh-jklm-opq`) is 22 characters with a dash as its 4th, 9th, 14th and 19th
+  character, that id is 36 characters with dashes where a uuid has them, the database refused
+  the session row, and every hook write in the project failed. The hook still exited normally,
+  so the error went only to its stderr and to the hook-errors count `stats` shows. Such an id now
+  gets one more character (`~`), as the other writers' ids have since 6.19.2.
+- **`browse` and `mem_browse` could list every explicit save in a project as working memory.**
+  Their "current session" was the project's newest active session row. The first `mem_save` in
+  a project (or its first merge, promote or narrow re-enrich) adds such a row, which stays
+  active until a session starts at least 24 hours later, while the hook's own session is marked
+  completed at the end of every reply. Only the hook's own session counts now.
+- **`restore` brought every row back as an explicit save.** Rows the hook, a merge, a promote
+  or an import wrote came back unmarked in `search` and `get`. They are restored as
+  machine-written now (under `restore-<project>`); explicit saves, and rows from a backup
+  without session ids, are restored as explicit saves as before.
+- The private-key line scanners do less work on text with many key headers. The output is
+  unchanged.
+
+## v6.19.2 — private keys in every line shape; saving in uuid-shaped projects
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Security: a cut-off private key or key tail was stored when its lines had a prefix or an
+  unusual break.** 6.19.1 scrubbed plain LF/CRLF lines and single-escaped `\n` breaks. Stored in
+  full until now: lines numbered by the Read tool or `cat -n` (`     2\t`, `2→`), `grep` output
+  (`id_rsa:`, `id_rsa-12-`), `> ` quoting, diff markers, a key inside a JS string split over
+  source lines (`"…\n" +`), a key inside a single-quoted string (a Python repr, `echo -e '…'`),
+  breaks escaped twice (a JSON string inside a JSON string), lone CR breaks, a key pasted onto
+  its BEGIN line, a key whose last line is followed by a closing backtick or tag, a truncation
+  note or (after a full-length line) words, such as a single-line Ed25519 key in a code span,
+  and a PGP key whose `Comment:` holds a Windows path. The same goes for a key tail
+  (`tail key.pem`) in those shapes.
+- **Prose next to a key marker keeps its text.** 6.19.1 could erase the first word of a
+  sentence right under a key (`Don't` lost `Don`), a path or identifier that starts the line
+  after a key header or body, the JSON fields after a cut header value when no base64 line
+  follows, two short words above an END line, and the text between a BEGIN and a far END once a
+  key between them had been scrubbed.
+  - Known limits: a fragment of 15 characters or fewer is kept, which includes a short last
+    line followed by more fields of the same JSON object or repr. A word line of 16 or more
+    letters right under a key body is taken for the key's last line. One base64 line of 16–39
+    characters under a key header is kept unless it starts like a key encoding (`MII…`,
+    `b3BlbnNzaC1rZXktdjE…`, or `lQ…`/`xc…` under a PGP header) or follows `Proc-Type`-style
+    headers. Above an END on its own line, such a line is kept when it has no digit, `+` or `=`
+    padding; above an END named in a sentence or in a backtick code span, it is kept unless it
+    starts like a key encoding or sits over a PGP checksum. An END followed only by closing tags
+    (`</code>`, `</key>`) counts as standing on its own line.
+    A key tail whose first line starts mid-line after prose is kept, as is a cut-off key whose
+    BEGIN line goes on with words. Right after a key header or body, blank lines between or not,
+    a line that starts with 40 or more letters, digits, `+`, `/` or `=` loses that start, and so
+    does a shorter run that a `[`, `<`, a quote, a backtick or five dashes follow. In escaped text,
+    a header value whose string runs on into later fields loses those fields up to a later
+    base64-looking line, as in 6.19.1. A 16–39 character last line before `&quot;`, and one over
+    an END inside an XML attribute (`…END-----"/>`), is kept. Prose that names a BEGIN and, later,
+    an END with no key between loses the text between them, as in earlier releases.
+- **Saving works in a project whose name makes a writer id look like a uuid.** For one name
+  length and dash layout per writer (for example a 29-character name shaped
+  `x-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), every `mem_save` failed, `activity promote` skipped every
+  event, and smart-compress and the weekly compress failed every run; smart-compress spent its
+  model call each time.
+- **Search's 🤖 mark covers memories that narrow re-enrich rewrote.** An explicit save whose
+  save-time enrichment had failed was rewritten with model text and still shown as an explicit
+  save.
+
+## v6.19.1 — secret scrubber and description fixes
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Security: three shapes of secret were stored in plaintext.**
+  - A JWT glued to a prefix longer than 40 characters (`session-<uuid>-eyJ…`). 6.19.0 had
+    narrowed where a JWT may start to keep the pattern linear; the pattern now starts at any
+    `eyJ` and stays linear another way.
+  - A private key cut off before its END line (`head id_rsa`, a tool output cut mid-key) when
+    no second key followed it. This goes back before 6.18.0. The header and the base64 lines
+    after it are now scrubbed, also where the line breaks are escaped (`\n` in a JSON string
+    saved or imported as text).
+  - A key body and END with no header (`tail key.pem`), including an armored PGP key's last
+    data line and checksum.
+  - Prose that names two private-key headers in one sentence no longer loses the text between
+    them.
+  - Known limits: a cut-off key whose lines carry a prefix (line numbers from `cat -n` or the
+    Read tool, a `grep` file name, `> ` quoting) is still stored. 6.19.0 stored it too, except
+    when a second key followed, where it erased everything up to that key; this release does
+    not. A fragment of 15 characters or fewer is kept. Right next to a key
+    header or END, a line that starts with 16 or more letters, digits, `+`, `/` or `=` (a long
+    path, `================`) loses that start.
+- **Episode descriptions never show part of a token a window edge cut.** A secret split by
+  the 4096-character scrub window (a whitespace run, then `ghp_…`) showed the fragment the
+  pattern could not recognise, and the Bash output's tail could start inside a long JWT and
+  show its signature. A `</private>` or private-key END that comes first (a nested span,
+  `tail key.pem`) no longer shows the text before it. Output between one and two windows long
+  no longer shows the same text twice, and whitespace runs in a Bash output snippet are one
+  space.
+- **Search's 🤖 mark covers two more machine writers.** A memory rewritten by the daily
+  cluster-merge and an event promoted by `activity promote --execute` were shown as explicit
+  saves.
+- **`defer add` / `mem_defer` print the new item's number past 50 open items** (they printed
+  `(item ?)`).
+
+## v6.19.0 — search marks machine-written memories; scrubber and ranking fixes
+
+**Upgrade note.** No schema change and no migration. The default output of `search` / `get`
+changes (below); there is no switch for it. Reverting everything is pinning
+`claude-mem-lite@6.18.0`.
+
+- **Search and get mark observations that were not saved explicitly** (#38, by
+  @danitrrga). A row written by hook capture, transcript import or compression, or imported
+  from an older store, shows `🤖` after its type in `search` (CLI and `mem_search`), and the
+  result line explains it (`🤖 = auto-written, not an explicit save`) whenever a shown row
+  carries it. `get` / `mem_get` name it in the row header. Explicit saves (`mem_save`,
+  `save`, `/lesson`, `/bug`) are unmarked, as every row was before, and so are events.
+  `search --json` carries `auto: true|false` on observation rows.
+- **`mem_search` stops repeating the title as its snippet line.** The snippet line is shown
+  only when the excerpt says something the title does not.
+- **Fix: a lone match whose IDF FTS5 clamped ranked last in cross-source search** (#36,
+  reported by @danitrrga). When a term is in at least half of a table's rows (in a new
+  per-project store, any two-row table), FTS5 replaces its IDF with 1e-6 and the row's score
+  stops saying how well it matched. A source with one such match was scored as a grazing hit
+  and sorted below every row of every other source; it is now scored like the best row of
+  any other source, which is what two such matches already got. It changes nothing where the
+  IDF is informative.
+- **Fix: a Bash step's description keeps the verdict its output ends with** (#37, by
+  @danitrrga). The episode summarizer saw only the first 60 characters of a command's output,
+  so a check that printed its result last read as unresolved, and a passing check was
+  written up as a bugfix. The description now keeps the head and the tail of the output (100
+  characters), each scrubbed before the cut. Output that contains a `<private>` tag or a
+  private-key header anywhere keeps the old 60-character head and no tail. Every description
+  field (Bash output and command, Edit, Grep and the rest) now stops before an unclosed
+  `<private>` tag or private-key header, where it used to show what followed. The extraction
+  prompt also says to state only outcomes the actions show.
+- **Security fixes in the secret scrubber** (found in the v6.18.0 review; present since
+  6.17.x):
+  - A label with markup between the noun and its value (`- **Password**: \`<value>\``,
+    `**Password:** <value>`) was not recognised, so the value was stored. It is now scrubbed,
+    in observations, prompts and session reports alike.
+  - Four patterns ran in quadratic time on crafted input (a JSON vendor key, quoted keys, a
+    JWT-shaped run, PEM headers with no END). Every stored field goes through the scrubber on
+    a synchronous hook path, and crafted input drove Stop past its 5-second timeout (27 s).
+    All four are linear now.
+  - A stored report could forge the /clear handoff's `<session-summary>` wrapper; that tag is
+    now defanged like the other context wrappers.
+
+## v6.18.0 — Last Session says how the previous session ended, without a report
+
+**Upgrade note.** No schema change and no migration. One default behaviour changes, and it
+has a switch. Pinning `claude-mem-lite@6.17.1` stops new lines; a line already written stays
+until that session's next observation titles replace it, and 6.17.1 keeps its unrecognised
+tag as text in the row's `notes`.
+
+| Change | Switch |
+|---|---|
+| When a session's final reply has no Done / Not done / Failed / Uncertain section, SessionStart's Last Session shows the first 120 characters of that reply as `Completed:` (and the /clear handoff shows it as `<session-summary source="last-reply">`), where it used to show observation titles, which are usually empty | `CLAUDE_MEM_SUMMARY_TAIL=0` (from a session's next turn) |
+
+**Who sees a difference:** anyone whose assistant does not end its turns with such a
+report — that is the default. A turn whose reply carries a report is handled as before.
+
+- **Last Session's Completed falls back to the head of the final reply.** Stop records a
+  summary row every turn. When the reply carried no report, the row's Completed came from
+  observation titles, which are usually empty (the model summary worker, which could fill it,
+  needs observations and exits without them), so the next session saw only the opening
+  prompt. In 30 headless sessions run without any reporting convention, Stop found a report
+  in none. The first 120 characters of the final reply were blind-labelled as correct in all
+  30 (informative in 22, vague in 8); the last 120 characters were uninformative in 29 of 30
+  (offers, questions, trailing detail) and are not used. A report still wins, then the model summary, then this line, then titles. A later
+  reply shorter than 400 characters as written (such as "You're welcome!") does not replace
+  an earlier one: closing replies ran 15–187 characters against 801 or more for task replies,
+  in 12 more sessions in English and Chinese. Only code blocks, line-leading markdown markers
+  and extra whitespace are removed; everything else, `__init__.py` and `*.mjs` included, is
+  kept as written. The line comes from the first 8000 characters left after that; if the secret
+  scrubber finds anything there — with lines kept or joined, as written or with backticks,
+  pipes and asterisks removed, which is how markup can hide a key — or a PEM header appears
+  there, no line is written that turn; the 120-character cut is checked the same way. What
+  is stored is scrubbed again and defanged when shown. Method and numbers:
+  `docs/audits/20260927-d114-default-user-corpus.md`.
+
+## v6.17.1 — fixes from the v6.17.0 pre-tag review
+
+**Upgrade note.** Fixes only; no schema change, no migration, no new setting. Reverting is
+pinning `claude-mem-lite@6.17.0`.
+
+- **`CLAUDE_MEM_SALIENCE=verdict` now says it overrides the adopted memory guidance.** Under
+  `verdict` the pre-edit line asks for `'#NN applied'` / `'#NN n/a — <reason>'` on every
+  lesson, while the CLAUDE.md managed row and the detail doc that 6.17.0 wrote into adopted
+  projects say a lesson that did not apply needs no mention. The agent got both with nothing
+  saying which wins; the verdict line now says it does. The default line, the `bind` and
+  `bridge` arms' lines (efficacy-harness arms, whose wording stays fixed) and the adopted text
+  are unchanged.
+- **Fix: Key Context rows whose title or lesson carries a block-delimiter tag were shown but
+  not recorded as injected.** The SessionStart / PreCompact output defangs such a tag (for
+  example `</memory-context>` becomes `/memory-context`), but the record of which rows were
+  shown kept the original line, so the row failed the "shown whole" match. It was then
+  re-injected at prompt time and missed by Stop's citation credit. Two rarer shapes still
+  leave a shown row unrecorded, as before: an unclosed tag whose attribute text runs on to a
+  later row's `>` (the rows at both ends), and 32 or more nested forged tags, where the
+  defang strips every `<` / `>` (any shown row containing one). On the maintainer's database
+  0 of 178 live importance ≥2 rows carry a tag (2026-09-27).
+- **Fix: `doctor` said "update pending" for the version you already run.** In plugin mode
+  nothing clears the cached update flag once Claude Code has applied the update; the
+  SessionStart banner already checked it against the running version (#35), and `doctor` now
+  asks the same check.
+- **Fix: `defer list` / `mem_defer_list` told you to raise the limit on a page already at the
+  maximum** (100 on the CLI, 50 over MCP). At the maximum the line now says the page is the
+  largest and that the rows left out are the ones that sort last (lowest priority, then
+  newest). SessionStart's "+N more open" line had the same flaw past 50 open items (the MCP
+  maximum): it now names `defer list --limit 100`, and past 100 says that lists the first
+  100. Up to 50 open items the line is unchanged.
+- **Tests:** two suites stopped leaving a directory in the temp dir on every run
+  (`mem-scenario-*`, `stop-fallback-*`): a background worker started by the hook under test
+  recreated the fixture after cleanup. Tests do not ship.
+
+## v6.17.0 — the pre-edit lesson line stops asking for a verdict on every lesson
+
+**Upgrade note.** No schema change and no migration. Two default behaviours change; one has a
+switch, and reverting everything is pinning `claude-mem-lite@6.16.0`:
+
+| Change | Switch |
+|---|---|
+| The pre-edit lesson line asks for a lesson's `#NN` only where it changed the edit, once; it no longer asks for a per-lesson `'#NN applied'` / `'#NN n/a — <reason>'` verdict in your next reply. The CLAUDE.md managed row and the detail doc say the same | `CLAUDE_MEM_SALIENCE=verdict` (the directive only) |
+| The SessionStart "Deferred Work" list (5 rows) ends with "+N more open …" when more items are open | — (pin 6.16.0) |
+
+Adopted projects get the new CLAUDE.md managed row and detail doc rewritten on the next
+SessionStart, as on every template change; `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the old
+text.
+
+- **The pre-edit lesson line stops asking for a verdict on every lesson.** It asked the agent
+  to answer every lesson it was shown, including the ones that did not apply. Those answers
+  (`#NN n/a — …`) have not counted as adoption since 6.13.0 — citation decay ignores them — but they put lists
+  of lesson ids into the replies you read: on the maintainer's transcripts, 335 of 2,007 `#NN`
+  mentions were such dismissals, and 98 of 1,890 text-only replies carried one
+  (`docs/audits/20260927-d98-dismissal-baseline.md`). The agent is now asked to name a lesson
+  only where it changed the work; whether replies actually carry fewer ids is measured after
+  this release. The citation itself stays: replacements that infer adoption from later tool
+  activity were measured and rejected (6.16.0 notes). The opt-in `bind` and `bridge` arms keep
+  their wording. The SessionStart "cite-recall" note counts a dismissal as an answer, so it may
+  fire more often now that a lesson that did not apply gets no reply.
+- **Fix: memory rows the 10,000-character hook limit cut were still recorded as delivered.**
+  A prompt naming a long deferred item could push the prompt-time memory rows past the limit;
+  they were dropped from the output but still written to the de-duplication marker, so a
+  later prompt inside the dedup window could skip them as already shown, and counted as
+  injected. The same held for SessionStart / PreCompact Key Context rows. Only rows shown
+  whole are recorded now (the D#108 gap named in 6.16.0). One exception: the first deferred
+  item named in a prompt counts as shown once its heading line is, because its detail is cut
+  the same way on every re-injection; any other item counts only when shown whole.
+- **Fix: `defer list` / `mem_defer_list` said nothing when a page left items out.** With 11
+  open items the default page showed 10 and no hint that an eleventh existed. They now end
+  with a line saying how many were not shown and how to raise the limit (`--limit` on the CLI,
+  `limit` on the MCP tool).
+- **Fix: the update banner kept offering a version you already run** (#35). In plugin mode
+  Claude Code applies the update, so the cached "vX available" flag stayed until the next
+  successful network check, up to a day later; both the SessionStart banner and the throttled
+  check now compare it with the running version.
+- The `<session-summary>` tag in a resumed session's handoff names who wrote its Done text
+  (`report`, `titles` or `haiku`) instead of always saying `haiku`.
+- Dev dependencies: six minor/patch updates (#32).
+
+## v6.16.0 — injected memory stays within the host's 10,000-character limit, and two recall wordings run side by side
+
+**Upgrade note.** No schema change and no migration. Three default behaviours change; one has
+an off switch, and reverting everything is pinning `claude-mem-lite@6.15.0`:
+
+| Change | Off switch |
+|---|---|
+| Each session gets one of two first lines on a PreToolUse / PostToolUse recall block: the old "system-injected context, continue your planned action" or a plain statement of where the notes come from | `CLAUDE_MEM_RECALL_FRAMING=legacy` |
+| Memory text over the host's 10,000-character hook limit is trimmed by whole lines, with a footer naming the dropped ids, instead of being replaced by the host with a 2,000-character preview | — (pin 6.15.0) |
+| Lessons shown after a failed Bash command now count in citation decay like every other face: ids surfaced there and never cited are demoted over time | — (pin 6.15.0) |
+
+- **Injected memory no longer collapses to a preview when it runs long.** Claude Code caps a
+  hook's injected text at 10,000 characters; over that it saves the text to a file and gives
+  the model the first 2,000 characters, and does not ask it to read the rest. Nothing bounded
+  our output: naming a deferred item with a long detail in a prompt injected 32,958
+  characters. Every surface that injects text now trims by whole lines to fit (a single line
+  longer than the limit is cut at a word boundary and ends in `…`), re-closes a tagged block
+  it cut, and ends with a line naming the ids it dropped. Known gap: rows trimmed this way are
+  still recorded as injected for de-duplication (D#108).
+- **The recall framing line is now an experiment, not a fixed string.** Claude Code's hooks
+  reference asks for injected context written as factual statements, because text framed as
+  out-of-band system commands can trigger the model's prompt-injection defenses. The old line
+  was added to stop the model ending its turn after a reminder, and PreToolUse is the
+  best-cited surface, so the wording is compared rather than swapped: each session is assigned
+  one of the two lines by a hash of its id. `node benchmark/citation-live-replay.mjs --since
+  <date> --by-framing` compares their cite-rates from your own transcripts.
+- **Fix: error recall delivered on a failed command was invisible to citation decay.** Hints
+  shown through PostToolUseFailure (where the host sends a failed Bash call) were never matched
+  by the citation extractor, so those ids could neither be promoted nor demoted, and every
+  cite-rate report missed them. On the maintainer's transcripts: error_recall pairs 703 -> 823.
+  **Caliber break:** every earlier error_recall cite-rate figure (citation-stats, the live
+  replay) counted only PostToolUse delivery; do not compare it with one taken after upgrading.
+- **`claude-mem-lite context --chars`** prints the context block's size against the 10,000
+  limit on stderr.
+- The plugin description no longer advertises the TF-IDF search arm removed in 6.0.0.
+
+Also measured and not shipped (details in `docs/measurement/rulers.md`): indexing the parts of
+camelCase identifiers took an identifier-part query suite from 0 to full recall but cost
+0.0385 precision@10 on the benchmark gate, above its 1/n tolerance, and was reverted; two
+non-citation adoption signals were counted and not built (one surface below 200 decidable
+pairs; on the other, 8 pairs where only the new signal fired, all test re-runs crediting
+every id in the block). `benchmark/cutoff-reach-probe.mjs` counts what file recall's 60-day
+cut removes; it first applies on 2026-11-04.
+
+## v6.15.0 — a lesson copied from tool output no longer reaches your context, and your own reports win Last Session
+
+**Upgrade note.** No schema change and no migration. Two default behaviours change; one has an
+off switch, and reverting everything is pinning `claude-mem-lite@6.14.0`:
+
+| Change | Off switch |
+|---|---|
+| An auto-captured lesson that repeats text a command PRINTED is kept out of automatic injection (an event stays searchable at importance 1; a `change` observation loses the lesson) | `CLAUDE_MEM_LESSON_OUTPUT_CAP=off` |
+| Last Session and the `/clear` handoff read the assistant's own Done / Not done report when its headings are markdown (`## Done`, `**Not done**`), instead of falling back to the model's summary | — (pin 6.14.0) |
+
+- **Security: text a command prints can no longer ride an auto-lesson into later sessions.**
+  6.14.0 started showing the episode summarizer up to 12 verbatim failing-output lines and
+  asking its lesson to quote one. Whoever controls what a command prints — a repository's
+  test, a fetched page, a third-party tool — could therefore get a sentence of their choosing
+  stored as a lesson at the importance every injection face reads. Reproduced with the real
+  model on a sandbox database: 3 of 6 hostile windows stored the directive verbatim at
+  importance 2. Lessons are now checked by where their words came from: sharing any four
+  consecutive words with tool output (a failing line, or the response snippet of a Bash,
+  Grep, MCP or other tool call shown in an action line) keeps an event at importance 1 and
+  drops a `change` observation's lesson (the lesson-less row is then dropped as low-yield),
+  because an observation's importance can be raised later by reads. After the change, 12
+  hostile windows: 0 stored at importance 2 or above. Trade-off: four shared words of filler
+  count too, so a lesson resting on your own comment or commit message can be demoted when
+  it happens to share such a run with output in the same window. Not covered: the title and
+  narrative of the same row, and a lesson that paraphrases the hostile line.
+- **Last Session shows what you reported, not what the model guessed.** The Stop-time parser
+  that reads the turn's final Done / Not done / Failed / Uncertain report only knew `Done:`
+  with a colon; most reports use markdown headings, so the model's summary filled Last Session
+  instead, and it can be wrong (one told the next session the work left was the opposite of
+  what the session's own report listed). Over 1,848 turn-final messages on the maintainer's
+  machine, reports read went from 109 to 465; sessions in the last 7 days with a readable
+  report, 39 to 86 of 106. Headers with a parenthetical (`**Not done**（未开始）：…`), a
+  combined header, `**Failed.** none`, `* Done:` bullets and a short closing question are
+  handled; header parsing is linear in line length (a 1M-character line: under 30 ms).
+- **Bash file capture: a loop is a write only when its body writes.** A read-only loop that
+  reused a written loop variable's name was recorded as writing its list; the body is now
+  checked, including writes through a helper, comprehensions and suites with comments.
+  Replayed over 10,514 real commands against 6.14.0: one command changed, and its dropped
+  "writes" were quoted test-fixture text.
+
+Also measured and decided (details in `docs/measurement/findings.md`): a tree-sitter shell
+parser for the hook path was rejected (≈ 26 ms per node process against a 3.2–8.6 ms cold
+current parser, 2.23 MB of grammars, and the bash prefilter cannot use it); moving the model
+session summary to SessionEnd or a debounce was not done — its coverage (9 of 157 sessions)
+is limited by its input, not its timing.
+
+## v6.14.0 — memory now sees work done through Bash, and stops injecting what the model cannot use
+
+**Upgrade note.** No schema change and no migration. Five default behaviours change; three
+have an off switch, and reverting everything is pinning `claude-mem-lite@6.13.6`:
+
+| Change | Off switch |
+|---|---|
+| File recall also fires before Bash commands that view or write a file (a fourth hook command runs under `bash`: `pre-tool-recall-bash.sh`) | `CLAUDE_MEM_BASH_RECALL=off` (any case) |
+| Error recall stays quiet on a deliberate failing-test run and on commands that only print data | — (pin 6.13.6) |
+| The episode summarizer ignores mutation probes, the agent's own failing inline scripts and subagent calls that do not edit the project | `CLAUDE_MEM_EPISODE_INPUT_FILTER=off` |
+| An auto-captured event lesson that quotes nothing from its window is dropped (the event stays, at importance 1) | `CLAUDE_MEM_LESSON_GROUNDING=off` |
+| The `[mem] episode flushed: N entries` line is no longer injected | — (pin 6.13.6) |
+
+Windows: the new hook needs `bash` like the other three (Git for Windows or WSL);
+`claude-mem-lite doctor` reports it when `bash` is missing.
+
+- **Reads and edits made through Bash are remembered and recalled.** On recent models most
+  file edits are `sed -i`, `cat > f <<EOF` or a python patch, and most reads are `cat` /
+  `sed -n`. The capture side took paths only when they were absolute and unquoted, so a
+  relative path, a quoted path or anything after `cd <repo> &&` gave no file or just the repo
+  root. Replayed over this project's own sessions, the share of Bash edit commands with a real
+  file recovered went from 3.3% to 87.3% (73.4% record the written file itself), and reads
+  from 2.7% to 88.9%. A Bash edit now also counts as an edit everywhere an Edit does (whether an episode is kept, the "unsaved
+  bugfix" nudge, cite-back, session handoff). Lessons for a file are now shown before a Bash
+  command views or writes it, as they are before Read and Edit; searches (`grep`, `rg`),
+  test runs and other commands stay silent. A bash prefilter decides in about 4 ms whether
+  to start Node at all; on this project's sessions it started Node for 52% of Bash commands
+  and missed 1 of 3,232 that had a file to recall. Parsing is bounded, so an unusual command
+  cannot hold the hook past its timeout.
+- **Error recall no longer answers a failure you meant to cause.** A run of a test file you
+  just wrote or edited is a TDD red step, and recall stays quiet on it; so does a command
+  that only prints data (`node -e`, `python3 -c`, `gh … --log`, `jq`) and exits 0 while its
+  output happens to contain someone else's error text. Real failures still fire.
+- **Auto-captured lessons have to quote what happened.** The episode summarizer now sees the
+  window's failing output, the comments an edit adds and commit messages, and a lesson that
+  quotes none of them is dropped. Mutation-test probes and the agent's own failing inline
+  scripts are no longer summarized as product bugs, and a subagent's reads and probes stay out
+  of the main session's episodes (its edits to the project are still recorded). Key Events
+  stays off at session start.
+- **No more `[mem] episode flushed: N entries` line in context.** It was a receipt the model
+  could not act on. The unsaved-bugfix and cite-back hints that followed it are unchanged.
+- **Newest-first lists no longer put the older of two same-millisecond rows first.** 27
+  orderings on `created_at_epoch` now break ties by id — `recent`, `timeline`, activity,
+  browse, exports, dedup scans. A timeline also no longer drops rows that share its anchor's
+  exact millisecond.
+- **Session-scoped paths stay out of file links.** The harness scratchpad, spilled tool
+  output (`tool-results/`) and `node_modules/` are no longer recorded as the files a memory
+  is about.
+- Development: `npm run test:ci-env` runs the suite under CI's environment (v6.13.0's CI-only
+  failure reproduces in it), and test workers now drop the `GIT_*` variables a git hook
+  exports — committing from a linked worktree ran fixture `git init`s against the real
+  repository and turned it bare.
+
+## v6.13.6 — a late background summary no longer overwrites a newer one
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.5`.
+
+- **The background session summary keeps the newest reply.** Each turn starts a background
+  summary, and two of them could finish out of order, so an older turn's summary could replace
+  a newer one until the next turn. A summary started by an earlier turn now writes nothing once
+  a later turn has ended; it also skips its model call when that is already known.
+- **A session's `completed_at` is its latest turn.** It kept the first turn's end time for the
+  whole session.
+- **The quick summary written at startup after an `/exit` finds the session that exited**
+  even when another session of the same project, still open, ended a turn more recently.
+- **Background summary outcomes can be measured.** With `CLAUDE_MEM_METRICS=1`, each run of the
+  background summary writes one `summary_worker` row to the metrics log: its outcome (written,
+  superseded, no observations, empty reply, no LLM slot, no database, error), the session, and
+  how long the model call took. Off by default.
+
+## v6.13.5 — one summary per session, and "Last Session" shows your latest report
+
+**Upgrade note.** Fixes only; no schema change and no migration. Duplicate summary rows that
+earlier versions already wrote are left as they are; new sessions no longer create them.
+Reverting is pinning `claude-mem-lite@6.13.4`.
+
+- **Session summaries: one row per session.** A session could collect many summary rows: the
+  background summary added one on each later turn once it had upgraded the first, and `/clear`
+  or `/compact` added a second beside the one written at the end of the first turn. One
+  session on the maintainer's database had 37 rows, and they filled all ten top results of a
+  session search for its own words. Every writer now updates the session's one row.
+- **"Last Session" shows the latest Done / Not done you reported.** The stored report was the
+  one from the session's first turn; each later report now replaces it. The background model
+  summary no longer overwrites a Done or Not done the assistant wrote (it still fills the other
+  fields and anything the report left out), and a report that says nothing is left is no
+  longer refilled with older unfinished items. A turn with only Failed / Uncertain lines is
+  not treated as a report. Without a report, the session shows the model's summary or its most
+  recent observation titles, instead of the first turn's titles.
+- **"Last Session" is no longer displaced by a late background summary.** A summary finishing
+  after the next session had started could put the previous session back on top.
+- **`stats`, `status` and `doctor` count sessions, not summary rows.**
+- **Related-memory links prefer the newest matches** when several share a timestamp
+  (previously the oldest).
+- **Stop reads the conversation transcript once per turn** in sessions that use subagents.
+- **`get` on a session summary** shows where its Done and Not done came from at the start of
+  `Notes` (for example `donereport leftreport`).
+
+## v6.13.4 — session-start context keeps the newest rows on a same-millisecond tie
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.3`.
+
+- **Session-start context: rows that share a timestamp now resolve newest first.** The
+  observation and session pools, the cross-project fallback, the "Last Session" block and the
+  quick session summary's list of recent titles ordered by time alone, so a same-millisecond
+  tie came back oldest first and could decide which rows were injected. They now break the
+  tie by newest id. Latent on the maintainer's database (no tied rows among 162 observations
+  and 452 summaries).
+- **Internal:** which quick summary an LLM summary upgrades is now stated explicitly (the
+  session's oldest quick summary, as before), with a test that the Done / Not done lines it
+  carries survive a partial LLM reply.
+
+## v6.13.3 — the resume summary picks the newest row on a same-millisecond tie
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.2`.
+
+- **Session handoff: the `<session-summary>` block attaches the newest summary when two share a
+  timestamp.** Both reads behind it (by session id, and the nearest-in-time fallback) ordered
+  by time alone, so a same-millisecond tie came back oldest first. They now break the tie by
+  newest id. This was latent on the maintainer's database (no two of a project's summary rows
+  share a millisecond, over 452). The handoff rows themselves are deliberately left as they
+  are: that table has no id column, and its row order is not write order because a rewrite
+  keeps the original row.
+- **Development only (not in the package):** the test proving that a Ctrl-C'd vitest run clears
+  the pre-commit green stamp now sends the signal only once the test body is running, instead
+  of after a fixed 4 s sleep; a signal that arrived before the reporter registered its exit
+  hook left the stamp in place and failed the test. It also no longer hangs to its timeout when
+  the child exits early, and it signals vitest's whole process group, so no worker outlives the
+  case.
+
+## v6.13.2 — handoff key files reach past empty rows; error-recall sees heredoc-then-run commands
+
+**Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning
+`claude-mem-lite@6.13.1`.
+
+- **Session handoff: Key Files can no longer lose real files to rows that contribute none.** The
+  read took the newest ten `files_modified` rows and only then dropped entries that are not
+  files (`[]`, directories, `/tmp` paths), so such rows could use up the window. This was
+  latent on the maintainer's database (0 of 45 stored handoffs lost a file). The read now
+  counts only rows that add a file not already listed. The same read, `Completed` and the
+  carry-forward subject also break a same-millisecond tie by newest id, so the cap keeps the
+  latest rows rather than the oldest.
+- **Error-recall no longer treats "write a file with a heredoc, then run it" as a read.** An
+  apostrophe in a heredoc body or a `#` comment made the command look unparseable, and the
+  fallback judged it by its first word (`cat`), so a red test run right after it recalled
+  nothing. Heredoc bodies and comments are now skipped, except that the `$(…)` and backticks
+  bash expands inside an unquoted heredoc are still judged. `sed -i`, `sort -o`, `awk` with
+  `-f`, `system()` or a pipe, `find -exec` / `-delete`, and `code-graph-mcp` subcommands that
+  rebuild the index are no longer counted as reads, and the bodies of `$(…)`, backticks and
+  `<(…)` are judged as commands of their own. Words are split with quotes intact, so
+  `x="a b" grep …` is still a grep. A command that still cannot be parsed is no longer
+  exempt. Replayed over 15,260 successful Bash results in the maintainer's transcripts: 7
+  newly fire, each a command that did run a program, and 1 false alarm is gone (a pure read
+  that the old first-word rule took for a program run).
+- **A lesson called "irrelevant rows …" is no longer read as dismissed.** `irrelevant`,
+  `unrelated` and `not relevant` now dismiss a lesson only when they are the verdict (followed
+  by the end of the clause, punctuation or words like "here", "to", "since"), not when they
+  describe a noun. Over 1,900 `#NN` mentions in the maintainer's transcripts this changed one
+  verdict.
+- **Docs:** both READMEs now say `citation-stats --sidechain` is the exception to the v6.13.0
+  caliber break (it counts an `n/a` as an answer).
+- **Development only (not in the package):** the pre-commit green stamp is now cleared by any
+  vitest run that does not load its reporter (a `--reporter=…` run), by a red run cut short
+  with `--bail`, and by a run killed with Ctrl-C; it is written only under the root
+  `vitest.config.mjs`, expires after 24 hours, and its tree key covers symlink targets and
+  gitlinks.
+
+## v6.13.1 — v6.13.0, published
+
+**Upgrade note.** Identical product code to v6.13.0; read the v6.13.0 entry below for what
+changes (SessionStart no longer injects `### Key Events` by default). v6.13.0 was tagged but
+never published: one of its new tests failed on the release runner because the runner forces
+coloured output, so the publish step was skipped. That test now reads the output without
+colour. Nothing else changed.
+
+## v6.13.0 — SessionStart stops injecting Key Events, and a lesson dismissed as n/a no longer counts as cited
+
+**Upgrade note — one default changes.** SessionStart no longer renders the `### Key Events`
+section. Set `CLAUDE_MEM_SESSION_EVENTS=1` (or `on`) to get it back. Events are still stored,
+still searchable with `mem_search`, and still injected when a prompt (UserPromptSubmit) or the
+file being touched (PreToolUse) matches them. No schema change, no migration: an older build
+still opens the database, so reverting is pinning `claude-mem-lite@6.12.2`.
+
+**Why Key Events is off.** The section showed the five newest importance ≥ 2 rows of the
+`events` table, which the background summarizer writes, at the top of every session. It was
+chosen by recency, not by what the session was doing, and nothing checked an event against the
+work it describes. We checked a random 30 of this project's live events against git history
+and session transcripts: 2 accurate, 11 partly accurate, 16 wrong, 1 generic. The two most
+common failures (6 each) were the summarizer reading a deliberate test mutation as a product
+bug and a lesson generalised past its evidence with an invented mechanism. In this project's
+main sessions (not counting the analysis session itself) the section had been injected 50
+times, 250 rows in all.
+
+**A lesson answered `#NN n/a` no longer counts as cited.** The adoption doc asks the agent to
+answer each surfaced lesson with `'#NN applied'` or `'#NN n/a — <reason>'`, but the tracker
+counted any `#NN` as a citation. So a lesson the agent had just said did not apply was
+promoted like one it used: `cited_count` + 1, its uncited streak reset, `access_count` bumped
+toward the boost op, and a hit recorded on its injection face. A `#NN` directly followed by
+`n/a`, "not applicable", "irrelevant", 不适用, 无关 and similar now earns none of that. The
+reminder that nags when lessons go unanswered still counts it as an answer. One exception
+remains: when the agent then edits the file the lesson was about, that edit still counts as
+acting on it (that credit arrives through the "edited N file(s) with prior lessons" hint,
+which has not once rendered in the maintainer's transcripts). Over the top-level transcripts on the maintainer's machine, 328 of about 1,880 `#NN`
+mentions were such dismissals. **This is a caliber break for cite rates:** `citation-stats`
+per-face rates and the funnel read lower from this version on (`citation-stats --sidechain`
+does not: it measures whether a lesson was answered, and an `n/a` is an answer). On the same transcripts,
+`benchmark/citation-live-replay.mjs` read PreToolUse 65.8% → 46.0%. That is the metric
+dropping the dismissals, not a regression; do not compare readings across it.
+
+**error-recall no longer fires on a read behind `cd <dir> &&`.** Its read-only exemption
+looked only at the first word of a command, so `cd repo && grep TypeError src/` counted as a
+program that printed an error, and "Related memories found for this error" was injected
+after a command that had not failed. Every statement and pipeline element is now checked
+(when the line's quotes balance; otherwise the old first-word rule still applies), and `sed`,
+`awk`, `ls`, `jq`, `diff` and a few text filters count as reads. Known limit: those verbs are
+exempt even in a writing form such as `sed -i`. Replayed over
+26,406 Bash results the host did not flag as failed: 151 stop firing (each one a read) and 23
+start. 21 of those 23 run a real program behind a read-verb first word (e.g. `grep …; python3 -`);
+2 only pipe a count from a saved log into `bc`, which is not on the read list, so they are new
+false positives.
+
+**Event ids keep their `E#` prefix in two more places.** A Read that injected lesson `E#116`
+was followed, at the next Edit of that file, by "Lessons #116 were shown" — and a bare `#116`
+names a different memory, the observation with that number. The "edited N file(s) with
+prior lessons" hint after an edit had the same rendering bug, and there it would also have
+credited that unrelated observation with a citation at the end of the turn (no instance of
+this hint appears in the maintainer's transcripts).
+
+**The adopted detail doc describes citations correctly.** `.claude/plugin_claude_mem_lite.md`
+still said an uncited lesson loses 1 importance after three sessions and a cited one gains 1.
+Citations have not changed importance since D#179/D#198. They move a lesson's ranking inside
+bounds, and a separate maintenance op lowers importance for lessons injected many times and
+never cited. The doc now says that, and that `n/a` is an answer, not an adoption: for
+ranking it counts the same as no citation. Adopted
+projects pick up the new text at their next SessionStart.
+
+**For maintainers.** `scripts/pre-commit.sh` skips `npm test` when a full, passing, unfiltered
+vitest run already covered the same working tree (a reporter stamps it in the git dir) and
+nothing tracked is unstaged. Untracked files count toward the tree but are not committed, the
+same as when pre-commit ran the suite itself. Anything unstaged, any file difference, a failed
+or filtered run → it runs the suite as before; `PRE_COMMIT_FULL_TEST=1` forces it. On the same tree, back to back: 62.3 s → 12.1 s.
+
+## v6.12.2 — an imported command no longer stores the start of a token, and pasted remedies quote any path exactly
+
+**Upgrade note.** No schema change, no migration, no config. One stored-data effect, below:
+an already imported row whose title contained something the secret scrubber rewrites gets a
+new title, so the next `import-jsonl` run re-adds that row once (likewise an imported prompt
+longer than 10,000 characters with such text in its first 10,000).
+
+**`import-jsonl` stored the first characters of a token that straddled a length cap.** Every
+imported text is capped — a tool call's title at 80 characters of its command, the stored
+body's tool input and tool result at 4,000 each, a prompt at 10,000 — and each cap ran BEFORE
+the secret scrubber. A token that crossed a cap arrived too short for its own pattern (a GitHub
+token needs 30+ characters after `ghp_`), so its prefix was stored in plaintext. With a 40-char
+token placed at each of 41 positions across a cap, the title stored a prefix at 29 of them and
+each of the other three caps at 24, the longest carrying 29 of the token's 36 secret
+characters. Everything is now scrubbed whole first and capped after.
+The title is also the cross-run dedup key, so a previously imported row whose title the
+scrubber would now rewrite is imported once more on the next run, then matches from then on.
+
+**Every printed shell remedy now quotes its path exactly.** v6.12.1 left `$`, backticks and
+quotes in a path as a known limit: the `doctor`/repair remedies wrapped paths in double
+quotes, which bash still expands. They now use single-quote quoting when a path needs it and
+print a plain path bare. This covers the destructive ones too — the `rm`/`mv`/`cp` commands
+that set aside or restore a damaged database — where a `$` in the path made the pasted command
+act on a different file. The hook commands written into `settings.json` are unchanged: they
+are a stored format that other code parses back, and double quotes already keep a space, an
+apostrophe and a drive-letter Windows path intact. Known limit: on Windows every path contains a
+backslash and so prints single-quoted, which PowerShell and Git Bash accept and `cmd.exe`
+does not — paste remedies into one of the first two.
+
+**The handoff's Key Decisions no longer lose real decisions to noise rows.** The section read
+the newest ten candidates, THEN dropped low-signal titles, THEN kept five, so six or more
+noise rows among the newest ten pushed older real decisions out. The cap now applies after the
+filter. Decisions saved in the same millisecond also come back newest first; before, the cap
+kept the oldest five of seven.
+
+**For maintainers.** `npm run audit:baseline` now runs the suite through `test:coverage`, so
+its vitest cache goes to disk instead of the `/tmp` tmpfs. Test-only: a flush-wait case that
+failed depending on how long a cold import took; a guard for the trailing-separator rule that
+could not fail; a backfill test that bypassed the noise filter the product runs; and the
+import title's "scrubbed once" guard is now behavioural instead of a source-text scan.
+
+## v6.12.1 — commands that survive a space in the install path, and flags that say when they do nothing
+
+**Upgrade note.** No schema change, no migration, no config. Bugfixes only.
+
+**Commands printed for you to run now work when the install path contains a space.** The
+path was printed bare, so a home directory like `/home/Jane Doe` split it into two
+arguments:
+- The MCP server instructions and every tool's "Equivalent CLI" hint (`node <path>/cli.mjs`)
+  now quote the path, but only when it needs quoting. On an ordinary path the text the model
+  reads is byte-identical to v6.12.0.
+- The `doctor` and repair remedies (`install`, `uninstall`, `repair`, `rebuild-binding`, the
+  `cd … && npm install` binding fix), the hook launcher's repair line, the native-binding hint,
+  and the manual `claude mcp add` line now quote it with double quotes. Those still break on a
+  path containing `$`, a backtick or a UNC `\\`, which we have left as a known limit.
+- The bundled slash commands (`/mem`, `/lesson`, `/bug`, `/adopt`, `/unadopt`) run
+  `node "${CLAUDE_PLUGIN_ROOT}/cli.mjs"`; `/verify` already did.
+
+**A flag that only `verify-apply` reads now says so when you pass it to another command.**
+`recent --apply` (or `--digest`, `--undo`, `--print-project`) used to be accepted silently
+while doing nothing. The commands the memory CLI dispatches now print "`--apply` is read only
+by verify-apply; recent does not read it." They also stop suggesting those flags as typo fixes.
+Install-family commands (`doctor`, `status`, …) are not covered.
+
+**Recall before a Read or Edit prefers the newer memory on a tie.** When two memories about the
+same file were saved in the same millisecond, the older one took the single slot a Read gets.
+Both queries now break the tie by id. A read-only count on one real database found no such
+ties today (0 of 103 observations, 0 of 2681 events in the 60-day window).
+
+**For contributors.** The pre-commit hook runs the suite through `npm test`, so its vitest cache
+(45 MB for a full-suite run) goes to `~/.cache/tmp` instead of a RAM-backed `/tmp`. A
+secret-scrubbing test that could not fail was replaced. New guards cover each change, and each
+was checked by breaking what it protects.
+
+## v6.12.0 — /verify: check memories against the code, and correct the stale ones you approve
+
+**Upgrade note.** No schema change, no migration, no config. One new command, and it only
+runs when you ask for it: nothing checks or rewrites your memories on its own. The changes to
+what already runs are narrower: the background model passes no longer rewrite, hide or merge
+a memory you approved through `/verify`, with the exceptions listed below, and the concepts
+backfill stops adding model-written facts to rows an earlier pass already processed.
+
+**`/verify` — memories go stale, and this is how to find and fix them.** A memory that was
+true when saved stops being true: the bug it records as open gets fixed, the number it quotes
+gets retracted, the function it names gets renamed. Measured on 118 live memories across 7
+repositories (2026-09-25): 12 were stale and 16 more partly out of date, and all 10 of the
+stale ones whose onset could be dated had gone stale within a day of being saved. No cheap
+automatic check could be trusted to find them: signals from the code (a file changed, a
+later commit touched it) flagged stale memories no more often than chance where they fired
+often enough to judge, a single model call per memory was right in 36% of its "stale"
+verdicts, and model-written corrections were false in 28 of 72, and one more was unsupported. What worked
+was an agent reading the code, so that is what `/verify` is:
+
+- The agent in your session checks each memory against the repository with read-only tools
+  (Grep, Read, `git log`) and drafts corrections for the stale ones — `edit` a detail,
+  `replace` the memory (the original stays as history), or `retire` it.
+- `claude-mem-lite verify-apply <proposals.json>` is the only thing that writes, and by
+  default it writes nothing: it prints every change, old and new text, and a plan digest.
+- After you approve that exact plan, `--apply --digest <d>` backs up the rows, applies every
+  change in one transaction (all or nothing), reads each row back and prints `ok` or
+  `MISMATCH`. It refuses if the proposals or the memories changed since the dry run.
+- `--undo <backup>` restores the rows while their content and state are as the apply left
+  them, and refuses once an edit, a supersede or a background pass has changed them since
+  (usage counters such as access counts do not count). Restored text is scrubbed for
+  secrets again on the way back. After an undo the old apply command is refused too:
+  applying the same changes again takes a new dry run and a new approval.
+- Backups are kept in `backups/` next to the database, readable by you only, until you
+  delete them. The refusal above rests on the backup file: delete it and the old apply
+  command would match again.
+
+**Background passes no longer undo an approval.** The daily background optimize run rewrites
+a memory's title and text with model output (re-enrich), hides rows the model rates
+unimportant, and merges near-duplicates. A memory you approved through `/verify` is now left
+out of all three — including when the approval lands while one of them is waiting on its
+model call, which before this release could overwrite the correction you had just approved.
+What still reaches an approved memory, and how:
+
+- The backfills that add search aliases, concepts and a scope still fill those on it. They no
+  longer write model facts onto it (the concepts backfill used to replace a memory's facts
+  with the model's), and they skip a memory that changed while their model call was running
+  instead of writing back text they had read before it. This facts rule applies to every row
+  an earlier pass has processed, not only approved ones.
+- Smart-compress still folds old (over 30 days), importance-1, never-accessed memories with
+  no lesson into one summary, approved or not. A memory edited, replaced or retired through
+  `/verify` while its model call is running makes it abort that group instead; so does
+  cluster-merge.
+- Concept normalization still rewrites concept keywords and search aliases into their
+  canonical forms.
+- Housekeeping that uses no model does not look at approvals either, and this release leaves
+  it as it was. Among what it does to an approved memory as to any other: importance decay and
+  boosts change its importance; an importance-1 memory without a lesson that was never
+  injected is hidden after 30 days and folded into a weekly summary after 60; one never read
+  or injected is marked idle and later purged; and auto-dedup can supersede a near-duplicate.
+  Any of these also makes a later `--undo` of that approval refuse.
+
+`get` on a memory that `/verify` retired now says so, instead of attributing it to an
+automatic dedup or merge.
+
 ## v6.11.0 — the second secret on a line, a budget that sat idle, and two faces of one install that disagreed
 
 **Upgrade note.** No schema change, no migration, no config. One default behaviour changes,

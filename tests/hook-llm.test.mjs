@@ -23,6 +23,11 @@ vi.mock('../hook-shared.mjs', async () => {
   };
 });
 
+vi.mock('../lib/metrics.mjs', async () => {
+  const actual = await vi.importActual('../lib/metrics.mjs');
+  return { ...actual, recordMetric: vi.fn() };
+});
+
 import {
   saveObservation,
   handleLLMEpisode,
@@ -36,6 +41,10 @@ import {
 } from '../hook-llm.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
+import { recordMetric } from '../lib/metrics.mjs';
+import { buildSessionContextLines } from '../hook-context.mjs';
+import { parseSummaryNotes, formatSummaryNotes } from '../lib/fast-summary.mjs';
+const REPORT_NOTES = formatSummaryNotes({ done: 'report', left: 'report', lines: '' });
 
 // v2.58: callLLM now accepts string OR {system, user} (cso F#4 fix). Tests
 // asserting prompt content should normalize both forms before string-matching.
@@ -266,6 +275,12 @@ describe('handleLLMEpisode', () => {
     filesToCleanup.push(tmpFile);
     process.argv[3] = tmpFile;
     process.env.CLAUDE_MEM_NO_DELAY = '1';
+    // The cases in this block pin retry / importance / routing mechanics with fixture
+    // episodes that carry no `diag` lines, so D#69's grounding check would drop every
+    // event lesson they assert on (and skip the retry whose queued mock response then
+    // leaks into the next case). Grounding-on behaviour, including its interaction with
+    // the retry and the importance cap, is pinned in tests/episode-input-filter.test.mjs.
+    process.env.CLAUDE_MEM_LESSON_GROUNDING = 'off';
 
     db = createTestDb();
     // Prevent handleLLMEpisode from closing our test DB
@@ -294,6 +309,7 @@ describe('handleLLMEpisode', () => {
     if (db?._realClose) db._realClose();
     process.argv[3] = originalArgv3;
     delete process.env.CLAUDE_MEM_NO_DELAY;
+    delete process.env.CLAUDE_MEM_LESSON_GROUNDING;
     while (filesToCleanup.length) {
       try {
         rmSync(filesToCleanup.pop(), { force: true });
@@ -1569,6 +1585,57 @@ describe('handleLLMEpisode', () => {
     expect(relatedIds.length).toBeLessThanOrEqual(5);
   });
 
+  it('file-overlap links take the newest rows of a created_at_epoch tie', async () => {
+    // The scan is `ORDER BY created_at_epoch DESC` and only the first 5 candidates are linked.
+    // A tie used to come back in ascending rowid, i.e. the OLDEST tied rows got the links.
+    // Titles share no word with the new one, so FTS (strategy 1) adds no candidate.
+    insertSession(db, { id: 'ep-sess', project: 'test-proj' });
+    const t = Date.now();
+    const ids = [];
+    for (let i = 0; i < 7; i++) {
+      ids.push(
+        Number(
+          db
+            .prepare(
+              `
+        INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+        VALUES (?, ?, '', 'change', ?, '', '', '', '', '[]', '["tied.mjs"]', 1, ?, ?)
+      `,
+            )
+            .run('ep-sess', 'test-proj', `Zebra quokka ${i}`, new Date(t).toISOString(), t).lastInsertRowid,
+        ),
+      );
+    }
+    callLLM.mockReturnValue(
+      JSON.stringify({
+        type: 'change',
+        title: 'Final performance optimization pass',
+        narrative: 'Completed performance optimization work',
+        concepts: ['optimization'],
+        facts: [],
+        importance: 1,
+        lesson_learned:
+          'Related links over a tie must prefer the newest rows, like every other recency read.',
+      }),
+    );
+    writeFileSync(
+      tmpFile,
+      JSON.stringify({
+        sessionId: 'ep-sess',
+        project: 'test-proj',
+        files: ['tied.mjs'],
+        filesRead: [],
+        entries: [{ tool: 'Edit', desc: 'Edit tied.mjs', isError: false }],
+      }),
+    );
+
+    await handleLLMEpisode();
+
+    const newObs = db.prepare('SELECT id, related_ids FROM observations ORDER BY id DESC LIMIT 1').get();
+    expect(ids, 'premise: the new row is not one of the seeded ones').not.toContain(newObs.id);
+    expect(JSON.parse(newObs.related_ids || '[]')).toEqual(ids.slice(2).reverse());
+  });
+
   it('upgrade-delete: pre-saved observation replaced by event when Haiku classifies as EVENT_TYPE', async () => {
     // Pre-save a rule-based observation (simulating what flushEpisode does).
     // Default mock returns type='feature' → EVENT_TYPE → pre-saved observations
@@ -1929,7 +1996,7 @@ describe('handleLLMSummary', () => {
     expect(row.completed).toBe('Basic auth flow with login/logout'); // Haiku richer → overwritten
     expect(row.remaining_items).toBe('structured-notdone: Gap #3 data backfill'); // Haiku empty → preserved
     expect(row.next_steps).toBe('Add refresh token rotation');
-    expect(row.notes).toBe('llm');
+    expect(parseSummaryNotes(row.notes).done).toBe('model');
   });
 
   it('upgrades existing fast summary instead of creating duplicate', async () => {
@@ -1958,9 +2025,476 @@ describe('handleLLMSummary', () => {
       .all('test-session');
     // Should have exactly 1 summary (upgraded, not duplicated)
     expect(summaries.length).toBe(1);
-    expect(summaries[0].notes).toBe('llm');
+    expect(parseSummaryNotes(summaries[0].notes).done).toBe('model');
     expect(summaries[0].request).toBe('Implementing auth system');
     expect(summaries[0].completed).toBe('Basic auth flow with login/logout');
+  });
+
+  // ── One summary row per session (D#79, D#80) ──
+  // Stop fires once per assistant TURN and spawns this worker every time, so the model "one
+  // fast row, upgraded once" does not hold: the first run upgraded the fast row and every later
+  // run found no `notes = 'fast'` row and INSERTed another (one live session: 37 rows in 65
+  // minutes). The worker now upgrades the session's NEWEST row whatever its notes, fills an
+  // empty field from the session's other rows before giving up on it, and leaves the row's
+  // timestamp alone. The cases about what a reader sees assert on the rendered Last Session.
+  const summaryRow = (db2) =>
+    db2.prepare(
+      `
+      INSERT INTO session_summaries (memory_session_id, project, request, investigated, learned, completed, next_steps, remaining_items, files_read, files_edited, notes, created_at, created_at_epoch)
+      VALUES (?, 'test-proj', ?, '', '', ?, '', ?, '[]', '[]', ?, ?, ?)
+    `,
+    );
+  const addRow = (sid, { request = '', completed = '', remaining = '', notes = 'fast', epoch }) =>
+    Number(
+      summaryRow(db).run(sid, request, completed, remaining, notes, new Date(epoch).toISOString(), epoch)
+        .lastInsertRowid,
+    );
+  const addObs = (sid = 'test-session') =>
+    db
+      .prepare(
+        `
+      INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+      VALUES (?, 'test-proj', '', 'feature', 'obs title', '', 'Narrative text', '', '', '[]', '[]', 1, ?, ?)
+    `,
+      )
+      .run(sid, new Date().toISOString(), Date.now());
+  // The degraded shape the floor exists for: request present, completed / remaining empty.
+  const degraded = () =>
+    callLLM.mockReturnValueOnce(
+      JSON.stringify({ request: 'llm request', completed: '', remaining_items: '' }),
+    );
+  const lastSession = () => buildSessionContextLines(db, 'test-proj');
+  const rowsOf = (sid = 'test-session') =>
+    db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ? ORDER BY id').all(sid);
+
+  // P3-6: a worker carries its Stop's epoch in argv[5]; once a later Stop has been recorded
+  // (sdk_sessions.completed_at_epoch), that later Stop's worker owns the row. Checked twice:
+  // before the model call (saves the call) and in the write's transaction (the later Stop can
+  // land during the round trip).
+  describe('a worker whose Stop was superseded (P3-6)', () => {
+    const originalArgv5 = process.argv[5];
+    const T = Date.now() - 60_000;
+    const latestStop = (epoch) =>
+      db
+        .prepare('UPDATE sdk_sessions SET completed_at_epoch = ? WHERE content_session_id = ?')
+        .run(epoch, 'test-session');
+    beforeEach(() => {
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+      addObs();
+      addRow('test-session', { request: 'fast request', epoch: T });
+    });
+    afterEach(() => {
+      process.argv[5] = originalArgv5;
+    });
+
+    it('does not call the model when a later Stop is already recorded', async () => {
+      latestStop(T + 2000);
+      process.argv[5] = String(T + 1000);
+
+      await handleLLMSummary();
+
+      expect(callLLM).not.toHaveBeenCalled();
+      expect(rowsOf().map((r) => r.request)).toEqual(['fast request']);
+    });
+
+    it('does not write when a later Stop lands during the model call', async () => {
+      latestStop(T + 1000);
+      process.argv[5] = String(T + 1000);
+      callLLM.mockImplementationOnce(() => {
+        latestStop(T + 2000);
+        return JSON.stringify({ request: 'stale model request', completed: 'stale' });
+      });
+
+      await handleLLMSummary();
+
+      expect(callLLM, 'premise: the pre-call check let it through').toHaveBeenCalledTimes(1);
+      expect(rowsOf().map((r) => r.request)).toEqual(['fast request']);
+    });
+
+    it('writes when its own Stop is the latest', async () => {
+      latestStop(T + 1000);
+      process.argv[5] = String(T + 1000);
+
+      await handleLLMSummary();
+
+      expect(rowsOf().map((r) => r.request)).toEqual(['Implementing auth system']);
+    });
+  });
+
+  // Every exit of the worker leaves one `summary_worker` metric row (CLAUDE_MEM_METRICS=1), so
+  // the P3-6 trade — a superseded worker yields, and a later worker that writes nothing leaves
+  // the row an earlier turn behind — and D#95's call count can be read off real use.
+  describe('reports its outcome as a summary_worker metric', () => {
+    const originalArgv5 = process.argv[5];
+    const T = Date.now() - 60_000;
+    const outcomes = () =>
+      recordMetric.mock.calls.map(([, p]) => p).filter((p) => p.event === 'summary_worker');
+    const latestStop = (epoch) =>
+      db
+        .prepare('UPDATE sdk_sessions SET completed_at_epoch = ? WHERE content_session_id = ?')
+        .run(epoch, 'test-session');
+    beforeEach(() => {
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+    });
+    afterEach(() => {
+      process.argv[5] = originalArgv5;
+    });
+
+    it('no observations', async () => {
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['no-obs']);
+    });
+
+    it('written, with the model call timed and the epoch flagged', async () => {
+      addObs();
+      latestStop(T);
+      process.argv[5] = String(T);
+      await handleLLMSummary();
+      const [p] = outcomes();
+      expect(outcomes()).toHaveLength(1);
+      expect(p).toMatchObject({ outcome: 'written', session: 'test-session', stopEpoch: T });
+      expect(p.llmMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('superseded before the call, and at the write', async () => {
+      addObs();
+      latestStop(T + 2000);
+      process.argv[5] = String(T + 1000);
+      await handleLLMSummary();
+      latestStop(T + 1000);
+      callLLM.mockImplementationOnce(() => {
+        latestStop(T + 2000);
+        return JSON.stringify({ request: 'stale' });
+      });
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['superseded-before-call', 'superseded-at-write']);
+    });
+
+    it('no content when the model returns nothing, and slot-timeout when no slot comes', async () => {
+      addObs();
+      callLLM.mockReturnValueOnce(null);
+      await handleLLMSummary();
+      acquireLLMSlot.mockResolvedValueOnce(false);
+      await handleLLMSummary();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['no-content', 'slot-timeout']);
+      expect(outcomes()[0].stopEpoch, 'no argv epoch').toBe(null);
+    });
+
+    it('no-db when the database will not open, carrying the argv session', async () => {
+      openDb.mockReturnValueOnce(null);
+      await handleLLMSummary();
+      expect(outcomes()).toEqual([expect.objectContaining({ outcome: 'no-db', session: 'test-session' })]);
+    });
+
+    it('error when the write throws, and the throw still reaches the caller', async () => {
+      addObs();
+      db.exec('DROP TABLE session_summaries');
+      await expect(handleLLMSummary()).rejects.toThrow();
+      expect(outcomes().map((p) => p.outcome)).toEqual(['error']);
+    });
+  });
+
+  it('a second run upgrades the same row instead of inserting another', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    addObs();
+
+    await handleLLMSummary();
+    await handleLLMSummary();
+
+    expect(callLLM, 'premise: both runs reached the model').toHaveBeenCalledTimes(2);
+    expect(rowsOf()).toHaveLength(1);
+  });
+
+  it('upgrades a Stop row whose notes carry Failed / Uncertain lines instead of inserting beside it', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const stopRow = addRow('test-session', {
+      request: 'stop request',
+      completed: 'STRUCT-DONE item',
+      remaining: 'STRUCT-NOTDONE item',
+      notes: 'Failed: x',
+      epoch: t0,
+    });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const rows = rowsOf();
+    expect(rows.map((r) => r.id)).toEqual([stopRow]);
+    expect(rows[0].request).toBe('llm request');
+    expect(rows[0].completed).toBe('STRUCT-DONE item');
+    expect(parseSummaryNotes(rows[0].notes).lines, 'the Failed / Uncertain text is kept').toBe('Failed: x');
+  });
+
+  it('with two rows for one session, Last Session keeps the Stop row structural lines (D#75)', async () => {
+    // Stop writes the structural Done / Not done extract; SessionStart's /clear path used to
+    // write a second row for the same session (76 live sessions have two).
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', {
+      request: 'stop fast',
+      completed: 'STRUCT-DONE item',
+      remaining: 'STRUCT-NOTDONE item',
+      epoch: t0,
+    });
+    addRow('test-session', { request: 'clear fast', epoch: t0 + 1000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(rowsOf(), 'premise: upgraded in place, no third row').toHaveLength(2);
+    const out = lastSession();
+    expect(out, 'premise: the Last Session block rendered').toMatch(/### Last Session/);
+    expect(out).toContain('Request: llm request');
+    expect(out).toContain('STRUCT-DONE item');
+    expect(out).toContain('STRUCT-NOTDONE item');
+  });
+
+  it('keeps an earlier upgrade content when the Stop row was upgraded before /clear wrote a second row', async () => {
+    // delta review P3-2: the Stop-spawned worker upgrades the Stop row first, then /clear adds
+    // an empty fast row, then a degraded reply upgrades that one.
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', {
+      request: 'full request',
+      completed: 'FULL-DONE',
+      remaining: 'FULL-REM',
+      notes: 'llm',
+      epoch: t0,
+    });
+    addRow('test-session', { request: 'clear fast', epoch: t0 + 1000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const out = lastSession();
+    expect(out).toContain('Request: llm request');
+    expect(out).toContain('FULL-DONE');
+    expect(out).toContain('FULL-REM');
+  });
+
+  it('two degraded runs over two rows still leave the structural lines in Last Session', async () => {
+    // delta review P3-3: the order that suited one run lost the lines over two.
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', {
+      request: 'stop fast',
+      completed: 'STRUCT-DONE item',
+      remaining: 'STRUCT-NOTDONE item',
+      epoch: t0,
+    });
+    addRow('test-session', { request: 'clear fast', epoch: t0 + 1000 });
+    addObs();
+    degraded();
+    degraded();
+
+    await handleLLMSummary();
+    await handleLLMSummary();
+
+    const out = lastSession();
+    expect(out).toContain('STRUCT-DONE item');
+    expect(out).toContain('STRUCT-NOTDONE item');
+  });
+
+  it('the floor covers every field, the upgraded row first and its older rows after', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const cols = [
+      'request',
+      'investigated',
+      'learned',
+      'completed',
+      'next_steps',
+      'remaining_items',
+      'lessons',
+      'key_decisions',
+    ];
+    const older = addRow('test-session', { epoch: t0 });
+    db.prepare(`UPDATE session_summaries SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(
+      ...cols.map((c) => `OLD-${c}`),
+      older,
+    );
+    const newer = addRow('test-session', { completed: 'OWN-completed', epoch: t0 + 1000 });
+    addObs();
+    // Only next_steps comes back, so every other field is left to the floor.
+    callLLM.mockReturnValueOnce(JSON.stringify({ next_steps: 'llm next' }));
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(newer);
+    expect(row.next_steps).toBe('llm next');
+    expect(row.completed, "the upgraded row's own content beats an older row's").toBe('OWN-completed');
+    for (const c of cols.filter((x) => x !== 'next_steps' && x !== 'completed'))
+      expect(row[c], c).toBe(`OLD-${c}`);
+  });
+
+  it('the floor also covers next_steps, the one field the case above has the model return', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const older = addRow('test-session', { epoch: t0 });
+    db.prepare("UPDATE session_summaries SET next_steps = 'OLD-next' WHERE id = ?").run(older);
+    const newer = addRow('test-session', { epoch: t0 + 1000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(db.prepare('SELECT next_steps FROM session_summaries WHERE id = ?').get(newer).next_steps).toBe(
+      'OLD-next',
+    );
+  });
+
+  it("the upgraded row's own content beats its older rows for every field", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const cols = [
+      'request',
+      'investigated',
+      'learned',
+      'completed',
+      'next_steps',
+      'remaining_items',
+      'lessons',
+      'key_decisions',
+    ];
+    const set = (id, prefix) =>
+      db
+        .prepare(`UPDATE session_summaries SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+        .run(...cols.map((c) => `${prefix}-${c}`), id);
+    set(addRow('test-session', { epoch: t0 }), 'OLD');
+    const newer = addRow('test-session', { notes: 'llm', epoch: t0 + 1000 });
+    set(newer, 'OWN');
+    addObs();
+    // A reply with nothing usable in any field the floor covers except one it must still carry.
+    callLLM.mockReturnValueOnce(JSON.stringify({ lessons: [], key_decisions: [], request: ' ' }));
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(newer);
+    for (const c of cols.filter((x) => x !== 'request')) expect(row[c], c).toBe(`OWN-${c}`);
+  });
+
+  // Provenance (review of c12cf88): a row holding the assistant's own Done / Not done report
+  // keeps it — the model fills its other fields and a Done it lacks, never its Not done.
+  it("a report's Done / Not done survive a full model reply; the model still fills the other fields", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const id = addRow('test-session', {
+      request: 'stop request',
+      completed: 'DONE-REPORT',
+      remaining: 'NOTDONE-REPORT',
+      notes: REPORT_NOTES,
+      epoch: Date.now() - 60000,
+    });
+    addObs();
+    callLLM.mockReturnValueOnce(
+      JSON.stringify({
+        request: 'model request',
+        completed: 'model paraphrase',
+        remaining_items: 'model inferred',
+        next_steps: 'model next',
+      }),
+    );
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT * FROM session_summaries WHERE id = ?').get(id);
+    expect([row.completed, row.remaining_items]).toEqual(['DONE-REPORT', 'NOTDONE-REPORT']);
+    expect([row.request, row.next_steps]).toEqual(['model request', 'model next']);
+    expect(parseSummaryNotes(row.notes)).toMatchObject({ done: 'report', left: 'report' });
+  });
+
+  it('a Not-done-only report row with no Done takes one from an older row when the model gives none', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { completed: 'OLD-DONE', notes: 'llm', epoch: t0 });
+    const id = addRow('test-session', {
+      completed: '',
+      remaining: 'LEFT',
+      notes: formatSummaryNotes({ done: 'titles', left: 'report', lines: '' }),
+      epoch: t0 + 1000,
+    });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const row = db.prepare('SELECT completed, remaining_items FROM session_summaries WHERE id = ?').get(id);
+    expect([row.completed, row.remaining_items]).toEqual(['OLD-DONE', 'LEFT']);
+  });
+
+  it("a report's cleared Not done is not refilled from an older row", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { remaining: 'STALE-LEFT', notes: 'llm', epoch: t0 });
+    const id = addRow('test-session', {
+      completed: 'ALL-DONE',
+      remaining: '',
+      notes: REPORT_NOTES,
+      epoch: t0 + 1000,
+    });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(db.prepare('SELECT remaining_items r FROM session_summaries WHERE id = ?').get(id).r).toBe('');
+  });
+
+  it("a session with no row yet is inserted at its last prompt, not at the worker's finish (D#79)", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    insertSession(db, { id: 'next-session', project: 'test-proj' });
+    const lastPrompt = Date.now() - 60000;
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+       VALUES ('test-session', 'first', 1, 'x', ?), ('test-session', 'last', 2, 'x', ?)`,
+    ).run(lastPrompt - 30000, lastPrompt);
+    addRow('next-session', { request: 'next session', epoch: lastPrompt + 5000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    const row = rowsOf()[0];
+    expect(row?.request, 'premise: the worker inserted the row').toBe('llm request');
+    expect(row.created_at_epoch).toBe(lastPrompt);
+    expect(lastSession()).toContain('Request: next session');
+  });
+
+  it('among older rows the floor takes the newest non-empty value', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    addRow('test-session', { completed: 'OLDEST-DONE', epoch: t0 });
+    addRow('test-session', { completed: 'MIDDLE-DONE', epoch: t0 + 1000 });
+    const newest = addRow('test-session', { epoch: t0 + 2000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary();
+
+    expect(db.prepare('SELECT completed c FROM session_summaries WHERE id = ?').get(newest).c).toBe(
+      'MIDDLE-DONE',
+    );
+  });
+
+  it("a late upgrade of the previous session's row does not put it above the next session's (D#79)", async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    insertSession(db, { id: 'next-session', project: 'test-proj' });
+    const t0 = Date.now() - 60000;
+    const prev = addRow('test-session', { request: 'previous session', epoch: t0 });
+    addRow('next-session', { request: 'next session', epoch: t0 + 5000 });
+    addObs();
+    degraded();
+
+    await handleLLMSummary(); // argv[3] = test-session, the PREVIOUS one
+
+    expect(rowsOf()[0].request, 'premise: the previous row was upgraded').toBe('llm request');
+    expect(db.prepare('SELECT created_at_epoch e FROM session_summaries WHERE id = ?').get(prev).e).toBe(t0);
+    const out = lastSession();
+    expect(out).toContain('Request: next session');
+    expect(out).not.toContain('Request: llm request');
   });
 
   it('skips summary when no observations exist', async () => {

@@ -785,6 +785,55 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     const section = lines.split('### Deferred Work')[1]?.split(/^###\s/m)[0] || '';
     const deferredLines = (section.match(/^\d+\.\s/gm) || []).length;
     expect(deferredLines).toBe(5);
+    // A capped list says so — 7 open read as 5 with nothing pointing at the rest.
+    expect(section).toMatch(
+      /^\+2 more open — mem_defer_list \/ `defer list` with a larger limit lists them$/m,
+    );
+  });
+
+  // D#115 follow-up (v6.17.1 pre-tag review): mem_defer_list pages at most 50 and `defer list`
+  // at most 100, so past those totals "with a larger limit lists them" is advice nobody can
+  // follow. At or under 50 open the line is unchanged.
+  // The cutoffs themselves: 50 is still listable by both surfaces, 51 is not; 100 is still
+  // listable by `defer list`, 101 is not (v6.17.1 delta review P3-3).
+  it.each([
+    [50, /^\+45 more open — mem_defer_list \/ `defer list` with a larger limit lists them$/m],
+    [51, /^\+46 more open — `defer list --limit 100` lists them$/m],
+    [100, /^\+95 more open — `defer list --limit 100` lists them$/m],
+    [101, /^\+96 more open — `defer list --limit 100` lists the first 100$/m],
+  ])('at %i open the more line reads correctly', (n, re) => {
+    for (let i = 0; i < n; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(re);
+  });
+
+  it('names the CLI maximum when mem_defer_list cannot list them all', () => {
+    for (let i = 0; i < 60; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(/^\+55 more open — `defer list --limit 100` lists them$/m);
+  });
+
+  it('says only the first 100 are listable past the CLI maximum', () => {
+    for (let i = 0; i < 120; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(/^\+115 more open — `defer list --limit 100` lists the first 100$/m);
+    expect(section).not.toContain('with a larger limit lists them');
+  });
+
+  it('a list that fits prints no "more" line', () => {
+    for (let i = 0; i < 5; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section = extractSection(buildSessionContextLines(db, 'test'), 'Deferred Work');
+    expect((section.match(/^\d+\.\s/gm) || []).length).toBe(5); // premise: the block rendered
+    expect(section).not.toMatch(/more open/);
   });
 
   it('omits block entirely when no open items', () => {
@@ -1151,3 +1200,67 @@ function extractSection(text, header) {
   }
   return lines.slice(startIdx, endIdx).join('\n');
 }
+
+// ─── D#75: created_at_epoch ties break newest-id-first ──────────────────────
+// Four reads here ordered by created_at_epoch DESC alone, so a same-millisecond tie came
+// back ascending id (oldest first): the obs and session pools feed a stable sort and a
+// LIMIT, the fallback feeds LIMIT 5, and the latest-summary read is LIMIT 1. Latent: 0 tie
+// groups over the live DB's 162 observations and 452 summaries (read-only, 2026-09-26).
+
+describe('D#75: created_at_epoch ties break newest-id-first', () => {
+  let db;
+  const E = Date.now() - 1000;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-tie', project: 'tie' });
+  });
+  afterEach(() => db.close());
+
+  function obs(project, title) {
+    return db
+      .prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+         VALUES ('sess-tie', ?, '', 'discovery', ?, '', '', '', '', '[]', '[]', 1, datetime('now'), ?)`,
+      )
+      .run(project, title, E).lastInsertRowid;
+  }
+  function summary(request) {
+    return db
+      .prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, request, completed, created_at, created_at_epoch)
+         VALUES ('sess-tie', 'tie', ?, 'done', datetime('now'), ?)`,
+      )
+      .run(request, E).lastInsertRowid;
+  }
+
+  it('the observation pool keeps the newest tied rows', () => {
+    const ids = [1, 2, 3, 4, 5].map((i) => Number(obs('tie', `tie discovery number ${i}`)));
+    const picked = selectWithTokenBudget(db, 'tie').observations.map((o) => o.id);
+    expect(picked.length, 'premise: the per-type cap of 3 chose among the five').toBe(3);
+    expect(picked.sort((a, b) => a - b)).toEqual(ids.slice(2));
+  });
+
+  it('the session pool keeps the newest tied rows at its LIMIT', () => {
+    const ids = [...Array(12)].map((_, i) => Number(summary(`tied request ${i}`)));
+    const picked = selectWithTokenBudget(db, 'tie').summaries.map((s) => s.id);
+    expect(picked.length, 'premise: the whole pool of 10 fit the budget').toBe(10);
+    expect(picked.sort((a, b) => a - b)).toEqual(ids.slice(2));
+  });
+
+  it('the cross-project fallback keeps the newest tied rows', () => {
+    const ids = [...Array(7)].map((_, i) => Number(obs('elsewhere', `fallback discovery ${i}`)));
+    const out = buildSessionContextLines(db, 'tie');
+    expect(out, 'premise: the Recent table rendered').toMatch(/### Recent/);
+    const shown = [...out.matchAll(/^\| #(\d+) \|/gm)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    expect(shown).toEqual(ids.slice(2));
+  });
+
+  it('Last Session is the newest tied summary', () => {
+    summary('older tied request');
+    summary('newer tied request');
+    const out = buildSessionContextLines(db, 'tie');
+    expect(out, 'premise: the Last Session block rendered').toMatch(/### Last Session/);
+    expect(out).toContain('Request: newer tied request');
+    expect(out).not.toContain('Request: older tied request');
+  });
+});

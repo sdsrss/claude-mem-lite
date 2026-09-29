@@ -22,6 +22,7 @@ import {
   NATIVE_BINDING_REBUILD_CMD,
   NATIVE_BINDING_SOURCE_BUILD_CMD,
 } from '../lib/binding-probe.mjs';
+import { shellWord } from '../cli-path.mjs';
 
 // dirname(fileURLToPath(...)) + join, never new URL() — tests/no-url-module-paths.test.mjs.
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,7 +42,7 @@ describe('nativeBindingRepairHint', () => {
     const hint = nativeBindingRepairHint('/tmp/x');
     expect(hint).toContain(NATIVE_BINDING_REBUILD_CMD);
     expect(hint).toContain(NATIVE_BINDING_SOURCE_BUILD_CMD);
-    expect(hint).toContain('cd "/tmp/x"'); // quoted — roots contain spaces
+    expect(hint).toContain(`cd ${shellWord('/tmp/x')} `); // one shell word — roots contain spaces (D#61)
 
     // The trap this whole finding is about: step 1 exits 0 whether or not it compiled, so
     // `||` would never reach step 2 while LOOKING like a fallback. Assert the source build
@@ -119,7 +120,7 @@ describe('the hint leads with the repair that runs the whole chain', () => {
     made.push(dir);
     writeFileSync(join(dir, 'cli.mjs'), '');
     const hint = nativeBindingRepairHint(dir);
-    expect(hint).toContain(`node "${join(dir, 'cli.mjs')}" rebuild-binding`);
+    expect(hint).toContain(`node ${shellWord(join(dir, 'cli.mjs'))} rebuild-binding`);
     // Order is the assertion: a user runs the first command they are given.
     expect(hint.indexOf('rebuild-binding')).toBeLessThan(hint.indexOf(NATIVE_BINDING_REBUILD_CMD));
     // The pair stays as the no-CLI fallback — losing it would strand the case v4.0.0 added.
@@ -131,7 +132,7 @@ describe('the hint leads with the repair that runs the whole chain', () => {
     made.push(dir);
     const hint = nativeBindingRepairHint(dir);
     expect(hint).not.toContain('rebuild-binding');
-    expect(hint).toContain(`cd "${dir}"`);
+    expect(hint).toContain(`cd ${shellWord(dir)} `);
     expect(hint).toContain(NATIVE_BINDING_SOURCE_BUILD_CMD);
   });
 });

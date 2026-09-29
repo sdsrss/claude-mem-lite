@@ -167,12 +167,18 @@ describe('E2E: Plugin install mode', () => {
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/hook-launcher.mjs" hook.mjs session-start',
     );
 
-    // PreToolUse — two matchers (the `Skill` bridge went with the skill-registry
-    // subsystem in 2026-09; see docs/audits/20260906-145304.md)
+    // PreToolUse — three matchers (the `Skill` bridge went with the skill-registry
+    // subsystem in 2026-09; see docs/audits/20260906-145304.md; the Bash leg of file recall
+    // arrived with docs/audits/20260926-154904-session-history-analysis-r2.md, N1)
     const preToolUse = hooks.hooks.PreToolUse;
-    expect(preToolUse).toHaveLength(2);
+    expect(preToolUse).toHaveLength(3);
     const preMatchers = preToolUse.map((h) => h.matcher);
     expect(preMatchers).toContain('Edit|Write|NotebookEdit|Read');
+    expect(preMatchers).toContain('Bash');
+    // The Bash leg is a bash prefilter whose name carries `pre-tool-recall`: the citation
+    // tracker attributes the pretool face by that substring of the hook command.
+    const bashRecall = preToolUse.find((h) => h.matcher === 'Bash');
+    expect(bashRecall.hooks[0].command).toBe('bash "${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-recall-bash.sh"');
     expect(preMatchers).not.toContain('Skill');
     expect(preMatchers).toContain('Agent|Task');
 
@@ -295,9 +301,10 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(settings.hooks.UserPromptSubmit).toBeTruthy();
     expect(settings.hooks.PreToolUse).toBeTruthy();
 
-    // PreToolUse has two separate matchers
+    // PreToolUse has three separate matchers (Edit|Write|NotebookEdit|Read, Bash, Agent|Task)
     const preToolUse = settings.hooks.PreToolUse;
-    expect(preToolUse.length).toBeGreaterThanOrEqual(2);
+    expect(preToolUse.length).toBeGreaterThanOrEqual(3);
+    expect(preToolUse.some((h) => h.matcher === 'Bash')).toBe(true);
 
     // Edit/Write/Read recall hook (v2.34.6 extended Read)
     const editMatcher = preToolUse.find((h) => h.matcher === 'Edit|Write|NotebookEdit|Read');

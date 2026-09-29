@@ -81,7 +81,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Episode batching** -- Groups related file operations into coherent episodes before LLM encoding
 - **Error-triggered recall** -- Automatically searches memory when Bash errors occur, surfacing relevant past fixes
 - **Proactive file history** -- When editing a file, automatically shows relevant past observations for that file
-- **Session summaries** -- LLM-generated summaries at session end (via background workers using `claude -p`)
+- **Session summaries** -- written at every Stop (the assistant's final report when it has Done / Not done sections, else — when the final reply has no report section at all — its first 120 characters, else the first prompt and recent observation titles), then upgraded by a background model summary when the session has observations
 - **Project-scoped context** -- Injects recent memory into `CLAUDE.md` and session startup for immediate context
 - **Observation types** -- Categorized as `decision`, `bugfix`, `feature`, `refactor`, `discovery`, or `change`
 - **Importance grading** -- LLM assigns 1-3 importance levels (routine / notable / critical) to each observation
@@ -138,7 +138,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 |----------|--------|-------|
 | **Linux** | Supported | Primary development and testing platform; the whole CI matrix runs here |
 | **macOS** | Supported | Fully compatible (Intel and Apple Silicon) |
-| **Windows** | Installs, not CI-covered | The MCP server, the CLI and the `node` hooks work (`better-sqlite3` ships `win32-x64` and `win32-arm64` prebuilds, so nothing is compiled). **Three hook commands run under `bash`** — `setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh` — and need Git for Windows or WSL on `PATH`; `claude-mem-lite doctor` reports it when `bash` cannot be found. No GitHub Actions runner exercises Windows, so this rests on user reports ([#28](https://github.com/sdsrss/claude-mem-lite/issues/28)), not on a green pipeline |
+| **Windows** | Installs, not CI-covered | The MCP server, the CLI and the `node` hooks work (`better-sqlite3` ships `win32-x64` and `win32-arm64` prebuilds, so nothing is compiled). **Four hook commands run under `bash`** — `setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh`, `pre-tool-recall-bash.sh` — and need Git for Windows or WSL on `PATH`; `claude-mem-lite doctor` reports it when `bash` cannot be found. No GitHub Actions runner exercises Windows, so this rests on user reports ([#28](https://github.com/sdsrss/claude-mem-lite/issues/28)), not on a green pipeline |
 | **WSL2** | Untested | Linux under the hood, so it should behave as the Linux row; nobody has reported either way |
 
 From v5.1.0 through v6.1.0, `package.json` declared `os: ["darwin", "linux"]`. That is an npm *install*
@@ -152,7 +152,7 @@ is still outside it gets a message naming both sides of the mismatch instead of 
 - **Node.js** >= 22
 - **Claude Code** CLI installed and configured (`claude` command available)
 - **SQLite3** support (provided by `better-sqlite3` 13, which ships prebuilt binaries for 8 platforms — no compiler needed on any of them; a platform it has no prebuild for falls back to building from source)
-- **Platform**: Linux or macOS; Windows installs and runs but is not CI-covered and needs Git Bash or WSL for three hooks (see [Platform Support](#platform-support))
+- **Platform**: Linux or macOS; Windows installs and runs but is not CI-covered and needs Git Bash or WSL for four hooks (see [Platform Support](#platform-support))
 
 ## Installation
 
@@ -165,7 +165,7 @@ is still outside it gets a message naming both sides of the mismatch instead of 
 
 Plugin mode manages its own hooks/runtime. On session start it only **checks and reports** new claude-mem-lite versions; it does **not** self-overwrite plugin files in place. Update plugin-mode installs through Claude's plugin workflow.
 
-> **The plugin install is complete on its own** — hooks, MCP tools, and the bundled slash commands (`/mem`, `/lesson`, `/bug`, `/adopt`) all run from the plugin with no second step. The slash commands invoke the bundled CLI by an absolute path resolved from the plugin directory (`${CLAUDE_PLUGIN_ROOT}/cli.mjs <cmd>`), so they work without anything on your `PATH`. A global `claude-mem-lite` **shell** command (for running queries yourself in a terminal) is **optional** — `npm i -g claude-mem-lite` — and is a *separate* npm install: the plugin's auto-update does **not** refresh it, so re-run `npm i -g claude-mem-lite@latest` if you want that shell command kept in sync. You do **not** need it for the plugin to be fully functional.
+> **The plugin install is complete on its own** — hooks, MCP tools, and the bundled slash commands (`/mem`, `/lesson`, `/bug`, `/adopt`) all run from the plugin with no second step. The slash commands invoke the bundled CLI by an absolute path resolved from the plugin directory (`node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" <cmd>`), so they work without anything on your `PATH`. A global `claude-mem-lite` **shell** command (for running queries yourself in a terminal) is **optional** — `npm i -g claude-mem-lite` — and is a *separate* npm install: the plugin's auto-update does **not** refresh it, so re-run `npm i -g claude-mem-lite@latest` if you want that shell command kept in sync. You do **not** need it for the plugin to be fully functional.
 
 > **Auto-adopt writes into your project, on every SessionStart (v3.13+).** The plugin adds a slug-scoped **managed block** to your project's own **`<cwd>/CLAUDE.md`** — a file that is normally committed to git — plus a `<cwd>/.claude/plugin_claude_mem_lite.md` detail file. The block is a system-authority pointer that boosts Claude's proactive use of `mem_recall` / `mem_save`. Everything outside the block is preserved verbatim, and it coexists with other plugins' blocks in the same file ([details](#invited-memory-v232)). This happens on **every** SessionStart, not just the first: the sync is idempotent and re-applies the block if it is edited away, and refreshes it when the shipped template changes. It applies regardless of install path (npm, npx, `/plugin`, manual), so **no manual `/adopt` is needed**.
 >
@@ -236,6 +236,119 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
   managed/
     repos/               # Shallow-cloned source repos
 ```
+
+## Upgrading to 6.19.0
+
+**Search output changes; no switch.** No schema change and no migration, so reverting is
+pinning `claude-mem-lite@6.18.0`.
+
+- **`search` / `mem_search` mark machine-written observations with `🤖`**, and `get` /
+  `mem_get` name them in the header. Hook-captured, imported and compressed rows carry it;
+  explicit saves and events do not. The result line explains the mark whenever a shown row
+  has it, and `search --json` adds `auto` to observation rows.
+- **`mem_search` shows a snippet line only when it adds to the title.**
+- Fixes: a lone search match in a new per-project store no longer sorts last; a Bash
+  step's stored description keeps the end of its output; the secret scrubber catches values
+  behind markdown labels and stays linear-time on crafted input.
+
+## Upgrading to 6.18.0
+
+**One default changes, with a switch.** No schema change and no migration. Pinning
+`claude-mem-lite@6.17.1` stops new lines; a line already written stays until that session's
+next observation titles replace it, and 6.17.1 keeps its unrecognised tag as text in the
+row's `notes`.
+
+- **Last Session shows how the previous session ended even without a report.** When the
+  final reply has no Done / Not done / Failed / Uncertain section, `Completed:` is its first
+  120 characters (code blocks and line-leading markers removed) where it used to be
+  observation titles, which are usually empty; the /clear handoff labels it
+  `<session-summary source="last-reply">`. A report or a model summary still takes
+  precedence. A later reply under 400 characters ("You're welcome!") does not replace an
+  earlier one, and a reply in which the secret scrubber finds anything writes no line at all.
+  `CLAUDE_MEM_SUMMARY_TAIL=0` restores the titles from the session's next turn on.
+
+## Upgrading to 6.17.0
+
+**Two defaults change; one has a switch.** No schema change and no migration, so reverting
+everything is pinning `claude-mem-lite@6.16.0`.
+
+- **The pre-edit lesson line asks for a lesson's `#NN` only where it changed the edit.** It no
+  longer asks for an applied / not-applicable verdict on every lesson in your next reply, which
+  put lesson-id lists into replies. Old directive: `CLAUDE_MEM_SALIENCE=verdict` (since 6.17.1
+  it also says it overrides the managed row and detail doc, which keep the new wording). Adopted
+  projects get the matching CLAUDE.md managed row and detail doc on the next SessionStart;
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the old text.
+- **SessionStart's "Deferred Work" list ends with "+N more open"** when more than its 5 rows
+  are open. No switch; pin 6.16.0 to revert.
+
+## Upgrading to 6.16.0
+
+**Three defaults change; one has an off switch.** No schema change and no migration, so
+reverting everything is pinning `claude-mem-lite@6.15.0`.
+
+- **Each session gets one of two first lines on a file-recall block.** Half of sessions keep
+  "system-injected context, continue your planned action"; the other half get a plain
+  statement of where the notes come from, as Claude Code's hooks guide recommends. The two
+  are compared by cite-rate before one becomes the default. Off (old line everywhere):
+  `CLAUDE_MEM_RECALL_FRAMING=legacy`.
+- **Memory text longer than the host's 10,000-character hook limit is trimmed by whole
+  lines**, with a closing line naming the ids left out, instead of the host replacing it with
+  a 2,000-character preview. No switch; pin 6.15.0 to revert.
+- **Lessons shown after a failed Bash command now count in citation decay**, like every other
+  surface: ones never cited are ranked down over time. No switch; pin 6.15.0 to revert.
+
+## Upgrading to 6.15.0
+
+**Two defaults change; one has an off switch.** No schema change and no migration, so
+reverting everything is pinning `claude-mem-lite@6.14.0`.
+
+- **An auto-captured lesson that repeats text a tool printed is kept out of automatic
+  injection.** Whoever controls a command's output (a repository's test, a fetched page, an
+  MCP server) could otherwise get a sentence of their choosing stored as a lesson that later
+  sessions are shown. Such an event stays searchable at importance 1; a `change` observation
+  loses the lesson. Four shared words are enough, filler included, so an occasional lesson
+  of your own is demoted too. Off: `CLAUDE_MEM_LESSON_OUTPUT_CAP=off`.
+- **Last Session reads your own Done / Not done report when it uses markdown headings**
+  (`## Done`, `**Not done**`) instead of falling back to the model's summary. No switch; pin
+  6.14.0 to revert.
+
+## Upgrading to 6.14.0
+
+**Five defaults change; three have an off switch.** No schema change and no migration: an
+older build still opens the database, so reverting everything is pinning
+`claude-mem-lite@6.13.6`.
+
+- **File recall now also fires before Bash commands that view or write a file** (`cat`,
+  `sed -n`, `head`; `sed -i`, `cat > f`, a python patch) — on recent models most reads and
+  edits go through Bash, and the recall face with the highest measured cite rate had almost
+  stopped firing. A **fourth hook command runs under `bash`**, `pre-tool-recall-bash.sh`; on
+  Windows it needs Git Bash or WSL like the other three. Off: `CLAUDE_MEM_BASH_RECALL=off`.
+- **Error recall stays quiet on a failure you meant to cause** (running a test file you just
+  wrote or edited) and on commands that only print data and exit 0. No switch; pin 6.13.6 to
+  revert. `error_recall` counts in `citation-stats` drop from here on — do not compare them
+  across this version.
+- **Auto-captured lessons must quote what happened.** The episode summarizer ignores
+  mutation-test probes, the agent's own failing inline scripts and subagent calls that do not
+  edit the project, and a lesson that quotes nothing from its window is dropped (the event is
+  kept, at importance 1). Off: `CLAUDE_MEM_EPISODE_INPUT_FILTER=off` /
+  `CLAUDE_MEM_LESSON_GROUNDING=off`.
+- **The `[mem] episode flushed: N entries` line is no longer injected.** The hints that
+  followed it are unchanged.
+
+## Upgrading to 6.13.0
+
+**One default changes: SessionStart no longer injects `### Key Events`.** That section listed
+the five newest importance ≥ 2 rows of the `events` table — activity the background summarizer
+records — at the top of every session, chosen by recency rather than by what you were doing. A
+check of 30 of them against git history and transcripts found 2 accurate and 16 wrong. Events are still stored, searchable with `mem_search`, and
+injected when your prompt or the file being edited matches them. To restore the section, set
+`CLAUDE_MEM_SESSION_EVENTS=1`. No schema change and no migration: an older build still opens
+the database, so reverting is pinning `claude-mem-lite@6.12.2`.
+
+**Citation readings drop at this version, and that is a measurement change.** A lesson the
+agent answers with `#NN n/a` is no longer counted as cited, so `citation-stats` per-face rates
+read lower from here on (`--sidechain` excepted: it counts an `n/a` as an answer). Do not compare
+a reading taken before 6.13.0 with one taken after.
 
 ## Upgrading to 6.11.0
 
@@ -405,6 +518,7 @@ surface — reach them through the CLI column in the second table.
 /mem <query>               # Shorthand for search
 /lesson <text>             # Save a non-obvious lesson to the events table (v2.31.0)
 /bug <text>                # Log a known bug + repro steps to the events table (v2.31.0)
+/verify                    # Check memories against the current code; correct stale ones after you approve
 ```
 
 ### Efficient Search Workflow
@@ -505,7 +619,7 @@ lesson_learned, minhash_sig, access_count, compressed_into, search_aliases,
 branch, superseded_at, superseded_by, last_accessed_at
 ```
 
-**session_summaries** -- LLM-generated session summaries
+**session_summaries** -- per-session summaries (written at Stop, upgraded by the background model summary)
 ```
 id, memory_session_id, project, request, investigated,
 learned, completed, next_steps, files_read, files_edited, notes,
@@ -574,6 +688,7 @@ Stop
   -> Flush final episode buffer
   -> Save handoff snapshot (type 'exit')
   -> Mark session completed
+  -> Write the session summary row (sync, no model call)
   -> Spawn LLM summary worker (poll-based wait)
   -> Keep the session file  <- Stop fires per TURN; deleting it here re-minted a mem
      session every turn and left the SessionStart /clear branch unreachable (v5.4.0)
@@ -902,6 +1017,12 @@ claude-mem-lite.
 | `OPENROUTER_MODEL` | Overrides the OpenRouter model slug for **all** background calls (e.g. `openai/gpt-4o-mini`, `qwen/qwen-2.5-72b-instruct`). When unset, the `CLAUDE_MEM_MODEL` tier maps to `anthropic/claude-haiku-4.5` (haiku) or `anthropic/claude-sonnet-4.5` (sonnet). | _(tier default)_ |
 | `CLAUDE_MEM_DEBUG` | Enable debug logging (`1` to enable). | _(disabled)_ |
 | `MEM_QUIET_HOOKS` | Low-noise hooks. `1` drops the `File Lessons` / `Key Context` sections from SessionStart injection, the lesson suffix from `[mem] Related memories`, and the `WHEN TO USE` / `Decision rules` blocks from MCP server instructions. IDs and the `Recent` table still surface so `mem_get(ids=[…])` remains reachable. Intended for users running the invited-memory adopt path or who otherwise want minimal auto-injection. **Since v2.82.0 this env no longer gates auto-adopt — use `MEM_NO_AUTO_ADOPT=1` for that.** | _(disabled)_ |
+| `CLAUDE_MEM_SESSION_EVENTS` | `1`/`on` restores the SessionStart `### Key Events` section (recent high-importance rows from the `events` table). **Off by default since v6.13.0**: an audit of 30 events read 2 accurate and 16 wrong. The UserPromptSubmit events block and PreToolUse recall are query-matched and stay on; `mem_search` still reaches every event. | _(off)_ |
+| `CLAUDE_MEM_SUMMARY_TAIL` | `0`/`off` stops Stop from using the head of the final reply (first 120 characters, code blocks and line-leading markers removed) as a session's Completed line when that reply has no Done / Not done / Failed / Uncertain section; Completed then falls back to observation titles, as before v6.18.0; a line already written gives way to the titles at the session's next turn. A later reply under 400 characters does not replace an earlier one. | _(on)_ |
+| `CLAUDE_MEM_EPISODE_INPUT_FILTER` | What the episode summarizer may learn from. A subagent's tool calls stay out of the episode buffer unless they edit a file inside the project, and mutation probes (mutate → RED run → restore) and the agent's own failing inline scripts (a patch's `anchor not found`) are dropped before a window is saved or summarized — replayed over the 30 audited events, this removes 3 of the 16 that were wrong outright; with `CLAUDE_MEM_LESSON_GROUNDING` none of the 16 lessons is injected. `off` restores the unfiltered input. | _(on)_ |
+| `CLAUDE_MEM_BASH_RECALL` | File recall before a Bash command that views (`cat`, `sed -n`, `head`…) or writes (`sed -i`, `cat > f`, a python patch…) a file, like the Read / Edit recall. A bash prefilter keeps Node from starting for other commands. `off` disables this leg only. | _(on)_ |
+| `CLAUDE_MEM_LESSON_GROUNDING` | An auto-captured event keeps its lesson only when the lesson quotes the window's own diagnosis (a failing output line, a comment the edit added, or the commit message); otherwise the row is kept without it at importance 1, below every injection face. `off` keeps unquoted lessons. | _(on)_ |
+| `CLAUDE_MEM_LESSON_OUTPUT_CAP` | An auto-captured lesson that shares four consecutive words with TOOL OUTPUT (a command's printed text or a tool's response, which whoever controls that output can write) is kept off the injection faces: an event keeps its row and lesson, searchable, at importance 1; a `change` observation, whose importance later reads can raise, loses the lesson, and the lesson-less row is then dropped like any other (kept only with `CLAUDE_MEM_KEEP_LOW_SIGNAL=1`). Four shared words of filler ("is not in the") count too, so a lesson quoting your own comment or commit message is demoted when it also happens to share such a run with output in the same window. The row's title is not checked. `off` restores the model's importance and the lesson. | _(on)_ |
 | `MEM_NO_AUTO_ADOPT` | Global opt-out for auto-adopt (v2.82.0+). `1` prevents the per-SessionStart auto-write of the `CLAUDE.md` managed block across **all** projects. For per-project opt-out use `claude-mem-lite adopt --disable` instead (writes a durable `<memdir>/.mem-no-auto-adopt` sentinel that survives marker deletion). | _(disabled)_ |
 | `MEM_NO_ADOPT_HINT` | Silences the one-line "Invited-memory 未启用：`claude-mem-lite adopt`…" hint that SessionStart appends when the current project hasn't been adopted. Since v2.82.1 auto-adopt runs on every SessionStart for any install path, so this hint typically surfaces only when you've explicitly opted out (`MEM_NO_AUTO_ADOPT=1` or `claude-mem-lite adopt --disable`). | _(disabled)_ |
 
@@ -999,7 +1120,8 @@ and names can change between releases.
 |----------|-------------|---------|
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
-| `CLAUDE_MEM_SALIENCE` | Selects a comprehension-bridge arm (`bridge`, `bind`); unset = current default behavior. | _(unset)_ |
+| `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. `ab` gives each session one of two wordings, the older "system-injected context, continue your planned action" or a plain statement of source, so their cite-rates can be compared in one run (`benchmark/citation-live-replay.mjs --by-framing`); `legacy` / `factual` pin one. | `ab` |
+| `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict (the adoption row in CLAUDE.md and the detail doc keep the new wording, and since 6.17.1 the directive says it overrides them); `bind` / `bridge` = comprehension-bridge arms (`bridge` keeps the pre-6.17 verdict wording as its fallback; neither says it overrides the adopted text, so their measured wording stays fixed); `legacy` = no directive. | _(unset)_ |
 | `CLAUDE_MEM_EDGE_DECAY` | Enables decay of file↔observation edges. | _(off)_ |
 | `CLAUDE_MEM_EDGE_DECAY_K` | Edge-decay threshold when the flag above is on (clamped to ≥1). | `3` |
 

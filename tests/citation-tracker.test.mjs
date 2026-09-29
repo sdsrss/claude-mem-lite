@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   extractCitationsFromTranscript,
+  isDismissalAt,
   classifyCitationContext,
   extractUserTypedIds,
   buildCitationRelevanceSet,
@@ -125,6 +126,110 @@ describe('extractCitationsFromTranscript', () => {
     const ids = extractCitationsFromTranscript(path);
     expect(ids.has(42)).toBe(true);
     expect(ids.size).toBe(1);
+  });
+});
+
+// `#NN n/a — <reason>` is the agent saying a lesson did NOT apply, and it used to promote
+// the row exactly like an application. Shapes are taken from real assistant text on the
+// authoring machine (328 of ~1,880 `#NN` mentions were dismissals, 2026-09-25).
+describe('extractCitationsFromTranscript — dismissals are not citations', () => {
+  let tmp;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'citation-dismiss-'));
+  });
+  afterEach(() => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  });
+  const say = (...texts) => {
+    const path = join(tmp, 'transcript.jsonl');
+    writeFileSync(
+      path,
+      texts
+        .map((text) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }))
+        .join('\n'),
+    );
+    return path;
+  };
+  const cited = (...texts) => [...extractCitationsFromTranscript(say(...texts))].sort((a, b) => a - b);
+
+  it('drops `#NN n/a` in its common spellings', () => {
+    expect(cited('#93 n/a — that lesson is about notebook_path, unrelated to this path.')).toEqual([]);
+    expect(cited('**#48 n/a**——本轮没有新增任何写列者')).toEqual([]);
+    expect(cited('`#44 n/a`（该教训是关于池边界的区分）')).toEqual([]);
+    expect(cited('#1451 不适用，它讲的是 tree-sitter')).toEqual([]);
+    expect(cited('#1983、#2359 本轮 n/a——没改 trap 处理器')).toEqual([]);
+  });
+
+  it('applies a trailing verdict to the whole id list, and only to that list', () => {
+    expect(cited('Lessons: #53 / #62 / #67 applied; #260 / #54 / E#470 n/a.')).toEqual([53, 62, 67]);
+    expect(cited('Lessons #1758、E#3520、E#3316 与这次的工作无关（n/a）')).toEqual([]);
+    expect(cited('#2408、#2362、#2526 与本轮编辑无关。')).toEqual([]);
+  });
+
+  // Pre-ship defect review P3-6: a marker that opens a clause which then states the lesson
+  // WAS applied is not a dismissal. The clause ends at the next id, so a verdict for a
+  // DIFFERENT lesson later on the line cannot rescue this one.
+  it('an application stated later in the same clause keeps the credit', () => {
+    expect(cited('#12 n/a for lib/a.mjs; applied to lib/b.mjs')).toEqual([12]);
+    expect(cited('#12 does not apply to tests but I applied it to lib')).toEqual([12]);
+    expect(cited('#12 与本次无关的部分已跳过，核心已采纳')).toEqual([12]);
+    expect(cited('#12 无关紧要的细节之外，已按它修复')).toEqual([12]);
+    expect(cited('#12 n/a; #13 applied')).toEqual([13]);
+    // …and the override must not fire on the dismissal's own explanation (delta review P3-2).
+    expect(cited('#12 n/a — does not apply here')).toEqual([]);
+    expect(cited('#12 n/a — it applies to the server path, not this file')).toEqual([]);
+    expect(cited('#12 不适用，不采纳')).toEqual([]);
+    expect(cited('#12 n/a, not applied')).toEqual([]);
+  });
+
+  it('reads a verdict past one short parenthetical gloss', () => {
+    expect(cited('#1964（发版就绪流程要前置）与本次无关 —— n/a')).toEqual([]);
+    expect(cited('#77 (the loader gate) does not apply here')).toEqual([]);
+  });
+
+  // Defect review P3-6 remainder: an English marker used as an adjective on a noun ("#12
+  // irrelevant rows are now filtered") describes the change, not the lesson.
+  it('reads irrelevant / unrelated / not relevant before a noun as a description, not a verdict', () => {
+    expect(cited('#12 irrelevant rows are now filtered (as the lesson said)')).toEqual([12]);
+    expect(cited('#12: unrelated tests failed first')).toEqual([12]);
+    expect(cited('#12 not relevant results are dropped now')).toEqual([12]);
+    // The verdict shapes stay dismissals.
+    expect(cited('#12 irrelevant here')).toEqual([]);
+    expect(cited('#12 unrelated to this change')).toEqual([]);
+    expect(cited('#12 unrelated — it is about notebooks')).toEqual([]);
+    expect(cited('#12 not relevant: read-only path')).toEqual([]);
+    expect(cited('#12 irrelevant.')).toEqual([]);
+    expect(cited('#12 unrelated')).toEqual([]);
+    expect(cited('#12 irrelevant since nothing was edited')).toEqual([]);
+    expect(cited('#12 unrelated, and #13 n/a')).toEqual([]);
+    expect(cited('#12 not relevant anymore')).toEqual([]);
+    expect(cited('#12 unrelated though')).toEqual([]);
+    expect(cited('#12 irrelevant today')).toEqual([]);
+  });
+
+  it('keeps a mention whose verdict is not directly attached', () => {
+    // The marker must follow the id; "somewhere nearby" would take credit from used lessons.
+    expect(cited('#56 applied — counted the surfaces first; the rest was n/a.')).toEqual([56]);
+    expect(cited('Per #42 the guard stays; unrelated files were left alone.')).toEqual([42]);
+    expect(cited('#1894/#1895 那条"未设 vs 零值"的同源问题我另记了一条')).toEqual([1894, 1895]);
+  });
+
+  it('cites an id that is dismissed once and applied elsewhere in the session', () => {
+    expect(cited('#42 n/a for the first edit.', 'Second edit: applying #42 now.')).toEqual([42]);
+  });
+
+  it('counts dismissals when the caller asks a compliance question', () => {
+    const path = say('#93 n/a — unrelated; #94 applied.');
+    expect([...extractCitationsFromTranscript(path, { includeDismissed: true })].sort()).toEqual([93, 94]);
+    expect([...extractCitationsFromTranscript(path)]).toEqual([94]);
+  });
+
+  it('isDismissalAt reads from the end of the match', () => {
+    const t = 'see #12 n/a';
+    expect(isDismissalAt(t, t.indexOf('#12') + 3)).toBe(true);
+    expect(isDismissalAt('see #12 later', 7)).toBe(false);
   });
 });
 

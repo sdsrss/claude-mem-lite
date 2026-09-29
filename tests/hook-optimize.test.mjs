@@ -133,6 +133,42 @@ describe('re-enrich', () => {
     const obs = db.prepare('SELECT title FROM observations LIMIT 1').get();
     expect(obs.title).not.toMatch(/ACCESS_KEY=[A-Za-z0-9]/);
   });
+
+  // D#146, the D#138 class on this path: narrow replaces title and narrative with model text, so
+  // an explicit save it rewrites (one whose save-time enrich failed) is no longer one.
+  const narrowReply = {
+    type: 'bugfix',
+    title: 'Model title',
+    narrative: 'model narrative',
+    concepts: ['c'],
+    facts: [],
+    importance: 2,
+    lesson_learned: 'a lesson with enough signal to persist',
+    search_aliases: [],
+  };
+
+  it('a manual save rewritten by narrow re-enrich is marked machine-written', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, { sessionId: 'manual-test', title: 'Saved by hand', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue(narrowReply);
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const obs = db.prepare('SELECT title, memory_session_id FROM observations LIMIT 1').get();
+    expect(obs.title).toBe('Model title');
+    expect(obs.memory_session_id).toBe('enrich-test');
+    expect(isAutoWritten(obs.memory_session_id)).toBe(true);
+  });
+
+  it('a machine-written row keeps its session id through narrow re-enrich', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Hook row', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue(narrowReply);
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT memory_session_id FROM observations LIMIT 1').get().memory_session_id).toBe(
+      'sess-1',
+    );
+  });
 });
 
 // P1 alias-backfill (scope='aliases'): a lesson-bearing manual save (mem_save)
@@ -844,6 +880,35 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect(wide[0].title).toContain('credit deduction');
   });
 
+  // D#146 control: wide keeps the stored title and narrative (it fills the lesson and side
+  // fields), so an explicit save stays one (narrow's rewrite moves it to `enrich-`).
+  it('a manual save keeps its session id through wide re-enrich', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, {
+      sessionId: 'manual-test',
+      type: 'bugfix',
+      title: 'Fix race condition in credit deduction',
+      narrative:
+        'IntegrityError appeared when two concurrent requests deducted credit from the same account. Root cause: balance read-then-write without SELECT FOR UPDATE. Added row-level lock.',
+    });
+    callModelJSONAsync.mockResolvedValue({
+      type: 'bugfix',
+      title: 'Model title',
+      narrative: 'model narrative',
+      concepts: ['credit'],
+      facts: [],
+      importance: 2,
+      lesson_learned: 'lock the balance row before a read-then-write',
+      search_aliases: [],
+    });
+    expect((await executeReenrich(db, 10, { scope: 'wide' })).processed).toBe(1);
+    const obs = db.prepare('SELECT title, lesson_learned, memory_session_id FROM observations LIMIT 1').get();
+    expect(obs.lesson_learned).toContain('lock the balance row');
+    expect(obs.title).toBe('Fix race condition in credit deduction');
+    expect(obs.memory_session_id).toBe('manual-test');
+  });
+
   it('wide scope excludes LOW_SIGNAL titles (no source material to extract from)', async () => {
     const { findReenrichCandidates } = await import('../hook-optimize.mjs');
     insertObs(db, {
@@ -1204,6 +1269,91 @@ describe('cluster-merge', () => {
     expect(other.compressed_into).toBe(obs[0].id);
   });
 
+  // D#138: provenance is read from memory_session_id, and a manual- keeper rewritten with model
+  // text rendered as an explicit save. The snapshot keeps the original id (it IS the save).
+  it('a manual keeper rewritten by the merge is marked machine-written; its snapshot is not', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, { sessionId: 'manual-test', title: 'Saved by hand', narrative: 'x', importance: 3 });
+    insertObs(db, { title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged by the model',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(obs[0].id);
+    expect(keeper.memory_session_id).toBe('compress-test');
+    expect(isAutoWritten(keeper.memory_session_id)).toBe(true);
+    const snap = db
+      .prepare(
+        "SELECT memory_session_id FROM observations WHERE compressed_into = ? AND title = 'Saved by hand'",
+      )
+      .get(obs[0].id);
+    expect(snap.memory_session_id).toBe('manual-test');
+  });
+
+  // v6.19.1 pre-tag review F5a: `compress-<project>` for a 27-character project shaped like
+  // xxxx-xxxx-xxxx-xxxxxxxxxxxx has the uuid shape the sdk_sessions trigger refuses, and the
+  // refusal failed every merge in that project. D#147: the writer id now gets one more character
+  // there, so the keeper is marked machine-written like in any other project.
+  it('a merge in a project whose writer id would look like a uuid still merges', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    const P = 'abcd-abcd-abcd-abcdefghijkl';
+    insertSession(db, { id: 'manual-u', project: P });
+    insertObs(db, {
+      sessionId: 'manual-u',
+      project: P,
+      title: 'Saved by hand',
+      narrative: 'x',
+      importance: 3,
+    });
+    insertObs(db, { project: P, title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations WHERE project = ? ORDER BY id').all(P);
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db
+      .prepare('SELECT title, memory_session_id FROM observations WHERE id = ?')
+      .get(obs[0].id);
+    expect(keeper.title).toBe('Merged');
+    expect(keeper.memory_session_id).toBe(`compress-${P}~`);
+    expect(isAutoWritten(keeper.memory_session_id)).toBe(true);
+  });
+
+  it('a machine-written keeper keeps its session id through the merge', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Hook keeper', narrative: 'x', importance: 3 });
+    insertObs(db, { title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(obs[0].id);
+    expect(keeper.memory_session_id).toBe('sess-1');
+  });
+
   it('snapshots the keeper original text before in-place overwrite (HIGH-3: data loss)', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
     insertObs(db, {
@@ -1432,6 +1582,33 @@ describe('smart-compress', () => {
     const summary = db.prepare('SELECT * FROM observations WHERE id = ?').get(result.summaryId);
     expect(summary.importance).toBe(2);
     expect(summary.title).toContain('Utils.mjs');
+  });
+
+  // D#147: `compress-<project>` for a 27-character project shaped xxxx-xxxx-xxxx-xxxxxxxxxxxx has
+  // the uuid shape sdk_sessions refuses, so every run in that project failed after its model call.
+  it('compresses in a project whose writer id would look like a uuid', async () => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const P = 'abcd-abcd-abcd-abcdefghijkl';
+    const oldEpoch = -(31 * 86400000);
+    for (let i = 0; i < 3; i++) {
+      insertObs(db, { project: P, title: `Old ${i}`, narrative: 'n', epochOffset: oldEpoch - i * 1000 });
+    }
+    const obs = db.prepare('SELECT * FROM observations WHERE project = ? ORDER BY id').all(P);
+    callModelJSONAsync.mockResolvedValue({
+      should_compress: true,
+      title: 'Summary',
+      narrative: 'summary text',
+      concepts: [],
+      facts: [],
+      lesson_learned: 'none',
+      search_aliases: [],
+    });
+    const result = await executeSmartCompressCluster(db, obs, P);
+    expect(result.compressed).toBe(true);
+    const summary = db
+      .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+      .get(result.summaryId);
+    expect(summary.memory_session_id).toBe(`compress-${P}~`);
   });
 
   // D#10. This path HIDES its inputs — the originals get compressed_into set, which

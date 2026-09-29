@@ -56,7 +56,8 @@ export {
 } from './bash-utils.mjs';
 
 // Internal imports for functions that remain in this module
-import { truncate } from './format-utils.mjs';
+import { normalizeInline, truncate } from './format-utils.mjs';
+import { stripPrivate } from './lib/private-strip.mjs';
 import { stripTestSuffix } from './bash-utils.mjs';
 // Static, and deliberately the dependency-free resolver (node:os + node:path only) —
 // debugCatch's sampler must not pull in the DB layer. See its comment below.
@@ -139,6 +140,28 @@ export function clampImportance(val) {
 // Tools that produce file edits (used for significance detection, feedback, importance)
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 
+/**
+ * The files an episode entry EDITED: an Edit/Write/NotebookEdit entry's paths, or what a
+ * Bash command wrote (`bashWrites`, recorded by hook.mjs from extractFileTargets). Every
+ * "was this an edit" consumer goes through here or isEditEntry: nine sites asked
+ * `EDIT_TOOLS.has(e.tool)`, and on Opus 5.5 82% of file edits went through Bash
+ * (docs/audits/20260926-154904-session-history-analysis-r2.md, N1), so each of them saw
+ * a session of `sed -i` / python patches as one with no edits at all.
+ * @param {object} e episode entry
+ * @returns {string[]}
+ */
+export function entryEditedFiles(e) {
+  if (!e) return [];
+  if (EDIT_TOOLS.has(e.tool)) return e.files || [];
+  if (e.tool === 'Bash' && Array.isArray(e.bashWrites)) return e.bashWrites;
+  return [];
+}
+
+/** @param {object} e episode entry @returns {boolean} the entry edited a file */
+export function isEditEntry(e) {
+  return Boolean(e) && (EDIT_TOOLS.has(e.tool) || entryEditedFiles(e).length > 0);
+}
+
 // Stdin caps for the hook entry points (G19). Two DELIBERATE tiers, not drift:
 // full hook payloads carry tool_response bodies (256KB), while the UserPromptSubmit
 // search surface caps the prompt itself at 64KB (#9494 huge-prompt guard — search
@@ -172,7 +195,7 @@ export function computeRuleImportance(episode) {
     toolTypes.add(entry.tool);
 
     // Track error→edit debug cycle pattern
-    if (lastWasError && EDIT_TOOLS.has(entry.tool)) hasErrorThenEdit = true;
+    if (lastWasError && isEditEntry(entry)) hasErrorThenEdit = true;
     lastWasError = entry.isError || sig?.isError;
 
     if (sig?.isError && (sig?.isTest || sig?.isBuild)) {
@@ -183,12 +206,12 @@ export function computeRuleImportance(episode) {
     // referenced in a bash command (finding #7): reading auth.js / .env / schema.mjs
     // incidentally during an unrelated task must not promote the whole memory to
     // imp=3 and outrank genuine memories in top-K injection.
-    const isEdit = EDIT_TOOLS.has(entry.tool);
-    if (isEdit && files.some((f) => /\.(env|pem|key)$|\/auth\.|\/credential|\/password/i.test(f))) {
+    const edited = entryEditedFiles(entry);
+    if (edited.some((f) => /\.(env|pem|key)$|\/auth\.|\/credential|\/password/i.test(f))) {
       importance = 3;
       break;
     }
-    if (isEdit && files.some((f) => /migration|schema\.|prisma|alembic/i.test(f))) {
+    if (edited.some((f) => /migration|schema\.|prisma|alembic/i.test(f))) {
       importance = 3;
       break;
     }
@@ -260,9 +283,97 @@ export function isRelatedToEpisode(episode, newFiles) {
 // magnitude above the longest cut here, so a secret that begins before the cut is still
 // seen whole by the patterns, at bounded cost.
 const DESC_SCRUB_WINDOW = 4096;
-function scrubTruncate(str, max) {
+
+// Every field is cut strictly around private spans: closed `<private>` spans are redacted across
+// the WHOLE input first (one linear pass; hook input is capped at 256 KiB), then the window stops
+// before the first remaining `<private>` or private-key BEGIN, so no field shows a span whose end
+// is out of view. Before v6.19.0 an unclosed opener in the window (a Grep line
+// `notes.md:3:<private>bank pin 4412`) was shown as written (v6.19.0 pre-tag reviews P3-1, r3 P2-1).
+// A `</private>` or private-key END that comes first is a span whose START is out of view (a
+// nested span, `tail key.pem`), so everything before it may be its inside: the field shows nothing
+// (round-3 P3-1). The PEM half is case-sensitive, like the scrubber's PEM pattern.
+const PRIVATE_MARK_RE = /<\/?[Pp][Rr][Ii][Vv][Aa][Tt][Ee]>|-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY/;
+// A window edge that cuts a token leaves a fragment shorter than its pattern needs (`ghp_` and 12
+// of its 36 characters), and whitespace collapsing can bring it into view: the cut token is
+// dropped (defect review P3-6, round-3 P3-4/P3-6). A head window with no whitespace keeps it: its
+// start is intact and it is the only part shown. A tail window with no whitespace is all one cut token.
+const isWs = (c) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || /\s/.test(c);
+function dropCutTokenAtEnd(win, next) {
+  if (next === undefined || isWs(next)) return win;
+  let i = win.length;
+  while (i > 0 && !isWs(win[i - 1])) i--;
+  return i > 0 ? win.slice(0, i) : win;
+}
+function dropCutTokenAtStart(win, prev) {
+  if (prev === undefined || isWs(prev)) return win;
+  let i = 0;
+  while (i < win.length && !isWs(win[i])) i++;
+  return win.slice(i);
+}
+function scrubTruncate(str, max, window = DESC_SCRUB_WINDOW) {
   if (typeof str !== 'string' || str === '') return truncate(str, max);
-  return truncate(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)), max);
+  const stripped = stripPrivate(str);
+  let win = stripped.slice(0, window);
+  const mark = PRIVATE_MARK_RE.exec(win);
+  if (mark) win = mark[0][1] === '/' || mark[0].startsWith('-----END') ? '' : win.slice(0, mark.index);
+  else win = dropCutTokenAtEnd(win, stripped[window]);
+  // The window edge can split a surrogate pair; truncate only guards a cut it makes itself.
+  if (/[\uD800-\uDBFF]$/.test(win)) win = win.slice(0, -1);
+  return truncate(_scrubSecrets(win), max);
+}
+
+// Head+tail cut for command output. A check usually prints its verdict last ("...parsed: 0",
+// "3 passed"); a head-only cut hands the episode summarizer an unresolved-looking fragment,
+// and it has written a bugfix narrative for a check that passed. The tail comes from its own
+// scrub window at the END of the original string: taking it from the head window would drop
+// the verdict of any output longer than DESC_SCRUB_WINDOW.
+//
+// Output with a private span anywhere in it (a `<private>` tag or a PEM private-key marker) shows
+// no tail, only v6.18.0's 60-character head (cut as above). The tail is scrubbed in its own
+// window, which cannot see a span that crosses its edge, and pairing the markers per window
+// stored span text two ways in the v6.19.0 pre-tag review (a cut inside a closed `<private>`, a
+// key with no END more than 4096 characters back).
+const PRIVATE_TAG_HINT_RE = /<\/?private>/i;
+const HEAD_ONLY_MAX = 60;
+// The tail window is scrubbed with TAIL_CONTEXT characters before it, which are then dropped: a
+// label cut by the window's edge (`pass|word: <value>`) is seen whole, so its value is not left
+// unlabelled at the window's start, where whitespace collapsing can bring it into view (v6.19.1
+// pre-tag review F1). A replacement inside the context moves the cut by its length change; the
+// token the cut lands in is dropped either way.
+const TAIL_CONTEXT = 256;
+function scrubTailWindow(str, window) {
+  const scrubbed = _scrubSecrets(str.slice(-(window + TAIL_CONTEXT)));
+  return dropCutTokenAtStart(scrubbed.slice(TAIL_CONTEXT), scrubbed[TAIL_CONTEXT - 1]);
+}
+const oneSpace = (s) => s.replace(/\s+/g, ' ');
+// The early return needs the WHOLE output inside the head window: a long output whose first
+// 4096 characters collapse to a few (whitespace) still has a tail to show (v6.19.0 pre-tag
+// claims review F2).
+function scrubTruncateEnds(str, max) {
+  if (typeof str === 'string' && (str.includes('PRIVATE KEY') || PRIVATE_TAG_HINT_RE.test(str))) {
+    return scrubTruncate(str, HEAD_ONLY_MAX);
+  }
+  // Up to two windows long, one window covers the whole output: two overlapping windows showed
+  // the same text twice (delta review P3-4).
+  const window =
+    typeof str === 'string' && str.length <= 2 * DESC_SCRUB_WINDOW
+      ? 2 * DESC_SCRUB_WINDOW
+      : DESC_SCRUB_WINDOW;
+  // Whitespace runs are one space: a blank-line run no longer spends the budget (or, before the
+  // one-window rule, hid behind the window edge).
+  const flat = oneSpace(scrubTruncate(str, window, window));
+  const whole = typeof str !== 'string' || str.length <= window;
+  if (whole && flat.length <= max) return flat;
+  const tailLen = Math.floor(max / 2) - 1;
+  const tailSrc = whole ? flat : oneSpace(normalizeInline(scrubTailWindow(str, window)));
+  if (tailSrc === '') return truncate(flat, max);
+  // Drop a lone low surrogate the tail's cut may start on.
+  const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');
+  // A head short enough to escape truncate's own "…" still gets one before the tail.
+  const budget = max - tailLen;
+  let head = truncate(flat, budget);
+  if (!head.endsWith('…')) head = head.length < budget ? `${head}…` : truncate(flat, budget - 1);
+  return head + tail;
 }
 
 export function makeEntryDesc(toolName, input, resp, opts) {
@@ -280,7 +391,7 @@ export function makeEntryDesc(toolName, input, resp, opts) {
       const isErr =
         opts?.isError ??
         (/\berror\b|\bfail(ed|ure)?\b|\bexception\b|\bpanic\b/i.test(resp) && resp.length > 30);
-      const snippet = scrubTruncate(resp, 60);
+      const snippet = scrubTruncateEnds(resp, 100);
       return isErr ? `${cmd} → ERROR: ${snippet}` : `${cmd} → ${snippet}`;
     }
     case 'Grep':

@@ -15,9 +15,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 import { projectNameFromDir } from '../project-utils.mjs';
+import Database from 'better-sqlite3';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(REPO, 'hook.mjs');
@@ -66,54 +67,87 @@ function seedBuffer(project) {
   return p;
 }
 
+// D#137: a fixed 400 ms before the signal and 700 ms after it failed 2 of 8 full-suite runs.
+// Under load the child had not registered its handler yet (time to register, 2026-09-28: max
+// 70 / 165 / 264 ms at 1 / 12 / 24 concurrent children), or had not finished the salvage. The
+// child now says when a SIGTERM listener is registered (hook.mjs is the only module on its
+// import path that registers one), and the test waits for the exit itself.
+const READY = '__SIGTERM_LISTENER__';
+const PRELOAD = `const on = process.on;
+process.on = function (ev, fn) {
+  const r = on.call(this, ev, fn);
+  if (ev === 'SIGTERM') process.stderr.write('\\n${READY}\\n');
+  return r;
+};
+`;
+
 /**
- * Start hook.mjs for `event`, leave stdin OPEN so it does not race to exit, wait for it to
- * be alive, SIGTERM it, and wait for exit. Returns whether it was still running when the
- * signal was sent — a case that signals a dead process proves nothing.
+ * Start hook.mjs for `event`, leave stdin OPEN so it does not race to exit, wait until its
+ * SIGTERM handler is registered, SIGTERM it, and wait for exit. Returns whether it was still
+ * running when the signal was sent — a case that signals a dead process proves nothing.
  */
 function runAndSignal(event, project, extraArgs = []) {
+  const preload = join(root, 'sigterm-ready.mjs');
+  writeFileSync(preload, PRELOAD);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [HOOK, event, ...extraArgs], {
-      env: {
-        ...process.env,
-        HOME: root,
-        CLAUDE_MEM_DIR: dataDir,
-        CLAUDE_PROJECT_DIR: projectDir,
-        MEM_NO_AUTO_ADOPT: '1',
-        CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
-        CLAUDE_MEM_SKIP_SUMMARY: '1',
-        CLAUDE_MEM_KEEP_LOW_SIGNAL: '1',
+    const child = spawn(
+      process.execPath,
+      ['--import', pathToFileURL(preload).href, HOOK, event, ...extraArgs],
+      {
+        env: {
+          ...process.env,
+          HOME: root,
+          CLAUDE_MEM_DIR: dataDir,
+          CLAUDE_PROJECT_DIR: projectDir,
+          MEM_NO_AUTO_ADOPT: '1',
+          CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
+          CLAUDE_MEM_SKIP_SUMMARY: '1',
+          CLAUDE_MEM_KEEP_LOW_SIGNAL: '1',
+        },
+        cwd: projectDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
       },
-      cwd: projectDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    );
     let exited = false;
-    child.on('exit', () => (exited = true));
-    setTimeout(() => {
-      const wasAlive = !exited;
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already gone */
-      }
-      setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* gone */
-        }
-        resolve({ wasAlive });
-      }, 700);
-    }, 400);
+    let wasAlive = false;
+    let signalled = false;
+    let stderr = '';
+    const killTimer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+    const signal = () => {
+      if (signalled) return;
+      signalled = true;
+      wasAlive = !exited;
+      child.kill('SIGTERM');
+    };
+    child.stderr.on('data', (d) => {
+      stderr += d;
+      if (stderr.includes(READY)) signal();
+    });
+    child.on('exit', () => {
+      exited = true;
+      clearTimeout(killTimer);
+      resolve({ wasAlive, ready: stderr.includes(READY) });
+    });
   });
 }
 
 describe('R10 P3-2 — only the interactive hook salvages the episode buffer on a signal', () => {
   it('an interactive hook DOES salvage it — the premise', async () => {
     const p = seedBuffer(PROJECT);
-    const { wasAlive } = await runAndSignal('post-tool-use', PROJECT);
+    const { wasAlive, ready } = await runAndSignal('post-tool-use', PROJECT);
+    expect(ready, 'the child never registered a SIGTERM listener').toBe(true);
     expect(wasAlive, 'the process exited before the signal; this case proves nothing').toBe(true);
     expect(existsSync(p), 'the interactive salvage path stopped working').toBe(false);
+    // Deleting the buffer is not salvaging it: the episode must be in the DB (v6.19.1 pre-tag F7).
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    try {
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM observations').get().n,
+        'the buffer was deleted but no episode was saved',
+      ).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
   });
 
   // The background arm is STRUCTURAL, and that is a limitation worth stating rather than

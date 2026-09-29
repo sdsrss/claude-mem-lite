@@ -440,7 +440,7 @@ describe('formatHookError — the hint must name a repair that actually applies'
     expect(line).toContain('rebuild-binding');
     // `repair` re-downloads + signature-verifies a whole release and fails closed
     // offline — wrong-sized (and often impossible) for a local ABI rebuild.
-    expect(line).not.toMatch(/cli\.mjs repair/);
+    expect(line).not.toMatch(/cli\.mjs"? repair/);
   });
 });
 

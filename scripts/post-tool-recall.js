@@ -31,6 +31,7 @@ import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES } from '../lib/hook-stdin.mjs';
 import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
 import { toolEditPath } from '../lib/file-edge-match.mjs';
+import { recallFramingLine } from '../lib/recall-framing.mjs';
 
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 
@@ -95,7 +96,7 @@ async function main() {
   }
   if (!dropped.length) return;
 
-  const lines = ['[mem] PostToolUse recall — system-injected context, continue your planned action:'];
+  const lines = [recallFramingLine('PostToolUse', { sessionId, fname: basename(filePath) })];
   for (const d of dropped.slice(0, 3)) {
     lines.push(
       `[mem] ⚠ your edit to ${basename(filePath)} dropped \`${d.token}\` flagged by #${d.obsId} — if intentional say so, else re-check before moving on.`,

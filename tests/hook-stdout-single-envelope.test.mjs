@@ -339,8 +339,17 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
    * flushes a receipt and — being a hard error — triggers recall, which is the
    * only state in which two envelopes were written from one process.
    */
+  // The first entry is a hard error, so the flushed episode is error+edit and carries the
+  // unsaved-bugfix hint: since the bookkeeping `episode flushed` line was removed, a hint
+  // is the only thing a flush contributes to stdout.
   function fillEpisodeBuffer(sessionId, n = 10) {
-    for (let i = 0; i < n; i++) {
+    postToolUse({
+      session_id: sessionId,
+      tool_name: 'Bash',
+      tool_input: { command: 'node --test widget-cache.test.mjs' },
+      tool_response: HARD_ERROR_RESPONSE,
+    });
+    for (let i = 1; i < n; i++) {
       postToolUse({
         session_id: sessionId,
         tool_name: 'Edit',
@@ -387,7 +396,8 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
     // Both contributions survive the merge.
     const ctx = parsed.hookSpecificOutput.additionalContext;
     expect(ctx).toContain('Related memories found for this error');
-    expect(ctx).toContain('episode flushed');
+    expect(ctx).toContain('Unsaved bugfix-shape');
+    expect(ctx).not.toContain('episode flushed');
   });
 
   it('never puts more than one JSON-looking line on stdout', () => {

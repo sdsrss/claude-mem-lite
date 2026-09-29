@@ -354,11 +354,14 @@ describe('hook-launcher marker-driven self-heal (session-start)', () => {
     mkdirSync(join(root, 'runtime'), { recursive: true });
     writeFileSync(BROKEN(root), JSON.stringify({ reason, ts: Date.now() }));
   };
+  // The stub publishes its record by rename: a plain writeFileSync creates the file before
+  // it writes it, so a poll that sees it exist can read '' (D#151, CI Node 26).
   const stubInstaller = (root) =>
     writeFileSync(
       join(root, 'install.mjs'),
-      `import { writeFileSync } from 'fs';\n` +
-        `writeFileSync(${JSON.stringify(RAN(root))}, process.argv[2] || '');\n` +
+      `import { writeFileSync, renameSync } from 'fs';\n` +
+        `writeFileSync(${JSON.stringify(RAN(root) + '.tmp')}, process.argv[2] || '');\n` +
+        `renameSync(${JSON.stringify(RAN(root) + '.tmp')}, ${JSON.stringify(RAN(root))});\n` +
         `process.exit(0);\n`,
     );
   const cleanEntry = (root) =>
@@ -465,8 +468,9 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
   const stubInstaller = (root, { exitCode = 0, clearsMarker = true } = {}) =>
     writeFileSync(
       join(root, 'install.mjs'),
-      `import { writeFileSync, unlinkSync } from 'fs';\n` +
-        `writeFileSync(${JSON.stringify(RAN(root))}, process.argv[2] || '');\n` +
+      `import { writeFileSync, renameSync, unlinkSync } from 'fs';\n` +
+        `writeFileSync(${JSON.stringify(RAN(root) + '.tmp')}, process.argv[2] || '');\n` +
+        `renameSync(${JSON.stringify(RAN(root) + '.tmp')}, ${JSON.stringify(RAN(root))});\n` +
         (clearsMarker && exitCode === 0
           ? `try { unlinkSync(${JSON.stringify(BROKEN(root))}); } catch {}\n`
           : '') +

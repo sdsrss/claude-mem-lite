@@ -68,8 +68,10 @@ describe('doctor remedies name commands that can run', () => {
 
     const unrunnable = [];
     for (const line of lines) {
-      for (const m of line.matchAll(/node (\S+\.mjs) repair/g)) {
-        if (!existsSync(m[1])) unrunnable.push(`${m[1]}  ← from: ${line.slice(0, 120)}`);
+      // Either spelling: shellWord prints a plain path bare and any other one single-quoted (D#61).
+      for (const m of line.matchAll(/node (?:'([^']+?\.mjs)'|"?(\S+?\.mjs)"?) repair/g)) {
+        const p = m[1] ?? m[2];
+        if (!existsSync(p)) unrunnable.push(`${p}  ← from: ${line.slice(0, 120)}`);
       }
     }
     expect(unrunnable, `doctor prescribed a repair binary that is absent:\n${unrunnable.join('\n')}`).toEqual(
@@ -88,7 +90,7 @@ describe('doctor remedies name commands that can run', () => {
 
     const lines = messages(doctorIn(home)).join('\n');
 
-    expect(lines).toMatch(/install\.mjs install/);
+    expect(lines).toMatch(/install\.mjs"? install/);
     expect(lines).toMatch(/no (claude-mem-lite )?(code|install)/i);
   });
 

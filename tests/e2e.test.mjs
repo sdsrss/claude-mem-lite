@@ -255,6 +255,46 @@ describe('Suite 1: Full Session Lifecycle', () => {
     expect(episode.files).toContain('/tmp/src/index.js');
   });
 
+  // N1 (R2 audit): on Opus 5.5 most edits are Bash. The hook must resolve a relative
+  // `sed -i` target against stdin's cwd and record it as an edit, not drop it.
+  it('post-tool-use (Bash sed -i, relative path) records the resolved file as an edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cd /work/proj && sed -i "s/a/b/" lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false },
+      cwd: '/elsewhere',
+    });
+    // tool_response must clear handlePostToolUse's 10-char floor.
+    const { exitCode } = runHook('post-tool-use', {
+      stdin: stdin.replace('"stdout":""', '"stdout":"(no output)"'),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+    const episode = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8'));
+    const e = episode.entries[0];
+    expect(e.tool).toBe('Bash');
+    expect(e.files).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.bashWrites).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.isSignificant).toBe(true);
+    expect(episode.files).not.toContain('/work/proj');
+  });
+
+  it('post-tool-use (Bash read) keeps the file as an edge but not as an edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: "sed -n '1,40p' lib/fast-summary.mjs" },
+      tool_response: { stdout: 'export function x() {}\n', stderr: '', interrupted: false },
+      cwd: '/work/proj',
+    });
+    runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    const e = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8')).entries[0];
+    expect(e.files).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.bashWrites).toBeUndefined();
+    expect(e.isSignificant).toBe(false);
+  });
+
   it('multiple post-tool-use entries accumulate in episode', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
 
@@ -363,6 +403,118 @@ describe('Suite 1: Full Session Lifecycle', () => {
 
     db.close();
   });
+
+  it('every Stop records itself as the latest, not only the first (P3-6)', () => {
+    // Stop fires per assistant turn. The UPDATE was guarded on status = 'active', so it ran on
+    // the first turn only and completed_at kept the first turn's end for the whole session.
+    // The summary worker now uses this column to tell whether a later Stop superseded it.
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+    const epochOf = () => {
+      const db = openTestDb(tmpHome);
+      try {
+        return db
+          .prepare('SELECT completed_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?')
+          .get(sessionId).e;
+      } finally {
+        db.close();
+      }
+    };
+
+    runHook('stop', { env: { HOME: tmpHome } });
+    const first = epochOf();
+    runHook('stop', { env: { HOME: tmpHome } });
+    const second = epochOf();
+
+    expect(first, 'premise: the first Stop recorded one').toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+  });
+
+  it('the /exit-restart fallback summary finds the exited session behind a live one with a summary', () => {
+    // buildFallbackFastSummary picks a session of this project completed in the last 2 minutes
+    // and writes a summary if it has none. Since every Stop records itself (P3-6), a parallel
+    // session still live ranks by its LATEST turn; with "has no summary" checked after
+    // `LIMIT 1`, that live session won the slot and the one that exited was never examined.
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup' }), env: { HOME: tmpHome } });
+    const db = openTestDb(tmpHome);
+    const project = db.prepare('SELECT project FROM sdk_sessions LIMIT 1').get().project;
+    const now = Date.now();
+    const addSession = (id, completedAgo) =>
+      db
+        .prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch,
+             status, completed_at, completed_at_epoch)
+           VALUES (?, ?, ?, ?, ?, 'completed', ?, ?)`,
+        )
+        .run(
+          id,
+          id,
+          project,
+          new Date(now - 60_000).toISOString(),
+          now - 60_000,
+          new Date(now - completedAgo).toISOString(),
+          now - completedAgo,
+        );
+    addSession('exited-x', 30_000);
+    addSession('live-y', 10_000);
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
+       VALUES ('exited-x', 1, 'the exited session request', ?, ?)`,
+    ).run(new Date(now - 50_000).toISOString(), now - 50_000);
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, created_at, created_at_epoch)
+       VALUES ('live-y', ?, 'live summary', ?, ?)`,
+    ).run(project, new Date(now - 10_000).toISOString(), now - 10_000);
+    db.close();
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup' }), env: { HOME: tmpHome } });
+
+    const db2 = openTestDb(tmpHome);
+    const rows = db2
+      .prepare("SELECT request FROM session_summaries WHERE memory_session_id = 'exited-x'")
+      .all();
+    db2.close();
+    expect(rows.map((r) => r.request)).toEqual(['the exited session request']);
+  });
+
+  it('the llm-summary worker Stop spawns receives the epoch Stop recorded (P3-6)', async () => {
+    // The worker drops its reply once completed_at_epoch is later than the epoch it was handed,
+    // so the two must be the SAME value: a fresh clock read for the UPDATE makes every worker
+    // superseded by its own Stop, while one for the spawn, or a missing argument, makes none
+    // ever superseded — a reply from an older turn can land last again. The session
+    // has no observation, so the real detached worker exits `no-obs` without a model call and
+    // its metric row reports what it received.
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+    runHook('stop', { env: { HOME: tmpHome, CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FLUSH_TIMEOUT: '0' } });
+
+    const metricsDir = join(tmpHome, '.claude-mem-lite', 'metrics');
+    const workerRow = () => {
+      if (!existsSync(metricsDir)) return null;
+      for (const f of readdirSync(metricsDir))
+        for (const line of readFileSync(join(metricsDir, f), 'utf8').split('\n'))
+          if (line.includes('"summary_worker"')) return JSON.parse(line);
+      return null;
+    };
+    // The detached child outlives runHook; wait for its row, then for the process itself, so it
+    // cannot recreate the sandbox behind afterEach.
+    const alive = () =>
+      execFileSync('ps', ['-ww', '-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
+    const deadline = Date.now() + 10_000;
+    while ((!workerRow() || alive()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+
+    const db = openTestDb(tmpHome);
+    const stored = db
+      .prepare('SELECT completed_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?')
+      .get(sessionId).e;
+    db.close();
+    const row = workerRow();
+    expect(row, 'premise: the worker ran and wrote its metric row').toMatchObject({
+      outcome: 'no-obs',
+      session: sessionId,
+    });
+    expect(row.stopEpoch).toBe(stored);
+  });
 });
 
 describe('Suite 2: Episode Buffer Management', () => {
@@ -445,7 +597,9 @@ describe('Suite 2: Episode Buffer Management', () => {
     // aggregates over the WHOLE episode (both sessions' entries), gated by
     // anySignificant && RECEIPT_EVENTS — spec §4 #7.
     const { stdout } = runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env });
-    expect(stdout).toMatch(/\[mem\] episode flushed: 2 entries/); // aggregate receipt, no throw
+    // No bookkeeping receipt (removed: the model cannot act on it) and nothing else to say
+    // for two clean edits.
+    expect(stdout).not.toMatch(/episode flushed/);
 
     const db = openTestDb(tmpHome);
     try {
@@ -518,6 +672,26 @@ describe('Suite 2: Episode Buffer Management', () => {
     }
   });
 
+  it('a flush with nothing actionable emits no receipt at all', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const outs = [];
+    for (let i = 0; i < 11; i++) {
+      outs.push(
+        runHook('post-tool-use', {
+          stdin: makeToolPayload(
+            'Edit',
+            { file_path: '/tmp/src/quiet.js', old_string: `old${i}`, new_string: `new${i}` },
+            'OK — edited file',
+          ),
+          env: { HOME: tmpHome },
+        }).stdout,
+      );
+    }
+    // Premise: the 11th call really flushed (the buffer restarted), so silence is the rule.
+    expect(getFlushFiles(tmpHome).length).toBeGreaterThanOrEqual(1);
+    expect(outs.join('')).toBe('');
+  });
+
   it('PostToolUse flush emits receipt JSON with correct event tag', () => {
     // v2.33.5: positive test for the PostToolUse receipt emission path.
     // Complements the Stop-must-not-emit assertion above — if a future edit
@@ -528,8 +702,18 @@ describe('Suite 2: Episode Buffer Management', () => {
     // EPISODE_BUFFER_SIZE = 10. The bufferFull check runs BEFORE the new
     // entry is appended, so the 11th call (when episode already holds 10)
     // is the one that triggers flushEpisode → receipt stdout.
+    // Entry 0 is a failing test run so the flushed episode is error+edit and carries the
+    // unsaved-bugfix hint — the receipt's only content since the bookkeeping line went.
+    runHook('post-tool-use', {
+      stdin: makeToolPayload(
+        'Bash',
+        { command: 'npx vitest run tests/receipt.test.js' },
+        'FAIL tests/receipt.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)',
+      ),
+      env: { HOME: tmpHome },
+    });
     let flushStdout = '';
-    for (let i = 0; i < 11; i++) {
+    for (let i = 1; i < 11; i++) {
       const { stdout } = runHook('post-tool-use', {
         stdin: makeToolPayload(
           'Edit',
@@ -542,7 +726,7 @@ describe('Suite 2: Episode Buffer Management', () => {
         ),
         env: { HOME: tmpHome },
       });
-      if (stdout && stdout.includes('episode flushed')) flushStdout = stdout;
+      if (stdout && stdout.includes('Unsaved bugfix-shape')) flushStdout = stdout;
     }
 
     // The flush-triggering call MUST produce a PostToolUse-tagged receipt.
@@ -551,7 +735,8 @@ describe('Suite 2: Episode Buffer Management', () => {
     expect(parsed.suppressOutput).toBe(true);
     expect(parsed.hookSpecificOutput).toBeDefined();
     expect(parsed.hookSpecificOutput.hookEventName).toBe('PostToolUse');
-    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/\[mem\] episode flushed: \d+ entries/);
+    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/Unsaved bugfix-shape/);
+    expect(parsed.hookSpecificOutput.additionalContext).not.toMatch(/episode flushed/);
   });
 
   it('SessionStart flush receipt + dashboard arrive as ONE envelope', () => {
@@ -566,7 +751,16 @@ describe('Suite 2: Episode Buffer Management', () => {
     // against the pre-v3.70 code (pre-tag review, test-effectiveness SHOULD-FIX-1).
     // Now it pins the real contract: exactly one document, carrying both surfaces.
     runHook('session-start', { env: { HOME: tmpHome } });
-    // Build a leftover episode (below the 10-entry auto-flush threshold).
+    // Build a leftover episode (below the 10-entry auto-flush threshold): a failing test run
+    // then edits, so the flush has a hint to contribute.
+    runHook('post-tool-use', {
+      stdin: makeToolPayload(
+        'Bash',
+        { command: 'npx vitest run tests/carry.test.js' },
+        'FAIL tests/carry.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)',
+      ),
+      env: { HOME: tmpHome },
+    });
     for (let i = 0; i < 2; i++) {
       runHook('post-tool-use', {
         stdin: makeToolPayload(
@@ -592,8 +786,8 @@ describe('Suite 2: Episode Buffer Management', () => {
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.suppressOutput).toBe(true);
     expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
-    // Both surfaces ride it: the flushed episode receipt and the dashboard.
-    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/\[mem\] episode flushed: \d+ entries/);
+    // Both surfaces ride it: the flushed episode's hint and the dashboard.
+    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/Unsaved bugfix-shape/);
     // And nothing rides outside it.
     expect(
       stdout
@@ -985,6 +1179,245 @@ describe('Suite 4: Session Summary', { retry: 2 }, () => {
   });
 });
 
+describe('Suite 4b: one summary row per session across turns and /clear', () => {
+  // Stop fires once per assistant TURN and the mem session survives it, so the summary
+  // writers run many times against a session that already has a row. Stop used to write
+  // only on the first turn (its existence guard predates the per-turn Stop), which kept the
+  // first turn's Done / Not done forever; and SessionStart's /clear path INSERTed a second
+  // row beside it. Both now land on the session's one row.
+  const env = () => ({ HOME: tmpHome, CLAUDE_MEM_SKIP_SUMMARY: '1' });
+  let transcript;
+  const turn = (prompt, reply) => {
+    const lines = [
+      { type: 'user', message: { role: 'user', content: prompt } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } },
+    ];
+    writeFileSync(transcript, lines.map((l) => JSON.stringify(l) + '\n').join(''), { flag: 'a' });
+  };
+  const stop = () =>
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+      env: env(),
+    });
+  const rowsOf = (sid) => {
+    const db = openTestDb(tmpHome);
+    try {
+      return db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ? ORDER BY id').all(sid);
+    } finally {
+      db.close();
+    }
+  };
+  const seedPrompt = (sid) => {
+    const db = openTestDb(tmpHome);
+    try {
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES (?, 'opening request', 1, ?, ?)`,
+      ).run(sid, new Date().toISOString(), Date.now());
+    } finally {
+      db.close();
+    }
+  };
+
+  beforeEach(() => {
+    transcript = join(tmpHome, 'transcript-4b.jsonl');
+    writeFileSync(transcript, '');
+  });
+
+  it("a later turn's report replaces the first turn's Done / Not done", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+
+    turn('start', 'Done: FIRST-DONE\nNot done: FIRST-LEFT');
+    stop();
+    const first = rowsOf(sid);
+    expect(first, 'premise: the first Stop wrote the row').toHaveLength(1);
+    expect(first[0].completed).toContain('FIRST-DONE');
+    expect(first[0].remaining_items).toContain('FIRST-LEFT');
+
+    turn('go on', 'Done: SECOND-DONE');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('SECOND-DONE');
+    expect(rows[0].remaining_items, 'a report with nothing left clears the old Not done').toBe('');
+    expect(rows[0].created_at_epoch, 'the refresh does not move the row').toBe(first[0].created_at_epoch);
+  });
+
+  it('a turn without a report leaves the row alone', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: KEPT-DONE\nNot done: KEPT-LEFT');
+    stop();
+    turn('a question', 'It is in lib/fast-summary.mjs.');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('KEPT-DONE');
+    expect(rows[0].remaining_items).toContain('KEPT-LEFT');
+  });
+
+  // D#121: a user who writes no Done / Not done report. Stop used to leave Completed empty
+  // (no observation titles either), so the next SessionStart showed only the opening prompt.
+  it("without any report, the head of the final reply becomes Last Session's Completed", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const reply =
+      '## Summary\n\nI fixed the retry loop in `src/net.mjs`: it now backs off exponentially and caps ' +
+      'at 30 s, so a flaky upstream no longer pins a core. I added a test for the cap; the suite passes.';
+    turn('fix the retry loop', reply);
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows, 'premise: the Stop wrote the row').toHaveLength(1);
+    expect(rows[0].completed.startsWith('Summary I fixed the retry loop in `src/net.mjs`')).toBe(true);
+    expect(rows[0].notes.startsWith('donetail ')).toBe(true);
+
+    const next = runHook('session-start', { env: env() });
+    const ctx = JSON.parse(next.stdout).hookSpecificOutput.additionalContext;
+    expect(ctx, 'premise: Last Session rendered').toContain('### Last Session');
+    expect(ctx).toMatch(/^Completed: Summary I fixed the retry loop in `src\/net\.mjs`/m);
+  });
+
+  it('a later turn that reports only a Not done replaces the old Not done and keeps the Done', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: KEPT-DONE\nNot done: OLD-LEFT');
+    stop();
+    turn('go on', 'Not done: NEW-LEFT');
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('KEPT-DONE');
+    expect(rows[0].remaining_items).toContain('NEW-LEFT');
+    expect(rows[0].remaining_items).not.toContain('OLD-LEFT');
+  });
+
+  // Since D#121 a reply without a report is itself the Done floor, so the titles refresh is
+  // the path of the opt-out (CLAUDE_MEM_SUMMARY_TAIL=0) — asserted there.
+  it('without a report, each Stop refreshes the observation titles instead of keeping the first turn (tail floor off)', () => {
+    const titlesOnly = () =>
+      runHook('stop', {
+        stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+        env: { ...env(), CLAUDE_MEM_SUMMARY_TAIL: '0' },
+      });
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const addObs = (title) => {
+      const db = openTestDb(tmpHome);
+      try {
+        db.prepare(
+          `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+           VALUES (?, 'parent--testproj', '', 'change', ?, '', '', '', '', '[]', '[]', 1, ?, ?)`,
+        ).run(sid, title, new Date().toISOString(), Date.now());
+      } finally {
+        db.close();
+      }
+    };
+    addObs('FIRST-TURN-OBS');
+    turn('start', 'Looked around.');
+    titlesOnly();
+    expect(rowsOf(sid)[0]?.completed, 'premise: the first Stop stored the titles').toContain(
+      'FIRST-TURN-OBS',
+    );
+    addObs('LATER-TURN-OBS');
+    turn('go on', 'Changed a file.');
+    titlesOnly();
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('LATER-TURN-OBS');
+  });
+
+  it('a Stop in a session with subagents parses the parent transcript once', () => {
+    // lib/transcript-scan.mjs memoizes ONE file, and reading a subagent transcript evicts the
+    // parent. Stop's citation tracking reads the subagents first so the parent is parsed once
+    // (D#152); the summary refresh now runs every turn and has to come after that, not before.
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: X');
+    const subDir = join(transcript.slice(0, -'.jsonl'.length), 'subagents');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(
+      join(subDir, 'agent-1.jsonl'),
+      JSON.stringify({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'sub' }] },
+      }) + '\n',
+    );
+    const countFile = join(tmpHome, 'parent-reads.txt');
+    const preload = join(tmpHome, 'count-reads.cjs');
+    writeFileSync(
+      preload,
+      `const fs = require('fs'); const { syncBuiltinESMExports } = require('module');
+       const orig = fs.readFileSync; let n = 0;
+       fs.readFileSync = function (p, ...rest) { if (String(p) === process.env.COUNT_PATH) n++; return orig.call(this, p, ...rest); };
+       syncBuiltinESMExports();
+       process.on('exit', () => fs.writeFileSync(process.env.COUNT_FILE, String(n)));`,
+    );
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+      env: { ...env(), NODE_OPTIONS: `--require ${preload}`, COUNT_PATH: transcript, COUNT_FILE: countFile },
+    });
+    expect(rowsOf(sid)[0]?.completed, 'premise: the Stop ran the summary writer').toContain('X');
+    expect(Number(readFileSync(countFile, 'utf8'))).toBe(1);
+  });
+
+  it("/clear keeps a first-turn report's Done instead of replacing it with observation titles", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const db = openTestDb(tmpHome);
+    try {
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+         VALUES (?, 'parent--testproj', '', 'change', 'SOME-OBS-TITLE', '', '', '', '', '[]', '[]', 1, ?, ?)`,
+      ).run(sid, new Date().toISOString(), Date.now());
+    } finally {
+      db.close();
+    }
+    turn('start', 'Done: REPORT-DONE');
+    stop();
+    expect(rowsOf(sid)[0]?.completed, 'premise: the report went in, not the titles').toContain('REPORT-DONE');
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env: env() });
+
+    expect(rowsOf(sid)[0].completed).toContain('REPORT-DONE');
+  });
+
+  it("Stop keeps the report's Failed / Uncertain lines", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Done: X\nFailed: BUILD-BROKE');
+    stop();
+    expect(rowsOf(sid)[0]?.notes).toContain('Failed: BUILD-BROKE');
+  });
+
+  it('/clear fills the empty fields of the previous session row instead of inserting another', () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    turn('start', 'Not done: STOP-LEFT');
+    stop();
+    const before = rowsOf(sid);
+    expect(before, 'premise: Stop wrote one row').toHaveLength(1);
+    expect(before[0].remaining_items).toContain('STOP-LEFT');
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env: env() });
+
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].request).toBe('opening request');
+    expect(rows[0].remaining_items, 'existing content wins over the /clear values').toContain('STOP-LEFT');
+    expect(rows[0].created_at_epoch).toBeGreaterThanOrEqual(before[0].created_at_epoch);
+  });
+});
+
 describe('Suite 5: User Prompt', () => {
   it('user-prompt stores scrubbed text in DB', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
@@ -1048,12 +1481,37 @@ describe('Suite 5: User Prompt', () => {
     expect(stdout).not.toContain(`(#${evId})`);
   });
 
-  it('SessionStart surfaces recent high-importance events in a Key Events section (HIGH-1 SessionStart)', () => {
+  // Key Events is OFF by default at SessionStart. A 30-row audit of this repo's events
+  // (docs/audits/20260925-200912-session-history-analysis.md §4.4.1) read 2 ACCURATE and
+  // 16 WRONG; the section had been injected 50 times (250 rows, the analysis session excluded) into this project's main
+  // sessions. The UserPromptSubmit FTS leg above is query-conditioned and stays on.
+  it('SessionStart does NOT emit Key Events unless CLAUDE_MEM_SESSION_EVENTS opts in', () => {
+    const env = { HOME: tmpHome, MEM_QUIET_HOOKS: '', CLAUDE_MEM_SESSION_EVENTS: '' };
+    runHook('session-start', { env });
+    const db = openTestDb(tmpHome);
+    const evId = saveEvent(db, {
+      project: 'parent--testproj',
+      event_type: 'decision',
+      title: 'chose WAL + busy_timeout for concurrent sessions',
+      body: 'immediate transactions serialize writers across sessions',
+      importance: 3,
+    });
+    db.close();
+
+    const { stdout } = runHook('session-start', { env });
+    // Premise: SessionStart ran and emitted its payload, so the absence below is the gate
+    // and not a hook that never spoke. The opted-in twin below shows the same seed renders.
+    expect(stdout).toContain('"hookEventName":"SessionStart"');
+    expect(stdout).not.toContain('### Key Events');
+    expect(stdout).not.toContain(`E#${evId}`);
+  });
+
+  it('SessionStart surfaces recent high-importance events in a Key Events section when opted in (HIGH-1 SessionStart)', () => {
     // First session-start creates the DB + session; seed an event; the next
     // session-start emits the context block including the Key Events section.
     // MEM_QUIET_HOOKS is cleared: the dev shell may export it (=1), and runHook
     // spreads ...process.env, which would suppress the descriptive sections (#8608).
-    const nonQuiet = { HOME: tmpHome, MEM_QUIET_HOOKS: '' };
+    const nonQuiet = { HOME: tmpHome, MEM_QUIET_HOOKS: '', CLAUDE_MEM_SESSION_EVENTS: '1' };
     runHook('session-start', { env: nonQuiet });
     const db = openTestDb(tmpHome);
     const evId = saveEvent(db, {
@@ -2590,6 +3048,38 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     expect(typeof payload.injected).toBe('number');
     expect(typeof payload.ratio).toBe('number');
   });
+
+  // The gate asks whether the agent ANSWERED what the hooks showed it. `#NN n/a — why`
+  // is a complete answer, so it must count here even though the crediting callers drop
+  // it — otherwise the nudge nags an agent for following the convention to the letter.
+  it('Stop counts a `#NN n/a` answer in the gate numerator', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const transcript = writeTranscript([
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/x/scripts/pre-tool-recall.js"',
+          stdout: '  #101 [lesson] alpha\n  #102 [bugfix] beta\n  #103 [decision] gamma',
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '#102 applied; #101 n/a — no pool edge here' }],
+        },
+      },
+    ]);
+    runHook('stop', {
+      stdin: JSON.stringify({ session_id: randomUUID(), transcript_path: transcript }),
+      env: { HOME: tmpHome },
+    });
+    const payloadFile = join(tmpHome, '.claude-mem-lite', 'runtime', 'cite-recall-parent--testproj.json');
+    const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+    expect(payload.gateInjected).toBe(3);
+    expect(payload.gateRecalled, '#102 applied and #101 dismissed are both answers').toBe(2);
+  });
 });
 
 describe('Suite: G1+G2 enrich-save worker (spawned-env recursion guard)', () => {
@@ -2825,5 +3315,36 @@ describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence',
     db.close();
     expect(n).toBe(2); // one per turn, as before v5.4.0
     expect(clearHandoffRows().length).toBe(0);
+  });
+});
+
+// D#156: the hook mints `hook-<project>-<8 hex>` and stores it as both session ids. For a
+// 22-character project with dashes at 3, 8, 13 and 18 that is the uuid shape sdk_sessions refuses,
+// and every hook write in the project failed. The hook still exits 0, so the error reached only its
+// stderr and the hook-errors log.
+describe('Suite: D#156 — a project name that gives the hook id the uuid shape', () => {
+  it('session-start, user-prompt and stop all write', () => {
+    const dir = join(tmpHome, 'dev', 'abc-efgh-jklm-opq');
+    mkdirSync(dir, { recursive: true });
+    // Premise: this project's unescaped hook id is uuid-shaped.
+    expect('hook-dev--abc-efgh-jklm-opq-1a2b3c4d').toMatch(/^.{8}-.{4}-.{4}-.{4}-.{12}$/);
+    const env = { HOME: tmpHome, CLAUDE_PROJECT_DIR: dir, PWD: dir, MEM_NO_AUTO_ADOPT: '1' };
+    const cc = randomUUID();
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: cc }), env });
+    const id = getSessionIdFromFile(tmpHome);
+    expect(id.startsWith('hook-dev--abc-efgh-jklm-opq-')).toBe(true);
+    runHook('user-prompt', {
+      stdin: JSON.stringify({ prompt: 'rename the config loader', session_id: cc }),
+      env,
+    });
+    runHook('stop', { stdin: JSON.stringify({ session_id: cc }), env });
+    const db = openTestDb(tmpHome);
+    const session = db
+      .prepare('SELECT project, status FROM sdk_sessions WHERE memory_session_id = ?')
+      .get(id);
+    const prompts = db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE content_session_id = ?').get(id).c;
+    db.close();
+    expect(session).toMatchObject({ project: 'dev--abc-efgh-jklm-opq', status: 'completed' });
+    expect(prompts).toBe(1);
   });
 });

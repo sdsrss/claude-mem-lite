@@ -154,7 +154,7 @@ describe('observation_files backfill runs on a database that already has edges',
     expect(junctionCount(), 'premise: nothing is reachable by file yet').toBe(0);
     runDeferredCleanups(db);
 
-    const { rows } = recallByFile(db, FILE, { limit: 10, includeNoise: true });
+    const { rows } = recallByFile(db, FILE, { limit: 10 });
     const ids = rows.map((r) => r.id);
     // The NEWEST import, not the oldest: 12 noise rows against a 10-row window means the
     // early ones are correctly out of frame. Asserting on `imported[0]` failed here and the

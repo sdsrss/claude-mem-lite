@@ -101,7 +101,7 @@ describe('FTS tokenizer: behaviour and the README agree', () => {
     // because the reader is a model rather than a person.
     //
     // The population is now `package.json#files` — the real shipped set, which includes the
-    // three bash hooks and the markdown, and is therefore wider than `walkShipped`'s
+    // four bash hooks and the markdown, and is therefore wider than `walkShipped`'s
     // ".mjs/.js" (the blind spot that hid two setup.sh defects for twelve audit rounds).
     // Plus the files npm packs regardless of `files`: README* and LICENSE.
     const files = shippedPopulation();

@@ -125,7 +125,10 @@ const NB_MANUAL_CMD =
 // INSTALL_DIR (import.meta.url) so it works on a plugin-only install, where
 // bare `claude-mem-lite` is not on PATH and ~/.claude-mem-lite/ holds no source.
 // cli.mjs routes `repair` → install.mjs. (review #3)
-const CLI_REPAIR = `node ${join(INSTALL_DIR, 'cli.mjs')} repair`;
+// Quote a path as ONE shell word for a printed command. A copy of cli-path.mjs's, not an
+// import (node: builtins only here); tests/cli-path-invocation.test.mjs keeps them equal.
+const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const CLI_REPAIR = `node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair`;
 
 // Last-resort recovery string for users whose `cli.mjs repair` path
 // itself failed (install.mjs missing / repair errored / retry still drifting).
@@ -490,7 +493,7 @@ function healNativeBindingIfBroken() {
     const installer = join(INSTALL_DIR, 'install.mjs');
     if (!existsSync(installer)) {
       process.stderr.write(
-        `[claude-mem-lite] native DB binding unusable and install.mjs is missing — run: cd "${INSTALL_DIR}" && ${NB_MANUAL_CMD}\n`,
+        `[claude-mem-lite] native DB binding unusable and install.mjs is missing — run: cd ${shellWord(INSTALL_DIR)} && ${NB_MANUAL_CMD}\n`,
       );
       return;
     }

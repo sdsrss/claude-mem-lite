@@ -20,7 +20,7 @@ let root;
 let runtimeDir;
 
 // The wait loop sleeps FIRST and checks AFTER (`await sleep(1000)` then filter,
-// hook-llm.mjs:1343-1345), so it only ever moves in whole 1000 ms ticks: a file removed at
+// the loop in `handleLLMSummary`), so it only ever moves in whole 1000 ms ticks: a file removed at
 // 1.1 s is first observed gone on the SECOND tick, at ~2.0 s. Every bound below is stated in
 // ticks for that reason — a bound placed between two adjacent ticks is a coin flip, not a
 // test.
@@ -77,9 +77,21 @@ function flushFile(name, ageMs = 0) {
   return p;
 }
 
-/** Import a fresh handleLLMSummary bound to this test's RUNTIME_DIR, and time one run. */
-async function timeSummary() {
+/**
+ * Import a fresh handleLLMSummary bound to this test's RUNTIME_DIR, and time one run.
+ *
+ * `arrange` schedules the case's timers, and it runs AFTER the import on purpose (D#50). The
+ * import is cold on every case (`vi.resetModules()`), so it takes anywhere from ~5 ms warm to
+ * ~260 ms cold to more under coverage — and timers scheduled before it start on a clock the
+ * wait's tick grid does not share. Pinning the wait's start 125 ms after the timers put its
+ * first tick between a removal at 1100 ms and a latecomer at 1150 ms and failed 1/1; 0 ms and
+ * 200 ms both passed. Scheduled here, the timers and the wait share one origin, and
+ * `handleLLMSummary` snapshots its set synchronously before its first `await`, so no timer
+ * can fire before the snapshot.
+ */
+async function timeSummary(arrange = () => {}) {
   const { handleLLMSummary } = await import('../hook-llm.mjs');
+  arrange();
   const t0 = Date.now();
   await handleLLMSummary();
   return Date.now() - t0;
@@ -108,14 +120,15 @@ describe('handleLLMSummary flush wait', () => {
     // summary reads the DB before the episode worker has written to it.
     process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
     const fresh = flushFile('ep-flush-2-live.json');
-    setTimeout(() => {
-      try {
-        rmSync(fresh);
-      } catch {
-        /* ignore */
-      }
-    }, 1200);
-    const elapsed = await timeSummary();
+    const elapsed = await timeSummary(() =>
+      setTimeout(() => {
+        try {
+          rmSync(fresh);
+        } catch {
+          /* ignore */
+        }
+      }, 1200),
+    );
     // Lower bound: it really waited. Removal is a tick in, so at least one tick must pass —
     // an implementation that skipped the wait entirely reads ~10 ms here.
     expect(elapsed).toBeGreaterThanOrEqual(POLL_MS);
@@ -129,15 +142,20 @@ describe('handleLLMSummary flush wait', () => {
     // latecomer is somebody else's.
     process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
     const fresh = flushFile('ep-flush-3-mine.json');
-    setTimeout(() => {
-      try {
-        rmSync(fresh);
-      } catch {
-        /* ignore */
-      }
-    }, 1100);
-    setTimeout(() => flushFile('ep-flush-4-someone-else.json'), 1150);
-    const elapsed = await timeSummary();
+    // Offsets on HALF ticks, from the wait's own origin: the latecomer lands mid-tick-1 and
+    // the removal mid-tick-2, so the removal is first seen on tick 2. Timers fire in deadline
+    // order however late the loop runs them, so the latecomer (0.5) always precedes tick 2
+    // (>= 2.0) — the old 1100/1150 pair straddled nothing and relied on where tick 1 fell.
+    const elapsed = await timeSummary(() => {
+      setTimeout(() => flushFile('ep-flush-4-someone-else.json'), 0.5 * POLL_MS);
+      setTimeout(() => {
+        try {
+          rmSync(fresh);
+        } catch {
+          /* ignore */
+        }
+      }, 1.5 * POLL_MS);
+    });
     expect(elapsed).toBeLessThan(NOT_BURNED_MS);
     // Premise: the latecomer really is still on disk, so "finished early" is not just
     // "the file was gone anyway".

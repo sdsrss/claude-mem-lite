@@ -63,6 +63,7 @@ const EXPECTED_CLI_COMMANDS = [
   'update',
   'export',
   'restore',
+  'verify-apply',
   'compress',
   'maintain',
   'optimize',
@@ -505,6 +506,36 @@ describe('CLI feature sweep: write commands', () => {
       importance: 3,
       lesson_learned: 'Coordinate window changes with the data team',
     });
+  });
+
+  itCmd('verify-apply', () => {
+    const id = savedId(
+      ok(['save', 'The nightly export job still fails on large tables', '--project', 'sweep-verify']),
+    );
+    const file = join(ROOT, 'verify-proposals.json');
+    writeFileSync(
+      file,
+      JSON.stringify([
+        {
+          id,
+          action: 'edit',
+          verdict: 'STALE',
+          set: { narrative: 'The nightly export job failed on large tables; fixed in abc1234.' },
+          evidence: 'abc1234',
+        },
+      ]),
+    );
+    const dry = ok(['verify-apply', file, '--project', 'sweep-verify']);
+    expect(dry.stdout).toContain('Dry run');
+    const before = withDb((db) => db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id));
+    expect(before.narrative).toBe('The nightly export job still fails on large tables');
+
+    const digest = (dry.stdout.match(/--digest ([0-9a-f]{16})/) || [])[1];
+    const r = ok(['verify-apply', file, '--project', 'sweep-verify', '--apply', '--digest', digest]);
+    expect(r.stdout).toMatch(new RegExp(`#${id} edit: ok`));
+    expect(r.stdout).toContain('verify-apply --undo ');
+    const row = withDb((db) => db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id));
+    expect(row.narrative).toBe('The nightly export job failed on large tables; fixed in abc1234.');
   });
 
   itCmd('delete', () => {

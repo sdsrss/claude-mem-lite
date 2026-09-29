@@ -12,6 +12,7 @@ import {
   injectedIdsFileName,
   injectedIdKey,
   EVENT_ID_PREFIX,
+  lessonIdTokens,
   readInjectedMarker,
   mergeInjectedMarker,
 } from '../lib/injected-ids.mjs';
@@ -33,6 +34,7 @@ import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/rerea
 import { recordMetric } from '../lib/metrics.mjs';
 import { presentIdents } from '../lib/lesson-idents.mjs';
 import { neutralizeContextDelimiters } from '../format-utils.mjs';
+import { recallFramingLine } from '../lib/recall-framing.mjs';
 // D#154: the one stdout writer. This script has THREE emit sites (Read→Edit ack,
 // repeated-read guard, lesson block) and they stay one document because each branch
 // process.exit()s before reaching the next.
@@ -53,6 +55,8 @@ import { neutralizeContextDelimiters } from '../format-utils.mjs';
 // Import-free module, no runtime deps — nothing added to this script's load cost.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 import { envNumber } from '../lib/env-number.mjs';
+// Leaf (path + os only): the Bash leg's command parser. See the Bash block in Main.
+import { bashFileTargets, isScratchCommandPath, isTransientPath } from '../lib/bash-file-targets.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
 import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
 // Recall queries the SAVE-path project, so this MUST produce the same string as the
@@ -61,9 +65,9 @@ import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } f
 // recalled nothing) and would have drifted again when the 2026-08-17 e2e round taught inferProject to
 // anchor on the git work-tree root. project-utils.mjs is a leaf module over path/fs/os
 // only — cheaper than several imports this script already carries.
-import { inferProject } from '../project-utils.mjs';
+import { inferProject, inferProjectDir } from '../project-utils.mjs';
 
-import { DAY_MS } from '../lib/time-constants.mjs';
+import { PRETOOL_LOOKBACK_MS } from '../lib/time-constants.mjs';
 // CLAUDE_MEM_DIR matches schema.mjs / main CLI — one env var sandboxes the
 // whole system. CLAUDE_MEM_DB_PATH / CLAUDE_MEM_RUNTIME_DIR remain as
 // per-component overrides for tests that mix isolated + real paths.
@@ -113,6 +117,11 @@ const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
 // (install.mjs:975 looks like a fifth and is not — different matcher, for
 // post-tool-recall.js.)
 //
+// Bash is deliberately NOT in this list although this script handles it: it reaches
+// here through its own matcher and prefilter (scripts/pre-tool-recall-bash.sh), and for
+// Bash a command with no file target is the normal case, not an upstream field rename,
+// so it must never reach the shape probe this constant drives.
+//
 // Drift between any two is invisible at runtime. Two guards chain to cover 1-3:
 // tests/hooks-pretool-whitelist-sync.test.mjs pins hooks.json against this
 // constant, and tests/audit-silent-20260814.test.mjs diffs hooks.json against the
@@ -136,15 +145,41 @@ const SALIENCE_LEGACY =
   process.env.CLAUDE_MEM_SALIENCE === 'legacy' || process.env.CLAUDE_MEM_SALIENCE === '0';
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
-const ACK_DIRECTIVE =
+// D#98: the default asks for `#NN` only where a lesson changed the edit, once. It used to
+// demand a verdict for EVERY lesson ('#NN applied' or '#NN n/a — <reason>'), and the
+// dismissal half earns nothing — citation decay already drops dismissal-only ids
+// (lib/citation-tracker.mjs isDismissalAt) — while it put lesson-id lists into the user's
+// reply: 335 of 2007 `#NN` mentions in assistant text were dismissals, 98 of 1890
+// text-only replies carried one (216 transcripts, 2026-09-27; tasks/specs/d98-*).
+// A behavioural signal instead of the citation was measured and rejected (C1,
+// docs/audits/20260927-c1-adoption-signal-denominators.md), so the applied half stays.
+// CLAUDE_MEM_SALIENCE=verdict restores the old wording. The `bridge` arm keeps it too: it is an
+// experimental arm benchmark/efficacy-harness.mjs measures, and changing its fallback text
+// would make readings before and after this change incomparable (pre-ship review P2-2).
+const VERDICT_DIRECTIVE =
   "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
+const ACK_DIRECTIVE =
+  'apply each lesson to this edit or rule it out. If one changes the edit, name its #NN once where you describe that change; a lesson that did not apply needs no mention.';
 // v-bind salience forcing-function (#8771 audit: ack ≠ act). Instead of a cheap
 // '#NN applied / n/a' verdict, demand the model bind the lesson to the concrete
 // line it's editing and quote the satisfying edit line. Selected by
 // CLAUDE_MEM_SALIENCE=bind; default stays ACK_DIRECTIVE.
 const BIND_DIRECTIVE =
   "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
-const ACTIVE_DIRECTIVE = SALIENCE_BIND ? BIND_DIRECTIVE : ACK_DIRECTIVE;
+// Under `verdict` the adopted CLAUDE.md row ("skip ones that did not apply") and the detail
+// doc ("`#NN n/a` … 所以不必写") still carry the v6.17 wording, so the agent would hold two
+// contradicting instructions; this says which wins (tasks/specs/verdict-precedence.md). Not
+// on `bind` or `bridge`, whose per-lesson asks carry the same contradiction: both are arms
+// benchmark/efficacy-harness.mjs measures, and their text must stay the one their readings
+// were taken with.
+const VERDICT_OPT_OUT_DIRECTIVE = `${VERDICT_DIRECTIVE} CLAUDE_MEM_SALIENCE=verdict is set: this overrides the memory guidance in CLAUDE.md and .claude/plugin_claude_mem_lite.md that a lesson which did not apply needs no mention.`;
+const ACTIVE_DIRECTIVE = SALIENCE_BIND
+  ? BIND_DIRECTIVE
+  : process.env.CLAUDE_MEM_SALIENCE === 'verdict'
+    ? VERDICT_OPT_OUT_DIRECTIVE
+    : SALIENCE_BRIDGE
+      ? VERDICT_DIRECTIVE
+      : ACK_DIRECTIVE;
 const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // Feature ① (file intelligence): on the first Read of a file each session, inject
 // its approximate token size + a one-line summary so the agent can decide to read
@@ -400,6 +435,7 @@ try {
   // isFullRead: a Read with no offset/limit reads the whole file. The reread
   // guard only flags full-vs-full re-reads, so paging never trips it.
   let isFullRead = true;
+  let bashCwd = null;
   try {
     const event = JSON.parse(input);
     toolInput = event.tool_input;
@@ -411,6 +447,7 @@ try {
     filePath = toolEditPath(event.tool_input);
     sessionId = event.session_id || null;
     toolName = event.tool_name || null;
+    bashCwd = typeof event.cwd === 'string' ? event.cwd : null;
     const off = event.tool_input?.offset;
     const lim = event.tool_input?.limit;
     isFullRead = (off === undefined || off === null) && (lim === undefined || lim === null);
@@ -426,6 +463,31 @@ try {
     ({ filePath, sessionId, toolName } = salvaged);
     toolInput = {};
     isFullRead = true;
+  }
+
+  // N1 (docs/audits/20260926-154904-session-history-analysis-r2.md): Bash is where the reads
+  // and edits went — on Opus 5.5, 82% of file edits and 85% of file reads. The prefilter
+  // hands over the Bash calls that look like they touch a file; here the command is parsed
+  // and recalled as the Edit or Read it stands for: the first file it WRITES (edit mode),
+  // else the first file it VIEWS (cat, sed -n, head…; read mode). Searches (grep, rg),
+  // runners and plumbing have neither and exit here, silently — for Bash, "no target" is
+  // the normal case, not the upstream field rename the probe below exists to record.
+  let viaBash = false;
+  if (toolName === 'Bash') {
+    const cmd = typeof toolInput?.command === 'string' ? toolInput.command : '';
+    const t = bashFileTargets(cmd, { cwd: bashCwd || process.cwd() });
+    // Same root the project NAME is derived from (CLAUDE_PROJECT_DIR || PWD || cwd).
+    const projectDir = inferProjectDir();
+    const eligible = (p) => !isScratchCommandPath(p, projectDir) && !isTransientPath(p);
+    const write = t.writes.find(eligible);
+    const view = write ? null : t.views.find(eligible);
+    if (!write && !view) process.exit(0);
+    filePath = write || view;
+    toolName = write ? 'Edit' : 'Read';
+    viaBash = true;
+    // A Bash view is a page (`sed -n`, `head`) as often as a whole file, so it never
+    // arms the full-re-read guard.
+    isFullRead = false;
   }
 
   // Upstream-shape probe: hook ran but neither field nor input shape matches the
@@ -485,11 +547,12 @@ try {
       const seenIds = typeof entry === 'object' && Array.isArray(entry.lessonIds) ? entry.lessonIds : [];
       const wasReadMode = typeof entry === 'object' && entry.mode === 'read';
       if (!isRead && wasReadMode && seenIds.length > 0 && !SALIENCE_LEGACY) {
-        const idList = seenIds.map((id) => `#${id}`).join(', ');
+        // Namespaced per table: a bare `#N` for an event id names a different memory.
+        const idList = lessonIdTokens(seenIds, entry.obsIds).join(', ');
         queueHookContext(
           'PreToolUse',
           [
-            '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+            recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
             `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${ACTIVE_DIRECTIVE}`,
           ].join('\n'),
         );
@@ -504,12 +567,32 @@ try {
           queueHookContext(
             'PreToolUse',
             [
-              '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+              recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
               buildRereadWarning(basename(filePath), entry.reread.tokens),
             ].join('\n'),
           );
           flushHookStdout();
           recordMetric(DATA_DIR, { event: 'reread_warn' }); // tier-1 firing counter (②)
+        }
+      }
+      // ② arming. The guard is armed by the FIRST full Read of a file, but the first touch is
+      // now often a Bash page (`sed -n`), which records `reread.full = false` — and every
+      // later Read landed here and exited, so the guard stayed disarmed all session
+      // (pre-ship review P3-3). A full Read of an entry not yet armed for full reads arms it.
+      if (
+        isRead &&
+        isFullRead &&
+        !REREAD_GUARD_OFF &&
+        typeof entry === 'object' &&
+        !(entry.reread && entry.reread.full)
+      ) {
+        const meta = readFileMeta(filePath);
+        if (meta) {
+          cooldown[filePath] = {
+            ...entry,
+            reread: { mtimeMs: meta.mtimeMs, tokens: meta.tokens, full: true },
+          };
+          writeCooldown(cooldownPath, cooldown, isSessionScoped);
         }
       }
       process.exit(0); // already recalled this file in-session
@@ -557,8 +640,9 @@ try {
     // Stop-side edge attribution so trigger and resolver can never drift.
     const fileMatch = fileMatchClause('of2');
     const fileParams = fileMatchParams(filePath);
-    // 60-day lookback to avoid surfacing ancient observations
-    const cutoff = Date.now() - 60 * DAY_MS;
+    // 60-day lookback to avoid surfacing ancient observations (PRETOOL_LOOKBACK_MS;
+    // benchmark/cutoff-reach-probe.mjs counts what it removes)
+    const cutoff = Date.now() - PRETOOL_LOOKBACK_MS;
 
     // Surface actionable lessons first, then high-importance bugfix/decision observations.
     // Priority: 1) observations with lesson_learned (most actionable for preventing repeat bugs)
@@ -648,7 +732,8 @@ try {
       ORDER BY
         CASE WHEN o.lesson_learned IS NOT NULL AND o.lesson_learned != '' THEN 0 ELSE 1 END,
         ${citeFactorClause('o')} DESC,
-        o.created_at_epoch DESC
+        o.created_at_epoch DESC,
+        o.id DESC
       LIMIT ${obsLimit}
     `,
       )
@@ -691,7 +776,8 @@ try {
           ${eventsBodyFilter}
         ORDER BY
           CASE WHEN body IS NOT NULL AND body != '' THEN 0 ELSE 1 END,
-          created_at_epoch DESC
+          created_at_epoch DESC,
+          id DESC
         LIMIT ${eventsLimit}
       `,
         )
@@ -764,15 +850,17 @@ try {
         obs: allRows.filter((r) => r.src === 'obs').length,
         evt: allRows.filter((r) => r.src === 'evt').length,
         mode: isRead ? 'read' : 'edit',
+        via: viaBash ? 'bash' : 'tool',
       });
     }
     const showFraming =
       hasLessons || Boolean(fileIntelLine) || (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1');
     if (showFraming) {
       // Framing line mirrors #7758 handoff-injection fix: without an explicit
-      // "system-injected, continue" disclaimer, observed turn-end after Edit+reminder
-      // when the model misreads passive lesson context as a closing note.
-      lines.push(`[mem] PreToolUse recall — system-injected context, continue your planned action:`);
+      // "this is context, the call continues" line, observed turn-end after Edit+reminder
+      // when the model misreads passive lesson context as a closing note. Two wordings
+      // run side by side per session — lib/recall-framing.mjs.
+      lines.push(recallFramingLine('PreToolUse', { sessionId, fname }));
     }
     // MED-1 (full audit 2026-07-16): defang the injection-block delimiters in
     // all DB/file-derived text before it enters additionalContext (which CC wraps

@@ -42,6 +42,16 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-recall-bash.sh\"",
+            "timeout": 3
+          }
+        ]
+      },
+      {
         "matcher": "Agent|Task",
         "hooks": [
           {

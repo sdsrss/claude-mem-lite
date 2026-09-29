@@ -236,4 +236,23 @@ describe('Phase-2: the TF-IDF vector arm is removed', () => {
     expect(ALL_MAINTAIN_OPS.length).toBeGreaterThan(0);
     expect(ALL_MAINTAIN_OPS).not.toContain(REMOVED_OP);
   });
+
+  // The one-line description ships in three manifests and is what the marketplace page and
+  // the host's plugin listing show — model-visible too. It kept "Hybrid FTS5 + TF-IDF search"
+  // for 15 minor versions after the arm was removed (found 2026-09-27, OSS landscape review).
+  it('no manifest description still advertises TF-IDF search, and the three copies agree', () => {
+    const read = (rel) => JSON.parse(readFileSync(join(ROOT, rel), 'utf8'));
+    const pkg = read('package.json').description;
+    const plugin = read('.claude-plugin/plugin.json').description;
+    const market = read('.claude-plugin/marketplace.json').plugins.find(
+      (p) => p.name === 'claude-mem-lite',
+    ).description;
+    for (const d of [pkg, plugin, market]) {
+      expect(typeof d).toBe('string');
+      expect(d.length).toBeGreaterThan(40);
+      expect(d).not.toMatch(/TF-IDF|vector/i);
+    }
+    expect(plugin).toBe(pkg);
+    expect(market).toBe(pkg);
+  });
 });

@@ -383,8 +383,8 @@ describe('pre-tool-recall', () => {
         tool_input: { file_path: join(projectDir, 'frame.mjs') },
       });
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      expect(ctx).toMatch(/system-injected/);
-      expect(ctx).toMatch(/continue/i);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+      expect(ctx).toMatch(/continue|proceeds as planned/i);
     });
 
     it('prepends the same framing line when emitting the no-prior-lessons backfill reminder', async () => {
@@ -393,8 +393,8 @@ describe('pre-tool-recall', () => {
         tool_input: { file_path: join(projectDir, 'pristine.py') },
       });
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      expect(ctx).toMatch(/system-injected/);
-      expect(ctx).toMatch(/continue/i);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+      expect(ctx).toMatch(/continue|proceeds as planned/i);
       expect(ctx).toContain('[mem] No prior lessons');
     });
 
@@ -1382,6 +1382,11 @@ describe('pre-tool-recall', () => {
   // longer goes fully silent — the Edit emits a compact ack nudge naming the IDs
   // shown at Read time (the old behavior injected only at Read, the most passive
   // point, and NOTHING at the actual edit). CLAUDE_MEM_SALIENCE=legacy opts out.
+  // The default directive's own words (D#98). Presence AND absence cases key on it, so an
+  // absence assertion cannot pass on a string the directive no longer contains.
+  const ACK_MARK = 'a lesson that did not apply needs no mention';
+  const VERDICT_OVERRIDE_MARK =
+    'overrides the memory guidance in CLAUDE.md and .claude/plugin_claude_mem_lite.md';
   describe('salience forcing-function (v2.98)', () => {
     let tmpRoot;
     let projectDir;
@@ -1432,8 +1437,32 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
-      expect(ctx).toContain("'#NN applied'");
-      expect(ctx).toContain("'#NN n/a — <reason>'");
+      expect(ctx).toContain(ACK_MARK);
+      // D#98: a lesson that did not apply is not reported — a dismissal earns nothing in
+      // decay and lands in the user's reply as jargon.
+      expect(ctx).not.toMatch(/n\/a/);
+      expect(ctx).not.toContain("'#NN applied'");
+      expect(ctx).not.toContain(VERDICT_OVERRIDE_MARK);
+    });
+
+    it('Edit: CLAUDE_MEM_SALIENCE=verdict restores the per-lesson verdict directive (D#98 opt-out)', async () => {
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Edit',
+          tool_input: { file_path: join(projectDir, 'maintain.mjs') },
+          session_id: 'sess-sal-verdict',
+        },
+        envFor({ CLAUDE_MEM_SALIENCE: 'verdict' }),
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain(
+        "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.",
+      );
+      expect(ctx).not.toContain(ACK_MARK);
+      // The CLAUDE.md managed row and the detail doc say a lesson that did not apply needs no
+      // mention; under verdict the directive must say it wins, or the agent holds two
+      // contradicting instructions (tasks/specs/verdict-precedence.md).
+      expect(ctx).toContain(VERDICT_OVERRIDE_MARK);
     });
 
     it('Edit: CLAUDE_MEM_SALIENCE=legacy restores the passive block (no directive)', async () => {
@@ -1447,6 +1476,7 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
+      expect(ctx).not.toContain(ACK_MARK);
       expect(ctx).not.toContain("'#NN applied'");
     });
 
@@ -1461,6 +1491,7 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
+      expect(ctx).not.toContain(ACK_MARK);
       expect(ctx).not.toContain("'#NN applied'");
     });
 
@@ -1486,11 +1517,65 @@ describe('pre-tool-recall', () => {
       const parsed = JSON.parse(stdout);
       const ctx = parsed.hookSpecificOutput.additionalContext;
       expect(ctx).toContain(`#${lessonObsId}`);
-      expect(ctx).toContain("'#NN applied'");
+      expect(ctx).toContain(ACK_MARK);
       // Compact nudge — must NOT re-emit the lesson body (token cost stays one line).
       expect(ctx).not.toContain('recover orphaned children');
       // #7758 framing guard: still announces itself as system-injected continuation.
-      expect(ctx).toMatch(/system-injected/);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+    });
+
+    // Pre-ship review P2-2: the `bridge` arm's fallback directive is the one its efficacy
+    // readings were taken with, so D#98 left it on the pre-6.17 verdict wording.
+    it('Read→Edit under CLAUDE_MEM_SALIENCE=bridge keeps the verdict directive', async () => {
+      const filePath = join(projectDir, 'maintain.mjs');
+      const env = envFor({ CLAUDE_MEM_SALIENCE: 'bridge' });
+      await runScript(
+        { tool_name: 'Read', tool_input: { file_path: filePath }, session_id: 'sess-sal-br' },
+        env,
+      );
+      const { stdout } = await runScript(
+        { tool_name: 'Edit', tool_input: { file_path: filePath }, session_id: 'sess-sal-br' },
+        env,
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toMatch(/were shown when you Read/); // premise: the ack line fired
+      expect(ctx).toContain("'#NN n/a — <reason>'");
+      expect(ctx).not.toContain(ACK_MARK);
+      // The arm's text is what its efficacy readings were taken with: no override clause.
+      expect(ctx).not.toContain(VERDICT_OVERRIDE_MARK);
+    });
+
+    // The ack line re-renders ids from the cooldown entry, which holds obs AND event ids
+    // in one list. It rendered every one as a bare `#N`, so a Read that injected
+    // `E#116` asked for a citation of "#116" — an OBSERVATION id, i.e. a different memory
+    // (found 2026-09-25, docs/audits/20260925-200912-session-history-analysis.md §8).
+    it('Read→Edit ack keeps the E# namespace for an event-sourced lesson', async () => {
+      const filePath = join(projectDir, 'evonly.mjs');
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      const evId = Number(
+        db
+          .prepare(
+            `INSERT INTO events (project, event_type, title, body, file_paths, importance, created_at_epoch)
+             VALUES ('parent--saltest', 'bugfix', 'event-sourced probe', 'close the handle before rename', ?, 2, ?)`,
+          )
+          .run(JSON.stringify([filePath]), Date.now()).lastInsertRowid,
+      );
+      db.close();
+      const read = await runScript(
+        { tool_name: 'Read', tool_input: { file_path: filePath }, session_id: 'sess-sal-ev' },
+        envFor(),
+      );
+      // Premise: the Read injected the event, under its namespaced id.
+      expect(JSON.parse(read.stdout).hookSpecificOutput.additionalContext).toContain(`E#${evId}`);
+
+      const { stdout } = await runScript(
+        { tool_name: 'Edit', tool_input: { file_path: filePath }, session_id: 'sess-sal-ev' },
+        envFor(),
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toMatch(/were shown when you Read/);
+      expect(ctx).toContain(`E#${evId}`);
+      expect(ctx).not.toMatch(new RegExp(`(?<![A-Za-z])#${evId}\\b`));
     });
 
     it('Read→Edit→Edit: the ack nudge fires once — second Edit is silent', async () => {
@@ -2607,12 +2692,20 @@ describe('pre-tool-recall', () => {
     // Control for the case above: an unhandled tool keeps its own distinct key,
     // so the two populations stay separable in the log.
     it('keeps the unknown-tool key distinct from the missing-path-field key', async () => {
-      const { stdout } = await runWithEnv({ tool_name: 'Bash', tool_input: { command: 'ls' } });
+      // `Glob`, not `Bash`: since the PreToolUse:Bash leg (N1, R2 audit) Bash is a tool
+      // this script handles, and a Bash command with no file target exits silently.
+      const { stdout } = await runWithEnv({ tool_name: 'Glob', tool_input: { pattern: '**/*.mjs' } });
 
       expect(stdout).toBe('');
       const keys = hookErrorRecords().map((r) => r.scope);
       expect(keys).toContain('pre-recall:unknown-tool');
       expect(keys).not.toContain('pre-recall:no-path-field');
+    });
+
+    it('a Bash command with no file target records no hook error at all', async () => {
+      const { stdout } = await runWithEnv({ tool_name: 'Bash', tool_input: { command: 'ls' } });
+      expect(stdout).toBe('');
+      expect(hookErrorRecords()).toEqual([]);
     });
 
     // B-1 ①. The basename arm cannot save this: real rows store path-shaped

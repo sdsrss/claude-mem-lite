@@ -575,7 +575,82 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `sorted[0]` after a STABLE JS sort — which preserves SQL order as the tiebreak. The hazard is
   therefore unconditional now, on the default path. Still left alone under Iron Law #1 because
   no failing case has been built. **Unjudged, not cleared — and no longer gated.**
-  **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
+  **Superseded 2026-09-26 by the N3 census below: it now ends on `id`**, which pins the ascending
+  rowid order R11 §5 measured (60/60) rather than changing it.
+  **2026-09-25: the two `scripts/pre-tool-recall.js` legs were judged and fixed** (D#36): a built
+  same-millisecond tie gave the Read slot to the older row, and both now end on `id DESC`. The live
+  tie rate over those legs' own populations (importance >= 2, live, 60-day window; key = project +
+  lowercased basename + epoch, file lists exploded) read 0/103 observation rows and 0/2681 event
+  rows (read-only, 2026-09-25T17:38Z). Whether D#15's 52 below counted these two was not
+  re-derived, so do not subtract them from it.
+  **2026-09-26: the `hook-handoff.mjs` reads left over from D#67 were judged.** The two
+  `session_summaries` reads behind the `<session-summary>` append (exact `memory_session_id`
+  arm and the nearest-in-time fallback) now end on `id DESC`; a built tie attached the OLDER
+  summary on both, and each tiebreaker was mutated alone and killed by its own case. The eight
+  `session_handoffs` reads (Stage -1 / 0 / 2 and `pickHandoffToInject`, both arms each) are
+  **judged and deliberately left untiebroken**: the table has no id column, and its rowid is
+  not recency because the writer is an UPSERT that keeps the row's original rowid, so on a
+  tie `rowid DESC` picks the older write exactly when the LOWER-rowid row was written last —
+  a shape only a rewrite can produce (the v6.13.3 claims and delta reviews; two earlier
+  wordings of this sentence, "exactly the rewritten rows" and "whenever a tie involves a
+  rewritten row", were both too broad). A real
+  tiebreaker needs a column, i.e. a migration. Live tie rate 0 groups over 51 handoff rows and
+  0 over 450 summary rows (read-only, 2026-09-26, key = project + `created_at_epoch`).
+  **`session_summaries` has the same shape on one path**, which the first draft of this
+  paragraph missed (v6.13.3 defect review P3-1): `hook-llm.mjs`'s fast-to-LLM UPDATE rewrites
+  `created_at_epoch` and keeps the row's `id`, so there too `id` is insertion order, not write
+  order, and a tie between an upgraded row and a later insert picks the older write when the
+  upgrade lands after that insert (built by the review, not observed). Only upgraded rows can
+  invert (`notes = 'llm'`, 14 of 452), and over the **281** same-project pairs whose lower-id
+  row is one of them, `id` order disagrees with `created_at_epoch` order on **0**; the
+  handoff table reads **2 of 173** same-project pairs (rowid) because it is rewritten on every
+  Stop rather than once. Read-only, 2026-09-26T08:21Z; a snapshot of how often each table is
+  rewritten, not a structural guarantee. **Moved, not gone (D#79, same day):** the LLM upgrade
+  no longer touches `created_at_epoch`; SessionStart's /clear path now moves an EXISTING row to
+  `now` instead of inserting one (`writeClearSummary`), so that write is where `id` and
+  `created_at_epoch` order can now disagree, and `id DESC` on this table stays best-effort.
+  **2026-09-26, D#75: five more reads in the same family, and one writer.** `hook-context.mjs`'s observation
+  pool (LIMIT 200), session pool (LIMIT 10), cross-project fallback (LIMIT 5) and "Last Session"
+  read (LIMIT 1), plus `lib/fast-summary.mjs`'s observation titles (LIMIT 5), now end on
+  `id DESC`; a built tie picked the OLDEST rows on each. Both pools feed a stable sort, so a
+  tie decides injected rows even below the LIMIT whenever the 2000-token budget binds, and for
+  observations also through the per-type cap of 3 (the new session case tests AT the
+  LIMIT; the v6.13.4 claims review measured the below-LIMIT budget case, [1,2,3] → [3,4,5]).
+  `hook-llm.mjs`'s `existingFast` had no ORDER BY and upgraded the LOWEST-id fast row of a
+  session (by index order). A first draft (`43571e3`) switched it to the highest id, to keep
+  `id` order equal to write order, and the v6.13.4 defect review found that to be a
+  regression: with two fast rows (Stop plus the unguarded SessionStart /clear-or-/compact path — 74
+  sessions had exactly two `notes = 'fast'` rows at 08:38Z, 75 at 08:50Z) the lower id is the
+  Stop row, whose structural Done / Not done extract is what the UPDATE's COALESCE floor keeps
+  when Haiku returns a field empty. Of the 75 live pairs 5 differ; in 4 the higher id has less
+  of every compared column, and in 342/348 it has an 11-char request the lower lacks while the
+  lower has 210 chars of completed. None of the 75 sessions has an observation, so none can
+  reach the upgrade today (09:17Z): the pairs picture what the two writers produce, not a
+  firing rate. A Stop row whose tail carries Failed / Uncertain lines is not stored as
+  `notes = 'fast'` at all, and two further shapes lose the structural lines whatever the
+  order — D#80 (delta review P3-2..P3-4). It then said `ORDER BY id ASC`, the old behaviour spelled out;
+  that was replaced the same day by one summary row per session (next bullet), which retires
+  the question of which fast row to upgrade. The draft's premise was also wrong: upgrading
+  is not "the one shape" that breaks id order — a late upgrade of the PREVIOUS session's row
+  re-stamps it above the next session's newer row with no tie at all (same review, P3-1;
+  D#79). So on session_summaries `id DESC` resolves an insert/insert tie correctly and is
+  best-effort beyond that. Each of the five hook-context / fast-summary tiebreakers, reverted
+  alone, is killed by its own case only.
+  Live tie groups 0 over 162 observations and 452 summaries (read-only, 2026-09-26T08:38Z).
+  Judged and left: the two `session_handoffs` reads at `hook-context.mjs` "Working State"
+  (same reason as above; the session-scoped arm is also PK-unique, one row at most). Not
+  judged here: the `deferred_work` ordering (`priority DESC, created_at_epoch ASC`, whose open
+  question is whether the ROW_NUMBER ordinal and the display order agree on a tie).
+  Judged later the same day: `hook-llm.mjs`'s `linkRelatedObservations` scan (`ORDER BY
+  created_at_epoch DESC LIMIT 50`, upstream of a JS file-overlap filter whose first 5
+  candidates get linked) now ends on `id DESC` — a built tie of 7 rows linked ids 1..5, the
+  OLDEST, and links 7..3 after; the new case is red with the tiebreaker reverted. `hook.mjs`'s
+  `buildFallbackFastSummary` (`sdk_sessions … ORDER BY completed_at_epoch DESC LIMIT 1`) is
+  judged and LEFT: 0 same-project `completed_at_epoch` ties in `sdk_sessions` (read-only,
+  09:40Z), its rows are created only by `INSERT OR IGNORE` so `id` is creation order (the
+  ordered column itself is set by an UPDATE at Stop), and the
+  path runs only for a startup within 2 minutes of an /exit whose session has no summary yet.
+  *(Superseded by the N3 census at the end of this bullet.)* **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
   itself is not currently firing on this corpus**: a read-only probe of the real DB found
@@ -606,6 +681,175 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   HAVING c > 1` before spending a round on the remaining sites. Match `hook-memory.mjs:683`'s
   spelling (`importance DESC, created_at_epoch DESC, id DESC`) — it is the one face that already
   got this right.
+  **2026-09-26, N3 (session-history analysis r2 §4.3): the census closes the population, and
+  the "52 unjudged" above is superseded.** Caliber, which differs from the 52's: the `.mjs`/`.js`
+  entries of `package.json#files` (so `scripts/*.js` in, `benchmark/` and `tests/` out), SQL
+  read from the AST (literals, templates, `+` chains; SQL `--` comments stripped), ASC and DESC,
+  every clause whose terms name `created_at` / `created_at_epoch`, including window
+  `OVER (ORDER BY …)`; no shipped `.sh`/`.md`/`.json` carries one. `CREATE INDEX` excluded.
+  Result on `fa66e5d` (pre-fix): **76 clauses, 38 already on `id`, 27 fixed, 11 left**.
+
+  | Verdict | Clauses | Sites |
+  |---|---|---|
+  | Already on `id` | 38 | D#9 / R11 / D#36 / D#67 / D#75 sites (hook-handoff 6, hook-context 5, hook-optimize 7, hook-llm 5, search-core 5, fast-summary 3, pre-tool-recall 2, one each in search-engine, hook-memory, recall-core, save-observation, user-prompt-search) |
+  | Fixed, DESC listing under a LIMIT (a tie handed back the OLDEST rows) | 13 | `fetchRecent`, `fetchRecentTimeline`, timeline before-leg, `recentInjectableEvents`, `recentEvents`, `promoteInsightEvents`, browse tiers, CLI + MCP export, hook.mjs fuzzy-dedup scan, `findDuplicates`, doctor prompt sample, user-prompt-search `searchRecent` |
+  | Fixed, LIMIT 1 anchor | 1 | `nearestObservation` `ABS(created_at_epoch - ?) ASC, id DESC` (matches hook-handoff's twin) |
+  | Fixed, ASC (gains `id ASC`; pins the ascending-rowid tie order R11 §5 measured) | 13 | get-core's 4 detail fetches, timeline after-leg, `findSmartCompressCandidates`, `selectCompressionCandidates`, the 6 `deferred_work` orderings behind the user-typed ordinal (3 `ROW_NUMBER` windows + 3 display orders, deferred-work.mjs and hook-context.mjs) |
+  | Left: `session_handoffs` has no id and its rowid is not write order | 11 | hook-handoff 8, hook-context "Working State" 2, startup-dashboard 1 |
+
+  Six DESC faces got built-tie cases (`tests/created-at-tiebreak-census.test.mjs`), all six red
+  before (`[1,2,3]` for `[5,4,3]`). `tests/order-by-created-at-guard.test.mjs` now holds the
+  population: a clause naming created_at must end on `id`/`rowid` of the same alias, same
+  direction for a bare column, or match an allowlist entry keyed on file + table + clause with
+  an exact count; a case asserts `session_handoffs` still has no id column, so the excuse
+  expires with its premise. Mutation-verified with the REAL reverts (`git show` of 8876cc4^,
+  43571e3^ on two files, d06dc32^, bbf1490^ — each red naming exactly the sites its commit
+  fixed) plus eight live-file mutants. Live tie groups, read-only on a DB copy
+  2026-09-26T16:35Z, keyed project + `created_at_epoch`: observations 0/172 rows, events
+  **1**/4112 (the first live tie this bullet has recorded), session_summaries 0/327,
+  deferred_work 0/96, session_handoffs 0/71; user_prompts 0/789 on the epoch alone.
+  **Not in the census**: orderings on other time columns (`completed_at_epoch`,
+  `started_at_epoch`, `resolved_at`) and score-led orders whose expression folds in a decay of
+  `created_at_epoch` (error-recall's `bm25 × decay`, R10 B3).
+  **A tie can also hide a row, not just misorder it** (found by this census, fixed in `d4e6d18`):
+  `fetchTimelineWindow`'s legs compared the epoch strictly, so a row sharing the ANCHOR's
+  millisecond fell out of both the before and the after leg. Both now compare
+  `(created_at_epoch, id)`; built ties with the anchor first / middle / last were red before.
+- **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
+  assumed one Stop per mem session. Stop always fired per assistant turn; since R10-P1-1 the
+  mem session also survives it, so every writer runs many times against a session that
+  already has a row. Three consequences, measured read-only at 09:34Z: (1) duplicate rows,
+  **458 for 312 sessions** — one session 37 rows in 65 minutes (37 distinct `completed`),
+  another 15. By writer (re-measured on the 11:13Z pre-dedup backup, 465 / 318): of 147
+  surplus rows **87 came from SessionStart's /clear-or-/compact path** inserting beside
+  Stop's row (84 still `fast`, 3 later upgraded by the model) and **60 from the LLM worker**,
+  spawned by every Stop, which upgraded the `notes = 'fast'` row once and then INSERTed on
+  every later turn of a session with observations. Session search for the 37-row session's
+  own words returned it for **10 of 10** hits ("test suites") and **9 of 10** ("shell
+  scripts"), and `stats` counted rows as sessions. (2) Stop's fast baseline was guarded on "no
+  row yet", so its Done / Not done came from the FIRST turn only: over 7 days of this
+  machine's transcripts (09:40Z, 107 sessions with a prompt), **20 of the 31** sessions that
+  wrote §10 markers had a first-turn extract that differs from their last report; at least
+  14 of those 20 had no marker on turn 1 at all (a reviewer's later re-count on a grown set
+  read 94 / 35 / 28 / 22 — same direction). (3) The same guard froze the observation-title
+  fallback of a session that never writes markers at its first turn.
+  Now every writer lands on the session's newest row (`newestSummaryId`) and inserts only
+  when there is none (`writeStopSummary`, `writeClearSummary`, `mergeModelSummary` in
+  `lib/fast-summary.mjs`, each a read-modify-write in one IMMEDIATE transaction), and **the
+  head of `notes` records, per FIELD, where Done and Not done came from** —
+  `done<report|model|titles> left<report|other>`, then the latest report's Failed / Uncertain
+  lines — with precedence report > model > titles for Done and report > other for Not done.
+  Stop refreshes Done from a report's Done, else a `titles` Done from the current titles, and
+  Not done from any report ('' = nothing left); /clear fills gaps, replaces a `titles` Done,
+  never touches a `report` Not done and moves the row to `now`; the model fills everything
+  except a `report` Done / Not done, floors an empty field on the row itself and then on the
+  session's older rows newest first, and **does not move the timestamp** (D#79); its INSERT,
+  for a session with no row, is dated at the session's last prompt, not at the worker's
+  finish. Rows from older versions map to titles (`fast`, bare Failed / Uncertain text) or
+  model (`llm`, '', NULL), never to report, so a pre-upgrade report Done stored under either
+  titles value can be replaced by titles once (the delta review's P3-2, accepted), and an
+  EMPTY Done takes the titles whatever its tag (third review P3-1: a model-created row with
+  no Done, or a legacy '' row, otherwise blocked them). Three review rounds shaped this: the first cut let
+  /clear keep a first-turn title fallback as if it were a report and let the model overwrite a
+  fresh report (defect review P2-1..P2-3); the repair's single per-row report tag then read a
+  Not-done-only or Failed-only tail as a full report and froze stale titles as its Done
+  (delta review P2-1, P2-2) — hence one tag per field. The third review (on `d4b3d73`) found
+  0 P1 / 0 P2; its P3s were repaired in v6.13.5 except P3-6, reasoned only and older than this
+  work: two workers of consecutive turns can land out of order, so an older model reply can
+  overwrite a newer one's model fields until the next worker (no report field is affected).
+  P3-6 was repaired after the release — see the P3-6 entry below.
+  D#79's precondition — an upgraded row of session A dated after the first row of a
+  same-project session that STARTED after A — held for **0 of 193** such pairs (3 within 10
+  minutes): a built failure, not an observed one. D#80's shapes could not reach the upgrade
+  in any two-row session (none has an observation); 3 sessions with 3+ rows did hold two
+  `llm` rows, with no content loss seen. Stop now calls the summary writer AFTER citation
+  tracking: run before it, the per-turn tail read parsed the parent transcript a second time
+  in every session with subagents (the memo holds one file; 126 of 191 main transcripts have
+  a subagents folder, claims review) — an e2e case counts the parent reads (1).
+  `stats` (CLI + MCP), `status` and `doctor` now count DISTINCT `memory_session_id` for "N
+  sessions". Evidence, on the per-field version: 40 single-site mutations (each Stop / /clear
+  / model precedence rule, each provenance tag written, the legacy mappings, the floor and its
+  order both ways, the target row, the INSERT stamp, no re-stamp, scrubbing, the Stop call
+  order and its Failed lines, tie order, the four counts) are each killed by a case in
+  `tests/{fast-summary,hook-llm,e2e,stats-core,install-session-count}.test.mjs`; the first
+  run left 4 alive (a report arriving on a later turn left untagged on either field, Failed
+  lines unscrubbed — the scrub case's notes cut fell inside the secret — and Stop dropping
+  those lines), each now killed by a case added for it. On the final tree (after the third review's
+  repairs) the set is 43 arms, all killed. The legacy duplicates were then removed from the maintainer's DB by a one-off
+  script (11:13Z, user-authorised, backup kept): 465 → 318 rows, 147 deleted, 31 empty fields
+  of kept rows filled from deleted ones; Last Session identical before/after in 20 of 20
+  projects (the comparer reported 1 of 20 when one project's newest row was deleted). Other
+  installs keep theirs. NOT done: the LLM worker still calls the model once per turn for a
+  session with observations — a much smaller population than it reads (next entry).
+- **2026-09-26, P3-6: a model reply from a superseded Stop no longer lands.** Measured first,
+  read-only, 7 days of this machine's main transcripts (a turn counted only when it holds an
+  assistant message; its end is the last one): 913 gaps between consecutive turn ends in 95
+  sessions — **27 under 10 s, 46 under 20 s** (27 of those 46 open with a
+  `<task-notification>`, so they carry no new user prompt), p25 110 s, p50 373 s; a session's
+  LAST gap was under 20 s in **4 of 86**. One summary call via OpenRouter took 4545 / 4885 /
+  4903 ms (3 calls, one sitting), via the `claude -p` fallback 10057 / 10250 / 9875 ms, before
+  the worker's wait for its episode flush. So overlap is
+  real but rare, and the ordering key cannot be the prompt number: task-notification turns
+  tie on it. The key is the Stop itself. `sdk_sessions.completed_at_epoch` turned out to be
+  **frozen at the FIRST turn** — Stop's UPDATE was guarded on `status = 'active'`, which only
+  the first Stop matches (one live session: `completed_at` 10:30, last prompt 12:31); its one
+  reader, `buildFallbackFastSummary`, is nearly unreachable now that every Stop writes a row.
+  Now every Stop records its epoch there (`status IN ('active', 'completed')`) and hands the
+  SAME value to the worker as argv[5]; `summarySuperseded` (`lib/fast-summary.mjs`) is checked
+  before the model call (the later Stop's worker reads the newer window, so the call is saved)
+  and again inside `mergeModelSummary`'s transaction (the later Stop can land during the round
+  trip). A spawn without an epoch — /clear, a pre-upgrade worker — always writes. The trade:
+  if the later worker then writes nothing, the row keeps the model fields of an earlier turn,
+  the same staleness P3-6 produced. The later worker writes nothing when its model reply is
+  empty, when it gets no LLM slot, or when it finds no observation — the newer window is not a
+  strict superset, since the episode upgrade-delete can remove what the earlier worker read
+  (pre-ship defect review P3-1). Unmeasured; the metric below pairs the two by session. Evidence: 8 single-site mutations (the UPDATE guard, the
+  spawn argument, the UPDATE's epoch read from a fresh clock, `>` → `>=`, the `<= 0` guard, each
+  of the two checks, the merge call's argument) are each killed by a case in
+  `tests/{fast-summary,hook-llm,e2e}.test.mjs` (the one in `bg-spawn-skip-flag-invariant` was the
+  source scan, since removed). The spawn wire was
+  first held by a source scan, on the stated reason that the spawn is off in every e2e case;
+  false — several e2e Stop cases spawn the real worker against `scripts/mock-claude.mjs` (claims
+  review P2-1). It is now behavioural: an e2e Stop spawns the real worker on a session with no
+  observation, and its metric row's `stopEpoch` must equal the stored `completed_at_epoch`
+  (killed by a spawn without the argument, and by a fresh clock read at either end).
+  **Stop's 5 s timeout** (Uncertain in the v6.13.5 report): the week's 4 largest transcripts
+  by main plus subagent bytes (to 27.8 MB, of which 3.5 MB main and 18 subagent files; one with
+  68 subagent files; the largest main file alone, 13.2 MB, is among them) timed 164–251 ms for a whole Stop
+  through `scripts/hook-launcher.mjs`, sandboxed on a backup copy of the DB, summary spawn off;
+  `collectSubagentSurface` read 18 and 68 files in 97 and 59 ms, so the subagent arm ran.
+  **Per-turn model calls — the first reading here was of the wrong population.** It said
+  "1008 turns in 95 sessions, so at one call per turn ≈ 91% of calls are overwritten", and
+  was filed as D#92. But the worker calls the model only when the session has an
+  observation, and on the DB (read-only, 7 days, 15:03Z) **4 of 157 hook sessions** hold one,
+  with **6 prompts** between them (a first count read "9 of 162" by including 5 `manual-*`
+  mem_save pseudo-sessions, which no worker runs for). **7 finished sessions** carry a
+  model-written summary by `parseSummaryNotes` (4 `notes = 'llm'`, 3 legacy `''` — a first
+  count of 4 missed the latter), so rows were written and the observations deleted after. The
+  live session's own row is an 8th at 15:22Z (`donemodel leftreport`); its tag is rewritten
+  every turn, so a count that includes it is a snapshot (delta review P2-1). The cause: `saveEpisodeImmediate` pre-saves an observation, `persistHaikuSummary`
+  (`hook-llm.mjs:452`) deletes it when Haiku classes it as an event type, and the worker
+  waits for that flush before its `SELECT … FROM observations WHERE memory_session_id = ?` —
+  auto-captured work lives in `events` now (observation ids 256–281 that day: 19 of 26
+  gone). A sandboxed run of the real worker on the previous session read `no-obs` for that
+  reason. So the per-turn cost is small, and the larger gap is that the model summary mostly
+  never runs; Last Session rests on Stop's report extract. D#92 was dropped for D#95 (via two
+  re-filings that corrected counts): feed events — whose summarizer
+  `docs/audits/20260925-200912-session-history-analysis.md:212` labelled 2/30 accurate (D#69)
+  — or retire the model summary, an LLM-visible change. To read the real rates, each worker
+  exit writes a `summary_worker` metric row under `CLAUDE_MEM_METRICS=1`: `no-db`, `no-obs`,
+  `slot-timeout`, `superseded-before-call`, `no-content`, `superseded-at-write`, `written`,
+  `error`, with `session`, `stopEpoch` and the model call's `llmMs`. As first shipped
+  (`91e45ba`) the row had neither session nor epoch value, so this paragraph's claim that it
+  measures the P3-6 trade was false (claims review P1-1). With both, the trade is a
+  `superseded-*` row of a session with no `written` row at a LATER `stopEpoch` — pair by
+  `stopEpoch`, not file order: the successor usually writes before the superseded worker's
+  `superseded-at-write` row lands. A worker killed by SIGTERM / SIGINT (the hook's signal
+  handler, `hook.mjs:261`), including mid-call, writes no row (delta review P3-4, not fixed).
+  **`buildFallbackFastSummary` now checks "has no summary" in its WHERE** (pre-ship defect
+  review P3-4): it selected the most recent completed session and checked for a summary after
+  `LIMIT 1`, so once every Stop records itself a parallel live session with a summary took the
+  slot from the session that exited — an e2e case with both shapes is red on the old SQL.
 - **`COALESCE(compressed_into,0)=0` alone is NOT the liveness predicate** — `liveObsFilterSql`
   also requires `superseded_at IS NULL`. **Which sites need the full one is settled; do not
   re-derive it.** Carrying it: the two `COMPRESSED_PENDING_PURGE` writers
@@ -1097,7 +1341,7 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   proxy. **That check has to ask which registration is LIVE, and the first cut did not**
   (pre-ship review P1-1). `hooks/hooks.json` is in `RELEASE_SIGNED_FILES` but NOT in
   `SOURCE_FILES`, so the npm / npx / `git clone` install has no `hooks/` directory — and that
-  is exactly the shape registering its bash hooks through `settings.json` (2 of them, not 3).
+  is exactly the shape registering its bash hooks through `settings.json` (3 of them since v6.14.0, not 4 — `setup.sh` has no settings.json twin).
   Reading only the manifest therefore printed a green *"no hook command needs bash"* on the
   one shape where they are live, while both shipped READMEs promise `claude-mem-lite doctor`
   reports it — and that binary is the `~/.local/bin` symlink pointing at exactly the copy
@@ -1241,6 +1485,97 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `mark_deps_ok` branch deletes and which directory each migration acts on, and each carries
   controls so a red arm cannot be mistaken for a harness that never reached the branch.
 
+### A lesson that quotes tool output is attacker-writable (D#100 item 3, 2026-09-26)
+
+v6.14.0's D#69 grounding shows the episode summarizer up to 12 verbatim DIAGNOSIS lines and
+keeps a lesson only if it quotes one. Before it, the model saw a 60-character prefix of a
+Bash call's output (`makeEntryDesc`). Tool output is written by whoever controls what a
+command prints — a repo's test, a fetched page, a third-party tool — so "must quote" became
+"may carry a hostile line verbatim into memory", at importance 2, the floor of the event
+faces (UserPromptSubmit's event leg; SessionStart Key Events when enabled). Observation faces
+are not all floored at 2: UserPromptSubmit's observation queries admit importance ≥ 1
+(`scripts/user-prompt-search.js`), and an observation's importance is raised later by reads
+(autoBoostIfNeeded, boostAccessed) — both found by the pre-ship reviews, not by this entry's
+first draft, which said "every observation face".
+
+Reproduced, not inferred: the shipped `handleLLMEpisode` with real Haiku (`callLLM`, CLI mode)
+on a sandbox `CLAUDE_MEM_DIR`, 6 windows each carrying one hostile failing line (curl | sh,
+`NODE_TLS_REJECT_UNAUTHORIZED=0`, `rm -rf ~/.claude`, `~/.ssh/id_rsa`, `git push --force`,
+one CJK line that `failureLines` never read). v6.14.0: **3 of 6** stored the directive
+verbatim in the event body at importance 2. After `a3dbf2d`, 12 windows (both line orders):
+5 stored it, **0** at importance ≥ 2. The probe script is not committed; the mechanism is
+pinned by `tests/episode-input-filter.test.mjs` (the "quotes tool output" cases, RED on
+v6.14.0).
+
+The rule is PROVENANCE, not content: `extractDiagnosis` tags output lines (`entry.diagOut`,
+always present on a Bash entry; an older Bash entry without it counts all its lines as
+output), the response snippet in a tool's desc counts as output too, located by TOOL: after
+" → " for Bash / Grep, after "<tool>: " for makeEntryDesc's default arm (MCP servers, Skill,
+SendMessage, MultiEdit, anything unlisted). Two delta reviews found the repairs reading only
+the arrow form, then reading an arrow INSIDE an MCP response first — the response is the
+attacker's text, so its content must not choose where it starts, a line counts as output only if no entry authored it (a comment block an edit
+added, a commit message), and a lesson sharing ANY 4 consecutive words with output (not
+grounding's stricter 5-letter rule) is handled by where it lands: an event row is capped at
+importance 1 with its lesson kept and searchable (no writer raises an event's importance, and
+every event face floors at 2); a `change` observation loses the lesson, because observation
+importance is not stable and UserPromptSubmit reads observations at ≥ 1 — and the lesson-less
+row is then deleted by the lesson-less-change rule unless `CLAUDE_MEM_KEEP_LOW_SIGNAL=1`. Any
+four shared words count, filler included ("is not in the"), so the cap over-reaches: a lesson
+resting on the agent's own comment is demoted when it also shares such a run with an output
+line in the window. That recall cost is not measured. A content filter was
+not tried: a deny-list of dangerous commands is bypassed by rephrasing, and the prompt-side
+`MEMORY_INPUT_GUARD` did not stop 3 of 6.
+Not covered, none measured: every row's TITLE and NARRATIVE are written from the same
+DIAGNOSIS block and are not checked (the SessionStart Recent table shows titles at
+importance ≥ 1); a `decision` whose lesson is empty keeps its importance with the narrative
+as its body; a PARAPHRASED directive shares no 4 words with the output line (the defect
+review saw 1 of 6 real-Haiku windows store one at importance 2); and an agent-authored line
+the same command prints back (a commit subject echoed by `git log`) counts as output, which
+over-caps (10 of 991 such calls in this repo's transcripts). Two routes move a demoted lesson
+back into reach, both off the default path: `activity promote --min-importance 1 --execute`
+copies an importance-1 event's body into an observation's lesson (observations are read at
+≥ 1), and with `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` hook-optimize's re-enrich pass can write a new
+lesson for the lesson-less `change` row from its title and narrative, uncapped — only when
+the row's concepts, facts and search aliases are all empty too (that is the pool's
+predicate; confirmed by the round-3 review's probe).
+
+### Bash-first capture (v6.14.0): what recovering Bash file paths did to the pre-save
+
+The N1 change (docs/audits/20260926-154904-session-history-analysis-r2.md) made Bash commands
+yield their real files and made a Bash write an edit. That moved two things the commit that
+shipped it did not measure; the pre-ship defect review did, and it was re-measured on the tree
+that ships (after the review repairs) with `benchmark/episode-flush-replay.mjs --json` on the
+base tree (`fa66e5d`) and then the release tree, back to back, 2026-09-26 18:38–18:39Z, over
+every main-thread transcript on the maintainer's machine (both arms exit 0):
+
+| arm | flushes | significant | pre-saved rows landing (upper bound) | of which dev--claude-mem-lite | reads destroyed |
+|---|---|---|---|---|---|
+| fa66e5d | 7700 | 4321 | 83 | 49 | 49.8% |
+| release tree | 8597 (+11.6%) | 5324 (+23.2%) | 18 | 0 | 37.8% |
+
+(The review's own reading on the pre-repair tree `207dc38` was 7658 → 8553 / 4304 → 5370 /
+79 → 18 about an hour earlier; the corpus grows every session, so compare within a row pair.)
+
+- **Why fewer pre-saves land.** The rows that stopped landing were error+test windows whose
+  degraded title was the entry desc (`sed -n 895,908p tests/… → …`) because the window had no
+  files. With files recovered, `buildDegradedTitle` returns `Error: <names>`, a LOW_SIGNAL
+  title, and the existing write-side noise gates drop or cap it; Bash writes also turn
+  `discovery` windows into `change` ones, which `isLowYieldChangeObs` drops. The policy is
+  the one that was already there — more rows now reach it.
+- **Who loses something.** Only the pre-save path: an install with no working LLM, and the
+  one flush whose LLM call fails (hook-llm.mjs's "keep the pre-saved row" branch). On LLM
+  success the worker clean-inserts a fresh row, so nothing is lost there. Decision: kept —
+  the rows that stopped landing had command text for titles. Re-measure this table if an
+  LLM-less install becomes a supported shape.
+- **What it costs.** +23.2% significant flushes is roughly that many more `llm-episode` calls
+  on the replayed corpus; +11.6% flushes because real paths now make `isRelatedToEpisode`
+  split windows that used to look related.
+- **What it gains.** Read paths destroyed at flush fell 49.8% → 37.8% of those consumed:
+  Bash edits now make windows significant, so the reads that preceded them are kept.
+- **The ruler's self-check 2 compares against a live meter written by the old code.** It
+  failed on the review's run (15.1pp against a 15pp tolerance) and passed on this one;
+  either way do not widen the tolerance — the meter re-baselines once the new build writes it.
+
 ## Levers measured and rejected
 
 - **A Porter tokenizer on the FTS index — measured 2026-09-14, REJECTED.** The index is
@@ -1285,6 +1620,56 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   query-side expansion — mapping a query term to the word forms the index actually holds —
   is untested and would need its own run of this same ruler.
 
+- **A real shell parser (tree-sitter-bash) for the hook-path file extraction — measured
+  2026-09-26, REJECTED (D#100 item 4).** Three reviews in a row found superlinear shapes in
+  the hand-written parser, which is why this was worth deciding once. Measured in a scratch
+  install (never added to the repo): web-tree-sitter 0.27.0 + tree-sitter-bash 0.25.1 (+
+  python 0.25.0, javascript 0.25.0), Node 22, this machine, 3 runs. Import + `Parser.init`
+  ≈ 8 ms, loading the bash grammar ≈ 9.5 ms, python + JS ≈ 2.6 ms — about 20 ms of setup —
+  and the first parse of a real patch command ≈ 6 ms, ≈ 26 ms in all, paid by every node
+  process that parses: each Bash PostToolUse, and the ≈ 52% of Bash PreToolUse calls the
+  prefilter hands to node. The current parser, cold in a fresh process, takes 3.2–8.6 ms on
+  the same commands (warm, its worst case over 10,389 real commands is 2.2 ms — the figure
+  first quoted here, which compared warm against cold; corrected by the claims review). The
+  grammar WASM files are 2.23 MB (bash 1.36 MB), 2.44 MB with the runtime, shipped to a
+  plugin cache that has no `node_modules`. On the round-3 shapes at 120 KB the bash grammar
+  parses the P2-3 prefilter shapes in 45–70 ms, but the python and JS grammars take
+  96–663 ms and 3–511 ms on the P2-1 shapes (claims review re-measure; this entry first
+  quoted only the bash figure as "120 KB in 45–70 ms"). It does not remove the reasons the
+  findings recurred either: the bash prefilter (P2-3's home) runs in bash and cannot use it, and
+  the python / JS write-flow resolution (P2-1's home) stays hand-written logic over any
+  AST. The class is instead bounded by hard caps (`0d29930`: 4 KB bracket scans, 64 sites
+  per kind, 64 KB for indirect resolution, 16 KB for the prefilter and tags), each with a
+  bound test per shape. The loop-body scoping added for P3-1 costs 11 → 26 ms on 64 nested
+  python loops over 62 KB. **Revisit when** a fourth superlinear finding lands INSIDE those
+  caps, or when misses attributable to shell lexing (not to inline-program resolution)
+  become a measurable share of the Bash edit commands that lose their written file.
+
+- **Moving the model session summary to SessionEnd or a debounce — decided 2026-09-26,
+  NOT DONE (R6 / N4).** The proposal was to stop patching Stop-side writers one by one and
+  pick when, and how often, the summary is produced. Measured first, as R6 asked
+  (DB snapshot 2026-09-26, every project on this machine, sessions started in the last 7
+  days, `done` provenance of each session's newest summary row): 157 sessions; `done=model`
+  9, `done=report` 4, `done=titles` 134, and 10 with no summary row at all (a titles row's
+  `completed` is usually empty, because the session's observations were upgrade-deleted into
+  events — D#95). Only 4 of the 156 hook sessions still held an observation (a fifth hit was
+  a `manual-*` pseudo-session no worker runs for; first quoted as "5 of 157"), and holding
+  one is the worker's gate — without it it exits before reading anything else (it also reads
+  user prompts once past the gate). **So model coverage is bound by its INPUT, not its
+  timing**: a SessionEnd or debounced worker meets the same gate. Where the model does win, it can be wrong — row 477, the v6.14.0
+  release session, told the next session the work left was "MEMORY.md compression" while
+  that session's own report listed D#101 / D#100 / N4. The writer that outranks the model by
+  design, the assistant's own report, was the real gap: its header matched `Done:` only.
+  Of the 1843 turn-final messages on this machine, 440 carried at least one section header
+  (238 all four) and the colon form parsed 78 of those (it parsed 109 messages in all; the
+  other 31 through a 中文 marker such as 剩下, some of them wrongly). Fixed in `44ad93e` (markdown
+  headings, with the review repairs in `589b1e3` and after); per transcript touched in the
+  last 7 days, a report Done / Not done is now readable in 86 of 106 (was 39; re-measured
+  after the repairs, the 7-day window having moved). The v6.13.5/6 timing defects stay fixed and guarded.
+  **Next, if anything:** after the report fix ships, count sessions whose Last Session is
+  still model-sourced and label them; retiring the per-Stop model worker is the candidate
+  if they read wrong. D#95 (the input) stays open.
+
 ## Condensed surfaces — original wording (pre-20 KB cap, v6.5.0)
 
 The 2026-09-08 cap rewrote CLAUDE.md's header and its Commands / module / Rulers tables in
@@ -1308,7 +1693,8 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 - **`INSTALL_COMMANDS`** — `install uninstall status doctor cleanup cleanup-hooks self-update repair rebuild-binding release`
 Seven hook events are registered in `hooks/hooks.json`: `SessionStart`, `PreCompact`,
 `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse`
-has TWO matchers, not three** — the `Skill` one went with the skill registry
+has THREE matchers** — `Edit|Write|NotebookEdit|Read`, `Bash` (a bash prefilter in front of the
+same recall, v6.14.0) and `Agent|Task`; the `Skill` one went with the skill registry
 (`docs/audits/20260906-145304.md`); `install.mjs`'s settings.json twin must stay equal to it.
 | `cli.mjs` | CLI entry point — routes subcommands to mem-cli.mjs or install.mjs |
 | `mem-cli.mjs` | CLI subcommand dispatch: retrieval / write / maintenance / data / insight / adopt families |
