@@ -77,9 +77,8 @@ const TIER_MODEL_ENV = {
  * @param {'haiku'|'sonnet'} tier
  * @returns {string}
  */
-function apiModelId(tier) {
-  const { configured, error } = resolveAnthropicBaseUrl();
-  if (!configured || error) return MODEL_MAP[tier];
+function apiModelId(tier, base = resolveAnthropicBaseUrl()) {
+  if (!base.configured || base.error) return MODEL_MAP[tier];
   return (process.env[TIER_MODEL_ENV[tier]] || '').trim() || MODEL_MAP[tier];
 }
 
@@ -500,7 +499,17 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  const modelId = apiModelId(model);
+  // Read the base URL once: the request URL and the tier model must come from the
+  // same verdict, and a set-but-unusable value must not quietly move the key to
+  // the public endpoint (the cross-origin hop the redirect guard exists to stop).
+  // Skip the direct leg; the CLI fallback reads ANTHROPIC_BASE_URL itself.
+  const base = resolveAnthropicBaseUrl();
+  if (base.configured && base.error) {
+    debugLog('WARN', `${model}-api`, `ANTHROPIC_BASE_URL unusable (${base.error}); skipping direct API call`);
+    return null;
+  }
+
+  const modelId = apiModelId(model, base);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   // One deadline for the whole call. The AbortController bounds the fetch path
@@ -536,7 +545,7 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     // fetch — a silent outage behind a proxy, and one the new doctor check would
     // have certified as healthy because it probes the hop this code was ASSUMED
     // to use. (pre-tag review SHOULD-FIX 3)
-    const apiUrl = `${resolveAnthropicBaseUrl().url}/v1/messages`;
+    const apiUrl = `${base.url}/v1/messages`;
     const apiHeaders = {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
@@ -565,12 +574,14 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
 
     let res = await send(body);
 
-    // Temperature-deprecation compat, same shape as the claude-CLI flag retry:
-    // retry once without the field, cache the negative so later calls skip it.
-    // The body must name the BACKTICKED field — matching bare "temperature" also
-    // catches unrelated 400s that merely mention it, and a false match costs a
-    // request plus the 0-pin for that model for the rest of the process. A 400
-    // that does not name the field keeps the old single-attempt path.
+    // Temperature-deprecation compat. Unlike the claude-CLI flag retry, which
+    // caches the negative only after the retry succeeds, this pins the model the
+    // moment the 400 matches: the 400 itself proves the model refuses the field,
+    // so every later call omits it from the start. The body must name the
+    // BACKTICKED field — matching bare "temperature" also catches unrelated 400s
+    // that merely mention it, and a false match costs a request plus the 0-pin
+    // for that model for the rest of the process. A 400 that does not name the
+    // field keeps the old single-attempt path.
     if (res.status === 400 && body.temperature !== undefined) {
       let detail = '';
       try {
@@ -580,8 +591,12 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
       }
       if (/`temperature`/i.test(detail) && /deprecat|unsupported|not support/i.test(detail)) {
         _temperatureDeprecated.add(modelId);
-        delete body.temperature;
-        res = await send(body);
+        // Only spend the second request if real budget is left; otherwise the
+        // gateway bills a POST the client aborts before reading it.
+        if (deadline - Date.now() >= RETRY_MIN_BUDGET_MS) {
+          delete body.temperature;
+          res = await send(body);
+        }
       }
     }
 

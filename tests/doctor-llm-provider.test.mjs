@@ -15,7 +15,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
 import { llmProviderStatus } from '../lib/llm-provider-probe.mjs';
 
-const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
+const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'];
 
 describe('llmProviderStatus', () => {
   afterEach(() => {
@@ -137,6 +137,38 @@ describe('llmProviderStatus', () => {
     noProxy();
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
     vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.attacker.example:4000');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('WARNS when the base URL carries userinfo', async () => {
+    // fetch() refuses a credentialed URL; without this the client falls back to
+    // the CLI while doctor certifies the host.
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://user:pass@gw.example.com');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('WARNS on a bare trailing "?" — URL.search is empty but the path is broken', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com/anthropic?');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('WARNS on a non-http(s) scheme', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'ftp://gw.example.com');
     const probe = vi.fn(async () => ({ reachable: true }));
     const s = await llmProviderStatus({ _probe: probe });
     expect(s.level).toBe('warn');

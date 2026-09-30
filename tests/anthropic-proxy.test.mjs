@@ -17,6 +17,10 @@ vi.mock('../lib/proxy-fetch.mjs', async (importOriginal) => {
   return { ...actual, httpConnectProxyFor: vi.fn(() => null), postViaConnectProxy: vi.fn() };
 });
 
+// The CLI fallback (reached when the direct leg is skipped or fails) must not
+// spawn a real `claude` in unit tests.
+vi.mock('child_process', () => ({ execFileSync: vi.fn(() => 'fallback'), spawn: vi.fn() }));
+
 import { httpConnectProxyFor, postViaConnectProxy } from '../lib/proxy-fetch.mjs';
 import { callModelJSON, callHaikuJSON, _resetMode, _resetTemperatureCompat } from '../haiku-client.mjs';
 
@@ -104,7 +108,7 @@ describe('temperature retry shares ONE deadline over the tunnel', () => {
     vi.useFakeTimers();
     vi.mocked(postViaConnectProxy)
       .mockImplementationOnce(async () => {
-        vi.advanceTimersByTime(800);
+        vi.advanceTimersByTime(400);
         return {
           ok: false,
           status: 400,
@@ -119,8 +123,25 @@ describe('temperature retry shares ONE deadline over the tunnel', () => {
     const first = postViaConnectProxy.mock.calls[0][2].timeout;
     const second = postViaConnectProxy.mock.calls[1][2].timeout;
     expect(first).toBe(1000);
-    // 800ms was spent on the first attempt; the retry gets the remaining ~200ms.
+    // 400ms was spent on the first attempt; the retry gets the remaining ~600ms.
     expect(second).toBeLessThan(first);
-    expect(second).toBeLessThanOrEqual(200);
+    expect(second).toBeLessThanOrEqual(600);
+  });
+
+  it('skips the retry when too little of the deadline is left', async () => {
+    vi.useFakeTimers();
+    vi.mocked(postViaConnectProxy).mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(900);
+      return {
+        ok: false,
+        status: 400,
+        text: async () => '`temperature` is deprecated for this model.',
+      };
+    });
+
+    const out = await callModelJSON('hello', 'haiku', { timeout: 1000, maxTokens: 50 });
+    expect(out).toBeNull();
+    // 100ms left < RETRY_MIN_BUDGET_MS: no second POST the client would abort.
+    expect(postViaConnectProxy).toHaveBeenCalledTimes(1);
   });
 });

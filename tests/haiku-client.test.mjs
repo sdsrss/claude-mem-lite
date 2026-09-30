@@ -95,7 +95,8 @@ describe('haiku-client.mjs', () => {
     // Proxy vars in the dev/CI shell would route the OpenRouter path through the
     // CONNECT tunnel (real network) instead of the mocked fetch — same #8608 trap:
     // an env-gated transport silently breaks tests that rely on the default path.
-    for (const v of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) vi.stubEnv(v, '');
+    for (const v of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'])
+      vi.stubEnv(v, '');
     _resetMode();
     // Module-level compat state: one case that trips the old-CLI fallback would
     // otherwise silently drop the flag from every later case's expected argv.
@@ -1113,6 +1114,19 @@ describe('haiku-client.mjs', () => {
       expect(body.model).toBe('claude-haiku-4-5-20251001');
     });
 
+    it('skips the direct API leg when the base URL is set but unusable', async () => {
+      // configured+error must not quietly send the key to api.anthropic.com; the
+      // CLI fallback reads ANTHROPIC_BASE_URL itself.
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'not a url');
+      vi.mocked(execFileSync).mockReturnValue('fallback');
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('test prompt');
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('does not tunnel an http:// gateway — the CONNECT tunnel is TLS-only', async () => {
       // Before the fix this crashed the process: the proxy was selected for the
       // http target, then https.request threw ERR_INVALID_PROTOCOL inside the
@@ -1200,8 +1214,21 @@ describe('haiku-client.mjs', () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: false,
         status: 400,
-        text: async () =>
-          '{"type":"error","error":{"message":"temperature sampling is unsupported here"}}',
+        text: async () => '{"type":"error","error":{"message":"temperature sampling is unsupported here"}}',
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(callHaiku('test prompt')).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry a backticked temperature field that is not a deprecation', async () => {
+      // Pins the second half of the guard: backticked name AND a deprecation
+      // word. A range error on the field must keep the single-attempt path.
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => '{"type":"error","error":{"message":"`temperature`: must be between 0 and 1"}}',
       });
       vi.stubGlobal('fetch', fetchMock);
 

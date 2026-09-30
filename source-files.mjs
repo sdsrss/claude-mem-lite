@@ -172,6 +172,7 @@ export const SOURCE_FILES = [
   'lib/hook-prune.mjs',
   'lib/proxy-fetch.mjs',
   'lib/llm-provider-probe.mjs',
+  'lib/anthropic-base-url.mjs',
   // P1 supply-chain: shared release-signing core (sha256 manifest + Ed25519
   // verify). Imported by hook-update.mjs (verify) + scripts/sign-release.mjs (CI
   // sign). Must ship or auto-update can't verify release signatures.
