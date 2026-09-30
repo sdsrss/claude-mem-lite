@@ -341,6 +341,7 @@ const CORE_SCHEMA = `
     name TEXT PRIMARY KEY,
     done_at_epoch INTEGER NOT NULL
   );
+
 `;
 
 // Column migrations (idempotent — only swallow "duplicate column" errors)

@@ -152,7 +152,7 @@ node install.mjs install
 ### 安装过程
 
 1. **安装依赖** -- `npm install --omit=dev`（编译原生 `better-sqlite3`）
-2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 18 个工具（9 个核心通过 `tools/list` 暴露 + 9 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
+2. **注册 MCP 服务器** -- `mem-lite` 服务器定义 19 个工具（10 个核心 + 9 个隐藏但可调；`mem_search_feedback` 仅在启用搜索遥测时注册）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
 
 > **自动 adopt 不再把托管块加进你项目的 `CLAUDE.md`（6.19.4 之后的下一个版本起）。** 每次 SessionStart，插件都会送达引导文本（提升 Claude 主动调用 `mem_recall` / `mem_save` 的触发表）。在还没有托管块的 git 仓库里，它把托管块写进仓库根目录的 `CLAUDE.local.md`（Claude Code 像加载 `CLAUDE.md` 一样加载它，子代理也能看到），并把这个文件加进仓库的 `.git/info/exclude`（你的 ignore 规则已覆盖时不加），所以 git 不列出、也不提交它；第一次写入时你会看到一条**一次性提示**。Claude Code 在插件的启动钩子运行之前就读取了指令文件，所以创建这个文件的那个会话改为在上下文里注入一次引导（该会话的子代理看不到）。不在 git 仓库里、仓库根是 `$HOME`、`CLAUDE.local.md` 已被 git 跟踪或是符号链接，或者仓库根是一个 `npm publish` 会把它带上的 npm 包（没有 `"private": true`，没有把它排除在外的 `files` 列表，没有 `files` 列表时也没有列出它的 `.npmignore`）时，什么都不写，改为每个会话把引导**注入**上下文，并一次性提示可以运行 `/adopt`（在 `$HOME` 下不提示）。托管块指向的详情文件放在插件自己的数据目录，以 `~/` 路径书写。`.git/info/exclude` 只对 git 生效：docker 构建上下文、归档和其他打包工具都可能把 `CLAUDE.local.md` 打进去（可发布的 npm 包根目录不会保留这个文件：目录变成 npm 包之前写入的托管块，会在下一次会话启动时移除）。旧版本会在你打开的每个项目里，未经询问就向项目自己的 `<cwd>/CLAUDE.md`（通常会进 git）写入托管块，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件；这些项目保留托管块，本版本的第一个会话会因为文本变化刷新它——想把某个项目迁到本地文件，在那里运行 `claude-mem-lite unadopt` 并提交这次删除。为什么不全部改成注入：沙箱实测中（一个项目，Claude Opus 5.5），8 个会话里模型主动记录的次数，注入时平均 1.5 次，写在 `CLAUDE.local.md` 或 `CLAUDE.md` 时 5.25 次；而且子代理完全看不到注入的文本。**任何安装路径都生效**（npm、npx、`/plugin`、手动）；两条提示都可以用 `MEM_NO_ADOPT_HINT=1` 关闭。
 >
@@ -402,8 +402,8 @@ v48"*。想继续用向量臂，请在**升级之前**锁定 `claude-mem-lite@5.
 
 ### MCP 工具
 
-v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。当前是 18 个工具，其中 9 个
-**核心** 工具出现在列表里，另外 9 个 **隐藏** 工具仍然注册在 MCP 层（按名
+v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。服务端定义 19 个工具，其中 9 个
+**核心** 工具默认出现在列表里，`mem_search_feedback` 仅在启用搜索遥测时加入；另外 9 个 **隐藏** 工具仍然注册在 MCP 层（按名
 `tools/call` 仍命中），只是不出现在列表响应里，以避免 Claude Code 会话启动时
 多加载 9 份工具 schema。隐藏工具走下面表格的 CLI 入口。
 
@@ -411,11 +411,12 @@ v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。当前是 18 �
 `tool-schemas.mjs` 是唯一事实来源，`tests/tool-count-docs.test.mjs` 现在把两份
 README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 
-**核心（9 个，暴露给 Claude Code）**
+**核心（10 个定义；`mem_search_feedback` 需要启用搜索遥测）**
 
 | 工具 | 描述 |
 |------|------|
 | `mem_search` | 基于 BM25 排名的 FTS5 全文搜索。支持按类型、项目、日期范围、重要度过滤。 |
+| `mem_search_feedback` | 为已有 `mem_search` Search ID 的结果记录稀疏相关性标签。 |
 | `mem_recent` | 显示最近的观察，按时间排序。快速查看最新活动。 |
 | `mem_recall` | 召回与文件相关的观察。编辑文件前使用，回顾过去的修复和上下文。 |
 | `mem_timeline` | 围绕锚点按时间顺序浏览观察。 |

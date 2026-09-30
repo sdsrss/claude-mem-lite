@@ -7,8 +7,8 @@
 //     core/hidden split, descriptions, CLI-parity of the doc lines. Never spawns.
 //   tests/mcp-protocol.test.mjs        — protocol-level regression museum: the
 //     specific bugs that shipped (purge without confirm, sort=time no-op, single-
-//     source totals, pagination double-offset, update validation parity). Ten of
-//     the twenty tools are never called there.
+//     source totals, pagination double-offset, update validation parity). Some
+//     tools are never called there.
 //   tests/server-defer.test.mjs        — schema/handler-shape unit tests for the
 //     defer family, plus a CLI proxy for the closes_deferred transaction.
 //   tests/mcp-export-parity-r5.test.mjs— one tool (mem_export) via an in-process seam.
@@ -54,7 +54,7 @@ import { tools as DECLARED_TOOLS } from '../tool-schemas.mjs';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER_PATH = join(REPO, 'server.mjs');
 
-// The 9 tools `tools/list` promises. Pinned as a literal ON PURPOSE: comparing the
+// The default tools `tools/list` promises. Pinned as a literal ON PURPOSE: comparing the
 // wire response against tool-schemas' own `hidden` flags would pass right through a
 // flag flip (both sides move together). This literal is what makes a tool silently
 // appearing in — or vanishing from — every agent's startup context a test failure.
@@ -69,7 +69,7 @@ const PUBLIC_TOOLS = [
   'mem_defer_list',
   'mem_defer_drop',
 ];
-// The 11 hidden-but-callable tools: absent from tools/call-time discovery, still
+// The 9 hidden-but-callable tools: absent from tools/call-time discovery, still
 // routable by exact name (Claude Code agents reach them via the CLI).
 const HIDDEN_TOOLS = [
   'mem_delete',
@@ -178,6 +178,7 @@ beforeAll(async () => {
     ANTHROPIC_API_KEY: '',
     OPENROUTER_API_KEY: '',
     CLAUDE_MEM_AUTO_DEEP: '0',
+    CLAUDE_MEM_SEARCH_TELEMETRY: '0',
     CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
     CLAUDE_MEM_SKIP_REPOS: '1',
     MEM_QUIET_HOOKS: '1',
@@ -251,7 +252,7 @@ afterAll(async () => {
 // ─── Surface guards ─────────────────────────────────────────────────────────
 
 describe('MCP feature sweep: registered surface', () => {
-  it('tools/list returns exactly the 9 public tools, and no hidden one', async () => {
+  it('tools/list returns exactly the 9 default public tools, and no hidden one', async () => {
     const { tools: listed } = await client.listTools();
     const names = listed.map((t) => t.name).sort();
     // Exact set BOTH ways: a missing tool and an extra tool are equally a failure.
@@ -261,7 +262,7 @@ describe('MCP feature sweep: registered surface', () => {
     // registration/filter break (declared public, missing on the wire) that the literal
     // above cannot distinguish from an intentional list change.
     expect(names).toEqual(
-      DECLARED_TOOLS.filter((t) => !t.hidden)
+      DECLARED_TOOLS.filter((t) => !t.hidden && t.name !== 'mem_search_feedback')
         .map((t) => t.name)
         .sort(),
     );
@@ -270,7 +271,9 @@ describe('MCP feature sweep: registered surface', () => {
   it('every tool tool-schemas registers has a sweep case (coverage guard)', () => {
     // SWEPT_TOOLS is the set of cases actually registered with vitest, so a tool added to
     // tool-schemas without a case fails here and cannot be silenced by editing a literal.
-    const declared = DECLARED_TOOLS.map((t) => t.name).sort();
+    const declared = DECLARED_TOOLS.filter((t) => t.name !== 'mem_search_feedback')
+      .map((t) => t.name)
+      .sort();
     expect(declared).toEqual([...SWEPT_TOOLS].sort());
     expect(declared).toEqual([...PUBLIC_TOOLS, ...HIDDEN_TOOLS].sort());
     expect(declared).toHaveLength(18);

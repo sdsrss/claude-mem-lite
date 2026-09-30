@@ -141,6 +141,7 @@ import {
 } from './lib/search-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { countRecentHookErrors } from './lib/hook-telemetry.mjs';
+import { computeSearchTelemetry, formatSearchTelemetryReport } from './lib/search-telemetry.mjs';
 import {
   computeCitationFunnelTrend,
   computeSurfaceFunnel,
@@ -1570,6 +1571,24 @@ async function cmdStats(db, args) {
   const project = flags.project ? resolveProject(db, flags.project) : null;
   const days = parseIntFlag(flags.days, { name: '--days', defaultValue: 30, max: 3650 });
   const jsonOutput = flags.json === true || flags.json === 'true';
+  const searchTelemetry = flags['search-telemetry'] === true || flags['search-telemetry'] === 'true';
+  if (searchTelemetry) {
+    const now = Date.now();
+    const recordingFailureDays = Math.min(days, 14);
+    const report = computeSearchTelemetry(db, {
+      project,
+      days,
+      now,
+      recordingFailures: countRecentHookErrors(
+        resolveRuntimeDir(DB_DIR),
+        now - recordingFailureDays * DAY_MS,
+        'search-telemetry:',
+      ),
+      recordingFailureDays,
+    });
+    out(jsonOutput ? JSON.stringify(report) : formatSearchTelemetryReport(report));
+    return;
+  }
   // N-1: --quality routes to a separate quality-focused report (lesson rate,
   // LOW_SIGNAL rate, per-type hit+lesson %, R-2 watchdog targets). Intended as
   // the baseline metric dashboard for the future Haiku prompt A/B test.
@@ -3321,6 +3340,7 @@ Commands:
     --days N            Lookback window (default 30)
     --quality           Quality dashboard: lesson rate, LOW_SIGNAL rate, per-type
                         hit/lesson %, top-accessed lessons, R-2 watchdog targets
+    --search-telemetry  Search exposure, relevance coverage, rank, and entry report
     --json              Output as JSON: nested by section
                         ({totals,recent,type_distribution,top_projects,
                           daily_activity,data_health,tier_distribution})

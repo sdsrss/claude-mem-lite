@@ -10,6 +10,7 @@ import { join } from 'path';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { initSchema } from '../schema.mjs';
 import { deleteObservations } from '../lib/delete-core.mjs';
+import { ensureSearchTelemetrySchema } from '../lib/search-telemetry.mjs';
 
 // observations.memory_session_id is an FK to sdk_sessions; seed the default session
 // so insertObs (which defaults sessionId → 'sess-1') satisfies it under FK-ON tests.
@@ -82,6 +83,27 @@ describe('deleteObservations (shared delete-core)', () => {
 
     expect(result.deleted).toBe(1); // only the existing row is counted
     expect(result.recoveredChildren).toBe(0);
+  });
+
+  it('clears telemetry titles for deleted observations', () => {
+    const db = freshDb();
+    insertObs(db, { title: 'Private title', text: 'private' });
+    ensureSearchTelemetrySchema(db);
+    db.prepare(
+      `INSERT INTO search_runs
+      (query, surface, search_mode, client, created_at, created_at_epoch)
+      VALUES ('q', 'mcp_search', 'normal', 'test', '2026-01-01', 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO search_results
+      (search_id, source, result_id, returned_rank, snapshot_label)
+      VALUES (1, 'obs', 1, 1, 'Private title')`,
+    ).run();
+
+    deleteObservations(db, [1]);
+
+    expect(db.prepare('SELECT snapshot_label FROM search_results').get().snapshot_label).toBeNull();
+    db.close();
   });
 
   it('returns null snapshotPath on a :memory: DB (snapshot step is a safe no-op)', () => {

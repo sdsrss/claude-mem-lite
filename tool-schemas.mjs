@@ -69,7 +69,7 @@ const boundedIntArray = (bounded) =>
 // MCP bridges sometimes JSON-stringify complex args — bare `z.array(z.string())` rejects those
 // with "expected array, received string" and the caller loses the field silently. Parity with
 // boundedIntArray: tolerate the same shapes so files/fields survive client serialization quirks.
-const coerceStringArray = z.preprocess((v) => {
+const stringArrayOrRaw = (v) => {
   if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? x : String(x)));
   if (typeof v === 'string') {
     const s = v.trim();
@@ -87,7 +87,8 @@ const coerceStringArray = z.preprocess((v) => {
       .filter((x) => x.length > 0);
   }
   return v;
-}, z.array(z.string()));
+};
+const coerceStringArray = z.preprocess(stringArrayOrRaw, z.array(z.string()));
 
 // Coerce mixed ID tokens (#N / P#N / S#N / D#N / bare N) for mem_get. Accepts:
 //   - native arrays: [1, "P#2", "#3"]
@@ -200,6 +201,20 @@ export const memSearchSchema = {
   from: z.string().optional().describe('Alias for `date_from` (CLI `search --from`)'),
   to: z.string().optional().describe('Alias for `date_to` (CLI `search --to`)'),
   since: z.string().optional().describe('Alias for `date_since` (CLI `search --since`)'),
+};
+
+const searchFeedbackIds = z.preprocess(
+  stringArrayOrRaw,
+  z.array(z.string().regex(/^(?:#|[SsPpEe]#)\d+$/, 'Expected #N, S#N, P#N, or E#N')).max(20),
+);
+
+export const memSearchFeedbackSchema = {
+  search_id: boundedInt(z.number().int().positive()).describe('Search ID printed by mem_search'),
+  relevant: searchFeedbackIds.optional().describe('Returned result IDs that directly addressed the query'),
+  partially_relevant: searchFeedbackIds
+    .optional()
+    .describe('Returned result IDs that were related but incomplete or indirect'),
+  irrelevant: searchFeedbackIds.optional().describe('Returned result IDs that did not address the query'),
 };
 
 export const memRecentSchema = {
@@ -612,7 +627,7 @@ export const memDeferDropSchema = {
 // CLI equivalents documented in `adopt-content.mjs`. R10 P3-28: this said "remaining 11"
 // and listed `registry/use`, four lines above the array that disproves it — mem_registry
 // and mem_use went with the skill registry in v5.0.0. tests/tool-schemas.test.mjs pins
-// 18 = 9 + 9; this comment is now the only prose nearby and must agree with it.
+// 19 = 10 + 9; this comment is now the only prose nearby and must agree with it.
 // ────────────────────────────────────────────────────────────────────────────
 
 export const tools = [
@@ -636,6 +651,24 @@ export const tools = [
       CLI_INVOKE +
       ' search "<query>" [--type bugfix] [--deep]',
     inputSchema: memSearchSchema,
+  },
+  {
+    name: 'mem_search_feedback',
+    description:
+      'Rate the relevance of results from one recorded search. Omitted results remain unrated.\n' +
+      '\n' +
+      'DO NOT use when:\n' +
+      '  - The search output did not include a Search ID\n' +
+      '  - A visible card is too vague to judge honestly (open it with mem_get first)\n' +
+      '  - Rating usefulness, correctness, or novelty rather than query relevance\n' +
+      '\n' +
+      'USE when:\n' +
+      '  - mem_search asks for relevance feedback\n' +
+      '  - You can label any returned #N, S#N, P#N, or E#N result\n' +
+      '  - Supplying sparse feedback; unrated results may be omitted\n' +
+      '\n' +
+      'Equivalent CLI: none (MCP only)',
+    inputSchema: memSearchFeedbackSchema,
   },
   {
     name: 'mem_recent',

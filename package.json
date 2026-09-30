@@ -146,6 +146,7 @@
     "lib/recall-core.mjs",
     "lib/timeline-core.mjs",
     "lib/search-core.mjs",
+    "lib/search-telemetry.mjs",
     "lib/recent-core.mjs",
     "lib/rrf.mjs",
     "lib/compress-core.mjs",

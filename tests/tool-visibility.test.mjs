@@ -1,6 +1,5 @@
-// v2.34.0 tool-visibility split (expanded v2.70.0): only 9 core tools appear
-// in tools/list (the original 6 + mem_defer/mem_defer_list/mem_defer_drop); the
-// 11 hidden maintenance/admin tools stay callable by exact name. This test
+// v2.34.0 tool-visibility split: only core tools appear in tools/list; the
+// 9 hidden maintenance/admin tools stay callable by exact name. This test
 // spawns the real server over stdio and drives the MCP handshake so it
 // catches regressions in both the filter and the registration wiring.
 
@@ -27,7 +26,13 @@ const EXPECTED_CORE = [
 
 function startServer(memDir, extraEnv = {}) {
   const proc = spawn(process.execPath, [SERVER_PATH], {
-    env: { ...process.env, CLAUDE_MEM_DIR: memDir, MEM_QUIET_HOOKS: '1', ...extraEnv },
+    env: {
+      ...process.env,
+      CLAUDE_MEM_DIR: memDir,
+      CLAUDE_MEM_SEARCH_TELEMETRY: '0',
+      MEM_QUIET_HOOKS: '1',
+      ...extraEnv,
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   proc.stderr.on('data', () => {}); // swallow startup chatter
@@ -93,7 +98,7 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     }
   });
 
-  it('tools/list returns exactly the 9 core names', async () => {
+  it('tools/list omits feedback when search telemetry is disabled', async () => {
     await rpc(proc, 1, 'initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
@@ -103,9 +108,30 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     expect(resp.error, 'tools/list error').toBeUndefined();
     const names = resp.result.tools.map((t) => t.name).sort();
     expect(names).toEqual(EXPECTED_CORE);
+
+    const call = await rpc(proc, 3, 'tools/call', {
+      name: 'mem_search_feedback',
+      arguments: { search_id: 1, relevant: ['#1'] },
+    });
+    expect(call.result?.isError).toBe(true);
+    expect(call.result?.content?.[0]?.text).toContain('not found');
   });
 
-  it('CLAUDE_MEM_ALL_TOOLS=1 restores all 18 tools in tools/list (opt-out)', async () => {
+  it('tools/list includes feedback when search telemetry is enabled', async () => {
+    proc.stdin.end();
+    proc.kill('SIGTERM');
+    proc = startServer(tmp, { CLAUDE_MEM_SEARCH_TELEMETRY: '1' });
+    await rpc(proc, 1, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'tool-visibility-test', version: '0' },
+    });
+    const resp = await rpc(proc, 2, 'tools/list', {});
+    const names = resp.result.tools.map((t) => t.name).sort();
+    expect(names).toEqual([...EXPECTED_CORE, 'mem_search_feedback'].sort());
+  });
+
+  it('CLAUDE_MEM_ALL_TOOLS=1 exposes all 18 registered default tools', async () => {
     // Spin up a dedicated server with the env var set — the default fixture
     // runs without it, so we need a separate process for this case.
     try {
@@ -124,6 +150,7 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     expect(resp.error, 'tools/list error').toBeUndefined();
     const names = resp.result.tools.map((t) => t.name);
     expect(names).toHaveLength(18);
+    expect(names).not.toContain('mem_search_feedback');
     // Spot-check hidden names are present
     expect(names).toContain('mem_stats');
     expect(names).toContain('mem_browse');

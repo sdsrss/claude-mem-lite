@@ -79,12 +79,16 @@ import {
   formatPendingPurgeLine,
   formatHiddenLine,
 } from './cli/common.mjs';
+import { countMcpEligibleCorpus, rateSearchResults, recordSearch } from './lib/search-telemetry.mjs';
+import { recordHookError } from './lib/hook-telemetry.mjs';
+import { stripPrivate } from './lib/private-strip.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
 import { CLI_INVOKE, shellWord } from './cli-path.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
+  memSearchFeedbackSchema,
   memRecentSchema,
   memTimelineSchema,
   memGetSchema,
@@ -148,6 +152,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require('./package.json');
+const SEARCH_TELEMETRY_ENABLED = process.env.CLAUDE_MEM_SEARCH_TELEMETRY === '1';
 
 // ─── Database ───────────────────────────────────────────────────────────────
 
@@ -518,11 +523,37 @@ function formatSearchOutput(
 // calls this with the module db and the default llm.
 // v3.42 F3: resolveProject now runs against the injected `db` param (not the module db), so
 // a project: arg through this seam resolves against the TEST db — real test isolation.
-export async function handleSearchForTest(db, args, { llm, rerankLlm } = {}) {
-  return runSearchPipeline(db, args, { llm, rerankLlm });
+export async function handleSearchForTest(
+  db,
+  args,
+  {
+    llm,
+    rerankLlm,
+    clientIdentity = 'test-client',
+    telemetryEnabled = false,
+    producerVersion = PKG_VERSION,
+  } = {},
+) {
+  return runSearchPipeline(db, args, {
+    llm,
+    rerankLlm,
+    clientIdentity,
+    telemetryEnabled,
+    producerVersion,
+  });
 }
 
-async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
+async function runSearchPipeline(
+  db,
+  args,
+  {
+    llm,
+    rerankLlm,
+    clientIdentity = 'unknown-mcp-client',
+    telemetryEnabled = SEARCH_TELEMETRY_ENABLED,
+    producerVersion = PKG_VERSION,
+  } = {},
+) {
   if (args.project) args = { ...args, project: _resolveProjectShared(db, args.project) };
   // CLI-flag aliases: --source/--from/--to/--since. Folded before any read of the
   // canonical names below, so every downstream filter sees them.
@@ -718,6 +749,42 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
   }
   appendDeferredTrailer(output);
 
+  let searchId = null;
+  if (telemetryEnabled) {
+    try {
+      const corpusCounts = countMcpEligibleCorpus(db, {
+        effectiveSource: r.effectiveSource,
+        obsTypeScoped,
+        project: args.project ?? null,
+        obsType: args.obs_type ?? null,
+        importance: args.importance ?? null,
+        branch: args.branch ?? null,
+        includeNoise: args.include_noise === true,
+        epochFrom,
+        epochTo,
+        tier: args.tier ?? null,
+        currentProject: args.project || currentProject,
+      });
+      searchId = recordSearch(db, {
+        project: args.project || currentProject,
+        query: stripPrivate(args.query || ''),
+        surface: 'mcp_search',
+        searchMode: r.isDeep ? (r.escalated ? 'auto_deep' : 'deep') : 'normal',
+        corpusCounts,
+        matchedCount: r.total,
+        results: r.page,
+        pageOffset: offset,
+        client: clientIdentity,
+        producerVersion,
+      });
+      if (r.page.length > 0 && output.content?.[0]?.type === 'text') {
+        output.content[0].text += `\n\nSearch ${searchId} — call mem_search_feedback for any result you can judge (query relevance, not novelty). For retrieval-quality investigations, assess contribution separately; this tool stores relevance only.`;
+      }
+    } catch (error) {
+      recordHookError('search-telemetry:mcp_search', error, RUNTIME_DIR);
+    }
+  }
+
   // Expose structured fields for tests + the MCP content blob.
   return {
     ...output,
@@ -726,8 +793,16 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
     escalated: r.escalated,
     variants: r.variants,
     reranked: r.reranked,
+    search_id: searchId,
   };
 }
+
+function mcpClientIdentity() {
+  const client = server.server.getClientVersion?.();
+  return client?.name ? `${client.name}${client.version ? `/${client.version}` : ''}` : 'unknown-mcp-client';
+}
+
+const issuedTelemetrySearchIds = new Set();
 
 server.registerTool(
   'mem_search',
@@ -736,10 +811,42 @@ server.registerTool(
     inputSchema: memSearchSchema,
   },
   safeHandler(async (args) => {
-    const result = await runSearchPipeline(db, args, {});
+    const result = await runSearchPipeline(db, args, { clientIdentity: mcpClientIdentity() });
+    if (result.search_id) issuedTelemetrySearchIds.add(result.search_id);
     return { content: result.content };
   }),
 );
+
+export function handleSearchFeedbackForTest(db, args, { clientIdentity = 'test-client' } = {}) {
+  return rateSearchResults(db, {
+    searchId: args.search_id,
+    relevant: args.relevant,
+    partiallyRelevant: args.partially_relevant,
+    irrelevant: args.irrelevant,
+    ratedBy: clientIdentity,
+  });
+}
+
+if (SEARCH_TELEMETRY_ENABLED) {
+  server.registerTool(
+    'mem_search_feedback',
+    {
+      description: descriptionOf('mem_search_feedback'),
+      inputSchema: memSearchFeedbackSchema,
+    },
+    safeHandler(async (args) => {
+      if (!issuedTelemetrySearchIds.has(args.search_id)) {
+        throw new Error(`Search ${args.search_id} was not issued by this server process`);
+      }
+      const count = handleSearchFeedbackForTest(db, args, { clientIdentity: mcpClientIdentity() });
+      return {
+        content: [
+          { type: 'text', text: `Recorded relevance for ${count} result(s) from search ${args.search_id}.` },
+        ],
+      };
+    }),
+  );
+}
 
 // ─── Tool: mem_recent ────────────────────────────────────────────────────────
 
@@ -1970,10 +2077,9 @@ server.registerTool(
 // response. Hiding the maintenance/admin tools keeps Claude Code's startup
 // context small while preserving the contract that the plugin dogfoods (see
 // the CLAUDE.md managed block + adopt-content.mjs detail doc).
-// Surface counts as of v2.70.0: 9 core (mem_search/recent/timeline/get/save/
-// recall + mem_defer/mem_defer_list/mem_defer_drop) + 11 hidden (maintenance/
-// admin/specialized) = 20 registered; tests/tool-schemas.test.mjs is the
-// authoritative count.
+// Surface definitions: 10 core + 9 hidden. mem_search_feedback is registered
+// only when search telemetry is enabled; tests/tool-schemas.test.mjs is the
+// authoritative definition count.
 //
 // Safe because:
 //   - Protocol-layer override: we replace the mcp.js default ListTools
@@ -1982,6 +2088,8 @@ server.registerTool(
 //     mcp.js line 106, a `disabled` tool would reject calls too.
 
 const HIDDEN_TOOL_NAMES = new Set(TOOL_DEFS.filter((t) => t.hidden === true).map((t) => t.name));
+const REGISTERED_TOOL_COUNT = TOOL_DEFS.length - (SEARCH_TELEMETRY_ENABLED ? 0 : 1);
+const LISTED_TOOL_COUNT = REGISTERED_TOOL_COUNT - HIDDEN_TOOL_NAMES.size;
 
 // Opt-out: setting CLAUDE_MEM_ALL_TOOLS=1 restores pre-v2.34.0 behavior where
 // every registered tool is visible in `tools/list`. Users who relied on Claude
@@ -2009,8 +2117,8 @@ if (!EXPOSE_ALL_TOOLS) {
 // harnesses stay silent.
 if (!effectiveQuiet()) {
   const status = EXPOSE_ALL_TOOLS
-    ? `all ${TOOL_DEFS.length} tools exposed via CLAUDE_MEM_ALL_TOOLS=1`
-    : `tools/list narrowed to ${TOOL_DEFS.length - HIDDEN_TOOL_NAMES.size} core tools (${HIDDEN_TOOL_NAMES.size} hidden but callable by exact name; unset CLAUDE_MEM_ALL_TOOLS to keep, set =1 to restore all)`;
+    ? `all ${REGISTERED_TOOL_COUNT} registered tools exposed via CLAUDE_MEM_ALL_TOOLS=1`
+    : `tools/list narrowed to ${LISTED_TOOL_COUNT} core tools (${HIDDEN_TOOL_NAMES.size} hidden but callable by exact name; unset CLAUDE_MEM_ALL_TOOLS to keep, set =1 to restore all)`;
   process.stderr.write(`[claude-mem-lite v${PKG_VERSION}] ${status}\n`);
 }
 
