@@ -107,9 +107,13 @@ All notable changes to claude-mem-lite are documented in this file.
     directory of `CLAUDE.md` does.
 - **`adopt --status` names the local file and, in more cases, says why there is none.** It
   printed `✗ none` also where the plugin will not write the file. `✓` names `CLAUDE.local.md` or
-  the rules file, and says when git tracks it or it sits behind a symbolic link; `— none` says
+  the rules file, and says when git tracks it, it sits behind a symbolic link, or the next session
+  moves it to the rules file; `⚠` marks one the next session takes out (a package root, a
+  `.gitignore` rule that lets git see it) or that git sees while auto-adopt is off; `— none` says
   when `CLAUDE.md` carries the block (and that a local copy beside it goes at the next session
-  start) or auto-adopt is off; `— none yet` names the file the next session writes; `✗ not
+  start, or, with `⚠`, that it loads too where nothing takes it out: a subdirectory's
+  `CLAUDE.md`, a tracked or linked copy, auto-adopt off, a copy that cannot be edited) or
+  auto-adopt is off; `— none yet` names the file the next session writes; `✗ not
   written` names the refusal (a tracked, linked or unreadable `CLAUDE.local.md`, a package root,
   a `.gitignore` rule git would let the file through, or, beside an `AGENTS.md`, why the rules
   file cannot be written and which ways to a file work there); and `✗ removed` says the block was
@@ -117,9 +121,16 @@ All notable changes to claude-mem-lite are documented in this file.
   may write it again.
 - **Smaller fixes around the local file.** A `CLAUDE.local.md` or `CLAUDE.md` that is a directory
   or cannot be read no longer leaves the session with no guidance (it is injected, or the other
-  file is written); a repository without `.git/info/` (made with `git init --template=`) gets its
-  exclude entry; and `unadopt` says so when it cannot edit a local file, instead of reporting
-  nothing to remove.
+  file is written), and no longer stops `adopt --status`, `unadopt --dry-run` or the
+  `unadopt --all` sweep; once the rules file carries the block, a `CLAUDE.local.md` the team
+  commits later does not add an injected copy on top. A `CLAUDE.local.md` the plugin wrote that a
+  `.gitignore` rule added later lets git see is taken out, as the rules file is, instead of
+  staying in `git status` and loading beside an injected copy. A repository without
+  `.git/info/` (made with `git init --template=`) gets its exclude entry; `.git/info/exclude` is
+  rewritten byte for byte (a pattern in another encoding than UTF-8, such as a Latin-1 file name,
+  stopped matching), and put back when the local file cannot be written. `adopt`, `unadopt`,
+  `unadopt --all` and `adopt --disable` say so, and exit 1, when they cannot read or edit a local
+  file, instead of reporting nothing to remove or counting it as removed.
 
 ## v6.21.0 — non-ASCII project names and concurrent sessions stop sharing memory
 

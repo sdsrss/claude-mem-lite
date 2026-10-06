@@ -13,9 +13,19 @@
 // it is redefined as a legacy-cleanup sweep (strip old memory-dir sentinels across
 // every memdir). New-scheme adoption happens per-project on SessionStart (cwd known).
 
-import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  readdirSync,
+  statSync,
+  mkdirSync,
+  writeFileSync,
+  unlinkSync,
+  readFileSync,
+} from 'fs';
 import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
-import { join, isAbsolute, relative } from 'path';
+import { join, isAbsolute, relative, dirname } from 'path';
 import {
   memdirPath,
   disableSentinelPath,
@@ -60,6 +70,7 @@ import {
   planLocalSteering,
   localMdRefused,
   trackedByGit,
+  ignoredByGit,
   isSharedAncestor,
   samePath,
   localFileLinked,
@@ -208,9 +219,16 @@ function adoptOne(cwd, { force, dryRun }) {
         ? ''
         : local.action === 'skipped-symlink'
           ? ` (left ${local.path} alone: it is a symlink)`
-          : ` (+removed the block from ${local.path})`;
+          : local.action === 'failed'
+            ? ` (could not remove the block from ${local.path}, so sessions here load it twice)`
+            : ` (+removed the block from ${local.path})`;
     log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}${importNote}`);
     for (const line of elsewhere('stops')) log(line);
+    // The copy that could not come out loads beside CLAUDE.md: said, and not a success (R3-4).
+    if (local.action === 'failed') {
+      if (local.residue) log(`  ⚠ ${local.residue}`);
+      process.exitCode = 1;
+    }
     return r;
   } catch (e) {
     log(`[adopt] ${cwd} → error: ${e.message}`);
@@ -459,6 +477,7 @@ function cmdDisable(args) {
     const r = dropLocalSteering(dir);
     if (r.action !== 'absent') log(`[adopt --disable] ${r.path} → ${r.action}`);
     if (r.residue) log(`  ⚠ ${r.residue}`);
+    if (r.action === 'failed') process.exitCode = 1;
   }
   // Known projects too, not only memdirs that already exist: Claude Code creates `memory/`
   // only when its auto-memory is used, and a project without one was left armed (pre-tag
@@ -552,34 +571,34 @@ function cmdEnable(args) {
 // promise a file that session would refuse (pre-tag claims review P2-2).
 function localSteeringStatus(cwd) {
   const root = localSteeringRoot(cwd);
+  const runs = autoAdoptRuns(cwd, root);
   // CLAUDE.md first: where it carries the block, no local file is written and nothing is injected,
   // in a git work tree or not (pre-tag delta review of the D#212 repairs, D11).
   if (blockIn(cwd) || (root && blockIn(root))) {
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
-    const goes =
-      cur !== null &&
-      cur.body !== null &&
-      samePath(root, cwd) &&
-      !trackedByGit(root, relative(root, cur.path)) &&
-      !localFileLinked(root, cur.path);
-    return goes
-      ? `— none: CLAUDE.md carries the block (the local copy in ${cur.path} is removed at the next session start)`
-      : '— none: CLAUDE.md carries the block';
+    if (cur === null || cur.body === null) return '— none: CLAUDE.md carries the block';
+    const kept = localFileLinked(root, cur.path)
+      ? 'behind a symbolic link'
+      : trackedByGit(root, relative(root, cur.path))
+        ? 'tracked by git'
+        : null;
+    // The sync takes the copy out only from a session at the root, when it runs, and where it can
+    // (round-3 review, R3-6, R3-4); otherwise both load.
+    if (!kept && runs && samePath(root, cwd) && removable(cur.path))
+      return `— none: CLAUDE.md carries the block (the local copy in ${cur.path} is removed at the next session start)`;
+    return `⚠ CLAUDE.md carries the block, and ${cur.path} also does${kept ? ` (${kept}; the plugin leaves it as it is)` : ''}: sessions here load it twice`;
   }
-  if (!root)
-    return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
-  const cur = readLocalSteering(root, PLUGIN_SLUG);
-  if (cur.body !== null) {
-    if (localFileLinked(root, cur.path))
-      return `✓ ${cur.path} (behind a symbolic link; the plugin leaves it as it is)`;
-    if (trackedByGit(root, relative(root, cur.path)))
-      return `✓ ${cur.path} (tracked by git; the plugin leaves it as it is)`;
-    return `✓ ${cur.path} (auto-written, excluded from git)`;
+  if (root) {
+    const cur = readLocalSteering(root, PLUGIN_SLUG);
+    if (cur.body !== null) return currentLocalLine(root, cwd, cur, runs);
   }
-  if (isAutoAdoptDisabledFor(cwd) || isAutoAdoptDisabledFor(root))
+  // Before "not a git work tree": with auto-adopt off nothing is injected either (R3-13).
+  if (isAutoAdoptDisabledFor(cwd) || (root && isAutoAdoptDisabledFor(root)))
     return '— none: auto-adopt is off for this project (`claude-mem-lite adopt --enable` turns it back on)';
   if (process.env.MEM_NO_AUTO_ADOPT === '1')
     return '— none: MEM_NO_AUTO_ADOPT=1, so no local file is written';
+  if (!root)
+    return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
   if (localSteeringRemembered(root))
     return '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); after `claude-mem-lite adopt --enable` the next session may write it again';
   const plan = planLocalSteering(root, PLUGIN_SLUG, cwd);
@@ -597,12 +616,70 @@ function localSteeringStatus(cwd) {
   return `✗ not written: Claude Code stops reading ${plan.agentsMd ?? 'the AGENTS.md'} once a CLAUDE.local.md exists, and ${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[plan.refusal]} (steering is injected at session start${alt.length ? `; ${alt.join(', or ')}` : ''})`;
 }
 
+// The `local:` line for a local file that carries the block: what the next session does with it,
+// from the same checks that session runs (round-3 review, R3-1, R3-13). A ✓ said "excluded from
+// git" of a file a `.gitignore` rule let through, and of one the next session takes out or moves.
+function currentLocalLine(root, cwd, cur, runs) {
+  const rel = relative(root, cur.path);
+  if (localFileLinked(root, cur.path))
+    return `✓ ${cur.path} (behind a symbolic link; the plugin leaves it as it is)`;
+  if (trackedByGit(root, rel)) return `✓ ${cur.path} (tracked by git; the plugin leaves it as it is)`;
+  const plan = runs ? planLocalSteering(root, PLUGIN_SLUG, cwd) : null;
+  if (plan?.refusal) {
+    const why =
+      plan.file === LOCAL_MD
+        ? `CLAUDE.local.md ${LOCAL_REFUSAL_TEXT[plan.refusal]}`
+        : rel === LOCAL_MD
+          ? `a CLAUDE.local.md stops Claude Code reading ${plan.agentsMd}, and ${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[plan.refusal]}`
+          : RULES_REFUSAL_TEXT[plan.refusal];
+    // That session loaded the file, so it gets no injected copy; the ones after it do.
+    return `⚠ ${cur.path} (auto-written, but ${why}: the next session removes it, and the steering is injected after that)`;
+  }
+  if (plan && plan.file !== rel)
+    return `✓ ${cur.path} (auto-written, excluded from git; the next session moves it to ${join(root, plan.file)}: a CLAUDE.local.md stops Claude Code reading ${plan.agentsMd})`;
+  if (!ignoredByGit(root, rel))
+    return `⚠ ${cur.path} (auto-written, but git sees it: a .gitignore rule outranks .git/info/exclude)`;
+  return `✓ ${cur.path} (auto-written, excluded from git)`;
+}
+
+// Whether the next session start runs the sync that writes, moves and removes the local file.
+function autoAdoptRuns(cwd, root) {
+  return (
+    process.env.MEM_NO_AUTO_ADOPT !== '1' &&
+    !isAutoAdoptDisabledFor(cwd) &&
+    !(root && isAutoAdoptDisabledFor(root))
+  );
+}
+
+// Whether `p` can be edited or deleted, so a promise to take it out can be kept (R3-4).
+function removable(p) {
+  try {
+    accessSync(p, fsConstants.W_OK);
+    accessSync(dirname(p), fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// CLAUDE.md read for a report: a directory or an unreadable file there crashed `adopt --status`
+// and the `unadopt` dry runs (round-3 review, R3-7). `null` = it cannot be read.
+function safely(fn) {
+  try {
+    return fn();
+  } catch {
+    return null;
+  }
+}
+
 function statusAll() {
   const cwd = detectCwd();
-  const adoptedHere = claudeMdIsAdopted(cwd, PLUGIN_SLUG);
+  const adoptedHere = safely(() => claudeMdIsAdopted(cwd, PLUGIN_SLUG));
   log('[adopt --status] current project:');
   log(`  cwd:        ${cwd}`);
-  log(`  CLAUDE.md:  ${adoptedHere ? `✓ adopted (${CURRENT_SENTINEL_VERSION})` : '✗ not adopted'}`);
+  log(
+    `  CLAUDE.md:  ${adoptedHere === null ? '✗ cannot be read (a directory, or no permission)' : adoptedHere ? `✓ adopted (${CURRENT_SENTINEL_VERSION})` : '✗ not adopted'}`,
+  );
   log(`  local:      ${localSteeringStatus(cwd)}`);
   if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
     log('  legacy:     ⚠ memory-dir sentinel still present (migrates on next SessionStart, or run `adopt`)');
@@ -624,7 +701,7 @@ function statusAll() {
 
   const known = listKnownProjectDirs();
   let adoptedCount = 0;
-  for (const dir of known) if (claudeMdHasResidue(dir, PLUGIN_SLUG)) adoptedCount++;
+  for (const dir of known) if (safely(() => claudeMdHasResidue(dir, PLUGIN_SLUG))) adoptedCount++;
   log(
     `[adopt --status] known projects (~/.claude.json): ${known.length} scanned, ${adoptedCount} with a CLAUDE.md managed block or partial residue (detail doc/state).`,
   );
@@ -667,47 +744,21 @@ function unadoptAll(args) {
   const projectDirs = listKnownProjectDirs();
   let blocks = 0,
     partial = 0,
-    locals = 0;
+    locals = 0,
+    failures = 0;
   for (const dir of projectDirs) {
-    // The CLAUDE.local.md block auto-adopt writes (r3) is swept first and independently: a
-    // project carries one or the other, and either way nothing of ours should survive.
-    const root = localSteeringRoot(dir);
-    const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
-    if (cur && cur.body !== null) {
-      if (dryRun) log(`[unadopt --all --dry-run] ${cur.path} → would-remove`);
-      else {
-        const lr = removeLocalSteering(root, PLUGIN_SLUG);
-        log(`[unadopt --all] ${lr.path ?? cur.path} → ${lr.action}`);
-        if (lr.residue) log(`  ⚠ ${lr.residue}`);
-      }
-      locals++;
+    // One project the sweep cannot read (a directory where a file belongs) ended the whole sweep
+    // with a stack trace (round-3 review, R3-7): said, counted, and the sweep goes on.
+    try {
+      const r = unadoptProject(dir, dryRun);
+      blocks += r.blocks;
+      partial += r.partial;
+      locals += r.locals;
+      failures += r.failures;
+    } catch (e) {
+      log(`[unadopt --all] ${dir} → error: ${e?.message ?? e}`);
+      failures++;
     }
-    // hasResidue, not isAdopted: the sweep must also catch PARTIAL residue
-    // (block without detail doc, or an orphaned doc/state sidecar) —
-    // isAdopted's block-AND-doc gate skipped those projects forever.
-    if (!claudeMdHasResidue(dir, PLUGIN_SLUG)) continue;
-    if (dryRun) {
-      log(
-        `[unadopt --all --dry-run] ${dir} → would-remove plugin residue (CLAUDE.md block and/or detail doc/state)`,
-      );
-      blocks++;
-      continue;
-    }
-    const r = removeManaged(dir, PLUGIN_SLUG);
-    if (r.action === 'removed') {
-      log(`[unadopt --all] ${dir} → removed`);
-      blocks++;
-    } else {
-      log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
-      partial++;
-    }
-    // OUTSIDE the branch, because residue is orthogonal to what happened to the block: a
-    // project can have its block removed AND still carry an unpaired sentinel. An orphan is
-    // the one kind of residue the sweep cannot finish — its block has no end marker, so its
-    // extent is unknowable — and the two lines above would otherwise imply the project is
-    // clean. Inside the else-branch it was also unreachable for the 'removed' case, which is
-    // how the print survived a mutation with the whole suite green (pre-ship review P2-2).
-    if (r.residue) log(`  ⚠ ${r.residue}`);
   }
 
   // 2. Legacy memory-dir cleanup across every memdir (foreign-content guarded).
@@ -727,14 +778,66 @@ function unadoptAll(args) {
 
   log('');
   const partialNote = partial > 0 ? ` (+${partial} partial-residue cleanup(s))` : '';
+  const failedNote = failures > 0 ? `; ${failures} could not be removed (see above)` : '';
   log(
-    `[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} and ${locals} CLAUDE.local.md block(s) across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}.`,
+    `[unadopt --all] ${dryRun ? 'would remove' : 'removed'} ${blocks} CLAUDE.md block(s)${partialNote} and ${locals} local-file block(s) across ${projectDirs.length} known project(s); ${legacy} legacy memory-dir sentinel(s) ${dryRun ? 'pending' : 'cleaned'}${failedNote}.`,
   );
+  if (failures > 0) process.exitCode = 1;
   if (projectDirs.length === 0) {
     log(
       '[unadopt --all] no known projects found in ~/.claude.json — if a project was adopted but never opened in Claude Code, run `claude-mem-lite unadopt` from inside it.',
     );
   }
+}
+
+// One known project of `unadopt --all`: its local-file block, then its CLAUDE.md residue.
+function unadoptProject(dir, dryRun) {
+  const n = { blocks: 0, partial: 0, locals: 0, failures: 0 };
+  // The local-file block auto-adopt writes (CLAUDE.local.md or the rules file) is swept first and
+  // independently: a project carries one or the other, and either way nothing of ours should
+  // survive.
+  const root = localSteeringRoot(dir);
+  const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
+  if (cur && cur.body !== null) {
+    if (dryRun) {
+      log(`[unadopt --all --dry-run] ${cur.path} → would-remove`);
+      n.locals++;
+    } else {
+      const lr = removeLocalSteering(root, PLUGIN_SLUG);
+      log(`[unadopt --all] ${lr.path ?? cur.path} → ${lr.action}`);
+      if (lr.residue) log(`  ⚠ ${lr.residue}`);
+      // A block that could not come out is not counted as removed (R3-4).
+      if (lr.action === 'failed') n.failures++;
+      else n.locals++;
+    }
+  }
+  // hasResidue, not isAdopted: the sweep must also catch PARTIAL residue
+  // (block without detail doc, or an orphaned doc/state sidecar) —
+  // isAdopted's block-AND-doc gate skipped those projects forever.
+  if (!claudeMdHasResidue(dir, PLUGIN_SLUG)) return n;
+  if (dryRun) {
+    log(
+      `[unadopt --all --dry-run] ${dir} → would-remove plugin residue (CLAUDE.md block and/or detail doc/state)`,
+    );
+    n.blocks++;
+    return n;
+  }
+  const r = removeManaged(dir, PLUGIN_SLUG);
+  if (r.action === 'removed') {
+    log(`[unadopt --all] ${dir} → removed`);
+    n.blocks++;
+  } else {
+    log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
+    n.partial++;
+  }
+  // OUTSIDE the branch, because residue is orthogonal to what happened to the block: a
+  // project can have its block removed AND still carry an unpaired sentinel. An orphan is
+  // the one kind of residue the sweep cannot finish — its block has no end marker, so its
+  // extent is unknowable — and the two lines above would otherwise imply the project is
+  // clean. Inside the else-branch it was also unreachable for the 'removed' case, which is
+  // how the print survived a mutation with the whole suite green (pre-ship review P2-2).
+  if (r.residue) log(`  ⚠ ${r.residue}`);
+  return n;
 }
 
 export function cmdUnadopt(args = []) {
@@ -751,9 +854,13 @@ export function cmdUnadopt(args = []) {
     const root = localSteeringRoot(cwd);
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
     if (cur && cur.body !== null) log(`[unadopt --dry-run] would-remove the block in ${cur.path}`);
-    const blockState = claudeMdHasResidue(cwd, PLUGIN_SLUG)
-      ? 'would-remove CLAUDE.md block + detail doc'
-      : 'no CLAUDE.md block';
+    const residue = safely(() => claudeMdHasResidue(cwd, PLUGIN_SLUG));
+    const blockState =
+      residue === null
+        ? 'CLAUDE.md cannot be read (a directory, or no permission)'
+        : residue
+          ? 'would-remove CLAUDE.md block + detail doc'
+          : 'no CLAUDE.md block';
     const legacy = hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)
       ? 'would-clean legacy memory-dir sentinel'
       : 'no legacy residue';

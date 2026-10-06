@@ -33,6 +33,7 @@ import {
   removeLocalSteering,
   forgetLocalSteering,
   isSharedAncestor,
+  excludeWouldFail,
 } from '../lib/local-steering.mjs';
 import { silentAutoAdopt, cmdUnadopt, cmdAdopt } from '../adopt-cli.mjs';
 import { isOwnAdoptionArtifact, readBlock, writeManaged } from '../claudemd.mjs';
@@ -1983,5 +1984,325 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
     expect(statusOut()).toMatch(
       /✗ removed: .*after `claude-mem-lite adopt --enable` the next session may write it again/,
     );
+  });
+});
+
+// Pre-tag round-3 review (docs/audits/20261006-d212-pretag-round3.md).
+describe('pre-tag round-3 review (D#212)', () => {
+  const app = () => join(home, 'work', 'app');
+  const rulesPath = () => join(app(), RULES_MD);
+  const excludeFile = () => join(app(), '.git', 'info', 'exclude');
+  const commitOnly = (dir, rel) => {
+    git(dir, 'add', rel);
+    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', rel);
+  };
+  const agents = () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitOnly(app(), 'AGENTS.md');
+  };
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const captureLog = (fn) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      fn();
+    } finally {
+      console.log = orig;
+    }
+    return lines.join('\n');
+  };
+  const statusLine = (dir) =>
+    captureLog(() => withCwd(dir, () => cmdAdopt(['--status'])))
+      .split('\n')
+      .find((l) => l.trimStart().startsWith('local:')) ?? '';
+  let exitBefore;
+  beforeEach(() => {
+    initRepo(app());
+    exitBefore = process.exitCode;
+  });
+  afterEach(() => {
+    process.exitCode = exitBefore;
+    delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+  });
+
+  // R3-1: the CLAUDE.local.md side of P1-2. A `.gitignore` negation added after the file was
+  // written left it in `git status`, loading beside an injected copy, while --status said it was
+  // excluded.
+  it('a CLAUDE.local.md that git sees again is taken out, and that session gets no injected copy', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    commitOnly(app(), '.gitignore');
+    expect(statusLine(app())).not.toMatch(/excluded from git/);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'local-exclude-failed',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(status(app())).toBe('');
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-exclude-failed',
+    });
+  });
+
+  it('the same with the template frozen', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    commitOnly(app(), '.gitignore');
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'already-adopted' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // R3-9: the CLAUDE.local.md side of the rules file's snapshot restore (delta D7).
+  it('a CLAUDE.local.md that cannot be written leaves info/exclude byte for byte', () => {
+    writeFileSync(excludeFile(), 'no-newline');
+    chmodSync(app(), 0o555);
+    try {
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+        action: 'inject',
+        reason: 'local-write-failed',
+      });
+    } finally {
+      chmodSync(app(), 0o755);
+    }
+    expect(readFileSync(excludeFile(), 'utf8')).toBe('no-newline');
+  });
+
+  // R3-8: info/exclude went through UTF-8, so a Latin-1 pattern came back as U+FFFD and stopped
+  // matching — the user's excluded file showed up in `git status`.
+  it('a Latin-1 pattern in info/exclude survives the entry being added and removed', () => {
+    const bytes = Buffer.from('caf\xe9.log\n', 'latin1');
+    writeFileSync(excludeFile(), bytes);
+    silentAutoAdopt({ cwd: app() });
+    withCwd(app(), () => captureLog(() => cmdUnadopt([])));
+    expect(readFileSync(excludeFile()).equals(bytes)).toBe(true);
+  });
+
+  it('and survives an entry that did not take, put back as it was', () => {
+    const bytes = Buffer.from('caf\xe9.log\n', 'latin1');
+    writeFileSync(excludeFile(), bytes);
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    commitOnly(app(), '.gitignore');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-exclude-failed',
+    });
+    expect(readFileSync(excludeFile()).equals(bytes)).toBe(true);
+  });
+
+  it('and survives a rules file that could not be written', () => {
+    agents();
+    const bytes = Buffer.from('caf\xe9.log\n', 'latin1');
+    writeFileSync(excludeFile(), bytes);
+    writeFileSync(join(app(), '.claude'), 'not a directory\n');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'write-failed' });
+    expect(readFileSync(excludeFile()).equals(bytes)).toBe(true);
+  });
+
+  // R3-3: a directory named CLAUDE.local.md made the session inject on top of the rules file it
+  // had loaded.
+  it('a directory named CLAUDE.local.md does not stop the rules file being the channel', () => {
+    agents();
+    silentAutoAdopt({ cwd: app() });
+    expect(existsSync(rulesPath())).toBe(true);
+    mkdirSync(join(app(), LOCAL_MD));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+  });
+
+  // The same shape: a CLAUDE.local.md the team commits later (without the block) was refused as
+  // tracked, and the session injected on top of the rules file it had loaded.
+  it('a tracked CLAUDE.local.md added later does not stop the rules file being the channel', () => {
+    agents();
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), LOCAL_MD), 'team notes\n');
+    commitOnly(app(), LOCAL_MD);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe('team notes\n');
+    expect(statusLine(app())).toMatch(
+      /✓ .*\.claude\/rules\/claude-mem-lite\.md \(auto-written, excluded from git\)/,
+    );
+  });
+
+  it('with auto-adopt off, --status says git sees a copy a .gitignore rule let through', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    commitOnly(app(), '.gitignore');
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    expect(statusLine(app())).toMatch(/⚠ .*CLAUDE\.local\.md \(auto-written, but git sees it/);
+  });
+
+  // R3-10: a rules file that cannot be read still holds the block; "absent" ended the search.
+  it('unadopt reports an unreadable rules file as a failure, not as nothing to remove', () => {
+    agents();
+    silentAutoAdopt({ cwd: app() });
+    chmodSync(rulesPath(), 0o000);
+    try {
+      expect(removeLocalSteering(app(), SLUG).action).toBe('failed');
+    } finally {
+      chmodSync(rulesPath(), 0o644);
+    }
+    expect(readFileSync(rulesPath(), 'utf8')).toContain('claude-mem-lite:begin');
+  });
+
+  // R3-4: the `failed` removal was handled by single-project unadopt only.
+  describe('a local copy that cannot be removed', () => {
+    const lock = () => chmodSync(join(app(), '.claude', 'rules'), 0o555);
+    const unlock = () => chmodSync(join(app(), '.claude', 'rules'), 0o755);
+    beforeEach(() => {
+      agents();
+      silentAutoAdopt({ cwd: app() });
+      lock();
+    });
+    afterEach(unlock);
+
+    it('adopt says it could not remove it, and exits 1', () => {
+      const out = captureLog(() => withCwd(app(), () => cmdAdopt([])));
+      expect(out).not.toMatch(/\+removed the block/);
+      expect(out).toMatch(/could not edit .*claude-mem-lite\.md/);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('--status does not promise the next session removes it', () => {
+      captureLog(() => withCwd(app(), () => cmdAdopt([])));
+      process.exitCode = exitBefore;
+      expect(statusLine(app())).not.toMatch(/removed at the next session start/);
+    });
+
+    it('unadopt --all does not count it as removed, and exits 1', () => {
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [app()]: {} } }));
+      const out = captureLog(() => withCwd(app(), () => cmdUnadopt(['--all'])));
+      expect(out).toMatch(/→ failed/);
+      expect(out).toMatch(/and 0 local-file block\(s\)/);
+      expect(out).toMatch(/1 could not be removed/);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('adopt --disable exits 1', () => {
+      const out = captureLog(() => withCwd(app(), () => cmdAdopt(['--disable'])));
+      expect(out).toMatch(/→ failed/);
+      expect(process.exitCode).toBe(1);
+    });
+  });
+
+  // R3-5: core.excludesFile named `.gitignore` sits below info/exclude; its negation does not win.
+  it('a negation in a global excludes file named .gitignore does not read as "would fail"', () => {
+    const global = join(home, '.gitignore');
+    writeFileSync(global, '!CLAUDE.local.md\n');
+    git(app(), 'config', 'core.excludesFile', global);
+    expect(excludeWouldFail(app(), LOCAL_MD)).toBe(false);
+    expect(statusLine(app())).toMatch(/— none yet: the next session writes .*CLAUDE\.local\.md/);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // R3-6: the "CLAUDE.md first" status branch hid a local copy that still loads.
+  it('from a subdirectory with its own CLAUDE.md, --status says the root copy still loads', () => {
+    silentAutoAdopt({ cwd: app() });
+    const sub = join(app(), 'sub');
+    mkdirSync(sub);
+    captureLog(() => withCwd(sub, () => cmdAdopt([])));
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(true);
+    expect(statusLine(sub)).toMatch(/CLAUDE\.local\.md.*also/);
+  });
+
+  it('with MEM_NO_AUTO_ADOPT=1 it does not promise the next session removes the local copy', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeManaged(app(), {
+      slug: SLUG,
+      version: V,
+      block: buildClaudeMdBlock(),
+      doc: getDetailDoc(),
+    });
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    expect(statusLine(app())).not.toMatch(/removed at the next session start/);
+    expect(statusLine(app())).toMatch(/CLAUDE\.local\.md.*also/);
+  });
+
+  it('beside a CLAUDE.md block, a tracked local copy is not promised away (the sync keeps it)', () => {
+    silentAutoAdopt({ cwd: app() });
+    git(app(), 'add', '-f', LOCAL_MD);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'local');
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    const line = statusLine(app());
+    expect(line).not.toMatch(/removed at the next session start/);
+    expect(line).toMatch(/CLAUDE\.local\.md also does \(tracked by git/);
+  });
+
+  // R3-13: a ✓ for a file the next session takes out or moves.
+  it('--status says the next session takes the copy out once the root is a package npm would ship', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    expect(statusLine(app())).toMatch(/npm publish.*the next session removes it/);
+  });
+
+  it('--status says the next session moves the copy once an AGENTS.md is tracked', () => {
+    silentAutoAdopt({ cwd: app() });
+    agents();
+    expect(statusLine(app())).toMatch(/next session moves it to .*\.claude\/rules\/claude-mem-lite\.md/);
+  });
+
+  it('outside git with auto-adopt off, --status does not say the steering is injected', () => {
+    const plain = join(home, 'plain');
+    mkdirSync(plain);
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    expect(statusLine(plain)).not.toMatch(/injected/);
+  });
+
+  // R3-7: a directory or unreadable file crashed --status, --dry-run and the --all sweep.
+  it('--status names a CLAUDE.local.md that is a directory instead of crashing', () => {
+    mkdirSync(join(app(), LOCAL_MD));
+    expect(statusLine(app())).toMatch(/✗ not written: CLAUDE\.local\.md is a directory or cannot be read/);
+  });
+
+  it('--status survives a CLAUDE.md that is a directory, here and in a known project', () => {
+    mkdirSync(join(app(), 'CLAUDE.md'));
+    const other = join(home, 'work', 'other');
+    mkdirSync(join(other, 'CLAUDE.md'), { recursive: true });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [other]: {} } }));
+    const out = captureLog(() => withCwd(app(), () => cmdAdopt(['--status'])));
+    expect(out).toMatch(/CLAUDE\.md: +✗ cannot be read/);
+    expect(out).toMatch(/known projects .*1 scanned, 0 with/);
+  });
+
+  it('unadopt --dry-run survives a CLAUDE.local.md and a CLAUDE.md that are directories', () => {
+    mkdirSync(join(app(), LOCAL_MD));
+    mkdirSync(join(app(), 'CLAUDE.md'));
+    expect(captureLog(() => withCwd(app(), () => cmdUnadopt(['--dry-run'])))).toMatch(
+      /CLAUDE\.md cannot be read/,
+    );
+  });
+
+  it('unadopt --all goes on past a project it cannot read', () => {
+    const broken = join(home, 'work', 'broken');
+    initRepo(broken);
+    mkdirSync(join(broken, LOCAL_MD));
+    mkdirSync(join(broken, 'CLAUDE.md'));
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [broken]: {}, [app()]: {} } }));
+    const out = captureLog(() => withCwd(app(), () => cmdUnadopt(['--all'])));
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(out).toMatch(/broken → error/);
+    expect(process.exitCode).toBe(1);
+  });
+
+  // R3-15: at a $HOME that git tracks AGENTS.md in, the warning was printed twice.
+  it('adopt at a $HOME whose git tracks AGENTS.md names it once', () => {
+    initRepo(home);
+    writeFileSync(join(home, 'AGENTS.md'), '# home\n');
+    commitOnly(home, 'AGENTS.md');
+    const out = captureLog(() => withCwd(home, () => cmdAdopt([])));
+    expect(out.match(/AGENTS\.md stops loading/g)).toHaveLength(1);
   });
 });
