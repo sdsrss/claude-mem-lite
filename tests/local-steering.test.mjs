@@ -71,10 +71,14 @@ beforeEach(() => {
     HOME: process.env.HOME,
     MEM_NO_AUTO_ADOPT: process.env.MEM_NO_AUTO_ADOPT,
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    CLAUDE_MEM_RULES_STEERING: process.env.CLAUDE_MEM_RULES_STEERING,
   };
   delete process.env.CLAUDE_CONFIG_DIR;
   process.env.HOME = home;
   delete process.env.MEM_NO_AUTO_ADOPT;
+  // The rules-file channel is opt-in (D#212 A/B, docs/audits/20261006-d212-ab.md). The suites below
+  // test it switched on; 'the rules file is opt-in' at the end tests the default.
+  process.env.CLAUDE_MEM_RULES_STEERING = '1';
 });
 afterEach(() => {
   for (const [k, v] of Object.entries(saved)) {
@@ -381,6 +385,9 @@ describe('SessionStart end to end', () => {
         CLAUDE_PROJECT_DIR: cwd,
         CLAUDE_MEM_SKIP_UPDATE: '1',
         CLAUDE_MEM_SKIP_MAINTAIN: '1',
+        ...(process.env.CLAUDE_MEM_RULES_STEERING
+          ? { CLAUDE_MEM_RULES_STEERING: process.env.CLAUDE_MEM_RULES_STEERING }
+          : {}),
         ...extraEnv,
       },
     });
@@ -2304,5 +2311,120 @@ describe('pre-tag round-3 review (D#212)', () => {
     commitOnly(home, 'AGENTS.md');
     const out = captureLog(() => withCwd(home, () => cmdAdopt([])));
     expect(out.match(/AGENTS\.md stops loading/g)).toHaveLength(1);
+  });
+});
+
+// D#212 A/B (docs/audits/20261006-d212-ab.md): the rules file did not beat injection by the
+// pre-registered bar (subagent sessions with a proactive record 1/12 vs 0/12, p=1.00), so beside an
+// AGENTS.md the default is injection, as before D#212, and the rules file is written only with
+// CLAUDE_MEM_RULES_STEERING=1.
+describe('the rules file is opt-in', () => {
+  const app = () => join(home, 'work', 'app');
+  const rulesPath = () => join(app(), RULES_MD);
+  const agents = () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    git(app(), 'add', 'AGENTS.md');
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'agents');
+  };
+  const statusLine = () => {
+    const before = process.cwd();
+    const lines = [];
+    const orig = console.log;
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    console.log = (m) => lines.push(String(m));
+    try {
+      cmdAdopt(['--status']);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    return lines.find((l) => l.trimStart().startsWith('local:')) ?? '';
+  };
+  beforeEach(() => {
+    initRepo(app());
+    delete process.env.CLAUDE_MEM_RULES_STEERING;
+  });
+
+  it('beside an AGENTS.md the steering is injected and no file is written', () => {
+    agents();
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-agents-md',
+      detail: 'off',
+    });
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(existsSync(join(app(), '.claude'))).toBe(false);
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/claude-mem-lite\.md/);
+  });
+
+  it('a CLAUDE.local.md block written before the AGENTS.md comes out, and that session gets no copy', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
+    agents();
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'already-adopted' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(status(app())).toBe('');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'off' });
+  });
+
+  it('without an AGENTS.md, CLAUDE.local.md is written as before', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      file: LOCAL_MD,
+    });
+  });
+
+  it('a rules file written while it was on stays the channel', () => {
+    agents();
+    process.env.CLAUDE_MEM_RULES_STEERING = '1';
+    silentAutoAdopt({ cwd: app() });
+    delete process.env.CLAUDE_MEM_RULES_STEERING;
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+  });
+
+  it('--status says how to get the rules file', () => {
+    agents();
+    const line = statusLine();
+    expect(line).toMatch(
+      /✗ not written: .*AGENTS\.md.*claude-mem-lite\.md is written only with CLAUDE_MEM_RULES_STEERING=1/,
+    );
+    expect(line).not.toMatch(/cannot be written here/);
+  });
+
+  it('--status says the next session takes out a CLAUDE.local.md an AGENTS.md now stops', () => {
+    silentAutoAdopt({ cwd: app() });
+    agents();
+    expect(statusLine()).toMatch(
+      /⚠ .*CLAUDE\.local\.md \(auto-written, but .*is written only with CLAUDE_MEM_RULES_STEERING=1: the next session removes it/,
+    );
+  });
+
+  it('the one-time note says the guidance is injected and how to get the rules file', () => {
+    agents();
+    const r = spawnSync(process.execPath, [join(REPO, 'hook.mjs'), 'session-start'], {
+      cwd: app(),
+      input: JSON.stringify({ session_id: 'optin-e2e', source: 'startup', cwd: app() }),
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|MEM_)/.test(k))),
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_PROJECT_DIR: app(),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        CLAUDE_MEM_SKIP_MAINTAIN: '1',
+      },
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
+    expect(out.systemMessage ?? '').toMatch(/injected at session start/);
+    expect(out.systemMessage ?? '').toMatch(/CLAUDE_MEM_RULES_STEERING=1/);
+    expect(out.systemMessage ?? '').not.toMatch(/cannot be written here/);
+    expect(existsSync(rulesPath())).toBe(false);
   });
 });

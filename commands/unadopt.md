@@ -17,7 +17,8 @@ Remove the claude-mem-lite steering block from the current project. Opposite of
 3. `<cwd>/.claude/.plugin_claude_mem_lite_state.json` sidecar (and an emptied
    `.claude/` dir).
 4. The block auto-adopt keeps in `CLAUDE.local.md` at the git repository root, or in
-   `.claude/rules/claude-mem-lite.md` there next to an `AGENTS.md` (the file too, when
+   `.claude/rules/claude-mem-lite.md` there (with `CLAUDE_MEM_RULES_STEERING=1`, next to an
+   `AGENTS.md`; the file too, when
    nothing else is in it, and an emptied `.claude/rules/` and `.claude/`), and the lines
    it added to `.git/info/exclude`. Those lines stay while another worktree of the
    repository still has the block, or while a file the plugin created still holds your

@@ -12,10 +12,11 @@ project's memory-dir `MEMORY.md`; that polluted an index meant for the user's ow
 memories, and `MEMORY.md` carries no more weight than `CLAUDE.md` anyway.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
-in `CLAUDE.local.md` at the repository root — or, next to an `AGENTS.md` that file would switch
-off, in `.claude/rules/claude-mem-lite.md` — excluded from git through `.git/info/exclude`, and
-where neither can be written (outside git, for example) it adds the text to each session's
-context. Run `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
+in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`.
+Next to an `AGENTS.md` that file would switch off, and where it cannot be written (outside git,
+for example), it adds the text to each session's context instead; with
+`CLAUDE_MEM_RULES_STEERING=1` it keeps the block in `.claude/rules/claude-mem-lite.md` next to
+an `AGENTS.md`, excluded the same way. Run `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
 so your team gets it too. It removes the local copy so the text does not load twice. A project that carries the block is kept in sync on every SessionStart, and a
 `CLAUDE.md` holding nothing but the block gets the `AGENTS.md` import described below.
 

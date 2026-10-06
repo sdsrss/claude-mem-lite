@@ -4,8 +4,8 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## Unreleased
 
-- **Fix: auto-adopt no longer switches off a project's `AGENTS.md`; there the guidance goes to
-  `.claude/rules/claude-mem-lite.md`.** Claude Code 2.1.277 and later reads `AGENTS.md` as a
+- **Fix: auto-adopt no longer switches off a project's `AGENTS.md`; there the guidance is
+  injected.** Claude Code 2.1.277 and later reads `AGENTS.md` as a
   project's instructions only while no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`
   exists in the session's directory or above it. The `CLAUDE.local.md` that auto-adopt has written
   into git repositories since 6.20.0 therefore made Claude Code stop reading the repository's
@@ -19,8 +19,21 @@ All notable changes to claude-mem-lite are documented in this file.
     a value that reads `AGENTS.md` regardless of `CLAUDE.local.md` (`claude-md-and-agents-md`),
     or never (`claude-md`, `managed-only`; with `managed-only` Claude Code loads neither file, so
     the guidance does not reach the session).
-  - There auto-adopt writes the block to `.claude/rules/claude-mem-lite.md` at the repository
-    root instead, kept out of git by an entry of its own in `.git/info/exclude`, written even
+  - There auto-adopt writes no file: the guidance is added to each session's context at session
+    start, as outside git, with a one-time notice. A block an earlier version wrote into
+    `CLAUDE.local.md` there comes out at the next session start; that session loaded the file, so
+    it gets no injected copy, and the injected copy starts with the session after it. If that was
+    a `CLAUDE.local.md` you had before, the block leaves it and git sees the file again as it did
+    before the plugin wrote into it; your `CLAUDE.local.md` itself still stops Claude Code reading
+    `AGENTS.md`. Injected guidance does not reach subagents.
+  - **Opt-in: `CLAUDE_MEM_RULES_STEERING=1`** writes the block to
+    `.claude/rules/claude-mem-lite.md` at the repository root instead, which leaves `AGENTS.md`
+    loading and does reach subagents. It is not the default because, in a pre-registered A/B on
+    Claude Code 2.1.292 (`docs/audits/20261006-d212-ab.md`), it did not beat injection by the bar
+    set in advance: sessions with a proactive memory record when work is delegated to
+    subagents, 1/12 against 0/12 (Fisher p=1.00); 4 records against 0 over 44 sessions per arm;
+    subagents saw the guidance 9/9 from the second session on, against 0/14. The file is kept out
+    of git by an entry of its own in `.git/info/exclude`, written even
     where your `.gitignore` already covers it (so narrowing that rule later does not expose it).
     If a `.gitignore` rule later makes git see it anyway, it is taken out and the guidance is
     injected. A rules
@@ -33,13 +46,13 @@ All notable changes to claude-mem-lite are documented in this file.
     file). A block an earlier version wrote into `CLAUDE.local.md` moves there at the next
     session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). If that
     was a `CLAUDE.local.md` you had before, the block leaves it and git sees the file again as it
-    did before the plugin wrote into it; your `CLAUDE.local.md` itself still stops Claude Code
-    reading `AGENTS.md` (and while another worktree of the repository still has the block in its
-    `CLAUDE.local.md`, the shared exclude entry stays, so git does not see yours yet). Once
-    written, the rules file stays where the guidance goes. A one-time
-    notice says where it is.
-  - The rules file is not written, and the guidance is injected instead with a one-time notice
-    saying why, where the file, `.claude/rules` or `.claude` is a symbolic link, git tracks the
+    did before the plugin wrote into it (while another worktree of the repository still has the
+    block in its `CLAUDE.local.md`, the shared exclude entry stays, so git does not see yours
+    yet). Once written, the rules file stays where the guidance goes, also after the variable is
+    unset; delete it, or run `claude-mem-lite unadopt`, to go back. A one-time notice says where
+    it is.
+  - With the variable set, the rules file is not written, and the guidance is injected instead
+    with a one-time notice saying why, where the file, `.claude/rules` or `.claude` is a symbolic link, git tracks the
     file, a file of that name without the block is there already, or the root is an npm package
     that `npm publish` could ship it with, judged conservatively: not `"private": true`, and
     either a `files` entry whose first part is `.claude` or a wildcard, or no `files` list and no
@@ -63,8 +76,11 @@ All notable changes to claude-mem-lite are documented in this file.
     can pick the rules file up, as they can `CLAUDE.local.md`. Claude Code labels it "project
     instructions, checked into the codebase", which is not so.
   - Not covered: an untracked `AGENTS.md` in a subdirectory is seen only from a session started
-    at or below it; until such a session moves the block to the rules file, `CLAUDE.local.md`
-    switches that `AGENTS.md` off.
+    at or below it. Such a session takes the block out of `CLAUDE.local.md`, the next session
+    started above that directory writes it back, and a session in the subdirectory after that one
+    does not load that `AGENTS.md` (it gets the guidance from `CLAUDE.local.md`). Committing the
+    `AGENTS.md`, or `CLAUDE_MEM_RULES_STEERING=1` (the rules file stays once written), ends the
+    back and forth.
 - **Fix: an explicit `adopt` no longer switches off the `AGENTS.md` beside the `CLAUDE.md` it
   creates.** The same Claude Code rule made `claude-mem-lite adopt` (and `/adopt`) hide a
   project's `AGENTS.md` whenever it created `CLAUDE.md`, without a word.
@@ -115,8 +131,9 @@ All notable changes to claude-mem-lite are documented in this file.
   `CLAUDE.md`, a tracked or linked copy, auto-adopt off, a copy that cannot be edited) or
   auto-adopt is off; `— none yet` names the file the next session writes; `✗ not
   written` names the refusal (a tracked, linked or unreadable `CLAUDE.local.md`, a package root,
-  a `.gitignore` rule git would let the file through, or, beside an `AGENTS.md`, why the rules
-  file cannot be written and which ways to a file work there); and `✗ removed` says the block was
+  a `.gitignore` rule git would let the file through, or, beside an `AGENTS.md`, that the rules
+  file needs `CLAUDE_MEM_RULES_STEERING=1` or why it cannot be written, and which ways to a file
+  work there); and `✗ removed` says the block was
   deleted (by you or `unadopt`) and that after `claude-mem-lite adopt --enable` the next session
   may write it again.
 - **Smaller fixes around the local file.** A `CLAUDE.local.md` or `CLAUDE.md` that is a directory

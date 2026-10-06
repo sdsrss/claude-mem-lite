@@ -613,7 +613,7 @@ function localSteeringStatus(cwd) {
       : null,
     ways.adoptImports ? 'run `claude-mem-lite adopt`, whose CLAUDE.md imports AGENTS.md' : null,
   ].filter(Boolean);
-  return `✗ not written: Claude Code stops reading ${plan.agentsMd ?? 'the AGENTS.md'} once a CLAUDE.local.md exists, and ${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[plan.refusal]} (steering is injected at session start${alt.length ? `; ${alt.join(', or ')}` : ''})`;
+  return `✗ not written: Claude Code stops reading ${plan.agentsMd ?? 'the AGENTS.md'} once a CLAUDE.local.md exists, and ${rulesWhy(plan.refusal)} (steering is injected at session start${alt.length ? `; ${alt.join(', or ')}` : ''})`;
 }
 
 // The `local:` line for a local file that carries the block: what the next session does with it,
@@ -630,7 +630,7 @@ function currentLocalLine(root, cwd, cur, runs) {
       plan.file === LOCAL_MD
         ? `CLAUDE.local.md ${LOCAL_REFUSAL_TEXT[plan.refusal]}`
         : rel === LOCAL_MD
-          ? `a CLAUDE.local.md stops Claude Code reading ${plan.agentsMd}, and ${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[plan.refusal]}`
+          ? `a CLAUDE.local.md stops Claude Code reading ${plan.agentsMd}, and ${rulesWhy(plan.refusal)}`
           : RULES_REFUSAL_TEXT[plan.refusal];
     // That session loaded the file, so it gets no injected copy; the ones after it do.
     return `⚠ ${cur.path} (auto-written, but ${why}: the next session removes it, and the steering is injected after that)`;
@@ -640,6 +640,13 @@ function currentLocalLine(root, cwd, cur, runs) {
   if (!ignoredByGit(root, rel))
     return `⚠ ${cur.path} (auto-written, but git sees it: a .gitignore rule outranks .git/info/exclude)`;
   return `✓ ${cur.path} (auto-written, excluded from git)`;
+}
+
+// Why there is no rules file, as the second half of a sentence. Off is a switch, not a failure.
+function rulesWhy(refusal) {
+  return refusal === 'off'
+    ? `${RULES_MD} is written only with CLAUDE_MEM_RULES_STEERING=1`
+    : `${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[refusal]}`;
 }
 
 // Whether the next session start runs the sync that writes, moves and removes the local file.

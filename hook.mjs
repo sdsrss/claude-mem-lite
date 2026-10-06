@@ -2773,8 +2773,13 @@ async function noteAgentsMdOnce(project, { detail, agentsMd, adoptImports, setti
     const { RULES_MD, RULES_REFUSAL_TEXT } = await import('./lib/local-steering.mjs');
     const why = RULES_REFUSAL_TEXT[detail] ?? 'it was refused';
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    const reads = `claude-mem-lite: Claude Code reads ${agentsMd ?? 'an AGENTS.md'} as this project's instructions and stops reading it once a CLAUDE.md or CLAUDE.local.md exists`;
+    // The rules file is opt-in (lib/local-steering.mjs rulesSteeringOn): off, the note says how to
+    // turn it on instead of calling it unwritable.
     const parts = [
-      `claude-mem-lite: Claude Code reads ${agentsMd ?? 'an AGENTS.md'} as this project's instructions and stops reading it once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance goes to ${RULES_MD}, which leaves it loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out).`,
+      detail === 'off'
+        ? `${reads}, so memory guidance is not written to CLAUDE.local.md here: it is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out). Injected guidance does not reach subagents; with CLAUDE_MEM_RULES_STEERING=1 it goes to ${RULES_MD} instead, which leaves AGENTS.md loading.`
+        : `${reads}, so memory guidance goes to ${RULES_MD}, which leaves it loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out).`,
     ];
     if (settingGivesFile)
       parts.push(
