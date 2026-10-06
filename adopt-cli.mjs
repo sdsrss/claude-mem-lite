@@ -71,7 +71,6 @@ import {
   localMdRefused,
   trackedByGit,
   ignoredByGit,
-  rulesSteeringOn,
   isSharedAncestor,
   samePath,
   localFileLinked,
@@ -603,12 +602,18 @@ function localSteeringStatus(cwd) {
   if (!root)
     return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
   if (localSteeringRemembered(root)) {
-    // Beside an AGENTS.md with the rules file switched off, --enable alone writes nothing (pre-tag
-    // opt-in review F2).
-    const offHere = !rulesSteeringOn() && planLocalSteering(root, PLUGIN_SLUG, cwd).file === RULES_MD;
-    return offHere
-      ? '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); beside this AGENTS.md a file comes back only with CLAUDE_MEM_RULES_STEERING=1 and then `claude-mem-lite adopt --enable`'
-      : '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); after `claude-mem-lite adopt --enable` the next session may write it again';
+    const removed =
+      '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start)';
+    // Beside an AGENTS.md, --enable alone writes nothing with the rules file switched off (pre-tag
+    // opt-in review F2), and neither does the switch where the rules file is refused anyway (delta
+    // review F-1).
+    const plan = planLocalSteering(root, PLUGIN_SLUG, cwd);
+    const beside = plan.agentsMd ?? 'the AGENTS.md';
+    if (plan.file === RULES_MD && plan.refusal === 'off')
+      return `${removed}; beside ${beside} a file comes back only with CLAUDE_MEM_RULES_STEERING=1 and then \`claude-mem-lite adopt --enable\``;
+    if (plan.file === RULES_MD && plan.refusal)
+      return `${removed}; beside ${beside}, ${rulesWhy(plan.refusal)}`;
+    return `${removed}; after \`claude-mem-lite adopt --enable\` the next session may write it again`;
   }
   const plan = planLocalSteering(root, PLUGIN_SLUG, cwd);
   if (!plan.refusal)

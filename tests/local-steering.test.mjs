@@ -2532,7 +2532,7 @@ describe('pre-tag opt-in review', () => {
 
   // F6: a CLAUDE.local.md with lines of the user's switches AGENTS.md off already; taking the block
   // out of it switched nothing back on and cost the file channel 6.21.0 gave.
-  it("the user's own CLAUDE.local.md keeps the block beside an AGENTS.md", () => {
+  it("the user's own CLAUDE.local.md gets the block beside an AGENTS.md, as without one", () => {
     writeFileSync(join(app(), LOCAL_MD), '# my notes\n');
     agents();
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
@@ -2540,5 +2540,92 @@ describe('pre-tag opt-in review', () => {
     process.env.CLAUDE_MEM_RULES_STEERING = '1';
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
     expect(existsSync(rulesPath())).toBe(false);
+  });
+});
+
+// Pre-tag delta review of the opt-in repairs (docs/audits/20261006-d212-pretag-optin-delta.md).
+describe('pre-tag delta review of the opt-in repairs', () => {
+  const app = () => join(home, 'work', 'app');
+  const rulesPath = () => join(app(), RULES_MD);
+  const commitOnly = (rel) => {
+    git(app(), 'add', rel);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', rel);
+  };
+  const agents = () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitOnly('AGENTS.md');
+  };
+  const statusLine = () => {
+    const before = process.cwd();
+    const lines = [];
+    const orig = console.log;
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    console.log = (m) => lines.push(String(m));
+    try {
+      cmdAdopt(['--status']);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    return lines.find((l) => l.trimStart().startsWith('local:')) ?? '';
+  };
+  // A rules file written with the switch on, then deleted by the user; the switch is off after.
+  const removedRules = () => {
+    agents();
+    process.env.CLAUDE_MEM_RULES_STEERING = '1';
+    silentAutoAdopt({ cwd: app() });
+    delete process.env.CLAUDE_MEM_RULES_STEERING;
+    rmSync(rulesPath());
+  };
+  beforeEach(() => {
+    initRepo(app());
+    delete process.env.CLAUDE_MEM_RULES_STEERING;
+  });
+
+  // F-1: the removed line offered the switch and --enable where the rules file is refused anyway.
+  it('a removed file at a package root: --status names the package, not the switch', () => {
+    removedRules();
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    const line = statusLine();
+    expect(line).toMatch(/✗ removed: .*npm publish could ship it/);
+    expect(line).not.toMatch(/CLAUDE_MEM_RULES_STEERING/);
+    expect(line).toContain(join(app(), 'AGENTS.md'));
+  });
+
+  // F-2: 'removed' was checked before the exclude prediction, so the write path (and the notice)
+  // offered the switch and --enable under a .gitignore that lets git see the file.
+  it('a removed file under a .gitignore negation: the reason is git', () => {
+    removedRules();
+    writeFileSync(join(app(), '.gitignore'), '!.claude/rules/**\n');
+    commitOnly('.gitignore');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'exclude-failed' });
+    expect(statusLine()).not.toMatch(/CLAUDE_MEM_RULES_STEERING/);
+  });
+
+  // F-5: a refresh that cannot be written left the session with the old block it loaded AND an
+  // injected copy.
+  it('a CLAUDE.local.md whose refresh cannot be written: no injected copy on top', () => {
+    writeLocalSteering(app(), { slug: SLUG, version: V, block: '## old guidance\n' });
+    chmodSync(app(), 0o555);
+    try {
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'already-adopted' });
+    } finally {
+      chmodSync(app(), 0o755);
+    }
+  });
+
+  it('a rules file whose refresh cannot be written: no injected copy on top', () => {
+    agents();
+    process.env.CLAUDE_MEM_RULES_STEERING = '1';
+    writeLocalSteering(app(), { slug: SLUG, version: V, block: '## old guidance\n' });
+    expect(existsSync(rulesPath())).toBe(true);
+    chmodSync(join(app(), '.claude', 'rules'), 0o555);
+    try {
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'already-adopted' });
+    } finally {
+      chmodSync(join(app(), '.claude', 'rules'), 0o755);
+    }
   });
 });

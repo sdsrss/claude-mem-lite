@@ -13,19 +13,18 @@ All notable changes to claude-mem-lite are documented in this file.
   `git status`). Reproduced on Claude Code 2.1.291: a canary word in `AGENTS.md` was answered
   before auto-adopt ran and not after.
   - Where: an `AGENTS.md` or `.claude/AGENTS.md` in the session's directory or above it, or an
-    `AGENTS.md` git tracks anywhere in the repository. Two exceptions, where `CLAUDE.local.md` is
-    written as before: the root has your own `CLAUDE.md` or `.claude/CLAUDE.md` (Claude Code is
-    not reading `AGENTS.md` there already), or your user settings set **Project instructions** to
+    `AGENTS.md` git tracks anywhere in the repository. Three exceptions, where `CLAUDE.local.md` is
+    written as before: the root has your own `CLAUDE.md` or `.claude/CLAUDE.md`, or a
+    `CLAUDE.local.md` with lines of your own (Claude Code is not reading `AGENTS.md` there already,
+    and the block goes into that file and keeps it out of git, as in 6.21.0), or your user settings set **Project instructions** to
     a value that reads `AGENTS.md` regardless of `CLAUDE.local.md` (`claude-md-and-agents-md`),
     or never (`claude-md`, `managed-only`; with `managed-only` Claude Code loads neither file, so
     the guidance does not reach the session).
   - There auto-adopt writes no file: the guidance is added to each session's context at session
     start, as outside git, with a one-time notice. A block an earlier version wrote into
     `CLAUDE.local.md` there comes out at the next session start; that session loaded the file, so
-    it gets no injected copy, and the injected copy starts with the session after it. A
-    `CLAUDE.local.md` with lines of your own switched `AGENTS.md` off already, and taking the
-    block out would switch nothing back on: there the block stays, as in 6.21.0. Injected guidance
-    does not reach subagents.
+    it gets no injected copy, and the injected copy starts with the session after it. Injected
+    guidance does not reach subagents.
   - **Opt-in: `CLAUDE_MEM_RULES_STEERING=1`** writes the block to
     `.claude/rules/claude-mem-lite.md` at the repository root instead, which leaves `AGENTS.md`
     loading and does reach subagents. It is not the default because, in a pre-registered A/B on
@@ -45,7 +44,7 @@ All notable changes to claude-mem-lite are documented in this file.
     context once (not the session that moves the block from `CLAUDE.local.md`, which loaded that
     file). A block an earlier version wrote into `CLAUDE.local.md` moves there at the next
     session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). A
-    `CLAUDE.local.md` with lines of your own keeps the block, as above. Once written, the rules file stays where the guidance goes, also after the variable is
+    `CLAUDE.local.md` with lines of your own keeps it (one of the exceptions above). Once written, the rules file stays where the guidance goes, also after the variable is
     unset; delete it, or run `claude-mem-lite unadopt`, to go back. A one-time notice says where
     it is.
   - With the variable set, the rules file is not written, and the guidance is injected instead
