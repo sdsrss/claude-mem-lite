@@ -2758,12 +2758,14 @@ function noteRulesSteeringOnce(project) {
 // The repository's instructions are AGENTS.md, which a CLAUDE.local.md would switch off, and the
 // rules file that leaves it loading was refused too (lib/local-steering.mjs writeRulesSteering;
 // `detail` is the refusal), so the steering is injected. The /adopt offer above would not say
-// what becomes of AGENTS.md; told once per project instead, with why there is no file and the two
-// ways to one that leave AGENTS.md loading: the setting that reads both, or /adopt, whose CLAUDE.md
-// imports it (claudemd.mjs addAgentsImports). It also explains a CLAUDE.local.md an earlier version
-// wrote, and announced, disappearing.
+// what becomes of AGENTS.md; told once per project instead, with why there is no file and the ways
+// to one that leave AGENTS.md loading — each only where it works (pre-tag claims review P1-1,
+// P2-1, adopt-cli.mjs agentsWays): the setting that reads both, unless CLAUDE.local.md is refused
+// here too, and /adopt, whose CLAUDE.md imports the AGENTS.md beside it, unless one it cannot
+// import would stop loading. It also explains a CLAUDE.local.md an earlier version wrote, and
+// announced, disappearing.
 const AGENTS_MD_NOTE_MARKER_PREFIX = '.agents-md-noted-';
-async function noteAgentsMdOnce(project, detail) {
+async function noteAgentsMdOnce(project, { detail, agentsMd, adoptImports, settingGivesFile }) {
   if (process.env.MEM_NO_ADOPT_HINT === '1') return;
   try {
     const marker = join(RUNTIME_DIR, `${AGENTS_MD_NOTE_MARKER_PREFIX}${project}`);
@@ -2771,10 +2773,17 @@ async function noteAgentsMdOnce(project, detail) {
     const { RULES_MD, RULES_REFUSAL_TEXT } = await import('./lib/local-steering.mjs');
     const why = RULES_REFUSAL_TEXT[detail] ?? 'it was refused';
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
-    queueHookSystemMessage(
-      `claude-mem-lite: this project has an AGENTS.md, which Claude Code stops reading once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance goes to ${RULES_MD}, which leaves AGENTS.md loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out). ` +
-        'To have a file instead, set Project instructions to claude-md-and-agents-md in /config (CLAUDE.local.md is then written from the next session), or run /adopt to put the guidance in CLAUDE.md, which then imports AGENTS.md. Shown once per project.',
-    );
+    const parts = [
+      `claude-mem-lite: Claude Code reads ${agentsMd ?? 'an AGENTS.md'} as this project's instructions and stops reading it once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance goes to ${RULES_MD}, which leaves it loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out).`,
+    ];
+    if (settingGivesFile)
+      parts.push(
+        'With Project instructions set to claude-md-and-agents-md in /config, AGENTS.md also loads beside CLAUDE.local.md, which is then written from the next session.',
+      );
+    if (adoptImports)
+      parts.push('Or run /adopt to put the guidance in CLAUDE.md, which then imports AGENTS.md.');
+    parts.push('Shown once per project.');
+    queueHookSystemMessage(parts.join(' '));
   } catch (e) {
     debugCatch(e, 'session-start-agents-md-note');
   }
@@ -2794,7 +2803,7 @@ function noteAgentsImportOnce(project, { imported, elsewhere }) {
     if (imported.length > 0)
       parts.push(
         `added ${imported.map((p) => `@${p}`).join(' and ')} at the top of this project's CLAUDE.md, which holds only the claude-mem-lite block: Claude Code stops reading AGENTS.md once a CLAUDE.md exists, so it was not being loaded. It loads from the next session. ` +
-          'If CLAUDE.md is committed, commit the change too; to drop CLAUDE.md instead, run `claude-mem-lite unadopt` (the guidance is then injected at session start).',
+          'If CLAUDE.md is committed, commit the change too; to drop CLAUDE.md instead, run `claude-mem-lite unadopt` (the guidance then goes to a git-ignored local file from the next session, or is injected where none can be written).',
       );
     if (elsewhere.length > 0) {
       const them = elsewhere.length > 1 ? 'them' : 'it';
@@ -3022,7 +3031,7 @@ async function handleSessionStart() {
   let adoptReason = null;
   let adoptAgents = null;
   let adoptFile = null;
-  let adoptDetail = null;
+  let adoptAgentsInfo = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -3034,7 +3043,15 @@ async function handleSessionStart() {
       adoptReason = r.reason ?? null;
       adoptAgents = r.agents ?? null;
       adoptFile = r.file ?? null;
-      adoptDetail = r.detail ?? null;
+      adoptAgentsInfo =
+        r.reason === 'local-agents-md'
+          ? {
+              detail: r.detail,
+              agentsMd: r.agentsMd,
+              adoptImports: r.adoptImports,
+              settingGivesFile: r.settingGivesFile,
+            }
+          : null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -3183,7 +3200,7 @@ async function handleSessionStart() {
     if (adoptAction === 'inject') {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
-      if (adoptReason === 'local-agents-md') await noteAgentsMdOnce(project, adoptDetail);
+      if (adoptReason === 'local-agents-md') await noteAgentsMdOnce(project, adoptAgentsInfo ?? {});
       else offerAdoptOnce(project);
     } else if (adoptAction === 'local') {
       // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it

@@ -17,25 +17,35 @@ All notable changes to claude-mem-lite are documented in this file.
     written as before: the root has your own `CLAUDE.md` or `.claude/CLAUDE.md` (Claude Code is
     not reading `AGENTS.md` there already), or your user settings set **Project instructions** to
     a value that reads `AGENTS.md` regardless of `CLAUDE.local.md` (`claude-md-and-agents-md`),
-    or never (`claude-md`, `managed-only`).
+    or never (`claude-md`, `managed-only`; with `managed-only` Claude Code loads neither file, so
+    the guidance does not reach the session).
   - There auto-adopt writes the block to `.claude/rules/claude-mem-lite.md` at the repository
     root instead, kept out of git through `.git/info/exclude` like `CLAUDE.local.md`. A rules
     file does not switch `AGENTS.md` off, and Claude Code loads it as project instructions, also
-    in subagents and in sessions started in a subdirectory (checked on 2.1.291; rules files load
-    since Claude Code 2.0.64). As with `CLAUDE.local.md`, Claude Code reads it before the
+    in subagents that load project instructions (not the built-in Explore and Plan agents) and in
+    sessions started in a subdirectory (checked on 2.1.291; rules files load since Claude Code
+    2.0.64). As with `CLAUDE.local.md`, Claude Code reads it before the
     plugin's startup hook runs, so the session that creates it gets the guidance added to its
     context once. A block an earlier version wrote into `CLAUDE.local.md` moves there at the next
-    session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). Once
-    written, the rules file stays where the guidance goes. A one-time notice says where it is.
+    session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). If that
+    was a `CLAUDE.local.md` you had before, the block leaves it and git sees the file again as it
+    did before the plugin wrote into it; your `CLAUDE.local.md` itself still stops Claude Code
+    reading `AGENTS.md`. Once written, the rules file stays where the guidance goes. A one-time
+    notice says where it is.
   - The rules file is not written, and the guidance is injected instead with a one-time notice
     saying why, where the file, `.claude/rules` or `.claude` is a symbolic link, git tracks the
     file, a file of that name without the block is there already, or the root is an npm package
-    that `npm publish` would ship it with: not `"private": true`, and either a `files` entry
-    whose first part is `.claude` or a wildcard, or no `files` list and no line naming `.claude`,
-    `.claude/rules` or the file in `.npmignore` (in `.gitignore` when there is no `.npmignore`),
-    or a `!` line there that mentions `.claude`. Checked against `npm pack --dry-run`, npm 11.19.0. A rules file
-    you delete, or `claude-mem-lite unadopt` removes, is not written again until
-    `claude-mem-lite adopt --enable`.
+    that `npm publish` could ship it with, judged conservatively: not `"private": true`, and
+    either a `files` entry whose first part is `.claude` or a wildcard, or no `files` list and no
+    line naming `.claude`, `.claude/rules` or the file in `.npmignore` (in `.gitignore` when there
+    is no `.npmignore`), or a `!` line there that mentions `.claude` (no setup where npm ships it
+    is let through, checked against `npm pack --dry-run` on npm 11.19.0; some where it does not
+    are refused). A tracked or linked rules file that already carries the block is left as it is,
+    and loads. A rules file you delete, or `claude-mem-lite unadopt` removes, is not written again
+    until `claude-mem-lite adopt --enable`. The notice offers only the ways to a file that work
+    there: the setting that reads `AGENTS.md` beside `CLAUDE.local.md` (not where
+    `CLAUDE.local.md` is refused too), and `/adopt` (not where an `AGENTS.md` above the directory
+    or in a subdirectory would stop loading).
   - `.git/info/exclude` is read by git only: docker build contexts, archives and other packagers
     can pick the rules file up, as they can `CLAUDE.local.md`. Claude Code labels it "project
     instructions, checked into the codebase", which is not so.
@@ -78,12 +88,14 @@ All notable changes to claude-mem-lite are documented in this file.
     is approved (checked on 2.1.291: the canary was answered only after approval). A session
     started in a subdirectory does not add the import either; the next one started in the
     directory of `CLAUDE.md` does.
-- **`adopt --status` names the local file and says why there is none.** It printed `✗ none` also
-  where the plugin will not write the file. `✓` names `CLAUDE.local.md` or the rules file;
-  `— none yet` says the next session writes the rules file beside an `AGENTS.md`;
-  `✗ not written` names the `AGENTS.md`, why the rules file cannot be written, and the setting;
-  and `✗ removed` says the block was deleted (by you or `unadopt`) and that
-  `claude-mem-lite adopt --enable` writes it back.
+- **`adopt --status` names the local file and, in more cases, says why there is none.** It
+  printed `✗ none` also where the plugin will not write the file. `✓` names `CLAUDE.local.md` or
+  the rules file; `— none` says when `CLAUDE.md` carries the block or auto-adopt is off;
+  `— none yet` names the file the next session writes; `✗ not written` names the refusal (a
+  tracked or linked `CLAUDE.local.md`, a package root, or, beside an `AGENTS.md`, why the rules
+  file cannot be written and which ways to a file work there); and `✗ removed` says the block was
+  deleted (by you or `unadopt`) and that after `claude-mem-lite adopt --enable` the next session
+  may write it again.
 
 ## v6.21.0 — non-ASCII project names and concurrent sessions stop sharing memory
 

@@ -482,15 +482,41 @@ describe('SessionStart end to end', () => {
     writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'pkg', version: '1.0.0' }));
     const first = sessionStart(app);
     expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
-    expect(first.systemMessage ?? '').toMatch(/AGENTS\.md/);
-    expect(first.systemMessage ?? '').toMatch(/npm publish would ship it/);
-    expect(first.systemMessage ?? '').toMatch(/claude-md-and-agents-md/);
+    expect(first.systemMessage ?? '').toContain(join(app, 'AGENTS.md'));
+    expect(first.systemMessage ?? '').toMatch(/npm publish could ship it/);
+    // CLAUDE.local.md is refused at a package root too: the setting would not give a file here.
+    expect(first.systemMessage ?? '').not.toMatch(/claude-md-and-agents-md/);
+    // The AGENTS.md is where the session started, so the CLAUDE.md /adopt writes imports it.
     expect(first.systemMessage ?? '').toMatch(/\/adopt .*imports AGENTS\.md/);
     expect(existsSync(join(app, LOCAL_MD))).toBe(false);
     expect(existsSync(join(app, RULES_MD))).toBe(false);
     const second = sessionStart(app);
     expect(second.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(second.systemMessage).toBeUndefined();
+  });
+
+  // Pre-tag claims review P1-1: /adopt imports only the AGENTS.md beside the CLAUDE.md it writes; one
+  // tracked in a subdirectory (or above the directory) would stop loading. Not offered there.
+  it('an AGENTS.md only in a subdirectory: the note does not offer /adopt', () => {
+    mkdirSync(join(app, 'packages', 'web'), { recursive: true });
+    writeFileSync(join(app, 'packages', 'web', 'AGENTS.md'), '# web agents\n');
+    git(app, 'add', '-A');
+    git(app, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'web');
+    writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'pkg', version: '1.0.0' }));
+    const out = sessionStart(app);
+    expect(out.systemMessage ?? '').toContain(join(app, 'packages', 'web', 'AGENTS.md'));
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+  });
+
+  // Pre-tag claims review P2-1: where CLAUDE.local.md could be written (the refusal is the rules
+  // file's own), the setting is a way to a file; where it is refused too, it is not offered.
+  it('a refusal of the rules file alone: the note offers the setting, which leads to CLAUDE.local.md', () => {
+    writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
+    mkdirSync(join(app, '.claude', 'rules'), { recursive: true });
+    writeFileSync(join(app, RULES_MD), '# a rule of mine\n');
+    const out = sessionStart(app);
+    expect(out.systemMessage ?? '').toMatch(/a file of that name, without the block, is already there/);
+    expect(out.systemMessage ?? '').toMatch(/claude-md-and-agents-md .*CLAUDE\.local\.md/);
   });
 });
 
@@ -1512,9 +1538,12 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
     writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
     writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
     silentAutoAdopt({ cwd: app() });
-    expect(statusOut()).toMatch(
-      /local: +✗ not written: .*AGENTS\.md.*npm publish would ship it.*claude-md-and-agents-md/,
-    );
+    const out = statusOut();
+    expect(out).toMatch(/local: +✗ not written: .*AGENTS\.md.*npm publish could ship it/);
+    // CLAUDE.local.md is refused at a package root too, so the setting is not offered; the
+    // AGENTS.md is at the root, so the CLAUDE.md `adopt` writes imports it.
+    expect(out).not.toMatch(/claude-md-and-agents-md/);
+    expect(out).toMatch(/run `claude-mem-lite adopt`, whose CLAUDE\.md imports AGENTS\.md/);
   });
 
   it('a removed block stays removed until adopt --enable', () => {
@@ -1523,7 +1552,45 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
     expect(statusOut()).toMatch(/local: +✗ removed.*adopt --enable/);
   });
 
-  it('a repository where it was never written still reads "none"', () => {
-    expect(statusOut()).toMatch(/local: +✗ none$/m);
+  it('a repository where it was never written says what the next session writes', () => {
+    expect(statusOut()).toMatch(/local: +— none yet: the next session writes .*CLAUDE\.local\.md/);
+  });
+
+  // Pre-tag claims review P2-2: four states the line described wrongly.
+  it('after an explicit adopt it says CLAUDE.md carries the block', () => {
+    silentAutoAdopt({ cwd: app() });
+    process.env.CLAUDE_PROJECT_DIR = app();
+    const before = process.cwd();
+    process.chdir(app());
+    try {
+      cmdAdopt([]);
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    expect(statusOut()).toMatch(/local: +— none: CLAUDE\.md carries the block/);
+  });
+
+  it('with auto-adopt off for the project it says so, not "removed" or "none yet"', () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    mkdirSync(memdirPath(app()), { recursive: true });
+    writeFileSync(disableSentinelPath(memdirPath(app())), '{}');
+    expect(statusOut()).toMatch(/local: +— none: auto-adopt is off for this project/);
+  });
+
+  it('a tracked CLAUDE.local.md beside an AGENTS.md: not written, and why', () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    writeFileSync(join(app(), LOCAL_MD), 'team notes\n');
+    git(app(), 'add', '-A');
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'local');
+    expect(statusOut()).toMatch(/local: +✗ not written: .*CLAUDE\.local\.md is tracked by git/);
+  });
+
+  it('"removed" says --enable lets the next session write it again, not that --enable writes it', () => {
+    silentAutoAdopt({ cwd: app() });
+    rmSync(join(app(), LOCAL_MD));
+    expect(statusOut()).toMatch(
+      /✗ removed: .*after `claude-mem-lite adopt --enable` the next session may write it again/,
+    );
   });
 });

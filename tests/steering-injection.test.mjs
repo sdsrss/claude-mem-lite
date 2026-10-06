@@ -230,6 +230,9 @@ describe('the one-time note when SessionStart imports AGENTS.md', () => {
     );
     expect(first.systemMessage).toMatch(/@AGENTS\.md/);
     expect(first.systemMessage).toMatch(/next session/);
+    // Pre-tag claims review P2-3: after unadopt the next session writes a local file (here the
+    // rules file, beside AGENTS.md); injection is only where none can be written.
+    expect(first.systemMessage).toMatch(/unadopt.*git-ignored local file/);
     expect(first.hookSpecificOutput?.additionalContext ?? '').not.toMatch(/@AGENTS\.md/);
     expect(sessionStart().systemMessage).toBeUndefined();
   });
