@@ -13,17 +13,24 @@ memories, and `MEMORY.md` carries no more weight than `CLAUDE.md` anyway.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
 in `CLAUDE.local.md` at the repository root, excluded from git through
-`.git/info/exclude`, and elsewhere it adds the text to each session's context. Run
+`.git/info/exclude`, and elsewhere (outside git, or next to an `AGENTS.md` that file would
+switch off) it adds the text to each session's context. Run
 `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
 so your team gets it too. It removes the `CLAUDE.local.md` copy so the text does not
-load twice. A project that carries the block is kept in sync on every SessionStart.
+load twice. A project that carries the block is kept in sync on every SessionStart, and a
+`CLAUDE.md` holding nothing but the block gets the `AGENTS.md` import described below.
 
 ## What it writes
 
 1. **`<cwd>/CLAUDE.md`** — a concise `<!-- claude-mem-lite:begin v1 -->…<!-- :end -->`
    managed block (trigger table → `mem_recall` / `mem_save` / `mem_defer`).
-   Slug-scoped: only this block is managed; the rest of your `CLAUDE.md` is
-   preserved verbatim. Auto-refreshes when the shipped content drifts.
+   Slug-scoped: only this block, and the import below in a file adopt created, are
+   managed; the rest of your `CLAUDE.md` is preserved verbatim. Auto-refreshes when
+   the shipped content drifts. Claude Code stops reading `AGENTS.md` once a `CLAUDE.md`
+   exists, so a `CLAUDE.md` adopt creates next to an `AGENTS.md` (or `.claude/AGENTS.md`)
+   starts with a marker comment and `@AGENTS.md`, which keeps it loading. An `AGENTS.md`
+   above the directory or tracked below it cannot be imported; the output names it with
+   the setting that keeps it.
 2. **`<cwd>/.claude/plugin_claude_mem_lite.md`** — the full contract (tool tables,
    CLI cheatsheet, citation/decay + save discipline). First line is a
    `<!-- managed-by: claude-mem-lite -->` marker. Not auto-loaded; the CLAUDE.md
