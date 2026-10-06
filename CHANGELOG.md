@@ -22,10 +22,10 @@ All notable changes to claude-mem-lite are documented in this file.
   - There auto-adopt writes no file: the guidance is added to each session's context at session
     start, as outside git, with a one-time notice. A block an earlier version wrote into
     `CLAUDE.local.md` there comes out at the next session start; that session loaded the file, so
-    it gets no injected copy, and the injected copy starts with the session after it. If that was
-    a `CLAUDE.local.md` you had before, the block leaves it and git sees the file again as it did
-    before the plugin wrote into it; your `CLAUDE.local.md` itself still stops Claude Code reading
-    `AGENTS.md`. Injected guidance does not reach subagents.
+    it gets no injected copy, and the injected copy starts with the session after it. A
+    `CLAUDE.local.md` with lines of your own switched `AGENTS.md` off already, and taking the
+    block out would switch nothing back on: there the block stays, as in 6.21.0. Injected guidance
+    does not reach subagents.
   - **Opt-in: `CLAUDE_MEM_RULES_STEERING=1`** writes the block to
     `.claude/rules/claude-mem-lite.md` at the repository root instead, which leaves `AGENTS.md`
     loading and does reach subagents. It is not the default because, in a pre-registered A/B on
@@ -44,11 +44,8 @@ All notable changes to claude-mem-lite are documented in this file.
     plugin's startup hook runs, so the session that creates it gets the guidance added to its
     context once (not the session that moves the block from `CLAUDE.local.md`, which loaded that
     file). A block an earlier version wrote into `CLAUDE.local.md` moves there at the next
-    session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). If that
-    was a `CLAUDE.local.md` you had before, the block leaves it and git sees the file again as it
-    did before the plugin wrote into it (while another worktree of the repository still has the
-    block in its `CLAUDE.local.md`, the shared exclude entry stays, so git does not see yours
-    yet). Once written, the rules file stays where the guidance goes, also after the variable is
+    session start (with `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, its text moves unchanged). A
+    `CLAUDE.local.md` with lines of your own keeps the block, as above. Once written, the rules file stays where the guidance goes, also after the variable is
     unset; delete it, or run `claude-mem-lite unadopt`, to go back. A one-time notice says where
     it is.
   - With the variable set, the rules file is not written, and the guidance is injected instead
@@ -135,7 +132,8 @@ All notable changes to claude-mem-lite are documented in this file.
   file needs `CLAUDE_MEM_RULES_STEERING=1` or why it cannot be written, and which ways to a file
   work there); and `✗ removed` says the block was
   deleted (by you or `unadopt`) and that after `claude-mem-lite adopt --enable` the next session
-  may write it again.
+  may write it again (beside an `AGENTS.md` with the rules file switched off, that it also takes
+  `CLAUDE_MEM_RULES_STEERING=1`).
 - **Smaller fixes around the local file.** A `CLAUDE.local.md` or `CLAUDE.md` that is a directory
   or cannot be read no longer leaves the session with no guidance (it is injected, or the other
   file is written), and no longer stops `adopt --status`, `unadopt --dry-run` or the

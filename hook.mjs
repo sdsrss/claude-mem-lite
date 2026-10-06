@@ -2736,9 +2736,9 @@ function noteLocalSteeringOnce(project) {
   }
 }
 
-// D#212: where CLAUDE.local.md would switch off the repository's AGENTS.md, the block goes to
-// .claude/rules/claude-mem-lite.md instead. Same reasons to say so once as for CLAUDE.local.md,
-// plus why it is not that file.
+// D#212: with CLAUDE_MEM_RULES_STEERING=1, where CLAUDE.local.md would switch off the repository's
+// AGENTS.md, the block goes to .claude/rules/claude-mem-lite.md instead. Same reasons to say so once
+// as for CLAUDE.local.md, plus why it is not that file.
 const RULES_NOTE_MARKER_PREFIX = '.rules-steering-noted-';
 function noteRulesSteeringOnce(project) {
   if (process.env.MEM_NO_ADOPT_HINT === '1') return;
@@ -2770,17 +2770,32 @@ async function noteAgentsMdOnce(project, { detail, agentsMd, adoptImports, setti
   try {
     const marker = join(RUNTIME_DIR, `${AGENTS_MD_NOTE_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
-    const { RULES_MD, RULES_REFUSAL_TEXT } = await import('./lib/local-steering.mjs');
+    const { RULES_MD, RULES_REFUSAL_TEXT, rulesSteeringOn } = await import('./lib/local-steering.mjs');
     const why = RULES_REFUSAL_TEXT[detail] ?? 'it was refused';
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     const reads = `claude-mem-lite: Claude Code reads ${agentsMd ?? 'an AGENTS.md'} as this project's instructions and stops reading it once a CLAUDE.md or CLAUDE.local.md exists`;
-    // The rules file is opt-in (lib/local-steering.mjs rulesSteeringOn): off, the note says how to
-    // turn it on instead of calling it unwritable.
-    const parts = [
-      detail === 'off'
-        ? `${reads}, so memory guidance is not written to CLAUDE.local.md here: it is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out). Injected guidance does not reach subagents; with CLAUDE_MEM_RULES_STEERING=1 it goes to ${RULES_MD} instead, which leaves AGENTS.md loading.`
-        : `${reads}, so memory guidance goes to ${RULES_MD}, which leaves it loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out).`,
-    ];
+    // The rules file is opt-in (lib/local-steering.mjs rulesSteeringOn). Off, the guidance does not
+    // go there by default, and the switch is offered only where it is what is missing — with
+    // `adopt --enable` after a removal — never where the file could not be written with it on
+    // either (pre-tag opt-in review F1, F2).
+    const parts = [];
+    if (rulesSteeringOn())
+      parts.push(
+        `${reads}, so memory guidance goes to ${RULES_MD}, which leaves it loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out).`,
+      );
+    else {
+      parts.push(
+        `${reads}, so memory guidance is not written to CLAUDE.local.md here: it is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out). Injected guidance does not reach subagents.`,
+      );
+      if (detail === 'off')
+        parts.push(
+          `With CLAUDE_MEM_RULES_STEERING=1 it goes to ${RULES_MD} instead, which leaves AGENTS.md loading.`,
+        );
+      else if (detail === 'removed')
+        parts.push(
+          `With CLAUDE_MEM_RULES_STEERING=1 and then \`claude-mem-lite adopt --enable\` it goes to ${RULES_MD}, which leaves AGENTS.md loading (a local file you or unadopt removed is not written back until then).`,
+        );
+    }
     if (settingGivesFile)
       parts.push(
         'With Project instructions set to claude-md-and-agents-md in /config, AGENTS.md also loads beside CLAUDE.local.md, which is then written from the next session.',

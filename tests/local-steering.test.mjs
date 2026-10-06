@@ -1413,9 +1413,10 @@ describe('D#212: the rules file and its refusals', () => {
     expect(status(app())).toBe('');
   });
 
-  // Moving the block reads `createdFile` from the state the CLAUDE.local.md write left, before the
-  // rules write replaces it: the user's own file goes back to how git saw it.
-  it("moving the block out of the user's own CLAUDE.local.md puts that file back in `git status`", () => {
+  // Pre-tag opt-in review F6 (restated): the user's own CLAUDE.local.md switched AGENTS.md off before
+  // the block went in, and taking the block out would switch nothing back on — the block stays in
+  // it, as in 6.21.0, instead of moving to the rules file and leaving the file in `git status`.
+  it("the block stays in the user's own CLAUDE.local.md when an AGENTS.md comes", () => {
     rmSync(join(app(), 'AGENTS.md'));
     commitAll(app());
     writeFileSync(join(app(), LOCAL_MD), 'mine\n');
@@ -1423,9 +1424,10 @@ describe('D#212: the rules file and its refusals', () => {
     expect(status(app())).toBe('');
     writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
     commitAll(app());
-    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
-    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe('mine\n');
-    expect(status(app())).toBe('?? CLAUDE.local.md');
+    expect(write()).toMatchObject({ action: 'unchanged', file: LOCAL_MD });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toMatch(/^mine\n[\s\S]*claude-mem-lite:begin/);
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(status(app())).toBe('');
   });
 
   // Refused, the rules file leaves the steering to injection; the CLAUDE.local.md block still has to
@@ -2384,6 +2386,9 @@ describe('the rules file is opt-in', () => {
     silentAutoAdopt({ cwd: app() });
     delete process.env.CLAUDE_MEM_RULES_STEERING;
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+    expect(statusLine()).toMatch(
+      /✓ .*\.claude\/rules\/claude-mem-lite\.md \(auto-written, excluded from git\)$/,
+    );
   });
 
   it('--status says how to get the rules file', () => {
@@ -2425,6 +2430,115 @@ describe('the rules file is opt-in', () => {
     expect(out.systemMessage ?? '').toMatch(/injected at session start/);
     expect(out.systemMessage ?? '').toMatch(/CLAUDE_MEM_RULES_STEERING=1/);
     expect(out.systemMessage ?? '').not.toMatch(/cannot be written here/);
+    expect(existsSync(rulesPath())).toBe(false);
+  });
+});
+
+// Pre-tag opt-in review (docs/audits/20261006-d212-pretag-optin.md).
+describe('pre-tag opt-in review', () => {
+  const app = () => join(home, 'work', 'app');
+  const rulesPath = () => join(app(), RULES_MD);
+  const commitOnly = (rel) => {
+    git(app(), 'add', rel);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', rel);
+  };
+  const agents = () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitOnly('AGENTS.md');
+  };
+  const statusLine = () => {
+    const before = process.cwd();
+    const lines = [];
+    const orig = console.log;
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    console.log = (m) => lines.push(String(m));
+    try {
+      cmdAdopt(['--status']);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    return lines.find((l) => l.trimStart().startsWith('local:')) ?? '';
+  };
+  const note = () => {
+    const r = spawnSync(process.execPath, [join(REPO, 'hook.mjs'), 'session-start'], {
+      cwd: app(),
+      input: JSON.stringify({ session_id: 'optin-review', source: 'startup', cwd: app() }),
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|MEM_)/.test(k))),
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_PROJECT_DIR: app(),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        CLAUDE_MEM_SKIP_MAINTAIN: '1',
+      },
+    });
+    expect(r.status).toBe(0);
+    return JSON.parse(r.stdout.trim()).systemMessage ?? '';
+  };
+  beforeEach(() => {
+    initRepo(app());
+    delete process.env.CLAUDE_MEM_RULES_STEERING;
+  });
+
+  // F1: with the switch off, 'off' hid the refusals the rules file would meet with it on, and the
+  // note and --status offered a variable that would change nothing.
+  describe('where the rules file could not be written even with the switch on', () => {
+    it('a publishable package root: the reason is the package, not the switch', () => {
+      agents();
+      writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'npm-publishable' });
+      const line = statusLine();
+      expect(line).toMatch(/npm publish could ship it/);
+      expect(line).not.toMatch(/CLAUDE_MEM_RULES_STEERING/);
+    });
+
+    it('a .gitignore negation: the reason is git, and info/exclude is not touched', () => {
+      agents();
+      writeFileSync(join(app(), '.gitignore'), '!.claude/rules/claude-mem-lite.md\n');
+      commitOnly('.gitignore');
+      const before = excludeOf(app());
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'exclude-failed' });
+      expect(excludeOf(app())).toBe(before);
+      expect(statusLine()).not.toMatch(/CLAUDE_MEM_RULES_STEERING/);
+    });
+
+    it('the note does not offer the switch at a package root', () => {
+      agents();
+      writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+      const msg = note();
+      expect(msg).toMatch(/injected at session start/);
+      expect(msg).not.toMatch(/CLAUDE_MEM_RULES_STEERING/);
+      // The rules file is not the default here: the note must not say the guidance goes there.
+      expect(msg).not.toMatch(/guidance goes to/);
+    });
+
+    // F2: a removed rules file needs the switch AND --enable; --enable alone writes nothing.
+    it('a removed rules file: --status and the note name both the switch and --enable', () => {
+      agents();
+      process.env.CLAUDE_MEM_RULES_STEERING = '1';
+      silentAutoAdopt({ cwd: app() });
+      delete process.env.CLAUDE_MEM_RULES_STEERING;
+      rmSync(rulesPath());
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', detail: 'removed' });
+      expect(statusLine()).toMatch(/CLAUDE_MEM_RULES_STEERING=1.*adopt --enable/);
+      expect(note()).toMatch(/CLAUDE_MEM_RULES_STEERING=1.*adopt --enable/);
+    });
+  });
+
+  // F6: a CLAUDE.local.md with lines of the user's switches AGENTS.md off already; taking the block
+  // out of it switched nothing back on and cost the file channel 6.21.0 gave.
+  it("the user's own CLAUDE.local.md keeps the block beside an AGENTS.md", () => {
+    writeFileSync(join(app(), LOCAL_MD), '# my notes\n');
+    agents();
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toContain(HEADING);
+    process.env.CLAUDE_MEM_RULES_STEERING = '1';
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
     expect(existsSync(rulesPath())).toBe(false);
   });
 });

@@ -45,7 +45,8 @@ project (slug-scoped — other plugins' blocks survive).
 written back; the text is added to each session's context instead
 (`claude-mem-lite adopt --enable` lets it write the file again). A project whose
 `CLAUDE.md` block you removed gets a local file on the next session, unless the
-plugin created one there before. To stop the steering: `claude-mem-lite adopt --disable`
+plugin created one there before. Beside an `AGENTS.md` that `CLAUDE.local.md` would
+switch off, no file is written unless `CLAUDE_MEM_RULES_STEERING=1`. To stop the steering: `claude-mem-lite adopt --disable`
 (per project) or `MEM_NO_AUTO_ADOPT=1` (global).
 
 ## Aftermath

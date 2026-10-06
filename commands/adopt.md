@@ -51,14 +51,17 @@ doc). Other plugins' blocks (e.g. `code-graph-mcp:*`) and your own prose survive
   per-project on each one's next SessionStart.)
 - `--status` — show this project's adoption + count of memdirs awaiting migration
 - `--disable` / `--enable` — per-project opt-out of automatic SessionStart adopt
-  (`--enable` also lets the plugin write a removed local block again)
+  (`--enable` also lets the plugin write a removed local block again; beside an `AGENTS.md`
+  that `CLAUDE.local.md` would switch off, only with `CLAUDE_MEM_RULES_STEERING=1`)
 
 ## Removal & opt-out
 
 - `/unadopt` removes the CLAUDE.md block + `.claude/` detail doc (your prose stays),
   and the local block. The next session writes a local file if the plugin never
   created one in this repository; one it created before is not written back (the
-  text is injected instead) until `claude-mem-lite adopt --enable`.
+  text is injected instead) until `claude-mem-lite adopt --enable`. Beside an
+  `AGENTS.md` that `CLAUDE.local.md` would switch off, no file is written unless
+  `CLAUDE_MEM_RULES_STEERING=1`.
 - `claude-mem-lite adopt --disable` permanently stops auto-adopt for this project
   (also for sessions started in its subdirectories) and removes the local block; a
   `CLAUDE.md` block stays until `/unadopt`.
