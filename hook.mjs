@@ -2747,7 +2747,7 @@ function noteRulesSteeringOnce(project) {
     if (existsSync(marker)) return;
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
-      'claude-mem-lite: memory guidance for this project is in .claude/rules/claude-mem-lite.md at the repository root, not in CLAUDE.local.md: Claude Code stops reading your AGENTS.md once a CLAUDE.local.md exists, and a rules file leaves it loading. Git ignores it (it is added to .git/info/exclude unless your ignore rules already cover it), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
+      'claude-mem-lite: memory guidance for this project is in .claude/rules/claude-mem-lite.md at the repository root, not in CLAUDE.local.md: Claude Code stops reading your AGENTS.md once a CLAUDE.local.md exists, and a rules file leaves it loading. Git ignores it (it is listed in .git/info/exclude), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
         'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
     );
   } catch (e) {
@@ -3032,6 +3032,7 @@ async function handleSessionStart() {
   let adoptAgents = null;
   let adoptFile = null;
   let adoptAgentsInfo = null;
+  let adoptMoved = false;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -3043,6 +3044,7 @@ async function handleSessionStart() {
       adoptReason = r.reason ?? null;
       adoptAgents = r.agents ?? null;
       adoptFile = r.file ?? null;
+      adoptMoved = r.moved === true;
       adoptAgentsInfo =
         r.reason === 'local-agents-md'
           ? {
@@ -3207,7 +3209,8 @@ async function handleSessionStart() {
       // does not load it (release-tree sandbox: first sessions had no steering, 0/4). Inject
       // the same block once; from the next session the file carries it. An update needs no
       // copy: the session already loaded the previous text.
-      if (adoptWritten === 'created') {
+      // Not when the block moved from CLAUDE.local.md: that file loaded at startup (P3-1).
+      if (adoptWritten === 'created' && !adoptMoved) {
         const steering = await buildInjectedSteering();
         if (steering) stdoutParts.push(steering);
       }

@@ -651,6 +651,25 @@ describe('adopt next to an AGENTS.md', () => {
     expect(body()).not.toContain('@');
   });
 
+  // Pre-tag defect review (D#212) P2-5: at $HOME an import in ~/CLAUDE.md would reach every project
+  // below it, each asking to approve an import from outside its directory. Not added there.
+  it('session start adds no import to a CLAUDE.md at $HOME', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    cmdAdopt([]);
+    agentsMd(tmpHome);
+    expect(silentAutoAdopt({ cwd: tmpHome }).agents).toBeUndefined();
+    expect(readFileSync(claudeMd(tmpHome), 'utf8')).not.toContain('@AGENTS.md');
+  });
+
+  // P3-9: with the import line deleted by hand, what is left — the marker — is still the plugin's.
+  it('unadopt deletes a CLAUDE.md left with the marker and the block', () => {
+    agentsMd(fakeCwd);
+    cmdAdopt([]);
+    writeFileSync(claudeMd(fakeCwd), body().replace('@AGENTS.md\n', ''));
+    cmdUnadopt([]);
+    expect(existsSync(claudeMd(fakeCwd))).toBe(false);
+  });
+
   // Seen from a subdirectory the root's `@AGENTS.md` resolves outside the working directory, which
   // Claude Code asks the user to approve; the next session started at the root adds it.
   it("a session started in a subdirectory leaves the root's CLAUDE.md alone", () => {

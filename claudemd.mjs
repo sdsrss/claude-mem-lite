@@ -122,14 +122,15 @@ function agentsImportMarker(slug) {
 }
 const AGENTS_IMPORT_LINE_RE = /^@(?:\.claude\/)?AGENTS\.md$/;
 
-// Is `rest` (a file's text with our blocks removed) nothing but adopt's import lines?
+// Is `rest` (a file's text with our blocks removed) nothing but adopt's import lines? The marker
+// alone counts too: it is still the plugin's line after the user deleted the import below it.
 function isOwnImportsOnly(rest, slug) {
   const lines = rest
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
   return (
-    lines.length >= 2 &&
+    lines.length >= 1 &&
     lines[0] === agentsImportMarker(slug) &&
     lines.slice(1).every((l) => AGENTS_IMPORT_LINE_RE.test(l))
   );
@@ -514,8 +515,10 @@ export function removeBlockAt(p, slug) {
       if (raw.trim() === '' && !isLink) {
         try {
           unlinkSync(p);
-        } catch {
-          atomicWrite(p, raw);
+        } catch (e) {
+          // ENOENT: another process deleted it first (two sessions starting at once, pre-tag defect
+          // review of D#212, P1-1). Writing the empty text back would recreate it for good.
+          if (e?.code !== 'ENOENT') atomicWrite(p, raw);
         }
       } else {
         atomicWrite(p, raw);

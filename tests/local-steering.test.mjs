@@ -495,6 +495,18 @@ describe('SessionStart end to end', () => {
     expect(second.systemMessage).toBeUndefined();
   });
 
+  // Pre-tag defect review of D#212, P3-1: the session that moves the block out of CLAUDE.local.md
+  // loaded that file at startup, so it gets no injected copy on top.
+  it('the session that moves the block to the rules file injects nothing', () => {
+    sessionStart(app);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(true);
+    writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
+    const moving = sessionStart(app);
+    expect(existsSync(join(app, RULES_MD))).toBe(true);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(false);
+    expect(moving.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
+  });
+
   // Pre-tag claims review P1-1: /adopt imports only the AGENTS.md beside the CLAUDE.md it writes; one
   // tracked in a subdirectory (or above the directory) would stop loading. Not offered there.
   it('an AGENTS.md only in a subdirectory: the note does not offer /adopt', () => {
@@ -1501,6 +1513,185 @@ describe('D#212: the rules file and its refusals', () => {
       );
       expect(existsSync(rulesPath())).toBe(true);
     });
+  });
+});
+
+// Pre-tag defect review of D#212 (docs/audits/20261006-d212-pretag-defect.md).
+describe('pre-tag defect review (D#212): the rules file', () => {
+  const app = () => join(home, 'work', 'app');
+  const block = () => buildClaudeMdBlock({ detailDocRef: '/data/plugin_claude_mem_lite.md' });
+  const write = (cwd = app()) => writeLocalSteering(app(), { slug: SLUG, version: V, block: block(), cwd });
+  const rulesPath = () => join(app(), RULES_MD);
+  const commitAll = (dir, msg = 'c') => {
+    git(dir, 'add', '-A');
+    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', msg);
+  };
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const captureLog = (fn) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      fn();
+    } finally {
+      console.log = orig;
+    }
+    return lines.join('\n');
+  };
+  // Commits only .gitignore: `git add -A` would commit a rules file git no longer ignores.
+  const commitGitignore = () => {
+    git(app(), 'add', '.gitignore');
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'ignore');
+  };
+  beforeEach(() => {
+    initRepo(app());
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitAll(app());
+  });
+
+  // P1-2: a negation added after the file was written makes git see it again; the file came out of
+  // the exclude's protection, so it must come out of the tree, not stay and be injected on top.
+  it('an exclude entry that stops working takes the written rules file out, and nothing loads twice', () => {
+    write();
+    writeFileSync(join(app(), '.gitignore'), '.claude/*\n!.claude/rules/\n!.claude/rules/**\n');
+    commitGitignore();
+    expect(status(app())).toBe('?? .claude/');
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'exclude-failed' });
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(status(app())).toBe('');
+  });
+
+  // P1-3: npm does not honour git's "a parent excluded cannot be re-included", so a negation that can
+  // match the file ships it. Only a literal negation naming none of its path parts is harmless.
+  it.each([
+    [
+      '.npmignore: .claude, !**/claude-mem-lite.md',
+      '.npmignore',
+      '.claude\n!**/claude-mem-lite.md\n',
+      'refused',
+    ],
+    ['.npmignore: .claude, !**/*.md', '.npmignore', '.claude\n!**/*.md\n', 'refused'],
+    ['.npmignore: .claude/, !**', '.npmignore', '.claude/\n!**\n', 'refused'],
+    ['.npmignore: the file, !*.md', '.npmignore', '.claude/rules/claude-mem-lite.md\n!*.md\n', 'refused'],
+    [
+      '.npmignore: .claude, !.Claude/rules/claude-mem-lite.md',
+      '.npmignore',
+      '.claude\n!.Claude/rules/claude-mem-lite.md\n',
+      'refused',
+    ],
+    ['.gitignore: .claude/, !**/*.md', '.gitignore', '.claude/\n!**/*.md\n', 'refused'],
+    ['.npmignore: .claude, !.env.example', '.npmignore', '.claude\n!.env.example\n', 'created'],
+  ])('package root, %s → %s', (_, file, text, action) => {
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    writeFileSync(join(app(), file), text);
+    expect(write().action).toBe(action);
+  });
+
+  it('a backslash in a `files` entry counts as a pattern', () => {
+    writeFileSync(
+      join(app(), 'package.json'),
+      JSON.stringify({ name: 'p', version: '1.0.0', files: ['\\.claude'] }),
+    );
+    expect(write()).toMatchObject({ action: 'refused', detail: 'npm-publishable' });
+  });
+
+  // P2-1: the ✓ line said "excluded from git" for a file git tracks.
+  it('--status says a tracked rules file is tracked', () => {
+    mkdirSync(dirname(rulesPath()), { recursive: true });
+    writeFileSync(rulesPath(), `<!-- ${SLUG}:begin ${V} -->\nteam copy\n<!-- ${SLUG}:end -->\n`);
+    git(app(), 'add', '-f', RULES_MD);
+    commitAll(app());
+    expect(withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])))).toMatch(
+      /local: +✓ .*claude-mem-lite\.md \(tracked by git/,
+    );
+  });
+
+  // P2-2: adopt in a subdirectory writes a CLAUDE.md that steers that subtree only; taking the root's
+  // file out left every root session without it, and called that the user's removal.
+  it('adopt in a subdirectory leaves the root rules file, and the root keeps it', () => {
+    write();
+    const pkg = join(app(), 'pkg');
+    mkdirSync(pkg);
+    withCwd(pkg, () => captureLog(() => cmdAdopt([])));
+    expect(existsSync(join(pkg, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(rulesPath())).toBe(true);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+    // And a session in that subdirectory, whose CLAUDE.md carries the block, leaves it too.
+    expect(silentAutoAdopt({ cwd: pkg }).action).toBe('already-adopted');
+    expect(existsSync(rulesPath())).toBe(true);
+  });
+
+  // P2-3: the write side refuses a tracked file; the SessionStart sync must not delete one either.
+  it('a session whose CLAUDE.md carries the block does not delete a tracked rules file', () => {
+    mkdirSync(dirname(rulesPath()), { recursive: true });
+    writeFileSync(rulesPath(), `<!-- ${SLUG}:begin ${V} -->\nteam copy\n<!-- ${SLUG}:end -->\n`);
+    git(app(), 'add', '-f', RULES_MD);
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    commitAll(app());
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('already-adopted');
+    expect(existsSync(rulesPath())).toBe(true);
+    // (CLAUDE.md gains its AGENTS.md import here; the tracked rules file is not deleted.)
+    expect(status(app())).not.toMatch(/claude-mem-lite\.md/);
+  });
+
+  // P2-4: written while the user's .gitignore covered .claude/, the file had no exclude entry of its
+  // own, and showed up in `git status` once the user narrowed that rule.
+  it('the rules file gets its own exclude entry even where .gitignore covers it', () => {
+    writeFileSync(join(app(), '.gitignore'), '.claude/\n');
+    commitGitignore();
+    write();
+    writeFileSync(join(app(), '.gitignore'), '.claude/settings.local.json\n');
+    commitGitignore();
+    expect(status(app())).toBe('');
+  });
+
+  // P3-1: the session that moves the block from CLAUDE.local.md loaded that file at startup already.
+  it('moving the block is reported as a move, so the session that did it is not injected', () => {
+    rmSync(join(app(), 'AGENTS.md'));
+    commitAll(app());
+    write();
+    writeFileSync(join(app(), 'AGENTS.md'), '# agents\n');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      moved: true,
+    });
+  });
+
+  // P3-6: an info/exclude saved with CRLF line endings kept our two lines on removal.
+  it('removal finds its exclude lines in a CRLF info/exclude', () => {
+    write();
+    const ex = join(app(), '.git', 'info', 'exclude');
+    writeFileSync(ex, readFileSync(ex, 'utf8').replace(/\r?\n/g, '\r\n'));
+    removeLocalSteering(app(), SLUG);
+    expect(readFileSync(ex, 'utf8')).not.toMatch(/claude-mem-lite/);
+  });
+
+  // P3-7: a failed write left the exclude entry behind, and every later session failed the same way.
+  it('a write that fails takes its exclude entry back', () => {
+    writeFileSync(join(app(), '.claude'), 'a file, not a directory\n');
+    const before = excludeOf(app());
+    expect(write()).toMatchObject({ action: 'refused', detail: 'write-failed' });
+    expect(excludeOf(app())).toBe(before);
+  });
+
+  // P3-8: an unreadable rules path threw out of the sync, and the session got no guidance at all.
+  it('a directory where the rules file goes is refused, and the steering is injected', () => {
+    mkdirSync(rulesPath(), { recursive: true });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ ok: true, action: 'inject', detail: 'foreign' });
+    // Removal and the quiet gate read the same path; neither may throw on it.
+    expect(removeLocalSteering(app(), SLUG)).toEqual({ action: 'absent' });
+    expect(isAdoptedHere(app())).toBe(true);
   });
 });
 

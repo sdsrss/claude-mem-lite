@@ -15,7 +15,7 @@
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
-import { join, isAbsolute, resolve } from 'path';
+import { join, isAbsolute, resolve, relative } from 'path';
 import {
   memdirPath,
   disableSentinelPath,
@@ -59,6 +59,8 @@ import {
   LOCAL_REFUSAL_TEXT,
   planLocalSteering,
   localMdRefused,
+  trackedByGit,
+  isSharedAncestor,
 } from './lib/local-steering.mjs';
 
 /**
@@ -66,12 +68,17 @@ import {
  * `cwd`, if there is one.
  * @returns {{action: 'removed'|'partial'|'absent', residue?: string, path?: string}}
  */
-function dropLocalSteering(cwd) {
+function dropLocalSteering(cwd, { atRootOnly = false, keepTracked = false } = {}) {
   const root = localSteeringRoot(cwd);
   if (!root) return { action: 'absent' };
+  // `atRootOnly`: a CLAUDE.md written or synced in a subdirectory steers that subtree only, so the
+  // root's local file stays for every other session there; taking it out also read as the user's
+  // removal at the root (pre-tag defect review of D#212, P2-2). Sessions in that subdirectory load
+  // both. `keepTracked`: the session-start sync leaves a file git tracks (P2-3).
+  if (atRootOnly && resolve(root) !== resolve(cwd)) return { action: 'absent' };
   // Runs even when the block is already gone (deleted by hand): removeLocalSteering then drops
   // the exclude lines it added (pre-tag defect review, mutation M7).
-  const r = removeLocalSteering(root, PLUGIN_SLUG);
+  const r = removeLocalSteering(root, PLUGIN_SLUG, { keepTracked });
   return r.action === 'absent' ? { action: 'absent' } : { ...r, path: r.path ?? localMdPath(root) };
 }
 
@@ -193,7 +200,7 @@ function adoptOne(cwd, { force, dryRun }) {
         : '';
     const migNote = mig.action === 'removed' ? ' (+migrated legacy memdir)' : '';
     // CLAUDE.md now carries the block; a CLAUDE.local.md copy would load it twice.
-    const local = dropLocalSteering(cwd);
+    const local = dropLocalSteering(cwd, { atRootOnly: true });
     const localNote =
       local.action === 'absent'
         ? ''
@@ -326,7 +333,14 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
           frozen: process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1',
           cwd,
         });
-        if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action, file: r.file };
+        if (r.action !== 'refused')
+          return {
+            ok: true,
+            action: 'local',
+            written: r.action,
+            file: r.file,
+            ...(r.moved ? { moved: true } : {}),
+          };
         // A refused file that carries the block anyway (tracked, or behind a link) is loaded by
         // the host: injecting it too would load it twice.
         if (r.present) return { ok: true, action: 'already-adopted', reason: `local-${r.reason}` };
@@ -342,7 +356,7 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       }
       return { ok: true, action: 'inject' };
     }
-    dropLocalSteering(cwd);
+    dropLocalSteering(cwd, { atRootOnly: true, keepTracked: true });
     let action = 'already-adopted';
     if (!claudeMdIsAdopted(cwd, PLUGIN_SLUG)) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
@@ -377,6 +391,9 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
 // back, as nothing stops a hand-edited block from being refreshed.
 function syncAgentsImports(cwd) {
   if (process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1') return null;
+  // Not at $HOME or `/` (pre-tag defect review of D#212, P2-5): an import in ~/CLAUDE.md reaches every
+  // project below it, each asking to approve an import from outside its directory.
+  if (isSharedAncestor(cwd)) return null;
   // The cheap check first: most CLAUDE.md files hold the user's own lines, and the full answer
   // asks git.
   if (!holdsOnlyOwnLines(claudeMdPath(cwd), PLUGIN_SLUG)) return null;
@@ -526,7 +543,10 @@ function localSteeringStatus(cwd) {
   if (!root)
     return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
   const cur = readLocalSteering(root, PLUGIN_SLUG);
-  if (cur.body !== null) return `✓ ${cur.path} (auto-written, excluded from git)`;
+  if (cur.body !== null)
+    return trackedByGit(root, relative(root, cur.path))
+      ? `✓ ${cur.path} (tracked by git; the plugin leaves it as it is)`
+      : `✓ ${cur.path} (auto-written, excluded from git)`;
   if (readBlock(cwd, PLUGIN_SLUG).body !== null || readBlock(root, PLUGIN_SLUG).body !== null)
     return '— none: CLAUDE.md carries the block';
   if (isAutoAdoptDisabledFor(cwd) || isAutoAdoptDisabledFor(root))
