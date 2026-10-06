@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.22.0 — auto-adopt stops switching off AGENTS.md
 
 - **Fix: auto-adopt no longer switches off a project's `AGENTS.md`; there the guidance is
   injected.** Claude Code 2.1.277 and later reads `AGENTS.md` as a
