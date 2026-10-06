@@ -605,4 +605,63 @@ describe('adopt next to an AGENTS.md', () => {
     expect(out()).toMatch(/would import AGENTS\.md/);
     expect(existsSync(claudeMd(fakeCwd))).toBe(false);
   });
+
+  // A CLAUDE.md holding only the block — what auto-adopt wrote into every project before 6.20.0,
+  // and adopt before it imported AGENTS.md — switches AGENTS.md off just as a new one would.
+  // The session-start sync gives it the import adopt writes now, once.
+  it('session start adds the import to a CLAUDE.md that holds only the block, once', () => {
+    cmdAdopt([]);
+    agentsMd(fakeCwd);
+    const r = silentAutoAdopt({ cwd: fakeCwd });
+    expect(r).toMatchObject({ ok: true, action: 'already-adopted' });
+    expect(r.agents).toEqual({ imported: ['AGENTS.md'], elsewhere: [] });
+    expect(body().startsWith(`${MARKER}\n@AGENTS.md\n\n${BEGIN}`)).toBe(true);
+    const after = body();
+    const again = silentAutoAdopt({ cwd: fakeCwd });
+    expect(again.agents).toBeUndefined();
+    expect(body()).toBe(after);
+  });
+
+  it('session start adds no import once the user has written into CLAUDE.md', () => {
+    cmdAdopt([]);
+    appendFileSync(claudeMd(fakeCwd), '\n## Our conventions\n');
+    agentsMd(fakeCwd);
+    const r = silentAutoAdopt({ cwd: fakeCwd });
+    expect(r.agents).toBeUndefined();
+    expect(body()).not.toContain('@AGENTS.md');
+  });
+
+  it('CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 keeps session start from adding the import', () => {
+    cmdAdopt([]);
+    agentsMd(fakeCwd);
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    try {
+      expect(silentAutoAdopt({ cwd: fakeCwd }).agents).toBeUndefined();
+    } finally {
+      delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+    }
+    expect(body()).not.toContain('@AGENTS.md');
+  });
+
+  it('session start reports an AGENTS.md above the directory, and imports nothing', () => {
+    cmdAdopt([]);
+    agentsMd(dirname(fakeCwd));
+    const r = silentAutoAdopt({ cwd: fakeCwd });
+    expect(r.agents).toEqual({ imported: [], elsewhere: [join(dirname(fakeCwd), 'AGENTS.md')] });
+    expect(body()).not.toContain('@');
+  });
+
+  // Seen from a subdirectory the root's `@AGENTS.md` resolves outside the working directory, which
+  // Claude Code asks the user to approve; the next session started at the root adds it.
+  it("a session started in a subdirectory leaves the root's CLAUDE.md alone", () => {
+    git(fakeCwd, 'init', '-q');
+    cmdAdopt([]);
+    agentsMd(fakeCwd);
+    const sub = join(fakeCwd, 'src');
+    mkdirSync(sub);
+    const before = body();
+    const r = silentAutoAdopt({ cwd: sub });
+    expect(r).toMatchObject({ action: 'already-adopted', reason: 'root-claude-md' });
+    expect(body()).toBe(before);
+  });
 });

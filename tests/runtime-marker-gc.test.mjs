@@ -206,7 +206,7 @@ describe('wiring', () => {
   it('the preserved list still covers every side-effecting sentinel', () => {
     // Named explicitly so adding a new "adopt once" / "migrate once" marker
     // without classifying it shows up here rather than as silent data loss.
-    // The three one-time notes to the user (hook.mjs) repeat if their marker goes.
+    // The one-time notes to the user (hook.mjs) repeat if their marker goes.
     for (const p of [
       '.auto-adopt-',
       '.deferred-block-migrated-',
@@ -214,6 +214,7 @@ describe('wiring', () => {
       '.adopt-offered-',
       '.local-steering-noted-',
       '.agents-md-noted-',
+      '.agents-import-noted-',
     ]) {
       expect(GC_PRESERVED_MARKER_PREFIXES).toContain(p);
     }

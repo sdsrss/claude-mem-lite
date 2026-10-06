@@ -39,6 +39,7 @@ import {
   claudeMdPath,
   detailDocPath,
   addAgentsImports,
+  holdsOnlyOwnLines,
 } from './claudemd.mjs';
 import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
 import {
@@ -259,7 +260,8 @@ function migrateAll(args) {
  *   1. respect per-project `.mem-no-auto-adopt` opt-out → skip.
  *   2. migrate legacy memory-dir sentinel away (idempotent; no-op once gone).
  *   3. a managed block in CLAUDE.md → keep it in sync, refreshing if shipped content drifted
- *      (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1), and drop a local copy (no double steering).
+ *      (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1), and drop a local copy (no double steering). A
+ *      file holding only the plugin's lines gets adopt's AGENTS.md import (`agents` in the result).
  *   4. otherwise, inside a git work tree → the block in <top-level>/CLAUDE.local.md, kept
  *      out of commits via info/exclude; return 'local' (`written` says what changed). In a
  *      subdirectory, a root CLAUDE.md block → 'already-adopted', a root opt-out → 'disabled'.
@@ -336,8 +338,9 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
       action = 'refreshed';
     }
+    const agents = syncAgentsImports(cwd);
     if (markerDir && markerKey) writeMarker(markerDir, markerKey);
-    return { ok: true, action };
+    return agents ? { ok: true, action, agents } : { ok: true, action };
   } catch (e) {
     try {
       if (markerDir && markerKey) writeMarker(markerDir, markerKey);
@@ -346,6 +349,29 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     }
     return { ok: false, action: 'skipped', reason: 'error', err: e };
   }
+}
+
+// A CLAUDE.md holding nothing but this plugin's lines — the block auto-adopt wrote into every
+// project before 6.20.0, or an adopt from before it imported AGENTS.md — switches off the AGENTS.md
+// beside it like a new one would (Claude Code 2.1.277+), so it gets the import adopt writes now.
+// `imported`: what was added this time (the file changed); `elsewhere`: the AGENTS.md files an
+// import cannot keep loading. Null when there is nothing to say. A file with the user's own lines
+// is left alone: AGENTS.md was off because of them. CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 freezes the
+// file here as it freezes the block; nothing else stops an import the user deleted from coming
+// back, as nothing stops a hand-edited block from being refreshed.
+function syncAgentsImports(cwd) {
+  if (process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1') return null;
+  // The cheap check first: most CLAUDE.md files hold the user's own lines, and the full answer
+  // asks git.
+  if (!holdsOnlyOwnLines(claudeMdPath(cwd), PLUGIN_SLUG)) return null;
+  const agents = agentsMdForNewClaudeMd(cwd, PLUGIN_SLUG);
+  if (!agents) return null;
+  const imported =
+    agents.imports.length > 0 && addAgentsImports(cwd, PLUGIN_SLUG, agents.imports) === 'added'
+      ? agents.imports
+      : [];
+  if (imported.length === 0 && agents.elsewhere.length === 0) return null;
+  return { imported, elsewhere: agents.elsewhere };
 }
 
 function writeMarker(markerDir, markerKey) {

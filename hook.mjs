@@ -2758,6 +2758,34 @@ function noteAgentsMdOnce(project) {
   }
 }
 
+// A CLAUDE.md an earlier version wrote, holding only the block, was switching off an AGENTS.md
+// (adopt-cli.mjs syncAgentsImports). SessionStart imports it there, which changes a file the user
+// may have committed, or names the AGENTS.md an import cannot keep loading: told once per project.
+const AGENTS_IMPORT_NOTE_MARKER_PREFIX = '.agents-import-noted-';
+function noteAgentsImportOnce(project, { imported, elsewhere }) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${AGENTS_IMPORT_NOTE_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    const parts = [];
+    if (imported.length > 0)
+      parts.push(
+        `added ${imported.map((p) => `@${p}`).join(' and ')} at the top of this project's CLAUDE.md, which holds only the claude-mem-lite block: Claude Code stops reading AGENTS.md once a CLAUDE.md exists, so it was not being loaded. It loads from the next session. ` +
+          'If CLAUDE.md is committed, commit the change too; to drop CLAUDE.md instead, run `claude-mem-lite unadopt` (the guidance is then injected at session start).',
+      );
+    if (elsewhere.length > 0) {
+      const them = elsewhere.length > 1 ? 'them' : 'it';
+      parts.push(
+        `Claude Code does not read ${elsewhere.join(', ')} while this project's CLAUDE.md exists, and an import cannot keep ${them} loading: set Project instructions to claude-md-and-agents-md in /config, or run \`claude-mem-lite unadopt\`.`,
+      );
+    }
+    queueHookSystemMessage(`claude-mem-lite: ${parts.join(' ')} Shown once per project.`);
+  } catch (e) {
+    debugCatch(e, 'session-start-agents-import-note');
+  }
+}
+
 /**
  * D9: a project whose id (`parent--directory`) is not all ASCII got a new one (project-utils.mjs
  * projectNameFromDir). Once per project, move what its old id holds for it — everything, when no
@@ -2970,6 +2998,7 @@ async function handleSessionStart() {
   let adoptAction = null;
   let adoptWritten = null;
   let adoptReason = null;
+  let adoptAgents = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -2979,6 +3008,7 @@ async function handleSessionStart() {
       adoptAction = r.action;
       adoptWritten = r.written ?? null;
       adoptReason = r.reason ?? null;
+      adoptAgents = r.agents ?? null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -3139,6 +3169,8 @@ async function handleSessionStart() {
         if (steering) stdoutParts.push(steering);
       }
       noteLocalSteeringOnce(project);
+    } else if (adoptAgents) {
+      noteAgentsImportOnce(project, adoptAgents);
     }
 
     // Auto-update banner (audit P3d): NON-BLOCKING — read from cached state

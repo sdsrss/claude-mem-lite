@@ -44,8 +44,24 @@ All notable changes to claude-mem-lite are documented in this file.
     `AGENTS.md` was not being read through a missing file there.
   - `unadopt` deletes a `CLAUDE.md` that holds nothing but the import lines and the block; once
     you have written into the file, the import stays.
-  - Not covered: a `CLAUDE.md` block written by auto-adopt before 6.20.0 is kept in sync at every
-    session start and gains no import; run `claude-mem-lite adopt` there to add it.
+  - A `CLAUDE.md` that holds nothing but the block gets the same import at the next session
+    started in its directory, with a one-time notice. That is the file auto-adopt wrote, before
+    6.20.0, into each project you opened that had no `CLAUDE.md` of its own, and it switched
+    `AGENTS.md` off the same way. Checked on Claude Code 2.1.291: next to such a `CLAUDE.md`, a
+    canary word in `AGENTS.md` was not answered; after the session-start sync it was. If you
+    committed that `CLAUDE.md`, the import shows in `git status`: commit it, and teammates on
+    Claude Code 2.1.277 or later get `AGENTS.md` back too. An import whose `AGENTS.md` is gone
+    later is skipped without an error (checked on 2.1.291). A `CLAUDE.md` with your own lines is
+    left alone, `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` leaves the file as it is, and an import you
+    delete together with its marker comes back at the next session start, as a hand-edited
+    block is refreshed. An `AGENTS.md` above the directory, or tracked below it, is named in the
+    notice with the setting that keeps it.
+  - Not covered: seen from a session started in a subdirectory, `@AGENTS.md` in the
+    `CLAUDE.md` above resolves outside the working directory, so Claude Code asks once to
+    approve it as an external import, and a `claude -p` session there does not load it until it
+    is approved (checked on 2.1.291: the canary was answered only after approval). A session
+    started in a subdirectory does not add the import either; the next one started in the
+    directory of `CLAUDE.md` does.
 - **`adopt --status` says why there is no `CLAUDE.local.md`.** It printed `✗ none` also where
   the plugin will not write the file. `✗ not written` now names the `AGENTS.md` and the setting,
   and `✗ removed` says the block was deleted (by you or `unadopt`) and that

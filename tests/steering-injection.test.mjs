@@ -5,7 +5,7 @@
 // VERBOSE MCP instructions) the moment the files stopped being written.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -13,6 +13,7 @@ import { spawnSync } from 'child_process';
 import { isAdoptedHere, effectiveQuiet } from '../lib/quiet-scope.mjs';
 import { memdirPath, disableSentinelPath } from '../memdir.mjs';
 import { buildClaudeMdBlock } from '../adopt-content.mjs';
+import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const STEERING_HEADING = '## claude-mem-lite — persistent memory';
@@ -181,5 +182,73 @@ describe('the one-time adopt offer', () => {
       `<!-- claude-mem-lite:begin v1 -->\n${buildClaudeMdBlock()}\n<!-- claude-mem-lite:end -->\n`,
     );
     expect(sessionStart().systemMessage).toBeUndefined();
+  });
+});
+
+// A CLAUDE.md an earlier version wrote, holding only the block, switches off the AGENTS.md beside
+// it (Claude Code 2.1.277+). SessionStart adds adopt's import to it — a change to a file the user
+// may have committed — so the user is told once, on the human channel, what changed and why.
+describe('the one-time note when SessionStart imports AGENTS.md', () => {
+  let home;
+  let cwd;
+  beforeEach(() => {
+    home = mkdtempWithoutInstructionAncestors('cml-agents-import-');
+    cwd = join(home, 'work', 'app');
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(
+      join(cwd, 'CLAUDE.md'),
+      `<!-- claude-mem-lite:begin v1 -->\n${buildClaudeMdBlock()}\n<!-- claude-mem-lite:end -->\n`,
+    );
+    writeFileSync(join(cwd, 'AGENTS.md'), '# Instructions for coding agents\n');
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  const sessionStart = (extraEnv = {}) => {
+    const r = spawnSync(process.execPath, [join(REPO, 'hook.mjs'), 'session-start'], {
+      cwd,
+      input: JSON.stringify({ session_id: 'agents-import-e2e', source: 'startup', cwd }),
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|MEM_)/.test(k))),
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'data'),
+        CLAUDE_PROJECT_DIR: cwd,
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        CLAUDE_MEM_SKIP_MAINTAIN: '1',
+        ...extraEnv,
+      },
+    });
+    expect(r.status).toBe(0);
+    return r.stdout.trim() ? JSON.parse(r.stdout.trim()) : {};
+  };
+
+  it('adds the import and tells the user, on the first session only', () => {
+    const first = sessionStart();
+    expect(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')).toMatch(
+      /^<!-- claude-mem-lite adopt: .*-->\n@AGENTS\.md\n/,
+    );
+    expect(first.systemMessage).toMatch(/@AGENTS\.md/);
+    expect(first.systemMessage).toMatch(/next session/);
+    expect(first.hookSpecificOutput?.additionalContext ?? '').not.toMatch(/@AGENTS\.md/);
+    expect(sessionStart().systemMessage).toBeUndefined();
+  });
+
+  // Nothing to import, so the file never changes and every session reports the same AGENTS.md:
+  // the marker alone keeps this to once.
+  it('names an AGENTS.md above the directory with the setting, once', () => {
+    rmSync(join(cwd, 'AGENTS.md'));
+    const above = join(dirname(cwd), 'AGENTS.md');
+    writeFileSync(above, '# Instructions for coding agents\n');
+    const first = sessionStart();
+    expect(first.systemMessage).toContain(above);
+    expect(first.systemMessage).toMatch(/claude-md-and-agents-md/);
+    expect(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')).not.toContain('@');
+    expect(sessionStart().systemMessage).toBeUndefined();
+  });
+
+  it('MEM_NO_ADOPT_HINT=1 silences the note, not the import', () => {
+    expect(sessionStart({ MEM_NO_ADOPT_HINT: '1' }).systemMessage).toBeUndefined();
+    expect(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')).toContain('@AGENTS.md');
   });
 });
