@@ -10,7 +10,6 @@ import {
   rmSync,
   mkdirSync,
   mkdtempSync,
-  copyFileSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -98,7 +97,7 @@ import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
-import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
 import { claudeStatePath } from './lib/data-paths.mjs';
 import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
@@ -118,7 +117,8 @@ export { probeBetterSqlite3Binding, ensureBetterSqlite3Working };
 export function copyHookScripts(srcDir, destDir) {
   for (const name of HOOK_SCRIPT_FILES) {
     const src = join(srcDir, name);
-    if (existsSync(src)) copyFileSync(src, join(destDir, name));
+    // By rename, not in place: hooks import these while install runs (D#223).
+    if (existsSync(src)) atomicCopyFileSync(src, join(destDir, name));
   }
 }
 
@@ -454,7 +454,37 @@ const importFromInstall = (rel) => import(pathToFileURL(join(INSTALL_DIR, rel)).
 const requireFromInstall = createRequire(pathToFileURL(join(INSTALL_DIR, 'package.json')).href);
 
 // ─── install() step helpers (audit P1-9) ──────────────────────────────────────
-function installSourceFiles(IS_DEV) {
+
+// Swap barrier (R10 P2-12, D#223). Hooks import this code tree on every tool call, and
+// `install` — also what a background `repair` ends in — rewrites it while a session runs.
+// hook-update.mjs arms this same marker around its renames and scripts/hook-launcher.mjs
+// skips a fire while it is present, so a fire that starts mid-deploy is dropped instead of
+// importing a mix of two versions. The marker carries pid + ts because the launcher ignores
+// one whose writer is gone or which is older than two minutes. Callers hold install.lock,
+// which hook-update's swap takes too, so the two never arm it at once.
+const SWAP_MARKER = join(MEM_DATA_DIR, 'runtime', 'swap-in-progress'); // runtime-dir:stays-put — installation identity; the launcher reads it here
+
+export async function withSwapBarrier(fn) {
+  try {
+    mkdirSync(dirname(SWAP_MARKER), { recursive: true });
+    writeFileSync(SWAP_MARKER, JSON.stringify({ pid: process.pid, ts: Date.now() }));
+  } catch {
+    /* best-effort: without it hooks fire unbarriered, as before */
+  }
+  try {
+    return await fn();
+  } finally {
+    try {
+      rmSync(SWAP_MARKER, { force: true });
+    } catch {
+      /* a marker left behind expires with its writer */
+    }
+  }
+}
+
+// Runs BEFORE the swap barrier: the barrier's marker lives under MEM_DATA_DIR, so arming it
+// first would create ~/.claude-mem-lite and the migration below would never see it absent.
+function prepareInstallDirs() {
   // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
   const oldUnhidden = join(homedir(), 'claude-mem-lite');
   if (!existsSync(DATA_DIR) && existsSync(oldUnhidden)) {
@@ -466,7 +496,9 @@ function installSourceFiles(IS_DEV) {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   // Under relocation the DB/managed/runtime live here, not in the code dir — create it too.
   if (!existsSync(MEM_DATA_DIR)) mkdirSync(MEM_DATA_DIR, { recursive: true });
+}
 
+export function deployCodeTree(IS_DEV) {
   if (IS_DEV) {
     log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
     // Symlink individual source files
@@ -512,7 +544,7 @@ function installSourceFiles(IS_DEV) {
         // Ensure parent dir exists for subdir entries (e.g. 'lib/activity.mjs')
         const dstParent = dirname(dst);
         if (!existsSync(dstParent)) mkdirSync(dstParent, { recursive: true });
-        copyFileSync(src, dst);
+        atomicCopyFileSync(src, dst); // by rename, not in place (D#223)
       }
     }
     // Copy hook scripts (settings.json hook commands point at these — must
@@ -1250,8 +1282,14 @@ async function install() {
   // 1. Install source files to ~/.claude-mem-lite/
   const IS_DEV = flags.has('--dev');
 
-  installSourceFiles(IS_DEV);
-  await installDependencies(IS_DEV);
+  prepareInstallDirs();
+  // Both steps rewrite the tree hooks import — the code, then node_modules — so one swap
+  // barrier spans them (D#223). installDependencies may process.exit(1): the marker it leaves
+  // names a dead pid, which the launcher ignores.
+  await withSwapBarrier(async () => {
+    deployCodeTree(IS_DEV);
+    await installDependencies(IS_DEV);
+  });
   createCliSymlink();
   registerMcpServer();
   // configureHooks BEFORE dedupe, and its result feeds the dedup gate: dedupe now

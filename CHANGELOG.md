@@ -2,6 +2,21 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+- **Fix: a hook firing while `claude-mem-lite install` ran could load a half-written file.**
+  The installer copied each file over the one in `~/.claude-mem-lite` in place (emptied, then
+  written), and Claude Code keeps starting hooks from that directory during an install, also
+  while a `repair` that SessionStart started in the background runs one. A hook that started
+  in that moment failed with an error such as `SyntaxError: The requested module
+  './lib/low-signal-patterns.mjs' does not provide an export named 'buildNotLowSignalSql'`,
+  even when the version did not change. Each file is now written beside the old one and
+  renamed over it, and hooks that start while the files and their npm dependencies are being
+  replaced skip that one run, as they already did during an automatic update. Measured by
+  re-copying the files under 8 processes loading them: 12 of 2386 loads failed before, 0 of
+  2388 after. The weekly install check had been failing on it three weeks in four since
+  2026-09-14.
+
 ## v6.22.0 — auto-adopt stops switching off AGENTS.md
 
 - **Fix: auto-adopt no longer switches off a project's `AGENTS.md`; there the guidance is

@@ -155,16 +155,12 @@ const entryAbs = entryArg.startsWith('/') ? entryArg : join(INSTALL_DIR, entryAr
 // module graph. Hooks are best-effort and the swap lasts ~a second, so the next
 // fire runs against a settled install.
 //
-// This covers the AUTO-UPDATE path only, and the distinction is not pedantic:
-// `hook-update.mjs:719` is the sole writer of this marker in the whole tree (name set,
-// 2026-09-07), so the barrier is never armed for `install.mjs install` — which copies the
-// same file set in place with copyFileSync (`install.mjs:341-350`) and is what
-// `install.mjs repair` ends up executing (`:2388`, after verifying the release). A repair
-// spawned in the background at SessionStart therefore overwrites this tree while hooks
-// keep firing into it. That is R10 P2-12, still open: the mechanism is settled, the runtime
-// symptom is not reproduced, and R10 §8 asks for a repro in tests/sandbox/phaseB-npm.mjs
-// before install()'s main path is touched. An earlier draft of this comment said "auto-update
-// / repair", which reads as though the repair path were already covered — it is not.
+// Two writers arm it: hook-update.mjs around its renames, and install.mjs's install()
+// around deploying the code tree and its npm install — also what `install.mjs repair`
+// ends in, which SessionStart can spawn in the background while hooks keep firing. The
+// install side came late (R10 P2-12, D#223): it copied in place with copyFileSync, and
+// tests/sandbox/phaseB-npm.mjs B10 caught a fire importing a truncated module on a
+// same-version re-install. Its copies now go through a rename as well.
 //
 // Stale-guarded on BOTH pid and ts: an updater killed mid-swap leaves the marker
 // behind, and a marker that outlives its writer must never mute hooks permanently.

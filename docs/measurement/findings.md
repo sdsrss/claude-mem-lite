@@ -176,6 +176,15 @@ measures the home tree and passes anyway. The harness now refuses such a base.
   re-install deploys the SAME module set, so it cannot produce the version-transition
   shape (`ERR_MODULE_NOT_FOUND`) the report names. Producing that needs an install whose
   tree differs from the one on disk. `install()` was left alone per R10 §8.
+  **Superseded 2026-10-06 (D#223): the bound did not hold, and the version-transition premise
+  was wrong.** The scheduled run went red on B10 on 2026-09-14, 09-28 and 10-05 (green 09-21)
+  with `SyntaxError: … './lib/low-signal-patterns.mjs' does not provide an export named
+  'buildNotLowSignalSql'` on the SAME-version re-install: copyFileSync opens the live file with
+  O_TRUNC, so an importer can read it empty or half-written without any version mix. A probe
+  re-copying SOURCE_FILES into a scratch tree under 8 concurrent importers (`main` @ `a122250`
+  tree, this machine): in place 12 of 2386 overlapping imports failed, that signature among
+  them; temp + rename 0 of 2388. `install()` now copies by rename and arms the swap marker
+  around deploy + npm install; `tests/install-atomic-deploy.test.mjs` holds both CI-side.
 
 The previous row: **2026-09-07, `main` @ v5.3.0 — 47/47, 45/45, 15/15**, the run the two
 dependency majors (better-sqlite3 13, vitest 5) had been owed since v4.0.0; no regression

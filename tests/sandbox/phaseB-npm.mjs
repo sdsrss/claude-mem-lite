@@ -573,12 +573,13 @@ check('cached hooks.json is still cleared in EVERY version dir (the other half o
 // ── 10. In-place install under live hook traffic (R10-P2-12) ────────────────
 setPhase('B10: hooks firing DURING an in-place install');
 
-// R10-P2-12, mechanism-only in the report: install() / repair overwrite ~/.claude-mem-lite
-// file by file with no swap barrier (hook-update.mjs has one — markSwapStart/clearSwapMarker
-// at :727/:736, honoured by scripts/hook-launcher.mjs:149 — install does not), while
-// PreToolUse / PostToolUse import that same tree on every tool call. The claimed harm is a
-// mixed module graph -> ERR_MODULE_NOT_FOUND -> recordBreakage -> the next SessionStart
-// spawns repair -> again, capped only by a 6h cooldown.
+// R10-P2-12 / D#223: install() / repair overwrote ~/.claude-mem-lite file by file, in place
+// (copyFileSync truncates, then writes) and with no swap barrier, while PreToolUse /
+// PostToolUse import that same tree on every tool call. This section went red on the weekly
+// schedule three runs in four (2026-09-14, 09-28, 10-05) with a fire importing a truncated
+// module — `does not provide an export named 'buildNotLowSignalSql'` — on a same-version
+// re-install. install() now copies by rename and arms the launcher's swap marker around the
+// deploy + npm install (tests/install-atomic-deploy.test.mjs holds both CI-side).
 //
 // This is a race, so it gets a stress probe, not a demonstration: fire the launcher in a
 // loop for the whole duration of an install and see whether ANY fire lands in a torn tree.
