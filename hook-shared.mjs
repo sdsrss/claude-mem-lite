@@ -268,6 +268,8 @@ export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   '.local-steering-noted-',
   // The one-time note that AGENTS.md keeps the steering out of a file. Deleting it would repeat it.
   '.agents-md-noted-',
+  // D#212: the one-time note that the steering is in .claude/rules/. Deleting it would repeat it.
+  '.rules-steering-noted-',
   // The one-time note that SessionStart imported AGENTS.md into an earlier version's CLAUDE.md.
   '.agents-import-noted-',
   // D9: the one-time re-key of a project's rows off its pre-D9 id, and its one-time note.

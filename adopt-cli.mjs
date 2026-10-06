@@ -54,10 +54,15 @@ import {
   shadowedAgentsMd,
   agentsMdForNewClaudeMd,
   tildePath,
+  rulesMdPath,
+  rulesRefusal,
+  RULES_MD,
+  RULES_REFUSAL_TEXT,
 } from './lib/local-steering.mjs';
 
 /**
- * Remove the auto-written CLAUDE.local.md block for the project at `cwd`, if there is one.
+ * Remove the auto-written local block (CLAUDE.local.md, or the D#212 rules file) for the project at
+ * `cwd`, if there is one.
  * @returns {{action: 'removed'|'partial'|'absent', residue?: string, path?: string}}
  */
 function dropLocalSteering(cwd) {
@@ -66,7 +71,7 @@ function dropLocalSteering(cwd) {
   // Runs even when the block is already gone (deleted by hand): removeLocalSteering then drops
   // the exclude lines it added (pre-tag defect review, mutation M7).
   const r = removeLocalSteering(root, PLUGIN_SLUG);
-  return r.action === 'absent' ? { action: 'absent' } : { ...r, path: localMdPath(root) };
+  return r.action === 'absent' ? { action: 'absent' } : { ...r, path: r.path ?? localMdPath(root) };
 }
 
 function log(msg) {
@@ -262,12 +267,14 @@ function migrateAll(args) {
  *   3. a managed block in CLAUDE.md → keep it in sync, refreshing if shipped content drifted
  *      (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1), and drop a local copy (no double steering). A
  *      file holding only the plugin's lines gets adopt's AGENTS.md import (`agents` in the result).
- *   4. otherwise, inside a git work tree → the block in <top-level>/CLAUDE.local.md, kept
- *      out of commits via info/exclude; return 'local' (`written` says what changed). In a
- *      subdirectory, a root CLAUDE.md block → 'already-adopted', a root opt-out → 'disabled'.
- *   5. otherwise (no git, $HOME, a tracked or symlinked CLAUDE.local.md, an npm-publishable
- *      root, an AGENTS.md the file would switch off, any git failure) → write nothing, return
- *      'inject' (the caller puts the steering into SessionStart context) — or
+ *   4. otherwise, inside a git work tree → the block in <top-level>/CLAUDE.local.md, or in
+ *      <top-level>/.claude/rules/claude-mem-lite.md where CLAUDE.local.md would switch off an
+ *      AGENTS.md (D#212), kept out of commits via info/exclude; return 'local' (`written` says
+ *      what changed, `file` which file). In a subdirectory, a root CLAUDE.md block →
+ *      'already-adopted', a root opt-out → 'disabled'.
+ *   5. otherwise (no git, $HOME, a tracked or symlinked file, an npm-publishable root, any git
+ *      failure) → write nothing, return 'inject' (the caller puts the steering into SessionStart
+ *      context; `detail` says why the rules file was refused in an AGENTS.md repository) — or
  *      'already-adopted' when that file carries the block.
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
@@ -318,11 +325,13 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
           frozen: process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1',
           cwd,
         });
-        if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
+        if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action, file: r.file };
         // A refused file that carries the block anyway (tracked, or behind a link) is loaded by
         // the host: injecting it too would load it twice.
         if (r.present) return { ok: true, action: 'already-adopted', reason: `local-${r.reason}` };
-        return { ok: true, action: 'inject', reason: `local-${r.reason}` };
+        return r.detail
+          ? { ok: true, action: 'inject', reason: `local-${r.reason}`, detail: r.detail }
+          : { ok: true, action: 'inject', reason: `local-${r.reason}` };
       }
       return { ok: true, action: 'inject' };
     }
@@ -447,7 +456,7 @@ function cmdEnable(args) {
   for (const dir of all ? listKnownProjectDirs() : [detectCwd()]) {
     const root = localSteeringRoot(dir);
     if (root && forgetLocalSteering(root))
-      log(`[adopt --enable] ${localMdPath(root)} → will be written again`);
+      log(`[adopt --enable] ${root}: the local steering file will be written again`);
   }
   // The legacy ~/.claude memdir too: isAutoAdoptDisabledFor still honours a sentinel an earlier
   // version left there, so --enable must be able to remove it.
@@ -487,19 +496,22 @@ function cmdEnable(args) {
  * how many memdirs still carry the legacy sentinel (i.e. await migration).
  */
 // The `local:` line of `adopt --status`. Where nothing was written it says why when the reason
-// lasts — AGENTS.md, or a removal the plugin remembers — and what changes it; otherwise `none`.
+// lasts — a removal the plugin remembers, or an AGENTS.md whose rules file is refused — and what
+// changes it; where the next session will write the rules file, it says so; otherwise `none`.
 function localSteeringStatus(cwd) {
   const root = localSteeringRoot(cwd);
   if (!root)
     return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
-  if (readLocalSteering(root, PLUGIN_SLUG).body !== null)
-    return `✓ ${localMdPath(root)} (auto-written, excluded from git)`;
-  const agentsMd = shadowedAgentsMd(root, cwd);
-  if (agentsMd)
-    return `✗ not written: Claude Code stops reading ${agentsMd} once a CLAUDE.local.md exists (steering is injected at session start; set Project instructions to claude-md-and-agents-md in /config to have both, or run \`claude-mem-lite adopt\`, whose CLAUDE.md imports AGENTS.md)`;
+  const cur = readLocalSteering(root, PLUGIN_SLUG);
+  if (cur.body !== null) return `✓ ${cur.path} (auto-written, excluded from git)`;
   if (localSteeringRemembered(root))
     return '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); `claude-mem-lite adopt --enable` writes it back';
-  return '✗ none';
+  const agentsMd = shadowedAgentsMd(root, cwd);
+  if (!agentsMd) return '✗ none';
+  const refusal = rulesRefusal(root, PLUGIN_SLUG);
+  if (!refusal)
+    return `— none yet: the next session writes ${rulesMdPath(root)} (a CLAUDE.local.md would stop Claude Code reading ${agentsMd})`;
+  return `✗ not written: Claude Code stops reading ${agentsMd} once a CLAUDE.local.md exists, and ${RULES_MD} cannot be written here: ${RULES_REFUSAL_TEXT[refusal]} (steering is injected at session start; set Project instructions to claude-md-and-agents-md in /config to have a file, or run \`claude-mem-lite adopt\`, whose CLAUDE.md imports AGENTS.md)`;
 }
 
 function statusAll() {
@@ -577,11 +589,12 @@ function unadoptAll(args) {
     // The CLAUDE.local.md block auto-adopt writes (r3) is swept first and independently: a
     // project carries one or the other, and either way nothing of ours should survive.
     const root = localSteeringRoot(dir);
-    if (root && readLocalSteering(root, PLUGIN_SLUG).body !== null) {
-      if (dryRun) log(`[unadopt --all --dry-run] ${localMdPath(root)} → would-remove`);
+    const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
+    if (cur && cur.body !== null) {
+      if (dryRun) log(`[unadopt --all --dry-run] ${cur.path} → would-remove`);
       else {
         const lr = removeLocalSteering(root, PLUGIN_SLUG);
-        log(`[unadopt --all] ${localMdPath(root)} → ${lr.action}`);
+        log(`[unadopt --all] ${lr.path ?? cur.path} → ${lr.action}`);
         if (lr.residue) log(`  ⚠ ${lr.residue}`);
       }
       locals++;
@@ -653,8 +666,8 @@ export function cmdUnadopt(args = []) {
   const cwd = detectCwd();
   if (dryRun) {
     const root = localSteeringRoot(cwd);
-    if (root && readLocalSteering(root, PLUGIN_SLUG).body !== null)
-      log(`[unadopt --dry-run] would-remove the block in ${localMdPath(root)}`);
+    const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
+    if (cur && cur.body !== null) log(`[unadopt --dry-run] would-remove the block in ${cur.path}`);
     const blockState = claudeMdHasResidue(cwd, PLUGIN_SLUG)
       ? 'would-remove CLAUDE.md block + detail doc'
       : 'no CLAUDE.md block';

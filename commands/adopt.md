@@ -1,6 +1,6 @@
 ---
 name: adopt
-description: "Use when: user asks to put the claude-mem-lite steering block into the current project's CLAUDE.md (for example to share it with the team), or to (re)install it there. Writes a sentinel-wrapped managed block into <cwd>/CLAUDE.md plus a <cwd>/.claude/plugin_claude_mem_lite.md detail doc, removes the auto-written CLAUDE.local.md copy, and migrates away any legacy memory-dir sentinel. Auto-adopt never adds the block to CLAUDE.md itself; it only keeps an existing one in sync. Run /unadopt to remove."
+description: "Use when: user asks to put the claude-mem-lite steering block into the current project's CLAUDE.md (for example to share it with the team), or to (re)install it there. Writes a sentinel-wrapped managed block into <cwd>/CLAUDE.md plus a <cwd>/.claude/plugin_claude_mem_lite.md detail doc, removes the auto-written local copy (CLAUDE.local.md or .claude/rules/claude-mem-lite.md), and migrates away any legacy memory-dir sentinel. Auto-adopt never adds the block to CLAUDE.md itself; it only keeps an existing one in sync. Run /unadopt to remove."
 ---
 
 # /adopt
@@ -12,12 +12,11 @@ project's memory-dir `MEMORY.md`; that polluted an index meant for the user's ow
 memories, and `MEMORY.md` carries no more weight than `CLAUDE.md` anyway.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
-in `CLAUDE.local.md` at the repository root, excluded from git through
-`.git/info/exclude`, and elsewhere (outside git, or next to an `AGENTS.md` that file would
-switch off) it adds the text to each session's context. Run
-`/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
-so your team gets it too. It removes the `CLAUDE.local.md` copy so the text does not
-load twice. A project that carries the block is kept in sync on every SessionStart, and a
+in `CLAUDE.local.md` at the repository root — or, next to an `AGENTS.md` that file would switch
+off, in `.claude/rules/claude-mem-lite.md` — excluded from git through `.git/info/exclude`, and
+where neither can be written (outside git, for example) it adds the text to each session's
+context. Run `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
+so your team gets it too. It removes the local copy so the text does not load twice. A project that carries the block is kept in sync on every SessionStart, and a
 `CLAUDE.md` holding nothing but the block gets the `AGENTS.md` import described below.
 
 ## What it writes
@@ -51,17 +50,17 @@ doc). Other plugins' blocks (e.g. `code-graph-mcp:*`) and your own prose survive
   per-project on each one's next SessionStart.)
 - `--status` — show this project's adoption + count of memdirs awaiting migration
 - `--disable` / `--enable` — per-project opt-out of automatic SessionStart adopt
-  (`--enable` also lets the plugin write a removed `CLAUDE.local.md` block again)
+  (`--enable` also lets the plugin write a removed local block again)
 
 ## Removal & opt-out
 
 - `/unadopt` removes the CLAUDE.md block + `.claude/` detail doc (your prose stays),
-  and the `CLAUDE.local.md` block. The next session writes `CLAUDE.local.md` if the
-  plugin never created one in this repository; one it created before is not written
-  back (the text is injected instead) until `claude-mem-lite adopt --enable`.
+  and the local block. The next session writes a local file if the plugin never
+  created one in this repository; one it created before is not written back (the
+  text is injected instead) until `claude-mem-lite adopt --enable`.
 - `claude-mem-lite adopt --disable` permanently stops auto-adopt for this project
-  (also for sessions started in its subdirectories) and removes the `CLAUDE.local.md`
-  block; a `CLAUDE.md` block stays until `/unadopt`.
+  (also for sessions started in its subdirectories) and removes the local block; a
+  `CLAUDE.md` block stays until `/unadopt`.
 - `MEM_NO_AUTO_ADOPT=1` disables auto-adopt globally; blocks already written stay.
 - `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` freezes the block against drift-refresh
   (keeps your hand-edits to the managed block).

@@ -25,10 +25,12 @@ import { fileURLToPath } from 'url';
 import { execFileSync, spawnSync } from 'child_process';
 import {
   LOCAL_MD,
+  RULES_MD,
   localSteeringRoot,
   writeLocalSteering,
   readLocalSteering,
   removeLocalSteering,
+  forgetLocalSteering,
   isSharedAncestor,
 } from '../lib/local-steering.mjs';
 import { silentAutoAdopt, cmdUnadopt, cmdAdopt } from '../adopt-cli.mjs';
@@ -451,17 +453,41 @@ describe('SessionStart end to end', () => {
     expect(readdirSync(plain)).toEqual([]);
   });
 
-  // A repository whose instructions are AGENTS.md gets the steering injected (see the AGENTS.md
-  // describe below). The one-time note names AGENTS.md and the two ways to a file that leave it
-  // loading: the setting that reads both, or /adopt, whose CLAUDE.md imports it.
-  it('an AGENTS.md repository: injected every session, a one-time note names AGENTS.md and both ways out', () => {
+  // D#212: a repository whose instructions are AGENTS.md gets the block in .claude/rules/, which
+  // Claude Code loads beside AGENTS.md (CLAUDE.local.md would switch it off). Like CLAUDE.local.md,
+  // the file is read before this hook runs, so the session that creates it gets the block injected
+  // once; a one-time note says where the guidance is and why it is not CLAUDE.local.md.
+  it('an AGENTS.md repository: the rules file, injected once, and a one-time note naming it', () => {
     writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
+    git(app, 'add', 'AGENTS.md');
+    git(app, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'agents');
+    const first = sessionStart(app);
+    expect(readFileSync(join(app, RULES_MD), 'utf8')).toContain(HEADING);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(false);
+    expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
+    expect(first.systemMessage ?? '').toContain('.claude/rules/claude-mem-lite.md');
+    expect(first.systemMessage ?? '').toMatch(/AGENTS\.md/);
+    expect(first.systemMessage ?? '').toMatch(/not written again/);
+    expect(status(app)).toBe('');
+    const second = sessionStart(app);
+    expect(second.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
+    expect(second.systemMessage).toBeUndefined();
+  });
+
+  // When the rules file cannot be written either, the steering is injected and the one-time note
+  // names AGENTS.md, why the rules file is not there, and the two ways to a file that leave it
+  // loading: the setting that reads both, or /adopt, whose CLAUDE.md imports it.
+  it('an AGENTS.md repository at a publishable package root: injected, the note says why', () => {
+    writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
+    writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'pkg', version: '1.0.0' }));
     const first = sessionStart(app);
     expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(first.systemMessage ?? '').toMatch(/AGENTS\.md/);
+    expect(first.systemMessage ?? '').toMatch(/npm publish would ship it/);
     expect(first.systemMessage ?? '').toMatch(/claude-md-and-agents-md/);
     expect(first.systemMessage ?? '').toMatch(/\/adopt .*imports AGENTS\.md/);
     expect(existsSync(join(app, LOCAL_MD))).toBe(false);
+    expect(existsSync(join(app, RULES_MD))).toBe(false);
     const second = sessionStart(app);
     expect(second.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(second.systemMessage).toBeUndefined();
@@ -970,7 +996,9 @@ describe('pre-tag delta review: local steering edges, round 2', () => {
 // CLAUDE.local.md auto-adopt wrote into a repository set up for other coding agents therefore
 // switched its AGENTS.md off from the second session on, unseen: reproduced 2026-10-06 on
 // Claude Code 2.1.291 with a canary in AGENTS.md — read before, NONE after silentAutoAdopt,
-// read again with a `.claude/rules/` file in its place. Such a repository gets injection.
+// read again with a `.claude/rules/` file in its place. D#212: such a repository gets the block in
+// .claude/rules/claude-mem-lite.md, which loads beside AGENTS.md as project instructions, in
+// subagents too (probe 2026-10-06), instead of the injection 5dddb48 fell back to.
 describe('AGENTS.md: auto-adopt does not switch it off', () => {
   const app = () => join(home, 'work', 'app');
   const block = () => buildClaudeMdBlock({ detailDocRef: '/data/plugin_claude_mem_lite.md' });
@@ -991,11 +1019,17 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
   };
   beforeEach(() => initRepo(app()));
 
-  it('a repository whose AGENTS.md is its instructions gets injection, and nothing is written', () => {
+  it('a repository whose AGENTS.md is its instructions gets the block in .claude/rules, no CLAUDE.local.md', () => {
     agentsMd(app());
     commitAll(app());
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-agents-md' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      file: RULES_MD,
+    });
+    expect(readFileSync(join(app(), RULES_MD), 'utf8')).toContain(HEADING);
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).toMatch(/^\.claude\/rules\/claude-mem-lite\.md$/m);
     expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
     expect(status(app())).toBe('');
   });
@@ -1025,15 +1059,26 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
   ])('%s counts', (_, arrange, cwdOf) => {
     arrange(app());
     const r = writeLocalSteering(app(), { slug: SLUG, version: V, block: block(), cwd: cwdOf(app()) });
-    expect(r).toMatchObject({ action: 'refused', reason: 'agents-md' });
+    expect(r).toMatchObject({ action: 'created', file: RULES_MD });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
   });
 
   it('a SessionStart in a subdirectory looks from there: its untracked AGENTS.md counts', () => {
     agentsMd(join(app(), 'pkg'));
-    expect(silentAutoAdopt({ cwd: join(app(), 'pkg') })).toMatchObject({
-      action: 'inject',
-      reason: 'local-agents-md',
+    expect(silentAutoAdopt({ cwd: join(app(), 'pkg') })).toMatchObject({ action: 'local', file: RULES_MD });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // An untracked AGENTS.md in a subdirectory is seen only from a session started there. Once the
+  // rules file is written it stays the channel: it switches nothing off, and going back to
+  // CLAUDE.local.md from a root session would switch that AGENTS.md off again.
+  it('the rules file is kept by a later session that sees no AGENTS.md', () => {
+    agentsMd(join(app(), 'pkg'));
+    silentAutoAdopt({ cwd: join(app(), 'pkg') });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'unchanged',
+      file: RULES_MD,
     });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
   });
@@ -1042,44 +1087,64 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
     agentsMd(app(), join('packages', 'api', 'AGENTS.md'));
     commitAll(app());
     rmSync(join(app(), 'packages', 'api', 'AGENTS.md'));
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      file: LOCAL_MD,
+    });
   });
 
   it('AGENTS.local.md, which Claude Code does not read, does not count', () => {
     agentsMd(app(), 'AGENTS.local.md');
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      file: LOCAL_MD,
+    });
   });
 
-  it('a block an earlier version wrote comes out once AGENTS.md appears, and is written again when it goes', () => {
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  it('a CLAUDE.local.md block written before AGENTS.md appeared moves to the rules file', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
     agentsMd(app());
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-agents-md' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'local',
+      written: 'created',
+      file: RULES_MD,
+    });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
     expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
-    // The plugin took it out, not the user, so it is not remembered as a removal.
+    // The plugin moved it, not the user: nothing reads as a removal, and it stays where it is.
     rmSync(join(app(), 'AGENTS.md'));
-    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
   });
 
-  it('with template refresh frozen, the block comes out too', () => {
-    silentAutoAdopt({ cwd: app() });
+  // CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 keeps the user's hand-edited block. It cannot stay in
+  // CLAUDE.local.md beside an AGENTS.md, so the text moves as it is.
+  it('with template refresh frozen, the hand-edited block moves to the rules file unchanged', () => {
+    writeLocalSteering(app(), { slug: SLUG, version: V, block: 'my edited guidance' });
     agentsMd(app());
     process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
     try {
-      expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
     } finally {
       delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
     }
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(readLocalSteering(app(), SLUG).body).toBe('my edited guidance');
   });
 
   it.each([['CLAUDE.md'], [join('.claude', 'CLAUDE.md')]])(
-    "the user's own %s at the root has switched AGENTS.md off already: the file is written",
+    "the user's own %s at the root has switched AGENTS.md off already: CLAUDE.local.md is written",
     (rel) => {
       agentsMd(app());
       mkdirSync(dirname(join(app(), rel)), { recursive: true });
       writeFileSync(join(app(), rel), '# our conventions\n');
-      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+        action: 'local',
+        written: 'created',
+        file: LOCAL_MD,
+      });
     },
   );
 
@@ -1087,16 +1152,16 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
   // lets a CLAUDE.local.md switch AGENTS.md off. Before v2.1.285 the entry's id was
   // `agents-md@builtin`, and later versions read either.
   it.each([
-    ['claude-md-and-agents-md', 'cc-plugin-agents-md@builtin', 'local'],
-    ['claude-md-and-agents-md', 'agents-md@builtin', 'local'],
-    ['claude-md', 'cc-plugin-agents-md@builtin', 'local'],
-    ['managed-only', 'cc-plugin-agents-md@builtin', 'local'],
-    ['claude-md-or-agents-md', 'cc-plugin-agents-md@builtin', 'inject'],
-    ['a-value-from-a-later-version', 'cc-plugin-agents-md@builtin', 'inject'],
-  ])('instructionFiles=%s under %s in the user settings → %s', (value, id, action) => {
+    ['claude-md-and-agents-md', 'cc-plugin-agents-md@builtin', LOCAL_MD],
+    ['claude-md-and-agents-md', 'agents-md@builtin', LOCAL_MD],
+    ['claude-md', 'cc-plugin-agents-md@builtin', LOCAL_MD],
+    ['managed-only', 'cc-plugin-agents-md@builtin', LOCAL_MD],
+    ['claude-md-or-agents-md', 'cc-plugin-agents-md@builtin', RULES_MD],
+    ['a-value-from-a-later-version', 'cc-plugin-agents-md@builtin', RULES_MD],
+  ])('instructionFiles=%s under %s in the user settings → %s', (value, id, file) => {
     agentsMd(app());
     userSettings(join(home, '.claude'), value, id);
-    expect(silentAutoAdopt({ cwd: app() }).action).toBe(action);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file });
   });
 
   it('the user settings are read from CLAUDE_CONFIG_DIR when it is set', () => {
@@ -1104,14 +1169,312 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
     const cfg = join(home, 'cfg');
     userSettings(cfg, 'claude-md-and-agents-md');
     process.env.CLAUDE_CONFIG_DIR = cfg;
-    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
   });
 
   it('settings that do not parse count as the default', () => {
     agentsMd(app());
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), '{ not json');
-    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: RULES_MD });
+  });
+});
+
+// D#212: every refusal of the rules file, and what the plugin does around it. Where it refuses, an
+// AGENTS.md repository gets injection (reason `agents-md`, `detail` naming the refusal).
+describe('D#212: the rules file and its refusals', () => {
+  const app = () => join(home, 'work', 'app');
+  const block = () => buildClaudeMdBlock({ detailDocRef: '/data/plugin_claude_mem_lite.md' });
+  const write = () => writeLocalSteering(app(), { slug: SLUG, version: V, block: block() });
+  const rulesPath = () => join(app(), RULES_MD);
+  const commitAll = (dir) => {
+    git(dir, 'add', '-A');
+    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'c');
+  };
+  beforeEach(() => {
+    initRepo(app());
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitAll(app());
+  });
+
+  it('`git add -A` in a repository whose .claude/ is tracked does not stage it', () => {
+    mkdirSync(join(app(), '.claude'), { recursive: true });
+    writeFileSync(join(app(), '.claude', 'settings.json'), '{}\n');
+    commitAll(app());
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+    git(app(), 'add', '-A');
+    expect(status(app())).toBe('');
+  });
+
+  it('readLocalSteering reads the rules file, with its path', () => {
+    write();
+    const r = readLocalSteering(app(), SLUG);
+    expect(r.body).toContain(HEADING);
+    expect(r.path).toBe(rulesPath());
+  });
+
+  it('a tracked rules file is refused; one that carries the block is reported present', () => {
+    mkdirSync(dirname(rulesPath()), { recursive: true });
+    writeFileSync(rulesPath(), `<!-- ${SLUG}:begin ${V} -->\nteam copy\n<!-- ${SLUG}:end -->\n`);
+    commitAll(app());
+    expect(write()).toMatchObject({
+      action: 'refused',
+      reason: 'agents-md',
+      detail: 'tracked',
+      present: true,
+    });
+    expect(status(app())).toBe('');
+  });
+
+  it.each([
+    ['the rules file', (o) => symlinkSync(join(o, 'x.md'), join(app(), RULES_MD))],
+    ['.claude/rules', (o) => symlinkSync(o, join(app(), '.claude', 'rules'))],
+    ['.claude', (o) => symlinkSync(o, join(app(), '.claude'))],
+  ])('a symlink at %s is refused and nothing is written through it', (_, link) => {
+    const other = join(home, 'shared-dotfiles');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'x.md'), 'theirs\n');
+    mkdirSync(join(app(), '.claude'), { recursive: true });
+    if (_ === '.claude') rmSync(join(app(), '.claude'), { recursive: true });
+    if (_ === 'the rules file') mkdirSync(join(app(), '.claude', 'rules'), { recursive: true });
+    link(other);
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'symlink' });
+    expect(readdirSync(other).sort()).toEqual(['x.md']);
+    expect(readFileSync(join(other, 'x.md'), 'utf8')).toBe('theirs\n');
+    // Removal does not go through the link either, and with nothing of ours behind it there is
+    // nothing to report.
+    expect(removeLocalSteering(app(), SLUG)).toEqual({ action: 'absent' });
+    expect(readdirSync(other).sort()).toEqual(['x.md']);
+  });
+
+  // Another repository's .claude/ reached through a link can hold a block the plugin wrote there:
+  // unadopt here must not take it out of that repository.
+  it("removal does not reach through a linked .claude into another repository's rules file", () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    writeFileSync(join(other, 'AGENTS.md'), '# agents\n');
+    writeLocalSteering(other, { slug: SLUG, version: V, block: block() });
+    const before = readFileSync(join(other, RULES_MD), 'utf8');
+    symlinkSync(join(other, '.claude'), join(app(), '.claude'));
+    expect(removeLocalSteering(app(), SLUG)).toMatchObject({ action: 'skipped-symlink' });
+    expect(readFileSync(join(other, RULES_MD), 'utf8')).toBe(before);
+  });
+
+  it('a file of that name the user wrote is left alone and not hidden from git', () => {
+    mkdirSync(dirname(rulesPath()), { recursive: true });
+    writeFileSync(rulesPath(), '# my own rule\n');
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'foreign' });
+    expect(readFileSync(rulesPath(), 'utf8')).toBe('# my own rule\n');
+    expect(excludeOf(app())).not.toMatch(/claude-mem-lite\.md/);
+  });
+
+  // npm 11.19.0, `npm pack --dry-run`, 2026-10-06: which package roots ship
+  // .claude/rules/claude-mem-lite.md. Without `files`, npm reads .npmignore, or .gitignore when
+  // there is none; with `files`, a first segment of `.claude`, `**` or a wildcard can take it in.
+  it.each([
+    ['no files list and nothing ignoring it', 'refused', {}, null, null],
+    ['.gitignore names .claude/', 'created', {}, null, '.claude/\n'],
+    ['.npmignore present without it, .gitignore with it', 'refused', {}, 'dist\n', '.claude/\n'],
+    ['.npmignore names /.claude/rules/', 'created', {}, '/.claude/rules/\n', null],
+    ['.npmignore names the file', 'created', {}, '.claude/rules/claude-mem-lite.md\n', null],
+    ['files: ["src"]', 'created', { files: ['src'] }, null, null],
+    ['files: [".claude"]', 'refused', { files: ['.claude'] }, null, null],
+    ['files: ["**/*.md"]', 'refused', { files: ['**/*.md'] }, null, null],
+    ['files: ["*"]', 'refused', { files: ['*'] }, null, null],
+    ['files: ["src/**/*.md"]', 'created', { files: ['src/**/*.md'] }, null, null],
+    [
+      '.gitignore names .claude/ and re-includes the file',
+      'refused',
+      {},
+      null,
+      '.claude/\n!.claude/rules/claude-mem-lite.md\n',
+    ],
+    ['private: true', 'created', { private: true }, null, null],
+  ])('package root, %s → %s', (_, action, extra, npmignore, gitignore) => {
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0', ...extra }));
+    if (npmignore !== null) writeFileSync(join(app(), '.npmignore'), npmignore);
+    if (gitignore !== null) writeFileSync(join(app(), '.gitignore'), gitignore);
+    const r = write();
+    expect(r.action).toBe(action);
+    if (action === 'refused') expect(r).toMatchObject({ reason: 'agents-md', detail: 'npm-publishable' });
+    expect(existsSync(rulesPath())).toBe(action === 'created');
+  });
+
+  it('a root that becomes a publishable package loses the rules block, and gets it back once private', () => {
+    write();
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    expect(write()).toMatchObject({ action: 'refused', detail: 'npm-publishable' });
+    expect(existsSync(rulesPath())).toBe(false);
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', private: true }));
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+  });
+
+  it('a negated ignore rule makes the exclude entry useless: nothing written, exclude restored', () => {
+    writeFileSync(join(app(), '.gitignore'), '!.claude/rules/claude-mem-lite.md\n');
+    commitAll(app());
+    const before = excludeOf(app());
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'exclude-failed' });
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(excludeOf(app())).toBe(before);
+  });
+
+  it('a rules file the user deleted is not written again until adopt --enable forgets it', () => {
+    write();
+    rmSync(rulesPath());
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'removed' });
+    expect(existsSync(rulesPath())).toBe(false);
+    forgetLocalSteering(app());
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+  });
+
+  it('removal deletes the file, its exclude line and the directories it emptied, nothing more', () => {
+    write();
+    expect(removeLocalSteering(app(), SLUG)).toMatchObject({ action: 'removed', path: rulesPath() });
+    expect(existsSync(join(app(), '.claude'))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/claude-mem-lite\.md/);
+    mkdirSync(join(app(), '.claude'), { recursive: true });
+    writeFileSync(join(app(), '.claude', 'settings.json'), '{}\n');
+    forgetLocalSteering(app());
+    write();
+    removeLocalSteering(app(), SLUG);
+    expect(readdirSync(join(app(), '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('notes the user added to the rules file survive removal and stay out of `git status`', () => {
+    write();
+    appendFileSync(rulesPath(), '\nmy notes\n');
+    removeLocalSteering(app(), SLUG);
+    expect(readFileSync(rulesPath(), 'utf8')).toContain('my notes');
+    expect(status(app())).toBe('');
+  });
+
+  // The file name is the plugin's, so the file is too, whatever the state file says or whether
+  // there is one.
+  it('…also when the state file is gone', () => {
+    write();
+    appendFileSync(rulesPath(), '\nmy notes\n');
+    forgetLocalSteering(app());
+    removeLocalSteering(app(), SLUG);
+    expect(readFileSync(rulesPath(), 'utf8')).toContain('my notes');
+    expect(status(app())).toBe('');
+  });
+
+  // Moving the block reads `createdFile` from the state the CLAUDE.local.md write left, before the
+  // rules write replaces it: the user's own file goes back to how git saw it.
+  it("moving the block out of the user's own CLAUDE.local.md puts that file back in `git status`", () => {
+    rmSync(join(app(), 'AGENTS.md'));
+    commitAll(app());
+    writeFileSync(join(app(), LOCAL_MD), 'mine\n');
+    write();
+    expect(status(app())).toBe('');
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitAll(app());
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe('mine\n');
+    expect(status(app())).toBe('?? CLAUDE.local.md');
+  });
+
+  // Refused, the rules file leaves the steering to injection; the CLAUDE.local.md block still has to
+  // go (it switches AGENTS.md off), and the plugin taking it out is not the user's removal.
+  it('when the rules file is refused, an earlier CLAUDE.local.md block comes out and is not remembered', () => {
+    rmSync(join(app(), 'AGENTS.md'));
+    commitAll(app());
+    expect(write()).toMatchObject({ action: 'created', file: LOCAL_MD });
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'npm-publishable' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', private: true }));
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+  });
+
+  it('removing one worktree’s rules block keeps the shared exclude entry while another still has one', () => {
+    write();
+    const wt = join(home, 'work', 'wt');
+    git(app(), 'worktree', 'add', '-q', wt);
+    writeLocalSteering(wt, { slug: SLUG, version: V, block: block() });
+    expect(existsSync(join(wt, RULES_MD))).toBe(true);
+    removeLocalSteering(app(), SLUG);
+    expect(excludeOf(app())).toMatch(/^\.claude\/rules\/claude-mem-lite\.md$/m);
+    removeLocalSteering(wt, SLUG);
+    expect(excludeOf(app())).not.toMatch(/claude-mem-lite\.md/);
+  });
+
+  it('with template refresh frozen, a missing exclude entry is restored', () => {
+    write();
+    writeFileSync(join(app(), '.git', 'info', 'exclude'), '');
+    writeLocalSteering(app(), { slug: SLUG, version: V, block: 'other', frozen: true });
+    expect(excludeOf(app())).toMatch(/^\.claude\/rules\/claude-mem-lite\.md$/m);
+    expect(readLocalSteering(app(), SLUG).body).toContain(HEADING);
+  });
+
+  it('quiet-scope counts a rules block as adopted even with MEM_NO_AUTO_ADOPT=1', () => {
+    write();
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    expect(isAdoptedHere(app())).toBe(true);
+    rmSync(rulesPath());
+    expect(isAdoptedHere(app())).toBe(false);
+  });
+
+  describe('the CLI verbs', () => {
+    let cwdBefore;
+    const captureLog = (fn) => {
+      const lines = [];
+      const orig = console.log;
+      console.log = (m) => lines.push(String(m));
+      try {
+        fn();
+      } finally {
+        console.log = orig;
+      }
+      return lines.join('\n');
+    };
+    beforeEach(() => {
+      cwdBefore = process.cwd();
+      process.chdir(app());
+      process.env.CLAUDE_PROJECT_DIR = app();
+      silentAutoAdopt({ cwd: app() });
+      expect(existsSync(rulesPath())).toBe(true);
+    });
+    afterEach(() => {
+      process.chdir(cwdBefore);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    });
+
+    it('unadopt removes it and its exclude line, and says which file', () => {
+      expect(captureLog(() => cmdUnadopt([]))).toContain(rulesPath());
+      expect(existsSync(rulesPath())).toBe(false);
+      expect(excludeOf(app())).not.toMatch(/claude-mem-lite\.md/);
+    });
+
+    it('adopt --disable removes it', () => {
+      cmdAdopt(['--disable']);
+      expect(existsSync(rulesPath())).toBe(false);
+    });
+
+    it('an explicit adopt moves the steering into CLAUDE.md, which imports AGENTS.md, and drops the rules copy', () => {
+      cmdAdopt([]);
+      expect(readBlock(app(), SLUG).body).not.toBeNull();
+      expect(readFileSync(join(app(), 'CLAUDE.md'), 'utf8')).toMatch(/^<!-- .*-->\n@AGENTS\.md\n/);
+      expect(existsSync(rulesPath())).toBe(false);
+    });
+
+    it('unadopt --all sweeps it', () => {
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [app()]: {} } }));
+      expect(captureLog(() => cmdUnadopt(['--all']))).toContain(rulesPath());
+      expect(existsSync(rulesPath())).toBe(false);
+    });
+
+    it('--dry-run and --status name the rules file', () => {
+      expect(captureLog(() => cmdUnadopt(['--dry-run']))).toMatch(
+        /would-remove the block in .*\.claude\/rules\/claude-mem-lite\.md/,
+      );
+      expect(captureLog(() => cmdAdopt(['--status']))).toMatch(
+        /local: +✓ .*\.claude\/rules\/claude-mem-lite\.md/,
+      );
+      expect(existsSync(rulesPath())).toBe(true);
+    });
   });
 });
 
@@ -1138,10 +1501,20 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
   };
   beforeEach(() => initRepo(app()));
 
-  it('AGENTS.md keeps it out', () => {
+  it('AGENTS.md: before any session, the next one writes the rules file', () => {
     writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    expect(statusOut()).toMatch(
+      /local: +— none yet: the next session writes .*\.claude\/rules\/claude-mem-lite\.md.*AGENTS\.md/,
+    );
+  });
+
+  it('AGENTS.md at a publishable package root keeps both files out, and says why', () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
     silentAutoAdopt({ cwd: app() });
-    expect(statusOut()).toMatch(/local: +✗ not written: .*AGENTS\.md.*claude-md-and-agents-md/);
+    expect(statusOut()).toMatch(
+      /local: +✗ not written: .*AGENTS\.md.*npm publish would ship it.*claude-md-and-agents-md/,
+    );
   });
 
   it('a removed block stays removed until adopt --enable', () => {

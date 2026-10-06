@@ -2736,22 +2736,44 @@ function noteLocalSteeringOnce(project) {
   }
 }
 
-// The repository's instructions are AGENTS.md, which Claude Code stops reading once a CLAUDE.md
-// or CLAUDE.local.md exists (lib/local-steering.mjs shadowedAgentsMd), so the steering is
-// injected. The /adopt offer above would not say what becomes of AGENTS.md; told once per
-// project instead, with the two ways to a file that leave AGENTS.md loading: the setting that
-// reads both, or /adopt, whose CLAUDE.md imports it (claudemd.mjs addAgentsImports). It also
-// explains a CLAUDE.local.md an earlier version wrote, and announced, disappearing.
+// D#212: where CLAUDE.local.md would switch off the repository's AGENTS.md, the block goes to
+// .claude/rules/claude-mem-lite.md instead. Same reasons to say so once as for CLAUDE.local.md,
+// plus why it is not that file.
+const RULES_NOTE_MARKER_PREFIX = '.rules-steering-noted-';
+function noteRulesSteeringOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${RULES_NOTE_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      'claude-mem-lite: memory guidance for this project is in .claude/rules/claude-mem-lite.md at the repository root, not in CLAUDE.local.md: Claude Code stops reading your AGENTS.md once a CLAUDE.local.md exists, and a rules file leaves it loading. Git ignores it (it is added to .git/info/exclude unless your ignore rules already cover it), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
+        'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-rules-note');
+  }
+}
+
+// The repository's instructions are AGENTS.md, which a CLAUDE.local.md would switch off, and the
+// rules file that leaves it loading was refused too (lib/local-steering.mjs writeRulesSteering;
+// `detail` is the refusal), so the steering is injected. The /adopt offer above would not say
+// what becomes of AGENTS.md; told once per project instead, with why there is no file and the two
+// ways to one that leave AGENTS.md loading: the setting that reads both, or /adopt, whose CLAUDE.md
+// imports it (claudemd.mjs addAgentsImports). It also explains a CLAUDE.local.md an earlier version
+// wrote, and announced, disappearing.
 const AGENTS_MD_NOTE_MARKER_PREFIX = '.agents-md-noted-';
-function noteAgentsMdOnce(project) {
+async function noteAgentsMdOnce(project, detail) {
   if (process.env.MEM_NO_ADOPT_HINT === '1') return;
   try {
     const marker = join(RUNTIME_DIR, `${AGENTS_MD_NOTE_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
+    const { RULES_MD, RULES_REFUSAL_TEXT } = await import('./lib/local-steering.mjs');
+    const why = RULES_REFUSAL_TEXT[detail] ?? 'it was refused';
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
-      'claude-mem-lite: this project has an AGENTS.md, and Claude Code stops reading AGENTS.md once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance is injected at session start instead of written to a file (a CLAUDE.local.md block an earlier version wrote here is taken out). ' +
-        'To have both, set Project instructions to claude-md-and-agents-md in /config (the file is then written from the next session), or run /adopt to put the guidance in CLAUDE.md, which then imports AGENTS.md. Shown once per project.',
+      `claude-mem-lite: this project has an AGENTS.md, which Claude Code stops reading once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance goes to ${RULES_MD}, which leaves AGENTS.md loading. That file cannot be written here (${why}), so the guidance is injected at session start (a CLAUDE.local.md block an earlier version wrote here is taken out). ` +
+        'To have a file instead, set Project instructions to claude-md-and-agents-md in /config (CLAUDE.local.md is then written from the next session), or run /adopt to put the guidance in CLAUDE.md, which then imports AGENTS.md. Shown once per project.',
     );
   } catch (e) {
     debugCatch(e, 'session-start-agents-md-note');
@@ -2999,6 +3021,8 @@ async function handleSessionStart() {
   let adoptWritten = null;
   let adoptReason = null;
   let adoptAgents = null;
+  let adoptFile = null;
+  let adoptDetail = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -3009,6 +3033,8 @@ async function handleSessionStart() {
       adoptWritten = r.written ?? null;
       adoptReason = r.reason ?? null;
       adoptAgents = r.agents ?? null;
+      adoptFile = r.file ?? null;
+      adoptDetail = r.detail ?? null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -3157,7 +3183,7 @@ async function handleSessionStart() {
     if (adoptAction === 'inject') {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
-      if (adoptReason === 'local-agents-md') noteAgentsMdOnce(project);
+      if (adoptReason === 'local-agents-md') await noteAgentsMdOnce(project, adoptDetail);
       else offerAdoptOnce(project);
     } else if (adoptAction === 'local') {
       // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it
@@ -3168,7 +3194,9 @@ async function handleSessionStart() {
         const steering = await buildInjectedSteering();
         if (steering) stdoutParts.push(steering);
       }
-      noteLocalSteeringOnce(project);
+      const { RULES_MD } = await import('./lib/local-steering.mjs');
+      if (adoptFile === RULES_MD) noteRulesSteeringOnce(project);
+      else noteLocalSteeringOnce(project);
     } else if (adoptAgents) {
       noteAgentsImportOnce(project, adoptAgents);
     }

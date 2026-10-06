@@ -215,6 +215,7 @@ describe('wiring', () => {
       '.local-steering-noted-',
       '.agents-md-noted-',
       '.agents-import-noted-',
+      '.rules-steering-noted-',
     ]) {
       expect(GC_PRESERVED_MARKER_PREFIXES).toContain(p);
     }
