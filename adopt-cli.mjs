@@ -48,6 +48,8 @@ import {
   ensureSteeringDetailDoc,
   localMdPath,
   forgetLocalSteering,
+  localSteeringRemembered,
+  shadowedAgentsMd,
   tildePath,
 } from './lib/local-steering.mjs';
 
@@ -243,8 +245,9 @@ function migrateAll(args) {
  *      out of commits via info/exclude; return 'local' (`written` says what changed). In a
  *      subdirectory, a root CLAUDE.md block → 'already-adopted', a root opt-out → 'disabled'.
  *   5. otherwise (no git, $HOME, a tracked or symlinked CLAUDE.local.md, an npm-publishable
- *      root, any git failure) → write nothing, return 'inject' (the caller puts the steering
- *      into SessionStart context) — or 'already-adopted' when that file carries the block.
+ *      root, an AGENTS.md the file would switch off, any git failure) → write nothing, return
+ *      'inject' (the caller puts the steering into SessionStart context) — or
+ *      'already-adopted' when that file carries the block.
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
 export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
@@ -292,6 +295,7 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
           version,
           block: localBlock,
           frozen: process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1',
+          cwd,
         });
         if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
         // A refused file that carries the block anyway (tracked, or behind a link) is loaded by
@@ -437,17 +441,29 @@ function cmdEnable(args) {
  * statusAll — report the current project's new-scheme adoption, plus a sweep of
  * how many memdirs still carry the legacy sentinel (i.e. await migration).
  */
+// The `local:` line of `adopt --status`. Where nothing was written it says why when the reason
+// lasts — AGENTS.md, or a removal the plugin remembers — and what changes it; otherwise `none`.
+function localSteeringStatus(cwd) {
+  const root = localSteeringRoot(cwd);
+  if (!root)
+    return '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)';
+  if (readLocalSteering(root, PLUGIN_SLUG).body !== null)
+    return `✓ ${localMdPath(root)} (auto-written, excluded from git)`;
+  const agentsMd = shadowedAgentsMd(root, cwd);
+  if (agentsMd)
+    return `✗ not written: Claude Code stops reading ${agentsMd} once a CLAUDE.local.md exists (steering is injected at session start; set Project instructions to claude-md-and-agents-md in /config to have both)`;
+  if (localSteeringRemembered(root))
+    return '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); `claude-mem-lite adopt --enable` writes it back';
+  return '✗ none';
+}
+
 function statusAll() {
   const cwd = detectCwd();
   const adoptedHere = claudeMdIsAdopted(cwd, PLUGIN_SLUG);
   log('[adopt --status] current project:');
   log(`  cwd:        ${cwd}`);
   log(`  CLAUDE.md:  ${adoptedHere ? `✓ adopted (${CURRENT_SENTINEL_VERSION})` : '✗ not adopted'}`);
-  const localRoot = localSteeringRoot(cwd);
-  const localHere = localRoot && readLocalSteering(localRoot, PLUGIN_SLUG).body !== null;
-  log(
-    `  local:      ${localHere ? `✓ ${localMdPath(localRoot)} (auto-written, excluded from git)` : localRoot ? '✗ none' : '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)'}`,
-  );
+  log(`  local:      ${localSteeringStatus(cwd)}`);
   if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
     log('  legacy:     ⚠ memory-dir sentinel still present (migrates on next SessionStart, or run `adopt`)');
   }

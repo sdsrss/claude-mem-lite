@@ -266,6 +266,8 @@ export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   '.adopt-offered-',
   // r3: the one-time note that CLAUDE.local.md was written. Deleting it would repeat the note.
   '.local-steering-noted-',
+  // The one-time note that AGENTS.md keeps the steering out of a file. Deleting it would repeat it.
+  '.agents-md-noted-',
   // D9: the one-time re-key of a project's rows off its pre-D9 id, and its one-time note.
   PROJECT_REKEY_MARKER_PREFIX,
   '.deferred-block-migrated-',

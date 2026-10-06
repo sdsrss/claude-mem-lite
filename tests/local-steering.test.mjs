@@ -451,6 +451,21 @@ describe('SessionStart end to end', () => {
     expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
     expect(readdirSync(plain)).toEqual([]);
   });
+
+  // A repository whose instructions are AGENTS.md gets the steering injected (see the AGENTS.md
+  // describe below). /adopt would write CLAUDE.md, which switches AGENTS.md off just the same,
+  // so the one-time note names AGENTS.md and does not suggest it.
+  it('an AGENTS.md repository: injected every session, a one-time note names AGENTS.md, no /adopt', () => {
+    writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
+    const first = sessionStart(app);
+    expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
+    expect(first.systemMessage ?? '').toMatch(/AGENTS\.md/);
+    expect(first.systemMessage ?? '').not.toMatch(/\/adopt/);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(false);
+    const second = sessionStart(app);
+    expect(second.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
+    expect(second.systemMessage).toBeUndefined();
+  });
 });
 
 // Pre-tag defect review (v6.20.0, against 80335a4): P2-1 worktrees, P2-2 symlinks, P1-1 npm pack,
@@ -946,5 +961,196 @@ describe('pre-tag delta review: local steering edges, round 2', () => {
     writeFileSync(disableSentinelPath(memdirPath(home)), '{}');
     expect(silentAutoAdopt({ cwd: proj }).action).toBe('inject');
     expect(isAdoptedHere(proj)).toBe(true);
+  });
+});
+
+// Claude Code (v2.1.277+) reads AGENTS.md as a project's instructions only while no CLAUDE.md,
+// .claude/CLAUDE.md or CLAUDE.local.md exists in the session's directory or above it
+// (code.claude.com/docs/en/memory#agents-md); `.claude/rules/` files do not count. The
+// CLAUDE.local.md auto-adopt wrote into a repository set up for other coding agents therefore
+// switched its AGENTS.md off from the second session on, unseen: reproduced 2026-10-06 on
+// Claude Code 2.1.291 with a canary in AGENTS.md — read before, NONE after silentAutoAdopt,
+// read again with a `.claude/rules/` file in its place. Such a repository gets injection.
+describe('AGENTS.md: auto-adopt does not switch it off', () => {
+  const app = () => join(home, 'work', 'app');
+  const block = () => buildClaudeMdBlock({ detailDocRef: '/data/plugin_claude_mem_lite.md' });
+  const commitAll = (dir) => {
+    git(dir, 'add', '-A');
+    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'agents');
+  };
+  const agentsMd = (dir, rel = 'AGENTS.md') => {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true });
+    writeFileSync(join(dir, rel), '# Instructions for coding agents\n');
+  };
+  const userSettings = (dir, instructionFiles, id = 'cc-plugin-agents-md@builtin') => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'settings.json'),
+      JSON.stringify({ pluginConfigs: { [id]: { options: { instructionFiles } } } }),
+    );
+  };
+  beforeEach(() => initRepo(app()));
+
+  it('a repository whose AGENTS.md is its instructions gets injection, and nothing is written', () => {
+    agentsMd(app());
+    commitAll(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-agents-md' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    expect(status(app())).toBe('');
+  });
+
+  // Each case is seen by one look alone: the walk up from the session's directory (the first
+  // three) or git's list of tracked files (the last).
+  it.each([
+    [
+      'an untracked .claude/AGENTS.md at the root',
+      (a) => agentsMd(a, join('.claude', 'AGENTS.md')),
+      (a) => a,
+    ],
+    ['an AGENTS.md in a directory above the repository', (a) => agentsMd(dirname(a)), (a) => a],
+    [
+      'an untracked AGENTS.md where the session started',
+      (a) => agentsMd(join(a, 'pkg')),
+      (a) => join(a, 'pkg'),
+    ],
+    [
+      'an AGENTS.md git tracks in a subdirectory, for a session at the root',
+      (a) => {
+        agentsMd(a, join('packages', 'api', 'AGENTS.md'));
+        commitAll(a);
+      },
+      (a) => a,
+    ],
+  ])('%s counts', (_, arrange, cwdOf) => {
+    arrange(app());
+    const r = writeLocalSteering(app(), { slug: SLUG, version: V, block: block(), cwd: cwdOf(app()) });
+    expect(r).toMatchObject({ action: 'refused', reason: 'agents-md' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('a SessionStart in a subdirectory looks from there: its untracked AGENTS.md counts', () => {
+    agentsMd(join(app(), 'pkg'));
+    expect(silentAutoAdopt({ cwd: join(app(), 'pkg') })).toMatchObject({
+      action: 'inject',
+      reason: 'local-agents-md',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('a tracked AGENTS.md deleted from the working tree is not read, so it does not count', () => {
+    agentsMd(app(), join('packages', 'api', 'AGENTS.md'));
+    commitAll(app());
+    rmSync(join(app(), 'packages', 'api', 'AGENTS.md'));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('AGENTS.local.md, which Claude Code does not read, does not count', () => {
+    agentsMd(app(), 'AGENTS.local.md');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('a block an earlier version wrote comes out once AGENTS.md appears, and is written again when it goes', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    agentsMd(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-agents-md' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    // The plugin took it out, not the user, so it is not remembered as a removal.
+    rmSync(join(app(), 'AGENTS.md'));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('with template refresh frozen, the block comes out too', () => {
+    silentAutoAdopt({ cwd: app() });
+    agentsMd(app());
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    try {
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+    } finally {
+      delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+    }
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it.each([['CLAUDE.md'], [join('.claude', 'CLAUDE.md')]])(
+    "the user's own %s at the root has switched AGENTS.md off already: the file is written",
+    (rel) => {
+      agentsMd(app());
+      mkdirSync(dirname(join(app(), rel)), { recursive: true });
+      writeFileSync(join(app(), rel), '# our conventions\n');
+      expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    },
+  );
+
+  // code.claude.com/docs/en/memory#choose-which-instruction-files-load: only the default value
+  // lets a CLAUDE.local.md switch AGENTS.md off. Before v2.1.285 the entry's id was
+  // `agents-md@builtin`, and later versions read either.
+  it.each([
+    ['claude-md-and-agents-md', 'cc-plugin-agents-md@builtin', 'local'],
+    ['claude-md-and-agents-md', 'agents-md@builtin', 'local'],
+    ['claude-md', 'cc-plugin-agents-md@builtin', 'local'],
+    ['managed-only', 'cc-plugin-agents-md@builtin', 'local'],
+    ['claude-md-or-agents-md', 'cc-plugin-agents-md@builtin', 'inject'],
+    ['a-value-from-a-later-version', 'cc-plugin-agents-md@builtin', 'inject'],
+  ])('instructionFiles=%s under %s in the user settings → %s', (value, id, action) => {
+    agentsMd(app());
+    userSettings(join(home, '.claude'), value, id);
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe(action);
+  });
+
+  it('the user settings are read from CLAUDE_CONFIG_DIR when it is set', () => {
+    agentsMd(app());
+    const cfg = join(home, 'cfg');
+    userSettings(cfg, 'claude-md-and-agents-md');
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+  });
+
+  it('settings that do not parse count as the default', () => {
+    agentsMd(app());
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), '{ not json');
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+  });
+});
+
+// `adopt --status` printed "✗ none" for every repository without the file, including one whose
+// block the plugin will never write back (removed by the user or unadopt, lib/local-steering.mjs
+// readState) and one where AGENTS.md keeps it out. Both now say why, and what changes it.
+describe('adopt --status says why there is no CLAUDE.local.md', () => {
+  const app = () => join(home, 'work', 'app');
+  const statusOut = () => {
+    const before = process.cwd();
+    const lines = [];
+    const orig = console.log;
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    console.log = (m) => lines.push(String(m));
+    try {
+      cmdAdopt(['--status']);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    return lines.join('\n');
+  };
+  beforeEach(() => initRepo(app()));
+
+  it('AGENTS.md keeps it out', () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    silentAutoAdopt({ cwd: app() });
+    expect(statusOut()).toMatch(/local: +✗ not written: .*AGENTS\.md.*claude-md-and-agents-md/);
+  });
+
+  it('a removed block stays removed until adopt --enable', () => {
+    silentAutoAdopt({ cwd: app() });
+    rmSync(join(app(), LOCAL_MD));
+    expect(statusOut()).toMatch(/local: +✗ removed.*adopt --enable/);
+  });
+
+  it('a repository where it was never written still reads "none"', () => {
+    expect(statusOut()).toMatch(/local: +✗ none$/m);
   });
 });

@@ -2736,6 +2736,27 @@ function noteLocalSteeringOnce(project) {
   }
 }
 
+// The repository's instructions are AGENTS.md, which Claude Code stops reading once a CLAUDE.md
+// or CLAUDE.local.md exists (lib/local-steering.mjs shadowedAgentsMd), so the steering is
+// injected and the /adopt offer above is wrong here: /adopt writes CLAUDE.md. Told once per
+// project instead, with the setting that lets the file and AGENTS.md load together. It also
+// explains a CLAUDE.local.md an earlier version wrote, and announced, disappearing.
+const AGENTS_MD_NOTE_MARKER_PREFIX = '.agents-md-noted-';
+function noteAgentsMdOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${AGENTS_MD_NOTE_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      'claude-mem-lite: this project has an AGENTS.md, and Claude Code stops reading AGENTS.md once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance is injected at session start instead of written to a file (a CLAUDE.local.md block an earlier version wrote here is taken out). ' +
+        'To have both, set Project instructions to claude-md-and-agents-md in /config; the file is then written from the next session. Shown once per project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-agents-md-note');
+  }
+}
+
 /**
  * D9: a project whose id (`parent--directory`) is not all ASCII got a new one (project-utils.mjs
  * projectNameFromDir). Once per project, move what its old id holds for it — everything, when no
@@ -2947,6 +2968,7 @@ async function handleSessionStart() {
   // the steering text then joins this SessionStart's context (injectSteeringPart below).
   let adoptAction = null;
   let adoptWritten = null;
+  let adoptReason = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -2955,6 +2977,7 @@ async function handleSessionStart() {
       const r = silentAutoAdopt({ cwd, markerDir: RUNTIME_DIR, markerKey: project });
       adoptAction = r.action;
       adoptWritten = r.written ?? null;
+      adoptReason = r.reason ?? null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -3103,7 +3126,8 @@ async function handleSessionStart() {
     if (adoptAction === 'inject') {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
-      offerAdoptOnce(project);
+      if (adoptReason === 'local-agents-md') noteAgentsMdOnce(project);
+      else offerAdoptOnce(project);
     } else if (adoptAction === 'local') {
       // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it
       // does not load it (release-tree sandbox: first sessions had no steering, 0/4). Inject

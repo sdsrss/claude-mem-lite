@@ -2,6 +2,35 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+- **Fix: auto-adopt no longer switches off a project's `AGENTS.md`.** Claude Code 2.1.277 and
+  later reads `AGENTS.md` as a project's instructions only while no `CLAUDE.md`,
+  `.claude/CLAUDE.md` or `CLAUDE.local.md` exists in the session's directory or above it. The
+  `CLAUDE.local.md` that auto-adopt has written into git repositories since 6.20.0 therefore made
+  Claude Code stop reading the repository's `AGENTS.md` from the second session on, with nothing
+  to show for it (the file is hidden from `git status`). Reproduced on Claude Code 2.1.291: a
+  canary word in `AGENTS.md` was answered before auto-adopt ran and not after.
+  - Auto-adopt now writes no `CLAUDE.local.md` when there is an `AGENTS.md` or
+    `.claude/AGENTS.md` in the session's directory or above it, or git tracks an `AGENTS.md`
+    anywhere in the repository. Two exceptions, where the file is written as before: the root
+    has your own `CLAUDE.md` or `.claude/CLAUDE.md` (Claude Code is not reading `AGENTS.md`
+    there already), or your user settings set **Project instructions** to a value that reads
+    `AGENTS.md` regardless of `CLAUDE.local.md` (`claude-md-and-agents-md`), or never
+    (`claude-md`, `managed-only`).
+  - The steering is injected into each session's context instead, and a block an earlier
+    version wrote is taken out at the next session start. A one-time notice says so and names
+    the setting that loads both; it does not suggest `/adopt`, whose `CLAUDE.md` would switch
+    `AGENTS.md` off just the same.
+  - Cost: in those projects the steering works at injection's strength — 1.5 proactive memory
+    saves per 8-session run against 5.25 from a file, in the 2026-09-29 sandbox evaluation.
+  - Not covered: an untracked `AGENTS.md` in a subdirectory is seen only from a session started
+    at or below it.
+- **`adopt --status` says why there is no `CLAUDE.local.md`.** It printed `✗ none` also where
+  the plugin will not write the file. `✗ not written` now names the `AGENTS.md` and the setting,
+  and `✗ removed` says the block was deleted (by you or `unadopt`) and that
+  `claude-mem-lite adopt --enable` writes it back.
+
 ## v6.21.0 — non-ASCII project names and concurrent sessions stop sharing memory
 
 **Upgrade note: projects whose names are not plain ASCII get a new id, and what they stored moves once.** No schema-version
