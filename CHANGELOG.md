@@ -20,12 +20,32 @@ All notable changes to claude-mem-lite are documented in this file.
     (`claude-md`, `managed-only`).
   - The steering is injected into each session's context instead, and a block an earlier
     version wrote is taken out at the next session start. A one-time notice says so and names
-    the setting that loads both; it does not suggest `/adopt`, whose `CLAUDE.md` would switch
-    `AGENTS.md` off just the same.
+    two ways to a file that keep `AGENTS.md` loading: the setting that reads both, or `/adopt`,
+    whose `CLAUDE.md` now imports `AGENTS.md` (next entry).
   - Cost: in those projects the steering works at injection's strength — 1.5 proactive memory
     saves per 8-session run against 5.25 from a file, in the 2026-09-29 sandbox evaluation.
   - Not covered: an untracked `AGENTS.md` in a subdirectory is seen only from a session started
     at or below it.
+- **Fix: an explicit `adopt` no longer switches off the `AGENTS.md` beside the `CLAUDE.md` it
+  creates.** The same Claude Code rule made `claude-mem-lite adopt` (and `/adopt`) hide a
+  project's `AGENTS.md` whenever it created `CLAUDE.md`, without a word.
+  - A `CLAUDE.md` that adopt creates next to an `AGENTS.md` or `.claude/AGENTS.md` now starts by
+    importing it (`@AGENTS.md`), the remedy Claude Code's documentation gives. A marker comment
+    above the import says whose it is; Claude Code strips block-level HTML comments, so it costs
+    no context. Checked on Claude Code 2.1.291: a canary word in `AGENTS.md` was answered
+    through a `CLAUDE.md` of that shape. Re-running adopt on a `CLAUDE.md` that holds nothing
+    but the block adds the import too.
+  - An `AGENTS.md` above the directory, or tracked below it, is named in adopt's output with the
+    setting that keeps it (Project instructions = `claude-md-and-agents-md`): importing the one
+    would make Claude Code ask to approve an external import, the other would load in every
+    session.
+  - Nothing is imported where your own `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` is
+    in the directory or above it, or where your settings read `AGENTS.md` anyway or never:
+    `AGENTS.md` was not being read through a missing file there.
+  - `unadopt` deletes a `CLAUDE.md` that holds nothing but the import lines and the block; once
+    you have written into the file, the import stays.
+  - Not covered: a `CLAUDE.md` block written by auto-adopt before 6.20.0 is kept in sync at every
+    session start and gains no import; run `claude-mem-lite adopt` there to add it.
 - **`adopt --status` says why there is no `CLAUDE.local.md`.** It printed `✗ none` also where
   the plugin will not write the file. `✗ not written` now names the `AGENTS.md` and the setting,
   and `✗ removed` says the block was deleted (by you or `unadopt`) and that

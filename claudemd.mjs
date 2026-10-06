@@ -111,6 +111,63 @@ function blockRegexG(slug) {
   return new RegExp(blockBody(escapeRe(slug)), 'g');
 }
 
+// ─── adopt's AGENTS.md import ────────────────────────────────────────────────
+// Claude Code (v2.1.277+) stops reading AGENTS.md once a CLAUDE.md exists in the session's
+// directory or above it, so the CLAUDE.md adopt writes next to one imports it first, the remedy
+// code.claude.com/docs/en/memory#agents-md gives. The marker line says whose the imports are, so
+// unadopt can delete a file that holds nothing else; Claude Code strips a block-level HTML
+// comment before it injects the file. It must never read as a sentinel: no `:begin` / `:end`.
+function agentsImportMarker(slug) {
+  return `<!-- ${slug} adopt: imports AGENTS.md, which Claude Code stops reading once a CLAUDE.md exists -->`;
+}
+const AGENTS_IMPORT_LINE_RE = /^@(?:\.claude\/)?AGENTS\.md$/;
+
+// Is `rest` (a file's text with our blocks removed) nothing but adopt's import lines?
+function isOwnImportsOnly(rest, slug) {
+  const lines = rest
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return (
+    lines.length >= 2 &&
+    lines[0] === agentsImportMarker(slug) &&
+    lines.slice(1).every((l) => AGENTS_IMPORT_LINE_RE.test(l))
+  );
+}
+
+/**
+ * Whether the instructions file at `p` holds nothing but what this plugin wrote: its blocks and
+ * adopt's AGENTS.md imports. False for a missing file.
+ * @param {string} p absolute path
+ * @param {string} slug
+ * @returns {boolean}
+ */
+export function holdsOnlyOwnLines(p, slug) {
+  try {
+    if (!existsSync(p)) return false;
+    const rest = readFileSync(p, 'utf8').replace(blockRegexG(slug), '');
+    return rest.trim() === '' || isOwnImportsOnly(rest, slug);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Put adopt's AGENTS.md imports at the top of <cwd>/CLAUDE.md (created if absent), unless the
+ * marker is there already. `imports` are paths relative to `cwd` (`AGENTS.md`,
+ * `.claude/AGENTS.md`).
+ * @returns {'added'|'present'}
+ */
+export function addAgentsImports(cwd, slug, imports) {
+  const p = claudeMdPath(cwd);
+  const raw = existsSync(p) ? readFileSync(p, 'utf8') : '';
+  const marker = agentsImportMarker(slug);
+  if (raw.includes(marker)) return 'present';
+  const lines = `${marker}\n${imports.map((i) => `@${i}`).join('\n')}\n`;
+  atomicWrite(p, raw.trim() === '' ? lines : `${lines}\n${raw.replace(/^\s+/, '')}`);
+  return 'added';
+}
+
 function renderBlock(slug, version, body) {
   return `<!-- ${slug}:begin ${version} -->\n${body}\n<!-- ${slug}:end -->`;
 }
@@ -175,7 +232,7 @@ export function readBlockAt(p, slug) {
 /**
  * Is `relPath` — an UNTRACKED path as `git status --porcelain` prints it, relative to `cwd` —
  * nothing but this plugin's own adoption output? True for a CLAUDE.md that holds only our
- * managed block, for our detail doc (checked by its managed-by marker, so a user's file of
+ * managed block (and adopt's AGENTS.md imports), for our detail doc (checked by its managed-by marker, so a user's file of
  * the same name is not ours) or state sidecar, and for a `.claude/` directory holding only
  * those. The startup dashboard and the handoff's tree state count uncommitted files to
  * describe the USER's work; counting what the first SessionStart itself wrote told the model
@@ -190,8 +247,8 @@ export function isOwnAdoptionArtifact(cwd, relPath, slug) {
   try {
     const rel = String(relPath).replace(/\/+$/, '');
     if (rel === 'CLAUDE.md' || rel === 'CLAUDE.local.md') {
-      const blk = readBlockAt(join(cwd, rel), slug);
-      return blk.body !== null && blk.raw.replace(blockRegexG(slug), '').trim() === '';
+      const p = join(cwd, rel);
+      return readBlockAt(p, slug).body !== null && holdsOnlyOwnLines(p, slug);
     }
     const docName = basename(detailDocPath(cwd, slug));
     const stateName = basename(stateFilePath(cwd, slug));
@@ -432,6 +489,9 @@ export function removeBlockAt(p, slug) {
       action = 'removed';
     }
     if (action === 'removed') {
+      // What is left may be adopt's AGENTS.md imports alone: they came with the block, and a
+      // CLAUDE.md holding only them is one adopt created (addAgentsImports).
+      if (isOwnImportsOnly(raw, slug)) raw = '';
       // When the managed block was the ENTIRE file (adopt created CLAUDE.md
       // because none existed), removing it leaves nothing but whitespace.
       // Delete the now-empty file rather than writing a 0-byte CLAUDE.md, so

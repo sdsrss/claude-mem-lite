@@ -11,7 +11,6 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  mkdtempSync,
   mkdirSync,
   writeFileSync,
   readFileSync,
@@ -21,7 +20,6 @@ import {
   symlinkSync,
   appendFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawnSync } from 'child_process';
@@ -43,6 +41,7 @@ import {
 } from '../adopt-content.mjs';
 import { memdirPath, disableSentinelPath } from '../memdir.mjs';
 import { isAdoptedHere } from '../lib/quiet-scope.mjs';
+import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SLUG = PLUGIN_SLUG;
@@ -63,7 +62,7 @@ const excludeOf = (dir) => readFileSync(join(dir, '.git', 'info', 'exclude'), 'u
 let home;
 let saved;
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'cml-local-'));
+  home = mkdtempWithoutInstructionAncestors('cml-local-');
   saved = {
     HOME: process.env.HOME,
     MEM_NO_AUTO_ADOPT: process.env.MEM_NO_AUTO_ADOPT,
@@ -453,14 +452,15 @@ describe('SessionStart end to end', () => {
   });
 
   // A repository whose instructions are AGENTS.md gets the steering injected (see the AGENTS.md
-  // describe below). /adopt would write CLAUDE.md, which switches AGENTS.md off just the same,
-  // so the one-time note names AGENTS.md and does not suggest it.
-  it('an AGENTS.md repository: injected every session, a one-time note names AGENTS.md, no /adopt', () => {
+  // describe below). The one-time note names AGENTS.md and the two ways to a file that leave it
+  // loading: the setting that reads both, or /adopt, whose CLAUDE.md imports it.
+  it('an AGENTS.md repository: injected every session, a one-time note names AGENTS.md and both ways out', () => {
     writeFileSync(join(app, 'AGENTS.md'), '# Instructions for coding agents\n');
     const first = sessionStart(app);
     expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(first.systemMessage ?? '').toMatch(/AGENTS\.md/);
-    expect(first.systemMessage ?? '').not.toMatch(/\/adopt/);
+    expect(first.systemMessage ?? '').toMatch(/claude-md-and-agents-md/);
+    expect(first.systemMessage ?? '').toMatch(/\/adopt .*imports AGENTS\.md/);
     expect(existsSync(join(app, LOCAL_MD))).toBe(false);
     const second = sessionStart(app);
     expect(second.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);

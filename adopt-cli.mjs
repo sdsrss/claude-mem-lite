@@ -38,6 +38,7 @@ import {
   hasLegacyMemdirSentinel,
   claudeMdPath,
   detailDocPath,
+  addAgentsImports,
 } from './claudemd.mjs';
 import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
 import {
@@ -50,6 +51,7 @@ import {
   forgetLocalSteering,
   localSteeringRemembered,
   shadowedAgentsMd,
+  agentsMdForNewClaudeMd,
   tildePath,
 } from './lib/local-steering.mjs';
 
@@ -152,11 +154,23 @@ function adoptOne(cwd, { force, dryRun }) {
   const block = buildClaudeMdBlock();
   const doc = getDetailDoc();
   const version = CURRENT_SENTINEL_VERSION;
+  // Claude Code stops reading AGENTS.md once a CLAUDE.md exists: the one written here imports
+  // the AGENTS.md files beside it and names the ones it cannot import.
+  const agents = agentsMdForNewClaudeMd(cwd, PLUGIN_SLUG);
+  const imports = agents?.imports ?? [];
+  const elsewhere = (verb) =>
+    (agents?.elsewhere ?? []).map(
+      (p) =>
+        `  ⚠ ${p} ${verb} loading in sessions here once CLAUDE.md exists; set Project instructions to claude-md-and-agents-md in /config to keep it`,
+    );
 
   if (dryRun) {
     log(`[adopt --dry-run] ${cwd}`);
     log(`  CLAUDE.md block:  ${claudeMdPath(cwd)} (${block.length} chars, ${version})`);
     log(`  detail doc:       ${detailDocPath(cwd, PLUGIN_SLUG)} (${doc.length} chars)`);
+    if (imports.length > 0)
+      log(`  AGENTS.md:        would import ${imports.join(', ')} at the top of CLAUDE.md`);
+    for (const line of elsewhere('would stop')) log(line);
     if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
       log(`  legacy migrate:   would strip memory-dir sentinel @ ${memdirPath(cwd)}`);
     }
@@ -166,6 +180,10 @@ function adoptOne(cwd, { force, dryRun }) {
   try {
     const mig = migrateLegacyMemoryDir(cwd, PLUGIN_SLUG, { force });
     const r = writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });
+    const importNote =
+      imports.length > 0 && addAgentsImports(cwd, PLUGIN_SLUG, imports) === 'added'
+        ? ` (+imported ${imports.join(', ')}: Claude Code stops reading AGENTS.md once a CLAUDE.md exists)`
+        : '';
     const migNote = mig.action === 'removed' ? ' (+migrated legacy memdir)' : '';
     // CLAUDE.md now carries the block; a CLAUDE.local.md copy would load it twice.
     const local = dropLocalSteering(cwd);
@@ -175,7 +193,8 @@ function adoptOne(cwd, { force, dryRun }) {
         : local.action === 'skipped-symlink'
           ? ` (left ${local.path} alone: it is a symlink)`
           : ` (+removed the block from ${local.path})`;
-    log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}`);
+    log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}${importNote}`);
+    for (const line of elsewhere('stops')) log(line);
     return r;
   } catch (e) {
     log(`[adopt] ${cwd} → error: ${e.message}`);
@@ -451,7 +470,7 @@ function localSteeringStatus(cwd) {
     return `✓ ${localMdPath(root)} (auto-written, excluded from git)`;
   const agentsMd = shadowedAgentsMd(root, cwd);
   if (agentsMd)
-    return `✗ not written: Claude Code stops reading ${agentsMd} once a CLAUDE.local.md exists (steering is injected at session start; set Project instructions to claude-md-and-agents-md in /config to have both)`;
+    return `✗ not written: Claude Code stops reading ${agentsMd} once a CLAUDE.local.md exists (steering is injected at session start; set Project instructions to claude-md-and-agents-md in /config to have both, or run \`claude-mem-lite adopt\`, whose CLAUDE.md imports AGENTS.md)`;
   if (localSteeringRemembered(root))
     return '✗ removed: deleted by you or unadopt, so it is not written again (steering is injected at session start); `claude-mem-lite adopt --enable` writes it back';
   return '✗ none';

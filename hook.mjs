@@ -2738,8 +2738,9 @@ function noteLocalSteeringOnce(project) {
 
 // The repository's instructions are AGENTS.md, which Claude Code stops reading once a CLAUDE.md
 // or CLAUDE.local.md exists (lib/local-steering.mjs shadowedAgentsMd), so the steering is
-// injected and the /adopt offer above is wrong here: /adopt writes CLAUDE.md. Told once per
-// project instead, with the setting that lets the file and AGENTS.md load together. It also
+// injected. The /adopt offer above would not say what becomes of AGENTS.md; told once per
+// project instead, with the two ways to a file that leave AGENTS.md loading: the setting that
+// reads both, or /adopt, whose CLAUDE.md imports it (claudemd.mjs addAgentsImports). It also
 // explains a CLAUDE.local.md an earlier version wrote, and announced, disappearing.
 const AGENTS_MD_NOTE_MARKER_PREFIX = '.agents-md-noted-';
 function noteAgentsMdOnce(project) {
@@ -2750,7 +2751,7 @@ function noteAgentsMdOnce(project) {
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
       'claude-mem-lite: this project has an AGENTS.md, and Claude Code stops reading AGENTS.md once a CLAUDE.md or CLAUDE.local.md exists, so memory guidance is injected at session start instead of written to a file (a CLAUDE.local.md block an earlier version wrote here is taken out). ' +
-        'To have both, set Project instructions to claude-md-and-agents-md in /config; the file is then written from the next session. Shown once per project.',
+        'To have both, set Project instructions to claude-md-and-agents-md in /config (the file is then written from the next session), or run /adopt to put the guidance in CLAUDE.md, which then imports AGENTS.md. Shown once per project.',
     );
   } catch (e) {
     debugCatch(e, 'session-start-agents-md-note');

@@ -2,7 +2,9 @@
 // Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
-import { rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
@@ -257,6 +259,47 @@ export function disposeFixtureDir(dir, { rm = rmSync } = {}) {
     console.warn(`[test-fixture] left ${dir} behind: ${err?.code || err?.message || err}`);
     return false;
   }
+}
+
+// Claude Code reads CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md, AGENTS.md and .claude/AGENTS.md
+// from every directory above the session's, and so does the plugin's AGENTS.md logic
+// (lib/local-steering.mjs). A fixture below one of them tests the machine, not the code:
+// `npm test` puts TMPDIR under $HOME, so ~/.claude/CLAUDE.md sits above every fixture while the
+// test's own HOME points elsewhere — 10 adopt tests failed in the pre-commit run on 2026-10-06
+// and passed under a /tmp TMPDIR.
+const INSTRUCTION_FILES = [
+  'CLAUDE.md',
+  'CLAUDE.local.md',
+  join('.claude', 'CLAUDE.md'),
+  'AGENTS.md',
+  join('.claude', 'AGENTS.md'),
+];
+
+function instructionFileAbove(dir) {
+  for (let d = resolve(dir); ;) {
+    for (const name of INSTRUCTION_FILES) if (existsSync(join(d, name))) return join(d, name);
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+}
+
+/**
+ * mkdtempSync under a directory with no Claude Code instruction file or AGENTS.md in it or above
+ * it: os.tmpdir() when it qualifies, else /tmp. Throws naming the files in the way when neither
+ * does — a failed premise, never a skip.
+ * @param {string} prefix
+ * @returns {string}
+ */
+export function mkdtempWithoutInstructionAncestors(prefix) {
+  const inTheWay = [];
+  for (const base of new Set([tmpdir(), '/tmp'])) {
+    if (!existsSync(base)) continue;
+    const hit = instructionFileAbove(base);
+    if (!hit) return mkdtempSync(join(base, prefix));
+    inTheWay.push(hit);
+  }
+  throw new Error(`no temp root without an instruction file above it: ${inTheWay.join(', ')}`);
 }
 
 /**
