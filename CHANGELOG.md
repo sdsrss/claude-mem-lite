@@ -44,8 +44,9 @@ All notable changes to claude-mem-lite are documented in this file.
     that `npm publish` could ship it with, judged conservatively: not `"private": true`, and
     either a `files` entry whose first part is `.claude` or a wildcard, or no `files` list and no
     line naming `.claude`, `.claude/rules` or the file in `.npmignore` (in `.gitignore` when there
-    is no `.npmignore`), or a `!` line there that could re-include it: any pattern, or a name that
-    is part of its path, in any case (no setup where npm ships it
+    is no `.npmignore`), or a `!` line there that could re-include it: any pattern (extglob
+    included), or a name that is part of its path, in any case; an `.npmignore` or `.gitignore`
+    inside `.claude/` or `.claude/rules/` counts as shipping it too (no setup where npm ships it
     is let through, checked against `npm pack --dry-run` on npm 11.19.0; some where it does not
     are refused). A tracked or linked rules file that already carries the block is left as it is,
     and loads; the session-start sync never deletes a tracked file. A rules file you delete, or `claude-mem-lite unadopt` removes, is not written again
@@ -53,6 +54,11 @@ All notable changes to claude-mem-lite are documented in this file.
     there: the setting that reads `AGENTS.md` beside `CLAUDE.local.md` (not where
     `CLAUDE.local.md` is refused too), and `/adopt` (not where an `AGENTS.md` above the directory
     or in a subdirectory would stop loading).
+  - The session that takes a block out — the rules file once git sees it or a package would ship
+    it, or a `CLAUDE.local.md` beside a new `AGENTS.md` or at a new package root — loaded that
+    file at startup, so it gets no injected copy on top; the injected copy starts with the next
+    session. (For `CLAUDE.local.md` at a package root this changes 6.20.0, which injected in that
+    session too.)
   - `.git/info/exclude` is read by git only: docker build contexts, archives and other packagers
     can pick the rules file up, as they can `CLAUDE.local.md`. Claude Code labels it "project
     instructions, checked into the codebase", which is not so.
@@ -68,7 +74,8 @@ All notable changes to claude-mem-lite are documented in this file.
     no context. Checked on Claude Code 2.1.291: a canary word in `AGENTS.md` was answered
     through a `CLAUDE.md` of that shape. Re-running adopt on a `CLAUDE.md` that holds nothing
     but the block adds the import too.
-  - An `AGENTS.md` above the directory, or tracked below it, is named in adopt's output with the
+  - An `AGENTS.md` above the directory, or tracked below it, or beside a `CLAUDE.md` adopt writes at
+    `$HOME` (an import there would reach every project below), is named in adopt's output with the
     setting that keeps it (Project instructions = `claude-md-and-agents-md`): importing the one
     would make Claude Code ask to approve an external import, the other would load in every
     session.
@@ -100,12 +107,19 @@ All notable changes to claude-mem-lite are documented in this file.
     directory of `CLAUDE.md` does.
 - **`adopt --status` names the local file and, in more cases, says why there is none.** It
   printed `✗ none` also where the plugin will not write the file. `✓` names `CLAUDE.local.md` or
-  the rules file; `— none` says when `CLAUDE.md` carries the block or auto-adopt is off;
-  `— none yet` names the file the next session writes; `✗ not written` names the refusal (a
-  tracked or linked `CLAUDE.local.md`, a package root, or, beside an `AGENTS.md`, why the rules
+  the rules file, and says when git tracks it or it sits behind a symbolic link; `— none` says
+  when `CLAUDE.md` carries the block (and that a local copy beside it goes at the next session
+  start) or auto-adopt is off; `— none yet` names the file the next session writes; `✗ not
+  written` names the refusal (a tracked, linked or unreadable `CLAUDE.local.md`, a package root,
+  a `.gitignore` rule git would let the file through, or, beside an `AGENTS.md`, why the rules
   file cannot be written and which ways to a file work there); and `✗ removed` says the block was
   deleted (by you or `unadopt`) and that after `claude-mem-lite adopt --enable` the next session
   may write it again.
+- **Smaller fixes around the local file.** A `CLAUDE.local.md` or `CLAUDE.md` that is a directory
+  or cannot be read no longer leaves the session with no guidance (it is injected, or the other
+  file is written); a repository without `.git/info/` (made with `git init --template=`) gets its
+  exclude entry; and `unadopt` says so when it cannot edit a local file, instead of reporting
+  nothing to remove.
 
 ## v6.21.0 — non-ASCII project names and concurrent sessions stop sharing memory
 

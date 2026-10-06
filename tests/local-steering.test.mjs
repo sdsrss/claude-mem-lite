@@ -19,6 +19,7 @@ import {
   readdirSync,
   symlinkSync,
   appendFileSync,
+  chmodSync,
 } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -766,12 +767,17 @@ describe('pre-tag delta review: local steering edges, round 2', () => {
   it('a root that becomes a publishable package loses the block written before, and gets it back once private', () => {
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
     pkg(app(), { name: 'lib', version: '1.0.0' });
+    // The session that takes it out loaded it at startup: no injected copy on top (delta D6).
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
-      action: 'inject',
+      action: 'already-adopted',
       reason: 'local-npm-publishable',
     });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
     expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-npm-publishable',
+    });
     // The plugin took it out, not the user, so it is not remembered as a removal.
     pkg(app(), { name: 'lib', version: '1.0.0', private: true });
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
@@ -782,6 +788,8 @@ describe('pre-tag delta review: local steering edges, round 2', () => {
     pkg(app(), { name: 'lib', version: '1.0.0' });
     process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
     try {
+      // Taken out in this session, which loaded it at startup (delta D6); injected from the next.
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('already-adopted');
       expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
     } finally {
       delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
@@ -1420,7 +1428,13 @@ describe('D#212: the rules file and its refusals', () => {
     expect(write()).toMatchObject({ action: 'created', file: LOCAL_MD });
     writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
     writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
-    expect(write()).toMatchObject({ action: 'refused', reason: 'agents-md', detail: 'npm-publishable' });
+    // `present`: this session loaded CLAUDE.local.md at startup, so it gets no injected copy (delta D6).
+    expect(write()).toMatchObject({
+      action: 'refused',
+      reason: 'agents-md',
+      detail: 'npm-publishable',
+      present: true,
+    });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
     expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
     writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', private: true }));
@@ -1692,6 +1706,192 @@ describe('pre-tag defect review (D#212): the rules file', () => {
     // Removal and the quiet gate read the same path; neither may throw on it.
     expect(removeLocalSteering(app(), SLUG)).toEqual({ action: 'absent' });
     expect(isAdoptedHere(app())).toBe(true);
+  });
+});
+
+// Pre-tag delta review of the D#212 repairs (docs/audits/20261006-d212-pretag-delta.md).
+describe('pre-tag delta review (D#212 repairs)', () => {
+  const app = () => join(home, 'work', 'app');
+  const block = () => buildClaudeMdBlock({ detailDocRef: '/data/plugin_claude_mem_lite.md' });
+  const write = () => writeLocalSteering(app(), { slug: SLUG, version: V, block: block() });
+  const rulesPath = () => join(app(), RULES_MD);
+  const commitOnly = (rel) => {
+    git(app(), 'add', rel);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', rel);
+  };
+  const statusLine = (dir) => {
+    const before = process.cwd();
+    const lines = [];
+    const orig = console.log;
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    console.log = (m) => lines.push(String(m));
+    try {
+      cmdAdopt(['--status']);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    return lines.find((l) => l.trimStart().startsWith('local:')) ?? '';
+  };
+  const agents = () => {
+    writeFileSync(join(app(), 'AGENTS.md'), '# Instructions for coding agents\n');
+    commitOnly('AGENTS.md');
+  };
+  beforeEach(() => initRepo(app()));
+
+  // D1: git names the root by its real path; a session or adopt reaching it through a symlink is
+  // still at the root, and the local copy still goes when CLAUDE.md takes over.
+  it('adopt at the root reached through a symlink still removes the local copy', () => {
+    silentAutoAdopt({ cwd: app() });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(true);
+    const link = join(home, 'link');
+    symlinkSync(join(home, 'work'), link);
+    const viaLink = join(link, 'app');
+    const before = process.cwd();
+    process.chdir(viaLink);
+    process.env.CLAUDE_PROJECT_DIR = viaLink;
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      cmdAdopt([]);
+    } finally {
+      console.log = orig;
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // D3: the status line and the notes did not foresee an exclude entry that cannot work.
+  it('after a negation took the rules file out, --status says it cannot be written, not "next session"', () => {
+    agents();
+    write();
+    writeFileSync(join(app(), '.gitignore'), '!.claude/rules/claude-mem-lite.md\n');
+    commitOnly('.gitignore');
+    silentAutoAdopt({ cwd: app() });
+    expect(existsSync(rulesPath())).toBe(false);
+    expect(statusLine(app())).toMatch(/✗ not written: .*git would not ignore it/);
+  });
+
+  it('where CLAUDE.local.md could not be kept out of git either, the setting is not offered', () => {
+    agents();
+    writeFileSync(join(app(), '.gitignore'), '/build\n!*.md\n');
+    commitOnly('.gitignore');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      detail: 'exclude-failed',
+      settingGivesFile: false,
+    });
+  });
+
+  it('a repository without .git/info gets its exclude entry all the same', () => {
+    agents();
+    rmSync(join(app(), '.git', 'info'), { recursive: true, force: true });
+    expect(write()).toMatchObject({ action: 'created', file: RULES_MD });
+    expect(status(app())).toBe('');
+  });
+
+  // D4: npm reads nested ignore files and extglob negations.
+  it.each([
+    [
+      '.claude/.npmignore re-includes rules',
+      () => {
+        writeFileSync(join(app(), '.gitignore'), '.claude/rules\n');
+        mkdirSync(join(app(), '.claude'), { recursive: true });
+        writeFileSync(join(app(), '.claude', '.npmignore'), '!rules\n');
+      },
+    ],
+    ['an extglob negation', () => writeFileSync(join(app(), '.gitignore'), '.claude\n!@(.claude)\n')],
+  ])('package root, %s → refused', (_, arrange) => {
+    agents();
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    arrange();
+    expect(write()).toMatchObject({ action: 'refused', detail: 'npm-publishable' });
+  });
+
+  // D5: a file that cannot be edited is a failure, not "nothing there".
+  it('removal in a read-only directory reports a failure', () => {
+    write();
+    chmodSync(app(), 0o555);
+    try {
+      expect(removeLocalSteering(app(), SLUG).action).toBe('failed');
+    } finally {
+      chmodSync(app(), 0o755);
+    }
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toContain(HEADING);
+  });
+
+  // D6: the session that takes a loaded file out has it in context already.
+  it('the session that takes the rules file out is not injected (it loaded the file)', () => {
+    agents();
+    write();
+    writeFileSync(join(app(), '.gitignore'), '!.claude/rules/claude-mem-lite.md\n');
+    commitOnly('.gitignore');
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('already-adopted');
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+  });
+
+  it('the session that takes CLAUDE.local.md out of a new package root is not injected either', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0' }));
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('already-adopted');
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+  });
+
+  // D7: a failed write puts info/exclude back byte for byte.
+  it.each([
+    ['ends without a newline', 'no-newline-at-end'],
+    ['did not exist', null],
+  ])('a failed write restores an info/exclude that %s', (_, before) => {
+    agents();
+    const ex = join(app(), '.git', 'info', 'exclude');
+    if (before === null) rmSync(ex, { force: true });
+    else writeFileSync(ex, before);
+    writeFileSync(join(app(), '.claude'), 'a file\n');
+    expect(write()).toMatchObject({ action: 'refused', detail: 'write-failed' });
+    if (before === null) expect(existsSync(ex)).toBe(false);
+    else expect(readFileSync(ex, 'utf8')).toBe(before);
+  });
+
+  // D9: a CLAUDE.local.md or CLAUDE.md that is a directory left the session with no guidance.
+  it('a directory named CLAUDE.local.md: the steering is injected, and info/exclude is left alone', () => {
+    mkdirSync(join(app(), LOCAL_MD));
+    const before = excludeOf(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ ok: true, action: 'inject' });
+    expect(excludeOf(app())).toBe(before);
+  });
+
+  it('a directory named CLAUDE.md: the sync still delivers the steering', () => {
+    mkdirSync(join(app(), 'CLAUDE.md'));
+    const r = silentAutoAdopt({ cwd: app() });
+    expect(r.ok).toBe(true);
+    expect(['inject', 'local']).toContain(r.action);
+  });
+
+  // D11: status lines that did not match the next session.
+  it('outside git, a CLAUDE.md that carries the block: --status says so', () => {
+    const plain = join(home, 'work', 'plain');
+    mkdirSync(plain, { recursive: true });
+    writeManaged(plain, { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    expect(statusLine(plain)).toMatch(/— none: CLAUDE\.md carries the block/);
+  });
+
+  it('a local copy beside a CLAUDE.md that carries the block: --status says it goes', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    expect(statusLine(app())).toMatch(/CLAUDE\.md carries the block.*removed at the next session start/);
+  });
+
+  it('a rules file behind a linked .claude: --status says it is behind a link', () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    writeFileSync(join(other, 'AGENTS.md'), '# agents\n');
+    writeLocalSteering(other, { slug: SLUG, version: V, block: block() });
+    symlinkSync(join(other, '.claude'), join(app(), '.claude'));
+    expect(statusLine(app())).toMatch(/✓ .*claude-mem-lite\.md \(behind a symbolic link/);
   });
 });
 

@@ -661,6 +661,15 @@ describe('adopt next to an AGENTS.md', () => {
     expect(readFileSync(claudeMd(tmpHome), 'utf8')).not.toContain('@AGENTS.md');
   });
 
+  // Delta review D8: an explicit adopt at $HOME does not import ~/AGENTS.md either; it names it.
+  it('adopt at $HOME names ~/AGENTS.md instead of importing it', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    agentsMd(tmpHome);
+    cmdAdopt([]);
+    expect(readFileSync(claudeMd(tmpHome), 'utf8')).not.toContain('@AGENTS.md');
+    expect(out()).toContain(join(tmpHome, 'AGENTS.md'));
+  });
+
   // P3-9: with the import line deleted by hand, what is left — the marker — is still the plugin's.
   it('unadopt deletes a CLAUDE.md left with the marker and the block', () => {
     agentsMd(fakeCwd);
