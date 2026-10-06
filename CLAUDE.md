@@ -22,7 +22,7 @@ before retrieval, measurement, release, migration or schema work.**
 | Lint · shell | `npx eslint .` · `shellcheck scripts/*.sh` |
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |
 | Dead code | `npm run dead-code` (knip — measure from the **primary working tree**; the NAME SET is the evidence, not the count) |
-| **Plugin manifests** | `npm run validate:manifests` — **`claude plugin validate . --strict` is NOT equivalent**: `.` resolves to the marketplace manifest alone, and `.claude-plugin/plugin.json` is the one that exits 1 |
+| **Plugin manifests** | `npm run validate:manifests` — **`claude plugin validate . --strict` is NOT equivalent**: it never checks `.claude-plugin/plugin.json` |
 | Bench · multipliers | `npm run benchmark:gate` · `benchmark:multipliers:gate` — **run the second after touching any constant in `scoring-sql.mjs` or `MULT_EXPR`; the first is structurally blind to those** |
 | **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **expires 30 days after its own `timestamp`**, and CI + publish pass `--strict`. Sampled **2026-09-14T16:06:53Z** → red from **2026-10-14 16:06 UTC**. The stamp lives in THREE places (`baseline.json`, `ci.yml`, this row); `tests/baseline-stamp-sync.test.mjs` fails if they disagree. **Recapture BEFORE tagging, in its own commit** — otherwise it goes red after the tag is pushed |
 | Audit metrics | `npm run audit:metrics` · `audit:baseline` · `audit:selfcheck` |
@@ -91,7 +91,7 @@ to · `citation-live-replay.mjs` per-face cite-rate from transcripts (prefer ove
 `citation-stats`) · `episode-flush-replay.mjs` flush decisions through the shipped batcher ·
 `{rerank,keyctx,imperative}-pool-replay.mjs` candidate-pool bounds, Key Context's unit being
 a PROJECT · `patha-exclude-report.mjs` D#216, deciding column `refilled` ·
-`deep-search-holdout.mjs` deep search's PRECISION arm (mean FP@10 = 10.00, 12/12) ·
+`deep-search-holdout.mjs` deep search's PRECISION arm ·
 `compress-veto-rate.mjs` whether D#10's veto FIRES, three arms · `multiplier-discrimination.mjs`
 whether each of the 8 multipliers is WIRED at its magnitude · `longmemeval.mjs` standard
 recall, lexical baseline.
@@ -132,8 +132,8 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 ### Retrieval and ranking
 
 - **Search's reported `total` is NOT the number of rows you can page to** — `reachable` is `preFinalizeCount`, never a re-derived `max(limit*3,60)`. The disclosure goes **SILENT** under a post-filter rather than guess; do not "improve" it with `total - postFilterDropped`.
-- **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a ranking bound** — an importance demotion becomes an *eviction*. Found on five faces. Count such populations with the pool's own `liveObsFilterSql`, not a bare `WHERE importance = 3`.
-- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first; same-ms inserts: **90.67%** in one population, **0.00%** in UPS/pretool. **All 76 judged** (N3); `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
+- **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a ranking bound** — an importance demotion becomes an *eviction*. Count such populations with the pool's own `liveObsFilterSql`, not a bare `WHERE importance = 3`.
+- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first; `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
 - **Deep search floods on questions the corpus cannot answer** — holdout reads **FP@10 = 10.00, 12/12**. The flood is the **AND→OR fallback**, which is also the vocab-mismatch recall win, so three gates were tested against both arms and **rejected**.
 - **That same OR fallback DISARMS auto-escalation**, so both deep rulers describe EXPLICIT deep only and an escalation A/B reading Δ=0 is a blind instrument (rule 9).
 - **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. Use `multiplier-discrimination.mjs`; all eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.
@@ -142,7 +142,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 - **`COALESCE(compressed_into,0)=0` alone is NOT the liveness predicate** — `liveObsFilterSql` also needs `superseded_at IS NULL`. **Which sites need the full one is settled; do not re-derive it** — the per-site reasons differ and are not interchangeable.
 - **A long LLM round-trip needs `liveObsFilterSql` in the UPDATE's WHERE, not just the SELECT** — a concurrent hook can supersede the row mid-call. Treat `changes === 0` as a skip; when one write of a pair is guarded, check the other.
-- **Every re-enrich pool's predicate is another pass's OUTPUT column, so filling a column EVICTS the row from whatever pool keyed on its emptiness.** Found three times, the third created by the second's fix. Before adding a writer, ask which pool's WHERE clause that column is. `optimized_at` is the re-enrich pools' flag and nothing else's.
+- **Every re-enrich pool's predicate is another pass's OUTPUT column, so filling a column EVICTS the row from whatever pool keyed on its emptiness.** Before adding a writer, ask which pool's WHERE clause that column is. `optimized_at` is the re-enrich pools' flag and nothing else's.
 - **A `project` column is not a substitute for a project CHECK on a write** — pass `{ mode: 'write' }`; cross-project ops must compare both rows' projects first.
 - **`writeFileSync(path, data, { flag: 'wx' })` is TWO syscalls**, so the file is briefly visible EMPTY — fill a private temp and `linkSync` it into place.
 - **The injected-ids marker is a union across TABLES**, so ids need namespacing (`injectedIdKey`): most observation ids are also event ids.
@@ -150,28 +150,28 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 ### Unattended LLM paths
 
-- **The daily unattended `normalize` fans out to one scoped pass per project** — a union pass let ONE observation's content rewrite every project. **A corpus-derived whitelist cannot fix that**: if the attacker can write to the corpus they can write to the whitelist, which is what the first fix did. Layer 1 is `isConceptShaped`, a Unicode **property**, never a hand-drawn class (three hand-drawn versions each rejected real orthography); the guard is `lib/memory-input-guard.mjs`, kept separate from `deep-search.mjs`'s `INJECTION_GUARD`. The 8-project cap **ROTATES** via a cursor the escape hatch must not reset.
-- **An `if (x)` guard whose else-branch is a LOOSER RULE is a second policy nobody reviewed, and deleting the `if` promotes it** — `clusterForCompression` grouped on a 14-day window with no similarity check. Smart-compress fails **CLOSED** on a missing `should_compress`; the measured veto argues **against** disabling the branch outright.
+- **The daily unattended `normalize` fans out to one scoped pass per project** — a union pass let ONE observation's content rewrite every project. **A corpus-derived whitelist cannot fix that**: if the attacker can write to the corpus they can write to the whitelist. Layer 1 is `isConceptShaped`, a Unicode **property**, never a hand-drawn class; the guard is `lib/memory-input-guard.mjs`, kept separate from `deep-search.mjs`'s `INJECTION_GUARD`. The 8-project cap **ROTATES** via a cursor the escape hatch must not reset.
+- **An `if (x)` guard whose else-branch is a LOOSER RULE is a second policy nobody reviewed, and deleting the `if` promotes it**. Smart-compress fails **CLOSED** on a missing `should_compress`; the measured veto argues **against** disabling the branch outright.
 - **Repetition must vary something** — `DEFAULT_LLM_TEMPERATURE` is 0, so re-asking an identical prompt measures nothing. Rotate member order.
 
 ### Install, platform and recovery
 
-- **`package.json`'s `os` is an npm INSTALL gate sitting on every MCP launch after an update** (the plugin cache ships without `node_modules`), so `["darwin","linux"]` did not warn Windows users — it killed the stdio server. **A gate is not a message.** `doctor` keys on whether **bash runs** and returns **three** outcomes: "I could not look" gets its own warning, because a green "nothing to check" ends the search.
+- **`package.json`'s `os` is an npm INSTALL gate sitting on every MCP launch after an update** (the plugin cache ships without `node_modules`): on Windows it killed the stdio server. **A gate is not a message.** `doctor` keys on whether **bash runs** and returns **three** outcomes: "I could not look" gets its own warning, because a green "nothing to check" ends the search.
 - **A recovery path must not import the thing it recovers** — one import edge, for two path constants, put the signature-verified repair out of reach on the broken install it exists to repair. They live in `lib/data-paths.mjs` (a leaf): importing a constant drags in its module's whole load graph.
 - **A prebuilt addon that is PRESENT and will not load cannot be healed by compiling one** — better-sqlite3 picks `prebuilds/` on existence alone. Quarantine the dead prebuild **only inside the source-build branch**, and **never name the addon's path — ask `getPrebuildPath()`**.
 - **A DB written by a NEWER claude-mem-lite locks every older code home out, permanently.** `lib/schema-skew.mjs` computes the remedy from the ROOT that is behind, not the machine's global shape — **grep its importers rather than enumerating surfaces here.** The dedup marker must be per PROJECT; nothing called from `openDb`'s catch may throw (`getSessionId()` MINTS and writes).
 - **A database file SQLite will not open is that shape with a DESTRUCTIVE remedy.** `SQLITE_CORRUPT_VTAB` (a damaged FTS index) carries the **same message text** as a damaged file — classify on `err.code` via `isFtsCorruptionError`, or you offer to overwrite a database whose rows are intact. The two channels carry **different strings**: the human gets the shell command, the model none. Register new per-project markers in `GC_PROJECT_MARKER_PREFIXES`.
-- **`claude mcp remove -s project` edits the repository you are standing in** — it once emptied this repo's tracked `.mcp.json`. Install warns instead, on both branches.
+- **`claude mcp remove -s project` edits the repository you are standing in**; install warns instead, on both branches.
 
 ### Testing this repo
 
 - **Tests use a `:memory:` DB**; schema changes must sync to test files.
-- **A test that reads repo source as TEXT must use `dirname(fileURLToPath(...))` + `join()`, never `new URL('../x.mjs', import.meta.url)`** — the URL form drops that module out of knip's report entirely. Guarded by `tests/no-url-module-paths.test.mjs`.
+- **A test that reads repo source as TEXT must use `dirname(fileURLToPath(...))` + `join()`, never `new URL('../x.mjs', import.meta.url)`** — it hides the module from knip; guarded by `tests/no-url-module-paths.test.mjs`.
 - **`MEM_NO_AUTO_ADOPT=1` is a GLOBAL opt-out every auto-adopt caller must honour** — any test spawning `install` or `repair` must set it, or the suite rewrites this repo's own CLAUDE.md and sidecar.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at a temp dir, set `MEM_NO_AUTO_ADOPT=1`, assert a premise.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.
 - **Tool name mapping**: Claude Code's Agent tool is `'Agent'`, not `'Task'`; Skill via `event.tool_input?.skill`. Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for CLI injection.
-- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the four shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
+- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the four shipped bash hooks sit outside every guard built on it. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
 <!-- claude-mem-lite:begin v1 -->
 ## claude-mem-lite — persistent memory
 
@@ -179,8 +179,9 @@ PreToolUse hooks already run `mem_recall` for past lessons before Read/Edit/Writ
 
 | When | Call |
 |------|------|
-| Before Edit/Write | hook already recalled; if an injected `#NN` lesson changed what you did, name `#NN` once where you say so (citing = adopting; uncited lessons decay; skip ones that did not apply) |
-| After fixing a non-trivial bug | `mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)` |
+| Before Edit/Write | hook already recalled; if an injected `#NN` lesson changed what you did, add the bare tag `(#NN)` once at the end of the sentence describing that change (citing = adopting; uncited lessons decay; skip ones that did not apply). No other mention of memory ids, saves or the memory store in replies to the user |
+| A recalled memory drives an answer or a design choice | check its claim in the code or `git log` first: `#NN` and `E#NN` rows are notes from past sessions, many written automatically, so they can be wrong, and they describe the code as it was. If the code disagrees, trust the code and replace the note: `mem_save(..., supersedes=[NN])`, or `supersedes=["E#NN"]` for an event |
+| After fixing a non-trivial bug | `mem_save(type="bugfix", lesson_learned="<root cause + fix, only what this change's diff shows>", importance=2)` |
 | After a non-obvious architecture decision | `mem_save(type="decision", lesson_learned="<constraint + tradeoff>")` |
 | Deferring to a future session | `mem_defer({title, priority:1|2|3, detail})`; when fixed, add `closes_deferred=[N]` to `mem_save` |
 | Looking up past work / history | `mem_search "keywords"` · `mem_recent` · `mem_timeline` |
