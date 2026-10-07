@@ -202,8 +202,7 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 ## 升级到 6.23.0
 
 **如果你设置了 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_API_KEY`，后台 LLM 调用现在会发往那个网关。**
-没有 schema 版本变更：本版本打开过的数据库，6.22.1 仍能打开。想保持旧行为，请停留在 6.22.1：
-直接安装或 npx 安装还需要设 `CLAUDE_MEM_SKIP_UPDATE=1`，否则一天之内会自动更新；插件安装请按英文
+没有 schema 版本变更：本版本打开过的数据库，6.22.1 仍能打开。想保持旧行为，请停留在 6.22.1；已经更新的插件安装可以按英文
 README "Trust model per install path" 一节的回退步骤操作。
 
 - **受影响的是谁。** 以前直连 API 这一路不管 `ANTHROPIC_BASE_URL` 是什么，都用内置模型 ID 发往

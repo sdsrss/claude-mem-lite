@@ -6,9 +6,8 @@ All notable changes to claude-mem-lite are documented in this file.
 
 One change for users who already set `ANTHROPIC_BASE_URL` (below), one opt-in feature, and a
 fix. No schema-version change and no migration: 6.22.1 still opens a database this release has
-opened. To keep the old gateway behaviour, stay on 6.22.1: a direct or npx install also needs
-`CLAUDE_MEM_SKIP_UPDATE=1`, or it updates itself within a day, and a plugin install follows the
-README's rollback recipe. Staying there also gives up the large-store fix below.
+opened. To keep the old gateway behaviour, stay on 6.22.1 (a plugin install that already updated
+can follow the README's rollback recipe); staying there also gives up the large-store fix below.
 
 - **Fix: on a large store every prompt's memory search could take seconds and time out** (#41,
   reported by @flamarion). Nothing ever ran `ANALYZE`, so no database had SQLite's planner
@@ -35,9 +34,10 @@ README's rollback recipe. Staying there also gives up the large-store fix below.
     these calls now go to that gateway**, with the tier models if you set them.
   - A value the plugin cannot use (not a parseable URL, not http or https, plain http to a host
     that is not loopback, credentials in the URL, a query or a fragment) skips the direct leg,
-    so the plugin sends the key neither to that URL nor to `api.anthropic.com`. Calls fall back
-    to `claude -p`, which reads `ANTHROPIC_BASE_URL` itself, and `doctor` says to fix or unset
-    the value.
+    so that leg sends the key neither to that URL nor to `api.anthropic.com`. Calls fall back
+    to `claude -p`, which reads `ANTHROPIC_BASE_URL` itself: with plain http to a host that is
+    not loopback, the claude CLI still sends its key there unencrypted. `doctor` says so and
+    says to fix or unset the value.
   - `doctor` probes the configured host and port, directly and through a proxy, including a
     gateway addressed by an IPv4 or IPv6 literal, and such a gateway works through
     `HTTPS_PROXY`.

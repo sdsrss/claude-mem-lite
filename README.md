@@ -241,8 +241,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 **If you set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, background LLM calls now go to that
 gateway.** No schema-version change: 6.22.1 still opens the database after this release has.
-To keep the old behaviour, stay on 6.22.1: a direct or npx install also needs
-`CLAUDE_MEM_SKIP_UPDATE=1`, or it updates itself within a day, and a plugin install follows the
+To keep the old behaviour, stay on 6.22.1; a plugin install that already updated can follow the
 rollback recipe under "Trust model per install path".
 
 - **Who is affected.** The direct API leg used to post to `api.anthropic.com` with the built-in
