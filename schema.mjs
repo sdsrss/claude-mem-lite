@@ -1338,6 +1338,53 @@ export function ensureDb() {
 }
 
 /**
+ * Give the query planner statistics (sqlite_stat1/4) the way SQLite's docs recommend:
+ * `PRAGMA optimize=0x10002` analyzes only tables whose indexes have no statistics yet or
+ * whose row count moved 10-fold since their last ANALYZE, under SQLite's own temporary
+ * analysis_limit, and costs ~0.1 ms when there is nothing to do.
+ *
+ * Nothing ran ANALYZE before #41, so no database had statistics. Without them the planner
+ * drives `observations_fts JOIN observations` from idx_obs_project_live and evaluates the
+ * FTS5 MATCH once per candidate row: 9.4 s for one hook search on a 44k-row project, 13 ms
+ * once analyzed (2026-10-07, synthetic corpus; tests/planner-stats.test.mjs).
+ *
+ * Called where the docs put it: when a long-lived connection opens (server.mjs), once a day
+ * (the auto-maintain worker) and after a bulk load (import-jsonl). Not on hook opens: an
+ * empty table writes no stat row, so on a database with empty tables every call runs
+ * ANALYZE on them again, and the hot path should not pay for that.
+ *
+ * Never throws. A read-only handle, or a writer still holding the lock after
+ * `busyTimeoutMs`, skips this round and returns false; the next caller retries. The override
+ * is for callers on a latency path, and the connection's own timeout is put back after.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ busyTimeoutMs?: number }} [opts]
+ * @returns {boolean} whether the pragma ran
+ */
+export function refreshPlannerStats(db, { busyTimeoutMs } = {}) {
+  let prior;
+  try {
+    if (busyTimeoutMs !== undefined) {
+      prior = db.pragma('busy_timeout', { simple: true });
+      db.pragma(`busy_timeout = ${Math.max(0, Math.floor(busyTimeoutMs))}`);
+    }
+    db.pragma('optimize=0x10002');
+    return true;
+  } catch (e) {
+    debugCatch(e, 'refresh-planner-stats');
+    return false;
+  } finally {
+    if (prior !== undefined) {
+      try {
+        db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : 5000}`);
+      } catch {
+        /* the connection is unusable anyway; its next statement reports why */
+      }
+    }
+  }
+}
+
+/**
  * Whether an open/init error carries a genuine corruption signature. WAL-delete
  * recovery is ONLY safe for these: on a transient error (SQLITE_BUSY) or the
  * forward-version guard throw, deleting the WAL would discard committed-but-

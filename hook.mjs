@@ -76,7 +76,7 @@ import {
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
 // always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
-import { DB_DIR, DB_PATH, CODE_DIR } from './schema.mjs';
+import { DB_DIR, DB_PATH, CODE_DIR, refreshPlannerStats } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
@@ -2236,6 +2236,10 @@ function runSessionStartAutoMaintain(db, project) {
       } catch (e) {
         debugCatch(e, 'auto-maintain-handoff-gc');
       }
+
+      // Planner statistics, the "once a day" half of SQLite's recommendation (#41). Last, so
+      // the purge/dedup above have already moved the row counts it compares. Never throws.
+      refreshPlannerStats(db);
 
       // Mark maintenance as done (24h gate) — even though compression runs in background
       writeFileSync(maintainFile, JSON.stringify({ epoch: Date.now() }));

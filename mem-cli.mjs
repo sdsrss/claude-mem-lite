@@ -2,7 +2,7 @@
 // claude-mem-lite CLI — lightweight command layer for direct memory access
 // No MCP SDK or heavy deps — only imports schema.mjs and utils.mjs
 
-import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
 import {
@@ -3474,6 +3474,9 @@ async function cmdImportJsonl(db, argv) {
       `, ${totalSkip} skipped from ${files.length} file(s)${errorTail}.`,
   );
   if (totalPrompts > 0 || totalObs > 0) {
+    // A bulk load is exactly when the planner's statistics are missing or 10-fold stale;
+    // without them every hook search runs FTS5 MATCH once per row (#41). Never throws.
+    refreshPlannerStats(db);
     // Orphan tool_use events persist as (truncated) observations and are counted INSIDE
     // totalObs (lib/import-jsonl.mjs), so they already count as "something was imported"
     // — an orphan-only first import must not fall through to the "already imported"
