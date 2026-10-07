@@ -2517,9 +2517,9 @@ async function doctor() {
       /* cannot judge — report the recorded state as it stands */
     }
     // While checks are off neither the background check nor self-update looks up; only a repair
-    // does (README: a repair still runs). So a failure recorded before they were turned off stayed
-    // a warning until a repair happened to look up, and a missing state file read "first run?".
-    // Say they are off instead (D#266).
+    // does (README: a repair still runs), and since D#266 its successful lookup is the one thing
+    // that clears a failure recorded before they were turned off. Without this branch that failure
+    // stayed a warning, and a missing state file read "first run?". Say they are off instead.
     const checksOff = hookUpdate?.updateCheckDisabledReason() ?? null;
     if (checksOff) {
       const why =
@@ -2560,7 +2560,7 @@ async function doctor() {
         // doctor sees only its own environment: a CLAUDE_MEM_SKIP_UPDATE set in Claude Code's
         // settings `env` turns the checks off for the hooks but not here (post-release review).
         log(
-          "If CLAUDE_MEM_SKIP_UPDATE is set in Claude Code's settings, background checks are off there and this record dates from before that.",
+          "If CLAUDE_MEM_SKIP_UPDATE is set in Claude Code's settings, background checks are off there; this record may be older, or from a run without it (a terminal self-update).",
         );
       } else {
         ok(`Update state: ${parts.join(', ') || 'empty'}`);

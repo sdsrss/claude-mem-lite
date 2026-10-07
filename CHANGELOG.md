@@ -7,9 +7,9 @@ All notable changes to claude-mem-lite are documented in this file.
 - **Fix: `doctor` no longer keeps a stale "update lookup failed" warning.** After a `repair`
   that fetched a release, the warning stayed until the next background check (24 hours, 6 when
   rate-limited), because repair's lookup recorded nothing on success; it now clears the warning.
-  With `CLAUDE_MEM_SKIP_UPDATE` set, the background check and `self-update` never look up (a
-  `repair` still does), so the warning stayed until a repair happened to, and with no state file
-  doctor asked "first run?"; it now says the checks are off.
+  With `CLAUDE_MEM_SKIP_UPDATE` set, the background check and `self-update` never look up and a
+  `repair`'s lookup recorded nothing, so the warning stayed until the variable was unset, and with
+  no state file doctor asked "first run?"; it now says the checks are off.
 - **Fix: in the narrow re-enrich pass, a reply that scores a protected row 0 no longer writes
   into it.** A row that pass may not hide (a compression keeper, or one whose importance a person
   set) already kept its title and narrative when the model scored it 0; the same write still

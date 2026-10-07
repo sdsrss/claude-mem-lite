@@ -123,7 +123,7 @@ describe('doctor with update checks turned off (D#266)', () => {
     expect(doctorUpdateLine(failing)).toContain('⚠');
   });
 
-  it('says the checks are off instead of warning about a failure nothing will clear', () => {
+  it('says the checks are off instead of warning about a failure no background check will clear', () => {
     const line = doctorUpdateLine(failing, { CLAUDE_MEM_SKIP_UPDATE: '1' });
     expect(line, 'doctor printed no Update state line at all').toContain('CLAUDE_MEM_SKIP_UPDATE');
     expect(line).toContain('✓');

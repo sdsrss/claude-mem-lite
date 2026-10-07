@@ -325,10 +325,10 @@ export async function fetchLatestRelease() {
 
 // repair looks up through fetchLatestRelease, so a lookup that succeeds there is evidence against
 // the failure doctor reports; without this the warning outlived the repair by a full check interval
-// (D#266). Only the two fields doctor's warning reads. lastCheck, latestVersion and rateLimited
-// belong to the background check: rateLimited picks its interval (6 h, else 24 h), so clearing it
-// here pushed the next check back by up to 18 h (post-release review). No write when there is
-// nothing to clear.
+// (D#266). Only the two fields that decide whether doctor warns. lastCheck, latestVersion and
+// rateLimited belong to checkForUpdate (the background check and self-update): rateLimited picks
+// its interval (6 h, else 24 h), so clearing it here pushed the next check back by up to 18 h
+// (post-release review). No write when there is nothing to clear.
 function clearRecordedLookupFailure() {
   const state = readState();
   if (!state.lookupError && !state.lookupFailingSince) return;
@@ -337,8 +337,9 @@ function clearRecordedLookupFailure() {
 
 // One lookup's outcome, returned rather than kept in module state: a module flag let a second
 // lookup running at the same time read the first one's 403 (D#260). `rateLimited` is THIS
-// lookup's refusal; the persisted flag is not that, since only a successful background check
-// clears it (pre-tag review of cd9f1ab7). `error` says why there is no release, for doctor (D#255).
+// lookup's refusal; the persisted flag is not that, since only a successful checkForUpdate (the
+// background check or self-update) clears it (pre-tag review of cd9f1ab7). `error` says why there
+// is no release, for doctor (D#255).
 async function lookupLatestRelease() {
   const headers = {
     Accept: 'application/vnd.github+json',

@@ -1,7 +1,7 @@
 # Post-release review — v6.24.0 batch D#266–D#270, defects lens (blind)
 
 - Range: `f09a9419..a41d9963`. 7 commits (the brief said 8; the brief was wrong). Reviewer: fresh `reviewer` subagent, blind brief (artifact + contract + questions; no author rationale). Delivered 2026-10-07 by heredoc file.
-- Disposition: P3-2 (rateLimited cleared by a repair lookup) fixed in 0d1ae7b5; P3-5 (SKIP_UPDATE only in Claude Code settings env) answered with a doctor detail line in 0d1ae7b5, host settings not read; P3-1 (stamp-only UPDATE guards) pinned in 9f91f846; P3-3 (path text keys) fixed in a21669cc with -ef + physical-path keys; P3-4 (non-default profiles re-run once) stated in the CHANGELOG in a21669cc; P3-6 (2914930c message) left in history, the missing behavioural cases added in a21669cc. Q4: pack.status check added; the D#267/D#268 cases stay in their describe block (placement only).
+- Disposition: P3-2 (rateLimited cleared by a repair lookup) fixed in 0d1ae7b5; P3-5 (SKIP_UPDATE only in Claude Code settings env) answered with a doctor detail line in 0d1ae7b5, host settings not read; P3-1 (stamp-only UPDATE guards) pinned in 9f91f846; P3-3 (path text keys) fixed in a21669cc with -ef + physical-path keys, completed for the residue key in 6ea6f1f4 (delta review P3-1); P3-4 (non-default profiles re-run once) stated in the CHANGELOG in a21669cc; P3-6 (2914930c message) left in history, the missing behavioural cases added in a21669cc. Q3 weak spot (posix arm with no absolute value) fixed in 6ea6f1f4; Q4: pack.status check added; the D#267/D#268 cases stay in their describe block (placement only).
 - Archived verbatim below.
 
 ---
