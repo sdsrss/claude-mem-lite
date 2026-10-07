@@ -96,6 +96,15 @@ describe('httpConnectProxyFor (transport selection)', () => {
     expect(httpConnectProxyFor('https://gw.example.com/x')).toBeNull();
   });
 
+  it('reads NO_PROXY before no_proxy when both are set', () => {
+    // The order this module has always had; curl, Python and Go read no_proxy first.
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', 'upper.test');
+    vi.stubEnv('no_proxy', 'lower.test');
+    expect(httpConnectProxyFor('https://upper.test/x')).toBeNull();
+    expect(httpConnectProxyFor('https://lower.test/x')).toBe('http://127.0.0.1:1');
+  });
+
   it('ignores a trailing root dot on either side', () => {
     vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
     vi.stubEnv('NO_PROXY', 'gw.example.com');
