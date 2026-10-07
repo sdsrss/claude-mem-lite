@@ -2,20 +2,15 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 
-- **Fix: a plain-`http://` gateway no longer sends the API key to `HTTP_PROXY`.** Plain http is
-  accepted only for a loopback `ANTHROPIC_BASE_URL`, on the premise that the request stays on
-  this machine. With Node's opt-in `NODE_USE_ENV_PROXY=1` and `HTTP_PROXY` set, native `fetch`
-  handed that request to the proxy unless Node's own `NO_PROXY` matching exempted the host, and
-  the proxy could read the `x-api-key` header: Node 26 sent it as a plain request, Node 22
-  inside a CONNECT tunnel that carries no encryption for an http target. A remote proxy then
-  delivered the request to its own loopback, not this machine's. The direct API leg now sends
-  plain-http requests itself, straight to the loopback host, however the scheme is spelled
-  (`HTTP://` included). `doctor` already probed that host
-  directly, so its "reachable (direct)" line now describes the hop the product uses. Without
-  `NODE_USE_ENV_PROXY` a plain-http request already went direct and still does; an `https://`
-  base URL takes the same path as before.
+Fixes only; no schema change, no migration, no new setting.
+
+**Behind an HTTP(S) proxy, 6.23.2 and earlier cannot see this release**: their update check
+fails, silently, so no notice appears. Run `npx claude-mem-lite@latest self-update` (it runs
+this release's updater), or update the way you installed. Plugin installs update through
+`/plugin marketplace update sdsrss` as before.
+
 - **Fix: behind an HTTP(S) proxy, the update check and the release download work again.**
   Requests through the proxy tunnel carried `Host: api.github.com:80` for a URL without a port:
   Node's `https.request` takes its default port as 80 when it is handed a connection and no
@@ -27,6 +22,18 @@ All notable changes to claude-mem-lite are documented in this file.
   them were not affected. An `https://` `ANTHROPIC_BASE_URL` gateway without an explicit port
   got `:80` too; how each gateway treated it was not measured. The tunnel now sends the host
   without the default port.
+- **Fix: a plain-`http://` gateway no longer sends the API key to `HTTP_PROXY`.** Plain http is
+  accepted only for a loopback `ANTHROPIC_BASE_URL`, on the premise that the request stays on
+  this machine. With Node's opt-in `NODE_USE_ENV_PROXY=1` and `HTTP_PROXY` set, native `fetch`
+  handed that request to the proxy unless Node's own `NO_PROXY` matching exempted the host, and
+  the proxy could read the `x-api-key` header: Node 26 sent it as a plain request, Node 22
+  inside a CONNECT tunnel that carries no encryption for an http target. A remote proxy then
+  delivered the request to its own loopback, not this machine's. The direct API leg now sends
+  plain-http requests itself, straight to the loopback host, however the scheme is spelled
+  (`HTTP://` included). `doctor` already probed that host directly, so its "reachable (direct)"
+  line now describes the hop the product uses. Without
+  `NODE_USE_ENV_PROXY` a plain-http request already went direct and still does; an `https://`
+  base URL takes the same path as before.
 - **Fix: `self-update` no longer says "Already up to date" when it did not check.** With
   `CLAUDE_MEM_SKIP_UPDATE` set, on a development install (a git checkout or symlinks), or when
   GitHub could not be reached or was rate-limiting, `self-update` (`node install.mjs update`)
@@ -34,6 +41,11 @@ All notable changes to claude-mem-lite are documented in this file.
   silence the session-start notice was told they were current and stayed on an old release. It
   now says the check did not run or failed, and why. The exit code is still 0. Its banner also
   names `self-update`; through `claude-mem-lite`, `update` is the memory editor.
+
+- **Docs: git-clone installs update with `node install.mjs update`.** The README told git-clone
+  users to update with `git pull && node install.mjs install`, which installs the checked-out
+  branch without a signature check, while the trust-model table listed git clone under signed
+  updates. It now gives the signed command first and says what the `git pull` route does.
 
 ## v6.23.2 — two proxy fixes; the README stops saying direct installs auto-update
 
