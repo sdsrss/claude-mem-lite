@@ -120,6 +120,9 @@ describe('httpConnectProxyFor (transport selection)', () => {
     expect(httpConnectProxyFor('https://gw.example.com/x')).toBe('http://127.0.0.1:1');
     expect(httpConnectProxyFor('https://[::1]:9443/x')).toBeNull();
     expect(httpConnectProxyFor('https://[::1]:8443/x')).toBe('http://127.0.0.1:1');
+    // A URL with no port is on 443, so a :443 entry covers it.
+    vi.stubEnv('NO_PROXY', 'gw.example.com:443');
+    expect(httpConnectProxyFor('https://gw.example.com/x')).toBeNull();
   });
 
   it('matches an IP entry exactly, never as a suffix', () => {
