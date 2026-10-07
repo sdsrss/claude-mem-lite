@@ -568,9 +568,13 @@ depends on the Claude Code version. Allow the server once in the `settings.json`
 { "permissions": { "allow": ["mcp__plugin_claude-mem-lite_mem-lite"] } }
 ```
 
-That is the server's name under a plugin install. An npx or git-clone install registers it as
+For a single run, `claude -p … --allowedTools "mcp__plugin_claude-mem-lite_mem-lite"` does the
+same (both forms checked on 2.1.292, 2026-10-07: no refusal, and `mem_search` answered). That is
+the server's name under a plugin install. An npx or git-clone install registers it as
 `mem-lite`, so the rule there is `mcp__mem-lite`. An interactive session asks instead; answering
-"always allow" there records a rule of its own.
+"always allow" there records a rule of its own. The plugin does not tell the model to fall back
+to the CLI when a call is refused: the refusal is Claude Code's permission check for a tool you
+have not allowed, and routing the same action through Bash would sidestep it.
 
 ### Skill Commands (in Claude Code chat)
 
