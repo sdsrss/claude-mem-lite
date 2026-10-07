@@ -15,6 +15,11 @@ All notable changes to claude-mem-lite are documented in this file.
   that reply's type, lesson, concepts, facts, aliases and scope, permanently. It now records only
   that the row was looked at, plus the usual importance floor. Wide-scope passes are unchanged:
   their rows are substantive, so a 0 there is treated as a misjudged importance.
+- **Fix: with several `CLAUDE_CONFIG_DIR` profiles, each gets the plugin's one-time checks.**
+  The cleanup of stale global MCP entries and the warning about leftover direct-install hooks
+  each run once, and the record that they had run was shared by every profile, so only the
+  first profile to start was checked. Each record is now kept per file it checks; the default
+  `~/.claude.json` and `~/.claude/settings.json` keep the records existing installs already have.
 
 ## v6.24.0 — `CLAUDE_CONFIG_DIR` is followed everywhere; npm installs drop the dev toolchain
 

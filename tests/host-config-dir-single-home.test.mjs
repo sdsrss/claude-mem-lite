@@ -22,10 +22,11 @@ const JS_OLD_SHAPE = /homedir\(\)\s*,\s*['"]\.claude(?:\.json)?['"]|join\(\s*hom
 const JS_ALLOWED = new Set(['lib/data-paths.mjs', 'memdir.mjs']);
 
 const SH_OLD_SHAPE = /\$\{?HOME\}?\/\.claude(?:\/|\.json)/;
-// The default arm of each script's one `case`.
+// The defaults each script spells once: setup.sh's two variables (its `case` and its one-shot
+// marker keys read them, D#270) and post-tool-use.sh's default arm.
 const SH_ALLOWED_LINES = new Set([
-  'CC_CONFIG_DIR="$HOME/.claude"',
-  'CC_STATE_FILE="$HOME/.claude.json"',
+  'CC_DEFAULT_CONFIG_DIR="$HOME/.claude"',
+  'CC_DEFAULT_STATE_FILE="$HOME/.claude.json"',
   '*) _mem_settings_file="${HOME}/.claude/settings.json" ;;',
 ]);
 

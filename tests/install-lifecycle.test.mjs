@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import {
   mkdirSync,
   writeFileSync,
@@ -904,6 +904,97 @@ describe('install lifecycle checks', () => {
         rmSync(home, { recursive: true, force: true });
       } catch {}
     }
+  });
+
+  // D#270: steps 7 and 9 edit and inspect the config home, but their one-shot markers sat in the
+  // data dir, which every profile shares, so the first profile to start settled the question for
+  // all of them: a second CLAUDE_CONFIG_DIR profile never got the MCP dedup or the residue warning.
+  describe('setup.sh one-shot markers are per config home (D#270)', () => {
+    const ours = JSON.stringify({ mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } } });
+    const legacyHooks = JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node ~/.claude-mem-lite/hook.mjs stop' }] }] },
+    });
+    function profileHome() {
+      const home = makeTmpDir();
+      const dataDir = join(home, '.claude-mem-lite');
+      mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+      symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
+      return home;
+    }
+    function runSetup(home, cfg) {
+      const root = join(
+        cfg || join(home, '.claude'),
+        'plugins',
+        'cache',
+        'sdsrss',
+        'claude-mem-lite',
+        '6.24.0',
+      );
+      mkdirSync(root, { recursive: true });
+      const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: root };
+      if (cfg) env.CLAUDE_CONFIG_DIR = cfg;
+      return spawnSync('bash', [SETUP_PATH], { encoding: 'utf8', env });
+    }
+
+    it('a second profile gets its own MCP dedup and residue warning', () => {
+      const home = profileHome();
+      try {
+        writeFileSync(join(home, '.claude.json'), ours);
+        const first = runSetup(home);
+        expect(first.status, first.stderr).toBe(0);
+        expect(
+          JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')).mcpServers['mem-lite'],
+        ).toBeUndefined();
+
+        const cfg = join(home, 'work-profile');
+        mkdirSync(cfg, { recursive: true });
+        writeFileSync(join(cfg, '.claude.json'), ours);
+        writeFileSync(join(cfg, 'settings.json'), legacyHooks);
+        const second = runSetup(home, cfg);
+        expect(second.status, second.stderr).toBe(0);
+        expect(
+          JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')).mcpServers['mem-lite'],
+          "the first profile's marker skipped this profile's dedup",
+        ).toBeUndefined();
+        expect(second.stderr, "the first profile's marker skipped this profile's warning").toContain(
+          `Legacy direct-install hooks detected in ${join(cfg, 'settings.json')}`,
+        );
+
+        // Still one-shot per home: a second start of the same profile does neither again.
+        writeFileSync(join(cfg, '.claude.json'), ours);
+        const again = runSetup(home, cfg);
+        expect(readFileSync(join(cfg, '.claude.json'), 'utf8')).toBe(ours);
+        expect(again.stderr).not.toContain('Legacy direct-install hooks');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // A marker is keyed by the file it gates, not by "is this ~/.claude": with CLAUDE_CONFIG_DIR
+    // naming ~/.claude, settings.json is the default one but .claude.json moves into ~/.claude.
+    it('CLAUDE_CONFIG_DIR=~/.claude: the settings.json marker every install has holds; .claude.json is a new file', () => {
+      const home = profileHome();
+      try {
+        const runtime = join(home, '.claude-mem-lite', 'runtime');
+        writeFileSync(join(runtime, '.mcp-dedup-v2.78'), '');
+        writeFileSync(join(runtime, '.residue-warned-v2.55'), '');
+        const cfg = join(home, '.claude');
+        mkdirSync(cfg, { recursive: true });
+        writeFileSync(join(cfg, 'settings.json'), legacyHooks);
+        writeFileSync(join(cfg, '.claude.json'), ours);
+        const r = runSetup(home, cfg);
+        expect(r.status, r.stderr).toBe(0);
+        expect(r.stderr, 'the residue warning repeated for the same settings.json').not.toContain(
+          'Legacy direct-install hooks',
+        );
+        expect(
+          JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')).mcpServers['mem-lite'],
+          '~/.claude/.claude.json was skipped on the marker of ~/.claude.json',
+        ).toBeUndefined();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   // Control for the case above: with the running root safely inside the keep window, the

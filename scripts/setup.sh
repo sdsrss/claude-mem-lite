@@ -39,16 +39,27 @@ DB_DIR="$CODE_DIR"
 # Claude Code's config home, as lib/data-paths.mjs claudeConfigDir resolves it: an absolute
 # CLAUDE_CONFIG_DIR, else ~/.claude (a relative value is ignored). The plugin cache, settings.json
 # and .claude.json all live there; with the variable set, ~/.claude is another profile's.
+# The defaults are spelled once: the default arm below and the marker keys after it both read them.
+CC_DEFAULT_CONFIG_DIR="$HOME/.claude"
+CC_DEFAULT_STATE_FILE="$HOME/.claude.json"
 case "${CLAUDE_CONFIG_DIR:-}" in
   /* | [A-Za-z]:[\\/]*)
     CC_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
     CC_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
     ;;
   *)
-    CC_CONFIG_DIR="$HOME/.claude"
-    CC_STATE_FILE="$HOME/.claude.json"
+    CC_CONFIG_DIR="$CC_DEFAULT_CONFIG_DIR"
+    CC_STATE_FILE="$CC_DEFAULT_STATE_FILE"
     ;;
 esac
+# Steps 7 and 9 each settle a question about one file (.claude.json, settings.json) with a
+# one-shot marker in this data dir, which every CLAUDE_CONFIG_DIR profile shares, so the first
+# profile to start settled it for all of them (D#270). Key each marker by the file it gates. The
+# default files keep the bare names every existing install already has: renaming one re-runs it.
+# Not "is this ~/.claude": CLAUDE_CONFIG_DIR=~/.claude still moves .claude.json into ~/.claude.
+marker_suffix() {
+  [[ "$1" == "$2" ]] || printf -- '-%s' "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+}
 RUNTIME_DIR="$CODE_DIR/runtime"
 if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
   # shellcheck disable=SC2016  # node script single-quoted on purpose; path passed via env, not shell expansion
@@ -171,9 +182,9 @@ mkdir -p "$CODE_DIR/runtime"
 # resolved once at the top of this file.
 #
 # ONLY this marker follows the override. `.mcp-dedup-v2.78` and `.residue-warned-v2.55`
-# below are one-shot state about THIS MACHINE's install — a ~/.claude.json edit and a
-# settings.json warning, not state a hook hands to another component — so they stay under
-# CODE_DIR. Read lib/resolve-data-dir.mjs's MOVES/STAYS list before relocating either:
+# below are one-shot state about a CONFIG HOME — a .claude.json edit and a settings.json
+# warning, not state a hook hands to another component — so they stay under CODE_DIR, one per
+# file they gate. Read lib/resolve-data-dir.mjs's MOVES/STAYS list before relocating either:
 # moving a run-once marker re-runs what it gated.
 DEPS_FLAG="$RUNTIME_DIR/.deps-broken"
 
@@ -314,9 +325,10 @@ fi
 #    pre-v2.79.1 — extra node spawn + JSON parse on every SessionStart for a
 #    near-always no-op). Bump MCP_MIGRATION name to re-run cleanup in future
 #    versions; same shape as the .deps-broken self-heal pattern.
-# CODE_DIR/runtime, not RUNTIME_DIR: this marker gates a one-shot edit of ~/.claude.json,
-# which is machine state, not per-data-dir state. Relocating it would re-run that edit.
-MCP_MIGRATION="$CODE_DIR/runtime/.mcp-dedup-v2.78"
+# CODE_DIR/runtime, not RUNTIME_DIR: this marker gates a one-shot edit of the config home's
+# .claude.json, which is not per-data-dir state. Relocating it would re-run that edit. One per
+# .claude.json (marker_suffix above).
+MCP_MIGRATION="$CODE_DIR/runtime/.mcp-dedup-v2.78$(marker_suffix "$CC_STATE_FILE" "$CC_DEFAULT_STATE_FILE")"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$MCP_MIGRATION" ]]; then
   # shellcheck disable=SC2016  # node script single-quoted on purpose; CLAUDE_JSON passed via env, not shell expansion
   CLAUDE_JSON="$CC_STATE_FILE" node -e '
@@ -398,9 +410,9 @@ fi
 #    will run every hook twice (direct settings.json hooks AND plugin hooks)
 #    until they run `claude-mem-lite uninstall` to clear the settings.json
 #    entries. /plugin uninstall does not touch settings.json.
-# CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in
-# ~/.claude/settings.json — one machine, one warning, regardless of where the data lives.
-RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55"
+# CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in the config
+# home's settings.json — one warning per config home, regardless of where the data lives.
+RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONFIG_DIR" "$CC_DEFAULT_CONFIG_DIR")"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
   SETTINGS="$CC_CONFIG_DIR/settings.json"
   if [[ -f "$SETTINGS" ]]; then
