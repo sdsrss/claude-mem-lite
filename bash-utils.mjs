@@ -675,12 +675,19 @@ export function detectBashSignificance(input, response) {
   // suites prints one summary each, and a node:test run whose failures were all timeouts says
   // "fail 0" next to "cancelled 1" (pre-tag defect review, item 7 F1). Red = a nonzero fail /
   // cancelled count in either summary form.
+  // D#179: a count-first red must sit where a summary puts it — end of line, or before `,` `;`
+  // `|` `(` or `in <n>` — on ONE line. Matched anywhere and across newlines, a passing run whose
+  // test name or log said "3 failed" / "2 failed attempts" read red, and "want 2\nFAIL" read as
+  // "2 FAIL". `errors?` is red too (pytest "1 passed, 1 error", tsc, eslint). go / jest / vitest
+  // failures carry a case-sensitive FAIL / FAILED banner at line start (shell suites print
+  // "FAILED: 3 case(s)", pytest "FAILED test_x.py::…"), read on its own.
   const hasGreenTestSummary =
     looksLikeError &&
     /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan) &&
-    !/\b[1-9]\d*\s+(fail|failed|failures|failing)\b|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
+    !/\b[1-9]\d*[ \t]+(?:fail|failed|failures|failing|errors?)\b(?=[ \t]*(?:$|[,;|(]|in[ \t]+\d))|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
       scan,
-    );
+    ) &&
+    !/^[ \t]*(?:--- )?FAIL(?:ED)?(?::|[ \t]|$)/m.test(scan);
   // NOTE: do not add `\bFAIL\s` here — with /i flag it would re-match the
   // very `0 fail\n` token green-summary is trying to exempt. A real test
   // failure produces "N fail" (N≥1) which never triggers hasGreenTestSummary,

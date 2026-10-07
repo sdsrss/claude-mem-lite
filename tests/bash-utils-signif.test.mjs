@@ -520,3 +520,115 @@ describe('detectBashSignificance — every red summary shape outvotes a green on
     expect(sig('node --test', out).isError).toBe(true);
   });
 });
+
+// D#179 (v6.20.0 pre-tag delta review, Q3): the red rule matched a count anywhere, across
+// newlines, so a passing run whose test NAME or LOG said "3 failed" read as an error, and a
+// pytest "1 error" next to another suite's green summary was never red. A red count now has
+// to sit in a summary position (end of line, or before `,` `;` `|` `(` or `in <n>`), and go /
+// jest / vitest failures are read off their FAIL banner instead of a count that spans lines.
+describe('detectBashSignificance — a red count must sit in a summary (D#179)', () => {
+  const sig = (command, out) => detectBashSignificance({ command }, out);
+  // Real node:test output (v26), one test named with a count and one logging one.
+  const NODE_PASS_NAMED = [
+    '2 failed attempts before success',
+    '✔ reports 3 failed retries in the summary (0.374688ms)',
+    '✔ logs (0.355531ms)',
+    'ℹ tests 2',
+    'ℹ suites 0',
+    'ℹ pass 2',
+    'ℹ fail 0',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 38.535806',
+  ].join('\n');
+
+  it('a passing node:test run that names "3 failed" is not an error', () => {
+    expect(sig('node --test', NODE_PASS_NAMED).isError).toBe(false);
+  });
+
+  it('a passing bun run that logs "2 failed attempts" is not an error', () => {
+    // Real bun 1.4.2 output.
+    const out = [
+      'bun test v1.4.2 (744846f84)',
+      '',
+      'b.test.ts:',
+      '2 failed attempts',
+      '',
+      ' 1 pass',
+      ' 0 fail',
+      ' 1 expect() calls',
+      'Ran 1 test across 1 file. [10.00ms]',
+    ].join('\n');
+    expect(sig('bun test', out).isError).toBe(false);
+  });
+
+  it('a pytest fixture error beside another suite’s green summary is an error', () => {
+    // Real pytest -q tail for a test whose fixture raised.
+    const pytest = [
+      'E       RuntimeError: fixture boom',
+      '',
+      'test_x.py:4: RuntimeError',
+      '=========================== short test summary info ============================',
+      'ERROR test_x.py::test_uses - RuntimeError: fixture boom',
+      '1 passed, 1 error in 0.00s',
+    ].join('\n');
+    expect(sig('node --test && pytest -q', `${NODE_PASS_NAMED}\n${pytest}`).isError).toBe(true);
+  });
+
+  it('a go failure beside a green summary is an error, read off its FAIL banner', () => {
+    const goFail = [
+      '--- FAIL: TestSplit (0.00s)',
+      '    split_test.go:9: want 2',
+      'FAIL',
+      'exit status 1',
+      'FAIL\texample.com/x\t0.002s',
+    ].join('\n');
+    expect(sig('node --test && go test ./...', `${NODE_PASS_NAMED}\n${goFail}`).isError).toBe(true);
+  });
+
+  it('a shell suite’s "FAILED: N case(s)" banner outvotes another suite’s green summary', () => {
+    const out = [
+      'FAIL: 32b held lock reported as an install',
+      'FAILED: 3 case(s)',
+      'ℹ tests 4',
+      'ℹ pass 4',
+      'ℹ fail 0',
+    ].join('\n');
+    expect(sig('npm run check', out).isError).toBe(true);
+    expect(
+      sig('npm run check', out.replace('FAIL: 32b held lock reported as an install\n', '')).isError,
+    ).toBe(true);
+  });
+
+  it('every summary-position red form still outvotes a green "0 fail"', () => {
+    for (const red of [
+      'Tests:       1 failed, 2 passed, 3 total',
+      ' Tests  1 failed | 2 passed (3)',
+      'test result: FAILED. 1 passed; 1 failed; 0 ignored',
+      '=== 2 failed in 0.05s ===',
+      'FAILED | 1 passed | 1 failed (12ms)',
+      'Found 2 errors in 1 file.',
+      '✖ 2 problems (2 errors, 0 warnings)',
+    ]) {
+      expect(sig('bun test && npm test', ` 5 pass\n 0 fail\n${red}`).isError, red).toBe(true);
+    }
+  });
+
+  it('a count at the end of one line and "failed" at the start of the next are not a summary', () => {
+    const out = [
+      'retries left: 2',
+      'failed, retrying on the replica',
+      ' 3 pass',
+      ' 0 fail',
+      'Ran 3 tests across 1 file. [9.00ms]',
+    ].join('\n');
+    expect(sig('bun test', out).isError).toBe(false);
+  });
+
+  it('"0 errors" next to a green summary stays green', () => {
+    expect(
+      sig('bun test && npx tsc', ' 5 pass\n 0 fail\nFound 0 errors. Watching for file changes.').isError,
+    ).toBe(false);
+  });
+});
