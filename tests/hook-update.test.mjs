@@ -814,6 +814,61 @@ describe('rate-limit handling + malformed-response robustness', () => {
     expect(cleared.lookupFailingSince ?? null).toBeNull();
   });
 
+  // D#266: repair looks up through fetchLatestRelease, which wrote no state, so after a repair
+  // that fetched a release doctor kept saying the last lookup failed until the next background
+  // check (24 h, or 6 h when rate-limited).
+  it('a successful lookup through fetchLatestRelease clears the recorded failure, and only that', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    const statePath = join(dataDir, 'runtime', 'update-state.json');
+    const failing = {
+      lastCheck: '2026-10-07T09:00:00.000Z',
+      latestVersion: '1.0.0',
+      rateLimited: true,
+      lookupError: 'HTTP 403',
+      lookupFailingSince: '2026-10-01T00:00:00.000Z',
+    };
+    writeFileSync(statePath, JSON.stringify(failing));
+    const readStateFile = () => JSON.parse(readFileSync(statePath, 'utf8'));
+    const { fetchLatestRelease } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
+    expect(await fetchLatestRelease()).toBeNull();
+    expect(readStateFile(), 'premise: a failed lookup leaves the record as it was').toEqual(failing);
+
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.0.1', assets: [] }) });
+    expect((await fetchLatestRelease())?.version).toBe('1.0.1');
+    const after = readStateFile();
+    expect([after.lookupError ?? null, after.lookupFailingSince ?? null, after.rateLimited]).toEqual([
+      null,
+      null,
+      false,
+    ]);
+    // The throttle's clock and the cached release belong to the background check.
+    expect([after.lastCheck, after.latestVersion]).toEqual([failing.lastCheck, failing.latestVersion]);
+  });
+
+  it('a successful lookup with no failure on record writes no state file', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    const { fetchLatestRelease } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.0.1', assets: [] }) });
+    expect((await fetchLatestRelease())?.version).toBe('1.0.1');
+    expect(existsSync(join(dataDir, 'runtime', 'update-state.json'))).toBe(false);
+  });
+
   it('falls through to the tags API when releases/latest returns 200 with no tag_name (no crash)', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');

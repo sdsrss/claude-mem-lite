@@ -318,7 +318,19 @@ function shouldCheck(state) {
 // ── GitHub API ─────────────────────────────────────────────
 // Try releases/latest first, fallback to tags (some repos only use tags)
 export async function fetchLatestRelease() {
-  return (await lookupLatestRelease()).release;
+  const { release } = await lookupLatestRelease();
+  if (release) clearRecordedLookupFailure();
+  return release;
+}
+
+// repair looks up through fetchLatestRelease, so a lookup that succeeds there is evidence against
+// the failure doctor reports; without this the warning outlived the repair by a full check interval
+// (D#266). Only the failure fields: lastCheck is the background check's throttle, latestVersion its
+// cache. No write when there is nothing to clear.
+function clearRecordedLookupFailure() {
+  const state = readState();
+  if (!state.lookupError && !state.lookupFailingSince && !state.rateLimited) return;
+  saveState({ ...state, lookupError: null, lookupFailingSince: null, rateLimited: false });
 }
 
 // One lookup's outcome, returned rather than kept in module state: a module flag let a second

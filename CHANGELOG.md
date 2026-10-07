@@ -2,6 +2,14 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+- **Fix: `doctor` no longer reports a failed update lookup that nothing will clear.** After a
+  `repair` that fetched a release, the warning stayed until the next background check (24 hours,
+  6 when rate-limited), because repair's lookup recorded nothing; a successful lookup there now
+  clears it. With `CLAUDE_MEM_SKIP_UPDATE` set no lookup runs at all, so the warning stayed
+  forever, and with no state file doctor asked "first run?"; it now says the checks are off.
+
 ## v6.24.0 — `CLAUDE_CONFIG_DIR` is followed everywhere; npm installs drop the dev toolchain
 
 Fixes only; no schema change, no migration, no new setting. A minor version because two

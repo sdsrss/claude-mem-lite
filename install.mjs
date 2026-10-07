@@ -2493,20 +2493,34 @@ async function doctor() {
   // Update state
   try {
     const stateFile = join(MEM_DATA_DIR, 'runtime', 'update-state.json'); // runtime-dir:stays-put — installation identity
-    if (existsSync(stateFile)) {
+    // Dynamic, as elsewhere in doctor, so a hook-update that cannot load costs only these judgements.
+    let hookUpdate = null;
+    try {
+      hookUpdate = await import('./hook-update.mjs');
+    } catch {
+      /* cannot judge — report the recorded state as it stands */
+    }
+    // No lookup runs while checks are off, so a failure recorded before they were turned off is
+    // never cleared and no state file ever appears: say they are off instead (D#266).
+    const checksOff = hookUpdate?.updateCheckDisabledReason() ?? null;
+    if (checksOff) {
+      const why =
+        checksOff === 'CLAUDE_MEM_SKIP_UPDATE'
+          ? 'CLAUDE_MEM_SKIP_UPDATE is set'
+          : `${INSTALL_DIR} is a development install (a git checkout or symlinks)`;
+      ok(`Update state: not checked — ${why}`);
+    } else if (existsSync(stateFile)) {
       const state = JSON.parse(readFileSync(stateFile, 'utf8'));
       const parts = [];
       if (state.lastCheck) parts.push(`last check: ${state.lastCheck}`);
       if (state.latestVersion) parts.push(`latest: v${state.latestVersion}`);
       if (state.lastUpdate) parts.push(`last update: ${state.lastUpdate}`);
       // Judged against the version running now, like the banner (#35): in plugin mode
-      // nothing clears the cached flag once Claude Code has applied the update. Dynamic, as
-      // elsewhere in doctor, so a hook-update that cannot load costs only this judgement.
+      // nothing clears the cached flag once Claude Code has applied the update.
       if (state.updateAvailable) {
         let pending = true;
         try {
-          const { pendingCachedUpdate } = await import('./hook-update.mjs');
-          pending = pendingCachedUpdate(state) !== null;
+          if (hookUpdate) pending = hookUpdate.pendingCachedUpdate(state) !== null;
         } catch {
           /* cannot judge — report the cached flag as it stands */
         }
