@@ -237,6 +237,21 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.25.0
+
+**Every session gets the same first line on a file-recall block again.** No schema-version
+change: 6.24.0 still opens the database after this release has.
+
+- **What changes.** Since 6.16.0 half of sessions got a plain statement of where the notes come
+  from instead of "system-injected context, continue your planned action", so the two could be
+  compared by how often the agent cited a lesson. On this project's own sessions the comparison
+  found no difference it could detect, and the agent surfaced neither line to the user, so the
+  split is closed: unset now means the older line in every session.
+  `CLAUDE_MEM_RECALL_FRAMING=factual` keeps the plain statement; `=ab` restores the split.
+- **Also in this release:** when the data directory cannot be read, `doctor` and `status` say
+  "not checked" for what they could not look at, instead of reporting a missing or empty store.
+  `maintain execute --ops dedup` names the merge pairs it skips. Details in CHANGELOG.md.
+
 ## Upgrading to 6.24.0
 
 **If you set `CLAUDE_CONFIG_DIR`, the installer, updates and hooks now use that directory, as
@@ -1235,7 +1250,7 @@ and names can change between releases.
 |----------|-------------|---------|
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
-| `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. `ab` gives each session one of two wordings, the older "system-injected context, continue your planned action" or a plain statement of source, so their cite-rates can be compared in one run (`benchmark/citation-live-replay.mjs --by-framing`); `legacy` / `factual` pin one. | `ab` |
+| `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. Unset or `legacy` = "system-injected context, continue your planned action"; `factual` = a plain statement of where the notes come from; `ab` = each session gets one of the two, for `benchmark/citation-live-replay.mjs --by-framing`. Any other value is `legacy`. | `legacy` |
 | `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict (the adoption row in CLAUDE.md and the detail doc keep the new wording, and since 6.17.1 the directive says it overrides them); `bind` / `bridge` = comprehension-bridge arms (`bridge` keeps the pre-6.17 verdict wording as its fallback; neither says it overrides the adopted text, so their measured wording stays fixed); `legacy` = no directive. | _(unset)_ |
 | `CLAUDE_MEM_EDGE_DECAY` | Enables decay of file↔observation edges. | _(off)_ |
 | `CLAUDE_MEM_EDGE_DECAY_K` | Edge-decay threshold when the flag above is on (clamped to ≥1). | `3` |

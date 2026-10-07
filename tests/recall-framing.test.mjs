@@ -27,10 +27,17 @@ describe('recallFramingArm', () => {
     expect(factual).toBeLessThan(N / 2 + 150);
   });
 
-  it('defaults to ab when the variable is unset', () => {
+  // D#104 closed the A/B: with the variable unset every session gets legacy, and `ab` is opt-in.
+  it('defaults to legacy for every session when the variable is unset', () => {
     const arms = new Set();
     for (let i = 0; i < 50; i++) arms.add(recallFramingArm(`s${i}`, {}));
-    expect(arms).toEqual(new Set(['legacy', 'factual']));
+    expect(arms).toEqual(new Set(['legacy']));
+  });
+
+  it('an unrecognised value falls back to legacy, not to the split', () => {
+    const arms = new Set();
+    for (let i = 0; i < 50; i++) arms.add(recallFramingArm(`s${i}`, { CLAUDE_MEM_RECALL_FRAMING: 'abx' }));
+    expect(arms).toEqual(new Set(['legacy']));
   });
 
   it('honours the legacy / factual overrides for every session', () => {
