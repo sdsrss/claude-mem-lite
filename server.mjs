@@ -237,7 +237,7 @@ try {
   process.exit(1);
 }
 // Server process uses longer busy_timeout for concurrent MCP requests
-db.pragma('busy_timeout = 5000');
+db.pragma(`busy_timeout = ${DB_BUSY_TIMEOUT_MS}`);
 // Planner statistics on open, as SQLite recommends for a long-lived connection (#41). The
 // short wait keeps a hook holding the write lock at session start from stalling startup;
 // a skipped round is retried by the daily auto-maintain worker.
@@ -1997,7 +1997,7 @@ server.registerTool(
 // Handler extracted to server/fts-check.mjs (v2.41 split).
 import { handleMemFtsCheck } from './server/fts-check.mjs';
 
-import { DAY_MS } from './lib/time-constants.mjs';
+import { DAY_MS, DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
 server.registerTool(
   'mem_fts_check',
   {

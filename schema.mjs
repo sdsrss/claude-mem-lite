@@ -21,6 +21,7 @@ import { isFtsCorruptionError } from './lib/db-unusable.mjs';
 // re-exported (not `export … from`) because schema.mjs uses DB_DIR / DB_PATH itself.
 // See lib/data-paths.mjs and tests/repair-path-no-native-dep.test.mjs.
 import { DB_DIR, DB_PATH, CODE_DIR } from './lib/data-paths.mjs';
+import { DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
 export { DB_DIR, DB_PATH, CODE_DIR };
 
 // Increment when schema changes (tables, columns, indexes, FTS, migrations)
@@ -1318,7 +1319,7 @@ export function ensureDb() {
   // 5000ms matches the MCP server (server.mjs) — 3000ms wasn't enough under realistic
   // concurrency (parallel CLI saves + a long-running FTS rebuild can push individual
   // transactions past 3s, triggering SQLITE_BUSY on the third caller).
-  db.pragma('busy_timeout = 5000');
+  db.pragma(`busy_timeout = ${DB_BUSY_TIMEOUT_MS}`);
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = OFF'); // Enabled after dedup migration
 
@@ -1380,7 +1381,7 @@ export function refreshPlannerStats(db, { busyTimeoutMs } = {}) {
   } finally {
     if (prior !== undefined) {
       try {
-        db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : 5000}`);
+        db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : DB_BUSY_TIMEOUT_MS}`);
       } catch {
         /* the connection is unusable anyway; its next statement reports why */
       }
