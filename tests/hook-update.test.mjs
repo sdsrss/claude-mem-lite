@@ -725,11 +725,12 @@ describe('rate-limit handling + malformed-response robustness', () => {
 
   it('reportFailure reads THIS lookup, not a rate limit persisted by an earlier one', async () => {
     // The persisted flag is cleared only by a successful lookup, so after one 403 every later
-    // network failure was reported as "rate-limiting" (pre-tag review of cd9f1ab7).
+    // network failure was reported as "rate-limiting" (pre-tag review of cd9f1ab7). Seeded
+    // false so the persisted-flag assertion at the end can only pass if the 403 wrote it.
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
     const statePath = join(dataDir, 'runtime', 'update-state.json');
-    writeFileSync(statePath, JSON.stringify({ lastCheck: new Date(0).toISOString(), rateLimited: true }));
+    writeFileSync(statePath, JSON.stringify({ lastCheck: new Date(0).toISOString(), rateLimited: false }));
     const { checkForUpdate } = await loadModule({
       CLAUDE_MEM_DIR: dataDir,
       CLAUDE_PLUGIN_ROOT: '/plugin/root',

@@ -128,6 +128,9 @@ describe('a plain-http loopback gateway is reached directly under NODE_USE_ENV_P
     ['127.0.0.1', 'http', '127.0.0.1'],
     ['localhost', 'http', 'localhost'],
     ['HTTP://127.0.0.1 (upper-case scheme)', 'HTTP', '127.0.0.1'],
+    // The URL parser drops tabs, so the resolver accepts this as http; a case-insensitive
+    // prefix test would still miss it (delta review of b59e0cec).
+    ['ht<TAB>tp://127.0.0.1 (tab inside the scheme)', 'ht\ttp', '127.0.0.1'],
   ]) {
     it(`${label}: the key goes to the gateway, never to HTTP_PROXY`, async (ctx) => {
       seen.proxy.length = 0;
