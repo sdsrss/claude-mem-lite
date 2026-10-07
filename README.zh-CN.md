@@ -204,11 +204,12 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 **文件召回块的第一行，所有会话重新用同一种写法。** 没有 schema 版本变更：本版本打开过的数据库，6.24.0 仍能打开。
 
 - **变了什么。** 从 6.16.0 起，一半会话的第一行是说明笔记来源的事实陈述，另一半保留 "system-injected context,
-  continue your planned action"，用来比较 agent 引用教训的频率。在本项目自己的会话上，两种写法看不出差别，
-  两组里 agent 也都没有把这一行当作可疑内容告诉用户，所以结束分组：不设变量时，所有会话都用旧的那一行。
+  continue your planned action"，用来比较 agent 引用教训的频率。在维护者自己的会话上，两种写法看不出差别，
+  按回复文本扫描，两组里 agent 也都没有把这一行当作可疑内容告诉用户，所以结束分组：
+  不设变量时，所有会话都用旧的那一行。
   `CLAUDE_MEM_RECALL_FRAMING=factual` 保留事实陈述的写法，`=ab` 恢复分组。
-- **本版本还有：** 数据目录读不了时，`doctor` 和 `status` 对看不到的项目显示“not checked”，不再报成数据库
-  缺失或为空。`maintain execute --ops dedup` 会列出跳过的合并对。详见 CHANGELOG.md。
+- **本版本还有：** 数据目录读不了时，`doctor` 对看不到的项目显示“not checked”，`status` 直接指出这个目录
+  无法访问，不再报成数据库缺失或为空。`maintain execute --ops dedup` 会列出跳过的合并对。详见 CHANGELOG.md。
 
 ## 升级到 6.24.0
 

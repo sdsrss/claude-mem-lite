@@ -244,13 +244,14 @@ change: 6.24.0 still opens the database after this release has.
 
 - **What changes.** Since 6.16.0 half of sessions got a plain statement of where the notes come
   from instead of "system-injected context, continue your planned action", so the two could be
-  compared by how often the agent cited a lesson. On this project's own sessions the comparison
-  found no difference it could detect, and the agent surfaced neither line to the user, so the
-  split is closed: unset now means the older line in every session.
+  compared by how often the agent cited a lesson. On the maintainer's own sessions the comparison
+  found no difference it could detect, and a scan of the agent's replies found neither line
+  surfaced to the user, so the split is closed: unset now means the older line in every session.
   `CLAUDE_MEM_RECALL_FRAMING=factual` keeps the plain statement; `=ab` restores the split.
-- **Also in this release:** when the data directory cannot be read, `doctor` and `status` say
-  "not checked" for what they could not look at, instead of reporting a missing or empty store.
-  `maintain execute --ops dedup` names the merge pairs it skips. Details in CHANGELOG.md.
+- **Also in this release:** when the data directory cannot be read, `doctor` says "not checked"
+  for what it could not look at and `status` names the directory, instead of reporting a missing
+  or empty store. `maintain execute --ops dedup` names the merge pairs it skips. Details in
+  CHANGELOG.md.
 
 ## Upgrading to 6.24.0
 
