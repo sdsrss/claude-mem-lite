@@ -9,11 +9,20 @@
 // 8.7.1 are in range, so the lock was honoured, not matched by chance).
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import {
+  readFileSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+  existsSync,
+  mkdirSync,
+  copyFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildShrinkwrap, verifyShrinkwrap, productionClosure } from '../scripts/write-shrinkwrap.mjs';
 import { deployLockfile } from '../install.mjs';
 
@@ -148,4 +157,49 @@ describe('deployLockfile: what install.mjs deploys as ~/.claude-mem-lite/package
       rmSync(dst, { recursive: true, force: true });
     }
   });
+
+  // v6.24.0 delta review P3-2: the unit cases above pin the helper, not its call in
+  // deployCodeTree, and deleting that call left the suite green. This runs the real
+  // deployCodeTree from a tree holding exactly what `npm pack` ships (no package-lock.json)
+  // plus a shrinkwrap, under a sandboxed HOME.
+  it('deployCodeTree, run from a tarball-shaped tree, deploys its shrinkwrap', () => {
+    const pack = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+      cwd: REPO,
+      encoding: 'utf8',
+    });
+    const files = JSON.parse(pack.stdout)[0].files.map((f) => f.path);
+    expect(files, 'premise: the tarball carries the installer').toContain('install.mjs');
+    expect(files, 'premise: the tarball carries no package-lock.json').not.toContain('package-lock.json');
+
+    const pkg = mkdtempSync(join(tmpdir(), 'mem-lockdep-pkg-'));
+    const home = mkdtempSync(join(tmpdir(), 'mem-lockdep-home-'));
+    try {
+      for (const f of files) {
+        mkdirSync(dirname(join(pkg, f)), { recursive: true });
+        copyFileSync(join(REPO, f), join(pkg, f));
+      }
+      symlinkSync(join(REPO, 'node_modules'), join(pkg, 'node_modules'));
+      const probe = '{"lockfileVersion":3,"probe":"tarball shrinkwrap"}\n';
+      writeFileSync(join(pkg, 'npm-shrinkwrap.json'), probe);
+      const env = { ...process.env, HOME: home, MEM_NO_AUTO_ADOPT: '1' };
+      delete env.CLAUDE_MEM_DIR;
+      delete env.CLAUDE_MEM_RUNTIME_DIR;
+      const r = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `const m = await import(${JSON.stringify(pathToFileURL(join(pkg, 'install.mjs')).href)}); m.deployCodeTree(false);`,
+        ],
+        { env, encoding: 'utf8' },
+      );
+      expect(r.status, r.stderr).toBe(0);
+      const deployed = join(home, '.claude-mem-lite');
+      expect(existsSync(join(deployed, 'install.mjs')), 'premise: the code tree was deployed').toBe(true);
+      expect(readFileSync(join(deployed, 'package-lock.json'), 'utf8')).toBe(probe);
+    } finally {
+      rmSync(pkg, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
 });
