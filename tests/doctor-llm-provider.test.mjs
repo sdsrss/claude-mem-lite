@@ -141,6 +141,67 @@ describe('llmProviderStatus', () => {
     expect(s.message).toContain('gw.example.com:8443 reachable');
   });
 
+  // D#263: Claude Code and the Anthropic SDK take an ORIGIN and append /v1 themselves, so a base URL
+  // copied with its /v1 posts to /v1/v1/messages. Doctor printed it green.
+  it('WARNS when the base URL ends in /v1: requests would go to /v1/v1/messages', async () => {
+    for (const value of [
+      'https://gw.example.com/v1',
+      'https://gw.example.com/v1/',
+      'http://127.0.0.1:4000/anthropic/v1',
+    ]) {
+      noProxy();
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+      vi.stubEnv('ANTHROPIC_BASE_URL', value);
+      const s = await llmProviderStatus({ _probe: vi.fn(async () => ({ reachable: true })) });
+      expect(s.level, value).toBe('warn');
+      expect(s.message, value).toContain('/v1/v1/messages');
+    }
+  });
+
+  it('does not warn on a path that merely starts with v1 (premise for the /v1 warning)', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com/v1beta');
+    const s = await llmProviderStatus({ _probe: vi.fn(async () => ({ reachable: true })) });
+    expect(s.level).toBe('ok');
+  });
+
+  it('an unreachable /v1 gateway reports the unreachability, the more basic fault', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com/v1');
+    const s = await llmProviderStatus({
+      _probe: vi.fn(async () => ({ reachable: false, error: 'ECONNREFUSED' })),
+    });
+    expect(s.level).toBe('warn');
+    expect(s.message).toContain('ECONNREFUSED');
+  });
+
+  it('probes port 80 for an http gateway without a port, and names the host alone', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://localhost');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(probe.mock.calls[0]).toEqual(['localhost', { port: 80 }]);
+    expect(s.message).toContain('localhost reachable');
+  });
+
+  it('a plain-http loopback gateway is probed direct even with HTTPS_PROXY set, as the product sends it', async () => {
+    for (const v of PROXY_ENV) vi.stubEnv(v, '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('OPENROUTER_API_KEY', '');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000');
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const proxyProbe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe, _proxyProbe: proxyProbe });
+    // haiku-client posts a plain http URL with postDirectHttp, never through the TLS tunnel.
+    expect(proxyProbe).not.toHaveBeenCalled();
+    expect(probe.mock.calls[0]).toEqual(['127.0.0.1', { port: 4000 }]);
+    expect(s.message).toContain('(direct)');
+  });
+
   it('names the host alone when the gateway uses its scheme default port', async () => {
     noProxy();
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');

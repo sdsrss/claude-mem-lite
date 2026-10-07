@@ -20,6 +20,10 @@ All notable changes to claude-mem-lite are documented in this file.
   checked, so every consumer reads the same scheme, host and port. Valid values send the same
   requests as before. `doctor` also prints a gateway's port when it is not the scheme's default
   (`gw.example.com:8443 reachable`).
+- **Fix: `doctor` warns when `ANTHROPIC_BASE_URL` ends in `/v1`.** The variable is an origin:
+  the direct API leg, Claude Code and the Anthropic SDK append `/v1/messages` themselves, so a
+  value copied with its `/v1` posts to `/v1/v1/messages` and fails, while `doctor` printed the
+  host reachable in green. It now names the URL the requests go to. What is sent is unchanged.
 - **Fix: background optimize passes keep what a person set.** Cluster-merge gave its merged
   row the model's importance even when a person had set the keeper's (a keeper lowered to 1 came
   back at 3). Re-enrich read the person's mark after the model call but wrote back the importance

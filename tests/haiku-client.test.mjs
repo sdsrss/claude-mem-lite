@@ -1235,6 +1235,23 @@ describe('haiku-client.mjs', () => {
       expect(JSON.parse(fetchMock.mock.calls[2][1].body).temperature).toBeUndefined();
     });
 
+    it('a pinned model that still gets the deprecation 400 sends once, not a second identical body', async () => {
+      // The retry exists to drop the field. Once the field is gone there is nothing to drop, so the
+      // same 400 must not buy a second POST of the same body (D#263 surviving mutation).
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(deprecation400())
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ content: [{ text: 'retried' }] }) })
+        .mockResolvedValue(deprecation400());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(callHaiku('test prompt')).resolves.toEqual({ text: 'retried' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await expect(callHaiku('test prompt')).resolves.toBeNull();
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body).temperature).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
     it('does not retry a 400 that does not name temperature', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: false,
