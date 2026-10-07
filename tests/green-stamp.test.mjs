@@ -342,7 +342,12 @@ describe('green-stamp reporter under a real vitest run', () => {
     // 180-210 ms by the v6.13.3 claims review). The old fixed 4 s sleep only made that window
     // unlikely; the marker rules it out.
     const ready = join(repo, 'ready.marker');
-    const env = { ...process.env, GS_SLOW: '1', GS_READY: ready, NO_COLOR: '1' };
+    // A killed vitest cannot remove its <tmpdir>/<id>/ssr dir, so this one run leaked one into
+    // the shared temp dir per suite run. Under `ignored/` it stays out of the tree key and goes
+    // with the fixture.
+    const childTmp = join(repo, 'ignored', 'tmp');
+    mkdirSync(childTmp, { recursive: true });
+    const env = { ...process.env, GS_SLOW: '1', GS_READY: ready, NO_COLOR: '1', TMPDIR: childTmp };
     for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'FORCE_COLOR') delete env[k];
     const { spawn } = await import('child_process');
     const child = spawn(process.execPath, [join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run'], {
