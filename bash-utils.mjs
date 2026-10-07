@@ -632,7 +632,8 @@ function withoutDiffHunks(text) {
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
 
-// A line a test runner prints for one PASSED test: it carries the test's name, not a summary.
+// A line a test runner prints for one test (`# Subtest:` heads a failing one too): it carries the
+// test's name, not a summary.
 const PASSED_TEST_LINE_RE = /^[ \t]*(?:✔|✓|ok[ \t]+\d+[ \t]+-|# Subtest:)/;
 
 /**
@@ -705,9 +706,10 @@ export function detectBashSignificance(input, response) {
   // eslint "(2 errors, 0 warnings)"). go / jest / vitest / shell-suite failures carry a
   // case-sensitive FAIL / FAILED banner at line start ("--- FAIL:", "FAILED: 3 case(s)", pytest
   // "FAILED test_x.py::…"), read on its own. The green marker still
-  // spans lines on purpose: made one-line, 15 of this machine's recorded outputs flipped to
-  // errors and about 13 of them were passing batteries and file reads that only ever matched
-  // "0\nFAIL" by accident (pre-tag review, measured 2026-10-07).
+  // spans lines on purpose: made one-line, 17 of this machine's 77,819 recorded results flipped
+  // to errors, and 15 of them were passing batteries, file reads and reports that only ever
+  // matched "0\nFAIL" by accident; 2 were real failures (measured 2026-10-07, recounted by the
+  // pre-tag delta review).
   const hasGreenTestSummary =
     looksLikeError &&
     /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan) &&

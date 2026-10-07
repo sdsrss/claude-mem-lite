@@ -32,6 +32,7 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       if (failSwapInto && String(to) === failSwapInto && String(from).includes('.update-staging-')) {
         failSwapInto = null;
+        events.push({ kind: 'throw', marked: real.existsSync(marker) });
         throw Object.assign(new Error('EIO: simulated swap failure'), { code: 'EIO' });
       }
       return real.renameSync(from, to);
@@ -144,6 +145,8 @@ describe('rollbacks restore files under the swap marker (D#239 g)', () => {
 
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
     expect(readFileSync(join(dataDir, 'server.mjs'), 'utf8')).toBe('// server'); // premise: rolled back
+    // The forward swap itself ran under the marker, and nothing cleared it before the rollback.
+    expect(events.find((e) => e.kind === 'throw')).toEqual({ kind: 'throw', marked: true });
     const lastRestore = events.map((e) => e.kind).lastIndexOf('restore');
     const firstClear = events.findIndex((e) => e.kind === 'clear');
     expect(lastRestore).toBeGreaterThanOrEqual(0);

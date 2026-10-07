@@ -921,8 +921,8 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 }
 
 // A rollback swaps a file SET back just as the install swapped it in, so it holds the same
-// marker for the same reason (D#239 g). Its two callers after a swap — the MED-5 smoke gate
-// and the catch — run once the swap loop's own finally has cleared it.
+// marker for the same reason (D#239 g). After the MED-5 smoke gate the loop has already cleared
+// it; after a throw inside the loop it is still set, and this call takes it over.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();
   try {

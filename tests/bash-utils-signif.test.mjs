@@ -672,12 +672,22 @@ describe('detectBashSignificance — a passed test’s own line is never a red s
     expect(sig('node --test --test-reporter=tap', TAP).isError).toBe(false);
   });
 
-  it('a red count printed for a FAILED test still outvotes the green summary', () => {
-    const out = SPEC.replace('✔ reports 3 failed (0.081058ms)', '✖ reports 3 failed (0.081058ms)').replace(
-      'ℹ fail 0',
-      'ℹ fail 0',
-    );
+  // Constructed: only the passed-test marker changes, so the line is no longer filtered out.
+  it('a red count on a line that is not a passed test still outvotes the green summary', () => {
+    const out = SPEC.replace('✔ reports 3 failed (0.081058ms)', '✖ reports 3 failed (0.081058ms)');
     expect(sig('node --test', out).isError).toBe(true);
+  });
+
+  // jest ends a passed test with " (3 ms)", vitest --reporter=verbose often with nothing.
+  it('jest / vitest passed-test lines (✓) are filtered too', () => {
+    const out = [
+      '  ✓ handles 2 errors (3 ms)',
+      '   ✓ reports 3 failed',
+      ' Test Files  1 passed (1)',
+      ' 5 pass',
+      ' 0 fail',
+    ].join('\n');
+    expect(sig('npx vitest run && bun test', out).isError).toBe(false);
   });
 
   it('a summary that is red only by its "(" follower is red (vitest "Test Files  1 failed (1)")', () => {
