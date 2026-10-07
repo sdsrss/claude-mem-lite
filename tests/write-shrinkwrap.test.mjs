@@ -9,12 +9,13 @@
 // 8.7.1 are in range, so the lock was honoured, not matched by chance).
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildShrinkwrap, verifyShrinkwrap, productionClosure } from '../scripts/write-shrinkwrap.mjs';
-import { deployableLockfile } from '../install.mjs';
+import { deployLockfile } from '../install.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const realLock = () => JSON.parse(readFileSync(join(REPO, 'package-lock.json'), 'utf8'));
@@ -91,19 +92,60 @@ describe('the closure check', () => {
   });
 });
 
-describe('deployableLockfile: the lock install.mjs deploys as ~/.claude-mem-lite/package-lock.json', () => {
-  // The npm tarball never carries package-lock.json; without this the npx / global install ran
-  // `npm install --omit=dev` in the managed dir with no lock at all.
-  it('prefers package-lock.json, falls back to the tarball shrinkwrap, else null', () => {
-    const d = mkdtempSync(join(tmpdir(), 'mem-lockpick-'));
+describe('the script entry', () => {
+  // Pre-tag review: run through a symlinked path, the entry check compared the symlink with the
+  // resolved module URL, so the script exited 0 having written nothing, and smoke-tarball then
+  // skipped its shrinkwrap check because no file existed.
+  it('writes the shrinkwrap when invoked through a symlink', () => {
+    const d = mkdtempSync(join(tmpdir(), 'mem-sw-link-'));
     try {
-      expect(deployableLockfile(d)).toBeNull();
-      writeFileSync(join(d, 'npm-shrinkwrap.json'), '{}');
-      expect(deployableLockfile(d)).toBe(join(d, 'npm-shrinkwrap.json'));
-      writeFileSync(join(d, 'package-lock.json'), '{}');
-      expect(deployableLockfile(d)).toBe(join(d, 'package-lock.json'));
+      const link = join(d, 'write-shrinkwrap.mjs');
+      symlinkSync(join(REPO, 'scripts', 'write-shrinkwrap.mjs'), link);
+      const out = join(d, 'npm-shrinkwrap.json');
+      const r = spawnSync(process.execPath, [link, '--lock', join(REPO, 'package-lock.json'), '--out', out], {
+        encoding: 'utf8',
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(existsSync(out), `nothing written; stdout: ${r.stdout}`).toBe(true);
     } finally {
       rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('deployLockfile: what install.mjs deploys as ~/.claude-mem-lite/package-lock.json', () => {
+  // The npm tarball never carries package-lock.json; without this the npx / global install ran
+  // `npm install --omit=dev` in the managed dir with no lock at all.
+  it('tarball shape: deploys the shrinkwrap as package-lock.json', () => {
+    const src = mkdtempSync(join(tmpdir(), 'mem-lockdep-src-'));
+    const dst = mkdtempSync(join(tmpdir(), 'mem-lockdep-dst-'));
+    try {
+      writeFileSync(join(src, 'npm-shrinkwrap.json'), '{"lockfileVersion":3,"probe":"sw"}\n');
+      expect(deployLockfile(src, dst)).toBe(join(src, 'npm-shrinkwrap.json'));
+      expect(readFileSync(join(dst, 'package-lock.json'), 'utf8')).toBe(
+        '{"lockfileVersion":3,"probe":"sw"}\n',
+      );
+    } finally {
+      rmSync(src, { recursive: true, force: true });
+      rmSync(dst, { recursive: true, force: true });
+    }
+  });
+
+  it('checkout shape: leaves the deployed package-lock.json to the SOURCE_FILES copy', () => {
+    const src = mkdtempSync(join(tmpdir(), 'mem-lockdep-src-'));
+    const dst = mkdtempSync(join(tmpdir(), 'mem-lockdep-dst-'));
+    try {
+      writeFileSync(join(src, 'package-lock.json'), '{"probe":"lock"}');
+      writeFileSync(join(src, 'npm-shrinkwrap.json'), '{"probe":"sw"}');
+      writeFileSync(join(dst, 'package-lock.json'), '{"probe":"copied by SOURCE_FILES"}');
+      expect(deployLockfile(src, dst)).toBeNull();
+      expect(readFileSync(join(dst, 'package-lock.json'), 'utf8')).toBe('{"probe":"copied by SOURCE_FILES"}');
+      rmSync(join(src, 'package-lock.json'));
+      rmSync(join(src, 'npm-shrinkwrap.json'));
+      expect(deployLockfile(src, dst), 'neither file: nothing to do').toBeNull();
+    } finally {
+      rmSync(src, { recursive: true, force: true });
+      rmSync(dst, { recursive: true, force: true });
     }
   });
 });

@@ -500,21 +500,22 @@ function prepareInstallDirs() {
 }
 
 /**
- * The lockfile to deploy as ~/.claude-mem-lite/package-lock.json, or null. A git checkout and
- * the plugin cache carry package-lock.json; the npm tarball never does (npm will not pack it)
- * and carries the release's npm-shrinkwrap.json instead (D#170), so an npx / global install ran
- * `npm install --omit=dev` in the managed dir with no lock and resolved every range afresh.
- * Deployed under the package-lock name: a later plugin sync or update writes that name, and a
- * stale shrinkwrap left beside it would take precedence over the lock they write.
- * @param {string} projectDir
- * @returns {string|null}
+ * Lock the managed dir when the source carries only a shrinkwrap. A git checkout and the plugin
+ * cache carry package-lock.json, which the SOURCE_FILES copy deploys; the npm tarball never does
+ * (npm will not pack it) and carries the release's npm-shrinkwrap.json instead (D#170), so an
+ * npx / global install ran `npm install --omit=dev` in the managed dir with no lock and resolved
+ * every range afresh. Deployed under the package-lock name: a later plugin sync or update writes
+ * that name, and a stale shrinkwrap left beside it would take precedence over the lock they write.
+ * @param {string} projectDir the package being installed from
+ * @param {string} dataDir the managed code dir
+ * @returns {string|null} the shrinkwrap deployed, or null when there was nothing to do
  */
-export function deployableLockfile(projectDir) {
-  for (const f of ['package-lock.json', 'npm-shrinkwrap.json']) {
-    const p = join(projectDir, f);
-    if (existsSync(p)) return p;
-  }
-  return null;
+export function deployLockfile(projectDir, dataDir) {
+  if (existsSync(join(projectDir, 'package-lock.json'))) return null;
+  const shrinkwrap = join(projectDir, 'npm-shrinkwrap.json');
+  if (!existsSync(shrinkwrap)) return null;
+  atomicCopyFileSync(shrinkwrap, join(dataDir, 'package-lock.json'));
+  return shrinkwrap;
 }
 
 export function deployCodeTree(IS_DEV) {
@@ -566,12 +567,8 @@ export function deployCodeTree(IS_DEV) {
         atomicCopyFileSync(src, dst); // by rename, not in place (D#223)
       }
     }
-    // The npm tarball has no package-lock.json for the loop above to copy; lock the managed
-    // dir with the tarball's shrinkwrap instead (D#170).
-    const lock = deployableLockfile(PROJECT_DIR);
-    if (lock && !lock.endsWith('package-lock.json')) {
-      atomicCopyFileSync(lock, join(DATA_DIR, 'package-lock.json'));
-    }
+    // The npm tarball has no package-lock.json for the loop above to copy (D#170).
+    deployLockfile(PROJECT_DIR, DATA_DIR);
     // Copy hook scripts (settings.json hook commands point at these — must
     // stay in sync with HOOK_SCRIPT_FILES manifest)
     copyHookScripts(join(PROJECT_DIR, 'scripts'), scriptsDir);
@@ -2526,7 +2523,7 @@ async function doctor() {
           `Update state: ${parts.join(', ')} — the last release lookup failed (${state.lookupError}${since})`,
         );
         log(
-          'Until a lookup succeeds no update is announced, and self-update / repair cannot fetch a release.',
+          'Newer releases cannot be detected until a lookup succeeds; self-update and repair use the same lookup.',
         );
       } else {
         ok(`Update state: ${parts.join(', ') || 'empty'}`);

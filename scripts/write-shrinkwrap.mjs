@@ -23,7 +23,7 @@
 //
 // Usage: node scripts/write-shrinkwrap.mjs [--lock <path>] [--out <path>]   (default: repo root)
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -144,7 +144,18 @@ function main(argv) {
   console.log(`[write-shrinkwrap] ${outPath}: kept ${kept} entries, dropped ${dropped.length} dev-only`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Compared by real path: node resolves a symlinked entry to the module's real file, so a plain
+// string compare made a run through a symlink exit 0 having written nothing.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   try {
     main(process.argv.slice(2));
   } catch (e) {
