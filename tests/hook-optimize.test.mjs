@@ -1298,8 +1298,11 @@ describe('re-enrich --scope wide (R-7)', () => {
     });
     callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
     const result = await executeReenrich(racing, 10);
-    expect(reads, 'premise: the write landed after the protection check read the row').toBe(1);
-    const row = db.prepare('SELECT compressed_into, optimized_at FROM observations WHERE id = ?').get(id);
+    expect(reads, 'premise: the write ran after the protection check read the row').toBe(1);
+    const row = db
+      .prepare('SELECT compressed_into, optimized_at, importance_set_at FROM observations WHERE id = ?')
+      .get(id);
+    expect(row.importance_set_at, 'premise: the write landed').not.toBeNull();
     expect(row.compressed_into ?? 0, 'hidden although a person had just set its importance').toBe(0);
     expect([result.processed, row.optimized_at]).toEqual([0, null]);
   });
@@ -1315,11 +1318,52 @@ describe('re-enrich --scope wide (R-7)', () => {
     });
     callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
     const result = await executeReenrich(racing, 10);
-    expect(reads, 'premise: the member landed after the keeper check read the row').toBe(1);
+    expect(reads, 'premise: the write ran after the keeper check read the row').toBe(1);
+    expect(
+      db.prepare('SELECT COUNT(*) n FROM observations WHERE compressed_into = ?').get(id).n,
+      'premise: the member landed',
+    ).toBe(1);
     const row = db.prepare('SELECT compressed_into, optimized_at FROM observations WHERE id = ?').get(id);
     expect(row.compressed_into ?? 0, 'the new keeper, and with it its member, was hidden').toBe(0);
     expect([result.processed, row.optimized_at]).toEqual([0, null]);
   });
+
+  // The stamp-only write a 0 reply gets on a protected narrow row (D#268) runs after the same
+  // synchronous reads, so its WHERE is again the only guard against another process (post-release
+  // review: deleting either predicate left the suite green). Person-set row; the write lands right
+  // after the protection check reads it.
+  for (const [what, write, check] of [
+    [
+      'superseded',
+      (id) => db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(Date.now(), id),
+      (row) => expect(row.optimized_at, 'a superseded row was stamped').toBeNull(),
+    ],
+    [
+      'stamped by another pass (a /verify approval)',
+      (id) => db.prepare('UPDATE observations SET optimized_at = 12345 WHERE id = ?').run(id),
+      (row) => expect(row.optimized_at, "the other pass's stamp was overwritten").toBe(12345),
+    ],
+  ]) {
+    it(`the stamp-only write of a 0 reply skips a protected row ${what} after the check read it`, async () => {
+      const { executeReenrich } = await import('../hook-optimize.mjs');
+      insertObs(db, { title: 'protected, then raced', narrative: 'body text for the row' });
+      const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+      db.prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?').run(
+        Date.now(),
+        id,
+      );
+      let reads = 0;
+      const racing = writeAfterRead(db, 'SELECT importance_set_at FROM observations WHERE id = ?', () => {
+        reads++;
+        write(id);
+      });
+      callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+      const result = await executeReenrich(racing, 10);
+      expect(reads, 'premise: the write ran after the protection check read the row').toBe(1);
+      check(db.prepare('SELECT optimized_at FROM observations WHERE id = ?').get(id));
+      expect(result.processed).toBe(0);
+    });
+  }
 
   // v6.21.0 pre-tag claims review: hiding a compression group's KEEPER hides every member
   // compressed into it (2eb44d1 guarded the five maintenance writers, not this one). A weekly
@@ -1358,7 +1402,8 @@ describe('re-enrich --scope wide (R-7)', () => {
 
   // Pre-tag review P3-8: the narrow rewrite moves an explicit save to the re-enrich writer's id,
   // because its text becomes the model's. A 0 reply leaves the stored text, so the row must stay
-  // the explicit save it was (the guard at the session-id rewrite is keepStoredText, not !isWide).
+  // the explicit save it was (since D#268 a narrow 0 reply returns through the stamp-only write
+  // before the session-id rewrite).
   it('a 0 reply on a person-set explicit save keeps the row under its manual author id', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertSession(db, { id: 'manual-probe', project: 'test' });

@@ -10,12 +10,13 @@ All notable changes to claude-mem-lite are documented in this file.
   With `CLAUDE_MEM_SKIP_UPDATE` set, the background check and `self-update` never look up (a
   `repair` still does), so the warning stayed until a repair happened to, and with no state file
   doctor asked "first run?"; it now says the checks are off.
-- **Fix: a re-enrich reply that scores a protected row 0 no longer writes into it.** A row
-  the narrow pass may not hide (a compression keeper, or one whose importance a person set)
-  already kept its title and narrative when the model scored it 0; the same write still stored
-  that reply's type, lesson, concepts, facts, aliases and scope, permanently. It now records only
-  that the row was looked at, plus the usual importance floor. Wide-scope passes are unchanged:
-  their rows are substantive, so a 0 there is treated as a misjudged importance.
+- **Fix: in the narrow re-enrich pass, a reply that scores a protected row 0 no longer writes
+  into it.** A row that pass may not hide (a compression keeper, or one whose importance a person
+  set) already kept its title and narrative when the model scored it 0; the same write still
+  stored that reply's type, lesson, concepts, facts, aliases and scope, permanently. It now
+  records only that the row was looked at, plus the usual importance floor. The passes that fill
+  concepts, aliases and scope on their own can still fill those later. Wide-scope passes are
+  unchanged: their rows are substantive, so a 0 there is treated as a misjudged importance.
 - **Fix: with several `CLAUDE_CONFIG_DIR` profiles, each gets the plugin's one-time checks.**
   The cleanup of stale global MCP entries and the warning about leftover direct-install hooks
   each run once, and the record that they had run was shared by every profile, so only the
