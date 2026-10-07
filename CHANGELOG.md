@@ -2,7 +2,17 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.24.0 — `CLAUDE_CONFIG_DIR` is followed everywhere; npm installs drop the dev toolchain
+
+Fixes only; no schema change, no migration, no new setting. A minor version because two
+behaviours a user can notice change: with `CLAUDE_CONFIG_DIR` set, the installer, updates and
+hooks now use that directory, and a confirmed `maintain execute --ops purge_stale` deletes every
+row its preview counted in one run.
+
+**If you set `CLAUDE_CONFIG_DIR` and installed with npm or npx**, run `claude-mem-lite install`
+once more with the variable set. Plugin installs need nothing. To go back, install 6.23.3
+(`npm install -g claude-mem-lite@6.23.3`; for a plugin install, the rollback recipe under
+"Trust model per install path" in the README).
 
 - **Fix: an npm install no longer brings the development toolchain.** The published lockfile
   (`npm-shrinkwrap.json`) was a full copy of the development lockfile, and npm installs a

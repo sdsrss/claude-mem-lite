@@ -237,6 +237,27 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.24.0
+
+**If you set `CLAUDE_CONFIG_DIR`, the installer, updates and hooks now use that directory, as
+Claude Code does.** No schema-version change: 6.23.3 still opens the database after this
+release has. Without `CLAUDE_CONFIG_DIR` nothing in this item changes.
+
+- **Who is affected.** Claude Code keeps `settings.json`, `plugins/` and `.claude.json` in
+  `CLAUDE_CONFIG_DIR` when it is set. The plugin kept using `~/.claude` and `~/.claude.json`:
+  `install` wrote its hooks where Claude Code never reads them, and with two profiles the
+  session-start setup and `self-update` pruned the other profile's plugin cache and edited its
+  `.claude.json`.
+- **What to do.** Installed with npm or npx: run `claude-mem-lite install` once more with the
+  variable set, so the hooks land in your config directory. Plugin installs need nothing. Hook
+  entries an older version wrote into `~/.claude/settings.json` stay there; if no other profile
+  uses `~/.claude`, `env -u CLAUDE_CONFIG_DIR claude-mem-lite cleanup-hooks` removes them.
+- **Also in this release:** `npm install -g claude-mem-lite` and `npx` no longer install the
+  development toolchain (96 packages / 57 MB instead of 298 / 541 MB). A confirmed
+  `maintain execute --ops purge_stale` now deletes every row its preview counted in one run,
+  behind one snapshot. `doctor` warns about a failing update check and about an
+  `ANTHROPIC_BASE_URL` that ends in `/v1`. Details in CHANGELOG.md.
+
 ## Upgrading to 6.23.1
 
 **If you set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, background LLM calls now go to that
