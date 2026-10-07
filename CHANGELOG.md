@@ -153,7 +153,9 @@ All notable changes to claude-mem-lite are documented in this file.
   work there); and `✗ removed` says the block was
   deleted (by you or `unadopt`) and that after `claude-mem-lite adopt --enable` the next session
   may write it again (beside an `AGENTS.md` with the rules file switched off, that it also takes
-  `CLAUDE_MEM_RULES_STEERING=1`).
+  `CLAUDE_MEM_RULES_STEERING=1`; where the rules file cannot be written anyway, why, instead of
+  either). A block that is still there but cannot be refreshed (a read-only directory) is
+  reported as present, so the session that loaded it gets no injected copy on top.
 - **Smaller fixes around the local file.** A `CLAUDE.local.md` or `CLAUDE.md` that is a directory
   or cannot be read no longer leaves the session with no guidance (it is injected, or the other
   file is written), and no longer stops `adopt --status`, `unadopt --dry-run` or the
