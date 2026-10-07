@@ -155,15 +155,35 @@ check('session-start stdout is ONE parseable JSON envelope (no raw prose alongsi
     detail: JSON.stringify(o).slice(0, 220),
   };
 });
-check('auto-adopt wrote the steering block into the project CLAUDE.md', () => {
-  const p = join(PROJECT, 'CLAUDE.md');
-  if (!existsSync(p)) return { ok: false, detail: 'CLAUDE.md not created' };
-  const txt = readFileSync(p, 'utf8');
-  return { ok: txt.includes('claude-mem-lite'), detail: `${txt.length} bytes` };
+// Since 6.20.0 auto-adopt puts the block in CLAUDE.local.md at the repository root, out of
+// git via .git/info/exclude, and never creates the project's CLAUDE.md; the detail doc the
+// block points at lives in the data dir. This repo has no AGENTS.md, so 6.22.0's
+// inject-instead branch does not apply. Until 2026-10-06 these two checks still asserted the
+// pre-6.20.0 shape (project CLAUDE.md + .claude/plugin_claude_mem_lite.md) and were red on
+// every scheduled run after that release (D#223).
+check('auto-adopt wrote the block into CLAUDE.local.md, kept it out of git, left CLAUDE.md alone', () => {
+  const local = join(PROJECT, 'CLAUDE.local.md');
+  if (!existsSync(local)) return { ok: false, detail: 'CLAUDE.local.md not created' };
+  const txt = readFileSync(local, 'utf8');
+  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    cwd: PROJECT,
+    encoding: 'utf8',
+  });
+  const claudeMd = existsSync(join(PROJECT, 'CLAUDE.md'));
+  return {
+    ok: txt.includes('claude-mem-lite') && !status.includes('CLAUDE.local.md') && !claudeMd,
+    detail: `${txt.length} bytes; git status: ${status.trim().replace(/\n/g, ' | ') || '(clean)'}; CLAUDE.md ${claudeMd ? 'created' : 'absent'}`,
+  };
 });
-check('auto-adopt wrote the detail doc', () =>
-  existsSync(join(PROJECT, '.claude', 'plugin_claude_mem_lite.md')),
-);
+check('auto-adopt wrote the detail doc the block points at', () => {
+  const doc = join(HOME, '.claude-mem-lite', 'plugin_claude_mem_lite.md');
+  const local = join(PROJECT, 'CLAUDE.local.md');
+  const block = existsSync(local) ? readFileSync(local, 'utf8') : '';
+  return {
+    ok: existsSync(doc) && block.includes('plugin_claude_mem_lite.md'),
+    detail: `${doc} ${existsSync(doc) ? 'present' : 'missing'}; block names it: ${block.includes('plugin_claude_mem_lite.md')}`,
+  };
+});
 
 // ── 4. UserPromptSubmit ─────────────────────────────────────────────────────
 setPhase('A4: UserPromptSubmit hooks');
