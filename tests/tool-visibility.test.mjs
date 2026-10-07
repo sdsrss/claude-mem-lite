@@ -8,7 +8,10 @@ import { spawn } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import Database from 'better-sqlite3';
 import { SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
+import { initSchema } from '../schema.mjs';
+import { recordSearch } from '../lib/search-telemetry.mjs';
 
 const SERVER_PATH = resolve(new URL('..', import.meta.url).pathname, 'server.mjs');
 
@@ -120,6 +123,17 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
   it('tools/list includes feedback when search telemetry is enabled', async () => {
     proc.stdin.end();
     proc.kill('SIGTERM');
+    // Let the old server release the DB before writing to it (recordSearch never waits on a lock).
+    if (proc.exitCode === null && proc.signalCode === null) await new Promise((r) => proc.once('exit', r));
+    // A search an EARLIER server process recorded: real row, real result, foreign id.
+    const seed = initSchema(new Database(join(tmp, 'claude-mem-lite.db')));
+    const foreignId = recordSearch(seed, {
+      query: 'earlier process',
+      surface: 'mcp_search',
+      client: 'earlier',
+      results: [{ source: 'obs', id: 1, title: 'Earlier result' }],
+    });
+    seed.close();
     proc = startServer(tmp, { CLAUDE_MEM_SEARCH_TELEMETRY: '1' });
     await rpc(proc, 1, 'initialize', {
       protocolVersion: '2024-11-05',
@@ -129,6 +143,13 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     const resp = await rpc(proc, 2, 'tools/list', {});
     const names = resp.result.tools.map((t) => t.name).sort();
     expect(names).toEqual([...EXPECTED_CORE, 'mem_search_feedback'].sort());
+
+    const foreign = await rpc(proc, 3, 'tools/call', {
+      name: 'mem_search_feedback',
+      arguments: { search_id: foreignId, relevant: ['#1'] },
+    });
+    expect(foreign.result?.isError).toBe(true);
+    expect(foreign.result?.content?.[0]?.text).toContain('was not issued by this server process');
   });
 
   it('CLAUDE_MEM_ALL_TOOLS=1 exposes all 18 registered default tools', async () => {

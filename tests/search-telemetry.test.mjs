@@ -220,9 +220,41 @@ describe('search telemetry on schema v49', () => {
         (memory_session_id, project, text, type, title, created_at, created_at_epoch, compressed_into)
        VALUES ('memory-1', 'telemetry-test', 'old', 'decision', 'Old', '2026-01-01', 1, ?)`,
     ).run(keeper);
+    // A superseded row: the half of liveObsFilterSql a bare COALESCE(compressed_into,0)=0 misses.
+    db.prepare(
+      `INSERT INTO observations
+        (memory_session_id, project, text, type, title, created_at, created_at_epoch, superseded_at, superseded_by)
+       VALUES ('memory-1', 'telemetry-test', 'retracted', 'decision', 'Retracted', '2026-01-01', 2, 2, ?)`,
+    ).run(keeper);
     expect(countMcpEligibleCorpus(db, { effectiveSource: 'observations', includeNoise: true })).toEqual({
       obs: 1,
     });
+    db.close();
+  });
+
+  it('reports on a database that never recorded without creating the tables', () => {
+    const db = openDb();
+    const report = computeSearchTelemetry(db, {});
+    expect(report).toMatchObject({ search_count: 0, stored_search_count: 0, stored_result_count: 0 });
+    expect(db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE name LIKE 'search_%'").get().c).toBe(0);
+    db.close();
+  });
+
+  it('reports stored totals for the whole series, not the --days window', () => {
+    const db = openDb();
+    const now = 100 * 86400000;
+    for (const age of [0, 40, 41]) {
+      recordSearch(db, {
+        query: `q${age}`,
+        surface: 'mcp_search',
+        client: 'test',
+        results: [{ source: 'obs', id: age + 1, title: 't' }],
+        now: now - age * 86400000,
+      });
+    }
+    const report = computeSearchTelemetry(db, { days: 30, now });
+    expect(report.search_count).toBe(1);
+    expect(formatSearchTelemetryReport(report)).toContain('Stored rows: searches 3 | results 3');
     db.close();
   });
 
@@ -378,6 +410,16 @@ describe('search telemetry on schema v49', () => {
     expect(formatSearchTelemetryReport(underCovered)).toContain(
       'mcp_search #1: suppressed (surface: 30 ratings, 19.9% coverage)',
     );
+
+    // Exactly at the gate: 20% coverage is reported, not suppressed.
+    const atGate = globalThis.structuredClone(report);
+    atGate.by_surface.mcp_search = {
+      ...underCovered.by_surface.mcp_search,
+      returned: 150,
+      unrated: 120,
+      coverage: 0.2,
+    };
+    expect(formatSearchTelemetryReport(atGate)).toContain('mcp_search #1: 30/30 relevant');
 
     const unratedRank = globalThis.structuredClone(report);
     unratedRank.by_rank['mcp_search:1'] = {
