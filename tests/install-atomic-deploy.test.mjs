@@ -4,9 +4,9 @@
 // The copy loop used copyFileSync onto the live file: open with O_TRUNC, then write. A hook
 // starting in that window imported an empty or half-written module. The weekly sandbox
 // harness (tests/sandbox/phaseB-npm.mjs B10) went red on it three Mondays in four with
-// `SyntaxError: ... './lib/low-signal-patterns.mjs' does not provide an export named
-// 'buildNotLowSignalSql'` on 10-05; `recordMetric` on 09-28, `likeLiteral` / `citeFactorClause`
-// on 09-14) — on a SAME-version re-install, so no version mix was needed.
+// `SyntaxError: ... does not provide an export named ...` (10-05 `buildNotLowSignalSql`, 09-28
+// `recordMetric`, 09-14 `likeLiteral` / `citeFactorClause`) on a SAME-version re-install, so no
+// version mix was needed.
 // A probe re-copying SOURCE_FILES under 8 concurrent importers (2026-10-06): in place
 // 12 of 2386 overlapping imports failed, that signature among them; temp + rename 0 of 2388.
 //

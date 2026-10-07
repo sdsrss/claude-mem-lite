@@ -439,7 +439,7 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 完整性检查与重建。 |
 | `mem_browse` | `claude-mem-lite browse` | 分层仪表盘（working / active / archive）。 |
 
-**无人值守运行（`claude -p`）。** 没有权限确认可答时，Claude Code 2.1.292 拒绝了所有 `mem_*` 调用，直到服务的工具被放行；模型也没有自己改用 CLI。在 88 个无人值守会话里（2026-10-06），13 次调用全部被拒，什么都没存下。同样参数在 2.1.284 上（2026-09-29）能存进去，所以这取决于 Claude Code 版本。在这次运行读取的 `settings.json` 里放行一次即可：
+**无人值守运行（`claude -p`）。** 没有权限确认可答时，Claude Code 2.1.292 拒绝了所有 `mem_*` 调用，直到服务的工具被放行；模型也没有自己改用 CLI。在 88 个无人值守会话里（2026-10-06），13 次调用全部被拒，什么都没存下。在 2.1.284 上（2026-09-29），同样的参数会放行这些调用，所以这取决于 Claude Code 版本。在这次运行读取的 `settings.json` 里放行一次即可：
 
 ```json
 { "permissions": { "allow": ["mcp__plugin_claude-mem-lite_mem-lite"] } }

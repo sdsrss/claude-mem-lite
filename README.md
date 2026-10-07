@@ -537,8 +537,8 @@ surface — reach them through the CLI column in the second table.
 **Headless runs (`claude -p`).** With no permission prompt to answer, Claude Code 2.1.292
 refused every `mem_*` call until the server's tools were allowed, and the model did not switch
 to the CLI by itself: in an 88-session headless run (2026-10-06) all 13 calls were refused and
-nothing was saved. A run with the same flags on 2.1.284 (2026-09-29) saved, so this depends on
-the Claude Code version. Allow the server once in the `settings.json` the run reads:
+nothing was saved. On 2.1.284 (2026-09-29) the same flags let these calls through, so this
+depends on the Claude Code version. Allow the server once in the `settings.json` the run reads:
 
 ```json
 { "permissions": { "allow": ["mcp__plugin_claude-mem-lite_mem-lite"] } }

@@ -12,8 +12,9 @@ All notable changes to claude-mem-lite are documented in this file.
   './lib/low-signal-patterns.mjs' does not provide an export named 'buildNotLowSignalSql'`,
   even when the version did not change. Each file is now written beside the old one and
   renamed over it, and hooks that start while the files and their npm dependencies are being
-  replaced skip that one run, as they already did during an automatic update (for its first two
-  minutes, as there: a dependency compile that runs longer is not covered after that). Measured by
+  replaced skip that one run, as they already did while an automatic update swaps files in. The
+  skip lapses two minutes after the install starts, so a dependency compile that runs longer is
+  not covered after that. Measured by
   re-copying the files under 8 processes loading them: 12 of 2386 loads failed before, 0 of
   2388 after. The weekly install check had been failing on it three weeks in four since
   2026-09-14.
@@ -24,7 +25,7 @@ All notable changes to claude-mem-lite are documented in this file.
   already, or where Project instructions is set to read `AGENTS.md` regardless.
 - **Docs: headless runs (`claude -p`) need the server's tools allowed once.** On Claude Code
   2.1.292 every `mem_*` call there was refused until they were (13 of 13 calls in an 88-session
-  run, nothing saved; the same flags on 2.1.284 saved). The README now gives the
+  run, nothing saved; on 2.1.284 the same flags let these calls through). The README now gives the
   `permissions.allow` rule for a plugin install (`mcp__plugin_claude-mem-lite_mem-lite`) and for
   an npx or git-clone install (`mcp__mem-lite`).
 - `npm run validate:manifests` passes on current Claude Code again: its validator now
