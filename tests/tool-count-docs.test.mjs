@@ -3,7 +3,7 @@
 // Five places stated a tool count and three different answers were in circulation:
 // README.md said 20 total / 11 hidden, README.zh-CN.md said 17 total / 6 core / 11 hidden,
 // llms.txt said 20 / 11, docs/ARCHITECTURE.md said 9 listed + 11 hidden — while
-// tool-schemas.mjs has said 18 = 9 + 9 since v5.0.0 removed mem_use and mem_registry.
+// tool-schemas.mjs had 18 = 9 + 9 after v5.0.0 removed mem_use and mem_registry.
 // README's own hidden-tool table had nine rows the whole time, under a heading saying
 // eleven, which is what makes a hand-maintained count worth replacing rather than
 // re-correcting: it had already disagreed with the table directly beneath it.

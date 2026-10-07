@@ -42,6 +42,7 @@ beforeAll(async () => {
       CLAUDE_PROJECT_DIR: '/test/project',
       PWD: '/test/project',
       CLAUDE_MEM_AUTO_DEEP: '0',
+      CLAUDE_MEM_SEARCH_TELEMETRY: '0',
     },
   });
   client = new Client({ name: 'mem-test-client', version: '0.0.0' });
@@ -69,7 +70,7 @@ function textOf(result) {
 }
 
 describe('MCP protocol surface', () => {
-  it('tools/list exposes exactly the 9 promised core tools', async () => {
+  it('tools/list exposes exactly the 9 default core tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([

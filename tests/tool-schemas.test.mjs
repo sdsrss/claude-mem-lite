@@ -22,15 +22,15 @@ const MAX_AUTHORED_DESCRIPTION = 760;
 const authoredLength = (desc) => desc.split(CLI_INVOKE).join('').length;
 
 describe('MCP tool descriptions use discouragement style', () => {
-  test('there are exactly 18 tools (9 core + 9 hidden)', () => {
-    expect(tools).toHaveLength(18);
+  test('there are exactly 19 tools (10 core + 9 hidden)', () => {
+    expect(tools).toHaveLength(19);
     const core = tools.filter((t) => !t.hidden);
     const hidden = tools.filter((t) => t.hidden === true);
-    expect(core, 'core count').toHaveLength(9);
+    expect(core, 'core count').toHaveLength(10);
     expect(hidden, 'hidden count').toHaveLength(9);
   });
 
-  test('core (unhidden) names are the contract-critical nine', () => {
+  test('core (unhidden) names are the contract-critical ten', () => {
     const coreNames = tools
       .filter((t) => !t.hidden)
       .map((t) => t.name)
@@ -48,6 +48,7 @@ describe('MCP tool descriptions use discouragement style', () => {
       'mem_recent',
       'mem_save',
       'mem_search',
+      'mem_search_feedback',
       'mem_timeline',
     ]);
   });

@@ -50,8 +50,8 @@ matchers** (Bash via a prefilter); `install.mjs`'s settings.json twin must stay 
 away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone
 since the vector engine was removed; `lib/tool-refusal.mjs` gates PostToolUseFailure,
 separating a program failing from the agent's own chain refusing; `hook-optimize.mjs` is
-re-enrich + normalize + cluster-merge + smart-compress; `server.mjs` exposes 18 tools, 9 in
-`tools/list` and 9 hidden-but-callable by exact name; `schema.mjs` is schema + migrations
+re-enrich + normalize + cluster-merge + smart-compress; `server.mjs` has 19 tool definitions:
+9 listed (10 with search telemetry), 9 hidden-but-callable; `schema.mjs` is schema + migrations
 (v49 drops the vector tables); `scripts/post-tool-use.sh` is a ~5ms bash pre-filter; and
 `hook.mjs` is the single entry for session-start / stop / post-tool-use / failure /
 user-prompt.

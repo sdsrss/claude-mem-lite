@@ -152,7 +152,7 @@ node install.mjs install
 ### 安装过程
 
 1. **安装依赖** -- `npm install --omit=dev`（编译原生 `better-sqlite3`）
-2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 18 个工具（9 个核心通过 `tools/list` 暴露 + 9 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
+2. **注册 MCP 服务器** -- `mem-lite` 服务器定义 19 个工具（10 个核心 + 9 个隐藏但可调；`mem_search_feedback` 仅在启用搜索遥测时注册）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
 
 > **自动 adopt 不再把托管块加进你项目的 `CLAUDE.md`（6.19.4 之后的下一个版本起）。** 每次 SessionStart，插件都会送达引导文本（提升 Claude 主动调用 `mem_recall` / `mem_save` 的触发表）。在还没有托管块的 git 仓库里，它把托管块写进仓库根目录的 `CLAUDE.local.md`（Claude Code 像加载 `CLAUDE.md` 一样加载它，加载项目指令的子代理也能看到；内置的 Explore 和 Plan 子代理不加载这类文件），并把这个文件加进仓库的 `.git/info/exclude`（你的 ignore 规则已覆盖时不加），所以 git 不列出、也不提交它；第一次写入时你会看到一条**一次性提示**。Claude Code 在插件的启动钩子运行之前就读取了指令文件，所以创建这个文件的那个会话改为在上下文里注入一次引导（该会话的子代理看不到）。Claude Code 把某个 `AGENTS.md` 当作项目指令读取时，会话目录或上层只要有 `CLAUDE.md` 或 `CLAUDE.local.md` 它就不再读 `AGENTS.md`，所以在这种仓库里什么都不写，改为**注入**引导（子代理看不到），并给一条点名那个 `AGENTS.md` 的一次性提示。设了 `CLAUDE_MEM_RULES_STEERING=1` 时，托管块改写进仓库根目录的 `.claude/rules/claude-mem-lite.md`：同样经 `.git/info/exclude` 排除在 git 之外，Claude Code 把它当作项目指令加载（加载项目指令的子代理也能看到），而且不会让 `AGENTS.md` 失效；第一次写入时有单独的一次性提示。它不是默认做法，因为在预先登记的 A/B 里它没有达到事先定下的、胜过注入的标准（`docs/audits/20261006-d212-ab.md`）。不在 git 仓库里、仓库根是 `$HOME`、`CLAUDE.local.md` 已被 git 跟踪或是符号链接，或者仓库根是一个 `npm publish` 会把它带上的 npm 包（没有 `"private": true`，没有把它排除在外的 `files` 列表，没有 `files` 列表时也没有列出它的 `.npmignore`）时，什么都不写，改为每个会话把引导**注入**上下文，并一次性提示可以运行 `/adopt`（在 `$HOME` 下不提示）。设了这个变量但 rules 文件写不了时（路径上有符号链接、同名文件被跟踪或是你自己的文件、npm 包会把它带上）同样改为注入。`AGENTS.md` 旁边的提示会说明是哪个 `AGENTS.md`、为什么没有文件，并只给出在这里行得通的、保留 `AGENTS.md` 又能写文件的做法：在 `/config` 里把 Project instructions 设为 `claude-md-and-agents-md`，之后就会写 `CLAUDE.local.md`（`CLAUDE.local.md` 也会被拒写时不提，比如 npm 包根，或你删过的文件）；运行 `/adopt`，它写的 `CLAUDE.md` 会导入同目录的 `AGENTS.md`（上层目录或子目录里的 `AGENTS.md` 会因此失效时不提）。托管块指向的详情文件放在插件自己的数据目录，以 `~/` 路径书写。`.git/info/exclude` 只对 git 生效：docker 构建上下文、归档和其他打包工具都可能把 `CLAUDE.local.md` 打进去（rules 文件同样如此；可发布的 npm 包根目录不会保留 `CLAUDE.local.md`：之前写入的托管块会在下一次会话启动时移除；在这个文件会让 `AGENTS.md` 失效的项目里，托管块会被移除、改为注入；设了 `CLAUDE_MEM_RULES_STEERING=1` 时，在写得了的情况下移到 rules 文件）。旧版本会在你打开的每个项目里，未经询问就向项目自己的 `<cwd>/CLAUDE.md`（通常会进 git）写入托管块，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件；这些项目保留托管块，本版本的第一个会话会因为文本变化刷新它——想把某个项目迁到本地文件，在那里运行 `claude-mem-lite unadopt` 并提交这次删除。为什么不全部改成注入：沙箱实测中（一个项目，Claude Opus 5.5），8 个会话里模型主动记录的次数，注入时平均 1.5 次，写在 `CLAUDE.local.md` 或 `CLAUDE.md` 时 5.25 次；而且子代理完全看不到注入的文本。**任何安装路径都生效**（npm、npx、`/plugin`、手动）；这些提示都可以用 `MEM_NO_ADOPT_HINT=1` 关闭。
 >
@@ -402,8 +402,8 @@ v48"*。想继续用向量臂，请在**升级之前**锁定 `claude-mem-lite@5.
 
 ### MCP 工具
 
-v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。当前是 18 个工具，其中 9 个
-**核心** 工具出现在列表里，另外 9 个 **隐藏** 工具仍然注册在 MCP 层（按名
+v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。服务端定义 19 个工具，其中 9 个
+**核心** 工具默认出现在列表里，`mem_search_feedback` 仅在启用搜索遥测时加入；另外 9 个 **隐藏** 工具仍然注册在 MCP 层（按名
 `tools/call` 仍命中），只是不出现在列表响应里，以避免 Claude Code 会话启动时
 多加载 9 份工具 schema。隐藏工具走下面表格的 CLI 入口。
 
@@ -411,11 +411,12 @@ v2.34.0 起服务端只把一部分工具暴露给 `tools/list`。当前是 18 �
 `tool-schemas.mjs` 是唯一事实来源，`tests/tool-count-docs.test.mjs` 现在把两份
 README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 
-**核心（9 个，暴露给 Claude Code）**
+**核心（10 个定义；`mem_search_feedback` 需要启用搜索遥测）**
 
 | 工具 | 描述 |
 |------|------|
 | `mem_search` | 基于 BM25 排名的 FTS5 全文搜索。支持按类型、项目、日期范围、重要度过滤。 |
+| `mem_search_feedback` | 为已有 `mem_search` Search ID 的结果记录稀疏相关性标签。 |
 | `mem_recent` | 显示最近的观察，按时间排序。快速查看最新活动。 |
 | `mem_recall` | 召回与文件相关的观察。编辑文件前使用，回顾过去的修复和上下文。 |
 | `mem_timeline` | 围绕锚点按时间顺序浏览观察。 |

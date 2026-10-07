@@ -49,7 +49,7 @@ describe('cli-path single source of truth', () => {
 describe('LLM-visible CLI hints advertise the resolvable path, not the tilde path', () => {
   test('tool-schemas per-tool "Equivalent CLI" hints', () => {
     const withHint = tools.filter((t) => /Equivalent CLI: node /.test(t.description || ''));
-    expect(withHint.length).toBeGreaterThan(10); // ~18 tools carry a CLI hint
+    expect(withHint.length).toBeGreaterThan(10); // ~19 tools carry a CLI hint
     for (const t of tools) {
       expect(t.description || '').not.toContain(BROKEN);
     }

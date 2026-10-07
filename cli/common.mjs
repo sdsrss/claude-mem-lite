@@ -374,6 +374,7 @@ export const KNOWN_CLI_FLAGS = new Set([
   'run',
   'run-all',
   'scope',
+  'search-telemetry',
   'session-audit',
   'sidechain',
   'since',
@@ -431,6 +432,7 @@ export const COMMAND_SCOPED_FLAGS = new Map([
   ['chars', 'context'],
   ['digest', 'verify-apply'],
   ['print-project', 'verify-apply'],
+  ['search-telemetry', 'stats'],
   ['undo', 'verify-apply'],
 ]);
 

@@ -339,11 +339,11 @@ check('MCP initialize responds', () => {
     detail: JSON.stringify(r?.result?.serverInfo || mcp.stderr.slice(0, 400)),
   };
 });
-check('MCP tools/list exposes the 9 core tools', () => {
+check('MCP tools/list exposes the 9 default core tools', () => {
   const r = mcp.responses.find((x) => x.id === 2);
   const names = (r?.result?.tools || []).map((t) => t.name);
   return {
-    ok: names.length === 9 && names.includes('mem_search') && names.includes('mem_save'),
+    ok: names.length === 9 && !names.includes('mem_search_feedback') && names.includes('mem_save'),
     detail: `${names.length}: ${names.join(',')}`,
   };
 });

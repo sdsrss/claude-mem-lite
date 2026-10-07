@@ -255,6 +255,7 @@ export const SOURCE_FILES = [
   // `timeline`/`search` and mem_timeline/mem_search on auto-update.
   'lib/timeline-core.mjs',
   'lib/search-core.mjs',
+  'lib/search-telemetry.mjs',
   // Shared `recent` core (live-row filter + ORDER BY created_at DESC LIMIT).
   // Statically imported by mem-cli.mjs AND server.mjs — same single-source pattern;
   // missing it from the manifest would break `recent` and mem_recent on auto-update.

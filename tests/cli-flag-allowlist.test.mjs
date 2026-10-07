@@ -136,7 +136,11 @@ describe('KNOWN_CLI_FLAGS', () => {
 // case below derives that from the sources, so a second reader turns it red.
 describe('COMMAND_SCOPED_FLAGS', () => {
   // Where each owning command's flags are read. A new owner must be added here.
-  const OWNER_MODULE = { 'verify-apply': 'cli/verify-apply.mjs', context: 'mem-cli.mjs' };
+  const OWNER_MODULE = {
+    'verify-apply': 'cli/verify-apply.mjs',
+    context: 'mem-cli.mjs',
+    stats: 'mem-cli.mjs',
+  };
   // Comments name flags freely (common.mjs documents `flags.apply` in one); only code counts.
   const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
