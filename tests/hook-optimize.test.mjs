@@ -1226,6 +1226,42 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect(text).toEqual({ title: 'Weekly summary: auth refactor', narrative: 'three changes to auth' });
   });
 
+  // Pre-tag review P3-8: the narrow rewrite moves an explicit save to the re-enrich writer's id,
+  // because its text becomes the model's. A 0 reply leaves the stored text, so the row must stay
+  // the explicit save it was (the guard at the session-id rewrite is keepStoredText, not !isWide).
+  it('a 0 reply on a person-set explicit save keeps the row under its manual author id', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-probe', project: 'test' });
+    insertObs(db, { sessionId: 'manual-probe', title: 'saved by hand', narrative: 'kept text' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    db.prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?').run(
+      Date.now(),
+      id,
+    );
+    callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(
+      db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(id).memory_session_id,
+    ).toBe('manual-probe');
+  });
+
+  it('control: a narrow rewrite of an explicit save does move it to the re-enrich writer', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-probe2', project: 'test' });
+    insertObs(db, { sessionId: 'manual-probe2', title: 'saved by hand', narrative: 'kept text' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    callModelJSONAsync.mockResolvedValue({
+      type: 'change',
+      title: 'model title',
+      narrative: 'model text',
+      importance: 2,
+    });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const row = db.prepare('SELECT title, memory_session_id FROM observations WHERE id = ?').get(id);
+    expect(row.title).toBe('model title');
+    expect(row.memory_session_id).not.toBe('manual-probe2');
+  });
+
   it('a reply scoring a person-set row 0 does not rewrite its title or narrative (D#207)', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertObs(db, { title: 'keep my words', narrative: 'the text a person kept' });

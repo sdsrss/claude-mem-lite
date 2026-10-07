@@ -485,7 +485,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // A compression keeper is never hidden: hiding it hides every member compressed into it
       // (the same rule NOT_COMPRESSION_KEEPER_SQL enforces on the maintenance writers). It falls
       // through to the normal update instead: floored to importance 1 and stamped, so it is not
-      // re-sent. In narrow scope that update still replaces its title and narrative.
+      // re-sent. That update keeps its stored title and narrative in both scopes (keepStoredText).
       const isKeeper = !!db
         .prepare('SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1')
         .get(cand.id);
