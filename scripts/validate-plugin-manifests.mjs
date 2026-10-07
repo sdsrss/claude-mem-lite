@@ -50,7 +50,8 @@ export const ALLOWED_WARNINGS = [
 export const ALLOWED_ERRORS = [
   {
     // 2026-10-06 (D#221). Claude Code 2.1.292's validator reserves names starting with
-    // `claude-`; CI's pinned 2.1.263 predates the rule. Kept because the manifest reference
+    // `claude-` (CI pinned 2.1.263, which predates the rule, until it moved to 2.1.292 with this
+    // entry). Kept because the manifest reference
     // (code.claude.com/docs/en/plugins/manifest-reference#name) says only `validate`, `init`
     // and `tag` check the name — "Claude Code still installs and loads a plugin whose name
     // they refuse" — and the release path runs none of the last two, while a rename changes
