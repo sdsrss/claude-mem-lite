@@ -664,8 +664,8 @@ npx claude-mem-lite doctor            # 诊断问题
   写法都一样，唯独 `update`：经 `cli.mjs`（以及 `claude-mem-lite` 命令）调用时，
   `update <id>` 是编辑一条记忆，更新器要写 `self-update`。
 - 插件模式只提示可用更新，不会自更新插件文件。
-- direct install / npx 模式最多每天检查一次 GitHub Releases（在会话开始时触发），发现新版本会在下一次会话开始时提示；检查本身不安装。运行 `npx claude-mem-lite self-update`（git clone 安装用 `node install.mjs update`）才安装，使用 staged replacement，若依赖安装失败会回滚。只有一条路径会不经命令自动安装：hook 发现缺少模块文件时会运行 `repair`，安装最新的签名发布。
-- `CLAUDE_MEM_SKIP_UPDATE` 会同时关掉检查、提示以及 `self-update` / `update`，更新前要先取消它；它不会阻止上面的 `repair`。
+- direct install / npx 模式每天检查一次 GitHub Releases（GitHub 限流期间每 6 小时一次，都在会话开始时触发），发现新版本会在下一次会话开始时提示；检查本身不安装。运行 `npx claude-mem-lite self-update`（git clone 安装用 `node install.mjs update`）才安装，使用 staged replacement，若依赖安装失败会回滚。有两种情况不经命令就会安装：hook 发现缺少模块或依赖时，会在会话开始时运行 `repair`（每 6 小时最多一次），签名校验通过才安装最新发布；同时装了插件时，会话开始会把更新的插件版本拷进 direct install（这次拷贝不做签名校验）。
+- `CLAUDE_MEM_SKIP_UPDATE` 会同时关掉检查、提示以及 `self-update` / `install.mjs update`，更新前要先取消它；上面两种自动安装它都不阻止。
 - 如果你禁用了插件，但 `~/.claude/settings.json` 里还有旧的 mem hooks，可运行 `node install.mjs cleanup-hooks`。
 
 ### doctor
@@ -682,7 +682,7 @@ npx claude-mem-lite doctor            # 诊断问题
 
 ### 故障恢复（安装卡死 / hook 报错）
 
-如果你看到 PreToolUse:Read/Edit hook 报 `ERR_MODULE_NOT_FOUND`，或者 `claude-mem-lite` 命令本身因为 import 错误崩溃，多半是被部分自动更新坑了——更新器复制了新脚本但漏了配套的 `lib/*` 文件，hook 链就此断掉（连下一次本可自愈的自动更新也跑不了）。
+如果你看到 PreToolUse:Read/Edit hook 报 `ERR_MODULE_NOT_FOUND`，或者 `claude-mem-lite` 命令本身因为 import 错误崩溃，多半是被一次不完整的更新坑了——更新器复制了新脚本但漏了配套的 `lib/*` 文件，hook 链就此断掉。
 
 **v2.84.0+** 提供 `repair` 子命令，从 GitHub 最新 release 重新同步：
 
