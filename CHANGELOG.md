@@ -16,6 +16,9 @@ All notable changes to claude-mem-lite are documented in this file.
   re-copying the files under 8 processes loading them: 12 of 2386 loads failed before, 0 of
   2388 after. The weekly install check had been failing on it three weeks in four since
   2026-09-14.
+- **Docs: headless runs (`claude -p`) need the plugin's tools allowed once.** Claude Code
+  refuses every `mem_*` call there until they are (2.1.292: 13 of 13 calls refused in an
+  88-session run, nothing saved). The README now gives the `permissions.allow` rule.
 - `npm run validate:manifests` passes on current Claude Code again: its validator now
   reserves plugin names starting with `claude-`, while Claude Code still installs and loads
   such a plugin, so this one name error is reported and allowed; any other error still fails.

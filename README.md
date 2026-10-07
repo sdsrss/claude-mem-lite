@@ -534,6 +534,17 @@ surface — reach them through the CLI column in the second table.
 | `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity + rebuild. |
 | `mem_browse` | `claude-mem-lite browse` | Tier-grouped dashboard (working / active / archive). |
 
+**Headless runs (`claude -p`).** With no permission prompt to answer, Claude Code refuses
+every `mem_*` call until the plugin's tools are allowed, and the model does not switch to the
+CLI by itself: in an 88-session headless run on Claude Code 2.1.292 (2026-10-06), all 13 calls
+were refused and nothing was saved. Allow the server once in the `settings.json` the run reads:
+
+```json
+{ "permissions": { "allow": ["mcp__plugin_claude-mem-lite_mem-lite"] } }
+```
+
+An interactive session asks instead; answering "always allow" there records a rule of its own.
+
 ### Skill Commands (in Claude Code chat)
 
 ```
