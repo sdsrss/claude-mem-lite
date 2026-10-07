@@ -75,6 +75,10 @@ function runHook(event, { stdin, env = {}, args = [] } = {}) {
     CLAUDE_MEM_SKIP_COMPRESS: '1', // Skip auto-compress background spawn (tests call it explicitly)
     CLAUDE_MEM_SKIP_OPTIMIZE: '1', // Skip llm-optimize background worker in tests
     CLAUDE_MEM_SKIP_MAINTAIN: '1', // Skip auto-maintain background spawn (tests call it explicitly)
+    // Skip the llm-summary worker Stop spawns. It is detached, outlives runHook and recreated the
+    // sandbox behind afterEach (D#258: one mem-e2e-* dir per run, from the D#156 suite). The one
+    // test that observes the worker passes CLAUDE_MEM_SKIP_SUMMARY: undefined and waits for it.
+    CLAUDE_MEM_SKIP_SUMMARY: '1',
     ...env,
   };
 
@@ -518,7 +522,14 @@ describe('Suite 1: Full Session Lifecycle', () => {
     // its metric row reports what it received.
     runHook('session-start', { env: { HOME: tmpHome } });
     const sessionId = getSessionIdFromFile(tmpHome);
-    runHook('stop', { env: { HOME: tmpHome, CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FLUSH_TIMEOUT: '0' } });
+    runHook('stop', {
+      env: {
+        HOME: tmpHome,
+        CLAUDE_MEM_METRICS: '1',
+        CLAUDE_MEM_FLUSH_TIMEOUT: '0',
+        CLAUDE_MEM_SKIP_SUMMARY: undefined,
+      },
+    });
 
     const metricsDir = join(tmpHome, '.claude-mem-lite', 'metrics');
     const workerRow = () => {
@@ -774,7 +785,10 @@ describe('Suite 2: Episode Buffer Management', () => {
   // §9-B (docs/audits/20260929-sandbox-usage-eval.md): the nudge repeated on every qualifying
   // flush — 3.2 times per nudged session in real use. One session hears it once.
   it('PostToolUse: the unsaved-bugfix nudge is said once per session', () => {
-    runHook('session-start', { env: { HOME: tmpHome } });
+    // Each 10-entry cycle flushes, and a flush spawns the detached llm-episode worker, which this
+    // test does not observe: it wrote into the sandbox after afterEach removed it (D#258).
+    const env = { HOME: tmpHome, CLAUDE_MEM_SKIP_EPISODE_LLM: '1' };
+    runHook('session-start', { env });
     const cycle = (sessionId, tag) => {
       const withSession = (payload) => JSON.stringify({ ...JSON.parse(payload), session_id: sessionId });
       runHook('post-tool-use', {
@@ -785,7 +799,7 @@ describe('Suite 2: Episode Buffer Management', () => {
             `FAIL tests/${tag}.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)`,
           ),
         ),
-        env: { HOME: tmpHome },
+        env,
       });
       let nudged = 0;
       for (let i = 1; i < 11; i++) {
@@ -797,7 +811,7 @@ describe('Suite 2: Episode Buffer Management', () => {
               'OK — edited file',
             ),
           ),
-          env: { HOME: tmpHome },
+          env,
         });
         if (stdout && stdout.includes('Unsaved bugfix-shape')) nudged++;
       }
