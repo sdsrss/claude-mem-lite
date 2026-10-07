@@ -26,7 +26,12 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { httpConnectProxyFor, requestViaConnectProxy, onceViaConnectProxy } from '../lib/proxy-fetch.mjs';
+import {
+  httpConnectProxyFor,
+  requestViaConnectProxy,
+  onceViaConnectProxy,
+  postDirectHttp,
+} from '../lib/proxy-fetch.mjs';
 
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'];
 
@@ -299,6 +304,101 @@ describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () =>
     await expect(
       onceViaConnectProxy('http://127.0.0.1:1', 'http://a.test/x', { timeout: 2000 }),
     ).rejects.toThrow(/https targets only/);
+  });
+});
+
+// D#250: the plain-http transport for a loopback gateway. The env-proxy case it exists for
+// needs a child process (NODE_USE_ENV_PROXY is read at startup) and lives in
+// tests/plain-http-gateway-env-proxy.test.mjs; these pin its own contract, which mirrors
+// onceViaConnectProxy's: settle exactly once, never follow a redirect, never hang.
+describe('postDirectHttp (plain http, no proxy)', () => {
+  let server;
+  afterEach(async () => {
+    if (server) {
+      server.closeAllConnections?.();
+      await new Promise((r) => server.close(r));
+      server = null;
+    }
+  });
+
+  function startServer(handler) {
+    return new Promise((resolve) => {
+      server = http.createServer(handler);
+      server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`));
+    });
+  }
+
+  it('posts the body with a Content-Length and resolves the fetch-like subset', async () => {
+    const seen = [];
+    const origin = await startServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        seen.push({
+          method: req.method,
+          url: req.url,
+          length: req.headers['content-length'],
+          chunked: req.headers['transfer-encoding'] || null,
+          key: req.headers['x-api-key'],
+          body,
+        });
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end('{"a":1}');
+      });
+    });
+    const res = await postDirectHttp(`${origin}/v1/messages`, {
+      headers: { 'x-api-key': 'k' },
+      body: '{"é":1}',
+      timeout: 3000,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe(201);
+    expect(res.json()).toEqual({ a: 1 });
+    // Byte length (8), not string length (7): "é" is two bytes.
+    expect(seen).toEqual([
+      { method: 'POST', url: '/v1/messages', length: '8', chunked: null, key: 'k', body: '{"é":1}' },
+    ]);
+  });
+
+  it('surfaces a redirect instead of following it — the key must not walk to another origin', async () => {
+    let hits = 0;
+    const origin = await startServer((req, res) => {
+      hits++;
+      res.writeHead(302, { location: 'http://127.0.0.1:1/elsewhere' });
+      res.end();
+    });
+    const res = await postDirectHttp(`${origin}/v1/messages`, { body: '{}', timeout: 3000 });
+    expect(res.status).toBe(302);
+    expect(res.ok).toBe(false);
+    expect(hits).toBe(1);
+  });
+
+  it('rejects at once when the server drops the connection mid-body, not at the timeout', async () => {
+    const origin = await startServer((req, res) => {
+      res.writeHead(200, { 'content-length': '100' });
+      res.write('0123456789');
+      setTimeout(() => res.socket.destroy(), 20);
+    });
+    const started = Date.now();
+    await expect(postDirectHttp(`${origin}/v1/messages`, { body: '{}', timeout: 5000 })).rejects.toThrow(
+      /closed before the body ended|aborted|ECONNRESET/,
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('rejects on timeout when the server accepts but never answers', async () => {
+    const origin = await startServer(() => {
+      /* swallow: never reply */
+    });
+    await expect(postDirectHttp(`${origin}/v1/messages`, { body: '{}', timeout: 300 })).rejects.toThrow(
+      /timeout/,
+    );
+  });
+
+  it('rejects an https target rather than sending it unencrypted', async () => {
+    await expect(postDirectHttp('https://127.0.0.1:1/v1/messages', { timeout: 300 })).rejects.toThrow(
+      /http targets only/,
+    );
   });
 });
 

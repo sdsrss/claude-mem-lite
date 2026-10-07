@@ -833,7 +833,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `CLAUDE_MEM_DIR` | 自定义数据目录。所有数据库与运行时文件均存储在此。 | `~/.claude-mem-lite/` |
 | `CLAUDE_MEM_MODEL` | 后台 LLM 调用模型（Episode 提取、会话总结、调度）。可选 `haiku` 或 `sonnet`。 | `haiku` |
 | `ANTHROPIC_API_KEY` | Anthropic API key。设置后所有后台 LLM 调用直连 Anthropic Messages API（带 prompt caching）；设了 `ANTHROPIC_BASE_URL` 时改发往那个网关。优先级最高。 | _(未设 → CLI)_ |
-| `ANTHROPIC_BASE_URL` | 由兼容 Anthropic 的网关（Azure AI Foundry、LiteLLM、Bedrock/Vertex 代理）提供模型时，直连 Messages API 使用的基础 URL。不要带 `/v1` 后缀，端点路径会自动拼上。`claude -p` 兜底读取同一个变量，所以一个值同时作用于两条路径。明文 `http://` 只接受回环主机，否则 API key 会以明文发送。设了但不可用的值会跳过直连这一路，后台调用改走 `claude -p`，doctor 会提示。 | `https://api.anthropic.com` |
+| `ANTHROPIC_BASE_URL` | 由兼容 Anthropic 的网关（Azure AI Foundry、LiteLLM、Bedrock/Vertex 代理）提供模型时，直连 Messages API 使用的基础 URL。不要带 `/v1` 后缀，端点路径会自动拼上。`claude -p` 兜底读取同一个变量，所以一个值同时作用于两条路径。明文 `http://` 只接受回环主机，否则 API key 会以明文发送。这个请求总是直连回环主机，即使 `NODE_USE_ENV_PROXY=1` 让其他请求走 `HTTP_PROXY`。设了但不可用的值会跳过直连这一路，后台调用改走 `claude -p`，doctor 会提示。 | `https://api.anthropic.com` |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `haiku` 档的模型 ID 或网关部署名，**仅在设了 `ANTHROPIC_BASE_URL` 时**用于直连 API。没有基础 URL 时只给 CLI 用，所以这个别名的 Bedrock/Vertex 写法不会被发往 `api.anthropic.com`。网关按部署名而不是 Anthropic 模型 ID 路由时（Azure Foundry 部署）使用。`claude -p` 兜底的 `--model haiku` 别名也经由它解析。 | 内置 `claude-haiku-4-5-…` |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | 同上，用于 `sonnet` 档。 | 内置 `claude-sonnet-4-5-…` |
 | `OPENROUTER_API_KEY` | OpenRouter API key（OpenAI 兼容）。当**未设** `ANTHROPIC_API_KEY` 时用于后台 LLM 调用；两者都未设则回退到 `claude -p` CLI。 | _(未设)_ |

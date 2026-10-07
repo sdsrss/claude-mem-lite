@@ -2,6 +2,19 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+- **Fix: a plain-`http://` gateway no longer sends the API key to `HTTP_PROXY`.** Plain http is
+  accepted only for a loopback `ANTHROPIC_BASE_URL`, on the premise that the request stays on
+  this machine. With Node's opt-in `NODE_USE_ENV_PROXY=1` and `HTTP_PROXY` set, native `fetch`
+  handed that request to the proxy unless Node's own `NO_PROXY` matching exempted the host, and
+  the proxy could read the `x-api-key` header: Node 26 sent it as a plain request, Node 22
+  inside a CONNECT tunnel that carries no encryption for an http target. A remote proxy then
+  delivered the request to its own loopback, not this machine's. The direct API leg now sends
+  plain-http requests itself, straight to the loopback host. `doctor` already probed that host
+  directly, so its "reachable (direct)" line now describes the hop the product uses. Without
+  `NODE_USE_ENV_PROXY`, or with an `https://` base URL, nothing changes.
+
 ## v6.23.2 — two proxy fixes; the README stops saying direct installs auto-update
 
 Two fixes on the proxy path that 6.23.1's gateway support sends more traffic through, and a

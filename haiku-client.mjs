@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { debugLog, debugCatch, parseJsonFromLLM } from './utils.mjs';
 import { DB_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
-import { httpConnectProxyFor, postViaConnectProxy } from './lib/proxy-fetch.mjs';
+import { httpConnectProxyFor, postViaConnectProxy, postDirectHttp } from './lib/proxy-fetch.mjs';
 import { resolveAnthropicBaseUrl } from './lib/anthropic-base-url.mjs';
 
 /**
@@ -553,8 +553,19 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     };
+    // Plain http is loopback-only (resolveAnthropicBaseUrl), and loopback must stay on this
+    // machine: native fetch would hand it, x-api-key in cleartext, to HTTP_PROXY under
+    // NODE_USE_ENV_PROXY=1. (D#250)
+    const plainHttp = apiUrl.startsWith('http:');
     const send = (payload) => {
       const json = JSON.stringify(payload);
+      if (plainHttp) {
+        return postDirectHttp(apiUrl, {
+          headers: apiHeaders,
+          body: json,
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+      }
       const apiProxy = httpConnectProxyFor(apiUrl);
       return apiProxy
         ? postViaConnectProxy(apiProxy, apiUrl, {

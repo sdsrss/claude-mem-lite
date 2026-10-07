@@ -1127,19 +1127,35 @@ describe('haiku-client.mjs', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('does not tunnel an http:// gateway — the CONNECT tunnel is TLS-only', async () => {
-      // Before the fix this crashed the process: the proxy was selected for the
-      // http target, then https.request threw ERR_INVALID_PROTOCOL inside the
-      // CONNECT callback where no try/catch could see it.
-      vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000');
-      vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
-      const fetchMock = vi.fn().mockResolvedValue(okResponse());
-      vi.stubGlobal('fetch', fetchMock);
+    it('posts to an http:// gateway directly — neither the TLS-only tunnel nor native fetch', async () => {
+      // The tunnel: before that fix this crashed the process, because the proxy was
+      // selected for the http target and https.request threw ERR_INVALID_PROTOCOL inside
+      // the CONNECT callback where no try/catch could see it. Native fetch: under
+      // NODE_USE_ENV_PROXY=1 it hands the cleartext key to HTTP_PROXY (D#250; the env-proxy
+      // case itself is tests/plain-http-gateway-env-proxy.test.mjs). So a real loopback
+      // server has to be the one that answers.
+      const { createServer } = await import('node:http');
+      const hits = [];
+      const gw = createServer((req, res) => {
+        hits.push({ method: req.method, url: req.url, key: req.headers['x-api-key'] });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ content: [{ text: 'gateway response' }] }));
+      });
+      await new Promise((r) => gw.listen(0, '127.0.0.1', r));
+      try {
+        vi.stubEnv('ANTHROPIC_BASE_URL', `http://127.0.0.1:${gw.address().port}`);
+        vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
+        const fetchMock = vi.fn().mockResolvedValue(okResponse());
+        vi.stubGlobal('fetch', fetchMock);
 
-      await callHaiku('test prompt');
+        const out = await callHaiku('test prompt');
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4000/v1/messages');
+        expect(out).toEqual({ text: 'gateway response' });
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(hits).toEqual([{ method: 'POST', url: '/v1/messages', key: 'sk-gateway-key' }]);
+      } finally {
+        await new Promise((r) => gw.close(r));
+      }
     });
 
     it('does not follow redirects on the credentialed native fetch', async () => {
