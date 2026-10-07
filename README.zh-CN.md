@@ -199,6 +199,34 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.25.0
+
+**文件召回块的第一行，所有会话重新用同一种写法。** 没有 schema 版本变更：本版本打开过的数据库，6.24.0 仍能打开。
+
+- **变了什么。** 从 6.16.0 起，一半会话的第一行是说明笔记来源的事实陈述，另一半保留 "system-injected context,
+  continue your planned action"，用来比较 agent 引用教训的频率。在本项目自己的会话上，两种写法看不出差别，
+  两组里 agent 也都没有把这一行当作可疑内容告诉用户，所以结束分组：不设变量时，所有会话都用旧的那一行。
+  `CLAUDE_MEM_RECALL_FRAMING=factual` 保留事实陈述的写法，`=ab` 恢复分组。
+- **本版本还有：** 数据目录读不了时，`doctor` 和 `status` 对看不到的项目显示“not checked”，不再报成数据库
+  缺失或为空。`maintain execute --ops dedup` 会列出跳过的合并对。详见 CHANGELOG.md。
+
+## 升级到 6.24.0
+
+**如果你设置了 `CLAUDE_CONFIG_DIR`，安装程序、更新和 hook 现在都使用这个目录，和 Claude Code 一致。**
+没有 schema 版本变更：本版本打开过的数据库，6.23.3 仍能打开。没设 `CLAUDE_CONFIG_DIR` 时，这一条不带来任何变化。
+
+- **受影响的是谁。** 设了 `CLAUDE_CONFIG_DIR` 时，Claude Code 把 `settings.json`、`plugins/` 和 `.claude.json`
+  都放在那个目录里，插件却一直用 `~/.claude` 和 `~/.claude.json`：`install` 把 hook 写到了 Claude Code 不读的
+  地方；有两个配置目录时，会话启动的整理步骤和 `self-update` 会清掉另一个配置目录的插件缓存，并改动它的
+  `.claude.json`。
+- **要做什么。** 用 npm 或 npx 安装的：在设好这个变量的情况下再运行一次 `claude-mem-lite install`，让 hook 写进
+  你的配置目录。插件安装不用做什么。旧版本写进 `~/.claude/settings.json` 的 hook 条目会留在那里；如果没有别的
+  配置目录在用 `~/.claude`，可以用 `env -u CLAUDE_CONFIG_DIR claude-mem-lite cleanup-hooks` 清掉。
+- **本版本还有：** `npm install -g claude-mem-lite` 和 `npx` 不再安装开发工具链。按依赖方式安装，从 298 个包 /
+  541 MB 降到 96 个包 / 57 MB；发布后实测 `-g` 和 `npx` 也是同样的 96 个包。确认执行的
+  `maintain execute --ops purge_stale` 现在一次运行就删掉预览里统计的全部行，只做一次快照。`doctor` 会对失败的
+  更新检查、以及以 `/v1` 结尾的 `ANTHROPIC_BASE_URL` 发出警告。详见 CHANGELOG.md。
+
 ## 升级到 6.23.1
 
 **如果你设置了 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_API_KEY`，后台 LLM 调用现在会发往那个网关。**
