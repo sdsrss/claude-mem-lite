@@ -54,15 +54,15 @@ All notable changes to claude-mem-lite are documented in this file.
   came back holding a fresh `runtime/` and an empty database, `update-state.json` or the
   `claude` CLI's working directory. A worker now exits at start when its data directory is gone,
   and its later writes (database, update state, the CLI's working directory, the maintenance
-  lock, logs and markers) are skipped instead of re-creating it. A foreground hook still creates
+  lock, logs and the native-binding markers) are skipped instead of re-creating it. A foreground hook still creates
   the directory on first run.
 - **Fix: a confirmed `maintain execute --ops purge_stale` deletes every row its preview
   counted.** The preview reported all candidates, but one confirmed run deleted at most 1000 and
   said "re-run for more", and every run first wrote a full database snapshot: clearing 15,000
   idle rows took 15 runs and 15 snapshots (#41). One run now deletes them all in 1000-row
-  batches behind a single snapshot; on a 44,000-row test database the purge of 15,000 rows took
-  180 ms, not counting the snapshot. The daily background pass still purges at most 500 rows a
-  day. Same on the MCP `mem_maintain` tool with `confirm=true`.
+  batches behind a single snapshot. On a 44,000-row test database with 15,000 rows to purge, one
+  confirmed run took 118–126 ms including the snapshot, 86–91 ms for the purge alone (three runs
+  each). The daily background pass still purges at most 500 rows a day. Same on the MCP `mem_maintain` tool with `confirm=true`.
 - **Fix: background optimize passes keep what a person set.** Cluster-merge gave its merged
   row the model's importance even when a person had set the keeper's (a keeper lowered to 1 came
   back at 3). Re-enrich read the person's mark after the model call but wrote back the importance

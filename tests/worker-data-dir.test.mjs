@@ -27,7 +27,7 @@ import { maybeSampleError } from '../lib/err-sampler.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { shouldRecordOnce } from '../lib/record-once.mjs';
 import { acquireLock } from '../lib/proc-lock.mjs';
-import { nativeBindingHintDue } from '../lib/native-binding-hint.mjs';
+import { nativeBindingHintDue, recordNativeBindingBreakage } from '../lib/native-binding-hint.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK_PATH = join(REPO, 'hook.mjs');
@@ -281,6 +281,12 @@ describe('a worker whose data dir is gone', () => {
     ['recordHookError', (dir) => recordHookError('probe', new Error('probe'), dir), (dir) => dir],
     ['shouldRecordOnce', (dir) => shouldRecordOnce(dir, 'probe-', 'proj', 'k'), (dir) => dir],
     ['nativeBindingHintDue', (dir) => nativeBindingHintDue(dir), (dir) => dir],
+    // formatHookError records the breakage BEFORE it asks whether the hint is due (delta review).
+    [
+      'recordNativeBindingBreakage',
+      (dir) => recordNativeBindingBreakage(dir, { reason: 'probe' }),
+      (dir) => dir,
+    ],
   ];
   it.each(sinks)('%s skips a missing dir in a worker and creates it otherwise', (_name, call, written) => {
     vi.stubEnv('CLAUDE_MEM_METRICS', '1');
