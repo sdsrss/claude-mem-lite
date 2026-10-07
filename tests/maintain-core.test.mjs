@@ -491,6 +491,64 @@ describe('execute ops', () => {
     else expect(get(db, A, 'compressed_into')).toBe(B);
   });
 
+  // D#200: two pairs used to drop with no entry in `skipped`, so the caller's
+  // "Merged N — skipped …" line said nothing about them.
+  test('mergeDuplicates reports a second keeper for one removeId instead of dropping it', () => {
+    const db = freshDb();
+    const A = add(db, { title: 'A' });
+    const B = add(db, { title: 'B' });
+    const C = add(db, { title: 'C dup of both' });
+    const skipped = [];
+    expect(
+      mergeDuplicates(
+        db,
+        [
+          [A, C],
+          [B, C],
+        ],
+        skipped,
+      ),
+    ).toBe(1);
+    expect(get(db, C, 'compressed_into')).toBe(A); // first writer wins, as before
+    expect(skipped).toEqual([{ keepId: B, removeId: C, reason: `#${C} already merges into #${A}` }]);
+  });
+
+  test('mergeDuplicates names the survivor of a cycle instead of dropping its pair', () => {
+    const db = freshDb();
+    const A = add(db, { title: 'A' });
+    const B = add(db, { title: 'B' });
+    const skipped = [];
+    expect(
+      mergeDuplicates(
+        db,
+        [
+          [A, B],
+          [B, A],
+        ],
+        skipped,
+      ),
+    ).toBe(1);
+    expect(skipped).toEqual([{ keepId: B, removeId: A, reason: `cycle: #${A} survives` }]);
+  });
+
+  test('mergeDuplicates stays quiet about a pair repeated verbatim', () => {
+    const db = freshDb();
+    const A = add(db, { title: 'A' });
+    const B = add(db, { title: 'B' });
+    const skipped = [];
+    expect(
+      mergeDuplicates(
+        db,
+        [
+          [A, B],
+          [A, B],
+        ],
+        skipped,
+      ),
+    ).toBe(1);
+    expect(skipped).toEqual([]);
+  });
+
   test('mergeDuplicates does not merge into an already-compressed keeper (cross-call)', () => {
     const db = freshDb();
     const D = add(db, { title: 'D keeper' });
