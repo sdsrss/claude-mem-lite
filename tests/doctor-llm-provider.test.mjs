@@ -193,6 +193,37 @@ describe('llmProviderStatus', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
+  // LiteLLM's own Claude Code quickstart sets ANTHROPIC_BASE_URL=http://0.0.0.0:4000 (the
+  // address its proxy prints on start), with ANTHROPIC_API_KEY exported in the same shell.
+  // A connect to the unspecified address never leaves the host, so the key is not on the
+  // wire - refusing it as "non-loopback" pushed every call to the CLI fallback.
+  it('accepts plain http to the unspecified address (0.0.0.0, [::]) as local', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    for (const [base, host] of [
+      ['http://0.0.0.0:4000', '0.0.0.0'],
+      ['http://[::]:4000', '::'],
+    ]) {
+      vi.stubEnv('ANTHROPIC_BASE_URL', base);
+      const probe = vi.fn(async () => ({ reachable: true }));
+      const s = await llmProviderStatus({ _probe: probe });
+      expect(s.level, base).toBe('ok');
+      expect(probe.mock.calls[0], base).toEqual([host, { port: 4000 }]);
+    }
+  });
+
+  it('still WARNS on hosts that only resemble the unspecified address', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    for (const base of ['http://0.0.0.1:4000', 'http://0.0.0.0.attacker.example:4000']) {
+      vi.stubEnv('ANTHROPIC_BASE_URL', base);
+      const probe = vi.fn(async () => ({ reachable: true }));
+      const s = await llmProviderStatus({ _probe: probe });
+      expect(s.level, base).toBe('warn');
+      expect(probe, base).not.toHaveBeenCalled();
+    }
+  });
+
   it('WARNS when the base URL carries userinfo', async () => {
     // fetch() refuses a credentialed URL; without this the client falls back to
     // the CLI while doctor certifies the host.
