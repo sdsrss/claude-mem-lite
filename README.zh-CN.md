@@ -661,9 +661,11 @@ npx claude-mem-lite doctor            # 诊断问题
   已经坏掉时才会用到的命令，而 `install.mjs` 在执行第一行代码之前要解析十几个静态
   import——少一个文件就直接吐一段 Node 栈，而不是告诉你少了哪个文件。`cli.mjs` 没有
   任何本地静态 import，会捕获这种失败并说出缺失的文件和修复命令。列表中其余命令两种
-  写法都一样。
+  写法都一样，唯独 `update`：经 `cli.mjs`（以及 `claude-mem-lite` 命令）调用时，
+  `update <id>` 是编辑一条记忆，更新器要写 `self-update`。
 - 插件模式只提示可用更新，不会自更新插件文件。
-- direct install / npx 模式每天检查一次 GitHub Releases，发现新版本只在会话开始时提示，不会自动安装；运行 `node install.mjs update` 才安装，使用 staged replacement，若依赖安装失败会回滚。
+- direct install / npx 模式最多每天检查一次 GitHub Releases（在会话开始时触发），发现新版本会在下一次会话开始时提示；检查本身不安装。运行 `npx claude-mem-lite self-update`（git clone 安装用 `node install.mjs update`）才安装，使用 staged replacement，若依赖安装失败会回滚。只有一条路径会不经命令自动安装：hook 发现缺少模块文件时会运行 `repair`，安装最新的签名发布。
+- `CLAUDE_MEM_SKIP_UPDATE` 会同时关掉检查、提示以及 `self-update` / `update`，更新前要先取消它；它不会阻止上面的 `repair`。
 - 如果你禁用了插件，但 `~/.claude/settings.json` 里还有旧的 mem hooks，可运行 `node install.mjs cleanup-hooks`。
 
 ### doctor

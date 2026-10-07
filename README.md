@@ -812,7 +812,8 @@ npx claude-mem-lite doctor            # Diagnose issues
 > around a dozen static imports before its first line runs — one missing file and it exits
 > with a Node stack instead of telling you which file. `cli.mjs` has no static local imports
 > and catches that, naming the file and a repair command. Everything else in the list is
-> unaffected either way.
+> unaffected either way, except `update`: through `cli.mjs` (and the `claude-mem-lite`
+> command) `update <id>` edits a memory, and the updater is `self-update`.
 
 Notes:
 - Plugin mode only reports available updates; it does not self-update plugin files.
@@ -822,7 +823,8 @@ Notes:
   /plugin install claude-mem-lite@sdsrss
   ```
   (The first command refreshes the local marketplace clone; the second reinstalls from it. Without the first command, `/plugin install` reuses the stale local clone and you stay on whichever version you originally pulled.)
-- Direct install / npx mode checks GitHub Releases once a day and announces a newer version at session start; it does not install it. `node install.mjs update` installs it, with staged replacement and rollback on install failure.
+- Direct install / npx mode checks GitHub Releases at most once a day, from a session start, and shows a notice about a newer version at the next session start; the check does not install it. `npx claude-mem-lite self-update` (from a git clone, `node install.mjs update`) installs it, with staged replacement and rollback on install failure. One path installs without a command: when a hook finds a module file missing, it runs `repair`, which installs the latest signed release.
+- `CLAUDE_MEM_SKIP_UPDATE` turns off the check, the notice, and `self-update` / `update` as well, so unset it before updating. It does not stop the `repair` above.
 - If you disabled the plugin but still have old mem hooks in `~/.claude/settings.json`, run `node install.mjs cleanup-hooks`.
 
 #### Trust model per install path
@@ -831,7 +833,7 @@ The three install paths do **not** carry the same supply-chain guarantees — pi
 
 | Path | Update mechanism | Ed25519 release-signature verification |
 |------|------------------|----------------------------------------|
-| npm / npx / git-clone direct install | daily check announces; `node install.mjs update` installs from GitHub Releases | **Yes** — every runtime file (140 entries incl. hook scripts, MCP launcher, plugin declaration files) is hash-pinned in a signed manifest; verification is fail-closed |
+| npm / npx / git-clone direct install | daily check announces; `self-update` installs from GitHub Releases, and `repair` reinstalls the latest release when a hook finds a module missing | **Yes** — every runtime file (hook scripts, MCP launcher and plugin declaration files included) is hash-pinned in a signed manifest; verification is fail-closed |
 | `/plugin install` (marketplace) | manual `/plugin marketplace update` + reinstall | **No** — Claude Code installs from a git clone of the marketplace repo; the plugin's own signature chain is not consulted on this path. You are trusting GitHub + the repo's branch protection, not the release signing key |
 
 **Rollback recipe (plugin path).** If an update misbehaves, pin the marketplace clone to the previous release tag and reinstall from it:
@@ -1192,7 +1194,7 @@ what is already stored — only whether new work runs.
 | `CLAUDE_MEM_SKIP_OPTIMIZE` | Skip the LLM optimization pass (re-enrich, normalize, cluster-merge). | _(runs)_ |
 | `CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY` | Skip the MinHash near-duplicate pass, keeping exact dedup. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_MARKER_GC` | Skip the runtime-marker sweep. **Must be exactly `1`** — unlike the other `CLAUDE_MEM_SKIP_*` flags, which accept any truthy value, this one compares against the string `1`. That is deliberate: a truthy check makes `=0` mean "skip", which is the opposite of what anyone typing it intends. | _(runs)_ |
-| `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h update check against GitHub Releases and its session-start notice. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h update check against GitHub Releases, its session-start notice, and `self-update` / `install.mjs update` (unset it to update). A `repair` triggered by a missing module still runs. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SIG_VERIFY` | Skip Ed25519 signature verification of a downloaded update. **Escape hatch — leaves updates unauthenticated.** | _(verifies)_ |
 | `CLAUDE_MEM_NO_LESSON_RETRY` | `1` disables the one-shot retry that re-asks for a missing `lesson_learned`. | _(retries)_ |
 | `CLAUDE_MEM_FLUSH_TIMEOUT` | Seconds the Stop hook waits for pending episode flushes. | `15` |
