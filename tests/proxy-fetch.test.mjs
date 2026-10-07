@@ -19,6 +19,8 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } 
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
@@ -315,6 +317,14 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
         '::1',
       );
     }
+    // Node 22 cannot match an IPv6 host against the cert's IPv6 SAN at all: its
+    // checkServerIdentity compares '::1' with OpenSSL's '0:0:0:0:0:0:0:1' and refuses, so
+    // even a plain fetch('https://[::1]') fails there (22.23.3; 24 and 26 accept the same
+    // cert). The IPv6 case can only observe the tunnel where the runtime can verify it.
+    certs.ip.v6Verifiable = !tls.checkServerIdentity('::1', {
+      subject: {},
+      subjectaltname: new X509Certificate(certs.ip.cert).subjectAltName,
+    });
     // A real CONNECT proxy: dial the requested host:port and splice the sockets.
     proxy = http.createServer();
     proxy.on('connect', (req, client, head) => {
@@ -352,7 +362,8 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
 
   it.skipIf(!HAS_IPV6_LOOPBACK)(
     'reaches an IPv6-literal target — brackets stripped for SNI and identity',
-    async () => {
+    async (ctx) => {
+      if (!certs.ip.v6Verifiable) ctx.skip();
       const r = await callInChild(certs.ip.certPath, `https://[::1]:${certs.ip.port6}/v1/messages`);
       expect(r).toEqual({ status: 200, body: 'gateway' });
     },
