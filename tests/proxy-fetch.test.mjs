@@ -59,6 +59,15 @@ describe('httpConnectProxyFor (transport selection)', () => {
     vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
     expect(httpConnectProxyFor('not a url')).toBeNull();
   });
+
+  it('declines a plain http target — the tunnel is TLS-only and would crash the process', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    // An http gateway (LiteLLM on localhost, say) must keep native fetch: taking
+    // the tunnel makes https.request throw ERR_INVALID_PROTOCOL inside the
+    // CONNECT callback, which no caller try/catch sees.
+    expect(httpConnectProxyFor('http://127.0.0.1:4000/v1/messages')).toBeNull();
+    expect(httpConnectProxyFor('https://gw.example.com/v1/messages')).toBe('http://127.0.0.1:1');
+  });
 });
 
 describe('requestViaConnectProxy (redirect handling)', () => {
@@ -196,5 +205,13 @@ describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () =>
     await expect(
       onceViaConnectProxy('http://127.0.0.1:1', 'https://a.test/x', { timeout: 2000 }),
     ).rejects.toBeTruthy();
+  });
+
+  it('rejects (never throws) for a non-https target instead of crashing the process', async () => {
+    // Second lock on the http-target door: even a direct caller gets a rejection
+    // it can catch, not an ERR_INVALID_PROTOCOL thrown from a socket callback.
+    await expect(
+      onceViaConnectProxy('http://127.0.0.1:1', 'http://a.test/x', { timeout: 2000 }),
+    ).rejects.toThrow(/https targets only/);
   });
 });
