@@ -670,6 +670,55 @@ describe('adopt next to an AGENTS.md', () => {
     expect(out()).toContain(join(tmpHome, 'AGENTS.md'));
   });
 
+  // D#225: a CLAUDE.md at $HOME (or `/`) sits above every project there, and Claude Code stops
+  // reading each one's AGENTS.md while it exists — projects adopt cannot list. adopt still writes it
+  // (it was asked to), and says so.
+  const everyProject = /AGENTS\.md of every project below/;
+
+  it('adopt at $HOME warns that projects below stop loading their AGENTS.md, and still writes', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    cmdAdopt([]);
+    expect(existsSync(claudeMd(tmpHome))).toBe(true);
+    expect(out()).toMatch(everyProject);
+    expect(out()).toMatch(/unadopt/);
+  });
+
+  it('adopt --dry-run at $HOME gives the warning and writes nothing', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    cmdAdopt(['--dry-run']);
+    expect(existsSync(claudeMd(tmpHome))).toBe(false);
+    expect(out()).toMatch(everyProject);
+  });
+
+  it('adopt in a project gives no such warning', () => {
+    cmdAdopt([]);
+    expect(existsSync(claudeMd(fakeCwd))).toBe(true);
+    expect(out()).not.toMatch(everyProject);
+  });
+
+  it("no warning where the user's own ~/CLAUDE.md has switched AGENTS.md off already", () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    writeFileSync(claudeMd(tmpHome), '# My notes\n');
+    cmdAdopt([]);
+    expect(readFileSync(claudeMd(tmpHome), 'utf8')).toContain('# My notes');
+    expect(out()).not.toMatch(everyProject);
+  });
+
+  it('no warning when Project instructions reads AGENTS.md regardless', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpHome;
+    mkdirSync(join(tmpHome, '.claude'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, '.claude', 'settings.json'),
+      JSON.stringify({
+        pluginConfigs: {
+          'cc-plugin-agents-md@builtin': { options: { instructionFiles: 'claude-md-and-agents-md' } },
+        },
+      }),
+    );
+    cmdAdopt([]);
+    expect(out()).not.toMatch(everyProject);
+  });
+
   // P3-9: with the import line deleted by hand, what is left — the marker — is still the plugin's.
   it('unadopt deletes a CLAUDE.md left with the marker and the block', () => {
     agentsMd(fakeCwd);

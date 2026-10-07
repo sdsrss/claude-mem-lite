@@ -62,6 +62,7 @@ import {
   forgetLocalSteering,
   localSteeringRemembered,
   agentsMdForNewClaudeMd,
+  claudeMdSwitchesOffAgentsBelow,
   tildePath,
   RULES_MD,
   RULES_REFUSAL_TEXT,
@@ -190,6 +191,15 @@ function adoptOne(cwd, { force, dryRun }) {
       (p) =>
         `  ⚠ ${p} ${verb} loading in sessions here once CLAUDE.md exists; set Project instructions to claude-md-and-agents-md in /config to keep it`,
     );
+  // D#225: at $HOME or `/` the file is above every project there, which no list above can name.
+  // Written anyway (adopt was asked to), and said.
+  const switchesOffBelow = claudeMdSwitchesOffAgentsBelow(cwd, PLUGIN_SLUG);
+  const sharedNote = (verb) =>
+    switchesOffBelow
+      ? [
+          `  ⚠ ${claudeMdPath(cwd)} ${verb} Claude Code reading the AGENTS.md of every project below ${cwd} that has one; to steer one project, run adopt inside it instead${verb === 'stops' ? ' (`claude-mem-lite unadopt` here takes this back)' : ''}, or set Project instructions to claude-md-and-agents-md in /config`,
+        ]
+      : [];
 
   if (dryRun) {
     log(`[adopt --dry-run] ${cwd}`);
@@ -198,6 +208,7 @@ function adoptOne(cwd, { force, dryRun }) {
     if (imports.length > 0)
       log(`  AGENTS.md:        would import ${imports.join(', ')} at the top of CLAUDE.md`);
     for (const line of elsewhere('would stop')) log(line);
+    for (const line of sharedNote('would stop')) log(line);
     if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
       log(`  legacy migrate:   would strip memory-dir sentinel @ ${memdirPath(cwd)}`);
     }
@@ -224,6 +235,7 @@ function adoptOne(cwd, { force, dryRun }) {
             : ` (+removed the block from ${local.path})`;
     log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}${importNote}`);
     for (const line of elsewhere('stops')) log(line);
+    for (const line of sharedNote('stops')) log(line);
     // The copy that could not come out loads beside CLAUDE.md: said, and not a success (R3-4).
     if (local.action === 'failed') {
       if (local.residue) log(`  ⚠ ${local.residue}`);

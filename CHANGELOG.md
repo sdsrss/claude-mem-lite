@@ -16,6 +16,11 @@ All notable changes to claude-mem-lite are documented in this file.
   re-copying the files under 8 processes loading them: 12 of 2386 loads failed before, 0 of
   2388 after. The weekly install check had been failing on it three weeks in four since
   2026-09-14.
+- **`claude-mem-lite adopt` in your home directory (or `/`) now warns** that the `CLAUDE.md` it
+  writes there makes Claude Code stop reading the `AGENTS.md` of every project below it that has
+  one, and says how to steer one project instead or take it back. It still writes the file. There
+  is no warning where a `CLAUDE.md` or `CLAUDE.local.md` of your own there has that effect
+  already, or where Project instructions is set to read `AGENTS.md` regardless.
 - **Docs: headless runs (`claude -p`) need the plugin's tools allowed once.** Claude Code
   refuses every `mem_*` call there until they are (2.1.292: 13 of 13 calls refused in an
   88-session run, nothing saved). The README now gives the `permissions.allow` rule.
