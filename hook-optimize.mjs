@@ -484,8 +484,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // clampImportance floor it to 1 (kept visible, low-ranked) instead of hiding.
       // A compression keeper is never hidden: hiding it hides every member compressed into it
       // (the same rule NOT_COMPRESSION_KEEPER_SQL enforces on the maintenance writers). It falls
-      // through to the normal update instead: floored to importance 1 and stamped, so it is not
-      // re-sent. That update keeps its stored title and narrative in both scopes (keepStoredText).
+      // through instead: in narrow scope to the stamp-only write below (floored to importance 1
+      // and stamped, so it is not re-sent), in wide scope to the normal update.
       const isKeeper = !!db
         .prepare('SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1')
         .get(cand.id);
@@ -511,6 +511,31 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
                AND importance_set_at IS NULL`,
           )
           .run(Date.now(), cand.id);
+        if (res.changes === 0) {
+          skipped++;
+          continue;
+        }
+        processed++;
+        continue;
+      }
+      // A narrow 0 reply reaches this point only for a row that may not be hidden (a compression
+      // keeper, or an importance a person set). It judged the row worthless, so it is no basis for
+      // any of the row's text either: the stored title and narrative stay (D#207: 'Weekly summary:
+      // auth refactor' became 'Weekly summary', narrative 'x'), and so do type, lesson, concepts,
+      // facts, aliases and scope (D#268). Written instead: what hiding would have written bar the
+      // hide, i.e. the stamp, so the row is not re-sent, plus the importance floor below. Wide
+      // scope stays on the normal path: its rows are substantive by construction, so a 0 there
+      // reads as a misjudgment of importance, not of the row.
+      if (scoredZero && scope !== 'wide') {
+        const res = db
+          .prepare(
+            `UPDATE observations SET
+               importance = CASE WHEN importance_set_at IS NOT NULL THEN importance
+                                 ELSE MAX(?, COALESCE(NULLIF(importance, 0), 1)) END,
+               optimized_at = ?
+             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL`,
+          )
+          .run(clampImportance(parsed.importance), Date.now(), cand.id);
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -558,13 +583,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // For `narrow`, the truncate stays on LLM output but NOT on the preserve-on-empty
       // fallback — truncating the row's own stored narrative to buy nothing was the same
       // bug in miniature.
-      //
-      // A reply that scored the row 0 reaches this point only for a row that may not be hidden
-      // (a compression keeper, or an importance a person set). It judged the row worthless, so
-      // its title and narrative do not replace the stored ones either (D#207: 'Weekly summary:
-      // auth refactor' became 'Weekly summary', narrative 'x').
       const isWide = scope === 'wide';
-      const keepStoredText = isWide || scoredZero;
+      const keepStoredText = isWide;
       const title = keepStoredText ? cand.title : truncate(scrubSecrets(parsed.title || ''), 120);
       const narrative = keepStoredText
         ? cand.narrative
@@ -611,8 +631,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
       // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
       // keeper does (D#146, D#138). Wide keeps the stored title and narrative (it fills the lesson
-      // and the side fields), so the row stays an explicit save, and so does a row whose stored
-      // text a 0 reply left in place. The writer's session row is best-effort.
+      // and the side fields), so the row stays an explicit save; a narrow 0 reply never gets here.
+      // The writer's session row is best-effort.
       let rewriteSessionId = null;
       if (!keepStoredText) {
         const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);

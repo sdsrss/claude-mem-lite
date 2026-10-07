@@ -1151,6 +1151,73 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect(obs.compressed_into).toBe(-1); // COMPRESSED_AUTO — narrow auto-hide preserved
   });
 
+  // D#268: a 0 reply reaches the write in narrow scope only for a row that may not be hidden.
+  // 4c174fa6 kept its title and narrative because the reply judged the row worthless, but the
+  // same UPDATE wrote that reply's type, lesson, concepts, facts, aliases and scope, permanently
+  // (it stamps optimized_at), and a lesson-bearing row is what pre-tool recall injects.
+  const ZERO_REPLY = {
+    type: 'bugfix',
+    title: 'y',
+    narrative: 'y',
+    importance: 0,
+    lesson_learned: 'a lesson from a reply that called the row worthless',
+    concepts: ['zero-reply-concept'],
+    facts: ['zero-reply-fact'],
+    search_aliases: ['zero reply alias'],
+    scope: 'project',
+  };
+  const REPLY_FIELDS = 'type, lesson_learned, concepts, facts, search_aliases, scope';
+
+  for (const [protection, protect, wantImportance] of [
+    [
+      'a person set its importance',
+      (db, id) =>
+        db
+          .prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?')
+          .run(Date.now(), id),
+      2,
+    ],
+    [
+      'it is a compression keeper',
+      (db, id) => insertObs(db, { title: 'member', narrative: 'member body', compressedInto: id }),
+      1,
+    ],
+  ]) {
+    it(`a 0 reply on a narrow row kept visible because ${protection} writes nothing from the reply`, async () => {
+      const { executeReenrich } = await import('../hook-optimize.mjs');
+      insertObs(db, { title: 'protected row', narrative: 'stored body', type: 'discovery', importance: 0 });
+      const id = db.prepare('SELECT MIN(id) id FROM observations').get().id;
+      protect(db, id);
+      const before = db.prepare(`SELECT ${REPLY_FIELDS} FROM observations WHERE id = ?`).get(id);
+      callModelJSONAsync.mockResolvedValue(ZERO_REPLY);
+
+      expect((await executeReenrich(db, 10)).processed).toBe(1);
+      expect(db.prepare(`SELECT ${REPLY_FIELDS} FROM observations WHERE id = ?`).get(id)).toEqual(before);
+      const row = db
+        .prepare('SELECT compressed_into, importance, optimized_at FROM observations WHERE id = ?')
+        .get(id);
+      expect(row.compressed_into ?? 0, 'premise: kept visible').toBe(0);
+      expect(row.importance).toBe(wantImportance);
+      expect(row.optimized_at, 'left unstamped, the row would be re-sent every run').not.toBeNull();
+    });
+  }
+
+  it('premise: a 0 reply in wide scope still fills the lesson (a 0 there reads as a misjudgment)', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, {
+      type: 'decision',
+      title: 'Chose RRF over union-by-max for hybrid fusion',
+      narrative:
+        'Union-by-max let one strong lexical hit dominate the fused ranking; RRF blends rank positions so the vector and lexical signals contribute evenly.',
+    });
+    const id = db.prepare('SELECT MIN(id) id FROM observations').get().id;
+    callModelJSONAsync.mockResolvedValue({ ...ZERO_REPLY, type: 'decision' });
+    expect((await executeReenrich(db, 10, { scope: 'wide' })).processed).toBe(1);
+    expect(db.prepare('SELECT lesson_learned FROM observations WHERE id = ?').get(id).lesson_learned).toBe(
+      ZERO_REPLY.lesson_learned,
+    );
+  });
+
   // D10: an importance a person set (importance_set_at) is theirs. The two access promotions
   // skipped it, but re-enrich rewrote it from the model's reply, and on importance:0 its
   // narrow pass HID the row (v6.21.0 pre-tag claims review).

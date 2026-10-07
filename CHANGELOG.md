@@ -9,6 +9,12 @@ All notable changes to claude-mem-lite are documented in this file.
   6 when rate-limited), because repair's lookup recorded nothing; a successful lookup there now
   clears it. With `CLAUDE_MEM_SKIP_UPDATE` set no lookup runs at all, so the warning stayed
   forever, and with no state file doctor asked "first run?"; it now says the checks are off.
+- **Fix: a re-enrich reply that scores a protected row 0 no longer writes into it.** A row
+  the narrow pass may not hide (a compression keeper, or one whose importance a person set)
+  already kept its title and narrative when the model scored it 0; the same write still stored
+  that reply's type, lesson, concepts, facts, aliases and scope, permanently. It now records only
+  that the row was looked at, plus the usual importance floor. Wide-scope passes are unchanged:
+  their rows are substantive, so a 0 there is treated as a misjudged importance.
 
 ## v6.24.0 — `CLAUDE_CONFIG_DIR` is followed everywhere; npm installs drop the dev toolchain
 
