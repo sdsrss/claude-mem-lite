@@ -167,6 +167,7 @@ describe('deployLockfile: what install.mjs deploys as ~/.claude-mem-lite/package
       cwd: REPO,
       encoding: 'utf8',
     });
+    expect(pack.status, pack.stderr).toBe(0);
     const files = JSON.parse(pack.stdout)[0].files.map((f) => f.path);
     expect(files, 'premise: the tarball carries the installer').toContain('install.mjs');
     expect(files, 'premise: the tarball carries no package-lock.json').not.toContain('package-lock.json');

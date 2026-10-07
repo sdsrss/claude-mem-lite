@@ -253,7 +253,8 @@ release has. Without `CLAUDE_CONFIG_DIR` nothing in this item changes.
   entries an older version wrote into `~/.claude/settings.json` stay there; if no other profile
   uses `~/.claude`, `env -u CLAUDE_CONFIG_DIR claude-mem-lite cleanup-hooks` removes them.
 - **Also in this release:** `npm install -g claude-mem-lite` and `npx` no longer install the
-  development toolchain (96 packages / 57 MB instead of 298 / 541 MB). A confirmed
+  development toolchain: 96 packages instead of 298 (57 MB instead of 541 MB, measured as a
+  dependency install; `-g` and `npx` install the same 96). A confirmed
   `maintain execute --ops purge_stale` now deletes every row its preview counted in one run,
   behind one snapshot. `doctor` warns about a failing update check and about an
   `ANTHROPIC_BASE_URL` that ends in `/v1`. Details in CHANGELOG.md.
