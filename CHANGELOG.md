@@ -6,13 +6,15 @@ All notable changes to claude-mem-lite are documented in this file.
 
 - **Fix: an npm install no longer brings the development toolchain.** The published lockfile
   (`npm-shrinkwrap.json`) was a full copy of the development lockfile, and npm installs a
-  package's shrinkwrap whole. So `npm install -g claude-mem-lite` and `npx claude-mem-lite`
-  also installed vitest, eslint, knip and prettier. It is now generated without the
-  development-only entries, and the release gate refuses one that has them. Measured through a
-  local registry with npm 11.19.0: 298 packages / 541 MB before, 96 / 57 MB after, the same on
-  npm 10.9.2, with every runtime dependency still at its locked version. `claude-mem-lite
-  install` from an npm or npx install now also locks `~/.claude-mem-lite` with that file, which
-  it previously installed without a lockfile. Plugin installs were not affected.
+  package's shrinkwrap whole. So installing from npm also installed vitest, eslint, knip and
+  prettier. It is now generated without the development-only entries, and the release gate
+  refuses one that has them. Measured through a local registry, installing it as a dependency:
+  npm 11.19.0 went from 298 packages / 541 MB to 96 / 57 MB, and npm 10.9.2 now installs the
+  same 96 / 57 MB (the 6.19.4 review measured 237 / 172 MB there with the old file). Every
+  runtime dependency stayed at its locked version. `npm install -g` and `npx` read the same
+  file; they were not measured separately. `claude-mem-lite install` from an npm or npx install
+  now also locks `~/.claude-mem-lite` with that file, which it previously installed without a
+  lockfile. Plugin installs were not affected.
 - **Fix: with `CLAUDE_CONFIG_DIR` set, the installer, updates and hooks use that directory.**
   Claude Code keeps `settings.json`, `plugins/` and `.claude.json` in `CLAUDE_CONFIG_DIR` when it
   is set (checked on 2.1.292). The plugin still used `~/.claude` and `~/.claude.json` in about 25
@@ -30,8 +32,8 @@ All notable changes to claude-mem-lite are documented in this file.
   6.23.3); the background check is silent by design. The update state now records why the last
   lookup failed (`HTTP 400`, `ENOTFOUND`, `proxy CONNECT 403`, with the proxy named, credentials
   removed) and since when, and `doctor` shows that as a warning until a lookup succeeds. The
-  exit code is unchanged. Two `self-update` runs in one process no longer share one rate-limit
-  verdict (no shipped caller ran two).
+  exit code is unchanged. Two concurrent release lookups in one process no longer share one
+  rate-limit verdict (no shipped caller ran two).
 - **Fix: an `ANTHROPIC_BASE_URL` with a trailing control character works on the direct API leg.**
   The resolver checked the parsed URL but handed back the text as typed. The URL parser drops a
   trailing control character only at the end of its input, so `http://127.0.0.1:4000` followed
@@ -43,20 +45,24 @@ All notable changes to claude-mem-lite are documented in this file.
 - **Fix: `doctor` warns when `ANTHROPIC_BASE_URL` ends in `/v1`.** The variable is an origin:
   the direct API leg, Claude Code and the Anthropic SDK append `/v1/messages` themselves, so a
   value copied with its `/v1` posts to `/v1/v1/messages` and fails, while `doctor` printed the
-  host reachable in green. It now names the URL the requests go to. What is sent is unchanged.
+  host reachable in green. With `ANTHROPIC_API_KEY` set and the host reachable, it now warns and
+  names the URL the requests go to. What is sent is unchanged.
 - **Fix: a background worker no longer re-creates a data directory removed while it ran.**
   Detached workers (episode and session summaries, enrichment, maintenance, the update check)
-  can run for up to a minute, and each one created its directories with a recursive `mkdir`.
-  A data directory removed in that window came back holding a fresh `runtime/` and an empty
-  database. A worker now exits, or skips the write, when its data directory is gone; a
-  foreground hook still creates the directory on first run.
+  can run for a minute or more (a wait for an LLM slot, then the call), and the writes they make
+  created their directories with a recursive `mkdir`. A data directory removed in that window
+  came back holding a fresh `runtime/` and an empty database, `update-state.json` or the
+  `claude` CLI's working directory. A worker now exits at start when its data directory is gone,
+  and its later writes (database, update state, the CLI's working directory, the maintenance
+  lock, logs and markers) are skipped instead of re-creating it. A foreground hook still creates
+  the directory on first run.
 - **Fix: a confirmed `maintain execute --ops purge_stale` deletes every row its preview
   counted.** The preview reported all candidates, but one confirmed run deleted at most 1000 and
   said "re-run for more", and every run first wrote a full database snapshot: clearing 15,000
   idle rows took 15 runs and 15 snapshots (#41). One run now deletes them all in 1000-row
-  batches behind a single snapshot; 15,000 rows took 180 ms on a 44,000-row database. The
-  daily background pass still purges at most 1000 rows a day. Same on the MCP `mem_maintain`
-  tool with `confirm=true`.
+  batches behind a single snapshot; on a 44,000-row test database the purge of 15,000 rows took
+  180 ms, not counting the snapshot. The daily background pass still purges at most 500 rows a
+  day. Same on the MCP `mem_maintain` tool with `confirm=true`.
 - **Fix: background optimize passes keep what a person set.** Cluster-merge gave its merged
   row the model's importance even when a person had set the keeper's (a keeper lowered to 1 came
   back at 3). Re-enrich read the person's mark after the model call but wrote back the importance

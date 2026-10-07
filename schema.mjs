@@ -508,7 +508,7 @@ export function initSchema(db) {
   }
 
   // Concurrent-init guard: serialize schema setup against peer processes via
-  // BEGIN IMMEDIATE (busy_timeout=3000 from ensureDb makes peers wait). Required
+  // BEGIN IMMEDIATE (the busy_timeout ensureDb sets makes peers wait). Required
   // because the sdk_sessions_id_mix_check_{ai,au} migration uses DROP+CREATE
   // without IF NOT EXISTS to update the trigger body, which races at cold-start.
   // Re-check schema_version under the lock — a peer may have completed init
