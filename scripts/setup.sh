@@ -42,16 +42,23 @@ DB_DIR="$CODE_DIR"
 # The defaults are spelled once: the default arm below and the marker keys after it both read them.
 CC_DEFAULT_CONFIG_DIR="$HOME/.claude"
 CC_DEFAULT_STATE_FILE="$HOME/.claude.json"
-case "${CLAUDE_CONFIG_DIR:-}" in
-  /* | [A-Za-z]:[\\/]*)
-    CC_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
-    CC_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
-    ;;
-  *)
-    CC_CONFIG_DIR="$CC_DEFAULT_CONFIG_DIR"
-    CC_STATE_FILE="$CC_DEFAULT_STATE_FILE"
-    ;;
-esac
+# "Absolute" as Node's path.isAbsolute reads it on this platform (D#269): a leading / anywhere,
+# and in a Windows shell (Git Bash, MSYS, Cygwin) also a leading \ (UNC, root of the drive) or a
+# drive letter and a slash. The same body sits in scripts/post-tool-use.sh.
+_mem_is_abs() {
+  case "$1" in /*) return 0 ;; esac
+  case "${OSTYPE:-}" in
+    msys* | cygwin*) case "$1" in \\* | [A-Za-z]:[\\/]*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+if _mem_is_abs "${CLAUDE_CONFIG_DIR:-}"; then
+  CC_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
+  CC_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+else
+  CC_CONFIG_DIR="$CC_DEFAULT_CONFIG_DIR"
+  CC_STATE_FILE="$CC_DEFAULT_STATE_FILE"
+fi
 # Steps 7 and 9 each settle a question about one file (.claude.json, settings.json) with a
 # one-shot marker in this data dir, which every CLAUDE_CONFIG_DIR profile shares, so the first
 # profile to start settled it for all of them (D#270). Key each marker by the file it gates. The

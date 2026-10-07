@@ -28,10 +28,19 @@
 # to the key, so only that key's own value can satisfy it.
 # Deliberately NOT applied to the Node handoff at the tail: hook.mjs already self-guards
 # there, so a bash false positive could only lose data, never save work.
-case "$CLAUDE_CONFIG_DIR" in
-  /* | [A-Za-z]:[\\/]*) _mem_settings_file="${CLAUDE_CONFIG_DIR}/settings.json" ;;
-  *) _mem_settings_file="${HOME}/.claude/settings.json" ;;
-esac
+# "Absolute" as Node's path.isAbsolute reads it on this platform (D#269): a leading / anywhere,
+# and in a Windows shell (Git Bash, MSYS, Cygwin) also a leading \ (UNC, root of the drive) or a
+# drive letter and a slash. The same body sits in scripts/setup.sh.
+_mem_is_abs() {
+  case "$1" in /*) return 0 ;; esac
+  case "${OSTYPE:-}" in
+    msys* | cygwin*) case "$1" in \\* | [A-Za-z]:[\\/]*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+_mem_config_home="${HOME}/.claude"
+_mem_is_abs "${CLAUDE_CONFIG_DIR:-}" && _mem_config_home="$CLAUDE_CONFIG_DIR"
+_mem_settings_file="$_mem_config_home/settings.json"
 _mem_plugin_disabled() {
   [[ -r "$_mem_settings_file" ]] || return 1
   local _settings

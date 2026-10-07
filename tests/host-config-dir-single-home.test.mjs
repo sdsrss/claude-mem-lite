@@ -6,7 +6,7 @@
 // update path, the disabled-plugin check and setup.sh — so for such a user it wrote hooks the host
 // never read, and with two profiles it pruned and edited the OTHER profile's files. Every site
 // now asks lib/data-paths.mjs (claudeConfigDir / claudeConfigDirFor / claudeStatePath), and the
-// two bash scripts carry one `case` each with the same absolute-only rule. This sweep fails on a
+// two bash scripts carry one `_mem_is_abs` each with the same body and spell the default once. This sweep fails on a
 // new site built the old way; the behaviour of each helper is tested in claude-config-dir,
 // hook-update, install-lifecycle and post-tool-use-disabled.
 
@@ -21,13 +21,15 @@ const JS_OLD_SHAPE = /homedir\(\)\s*,\s*['"]\.claude(?:\.json)?['"]|join\(\s*hom
 // ~/.claude before CLAUDE_CONFIG_DIR was honoured still holds; tests/local-steering pins it).
 const JS_ALLOWED = new Set(['lib/data-paths.mjs', 'memdir.mjs']);
 
-const SH_OLD_SHAPE = /\$\{?HOME\}?\/\.claude(?:\/|\.json)/;
-// The defaults each script spells once: setup.sh's two variables (its `case` and its one-shot
-// marker keys read them, D#270) and post-tool-use.sh's default arm.
+// `.claude` alone too (D#269: a default spelled as a bare dir slipped past `/` and `.json`), but
+// not the data dirs that only share the prefix (`.claude-mem-lite`, `.claude-mem`).
+const SH_OLD_SHAPE = /\$\{?HOME\}?\/\.claude(?:\/|\.json|(?![\w.-]))/;
+// The defaults each script spells once: setup.sh's two variables (its config-home choice and its
+// one-shot marker keys read them, D#270) and post-tool-use.sh's one.
 const SH_ALLOWED_LINES = new Set([
   'CC_DEFAULT_CONFIG_DIR="$HOME/.claude"',
   'CC_DEFAULT_STATE_FILE="$HOME/.claude.json"',
-  '*) _mem_settings_file="${HOME}/.claude/settings.json" ;;',
+  '_mem_config_home="${HOME}/.claude"',
 ]);
 
 function jsOffenders(text) {
@@ -68,6 +70,9 @@ describe('the host config home has one spelling in shipped code', () => {
     expect(shOffenders('  CACHE_DIR="$HOME/.claude/plugins/cache/sdsrss/claude-mem-lite"')).toHaveLength(1);
     expect(shOffenders('  CLAUDE_JSON="$HOME/.claude.json" node -e \'')).toHaveLength(1);
     expect(shOffenders('_mem_settings_file="${HOME}/.claude/settings.json"')).toHaveLength(1);
+    // The bare dir, the shape a second default spelling takes when it ends in a quote (D#269).
+    expect(shOffenders('    CC_CONFIG_DIR="$HOME/.claude"')).toHaveLength(1);
+    expect(shOffenders('marker_suffix "$CC_CONFIG_DIR" "$HOME/.claude"')).toHaveLength(1);
     // …and the data dir, which only shares a prefix, is not.
     expect(jsOffenders("const DATA_DIR = join(homedir(), '.claude-mem-lite');")).toHaveLength(0);
     expect(shOffenders('CODE_DIR="$HOME/.claude-mem-lite"')).toHaveLength(0);

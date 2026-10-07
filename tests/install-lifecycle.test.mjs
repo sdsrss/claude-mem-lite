@@ -10,7 +10,7 @@ import {
   symlinkSync,
   readlinkSync,
 } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
@@ -921,19 +921,14 @@ describe('install lifecycle checks', () => {
       symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
       return home;
     }
-    function runSetup(home, cfg) {
-      const root = join(
-        cfg || join(home, '.claude'),
-        'plugins',
-        'cache',
-        'sdsrss',
-        'claude-mem-lite',
-        '6.24.0',
-      );
+    // A cfg that is not absolute here still gets its plugin root under ~/.claude, never the cwd.
+    function runSetup(home, cfg, { cwd, env: extra = {} } = {}) {
+      const base = cfg && isAbsolute(cfg) ? cfg : join(home, '.claude');
+      const root = join(base, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.24.0');
       mkdirSync(root, { recursive: true });
-      const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: root };
+      const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: root, ...extra };
       if (cfg) env.CLAUDE_CONFIG_DIR = cfg;
-      return spawnSync('bash', [SETUP_PATH], { encoding: 'utf8', env });
+      return spawnSync('bash', [SETUP_PATH], { encoding: 'utf8', env, cwd });
     }
 
     it('a second profile gets its own MCP dedup and residue warning', () => {
@@ -967,6 +962,34 @@ describe('install lifecycle checks', () => {
         expect(again.stderr).not.toContain('Legacy direct-install hooks');
       } finally {
         rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // D#269: setup.sh calls a value absolute exactly when Node's isAbsolute does on that platform
+    // (bash keeps an inherited OSTYPE). The cwd holds `<value>/.claude.json`, which setup edits
+    // only when it takes the value as absolute; otherwise it edits ~/.claude.json.
+    it('edits the .claude.json of the config home Node would pick on that platform (D#269)', () => {
+      for (const [ostype, value, absolute] of [
+        ['linux-gnu', 'C:/cfg', false],
+        ['msys', '\\\\srv\\cfg', true],
+      ]) {
+        const home = profileHome();
+        const cwd = makeTmpDir();
+        try {
+          mkdirSync(join(cwd, value), { recursive: true });
+          writeFileSync(join(cwd, value, '.claude.json'), ours);
+          writeFileSync(join(home, '.claude.json'), ours);
+          const r = runSetup(home, value, { cwd, env: { OSTYPE: ostype } });
+          expect(r.status, r.stderr).toBe(0);
+          const edited = (p) => JSON.parse(readFileSync(p, 'utf8')).mcpServers['mem-lite'] === undefined;
+          expect(
+            [edited(join(cwd, value, '.claude.json')), edited(join(home, '.claude.json'))],
+            ostype,
+          ).toEqual(absolute ? [true, false] : [false, true]);
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+          rmSync(cwd, { recursive: true, force: true });
+        }
       }
     });
 

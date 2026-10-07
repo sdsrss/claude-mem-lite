@@ -20,6 +20,13 @@ All notable changes to claude-mem-lite are documented in this file.
   each run once, and the record that they had run was shared by every profile, so only the
   first profile to start was checked. Each record is now kept per file it checks; the default
   `~/.claude.json` and `~/.claude/settings.json` keep the records existing installs already have.
+- **Fix: the hook scripts agree with the rest of the plugin on which `CLAUDE_CONFIG_DIR` values
+  count as absolute.** On Linux and macOS they took a Windows drive path such as `C:/cfg` as
+  absolute, and on Windows they took a UNC path (`\\server\share`) as relative; both now follow
+  the same rule as the Node side on each platform. `doctor` now also warns when
+  `CLAUDE_CONFIG_DIR` is a relative path: Claude Code resolves it against the directory it starts
+  in (checked on 2.1.293), while the plugin ignores it and uses `~/.claude`. Set it to an absolute
+  path.
 
 ## v6.24.0 — `CLAUDE_CONFIG_DIR` is followed everywhere; npm installs drop the dev toolchain
 

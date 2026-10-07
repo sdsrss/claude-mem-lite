@@ -99,7 +99,12 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
-import { claudeConfigDir, claudeConfigDirFor, claudeStatePath } from './lib/data-paths.mjs';
+import {
+  claudeConfigDir,
+  claudeConfigDirFor,
+  claudeStatePath,
+  ignoredClaudeConfigDir,
+} from './lib/data-paths.mjs';
 import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -1952,6 +1957,17 @@ async function doctor() {
   } else {
     fail(`Node.js ${nodeVer} too old (need >=${nodeFloor})`);
     issues++;
+  }
+
+  // A relative CLAUDE_CONFIG_DIR: Claude Code reads it against the directory it starts in, this
+  // code ignores it and uses ~/.claude, so hooks, settings and the plugin cache can sit in a home
+  // the host does not read (D#269). Followed only as an absolute path, on every face.
+  const ignoredConfigDir = ignoredClaudeConfigDir();
+  if (ignoredConfigDir !== null) {
+    dwarn(
+      `Claude Code config home: CLAUDE_CONFIG_DIR=${JSON.stringify(ignoredConfigDir)} is a relative path — Claude Code resolves it against the directory it starts in, claude-mem-lite uses ${claudeConfigDir()}`,
+    );
+    log('Set CLAUDE_CONFIG_DIR to an absolute path so both use the same directory.');
   }
 
   const dataDirDenied = dataDirAccessError();

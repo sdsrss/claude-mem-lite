@@ -8,7 +8,12 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { homedir } from 'os';
 import { join } from 'path';
-import { claudeConfigDir, claudeConfigDirFor, claudeStatePath } from '../lib/data-paths.mjs';
+import {
+  claudeConfigDir,
+  claudeConfigDirFor,
+  claudeStatePath,
+  ignoredClaudeConfigDir,
+} from '../lib/data-paths.mjs';
 import { memdirPath } from '../memdir.mjs';
 import { readProjectTasks } from '../lib/task-reader.mjs';
 import { fileURLToPath } from 'url';
@@ -217,4 +222,54 @@ describe('the installer and its probes use the host config home', () => {
     expect(JSON.stringify(written.hooks || {})).toContain('claude-mem-lite');
     expect(existsSync(join(home(), '.claude', 'settings.json'))).toBe(false);
   }, 130000);
+});
+
+// D#269: Claude Code resolves a relative CLAUDE_CONFIG_DIR against the directory it starts in
+// (2.1.293 in a sandbox: `claude plugin list` wrote <cwd>/<value>/.claude.json and nothing under
+// ~/.claude), while this code ignores the value, so the two use different config homes. Following
+// it would need every hook, the MCP server and the CLI to share the host's cwd; doctor says so
+// instead. An empty value the host reads as unset for its state file (~/.claude.json), as here.
+describe('a CLAUDE_CONFIG_DIR this code does not follow (D#269)', () => {
+  it('ignoredClaudeConfigDir names a relative value and nothing else', () => {
+    const got = [];
+    for (const v of ['relcfg', './p', 'C:cfg', '/srv/cc', '', undefined]) {
+      if (v === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = v;
+      got.push(ignoredClaudeConfigDir());
+    }
+    expect(got).toEqual(['relcfg', './p', 'C:cfg', null, null, null]);
+  });
+
+  function doctorConfigLines(value) {
+    const home = mkdtempSync(join(tmpdir(), 'cml-cfgdir-doctor-'));
+    try {
+      const env = { ...process.env, HOME: home, MEM_NO_AUTO_ADOPT: '1', CLAUDE_MEM_DIR: join(home, 'data') };
+      if (value === undefined) delete env.CLAUDE_CONFIG_DIR;
+      else env.CLAUDE_CONFIG_DIR = value;
+      const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+      const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
+        cwd: home,
+        env,
+        encoding: 'utf8',
+      });
+      expect(r.stdout, 'premise: doctor ran').toContain('Node.js:');
+      return r.stdout.split('\n').filter((l) => l.includes('CLAUDE_CONFIG_DIR'));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('doctor warns about a relative value and says what to set', () => {
+    const lines = doctorConfigLines('relcfg');
+    expect(lines[0]).toMatch(/⚠.*CLAUDE_CONFIG_DIR="relcfg".*relative/);
+    expect(lines.join('\n')).toContain('absolute path');
+  });
+
+  it('doctor says nothing about an absolute value, an empty one or none', () => {
+    expect([doctorConfigLines('/srv/cc'), doctorConfigLines(''), doctorConfigLines(undefined)]).toEqual([
+      [],
+      [],
+      [],
+    ]);
+  });
 });

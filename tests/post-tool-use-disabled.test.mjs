@@ -24,7 +24,7 @@ import {
   statSync,
 } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { join, resolve, win32, posix } from 'path';
 
 const SCRIPT = resolve(import.meta.dirname, '../scripts/post-tool-use.sh');
 const HOOK_MJS = resolve(import.meta.dirname, '../hook.mjs');
@@ -201,7 +201,7 @@ describe('bash/Node disable-detection parity', () => {
         CLAUDE_PROJECT_DIR: '/tmp/org/proj',
         CLAUDE_MEM_HOOK_RUNNING: '',
         MEM_NO_AUTO_ADOPT: '1',
-        CLAUDE_CONFIG_DIR: cfgEnv === 'abs' ? cfg : cfgEnv === 'rel' ? 'relative-cfg' : undefined,
+        CLAUDE_CONFIG_DIR: cfgEnv === 'abs' ? cfg : cfgEnv === 'rel' ? 'relative-cfg' : cfgEnv || undefined,
       };
       if (env.CLAUDE_CONFIG_DIR === undefined) delete env.CLAUDE_CONFIG_DIR;
       spawnSync('bash', [SCRIPT], {
@@ -239,6 +239,69 @@ describe('bash/Node disable-detection parity', () => {
     it('premise: unset, ~/.claude decides both ways', () => {
       expect(run({ homeValue: false, cfgEnv: '' })).toEqual([false, false]);
       expect(run({ homeValue: true, cfgEnv: '' })).toEqual([true, true]);
+    });
+
+    // D#269: bash took a drive letter as absolute on every OS; Node's isAbsolute rejects it here.
+    it('a drive-letter value is relative off Windows on both sides: ~/.claude decides', () => {
+      expect(run({ homeValue: false, cfgValue: true, cfgEnv: 'C:/cfg' })).toEqual([false, false]);
+    });
+  });
+
+  // D#269: on Windows, Node's isAbsolute also takes a leading backslash (UNC, root of the drive),
+  // which bash called relative. Node cannot be put in win32 mode here, so bash is held to
+  // path.win32 / path.posix directly: it runs with OSTYPE set (bash keeps an inherited value) in a
+  // cwd holding `<value>/settings.json` that switches the plugin off, so it acts exactly when it
+  // calls the value relative and reads the enabled ~/.claude instead.
+  describe('bash takes the CLAUDE_CONFIG_DIR values Node takes as absolute on that platform', () => {
+    const VALUES = ['C:/cfg', 'C:\\cfg', '\\\\srv\\cfg', '\\cfg', 'C:cfg', 'cfg'];
+    function bashActs(value, ostype) {
+      const home = sandbox('mem-cfgabs-home-');
+      const cwd = sandbox('mem-cfgabs-cwd-');
+      const memDir = sandbox('mem-cfgabs-data-');
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'settings.json'), settingsWith(true));
+      mkdirSync(join(cwd, value), { recursive: true });
+      writeFileSync(join(cwd, value, 'settings.json'), settingsWith(false));
+      const env = {
+        ...process.env,
+        HOME: home,
+        OSTYPE: ostype,
+        CLAUDE_CONFIG_DIR: value,
+        CLAUDE_MEM_DIR: memDir,
+        CLAUDE_PROJECT_DIR: '/tmp/org/proj',
+        CLAUDE_MEM_HOOK_RUNNING: '',
+      };
+      spawnSync('bash', [SCRIPT], {
+        input: JSON.stringify({
+          session_id: 'cfg',
+          tool_name: 'Read',
+          tool_input: { file_path: '/x/plan.md' },
+        }),
+        env,
+        cwd,
+        encoding: 'utf8',
+      });
+      return existsSync(join(memDir, 'runtime', 'reads-org--proj.txt'));
+    }
+
+    it('a Windows shell (OSTYPE=msys) follows path.win32.isAbsolute', () => {
+      const got = VALUES.map((v) => [v, bashActs(v, 'msys') ? 'relative' : 'absolute']);
+      expect(got).toEqual(VALUES.map((v) => [v, win32.isAbsolute(v) ? 'absolute' : 'relative']));
+      expect(new Set(got.map(([, k]) => k)).size, 'premise: the values split both ways').toBe(2);
+    });
+
+    it('elsewhere (OSTYPE=linux-gnu) follows path.posix.isAbsolute', () => {
+      const got = VALUES.map((v) => [v, bashActs(v, 'linux-gnu') ? 'relative' : 'absolute']);
+      expect(got).toEqual(VALUES.map((v) => [v, posix.isAbsolute(v) ? 'absolute' : 'relative']));
+    });
+
+    // setup.sh decides the same question for the files it edits; its behaviour is in
+    // install-lifecycle, this holds the two copies of the rule together.
+    it('setup.sh carries the same _mem_is_abs body', () => {
+      const body = (src) => src.match(/^_mem_is_abs\(\) \{\n[\s\S]*?\n\}$/m)?.[0];
+      const here = body(readFileSync(SCRIPT, 'utf8'));
+      expect(here, 'premise: post-tool-use.sh defines it').toMatch(/msys/);
+      expect(body(readFileSync(resolve(import.meta.dirname, '../scripts/setup.sh'), 'utf8'))).toBe(here);
     });
   });
 });
