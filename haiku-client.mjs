@@ -75,6 +75,8 @@ const TIER_MODEL_ENV = {
  * every call), and pointing the haiku alias at a bigger model would silently
  * change model and cost. No base URL → the built-in Anthropic ID, as before.
  * @param {'haiku'|'sonnet'} tier
+ * @param {ReturnType<typeof resolveAnthropicBaseUrl>} [base] the resolved base URL;
+ *   callModelAPI passes the one it also builds the request URL from
  * @returns {string}
  */
 function apiModelId(tier, base = resolveAnthropicBaseUrl()) {
@@ -706,8 +708,10 @@ const FLAG_TOKEN = /no-session-persistence/;
 const PARSE_REJECTION =
   /(unknown|unrecognized|unsupported|invalid|unexpected)[^\n]{0,40}(option|argument|flag|switch)/i;
 
-// Below this many ms left, a retry can only spawn a process and immediately kill
-// it — worse than returning the original failure.
+// Below this many ms left, a retry is worse than returning the original failure:
+// the CLI retry can only spawn a process and immediately kill it, and the direct
+// API's temperature retry would send a request (billed by the gateway) whose
+// reply nobody waits for.
 const RETRY_MIN_BUDGET_MS = 500;
 
 export function _isUnknownFlagError(diagnostic) {

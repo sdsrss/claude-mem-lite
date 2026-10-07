@@ -15,8 +15,15 @@
 // Per the node-fetch-proxy-blindness skill: every suite that mocks fetch on a
 // transport that switches on proxy env MUST neutralize those vars, or it tests
 // a different code path on a developer machine that has them set.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import { execFile, execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { networkInterfaces, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { httpConnectProxyFor, requestViaConnectProxy, onceViaConnectProxy } from '../lib/proxy-fetch.mjs';
 
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'];
@@ -213,5 +220,149 @@ describe('onceViaConnectProxy (CONNECT negotiation against a fake proxy)', () =>
     await expect(
       onceViaConnectProxy('http://127.0.0.1:1', 'http://a.test/x', { timeout: 2000 }),
     ).rejects.toThrow(/https targets only/);
+  });
+});
+
+// #33 made the target a user-set ANTHROPIC_BASE_URL, so it can be an IP literal
+// (`https://10.0.0.5:8443`). Node refuses an IP as the TLS servername
+// (ERR_INVALID_ARG_VALUE: SNI carries DNS names only), so every call through
+// the tunnel failed and fell back to the CLI while doctor reported the gateway
+// reachable. The trust store has to hold the fixture cert, so each call runs in
+// a child with NODE_EXTRA_CA_CERTS; the servers stay in this process.
+const HAS_OPENSSL = (() => {
+  try {
+    execFileSync('openssl', ['version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const HAS_IPV6_LOOPBACK = Object.values(networkInterfaces())
+  .flat()
+  .some((a) => a?.address === '::1');
+
+describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target through a real tunnel)', () => {
+  const PROXY_FETCH_URL = pathToFileURL(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'proxy-fetch.mjs'),
+  ).href;
+  let dir, proxy, proxyUrl;
+  const servers = [];
+  const certs = {};
+
+  function makeCert(name, san) {
+    const key = join(dir, `${name}.key`);
+    const cert = join(dir, `${name}.pem`);
+    execFileSync(
+      'openssl',
+      ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '2'].concat([
+        '-subj',
+        '/CN=localhost',
+        '-addext',
+        `subjectAltName=${san}`,
+      ]),
+      { stdio: 'ignore' },
+    );
+    return { key: readFileSync(key), cert: readFileSync(cert), certPath: cert };
+  }
+
+  function listen(server, host = '127.0.0.1') {
+    servers.push(server);
+    return new Promise((resolve) => server.listen(0, host, () => resolve(server.address().port)));
+  }
+
+  /**
+   * onceViaConnectProxy in a child that trusts `certPath`. Resolves {status, body} or {error},
+   * plus `hung: true` when the child had to be killed: a settled call whose tunnel socket was
+   * never closed holds the process open (120 s here, the server's handshake timeout).
+   */
+  function callInChild(certPath, target) {
+    const script = `
+      const { onceViaConnectProxy } = await import(process.argv[1]);
+      try {
+        const r = await onceViaConnectProxy(process.argv[2], process.argv[3], { timeout: 5000 });
+        console.log(JSON.stringify({ status: r.status, body: r.text() }));
+      } catch (e) {
+        console.log(JSON.stringify({ error: e.code || e.message }));
+      }`;
+    return new Promise((resolve, reject) => {
+      execFile(
+        process.execPath,
+        ['--input-type=module', '-e', script, PROXY_FETCH_URL, proxyUrl, target],
+        { env: { ...process.env, NODE_EXTRA_CA_CERTS: certPath }, timeout: 8000 },
+        (err, stdout) => {
+          if (err && !err.killed) return reject(err);
+          const last = stdout.trim().split('\n').pop();
+          const parsed = last ? JSON.parse(last) : {};
+          resolve(err ? { ...parsed, hung: true } : parsed);
+        },
+      );
+    });
+  }
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'mem-proxy-ip-'));
+    certs.ip = makeCert('ip', 'DNS:localhost,IP:127.0.0.1,IP:::1');
+    certs.dnsOnly = makeCert('dns', 'DNS:localhost');
+    for (const name of ['ip', 'dnsOnly']) {
+      const { key, cert } = certs[name];
+      certs[name].port = await listen(https.createServer({ key, cert }, (req, res) => res.end('gateway')));
+    }
+    if (HAS_IPV6_LOOPBACK) {
+      const { key, cert } = certs.ip;
+      certs.ip.port6 = await listen(
+        https.createServer({ key, cert }, (req, res) => res.end('gateway')),
+        '::1',
+      );
+    }
+    // A real CONNECT proxy: dial the requested host:port and splice the sockets.
+    proxy = http.createServer();
+    proxy.on('connect', (req, client, head) => {
+      const cut = req.url.lastIndexOf(':');
+      const host = req.url.slice(0, cut).replace(/^\[|\]$/g, '');
+      const upstream = net.connect(Number(req.url.slice(cut + 1)), host, () => {
+        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        upstream.write(head);
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      upstream.on('error', () => client.destroy());
+      client.on('error', () => upstream.destroy());
+    });
+    proxyUrl = `http://127.0.0.1:${await listen(proxy)}`;
+  });
+
+  afterAll(() => {
+    for (const s of servers) {
+      s.closeAllConnections?.();
+      s.close();
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('CONTROL: a DNS-name target already works through the tunnel', async () => {
+    const r = await callInChild(certs.ip.certPath, `https://localhost:${certs.ip.port}/v1/messages`);
+    expect(r).toEqual({ status: 200, body: 'gateway' });
+  });
+
+  it('reaches an IPv4-literal target — the IP is not sent as SNI', async () => {
+    const r = await callInChild(certs.ip.certPath, `https://127.0.0.1:${certs.ip.port}/v1/messages`);
+    expect(r).toEqual({ status: 200, body: 'gateway' });
+  });
+
+  it.skipIf(!HAS_IPV6_LOOPBACK)(
+    'reaches an IPv6-literal target — brackets stripped for SNI and identity',
+    async () => {
+      const r = await callInChild(certs.ip.certPath, `https://[::1]:${certs.ip.port6}/v1/messages`);
+      expect(r).toEqual({ status: 200, body: 'gateway' });
+    },
+  );
+
+  it('still checks the certificate against the IP: a cert without that IP is refused', async () => {
+    const r = await callInChild(
+      certs.dnsOnly.certPath,
+      `https://127.0.0.1:${certs.dnsOnly.port}/v1/messages`,
+    );
+    expect(r).toEqual({ error: 'ERR_TLS_CERT_ALTNAME_INVALID' });
   });
 });

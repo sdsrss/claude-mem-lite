@@ -188,6 +188,16 @@ describe('llmProviderStatus', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
+  it('WARNS on a bare trailing "#" — URL.hash is empty but the path is broken', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com/anthropic#');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    expect(s.level).toBe('warn');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it('WARNS on a non-http(s) scheme', async () => {
     noProxy();
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
