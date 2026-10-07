@@ -2,8 +2,65 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.25.0 — every session gets the same recall line again; a locked data directory reads as locked
 
+Fixes plus one default change; no schema change, no migration, and 6.24.0 still opens the
+database after this release has. A minor version because the first line of a file-recall block
+changes for half of sessions: the comparison 6.16.0 started is closed, and with
+`CLAUDE_MEM_RECALL_FRAMING` unset every session gets the older line again.
+`CLAUDE_MEM_RECALL_FRAMING=factual` keeps the newer line; `=ab` restores the split. To go back
+entirely, install 6.24.0 (`npm install -g claude-mem-lite@6.24.0`; for a plugin install, the
+rollback recipe under "Trust model per install path" in the README).
+
+- **Change: the first line of a file-recall block is the same in every session again.** Since
+  6.16.0 half of sessions got "notes recorded by claude-mem-lite about <file>; the tool call
+  proceeds as planned" instead of "system-injected context, continue your planned action", so the
+  two could be compared by how often the agent cited a lesson. Read on 42 of the maintainer's own
+  sessions (three projects) that received one of the two softer citation asks (6.17.0 and later;
+  2026-10-07): the older line 6 citations in 162 lesson-session pairs, the newer line 2 in 158, a
+  difference a session-level permutation test cannot tell from chance (p = 0.21). A pattern scan of
+  the agent's replies found neither line surfaced to the user (0 of 20 and 0 of 22 sessions),
+  though that scan's positive control is weak. With no measured harm in the older line and no
+  measured benefit in the newer one, the older line stays. An earlier reading of the same
+  comparison (p = 0.032) had counted ten sessions that still carried the older per-lesson citation
+  ask, all on the older line; `docs/audits/20261007-d104-d111-readout.md` has both readings. The
+  same document closes the 6.17.0 follow-up: the softer "cite a lesson only where it changed the
+  edit" ask stays.
+- **Fix: `doctor` says "not checked" for what it cannot read in a locked data directory, and
+  `status` names the directory.** A directory the process cannot enter or list (mode 000, say)
+  reads as an empty one, so under doctor's "✗ Data directory: … not accessible" line the checks
+  below still reported "✓ DB schema: no database yet", "✓ Disk footprint: DB 0.0MB", "Database: not
+  found", "Update state: no state file (first run?)" and a green "Hook self-heal", and where the
+  code shares that directory (the default layout) also "✗ server.mjs: missing", "✗ hook.mjs:
+  missing" and two warnings about undeployed code: doctor counted five issues for one fault, over
+  an intact store. Each of those checks now prints "not checked — <dir> is not accessible". A
+  directory that can be read but not written (the usual 755 a `sudo` run leaves owned by root) is
+  still a ✗, now saying so, and its checks run as before. With `CLAUDE_MEM_DIR` set, a locked code
+  directory is one ✗ with its `chmod` fix, and one directory spelled two ways (a trailing slash, a
+  symlinked home) counts once. `status` had no access check and said "⚠ Database: not found"; it
+  now says "✗ Database: <dir> is not accessible (EACCES)" with the fix, and its `--json` row
+  carries `exists: null` and the error code.
+- **Fix: `maintain execute --ops dedup` names every merge pair it skips.** Two kinds of pair were
+  dropped without a word after "Merged N": a second keeper for a row another pair already merges
+  (`--merge-ids 1:3,2:3` now reports "2:3 (#3 already merges into #1)"), and the surviving member
+  of a cycle (`1:2,2:1` now reports "2:1 (cycle: #1 survives)"). Which rows merge is unchanged.
+- **Fix: a passing test run whose output mentions "3 failed" is no longer stored as an error.** The
+  check that keeps a green summary ("0 fail", "ℹ fail 0") from counting as a failure gave way to a
+  nonzero "<N> failed" anywhere in the output, including a passing test's name or a log line such
+  as "2 failed attempts", and read a count and a word on two different lines as one. A red count
+  now has to sit where test runners print summaries, on one line, and never on the line a runner
+  prints for a passed test (`✔ name (1ms)`, `ok 1 - name`). "N error(s)" counts as red too (pytest
+  "1 passed, 1 error", tsc "Found 1 error in …"), and a line-start `FAIL` / `FAILED` banner (go,
+  jest, vitest, shell suites) marks a failure on its own. Replayed over this machine's recorded
+  Bash results the way the hook sees them (77,819 results; host-flagged failures, which never reach
+  this check, left out), 141 change: 79 are now read as failures, almost all real ones (at least
+  four are analysis output that quotes failure lines); 62 are no longer read as failures, all but
+  one passing runs, file reads or mutation-script reports.
+- **Fix: a rolled-back update no longer lets a hook load a half-restored install.** While an update
+  renames a release into place, a marker makes the hooks skip their run so none imports a mix of
+  two versions. Putting the old files back — after a release that fails its start-up check, after a
+  rename fails partway through the swap, or at the next start after an updater was killed mid-swap
+  — happened without that marker, or with a gap in it. It now holds the marker throughout.
 - **Fix: `doctor` no longer keeps a stale "update lookup failed" warning.** After a `repair`
   that fetched a release, the warning stayed until the next background check (24 hours, 6 when
   rate-limited), because repair's lookup recorded nothing on success; it now clears the warning.
