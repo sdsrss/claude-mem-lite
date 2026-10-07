@@ -2,7 +2,9 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.22.1 — install no longer tears the code hooks are loading
+
+Fixes, one new warning and docs; no schema change, no migration, no new setting.
 
 - **Fix: a hook firing while `claude-mem-lite install` ran could load a half-written file.**
   The installer copied each file over the one in `~/.claude-mem-lite` in place (emptied, then
