@@ -96,6 +96,33 @@ describe('llmProviderStatus', () => {
     expect(probe.mock.calls[0][1]).toEqual({ port: 4000 });
   });
 
+  it('probes an IPv6-literal gateway without the URL brackets net.connect cannot resolve', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://[::1]:4000');
+    const probe = vi.fn(async () => ({ reachable: true }));
+    const s = await llmProviderStatus({ _probe: probe });
+    // URL.hostname keeps the brackets; net.connect read '[::1]' as a DNS name (ENOTFOUND)
+    // and doctor reported a working gateway unreachable.
+    expect(probe.mock.calls[0][0]).toBe('::1');
+    expect(probe.mock.calls[0][1]).toEqual({ port: 4000 });
+    expect(s.level).toBe('ok');
+  });
+
+  it('keeps the brackets for an IPv6 gateway behind a proxy: CONNECT names [host]:port', async () => {
+    for (const v of PROXY_ENV) vi.stubEnv(v, '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('OPENROUTER_API_KEY', '');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://[2001:db8::1]:8443');
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:10808');
+    const probe = vi.fn();
+    const proxyProbe = vi.fn(async () => ({ reachable: true }));
+    await llmProviderStatus({ _probe: probe, _proxyProbe: proxyProbe });
+    expect(probe).not.toHaveBeenCalled();
+    expect(proxyProbe.mock.calls[0][1]).toBe('[2001:db8::1]');
+    expect(proxyProbe.mock.calls[0][2]).toEqual({ timeout: 4000, port: 8443 });
+  });
+
   it('passes the gateway port to the proxy CONNECT probe, not the 443 default', async () => {
     for (const v of PROXY_ENV) vi.stubEnv(v, '');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
