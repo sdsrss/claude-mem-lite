@@ -237,6 +237,26 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.23.0
+
+**If you set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, background LLM calls now go to that
+gateway.** No schema-version change: 6.22.1 still opens the database after this release has.
+To keep the old behaviour, pin `claude-mem-lite@6.22.1`.
+
+- **Who is affected.** The direct API leg used to post to `api.anthropic.com` with the built-in
+  model IDs whatever `ANTHROPIC_BASE_URL` said; only the `claude -p` fallback followed it. Now
+  the direct leg uses it too, together with `ANTHROPIC_DEFAULT_HAIKU_MODEL` /
+  `ANTHROPIC_DEFAULT_SONNET_MODEL`. Without `ANTHROPIC_BASE_URL` nothing changes, even when the
+  two model variables are set.
+- **A value the plugin cannot use** (not http or https, plain http to a host that is not
+  loopback, credentials in the URL, a query or a fragment) skips the direct leg: every
+  background call falls back to `claude -p`, and `claude-mem-lite doctor` says why. `doctor`
+  now probes the gateway's host and port instead of `api.anthropic.com`.
+- **Also in this release:** large stores no longer time out on every prompt. The database now
+  gets SQLite's planner statistics, which adds SQLite's own `sqlite_stat1` / `sqlite_stat4`
+  tables. And `CLAUDE_MEM_SEARCH_TELEMETRY=1` is a new, off-by-default switch that records MCP
+  searches for relevance feedback. Details in CHANGELOG.md.
+
 ## Upgrading to 6.21.0
 
 **Projects whose names are not plain ASCII get a new id, and what they stored moves once.** No

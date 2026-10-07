@@ -199,6 +199,23 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.23.0
+
+**如果你设置了 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_API_KEY`，后台 LLM 调用现在会发往那个网关。**
+没有 schema 版本变更：本版本打开过的数据库，6.22.1 仍能打开。想保持旧行为，请固定
+`claude-mem-lite@6.22.1`。
+
+- **受影响的是谁。** 以前直连 API 这一路不管 `ANTHROPIC_BASE_URL` 是什么，都用内置模型 ID 发往
+  `api.anthropic.com`，只有 `claude -p` 兜底会跟随它。现在直连这一路也用它，同时采用
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`。没设 `ANTHROPIC_BASE_URL`
+  时一切不变，即使设了这两个模型变量也一样。
+- **插件用不了的值**（不是 http 或 https、对非回环主机用明文 http、URL 里带凭据、带查询串或片段）
+  会跳过直连这一路：所有后台调用改走 `claude -p`，`claude-mem-lite doctor` 会说明原因。`doctor`
+  现在探测的是网关的主机和端口，而不是 `api.anthropic.com`。
+- **本版本还有：** 数据量大的存储不再每次提示都超时。数据库现在会有 SQLite 的查询规划统计，因此会多出
+  SQLite 自己的 `sqlite_stat1` / `sqlite_stat4` 表。另外新增默认关闭的开关
+  `CLAUDE_MEM_SEARCH_TELEMETRY=1`，用来记录 MCP 搜索以便给相关性打分。详见 CHANGELOG.md。
+
 ## 升级到 6.21.0
 
 **名字不是纯 ASCII 的项目会换一个新标识，它们存下的内容会搬一次。** 没有 schema 版本变更：

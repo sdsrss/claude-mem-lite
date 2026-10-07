@@ -2,6 +2,46 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.23.0 — gateway support on the direct API leg; large stores stop timing out
+
+One change for users who already set `ANTHROPIC_BASE_URL` (below), one opt-in feature, and a
+fix. No schema-version change and no migration: 6.22.1 still opens a database this release has
+opened. To keep the old gateway behaviour, pin `claude-mem-lite@6.22.1`.
+
+- **Fix: on a large store every prompt's memory search could take seconds and time out** (#41,
+  reported by @flamarion). Nothing ever ran `ANALYZE`, so no database had SQLite's planner
+  statistics, and without them SQLite ran the full-text match once per row of the project. On a
+  synthetic project of 44k observations (a size `import-jsonl` can reach), one search took
+  9.3–9.6 s over three runs, against the UserPromptSubmit hook's 2 s budget; Claude Code prints
+  "timed out after 2s — output discarded" when that happens. The database now gets statistics
+  the way SQLite recommends (`PRAGMA optimize`): when the MCP server opens it, in the daily
+  background maintenance, and after `import-jsonl` loads rows. After one maintenance pass the
+  same search on the same database took 14 ms; when there is nothing to analyze the call costs
+  about 0.1 ms. The database gains SQLite's own `sqlite_stat1` and `sqlite_stat4` tables.
+- **Change: `ANTHROPIC_BASE_URL` and the tier model variables now apply to the direct API leg**
+  (#33, by @thenewnano). With `ANTHROPIC_API_KEY` set, background LLM calls go straight to the
+  Messages API. That leg was fixed to `api.anthropic.com` and the built-in model IDs, so an
+  Anthropic-compatible gateway (Azure AI Foundry, LiteLLM, a Bedrock or Vertex proxy) was
+  reachable only through the slower `claude -p` fallback.
+  - `ANTHROPIC_BASE_URL` (no `/v1` suffix) now points the direct leg at the gateway, and
+    `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL` set the model per tier.
+    The two model variables apply only when a usable base URL is set.
+  - **If you already set `ANTHROPIC_BASE_URL` for Claude Code and have `ANTHROPIC_API_KEY`,
+    these calls now go to that gateway**, with the tier models if you set them.
+  - A value the plugin cannot use (not http or https, plain http to a host that is not
+    loopback, credentials in the URL, a query or a fragment) skips the direct leg, so the key
+    is not sent anywhere else. Calls fall back to `claude -p`, and `doctor` warns.
+  - `doctor` probes the configured host and port, directly and through a proxy. A gateway
+    addressed by IP works through `HTTPS_PROXY`. A 400 saying `temperature` is deprecated or
+    unsupported is retried once without it.
+- **New, opt-in: search relevance telemetry** (#40, by @mekineer-com; #31).
+  `CLAUDE_MEM_SEARCH_TELEMETRY=1` records MCP `mem_search` runs stamped with the running
+  version, adds a `mem_search_feedback` tool to rate results of searches the current server
+  issued, and `claude-mem-lite stats --search-telemetry` reports coverage and rank quality. With
+  the variable unset, the tools list, the server instructions and the search and save output
+  are unchanged, and no telemetry table is created. Rows are kept until you delete them; the
+  README gives the SQL.
+
 ## v6.22.1 — install no longer tears the code hooks are loading
 
 Fixes, one new warning and docs; no schema change, no migration, no new setting.
