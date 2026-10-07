@@ -147,7 +147,7 @@ cd claude-mem-lite
 node install.mjs install
 ```
 
-源文件保留在克隆的仓库中。通过 `git pull && node install.mjs install` 更新。
+`install` 会把源文件复制到 `~/.claude-mem-lite/`，与其他方式相同。用 `node install.mjs update` 更新，它安装最新的已签名发布。`git pull && node install.mjs install` 安装的则是当前检出的分支：可能领先于最新发布，也不校验签名。
 
 ### 安装过程
 

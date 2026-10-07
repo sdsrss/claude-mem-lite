@@ -189,7 +189,7 @@ cd claude-mem-lite
 node install.mjs install
 ```
 
-Source files stay in the cloned repo. Update via `git pull && node install.mjs install`.
+`install` copies the source files to `~/.claude-mem-lite/`, as the other methods do. Update with `node install.mjs update`, which installs the latest signed release. `git pull && node install.mjs install` installs the checked-out branch instead: it can be ahead of the latest release, and no signature is checked.
 
 ### What happens during installation
 
