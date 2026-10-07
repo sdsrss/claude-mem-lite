@@ -121,11 +121,18 @@ function runChild(gatewayOrigin) {
 }
 
 describe('a plain-http loopback gateway is reached directly under NODE_USE_ENV_PROXY', () => {
-  for (const host of ['127.0.0.1', 'localhost']) {
-    it(`${host}: the key goes to the gateway, never to HTTP_PROXY`, async (ctx) => {
+  // The scheme spelling matters: the resolver accepts any case (it validates URL.protocol)
+  // and hands back the raw text, so a case-sensitive 'http:' test sent HTTP://… through native
+  // fetch to the proxy (pre-tag review of 0cd43054).
+  for (const [label, scheme, host] of [
+    ['127.0.0.1', 'http', '127.0.0.1'],
+    ['localhost', 'http', 'localhost'],
+    ['HTTP://127.0.0.1 (upper-case scheme)', 'HTTP', '127.0.0.1'],
+  ]) {
+    it(`${label}: the key goes to the gateway, never to HTTP_PROXY`, async (ctx) => {
       seen.proxy.length = 0;
       seen.gateway.length = 0;
-      const origin = `http://${host}:${gateway.address().port}`;
+      const origin = `${scheme}://${host}:${gateway.address().port}`;
 
       const r = await runChild(origin);
 

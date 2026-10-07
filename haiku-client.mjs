@@ -555,8 +555,9 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     };
     // Plain http is loopback-only (resolveAnthropicBaseUrl), and loopback must stay on this
     // machine: native fetch would hand it, x-api-key in cleartext, to HTTP_PROXY under
-    // NODE_USE_ENV_PROXY=1. (D#250)
-    const plainHttp = apiUrl.startsWith('http:');
+    // NODE_USE_ENV_PROXY=1. (D#250) Parsed, not a prefix test: the resolver accepts the scheme
+    // in any case (`HTTP://127.0.0.1`) and returns the raw text.
+    const plainHttp = new URL(apiUrl).protocol === 'http:';
     const send = (payload) => {
       const json = JSON.stringify(payload);
       if (plainHttp) {

@@ -11,7 +11,8 @@ All notable changes to claude-mem-lite are documented in this file.
   the proxy could read the `x-api-key` header: Node 26 sent it as a plain request, Node 22
   inside a CONNECT tunnel that carries no encryption for an http target. A remote proxy then
   delivered the request to its own loopback, not this machine's. The direct API leg now sends
-  plain-http requests itself, straight to the loopback host. `doctor` already probed that host
+  plain-http requests itself, straight to the loopback host, however the scheme is spelled
+  (`HTTP://` included). `doctor` already probed that host
   directly, so its "reachable (direct)" line now describes the hop the product uses. Without
   `NODE_USE_ENV_PROXY` a plain-http request already went direct and still does; an `https://`
   base URL takes the same path as before.
@@ -21,9 +22,11 @@ All notable changes to claude-mem-lite are documented in this file.
   agent. GitHub answers that with 400 from the API and a 301 back to the same URL for release
   downloads, so the daily check, `self-update` and `repair` all failed through any proxy, and
   the check is silent on failure. `doctor` did not notice, because it checks only that the
-  proxy opens a tunnel. Measured on Node 22.23.3 and 26.8.1; the Anthropic API and OpenRouter
-  accept the port, so LLM calls through a proxy were not affected. The tunnel now sends the
-  host without the default port.
+  proxy opens a tunnel. Measured on Node 22.23.3 and 26.8.1. The Anthropic API and OpenRouter
+  accepted the port (a keyless request reached their authentication check), so LLM calls to
+  them were not affected. An `https://` `ANTHROPIC_BASE_URL` gateway without an explicit port
+  got `:80` too; how each gateway treated it was not measured. The tunnel now sends the host
+  without the default port.
 - **Fix: `self-update` no longer says "Already up to date" when it did not check.** With
   `CLAUDE_MEM_SKIP_UPDATE` set, on a development install (a git checkout or symlinks), or when
   GitHub could not be reached or was rate-limiting, `self-update` (`node install.mjs update`)
