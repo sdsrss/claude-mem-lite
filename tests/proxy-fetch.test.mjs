@@ -317,6 +317,17 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
         '::1',
       );
     }
+    // A gateway that sends the headers and part of the body, then drops the connection.
+    {
+      const { key, cert } = certs.ip;
+      certs.ip.cutPort = await listen(
+        https.createServer({ key, cert }, (req, res) => {
+          res.writeHead(200, { 'content-length': '1000' });
+          res.write('partial');
+          setTimeout(() => res.socket.destroy(), 50);
+        }),
+      );
+    }
     // Node 22 cannot match an IPv6 host against the cert's IPv6 SAN at all: its
     // checkServerIdentity compares '::1' with OpenSSL's '0:0:0:0:0:0:0:1' and refuses, so
     // even a plain fetch('https://[::1]') fails there (22.23.3; 24 and 26 accept the same
@@ -368,6 +379,18 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
       expect(r).toEqual({ status: 200, body: 'gateway' });
     },
   );
+
+  // Native fetch rejects a body cut short ("terminated"); the tunnel listened for the
+  // response's 'data' and 'end' only. A destroyed IncomingMessage emits neither (and
+  // emits 'error' only to a listener), so the call stayed pending until the overall
+  // timer - which is unref'd, so a worker with nothing else to do exited first, with
+  // the call never settled and the caller's CLI fallback never run.
+  it('rejects at once when the gateway drops the connection mid-body', async () => {
+    const r = await callInChild(certs.ip.certPath, `https://localhost:${certs.ip.cutPort}/v1/messages`);
+    expect(r.hung).toBeUndefined();
+    expect(r.error).toBeDefined();
+    expect(r.error).not.toBe('proxy request timeout');
+  });
 
   it('still checks the certificate against the IP: a cert without that IP is refused', async () => {
     const r = await callInChild(
