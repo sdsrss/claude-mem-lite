@@ -663,7 +663,7 @@ npx claude-mem-lite doctor            # 诊断问题
   任何本地静态 import，会捕获这种失败并说出缺失的文件和修复命令。列表中其余命令两种
   写法都一样。
 - 插件模式只提示可用更新，不会自更新插件文件。
-- direct install / npx 模式保留自动更新，并使用 staged replacement；若依赖安装失败会回滚。
+- direct install / npx 模式每天检查一次 GitHub Releases，发现新版本只在会话开始时提示，不会自动安装；运行 `node install.mjs update` 才安装，使用 staged replacement，若依赖安装失败会回滚。
 - 如果你禁用了插件，但 `~/.claude/settings.json` 里还有旧的 mem hooks，可运行 `node install.mjs cleanup-hooks`。
 
 ### doctor

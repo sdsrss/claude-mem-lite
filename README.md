@@ -822,7 +822,7 @@ Notes:
   /plugin install claude-mem-lite@sdsrss
   ```
   (The first command refreshes the local marketplace clone; the second reinstalls from it. Without the first command, `/plugin install` reuses the stale local clone and you stay on whichever version you originally pulled.)
-- Direct install / npx mode keeps auto-update enabled and uses staged replacement with rollback on install failure.
+- Direct install / npx mode checks GitHub Releases once a day and announces a newer version at session start; it does not install it. `node install.mjs update` installs it, with staged replacement and rollback on install failure.
 - If you disabled the plugin but still have old mem hooks in `~/.claude/settings.json`, run `node install.mjs cleanup-hooks`.
 
 #### Trust model per install path
@@ -831,7 +831,7 @@ The three install paths do **not** carry the same supply-chain guarantees — pi
 
 | Path | Update mechanism | Ed25519 release-signature verification |
 |------|------------------|----------------------------------------|
-| npm / npx / git-clone direct install | auto-update from GitHub Releases | **Yes** — every runtime file (140 entries incl. hook scripts, MCP launcher, plugin declaration files) is hash-pinned in a signed manifest; verification is fail-closed |
+| npm / npx / git-clone direct install | daily check announces; `node install.mjs update` installs from GitHub Releases | **Yes** — every runtime file (140 entries incl. hook scripts, MCP launcher, plugin declaration files) is hash-pinned in a signed manifest; verification is fail-closed |
 | `/plugin install` (marketplace) | manual `/plugin marketplace update` + reinstall | **No** — Claude Code installs from a git clone of the marketplace repo; the plugin's own signature chain is not consulted on this path. You are trusting GitHub + the repo's branch protection, not the release signing key |
 
 **Rollback recipe (plugin path).** If an update misbehaves, pin the marketplace clone to the previous release tag and reinstall from it:
@@ -1192,7 +1192,7 @@ what is already stored — only whether new work runs.
 | `CLAUDE_MEM_SKIP_OPTIMIZE` | Skip the LLM optimization pass (re-enrich, normalize, cluster-merge). | _(runs)_ |
 | `CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY` | Skip the MinHash near-duplicate pass, keeping exact dedup. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_MARKER_GC` | Skip the runtime-marker sweep. **Must be exactly `1`** — unlike the other `CLAUDE_MEM_SKIP_*` flags, which accept any truthy value, this one compares against the string `1`. That is deliberate: a truthy check makes `=0` mean "skip", which is the opposite of what anyone typing it intends. | _(runs)_ |
-| `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h auto-update check against GitHub Releases. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h update check against GitHub Releases and its session-start notice. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SIG_VERIFY` | Skip Ed25519 signature verification of a downloaded update. **Escape hatch — leaves updates unauthenticated.** | _(verifies)_ |
 | `CLAUDE_MEM_NO_LESSON_RETRY` | `1` disables the one-shot retry that re-asks for a missing `lesson_learned`. | _(retries)_ |
 | `CLAUDE_MEM_FLUSH_TIMEOUT` | Seconds the Stop hook waits for pending episode flushes. | `15` |
