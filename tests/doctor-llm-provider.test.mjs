@@ -137,6 +137,16 @@ describe('llmProviderStatus', () => {
     // The bug: the tunnel defaulted to 443 while requests went to 8443.
     expect(proxyProbe.mock.calls[0][2]).toEqual({ timeout: 4000, port: 8443 });
     expect(s.level).toBe('ok');
+    // D#257: the line named the host without the port it probed.
+    expect(s.message).toContain('gw.example.com:8443 reachable');
+  });
+
+  it('names the host alone when the gateway uses its scheme default port', async () => {
+    noProxy();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com:443/anthropic');
+    const s = await llmProviderStatus({ _probe: vi.fn(async () => ({ reachable: true })) });
+    expect(s.message).toContain('gw.example.com reachable');
   });
 
   it('WARNS when ANTHROPIC_BASE_URL is set but unusable, instead of a green default', async () => {

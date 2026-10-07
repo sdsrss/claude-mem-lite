@@ -1158,6 +1158,29 @@ describe('haiku-client.mjs', () => {
       }
     });
 
+    // D#259: the resolver accepted this value and returned it raw; `new URL(raw + '/v1/messages')`
+    // then threw on every call (the parser strips a trailing C0 only at the END of the input), so
+    // every keyed call fell back to the CLI while doctor reported the gateway usable.
+    it('reaches a loopback gateway whose base URL ends in a control character', async () => {
+      const { createServer } = await import('node:http');
+      const hits = [];
+      const gw = createServer((req, res) => {
+        hits.push({ method: req.method, url: req.url });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ content: [{ text: 'gateway response' }] }));
+      });
+      await new Promise((r) => gw.listen(0, '127.0.0.1', r));
+      try {
+        vi.stubEnv('ANTHROPIC_BASE_URL', `http://127.0.0.1:${gw.address().port}\x01`);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse()));
+
+        expect(await callHaiku('test prompt')).toEqual({ text: 'gateway response' });
+        expect(hits).toEqual([{ method: 'POST', url: '/v1/messages' }]);
+      } finally {
+        await new Promise((r) => gw.close(r));
+      }
+    });
+
     it('does not follow redirects on the credentialed native fetch', async () => {
       const fetchMock = vi.fn().mockResolvedValue(okResponse());
       vi.stubGlobal('fetch', fetchMock);

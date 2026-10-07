@@ -12,6 +12,14 @@ All notable changes to claude-mem-lite are documented in this file.
   removed) and since when, and `doctor` shows that as a warning until a lookup succeeds. The
   exit code is unchanged. Two `self-update` runs in one process no longer share one rate-limit
   verdict (no shipped caller ran two).
+- **Fix: an `ANTHROPIC_BASE_URL` with a trailing control character works on the direct API leg.**
+  The resolver checked the parsed URL but handed back the text as typed. The URL parser drops a
+  trailing control character only at the end of its input, so `http://127.0.0.1:4000` followed
+  by one passed the check and `doctor`, and then every direct call failed building
+  `<value>/v1/messages` and fell back to the `claude` CLI. The resolver now returns the URL it
+  checked, so every consumer reads the same scheme, host and port. Valid values send the same
+  requests as before. `doctor` also prints a gateway's port when it is not the scheme's default
+  (`gw.example.com:8443 reachable`).
 
 ## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 
