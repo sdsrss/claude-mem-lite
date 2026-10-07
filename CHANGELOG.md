@@ -2,6 +2,42 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.23.2 — two proxy fixes; the README stops saying direct installs auto-update
+
+Two fixes on the proxy path that 6.23.1's gateway support sends more traffic through, and a
+README correction. No schema change and no migration.
+
+- **Fix: a response cut off mid-body through an HTTP(S) proxy no longer hangs the call.** When
+  the gateway or the proxy closed the connection partway through the body, the call failed only
+  when its whole timeout ran out. A background process with nothing else to do could exit first,
+  and then the `claude -p` fallback never ran. The call now fails at once and falls back.
+  Without a proxy, or when the connection was reset rather than closed, this already worked.
+- **Fix: `NO_PROXY` accepts the name and port forms curl, Python and Go accept.** `NO_PROXY` has
+  no standard, and these clients differ. The plugin accepts the union of their name and port
+  forms, so it can skip the proxy for a host one of them would still send through it.
+  `NO_PROXY` decides which hosts skip the proxy for the direct API leg, OpenRouter, the update
+  check, the `self-update` and `repair` downloads (the release tarball itself goes through
+  `curl`, which applies curl's own rules), and `doctor`'s probe.
+  - `internal.corp` now also covers its subdomains (`build.internal.corp`); before, only
+    `.internal.corp` did, and `*.internal.corp` is accepted too.
+  - A `*` entry exempts every host, `::1` matches `https://[::1]`, and entries are
+    case-insensitive.
+  - `host:port` exempts only that port.
+  - `.internal.corp` no longer matches `evilinternal.corp`.
+  - Still not accepted: CIDR ranges; an IP address spelled other than in its canonical form
+    (`127.0.0.1`, `::1` or `[::1]`; not `127.1`); an IP entry as a suffix; and an
+    internationalized name not written in its `xn--` form.
+- **Docs: direct and npx installs announce updates; the check does not install them.** The README
+  said these installs auto-update. Since v3.62.0 the check runs once a day (every 6 hours while
+  GitHub is rate-limiting), from a session start, and the notice appears at the next session
+  start. `npx claude-mem-lite self-update` installs the update (`node install.mjs update` from a
+  git clone); `claude-mem-lite update` is the memory editor. `CLAUDE_MEM_SKIP_UPDATE` turns off
+  the check, the notice and `self-update` too, so unset it before updating. Two things still
+  install without a command, and `CLAUDE_MEM_SKIP_UPDATE` stops neither: when a hook finds a
+  module or dependency missing, a session start runs `repair` (at most once per 6 hours), which
+  installs the latest release if its signature verifies; and with the plugin also installed, a
+  session start copies a newer plugin version into the direct install without a signature check.
+
 ## v6.23.1 — gateway support on the direct API leg; large stores stop timing out
 
 v6.23.0 was tagged but never published: its release check failed on Node 22 in a test added for
