@@ -201,6 +201,14 @@ describe('a failed repair cleans up its staging dir', () => {
         CLAUDE_MEM_DIR: join(s.root, 'data'),
         CLAUDE_MEM_SKIP_UPDATE: '1',
         MEM_NO_AUTO_ADOPT: '1',
+        // Load-bearing: with any of these set, the release lookup takes the CONNECT tunnel,
+        // which never calls globalThis.fetch. On a proxy-bound machine this test then passed
+        // only because the tunnel sent `Host: api.github.com:80` and GitHub answered 400;
+        // once that was fixed, the "offline" repair ran a real one for 17 s.
+        HTTPS_PROXY: '',
+        https_proxy: '',
+        HTTP_PROXY: '',
+        http_proxy: '',
       },
     });
     expect(r.status).toBe(1);

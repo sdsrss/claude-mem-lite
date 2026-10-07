@@ -15,6 +15,15 @@ All notable changes to claude-mem-lite are documented in this file.
   directly, so its "reachable (direct)" line now describes the hop the product uses. Without
   `NODE_USE_ENV_PROXY` a plain-http request already went direct and still does; an `https://`
   base URL takes the same path as before.
+- **Fix: behind an HTTP(S) proxy, the update check and the release download work again.**
+  Requests through the proxy tunnel carried `Host: api.github.com:80` for a URL without a port:
+  Node's `https.request` takes its default port as 80 when it is handed a connection and no
+  agent. GitHub answers that with 400 from the API and a 301 back to the same URL for release
+  downloads, so the daily check, `self-update` and `repair` all failed through any proxy, and
+  the check is silent on failure. `doctor` did not notice, because it checks only that the
+  proxy opens a tunnel. Measured on Node 22.23.3 and 26.8.1; the Anthropic API and OpenRouter
+  accept the port, so LLM calls through a proxy were not affected. The tunnel now sends the
+  host without the default port.
 - **Fix: `self-update` no longer says "Already up to date" when it did not check.** With
   `CLAUDE_MEM_SKIP_UPDATE` set, or on a development install (a git checkout or symlinks), the
   update check returns without a request, and `self-update` (`node install.mjs update`) printed

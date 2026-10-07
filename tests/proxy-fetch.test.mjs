@@ -494,6 +494,14 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
         '::1',
       );
     }
+    // Echoes the Host header it received. The proxy below routes every CONNECT to port 443
+    // here, so a target URL WITHOUT a port can be tested without binding 443.
+    {
+      const { key, cert } = certs.ip;
+      certs.ip.hostEchoPort = await listen(
+        https.createServer({ key, cert }, (req, res) => res.end(String(req.headers.host))),
+      );
+    }
     // A gateway that sends the headers and part of the body, then drops the connection.
     {
       const { key, cert } = certs.ip;
@@ -518,7 +526,8 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
     proxy.on('connect', (req, client, head) => {
       const cut = req.url.lastIndexOf(':');
       const host = req.url.slice(0, cut).replace(/^\[|\]$/g, '');
-      const upstream = net.connect(Number(req.url.slice(cut + 1)), host, () => {
+      const port = Number(req.url.slice(cut + 1));
+      const upstream = net.connect(port === 443 ? certs.ip.hostEchoPort : port, host, () => {
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         upstream.write(head);
         upstream.pipe(client);
@@ -541,6 +550,21 @@ describe.skipIf(!HAS_OPENSSL)('onceViaConnectProxy (IP-literal https target thro
   it('CONTROL: a DNS-name target already works through the tunnel', async () => {
     const r = await callInChild(certs.ip.certPath, `https://localhost:${certs.ip.port}/v1/messages`);
     expect(r).toEqual({ status: 200, body: 'gateway' });
+  });
+
+  // With `createConnection` and no agent, https.request takes its default port as 80, so a
+  // target with no port went out as `Host: api.github.com:80`. GitHub answers that with 400
+  // (the API) or a 301 to the same URL (release downloads), so through any proxy the update
+  // check and the release download always failed, and the check is silent on failure.
+  // Anthropic and OpenRouter tolerate the port. Measured 2026-10-07, Node 22.23.3 and 26.8.1.
+  it('sends Host without a port for a default-port https target', async () => {
+    const r = await callInChild(certs.ip.certPath, 'https://localhost/v1/messages');
+    expect(r).toEqual({ status: 200, body: 'localhost' });
+  });
+
+  it('keeps an explicit port in Host', async () => {
+    const r = await callInChild(certs.ip.certPath, `https://localhost:${certs.ip.hostEchoPort}/v1/messages`);
+    expect(r).toEqual({ status: 200, body: `localhost:${certs.ip.hostEchoPort}` });
   });
 
   it('reaches an IPv4-literal target — the IP is not sent as SNI', async () => {
