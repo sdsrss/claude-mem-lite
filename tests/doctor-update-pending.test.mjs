@@ -102,9 +102,9 @@ describe('doctor warns when the last update lookup failed (D#255)', () => {
   });
 });
 
-// D#266: no lookup runs while CLAUDE_MEM_SKIP_UPDATE is set, so nothing ever cleared a failure
-// recorded before it was set (the warning stayed forever), and with no state file doctor asked
-// "first run?" about a check that never runs.
+// D#266: with CLAUDE_MEM_SKIP_UPDATE set neither the background check nor self-update looks up
+// (only a repair does), so a failure recorded before it was set stayed a warning, and with no
+// state file doctor asked "first run?" about a check that does not run.
 describe('doctor with update checks turned off (D#266)', () => {
   const failing = {
     lastCheck: '2026-09-01T00:00:00Z',

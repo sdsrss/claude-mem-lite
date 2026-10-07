@@ -2516,8 +2516,10 @@ async function doctor() {
     } catch {
       /* cannot judge — report the recorded state as it stands */
     }
-    // No lookup runs while checks are off, so a failure recorded before they were turned off is
-    // never cleared and no state file ever appears: say they are off instead (D#266).
+    // While checks are off neither the background check nor self-update looks up; only a repair
+    // does (README: a repair still runs). So a failure recorded before they were turned off stayed
+    // a warning until a repair happened to look up, and a missing state file read "first run?".
+    // Say they are off instead (D#266).
     const checksOff = hookUpdate?.updateCheckDisabledReason() ?? null;
     if (checksOff) {
       const why =
@@ -2554,6 +2556,11 @@ async function doctor() {
         );
         log(
           'Newer releases cannot be detected until a lookup succeeds; self-update and repair use the same lookup.',
+        );
+        // doctor sees only its own environment: a CLAUDE_MEM_SKIP_UPDATE set in Claude Code's
+        // settings `env` turns the checks off for the hooks but not here (post-release review).
+        log(
+          "If CLAUDE_MEM_SKIP_UPDATE is set in Claude Code's settings, background checks are off there and this record dates from before that.",
         );
       } else {
         ok(`Update state: ${parts.join(', ') || 'empty'}`);

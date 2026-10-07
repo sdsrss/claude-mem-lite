@@ -814,9 +814,9 @@ describe('rate-limit handling + malformed-response robustness', () => {
     expect(cleared.lookupFailingSince ?? null).toBeNull();
   });
 
-  // D#266: repair looks up through fetchLatestRelease, which wrote no state, so after a repair
-  // that fetched a release doctor kept saying the last lookup failed until the next background
-  // check (24 h, or 6 h when rate-limited).
+  // D#266: repair looks up through fetchLatestRelease, which wrote no state on success, so after a
+  // repair that fetched a release doctor kept saying the last lookup failed until the next
+  // background check (24 h, or 6 h when rate-limited).
   it('a successful lookup through fetchLatestRelease clears the recorded failure, and only that', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
@@ -845,13 +845,15 @@ describe('rate-limit handling + malformed-response robustness', () => {
       .mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.0.1', assets: [] }) });
     expect((await fetchLatestRelease())?.version).toBe('1.0.1');
     const after = readStateFile();
-    expect([after.lookupError ?? null, after.lookupFailingSince ?? null, after.rateLimited]).toEqual([
-      null,
-      null,
-      false,
+    expect([after.lookupError ?? null, after.lookupFailingSince ?? null]).toEqual([null, null]);
+    // The throttle (lastCheck, and rateLimited, which picks its 6 h or 24 h interval) and the cached
+    // release belong to the background check: clearing rateLimited here pushed the next check back
+    // by up to 18 h (post-release review).
+    expect([after.lastCheck, after.rateLimited, after.latestVersion]).toEqual([
+      failing.lastCheck,
+      true,
+      failing.latestVersion,
     ]);
-    // The throttle's clock and the cached release belong to the background check.
-    expect([after.lastCheck, after.latestVersion]).toEqual([failing.lastCheck, failing.latestVersion]);
   });
 
   it('a successful lookup with no failure on record writes no state file', async () => {
