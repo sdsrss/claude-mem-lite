@@ -27,6 +27,10 @@ All notable changes to claude-mem-lite are documented in this file.
   importance in the write itself. A re-enrich reply that rated a row 0 no longer replaces the
   title and narrative of a row it may not hide (a compression keeper, or a row whose importance
   a person set): `Weekly summary: auth refactor` had become `Weekly summary`, narrative `x`.
+- **Fix: a stray `</private >` closer written with a space or attributes hides the text before
+  it in tool descriptions**, as the bare `</private>` already did. The description window's own
+  marker test matched only the bare tag, while `<private>` stripping accepts whitespace and
+  attributes, so text cut from inside a private span could show in an episode's description.
 
 ## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 

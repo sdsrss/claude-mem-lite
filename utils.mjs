@@ -328,8 +328,11 @@ const DESC_SCRUB_WINDOW = 4096;
 // `notes.md:3:<private>bank pin 4412`) was shown as written (v6.19.0 pre-tag reviews P3-1, r3 P2-1).
 // A `</private>` or private-key END that comes first is a span whose START is out of view (a
 // nested span, `tail key.pem`), so everything before it may be its inside: the field shows nothing
-// (round-3 P3-1). The PEM half is case-sensitive, like the scrubber's PEM pattern.
-const PRIVATE_MARK_RE = /<\/?[Pp][Rr][Ii][Vv][Aa][Tt][Ee]>|-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY/;
+// (round-3 P3-1). The PEM half is case-sensitive, like the scrubber's PEM pattern. The tag half
+// takes the whitespace and attributes lib/private-strip.mjs takes (D13): bare-only let a stray
+// `</private >` or `</private reason="x">` show the text before it (D#208).
+const PRIVATE_MARK_RE =
+  /<\/?[Pp][Rr][Ii][Vv][Aa][Tt][Ee](?:\s[^<>]*)?>|-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY/;
 // A window edge that cuts a token leaves a fragment shorter than its pattern needs (`ghp_` and 12
 // of its 36 characters), and whitespace collapsing can bring it into view: the cut token is
 // dropped (defect review P3-6, round-3 P3-4/P3-6). A head window with no whitespace keeps it: its

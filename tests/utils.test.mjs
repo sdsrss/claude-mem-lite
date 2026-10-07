@@ -1393,6 +1393,15 @@ describe('makeEntryDesc', () => {
     expect(desc).toBe('Search "pin" → ');
   });
 
+  // D#208: lib/private-strip.mjs takes whitespace and attributes in a tag (D13), but the window's
+  // own marker test matched only the bare `</private>`, so these closers showed the text before them.
+  it('shows no text before a stray closer written with whitespace or attributes', () => {
+    for (const closer of ['</private >', '</PRIVATE\t>', '</private reason="x">']) {
+      const desc = makeEntryDesc('Grep', { pattern: 'pin' }, `notes.md:4:pin 4412${closer} rotated`);
+      expect(desc, closer).toBe('Search "pin" → ');
+    }
+  });
+
   it('shows no fragment of a token the window cut in a Grep result', () => {
     const desc = makeEntryDesc('Grep', { pattern: 'p' }, `${' '.repeat(4080)}ghp_${'A'.repeat(36)} done`);
     expect(desc).not.toMatch(/ghp_|AAAA/);
