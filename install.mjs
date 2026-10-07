@@ -3234,9 +3234,15 @@ async function manualUpdate() {
     return;
   }
   log('Checking for updates...');
-  const result = await checkForUpdate({ force: true, allowInstall: true });
+  const result = await checkForUpdate({ force: true, allowInstall: true, reportFailure: true });
 
-  if (result?.updated) {
+  if (result?.checkFailed) {
+    warn(
+      result.rateLimited
+        ? 'Not checked: GitHub is rate-limiting requests from this address. Try again later.'
+        : 'Not checked: could not reach GitHub Releases (network, proxy or DNS). Nothing was installed.',
+    );
+  } else if (result?.updated) {
     ok(`Updated: v${result.from} → v${result.to}`);
   } else if (result?.updateAvailable && result?.installDeferred) {
     warn(`v${result.to} available — plugin mode only checks for updates.`);

@@ -63,6 +63,17 @@ describe('self-update says why it did not check', () => {
     }
   });
 
+  // The third null: the check ran and failed. Found running the README command in a sandbox
+  // behind a proxy: "Already up to date (v6.23.1)" with 6.23.2 published, because every
+  // GitHub request through the tunnel was answered 400.
+  it('says the check failed when GitHub cannot be reached, not that it is up to date', () => {
+    // The dead proxy in selfUpdate() refuses every connection.
+    const out = selfUpdate({ CLAUDE_MEM_SKIP_UPDATE: '' });
+    expect(out).toMatch(/Checking for updates/);
+    expect(out).not.toMatch(/up to date/i);
+    expect(out).toMatch(/could not reach GitHub/i);
+  });
+
   it('prints the updater name in its banner, not the memory editor `update`', () => {
     const out = selfUpdate({ CLAUDE_MEM_SKIP_UPDATE: '1' });
     expect(out).toMatch(/^claude-mem-lite self-update$/m);

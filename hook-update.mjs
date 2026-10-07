@@ -68,6 +68,11 @@ const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 // ── Main Entry ─────────────────────────────────────────────
 export async function checkForUpdate(options = {}) {
+  // A failed lookup returns null by default, which a background caller wants (silent on
+  // network failure). `self-update` printed that null as "Already up to date", so a caller
+  // that reports to a person asks for the failure instead. (D#251)
+  const failed = (rateLimited) =>
+    options.reportFailure ? { updateAvailable: false, updated: false, checkFailed: true, rateLimited } : null;
   try {
     const pluginMode = isPluginMode();
     const force = Boolean(options.force);
@@ -100,7 +105,7 @@ export async function checkForUpdate(options = {}) {
       // rate-limit mechanism is dead. Re-reading preserves the freshly-written flag.
       const fresh = readState();
       saveState({ ...fresh, lastCheck: new Date().toISOString() });
-      return null;
+      return failed(Boolean(fresh.rateLimited));
     }
 
     const currentVersion = getCurrentVersion();
@@ -148,7 +153,7 @@ export async function checkForUpdate(options = {}) {
       const s = readState();
       saveState({ ...s, lastCheck: new Date().toISOString(), lastError: err.message });
     } catch {}
-    return null;
+    return failed(false);
   }
 }
 

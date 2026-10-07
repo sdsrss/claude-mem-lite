@@ -681,6 +681,48 @@ describe('rate-limit handling + malformed-response robustness', () => {
     expect(state.rateLimited).toBe(true);
   });
 
+  // D#251: `self-update` printed a failed lookup's null as "Already up to date". With
+  // reportFailure the failure is named; without it the background contract (null) holds.
+  it('reportFailure names a rate-limited lookup instead of returning null', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+
+    expect(await checkForUpdate({ force: true, reportFailure: true })).toEqual({
+      updateAvailable: false,
+      updated: false,
+      checkFailed: true,
+      rateLimited: true,
+    });
+  });
+
+  it('reportFailure names an unreachable GitHub; a reachable one that has nothing newer stays null', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+
+    expect(await checkForUpdate({ force: true, reportFailure: true })).toMatchObject({
+      checkFailed: true,
+      rateLimited: false,
+    });
+    expect(await checkForUpdate({ force: true })).toBeNull();
+
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.0.0', assets: [] }) });
+    expect(await checkForUpdate({ force: true, reportFailure: true })).toBeNull();
+  });
+
   it('falls through to the tags API when releases/latest returns 200 with no tag_name (no crash)', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');
