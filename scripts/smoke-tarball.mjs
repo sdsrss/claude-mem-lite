@@ -75,10 +75,15 @@ try {
 
   // 1b. Shrinkwrap inclusion (v3.58.0 regression class): when the release
   //     pipeline has generated npm-shrinkwrap.json (publish.yml runs
-  //     `npm shrinkwrap` before this smoke), the tarball MUST carry it — npm's
+  //     scripts/write-shrinkwrap.mjs before this smoke), the tarball MUST carry it — npm's
   //     packlist silently drops it unless files[] lists it, which is exactly
   //     how v3.58.0 shipped unlocked despite the workflow step running. In dev
   //     and plain CI the file doesn't exist, so the check self-skips.
+  //     The packed copy must also be the dev-free, closed lock (D#170): a registry install
+  //     installs a dependency's shrinkwrap whole, so a full copy put the dev tree on every
+  //     user (npm 11: 298 packages / 541 MB against 96 / 57 MB). The install in step 2 cannot
+  //     catch that: `npm install <tgz>` ignores the tarball's shrinkwrap under npm 10 and 11,
+  //     so it smokes the file set and the native build, not the locked tree.
   if (existsSync(join(REPO_ROOT, 'npm-shrinkwrap.json'))) {
     const entries = sh('tar', ['-tzf', tgz]);
     if (!entries.includes('package/npm-shrinkwrap.json')) {
@@ -86,7 +91,13 @@ try {
         'repo has npm-shrinkwrap.json but the packed tarball does not — packlist dropped it (files[] entry missing?)',
       );
     }
-    log('shrinkwrap OK — npm-shrinkwrap.json is in the tarball');
+    const { verifyShrinkwrap } = await import('./write-shrinkwrap.mjs');
+    try {
+      verifyShrinkwrap(JSON.parse(sh('tar', ['-xOzf', tgz, 'package/npm-shrinkwrap.json'])));
+    } catch (e) {
+      fail(`packed npm-shrinkwrap.json is not publishable: ${e.message}`);
+    }
+    log('shrinkwrap OK — in the tarball, no dev-only entries, closed under production deps');
   }
 
   // 2. Install into a clean throwaway project. This is where better-sqlite3 is

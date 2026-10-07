@@ -85,7 +85,11 @@ jobs:
         # time (not committed) so registry installs get the exact tested tree
         # while dev flow keeps package-lock.json. Marketplace installs were
         # already locked (git clone carries package-lock.json).
-        run: npm shrinkwrap
+        # Not `npm shrinkwrap`: it copies the dev entries too, and npm installs a
+        # dependency's shrinkwrap whole, so every registry user got vitest, eslint,
+        # knip and prettier (D#170). The script drops dev-only entries and fails
+        # unless the rest is closed under production deps.
+        run: node scripts/write-shrinkwrap.mjs
 
       - name: Smoke-test the publishable tarball
         # Gate the release on the riskiest path: npm pack → real npm install of the
@@ -94,8 +98,9 @@ jobs:
         # install), hook-update mocks tarball I/O, completeness is static-only. A
         # missing files[] entry or a native ABI break would otherwise publish a
         # tarball that bricks every fresh `npx`/`npm i` install. (audit MED-4)
-        # Runs AFTER npm shrinkwrap so the smoked tarball is the locked shape
-        # that publish ships.
+        # Runs AFTER the shrinkwrap step so the tarball's lockfile is checked: present,
+        # no dev-only entries, closed. Its `npm install <tgz>` ignores a tarball's
+        # shrinkwrap (npm 10 and 11), so it does not install the locked tree itself.
         run: node scripts/smoke-tarball.mjs
 
       - name: Benchmark gate
@@ -145,7 +150,7 @@ jobs:
       - name: Generate npm-shrinkwrap (lock the published tarball)
         # Mirrors the validate job — see the rationale there. Must run before
         # `npm publish` (each job has its own checkout).
-        run: npm shrinkwrap
+        run: node scripts/write-shrinkwrap.mjs
 
       - name: Publish to npm
         # --provenance requires an OIDC-capable token (npm >=9.5). A legacy/classic

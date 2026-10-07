@@ -499,6 +499,24 @@ function prepareInstallDirs() {
   if (!existsSync(MEM_DATA_DIR)) mkdirSync(MEM_DATA_DIR, { recursive: true });
 }
 
+/**
+ * The lockfile to deploy as ~/.claude-mem-lite/package-lock.json, or null. A git checkout and
+ * the plugin cache carry package-lock.json; the npm tarball never does (npm will not pack it)
+ * and carries the release's npm-shrinkwrap.json instead (D#170), so an npx / global install ran
+ * `npm install --omit=dev` in the managed dir with no lock and resolved every range afresh.
+ * Deployed under the package-lock name: a later plugin sync or update writes that name, and a
+ * stale shrinkwrap left beside it would take precedence over the lock they write.
+ * @param {string} projectDir
+ * @returns {string|null}
+ */
+export function deployableLockfile(projectDir) {
+  for (const f of ['package-lock.json', 'npm-shrinkwrap.json']) {
+    const p = join(projectDir, f);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 export function deployCodeTree(IS_DEV) {
   if (IS_DEV) {
     log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
@@ -547,6 +565,12 @@ export function deployCodeTree(IS_DEV) {
         if (!existsSync(dstParent)) mkdirSync(dstParent, { recursive: true });
         atomicCopyFileSync(src, dst); // by rename, not in place (D#223)
       }
+    }
+    // The npm tarball has no package-lock.json for the loop above to copy; lock the managed
+    // dir with the tarball's shrinkwrap instead (D#170).
+    const lock = deployableLockfile(PROJECT_DIR);
+    if (lock && !lock.endsWith('package-lock.json')) {
+      atomicCopyFileSync(lock, join(DATA_DIR, 'package-lock.json'));
     }
     // Copy hook scripts (settings.json hook commands point at these — must
     // stay in sync with HOOK_SCRIPT_FILES manifest)

@@ -4,6 +4,15 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## Unreleased
 
+- **Fix: an npm install no longer brings the development toolchain.** The published lockfile
+  (`npm-shrinkwrap.json`) was a full copy of the development lockfile, and npm installs a
+  package's shrinkwrap whole. So `npm install -g claude-mem-lite` and `npx claude-mem-lite`
+  also installed vitest, eslint, knip and prettier. It is now generated without the
+  development-only entries, and the release gate refuses one that has them. Measured through a
+  local registry with npm 11.19.0: 298 packages / 541 MB before, 96 / 57 MB after, the same on
+  npm 10.9.2, with every runtime dependency still at its locked version. `claude-mem-lite
+  install` from an npm or npx install now also locks `~/.claude-mem-lite` with that file, which
+  it previously installed without a lockfile. Plugin installs were not affected.
 - **Fix: with `CLAUDE_CONFIG_DIR` set, the installer, updates and hooks use that directory.**
   Claude Code keeps `settings.json`, `plugins/` and `.claude.json` in `CLAUDE_CONFIG_DIR` when it
   is set (checked on 2.1.292). The plugin still used `~/.claude` and `~/.claude.json` in about 25

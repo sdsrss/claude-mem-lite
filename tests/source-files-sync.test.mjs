@@ -153,9 +153,14 @@ test('package.json files array ships every RELEASE_SIGNED_FILES entry', () => {
 // their transitive tree again with no local test failing.
 test('release workflow generates npm-shrinkwrap before smoke and publish', () => {
   const wf = readFileSync(resolve(ROOT, '.github/workflows/publish.yml'), 'utf8');
-  const shrinkwrapSteps = wf.match(/run: npm shrinkwrap/g) || [];
+  // D#170: the step is scripts/write-shrinkwrap.mjs, not `npm shrinkwrap` — that command copies
+  // the dev entries, and npm installs a dependency's shrinkwrap whole. Anchored on ACTIVE run
+  // lines: the comments above the step still name the old command to say why it is gone.
+  const STEP = 'run: node scripts/write-shrinkwrap.mjs';
+  const shrinkwrapSteps = wf.split('\n').filter((l) => l.trim() === STEP);
   expect(shrinkwrapSteps.length, 'both validate and publish jobs must shrinkwrap').toBeGreaterThanOrEqual(2);
-  expect(wf.indexOf('npm shrinkwrap')).toBeLessThan(wf.indexOf('scripts/smoke-tarball.mjs'));
+  expect(wf.split('\n').filter((l) => /^\s*run:\s*npm shrinkwrap\b/.test(l))).toEqual([]);
+  expect(wf.indexOf(STEP)).toBeLessThan(wf.indexOf('run: node scripts/smoke-tarball.mjs'));
   // v3.58.0 shipped WITHOUT the shrinkwrap despite the workflow step running:
   // with a files[] whitelist, npm 10's packlist drops npm-shrinkwrap.json
   // unless it is EXPLICITLY listed (verified against npm 10.9.2; npm 12
