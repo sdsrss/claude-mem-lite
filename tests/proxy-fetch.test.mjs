@@ -64,6 +64,71 @@ describe('httpConnectProxyFor (transport selection)', () => {
     expect(httpConnectProxyFor('https://b.test/x')).toBe('http://127.0.0.1:1');
   });
 
+  // NO_PROXY has no standard, but curl, wget, Ruby, Python and Go all suffix-match an
+  // entry without a leading dot, and curl/Python/Go take a lone '*' (survey:
+  // about.gitlab.com/blog/we-need-to-talk-no-proxy). The matcher only knew the
+  // leading-dot shape, so the recommended `NO_PROXY=internal.corp` still sent
+  // build.internal.corp - a #33 gateway, typically - into the proxy.
+  it('suffix-matches an entry without a leading dot, on a domain boundary', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', 'internal.corp');
+    expect(httpConnectProxyFor('https://internal.corp/x')).toBeNull();
+    expect(httpConnectProxyFor('https://build.internal.corp/x')).toBeNull();
+    expect(httpConnectProxyFor('https://evilinternal.corp/x')).toBe('http://127.0.0.1:1');
+  });
+
+  it('keeps a leading "." or "*." entry on a domain boundary too', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', '.internal.corp,*.lab.test');
+    expect(httpConnectProxyFor('https://gw.lab.test/x')).toBeNull();
+    expect(httpConnectProxyFor('https://evilinternal.corp/x')).toBe('http://127.0.0.1:1');
+  });
+
+  it('bypasses every host for a lone "*"', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', '*');
+    expect(httpConnectProxyFor('https://api.anthropic.com/v1/messages')).toBeNull();
+  });
+
+  it('matches case-insensitively', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', 'GW.Example.COM');
+    expect(httpConnectProxyFor('https://gw.example.com/x')).toBeNull();
+  });
+
+  it('ignores a trailing root dot on either side', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', 'gw.example.com');
+    expect(httpConnectProxyFor('https://gw.example.com./x')).toBeNull();
+    vi.stubEnv('NO_PROXY', 'gw.example.com.');
+    expect(httpConnectProxyFor('https://gw.example.com/x')).toBeNull();
+  });
+
+  it('matches an IPv6 entry written with or without brackets', () => {
+    // URL.hostname keeps the brackets ('[::1]'); NO_PROXY is usually written '::1'.
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    for (const entry of ['::1', '[::1]']) {
+      vi.stubEnv('NO_PROXY', entry);
+      expect(httpConnectProxyFor('https://[::1]:8443/v1/messages'), entry).toBeNull();
+    }
+  });
+
+  it('narrows an entry with a :port to that port', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', 'gw.example.com:8443,[::1]:9443');
+    expect(httpConnectProxyFor('https://gw.example.com:8443/x')).toBeNull();
+    expect(httpConnectProxyFor('https://gw.example.com/x')).toBe('http://127.0.0.1:1');
+    expect(httpConnectProxyFor('https://[::1]:9443/x')).toBeNull();
+    expect(httpConnectProxyFor('https://[::1]:8443/x')).toBe('http://127.0.0.1:1');
+  });
+
+  it('matches an IP entry exactly, never as a suffix', () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
+    vi.stubEnv('NO_PROXY', '0.0.5,10.0.0.6');
+    expect(httpConnectProxyFor('https://10.0.0.5/x')).toBe('http://127.0.0.1:1');
+    expect(httpConnectProxyFor('https://10.0.0.6/x')).toBeNull();
+  });
+
   it('returns null on an unparseable target instead of throwing', () => {
     vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:1');
     expect(httpConnectProxyFor('not a url')).toBeNull();
