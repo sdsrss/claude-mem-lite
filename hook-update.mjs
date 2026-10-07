@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 // unreachable on exactly the broken-install state it exists to repair (2026-09-08).
 // tests/repair-path-no-native-dep.test.mjs fails on any package edge reachable from here.
 import { DB_DIR, CODE_DIR, claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
+import { workerDirGone } from './lib/worker-data-dir.mjs';
 import { debugCatch, debugLog } from './utils.mjs';
 import { NATIVE_BINDING_SOURCE_BUILD_CMD } from './lib/binding-probe.mjs';
 // Local manifest is fallback only — the active manifest is loaded from the
@@ -1514,6 +1515,9 @@ function readState() {
 }
 
 function saveState(state) {
+  // The update-check worker runs this after its release lookup; a data dir removed meanwhile
+  // stays removed (D#265, pre-tag review).
+  if (workerDirGone(STATE_DIR)) return;
   try {
     const dir = join(STATE_DIR, 'runtime'); // runtime-dir:stays-put — mkdir for update-state.json above
     mkdirSync(dir, { recursive: true });

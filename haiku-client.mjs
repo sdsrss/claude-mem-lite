@@ -20,6 +20,7 @@ import { randomUUID } from 'crypto';
 import { debugLog, debugCatch, parseJsonFromLLM } from './utils.mjs';
 import { DB_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
+import { workerDirGone } from './lib/worker-data-dir.mjs';
 import { httpConnectProxyFor, postViaConnectProxy, postDirectHttp } from './lib/proxy-fetch.mjs';
 import { resolveAnthropicBaseUrl } from './lib/anthropic-base-url.mjs';
 
@@ -40,6 +41,9 @@ import { resolveAnthropicBaseUrl } from './lib/anthropic-base-url.mjs';
  */
 function cliSpawnCwd() {
   const dir = join(resolveRuntimeDir(DB_DIR), 'cli-cwd');
+  // A background worker whose data dir was removed during its API attempt must not re-create
+  // it here (D#265); the spawn then fails on the missing cwd, and the worker gives up.
+  if (workerDirGone(DB_DIR)) return dir;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {

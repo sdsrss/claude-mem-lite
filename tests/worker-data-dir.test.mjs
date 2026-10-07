@@ -8,7 +8,16 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  readdirSync,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +26,8 @@ import { recordMetric } from '../lib/metrics.mjs';
 import { maybeSampleError } from '../lib/err-sampler.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { shouldRecordOnce } from '../lib/record-once.mjs';
+import { acquireLock } from '../lib/proc-lock.mjs';
+import { nativeBindingHintDue } from '../lib/native-binding-hint.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK_PATH = join(REPO, 'hook.mjs');
@@ -129,6 +140,111 @@ describe('a worker whose data dir is gone', () => {
     expect(fetches().length).toBeGreaterThan(0);
   });
 
+  // Removal DURING the run (pre-tag review, both lenses): the dispatch check above only sees a
+  // dir that was gone before the worker started. These remove it from inside the worker's own
+  // network call: the fetch stub deletes the data dir, then fails.
+  const readdirOr = (d) => {
+    try {
+      return `re-created: ${JSON.stringify(readdirSync(d, { recursive: true }))}`;
+    } catch {
+      return 'absent';
+    }
+  };
+  function midRunStub(home) {
+    const stub = join(home, 'remove-then-fail.cjs');
+    writeFileSync(
+      stub,
+      "globalThis.fetch = async () => { const fs = require('fs'); fs.appendFileSync(process.env.PROBE_DATA_DIR + '.stub-ran', 'x'); fs.rmSync(process.env.PROBE_DATA_DIR, { recursive: true, force: true }); throw new Error('offline'); };\n",
+    );
+    return stub;
+  }
+
+  // FAILS IF hook-update's saveState mkdirs runtime/ for a worker: the update check recorded its
+  // failed lookup and re-created ~/.claude-mem-lite/runtime/update-state.json.
+  it('update-check: a data dir removed during the lookup stays removed', () => {
+    const home = freshHome();
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+    const env = {
+      ...baseEnv(home),
+      PROBE_DATA_DIR: dataDir,
+      NODE_OPTIONS: `--require "${midRunStub(home)}"`,
+    };
+    for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) env[k] = '';
+    delete env.CLAUDE_MEM_SKIP_UPDATE;
+    const r = spawnSync(process.execPath, [HOOK_PATH, 'update-check'], {
+      cwd: home,
+      env: backgroundWorkerEnv(env),
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(`${dataDir}.stub-ran`), 'premise: the lookup reached the stub').toBe(true);
+    expect(existsSync(dataDir), readdirOr(dataDir)).toBe(false);
+  });
+
+  // FAILS IF cliSpawnCwd mkdirs runtime/cli-cwd for a worker: a keyed call that fails falls back
+  // to the claude CLI, whose private cwd is created under the runtime dir.
+  it('CLI fallback: a data dir removed during the API call stays removed', () => {
+    const home = freshHome();
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+    const cli = join(home, 'fake-claude.sh');
+    writeFileSync(cli, '#!/bin/sh\nexit 1\n');
+    chmodSync(cli, 0o755);
+    const env = {
+      ...baseEnv(home),
+      PROBE_DATA_DIR: dataDir,
+      NODE_OPTIONS: `--require "${midRunStub(home)}"`,
+      ANTHROPIC_API_KEY: 'sk-probe',
+      CLAUDE_CODE_PATH: cli,
+    };
+    for (const k of [
+      'HTTPS_PROXY',
+      'https_proxy',
+      'HTTP_PROXY',
+      'http_proxy',
+      'OPENROUTER_API_KEY',
+      'ANTHROPIC_BASE_URL',
+    ]) {
+      delete env[k];
+    }
+    const script =
+      `import { callHaiku } from ${JSON.stringify(pathToFileURL(join(REPO, 'haiku-client.mjs')).href)};` +
+      `console.log(JSON.stringify(await callHaiku('probe')));`;
+    const run = (e) =>
+      spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: home,
+        env: e,
+        encoding: 'utf8',
+        timeout: 60000,
+      });
+
+    const r = run(backgroundWorkerEnv(env));
+    expect(r.stdout.trim(), r.stderr).toBe('null');
+    expect(existsSync(`${dataDir}.stub-ran`), 'premise: the API leg reached the stub').toBe(true);
+    expect(existsSync(dataDir), readdirOr(dataDir)).toBe(false);
+
+    // Premise: unmarked, the same fallback does create the CLI's cwd, so the case above is not
+    // passing because the fallback never ran.
+    mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+    run(env);
+    expect(existsSync(join(dataDir, 'runtime', 'cli-cwd'))).toBe(true);
+  });
+
+  // FAILS IF acquireLock mkdirs the lock's directory for a worker (auto-maintain's lock lives in
+  // the runtime dir).
+  it('acquireLock in a worker does not create a missing lock directory, and does not take the lock', () => {
+    const dir = join(freshHome(), 'gone');
+    vi.stubEnv('CLAUDE_MEM_BG_WORKER', '1');
+    expect(acquireLock(join(dir, 'maintain.lock'))).toBeNull();
+    expect(existsSync(dir)).toBe(false);
+    vi.stubEnv('CLAUDE_MEM_BG_WORKER', '');
+    const release = acquireLock(join(dir, 'maintain.lock'));
+    expect(typeof release).toBe('function');
+    release();
+  });
+
   // FAILS IF ensureDb creates DB_DIR for a worker: every handler opens the database after its LLM
   // round-trip, which is when a sandbox or a data dir has had time to go.
   it('ensureDb in a worker throws instead of creating the data dir', () => {
@@ -164,6 +280,7 @@ describe('a worker whose data dir is gone', () => {
     ],
     ['recordHookError', (dir) => recordHookError('probe', new Error('probe'), dir), (dir) => dir],
     ['shouldRecordOnce', (dir) => shouldRecordOnce(dir, 'probe-', 'proj', 'k'), (dir) => dir],
+    ['nativeBindingHintDue', (dir) => nativeBindingHintDue(dir), (dir) => dir],
   ];
   it.each(sinks)('%s skips a missing dir in a worker and creates it otherwise', (_name, call, written) => {
     vi.stubEnv('CLAUDE_MEM_METRICS', '1');

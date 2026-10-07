@@ -332,7 +332,8 @@ export const SOURCE_FILES = [
   // Statically imported by cli/verify-apply.mjs.
   'lib/verify-apply-core.mjs',
   // Background workers never re-create a removed data dir (D#265). Statically imported by
-  // schema, hook, hook-shared, save-enrich and the metrics / error / hook-error sinks.
+  // schema, hook, hook-shared, hook-update, haiku-client, save-enrich, proc-lock,
+  // native-binding-hint, record-once and the metrics / error / hook-error sinks.
   'lib/worker-data-dir.mjs',
   // Per-table scrub helper for defense-in-depth at text-write INSERT paths.
   // Statically imported by hook-llm, hook-handoff, hook-optimize, hook,
