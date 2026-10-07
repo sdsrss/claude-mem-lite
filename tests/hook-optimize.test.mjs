@@ -1191,6 +1191,69 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect([row.importance, row.compressed_into ?? 0]).toEqual([2, 0]);
   });
 
+  // D#267. The hide branch reads "is this row protected?" in JS and then runs its UPDATE with no
+  // await in between, so only another process can change the answer inside that window, and the
+  // UPDATE's own WHERE is the only guard there. A handle that runs `afterRead` right after the
+  // matching SELECT stands in for that process.
+  function writeAfterRead(target, selectSql, afterRead) {
+    return new Proxy(target, {
+      get(t, prop) {
+        if (prop !== 'prepare') {
+          const v = t[prop];
+          return typeof v === 'function' ? v.bind(t) : v;
+        }
+        return (sql) => {
+          const stmt = t.prepare(sql);
+          if (sql !== selectSql) return stmt;
+          return {
+            get: (...args) => {
+              const row = stmt.get(...args);
+              afterRead(...args);
+              return row;
+            },
+          };
+        };
+      },
+    });
+  }
+
+  it('narrow re-enrich does not hide a row a person set importance on after the check read it', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'stamped from another process', narrative: 'body text for the row' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    let reads = 0;
+    const racing = writeAfterRead(db, 'SELECT importance_set_at FROM observations WHERE id = ?', () => {
+      reads++;
+      db.prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?').run(
+        Date.now(),
+        id,
+      );
+    });
+    callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+    const result = await executeReenrich(racing, 10);
+    expect(reads, 'premise: the write landed after the protection check read the row').toBe(1);
+    const row = db.prepare('SELECT compressed_into, optimized_at FROM observations WHERE id = ?').get(id);
+    expect(row.compressed_into ?? 0, 'hidden although a person had just set its importance').toBe(0);
+    expect([result.processed, row.optimized_at]).toEqual([0, null]);
+  });
+
+  it('narrow re-enrich does not hide a row that became a compression keeper after the check read it', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'adopted from another process', narrative: 'body text for the row' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    let reads = 0;
+    const racing = writeAfterRead(db, 'SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1', () => {
+      reads++;
+      insertObs(db, { title: 'member', narrative: 'member body', compressedInto: id });
+    });
+    callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+    const result = await executeReenrich(racing, 10);
+    expect(reads, 'premise: the member landed after the keeper check read the row').toBe(1);
+    const row = db.prepare('SELECT compressed_into, optimized_at FROM observations WHERE id = ?').get(id);
+    expect(row.compressed_into ?? 0, 'the new keeper, and with it its member, was hidden').toBe(0);
+    expect([result.processed, row.optimized_at]).toEqual([0, null]);
+  });
+
   // v6.21.0 pre-tag claims review: hiding a compression group's KEEPER hides every member
   // compressed into it (2eb44d1 guarded the five maintenance writers, not this one). A weekly
   // summary is exactly the thin row the narrow pool picks, and `optimize`'s default is narrow.
