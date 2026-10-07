@@ -262,6 +262,88 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       chmodSync(dir, 0o755);
     }
   });
+
+  // Pre-tag review of D#199. Every case above sets CLAUDE_MEM_SKIP_UPDATE, which answers Update
+  // state before it looks; with checks on (the default) it and Hook self-heal still graded the
+  // locked dir ("no state file (first run?)" over a state file that exists).
+  const doctorEnv = (s, extra = {}) => {
+    const env = { ...process.env, HOME: s.home, TMPDIR: s.root, PATH: `${s.bin}:${process.env.PATH}` };
+    env.MEM_NO_AUTO_ADOPT = '1';
+    for (const k of [
+      'CLAUDE_MEM_DIR',
+      'CLAUDE_CONFIG_DIR',
+      'CLAUDE_MEM_SKIP_UPDATE',
+      'OPENROUTER_API_KEY',
+      'ANTHROPIC_API_KEY',
+    ])
+      delete env[k];
+    return { ...env, ...extra };
+  };
+  const doctor = (s, env) =>
+    spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
+      cwd: s.root,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env,
+    });
+
+  it.skipIf(skip)(
+    'with update checks on, Update state and Hook self-heal do not grade the locked dir',
+    () => {
+      const s = sandbox();
+      const dir = join(s.home, '.claude-mem-lite');
+      mkdirSync(join(dir, 'runtime'), { recursive: true });
+      writeFileSync(join(dir, 'runtime', 'update-state.json'), '{}');
+      chmodSync(dir, 0o000);
+      try {
+        const r = doctor(s, doctorEnv(s));
+        expect(r.stdout).not.toMatch(/no state file \(first run\?\)/);
+        expect(r.stdout).not.toMatch(/✓ Hook self-heal/);
+        for (const what of ['Update state', 'Hook self-heal']) {
+          expect(r.stdout).toMatch(new RegExp(`⚠ ${what}: not checked — .* is not accessible`));
+        }
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
+
+  // A dir a `sudo` run created as root is usually 755: readable, not writable. Its checks read
+  // it correctly, so they run; only the ✗ says what is wrong (review P3-5).
+  it.skipIf(skip)('a readable but unwritable data dir is a ✗, and the checks that read it still run', () => {
+    const { s, data, restore } = locked();
+    chmodSync(data, 0o500);
+    try {
+      const r = run(s, ['doctor']);
+      expect(r.stdout).toMatch(
+        new RegExp(
+          `✗ Data directory: ${data} is not accessible \\(EACCES\\) — it can be read but not written`,
+        ),
+      );
+      expect(r.stdout).not.toMatch(/not checked — .* is not accessible/);
+      expect(r.stdout).toMatch(/DB schema: /);
+    } finally {
+      restore();
+    }
+  });
+
+  // One directory spelled two ways (a trailing slash on CLAUDE_MEM_DIR) is still one directory:
+  // one ✗, not a second one for the "separate" code dir (review P3-6).
+  it.skipIf(skip)('CLAUDE_MEM_DIR naming the code dir with a trailing slash counts the lock once', () => {
+    const s = sandbox();
+    const dir = join(s.home, '.claude-mem-lite');
+    mkdirSync(join(dir, 'runtime'), { recursive: true });
+    chmodSync(dir, 0o000);
+    try {
+      const r = doctor(s, doctorEnv(s, { CLAUDE_MEM_DIR: `${dir}/`, CLAUDE_MEM_SKIP_UPDATE: '1' }));
+      expect(r.stdout).not.toMatch(/✗ Entry points/);
+      expect(r.stdout).toMatch(/⚠ Entry points: not checked/);
+      // The sandbox's settings.json carries a fixture hook, so count the lock's own ✗ lines.
+      expect(r.stdout.match(/✗ .* is not accessible/g)).toHaveLength(1);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
 });
 
 // A failed `repair` left its staging dir behind: the catch ended in process.exit(1), which

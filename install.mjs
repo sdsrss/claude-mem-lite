@@ -1980,19 +1980,25 @@ async function doctor() {
   }
 
   const dataDirDenied = dataDirAccessError();
+  // D#199: a directory this process cannot ENTER or LIST reads as an empty one to
+  // existsSync/statSync, so the checks that look inside it said "no database yet" (✓), "DB 0.0MB"
+  // (✓) and "not found". Only those checks stand down, and only then: a readable directory that
+  // cannot be written (the usual 755 left by a `sudo` run) still reads correctly.
+  const readMode = fsConstants.R_OK | fsConstants.X_OK;
+  const dataDirUnreadable = dataDirDenied ? dataDirAccessError(MEM_DATA_DIR, readMode) : null;
   if (dataDirDenied) {
     fail(
-      `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — checks that read it ` +
-        `say "not checked". Fix: ${dataDirAccessRemedy()}`,
+      `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — ` +
+        (dataDirUnreadable ? 'checks that read it say "not checked"' : 'it can be read but not written') +
+        `. Fix: ${dataDirAccessRemedy()}`,
     );
     issues++;
   }
-  // D#199: a directory this process cannot enter reads as an EMPTY one to existsSync/statSync,
-  // so the checks that look inside it said "no database yet" (✓), "DB 0.0MB" (✓) and "not found".
   const notCheckedDenied = (what, dir = MEM_DATA_DIR) =>
     dwarn(`${what}: not checked — ${dir} is not accessible`);
   // The code dir is the data dir in the default shape; under CLAUDE_MEM_DIR it is checked apart.
-  const codeDirDenied = INSTALL_DIR === MEM_DATA_DIR ? dataDirDenied : dataDirAccessError(INSTALL_DIR);
+  const codeIsDataDir = sameDir(INSTALL_DIR, MEM_DATA_DIR);
+  const codeDirDenied = codeIsDataDir ? dataDirUnreadable : dataDirAccessError(INSTALL_DIR, readMode);
 
   // Which code homes does this machine actually run? A machine can hold three
   // at once (plugin cache / ~/.claude-mem-lite / npm-global) and each owns its
@@ -2054,7 +2060,7 @@ async function doctor() {
   // too-new file is still a real number; a checkmark on it is not.
   let dbWriteBlocked = null;
   let dbUnusableHere = false;
-  if (dataDirDenied) {
+  if (dataDirUnreadable) {
     notCheckedDenied('DB schema');
   } else if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
@@ -2165,7 +2171,7 @@ async function doctor() {
   } else {
     // A locked code dir reads as one with no code in it (D#199). In the default shape it IS the
     // data dir, already a ✗ above; under CLAUDE_MEM_DIR it is not, and this is the only line.
-    if (codeDirDenied && INSTALL_DIR === MEM_DATA_DIR) {
+    if (codeDirDenied && codeIsDataDir) {
       notCheckedDenied('Entry points', INSTALL_DIR);
     } else if (codeDirDenied) {
       fail(
@@ -2184,7 +2190,12 @@ async function doctor() {
   // fire. That silence is intentional but hides failure — it drops a breakage
   // marker so this check can surface the otherwise-invisible degraded state.
   const brokenMarker = join(MEM_RUNTIME_DIR, 'hook-launcher-broken');
-  if (existsSync(brokenMarker)) {
+  // The marker lives in the runtime dir, which is inside the data dir unless CLAUDE_MEM_RUNTIME_DIR
+  // moves it elsewhere.
+  const runtimeInDataDir = (resolve(MEM_RUNTIME_DIR) + sep).startsWith(resolve(MEM_DATA_DIR) + sep);
+  if (dataDirUnreadable && runtimeInDataDir) {
+    notCheckedDenied('Hook self-heal');
+  } else if (existsSync(brokenMarker)) {
     let detail = '';
     try {
       const b = JSON.parse(readFileSync(brokenMarker, 'utf8'));
@@ -2231,7 +2242,7 @@ async function doctor() {
   // check anywhere. Cheap probes only (DB file + .bak aggregate, no tree walk).
   // The budget itself is enforced by lib/db-backup on every new snapshot; this
   // check surfaces stores that predate the budget or exceed it between snapshots.
-  if (dataDirDenied) notCheckedDenied('Disk footprint');
+  if (dataDirUnreadable) notCheckedDenied('Disk footprint');
   else
     try {
       const { listSnapshots, backupBudgetBytes } = await import('./lib/db-backup.mjs');
@@ -2406,7 +2417,7 @@ async function doctor() {
   // and a check that reports on a thing you do not have is noise.
 
   // Database
-  if (dataDirDenied) {
+  if (dataDirUnreadable) {
     notCheckedDenied('Database');
   } else if (existsSync(DB_PATH)) {
     try {
@@ -2559,6 +2570,8 @@ async function doctor() {
           ? 'CLAUDE_MEM_SKIP_UPDATE is set'
           : `${INSTALL_DIR} is a development install (a git checkout or symlinks)`;
       ok(`Update state: not checked — ${why}`);
+    } else if (dataDirUnreadable) {
+      notCheckedDenied('Update state');
     } else if (existsSync(stateFile)) {
       const state = JSON.parse(readFileSync(stateFile, 'utf8'));
       const parts = [];
@@ -2655,7 +2668,7 @@ async function doctor() {
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;
     const { checkDevDrift } = await import('./lib/doctor-drift.mjs');
-    const r = skipDrift || codeDirDenied ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
+    const r = skipDrift ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
     const devRemedy = `re-run: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install --dev`;
     const nameList = (files, count) => {
       const suffix = count > files.length ? ` +${count - files.length} more` : '';
@@ -2749,7 +2762,7 @@ async function doctor() {
     // ~/.claude-mem-lite, and its hooks run from ${CLAUDE_PLUGIN_ROOT}/scripts/ instead.
     const skipScripts = !shape.managed && !!shape.activePluginVersion;
     const { checkHookScriptDrift, HOOK_SCRIPT_ENTRY_POINTS } = await import('./lib/doctor-drift.mjs');
-    const h = skipScripts || codeDirDenied ? null : checkHookScriptDrift(INSTALL_DIR, HOOK_SCRIPT_FILES);
+    const h = skipScripts ? null : checkHookScriptDrift(INSTALL_DIR, HOOK_SCRIPT_FILES);
     // cli.mjs, not install.mjs: the reader of this line has an install that is
     // missing files, and install.mjs is the one entry that cannot survive that —
     // its static imports resolve before its first statement. cli.mjs has no static
@@ -3673,12 +3686,27 @@ async function rebuildBinding() {
  * returns for a permission error and a live peer alike — as "Another install/repair is in
  * progress" and exited 0. Returns the error code, or null when accessible or absent.
  */
-function dataDirAccessError(dir = MEM_DATA_DIR) {
+function dataDirAccessError(
+  dir = MEM_DATA_DIR,
+  mode = fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK,
+) {
   try {
-    accessSync(dir, fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK);
+    accessSync(dir, mode);
     return null;
   } catch (e) {
     return e.code === 'ENOENT' ? null : e.code || 'EACCES';
+  }
+}
+
+// Same directory however it is spelled (a trailing slash, a symlinked HOME). stat works on a
+// locked directory itself, so dev + inode decide; resolve() when either cannot be stat'ed.
+function sameDir(a, b) {
+  try {
+    const x = statSync(a);
+    const y = statSync(b);
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return resolve(a) === resolve(b);
   }
 }
 
