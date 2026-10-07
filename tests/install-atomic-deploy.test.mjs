@@ -5,7 +5,8 @@
 // starting in that window imported an empty or half-written module. The weekly sandbox
 // harness (tests/sandbox/phaseB-npm.mjs B10) went red on it three Mondays in four with
 // `SyntaxError: ... './lib/low-signal-patterns.mjs' does not provide an export named
-// 'buildNotLowSignalSql'` — on a SAME-version re-install, so no version mix was needed.
+// 'buildNotLowSignalSql'` on 10-05; `recordMetric` on 09-28, `likeLiteral` / `citeFactorClause`
+// on 09-14) — on a SAME-version re-install, so no version mix was needed.
 // A probe re-copying SOURCE_FILES under 8 concurrent importers (2026-10-06): in place
 // 12 of 2386 overlapping imports failed, that signature among them; temp + rename 0 of 2388.
 //
@@ -209,7 +210,7 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
     expect(existsSync(marker)).toBe(false);
   });
 
-  it('install() deploys the code and its dependencies inside one barrier, after the directory migration', () => {
+  it('install() prepares the dirs, then deploys the code and its dependencies inside one barrier', () => {
     // install() itself is not unit-runnable (npm, MCP registration, settings.json), so its
     // wiring is read from source, comments stripped so a commented-out call cannot satisfy it.
     const src = readFileSync(join(REPO, 'install.mjs'), 'utf8');
@@ -223,5 +224,66 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
     expect(body).toMatch(
       /prepareInstallDirs\(\);\s*await withSwapBarrier\(async \(\) => \{\s*deployCodeTree\(IS_DEV\);\s*await installDependencies\(IS_DEV\);\s*\}\);/,
     );
+  });
+});
+
+describe('install: the swap marker under a relocated data dir and a runtime override', () => {
+  // The marker is installation identity: the launcher reads it under CLAUDE_MEM_DIR's runtime dir
+  // and deliberately NOT under CLAUDE_MEM_RUNTIME_DIR (a per-harness override it keeps for hook
+  // markers). The default-env test above cannot tell those apart from the home-rooted dir.
+  let home;
+  let dataDir;
+  let rtDir;
+  let install;
+  const saved = {};
+
+  beforeAll(async () => {
+    home = sandbox('mem-atomic-reloc-');
+    dataDir = join(home, 'relocated-data');
+    rtDir = join(home, 'runtime-override');
+    for (const k of ['HOME', 'CLAUDE_MEM_DIR', 'CLAUDE_MEM_RUNTIME_DIR']) saved[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.CLAUDE_MEM_DIR = dataDir;
+    process.env.CLAUDE_MEM_RUNTIME_DIR = rtDir;
+    vi.resetModules();
+    install = await import('../install.mjs');
+  });
+
+  afterAll(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('the launcher, given the same env, skips a fire while install holds the barrier', async () => {
+    const ranFlag = join(home, 'entry-ran.txt');
+    const entry = join(home, 'entry.mjs');
+    writeFileSync(
+      entry,
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(ranFlag)}, 'ran');\n`,
+    );
+    const env = { ...process.env, HOME: home, CLAUDE_MEM_DIR: dataDir, CLAUDE_MEM_RUNTIME_DIR: rtDir };
+    const fire = () =>
+      spawnSync(process.execPath, [join(REPO, 'scripts', 'hook-launcher.mjs'), entry], {
+        env,
+        input: '{}',
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+
+    const during = await install.withSwapBarrier(() => {
+      const r = fire();
+      return {
+        code: r.status,
+        ran: existsSync(ranFlag),
+        underDataDir: existsSync(join(dataDir, 'runtime', 'swap-in-progress')),
+      };
+    });
+    expect(during).toEqual({ code: 0, ran: false, underDataDir: true });
+
+    const after = fire();
+    expect(after.status).toBe(0);
+    expect(existsSync(ranFlag)).toBe(true);
   });
 });

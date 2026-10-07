@@ -17,6 +17,7 @@ import {
   collectDiagnostics,
   ALLOWED_WARNINGS,
   ALLOWED_ERRORS,
+  reportLines,
 } from '../scripts/validate-plugin-manifests.mjs';
 
 const PLUGIN_NAME = JSON.parse(
@@ -144,6 +145,15 @@ describe('classifyReport', () => {
     expect(v.ok).toBe(false);
     expect(v.errors).toHaveLength(1);
     expect(v.allowedErrors).toEqual([]);
+  });
+
+  it('an allowed error is still printed, with its reason, and the target reads ok', () => {
+    const v = classifyReport(report({ manifestErrors: [reservedNameError(PLUGIN_NAME)] }));
+    const { err, out } = reportLines('plugin.json', v);
+    expect(err).toEqual([]);
+    expect(out.join('\n')).toContain(`known ERROR plugin.json: Plugin name "${PLUGIN_NAME}" is reserved`);
+    expect(out.join('\n')).toContain('(allowed: reserved prefix');
+    expect(out.at(-1)).toBe('ok   plugin.json');
   });
 
   it('an allowed error does not hide another error beside it', () => {

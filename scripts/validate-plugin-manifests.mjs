@@ -97,6 +97,25 @@ export function classifyReport(report, allowlist = ALLOWED_WARNINGS, errorAllowl
   return { ok: errors.length === 0 && unexpected.length === 0, errors, unexpected, allowed, allowedErrors };
 }
 
+/**
+ * What main() prints for one target: `err` lines to stderr, `out` lines to stdout. Kept pure so
+ * that an allowed diagnostic staying VISIBLE is tested, not just its classification.
+ * @returns {{err: string[], out: string[]}}
+ */
+export function reportLines(target, v) {
+  return {
+    err: [
+      ...v.errors.map((e) => `  ERROR  ${e.file}: ${e.message}`),
+      ...v.unexpected.map((w) => `  WARN   ${w.file}: ${w.message}`),
+    ],
+    out: [
+      ...v.allowed.map((w) => `  known  ${w.file}: ${w.message}\n         (allowed: ${w.why})`),
+      ...v.allowedErrors.map((e) => `  known ERROR ${e.file}: ${e.message}\n         (allowed: ${e.why})`),
+      `${v.ok ? 'ok  ' : 'FAIL'} ${target}`,
+    ],
+  };
+}
+
 const TARGETS = ['.claude-plugin/marketplace.json', '.claude-plugin/plugin.json'];
 
 function main() {
@@ -124,12 +143,9 @@ function main() {
       continue;
     }
     const v = classifyReport(report);
-    for (const e of v.errors) console.error(`  ERROR  ${e.file}: ${e.message}`);
-    for (const w of v.unexpected) console.error(`  WARN   ${w.file}: ${w.message}`);
-    for (const w of v.allowed) console.log(`  known  ${w.file}: ${w.message}\n         (allowed: ${w.why})`);
-    for (const e of v.allowedErrors)
-      console.log(`  known ERROR ${e.file}: ${e.message}\n         (allowed: ${e.why})`);
-    console.log(`${v.ok ? 'ok  ' : 'FAIL'} ${target}`);
+    const lines = reportLines(target, v);
+    for (const l of lines.err) console.error(l);
+    for (const l of lines.out) console.log(l);
     if (!v.ok) failed = true;
   }
   if (failed) process.exitCode = 1;

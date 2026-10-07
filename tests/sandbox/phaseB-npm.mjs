@@ -576,9 +576,9 @@ setPhase('B10: hooks firing DURING an in-place install');
 // R10-P2-12 / D#223: install() / repair overwrote ~/.claude-mem-lite file by file, in place
 // (copyFileSync truncates, then writes) and with no swap barrier, while PreToolUse /
 // PostToolUse import that same tree on every tool call. This section went red on the weekly
-// schedule three runs in four (2026-09-14, 09-28, 10-05) with a fire importing a truncated
-// module — `does not provide an export named 'buildNotLowSignalSql'` — on a same-version
-// re-install. install() now copies by rename and arms the launcher's swap marker around the
+// schedule three runs in four (2026-09-14, 09-28, 10-05), each time a fire importing a truncated
+// module — `does not provide an export named …`: `likeLiteral` / `citeFactorClause`,
+// `recordMetric`, `buildNotLowSignalSql` — on a same-version re-install. install() now copies by rename and arms the launcher's swap marker around the
 // deploy + npm install (tests/install-atomic-deploy.test.mjs holds both CI-side).
 //
 // This is a race, so it gets a stress probe, not a demonstration: fire the launcher in a

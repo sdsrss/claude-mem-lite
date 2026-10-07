@@ -482,8 +482,9 @@ export async function withSwapBarrier(fn) {
   }
 }
 
-// Runs BEFORE the swap barrier: the barrier's marker lives under MEM_DATA_DIR, so arming it
-// first would create ~/.claude-mem-lite and the migration below would never see it absent.
+// Creates the data dirs the swap barrier then writes its marker into. The legacy-dir migration
+// here runs only under CLAUDE_MEM_DIR relocation: in the default shape runLockedInstall's
+// install.lock has created ~/.claude-mem-lite before install() starts (pre-existing, D#238).
 function prepareInstallDirs() {
   // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
   const oldUnhidden = join(homedir(), 'claude-mem-lite');
@@ -1284,7 +1285,8 @@ async function install() {
 
   prepareInstallDirs();
   // Both steps rewrite the tree hooks import — the code, then node_modules — so one swap
-  // barrier spans them (D#223). installDependencies may process.exit(1): the marker it leaves
+  // barrier spans them (D#223), for its first two minutes: the launcher ignores an older marker,
+  // and npm install has no timeout. installDependencies may process.exit(1): the marker it leaves
   // names a dead pid, which the launcher ignores.
   await withSwapBarrier(async () => {
     deployCodeTree(IS_DEV);

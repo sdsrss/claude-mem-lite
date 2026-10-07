@@ -177,9 +177,9 @@ measures the home tree and passes anyway. The harness now refuses such a base.
   shape (`ERR_MODULE_NOT_FOUND`) the report names. Producing that needs an install whose
   tree differs from the one on disk. `install()` was left alone per R10 §8.
   **Superseded 2026-10-06 (D#223): the bound did not hold, and the version-transition premise
-  was wrong.** The scheduled run went red on B10 on 2026-09-14, 09-28 and 10-05 (green 09-21)
-  with `SyntaxError: … './lib/low-signal-patterns.mjs' does not provide an export named
-  'buildNotLowSignalSql'` on the SAME-version re-install: copyFileSync opens the live file with
+  was wrong.** The scheduled run went red on B10 on 2026-09-14, 09-28 and 10-05 (green 09-21),
+  each time a `SyntaxError: … does not provide an export named …` on the SAME-version re-install
+  (09-14 `likeLiteral` / `citeFactorClause`, 09-28 `recordMetric`, 10-05 `buildNotLowSignalSql`): copyFileSync opens the live file with
   O_TRUNC, so an importer can read it empty or half-written without any version mix. A probe
   re-copying SOURCE_FILES into a scratch tree under 8 concurrent importers (`main` @ `a122250`
   tree, this machine): in place 12 of 2386 overlapping imports failed, that signature among
