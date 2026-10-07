@@ -69,7 +69,8 @@ fi
 # Not "is this ~/.claude": CLAUDE_CONFIG_DIR=~/.claude still moves .claude.json into ~/.claude.
 # Another spelling of a path (`cfg/`, `~/./.claude`, a symlinked dir) must key the same file: -ef
 # matches a default that exists, and any other path is hashed by its directory's physical path when
-# that directory exists (it does once Claude Code has run: the plugin runs from its plugins/).
+# that directory exists (it does once Claude Code has run: the plugin runs from its plugins/). So
+# both callers pass the FILE, whose directory is the config dir itself.
 marker_suffix() {
   [[ "$1" == "$2" || "$1" -ef "$2" ]] && return 0
   local key="$1"
@@ -428,7 +429,7 @@ fi
 #    entries. /plugin uninstall does not touch settings.json.
 # CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in the config
 # home's settings.json — one warning per config home, regardless of where the data lives.
-RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONFIG_DIR" "$CC_DEFAULT_CONFIG_DIR")"
+RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONFIG_DIR/settings.json" "$CC_DEFAULT_CONFIG_DIR/settings.json")"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
   SETTINGS="$CC_CONFIG_DIR/settings.json"
   if [[ -f "$SETTINGS" ]]; then

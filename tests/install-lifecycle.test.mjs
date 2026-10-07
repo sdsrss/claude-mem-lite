@@ -1021,16 +1021,24 @@ describe('install lifecycle checks', () => {
         }
         expect(dedupMarkers(), 'a second marker for the same .claude.json').toEqual(keyed);
 
-        // A non-default profile, keyed by its own hash: the same under a trailing slash.
+        // A non-default profile, keyed by its own hash: the same under a trailing slash, `/.` and a
+        // symlink to it (delta review: the residue key once hashed the dir's parent plus its name).
         const work = join(home, 'work-profile');
         mkdirSync(work, { recursive: true });
         writeFileSync(join(work, 'settings.json'), legacyHooks);
+        symlinkSync(work, join(home, 'work-link'));
         expect(runSetup(home, work).stderr, 'premise: the first run warns').toContain(
           'Legacy direct-install hooks',
         );
-        expect(runSetup(home, `${work}/`).stderr, 'the trailing slash re-ran the warning').not.toContain(
-          'Legacy direct-install hooks',
-        );
+        for (const spelling of [`${work}/`, `${work}/.`, join(home, 'work-link')]) {
+          expect(runSetup(home, spelling).stderr, `${spelling} re-ran the warning`).not.toContain(
+            'Legacy direct-install hooks',
+          );
+        }
+        expect(
+          readdirSync(runtime).filter((n) => n.startsWith('.residue-warned-')),
+          'one residue marker per settings.json',
+        ).toHaveLength(2);
       } finally {
         rmSync(home, { recursive: true, force: true });
       }

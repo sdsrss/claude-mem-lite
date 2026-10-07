@@ -253,20 +253,26 @@ describe('bash/Node disable-detection parity', () => {
   // cwd holding `<value>/settings.json` that switches the plugin off, so it acts exactly when it
   // calls the value relative and reads the enabled ~/.claude instead.
   describe('bash takes the CLAUDE_CONFIG_DIR values Node takes as absolute on that platform', () => {
-    const VALUES = ['C:/cfg', 'C:\\cfg', '\\\\srv\\cfg', '\\cfg', 'C:cfg', 'cfg'];
+    // ABS stands for an absolute path inside the cwd sandbox, so each arm also has a value both
+    // platforms call absolute (delta review: the posix arm had none and could not catch a bash that
+    // called everything relative). Judged as '/abs'.
+    const ABS = '<absolute>';
+    const VALUES = [ABS, 'C:/cfg', 'C:\\cfg', '\\\\srv\\cfg', '\\cfg', 'C:cfg', 'cfg'];
+    const judged = (v) => (v === ABS ? '/abs' : v);
     function bashActs(value, ostype) {
       const home = sandbox('mem-cfgabs-home-');
       const cwd = sandbox('mem-cfgabs-cwd-');
       const memDir = sandbox('mem-cfgabs-data-');
       mkdirSync(join(home, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), settingsWith(true));
-      mkdirSync(join(cwd, value), { recursive: true });
-      writeFileSync(join(cwd, value, 'settings.json'), settingsWith(false));
+      const cfgDir = value === ABS ? join(cwd, 'abs-cfg') : join(cwd, value);
+      mkdirSync(cfgDir, { recursive: true });
+      writeFileSync(join(cfgDir, 'settings.json'), settingsWith(false));
       const env = {
         ...process.env,
         HOME: home,
         OSTYPE: ostype,
-        CLAUDE_CONFIG_DIR: value,
+        CLAUDE_CONFIG_DIR: value === ABS ? cfgDir : value,
         CLAUDE_MEM_DIR: memDir,
         CLAUDE_PROJECT_DIR: '/tmp/org/proj',
         CLAUDE_MEM_HOOK_RUNNING: '',
@@ -287,14 +293,17 @@ describe('bash/Node disable-detection parity', () => {
     it('a Windows shell (OSTYPE=msys, cygwin) follows path.win32.isAbsolute', () => {
       for (const ostype of ['msys', 'cygwin']) {
         const got = VALUES.map((v) => [v, bashActs(v, ostype) ? 'relative' : 'absolute']);
-        expect(got, ostype).toEqual(VALUES.map((v) => [v, win32.isAbsolute(v) ? 'absolute' : 'relative']));
+        expect(got, ostype).toEqual(
+          VALUES.map((v) => [v, win32.isAbsolute(judged(v)) ? 'absolute' : 'relative']),
+        );
         expect(new Set(got.map(([, k]) => k)).size, 'premise: the values split both ways').toBe(2);
       }
     });
 
     it('elsewhere (OSTYPE=linux-gnu) follows path.posix.isAbsolute', () => {
       const got = VALUES.map((v) => [v, bashActs(v, 'linux-gnu') ? 'relative' : 'absolute']);
-      expect(got).toEqual(VALUES.map((v) => [v, posix.isAbsolute(v) ? 'absolute' : 'relative']));
+      expect(got).toEqual(VALUES.map((v) => [v, posix.isAbsolute(judged(v)) ? 'absolute' : 'relative']));
+      expect(new Set(got.map(([, k]) => k)).size, 'premise: the values split both ways').toBe(2);
     });
 
     // setup.sh decides the same question for the files it edits; its behaviour is in
