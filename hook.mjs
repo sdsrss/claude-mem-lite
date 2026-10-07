@@ -241,6 +241,7 @@ import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
+import { claudeConfigDir } from './lib/data-paths.mjs';
 // Prevent recursive hooks from background claude -p calls
 // Background workers (llm-episode, llm-summary) are exempt — they're ours
 const event = process.argv[2];
@@ -274,7 +275,7 @@ const BG_EVENTS = new Set([
 // install.mjs already holds a parsed settings object when it asks, this process does not.
 function pluginDisabledHere() {
   try {
-    const settingsPath = join(homedir(), '.claude', 'settings.json');
+    const settingsPath = join(claudeConfigDir(), 'settings.json');
     return isPluginExplicitlyDisabled(JSON.parse(readFileSync(settingsPath, 'utf8')));
   } catch {
     // Missing or unparseable settings.json → not disabled. Fail OPEN: a corrupt file must

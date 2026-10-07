@@ -21,13 +21,13 @@ import {
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 // lib/data-paths.mjs, NOT schema.mjs: this module is what install.mjs::repair() imports to
 // reach the signature-verified release path, and schema.mjs statically imports
 // better-sqlite3 — so importing two path constants from there made the verified repair
 // unreachable on exactly the broken-install state it exists to repair (2026-09-08).
 // tests/repair-path-no-native-dep.test.mjs fails on any package edge reachable from here.
-import { DB_DIR, CODE_DIR } from './lib/data-paths.mjs';
+import { DB_DIR, CODE_DIR, claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
 import { debugCatch, debugLog } from './utils.mjs';
 import { NATIVE_BINDING_SOURCE_BUILD_CMD } from './lib/binding-probe.mjs';
 // Local manifest is fallback only — the active manifest is loaded from the
@@ -1100,7 +1100,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // guard rejects. Failure is non-fatal — a stale entry is noisy, not broken, and must
     // never roll back an otherwise-good update.
     try {
-      const settingsPath = join(homedir(), '.claude', 'settings.json');
+      const settingsPath = join(claudeConfigDir(), 'settings.json');
       if (existsSync(settingsPath)) {
         const { pruneDanglingMemHooks } = await import('./lib/hook-prune.mjs');
         const before = JSON.parse(readFileSync(settingsPath, 'utf8'));
@@ -1129,7 +1129,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // server was deleted on every plugin update that re-synced a direct install.
     try {
       if (isPluginMode()) {
-        const claudeJsonPath = join(homedir(), '.claude.json');
+        const claudeJsonPath = claudeStatePath();
         const cfg = JSON.parse(readFileSync(claudeJsonPath, 'utf8'));
         let changed = false;
         for (const k of ['mem', 'mem-lite']) {
@@ -1224,7 +1224,7 @@ export async function syncDataDirFromCache(opts = {}) {
     let sourceDir = opts.sourceDir || null;
     if (!sourceDir) {
       const cacheBase =
-        opts.cacheBase || join(homedir(), '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+        opts.cacheBase || join(claudeConfigDir(), 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
       if (!existsSync(cacheBase)) return { synced: false, reason: 'no-cache' };
       const versions = readdirSync(cacheBase)
         .filter((n) => /^\d+\.\d+/.test(n))
@@ -1364,7 +1364,7 @@ function copyReleaseIntoStaging(
 // appearing in a serialized hooks block) so the two cannot disagree about whether
 // settings.json owns the hooks.
 function hasInstallManagedSettingsHooks() {
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  const settingsPath = join(claudeConfigDir(), 'settings.json');
   if (!existsSync(settingsPath)) return false;
   let s;
   try {
@@ -1406,7 +1406,7 @@ export function clearCacheHookResidue() {
   // status/doctor then see the shape of a healthy plugin-only install. Inlined
   // here for the same reason the rest of this function is (see header).
   if (!hasInstallManagedSettingsHooks()) return 0;
-  const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+  const cacheBase = join(claudeConfigDir(), 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
   if (!existsSync(cacheBase)) return 0;
   let cleared = 0;
   for (const ver of readdirSync(cacheBase)) {
@@ -1455,7 +1455,7 @@ function isSameDir(a, b) {
 }
 
 export function prunePluginCache() {
-  const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+  const cacheBase = join(claudeConfigDir(), 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
   if (!existsSync(cacheBase)) return 0;
 
   const entries = readdirSync(cacheBase)
@@ -1479,7 +1479,7 @@ export function prunePluginCache() {
   const runningRoot = process.env.CLAUDE_PLUGIN_ROOT;
   let recordedRoot = null;
   try {
-    recordedRoot = detectInstallShape({ home: homedir() }).activePluginVersion?.root || null;
+    recordedRoot = detectInstallShape().activePluginVersion?.root || null;
   } catch {
     /* best-effort — a failure here must not stop pruning entirely */
   }

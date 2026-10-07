@@ -4,6 +4,17 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## Unreleased
 
+- **Fix: with `CLAUDE_CONFIG_DIR` set, the installer, updates and hooks use that directory.**
+  Claude Code keeps `settings.json`, `plugins/` and `.claude.json` in `CLAUDE_CONFIG_DIR` when it
+  is set (checked on 2.1.292). The plugin still used `~/.claude` and `~/.claude.json` in about 25
+  places. So `install` wrote its hooks where Claude Code never reads them; the disabled-plugin
+  check read the wrong `settings.json`; and with two profiles, the plugin's session-start setup
+  and `self-update` pruned the other profile's plugin cache and edited its `.claude.json`. They
+  now all follow the variable when it is set to an absolute path; with it unset nothing changes.
+  **If you set `CLAUDE_CONFIG_DIR` and installed with npm or npx**, run `claude-mem-lite install`
+  once more with the variable set, so the hooks land in your config directory. Plugin installs
+  need nothing. Entries an older version wrote into `~/.claude/settings.json` stay there; if no
+  other profile uses `~/.claude`, `env -u CLAUDE_CONFIG_DIR claude-mem-lite cleanup-hooks` removes them.
 - **Fix: `doctor` warns when the update check is failing.** A failed release lookup advanced
   `last check` like a successful one and recorded nothing else, so `doctor` printed a fresh date
   in green while every lookup behind a proxy failed from 2026-08-19 to 2026-10-07 (fixed in

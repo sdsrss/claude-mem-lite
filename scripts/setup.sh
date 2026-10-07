@@ -36,6 +36,19 @@ fi
 # enough on its own, and aborting here would fail the user's session start.
 CODE_DIR="$HOME/.claude-mem-lite"
 DB_DIR="$CODE_DIR"
+# Claude Code's config home, as lib/data-paths.mjs claudeConfigDir resolves it: an absolute
+# CLAUDE_CONFIG_DIR, else ~/.claude (a relative value is ignored). The plugin cache, settings.json
+# and .claude.json all live there; with the variable set, ~/.claude is another profile's.
+case "${CLAUDE_CONFIG_DIR:-}" in
+  /* | [A-Za-z]:[\\/]*)
+    CC_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
+    CC_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+    ;;
+  *)
+    CC_CONFIG_DIR="$HOME/.claude"
+    CC_STATE_FILE="$HOME/.claude.json"
+    ;;
+esac
 RUNTIME_DIR="$CODE_DIR/runtime"
 if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
   # shellcheck disable=SC2016  # node script single-quoted on purpose; path passed via env, not shell expansion
@@ -306,7 +319,7 @@ fi
 MCP_MIGRATION="$CODE_DIR/runtime/.mcp-dedup-v2.78"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$MCP_MIGRATION" ]]; then
   # shellcheck disable=SC2016  # node script single-quoted on purpose; CLAUDE_JSON passed via env, not shell expansion
-  CLAUDE_JSON="$HOME/.claude.json" node -e '
+  CLAUDE_JSON="$CC_STATE_FILE" node -e '
     const fs = require("fs");
     let changed = false;
     // Remove stale global MCP registrations (plugin .mcp.json handles it).
@@ -338,7 +351,7 @@ fi
 
 # 8. Prune old plugin cache versions (keep latest 3)
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
-  CACHE_DIR="$HOME/.claude/plugins/cache/sdsrss/claude-mem-lite"
+  CACHE_DIR="$CC_CONFIG_DIR/plugins/cache/sdsrss/claude-mem-lite"
   if [[ -d "$CACHE_DIR" ]]; then
     # List version dirs sorted by semver descending, skip top 3
     # Use glob + while-read for bash 3.2 (macOS) compatibility (no mapfile, no `ls | grep`)
@@ -389,7 +402,7 @@ fi
 # ~/.claude/settings.json — one machine, one warning, regardless of where the data lives.
 RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
-  SETTINGS="$HOME/.claude/settings.json"
+  SETTINGS="$CC_CONFIG_DIR/settings.json"
   if [[ -f "$SETTINGS" ]]; then
     SETTINGS_PATH="$SETTINGS" node -e '
       const fs = require("fs");

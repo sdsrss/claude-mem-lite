@@ -14,16 +14,15 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { claudeConfigDirFor } from './lib/data-paths.mjs';
 
 export const DEFAULT_MARKETPLACE = 'sdsrss';
 export const DEFAULT_PLUGIN = 'claude-mem-lite';
 
 function cacheBaseFor(opts) {
-  const home = opts?.home || homedir();
   const mp = opts?.marketplace || DEFAULT_MARKETPLACE;
   const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  return join(home, '.claude', 'plugins', 'cache', mp, plugin);
+  return join(claudeConfigDirFor(opts?.home), 'plugins', 'cache', mp, plugin);
 }
 
 export function scanPluginCacheHookPollution(opts) {
@@ -104,9 +103,8 @@ export function pluginCacheHookEvents(root) {
 }
 
 export function hasInstallManagedHooks(opts) {
-  const home = opts?.home || homedir();
   const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  const settingsPath = join(home, '.claude', 'settings.json');
+  const settingsPath = join(claudeConfigDirFor(opts?.home), 'settings.json');
   if (!existsSync(settingsPath)) return false;
   try {
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
@@ -127,7 +125,7 @@ export function hasInstallManagedHooks(opts) {
  * this repo keeps paying for.
  */
 export function settingsHookCommands(home) {
-  const settingsPath = join(home, '.claude', 'settings.json');
+  const settingsPath = join(claudeConfigDirFor(home), 'settings.json');
   if (!existsSync(settingsPath)) return [];
   let s;
   try {
@@ -188,9 +186,8 @@ function commandPaths(command) {
  */
 export function hasLiveInstallManagedHooks(opts) {
   if (!hasInstallManagedHooks(opts)) return false;
-  const home = opts?.home || homedir();
   const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  const managed = settingsHookCommands(home).filter(
+  const managed = settingsHookCommands(opts?.home).filter(
     (c) => c.includes(`.${plugin}/`) || c.includes(`/${plugin}/`),
   );
   let checked = 0;

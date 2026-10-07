@@ -848,6 +848,64 @@ describe('install lifecycle checks', () => {
     }
   });
 
+  // D#176: with CLAUDE_CONFIG_DIR set, the plugin runs from <cfg>/plugins/cache and Claude Code
+  // keeps .claude.json and settings.json in <cfg>. Step 8 pruned ~/.claude/plugins/cache, which is
+  // then ANOTHER profile's cache, where CLAUDE_PLUGIN_ROOT protects nothing, and the MCP dedup
+  // edited that profile's ~/.claude.json. Both must stay in the config dir this session uses.
+  it('plugin setup under CLAUDE_CONFIG_DIR prunes and edits only the config dir, never ~/.claude', () => {
+    const home = makeTmpDir();
+    try {
+      const cfg = join(home, 'cfg');
+      const dataDir = join(home, '.claude-mem-lite');
+      mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+      symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
+      const cacheIn = (base) => join(base, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+      for (const base of [cfg, join(home, '.claude')]) {
+        for (const v of ['3.90.0', '3.94.0', '3.95.0', '3.96.0'])
+          mkdirSync(join(cacheIn(base), v), { recursive: true });
+      }
+      const ours = JSON.stringify({
+        mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } },
+      });
+      writeFileSync(join(cfg, '.claude.json'), ours);
+      writeFileSync(join(home, '.claude.json'), ours);
+
+      execFileSync('bash', [SETUP_PATH], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: home,
+          CLAUDE_CONFIG_DIR: cfg,
+          CLAUDE_PLUGIN_ROOT: join(cacheIn(cfg), '3.96.0'),
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const versions = (base) =>
+        readdirSync(cacheIn(base))
+          .filter((n) => /^\d+\./.test(n))
+          .sort();
+      expect(versions(cfg)).toEqual(['3.94.0', '3.95.0', '3.96.0']);
+      expect(versions(join(home, '.claude')), "another profile's cache was pruned").toEqual([
+        '3.90.0',
+        '3.94.0',
+        '3.95.0',
+        '3.96.0',
+      ]);
+      expect(
+        JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')).mcpServers['mem-lite'],
+      ).toBeUndefined();
+      expect(
+        readFileSync(join(home, '.claude.json'), 'utf8'),
+        "another profile's .claude.json was edited",
+      ).toBe(ours);
+    } finally {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
   // Control for the case above: with the running root safely inside the keep window, the
   // guard changes nothing and step 8 still prunes. Without this, "the dirs survived" is
   // equally consistent with a step 8 that stopped running at all.

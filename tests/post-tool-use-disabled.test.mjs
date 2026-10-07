@@ -9,7 +9,7 @@
 // same exit(0), so nothing ever collected them: unbounded growth for a disabled plugin.
 //
 // The bash guard must agree with hook.mjs isPluginExplicitlyDisabled() — same key, same
-// file, same fail-open-on-unreadable semantics. The drift guard at the bottom pins that.
+// file, same fail-open-on-unreadable semantics. The cases at the bottom pin that.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
@@ -178,16 +178,67 @@ describe('bash/Node disable-detection parity', () => {
     expect(nodeSrc, 'hook.mjs must not re-type the plugin key').not.toMatch(/const PLUGIN_KEY\s*=\s*['"]/);
   });
 
-  it('both sides read $HOME/.claude/settings.json (not CLAUDE_CONFIG_DIR)', () => {
-    // hook.mjs uses join(homedir(), '.claude', 'settings.json'); honoring
-    // CLAUDE_CONFIG_DIR on only one side would make the two disagree.
-    expect(nodeSrc).toMatch(/join\(homedir\(\), '\.claude', 'settings\.json'\)/);
-    expect(bash).toMatch(/\$\{?HOME\}?\/\.claude\/settings\.json/);
-    // Comments may name the variable to explain why it is not honored; no CODE line may.
-    const bashCode = bash
-      .split('\n')
-      .filter((l) => !/^\s*#/.test(l))
-      .join('\n');
-    expect(bashCode).not.toContain('CLAUDE_CONFIG_DIR');
+  // D#176: both sides read the HOST's settings.json: an absolute CLAUDE_CONFIG_DIR moves it (Claude
+  // Code 2.1.292: `claude plugin list` reads enabledPlugins and installed_plugins.json from
+  // there), else $HOME/.claude. A relative value is ignored on both sides. Behavioural, not a
+  // source grep: each case runs the bash Read fast-path AND hook.mjs session-start against the
+  // same files and asks each whether it acted.
+  describe('both sides read the settings.json of the config home the host uses', () => {
+    // Writes the two candidate files and returns [bashActed, nodeActed].
+    function run({ homeValue, cfgValue, cfgEnv }) {
+      const home = sandbox('mem-cfgdir-home-');
+      const cfg = sandbox('mem-cfgdir-cfg-');
+      const memDir = sandbox('mem-cfgdir-data-');
+      if (homeValue !== undefined) {
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        writeFileSync(join(home, '.claude', 'settings.json'), settingsWith(homeValue));
+      }
+      if (cfgValue !== undefined) writeFileSync(join(cfg, 'settings.json'), settingsWith(cfgValue));
+      const env = {
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: memDir,
+        CLAUDE_PROJECT_DIR: '/tmp/org/proj',
+        CLAUDE_MEM_HOOK_RUNNING: '',
+        MEM_NO_AUTO_ADOPT: '1',
+        CLAUDE_CONFIG_DIR: cfgEnv === 'abs' ? cfg : cfgEnv === 'rel' ? 'relative-cfg' : undefined,
+      };
+      if (env.CLAUDE_CONFIG_DIR === undefined) delete env.CLAUDE_CONFIG_DIR;
+      spawnSync('bash', [SCRIPT], {
+        input: JSON.stringify({
+          session_id: 'cfg',
+          tool_name: 'Read',
+          tool_input: { file_path: '/x/plan.md' },
+        }),
+        env,
+        encoding: 'utf8',
+      });
+      const bashActed = existsSync(join(memDir, 'runtime', 'reads-org--proj.txt'));
+      spawnSync(process.execPath, [HOOK_MJS, 'session-start'], {
+        input: '{}',
+        env,
+        cwd: home,
+        encoding: 'utf8',
+      });
+      const nodeActed = existsSync(join(memDir, 'claude-mem-lite.db'));
+      return [bashActed, nodeActed];
+    }
+
+    it('CLAUDE_CONFIG_DIR set: its opt-out holds, whatever ~/.claude says', () => {
+      expect(run({ homeValue: true, cfgValue: false, cfgEnv: 'abs' })).toEqual([false, false]);
+    });
+
+    it("CLAUDE_CONFIG_DIR set: another profile's opt-out in ~/.claude does not switch this one off", () => {
+      expect(run({ homeValue: false, cfgValue: true, cfgEnv: 'abs' })).toEqual([true, true]);
+    });
+
+    it('a relative CLAUDE_CONFIG_DIR is ignored: ~/.claude decides', () => {
+      expect(run({ homeValue: false, cfgValue: true, cfgEnv: 'rel' })).toEqual([false, false]);
+    });
+
+    it('premise: unset, ~/.claude decides both ways', () => {
+      expect(run({ homeValue: false, cfgEnv: '' })).toEqual([false, false]);
+      expect(run({ homeValue: true, cfgEnv: '' })).toEqual([true, true]);
+    });
   });
 });

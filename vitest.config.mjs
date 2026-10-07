@@ -99,7 +99,8 @@ export default defineConfig({
     globalSetup: ['./tests/global-setup.mjs', './scripts/green-stamp.mjs'],
     // Workers only: strip GIT_* inherited from a git hook, or a fixture `git init` rewrites
     // the repository the hook's GIT_DIR names (see the file's header).
-    setupFiles: ['./tests/setup-strip-git-env.mjs'],
+    // The second unsets CLAUDE_CONFIG_DIR (see its header for why unset, not blank).
+    setupFiles: ['./tests/setup-strip-git-env.mjs', './tests/setup-unset-claude-config-dir.mjs'],
     // `default` restated because `reporters` REPLACES the default list. The second one
     // records a green stamp after a full, passing, unfiltered run over an unchanged tree,
     // which scripts/pre-commit.sh reuses to skip re-running the suite on that exact tree.

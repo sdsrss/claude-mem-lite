@@ -1810,3 +1810,125 @@ describe('interrupted-swap recovery (audit P2-5)', () => {
     expect(readFileSync(join(target, 'hook.mjs'), 'utf8')).toBe('// current');
   });
 });
+
+// D#173 / D#176: with CLAUDE_CONFIG_DIR set, Claude Code keeps settings.json, plugins/ and
+// .claude.json in that directory (docs: settings.md; verified on 2.1.292 with `claude plugin
+// list`). The update path read and wrote ~/.claude and ~/.claude.json instead: files the host
+// does not read, and with two profiles, ANOTHER profile's config. Every case puts the live files
+// under the config dir and a decoy under ~/.claude, and asserts the decoy is untouched.
+describe('CLAUDE_CONFIG_DIR: the update path uses the host config home', () => {
+  let cfg, home;
+  const withCfg = () => {
+    home = makeDir('mem-cfg-home');
+    cfg = makeDir('mem-cfg-dir');
+    process.env.HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+  };
+  afterEach(() => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  });
+  const cacheUnder = (base) => join(base, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+
+  it('prunePluginCache prunes the cache under the config dir, not ~/.claude', async () => {
+    withCfg();
+    for (const base of [cfg, join(home, '.claude')]) {
+      for (const v of ['1.0.0', '1.1.0', '2.0.0', '2.1.0', '2.5.0']) {
+        // Runnable shape, so detectInstallShape counts it as a plugin version.
+        mkdirSync(join(cacheUnder(base), v, 'scripts'), { recursive: true });
+        writeFileSync(join(cacheUnder(base), v, 'scripts', 'launch.mjs'), `// v${v}`);
+        writeFileSync(join(cacheUnder(base), v, 'cli.mjs'), `// v${v}`);
+      }
+    }
+    // Claude Code recorded the OLDEST as live (a rollback) in THIS profile's registry.
+    writeFileSync(
+      join(cfg, 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        plugins: { 'claude-mem-lite@sdsrss': [{ installPath: join(cacheUnder(cfg), '1.0.0') }] },
+      }),
+    );
+    const { prunePluginCache } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+    expect(prunePluginCache()).toBe(1);
+    expect(readdirSync(cacheUnder(cfg)).sort()).toEqual(['1.0.0', '2.0.0', '2.1.0', '2.5.0']);
+    expect(readdirSync(cacheUnder(join(home, '.claude')))).toHaveLength(5);
+  });
+
+  it('clearCacheHookResidue reads the settings.json and cache under the config dir', async () => {
+    withCfg();
+    const launcher = join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs');
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, '// installed launcher\n');
+    writeFileSync(
+      join(cfg, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              matcher: '*',
+              hooks: [{ type: 'command', command: `node "${launcher}" hook.mjs session-start` }],
+            },
+          ],
+        },
+      }),
+    );
+    const populated = JSON.stringify({
+      hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+    });
+    for (const base of [cfg, join(home, '.claude')]) {
+      mkdirSync(join(cacheUnder(base), '2.31.0', 'hooks'), { recursive: true });
+      writeFileSync(join(cacheUnder(base), '2.31.0', 'hooks', 'hooks.json'), populated);
+    }
+    const { clearCacheHookResidue } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+    expect(clearCacheHookResidue()).toBe(1);
+    const read = (base) =>
+      JSON.parse(readFileSync(join(cacheUnder(base), '2.31.0', 'hooks', 'hooks.json'), 'utf8'));
+    expect(read(cfg).hooks).toEqual({});
+    expect(read(join(home, '.claude')).hooks.SessionStart).toHaveLength(1);
+  });
+
+  it('syncDataDirFromCache finds the plugin cache under the config dir', async () => {
+    withCfg();
+    mkdirSync(join(cacheUnder(cfg), '1.2.0'), { recursive: true });
+    const { syncDataDirFromCache } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+    const r = await syncDataDirFromCache({ targetDir: makeDir('mem-cfg-target') });
+    expect(r.reason).not.toBe('no-cache');
+  });
+
+  it('a plugin update cleans our MCP entry and dangling hooks in the config dir, not in ~/', async () => {
+    withCfg();
+    const dataDir = makeDataDir();
+    const releaseDir = makeReleaseDir();
+    const ours = { command: 'node', args: ['/x/server.mjs'] };
+    for (const p of [join(cfg, '.claude.json'), join(home, '.claude.json')]) {
+      writeFileSync(p, JSON.stringify({ mcpServers: { 'mem-lite': ours } }));
+    }
+    const launcher = join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs');
+    const dangling = JSON.stringify({
+      hooks: {
+        Stop: [
+          { matcher: '', hooks: [{ type: 'command', command: `node "${launcher}" scripts/gone-hook.js` }] },
+        ],
+      },
+    });
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    for (const p of [join(cfg, 'settings.json'), join(home, '.claude', 'settings.json')])
+      writeFileSync(p, dangling);
+    mockedExecSync.mockImplementation((cmd, opts = {}) => {
+      if (String(cmd).startsWith('npm install'))
+        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+      return '';
+    });
+    const { installExtractedRelease } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      HOME: home,
+      CLAUDE_PLUGIN_ROOT: releaseDir,
+    });
+    expect(await installExtractedRelease(releaseDir, dataDir)).toBe(true);
+
+    expect(
+      JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')).mcpServers['mem-lite'],
+    ).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')).mcpServers['mem-lite']).toEqual(ours);
+    expect(JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')).hooks?.Stop ?? []).toEqual([]);
+    expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).toBe(dangling);
+  });
+});

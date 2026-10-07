@@ -26,7 +26,7 @@ import { createRequire } from 'node:module';
 import { resolveDataDir, resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 
 const PROJECT_DIR = resolve(import.meta.dirname ?? dirname(fileURLToPath(import.meta.url)));
-const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json');
+const SETTINGS_PATH = join(claudeConfigDir(), 'settings.json');
 // Plugin CODE / install location — ALWAYS homedir-rooted. Claude Code's
 // settings.json + MCP registration bake ABSOLUTE paths to server.mjs / hooks here,
 // and env vars are per-shell (the MCP launcher won't reliably inherit
@@ -99,7 +99,7 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
-import { claudeStatePath } from './lib/data-paths.mjs';
+import { claudeConfigDir, claudeConfigDirFor, claudeStatePath } from './lib/data-paths.mjs';
 import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -742,7 +742,7 @@ function registerMcpServer() {
   // The legacy generic name "mem" (pre-v2.78) is also purged so a user who installed in
   // either era ends up with a single canonical "mem-lite" registration.
   // Detect plugin mode: installed_plugins.json has our entry → plugin handles MCP.
-  const installedPluginsPath = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
+  const installedPluginsPath = join(claudeConfigDir(), 'plugins', 'installed_plugins.json');
   let pluginHandlesMcp = false;
   try {
     const installed = JSON.parse(readFileSync(installedPluginsPath, 'utf8'));
@@ -803,7 +803,7 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
   // MCP dedup: Claude Code copies .mcp.json from marketplace clone → plugin cache.
   // Do NOT modify marketplace .mcp.json — it breaks the MCP server registration chain.
   // Dedup is handled by skipping global `claude mcp add` when plugin system is active.
-  const pluginDir = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
+  const pluginDir = join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY);
   const pluginHooksPath = join(pluginDir, 'hooks', 'hooks.json');
 
   // Clearing is a DEDUP, and a dedup with only one registration left is a delete.
@@ -875,7 +875,7 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
     // Clearing only the marketplace source (above) leaves stale cache copies that double-register
     // hooks alongside install.mjs-written settings.json entries.
     try {
-      const cacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
+      const cacheBase = join(claudeConfigDir(), 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
       if (existsSync(cacheBase)) {
         const launchSyncFiles = ['launch.mjs', 'launch-preflight.mjs'];
         // Read, not remembered: the cache dir names ARE versions, so the comparison has to
@@ -1364,7 +1364,7 @@ async function uninstall() {
 
   // 3. Clean plugin registry entries conservatively (avoid deleting other plugins
   // from the same marketplace publisher)
-  const pluginsDir = join(homedir(), '.claude', 'plugins');
+  const pluginsDir = join(claudeConfigDir(), 'plugins');
   const installedPath = join(pluginsDir, 'installed_plugins.json');
   let canRemoveMarketplaceArtifacts;
   try {
@@ -1566,16 +1566,13 @@ async function cleanupHooks() {
   // registration: capture stopped with "Removed N" as the last word. Same check and repair
   // status/doctor print; this is the moment it happens.
   if (removed > 0 && settings.enabledPlugins?.[PLUGIN_KEY] === true) {
-    const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
+    const shape = detectInstallShape({ projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
     const root = shape.activePluginVersion?.root;
     if (root && !pluginCacheHookEvents(root).ok) {
       warn(
         `The enabled plugin's hooks/hooks.json registers none — every hook is now unregistered (an earlier ` +
           `direct install emptied it to avoid duplicates). Repair: ` +
-          hookManifestRepairHint(
-            root,
-            join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY),
-          ),
+          hookManifestRepairHint(root, join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY)),
       );
     }
   }
@@ -1599,13 +1596,12 @@ async function status() {
   // that, status printed `✗ MCP server: not registered` and `✗ Hooks: not
   // configured` at a correctly-installed plugin user — two red marks describing
   // the intended state.
-  const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
+  const shape = detectInstallShape({ projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
   // A cache DIRECTORY is not an installed plugin — `/plugin uninstall` leaves version dirs
   // behind (this project's own README documents that), and `activePluginVersion` falls back to
   // "newest cache dir" when nothing recorded an install. Both branches below credit the
   // manifest with providing something, so both need the registration, not the directory.
-  const pluginProvides =
-    !!shape.activePluginVersion && pluginIsRegistered({ home: homedir(), settings: readSettings() });
+  const pluginProvides = !!shape.activePluginVersion && pluginIsRegistered({ settings: readSettings() });
 
   // MCP. A plugin install answers this from the manifest and does NOT shell out.
   //
@@ -1683,7 +1679,7 @@ async function status() {
     } else {
       const repair = hookManifestRepairHint(
         shape.activePluginVersion.root,
-        join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY),
+        join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY),
       );
       push(
         'fail',
@@ -1952,7 +1948,7 @@ async function doctor() {
   // wrong both ways in the field: `✗ server.mjs: missing` on a healthy
   // plugin-only install, and `✓ better-sqlite3: verified` while the registered
   // MCP server FATAL'd because a DIFFERENT tree was stale. See lib/install-shape.mjs.
-  const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
+  const shape = detectInstallShape({ projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
 
   // Dependencies. Out of process: an in-process open of a STALE .node caches a
   // dead module handle for the rest of doctor and can SIGSEGV on teardown —
@@ -2245,7 +2241,7 @@ async function doctor() {
         `Plugin lifecycle: plugin manifest v${shape.activePluginVersion.version} registers NO hooks (${manifest.reason}) and settings.json holds none — every hook is unregistered`,
       );
       log(
-        `    Repair: ${hookManifestRepairHint(shape.activePluginVersion.root, join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY))}`,
+        `    Repair: ${hookManifestRepairHint(shape.activePluginVersion.root, join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY))}`,
       );
       issues++;
     }
@@ -2293,8 +2289,7 @@ async function doctor() {
     // Reuses the `settings` read above rather than calling readSettings() a second time:
     // the second call carried the same throw, so guarding only the first would have moved
     // the abort eleven checks later instead of removing it (P1-2).
-    const viaPlugin =
-      !!shape?.activePluginVersion && settings !== null && pluginIsRegistered({ home: homedir(), settings });
+    const viaPlugin = !!shape?.activePluginVersion && settings !== null && pluginIsRegistered({ settings });
     if (settings === null) {
       dwarn(
         `MCP registration: found ${bare.length} bare registration(s); whether the plugin also provides one is not checked (settings.json unreadable)`,
@@ -2324,7 +2319,7 @@ async function doctor() {
 
   // Marketplace clone updatability — see marketplaceCloneHealth for why this is the
   // precondition behind the schema-skew lock-in v6.3.0 shipped a detector for.
-  const marketplaceClone = join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY);
+  const marketplaceClone = join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY);
   const clone = marketplaceCloneHealth(marketplaceClone);
   if (clone.kind === 'dirty') {
     dwarn(`Marketplace clone: ${clone.count} uncommitted change(s) in ${marketplaceClone}`);
@@ -2711,8 +2706,8 @@ async function doctor() {
     { ok, dwarn },
     {
       manifestPath: join(PROJECT_DIR, 'hooks', 'hooks.json'),
-      settingsPath: join(homedir(), '.claude', 'settings.json'),
-      settingsCommands: settingsHookCommands(homedir()),
+      settingsPath: join(claudeConfigDir(), 'settings.json'),
+      settingsCommands: settingsHookCommands(),
       installDir: INSTALL_DIR,
     },
   );
@@ -2795,7 +2790,7 @@ async function doctor() {
   }
 
   // Plugin cache versions
-  const pluginCacheBase = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
+  const pluginCacheBase = join(claudeConfigDir(), 'plugins', 'cache', MARKETPLACE_KEY, 'claude-mem-lite');
   if (existsSync(pluginCacheBase)) {
     try {
       const versions = readdirSync(pluginCacheBase).filter((n) => /^\d+\./.test(n));
@@ -3074,12 +3069,12 @@ export function hasOtherMarketplacePlugins(
  *
  * Exported for tests/mcp-registration-parse.test.mjs.
  */
-export function pluginIsRegistered({ home = homedir(), settings = {} } = {}) {
+export function pluginIsRegistered({ home, settings = {} } = {}) {
   if (isPluginExplicitlyDisabled(settings)) return false;
   if (settings?.enabledPlugins?.[PLUGIN_KEY] === true) return true;
   try {
     const installed = JSON.parse(
-      readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'),
+      readFileSync(join(claudeConfigDirFor(home), 'plugins', 'installed_plugins.json'), 'utf8'),
     );
     return PLUGIN_KEY in getInstalledPluginEntries(installed);
   } catch {
@@ -3540,7 +3535,7 @@ async function rebuildBinding() {
     // MCP server FATAL'ing) ran the documented repair, watched it succeed, and
     // still had no memory. Falling back to INSTALL_DIR keeps a source-only
     // layout with no deps of its own repairable.
-    const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
+    const shape = detectInstallShape({ projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
     const targets =
       shape.runtimeRoots.length > 0 ? shape.runtimeRoots : [{ label: 'install dir', root: bindingHostDir() }];
 
