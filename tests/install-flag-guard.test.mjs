@@ -178,6 +178,90 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       restore();
     }
   });
+  // status had no access check at all and said "⚠ Database: not found" over the same store.
+  it.skipIf(skip)('status names the locked data dir instead of a missing database', () => {
+    const { s, data, restore } = locked();
+    try {
+      const r = run(s, ['status']);
+      expect(r.stdout).toMatch(new RegExp(`✗ Database: ${data} is not accessible \\(EACCES\\)`));
+      expect(r.stdout).not.toMatch(/Database: not found/);
+      const j = JSON.parse(run(s, ['status', '--json']).stdout);
+      expect(j.database).toMatchObject({ level: 'fail', exists: null, error: 'EACCES' });
+    } finally {
+      restore();
+    }
+  });
+  // D#199: the lines below the ✗ still read the locked dir as an empty one — a ✓ "no
+  // database yet" and a 0.0MB footprint over a store that exists. They now say they did not look.
+  it.skipIf(skip)('doctor does not grade the locked store as absent or empty', () => {
+    const { s, restore } = locked();
+    try {
+      const r = run(s, ['doctor']);
+      expect(r.stdout).not.toMatch(/DB schema: no database yet/);
+      expect(r.stdout).not.toMatch(/Database: not found/);
+      expect(r.stdout).not.toMatch(/✓ Disk footprint/);
+      for (const what of ['DB schema', 'Database', 'Disk footprint']) {
+        expect(r.stdout).toMatch(new RegExp(`⚠ ${what}: not checked — .* is not accessible`));
+      }
+    } finally {
+      restore();
+    }
+  });
+  // Default shape: the code and the data share ~/.claude-mem-lite, so the entry-point check
+  // read the locked dir as an install with no server.mjs and added two issues to the one above.
+  it.skipIf(skip)('doctor does not call the entry points missing when the shared dir is locked', () => {
+    const s = sandbox();
+    const dir = join(s.home, '.claude-mem-lite');
+    mkdirSync(join(dir, 'runtime'), { recursive: true });
+    writeFileSync(join(dir, 'server.mjs'), '');
+    writeFileSync(join(dir, 'hook.mjs'), '');
+    chmodSync(dir, 0o000);
+    try {
+      const env = { ...process.env, HOME: s.home, TMPDIR: s.root, PATH: `${s.bin}:${process.env.PATH}` };
+      env.CLAUDE_MEM_SKIP_UPDATE = '1';
+      env.MEM_NO_AUTO_ADOPT = '1';
+      for (const k of ['CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'])
+        delete env[k];
+      const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
+        cwd: s.root,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env,
+      });
+      expect(r.stdout).toMatch(/✗ Data directory: .*not accessible/);
+      expect(r.stdout).not.toMatch(/server\.mjs: missing/);
+      expect(r.stdout).not.toMatch(/hook\.mjs: missing/);
+      expect(r.stdout).toMatch(/⚠ Entry points: not checked — .* is not accessible/);
+      // The two drift checks read the same dir as a never-deployed install.
+      expect(r.stdout).not.toMatch(/no claude-mem-lite code is deployed/);
+      expect(r.stdout).not.toMatch(/Hook scripts: .* is absent/);
+      for (const what of ['Managed files', 'Hook scripts']) {
+        expect(r.stdout).toMatch(new RegExp(`⚠ ${what}: not checked — .* is not accessible`));
+      }
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+  // Under CLAUDE_MEM_DIR the data dir is fine and only the code dir is locked: nothing above
+  // reports it, so the entry-point line is the ✗ and carries the fix.
+  it.skipIf(skip)('a locked code dir under relocation is one ✗ with its fix, not two missing files', () => {
+    const s = sandbox();
+    mkdirSync(join(s.root, 'data'), { recursive: true });
+    const dir = join(s.home, '.claude-mem-lite');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'server.mjs'), '');
+    chmodSync(dir, 0o000);
+    try {
+      const r = run(s, ['doctor']);
+      expect(r.stdout).not.toMatch(/Data directory: .*not accessible/);
+      expect(r.stdout).not.toMatch(/server\.mjs: missing/);
+      expect(r.stdout).toMatch(
+        new RegExp(`✗ Entry points: ${dir} is not accessible \\(EACCES\\) — Fix: chmod u\\+rwx`),
+      );
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
 });
 
 // A failed `repair` left its staging dir behind: the catch ended in process.exit(1), which

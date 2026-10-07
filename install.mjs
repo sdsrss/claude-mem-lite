@@ -1741,8 +1741,17 @@ async function status() {
     });
   }
 
-  // Database
-  if (existsSync(DB_PATH)) {
+  // Database. A data dir this process cannot enter reads as an empty one (D#199), and
+  // `exists: false` would be a guess — null says nobody could look.
+  const dataDirDenied = dataDirAccessError();
+  if (dataDirDenied) {
+    push(
+      'fail',
+      'database',
+      `Database: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — Fix: ${dataDirAccessRemedy()}`,
+      { exists: null, error: dataDirDenied },
+    );
+  } else if (existsSync(DB_PATH)) {
     try {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
@@ -1973,11 +1982,17 @@ async function doctor() {
   const dataDirDenied = dataDirAccessError();
   if (dataDirDenied) {
     fail(
-      `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — the checks below ` +
-        `read it as missing. Fix: ${dataDirAccessRemedy()}`,
+      `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — checks that read it ` +
+        `say "not checked". Fix: ${dataDirAccessRemedy()}`,
     );
     issues++;
   }
+  // D#199: a directory this process cannot enter reads as an EMPTY one to existsSync/statSync,
+  // so the checks that look inside it said "no database yet" (✓), "DB 0.0MB" (✓) and "not found".
+  const notCheckedDenied = (what, dir = MEM_DATA_DIR) =>
+    dwarn(`${what}: not checked — ${dir} is not accessible`);
+  // The code dir is the data dir in the default shape; under CLAUDE_MEM_DIR it is checked apart.
+  const codeDirDenied = INSTALL_DIR === MEM_DATA_DIR ? dataDirDenied : dataDirAccessError(INSTALL_DIR);
 
   // Which code homes does this machine actually run? A machine can hold three
   // at once (plugin cache / ~/.claude-mem-lite / npm-global) and each owns its
@@ -2039,7 +2054,9 @@ async function doctor() {
   // too-new file is still a real number; a checkmark on it is not.
   let dbWriteBlocked = null;
   let dbUnusableHere = false;
-  if (!existsSync(DB_PATH)) {
+  if (dataDirDenied) {
+    notCheckedDenied('DB schema');
+  } else if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
   } else if (rootProbes.length === 0) {
     // The fourth outcome the first cut had and did not print. The `fail` above already tells
@@ -2146,9 +2163,20 @@ async function doctor() {
       }
     }
   } else {
-    fail('server.mjs: missing');
-    fail('hook.mjs: missing');
-    issues += 2;
+    // A locked code dir reads as one with no code in it (D#199). In the default shape it IS the
+    // data dir, already a ✗ above; under CLAUDE_MEM_DIR it is not, and this is the only line.
+    if (codeDirDenied && INSTALL_DIR === MEM_DATA_DIR) {
+      notCheckedDenied('Entry points', INSTALL_DIR);
+    } else if (codeDirDenied) {
+      fail(
+        `Entry points: ${INSTALL_DIR} is not accessible (${codeDirDenied}) — Fix: chmod u+rwx ${shellWord(INSTALL_DIR)}`,
+      );
+      issues++;
+    } else {
+      fail('server.mjs: missing');
+      fail('hook.mjs: missing');
+      issues += 2;
+    }
   }
 
   // Hook self-heal runtime: the launcher (scripts/hook-launcher.mjs) degrades a
@@ -2203,32 +2231,34 @@ async function doctor() {
   // check anywhere. Cheap probes only (DB file + .bak aggregate, no tree walk).
   // The budget itself is enforced by lib/db-backup on every new snapshot; this
   // check surfaces stores that predate the budget or exceed it between snapshots.
-  try {
-    const { listSnapshots, backupBudgetBytes } = await import('./lib/db-backup.mjs');
-    const dbFile = join(MEM_DATA_DIR, 'claude-mem-lite.db');
-    const dbBytes = existsSync(dbFile) ? statSync(dbFile).size : 0;
-    const snaps = listSnapshots(dbFile);
-    const backupBytes = snaps.reduce((s, x) => s + x.size, 0);
-    const mb = (n) => (n / (1024 * 1024)).toFixed(1);
-    // Warn threshold = the REAL eviction budget (pre-release review 2026-08-16) —
-    // warning below it promised an eviction enforceBackupBudget would never do.
-    if (backupBytes > backupBudgetBytes()) {
-      dwarn(
-        `Disk footprint: ${snaps.length} backup snapshot(s) hold ${mb(backupBytes)}MB, over the ${mb(backupBudgetBytes())}MB budget (CLAUDE_MEM_BACKUP_BUDGET_MB) — the next maintain/save snapshot evicts oldest snapshots past the 7d undo grace`,
-      );
-    } else {
-      ok(
-        `Disk footprint: DB ${mb(dbBytes)}MB, ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB (budget ${mb(backupBudgetBytes())}MB)`,
-      );
+  if (dataDirDenied) notCheckedDenied('Disk footprint');
+  else
+    try {
+      const { listSnapshots, backupBudgetBytes } = await import('./lib/db-backup.mjs');
+      const dbFile = join(MEM_DATA_DIR, 'claude-mem-lite.db');
+      const dbBytes = existsSync(dbFile) ? statSync(dbFile).size : 0;
+      const snaps = listSnapshots(dbFile);
+      const backupBytes = snaps.reduce((s, x) => s + x.size, 0);
+      const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+      // Warn threshold = the REAL eviction budget (pre-release review 2026-08-16) —
+      // warning below it promised an eviction enforceBackupBudget would never do.
+      if (backupBytes > backupBudgetBytes()) {
+        dwarn(
+          `Disk footprint: ${snaps.length} backup snapshot(s) hold ${mb(backupBytes)}MB, over the ${mb(backupBudgetBytes())}MB budget (CLAUDE_MEM_BACKUP_BUDGET_MB) — the next maintain/save snapshot evicts oldest snapshots past the 7d undo grace`,
+        );
+      } else {
+        ok(
+          `Disk footprint: DB ${mb(dbBytes)}MB, ${snaps.length} backup snapshot(s) ${mb(backupBytes)}MB (budget ${mb(backupBudgetBytes())}MB)`,
+        );
+      }
+    } catch (e) {
+      // "Informational" was the reason this was silent, and silence is the one thing it must
+      // not be: the import above is of a sibling module, so the run where it fails is a broken
+      // install — doctor's entire audience. The line vanished with no trace, which reads
+      // identically to a check that was never written (R12 audit P3-7). Every other "I could
+      // not look" in this file has its own sentence; this is the same shape as the four.
+      dwarn('Disk footprint: check failed — ' + e.message);
     }
-  } catch (e) {
-    // "Informational" was the reason this was silent, and silence is the one thing it must
-    // not be: the import above is of a sibling module, so the run where it fails is a broken
-    // install — doctor's entire audience. The line vanished with no trace, which reads
-    // identically to a check that was never written (R12 audit P3-7). Every other "I could
-    // not look" in this file has its own sentence; this is the same shape as the four.
-    dwarn('Disk footprint: check failed — ' + e.message);
-  }
 
   // Plugin/hook lifecycle state
   //
@@ -2376,7 +2406,9 @@ async function doctor() {
   // and a check that reports on a thing you do not have is noise.
 
   // Database
-  if (existsSync(DB_PATH)) {
+  if (dataDirDenied) {
+    notCheckedDenied('Database');
+  } else if (existsSync(DB_PATH)) {
     try {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
@@ -2623,7 +2655,7 @@ async function doctor() {
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;
     const { checkDevDrift } = await import('./lib/doctor-drift.mjs');
-    const r = skipDrift ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
+    const r = skipDrift || codeDirDenied ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
     const devRemedy = `re-run: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install --dev`;
     const nameList = (files, count) => {
       const suffix = count > files.length ? ` +${count - files.length} more` : '';
@@ -2633,6 +2665,8 @@ async function doctor() {
       ok(
         'Managed files: n/a (plugin-only install — code is served from the plugin cache, so ~/.claude-mem-lite holds data only)',
       );
+    } else if (codeDirDenied) {
+      notCheckedDenied('Managed files', INSTALL_DIR);
     } else if (r.devMode) {
       const parts = [];
       if (r.plainCount > 0) {
@@ -2715,7 +2749,7 @@ async function doctor() {
     // ~/.claude-mem-lite, and its hooks run from ${CLAUDE_PLUGIN_ROOT}/scripts/ instead.
     const skipScripts = !shape.managed && !!shape.activePluginVersion;
     const { checkHookScriptDrift, HOOK_SCRIPT_ENTRY_POINTS } = await import('./lib/doctor-drift.mjs');
-    const h = skipScripts ? null : checkHookScriptDrift(INSTALL_DIR, HOOK_SCRIPT_FILES);
+    const h = skipScripts || codeDirDenied ? null : checkHookScriptDrift(INSTALL_DIR, HOOK_SCRIPT_FILES);
     // cli.mjs, not install.mjs: the reader of this line has an install that is
     // missing files, and install.mjs is the one entry that cannot survive that —
     // its static imports resolve before its first statement. cli.mjs has no static
@@ -2727,6 +2761,8 @@ async function doctor() {
       : `claude-mem-lite self-update (or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
+    } else if (codeDirDenied) {
+      notCheckedDenied('Hook scripts', INSTALL_DIR);
     } else if (!h.present) {
       issueWarn(
         `Hook scripts: ${join(INSTALL_DIR, 'scripts')} ` +
