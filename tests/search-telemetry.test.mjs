@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, readFileSync, rmSync } from 'fs';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
+import { createRequire } from 'module';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { CURRENT_SCHEMA_VERSION, initSchema } from '../schema.mjs';
@@ -12,7 +13,7 @@ import {
   rateSearchResults,
   recordSearch,
 } from '../lib/search-telemetry.mjs';
-import { handleSearchFeedbackForTest, handleSearchForTest as rawHandleSearchForTest } from '../server.mjs';
+import { handleSearchFeedback, handleSearchForTest as rawHandleSearchForTest } from '../server.mjs';
 
 const handleSearchForTest = (db, args, options = {}) =>
   rawHandleSearchForTest(db, args, {
@@ -212,6 +213,74 @@ describe('search telemetry on schema v49', () => {
     db.close();
   });
 
+  // D#245 N5: the rater's identity comes from the same mcpClientIdentity() as `client`, which is
+  // scrubbed and capped; rated_by was stored as given.
+  it('scrubs and caps the rater identity like the client identity', () => {
+    const db = openDb();
+    const searchId = recordSearch(db, {
+      query: 'alpha',
+      surface: 'mcp_search',
+      client: 'test',
+      results: [{ source: 'obs', id: 7, title: 'Alpha' }],
+    });
+    rateSearchResults(db, {
+      searchId,
+      relevant: ['#7'],
+      ratedBy: `rater token=abc123xyz ${'r'.repeat(600)}`,
+    });
+    const ratedBy = db
+      .prepare('SELECT rated_by FROM search_results WHERE search_id = ?')
+      .get(searchId).rated_by;
+    expect(ratedBy).toHaveLength(500);
+    expect(ratedBy).toContain('token=***');
+    db.close();
+  });
+
+  // D#245 N2: a rating is a deliberate act, and busy_timeout=0 lost it with "database is locked"
+  // whenever a hook held the writer. recordSearch stays non-blocking (it sits on the search path).
+  it('a rating waits briefly for a writer another process holds; a search record does not', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-search-telemetry-'));
+    tempDirs.push(dir);
+    const path = join(dir, 'test.db');
+    const seed = openDb(path);
+    seed.pragma('journal_mode = WAL');
+    const searchId = recordSearch(seed, {
+      query: 'alpha',
+      surface: 'mcp_search',
+      client: 'test',
+      results: [{ source: 'obs', id: 7, title: 'Alpha' }],
+    });
+    seed.close();
+
+    const holder = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const D = require(process.argv[1]); const db = new D(process.argv[2]);
+         db.exec('BEGIN IMMEDIATE'); process.stdout.write('locked\\n');
+         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
+         db.exec('COMMIT'); db.close();`,
+        createRequire(import.meta.url).resolve('better-sqlite3'),
+        path,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    const exited = new Promise((r) => holder.on('exit', r));
+    await new Promise((r) => holder.stdout.once('data', r));
+
+    const contender = new Database(path);
+    try {
+      // Premise: the writer is held right now.
+      expect(() =>
+        recordSearch(contender, { query: 'b', surface: 'mcp_search', client: 'test', results: [] }),
+      ).toThrow(/locked|busy/i);
+      expect(rateSearchResults(contender, { searchId, relevant: ['#7'], ratedBy: 'test' })).toBe(1);
+    } finally {
+      contender.close();
+      await exited;
+    }
+  });
+
   it('counts only live observations in the eligible corpus', () => {
     const db = openDb();
     const keeper = seedObservation(db);
@@ -350,7 +419,7 @@ describe('search telemetry on schema v49', () => {
           `Search ${result.search_id} — call mem_search_feedback for any result you can judge (query relevance, not novelty). For retrieval-quality investigations, assess contribution separately; this tool stores relevance only.`,
         ),
     ).toBe(true);
-    handleSearchFeedbackForTest(
+    handleSearchFeedback(
       db,
       {
         search_id: result.search_id,

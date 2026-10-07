@@ -31,6 +31,12 @@ All notable changes to claude-mem-lite are documented in this file.
   it in tool descriptions**, as the bare `</private>` already did. The description window's own
   marker test matched only the bare tag, while `<private>` stripping accepts whitespace and
   attributes, so text cut from inside a private span could show in an episode's description.
+- **Fix (opt-in search telemetry): a rating waits for a busy writer, and deletes drop titles.**
+  `mem_search_feedback` gave up at once with "database is locked" whenever a hook held the
+  database; it now waits up to 250 ms. Recording a search still never waits. The rater's client
+  name is scrubbed and capped like the client name it comes from. `activity delete --confirm`
+  now clears the deleted events' titles from the telemetry table, as `delete` already did for
+  observations.
 
 ## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 

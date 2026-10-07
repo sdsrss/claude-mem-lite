@@ -296,6 +296,49 @@ describe('cmdActivity CLI: --type validation', () => {
     }
   });
 
+  // D#245 N6: `delete` clears a deleted observation's title from the opt-in search telemetry;
+  // `activity delete` kept a deleted event's.
+  test("activity delete --confirm clears the deleted event's telemetry label, not others", async () => {
+    setupDir();
+    try {
+      const a = JSON.parse(
+        runCli(['activity', 'save', '--type', 'bugfix', 'secret event title']).stdout.trim(),
+      ).id;
+      const b = JSON.parse(
+        runCli(['activity', 'save', '--type', 'bugfix', 'kept event title']).stdout.trim(),
+      ).id;
+      const { recordSearch } = await import('../lib/search-telemetry.mjs');
+      const dbPath = join(dataDir, 'claude-mem-lite.db');
+      let db = new Database(dbPath);
+      recordSearch(db, {
+        query: 'event',
+        surface: 'mcp_search',
+        client: 'test',
+        results: [
+          { source: 'event', id: a, title: 'secret event title' },
+          { source: 'event', id: b, title: 'kept event title' },
+        ],
+      });
+      db.close();
+
+      expect(runCli(['activity', 'delete', String(a), '--confirm']).stdout).toContain('Deleted 1 event');
+
+      db = new Database(dbPath);
+      const labels = db
+        .prepare(
+          "SELECT result_id, snapshot_label FROM search_results WHERE source = 'event' ORDER BY result_id",
+        )
+        .all();
+      db.close();
+      expect(labels).toEqual([
+        { result_id: a, snapshot_label: null },
+        { result_id: b, snapshot_label: 'kept event title' },
+      ]);
+    } finally {
+      teardownDir();
+    }
+  });
+
   test('activity delete supports comma-separated batch IDs', () => {
     setupDir();
     try {

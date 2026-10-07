@@ -821,7 +821,7 @@ server.registerTool(
   }),
 );
 
-export function handleSearchFeedbackForTest(db, args, { clientIdentity = 'test-client' } = {}) {
+export function handleSearchFeedback(db, args, { clientIdentity = 'test-client' } = {}) {
   return rateSearchResults(db, {
     searchId: args.search_id,
     relevant: args.relevant,
@@ -842,7 +842,7 @@ if (SEARCH_TELEMETRY_ENABLED) {
       if (!issuedTelemetrySearchIds.has(args.search_id)) {
         throw new Error(`Search ${args.search_id} was not issued by this server process`);
       }
-      const count = handleSearchFeedbackForTest(db, args, { clientIdentity: mcpClientIdentity() });
+      const count = handleSearchFeedback(db, args, { clientIdentity: mcpClientIdentity() });
       return {
         content: [
           { type: 'text', text: `Recorded relevance for ${count} result(s) from search ${args.search_id}.` },
