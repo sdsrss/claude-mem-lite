@@ -148,6 +148,40 @@ describe('runMaintainOps — the sequence', () => {
     expect(called).toBe(0);
     expect(lines[0]).toMatch(/^Purged \d+ stale observations/);
   });
+
+  // D#244 (issue #41 side note): the preview counts every candidate and says "re-run with
+  // confirm", but the confirmed run deleted one OP_CAP batch, so 15k idle rows took 15 runs and
+  // 15 full VACUUM INTO snapshots. One confirmed run now deletes what the preview counted, in
+  // OP_CAP-sized batches, all behind the one snapshot taken before the transaction.
+  it('a confirmed purge deletes every candidate the preview counted, past the cap', () => {
+    const cap = 10;
+    insertSession(db, { id: 'sess-1' });
+    for (let i = 0; i < 2 * cap + 5; i++) {
+      insertObs(db, { title: `idle ${i}`, compressedInto: -2, epochOffset: -40 * 86400000 });
+    }
+    insertObs(db, { title: 'recent pending, inside retain', compressedInto: -2 });
+    insertObs(db, { title: 'live row' });
+    const c = { ...ctx(), opCap: cap };
+    const cutoff = Date.now() - 30 * 86400000;
+    const [previewLine] = runMaintainOps(db, c, ['purge_stale'], {
+      retainCutoff: cutoff,
+      confirmed: false,
+      renderPurgePreview: (row) => `candidates=${row.candidates}`,
+    });
+    expect(previewLine).toBe(`candidates=${2 * cap + 5}`);
+
+    const [line] = runMaintainOps(db, c, ['purge_stale'], {
+      retainCutoff: cutoff,
+      confirmed: true,
+      renderPurgePreview: preview,
+    });
+    expect(line).toBe(`Purged ${2 * cap + 5} stale observations (retained last 30 days)`);
+    const left = db
+      .prepare('SELECT title FROM observations ORDER BY id')
+      .all()
+      .map((r) => r.title);
+    expect(left).toEqual(['recent pending, inside retain', 'live row']);
+  });
 });
 
 describe('neither face re-implements the sequence', () => {
