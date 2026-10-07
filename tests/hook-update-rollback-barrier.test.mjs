@@ -14,7 +14,11 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const restores = [];
+// Ordered log: 'clear' (the marker removed), 'restore' (a backup renamed back), 'delete' (an
+// installed path removed by the rollback), each with whether the marker existed at that moment.
+const events = [];
 let marker = null;
+let failSwapInto = null; // a target path whose forward rename throws once
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn(), execFileSync: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -24,8 +28,26 @@ vi.mock('node:fs', async (importOriginal) => {
     renameSync(from, to) {
       if (marker && String(from).includes('.update-backup-')) {
         restores.push({ from: String(from), marked: real.existsSync(marker) });
+        events.push({ kind: 'restore', marked: real.existsSync(marker) });
+      }
+      if (failSwapInto && String(to) === failSwapInto && String(from).includes('.update-staging-')) {
+        failSwapInto = null;
+        throw Object.assign(new Error('EIO: simulated swap failure'), { code: 'EIO' });
       }
       return real.renameSync(from, to);
+    },
+    rmSync(path, opts) {
+      const p = String(path);
+      if (marker && p === marker) events.push({ kind: 'clear', marked: real.existsSync(marker) });
+      else if (
+        marker &&
+        !p.includes('.update-') &&
+        events.recordDeletesUnder &&
+        p.startsWith(events.recordDeletesUnder)
+      ) {
+        events.push({ kind: 'delete', marked: real.existsSync(marker) });
+      }
+      return real.rmSync(path, opts);
     },
   };
 });
@@ -74,7 +96,10 @@ async function loadModule(dataDir) {
 afterEach(() => {
   mockedExecSync.mockReset();
   restores.length = 0;
+  events.length = 0;
+  delete events.recordDeletesUnder;
   marker = null;
+  failSwapInto = null;
   delete process.env.CLAUDE_MEM_DIR;
   process.env.HOME = originalHome;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -93,12 +118,37 @@ describe('rollbacks restore files under the swap marker (D#239 g)', () => {
       return '';
     });
     const { installExtractedRelease } = await loadModule(dataDir);
+    events.recordDeletesUnder = dataDir + '/';
 
     expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
     expect(readFileSync(join(dataDir, 'hook.mjs'), 'utf8')).toBe('// old hook'); // premise: it rolled back
     expect(restores.length).toBeGreaterThan(0);
     expect(restores.filter((r) => !r.marked)).toEqual([]);
+    // The new files are deleted before the old ones come back: that is a window too.
+    const deletes = events.filter((e) => e.kind === 'delete');
+    expect(deletes.length).toBeGreaterThan(0);
+    expect(deletes.filter((e) => !e.marked)).toEqual([]);
     expect(existsSync(marker)).toBe(false); // and released afterwards
+  });
+
+  it('a swap that throws halfway keeps the marker until its rollback is done', async () => {
+    const dataDir = makeDataDir();
+    const releaseDir = makeReleaseDir();
+    mockedExecSync.mockImplementation((cmd, opts = {}) => {
+      if (String(cmd).startsWith('npm install'))
+        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+      return '';
+    });
+    const { installExtractedRelease } = await loadModule(dataDir);
+    failSwapInto = join(dataDir, 'server.mjs');
+
+    expect(await installExtractedRelease(releaseDir, dataDir)).toBe(false);
+    expect(readFileSync(join(dataDir, 'server.mjs'), 'utf8')).toBe('// server'); // premise: rolled back
+    const lastRestore = events.map((e) => e.kind).lastIndexOf('restore');
+    const firstClear = events.findIndex((e) => e.kind === 'clear');
+    expect(lastRestore).toBeGreaterThanOrEqual(0);
+    expect(firstClear).toBeGreaterThan(lastRestore);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it('the recovery of a swap a killed updater left behind', async () => {

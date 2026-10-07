@@ -1072,6 +1072,9 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     }
 
     markSwapStart();
+    // Cleared here only when the loop finished. If a rename throws, the half-swapped tree keeps
+    // the marker through the catch below until rollbackInstall has put the old files back.
+    let swapped = false;
     try {
       for (const relPath of switchablePaths) {
         const stagedPath = join(stagingDir, relPath);
@@ -1093,8 +1096,9 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
         journalSwap(backupDir, backedUp, installed);
         renameSync(stagedPath, targetPath);
       }
+      swapped = true;
     } finally {
-      clearSwapMarker();
+      if (swapped) clearSwapMarker();
     }
 
     // MED-5: before discarding the rollback backup, prove the switched code boots.
