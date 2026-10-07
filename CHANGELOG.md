@@ -20,6 +20,13 @@ All notable changes to claude-mem-lite are documented in this file.
   checked, so every consumer reads the same scheme, host and port. Valid values send the same
   requests as before. `doctor` also prints a gateway's port when it is not the scheme's default
   (`gw.example.com:8443 reachable`).
+- **Fix: background optimize passes keep what a person set.** Cluster-merge gave its merged
+  row the model's importance even when a person had set the keeper's (a keeper lowered to 1 came
+  back at 3). Re-enrich read the person's mark after the model call but wrote back the importance
+  it had read before the call, undoing a change made during the call. Both now decide the
+  importance in the write itself. A re-enrich reply that rated a row 0 no longer replaces the
+  title and narrative of a row it may not hide (a compression keeper, or a row whose importance
+  a person set): `Weekly summary: auth refactor` had become `Weekly summary`, narrative `x`.
 
 ## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 

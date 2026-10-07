@@ -494,12 +494,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       const humanSet =
         (db.prepare('SELECT importance_set_at FROM observations WHERE id = ?').get(cand.id)
           ?.importance_set_at ?? null) !== null;
-      if (
-        (parsed.importance === 0 || parsed.importance === '0') &&
-        scope !== 'wide' &&
-        !isKeeper &&
-        !humanSet
-      ) {
+      const scoredZero = parsed.importance === 0 || parsed.importance === '0';
+      if (scoredZero && scope !== 'wide' && !isKeeper && !humanSet) {
         // D#12, and this one is not a stale-write guard — it is a POINTER guard.
         // `compressed_into` is the child -> keeper link, and COMPRESSED_AUTO is -1. If a
         // concurrent cluster-merge or smart-compress adopts this row during the 45 s Haiku
@@ -511,7 +507,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         const res = db
           .prepare(
             `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ?
-             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL AND ${NOT_COMPRESSION_KEEPER_SQL}`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL AND ${NOT_COMPRESSION_KEEPER_SQL}
+               AND importance_set_at IS NULL`,
           )
           .run(Date.now(), cand.id);
         if (res.changes === 0) {
@@ -561,9 +558,15 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // For `narrow`, the truncate stays on LLM output but NOT on the preserve-on-empty
       // fallback — truncating the row's own stored narrative to buy nothing was the same
       // bug in miniature.
+      //
+      // A reply that scored the row 0 reaches this point only for a row that may not be hidden
+      // (a compression keeper, or an importance a person set). It judged the row worthless, so
+      // its title and narrative do not replace the stored ones either (D#207: 'Weekly summary:
+      // auth refactor' became 'Weekly summary', narrative 'x').
       const isWide = scope === 'wide';
-      const title = isWide ? cand.title : truncate(scrubSecrets(parsed.title || ''), 120);
-      const narrative = isWide
+      const keepStoredText = isWide || scoredZero;
+      const title = keepStoredText ? cand.title : truncate(scrubSecrets(parsed.title || ''), 120);
+      const narrative = keepStoredText
         ? cand.narrative
         : parsed.narrative
           ? truncate(scrubSecrets(parsed.narrative), 500)
@@ -571,9 +574,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // Floor at the stored importance: re-enrich adds a lesson, it must never silently downgrade
       // a user-set/promoted importance (the UPDATE also sets optimized_at → the loss is permanent).
       // Upgrades are still honored — except over an importance a person set (D10), which stays.
-      const importance = humanSet
-        ? cand.importance
-        : Math.max(clampImportance(parsed.importance), cand.importance || 1);
+      // Decided in the UPDATE itself, on the row as it is then: the candidate's importance was read
+      // before the model call, and writing it back undid a person's change made during the call
+      // (D#206).
+      const modelImportance = clampImportance(parsed.importance);
 
       const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
@@ -607,10 +611,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
       // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
       // keeper does (D#146, D#138). Wide keeps the stored title and narrative (it fills the lesson
-      // and the side fields), so the row stays an explicit save. The writer's session row is
-      // best-effort.
+      // and the side fields), so the row stays an explicit save, and so does a row whose stored
+      // text a 0 reply left in place. The writer's session row is best-effort.
       let rewriteSessionId = null;
-      if (!isWide) {
+      if (!keepStoredText) {
         const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);
         if (cur?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
           const enrichSessionId = writerSessionId('enrich-', cand.project);
@@ -629,7 +633,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         .prepare(
           `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
-          text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
+          text=?,
+          importance = CASE WHEN importance_set_at IS NOT NULL THEN importance
+                            ELSE MAX(?, COALESCE(NULLIF(importance, 0), 1)) END,
+          lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
           scope=COALESCE(?, scope), memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL
       `,
@@ -641,7 +648,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           safe.concepts,
           safe.facts,
           safe.text,
-          importance,
+          modelImportance,
           safe.lesson_learned,
           safe.search_aliases,
           minhashSig,
@@ -1300,6 +1307,8 @@ Return ONLY valid JSON:
     const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
     const textField = [conceptsText, factsText, bigramText].filter(Boolean).join(' ');
     const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
+    // An importance a person set on the keeper stays (D10); the UPDATE decides that on the row as
+    // it is then, since a person can set it while this call waits on the model (D#198).
     const importance = Math.max(clampImportance(parsed.importance || 2), maxClusterImportance);
 
     // Scrub LLM-output cluster-merge text fields at the UPDATE boundary.
@@ -1382,7 +1391,8 @@ Return ONLY valid JSON:
       db.prepare(
         `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
-          importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?,
+          importance = CASE WHEN importance_set_at IS NOT NULL THEN importance ELSE ? END,
+          lesson_learned=?, minhash_sig=?, optimized_at=?,
           memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ?
       `,

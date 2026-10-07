@@ -1221,6 +1221,60 @@ describe('re-enrich --scope wide (R-7)', () => {
     ).not.toBeNull();
     const members = db.prepare('SELECT COUNT(*) n FROM observations WHERE compressed_into = ?').get(keeper).n;
     expect(members).toBe(3);
+    // D#207: the reply scored the keeper 0, so its text is not trusted to replace the keeper's.
+    const text = db.prepare('SELECT title, narrative FROM observations WHERE id = ?').get(keeper);
+    expect(text).toEqual({ title: 'Weekly summary: auth refactor', narrative: 'three changes to auth' });
+  });
+
+  it('a reply scoring a person-set row 0 does not rewrite its title or narrative (D#207)', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'keep my words', narrative: 'the text a person kept' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    db.prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?').run(
+      Date.now(),
+      id,
+    );
+    callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT title, narrative FROM observations WHERE id = ?').get(id)).toEqual({
+      title: 'keep my words',
+      narrative: 'the text a person kept',
+    });
+  });
+
+  it('premise: a reply scoring an unprotected narrow row above 0 still rewrites it', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'thin', narrative: 'thin body' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    callModelJSONAsync.mockResolvedValue({
+      type: 'change',
+      title: 'Rich title',
+      narrative: 'rich body',
+      importance: 2,
+    });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT title, narrative FROM observations WHERE id = ?').get(id)).toEqual({
+      title: 'Rich title',
+      narrative: 'rich body',
+    });
+  });
+
+  // D#206: the stamp was read fresh after the model call, but the value written was the
+  // candidate's importance from BEFORE the call, so a person's change during the call was undone.
+  it('re-enrich keeps an importance a person set while the model call was running', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'raced', narrative: 'body text for the row' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    db.prepare('UPDATE observations SET importance = 2 WHERE id = ?').run(id);
+    callModelJSONAsync.mockImplementation(async () => {
+      db.prepare('UPDATE observations SET importance = 1, importance_set_at = ? WHERE id = ?').run(
+        Date.now(),
+        id,
+      );
+      return { type: 'change', title: 'x', narrative: 'x', importance: 3 };
+    });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT importance FROM observations WHERE id = ?').get(id).importance).toBe(1);
   });
 });
 
@@ -1339,6 +1393,40 @@ describe('cluster-merge', () => {
 
     const other = db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(obs[1].id);
     expect(other.compressed_into).toBe(obs[0].id);
+  });
+
+  // D#198: the merged importance was max(model, cluster max) whatever a person had set on the
+  // keeper, so a keeper a person lowered to 1 came back at the model's 3. Set during the model
+  // call here, which also covers a person acting while the merge waits on the model.
+  it('cluster-merge keeps a keeper importance a person set; premise: an unset one takes the model value', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const reply = {
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'merged text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 3,
+    };
+    for (const personSets of [true, false]) {
+      db.prepare('DELETE FROM observations').run();
+      insertObs(db, { title: 'Fix FTS5 bug A', narrative: 'Handled special chars', accessCount: 3 });
+      insertObs(db, { title: 'Fix FTS5 bug B', narrative: 'Handled parentheses', accessCount: 1 });
+      const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+      callModelJSONAsync.mockImplementation(async () => {
+        if (personSets) {
+          db.prepare('UPDATE observations SET importance = 1, importance_set_at = ? WHERE id = ?').run(
+            Date.now(),
+            obs[0].id,
+          );
+        }
+        return reply;
+      });
+      expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+      const imp = db.prepare('SELECT importance FROM observations WHERE id = ?').get(obs[0].id).importance;
+      expect(imp, `personSets=${personSets}`).toBe(personSets ? 1 : 3);
+    }
   });
 
   // D#138: provenance is read from memory_session_id, and a manual- keeper rewritten with model
