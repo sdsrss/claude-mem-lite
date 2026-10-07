@@ -284,10 +284,12 @@ describe('bash/Node disable-detection parity', () => {
       return existsSync(join(memDir, 'runtime', 'reads-org--proj.txt'));
     }
 
-    it('a Windows shell (OSTYPE=msys) follows path.win32.isAbsolute', () => {
-      const got = VALUES.map((v) => [v, bashActs(v, 'msys') ? 'relative' : 'absolute']);
-      expect(got).toEqual(VALUES.map((v) => [v, win32.isAbsolute(v) ? 'absolute' : 'relative']));
-      expect(new Set(got.map(([, k]) => k)).size, 'premise: the values split both ways').toBe(2);
+    it('a Windows shell (OSTYPE=msys, cygwin) follows path.win32.isAbsolute', () => {
+      for (const ostype of ['msys', 'cygwin']) {
+        const got = VALUES.map((v) => [v, bashActs(v, ostype) ? 'relative' : 'absolute']);
+        expect(got, ostype).toEqual(VALUES.map((v) => [v, win32.isAbsolute(v) ? 'absolute' : 'relative']));
+        expect(new Set(got.map(([, k]) => k)).size, 'premise: the values split both ways').toBe(2);
+      }
     });
 
     it('elsewhere (OSTYPE=linux-gnu) follows path.posix.isAbsolute', () => {

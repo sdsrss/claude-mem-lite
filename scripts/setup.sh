@@ -54,7 +54,10 @@ _mem_is_abs() {
 }
 if _mem_is_abs "${CLAUDE_CONFIG_DIR:-}"; then
   CC_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
-  CC_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+  # Trailing slashes off, a bare / kept: the marker keys below read this as text, and `cfg/` must
+  # key the same file as `cfg` (post-release review).
+  while [[ "$CC_CONFIG_DIR" == */ && "$CC_CONFIG_DIR" != / ]]; do CC_CONFIG_DIR="${CC_CONFIG_DIR%/}"; done
+  CC_STATE_FILE="$CC_CONFIG_DIR/.claude.json"
 else
   CC_CONFIG_DIR="$CC_DEFAULT_CONFIG_DIR"
   CC_STATE_FILE="$CC_DEFAULT_STATE_FILE"
@@ -64,8 +67,14 @@ fi
 # profile to start settled it for all of them (D#270). Key each marker by the file it gates. The
 # default files keep the bare names every existing install already has: renaming one re-runs it.
 # Not "is this ~/.claude": CLAUDE_CONFIG_DIR=~/.claude still moves .claude.json into ~/.claude.
+# Another spelling of a path (`cfg/`, `~/./.claude`, a symlinked dir) must key the same file: -ef
+# matches a default that exists, and any other path is hashed by its directory's physical path when
+# that directory exists (it does once Claude Code has run: the plugin runs from its plugins/).
 marker_suffix() {
-  [[ "$1" == "$2" ]] || printf -- '-%s' "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+  [[ "$1" == "$2" || "$1" -ef "$2" ]] && return 0
+  local key="$1"
+  [[ -d "${1%/*}" ]] && key="$(cd "${1%/*}" && pwd -P)/${1##*/}"
+  printf -- '-%s' "$(printf '%s' "$key" | cksum | cut -d' ' -f1)"
 }
 RUNTIME_DIR="$CODE_DIR/runtime"
 if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
@@ -412,7 +421,7 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
 fi
 
 # 9. Residue detection (plugin mode only): warn once if legacy direct-install
-#    hooks remain in ~/.claude/settings.json. A user who installed via global
+#    hooks remain in the config home's settings.json. A user who installed via global
 #    `claude-mem-lite install` and later switched to the marketplace plugin
 #    will run every hook twice (direct settings.json hooks AND plugin hooks)
 #    until they run `claude-mem-lite uninstall` to clear the settings.json
@@ -457,7 +466,7 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
     ' || true
   fi
   # Mark the warning as shown regardless of result — silence is fine if no
-  # residue, and the warning above is one-shot per data-dir.
+  # residue, and the warning above is one-shot per settings.json (RESIDUE_MARKER's key).
   touch "$RESIDUE_MARKER"
 fi
 

@@ -972,6 +972,8 @@ describe('install lifecycle checks', () => {
       for (const [ostype, value, absolute] of [
         ['linux-gnu', 'C:/cfg', false],
         ['msys', '\\\\srv\\cfg', true],
+        ['msys', 'C:/cfg', true],
+        ['cygwin', 'C:/cfg', true],
       ]) {
         const home = profileHome();
         const cwd = makeTmpDir();
@@ -990,6 +992,47 @@ describe('install lifecycle checks', () => {
           rmSync(home, { recursive: true, force: true });
           rmSync(cwd, { recursive: true, force: true });
         }
+      }
+    });
+
+    // Post-release review: the keys compared path TEXT, so `~/.claude/` repeated the residue warning
+    // for the default settings.json and gave ~/.claude/.claude.json a second dedup marker.
+    it('another spelling of the same path reuses its marker', () => {
+      const home = profileHome();
+      try {
+        const runtime = join(home, '.claude-mem-lite', 'runtime');
+        writeFileSync(join(runtime, '.residue-warned-v2.55'), '');
+        const cfg = join(home, '.claude');
+        mkdirSync(cfg, { recursive: true });
+        writeFileSync(join(cfg, 'settings.json'), legacyHooks);
+        const dedupMarkers = () =>
+          readdirSync(runtime)
+            .filter((n) => n.startsWith('.mcp-dedup-'))
+            .sort();
+        expect(runSetup(home, cfg).status).toBe(0);
+        const keyed = dedupMarkers();
+        expect(keyed, 'premise: ~/.claude/.claude.json got its own marker').toHaveLength(1);
+        for (const spelling of [`${cfg}/`, `${cfg}//`, `${home}/./.claude`]) {
+          const r = runSetup(home, spelling);
+          expect(r.status, r.stderr).toBe(0);
+          expect(r.stderr, `${spelling}: the warning repeated for the default settings.json`).not.toContain(
+            'Legacy direct-install hooks',
+          );
+        }
+        expect(dedupMarkers(), 'a second marker for the same .claude.json').toEqual(keyed);
+
+        // A non-default profile, keyed by its own hash: the same under a trailing slash.
+        const work = join(home, 'work-profile');
+        mkdirSync(work, { recursive: true });
+        writeFileSync(join(work, 'settings.json'), legacyHooks);
+        expect(runSetup(home, work).stderr, 'premise: the first run warns').toContain(
+          'Legacy direct-install hooks',
+        );
+        expect(runSetup(home, `${work}/`).stderr, 'the trailing slash re-ran the warning').not.toContain(
+          'Legacy direct-install hooks',
+        );
+      } finally {
+        rmSync(home, { recursive: true, force: true });
       }
     });
 

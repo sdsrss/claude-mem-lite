@@ -281,7 +281,8 @@ export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   // out. Both are version-keyed one-shot migration sentinels written by
   // scripts/setup.sh, and their gate is `! -f <marker>` — deleting one re-runs
   // its migration. `.mcp-dedup-v2.78` gates a block that removes
-  // mcpServers.mem / mcpServers["mem-lite"] from the user's ~/.claude.json with
+  // mcpServers.mem / mcpServers["mem-lite"] from the config home's .claude.json (one marker per
+  // .claude.json since D#270, the same prefix) with
   // a raw writeFileSync (no tmp+rename, no backup), which the repo's own test
   // documents as intentionally one-shot: "If a user later runs `claude mcp add
   // mem ...` themselves, the gate intentionally lets it stand." A 30-day sweep

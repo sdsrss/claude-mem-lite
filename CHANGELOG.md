@@ -22,6 +22,9 @@ All notable changes to claude-mem-lite are documented in this file.
   each run once, and the record that they had run was shared by every profile, so only the
   first profile to start was checked. Each record is now kept per file it checks; the default
   `~/.claude.json` and `~/.claude/settings.json` keep the records existing installs already have.
+  With `CLAUDE_CONFIG_DIR` set to another directory, both checks run once more after this update:
+  that profile's first check of its own files. The cleanup removes only this plugin's own global
+  entries (`mem-lite`, and a legacy `mem` that runs this plugin's server).
 - **Fix: the hook scripts agree with the rest of the plugin on which `CLAUDE_CONFIG_DIR` values
   count as absolute.** On Linux and macOS they took a Windows drive path such as `C:/cfg` as
   absolute, and on Windows they took a UNC path (`\\server\share`) as relative; both now follow
