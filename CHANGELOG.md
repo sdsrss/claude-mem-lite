@@ -48,7 +48,8 @@ once more with the variable set. Plugin installs need nothing. To go back, insta
   npm 11.19.0 went from 298 packages / 541 MB to 96 / 57 MB, and npm 10.9.2 now installs the
   same 96 / 57 MB (the 6.19.4 review measured 237 / 172 MB there with the old file). Every
   runtime dependency stayed at its locked version. `npm install -g` and `npx` read the same
-  file; they were not measured separately. `claude-mem-lite install` from an npm or npx install
+  file; measured after the release from the public registry (2026-10-07, npm 11.19.0), they
+  install the same 96 packages as a dependency install, the same size to within 0.1%. `claude-mem-lite install` from an npm or npx install
   now also locks `~/.claude-mem-lite` with that file, which it previously installed without a
   lockfile. Plugin installs were not affected.
 - **Fix: with `CLAUDE_CONFIG_DIR` set, the installer, updates and hooks use that directory.**
