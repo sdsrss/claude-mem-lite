@@ -920,25 +920,33 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   return recovered;
 }
 
+// A rollback swaps a file SET back just as the install swapped it in, so it holds the same
+// marker for the same reason (D#239 g). Its two callers after a swap — the MED-5 smoke gate
+// and the catch — run once the swap loop's own finally has cleared it.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
-  for (const relPath of installed.reverse()) {
-    try {
-      rmSync(join(targetDir, relPath), { recursive: true, force: true });
-    } catch {
-      /* best-effort */
-    }
-  }
-  for (const relPath of backedUp.reverse()) {
-    const backupPath = join(backupDir, relPath);
-    const targetPath = join(targetDir, relPath);
-    try {
-      if (existsSync(backupPath)) {
-        mkdirSync(dirname(targetPath), { recursive: true });
-        renameSync(backupPath, targetPath);
+  markSwapStart();
+  try {
+    for (const relPath of installed.reverse()) {
+      try {
+        rmSync(join(targetDir, relPath), { recursive: true, force: true });
+      } catch {
+        /* best-effort */
       }
-    } catch (restoreErr) {
-      debugCatch(restoreErr, `installExtractedRelease-restore-${relPath}`);
     }
+    for (const relPath of backedUp.reverse()) {
+      const backupPath = join(backupDir, relPath);
+      const targetPath = join(targetDir, relPath);
+      try {
+        if (existsSync(backupPath)) {
+          mkdirSync(dirname(targetPath), { recursive: true });
+          renameSync(backupPath, targetPath);
+        }
+      } catch (restoreErr) {
+        debugCatch(restoreErr, `installExtractedRelease-restore-${relPath}`);
+      }
+    }
+  } finally {
+    clearSwapMarker();
   }
 }
 
