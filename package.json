@@ -171,6 +171,7 @@
     "lib/deferred-work.mjs",
     "lib/upgrade-banner.mjs",
     "lib/verify-apply-core.mjs",
+    "lib/worker-data-dir.mjs",
     "lib/scrub-record.mjs",
     "lib/native-binding-hint.mjs",
     "lib/import-jsonl.mjs",

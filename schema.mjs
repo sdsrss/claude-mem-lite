@@ -22,6 +22,7 @@ import { isFtsCorruptionError } from './lib/db-unusable.mjs';
 // See lib/data-paths.mjs and tests/repair-path-no-native-dep.test.mjs.
 import { DB_DIR, DB_PATH, CODE_DIR } from './lib/data-paths.mjs';
 import { DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
+import { workerDirGone } from './lib/worker-data-dir.mjs';
 export { DB_DIR, DB_PATH, CODE_DIR };
 
 // Increment when schema changes (tables, columns, indexes, FTS, migrations)
@@ -1283,6 +1284,13 @@ export function runDeferredCleanups(db) {
  * Returns an opened Database instance with WAL + busy_timeout configured.
  */
 export function ensureDb() {
+  // A background worker outliving its data dir must not re-create it (D#265): whoever removed
+  // the dir meant it. Before the legacy-dir migration below, which would move one into place.
+  if (workerDirGone(DB_DIR)) {
+    throw Object.assign(new Error(`data dir ${DB_DIR} was removed while a background worker ran`), {
+      code: 'CLAUDE_MEM_DATA_DIR_GONE',
+    });
+  }
   // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
   // Check DB_PATH (not DB_DIR) because hook-shared.mjs module-level init may create DB_DIR early
   const oldUnhidden = join(homedir(), 'claude-mem-lite');

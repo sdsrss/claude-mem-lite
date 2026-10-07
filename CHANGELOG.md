@@ -24,6 +24,12 @@ All notable changes to claude-mem-lite are documented in this file.
   the direct API leg, Claude Code and the Anthropic SDK append `/v1/messages` themselves, so a
   value copied with its `/v1` posts to `/v1/v1/messages` and fails, while `doctor` printed the
   host reachable in green. It now names the URL the requests go to. What is sent is unchanged.
+- **Fix: a background worker no longer re-creates a data directory removed while it ran.**
+  Detached workers (episode and session summaries, enrichment, maintenance, the update check)
+  can run for up to a minute, and each one created its directories with a recursive `mkdir`.
+  A data directory removed in that window came back holding a fresh `runtime/` and an empty
+  database. A worker now exits, or skips the write, when its data directory is gone; a
+  foreground hook still creates the directory on first run.
 - **Fix: background optimize passes keep what a person set.** Cluster-merge gave its merged
   row the model's importance even when a person had set the keeper's (a keeper lowered to 1 came
   back at 3). Re-enrich read the person's mark after the model call but wrote back the importance

@@ -30,6 +30,7 @@ import {
 } from './lib/schema-skew.mjs';
 import { isDbUnusableError, DB_UNUSABLE_MARKER_PREFIX } from './lib/db-unusable.mjs';
 import { shouldRecordOnce } from './lib/record-once.mjs';
+import { backgroundWorkerEnv, workerDirGone } from './lib/worker-data-dir.mjs';
 import { hookSessionId } from './lib/provenance.mjs';
 import { PROJECT_REKEY_MARKER_PREFIX } from './lib/project-rekey.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
@@ -378,9 +379,11 @@ export function sweepStaleProjectMarkers(
 // exists, so harden here too: create 0700, and chmod a pre-existing dir a prior version
 // created at the default umask. A 0700 dir blocks traversal to every file inside,
 // current and future, regardless of individual file mode (audit sec P3-2 2026-07-24).
+// A background worker whose data dir was removed while it ran does not re-create it (D#265).
 try {
-  if (!existsSync(RUNTIME_DIR)) mkdirSync(RUNTIME_DIR, { recursive: true, mode: 0o700 });
-  else chmodSync(RUNTIME_DIR, 0o700);
+  if (!existsSync(RUNTIME_DIR)) {
+    if (!workerDirGone(DB_DIR)) mkdirSync(RUNTIME_DIR, { recursive: true, mode: 0o700 });
+  } else chmodSync(RUNTIME_DIR, 0o700);
 } catch {}
 
 // ─── Session ID Management ───────────────────────────────────────────────────
@@ -604,7 +607,7 @@ export function spawnBackground(bgEvent, ...extraArgs) {
     const child = spawn(process.execPath, args, {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, CLAUDE_MEM_HOOK_RUNNING: '1' },
+      env: backgroundWorkerEnv(),
     });
     child.on('error', (err) => {
       debugCatch(err, 'spawnBackground');

@@ -240,6 +240,7 @@ async function loadCacheGuard() {
 import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+import { workerDirGone } from './lib/worker-data-dir.mjs';
 // Prevent recursive hooks from background claude -p calls
 // Background workers (llm-episode, llm-summary) are exempt — they're ours
 const event = process.argv[2];
@@ -284,6 +285,9 @@ function pluginDisabledHere() {
 
 if (event && pluginDisabledHere()) process.exit(0);
 if (process.env.CLAUDE_MEM_HOOK_RUNNING && !BG_EVENTS.has(event)) process.exit(0);
+// A worker whose data dir was removed before it started does nothing: no LLM call, no network,
+// and no write that would re-create the dir (D#265).
+if (BG_EVENTS.has(event) && workerDirGone(DB_DIR)) process.exit(0);
 
 // Crash-safe: flush episode buffer on unexpected termination to prevent data loss
 // Uses flag-based approach to avoid calling file I/O inside signal handlers,
