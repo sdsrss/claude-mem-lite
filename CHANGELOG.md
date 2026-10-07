@@ -13,7 +13,16 @@ All notable changes to claude-mem-lite are documented in this file.
   delivered the request to its own loopback, not this machine's. The direct API leg now sends
   plain-http requests itself, straight to the loopback host. `doctor` already probed that host
   directly, so its "reachable (direct)" line now describes the hop the product uses. Without
-  `NODE_USE_ENV_PROXY`, or with an `https://` base URL, nothing changes.
+  `NODE_USE_ENV_PROXY` a plain-http request already went direct and still does; an `https://`
+  base URL takes the same path as before.
+- **Fix: `self-update` no longer says "Already up to date" when it did not check.** With
+  `CLAUDE_MEM_SKIP_UPDATE` set, or on a development install (a git checkout or symlinks), the
+  update check returns without a request, and `self-update` (`node install.mjs update`) printed
+  "✓ Already up to date" for it, even with nothing installed. Someone who set the variable to
+  silence the session-start notice was told they were current and stayed on an old release. It
+  now says the check did not run and why: unset the variable, or update the checkout with git.
+  The exit code is still 0. Its banner also names `self-update`; through `claude-mem-lite`,
+  `update` is the memory editor.
 
 ## v6.23.2 — two proxy fixes; the README stops saying direct installs auto-update
 

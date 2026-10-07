@@ -1,6 +1,7 @@
-// claude-mem-lite: Auto-update via GitHub Releases
-// Checks for new versions on SessionStart, downloads and installs automatically.
-// Skips in dev mode (symlinked installs). Silent on network failure.
+// claude-mem-lite: update check and installer via GitHub Releases
+// The SessionStart check (hook.mjs, allowInstall:false) only records and announces a newer
+// release; `self-update` and `repair` install one, signature-verified. Skips a dev install
+// (a git checkout or symlinks) and under CLAUDE_MEM_SKIP_UPDATE. Silent on network failure.
 
 import { isOurMcpRegistration } from './lib/mcp-ownership.mjs';
 import { execSync, execFileSync } from 'node:child_process';
@@ -72,7 +73,7 @@ export async function checkForUpdate(options = {}) {
     const force = Boolean(options.force);
     const allowInstall = options.allowInstall ?? !pluginMode;
 
-    if (isDevMode() || process.env.CLAUDE_MEM_SKIP_UPDATE) return null;
+    if (updateCheckDisabledReason()) return null;
 
     const state = readState();
     if (!force && !shouldCheck(state)) {
@@ -160,7 +161,7 @@ export async function checkForUpdate(options = {}) {
 // Banner string from cached update-state (≤24h stale), or null. No network I/O.
 export function getCachedUpdateBanner() {
   try {
-    if (isDevMode() || process.env.CLAUDE_MEM_SKIP_UPDATE) return null;
+    if (updateCheckDisabledReason()) return null;
     const state = readState();
     const running = pendingCachedUpdate(state);
     if (running) {
@@ -193,7 +194,7 @@ export function pendingCachedUpdate(state) {
 // Caller spawns the refresh in the background so this session doesn't wait.
 export function isUpdateCheckDue() {
   try {
-    if (isDevMode() || process.env.CLAUDE_MEM_SKIP_UPDATE) return false;
+    if (updateCheckDisabledReason()) return false;
     return shouldCheck(readState());
   } catch {
     return false;
@@ -203,7 +204,7 @@ export function isUpdateCheckDue() {
 // D#187. `CLAUDE_PLUGIN_ROOT` is set in every hook and MCP process Claude Code
 // spawns, so inside those the env var answers "am I a plugin install?" perfectly —
 // which is why v3.84.1's fix, which reads it, was enough THERE. It is not set in a
-// plain terminal, and a plugin-only user typing `claude-mem-lite update` therefore
+// plain terminal, and a plugin-only user typing `claude-mem-lite self-update` therefore
 // fell off both plugin paths at once: getCurrentVersion() returned '0.0.0' (so every
 // release compares as newer, forever), and isPluginMode() was false, so allowInstall
 // defaulted to true and downloadAndInstall laid a full managed tree into
@@ -252,6 +253,19 @@ function isPluginMode() {
 // never a command that would overwrite its working tree. Re-implementing the check at the
 // call site would make it the second copy of a predicate this file has already had to get
 // right twice (whole-dir symlink, then per-file drift) — the twin-drift class.
+/**
+ * Why the update check will not look at all, or null when it will. checkForUpdate returns
+ * null both for "nothing newer" and for "never looked", so a caller that reports to a
+ * person asks this first: `self-update` used to print "Already up to date" under
+ * CLAUDE_MEM_SKIP_UPDATE without a single request (D#251).
+ * @returns {'dev-install'|'CLAUDE_MEM_SKIP_UPDATE'|null}
+ */
+export function updateCheckDisabledReason() {
+  if (isDevMode()) return 'dev-install';
+  if (process.env.CLAUDE_MEM_SKIP_UPDATE) return 'CLAUDE_MEM_SKIP_UPDATE';
+  return null;
+}
+
 export function isDevMode() {
   try {
     // A dev checkout always carries a .git dir. This catches a whole-directory
@@ -412,7 +426,7 @@ export function getCurrentVersion() {
   }
   // D#187: no env var in a plain terminal, so ask the filesystem which plugin
   // version this machine actually runs. Without this a plugin-only user's
-  // `claude-mem-lite update` reads 0.0.0 and every release compares as newer.
+  // `claude-mem-lite self-update` reads 0.0.0 and every release compares as newer.
   const active = installShape()?.activePluginVersion;
   if (active) {
     try {

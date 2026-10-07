@@ -3213,10 +3213,26 @@ function cleanup() {
 // ─── Manual Update ───────────────────────────────────────────────────────────
 
 async function manualUpdate() {
-  console.log('\nclaude-mem-lite update\n');
+  // `self-update`, not `update`: through cli.mjs `update <id>` is the memory editor.
+  console.log('\nclaude-mem-lite self-update\n');
 
   // Force check by importing hook-update (bypasses throttle for manual use)
-  const { checkForUpdate, getCurrentVersion } = await import('./hook-update.mjs');
+  const { checkForUpdate, getCurrentVersion, updateCheckDisabledReason } = await import('./hook-update.mjs');
+  // checkForUpdate returns null without looking in these two cases, and the branch at the
+  // bottom would then report "Already up to date" for a check that never ran. (D#251)
+  const disabled = updateCheckDisabledReason();
+  if (disabled === 'CLAUDE_MEM_SKIP_UPDATE') {
+    warn('Not checked: CLAUDE_MEM_SKIP_UPDATE is set, which turns off update checks and installs.');
+    log('  Unset it and run this command again to update.');
+    console.log('');
+    return;
+  }
+  if (disabled === 'dev-install') {
+    warn(`Not checked: ${INSTALL_DIR} is a development install (a git checkout or symlinks).`);
+    log('  Update the checkout it points to with git instead.');
+    console.log('');
+    return;
+  }
   log('Checking for updates...');
   const result = await checkForUpdate({ force: true, allowInstall: true });
 
