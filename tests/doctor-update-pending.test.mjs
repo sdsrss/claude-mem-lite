@@ -18,12 +18,13 @@ const RUNNING = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).ver
 let home;
 
 function updateStateLine(latestVersion) {
+  return doctorUpdateLine({ lastCheck: '2026-09-27T12:56:14Z', latestVersion, updateAvailable: true });
+}
+
+function doctorUpdateLine(state) {
   const runtime = join(home, 'data', 'runtime');
   mkdirSync(runtime, { recursive: true });
-  writeFileSync(
-    join(runtime, 'update-state.json'),
-    JSON.stringify({ lastCheck: '2026-09-27T12:56:14Z', latestVersion, updateAvailable: true }),
-  );
+  writeFileSync(join(runtime, 'update-state.json'), JSON.stringify(state));
   let stdout;
   try {
     stdout = execFileSync(process.execPath, [INSTALL_PATH, 'doctor'], {
@@ -63,5 +64,35 @@ describe('doctor judges a cached update against the running version (#35, D#115 
     const line = updateStateLine(RUNNING);
     expect(line, 'doctor printed no Update state line at all').toContain(`latest: v${RUNNING}`);
     expect(line).not.toContain('update pending');
+  });
+});
+
+// D#255: from 2026-08-19 to 2026-10-07 every update lookup through a proxy failed (GitHub
+// answered the tunnel's `Host: …:80` with 400), the background check is silent by design, and
+// this line read ✓ with a fresh "last check" the whole time.
+describe('doctor warns when the last update lookup failed (D#255)', () => {
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'doctor-update-lookup-'));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('names the reason and the start of the failing run', () => {
+    const line = doctorUpdateLine({
+      lastCheck: '2026-10-07T09:00:00Z',
+      latestVersion: RUNNING,
+      lookupError: 'HTTP 400 via proxy http://proxy.test:3128',
+      lookupFailingSince: '2026-08-19T08:00:00Z',
+    });
+    expect(line, 'doctor printed no Update state line at all').toContain('⚠');
+    expect(line).toContain('HTTP 400 via proxy http://proxy.test:3128');
+    expect(line).toContain('2026-08-19T08:00:00Z');
+  });
+
+  it('control: the same state with no lookup error stays ✓', () => {
+    const line = doctorUpdateLine({ lastCheck: '2026-10-07T09:00:00Z', latestVersion: RUNNING });
+    expect(line, 'doctor printed no Update state line at all').toContain('✓');
+    expect(line).not.toContain('failed');
   });
 });

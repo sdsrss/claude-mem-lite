@@ -41,7 +41,7 @@ import {
 // version check AND the release download — dies instantly behind a proxy, and
 // because checkForUpdate is silent on network failure the plugin then reports
 // itself permanently up to date. Same tunnel the OpenRouter call site uses.
-import { httpConnectProxyFor, getViaConnectProxy } from './lib/proxy-fetch.mjs';
+import { httpConnectProxyFor, getViaConnectProxy, redactProxyUrl } from './lib/proxy-fetch.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { verifyReleaseFiles, verifyManifestSignature } from './lib/release-digest.mjs';
@@ -97,15 +97,25 @@ export async function checkForUpdate(options = {}) {
       return null;
     }
 
-    const latest = await fetchLatestRelease();
+    const lookup = await lookupLatestRelease();
+    const latest = lookup.release;
     if (!latest) {
-      // Re-read from disk: a 403 inside fetchWithTimeout just persisted rateLimited:true.
+      // Re-read from disk: a 403 inside fetchJson just persisted rateLimited:true.
       // Spreading the stale in-memory `state` (captured above with rateLimited:false) would
       // clobber that flag back to false, so shouldCheck never honors the backoff and the
       // rate-limit mechanism is dead. Re-reading preserves the freshly-written flag.
+      // lookupError / lookupFailingSince are doctor's evidence: lastCheck alone advanced on a
+      // failed lookup too, so doctor printed a fresh "last check" in green while every lookup
+      // behind a proxy failed from 2026-08-19 to 2026-10-07 (D#255). A success clears both.
       const fresh = readState();
-      saveState({ ...fresh, lastCheck: new Date().toISOString() });
-      return failed(lastLookupRateLimited);
+      const now = new Date().toISOString();
+      saveState({
+        ...fresh,
+        lastCheck: now,
+        lookupError: lookup.error,
+        lookupFailingSince: fresh.lookupFailingSince || now,
+      });
+      return failed(lookup.rateLimited);
     }
 
     const currentVersion = getCurrentVersion();
@@ -145,6 +155,8 @@ export async function checkForUpdate(options = {}) {
       updateAvailable: false,
       rateLimited: false,
       lastError: null,
+      lookupError: null,
+      lookupFailingSince: null,
     });
     return null;
   } catch (err) {
@@ -304,64 +316,94 @@ function shouldCheck(state) {
 
 // ── GitHub API ─────────────────────────────────────────────
 // Try releases/latest first, fallback to tags (some repos only use tags)
-// Whether the most recent fetchLatestRelease call was refused with 403/429. The persisted
-// `rateLimited` flag is not that: only a successful lookup clears it, so reading it after a
-// network failure blamed a rate limit from an earlier call. (pre-tag review of cd9f1ab7)
-let lastLookupRateLimited = false;
-
 export async function fetchLatestRelease() {
-  lastLookupRateLimited = false;
+  return (await lookupLatestRelease()).release;
+}
+
+// One lookup's outcome, returned rather than kept in module state: a module flag let a second
+// lookup running at the same time read the first one's 403 (D#260). `rateLimited` is THIS
+// lookup's refusal; the persisted flag is not that, since only a successful lookup clears it
+// (pre-tag review of cd9f1ab7). `error` says why there is no release, for doctor (D#255).
+async function lookupLatestRelease() {
   const headers = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'claude-mem-lite-updater/1.0',
   };
+  const fail = (rateLimited, error) => ({ release: null, rateLimited, error });
 
   // Attempt 1: GitHub Releases API
-  const result = await fetchWithTimeout(
-    `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-    headers,
-  );
-  if (result === 'rate-limited') return null;
+  const result = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, headers);
+  if (result.rateLimited) return fail(true, result.error);
   // Guard tag_name: a 200-OK with a malformed body ({} / {tag_name:null}) would throw
   // `Cannot read properties of undefined (reading 'replace')`. Caught upstream, but it
   // poisons lastError and blocks the tags fallback below — fall through instead.
-  if (result && typeof result.tag_name === 'string') {
+  const rel = result.body;
+  if (rel && typeof rel.tag_name === 'string') {
     return {
-      version: result.tag_name.replace(/^v/, ''),
-      tarballUrl: result.tarball_url,
-      releaseUrl: result.html_url,
-      assets: Array.isArray(result.assets) ? result.assets : [],
+      release: {
+        version: rel.tag_name.replace(/^v/, ''),
+        tarballUrl: rel.tarball_url,
+        releaseUrl: rel.html_url,
+        assets: Array.isArray(rel.assets) ? rel.assets : [],
+      },
+      rateLimited: false,
+      error: null,
     };
   }
 
   // Attempt 2: Tags API fallback (for repos without formal releases)
-  const tags = await fetchWithTimeout(`https://api.github.com/repos/${GITHUB_REPO}/tags?per_page=1`, headers);
-  if (tags === 'rate-limited') return null;
-  if (Array.isArray(tags) && tags.length > 0 && typeof tags[0]?.name === 'string') {
-    const tag = tags[0];
+  const tags = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/tags?per_page=1`, headers);
+  if (tags.rateLimited) return fail(true, tags.error);
+  const tagList = tags.body;
+  if (Array.isArray(tagList) && tagList.length > 0 && typeof tagList[0]?.name === 'string') {
+    const tag = tagList[0];
     return {
-      version: tag.name.replace(/^v/, ''),
-      tarballUrl: `https://api.github.com/repos/${GITHUB_REPO}/tarball/${tag.name}`,
-      releaseUrl: `https://github.com/${GITHUB_REPO}/releases/tag/${tag.name}`,
-      assets: [],
+      release: {
+        version: tag.name.replace(/^v/, ''),
+        tarballUrl: `https://api.github.com/repos/${GITHUB_REPO}/tarball/${tag.name}`,
+        releaseUrl: `https://github.com/${GITHUB_REPO}/releases/tag/${tag.name}`,
+        assets: [],
+      },
+      rateLimited: false,
+      error: null,
     };
   }
 
-  return null;
+  const relErr = result.error || 'no release in the response';
+  const tagErr = tags.error || 'no tag in the response';
+  return fail(false, relErr === tagErr ? relErr : `${relErr}; tags: ${tagErr}`);
 }
 
-async function fetchWithTimeout(url, headers) {
+// Why a request produced no usable body, in words doctor can print: the status, or the
+// transport error's code (native fetch wraps it as `fetch failed` with the code on `cause`).
+// The proxy is named redacted — HTTP(S)_PROXY may carry user:pass@.
+// Total: it runs inside fetchJson's catch, and a throw there would reject the lookup the
+// background check relies on never rejecting.
+function describeLookupError(e, proxy) {
+  try {
+    const what =
+      e?.name === 'AbortError'
+        ? `timed out after ${FETCH_TIMEOUT_MS / 1000} s`
+        : String(e?.cause?.code || e?.code || e?.message || e || 'unknown error');
+    return `${what.slice(0, 160)}${proxy ? ` via proxy ${redactProxyUrl(proxy)}` : ''}`;
+  } catch {
+    return 'unknown error';
+  }
+}
+
+async function fetchJson(url, headers) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let proxy = null;
   try {
     // Proxy configured → CONNECT tunnel; otherwise native fetch, byte-for-byte
     // the previous behaviour. Both shapes expose { status, ok, json() }, and the
     // tunnel REJECTS on transport failure exactly as a failed fetch does, so the
-    // catch below still returns null and the caller still stays silent.
+    // catch below still yields no body and the caller still stays silent.
     // The AbortController above governs only the fetch branch; the tunnel takes
     // the same budget as an explicit argument and bounds the whole call with it
     // (redirect chain included). (pre-tag review NOTE 7)
-    const proxy = httpConnectProxyFor(url);
+    proxy = httpConnectProxyFor(url);
     const res = proxy
       ? await getViaConnectProxy(proxy, url, { headers, timeout: FETCH_TIMEOUT_MS })
       : await fetch(url, { signal: controller.signal, headers });
@@ -372,13 +414,15 @@ async function fetchWithTimeout(url, headers) {
       const state = readState();
       saveState({ ...state, rateLimited: true });
       debugLog('DEBUG', 'hook-update', 'GitHub API rate limited; will retry on the 6h rate-limit cadence');
-      lastLookupRateLimited = true;
-      return 'rate-limited';
+      return {
+        rateLimited: true,
+        error: describeLookupError({ message: `HTTP ${res.status} (rate limited)` }, proxy),
+      };
     }
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+    if (!res.ok) return { error: describeLookupError({ message: `HTTP ${res.status}` }, proxy) };
+    return { body: await res.json() };
+  } catch (e) {
+    return { error: describeLookupError(e, proxy) };
   } finally {
     clearTimeout(timeout);
   }

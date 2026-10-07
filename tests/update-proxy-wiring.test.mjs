@@ -28,7 +28,9 @@ const MEM_DIR = await vi.hoisted(async () => {
   return dir;
 });
 
-vi.mock('../lib/proxy-fetch.mjs', () => ({
+vi.mock('../lib/proxy-fetch.mjs', async (importOriginal) => ({
+  // The real redactor: the lookup names the proxy in its failure reason.
+  redactProxyUrl: (await importOriginal()).redactProxyUrl,
   httpConnectProxyFor: vi.fn(() => null),
   getViaConnectProxy: vi.fn(),
   postViaConnectProxy: vi.fn(),

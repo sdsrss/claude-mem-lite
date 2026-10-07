@@ -2,6 +2,17 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+- **Fix: `doctor` warns when the update check is failing.** A failed release lookup advanced
+  `last check` like a successful one and recorded nothing else, so `doctor` printed a fresh date
+  in green while every lookup behind a proxy failed from 2026-08-19 to 2026-10-07 (fixed in
+  6.23.3); the background check is silent by design. The update state now records why the last
+  lookup failed (`HTTP 400`, `ENOTFOUND`, `proxy CONNECT 403`, with the proxy named, credentials
+  removed) and since when, and `doctor` shows that as a warning until a lookup succeeds. The
+  exit code is unchanged. Two `self-update` runs in one process no longer share one rate-limit
+  verdict (no shipped caller ran two).
+
 ## v6.23.3 — the update path works behind a proxy again; a gateway key no longer reaches it
 
 Fixes only; no schema change, no migration, no new setting.

@@ -2498,7 +2498,20 @@ async function doctor() {
       }
       if (state.rateLimited) parts.push('rate-limited');
       if (state.lastError) parts.push(`last error: ${state.lastError}`);
-      ok(`Update state: ${parts.join(', ') || 'empty'}`);
+      // A failed lookup advances lastCheck too, so without this the line read ✓ with a fresh
+      // date while every lookup behind a proxy failed for seven weeks (D#255). The background
+      // check is silent by design; this is where a failing one becomes visible.
+      if (state.lookupError) {
+        const since = state.lookupFailingSince ? `, failing since ${state.lookupFailingSince}` : '';
+        dwarn(
+          `Update state: ${parts.join(', ')} — the last release lookup failed (${state.lookupError}${since})`,
+        );
+        log(
+          'Until a lookup succeeds no update is announced, and self-update / repair cannot fetch a release.',
+        );
+      } else {
+        ok(`Update state: ${parts.join(', ') || 'empty'}`);
+      }
     } else if (isDevInstall()) {
       // Dev installs symlink server.mjs → project source; hook-update.mjs
       // short-circuits before writing state (see hook-update.mjs isDevMode).

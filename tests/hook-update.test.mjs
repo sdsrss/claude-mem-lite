@@ -666,7 +666,7 @@ describe('rate-limit handling + malformed-response robustness', () => {
     const dataDir = makeDataDir('1.0.0');
     const statePath = join(dataDir, 'runtime', 'update-state.json');
     writeFileSync(statePath, JSON.stringify({ lastCheck: new Date(0).toISOString(), rateLimited: false }));
-    // GitHub 403 → fetchWithTimeout writes rateLimited:true; the !latest branch must not
+    // GitHub 403 → fetchJson writes rateLimited:true; the !latest branch must not
     // clobber it back to false with a stale in-memory snapshot.
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
     const { checkForUpdate } = await loadModule({
@@ -747,6 +747,71 @@ describe('rate-limit handling + malformed-response robustness', () => {
     });
     // The persisted flag still drives the 6h backoff; only the diagnosis stopped reading it.
     expect(JSON.parse(readFileSync(statePath, 'utf8')).rateLimited).toBe(true);
+  });
+
+  // D#260: the rate-limit verdict was a module variable, so a second lookup running at the
+  // same time read the first one's 403. Call order: A's releases call (403), then B's
+  // releases and tags calls (network errors).
+  it('reportFailure keeps concurrent lookups apart: only the refused one reads rate-limited', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) })
+      .mockRejectedValueOnce(new Error('ENOTFOUND'))
+      .mockRejectedValueOnce(new Error('ENOTFOUND'));
+
+    const [a, b] = await Promise.all([
+      checkForUpdate({ force: true, reportFailure: true }),
+      checkForUpdate({ force: true, reportFailure: true }),
+    ]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    expect(a).toMatchObject({ checkFailed: true, rateLimited: true });
+    expect(b).toMatchObject({ checkFailed: true, rateLimited: false });
+  });
+
+  // D#255: a failed lookup advanced lastCheck and left nothing else, so doctor printed a fresh
+  // "last check" in green while every lookup behind a proxy failed for seven weeks.
+  it('a failed lookup records why and since when; a successful one clears both', async () => {
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    const statePath = join(dataDir, 'runtime', 'update-state.json');
+    writeFileSync(statePath, JSON.stringify({ lastCheck: new Date(0).toISOString(), rateLimited: false }));
+    const readStateFile = () => JSON.parse(readFileSync(statePath, 'utf8'));
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({}) });
+    expect(await checkForUpdate({ force: true })).toBeNull();
+    const first = readStateFile();
+    expect(first.lookupError).toContain('HTTP 400');
+    expect(Number.isNaN(Date.parse(first.lookupFailingSince))).toBe(false);
+
+    // A later failure names its own reason and keeps the start of the run.
+    const netErr = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    globalThis.fetch = vi.fn().mockRejectedValue(netErr);
+    expect(await checkForUpdate({ force: true })).toBeNull();
+    const second = readStateFile();
+    expect(second.lookupError).toContain('ENOTFOUND');
+    expect(second.lookupError).not.toContain('HTTP 400');
+    expect(second.lookupFailingSince).toBe(first.lookupFailingSince);
+
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ tag_name: 'v1.0.0', assets: [] }) });
+    expect(await checkForUpdate({ force: true })).toBeNull();
+    const cleared = readStateFile();
+    expect(cleared.latestVersion).toBe('1.0.0');
+    expect(cleared.lookupError ?? null).toBeNull();
+    expect(cleared.lookupFailingSince ?? null).toBeNull();
   });
 
   it('falls through to the tags API when releases/latest returns 200 with no tag_name (no crash)', async () => {
