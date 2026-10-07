@@ -723,6 +723,31 @@ describe('rate-limit handling + malformed-response robustness', () => {
     expect(await checkForUpdate({ force: true, reportFailure: true })).toBeNull();
   });
 
+  it('reportFailure reads THIS lookup, not a rate limit persisted by an earlier one', async () => {
+    // The persisted flag is cleared only by a successful lookup, so after one 403 every later
+    // network failure was reported as "rate-limiting" (pre-tag review of cd9f1ab7).
+    const { home } = makeCodeHome('1.0.0');
+    const dataDir = makeDataDir('1.0.0');
+    const statePath = join(dataDir, 'runtime', 'update-state.json');
+    writeFileSync(statePath, JSON.stringify({ lastCheck: new Date(0).toISOString(), rateLimited: true }));
+    const { checkForUpdate } = await loadModule({
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PLUGIN_ROOT: '/plugin/root',
+      HOME: home,
+    });
+
+    // Same process: a real 403 first, then a network failure.
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
+    expect(await checkForUpdate({ force: true, reportFailure: true })).toMatchObject({ rateLimited: true });
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
+    expect(await checkForUpdate({ force: true, reportFailure: true })).toMatchObject({
+      checkFailed: true,
+      rateLimited: false,
+    });
+    // The persisted flag still drives the 6h backoff; only the diagnosis stopped reading it.
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).rateLimited).toBe(true);
+  });
+
   it('falls through to the tags API when releases/latest returns 200 with no tag_name (no crash)', async () => {
     const { home } = makeCodeHome('1.0.0');
     const dataDir = makeDataDir('1.0.0');

@@ -105,7 +105,7 @@ export async function checkForUpdate(options = {}) {
       // rate-limit mechanism is dead. Re-reading preserves the freshly-written flag.
       const fresh = readState();
       saveState({ ...fresh, lastCheck: new Date().toISOString() });
-      return failed(Boolean(fresh.rateLimited));
+      return failed(lastLookupRateLimited);
     }
 
     const currentVersion = getCurrentVersion();
@@ -304,7 +304,13 @@ function shouldCheck(state) {
 
 // ── GitHub API ─────────────────────────────────────────────
 // Try releases/latest first, fallback to tags (some repos only use tags)
+// Whether the most recent fetchLatestRelease call was refused with 403/429. The persisted
+// `rateLimited` flag is not that: only a successful lookup clears it, so reading it after a
+// network failure blamed a rate limit from an earlier call. (pre-tag review of cd9f1ab7)
+let lastLookupRateLimited = false;
+
 export async function fetchLatestRelease() {
+  lastLookupRateLimited = false;
   const headers = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'claude-mem-lite-updater/1.0',
@@ -366,6 +372,7 @@ async function fetchWithTimeout(url, headers) {
       const state = readState();
       saveState({ ...state, rateLimited: true });
       debugLog('DEBUG', 'hook-update', 'GitHub API rate limited; will retry on the 6h rate-limit cadence');
+      lastLookupRateLimited = true;
       return 'rate-limited';
     }
     if (!res.ok) return null;
