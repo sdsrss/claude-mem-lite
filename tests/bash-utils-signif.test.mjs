@@ -632,3 +632,74 @@ describe('detectBashSignificance — a red count must sit in a summary (D#179)',
     ).toBe(false);
   });
 });
+
+// Pre-tag review of D#179 (P2-1): node:test's spec reporter ends a passing test's line with
+// " (<ms>)" and TAP ends "ok N - <name>" at end of line, so a test NAMED with a count sat in a
+// summary position by construction. Lines a runner prints for a PASSED test are not summaries.
+describe('detectBashSignificance — a passed test’s own line is never a red summary (D#179 review)', () => {
+  const sig = (command, out) => detectBashSignificance({ command }, out);
+  // Real node:test v26 output, spec and TAP reporters.
+  const SPEC = [
+    '✔ handles 2 errors (0.358075ms)',
+    '✔ reports 3 failed (0.081058ms)',
+    'ℹ tests 2',
+    'ℹ pass 2',
+    'ℹ fail 0',
+    'ℹ cancelled 0',
+    'ℹ duration_ms 37.093879',
+  ].join('\n');
+  const TAP = [
+    'TAP version 13',
+    '# Subtest: handles 2 errors',
+    'ok 1 - handles 2 errors',
+    '  ---',
+    '  duration_ms: 0.338354',
+    '  ...',
+    '# Subtest: reports 3 failed',
+    'ok 2 - reports 3 failed',
+    '1..2',
+    '# tests 2',
+    '# pass 2',
+    '# fail 0',
+    '# cancelled 0',
+  ].join('\n');
+
+  it('spec reporter: passing tests named "… 2 errors" / "… 3 failed" are not an error', () => {
+    expect(sig('node --test', SPEC).isError).toBe(false);
+  });
+
+  it('TAP reporter: the same names are not an error', () => {
+    expect(sig('node --test --test-reporter=tap', TAP).isError).toBe(false);
+  });
+
+  it('a red count printed for a FAILED test still outvotes the green summary', () => {
+    const out = SPEC.replace('✔ reports 3 failed (0.081058ms)', '✖ reports 3 failed (0.081058ms)').replace(
+      'ℹ fail 0',
+      'ℹ fail 0',
+    );
+    expect(sig('node --test', out).isError).toBe(true);
+  });
+
+  it('a summary that is red only by its "(" follower is red (vitest "Test Files  1 failed (1)")', () => {
+    expect(sig('bun test && npx vitest run', ' 5 pass\n 0 fail\n Test Files  1 failed (1)').isError).toBe(
+      true,
+    );
+  });
+
+  it('a go "--- FAIL:" line alone is a banner', () => {
+    expect(
+      sig('bun test && go test -v ./... | grep -- "---"', ' 5 pass\n 0 fail\n--- FAIL: TestSplit (0.00s)')
+        .isError,
+    ).toBe(true);
+  });
+
+  it('tsc reports beside a green summary are red', () => {
+    for (const tsc of [
+      'Found 1 error in src/a.ts:1',
+      'Found 3 errors in the same file, starting at: src/a.ts:4',
+      'Found 1 error. Watching for file changes.',
+    ]) {
+      expect(sig('bun test && npx tsc', ` 5 pass\n 0 fail\n${tsc}`).isError, tsc).toBe(true);
+    }
+  });
+});

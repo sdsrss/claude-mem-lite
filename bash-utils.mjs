@@ -632,6 +632,27 @@ function withoutDiffHunks(text) {
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
 
+// A line a test runner prints for one PASSED test: it carries the test's name, not a summary.
+const PASSED_TEST_LINE_RE = /^[ \t]*(?:✔|✓|ok[ \t]+\d+[ \t]+-|# Subtest:)/;
+
+/**
+ * Whether test-runner output carries a red summary or failure banner (detectBashSignificance's
+ * veto on a green "0 fail" marker; D#179).
+ * @param {string} scan
+ * @returns {boolean}
+ */
+function hasRedTestSummary(scan) {
+  const lines = scan
+    .split('\n')
+    .filter((l) => !PASSED_TEST_LINE_RE.test(l))
+    .join('\n');
+  return (
+    /\b[1-9]\d*[ \t]+(?:fail|failed|failures|failing|errors?)\b(?=[ \t]*(?:$|[,;|(]|\.(?:[ \t]|$)|in[ \t]+\S))|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
+      lines,
+    ) || /^[ \t]*(?:--- )?FAIL(?:ED)?(?::|[ \t]|$)/m.test(lines)
+  );
+}
+
 /**
  * Detect significance signals in a Bash command and its response.
  * Checks for errors, test runs, builds, git operations, and deployments.
@@ -676,18 +697,21 @@ export function detectBashSignificance(input, response) {
   // "fail 0" next to "cancelled 1" (pre-tag defect review, item 7 F1). Red = a nonzero fail /
   // cancelled count in either summary form.
   // D#179: a count-first red must sit where a summary puts it — end of line, or before `,` `;`
-  // `|` `(` or `in <n>` — on ONE line. Matched anywhere and across newlines, a passing run whose
-  // test name or log said "3 failed" / "2 failed attempts" read red, and "want 2\nFAIL" read as
-  // "2 FAIL". `errors?` is red too (pytest "1 passed, 1 error", tsc, eslint). go / jest / vitest
-  // failures carry a case-sensitive FAIL / FAILED banner at line start (shell suites print
-  // "FAILED: 3 case(s)", pytest "FAILED test_x.py::…"), read on its own.
+  // `|` `(` `. ` or `in …` — on ONE line, and never on a line a runner prints for a PASSED test
+  // (node:test `✔ name (1ms)`, vitest / bun `✓ name`, TAP `ok 1 - name` and its `# Subtest:`),
+  // which carries the test's NAME. Matched anywhere and across newlines, a passing run whose test
+  // name or log said "3 failed" / "2 failed attempts" read red, and "want 2\nFAIL" read as
+  // "2 FAIL". `errors?` is red too (pytest "1 passed, 1 error", tsc "Found 1 error in …",
+  // eslint "(2 errors, 0 warnings)"). go / jest / vitest / shell-suite failures carry a
+  // case-sensitive FAIL / FAILED banner at line start ("--- FAIL:", "FAILED: 3 case(s)", pytest
+  // "FAILED test_x.py::…"), read on its own. The green marker still
+  // spans lines on purpose: made one-line, 15 of this machine's recorded outputs flipped to
+  // errors and about 13 of them were passing batteries and file reads that only ever matched
+  // "0\nFAIL" by accident (pre-tag review, measured 2026-10-07).
   const hasGreenTestSummary =
     looksLikeError &&
     /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan) &&
-    !/\b[1-9]\d*[ \t]+(?:fail|failed|failures|failing|errors?)\b(?=[ \t]*(?:$|[,;|(]|in[ \t]+\d))|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
-      scan,
-    ) &&
-    !/^[ \t]*(?:--- )?FAIL(?:ED)?(?::|[ \t]|$)/m.test(scan);
+    !hasRedTestSummary(scan);
   // NOTE: do not add `\bFAIL\s` here — with /i flag it would re-match the
   // very `0 fail\n` token green-summary is trying to exempt. A real test
   // failure produces "N fail" (N≥1) which never triggers hasGreenTestSummary,
