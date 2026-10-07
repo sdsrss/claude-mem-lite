@@ -2,7 +2,11 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## v6.23.0 — gateway support on the direct API leg; large stores stop timing out
+## v6.23.1 — gateway support on the direct API leg; large stores stop timing out
+
+v6.23.0 was tagged but never published: its release check failed on Node 22 in a test added for
+this release. Node 22 cannot verify an IPv6 address in a TLS certificate, so the test now skips
+there. 6.23.1 ships the same product code, and the notes below are the 6.23.0 notes.
 
 One change for users who already set `ANTHROPIC_BASE_URL` (below), one opt-in feature, and a
 fix. No schema-version change and no migration: 6.22.1 still opens a database this release has
@@ -40,7 +44,9 @@ can follow the README's rollback recipe); staying there also gives up the large-
     says to fix or unset the value.
   - `doctor` probes the configured host and port, directly and through a proxy, including a
     gateway addressed by an IPv4 or IPv6 literal, and such a gateway works through
-    `HTTPS_PROXY`.
+    `HTTPS_PROXY`. On Node 22 an https gateway addressed by an IPv6 literal fails certificate
+    verification on every path, a Node 22 limitation (seen with `[::1]`; Node 24 and 26 accept
+    the same certificate).
   - A 400 whose message names the `` `temperature` `` field in backticks (as Azure AI Foundry's
     does) and says it is deprecated or not supported is retried once without it, while at least
     500 ms of the call's budget remain.

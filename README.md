@@ -237,7 +237,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
-## Upgrading to 6.23.0
+## Upgrading to 6.23.1
 
 **If you set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, background LLM calls now go to that
 gateway.** No schema-version change: 6.22.1 still opens the database after this release has.
