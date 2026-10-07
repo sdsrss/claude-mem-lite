@@ -1,8 +1,9 @@
 // Issue #41: nothing in the package ever ran ANALYZE, so no database carried planner
 // statistics. Without sqlite_stat1 the planner drives `observations_fts JOIN observations`
 // from idx_obs_project_live and evaluates the FTS5 MATCH once per candidate row. Measured
-// 2026-10-07 on a synthetic 44k-row single-project corpus: one searchByFts (OR fallback)
-// took 9.4 s stat-less and 13 ms once analyzed; the UserPromptSubmit hook's budget is 2 s.
+// 2026-10-07 on a synthetic 44k-row single-project corpus (generator not in the repo): one
+// searchByFts (OR fallback) took 9.4 s stat-less and 13 ms once analyzed; the UserPromptSubmit
+// hook's budget is 2 s. These cases pin the plan flip and the call sites, not the timing.
 //
 // refreshPlannerStats is SQLite's own recommendation (PRAGMA optimize=0x10002), run where
 // the docs put it: on a long-lived connection's open (the MCP server), periodically (the

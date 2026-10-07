@@ -1341,13 +1341,16 @@ export function ensureDb() {
 /**
  * Give the query planner statistics (sqlite_stat1/4) the way SQLite's docs recommend:
  * `PRAGMA optimize=0x10002` analyzes only tables whose indexes have no statistics yet or
- * whose row count moved 10-fold since their last ANALYZE, under SQLite's own temporary
- * analysis_limit, and costs ~0.1 ms when there is nothing to do.
+ * whose row count moved 10-fold since their last ANALYZE, and costs ~0.1 ms when there is
+ * nothing to do. The mask leaves out 0x10 (the temporary analysis_limit), so a pass that does
+ * run is a full ANALYZE of those tables, stat4 included: 17 ms at 44k observations and 103 ms
+ * at 400k (2026-10-07, synthetic stores). With 0x10 set, stat4 came back empty.
  *
  * Nothing ran ANALYZE before #41, so no database had statistics. Without them the planner
  * drives `observations_fts JOIN observations` from idx_obs_project_live and evaluates the
  * FTS5 MATCH once per candidate row: 9.4 s for one hook search on a 44k-row project, 13 ms
- * once analyzed (2026-10-07, synthetic corpus; tests/planner-stats.test.mjs).
+ * once analyzed (2026-10-07, tree 7cffde0, a synthetic corpus whose generator is not in the
+ * repo; tests/planner-stats.test.mjs pins the plan flip, not the timing).
  *
  * Called where the docs put it: when a long-lived connection opens (server.mjs), once a day
  * (the auto-maintain worker) and after a bulk load (import-jsonl). Not on hook opens: an

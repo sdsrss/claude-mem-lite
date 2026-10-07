@@ -6,18 +6,23 @@ All notable changes to claude-mem-lite are documented in this file.
 
 One change for users who already set `ANTHROPIC_BASE_URL` (below), one opt-in feature, and a
 fix. No schema-version change and no migration: 6.22.1 still opens a database this release has
-opened. To keep the old gateway behaviour, pin `claude-mem-lite@6.22.1`.
+opened. To keep the old gateway behaviour, stay on 6.22.1: a direct or npx install also needs
+`CLAUDE_MEM_SKIP_UPDATE=1`, or it updates itself within a day, and a plugin install follows the
+README's rollback recipe. Staying there also gives up the large-store fix below.
 
 - **Fix: on a large store every prompt's memory search could take seconds and time out** (#41,
   reported by @flamarion). Nothing ever ran `ANALYZE`, so no database had SQLite's planner
-  statistics, and without them SQLite ran the full-text match once per row of the project. On a
-  synthetic project of 44k observations (a size `import-jsonl` can reach), one search took
-  9.3–9.6 s over three runs, against the UserPromptSubmit hook's 2 s budget; Claude Code prints
-  "timed out after 2s — output discarded" when that happens. The database now gets statistics
-  the way SQLite recommends (`PRAGMA optimize`): when the MCP server opens it, in the daily
-  background maintenance, and after `import-jsonl` loads rows. After one maintenance pass the
-  same search on the same database took 14 ms; when there is nothing to analyze the call costs
-  about 0.1 ms. The database gains SQLite's own `sqlite_stat1` and `sqlite_stat4` tables.
+  statistics, and without them SQLite ran the full-text match once per row of the project.
+  Against the UserPromptSubmit hook's 2 s budget, the reporter's store of 44k observations took
+  3.3 s for a short prompt and over 60 s for a 4k-character one, and Claude Code printed "timed
+  out after 2s — output discarded".
+  The database now gets statistics the way SQLite recommends (`PRAGMA optimize`): when the MCP
+  server opens it, in the daily background maintenance, and after `import-jsonl` loads rows. On
+  three synthetic 44k-observation projects (2026-10-07), one search took 7–20 s without
+  statistics and 14–28 ms after one maintenance pass. When there is nothing to analyze the call
+  costs about 0.1 ms; the first pass on a large store is a full `ANALYZE` (17 ms at 44k
+  observations, 103 ms at 400k). The database gains SQLite's own `sqlite_stat1` and
+  `sqlite_stat4` tables.
 - **Change: `ANTHROPIC_BASE_URL` and the tier model variables now apply to the direct API leg**
   (#33, by @thenewnano). With `ANTHROPIC_API_KEY` set, background LLM calls go straight to the
   Messages API. That leg was fixed to `api.anthropic.com` and the built-in model IDs, so an
@@ -28,12 +33,17 @@ opened. To keep the old gateway behaviour, pin `claude-mem-lite@6.22.1`.
     The two model variables apply only when a usable base URL is set.
   - **If you already set `ANTHROPIC_BASE_URL` for Claude Code and have `ANTHROPIC_API_KEY`,
     these calls now go to that gateway**, with the tier models if you set them.
-  - A value the plugin cannot use (not http or https, plain http to a host that is not
-    loopback, credentials in the URL, a query or a fragment) skips the direct leg, so the key
-    is not sent anywhere else. Calls fall back to `claude -p`, and `doctor` warns.
-  - `doctor` probes the configured host and port, directly and through a proxy. A gateway
-    addressed by IP works through `HTTPS_PROXY`. A 400 saying `temperature` is deprecated or
-    unsupported is retried once without it.
+  - A value the plugin cannot use (not a parseable URL, not http or https, plain http to a host
+    that is not loopback, credentials in the URL, a query or a fragment) skips the direct leg,
+    so the plugin sends the key neither to that URL nor to `api.anthropic.com`. Calls fall back
+    to `claude -p`, which reads `ANTHROPIC_BASE_URL` itself, and `doctor` says to fix or unset
+    the value.
+  - `doctor` probes the configured host and port, directly and through a proxy, including a
+    gateway addressed by an IPv4 or IPv6 literal, and such a gateway works through
+    `HTTPS_PROXY`.
+  - A 400 whose message names the `` `temperature` `` field in backticks (as Azure AI Foundry's
+    does) and says it is deprecated or not supported is retried once without it, while at least
+    500 ms of the call's budget remain.
 - **New, opt-in: search relevance telemetry** (#40, by @mekineer-com; #31).
   `CLAUDE_MEM_SEARCH_TELEMETRY=1` records MCP `mem_search` runs stamped with the running
   version, adds a `mem_search_feedback` tool to rate results of searches the current server

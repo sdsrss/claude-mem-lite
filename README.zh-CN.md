@@ -202,16 +202,18 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 ## 升级到 6.23.0
 
 **如果你设置了 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_API_KEY`，后台 LLM 调用现在会发往那个网关。**
-没有 schema 版本变更：本版本打开过的数据库，6.22.1 仍能打开。想保持旧行为，请固定
-`claude-mem-lite@6.22.1`。
+没有 schema 版本变更：本版本打开过的数据库，6.22.1 仍能打开。想保持旧行为，请停留在 6.22.1：
+直接安装或 npx 安装还需要设 `CLAUDE_MEM_SKIP_UPDATE=1`，否则一天之内会自动更新；插件安装请按英文
+README "Trust model per install path" 一节的回退步骤操作。
 
 - **受影响的是谁。** 以前直连 API 这一路不管 `ANTHROPIC_BASE_URL` 是什么，都用内置模型 ID 发往
   `api.anthropic.com`，只有 `claude -p` 兜底会跟随它。现在直连这一路也用它，同时采用
   `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`。没设 `ANTHROPIC_BASE_URL`
   时一切不变，即使设了这两个模型变量也一样。
-- **插件用不了的值**（不是 http 或 https、对非回环主机用明文 http、URL 里带凭据、带查询串或片段）
-  会跳过直连这一路：所有后台调用改走 `claude -p`，`claude-mem-lite doctor` 会说明原因。`doctor`
-  现在探测的是网关的主机和端口，而不是 `api.anthropic.com`。
+- **插件用不了的值**（无法解析成 URL、不是 http 或 https、对非回环主机用明文 http、URL 里带凭据、
+  带查询串或片段）会跳过直连这一路：所有后台调用改走 `claude -p`（它自己也会读取
+  `ANTHROPIC_BASE_URL`），`claude-mem-lite doctor` 会说明原因。`doctor` 现在探测的是网关的主机和端口，
+  而不是 `api.anthropic.com`。
 - **本版本还有：** 数据量大的存储不再每次提示都超时。数据库现在会有 SQLite 的查询规划统计，因此会多出
   SQLite 自己的 `sqlite_stat1` / `sqlite_stat4` 表。另外新增默认关闭的开关
   `CLAUDE_MEM_SEARCH_TELEMETRY=1`，用来记录 MCP 搜索以便给相关性打分。详见 CHANGELOG.md。
@@ -829,7 +831,10 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 |------|------|--------|
 | `CLAUDE_MEM_DIR` | 自定义数据目录。所有数据库与运行时文件均存储在此。 | `~/.claude-mem-lite/` |
 | `CLAUDE_MEM_MODEL` | 后台 LLM 调用模型（Episode 提取、会话总结、调度）。可选 `haiku` 或 `sonnet`。 | `haiku` |
-| `ANTHROPIC_API_KEY` | Anthropic API key。设置后所有后台 LLM 调用直连 Anthropic Messages API（带 prompt caching），优先级最高。 | _(未设 → CLI)_ |
+| `ANTHROPIC_API_KEY` | Anthropic API key。设置后所有后台 LLM 调用直连 Anthropic Messages API（带 prompt caching）；设了 `ANTHROPIC_BASE_URL` 时改发往那个网关。优先级最高。 | _(未设 → CLI)_ |
+| `ANTHROPIC_BASE_URL` | 由兼容 Anthropic 的网关（Azure AI Foundry、LiteLLM、Bedrock/Vertex 代理）提供模型时，直连 Messages API 使用的基础 URL。不要带 `/v1` 后缀，端点路径会自动拼上。`claude -p` 兜底读取同一个变量，所以一个值同时作用于两条路径。明文 `http://` 只接受回环主机，否则 API key 会以明文发送。设了但不可用的值会跳过直连这一路，后台调用改走 `claude -p`，doctor 会提示。 | `https://api.anthropic.com` |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `haiku` 档的模型 ID 或网关部署名，**仅在设了 `ANTHROPIC_BASE_URL` 时**用于直连 API。没有基础 URL 时只给 CLI 用，所以这个别名的 Bedrock/Vertex 写法不会被发往 `api.anthropic.com`。网关按部署名而不是 Anthropic 模型 ID 路由时（Azure Foundry 部署）使用。`claude -p` 兜底的 `--model haiku` 别名也经由它解析。 | 内置 `claude-haiku-4-5-…` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | 同上，用于 `sonnet` 档。 | 内置 `claude-sonnet-4-5-…` |
 | `OPENROUTER_API_KEY` | OpenRouter API key（OpenAI 兼容）。当**未设** `ANTHROPIC_API_KEY` 时用于后台 LLM 调用；两者都未设则回退到 `claude -p` CLI。 | _(未设)_ |
 | `OPENROUTER_MODEL` | 覆盖**所有**后台调用的 OpenRouter 模型 slug（如 `openai/gpt-4o-mini`、`qwen/qwen-2.5-72b-instruct`）。未设时按 `CLAUDE_MEM_MODEL` 分层映射到 `anthropic/claude-haiku-4.5`（haiku）或 `anthropic/claude-sonnet-4.5`（sonnet）。 | _(分层默认)_ |
 | `CLAUDE_MEM_DEBUG` | 启用调试日志（设为 `1` 启用）。 | _(禁用)_ |
@@ -842,6 +847,12 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 在**所有**项目停止自动 adopt——不注入引导文本、不新建本地文件（`CLAUDE.local.md` 或 `.claude/rules/claude-mem-lite.md`），也不同步已有的 `CLAUDE.md` 或本地托管块（这些托管块会保留并继续加载，直到 `claude-mem-lite unadopt`）。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
 | `MEM_NO_ADOPT_HINT` | 静音项目第一次得到 `CLAUDE.local.md`、或第一次以注入方式被引导时给你的一次性提示（后者建议运行 `/adopt`，在 `$HOME` 下除外；在这个文件会让 `AGENTS.md` 失效的项目里，还会说明 `AGENTS.md` 的情况和相应设置）、引导写进 `.claude/rules/claude-mem-lite.md` 时的一次性提示，SessionStart 给只有托管块的 `CLAUDE.md` 补上 `AGENTS.md` 导入时的一次性提示，以及当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 | `CLAUDE_MEM_RULES_STEERING` | 设为 `1` 时，在 `CLAUDE.local.md` 会让 Claude Code 不再读项目 `AGENTS.md` 的仓库里，自动 adopt 把托管块写进 `.claude/rules/claude-mem-lite.md`（排除在 git 之外）而不是注入；子代理能看到它，`AGENTS.md` 也继续加载。开着时写下的文件之后一直是引导渠道。默认关闭：预先登记的 A/B 没有显示出达到标准的、胜过注入的效果（`docs/audits/20261006-d212-ab.md`）。 | _（注入）_ |
+| `CLAUDE_MEM_SEARCH_TELEMETRY` | 设为 `1` 时记录 MCP `mem_search` 的查询和结果，输出 Search ID 供可选的 `mem_search_feedback` 打分，并给每次搜索标上当时运行的 claude-mem-lite 版本。 | _(关闭)_ |
+
+搜索遥测记录会一直保留，直到你删除。用 `claude-mem-lite stats --search-telemetry` 查看数量；在所配置的
+SQLite 数据库（通常是 `~/.claude-mem-lite/claude-mem-lite.db`）里执行
+`DELETE FROM search_results; DELETE FROM search_runs; VACUUM;` 清除。数据库旁边删除前留下的 `.bak`
+快照，在被删掉之前仍保有之前的内容。
 
 ## 许可证
 
