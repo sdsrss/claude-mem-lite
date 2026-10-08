@@ -1328,8 +1328,9 @@ function listUpdateResidue() {
  * tree is written, or for a later entry that can replay it).
  * @param {{f: string, kind: string}[]} found entries from listUpdateResidue
  * @returns {Promise<{finished: string[], removed: string[], kept: string[], deferred: string[],
- *   left: string[]}>} kept: left on purpose because its journal cannot be read; deferred: an
- *   unfinished swap left because hook-update could not load; left: anything else still there
+ *   unfinished: string[], left: string[]}>} kept: left on purpose because its journal cannot be
+ *   read; deferred: an unfinished swap left because hook-update could not load; unfinished: one its
+ *   replay could not put every file back from, left holding them (D#293); left: anything else
  */
 async function recoverUpdateResidue(found) {
   let replayed = true;
@@ -1350,11 +1351,13 @@ async function recoverUpdateResidue(found) {
       /* reported below as left */
     }
   }
-  const out = { finished: [], removed: [], kept: [], deferred: [], left: [] };
+  const out = { finished: [], removed: [], kept: [], deferred: [], unfinished: [], left: [] };
   for (const { f, kind } of found) {
     if (!pathPresent(join(INSTALL_DIR, f))) (kind === 'unfinished-swap' ? out.finished : out.removed).push(f);
     else if (kind === 'unreadable-journal') out.kept.push(f);
     else if (kind === 'unfinished-swap' && !replayed) out.deferred.push(f);
+    else if (kind === 'unfinished-swap' && classifyUpdateResidue(INSTALL_DIR, f) === 'unfinished-swap')
+      out.unfinished.push(f);
     else out.left.push(f);
   }
   return out;
@@ -1375,7 +1378,11 @@ async function finishInterruptedSwaps() {
   const r = await recoverUpdateResidue(found);
   if (r.finished.length > 0)
     ok(`Finished ${r.finished.length} interrupted update(s) before installing: ${r.finished.join(', ')}`);
-  // A swap left unfinished here (deferred, kept) is retired once the tree is written.
+  // A swap left unfinished here (deferred, kept, unfinished) is retired once the tree is written.
+  for (const f of r.unfinished)
+    warn(
+      `Could not finish the interrupted update ${f}: a file it moved aside could not be put back. This install writes over it and then retires it.`,
+    );
   for (const f of r.left) warn(`Could not remove ${f} from ${INSTALL_DIR}`);
 }
 
@@ -3018,7 +3025,7 @@ async function doctor() {
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
     if (unfinishedSwaps > 0) {
       dwarn(
-        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or is running right now (run: ${installer} cleanup — it finishes an interrupted one, and skips while an update holds install.lock)`,
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, could not put back every file it moved aside, or is running right now (run: ${installer} cleanup — it finishes an interrupted one, and skips while an update holds install.lock)`,
       );
     }
     if (unreadableJournals > 0) {
@@ -3483,6 +3490,10 @@ async function cleanup() {
         for (const f of r.kept)
           warn(
             `Left in place: ${f} — its journal cannot be read, so nothing can finish that update, and it holds the files the update moved aside. repair reinstalls over it; cleanup removes it after that.`,
+          );
+        for (const f of r.unfinished)
+          warn(
+            `Could not finish the interrupted update ${f}: a file it moved aside could not be put back (held open, or in a directory that cannot be emptied), and it stays in place holding it. cleanup tries again; repair reinstalls over it instead.`,
           );
         for (const f of r.left) warn(`Failed to remove ${f}`);
         finished += r.finished.length;

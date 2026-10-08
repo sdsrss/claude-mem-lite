@@ -871,9 +871,13 @@ function clearSwapMarker() {
 // per switched path, and on Windows a scanner holding that file makes a rename over it fail
 // briefly. Each failure stopped the update and rolled it back, and a rollback is where a restore
 // can fail (D#292 A). Bounded at about 0.7 s, then it throws as before.
+//
+// `seq` orders the swaps whose backup dirs are still unresolved, for recovery to replay newest
+// first (D#293): one more than the highest such dir held when this swap began. A wall clock can go
+// back, and the dir names carry one.
 const JOURNAL_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
-function journalSwap(backupDir, backedUp, installed) {
-  const data = JSON.stringify({ backedUp, installed });
+function journalSwap(backupDir, seq, backedUp, installed) {
+  const data = JSON.stringify({ seq, backedUp, installed });
   for (let attempt = 1; ; attempt++) {
     try {
       atomicWriteFileSync(join(backupDir, SWAP_JOURNAL), data);
@@ -954,6 +958,19 @@ function retireUnresolvedBackups(targetDir, names) {
   }
 }
 
+// The `seq` for a swap starting now: above every unresolved dir's whose journal can be read.
+function nextSwapSeq(targetDir, names) {
+  let max = 0;
+  for (const name of names) {
+    try {
+      max = Math.max(max, swapSeq(JSON.parse(readFileSync(join(targetDir, name, SWAP_JOURNAL), 'utf8'))));
+    } catch {
+      /* no journal, or not one: never replayed, so it needs no place in the order */
+    }
+  }
+  return max + 1;
+}
+
 // The `.update-backup-*` dirs in targetDir that carry no resolved marker.
 function unresolvedBackups(targetDir) {
   try {
@@ -969,14 +986,41 @@ function unresolvedBackups(targetDir) {
 
 // The backup dir is resolved before staging goes: removing a whole staging tree takes long enough
 // for a kill to land in, and a kill there left a committed swap's journal to be replayed.
-function discardSwapDirs(stagingDir, backupDir) {
-  discardBackupDir(backupDir);
+//
+// After a rollback, `notRestored` lists what it could not put back. The backup dir then holds the
+// only copy of each, so it stays whole with its journal, unresolved, and the next entry replays it
+// (D#293). The caller used to delete it. Nothing gates a later update on it: one that commits
+// retires it, so a restore that keeps failing cannot block updates (a2cf96a1's gate did).
+function discardSwapDirs(stagingDir, backupDir, notRestored = []) {
+  if (notRestored.length === 0) discardBackupDir(backupDir);
+  else
+    debugLog(
+      'WARN',
+      'hook-update',
+      `Kept ${backupDir}: could not put back ${notRestored.join(', ')}; the next update, install or cleanup tries again`,
+    );
   try {
     rmSync(stagingDir, { recursive: true, force: true });
   } catch (e) {
     debugCatch(e, 'discard-staging-dir');
   }
 }
+
+// Whether a path is there, by lstat: a symlink counts whatever it points to, and an error other
+// than "no such path" counts as there. existsSync follows the link and answers false on EACCES, so
+// a backup that was a dangling symlink read as already put back, and was deleted (review r2 F11).
+function present(p) {
+  try {
+    lstatSync(p);
+    return true;
+  } catch (e) {
+    return e.code !== 'ENOENT' && e.code !== 'ENOTDIR';
+  }
+}
+
+// Replay order among backup dirs still unresolved (D#293): newest first, by the journal's `seq`. A
+// journal 6.25.1 or older has none and comes last; at most one such dir is ever unresolved.
+const swapSeq = (journal) => (Number.isSafeInteger(journal.seq) ? journal.seq : 0);
 
 /**
  * Finish any swap a previous process was killed in the middle of, then clear its
@@ -995,6 +1039,7 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   }
 
   let recovered = 0;
+  const replays = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(targetDir, entry.name);
@@ -1024,8 +1069,7 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
     // nothing about what moved, and the dir may hold the only copy of it: leave it. It used to be
     // read as "nothing moved" and deleted (v6.25.1 review). doctor and cleanup name it; the next
     // swap that commits, or an install, retires it.
-    let journal = { backedUp: [], installed: [] };
-    let raw = null;
+    let raw;
     try {
       raw = readFileSync(join(dir, SWAP_JOURNAL), 'utf8');
     } catch (e) {
@@ -1033,26 +1077,44 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
         debugCatch(e, 'recover-read-journal');
         continue;
       }
+      discardBackupDir(dir);
+      recovered++;
+      continue;
     }
-    if (raw !== null) {
-      try {
-        journal = JSON.parse(raw);
-      } catch {
-        journal = null;
-      }
-      if (!Array.isArray(journal?.backedUp) || !Array.isArray(journal?.installed)) {
-        debugLog('WARN', 'hook-update', `Left ${entry.name} in place: its swap journal cannot be read`);
-        continue;
-      }
+    let journal;
+    try {
+      journal = JSON.parse(raw);
+    } catch {
+      journal = null;
     }
-    const { backedUp, installed } = journal;
-    rollbackInstall(installed, backedUp, dir, targetDir);
+    if (!Array.isArray(journal?.backedUp) || !Array.isArray(journal?.installed)) {
+      debugLog('WARN', 'hook-update', `Left ${entry.name} in place: its swap journal cannot be read`);
+      continue;
+    }
+    replays.push({ name: entry.name, dir, journal });
+  }
+
+  // Several dirs are unresolved only when a rollback could not put every file back (D#293), and
+  // they are undone like a stack: newest first, and none older while a newer one is unfinished. An
+  // older journal replayed first puts back a file that a newer journal, which installed that path,
+  // then deletes; with nothing left to restore it from.
+  replays.sort((a, b) => swapSeq(b.journal) - swapSeq(a.journal));
+  for (const { name, dir, journal } of replays) {
+    const notRestored = rollbackInstall(journal.installed, journal.backedUp, dir, targetDir);
+    if (notRestored.length > 0) {
+      debugLog(
+        'WARN',
+        'hook-update',
+        `Could not finish ${name}: ${notRestored.join(', ')} not put back; left for the next entry`,
+      );
+      break;
+    }
     discardBackupDir(dir);
     recovered++;
     debugLog(
       'WARN',
       'hook-update',
-      `Recovered an interrupted update swap: restored ${backedUp.length} path(s) from ${entry.name}`,
+      `Recovered an interrupted update swap: restored ${journal.backedUp.length} path(s) from ${name}`,
     );
   }
   return recovered;
@@ -1069,10 +1131,12 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 // when the journal cannot be removed, the resolved marker keeps it from being replayed. A backup
 // dir 6.25.0 or older left half deleted beside its journal can still replay to a mix.
 // The arrays are copied, not reversed in place, so a caller's journal is left as it was.
+//
+// Returns the backed-up paths it could not put back, still in the backup dir (D#293).
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();
   try {
-    const restored = new Set(backedUp.filter((relPath) => !existsSync(join(backupDir, relPath))));
+    const restored = new Set(backedUp.filter((relPath) => !present(join(backupDir, relPath))));
     for (const relPath of [...installed].reverse()) {
       if (restored.has(relPath)) continue;
       try {
@@ -1085,7 +1149,7 @@ function rollbackInstall(installed, backedUp, backupDir, targetDir) {
       const backupPath = join(backupDir, relPath);
       const targetPath = join(targetDir, relPath);
       try {
-        if (existsSync(backupPath)) {
+        if (present(backupPath)) {
           mkdirSync(dirname(targetPath), { recursive: true });
           renameSync(backupPath, targetPath);
         }
@@ -1096,6 +1160,7 @@ function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   } finally {
     clearSwapMarker();
   }
+  return backedUp.filter((relPath) => present(join(backupDir, relPath)));
 }
 
 // MED-5 post-install health gate: load-test the freshly-switched code in a SEPARATE
@@ -1207,9 +1272,11 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // one — otherwise this install stacks on top of a mixed-version tree and its
     // own backup can no longer restore a coherent state.
     recoverInterruptedSwaps(targetDir);
-    // What recovery left unfinished (a journal it cannot read right now) is retired if this swap
-    // commits, and left for the next entry if it rolls back.
+    // What recovery left unfinished (a journal it cannot read right now, or a replay that could not
+    // put every file back, D#293) is retired if this swap commits, and left for the next entry if it
+    // rolls back. Nothing here waits on it: a gate on it blocked every later update (a2cf96a1).
     const leftUnresolved = unresolvedBackups(targetDir);
+    const seq = nextSwapSeq(targetDir, leftUnresolved);
 
     mkdirSync(stagingDir, { recursive: true });
     mkdirSync(backupDir, { recursive: true });
@@ -1238,14 +1305,14 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
         mkdirSync(dirname(targetPath), { recursive: true });
         mkdirSync(dirname(backupPath), { recursive: true });
 
-        if (existsSync(targetPath)) {
+        if (present(targetPath)) {
           backedUp.push(relPath);
-          journalSwap(backupDir, backedUp, installed);
+          journalSwap(backupDir, seq, backedUp, installed);
           renameSync(targetPath, backupPath);
         }
 
         installed.push(relPath);
-        journalSwap(backupDir, backedUp, installed);
+        journalSwap(backupDir, seq, backedUp, installed);
         renameSync(stagedPath, targetPath);
       }
       swapped = true;
@@ -1257,8 +1324,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // If it can't, restore the backup and report failure — the running (old) version
     // keeps working rather than leaving a broken install with no way back.
     if (!opts.skipSmoke && !smokeInstalledRelease(targetDir)) {
-      rollbackInstall(installed, backedUp, backupDir, targetDir);
-      discardSwapDirs(stagingDir, backupDir);
+      discardSwapDirs(stagingDir, backupDir, rollbackInstall(installed, backedUp, backupDir, targetDir));
       return false;
     }
 
@@ -1354,8 +1420,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // Past the commit point the backups are gone and the new release IS the install: a rollback
     // would delete the paths it added and restore nothing (D#283).
     if (committed) return true;
-    rollbackInstall(installed, backedUp, backupDir, targetDir);
-    discardSwapDirs(stagingDir, backupDir);
+    discardSwapDirs(stagingDir, backupDir, rollbackInstall(installed, backedUp, backupDir, targetDir));
     return false;
   } finally {
     release();

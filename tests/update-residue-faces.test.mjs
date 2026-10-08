@@ -458,3 +458,69 @@ describe('update residue, second pass (v6.25.1 delta review)', () => {
     expect(existsSync(join(target, '.swap-journal.json'))).toBe(true); // the link went, not its target
   });
 });
+
+// D#293: a replay that cannot put every file back leaves its backup dir, the only copy of what it
+// could not restore. The new node_modules holds a dir the replay cannot empty, so removing it
+// stops partway and the old one cannot be renamed back (ENOTEMPTY), on Linux with no fault mock.
+describe('a swap whose replay cannot put a file back (D#293)', () => {
+  const skipRoot = process.getuid?.() === 0;
+
+  function seedStuckSwap(codeDir) {
+    mkdirSync(join(codeDir, 'node_modules', 'stuck'), { recursive: true });
+    writeFileSync(join(codeDir, 'node_modules', 'dep.js'), 'new-dep');
+    writeFileSync(join(codeDir, 'node_modules', 'stuck', 'held.js'), 'held');
+    chmodSync(join(codeDir, 'node_modules', 'stuck'), 0o555);
+    mkdirSync(join(codeDir, JOURNALED, 'node_modules'), { recursive: true });
+    writeFileSync(join(codeDir, JOURNALED, 'node_modules', 'dep.js'), 'old-dep');
+    writeFileSync(
+      join(codeDir, JOURNALED, '.swap-journal.json'),
+      JSON.stringify({ seq: 1, backedUp: ['node_modules'], installed: ['node_modules'] }),
+    );
+  }
+
+  it.skipIf(skipRoot)('cleanup keeps it, says it could not finish, and finishes it once it can', () => {
+    const box = sandbox();
+    seedStuckSwap(box.codeDir);
+    const stuck = join(box.codeDir, 'node_modules', 'stuck');
+    try {
+      const out = run(box, ['cleanup']);
+      expect(read(join(box.codeDir, JOURNALED, 'node_modules', 'dep.js')), out).toBe('old-dep');
+      expect(existsSync(join(box.codeDir, JOURNALED, '.swap-journal.json'))).toBe(true);
+      expect(out).toMatch(new RegExp(`Could not finish the interrupted update ${JOURNALED}`));
+      expect(out).not.toMatch(/Finished an interrupted update|Failed to remove/);
+    } finally {
+      chmodSync(stuck, 0o755);
+    }
+    const out = run(box, ['cleanup']);
+    expect(read(join(box.codeDir, 'node_modules', 'dep.js')), out).toBe('old-dep');
+    expect(residue(box.codeDir)).toEqual([]);
+    expect(out).toMatch(new RegExp(`Finished an interrupted update: ${JOURNALED}`));
+  });
+
+  // install writes the whole tree, so it goes ahead and retires the dir afterwards. The journal
+  // names a dir install itself does not write, so the write is not the thing that fails.
+  it.skipIf(skipRoot)('install says it could not finish it, writes the tree and retires it', () => {
+    const box = sandbox();
+    mkdirSync(join(box.codeDir, 'extra', 'stuck'), { recursive: true });
+    writeFileSync(join(box.codeDir, 'extra', 'stuck', 'held.js'), 'held');
+    chmodSync(join(box.codeDir, 'extra', 'stuck'), 0o555);
+    mkdirSync(join(box.codeDir, JOURNALED, 'extra'), { recursive: true });
+    writeFileSync(join(box.codeDir, JOURNALED, 'extra', 'kept.js'), 'old');
+    writeFileSync(
+      join(box.codeDir, JOURNALED, '.swap-journal.json'),
+      JSON.stringify({ seq: 1, backedUp: ['extra'], installed: ['extra'] }),
+    );
+    let out;
+    try {
+      out = run(box, ['install', '--dev', '--skip-repos'], {
+        PATH: `${fakeClaudeBin(box.home)}:${process.env.PATH}`,
+      });
+    } finally {
+      chmodSync(join(box.codeDir, 'extra', 'stuck'), 0o755);
+    }
+    expect(out).toMatch(new RegExp(`Could not finish the interrupted update ${JOURNALED}`));
+    expect(out).not.toMatch(/Could not remove/);
+    expect(lstatSync(join(box.codeDir, 'cli.mjs')).isSymbolicLink(), out).toBe(true); // premise: deployed
+    expect(existsSync(join(box.codeDir, JOURNALED, '.swap-resolved'))).toBe(true);
+  });
+});
