@@ -17,7 +17,7 @@ import {
   symlinkSync,
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
@@ -500,6 +500,57 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       }
     },
   );
+
+  // D#295. On a read-only mount SQLite answers SQLITE_CANTOPEN "unable to open database file" for
+  // the same closed store, not SQLITE_READONLY_DIRECTORY, so every face relayed that message and
+  // doctor counted ✗ Database beside ✗ Data directory. The mount is simulated by
+  // tests/fixtures/erofs-sim-preload.mjs at the two boundaries a kernel read-only mount was measured
+  // to change; this test's premise run reproduced that mount's doctor output line for line.
+  it.skipIf(skip)('a closed WAL store on a read-only mount is named on every face, and counted once', () => {
+    const s = sandbox();
+    const { data, db } = walStore(s);
+    db.exec('CREATE TABLE schema_version (version INTEGER); INSERT INTO schema_version VALUES (1);');
+    db.close();
+    chmodSync(data, 0o500);
+    const env = {
+      ...runEnv(s),
+      NODE_OPTIONS: `--import=${pathToFileURL(join(REPO, 'tests', 'fixtures', 'erofs-sim-preload.mjs')).href}`,
+      CML_EROFS_SIM_DIR: data,
+      CML_EROFS_SIM_REQUIRE_FROM: join(REPO, 'package.json'),
+    };
+    const go = (file, args) =>
+      spawnSync(process.execPath, [join(REPO, file), ...args], {
+        cwd: s.root,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env,
+      });
+    try {
+      const d = go('install.mjs', ['doctor']).stdout;
+      expect(d).toMatch(/✗ Data directory: .* \(EROFS\) .*remount it read-write/); // premise: the mount is read-only
+      expect(d).not.toMatch(/unable to open database file/);
+      expect(d).not.toMatch(/✗ Database/);
+      for (const what of ['DB schema', 'Database', 'DB stats'])
+        expect(d).toMatch(
+          new RegExp(`⚠ ${what}: not checked.* — SQLite cannot open a WAL database without creating`),
+        );
+
+      const st = go('install.mjs', ['status']).stdout;
+      expect(st).toMatch(
+        /✗ Database: exists, but SQLite cannot open a WAL database without creating its -wal\/-shm files beside it — .* \(EROFS\)/,
+      );
+      expect(st).not.toMatch(/unable to open database file/);
+
+      const m = go('cli.mjs', ['doctor', '--metrics']);
+      const out = m.stdout + m.stderr;
+      expect(m.status, out).toBe(1);
+      expect(out).toMatch(/cannot be written \(EROFS\)/);
+      expect(out).toMatch(/Fix: the file system holding .* is mounted read-only — remount it read-write/);
+      expect(out).not.toMatch(/unable to open database file/);
+    } finally {
+      chmodSync(data, 0o755);
+    }
+  });
 
   // D#284. The breakage marker sits in the locked dir, so it read as absent and the line said ✓.
   it.skipIf(skip)('doctor does not put a ✓ on a native-binding marker it could not read', () => {

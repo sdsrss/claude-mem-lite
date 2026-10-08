@@ -1903,7 +1903,7 @@ async function status() {
       // SQLite creates beside the DB: in a directory it cannot write, a closed store cannot be opened
       // in place (a copy elsewhere could be read) — 6.24.0 could not open it either. Say so rather than relay "attempt to write a readonly database".
       // The errno stands in for SQLite's message only where the directory is the cause.
-      const walBlocked = walOpenBlocked(e.code, dataDirDenied);
+      const walBlocked = walOpenBlocked(e.code, dataDirDenied, DB_PATH);
       const why = walBlocked
         ? `exists, but ${WAL_BLOCKED_WHY}`
         : bindingMissing(e)
@@ -2147,7 +2147,7 @@ async function doctor() {
   // create the -wal/-shm files beside it, so every check that opens the DB fails, for the fault the
   // Data directory line names and counts. Those checks say they did not look, in the words status
   // uses (D#287, the D#199 shape). Keyed on SQLite's code: its message is shared with other faults.
-  const walBlocked = (code) => walOpenBlocked(code, dataDirDenied);
+  const walBlocked = (code) => walOpenBlocked(code, dataDirDenied, DB_PATH);
   const notCheckedWal = (what, scope = '') =>
     dwarn(
       `${what}: not checked${scope} — ${WAL_BLOCKED_WHY}, and ${MEM_DATA_DIR} cannot be written (see Data directory above)`,

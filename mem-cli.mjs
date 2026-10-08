@@ -3879,9 +3879,12 @@ async function runDispatch(argv) {
       return;
     }
     // A closed WAL store in a data dir this user cannot write: name the cause and its fix rather
-    // than relay "attempt to write a readonly database" (D#296; doctor and status say the same).
-    const dirDenied = e.code === 'SQLITE_READONLY_DIRECTORY' ? dirAccessError(DB_DIR) : null;
-    if (walOpenBlocked(e.code, dirDenied)) {
+    // than relay "attempt to write a readonly database", or "unable to open database file" on a
+    // read-only mount (D#296, D#295; doctor and status say the same).
+    const dirDenied = /^SQLITE_(READONLY_DIRECTORY|CANTOPEN)$/.test(e.code ?? '')
+      ? dirAccessError(DB_DIR)
+      : null;
+    if (walOpenBlocked(e.code, dirDenied, DB_PATH)) {
       out(
         `[mem] Error: Cannot open database: ${WAL_BLOCKED_WHY}, and ${DB_DIR} cannot be written (${dirDenied})`,
       );
