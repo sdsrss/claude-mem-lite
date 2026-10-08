@@ -17,10 +17,11 @@
 // roots and make multi-root assertions pass for the wrong reason).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { execFileSync, spawnSync } from 'child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
+import { SOURCE_FILES } from '../source-files.mjs';
 import { shellWord } from '../cli-path.mjs';
 
 const INSTALL_PATH = resolve(import.meta.dirname, '../install.mjs');
@@ -163,6 +164,35 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
     const r = run('doctor');
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/Plugin cache v3\.69\.1: server\.mjs missing/);
+  });
+});
+
+// D#284 (found beside it). With no install to probe — a checkout before `npm install`, no
+// managed tree, no plugin — doctor said "✗ no install on this machine owns a native binding" and,
+// further down, "✓ Native DB binding: loadable": a ✓ that nothing had been probed for.
+describe('doctor: nothing to probe is not a loadable binding', () => {
+  it('prints the ✗ and no ✓ for the binding', () => {
+    const checkout = join(home, 'checkout');
+    for (const rel of SOURCE_FILES) {
+      if (!existsSync(join(REPO, rel))) continue;
+      mkdirSync(dirname(join(checkout, rel)), { recursive: true });
+      copyFileSync(join(REPO, rel), join(checkout, rel));
+    }
+    const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
+    for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
+      delete env[k];
+    env.MEM_NO_AUTO_ADOPT = '1';
+    const r = spawnSync(process.execPath, [join(checkout, 'install.mjs'), 'doctor'], {
+      cwd: home,
+      encoding: 'utf8',
+      env,
+      timeout: 90000,
+    });
+    expect(r.stdout).toMatch(/✗ better-sqlite3: no install on this machine owns a native binding/); // premise
+    expect(r.stdout).not.toMatch(/✓ Native DB binding/);
+    expect(r.stdout).toMatch(
+      /⚠ Native DB binding: not checked — no install on this machine owns a native binding/,
+    );
   });
 });
 

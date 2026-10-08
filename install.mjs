@@ -2241,7 +2241,9 @@ async function doctor() {
   // is 6h-rate-limited stderr nobody reads), the live probe says "is it broken
   // right now". A Node upgrade breaks every DB-touching path at once, so this is
   // the single highest-value line in doctor when it fires.
-  const breakage = readNativeBindingBreakage(MEM_RUNTIME_DIR);
+  // The marker sits in the runtime dir: in a locked data dir it reads as absent (D#284).
+  const breakageUnread = dataDirUnreadable && runtimeInDataDir;
+  const breakage = breakageUnread ? null : readNativeBindingBreakage(MEM_RUNTIME_DIR);
   // Reuses the per-root probes above — same trees, same question, and doctor
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
@@ -2249,6 +2251,12 @@ async function doctor() {
       `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} rebuild-binding\` (repairs every broken install, not just this one)`,
     );
     issues++;
+  } else if (rootProbes.length === 0) {
+    // Nothing was probed: a ✓ here sat under the better-sqlite3 ✗ for the same machine. Said, not
+    // left silent, like DB schema's fourth outcome above.
+    dwarn('Native DB binding: not checked — no install on this machine owns a native binding to probe');
+  } else if (breakageUnread) {
+    notCheckedDenied(`Native DB binding: loadable on Node ${process.version}, past failures`);
   } else if (breakage) {
     const ageH = Math.round((Date.now() - (breakage.ts || 0)) / 3600000);
     dwarn(

@@ -14,6 +14,7 @@ import {
   readFileSync,
   existsSync,
   chmodSync,
+  symlinkSync,
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -379,6 +380,76 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       expect(j.database).toMatchObject({ level: 'fail', exists: true, observations: 2, error: 'EACCES' });
     } finally {
       chmodSync(data, 0o755);
+    }
+  });
+
+  // D#284. The breakage marker sits in the locked dir, so it read as absent and the line said ✓.
+  it.skipIf(skip)('doctor does not put a ✓ on a native-binding marker it could not read', () => {
+    const s = sandbox();
+    const dir = join(s.home, '.claude-mem-lite');
+    mkdirSync(join(dir, 'runtime'), { recursive: true });
+    writeFileSync(
+      join(dir, 'runtime', 'native-binding-broken'),
+      JSON.stringify({ reason: 'abi', ts: Date.now() }),
+    );
+    const env = doctorEnv(s, { CLAUDE_MEM_SKIP_UPDATE: '1' });
+    expect(doctor(s, env).stdout).toMatch(/⚠ Native DB binding: healthy now, but a fire failed/); // premise
+    chmodSync(dir, 0o000);
+    try {
+      const r = doctor(s, env);
+      expect(r.stdout).not.toMatch(/✓ Native DB binding/);
+      expect(r.stdout).toMatch(/⚠ Native DB binding: .*not checked — .* is not accessible/);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  // Guards for two branches nothing exercised (D#284). A runtime dir moved OUT of the locked data
+  // dir by CLAUDE_MEM_RUNTIME_DIR is readable, so the checks that read it still run.
+  it.skipIf(skip)('a runtime dir outside the locked data dir is still read', () => {
+    const { s, restore } = locked();
+    const runtime = join(s.root, 'elsewhere');
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(join(runtime, 'hook-launcher-broken'), JSON.stringify({ reason: 'gone', ts: Date.now() }));
+    writeFileSync(join(runtime, 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));
+    try {
+      const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
+        cwd: s.root,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: {
+          ...doctorEnv(s, { CLAUDE_MEM_SKIP_UPDATE: '1' }),
+          CLAUDE_MEM_DIR: join(s.root, 'data'),
+          CLAUDE_MEM_RUNTIME_DIR: runtime,
+        },
+      });
+      expect(r.stdout).toMatch(/✗ Data directory: .*not accessible/); // premise: the data dir is locked
+      expect(r.stdout).toMatch(/⚠ Hook self-heal: a recent hook fire degraded to exit-0 \(last: gone/);
+      expect(r.stdout).toMatch(/⚠ Native DB binding: healthy now, but a fire failed/);
+    } finally {
+      restore();
+    }
+  });
+
+  // One directory reached through a symlinked HOME and through its real path is still one
+  // directory: one ✗, not a second one for the "separate" code dir (D#284; review P3-6 pinned only
+  // the trailing slash, which resolve() alone also fixes).
+  it.skipIf(skip)('a symlinked HOME and the real path count one locked dir once', () => {
+    const s = sandbox();
+    const linkHome = join(s.root, 'home-link');
+    symlinkSync(s.home, linkHome);
+    const dir = join(s.home, '.claude-mem-lite');
+    mkdirSync(join(dir, 'runtime'), { recursive: true });
+    chmodSync(dir, 0o000);
+    try {
+      const env = { ...doctorEnv(s, { CLAUDE_MEM_DIR: dir, CLAUDE_MEM_SKIP_UPDATE: '1' }), HOME: linkHome };
+      const r = doctor(s, env);
+      expect(r.stdout).toMatch(/✗ Data directory: .*not accessible/);
+      expect(r.stdout).not.toMatch(/✗ Entry points/);
+      expect(r.stdout).toMatch(/⚠ Entry points: not checked/);
+      expect(r.stdout.match(/✗ .* is not accessible/g)).toHaveLength(1);
+    } finally {
+      chmodSync(dir, 0o755);
     }
   });
 });
