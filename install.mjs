@@ -73,9 +73,9 @@ import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 import { checkHookInterpreter } from './lib/doctor-hook-interpreter.mjs';
 import {
   classifyEpisodeFile,
+  classifyUpdateResidue,
   EPISODE_AGE_LABEL,
   isEpisodeResidue,
-  isUpdateResidue,
   scanStaleTempFiles,
 } from './lib/doctor-stale-temp.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
@@ -1298,6 +1298,65 @@ function offerCleanOldVectorDb() {
   }
 }
 
+// Update residue in the code dir, each entry with what it is (lib/doctor-stale-temp.mjs).
+function listUpdateResidue() {
+  return readdirSync(INSTALL_DIR)
+    .map((f) => ({ f, kind: classifyUpdateResidue(INSTALL_DIR, f) }))
+    .filter((r) => r.kind);
+}
+
+/**
+ * Finish what interrupted updates left in the code dir, the way the next update entry would:
+ * hook-update's recoverInterruptedSwaps replays each journal, then removes the residue. Reports
+ * every entry by what became of it. The caller holds install.lock.
+ *
+ * Never throws: install calls it before writing the tree, and a recovery that threw would stop
+ * the install it exists to protect. If hook-update cannot load, the residue of finished swaps is
+ * still removed and an unfinished swap is left for the next entry that can replay it.
+ * @param {{f: string, kind: string}[]} found entries from listUpdateResidue
+ * @returns {Promise<{finished: string[], removed: string[], left: string[]}>}
+ */
+async function recoverUpdateResidue(found) {
+  try {
+    const { recoverInterruptedSwaps } = await import('./hook-update.mjs');
+    recoverInterruptedSwaps(INSTALL_DIR);
+  } catch (e) {
+    warn(`Could not finish an interrupted update here (${e.message}) — it is left in place`);
+    for (const { f, kind } of found) {
+      if (kind !== 'stale') continue;
+      try {
+        rmSync(join(INSTALL_DIR, f), { recursive: true, force: true });
+      } catch {
+        /* reported below as left */
+      }
+    }
+  }
+  const out = { finished: [], removed: [], left: [] };
+  for (const { f, kind } of found) {
+    if (existsSync(join(INSTALL_DIR, f))) out.left.push(f);
+    else (kind === 'unfinished-swap' ? out.finished : out.removed).push(f);
+  }
+  return out;
+}
+
+// A swap an updater was killed in the middle of is finished BEFORE this install writes the tree
+// (D#289). Its journal names an older release's paths; left for the next update entry, it was
+// replayed over the tree written here: it deleted the files the killed swap had added and put the
+// older ones back. Runs before the swap barrier, because the recovery arms and clears that marker.
+async function finishInterruptedSwaps() {
+  let found;
+  try {
+    found = listUpdateResidue();
+  } catch {
+    return; // no code dir yet, so nothing to finish
+  }
+  if (!found.some((r) => r.kind === 'unfinished-swap')) return;
+  const r = await recoverUpdateResidue(found);
+  if (r.finished.length > 0)
+    ok(`Finished ${r.finished.length} interrupted update(s) before installing: ${r.finished.join(', ')}`);
+  for (const f of r.left) warn(`Could not remove ${f} from ${INSTALL_DIR}`);
+}
+
 async function install() {
   console.log('\nclaude-mem-lite installer\n');
   // Refuse an unparseable settings.json BEFORE the first side effect (throws
@@ -1310,6 +1369,7 @@ async function install() {
   const IS_DEV = flags.has('--dev');
 
   prepareInstallDirs();
+  await finishInterruptedSwaps();
   // Both steps rewrite the tree hooks import — the code, then node_modules — so one swap
   // barrier spans them (D#223), for its first two minutes: the launcher ignores an older marker,
   // and npm install has no timeout. installDependencies may process.exit(1): the marker it leaves
@@ -2865,16 +2925,23 @@ async function doctor() {
   // Stale temp files. The rules live in lib/doctor-stale-temp.mjs because this scanner and
   // cleanup's deleter are the same question asked twice and had drifted twice — see that
   // file. Counting is all that differs here; the classification is shared, so "what doctor
-  // calls stale" and "what cleanup removes" agree on the age gate, which is the axis they
-  // last diverged on. Not on every axis: cleanup skips update residue entirely while
-  // install.lock is held and the scanner has no such gate, so mid-self-update doctor still
-  // counts a file cleanup will decline. That one is milder than D#53 — cleanup SAYS it is
-  // skipping rather than answering "No stale files found" — and it predates this change.
+  // calls stale" and "what cleanup removes" agree on the age gate and on the directory, the
+  // axes they diverged on (the third time, D#289: both looked for update residue in the data
+  // dir, which CLAUDE_MEM_DIR moves away from the code dir it lives in). Not on every axis:
+  // cleanup skips update residue entirely while install.lock is held and the scanner has no
+  // such gate, so mid-self-update doctor still counts what cleanup will decline. That one is
+  // milder than D#53 — cleanup SAYS it is skipping — and the unfinished-update line says a
+  // running update looks the same.
   try {
-    const { stale, inFlight } = scanStaleTempFiles({
-      dataDir: MEM_DATA_DIR,
+    const { stale, inFlight, unfinishedSwaps } = scanStaleTempFiles({
+      codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
     });
+    if (unfinishedSwaps > 0) {
+      dwarn(
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or is running right now (run: node install.mjs cleanup — it finishes an interrupted one and leaves a running one alone)`,
+      );
+    }
     if (stale > 0) {
       dwarn(`Stale temp files: ${stale} found (run: node install.mjs cleanup)`);
     } else {
@@ -3272,7 +3339,7 @@ function writeSettings(settings) {
 
 // ─── Cleanup Stale Files ─────────────────────────────────────────────────────
 
-function cleanup() {
+async function cleanup() {
   // Dogfood-7 addition: --dry-run lists which files would be removed without
   // touching disk. Useful before running cleanup on a remote/CI machine where
   // accidentally pruning the wrong file would be costly. Doctor reports stale
@@ -3281,39 +3348,54 @@ function cleanup() {
   console.log(`\nclaude-mem-lite cleanup${dryRun ? ' (--dry-run)' : ''}\n`);
   let removed = 0;
 
-  // Clean .update-staging-* / .update-backup-* — hook-update writes these under
-  // DB_DIR (= MEM_DATA_DIR, env-aware), so scan the data dir, not the homedir code dir.
+  // Update residue: `.update-staging-*` / `.update-backup-*` in the CODE dir, where hook-update's
+  // swap writes them. Under CLAUDE_MEM_DIR this scanned the data dir, where nothing writes them.
+  // A backup dir that still holds its journal is a swap whose updater was killed, holding the only
+  // copy of every file the swap had moved out: cleanup finishes it, by replaying the journal the
+  // way the next update entry would, instead of deleting it (D#289).
   //
-  // R10 P2-10: take install.lock first. `.update-backup-*` is the ONLY rollback copy of an
-  // in-flight update and it holds the journal hook-update replays; `.update-staging-*` is
-  // the tree being swapped in. Deleting either mid-update leaves the install unrecoverable,
-  // and the window is long — it spans the source-compile fallback, up to five minutes —
-  // while doctor is actively telling the user to run cleanup. Non-blocking: if an installer
-  // holds the lock we skip only these two patterns, not the rest of cleanup.
+  // R10 P2-10: take install.lock first. A backup dir of a swap running now holds a journal too,
+  // and the staging dir is the tree being swapped in; touching either mid-update leaves the install
+  // unrecoverable. The window is long (it spans the source-compile fallback, up to five minutes),
+  // and doctor tells the user to run cleanup. Non-blocking: if an installer holds the lock we skip
+  // only the update residue, not the rest of cleanup.
+  let finished = 0;
   const updateLock = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!updateLock) {
     warn('Update residue skipped: install in progress (install.lock held)');
-  } else if (existsSync(MEM_DATA_DIR)) {
-    for (const f of readdirSync(MEM_DATA_DIR)) {
-      if (isUpdateResidue(f)) {
-        if (dryRun) {
-          ok(`Would remove: ${f}`);
-          removed++;
-          continue;
-        }
-        try {
-          rmSync(join(MEM_DATA_DIR, f), { recursive: true, force: true });
-          ok(`Removed: ${f}`);
-          removed++;
-        } catch (e) {
-          warn(`Failed to remove ${f}: ${e.message}`);
-        }
+  } else {
+    try {
+      let found = [];
+      try {
+        found = existsSync(INSTALL_DIR) ? listUpdateResidue() : [];
+      } catch (e) {
+        warn(`Update residue: could not list ${INSTALL_DIR} (${e.code || e.message})`);
       }
+      if (dryRun) {
+        for (const { f, kind } of found) {
+          if (kind === 'unfinished-swap') {
+            ok(`Would finish an interrupted update: ${f} (puts back the files its journal lists)`);
+            finished++;
+          } else {
+            ok(`Would remove: ${f}`);
+            removed++;
+          }
+        }
+      } else if (found.length > 0) {
+        const r = await recoverUpdateResidue(found);
+        for (const f of r.finished)
+          ok(`Finished an interrupted update: ${f} (put back the files it had moved out)`);
+        for (const f of r.removed) ok(`Removed: ${f}`);
+        for (const f of r.left) warn(`Failed to remove ${f}`);
+        finished += r.finished.length;
+        removed += r.removed.length;
+      }
+    } finally {
+      // Released here: the rest of cleanup touches runtime scratch that no installer owns, and
+      // holding install.lock across it would block a self-heal for no reason.
+      updateLock();
     }
   }
-  // Release immediately: the rest of cleanup touches runtime scratch that no installer owns,
-  // and holding install.lock across it would block a self-heal for no reason.
-  if (updateLock) updateLock();
 
   // Clean pending-* / ep-flush-* in runtime/ (env-aware, and honouring the runtime override).
   //
@@ -3365,7 +3447,11 @@ function cleanup() {
   // start of every run (tests/global-setup.mjs → lib/tmp-fixture-sweep.mjs).
 
   const verb = dryRun ? 'would be removed' : 'removed';
-  console.log(`\n  ${removed === 0 ? 'No stale files found.' : `${removed} stale file(s) ${verb}.`}\n`);
+  const done = [];
+  if (removed > 0) done.push(`${removed} stale file(s) ${verb}`);
+  if (finished > 0)
+    done.push(`${finished} interrupted update(s) ${dryRun ? 'would be finished' : 'finished'}`);
+  console.log(`\n  ${done.length === 0 ? 'No stale files found.' : `${done.join('; ')}.`}\n`);
 }
 
 // ─── Manual Update ───────────────────────────────────────────────────────────
@@ -3867,7 +3953,7 @@ async function dispatch(cmd) {
       await cleanupHooks();
       break;
     case 'cleanup':
-      cleanup();
+      await cleanup();
       break;
     case 'self-update':
     case 'update':

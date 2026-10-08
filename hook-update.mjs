@@ -833,7 +833,7 @@ const SWAP_MARKER = join(STATE_DIR, 'runtime', 'swap-in-progress'); // runtime-d
 // which paths were in flight, so the next entry can finish the rollback at the right
 // granularity — a bare directory walk cannot tell a nested relPath from a directory
 // relPath like `node_modules`.
-const SWAP_JOURNAL = '.swap-journal.json';
+const SWAP_JOURNAL = '.swap-journal.json'; // doctor and cleanup spell it SWAP_JOURNAL_NAME (lib/doctor-stale-temp.mjs)
 
 function markSwapStart() {
   try {
@@ -899,8 +899,9 @@ function discardSwapDirs(stagingDir, backupDir) {
 /**
  * Finish any swap a previous process was killed in the middle of, then clear its
  * residue. Called on every install entry, under the install lock, BEFORE a new
- * staging/backup pair is created.
- * @returns {number} number of interrupted swaps rolled back
+ * staging/backup pair is created; and by install.mjs, under the same lock, before
+ * `install` (and so `repair`) writes the tree and from `cleanup` (D#289).
+ * @returns {number} number of backup dirs processed, with a journal or without
  */
 export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   let entries;

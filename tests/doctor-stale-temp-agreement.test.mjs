@@ -19,9 +19,11 @@ import { join, resolve } from 'node:path';
 import {
   scanStaleTempFiles,
   classifyEpisodeFile,
+  classifyUpdateResidue,
   isUpdateResidue,
   isEpisodeResidue,
   EPISODE_AGE_LABEL,
+  SWAP_JOURNAL_NAME,
 } from '../lib/doctor-stale-temp.mjs';
 import { ORPHAN_EPISODE_AGE_MS } from '../lib/time-constants.mjs';
 
@@ -41,13 +43,19 @@ afterEach(() => {
 
 const HOURS = 60 * 60 * 1000;
 
-/** data dir holding `fresh` in-flight episode files and `stale` ones aged past the gate. */
+/**
+ * data dir holding `fresh` in-flight episode files and `stale` ones aged past the gate. Update
+ * residue goes in the CODE dir, $HOME/.claude-mem-lite: that is where hook-update's swap writes
+ * it, and CLAUDE_MEM_DIR (set by runFace) does not move it (D#289).
+ */
 function fixture({ fresh = 0, stale = 0, updateResidue = 0 } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'doctor-stale-'));
   homes.push(home);
   const dataDir = join(home, 'data');
+  const codeDir = join(home, '.claude-mem-lite');
   const runtimeDir = join(dataDir, 'runtime');
   mkdirSync(runtimeDir, { recursive: true });
+  mkdirSync(codeDir, { recursive: true });
   for (let i = 0; i < fresh; i++) {
     writeFileSync(join(runtimeDir, `ep-flush-fresh-${i}.json`), '{}');
   }
@@ -58,9 +66,9 @@ function fixture({ fresh = 0, stale = 0, updateResidue = 0 } = {}) {
     utimesSync(f, old, old);
   }
   for (let i = 0; i < updateResidue; i++) {
-    mkdirSync(join(dataDir, `.update-staging-${i}`), { recursive: true });
+    mkdirSync(join(codeDir, `.update-staging-${i}`), { recursive: true });
   }
-  return { home, dataDir, runtimeDir };
+  return { home, dataDir, codeDir, runtimeDir };
 }
 
 function runFace(face, { home, dataDir }) {
@@ -134,9 +142,10 @@ describe('doctor and cleanup agree about what is stale', () => {
 describe('scanStaleTempFiles / classifyEpisodeFile', () => {
   it('splits fresh from aged at the gate, and counts update residue regardless of age', () => {
     const f = fixture({ fresh: 2, stale: 3, updateResidue: 1 });
-    expect(scanStaleTempFiles({ dataDir: f.dataDir, runtimeDir: f.runtimeDir })).toEqual({
+    expect(scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir })).toEqual({
       stale: 4, // 3 aged episodes + 1 update residue
       inFlight: 2,
+      unfinishedSwaps: 0,
     });
   });
 
@@ -149,10 +158,10 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
     // Premise for the case above it: without a movable `now`, "aged" is untestable without
     // sleeping an hour, which is why the gate had no unit coverage before.
     const f = fixture({ fresh: 2 });
-    expect(scanStaleTempFiles({ dataDir: f.dataDir, runtimeDir: f.runtimeDir }).inFlight).toBe(2);
+    expect(scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir }).inFlight).toBe(2);
     expect(
       scanStaleTempFiles({
-        dataDir: f.dataDir,
+        codeDir: f.codeDir,
         runtimeDir: f.runtimeDir,
         now: Date.now() + 5 * HOURS,
       }).stale,
@@ -167,11 +176,11 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
     // hold `now` at its default, so only episodeAgeMs can move the reading.
     const f = fixture({ stale: 2 });
     expect(
-      scanStaleTempFiles({ dataDir: f.dataDir, runtimeDir: f.runtimeDir }).stale,
+      scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir }).stale,
       'premise: 3h-old files are stale under the default 1h gate',
     ).toBe(2);
     expect(
-      scanStaleTempFiles({ dataDir: f.dataDir, runtimeDir: f.runtimeDir, episodeAgeMs: 5 * HOURS }).inFlight,
+      scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir, episodeAgeMs: 5 * HOURS }).inFlight,
       'a 5h window should keep 3h-old files in flight',
     ).toBe(2);
   });
@@ -213,9 +222,10 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
     const f = fixture({});
     writeFileSync(join(f.runtimeDir, 'install.lock'), '');
     writeFileSync(join(f.runtimeDir, 'reads-proj.txt'), '');
-    expect(scanStaleTempFiles({ dataDir: f.dataDir, runtimeDir: f.runtimeDir })).toEqual({
+    expect(scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir })).toEqual({
       stale: 0,
       inFlight: 0,
+      unfinishedSwaps: 0,
     });
   });
 
@@ -224,10 +234,10 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
     // hook has written) and the only branch the other cases could not take.
     expect(
       scanStaleTempFiles({
-        dataDir: join(tmpdir(), 'mem-absent-xyz'),
+        codeDir: join(tmpdir(), 'mem-absent-xyz'),
         runtimeDir: join(tmpdir(), 'mem-absent-xyz', 'runtime'),
       }),
-    ).toEqual({ stale: 0, inFlight: 0 });
+    ).toEqual({ stale: 0, inFlight: 0, unfinishedSwaps: 0 });
   });
 
   it('the window both faces print is exactly the gate they apply', () => {
@@ -238,6 +248,26 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
     const m = /^(\d+)h$/.exec(EPISODE_AGE_LABEL);
     expect(m, `label is not in whole hours: ${EPISODE_AGE_LABEL}`).not.toBeNull();
     expect(Number(m[1]) * HOURS, 'the printed window differs from the gate').toBe(ORPHAN_EPISODE_AGE_MS);
+  });
+
+  it('a backup dir that still holds its journal is an unfinished swap, not stale temp (D#289)', () => {
+    const f = fixture({});
+    mkdirSync(join(f.codeDir, '.update-backup-2'), { recursive: true });
+    writeFileSync(join(f.codeDir, '.update-backup-2', SWAP_JOURNAL_NAME), '{"backedUp":[],"installed":[]}');
+    mkdirSync(join(f.codeDir, '.update-backup-1'), { recursive: true }); // its swap is over
+    mkdirSync(join(f.codeDir, '.update-staging-1'), { recursive: true });
+    expect(classifyUpdateResidue(f.codeDir, '.update-backup-2')).toBe('unfinished-swap');
+    expect(classifyUpdateResidue(f.codeDir, '.update-backup-1')).toBe('stale');
+    expect(classifyUpdateResidue(f.codeDir, '.update-staging-1')).toBe('stale');
+    expect(classifyUpdateResidue(f.codeDir, 'server.mjs')).toBe(null);
+    // A journal in a STAGING dir means nothing: staging holds copies, nothing was moved out of it.
+    writeFileSync(join(f.codeDir, '.update-staging-1', SWAP_JOURNAL_NAME), '{}');
+    expect(classifyUpdateResidue(f.codeDir, '.update-staging-1')).toBe('stale');
+    expect(scanStaleTempFiles({ codeDir: f.codeDir, runtimeDir: f.runtimeDir })).toEqual({
+      stale: 2,
+      inFlight: 0,
+      unfinishedSwaps: 1,
+    });
   });
 
   it('the two prefix families do not overlap, so nothing is counted twice', () => {

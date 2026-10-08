@@ -256,6 +256,26 @@ describe('a forward rename throws, then a kill lands inside the rollback or its 
   }, 300000);
 });
 
+// doctor and cleanup recognise an unfinished swap by its journal's name, which they spell apart
+// from hook-update (lib/doctor-stale-temp.mjs). Read the name off a journal the swap really wrote.
+describe('the journal a killed swap leaves is the one doctor and cleanup look for', () => {
+  it('classifies as an unfinished swap', async () => {
+    const { classifyUpdateResidue } = await import('../lib/doctor-stale-temp.mjs');
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smoke(true));
+    const mod = await loadModule(dataDir);
+    await runInstall(mod, dataDir, makeReleaseDir()); // count the ops of a clean run
+    const firstRename = ctl.log.findIndex((l) => l.startsWith('rename ') && l.includes('.update-backup-'));
+    const fresh = makeDataDir();
+    mockedExecSync.mockImplementation(smoke(true));
+    const mod2 = await loadModule(fresh);
+    await runInstall(mod2, fresh, makeReleaseDir(), { killAt: firstRename + 1 });
+    const left = residue(fresh).filter((n) => n.startsWith('.update-backup-'));
+    expect(left.length, 'premise: the kill left a backup dir').toBe(1);
+    expect(classifyUpdateResidue(fresh, left[0])).toBe('unfinished-swap');
+  });
+});
+
 // D#289 (B): journalSwap swallowed its own write error, so the rename it was meant to record went
 // ahead unrecorded, and a kill after that left a file in the backup dir that no journal named.
 describe('a journal that cannot be written stops the swap', () => {

@@ -210,9 +210,12 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
     expect(existsSync(marker)).toBe(false);
   });
 
-  it('install() prepares the dirs, then deploys the code and its dependencies inside one barrier', () => {
+  it('install() prepares the dirs, finishes an interrupted swap, then deploys the code and its dependencies inside one barrier', () => {
     // install() itself is not unit-runnable (npm, MCP registration, settings.json), so its
     // wiring is read from source, comments stripped so a commented-out call cannot satisfy it.
+    // The interrupted swap is finished BEFORE the barrier: its recovery arms and clears the same
+    // marker, and replayed after the deploy it would put an older release back (D#289;
+    // tests/update-residue-faces.test.mjs runs that behaviour end to end).
     const src = readFileSync(join(REPO, 'install.mjs'), 'utf8');
     const start = src.indexOf('async function install() {');
     expect(start).toBeGreaterThan(-1);
@@ -222,7 +225,7 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
       .map((l) => l.replace(/\/\/.*$/, ''))
       .join('\n');
     expect(body).toMatch(
-      /prepareInstallDirs\(\);\s*await withSwapBarrier\(async \(\) => \{\s*deployCodeTree\(IS_DEV\);\s*await installDependencies\(IS_DEV\);\s*\}\);/,
+      /prepareInstallDirs\(\);\s*await finishInterruptedSwaps\(\);\s*await withSwapBarrier\(async \(\) => \{\s*deployCodeTree\(IS_DEV\);\s*await installDependencies\(IS_DEV\);\s*\}\);/,
     );
   });
 });
