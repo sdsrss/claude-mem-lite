@@ -1742,14 +1742,21 @@ async function status() {
   }
 
   // Database. A data dir this process cannot enter reads as an empty one (D#199), and
-  // `exists: false` would be a guess — null says nobody could look.
+  // `exists: false` would be a guess — null says nobody could look. One it can read but not write
+  // (the 755 a `sudo` run leaves owned by root) reads correctly: its counts are real, under a ✗ (D#284).
   const dataDirDenied = dataDirAccessError();
-  if (dataDirDenied) {
+  const dataDirUnreadable = dataDirDenied
+    ? dataDirAccessError(MEM_DATA_DIR, fsConstants.R_OK | fsConstants.X_OK)
+    : null;
+  const unwritable = dataDirDenied
+    ? ` — ${MEM_DATA_DIR} can be read but not written (${dataDirDenied}). Fix: ${dataDirAccessRemedy()}`
+    : '';
+  if (dataDirUnreadable) {
     push(
       'fail',
       'database',
-      `Database: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — Fix: ${dataDirAccessRemedy()}`,
-      { exists: null, error: dataDirDenied },
+      `Database: ${MEM_DATA_DIR} is not accessible (${dataDirUnreadable}) — Fix: ${dataDirAccessRemedy()}`,
+      { exists: null, error: dataDirUnreadable },
     );
   } else if (existsSync(DB_PATH)) {
     try {
@@ -1759,19 +1766,33 @@ async function status() {
       // DISTINCT, like stats: a session can own several summary rows (legacy duplicates).
       const sess = db.prepare('SELECT COUNT(DISTINCT memory_session_id) as c FROM session_summaries').get();
       db.close();
-      push('ok', 'database', `Database: ${obs.c} observations, ${sess.c} sessions`, {
-        exists: true,
-        observations: obs.c,
-        sessions: sess.c,
-      });
+      push(
+        dataDirDenied ? 'fail' : 'ok',
+        'database',
+        `Database: ${obs.c} observations, ${sess.c} sessions${unwritable}`,
+        {
+          exists: true,
+          observations: obs.c,
+          sessions: sess.c,
+          ...(dataDirDenied && { error: dataDirDenied }),
+        },
+      );
     } catch (e) {
-      push('warn', 'database', 'Database: exists but check failed — ' + e.message, {
-        exists: true,
-        error: e.message,
-      });
+      push(
+        dataDirDenied ? 'fail' : 'warn',
+        'database',
+        'Database: exists but check failed — ' + e.message + unwritable,
+        {
+          exists: true,
+          error: e.message,
+        },
+      );
     }
   } else {
-    push('warn', 'database', 'Database: not found', { exists: false });
+    push(dataDirDenied ? 'fail' : 'warn', 'database', 'Database: not found' + unwritable, {
+      exists: false,
+      ...(dataDirDenied && { error: dataDirDenied }),
+    });
   }
 
   // CLI.

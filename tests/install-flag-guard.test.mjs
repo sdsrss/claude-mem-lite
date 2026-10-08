@@ -7,11 +7,19 @@
 // §8.V3: destructive paths run against a sandbox HOME with a fake `claude` on PATH that only
 // records its argv, so an unguarded run shows up as a recorded `mcp remove` rather than as damage.
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  chmodSync,
+} from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import Database from 'better-sqlite3';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -342,6 +350,35 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       expect(r.stdout.match(/✗ .* is not accessible/g)).toHaveLength(1);
     } finally {
       chmodSync(dir, 0o755);
+    }
+  });
+
+  // D#284. status asked for read, write AND search access, so the 755 a `sudo` run leaves owned
+  // by root printed "not accessible" and dropped the counts it could read (6.24.0 printed them).
+  it.skipIf(skip)('status reads the counts of a readable but unwritable data dir, under its ✗', () => {
+    const s = sandbox();
+    const data = join(s.root, 'data');
+    mkdirSync(data, { recursive: true });
+    const db = new Database(join(data, 'claude-mem-lite.db'));
+    db.exec(
+      'CREATE TABLE observations (id INTEGER); CREATE TABLE session_summaries (memory_session_id TEXT);',
+    );
+    db.exec("INSERT INTO observations VALUES (1), (2); INSERT INTO session_summaries VALUES ('s1');");
+    db.close();
+    expect(run(s, ['status']).stdout).toMatch(/✓ Database: 2 observations, 1 sessions/); // premise
+    chmodSync(data, 0o500);
+    try {
+      const r = run(s, ['status']);
+      expect(r.stdout).toMatch(
+        new RegExp(
+          `✗ Database: 2 observations, 1 sessions — ${data} can be read but not written \\(EACCES\\)`,
+        ),
+      );
+      expect(r.stdout).toContain(`chmod u+rwx ${data}`);
+      const j = JSON.parse(run(s, ['status', '--json']).stdout);
+      expect(j.database).toMatchObject({ level: 'fail', exists: true, observations: 2, error: 'EACCES' });
+    } finally {
+      chmodSync(data, 0o755);
     }
   });
 });
