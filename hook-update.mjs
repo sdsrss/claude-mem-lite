@@ -866,8 +866,23 @@ function clearSwapMarker() {
 // moved" and then deleted the backups. A write error was swallowed, so the rename it was meant to
 // record went ahead unrecorded. Now the previous journal stays whole until the new one replaces
 // it, and a swap that cannot journal stops before the rename, through the rollback in the caller.
+//
+// Retried for a moment on EPERM/EBUSY/EACCES: the rename replaces a file just written, about twice
+// per switched path, and on Windows a scanner holding that file makes a rename over it fail
+// briefly. Each failure stopped the update and rolled it back, and a rollback is where a restore
+// can fail (D#292 A). Bounded at about 0.7 s, then it throws as before.
+const JOURNAL_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 function journalSwap(backupDir, backedUp, installed) {
-  atomicWriteFileSync(join(backupDir, SWAP_JOURNAL), JSON.stringify({ backedUp, installed }));
+  const data = JSON.stringify({ backedUp, installed });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      atomicWriteFileSync(join(backupDir, SWAP_JOURNAL), data);
+      return;
+    } catch (e) {
+      if (attempt >= 8 || !JOURNAL_RETRY_CODES.has(e.code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * attempt);
+    }
+  }
 }
 
 // Clean up after a swap that is over: committed, or rolled back. Never throws, because a cleanup
@@ -879,11 +894,14 @@ function journalSwap(backupDir, backedUp, installed) {
 // release back, and over a rolled-back one whose journal outlived a later swap it deleted a path
 // that swap had installed. Recovery, install, cleanup and doctor leave a resolved dir's journal
 // alone. The marker is a new empty file, so it needs no access to the journal a failed removal
-// could not get. If it cannot be written either, the journal still goes before the backups, so a
-// replay of what is left restores one whole release.
+// could not get. With the marker written, a journal that stays is inert and the backups go anyway.
+// If the marker cannot be written either, the journal still goes before the backups, and if it
+// stays, so do the backups, complete, so that a replay restores one whole release.
 function discardBackupDir(backupDir) {
+  let resolved = false;
   try {
     writeFileSync(join(backupDir, SWAP_RESOLVED), '');
+    resolved = true;
   } catch (e) {
     debugCatch(e, 'mark-swap-resolved');
   }
@@ -891,7 +909,7 @@ function discardBackupDir(backupDir) {
     rmSync(join(backupDir, SWAP_JOURNAL), { force: true });
   } catch (e) {
     debugCatch(e, 'discard-swap-journal');
-    return;
+    if (!resolved) return;
   }
   try {
     rmSync(backupDir, { recursive: true, force: true });
@@ -916,7 +934,8 @@ function discardSwapDirs(stagingDir, backupDir) {
  * residue. Called on every install entry, under the install lock, BEFORE a new
  * staging/backup pair is created; and by install.mjs, under the same lock, before
  * `install` (and so `repair`) writes the tree and from `cleanup` (D#289).
- * @returns {number} number of backup dirs processed, with a journal or without
+ * @returns {number} number of backup dirs processed, with a journal or without; one left in place
+ *   because its journal cannot be read is not counted
  */
 export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   let entries;
@@ -950,14 +969,32 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
       continue;
     }
 
-    let journal;
+    // No journal: killed before the first rename, so nothing moved and the dir is residue. A journal
+    // that is there but cannot be read as one (an in-place write of 6.25.0 or older torn by a kill)
+    // says nothing about what moved, and the dir may hold the only copy of it: leave it. It used to
+    // be read as "nothing moved" and deleted (v6.25.1 review). doctor and cleanup name it.
+    let journal = { backedUp: [], installed: [] };
+    let raw = null;
     try {
-      journal = JSON.parse(readFileSync(join(dir, SWAP_JOURNAL), 'utf8'));
-    } catch {
-      journal = null;
+      raw = readFileSync(join(dir, SWAP_JOURNAL), 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') {
+        debugCatch(e, 'recover-read-journal');
+        continue;
+      }
     }
-    const backedUp = Array.isArray(journal?.backedUp) ? journal.backedUp : [];
-    const installed = Array.isArray(journal?.installed) ? journal.installed : [];
+    if (raw !== null) {
+      try {
+        journal = JSON.parse(raw);
+      } catch {
+        journal = null;
+      }
+      if (!Array.isArray(journal?.backedUp) || !Array.isArray(journal?.installed)) {
+        debugLog('WARN', 'hook-update', `Left ${entry.name} in place: its swap journal cannot be read`);
+        continue;
+      }
+    }
+    const { backedUp, installed } = journal;
     rollbackInstall(installed, backedUp, dir, targetDir);
     discardBackupDir(dir);
     recovered++;

@@ -23,6 +23,14 @@ let failSwapInto = null; // a target path whose forward rename throws once
 // recursive removal that deleted part of the tree and then hit a busy file (EBUSY on Windows,
 // which `force` does not suppress).
 let rmFaults = [];
+// writeFileSync / renameSync faults on chosen paths: { match, code, times } (times: how many calls
+// throw before the fault is spent; Infinity for a persistent one).
+let writeFaults = [];
+let renameFaults = [];
+const spendFault = (list, f) => {
+  f.times -= 1;
+  return f.times <= 0 ? list.filter((x) => x !== f) : list;
+};
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn(), execFileSync: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -30,6 +38,13 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...real,
     renameSync(from, to) {
+      const rf = renameFaults.find((f) => f.match(String(from), String(to)));
+      if (rf) {
+        renameFaults = spendFault(renameFaults, rf);
+        throw Object.assign(new Error(`${rf.code}: simulated, rename '${from}' -> '${to}'`), {
+          code: rf.code,
+        });
+      }
       if (marker && String(from).includes('.update-backup-')) {
         restores.push({ from: String(from), marked: real.existsSync(marker) });
         events.push({ kind: 'restore', marked: real.existsSync(marker) });
@@ -59,6 +74,14 @@ vi.mock('node:fs', async (importOriginal) => {
         events.push({ kind: 'delete', marked: real.existsSync(marker) });
       }
       return real.rmSync(path, opts);
+    },
+    writeFileSync(path, data, opts) {
+      const wf = writeFaults.find((f) => f.match(String(path)));
+      if (wf) {
+        writeFaults = spendFault(writeFaults, wf);
+        throw Object.assign(new Error(`${wf.code}: simulated, write '${path}'`), { code: wf.code });
+      }
+      return real.writeFileSync(path, data, opts);
     },
   };
 });
@@ -112,6 +135,8 @@ afterEach(() => {
   marker = null;
   failSwapInto = null;
   rmFaults = [];
+  writeFaults = [];
+  renameFaults = [];
   delete process.env.CLAUDE_MEM_DIR;
   delete process.env.CLAUDE_MEM_DEBUG;
   vi.restoreAllMocks();
@@ -326,15 +351,24 @@ describe('a resolved swap is never replayed (D#292 C)', () => {
     const dataDir = makeDataDir();
     mockedExecSync.mockImplementation(smokePasses);
     const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
-    rmFaults.push({ match: (p) => p.endsWith('.swap-journal.json') });
+    // A journal a scanner holds open: removing it fails, and so does removing the dir around it.
+    let locked = true;
+    const isBackupDir = (p) => p.slice(p.lastIndexOf(sep) + 1).startsWith('.update-backup-');
+    rmFaults.push({
+      sticky: true,
+      match: (p) => locked && (p.endsWith('.swap-journal.json') || isBackupDir(p)),
+    });
 
     expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
-    expect(rmFaults, 'premise: the fault fired').toEqual([]);
     expect(updateResidue(dataDir).length, 'premise: the journal stayed').toBe(1);
 
-    recoverInterruptedSwaps(dataDir);
+    recoverInterruptedSwaps(dataDir); // the next entry, the journal still held
     expect(read(dataDir, 'package.json')).toBe(JSON.stringify({ version: '1.1.0' }));
     expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n');
+    locked = false;
+    recoverInterruptedSwaps(dataDir); // and once it is free
+    expect(read(dataDir, 'package.json')).toBe(JSON.stringify({ version: '1.1.0' }));
     expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n');
     expect(updateResidue(dataDir)).toEqual([]);
   });
@@ -344,7 +378,10 @@ describe('a resolved swap is never replayed (D#292 C)', () => {
     const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
     // The first swap adds cli.mjs, fails its check and is rolled back; its journal can never be removed.
     let first = null;
-    rmFaults.push({ sticky: true, match: (p) => first !== null && p === join(first, '.swap-journal.json') });
+    rmFaults.push({
+      sticky: true,
+      match: (p) => first !== null && (p === join(first, '.swap-journal.json') || p === first),
+    });
     mockedExecSync.mockImplementation((cmd, opts = {}) => {
       const b = readdirSync(dataDir).find((n) => n.startsWith('.update-backup-'));
       if (first === null && b) first = join(dataDir, b);
@@ -362,5 +399,94 @@ describe('a resolved swap is never replayed (D#292 C)', () => {
     recoverInterruptedSwaps(dataDir); // the next entry
     expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n');
     expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+  });
+});
+
+// v6.25.1 pre-tag defect review.
+describe('journals and markers that cannot be written, removed or read (v6.25.1 review)', () => {
+  const smokePasses = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+    return '';
+  };
+  const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : null);
+  const backups = (dir) => readdirSync(dir).filter((n) => n.startsWith('.update-backup-'));
+
+  // P2-2: a journal that exists but does not parse (one an in-place write of 6.25.0 or older tore)
+  // was read as "nothing moved", and the backup dir, the only copy of what had moved, was deleted.
+  for (const [what, body] of [
+    ['empty', ''],
+    ['not a journal', '{"x":1}'],
+  ]) {
+    it(`recovery leaves a backup dir whose journal is ${what}, with the files it holds`, async () => {
+      const dataDir = makeDataDir();
+      writeFileSync(join(dataDir, 'server.mjs'), '// new server');
+      const backup = join(dataDir, '.update-backup-1-1');
+      mkdirSync(backup, { recursive: true });
+      writeFileSync(join(backup, 'server.mjs'), '// server');
+      writeFileSync(join(backup, '.swap-journal.json'), body);
+      const { recoverInterruptedSwaps } = await loadModule(dataDir);
+
+      recoverInterruptedSwaps(dataDir);
+      expect(read(backup, 'server.mjs')).toBe('// server');
+      expect(read(backup, '.swap-journal.json')).toBe(body);
+      expect(read(dataDir, 'server.mjs')).toBe('// new server');
+    });
+  }
+
+  // P3-6 (M8): with the resolved marker written, a journal that stays is inert, so the backups can
+  // go; without the marker they must stay complete beside the journal, so that a replay restores
+  // one whole release.
+  it('a committed swap keeps its backups beside a journal that stays only when the marker failed too', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    writeFaults.push({ match: (p) => p.endsWith('.swap-resolved'), code: 'ENOSPC', times: 1 });
+    rmFaults.push({ match: (p) => p.endsWith('.swap-journal.json') });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(writeFaults, 'premise: the marker write failed').toEqual([]);
+    const [left] = backups(dataDir);
+    expect(read(join(dataDir, left), 'hook.mjs')).toBe('// old hook');
+    expect(existsSync(join(dataDir, left, '.swap-journal.json'))).toBe(true);
+  });
+
+  it('with the marker written, a journal that stays does not keep the backups', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    rmFaults.push({ match: (p) => p.endsWith('.swap-journal.json') });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(rmFaults, 'premise: the journal could not be removed').toEqual([]);
+    expect(backups(dataDir)).toEqual([]);
+  });
+
+  // P3-5: the journal is replaced by rename about twice per switched path, and on Windows a rename
+  // over a file a scanner holds open fails EPERM for a moment. Each failure stopped the update and
+  // rolled it back, and a rollback is where a restore can fail (D#292 A).
+  it('a journal rename that fails EPERM for a moment is retried', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    renameFaults.push({ match: (_from, to) => to.endsWith('.swap-journal.json'), code: 'EPERM', times: 2 });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(renameFaults, 'premise: the fault fired').toEqual([]);
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+  });
+
+  it('a journal rename that keeps failing still stops the swap and keeps the old release', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    renameFaults.push({
+      match: (_from, to) => to.endsWith('.swap-journal.json'),
+      code: 'EPERM',
+      times: Infinity,
+    });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
+    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// server');
   });
 });

@@ -28,10 +28,14 @@ import {
   readdirSync,
   rmSync,
   chmodSync,
+  copyFileSync,
+  cpSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SOURCE_FILES } from '../source-files.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const INSTALLER = join(REPO, 'install.mjs');
@@ -282,5 +286,92 @@ describe('residue an updater older than v2.90.0 left in a relocated data dir', (
     expect(residue(box.dataDir), out).toEqual([]);
     expect(existsSync(join(box.dataDir, 'server.mjs'))).toBe(false);
     expect(out).not.toMatch(/interrupted update/i);
+  });
+});
+
+// v6.25.1 pre-tag defect review.
+describe('update residue the replay cannot handle (v6.25.1 review)', () => {
+  const skipRoot = process.getuid?.() === 0; // root ignores the mode bits a case relies on
+
+  /** A backup dir whose journal an in-place write of 6.25.0 or older tore: it parses to nothing. */
+  function seedUnreadableJournal(codeDir) {
+    writeFileSync(join(codeDir, 'server.mjs'), '// from the interrupted swap');
+    const backup = join(codeDir, JOURNALED);
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(join(backup, 'server.mjs'), '// before the interrupted swap');
+    writeFileSync(join(backup, '.swap-journal.json'), '');
+  }
+
+  // P2-2: recovery read such a journal as "nothing moved" and deleted the only copy of the files it
+  // had moved, and cleanup reported that as "Finished an interrupted update".
+  it('cleanup leaves it in place and says why; doctor names it', () => {
+    const box = sandbox();
+    seedUnreadableJournal(box.codeDir);
+    const out = run(box, ['cleanup']);
+    expect(read(join(box.codeDir, JOURNALED, 'server.mjs')), out).toBe('// before the interrupted swap');
+    expect(out).not.toMatch(/Finished an interrupted update/);
+    expect(out).toContain(`Left in place: ${JOURNALED}`);
+    const checks = doctorChecks(run(box, ['doctor', '--json']));
+    const line = checks.find((c) => /^Unfinished update/.test(c.message || ''));
+    expect(line?.message, JSON.stringify(checks.map((c) => c.message))).toMatch(/journal cannot be read/);
+  });
+
+  // P2-3: with hook-update unable to load, install could not replay the swap, wrote the tree anyway,
+  // and the next update entry replayed the old journal over it.
+  it('an install that cannot replay a swap retires its journal after writing the tree', () => {
+    const box = sandbox();
+    seedUnfinishedSwap(box.codeDir, { relPath: 'hook.mjs', added: 'cli.mjs' });
+    const checkout = join(box.home, 'checkout');
+    for (const rel of [...SOURCE_FILES, 'package.json']) {
+      if (!existsSync(join(REPO, rel))) continue;
+      mkdirSync(dirname(join(checkout, rel)), { recursive: true });
+      copyFileSync(join(REPO, rel), join(checkout, rel));
+    }
+    cpSync(join(REPO, 'scripts'), join(checkout, 'scripts'), { recursive: true });
+    symlinkSync(join(REPO, 'node_modules'), join(checkout, 'node_modules'));
+    writeFileSync(
+      join(checkout, 'hook-update.mjs'),
+      "throw new Error('simulated: hook-update cannot load');\n",
+    );
+    const out = execFileSync(
+      process.execPath,
+      [join(checkout, 'install.mjs'), 'install', '--dev', '--skip-repos'],
+      {
+        env: env(box, { PATH: `${fakeClaudeBin(box.home)}:${process.env.PATH}` }),
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 60_000,
+      },
+    );
+    expect(lstatSync(join(box.codeDir, 'cli.mjs')).isSymbolicLink(), out).toBe(true); // premise: deployed
+
+    nextUpdateEntry(box); // the real hook-update, as the next update would run it
+    expect(lstatSync(join(box.codeDir, 'hook.mjs')).isSymbolicLink(), 'the old hook.mjs came back').toBe(
+      true,
+    );
+    expect(existsSync(join(box.codeDir, 'cli.mjs')), 'the installed cli.mjs was deleted').toBe(true);
+  });
+
+  // P3-1: the scan read a runtime dir inside an unreadable data dir as absent and printed ✓ none.
+  it.skipIf(skipRoot)('doctor does not call a data dir it cannot read free of stale files', () => {
+    const box = sandbox({ relocate: true });
+    chmodSync(box.dataDir, 0o000);
+    try {
+      const checks = doctorChecks(run(box, ['doctor', '--json']));
+      const line = checks.find((c) => /^Stale temp files/.test(c.message || ''));
+      expect(line?.level, line?.message).not.toBe('ok');
+    } finally {
+      chmodSync(box.dataDir, 0o755);
+    }
+  });
+
+  // P3-10: the remedy named `node install.mjs cleanup`, which resolves against the shell's cwd.
+  it('the unfinished-update remedy names the installer by its absolute path', () => {
+    const box = sandbox();
+    seedUnfinishedSwap(box.codeDir);
+    const line = doctorChecks(run(box, ['doctor', '--json'])).find((c) =>
+      /^Unfinished update/.test(c.message || ''),
+    );
+    expect(line.message).toContain(INSTALLER);
   });
 });

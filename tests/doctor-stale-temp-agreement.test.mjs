@@ -146,6 +146,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       stale: 4, // 3 aged episodes + 1 update residue
       inFlight: 2,
       unfinishedSwaps: 0,
+      unreadableJournals: 0,
     });
   });
 
@@ -226,6 +227,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       stale: 0,
       inFlight: 0,
       unfinishedSwaps: 0,
+      unreadableJournals: 0,
     });
   });
 
@@ -237,7 +239,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
         codeDir: join(tmpdir(), 'mem-absent-xyz'),
         runtimeDir: join(tmpdir(), 'mem-absent-xyz', 'runtime'),
       }),
-    ).toEqual({ stale: 0, inFlight: 0, unfinishedSwaps: 0 });
+    ).toEqual({ stale: 0, inFlight: 0, unfinishedSwaps: 0, unreadableJournals: 0 });
   });
 
   it('the window both faces print is exactly the gate they apply', () => {
@@ -267,6 +269,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       stale: 2,
       inFlight: 0,
       unfinishedSwaps: 1,
+      unreadableJournals: 0,
     });
   });
 

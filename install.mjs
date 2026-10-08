@@ -78,6 +78,7 @@ import {
   isEpisodeResidue,
   isUpdateResidue,
   scanStaleTempFiles,
+  SWAP_RESOLVED_NAME,
 } from './lib/doctor-stale-temp.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
@@ -1315,7 +1316,8 @@ function listUpdateResidue() {
  * the install it exists to protect. If hook-update cannot load, the residue of finished swaps is
  * still removed and an unfinished swap is left for the next entry that can replay it.
  * @param {{f: string, kind: string}[]} found entries from listUpdateResidue
- * @returns {Promise<{finished: string[], removed: string[], left: string[]}>}
+ * @returns {Promise<{finished: string[], removed: string[], kept: string[], left: string[]}>} kept:
+ *   left on purpose because the journal cannot be read; left: anything else still there
  */
 async function recoverUpdateResidue(found) {
   try {
@@ -1332,9 +1334,9 @@ async function recoverUpdateResidue(found) {
       }
     }
   }
-  const out = { finished: [], removed: [], left: [] };
+  const out = { finished: [], removed: [], kept: [], left: [] };
   for (const { f, kind } of found) {
-    if (existsSync(join(INSTALL_DIR, f))) out.left.push(f);
+    if (existsSync(join(INSTALL_DIR, f))) (kind === 'unreadable-journal' ? out.kept : out.left).push(f);
     else (kind === 'unfinished-swap' ? out.finished : out.removed).push(f);
   }
   return out;
@@ -1355,7 +1357,37 @@ async function finishInterruptedSwaps() {
   const r = await recoverUpdateResidue(found);
   if (r.finished.length > 0)
     ok(`Finished ${r.finished.length} interrupted update(s) before installing: ${r.finished.join(', ')}`);
-  for (const f of r.left) warn(`Could not remove ${f} from ${INSTALL_DIR}`);
+  // A swap left unfinished here is retired once the tree is written (retireLeftoverJournals).
+  for (const f of r.left) if (!isUnresolvedSwap(f)) warn(`Could not remove ${f} from ${INSTALL_DIR}`);
+}
+
+const isUnresolvedSwap = (f) => {
+  const kind = classifyUpdateResidue(INSTALL_DIR, f);
+  return kind === 'unfinished-swap' || kind === 'unreadable-journal';
+};
+
+// A journal still unresolved once deployCodeTree has written the whole tree names paths of a
+// release this install has just replaced, and a later update entry would replay it over this tree:
+// delete the files the install wrote and put that release's back (v6.25.1 review; reached when
+// hook-update cannot load, or a journal cannot be read or removed). Marked resolved, it is never
+// replayed, and cleanup removes it as leftover.
+function retireLeftoverJournals() {
+  let names;
+  try {
+    names = readdirSync(INSTALL_DIR).filter(isUnresolvedSwap);
+  } catch {
+    return;
+  }
+  for (const f of names) {
+    try {
+      writeFileSync(join(INSTALL_DIR, f, SWAP_RESOLVED_NAME), '');
+      ok(`Retired ${f}: this install replaced the release its journal would put back (cleanup removes it)`);
+    } catch (e) {
+      warn(
+        `Could not retire ${f} (${e.code || e.message}): delete it, or the next update puts back the files it holds`,
+      );
+    }
+  }
 }
 
 async function install() {
@@ -1377,6 +1409,7 @@ async function install() {
   // names a dead pid, which the launcher ignores.
   await withSwapBarrier(async () => {
     deployCodeTree(IS_DEV);
+    retireLeftoverJournals();
     await installDependencies(IS_DEV);
   });
   createCliSymlink();
@@ -2958,18 +2991,24 @@ async function doctor() {
   // milder than D#53 — cleanup SAYS it is skipping — and the unfinished-update line says a
   // running update looks the same.
   try {
-    const { stale, inFlight, unfinishedSwaps } = scanStaleTempFiles({
+    const { stale, inFlight, unfinishedSwaps, unreadableJournals } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
       legacyDir: codeIsDataDir ? undefined : MEM_DATA_DIR,
     });
+    const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
     if (unfinishedSwaps > 0) {
       dwarn(
-        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or is running right now (run: node install.mjs cleanup — it finishes an interrupted one and leaves a running one alone)`,
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or is running right now (run: ${installer} cleanup — it finishes an interrupted one, and skips while an update holds install.lock)`,
+      );
+    }
+    if (unreadableJournals > 0) {
+      dwarn(
+        `Unfinished update: ${unreadableJournals} backup dir(s) in ${INSTALL_DIR} whose journal cannot be read, so nothing can finish that update; they hold the files it moved aside (run: ${installer} repair — it reinstalls over them; cleanup then removes them)`,
       );
     }
     if (stale > 0) {
-      dwarn(`Stale temp files: ${stale} found (run: node install.mjs cleanup)`);
+      dwarn(`Stale temp files: ${stale} found (run: ${installer} cleanup)`);
     } else {
       ok('Stale temp files: none');
     }
@@ -2985,8 +3024,12 @@ async function doctor() {
         `  ${inFlight} episode file(s) newer than ${EPISODE_AGE_LABEL} are in flight, not stale — cleanup keeps these.`,
       );
     }
-  } catch {
-    dwarn('Stale temp files: check failed');
+  } catch (e) {
+    dwarn(
+      e?.code === 'EACCES' || e?.code === 'EPERM'
+        ? `Stale temp files: not checked — ${e.path || 'a directory it scans'} is not accessible (${e.code})`
+        : 'Stale temp files: check failed',
+    );
   }
 
   // DB stats
@@ -3404,6 +3447,8 @@ async function cleanup() {
           if (kind === 'unfinished-swap') {
             ok(`Would finish an interrupted update: ${f} (puts back the files its journal lists)`);
             finished++;
+          } else if (kind === 'unreadable-journal') {
+            warn(`Would leave in place: ${f} (its journal cannot be read)`);
           } else {
             ok(`Would remove: ${f}`);
             removed++;
@@ -3414,6 +3459,10 @@ async function cleanup() {
         for (const f of r.finished)
           ok(`Finished an interrupted update: ${f} (put back the files it had moved out)`);
         for (const f of r.removed) ok(`Removed: ${f}`);
+        for (const f of r.kept)
+          warn(
+            `Left in place: ${f} — its journal cannot be read, so nothing can finish that update, and it holds the files the update moved aside. repair reinstalls over it; cleanup removes it after that.`,
+          );
         for (const f of r.left) warn(`Failed to remove ${f}`);
         finished += r.finished.length;
         removed += r.removed.length;
