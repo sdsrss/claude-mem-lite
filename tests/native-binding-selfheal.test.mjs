@@ -110,6 +110,22 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
     ).toBe(true);
   });
 
+  // Pre-ship review P3-1: a quote inside the path ended the match before the addon's name.
+  it('classifies the missing-addon error under a path that holds an apostrophe', () => {
+    for (const p of [
+      "/home/o'brien/x/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+      "C:\\Users\\O'Neil\\x\\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node",
+    ])
+      expect(
+        isNativeBindingError(
+          Object.assign(new Error(`Cannot find module '${p}'\nRequire stack:\n- x`), {
+            code: 'MODULE_NOT_FOUND',
+          }),
+        ),
+        p,
+      ).toBe(true);
+  });
+
   // A missing PACKAGE needs an install, not a rebuild, and an unrelated missing module is not
   // this fault at all: a rebuild burns up to minutes of npm on every fire for either.
   it('does NOT classify a missing package or an unrelated missing module', () => {
@@ -506,8 +522,8 @@ describe('formatHookError — the hint must name a repair that actually applies'
     expect(line).not.toMatch(/cli\.mjs"? repair/);
   });
 
-  // D#306. On the platforms 13 ships no prebuild for, this is the hint every fire prints, and the
-  // marker beside it is what arms the session-start rebuild. It guessed "likely a Node version
+  // D#306. On the platforms 13 ships no prebuild for, this is the hint those fires print (once per
+  // cooldown), and the marker beside it, written on every fire, is what arms the session-start rebuild. It guessed "likely a Node version
   // change", which 13's N-API addons do not break on, and which is not this fault at all.
   it("arms the heal for 13's missing addon and does not guess a Node version change", () => {
     const dir = mkdtempSync(join(tmpdir(), 'cml-nbh-13-'));

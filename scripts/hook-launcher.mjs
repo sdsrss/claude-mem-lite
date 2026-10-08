@@ -497,9 +497,7 @@ function healNativeBindingIfBroken() {
     // (install.mjs::rebuildBinding). Clearing it here would mean a rebuild that
     // silently did nothing — lock contention, a no-op npm — still reads as
     // "healed", dropping the cooldown and re-spawning npm on every session.
-    process.stderr.write(
-      '[claude-mem-lite] native DB binding unusable (Node version change?) — rebuilding in the background\n',
-    );
+    process.stderr.write('[claude-mem-lite] native DB binding unusable — rebuilding in the background\n');
     const child = spawn(process.execPath, [installer, 'rebuild-binding'], {
       detached: true,
       stdio: 'ignore',
