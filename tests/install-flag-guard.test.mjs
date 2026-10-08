@@ -59,6 +59,9 @@ function run(s, args) {
       CLAUDE_MEM_DIR: join(s.root, 'data'),
       CLAUDE_MEM_SKIP_UPDATE: '1',
       MEM_NO_AUTO_ADOPT: '1',
+      // A runtime-dir override exported in the developer's shell would move the markers the
+      // cases below write; spawnSync drops an undefined value, so the child never sees it.
+      CLAUDE_MEM_RUNTIME_DIR: undefined,
     },
   });
 }
@@ -281,6 +284,7 @@ describe('an inaccessible data dir is named as a permission problem', () => {
     for (const k of [
       'CLAUDE_MEM_DIR',
       'CLAUDE_CONFIG_DIR',
+      'CLAUDE_MEM_RUNTIME_DIR',
       'CLAUDE_MEM_SKIP_UPDATE',
       'OPENROUTER_API_KEY',
       'ANTHROPIC_API_KEY',
@@ -356,16 +360,22 @@ describe('an inaccessible data dir is named as a permission problem', () => {
 
   // D#284. status asked for read, write AND search access, so the 755 a `sudo` run leaves owned
   // by root printed "not accessible" and dropped the counts it could read (6.24.0 printed them).
-  it.skipIf(skip)('status reads the counts of a readable but unwritable data dir, under its ✗', () => {
-    const s = sandbox();
+  // The store is WAL (schema.mjs), as every real one is: a read-only open needs <db>-shm, which
+  // SQLite creates in the directory unless a live connection already holds it.
+  function walStore(s) {
     const data = join(s.root, 'data');
     mkdirSync(data, { recursive: true });
     const db = new Database(join(data, 'claude-mem-lite.db'));
+    db.pragma('journal_mode = WAL');
     db.exec(
       'CREATE TABLE observations (id INTEGER); CREATE TABLE session_summaries (memory_session_id TEXT);',
     );
     db.exec("INSERT INTO observations VALUES (1), (2); INSERT INTO session_summaries VALUES ('s1');");
-    db.close();
+    return { data, db };
+  }
+  it.skipIf(skip)('status reads the counts of a readable but unwritable data dir, under its ✗', () => {
+    const s = sandbox();
+    const { data, db } = walStore(s); // held open: -wal and -shm exist
     expect(run(s, ['status']).stdout).toMatch(/✓ Database: 2 observations, 1 sessions/); // premise
     chmodSync(data, 0o500);
     try {
@@ -378,6 +388,30 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       expect(r.stdout).toContain(`chmod u+rwx ${data}`);
       const j = JSON.parse(run(s, ['status', '--json']).stdout);
       expect(j.database).toMatchObject({ level: 'fail', exists: true, observations: 2, error: 'EACCES' });
+    } finally {
+      chmodSync(data, 0o755);
+      db.close();
+    }
+  });
+  // Closed, as a `sudo` run leaves it: SQLite cannot read it there at all (D#284 review P2-1). The
+  // line says why instead of passing on SQLite's "attempt to write a readonly database", and the
+  // JSON keeps the errno a consumer keys on.
+  it.skipIf(skip)('status says why a closed WAL store in an unwritable dir has no counts', () => {
+    const s = sandbox();
+    const { data, db } = walStore(s);
+    db.close(); // checkpoints and removes -wal / -shm
+    expect(existsSync(join(data, 'claude-mem-lite.db-shm'))).toBe(false); // premise
+    chmodSync(data, 0o500);
+    try {
+      const r = run(s, ['status']);
+      expect(r.stdout).toMatch(
+        new RegExp(
+          `✗ Database: exists, but SQLite cannot read it without creating claude-mem-lite\\.db-shm — ${data} can be read but not written \\(EACCES\\)`,
+        ),
+      );
+      expect(r.stdout).not.toMatch(/attempt to write a readonly database/);
+      const j = JSON.parse(run(s, ['status', '--json']).stdout);
+      expect(j.database).toMatchObject({ level: 'fail', exists: true, error: 'EACCES' });
     } finally {
       chmodSync(data, 0o755);
     }

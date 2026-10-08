@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve, dirname } from 'path';
 import { SOURCE_FILES } from '../source-files.mjs';
@@ -171,29 +171,66 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
 // managed tree, no plugin — doctor said "✗ no install on this machine owns a native binding" and,
 // further down, "✓ Native DB binding: loadable": a ✓ that nothing had been probed for.
 describe('doctor: nothing to probe is not a loadable binding', () => {
-  it('prints the ✗ and no ✓ for the binding', () => {
+  const doctorFrom = (checkout) => {
+    const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
+    for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
+      delete env[k];
+    env.MEM_NO_AUTO_ADOPT = '1';
+    return spawnSync(process.execPath, [join(checkout, 'install.mjs'), 'doctor'], {
+      cwd: home,
+      encoding: 'utf8',
+      env,
+      timeout: 90000,
+    });
+  };
+  const checkoutWithoutDeps = () => {
     const checkout = join(home, 'checkout');
     for (const rel of SOURCE_FILES) {
       if (!existsSync(join(REPO, rel))) continue;
       mkdirSync(dirname(join(checkout, rel)), { recursive: true });
       copyFileSync(join(REPO, rel), join(checkout, rel));
     }
-    const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
-    for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
-      delete env[k];
-    env.MEM_NO_AUTO_ADOPT = '1';
-    const r = spawnSync(process.execPath, [join(checkout, 'install.mjs'), 'doctor'], {
-      cwd: home,
-      encoding: 'utf8',
-      env,
-      timeout: 90000,
-    });
+    return checkout;
+  };
+
+  it('prints the ✗ and no ✓ for the binding', () => {
+    const checkout = checkoutWithoutDeps();
+    // A marker it can read is still reported, without the "healthy now" it used to come with.
+    mkdirSync(join(home, '.claude-mem-lite', 'runtime'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude-mem-lite', 'runtime', 'native-binding-broken'),
+      JSON.stringify({ reason: 'abi', ts: Date.now() }),
+    );
+    const r = doctorFrom(checkout);
     expect(r.stdout).toMatch(/✗ better-sqlite3: no install on this machine owns a native binding/); // premise
     expect(r.stdout).not.toMatch(/✓ Native DB binding/);
     expect(r.stdout).toMatch(
-      /⚠ Native DB binding: not checked — no install on this machine owns a native binding/,
+      /⚠ Native DB binding: not checked — no install on this machine owns a native binding to probe; a fire failed ~0h ago \(abi\)/,
     );
   });
+
+  // D#284 review P3-4. The managed install DOES own a working binding, inside a dir this process
+  // cannot enter: "no install owns one" is a claim the lock kept it from checking.
+  it.skipIf(process.getuid?.() === 0)(
+    'says "not checked", not "no install owns one", when the managed dir is locked',
+    () => {
+      const checkout = checkoutWithoutDeps();
+      const managed = makeManagedInstall();
+      expect(doctorFrom(checkout).stdout).toMatch(
+        /✓ better-sqlite3: verified in 1 install \(managed install/,
+      ); // premise
+      chmodSync(managed, 0o000);
+      try {
+        const r = doctorFrom(checkout);
+        expect(r.stdout).toMatch(/✗ Data directory: .*not accessible/);
+        expect(r.stdout).not.toMatch(/no install on this machine owns a native binding/);
+        expect(r.stdout).toMatch(/⚠ better-sqlite3: not checked — .* is not accessible/);
+        expect(r.stdout).toMatch(/⚠ Native DB binding: not checked — .* is not accessible/);
+      } finally {
+        chmodSync(managed, 0o755);
+      }
+    },
+  );
 });
 
 describe('doctor: a stale binding is found in whichever install owns it', () => {

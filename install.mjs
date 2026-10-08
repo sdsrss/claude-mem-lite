@@ -1778,15 +1778,17 @@ async function status() {
         },
       );
     } catch (e) {
-      push(
-        dataDirDenied ? 'fail' : 'warn',
-        'database',
-        'Database: exists but check failed — ' + e.message + unwritable,
-        {
-          exists: true,
-          error: e.message,
-        },
-      );
+      // The store is WAL (schema.mjs), and even a read-only open needs <db>-shm, which SQLite creates
+      // beside the DB: in a directory it cannot write, a closed store cannot be read at all — 6.24.0
+      // could not either. Say so rather than relay "attempt to write a readonly database".
+      const why =
+        dataDirDenied && e.code === 'SQLITE_READONLY_DIRECTORY'
+          ? `exists, but SQLite cannot read it without creating ${basename(DB_PATH)}-shm`
+          : 'exists but check failed — ' + e.message;
+      push(dataDirDenied ? 'fail' : 'warn', 'database', `Database: ${why}${unwritable}`, {
+        exists: true,
+        error: dataDirDenied || e.message,
+      });
     }
   } else {
     push(dataDirDenied ? 'fail' : 'warn', 'database', 'Database: not found' + unwritable, {
@@ -2037,7 +2039,10 @@ async function doctor() {
   // process.
   const rootProbes = probeRuntimeRoots(shape.runtimeRoots);
   const brokenRoots = rootProbes.filter((r) => !r.ok);
-  if (rootProbes.length === 0) {
+  if (rootProbes.length === 0 && codeDirDenied) {
+    // The code home is locked, so it may own a binding nobody could look at (D#284 review P3-4).
+    notCheckedDenied('better-sqlite3', INSTALL_DIR);
+  } else if (rootProbes.length === 0) {
     fail('better-sqlite3: no install on this machine owns a native binding — nothing here can open the DB');
     issues++;
   } else if (brokenRoots.length === 0) {
@@ -2244,6 +2249,8 @@ async function doctor() {
   // The marker sits in the runtime dir: in a locked data dir it reads as absent (D#284).
   const breakageUnread = dataDirUnreadable && runtimeInDataDir;
   const breakage = breakageUnread ? null : readNativeBindingBreakage(MEM_RUNTIME_DIR);
+  const breakageSeen = (b) =>
+    `~${Math.round((Date.now() - (b.ts || 0)) / 3600000)}h ago (${b.reason || 'unknown'})`;
   // Reuses the per-root probes above — same trees, same question, and doctor
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
@@ -2251,16 +2258,19 @@ async function doctor() {
       `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} rebuild-binding\` (repairs every broken install, not just this one)`,
     );
     issues++;
+  } else if (rootProbes.length === 0 && codeDirDenied) {
+    notCheckedDenied('Native DB binding', INSTALL_DIR);
   } else if (rootProbes.length === 0) {
     // Nothing was probed: a ✓ here sat under the better-sqlite3 ✗ for the same machine. Said, not
-    // left silent, like DB schema's fourth outcome above.
-    dwarn('Native DB binding: not checked — no install on this machine owns a native binding to probe');
+    // left silent, like DB schema's fourth outcome above; a marker it could read still shows.
+    dwarn(
+      `Native DB binding: not checked — no install on this machine owns a native binding to probe${breakage ? `; a fire failed ${breakageSeen(breakage)}` : ''}`,
+    );
   } else if (breakageUnread) {
     notCheckedDenied(`Native DB binding: loadable on Node ${process.version}, past failures`);
   } else if (breakage) {
-    const ageH = Math.round((Date.now() - (breakage.ts || 0)) / 3600000);
     dwarn(
-      `Native DB binding: healthy now, but a fire failed ~${ageH}h ago (${breakage.reason || 'unknown'}) — stale marker clears on the next successful rebuild-binding`,
+      `Native DB binding: healthy now, but a fire failed ${breakageSeen(breakage)} — stale marker clears on the next successful rebuild-binding`,
     );
   } else {
     ok(`Native DB binding: loadable on Node ${process.version}`);
