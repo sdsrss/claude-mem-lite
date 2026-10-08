@@ -834,6 +834,9 @@ const SWAP_MARKER = join(STATE_DIR, 'runtime', 'swap-in-progress'); // runtime-d
 // granularity — a bare directory walk cannot tell a nested relPath from a directory
 // relPath like `node_modules`.
 const SWAP_JOURNAL = '.swap-journal.json'; // doctor and cleanup spell it SWAP_JOURNAL_NAME (lib/doctor-stale-temp.mjs)
+// Written into the backup dir when its swap is over (committed, or rolled back): never replay it
+// (D#292 C). Doctor and cleanup spell it SWAP_RESOLVED_NAME.
+const SWAP_RESOLVED = '.swap-resolved';
 
 function markSwapStart() {
   try {
@@ -869,11 +872,21 @@ function journalSwap(backupDir, backedUp, installed) {
 
 // Clean up after a swap that is over: committed, or rolled back. Never throws, because a cleanup
 // that throws reaches the caller's catch, which rolls the swap back again (D#283; EBUSY is
-// ordinary on Windows and `force` does not suppress it). The journal goes first: recovery at the
-// next entry replays whatever a leftover journal lists, and replayed over a committed swap whose
-// backups were half deleted it mixes two releases. If the journal cannot be removed, the backups
-// stay with it, complete, so a replay restores one whole release.
+// ordinary on Windows and `force` does not suppress it).
+//
+// The dir is marked resolved first (D#292 C). A journal left behind (it could not be removed, or a
+// kill came first) was replayed by the next recovery: over a committed swap that put the previous
+// release back, and over a rolled-back one whose journal outlived a later swap it deleted a path
+// that swap had installed. Recovery, install, cleanup and doctor leave a resolved dir's journal
+// alone. The marker is a new empty file, so it needs no access to the journal a failed removal
+// could not get. If it cannot be written either, the journal still goes before the backups, so a
+// replay of what is left restores one whole release.
 function discardBackupDir(backupDir) {
+  try {
+    writeFileSync(join(backupDir, SWAP_RESOLVED), '');
+  } catch (e) {
+    debugCatch(e, 'mark-swap-resolved');
+  }
   try {
     rmSync(join(backupDir, SWAP_JOURNAL), { force: true });
   } catch (e) {
@@ -887,13 +900,15 @@ function discardBackupDir(backupDir) {
   }
 }
 
+// The backup dir is resolved before staging goes: removing a whole staging tree takes long enough
+// for a kill to land in, and a kill there left a committed swap's journal to be replayed.
 function discardSwapDirs(stagingDir, backupDir) {
+  discardBackupDir(backupDir);
   try {
     rmSync(stagingDir, { recursive: true, force: true });
   } catch (e) {
     debugCatch(e, 'discard-staging-dir');
   }
-  discardBackupDir(backupDir);
 }
 
 /**
@@ -928,6 +943,13 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
     }
     if (!entry.name.startsWith('.update-backup-')) continue;
 
+    // Its swap is over and only its cleanup failed: remove what is left, never replay it (D#292 C).
+    if (existsSync(join(dir, SWAP_RESOLVED))) {
+      discardBackupDir(dir);
+      recovered++;
+      continue;
+    }
+
     let journal;
     try {
       journal = JSON.parse(readFileSync(join(dir, SWAP_JOURNAL), 'utf8'));
@@ -955,6 +977,8 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 // Safe to run twice over one journal (D#283). A backed-up path whose backup is gone holds the OLD
 // file already, restored by an earlier rollback or never moved out, so it is not deleted: a
 // second rollback used to delete every installed path, by then the only copy of the old install.
+// That holds for a journal this code wrote, whose cleanup removes the journal before any backup.
+// A backup dir 6.25.0 or older left half deleted beside its journal can still replay to a mix.
 // The arrays are copied, not reversed in place, so a caller's journal is left as it was.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();

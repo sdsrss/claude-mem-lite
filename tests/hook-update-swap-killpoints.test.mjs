@@ -207,6 +207,17 @@ describe('every kill point inside a swap recovers to one whole release', () => {
         );
         expect(journalWrites.length, 'premise: the swap journals its renames').toBeGreaterThan(4);
 
+        // A passed swap is committed from the first cleanup step on: it marks its backup dir resolved
+        // and removes the staging dir only after its check passed. A kill from there on must recover
+        // to the NEW release, never replay the journal back to the old one (D#292 C).
+        const resolvedAt = fullLog.findIndex((l) => l.startsWith('write ') && l.endsWith('.swap-resolved'));
+        const stagingRmAt = fullLog.findIndex((l) => /^rm .*\.update-staging-[^/]*$/.test(l));
+        if (pass) {
+          expect(resolvedAt, 'premise: a passed swap marks itself resolved').toBeGreaterThan(-1);
+          expect(stagingRmAt, 'premise: a passed swap removes its staging dir').toBeGreaterThan(-1);
+        }
+        const committedFrom = Math.min(resolvedAt + 1, stagingRmAt);
+
         const bad = [];
         for (let k = 0; k < total; k++) {
           dataDir = makeDataDir();
@@ -215,7 +226,10 @@ describe('every kill point inside a swap recovers to one whole release', () => {
           await runInstall(mod, dataDir, makeReleaseDir(), { killAt: k, torn });
           mod.recoverInterruptedSwaps(dataDir);
           const kind = kindOf(snapshot(dataDir));
-          if (kind === 'MIXED') bad.push(`${k} ${fullLog[k].replaceAll(dataDir, '')}`);
+          const step = `${k} ${fullLog[k].replaceAll(dataDir, '')}`;
+          if (kind === 'MIXED') bad.push(step);
+          else if (pass && k >= committedFrom && kind !== 'NEW')
+            bad.push(`${step} -> ${kind} after the commit`);
         }
         expect(bad).toEqual([]);
       }, 120000);

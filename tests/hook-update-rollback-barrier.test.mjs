@@ -300,3 +300,67 @@ describe('a resolved swap is never rolled back again (D#283)', () => {
     expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
   });
 });
+
+// D#292 (C), found by the v6.25.1 pre-tag claims review. A swap that is over (committed, or rolled
+// back) whose journal could not be removed (EBUSY/EPERM on Windows) kept the journal, and the next
+// recovery replayed it: over a committed swap that put the previous release back, and since 6.25.1
+// recovery also runs from install, repair and the cleanup doctor recommends; over a rolled-back swap
+// whose journal outlived a later swap, it deleted a path the later swap had installed.
+describe('a resolved swap is never replayed (D#292 C)', () => {
+  const smokeFails = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) {
+      mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+      return '';
+    }
+    if (String(cmd).includes('cli.mjs') || String(cmd).includes('--check')) throw new Error('broken');
+    return '';
+  };
+  const smokePasses = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+    return '';
+  };
+  const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : null);
+  const updateResidue = (dir) => readdirSync(dir).filter((n) => n.startsWith('.update-'));
+
+  it('a committed swap whose journal cannot be removed stays committed at the next entry', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
+    rmFaults.push({ match: (p) => p.endsWith('.swap-journal.json') });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(rmFaults, 'premise: the fault fired').toEqual([]);
+    expect(updateResidue(dataDir).length, 'premise: the journal stayed').toBe(1);
+
+    recoverInterruptedSwaps(dataDir);
+    expect(read(dataDir, 'package.json')).toBe(JSON.stringify({ version: '1.1.0' }));
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n');
+    expect(updateResidue(dataDir)).toEqual([]);
+  });
+
+  it('a rolled-back swap whose journal stays does not delete a path a later swap installed', async () => {
+    const dataDir = makeDataDir();
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
+    // The first swap adds cli.mjs, fails its check and is rolled back; its journal can never be removed.
+    let first = null;
+    rmFaults.push({ sticky: true, match: (p) => first !== null && p === join(first, '.swap-journal.json') });
+    mockedExecSync.mockImplementation((cmd, opts = {}) => {
+      const b = readdirSync(dataDir).find((n) => n.startsWith('.update-backup-'));
+      if (first === null && b) first = join(dataDir, b);
+      return smokeFails(cmd, opts);
+    });
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
+    expect(read(dataDir, 'cli.mjs'), 'premise: rolled back').toBe(null);
+    expect(existsSync(join(first, '.swap-journal.json')), 'premise: the journal stayed').toBe(true);
+
+    // A later swap installs cli.mjs again and commits.
+    mockedExecSync.mockImplementation(smokePasses);
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(read(dataDir, 'cli.mjs'), 'premise: the later swap installed it').toBe('#!/usr/bin/env node\n');
+
+    recoverInterruptedSwaps(dataDir); // the next entry
+    expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n');
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+  });
+});

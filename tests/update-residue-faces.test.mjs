@@ -200,3 +200,87 @@ for (const relocate of [false, true]) {
     });
   });
 }
+
+// D#292 (C): a backup dir whose swap is over but whose journal could not be removed is marked
+// `.swap-resolved`. It is leftover, not an unfinished update: replaying it would undo the release
+// that finished.
+describe('a resolved swap whose journal stayed (D#292 C)', () => {
+  function seedResolved(codeDir) {
+    writeFileSync(join(codeDir, 'server.mjs'), '// the release that finished');
+    const backup = join(codeDir, JOURNALED);
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(join(backup, 'server.mjs'), '// the release before it');
+    writeFileSync(
+      join(backup, '.swap-journal.json'),
+      JSON.stringify({ backedUp: ['server.mjs'], installed: ['server.mjs'] }),
+    );
+    writeFileSync(join(backup, '.swap-resolved'), '');
+  }
+
+  it('cleanup removes it without replaying it', () => {
+    const box = sandbox();
+    seedResolved(box.codeDir);
+    const out = run(box, ['cleanup']);
+    expect(read(join(box.codeDir, 'server.mjs')), out).toBe('// the release that finished');
+    expect(residue(box.codeDir)).toEqual([]);
+    expect(out).toContain(`Removed: ${JOURNALED}`);
+  });
+
+  it('doctor counts it as stale temp, not as an unfinished update', () => {
+    const box = sandbox();
+    seedResolved(box.codeDir);
+    const checks = doctorChecks(run(box, ['doctor', '--json']));
+    expect(checks.find((c) => /^Unfinished update/.test(c.message || ''))).toBeUndefined();
+    expect(checks.find((c) => /^Stale temp files/.test(c.message || '')).message).toMatch(
+      /Stale temp files: 1 found/,
+    );
+  });
+
+  it('install does not replay it over the tree it writes', () => {
+    const box = sandbox();
+    seedResolved(box.codeDir);
+    const out = run(box, ['install', '--dev', '--skip-repos'], {
+      PATH: `${fakeClaudeBin(box.home)}:${process.env.PATH}`,
+    });
+    expect(lstatSync(join(box.codeDir, 'server.mjs')).isSymbolicLink(), out).toBe(true); // premise: deployed
+    // The deploy overwrites what a replay would restore, so what tells the two apart is the replay itself.
+    expect(out).not.toMatch(/interrupted update/i);
+  });
+});
+
+// Before v2.90.0 the updater swapped into the data dir itself, which CLAUDE_MEM_DIR could relocate,
+// so a relocated data dir can still hold residue from then. 6.25.0's doctor and cleanup scanned it;
+// whatever such a backup holds, its journal names a tree no current code lives in, so it is stale and
+// is never replayed.
+describe('residue an updater older than v2.90.0 left in a relocated data dir', () => {
+  function seedLegacy(dataDir) {
+    mkdirSync(join(dataDir, STAGING), { recursive: true });
+    const backup = join(dataDir, JOURNALED);
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(join(backup, 'server.mjs'), '// an old release');
+    writeFileSync(
+      join(backup, '.swap-journal.json'),
+      JSON.stringify({ backedUp: ['server.mjs'], installed: [] }),
+    );
+  }
+
+  it('doctor counts it as stale temp', () => {
+    const box = sandbox({ relocate: true });
+    seedLegacy(box.dataDir);
+    const checks = doctorChecks(run(box, ['doctor', '--json']));
+    expect(checks.find((c) => /^Unfinished update/.test(c.message || ''))).toBeUndefined();
+    expect(checks.find((c) => /^Stale temp files/.test(c.message || '')).message).toMatch(
+      /Stale temp files: 2 found/,
+    );
+  });
+
+  it('cleanup removes it and replays nothing into the data dir', () => {
+    const box = sandbox({ relocate: true });
+    seedLegacy(box.dataDir);
+    expect((run(box, ['cleanup', '--dry-run']).match(/Would remove:/g) || []).length).toBe(2);
+    const out = run(box, ['cleanup']);
+    expect(residue(box.dataDir), out).toEqual([]);
+    expect(existsSync(join(box.dataDir, 'server.mjs'))).toBe(false);
+    expect(out).not.toMatch(/interrupted update/i);
+  });
+});

@@ -76,6 +76,7 @@ import {
   classifyUpdateResidue,
   EPISODE_AGE_LABEL,
   isEpisodeResidue,
+  isUpdateResidue,
   scanStaleTempFiles,
 } from './lib/doctor-stale-temp.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
@@ -1803,7 +1804,8 @@ async function status() {
 
   // Database. A data dir this process cannot enter reads as an empty one (D#199), and
   // `exists: false` would be a guess — null says nobody could look. One it can read but not write
-  // (the 755 a `sudo` run leaves owned by root) reads correctly: its counts are real, under a ✗ (D#284).
+  // (the 755 a `sudo` run leaves owned by root) is read where SQLite can open the store there: its
+  // counts are real, under a ✗ (D#284). A closed WAL store there cannot be opened; see the catch.
   const dataDirDenied = dataDirAccessError();
   const dataDirUnreadable = dataDirDenied
     ? dataDirAccessError(MEM_DATA_DIR, fsConstants.R_OK | fsConstants.X_OK)
@@ -1839,8 +1841,8 @@ async function status() {
       );
     } catch (e) {
       // The store is WAL (schema.mjs), and even a read-only open needs its -wal and -shm files, which
-      // SQLite creates beside the DB: in a directory it cannot write, a closed store cannot be read at
-      // all — 6.24.0 could not either. Say so rather than relay "attempt to write a readonly database".
+      // SQLite creates beside the DB: in a directory it cannot write, a closed store cannot be opened
+      // in place (a copy elsewhere could be read) — 6.24.0 could not open it either. Say so rather than relay "attempt to write a readonly database".
       // The errno stands in for SQLite's message only where the directory is the cause.
       const walBlocked = dataDirDenied && e.code === 'SQLITE_READONLY_DIRECTORY';
       const why = walBlocked
@@ -2959,6 +2961,7 @@ async function doctor() {
     const { stale, inFlight, unfinishedSwaps } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
+      legacyDir: codeIsDataDir ? undefined : MEM_DATA_DIR,
     });
     if (unfinishedSwaps > 0) {
       dwarn(
@@ -3373,10 +3376,11 @@ async function cleanup() {
   let removed = 0;
 
   // Update residue: `.update-staging-*` / `.update-backup-*` in the CODE dir, where hook-update's
-  // swap writes them. Under CLAUDE_MEM_DIR this scanned the data dir, where nothing writes them.
-  // A backup dir that still holds its journal is a swap whose updater was killed, holding the only
-  // copy of every file the swap had moved out: cleanup finishes it, by replaying the journal the
-  // way the next update entry would, instead of deleting it (D#289).
+  // swap writes them. Under CLAUDE_MEM_DIR this scanned only the data dir, where nothing has written
+  // them since v2.90.0; residue an older updater left there is still removed, below. A backup dir
+  // that holds its journal and no resolved marker is a swap whose updater was killed, holding the
+  // only copy of every file the swap had moved out: cleanup finishes it, by replaying the journal
+  // the way the next update entry would, instead of deleting it (D#289).
   //
   // R10 P2-10: take install.lock first. A backup dir of a swap running now holds a journal too,
   // and the staging dir is the tree being swapped in; touching either mid-update leaves the install
@@ -3413,6 +3417,25 @@ async function cleanup() {
         for (const f of r.left) warn(`Failed to remove ${f}`);
         finished += r.finished.length;
         removed += r.removed.length;
+      }
+      // A relocated data dir that an updater older than v2.90.0 swapped into: its residue is stale,
+      // whatever it holds, and is never replayed (lib/doctor-stale-temp.mjs, legacyDir).
+      if (!sameDir(INSTALL_DIR, MEM_DATA_DIR) && existsSync(MEM_DATA_DIR)) {
+        for (const f of readdirSync(MEM_DATA_DIR)) {
+          if (!isUpdateResidue(f)) continue;
+          if (dryRun) {
+            ok(`Would remove: ${join(MEM_DATA_DIR, f)}`);
+            removed++;
+            continue;
+          }
+          try {
+            rmSync(join(MEM_DATA_DIR, f), { recursive: true, force: true });
+            ok(`Removed: ${join(MEM_DATA_DIR, f)}`);
+            removed++;
+          } catch (e) {
+            warn(`Failed to remove ${join(MEM_DATA_DIR, f)}: ${e.message}`);
+          }
+        }
       }
     } finally {
       // Released here: the rest of cleanup touches runtime scratch that no installer owns, and
@@ -3868,7 +3891,7 @@ function sameDir(a, b) {
 // there (D#287).
 export const dataDirAccessRemedy = (code) =>
   code === 'EROFS'
-    ? `the file system holding ${shellWord(MEM_DATA_DIR)} is mounted read-only — remount it read-write, or set CLAUDE_MEM_DIR to a directory on a writable one`
+    ? `the file system holding ${shellWord(MEM_DATA_DIR)} is mounted read-only — remount it read-write`
     : `chmod u+rwx ${shellWord(MEM_DATA_DIR)} (or chown it back to your user if a sudo run created it)`;
 
 async function runLockedInstall() {
