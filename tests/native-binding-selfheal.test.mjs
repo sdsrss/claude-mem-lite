@@ -126,6 +126,20 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
       ).toBe(true);
   });
 
+  // Delta review P3-5: the addon's quoted path has to END the line, not just appear on it.
+  it('does NOT classify another missing module whose line merely quotes the addon path', () => {
+    expect(
+      isNativeBindingError(
+        Object.assign(
+          new Error("Cannot find module 'zod' (while loading '/x/build/Release/better_sqlite3.node')"),
+          {
+            code: 'MODULE_NOT_FOUND',
+          },
+        ),
+      ),
+    ).toBe(false);
+  });
+
   // A missing PACKAGE needs an install, not a rebuild, and an unrelated missing module is not
   // this fault at all: a rebuild burns up to minutes of npm on every fire for either.
   it('does NOT classify a missing package or an unrelated missing module', () => {

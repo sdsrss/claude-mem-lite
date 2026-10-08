@@ -43,7 +43,11 @@ import {
 // because checkForUpdate is silent on network failure the plugin then reports
 // itself permanently up to date. Same tunnel the OpenRouter call site uses.
 import { httpConnectProxyFor, getViaConnectProxy, redactProxyUrl } from './lib/proxy-fetch.mjs';
-import { takeLock } from './lib/proc-lock.mjs';
+// A namespace, not a named import: a swap renames files one at a time, so for a moment this file can
+// sit over the previous release's lib/proc-lock.mjs, and a named import of an export that release
+// lacks is a SyntaxError that stops this module loading — and with it recoverInterruptedSwaps, which
+// finishes that very swap (pre-ship delta review P2-1). takeLock is newer than v6.25.2: detected.
+import * as procLock from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { verifyReleaseFiles, verifyManifestSignature } from './lib/release-digest.mjs';
 import { detectInstallShape } from './lib/install-shape.mjs';
@@ -262,7 +266,7 @@ function pluginOnlyInstall() {
   return Boolean(shape && !shape.managed && shape.activePluginVersion);
 }
 
-function isPluginMode() {
+export function isPluginMode() {
   return Boolean(process.env.CLAUDE_PLUGIN_ROOT) || pluginOnlyInstall();
 }
 
@@ -1264,7 +1268,10 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   // holding the lock means an install is already in flight — skip rather than
   // race. Shared path with install.mjs so direct install + repair + auto-update
   // are mutually exclusive.
-  const { release, error: lockError } = takeLock(join(STATE_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  const lockPath = join(STATE_DIR, 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
+  const { release, error: lockError } = procLock.takeLock
+    ? procLock.takeLock(lockPath)
+    : { release: procLock.acquireLock(lockPath) };
   if (!release) {
     // doctor is the face that names a lock that cannot be taken (D#307); this log is debug-only.
     debugLog(

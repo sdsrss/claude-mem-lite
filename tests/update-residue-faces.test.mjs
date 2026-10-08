@@ -908,3 +908,143 @@ describe('swapsBlockedByUnreadable: the order recovery walks, whatever order the
     });
   }
 });
+
+// Pre-ship delta review of the repairs above.
+describe('install.lock that cannot be taken: the delta review repairs', () => {
+  const skipRoot = process.getuid?.() === 0;
+  const esc = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const offline = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', NO_PROXY: '' };
+
+  // P2-1. A swap renames files one at a time (hook-update.mjs and install.mjs long before
+  // lib/proc-lock.mjs), so a swap killed in between leaves the new entry points over the previous
+  // release's lib. hook-update.mjs is what finishes that swap, and install.mjs is the repair for it:
+  // both must load against the previous release's proc-lock.mjs. Its export set, as shipped in
+  // v6.25.2 (git show 0cd60a25:lib/proc-lock.mjs): acquireLock, lockHeld, withLock, withLockAsync,
+  // LIVE_HOLDER_MAX_MS.
+  it("the swap's own recovery paths load against the previous release's proc-lock.mjs", () => {
+    const box = sandbox();
+    const tree = join(box.home, 'mixed');
+    for (const rel of [...SOURCE_FILES, 'package.json']) {
+      if (!existsSync(join(REPO, rel))) continue;
+      mkdirSync(dirname(join(tree, rel)), { recursive: true });
+      copyFileSync(join(REPO, rel), join(tree, rel));
+    }
+    symlinkSync(join(REPO, 'node_modules'), join(tree, 'node_modules'));
+    copyFileSync(join(REPO, 'lib', 'proc-lock.mjs'), join(tree, 'lib', 'proc-lock-current.mjs'));
+    writeFileSync(
+      join(tree, 'lib', 'proc-lock.mjs'),
+      "export { acquireLock, lockHeld, withLock, withLockAsync, LIVE_HOLDER_MAX_MS } from './proc-lock-current.mjs';\n",
+    );
+    const load = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `await import(${JSON.stringify(pathToFileURL(join(tree, 'hook-update.mjs')).href)});`,
+      ],
+      { env: env(box), encoding: 'utf8', timeout: 60_000 },
+    );
+    expect(load.stderr).not.toMatch(/does not provide an export named/);
+    expect(load.status, load.stderr).toBe(0);
+    mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+    // The dry run predicts (lockDirBlocked); the real run takes the lock (takeLock).
+    const dry = spawnSync(process.execPath, [join(tree, 'install.mjs'), 'cleanup', '--dry-run'], {
+      env: env(box),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(`${dry.stdout}${dry.stderr}`).not.toMatch(/does not provide an export named|is not a function/);
+    expect(dry.stdout).toContain(`Would remove: ${STAGING}`);
+    const r = spawnSync(process.execPath, [join(tree, 'install.mjs'), 'cleanup'], {
+      env: env(box),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/does not provide an export named|is not a function/);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(existsSync(join(box.codeDir, STAGING))).toBe(false); // it took the lock and cleaned up
+  });
+
+  // P3-1. Above the data dir, "create it as your user" fixes only a parent that can be entered but
+  // not written. One that cannot be entered (the data dir may exist and be the user's already), or a
+  // link to nowhere (mkdir -p fails through it), leaves CLAUDE_MEM_DIR as the fix.
+  for (const shape of ['unenterable', 'link to nowhere'])
+    it.skipIf(skipRoot)(`a data dir behind an ancestor that is ${shape}: the fix is CLAUDE_MEM_DIR`, () => {
+      const box = sandbox();
+      const anc = join(box.home, 'anc');
+      if (shape === 'unenterable') {
+        mkdirSync(join(anc, 'data', 'runtime'), { recursive: true });
+        chmodSync(anc, 0o000);
+      } else {
+        symlinkSync(join(box.home, 'gone'), anc);
+      }
+      try {
+        // cleanup, not install: install stops earlier on the data dir's own access check.
+        const r = runFull(box, ['cleanup'], { CLAUDE_MEM_DIR: join(anc, 'data') });
+        expect(r.status).toBe(1);
+        expect(r.out).toMatch(new RegExp(`install\\.lock cannot be taken — ${esc(anc)} `));
+        expect(r.out).not.toMatch(/sudo mkdir|a directory your user owns/);
+        expect(r.out).toMatch(/set CLAUDE_MEM_DIR/);
+      } finally {
+        if (shape === 'unenterable') chmodSync(anc, 0o755);
+      }
+    });
+
+  // P3-2. A runtime "dir" that is a regular file: name it as one, not as a permission to chmod.
+  it('a runtime path that is a file is named as one', () => {
+    const box = sandbox();
+    const runtime = join(box.dataDir, 'runtime');
+    rmSync(runtime, { recursive: true, force: true });
+    writeFileSync(runtime, 'not a directory');
+    const r = runFull(box, ['cleanup']);
+    expect(r.out).toMatch(
+      new RegExp(`install\\.lock cannot be taken — ${esc(runtime)} cannot be written \\(ENOTDIR\\)`),
+    );
+    expect(r.out).toMatch(/is a file, not a directory — move it aside/);
+    expect(r.out).not.toMatch(/chmod/);
+  });
+
+  // P3-3. In plugin mode the check never installs, so a lock that cannot be taken must not stop it.
+  it.skipIf(skipRoot)('self-update in plugin mode still checks', () => {
+    const box = sandbox();
+    const runtime = join(box.dataDir, 'runtime');
+    chmodSync(runtime, 0o555);
+    try {
+      const r = runFull(box, ['self-update'], {
+        ...offline,
+        CLAUDE_MEM_SKIP_UPDATE: '',
+        CLAUDE_PLUGIN_ROOT: REPO,
+      });
+      expect(r.out).toMatch(/Checking for updates/);
+      expect(r.out).not.toMatch(/install\.lock cannot be taken/);
+      expect(r.status, r.out).toBe(0);
+    } finally {
+      chmodSync(runtime, 0o755);
+    }
+  });
+
+  // P3-6. A runtime dir under a data dir on a read-only mount is one fault: one remount. Simulated by
+  // tests/fixtures/erofs-sim-preload.mjs (EACCES under the dir answers EROFS), as D#295's case does.
+  it.skipIf(skipRoot)('on a read-only mount the lock line is a ⚠ beside the Data directory ✗', () => {
+    const box = sandbox();
+    const runtime = join(box.dataDir, 'runtime');
+    chmodSync(runtime, 0o555);
+    chmodSync(box.dataDir, 0o500);
+    try {
+      const checks = doctorChecks(
+        run(box, ['doctor', '--json'], {
+          NODE_OPTIONS: `--import=${pathToFileURL(join(REPO, 'tests', 'fixtures', 'erofs-sim-preload.mjs')).href}`,
+          CML_EROFS_SIM_DIR: box.dataDir,
+          CML_EROFS_SIM_REQUIRE_FROM: join(REPO, 'package.json'),
+        }),
+      );
+      expect(checks.find((c) => /^Data directory/.test(c.message || ''))?.message).toMatch(/\(EROFS\)/); // premise
+      const lockLine = checks.find((c) => /^Install lock/.test(c.message || ''));
+      expect(lockLine?.message).toMatch(/\(EROFS\)/);
+      expect(lockLine?.level).toBe('warn');
+    } finally {
+      chmodSync(box.dataDir, 0o755);
+      chmodSync(runtime, 0o755);
+    }
+  });
+});

@@ -99,7 +99,19 @@ import {
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
-import { lockHeld, lockDirBlocked, takeLock } from './lib/proc-lock.mjs';
+// A namespace, not named imports: a swap renames files one at a time, so for a moment this file can
+// sit over the previous release's lib/proc-lock.mjs, and a named import of an export that release
+// lacks is a SyntaxError that stops install.mjs loading — and repair and cleanup are what finish that
+// state (pre-ship delta review P2-1). Exports newer than v6.25.2 are detected.
+import * as procLock from './lib/proc-lock.mjs';
+const { lockHeld } = procLock;
+const lockDirBlocked = procLock.lockDirBlocked ?? (() => null);
+const takeLock =
+  procLock.takeLock ??
+  ((p) => {
+    const release = procLock.acquireLock(p);
+    return release ? { release } : {};
+  });
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
@@ -3742,7 +3754,8 @@ async function manualUpdate() {
   console.log('\nclaude-mem-lite self-update\n');
 
   // Force check by importing hook-update (bypasses throttle for manual use)
-  const { checkForUpdate, getCurrentVersion, updateCheckDisabledReason } = await import('./hook-update.mjs');
+  const { checkForUpdate, getCurrentVersion, updateCheckDisabledReason, isPluginMode } =
+    await import('./hook-update.mjs');
   // checkForUpdate returns null without looking in these two cases, and the branch at the
   // bottom would then report "Already up to date" for a check that never ran. (D#251)
   const disabled = updateCheckDisabledReason();
@@ -3760,7 +3773,8 @@ async function manualUpdate() {
   }
   // An update installs under install.lock, and hook-update reads a lock it cannot take as "an install
   // is in progress", which this printed as "install failed" (review P3-5).
-  const lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  // Plugin mode only checks, it never installs, so the lock is not its business (delta review P3-3).
+  const lockBlocked = isPluginMode?.() ? null : lockDirBlocked(INSTALL_LOCK_PATH);
   if (lockBlocked) {
     warn(`Not checked: ${lockBlockedWhy(lockBlocked)}`);
     process.exitCode = 1;
@@ -4152,11 +4166,18 @@ const lockBlockedWhy = ({ dir, code }) =>
 // a CLAUDE_MEM_DIR under /opt that advice would hand /opt to the user (review P3-3).
 function lockDirRemedy(code, dir) {
   const rel = relative(MEM_DATA_DIR, dir);
-  if (rel.startsWith('..') || isAbsolute(rel))
+  // Creating the data dir fixes only a parent that can be entered but not written; one that cannot be
+  // entered (the data dir may already be the user's), or a link to nowhere, leaves CLAUDE_MEM_DIR
+  // (delta review P3-1).
+  const above = rel.startsWith('..') || isAbsolute(rel);
+  if (above && (code === 'ENOENT' || dirAccessError(dir, fsConstants.X_OK)))
+    return `${shellWord(dir)} cannot be entered or does not exist — set CLAUDE_MEM_DIR to a directory your user can write`;
+  if (above)
     return `make ${shellWord(MEM_DATA_DIR)} a directory your user owns (e.g. sudo mkdir -p ${shellWord(MEM_DATA_DIR)} && sudo chown "$USER" ${shellWord(MEM_DATA_DIR)}), or set CLAUDE_MEM_DIR to one`;
   if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return dataDirRemedy(code, dir);
   if (code === 'ENOSPC' || code === 'EDQUOT')
     return `free space on the file system holding ${shellWord(dir)}`;
+  if (code === 'ENOTDIR') return `${shellWord(dir)} is a file, not a directory — move it aside`;
   if (code === 'ENOENT')
     return `${shellWord(dir)} is a link to a directory that does not exist — create its target, or remove the link`;
   return `check that your user can create files in ${shellWord(dir)}`;

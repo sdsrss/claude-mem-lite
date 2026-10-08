@@ -1,7 +1,20 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  symlinkSync,
+  readdirSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 import {
   acquireLock,
   withLock,
@@ -251,5 +264,34 @@ describe('lockDirBlocked names the directory that has to change', () => {
     } finally {
       chmodSync(data, 0o755);
     }
+  });
+});
+
+// Pre-ship delta review P3-2 / P3-4.
+describe('takeLock: the errno is the failed create’s own', () => {
+  it('a data dir that is a regular file is ENOTDIR, named at that file', () => {
+    const d = tmp();
+    const file = join(d, 'data');
+    writeFileSync(file, 'not a directory');
+    const lock = join(file, 'runtime', 'install.lock');
+    expect(takeLock(lock).error).toEqual({ dir: file, code: 'ENOTDIR' });
+    expect(lockDirBlocked(lock)).toEqual({ dir: file, code: 'ENOTDIR' });
+  });
+
+  // A write that fails after open() created the temp (a full disk; EFBIG under `ulimit -f 0` stands in)
+  // left a zero-byte install.lock.new-*.lock on every attempt.
+  it.skipIf(process.platform === 'win32')('a create whose write fails leaves no temp file behind', () => {
+    const d = tmp();
+    const probe = `const m = await import(${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'lib', 'proc-lock.mjs')).href)});
+      process.stdout.write(JSON.stringify(m.takeLock(${JSON.stringify(join(d, 'install.lock'))})));`;
+    const r = spawnSync(
+      'bash',
+      ['-c', `trap "" XFSZ; ulimit -f 0; exec "$0" --input-type=module -e "$1"`, process.execPath, probe],
+      {
+        encoding: 'utf8',
+      },
+    );
+    expect(JSON.parse(r.stdout || '{}').error?.code, r.stderr).toBe('EFBIG'); // premise: the write failed
+    expect(readdirSync(d)).toEqual([]);
   });
 });
