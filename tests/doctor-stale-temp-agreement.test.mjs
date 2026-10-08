@@ -13,7 +13,7 @@
 // "No stale files found."
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, statSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -147,6 +147,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       inFlight: 2,
       unfinishedSwaps: 0,
       unreadableJournals: 0,
+      notChecked: [],
     });
   });
 
@@ -228,6 +229,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       inFlight: 0,
       unfinishedSwaps: 0,
       unreadableJournals: 0,
+      notChecked: [],
     });
   });
 
@@ -239,7 +241,7 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
         codeDir: join(tmpdir(), 'mem-absent-xyz'),
         runtimeDir: join(tmpdir(), 'mem-absent-xyz', 'runtime'),
       }),
-    ).toEqual({ stale: 0, inFlight: 0, unfinishedSwaps: 0, unreadableJournals: 0 });
+    ).toEqual({ stale: 0, inFlight: 0, unfinishedSwaps: 0, unreadableJournals: 0, notChecked: [] });
   });
 
   it('the window both faces print is exactly the gate they apply', () => {
@@ -270,8 +272,28 @@ describe('scanStaleTempFiles / classifyEpisodeFile', () => {
       inFlight: 0,
       unfinishedSwaps: 1,
       unreadableJournals: 0,
+      notChecked: [],
     });
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a journal that is there but cannot be read now is unreadable, not leftover (v6.25.1 delta review)',
+    () => {
+      const f = fixture({});
+      const dir = join(f.codeDir, '.update-backup-3');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, SWAP_JOURNAL_NAME), '{"backedUp":[],"installed":[]}');
+      chmodSync(join(dir, SWAP_JOURNAL_NAME), 0o000);
+      try {
+        expect(classifyUpdateResidue(f.codeDir, '.update-backup-3')).toBe('unreadable-journal');
+      } finally {
+        chmodSync(join(dir, SWAP_JOURNAL_NAME), 0o644);
+      }
+      expect(classifyUpdateResidue(f.codeDir, '.update-backup-3'), 'premise: readable it is a swap').toBe(
+        'unfinished-swap',
+      );
+    },
+  );
 
   it('the two prefix families do not overlap, so nothing is counted twice', () => {
     for (const n of ['.update-staging-1', '.update-backup-1']) {

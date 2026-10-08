@@ -253,9 +253,9 @@ describe('a resolved swap whose journal stayed (D#292 C)', () => {
 });
 
 // Before v2.90.0 the updater swapped into the data dir itself, which CLAUDE_MEM_DIR could relocate,
-// so a relocated data dir can still hold residue from then. 6.25.0's doctor and cleanup scanned it;
-// whatever such a backup holds, its journal names a tree no current code lives in, so it is stale and
-// is never replayed.
+// so a relocated data dir can still hold residue from then. 6.25.0's doctor and cleanup scanned it.
+// It is stale and never replayed. A real one holds no journal (journals came in v3.57.0); the fixture
+// gives it one, to show that even a journal there is not replayed.
 describe('residue an updater older than v2.90.0 left in a relocated data dir', () => {
   function seedLegacy(dataDir) {
     mkdirSync(join(dataDir, STAGING), { recursive: true });
@@ -290,6 +290,23 @@ describe('residue an updater older than v2.90.0 left in a relocated data dir', (
 });
 
 // v6.25.1 pre-tag defect review.
+/** A copy of this checkout whose hook-update.mjs throws on import (node_modules linked back). */
+function checkoutWithBrokenHookUpdate(box) {
+  const checkout = join(box.home, 'checkout');
+  for (const rel of [...SOURCE_FILES, 'package.json']) {
+    if (!existsSync(join(REPO, rel))) continue;
+    mkdirSync(dirname(join(checkout, rel)), { recursive: true });
+    copyFileSync(join(REPO, rel), join(checkout, rel));
+  }
+  cpSync(join(REPO, 'scripts'), join(checkout, 'scripts'), { recursive: true });
+  symlinkSync(join(REPO, 'node_modules'), join(checkout, 'node_modules'));
+  writeFileSync(
+    join(checkout, 'hook-update.mjs'),
+    "throw new Error('simulated: hook-update cannot load');\n",
+  );
+  return checkout;
+}
+
 describe('update residue the replay cannot handle (v6.25.1 review)', () => {
   const skipRoot = process.getuid?.() === 0; // root ignores the mode bits a case relies on
 
@@ -321,18 +338,7 @@ describe('update residue the replay cannot handle (v6.25.1 review)', () => {
   it('an install that cannot replay a swap retires its journal after writing the tree', () => {
     const box = sandbox();
     seedUnfinishedSwap(box.codeDir, { relPath: 'hook.mjs', added: 'cli.mjs' });
-    const checkout = join(box.home, 'checkout');
-    for (const rel of [...SOURCE_FILES, 'package.json']) {
-      if (!existsSync(join(REPO, rel))) continue;
-      mkdirSync(dirname(join(checkout, rel)), { recursive: true });
-      copyFileSync(join(REPO, rel), join(checkout, rel));
-    }
-    cpSync(join(REPO, 'scripts'), join(checkout, 'scripts'), { recursive: true });
-    symlinkSync(join(REPO, 'node_modules'), join(checkout, 'node_modules'));
-    writeFileSync(
-      join(checkout, 'hook-update.mjs'),
-      "throw new Error('simulated: hook-update cannot load');\n",
-    );
+    const checkout = checkoutWithBrokenHookUpdate(box);
     const out = execFileSync(
       process.execPath,
       [join(checkout, 'install.mjs'), 'install', '--dev', '--skip-repos'],
@@ -344,6 +350,7 @@ describe('update residue the replay cannot handle (v6.25.1 review)', () => {
       },
     );
     expect(lstatSync(join(box.codeDir, 'cli.mjs')).isSymbolicLink(), out).toBe(true); // premise: deployed
+    expect(out).not.toMatch(/Could not remove/); // it is retired below, not a removal that failed
 
     nextUpdateEntry(box); // the real hook-update, as the next update would run it
     expect(lstatSync(join(box.codeDir, 'hook.mjs')).isSymbolicLink(), 'the old hook.mjs came back').toBe(
@@ -360,6 +367,7 @@ describe('update residue the replay cannot handle (v6.25.1 review)', () => {
       const checks = doctorChecks(run(box, ['doctor', '--json']));
       const line = checks.find((c) => /^Stale temp files/.test(c.message || ''));
       expect(line?.level, line?.message).not.toBe('ok');
+      expect(line.message).toMatch(/not checked — .* is not accessible \(EACCES\)/);
     } finally {
       chmodSync(box.dataDir, 0o755);
     }
@@ -373,5 +381,80 @@ describe('update residue the replay cannot handle (v6.25.1 review)', () => {
       /^Unfinished update/.test(c.message || ''),
     );
     expect(line.message).toContain(INSTALLER);
+  });
+});
+
+// v6.25.1 round-2 delta review.
+describe('update residue, second pass (v6.25.1 delta review)', () => {
+  const skipRoot = process.getuid?.() === 0;
+
+  // P3-2: one directory the scan could not read aborted the whole scan, so a readable code dir's
+  // unfinished swap went unreported beside "not checked".
+  it.skipIf(skipRoot)('an unreadable data dir does not hide an unfinished swap in the code dir', () => {
+    const box = sandbox({ relocate: true });
+    seedUnfinishedSwap(box.codeDir);
+    chmodSync(box.dataDir, 0o000);
+    try {
+      const checks = doctorChecks(run(box, ['doctor', '--json']));
+      expect(checks.find((c) => /^Unfinished update/.test(c.message || ''))).toBeDefined();
+      expect(checks.find((c) => /^Stale temp files/.test(c.message || '')).message).toMatch(/not checked/);
+    } finally {
+      chmodSync(box.dataDir, 0o755);
+    }
+  });
+
+  // P3-3 and the review's I8: with hook-update unable to load, cleanup must keep an unfinished swap
+  // whole (it holds the only copy of what moved), and say so once.
+  it('cleanup that cannot load hook-update keeps an unfinished swap whole and says why once', () => {
+    const box = sandbox();
+    seedUnfinishedSwap(box.codeDir);
+    seedFinishedResidue(box.codeDir);
+    const checkout = checkoutWithBrokenHookUpdate(box);
+    const out = execFileSync(process.execPath, [join(checkout, 'install.mjs'), 'cleanup'], {
+      env: env(box),
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 60_000,
+    });
+    expect(read(join(box.codeDir, JOURNALED, 'server.mjs')), out).toBe('// before the interrupted swap');
+    expect(existsSync(join(box.codeDir, JOURNALED, '.swap-journal.json'))).toBe(true);
+    expect(residue(box.codeDir)).toEqual([JOURNALED]); // the finished residue still goes
+    expect(out).not.toMatch(/Failed to remove/);
+  });
+
+  // The review's gap: install retires a dir whose journal cannot be read, which is what doctor's
+  // "repair reinstalls over them; cleanup then removes them" depends on.
+  it('install retires a dir whose journal cannot be read, and cleanup then removes it', () => {
+    const box = sandbox();
+    writeFileSync(join(box.codeDir, 'server.mjs'), '// from the interrupted swap');
+    mkdirSync(join(box.codeDir, JOURNALED), { recursive: true });
+    writeFileSync(join(box.codeDir, JOURNALED, 'server.mjs'), '// before the interrupted swap');
+    writeFileSync(join(box.codeDir, JOURNALED, '.swap-journal.json'), '');
+    const out = run(box, ['install', '--dev', '--skip-repos'], {
+      PATH: `${fakeClaudeBin(box.home)}:${process.env.PATH}`,
+    });
+    expect(existsSync(join(box.codeDir, JOURNALED, '.swap-resolved')), out).toBe(true);
+    expect(out).toContain(`Retired ${JOURNALED}`);
+    run(box, ['cleanup']);
+    expect(residue(box.codeDir)).toEqual([]);
+  });
+
+  // P3-7: a `.update-backup-*` that is not a real directory (a file, a symlink) is skipped by
+  // recovery, so the classifier must not call it an unfinished swap; cleanup removes it as leftover.
+  it('a file or a symlink named like a backup dir is stale, and cleanup removes only the name', () => {
+    const box = sandbox();
+    writeFileSync(join(box.codeDir, '.update-backup-9'), 'not a dir');
+    const target = join(box.home, 'elsewhere');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, '.swap-journal.json'), JSON.stringify({ backedUp: [], installed: [] }));
+    symlinkSync(target, join(box.codeDir, '.update-backup-8'));
+    const checks = doctorChecks(run(box, ['doctor', '--json']));
+    expect(checks.find((c) => /^Unfinished update/.test(c.message || ''))).toBeUndefined();
+    expect(checks.find((c) => /^Stale temp files/.test(c.message || '')).message).toMatch(
+      /Stale temp files: 2 found/,
+    );
+    const out = run(box, ['cleanup']);
+    expect(residue(box.codeDir), out).toEqual([]);
+    expect(existsSync(join(target, '.swap-journal.json'))).toBe(true); // the link went, not its target
   });
 });

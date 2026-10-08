@@ -894,9 +894,12 @@ function journalSwap(backupDir, backedUp, installed) {
 // release back, and over a rolled-back one whose journal outlived a later swap it deleted a path
 // that swap had installed. Recovery, install, cleanup and doctor leave a resolved dir's journal
 // alone. The marker is a new empty file, so it needs no access to the journal a failed removal
-// could not get. With the marker written, a journal that stays is inert and the backups go anyway.
-// If the marker cannot be written either, the journal still goes before the backups, and if it
-// stays, so do the backups, complete, so that a replay restores one whole release.
+// could not get. With the marker written, a journal that stays is inert and the backups go anyway,
+// child by child around the journal and the marker: a recursive removal of the dir takes children
+// in directory order and stops at the first failure, so it could take the marker and then stop at
+// the journal (v6.25.1 delta review). If the marker cannot be written either, the journal still
+// goes before the backups, and if it stays, so do the backups, complete, so that a replay restores
+// one whole release.
 function discardBackupDir(backupDir) {
   let resolved = false;
   try {
@@ -909,12 +912,58 @@ function discardBackupDir(backupDir) {
     rmSync(join(backupDir, SWAP_JOURNAL), { force: true });
   } catch (e) {
     debugCatch(e, 'discard-swap-journal');
-    if (!resolved) return;
+    if (resolved) removeBackupsBeside(backupDir);
+    return;
   }
   try {
     rmSync(backupDir, { recursive: true, force: true });
   } catch (e) {
     debugCatch(e, 'discard-backup-dir');
+  }
+}
+
+function removeBackupsBeside(backupDir) {
+  let names = [];
+  try {
+    names = readdirSync(backupDir);
+  } catch (e) {
+    debugCatch(e, 'discard-backups-list');
+  }
+  for (const name of names) {
+    if (name === SWAP_JOURNAL || name === SWAP_RESOLVED) continue;
+    try {
+      rmSync(join(backupDir, name), { recursive: true, force: true });
+    } catch (e) {
+      debugCatch(e, 'discard-backup');
+    }
+  }
+}
+
+// Mark resolved the backup dirs a swap found left over and unfinished (recovery leaves one whose
+// journal it cannot read right now). Called once that swap has committed: it replaced every path
+// it switches, so a later replay of an older journal, once it can be read, would only mix the
+// releases back (v6.25.1 delta review). The same retirement install does after writing the tree.
+function retireUnresolvedBackups(targetDir, names) {
+  for (const name of names) {
+    try {
+      writeFileSync(join(targetDir, name, SWAP_RESOLVED), '');
+      debugLog('WARN', 'hook-update', `Retired ${name}: the committed swap replaced what its journal names`);
+    } catch (e) {
+      debugCatch(e, 'retire-unresolved-backup');
+    }
+  }
+}
+
+// The `.update-backup-*` dirs in targetDir that carry no resolved marker.
+function unresolvedBackups(targetDir) {
+  try {
+    return readdirSync(targetDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith('.update-backup-'))
+      .map((e) => e.name)
+      .filter((name) => !existsSync(join(targetDir, name, SWAP_RESOLVED)));
+  } catch (e) {
+    debugCatch(e, 'list-unresolved-backups');
+    return [];
   }
 }
 
@@ -969,10 +1018,12 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
       continue;
     }
 
-    // No journal: killed before the first rename, so nothing moved and the dir is residue. A journal
-    // that is there but cannot be read as one (an in-place write of 6.25.0 or older torn by a kill)
-    // says nothing about what moved, and the dir may hold the only copy of it: leave it. It used to
-    // be read as "nothing moved" and deleted (v6.25.1 review). doctor and cleanup name it.
+    // No journal: the swap is over and its journal is gone (or it was killed before its first
+    // rename), so there is nothing to replay and the dir is residue. A journal that is there but
+    // cannot be read, or not as one (an in-place write of 6.25.0 or older torn by a kill), says
+    // nothing about what moved, and the dir may hold the only copy of it: leave it. It used to be
+    // read as "nothing moved" and deleted (v6.25.1 review). doctor and cleanup name it; the next
+    // swap that commits, or an install, retires it.
     let journal = { backedUp: [], installed: [] };
     let raw = null;
     try {
@@ -1014,8 +1065,9 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 // Safe to run twice over one journal (D#283). A backed-up path whose backup is gone holds the OLD
 // file already, restored by an earlier rollback or never moved out, so it is not deleted: a
 // second rollback used to delete every installed path, by then the only copy of the old install.
-// That holds for a journal this code wrote, whose cleanup removes the journal before any backup.
-// A backup dir 6.25.0 or older left half deleted beside its journal can still replay to a mix.
+// That holds for a journal this code wrote: its cleanup removes the journal before any backup, and
+// when the journal cannot be removed, the resolved marker keeps it from being replayed. A backup
+// dir 6.25.0 or older left half deleted beside its journal can still replay to a mix.
 // The arrays are copied, not reversed in place, so a caller's journal is left as it was.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();
@@ -1155,6 +1207,9 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // one — otherwise this install stacks on top of a mixed-version tree and its
     // own backup can no longer restore a coherent state.
     recoverInterruptedSwaps(targetDir);
+    // What recovery left unfinished (a journal it cannot read right now) is retired if this swap
+    // commits, and left for the next entry if it rolls back.
+    const leftUnresolved = unresolvedBackups(targetDir);
 
     mkdirSync(stagingDir, { recursive: true });
     mkdirSync(backupDir, { recursive: true });
@@ -1209,6 +1264,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
 
     // Committed: from here on the catch below must not roll back (D#283).
     committed = true;
+    retireUnresolvedBackups(targetDir, leftUnresolved);
     discardSwapDirs(stagingDir, backupDir);
 
     // Post-update migration: reconcile settings.json against the release we just

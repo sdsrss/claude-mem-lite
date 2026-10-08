@@ -587,7 +587,7 @@ describe('uninstall names an unadopt command that still works afterwards', () =>
 describe('the data dir remedy follows the error', () => {
   it('a read-only file system is not a chmod problem', async () => {
     const { dataDirAccessRemedy } = await import('../install.mjs');
-    expect(dataDirAccessRemedy('EROFS')).toMatch(/mounted read-only/);
+    expect(dataDirAccessRemedy('EROFS')).toMatch(/is mounted read-only — remount it read-write$/);
     expect(dataDirAccessRemedy('EROFS')).not.toMatch(/chmod/);
     expect(dataDirAccessRemedy('EACCES')).toMatch(/^chmod u\+rwx /);
   });

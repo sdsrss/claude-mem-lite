@@ -8,7 +8,7 @@
 // a backup is restored, then performs the real rename.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -453,12 +453,17 @@ describe('journals and markers that cannot be written, removed or read (v6.25.1 
   it('with the marker written, a journal that stays does not keep the backups', async () => {
     const dataDir = makeDataDir();
     mockedExecSync.mockImplementation(smokePasses);
-    const { installExtractedRelease } = await loadModule(dataDir);
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
     rmFaults.push({ match: (p) => p.endsWith('.swap-journal.json') });
 
     expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
     expect(rmFaults, 'premise: the journal could not be removed').toEqual([]);
+    const [left] = backups(dataDir);
+    expect(read(join(dataDir, left), 'hook.mjs'), 'the backups went').toBe(null);
+    expect(existsSync(join(dataDir, left, '.swap-resolved'))).toBe(true);
+    recoverInterruptedSwaps(dataDir); // the journal can be removed now
     expect(backups(dataDir)).toEqual([]);
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
   });
 
   // P3-5: the journal is replaced by rename about twice per switched path, and on Windows a rename
@@ -488,5 +493,97 @@ describe('journals and markers that cannot be written, removed or read (v6.25.1 
     expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
     expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
     expect(read(dataDir, 'server.mjs')).toBe('// server');
+  });
+});
+
+// v6.25.1 round-2 delta review.
+describe('backup dirs a swap finds and cannot finish (v6.25.1 delta review)', () => {
+  const skipRoot = process.getuid?.() === 0; // root reads a mode-000 file
+  const smokePasses = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+    return '';
+  };
+  const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : null);
+
+  /** A killed swap that had moved hook.mjs out, whose journal this process cannot read right now. */
+  function seedHeldJournal(dataDir) {
+    const backup = join(dataDir, '.update-backup-1000-1');
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(join(backup, 'hook.mjs'), '// vA hook');
+    const journal = join(backup, '.swap-journal.json');
+    writeFileSync(journal, JSON.stringify({ backedUp: ['hook.mjs'], installed: ['hook.mjs'] }));
+    chmodSync(journal, 0o000);
+    return { backup, journal };
+  }
+
+  it.skipIf(skipRoot)('recovery leaves a backup dir whose journal it cannot read right now', async () => {
+    const dataDir = makeDataDir();
+    const { backup, journal } = seedHeldJournal(dataDir);
+    const { recoverInterruptedSwaps } = await loadModule(dataDir);
+    try {
+      recoverInterruptedSwaps(dataDir);
+      expect(read(backup, 'hook.mjs')).toBe('// vA hook');
+      expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
+    } finally {
+      chmodSync(journal, 0o644);
+    }
+  });
+
+  // P2-1: recovery left that dir, the next swap committed over it, and once the journal could be read
+  // again the next recovery (or cleanup, or install) replayed it over the newer release: a mix.
+  it.skipIf(skipRoot)('a swap that commits retires the dirs it found unresolved', async () => {
+    const dataDir = makeDataDir();
+    const { journal } = seedHeldJournal(dataDir);
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
+    try {
+      expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    } finally {
+      chmodSync(journal, 0o644);
+    }
+    expect(read(dataDir, 'hook.mjs'), 'premise: committed').toBe('// new hook');
+
+    recoverInterruptedSwaps(dataDir); // the journal can be read again
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// new server');
+  });
+
+  it.skipIf(skipRoot)('a swap that rolls back leaves them for the next entry', async () => {
+    const dataDir = makeDataDir();
+    const { backup, journal } = seedHeldJournal(dataDir);
+    mockedExecSync.mockImplementation((cmd, opts = {}) => {
+      if (String(cmd).includes('cli.mjs') || String(cmd).includes('--check')) throw new Error('broken');
+      return smokePasses(cmd, opts);
+    });
+    const { installExtractedRelease } = await loadModule(dataDir);
+    try {
+      expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
+    } finally {
+      chmodSync(journal, 0o644);
+    }
+    expect(existsSync(join(backup, '.swap-resolved'))).toBe(false);
+    expect(read(backup, 'hook.mjs')).toBe('// vA hook');
+  });
+
+  // P3-1: removing the dir recursively takes its children in directory order and stops at the first
+  // that fails, so it could take the marker before it failed on a held journal; the journal then
+  // stayed unmarked and was replayed over a release whose backups were already half gone.
+  it('a journal that stays keeps its resolved marker, whatever order the dir is removed in', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    let backup = null;
+    rmFaults.push({ sticky: true, match: (p) => p.endsWith('.swap-journal.json') });
+    rmFaults.push({
+      sticky: true,
+      match: (p) => p.slice(p.lastIndexOf(sep) + 1).startsWith('.update-backup-') && (backup = p),
+      before: () => rmSync(join(backup, '.swap-resolved'), { force: true }), // the marker went first
+    });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    const [left] = readdirSync(dataDir).filter((n) => n.startsWith('.update-backup-'));
+    expect(existsSync(join(dataDir, left, '.swap-journal.json')), 'premise: the journal stayed').toBe(true);
+    expect(existsSync(join(dataDir, left, '.swap-resolved'))).toBe(true);
+    expect(existsSync(join(dataDir, left, 'hook.mjs')), 'the backups still go').toBe(false);
   });
 });
