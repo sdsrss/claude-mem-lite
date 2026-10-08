@@ -16,7 +16,7 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-const ctl = { renameFaults: [], rmFaults: [], readdirOrder: null, fired: [] };
+const ctl = { renameFaults: [], rmFaults: [], readFaults: [], readdirOrder: null, fired: [] };
 globalThis.__restoreFailCtl = ctl;
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn(), execFileSync: vi.fn() }));
@@ -44,6 +44,11 @@ vi.mock('node:fs', async (importOriginal) => {
         throw Object.assign(new Error(`${f.code}: simulated rm failure`), { code: f.code });
       }
       return real.rmSync(p, o);
+    },
+    readFileSync(p, o) {
+      const f = take(c().readFaults, String(p));
+      if (f) throw Object.assign(new Error(`${f.code}: simulated read failure`), { code: f.code });
+      return real.readFileSync(p, o);
     },
     readdirSync(p, o) {
       const out = real.readdirSync(p, o);
@@ -156,7 +161,7 @@ const restoreOf = (dataDir, relPath) => (from, to) =>
 
 afterEach(() => {
   mockedExecSync.mockReset();
-  Object.assign(ctl, { renameFaults: [], rmFaults: [], readdirOrder: null, fired: [] });
+  Object.assign(ctl, { renameFaults: [], rmFaults: [], readFaults: [], readdirOrder: null, fired: [] });
   delete process.env.CLAUDE_MEM_DIR;
   process.env.HOME = originalHome;
   for (const d of dirs.splice(0)) {
@@ -273,11 +278,10 @@ describe('a rollback that cannot put a file back keeps the backup dir for the ne
         expect(second, 'the second swap kept no backup dir').toBeDefined();
 
         if (clock === 'backward') {
-          // The second dir carries the older timestamp, as after the clock was set back.
-          const tmp = join(dataDir, '.update-backup-swap-tmp');
-          fs.renameSync(join(dataDir, first), tmp);
-          fs.renameSync(join(dataDir, second), join(dataDir, first));
-          fs.renameSync(tmp, join(dataDir, second));
+          // The second dir's name carries an older timestamp, as after the clock was set back.
+          const earlier = second.replace(/\d{13}/, '1000000000000');
+          expect(earlier).not.toBe(second);
+          fs.renameSync(join(dataDir, second), join(dataDir, earlier));
         }
 
         ctl.renameFaults = [];
@@ -314,6 +318,80 @@ describe('a rollback that cannot put a file back keeps the backup dir for the ne
     expect(backups(dataDir), 'the older dir was replayed under a newer unfinished one').toHaveLength(2);
 
     ctl.renameFaults = [];
+    mod.recoverInterruptedSwaps(dataDir);
+    expect(snapshot(dataDir)).toEqual(OLD);
+    expect(residue(dataDir)).toEqual([]);
+  });
+
+  // Review P2-1: the order was read from the journals, so a journal that could not be read at the
+  // wrong moment (a scanner holding it on Windows, EACCES) broke it, and a replay lost a file.
+  for (const order of ['asc', 'desc']) {
+    it(`a kept dir whose journal cannot be read when the next swap starts still replays last (readdir ${order})`, async () => {
+      const dataDir = makeDataDir();
+      mockedExecSync.mockImplementation(smoke(false));
+      const mod = await loadModule(dataDir);
+      ctl.renameFaults.push({
+        name: 'restore-server',
+        code: 'EPERM',
+        match: restoreOf(dataDir, 'server.mjs'),
+      });
+      expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+      const [first] = backups(dataDir);
+
+      const firstJournal = join(dataDir, first, '.swap-journal.json');
+      ctl.readFaults.push({
+        name: 'read-first',
+        code: 'EBUSY',
+        sticky: true,
+        match: (p) => p === firstJournal,
+      });
+      ctl.renameFaults.push({ name: 'restore-hook', code: 'EPERM', match: restoreOf(dataDir, 'hook.mjs') });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+      expect(ctl.fired).toEqual(expect.arrayContaining(['read-first', 'restore-hook']));
+      expect(backups(dataDir)).toHaveLength(2);
+
+      ctl.readFaults = [];
+      ctl.readdirOrder = order;
+      mod.recoverInterruptedSwaps(dataDir);
+      expect(snapshot(dataDir)).toEqual(OLD);
+      expect(residue(dataDir)).toEqual([]);
+    });
+  }
+
+  it('an older kept dir is not replayed while a newer one’s journal cannot be read', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smoke(false));
+    const mod = await loadModule(dataDir);
+    ctl.renameFaults.push({
+      name: 'restore-server',
+      code: 'EPERM',
+      sticky: true,
+      match: restoreOf(dataDir, 'server.mjs'),
+    });
+    expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+    const [first] = backups(dataDir);
+    ctl.renameFaults.push({ name: 'restore-hook', code: 'EPERM', match: restoreOf(dataDir, 'hook.mjs') });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+    const second = backups(dataDir).find((n) => n !== first);
+    expect(second).toBeDefined();
+
+    ctl.renameFaults = [];
+    const secondJournal = join(dataDir, second, '.swap-journal.json');
+    ctl.readFaults.push({
+      name: 'read-second',
+      code: 'EBUSY',
+      sticky: true,
+      match: (p) => p === secondJournal,
+    });
+    mod.recoverInterruptedSwaps(dataDir);
+    expect(ctl.fired).toContain('read-second');
+    expect(backups(dataDir), 'the older dir was replayed under a newer one it could not read').toHaveLength(
+      2,
+    );
+
+    ctl.readFaults = [];
     mod.recoverInterruptedSwaps(dataDir);
     expect(snapshot(dataDir)).toEqual(OLD);
     expect(residue(dataDir)).toEqual([]);

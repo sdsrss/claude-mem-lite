@@ -871,13 +871,9 @@ function clearSwapMarker() {
 // per switched path, and on Windows a scanner holding that file makes a rename over it fail
 // briefly. Each failure stopped the update and rolled it back, and a rollback is where a restore
 // can fail (D#292 A). Bounded at about 0.7 s, then it throws as before.
-//
-// `seq` orders the swaps whose backup dirs are still unresolved, for recovery to replay newest
-// first (D#293): one more than the highest such dir held when this swap began. A wall clock can go
-// back, and the dir names carry one.
 const JOURNAL_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
-function journalSwap(backupDir, seq, backedUp, installed) {
-  const data = JSON.stringify({ seq, backedUp, installed });
+function journalSwap(backupDir, backedUp, installed) {
+  const data = JSON.stringify({ backedUp, installed });
   for (let attempt = 1; ; attempt++) {
     try {
       atomicWriteFileSync(join(backupDir, SWAP_JOURNAL), data);
@@ -958,18 +954,15 @@ function retireUnresolvedBackups(targetDir, names) {
   }
 }
 
-// The `seq` for a swap starting now: above every unresolved dir's whose journal can be read.
-function nextSwapSeq(targetDir, names) {
-  let max = 0;
-  for (const name of names) {
-    try {
-      max = Math.max(max, swapSeq(JSON.parse(readFileSync(join(targetDir, name, SWAP_JOURNAL), 'utf8'))));
-    } catch {
-      /* no journal, or not one: never replayed, so it needs no place in the order */
-    }
-  }
-  return max + 1;
-}
+// Backup dirs still unresolved are undone like a stack, newest first (D#293), and their order is
+// carried in the dir NAME, `.update-backup-s<seq>-<ms>-<pid>`: a swap takes one more than the
+// highest seq among the unresolved dirs it finds. Neither the wall clock in the name nor a field in
+// the journal decides it: a clock can go back, and a journal can be unreadable at the moment the
+// order is needed (a scanner holding it on Windows), which made a replay lose a file (review P2-1).
+// A dir named before 6.25.2 has no seq and reads as 0, so it comes last.
+const BACKUP_SEQ_RE = /^\.update-backup-s(\d+)-/;
+const swapSeqOf = (name) => Number(BACKUP_SEQ_RE.exec(name)?.[1] ?? 0);
+const nextSwapSeq = (names) => Math.max(0, ...names.map(swapSeqOf)) + 1;
 
 // The `.update-backup-*` dirs in targetDir that carry no resolved marker.
 function unresolvedBackups(targetDir) {
@@ -1018,10 +1011,6 @@ function present(p) {
   }
 }
 
-// Replay order among backup dirs still unresolved (D#293): newest first, by the journal's `seq`. A
-// journal 6.25.1 or older has none and comes last; at most one such dir is ever unresolved.
-const swapSeq = (journal) => (Number.isSafeInteger(journal.seq) ? journal.seq : 0);
-
 /**
  * Finish any swap a previous process was killed in the middle of, then clear its
  * residue. Called on every install entry, under the install lock, BEFORE a new
@@ -1039,7 +1028,7 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   }
 
   let recovered = 0;
-  const replays = [];
+  const pending = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(targetDir, entry.name);
@@ -1062,24 +1051,33 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
       recovered++;
       continue;
     }
+    pending.push(entry.name);
+  }
 
+  // Several dirs are unresolved only when a rollback could not put every file back (D#293), and
+  // they are undone like a stack: newest first by the seq in the name, and none older while a newer
+  // one is unfinished or cannot be read. An older journal replayed first puts back a file that a
+  // newer journal, which installed that path, then deletes; with nothing left to restore it from.
+  pending.sort((a, b) => swapSeqOf(b) - swapSeqOf(a) || b.localeCompare(a));
+  for (const name of pending) {
+    const dir = join(targetDir, name);
     // No journal: the swap is over and its journal is gone (or it was killed before its first
     // rename), so there is nothing to replay and the dir is residue. A journal that is there but
     // cannot be read, or not as one (an in-place write of 6.25.0 or older torn by a kill), says
-    // nothing about what moved, and the dir may hold the only copy of it: leave it. It used to be
-    // read as "nothing moved" and deleted (v6.25.1 review). doctor and cleanup name it; the next
-    // swap that commits, or an install, retires it.
+    // nothing about what moved, and the dir may hold the only copy of it: leave it, and everything
+    // older with it. It used to be read as "nothing moved" and deleted (v6.25.1 review). doctor and
+    // cleanup name it; the next swap that commits, or an install, retires it.
     let raw;
     try {
       raw = readFileSync(join(dir, SWAP_JOURNAL), 'utf8');
     } catch (e) {
-      if (e.code !== 'ENOENT') {
-        debugCatch(e, 'recover-read-journal');
+      if (e.code === 'ENOENT') {
+        discardBackupDir(dir);
+        recovered++;
         continue;
       }
-      discardBackupDir(dir);
-      recovered++;
-      continue;
+      debugCatch(e, 'recover-read-journal');
+      break;
     }
     let journal;
     try {
@@ -1088,24 +1086,19 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
       journal = null;
     }
     if (!Array.isArray(journal?.backedUp) || !Array.isArray(journal?.installed)) {
-      debugLog('WARN', 'hook-update', `Left ${entry.name} in place: its swap journal cannot be read`);
-      continue;
+      debugLog(
+        'WARN',
+        'hook-update',
+        `Left ${name} in place, and any older one: its swap journal cannot be read`,
+      );
+      break;
     }
-    replays.push({ name: entry.name, dir, journal });
-  }
-
-  // Several dirs are unresolved only when a rollback could not put every file back (D#293), and
-  // they are undone like a stack: newest first, and none older while a newer one is unfinished. An
-  // older journal replayed first puts back a file that a newer journal, which installed that path,
-  // then deletes; with nothing left to restore it from.
-  replays.sort((a, b) => swapSeq(b.journal) - swapSeq(a.journal));
-  for (const { name, dir, journal } of replays) {
     const notRestored = rollbackInstall(journal.installed, journal.backedUp, dir, targetDir);
     if (notRestored.length > 0) {
       debugLog(
         'WARN',
         'hook-update',
-        `Could not finish ${name}: ${notRestored.join(', ')} not put back; left for the next entry`,
+        `Could not finish ${name}: ${notRestored.join(', ')} not put back; left, with any older one, for the next entry`,
       );
       break;
     }
@@ -1259,7 +1252,8 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   }
   const ts = `${Date.now()}-${process.pid}`;
   const stagingDir = join(targetDir, `.update-staging-${ts}`);
-  const backupDir = join(targetDir, `.update-backup-${ts}`);
+  // Named once the seq is known, below; until then nothing has been written into it.
+  let backupDir = join(targetDir, `.update-backup-${ts}`);
   const backedUp = [];
   const installed = [];
   let committed = false;
@@ -1276,7 +1270,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // put every file back, D#293) is retired if this swap commits, and left for the next entry if it
     // rolls back. Nothing here waits on it: a gate on it blocked every later update (a2cf96a1).
     const leftUnresolved = unresolvedBackups(targetDir);
-    const seq = nextSwapSeq(targetDir, leftUnresolved);
+    backupDir = join(targetDir, `.update-backup-s${nextSwapSeq(leftUnresolved)}-${ts}`);
 
     mkdirSync(stagingDir, { recursive: true });
     mkdirSync(backupDir, { recursive: true });
@@ -1307,12 +1301,12 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
 
         if (present(targetPath)) {
           backedUp.push(relPath);
-          journalSwap(backupDir, seq, backedUp, installed);
+          journalSwap(backupDir, backedUp, installed);
           renameSync(targetPath, backupPath);
         }
 
         installed.push(relPath);
-        journalSwap(backupDir, seq, backedUp, installed);
+        journalSwap(backupDir, backedUp, installed);
         renameSync(stagedPath, targetPath);
       }
       swapped = true;
