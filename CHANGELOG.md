@@ -2,6 +2,49 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.25.2 — a rollback that cannot put a file back keeps it; a running update keeps its lock
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Fix: a rolled-back update no longer loses a file it could not put back.** v6.25.1 listed this
+  as known: when an update's start-up check fails, the old files are renamed back, and if one of
+  those renames failed (on Windows a file another process or a scanner holds open; on Linux a
+  directory that cannot be emptied), the update then deleted its backup directory, the only copy
+  of that file, and `cleanup` could report "✓ Finished an interrupted update" over the loss. Now
+  the backup directory stays, journal and all, and the next update, `install`, `repair` or
+  `cleanup` finishes putting the files back; `doctor` lists it under "Unfinished update", and
+  `cleanup` and `install` say when they still could not finish it. Nothing waits on it: an update
+  that completes, or an install, retires it, so a file that stays stuck never blocks later
+  updates. Several such directories are finished newest first, in an order kept in their names,
+  so neither a clock set back nor a journal that cannot be read at that moment can reorder them.
+  The rollback also no longer takes a symlink that points nowhere for a file already put back.
+  The Windows trigger is reasoned; it was reproduced here by injected EPERM, EBUSY and ENOTEMPTY.
+- **Fix: a running update keeps `install.lock`.** An update holds the lock through `npm install`
+  and its start-up check, which can rebuild the native binding twice and from source: about 12
+  minutes on a platform with no prebuilt binding (a direct `install` runs `npm` with no time
+  limit). After 5 minutes the next `cleanup`, `install` or update took the lock, and the session
+  start-up sweep deleted it after 10, and that entry then rolled back the swap the update was in
+  the middle of. A lock whose process is alive is now kept for up to an hour (the bound for a
+  process id reused by another program); a lock whose process has exited is still taken at once.
+- **Fix: a database in a data directory that cannot be written is named on every command.**
+  `doctor --metrics`, `--session-audit`, `--benchmark` and every command that opens the database
+  (`search`, `recent`, `stats`, …) passed on SQLite's "attempt to write a readonly database" for a
+  closed store there; they now say SQLite cannot open it without creating its -wal/-shm files and
+  print the fix, as `status` and `doctor` already did. On a read-only mount SQLite answers
+  "unable to open database file" instead, which every face passed on and `doctor` counted as a
+  second issue; it is now named the same way, with the remount fix, and counted once. Measured
+  here on a read-only mount.
+- **Fix: `doctor` and `cleanup` agree about a running install.** While any install, update,
+  repair or binding rebuild holds `install.lock`, `cleanup` skips the update leftovers; `doctor`
+  counted them as stale temp files, and now says it did not check them. `cleanup --dry-run` no
+  longer creates `~/.claude-mem-lite`, its `runtime` directory and a lock file on a machine with
+  nothing installed.
+- **Fix: `doctor` counts one fault once.** With the code directory unreadable, the hooks that
+  point into it were "✗ Orphan hooks: … reference missing files" beside the ✗ that already names
+  the directory; they are now "not checked". A database `doctor` has no working better-sqlite3 to
+  open (a checkout before `npm install`, or a binding built for another Node version) was a second
+  ✗ on the Database line and an error on DB stats and `status`; they now say they did not check.
+
 ## v6.25.1 — a rolled-back update no longer deletes what it restored; an interrupted one is finished where its journal can be read
 
 Fixes only; no schema change, no migration, no new setting.
