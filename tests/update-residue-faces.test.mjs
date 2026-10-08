@@ -544,7 +544,7 @@ describe('a running update and a dry run (D#297)', () => {
       // Not a ✓: the residue was not looked at, and the holder may be any installer, not an update.
       expect(line?.level, line?.message).not.toBe('ok');
       expect(line?.message).toMatch(
-        /update residue in .* not checked — install\.lock is held by a running install, update or repair/,
+        /update residue not checked — install\.lock is held \(by a running install, update, repair or binding rebuild, or as a lock file this user cannot read\)/,
       );
       expect(run(box, ['cleanup'])).toMatch(/Update residue skipped: install in progress/);
       expect(existsSync(join(box.codeDir, STAGING))).toBe(true);

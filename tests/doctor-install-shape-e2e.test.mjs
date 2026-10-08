@@ -304,18 +304,22 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
   }
 
   // Review P3-4: the same for a binding that is there but will not load (a stale ABI, a damaged
-  // prebuild): the better-sqlite3 line counts it, and Database counted it again.
+  // prebuild): the better-sqlite3 line counts it, and Database counted it again. The addon is a real
+  // file Node fails to dlopen (ERR_DLOPEN_FAILED, "invalid ELF header"), loaded the way
+  // better-sqlite3 13's lib/binding.js loads one, so the error is the shape the shipped dependency
+  // throws for a damaged prebuild, not a message written for the test.
   it('a store whose binding will not load is not checked, not a second ✗', () => {
     const checkout = checkoutWithoutDeps();
     const pkgDir = join(checkout, 'node_modules', 'better-sqlite3');
-    mkdirSync(pkgDir, { recursive: true });
+    mkdirSync(join(pkgDir, 'build', 'Release'), { recursive: true });
     writeFileSync(
       join(pkgDir, 'package.json'),
-      JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }),
+      JSON.stringify({ name: 'better-sqlite3', version: '13.0.3', main: 'index.js' }),
     );
+    writeFileSync(join(pkgDir, 'build', 'Release', 'better_sqlite3.node'), 'not an ELF object\n');
     writeFileSync(
       join(pkgDir, 'index.js'),
-      'throw new Error("Could not locate the bindings file. Tried: fixture-stale-abi");\n',
+      "module.exports = require(require('path').join(__dirname, 'build', 'Release', 'better_sqlite3.node'));\n",
     );
     const data = join(home, 'data');
     mkdirSync(join(data, 'runtime'), { recursive: true });

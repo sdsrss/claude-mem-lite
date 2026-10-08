@@ -1330,8 +1330,8 @@ function listUpdateResidue() {
  * @returns {Promise<{finished: string[], removed: string[], kept: string[], deferred: string[],
  *   unfinished: string[], left: string[]}>} kept: left on purpose because its journal cannot be
  *   read; deferred: an unfinished swap left because hook-update could not load; unfinished: one the
- *   replay did not finish, because a file could not be put back from it or from a later one that
- *   must be finished first (D#293); left: anything else
+ *   replay did not finish, because a file could not be put back from it, or a later one that must be
+ *   finished first could not be finished or read (D#293); left: anything else
  */
 async function recoverUpdateResidue(found) {
   let replayed = true;
@@ -3034,12 +3034,12 @@ async function doctor() {
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
       legacyDir: codeIsDataDir ? undefined : MEM_DATA_DIR,
-      updateRunning: lockHeldNow,
+      installLockHeld: lockHeldNow,
     });
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
     if (unfinishedSwaps > 0) {
       dwarn(
-        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup — it finishes them)`,
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup — it finishes them newest first, and stops at one it cannot read or put back)`,
       );
     }
     if (unreadableJournals > 0) {
@@ -3048,7 +3048,7 @@ async function doctor() {
       );
     }
     const skipped = lockHeldNow
-      ? `update residue in ${INSTALL_DIR} not checked — install.lock is held by a running install, update or repair, and cleanup skips it too`
+      ? `update residue not checked — install.lock is held (by a running install, update, repair or binding rebuild, or as a lock file this user cannot read), and cleanup skips it too`
       : '';
     if (notChecked.length > 0) {
       const where = notChecked.map((n) => `${n.dir} is not accessible (${n.code})`).join('; ');
