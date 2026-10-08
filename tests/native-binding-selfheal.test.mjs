@@ -14,7 +14,8 @@
 //   3. a breakage marker is recorded on EVERY failing fire (even when the hint
 //      is rate-limited) so the next session-start can heal unattended.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, cpSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { acquireLock } from '../lib/proc-lock.mjs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -65,6 +66,68 @@ describe('isNativeBindingError — one classifier for the whole fault family', (
     expect(isNativeBindingError(new Error("Module did not self-register: '/x/better_sqlite3.node'."))).toBe(
       true,
     );
+  });
+
+  // D#306. better-sqlite3 13 dropped the `bindings` package: with no prebuild for the platform and
+  // no source build, lib/binding.js requires build/Release/better_sqlite3.node and Node throws a
+  // plain MODULE_NOT_FOUND. That is every first load on a platform 13 ships no prebuild for, and
+  // the hooks' marker and the CLI's heal both key on this classifier. The error comes from the
+  // shipped loader itself (its lib/ copied without prebuilds/ or build/), so a dependency bump
+  // that changes the shape fails the premise here instead of passing on a hand-written message.
+  it("classifies better-sqlite3 13's missing-addon error, as its own loader throws it", () => {
+    const root = mkdtempSync(join(tmpdir(), 'mem-bs13-noaddon-'));
+    try {
+      const pkg = join(root, 'node_modules', 'better-sqlite3');
+      mkdirSync(pkg, { recursive: true });
+      cpSync(join(REPO, 'node_modules', 'better-sqlite3', 'lib'), join(pkg, 'lib'), { recursive: true });
+      cpSync(join(REPO, 'node_modules', 'better-sqlite3', 'package.json'), join(pkg, 'package.json'));
+      writeFileSync(join(root, 'package.json'), '{"name":"fixture"}');
+      let thrown = null;
+      try {
+        const Db = createRequire(join(root, 'package.json'))('better-sqlite3');
+        new Db(':memory:').close();
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown?.code).toBe('MODULE_NOT_FOUND'); // premise: the shape 13.x throws
+      expect(thrown?.message).toMatch(/better_sqlite3\.node'/);
+      expect(isNativeBindingError(thrown)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies the missing-addon error by the addon file name, on a Windows path too', () => {
+    expect(
+      isNativeBindingError(
+        Object.assign(
+          new Error(
+            "Cannot find module 'C:\\Users\\a b\\x\\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node'\nRequire stack:\n- C:\\x\\lib\\binding.js",
+          ),
+          { code: 'MODULE_NOT_FOUND' },
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  // A missing PACKAGE needs an install, not a rebuild, and an unrelated missing module is not
+  // this fault at all: a rebuild burns up to minutes of npm on every fire for either.
+  it('does NOT classify a missing package or an unrelated missing module', () => {
+    const missing = (msg, code) => Object.assign(new Error(msg), { code });
+    expect(
+      isNativeBindingError(
+        missing(
+          "Cannot find package 'better-sqlite3' imported from /x/hook-shared.mjs",
+          'ERR_MODULE_NOT_FOUND',
+        ),
+      ),
+    ).toBe(false);
+    expect(isNativeBindingError(missing("Cannot find module 'left-pad'", 'MODULE_NOT_FOUND'))).toBe(false);
+    expect(
+      isNativeBindingError(
+        missing("Cannot find module '/x/node_modules/other/build/Release/other.node'", 'MODULE_NOT_FOUND'),
+      ),
+    ).toBe(false);
   });
 
   it('does NOT classify a corrupt-DB error — a rebuild cannot fix data corruption', () => {
@@ -441,6 +504,25 @@ describe('formatHookError — the hint must name a repair that actually applies'
     // `repair` re-downloads + signature-verifies a whole release and fails closed
     // offline — wrong-sized (and often impossible) for a local ABI rebuild.
     expect(line).not.toMatch(/cli\.mjs"? repair/);
+  });
+
+  // D#306. On the platforms 13 ships no prebuild for, this is the hint every fire prints, and the
+  // marker beside it is what arms the session-start rebuild. It guessed "likely a Node version
+  // change", which 13's N-API addons do not break on, and which is not this fault at all.
+  it("arms the heal for 13's missing addon and does not guess a Node version change", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cml-nbh-13-'));
+    try {
+      const missing = Object.assign(
+        new Error("Cannot find module '/x/node_modules/better-sqlite3/build/Release/better_sqlite3.node'"),
+        { code: 'MODULE_NOT_FOUND' },
+      );
+      const line = formatHookError(missing, 'session-start', { now: NOW, runtimeDir: dir });
+      expect(line).toContain('rebuild-binding');
+      expect(line).not.toMatch(/Node version/);
+      expect(readNativeBindingBreakage(dir)?.event).toBe('session-start');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

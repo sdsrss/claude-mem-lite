@@ -18,9 +18,20 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, chmodSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  copyFileSync,
+  chmodSync,
+  cpSync,
+  readFileSync,
+} from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
-import { join, resolve, dirname } from 'path';
+import { join, resolve, dirname, basename } from 'path';
 import { SOURCE_FILES } from '../source-files.mjs';
 import { shellWord } from '../cli-path.mjs';
 import Database from 'better-sqlite3';
@@ -334,6 +345,62 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
     const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
     expect(st.stdout).toMatch(/Database: exists, but not checked — better-sqlite3 cannot be loaded/);
   });
+
+  // D#306. The two shapes better-sqlite3 13's own loader produces when it has no usable addon,
+  // built from the shipped lib/ (copied from this repo's node_modules), not a stand-in index.js:
+  //   none      — no prebuild for the platform and no source build: lib/binding.js requires
+  //               build/Release/better_sqlite3.node, a plain MODULE_NOT_FOUND. Database was a
+  //               second ✗ for it, because the shared classifier did not know the shape.
+  //   truncated — the prebuild 13 selects, cut in half with its ELF header intact (an interrupted
+  //               extract, a full disk). dlopen raises SIGBUS, and doctor's in-process Database
+  //               open killed doctor (exit 135) after its out-of-process probe had already failed.
+  // The prebuild's name is asked of the dependency (getPrebuildPath), never computed here.
+  const shipped13Loader = (checkout, prebuild) => {
+    const src = join(REPO, 'node_modules', 'better-sqlite3');
+    const pkgDir = join(checkout, 'node_modules', 'better-sqlite3');
+    mkdirSync(pkgDir, { recursive: true });
+    cpSync(join(src, 'lib'), join(pkgDir, 'lib'), { recursive: true });
+    copyFileSync(join(src, 'package.json'), join(pkgDir, 'package.json'));
+    if (prebuild === 'truncated') {
+      const real = createRequire(import.meta.url)(join(src, 'lib', 'binding.js')).getPrebuildPath();
+      const bytes = readFileSync(real);
+      mkdirSync(join(pkgDir, 'prebuilds'), { recursive: true });
+      writeFileSync(join(pkgDir, 'prebuilds', basename(real)), bytes.subarray(0, bytes.length >> 1));
+    }
+  };
+  const hasPrebuild = (() => {
+    try {
+      return !!createRequire(import.meta.url)(
+        join(REPO, 'node_modules', 'better-sqlite3', 'lib', 'binding.js'),
+      ).getPrebuildPath();
+    } catch {
+      return false;
+    }
+  })();
+  for (const prebuild of ['none', 'truncated']) {
+    it.skipIf(prebuild === 'truncated' && !hasPrebuild)(
+      `a store whose 13.x addon is ${prebuild === 'none' ? 'missing' : 'truncated'} is not checked, and doctor survives it`,
+      () => {
+        const checkout = checkoutWithoutDeps();
+        shipped13Loader(checkout, prebuild);
+        const data = join(home, 'data');
+        mkdirSync(join(data, 'runtime'), { recursive: true });
+        const db = new Database(join(data, 'claude-mem-lite.db'));
+        db.exec('CREATE TABLE observations (id INTEGER)');
+        db.close();
+        const r = doctorFrom(checkout, { CLAUDE_MEM_DIR: data });
+        expect(r.signal).toBeNull();
+        expect(r.status).toBe(1);
+        expect(r.stdout).toMatch(/✗ better-sqlite3 unusable in running CLI/); // premise: counted there
+        expect(r.stdout).not.toMatch(/✗ Database/);
+        expect(r.stdout).toMatch(/⚠ Database: not checked — better-sqlite3 cannot be loaded from /);
+        expect(r.stdout).toMatch(/⚠ DB stats: not checked — /);
+        const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
+        expect(st.signal).toBeNull();
+        expect(st.stdout).toMatch(/Database: exists, but not checked — better-sqlite3 cannot be loaded/);
+      },
+    );
+  }
 
   // P3-7, first half: settings.json hooks that point into a code home this user cannot enter were
   // "missing files", a second ✗ for the fault the Entry points line names.

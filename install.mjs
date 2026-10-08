@@ -93,6 +93,7 @@ import {
   ensureBetterSqlite3Working,
   nativeBindingRepairHint,
   isNativeBindingError,
+  probeBindingInFreshProcess,
 } from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
@@ -1880,6 +1881,19 @@ async function status() {
       `Database: ${MEM_DATA_DIR} is not accessible (${dataDirUnreadable}) — Fix: ${dataDirAccessRemedy(dataDirUnreadable)}`,
       { exists: null, error: dataDirUnreadable },
     );
+  } else if (existsSync(DB_PATH) && !probeBindingInFreshProcess(PROJECT_DIR).ok) {
+    // Out of process first, as doctor does: the open below loads the addon IN this process, and a
+    // truncated prebuild raises SIGBUS in dlopen rather than throwing, so status died with no
+    // output (D#306). The binding that does not load is the line's reason, as in the catch below.
+    push(
+      dataDirDenied ? 'fail' : 'warn',
+      'database',
+      `Database: exists, but not checked — ${BINDING_MISSING_WHY}${unwritable}`,
+      {
+        exists: true,
+        error: BINDING_MISSING_WHY,
+      },
+    );
   } else if (existsSync(DB_PATH)) {
     try {
       const Database = (await import('better-sqlite3')).default;
@@ -2173,6 +2187,11 @@ async function doctor() {
   // process.
   const rootProbes = probeRuntimeRoots(shape.runtimeRoots);
   const brokenRoots = rootProbes.filter((r) => !r.ok);
+  // Database and DB stats below open the store IN this process, through the better-sqlite3 the
+  // running CLI's tree resolves. When the out-of-process probe of that tree has already failed,
+  // loading it here is not just pointless: a truncated prebuild raises SIGBUS in dlopen, which
+  // killed doctor (exit 135) before it printed the rest (D#306). They say "not checked" instead.
+  const bindingBrokenHere = rootProbes.some((r) => !r.ok && sameDir(r.root, PROJECT_DIR));
   if (rootProbes.length === 0 && codeDirDenied) {
     // The code home is locked, so it may own a binding nobody could look at (D#284 review P3-4).
     notCheckedDenied('better-sqlite3', INSTALL_DIR);
@@ -2604,6 +2623,8 @@ async function doctor() {
   // Database
   if (dataDirUnreadable) {
     notCheckedDenied('Database');
+  } else if (existsSync(DB_PATH) && bindingBrokenHere) {
+    dwarn(`Database: not checked — ${BINDING_MISSING_WHY}`);
   } else if (existsSync(DB_PATH)) {
     try {
       const Database = (await import('better-sqlite3')).default;
@@ -3081,7 +3102,9 @@ async function doctor() {
   }
 
   // DB stats
-  if (existsSync(DB_PATH)) {
+  if (existsSync(DB_PATH) && bindingBrokenHere) {
+    dwarn(`DB stats: not checked — ${BINDING_MISSING_WHY}`);
+  } else if (existsSync(DB_PATH)) {
     try {
       const dbSize = statSync(DB_PATH).size;
       const sizeMB = (dbSize / 1024 / 1024).toFixed(1);
