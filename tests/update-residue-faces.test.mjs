@@ -541,11 +541,37 @@ describe('a running update and a dry run (D#297)', () => {
       const checks = doctorChecks(run(box, ['doctor', '--json']));
       const line = checks.find((c) => /^Stale temp files/.test(c.message || ''));
       expect(line?.message).not.toMatch(/found/);
-      const text = run(box, ['doctor']);
-      expect(text).toMatch(/An update holds install\.lock right now/);
+      // Not a ✓: the residue was not looked at, and the holder may be any installer, not an update.
+      expect(line?.level, line?.message).not.toBe('ok');
+      expect(line?.message).toMatch(
+        /update residue in .* not checked — install\.lock is held by a running install, update or repair/,
+      );
       expect(run(box, ['cleanup'])).toMatch(/Update residue skipped: install in progress/);
       expect(existsSync(join(box.codeDir, STAGING))).toBe(true);
     });
+
+  // Review P3-1: a lock this user cannot read stops acquireLock (cleanup skipped the residue), but
+  // lockHeld read it as stale, so doctor and the dry run counted what cleanup would not touch.
+  it.skipIf(process.getuid?.() === 0)(
+    'a lock that cannot be read is held for doctor and the dry run too',
+    () => {
+      const box = sandbox();
+      mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+      const lock = join(box.dataDir, 'runtime', 'install.lock');
+      writeFileSync(lock, JSON.stringify({ pid: 0x7ffffffe, ts: 1 }));
+      chmodSync(lock, 0o000);
+      try {
+        expect(run(box, ['cleanup', '--dry-run'])).toMatch(/Update residue skipped: install in progress/);
+        const line = doctorChecks(run(box, ['doctor', '--json'])).find((c) =>
+          /^Stale temp files/.test(c.message || ''),
+        );
+        expect(line?.message).not.toMatch(/found/);
+        expect(run(box, ['cleanup'])).toMatch(/Update residue skipped: install in progress/); // premise
+      } finally {
+        chmodSync(lock, 0o644);
+      }
+    },
+  );
 
   it('doctor still counts that staging dir once no update holds the lock', () => {
     const box = sandbox();

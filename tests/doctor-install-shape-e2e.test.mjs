@@ -289,7 +289,9 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
           const r = doctorFrom(checkout, { CLAUDE_MEM_DIR: data });
           expect(r.stdout).toMatch(/better-sqlite3: (no install|not checked)/); // premise: no binding here
           expect(r.stdout).not.toMatch(/Cannot find package 'better-sqlite3'/);
-          expect(r.stdout).toMatch(/⚠ Database: not checked — /);
+          expect(r.stdout).toMatch(/⚠ Database: not checked — better-sqlite3 cannot be loaded from /);
+          // Review P3-4: "see better-sqlite3 above" could point at a ✓ for another install.
+          expect(r.stdout).not.toMatch(/see better-sqlite3 above/);
           expect(r.stdout).toMatch(/⚠ DB stats: not checked — /);
           const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
           expect(st.stdout).not.toMatch(/Cannot find package 'better-sqlite3'/);
@@ -300,6 +302,34 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
       },
     );
   }
+
+  // Review P3-4: the same for a binding that is there but will not load (a stale ABI, a damaged
+  // prebuild): the better-sqlite3 line counts it, and Database counted it again.
+  it('a store whose binding will not load is not checked, not a second ✗', () => {
+    const checkout = checkoutWithoutDeps();
+    const pkgDir = join(checkout, 'node_modules', 'better-sqlite3');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({ name: 'better-sqlite3', version: '12.10.0', main: 'index.js' }),
+    );
+    writeFileSync(
+      join(pkgDir, 'index.js'),
+      'throw new Error("Could not locate the bindings file. Tried: fixture-stale-abi");\n',
+    );
+    const data = join(home, 'data');
+    mkdirSync(join(data, 'runtime'), { recursive: true });
+    const db = new Database(join(data, 'claude-mem-lite.db'));
+    db.exec('CREATE TABLE observations (id INTEGER)');
+    db.close();
+    const r = doctorFrom(checkout, { CLAUDE_MEM_DIR: data });
+    expect(r.stdout).toMatch(/✗ better-sqlite3 unusable in running CLI/); // premise: counted there
+    expect(r.stdout).not.toMatch(/✗ Database/);
+    expect(r.stdout).toMatch(/⚠ Database: not checked — better-sqlite3 cannot be loaded from /);
+    expect(r.stdout).toMatch(/⚠ DB stats: not checked — /);
+    const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
+    expect(st.stdout).toMatch(/Database: exists, but not checked — better-sqlite3 cannot be loaded/);
+  });
 
   // P3-7, first half: settings.json hooks that point into a code home this user cannot enter were
   // "missing files", a second ✗ for the fault the Entry points line names.

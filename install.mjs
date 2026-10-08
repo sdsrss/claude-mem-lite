@@ -1329,8 +1329,9 @@ function listUpdateResidue() {
  * @param {{f: string, kind: string}[]} found entries from listUpdateResidue
  * @returns {Promise<{finished: string[], removed: string[], kept: string[], deferred: string[],
  *   unfinished: string[], left: string[]}>} kept: left on purpose because its journal cannot be
- *   read; deferred: an unfinished swap left because hook-update could not load; unfinished: one its
- *   replay could not put every file back from, left holding them (D#293); left: anything else
+ *   read; deferred: an unfinished swap left because hook-update could not load; unfinished: one the
+ *   replay did not finish, because a file could not be put back from it or from a later one that
+ *   must be finished first (D#293); left: anything else
  */
 async function recoverUpdateResidue(found) {
   let replayed = true;
@@ -1381,7 +1382,7 @@ async function finishInterruptedSwaps() {
   // A swap left unfinished here (deferred, kept, unfinished) is retired once the tree is written.
   for (const f of r.unfinished)
     warn(
-      `Could not finish the interrupted update ${f}: a file it moved aside could not be put back. This install writes over it and then retires it.`,
+      `Could not finish the interrupted update ${f}: a file it moved aside could not be put back, or a later one that must be finished first could not be. This install writes over it and then retires it.`,
     );
   for (const f of r.left) warn(`Could not remove ${f} from ${INSTALL_DIR}`);
 }
@@ -2661,7 +2662,7 @@ async function doctor() {
       if (walBlocked(e.code)) {
         notCheckedWal('Database');
       } else if (bindingMissing(e)) {
-        dwarn(`Database: not checked — ${BINDING_MISSING_WHY} (see better-sqlite3 above)`);
+        dwarn(`Database: not checked — ${BINDING_MISSING_WHY}`);
       } else {
         fail('Database: ' + e.message);
         // Every other ✗ on this screen carries a remedy; this one used to be the exception,
@@ -3024,20 +3025,21 @@ async function doctor() {
   // calls stale" and "what cleanup removes" agree on the age gate and on the directory, the
   // axes they diverged on (the third time, D#289: both looked for update residue in the data
   // dir, which CLAUDE_MEM_DIR moves away from the code dir it lives in). And on the lock: while
-  // an update holds install.lock, cleanup skips update residue, which is that update's own staging
-  // and backup dirs, so doctor does not count it either (D#297). It asks without taking the lock.
+  // install.lock is held, cleanup skips update residue (a running update's own staging and backup
+  // dirs among it), so doctor does not count it either, and says it did not look (D#297). The holder
+  // may be any installer: an update, install, repair, a binding rebuild. It asks without taking it.
   try {
-    const updateRunning = lockHeld(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+    const lockHeldNow = lockHeld(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
     const { stale, inFlight, unfinishedSwaps, unreadableJournals, notChecked } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
       legacyDir: codeIsDataDir ? undefined : MEM_DATA_DIR,
-      updateRunning,
+      updateRunning: lockHeldNow,
     });
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
     if (unfinishedSwaps > 0) {
       dwarn(
-        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, could not put back every file it moved aside, or is running right now (run: ${installer} cleanup — it finishes an interrupted one, and skips while an update holds install.lock)`,
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup — it finishes them)`,
       );
     }
     if (unreadableJournals > 0) {
@@ -3045,14 +3047,20 @@ async function doctor() {
         `Unfinished update: ${unreadableJournals} backup dir(s) in ${INSTALL_DIR} whose journal cannot be read, so nothing can finish that update; they hold the files it moved aside (run: ${installer} repair — it reinstalls over them; cleanup then removes them)`,
       );
     }
+    const skipped = lockHeldNow
+      ? `update residue in ${INSTALL_DIR} not checked — install.lock is held by a running install, update or repair, and cleanup skips it too`
+      : '';
     if (notChecked.length > 0) {
       const where = notChecked.map((n) => `${n.dir} is not accessible (${n.code})`).join('; ');
       dwarn(
         `Stale temp files: not checked — ${where}` +
-          (stale > 0 ? `; ${stale} found elsewhere (run: ${installer} cleanup)` : ''),
+          (stale > 0 ? `; ${stale} found elsewhere (run: ${installer} cleanup)` : '') +
+          (skipped ? `; ${skipped}` : ''),
       );
     } else if (stale > 0) {
-      dwarn(`Stale temp files: ${stale} found (run: ${installer} cleanup)`);
+      dwarn(`Stale temp files: ${stale} found (run: ${installer} cleanup)${skipped ? `; ${skipped}` : ''}`);
+    } else if (skipped) {
+      dwarn(`Stale temp files: ${skipped}`);
     } else {
       ok('Stale temp files: none');
     }
@@ -3066,11 +3074,6 @@ async function doctor() {
     if (inFlight > 0) {
       log(
         `  ${inFlight} episode file(s) newer than ${EPISODE_AGE_LABEL} are in flight, not stale — cleanup keeps these.`,
-      );
-    }
-    if (updateRunning) {
-      log(
-        `  An update holds install.lock right now; its staging and backup dirs in ${INSTALL_DIR} are not counted — cleanup skips them too.`,
       );
     }
   } catch {
@@ -3536,7 +3539,7 @@ async function cleanup() {
           );
         for (const f of r.unfinished)
           warn(
-            `Could not finish the interrupted update ${f}: a file it moved aside could not be put back (held open, or in a directory that cannot be emptied), and it stays in place holding it. cleanup tries again; repair reinstalls over it instead.`,
+            `Could not finish the interrupted update ${f}: a file it moved aside could not be put back (held open, or in a directory that cannot be emptied), or a later one that must be finished first could not be. It stays in place holding what it moved aside; cleanup tries again, and repair reinstalls over it instead.`,
           );
         for (const f of r.left) warn(`Failed to remove ${f}`);
         finished += r.finished.length;
@@ -4008,10 +4011,12 @@ function sameDir(a, b) {
 // The fix for a data dir this user cannot use, chosen by the error code (lib/wal-open-blocked.mjs).
 export const dataDirAccessRemedy = (code) => dataDirRemedy(code, MEM_DATA_DIR);
 
-// This process cannot load better-sqlite3 at all (a checkout, or a plugin cache before its first
-// launch installed node_modules). The better-sqlite3 line names and counts that; a line that would
-// open the DB says it did not look, rather than count the same fault again (D#297).
-const bindingMissing = (e) => e?.code === 'ERR_MODULE_NOT_FOUND' && /'better-sqlite3'/.test(e.message);
+// This process cannot load better-sqlite3: none installed where it runs (a checkout, or a plugin
+// cache before its first launch installed node_modules), or one that will not load (a stale ABI, a
+// damaged prebuild). The better-sqlite3 line names and counts that; a line that would open the DB
+// says it did not look, rather than count the same fault again (D#297, pre-ship review P3-4).
+const bindingMissing = (e) =>
+  (e?.code === 'ERR_MODULE_NOT_FOUND' && /'better-sqlite3'/.test(e.message)) || isNativeBindingError(e);
 const BINDING_MISSING_WHY = `better-sqlite3 cannot be loaded from ${PROJECT_DIR}`;
 
 async function runLockedInstall() {
