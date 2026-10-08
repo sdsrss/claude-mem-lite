@@ -1,8 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquireLock, withLock, withLockAsync, LIVE_HOLDER_MAX_MS } from '../lib/proc-lock.mjs';
+import {
+  acquireLock,
+  withLock,
+  withLockAsync,
+  LIVE_HOLDER_MAX_MS,
+  lockDirBlocked,
+} from '../lib/proc-lock.mjs';
 
 const dirs = [];
 function tmp() {
@@ -138,5 +144,59 @@ describe('proc-lock', () => {
     const out = await withLockAsync(lock, async () => 'done');
     expect(out).toEqual({ acquired: true, result: 'done' });
     expect(existsSync(lock)).toBe(false);
+  });
+});
+
+// D#304, D#307. acquireLock answers null both for a live holder and for a lock it cannot create at
+// all (a runtime dir a sudo run left root-owned, a read-only data dir), and every caller read null as
+// "another install is in progress": updates skipped silently forever, install exited 0, cleanup
+// named a lock that did not exist. lockDirBlocked is the read-only half that tells them apart.
+describe('lockDirBlocked', () => {
+  const asRoot = process.getuid?.() === 0;
+
+  for (const mode of [0o555, 0o000])
+    it.skipIf(asRoot)(`names a lock dir this user cannot write into (mode ${mode.toString(8)})`, () => {
+      const rt = join(tmp(), 'runtime');
+      mkdirSync(rt);
+      chmodSync(rt, mode);
+      try {
+        const lock = join(rt, 'install.lock');
+        expect(acquireLock(lock)).toBeNull(); // premise: acquire fails closed
+        expect(lockDirBlocked(lock)).toEqual({ dir: rt, code: 'EACCES' });
+      } finally {
+        chmodSync(rt, 0o755);
+      }
+    });
+
+  it('a lock dir that does not exist yet under a writable one is not blocked, and is not created', () => {
+    const d = tmp();
+    const lock = join(d, 'runtime', 'install.lock');
+    expect(lockDirBlocked(lock)).toBeNull();
+    expect(existsSync(join(d, 'runtime'))).toBe(false);
+  });
+
+  it.skipIf(asRoot)(
+    'a missing lock dir under an unwritable one is blocked there: acquireLock cannot create it',
+    () => {
+      const d = tmp();
+      chmodSync(d, 0o555);
+      try {
+        const lock = join(d, 'runtime', 'install.lock');
+        expect(acquireLock(lock)).toBeNull(); // premise
+        expect(lockDirBlocked(lock)).toEqual({ dir: d, code: 'EACCES' });
+      } finally {
+        chmodSync(d, 0o755);
+      }
+    },
+  );
+
+  it('a held lock in a writable dir is held, not blocked', () => {
+    const lock = join(tmp(), 'install.lock');
+    const release = acquireLock(lock);
+    try {
+      expect(lockDirBlocked(lock)).toBeNull();
+    } finally {
+      release();
+    }
   });
 });

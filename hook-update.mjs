@@ -964,6 +964,11 @@ const BACKUP_SEQ_RE = /^\.update-backup-s(\d+)-/;
 const swapSeqOf = (name) => Number(BACKUP_SEQ_RE.exec(name)?.[1] ?? 0);
 const nextSwapSeq = (names) => Math.max(0, ...names.map(swapSeqOf)) + 1;
 
+/** Unresolved backup dir names in the order recovery undoes them: newest first, by seq, then name.
+ * cleanup --dry-run walks the same order to say what recovery would leave (D#307 F3). */
+export const unresolvedSwapOrder = (names) =>
+  [...names].sort((a, b) => swapSeqOf(b) - swapSeqOf(a) || b.localeCompare(a));
+
 // The `.update-backup-*` dirs in targetDir that carry no resolved marker.
 function unresolvedBackups(targetDir) {
   try {
@@ -1058,8 +1063,7 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
   // they are undone like a stack: newest first by the seq in the name, and none older while a newer
   // one is unfinished or cannot be read. An older journal replayed first puts back a file that a
   // newer journal, which installed that path, then deletes; with nothing left to restore it from.
-  pending.sort((a, b) => swapSeqOf(b) - swapSeqOf(a) || b.localeCompare(a));
-  for (const name of pending) {
+  for (const name of unresolvedSwapOrder(pending)) {
     const dir = join(targetDir, name);
     // No journal: the swap is over and its journal is gone (or it was killed before its first
     // rename), so there is nothing to replay and the dir is residue. A journal that is there but

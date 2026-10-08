@@ -17,7 +17,7 @@
 // Every run uses a sandbox HOME; each child gets an env without CLAUDE_MEM_DIR,
 // CLAUDE_MEM_RUNTIME_DIR or CLAUDE_CONFIG_DIR unless the case sets one.
 import { describe, it, expect, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
@@ -601,5 +601,110 @@ describe('a running update and a dry run (D#297)', () => {
     expect(out).toMatch(/Update residue skipped: install in progress/);
     expect(out).not.toContain(`Would remove: ${STAGING}`);
     expect(readFileSync(lock, 'utf8')).toBe(holder);
+  });
+});
+
+// D#304, D#307. A runtime dir install.lock cannot be created in: a `sudo` run left it root-owned
+// (0555 to this user), or it cannot even be listed (0000). acquireLock answers null for that as for a
+// live holder, and every face read null as "an install is in progress": the real cleanup named a
+// lock that did not exist while its dry run promised to remove the residue, both then died on an
+// uncaught EACCES listing the runtime dir (0000), install exited 0 having done nothing, and doctor
+// sent the user to a cleanup that would not touch the residue. Every update entry skipped the same
+// way, silently, so nothing ever said why updates stopped.
+function runFull(box, args) {
+  const r = spawnSync(process.execPath, [INSTALLER, ...args], {
+    env: env(box),
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  return { status: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
+}
+
+describe('a runtime dir install.lock cannot be taken in (D#304, D#307)', () => {
+  for (const mode of [0o555, 0o000])
+    it.skipIf(process.getuid?.() === 0)(
+      `every face names it, and none claims a lock is held (runtime ${mode.toString(8).padStart(3, '0')})`,
+      () => {
+        const box = sandbox();
+        mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+        const runtime = join(box.dataDir, 'runtime');
+        chmodSync(runtime, mode);
+        try {
+          const blocked = new RegExp(
+            `install\\.lock cannot be taken — ${runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} cannot be written \\(EACCES\\)`,
+          );
+          for (const args of [['cleanup', '--dry-run'], ['cleanup']]) {
+            const r = runFull(box, args);
+            expect(r.out, args.join(' ')).not.toMatch(/install in progress|install\.lock held/);
+            expect(r.out, args.join(' ')).toMatch(new RegExp(`Update residue skipped: ${blocked.source}`));
+            expect(r.out, args.join(' ')).not.toContain(`Would remove: ${STAGING}`);
+            expect(r.out, args.join(' ')).not.toMatch(/Error: EACCES/); // no uncaught crash
+            expect(r.status, `${args.join(' ')}\n${r.out}`).toBe(0);
+          }
+          expect(existsSync(join(box.codeDir, STAGING))).toBe(true);
+
+          const inst = runFull(box, ['install']);
+          expect(inst.out).not.toMatch(/in progress/);
+          expect(inst.out).toMatch(blocked);
+          expect(inst.status).toBe(1);
+
+          const rb = runFull(box, ['rebuild-binding']);
+          expect(rb.out).not.toMatch(/in progress/);
+          expect(rb.out).toMatch(blocked);
+          expect(rb.status).toBe(1);
+
+          const checks = doctorChecks(run(box, ['doctor', '--json']));
+          const lockLine = checks.find((c) => /^Install lock/.test(c.message || ''));
+          expect(lockLine?.level, JSON.stringify(checks.map((c) => c.message))).toBe('fail');
+          expect(lockLine?.message).toMatch(blocked);
+          // The residue is real (no installer of this user can be running), so it is counted; the
+          // cleanup it names waits on the lock line's fix instead of being offered as the repair.
+          const stale = checks.find((c) => /^Stale temp files/.test(c.message || ''));
+          expect(stale?.message).toMatch(
+            /1 found (elsewhere )?\(run: .*cleanup once install\.lock can be taken \(see Install lock\)\)/,
+          );
+        } finally {
+          chmodSync(runtime, 0o755);
+        }
+      },
+    );
+
+  it('a runtime dir that can be written is not named', () => {
+    const box = sandbox();
+    const checks = doctorChecks(run(box, ['doctor', '--json']));
+    expect(checks.find((c) => /^Install lock/.test(c.message || ''))).toBeUndefined();
+  });
+});
+
+// D#307 F3. Recovery undoes unresolved backup dirs like a stack, newest first, and stops at one
+// whose journal cannot be read: everything older stays. The dry run decided per dir and promised to
+// finish an older one the real run leaves.
+describe('cleanup --dry-run walks the swap stack the way recovery does (D#307 F3)', () => {
+  it('does not promise to finish a swap that a newer unreadable one blocks', () => {
+    const box = sandbox();
+    const older = '.update-backup-s1-1700000000000-4242';
+    const newer = '.update-backup-s2-1700000000001-4243';
+    writeFileSync(join(box.codeDir, 'server.mjs'), '// from the older interrupted swap');
+    mkdirSync(join(box.codeDir, older), { recursive: true });
+    writeFileSync(join(box.codeDir, older, 'server.mjs'), '// before the older swap');
+    writeFileSync(
+      join(box.codeDir, older, '.swap-journal.json'),
+      JSON.stringify({ backedUp: ['server.mjs'], installed: ['server.mjs'] }),
+    );
+    mkdirSync(join(box.codeDir, newer), { recursive: true });
+    writeFileSync(join(box.codeDir, newer, '.swap-journal.json'), '{torn');
+    const dry = run(box, ['cleanup', '--dry-run']);
+    expect(dry).toContain(`Would leave in place: ${newer} (its journal cannot be read)`);
+    expect(dry).not.toContain(`Would finish an interrupted update: ${older}`);
+    expect(dry).toMatch(new RegExp(`Would leave in place: ${older.replace(/\./g, '\\.')} \\(a newer one`));
+    const real = run(box, ['cleanup']);
+    expect(real).toContain(`Could not finish the interrupted update ${older}`); // premise: the real run leaves it
+    expect(readFileSync(join(box.codeDir, 'server.mjs'), 'utf8')).toBe('// from the older interrupted swap');
+  });
+
+  it('still promises to finish a readable swap with nothing newer blocking it', () => {
+    const box = sandbox();
+    seedUnfinishedSwap(box.codeDir);
+    expect(run(box, ['cleanup', '--dry-run'])).toContain(`Would finish an interrupted update: ${JOURNALED}`);
   });
 });

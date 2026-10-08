@@ -116,9 +116,13 @@ try {
 }
 const release = helpers.acquireLock(lockPath);
 if (!release) {
+  // A lock dir this user cannot write is not an install in flight (D#307): name it, as doctor does.
+  const blocked = helpers.lockDirBlocked?.(lockPath);
   process.stderr.write(
     `[claude-mem-lite] binding probe: ${helpers.flattenBindingError(first.error)} ` +
-      '(another install/repair in flight — deferring heal)\n',
+      (blocked
+        ? `(install.lock cannot be taken — ${blocked.dir} cannot be written (${blocked.code}); run doctor for the fix)\n`
+        : '(another install/repair in flight — deferring heal)\n'),
   );
   process.exit(1);
 }

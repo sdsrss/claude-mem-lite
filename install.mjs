@@ -98,7 +98,7 @@ import {
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
-import { acquireLock, lockHeld } from './lib/proc-lock.mjs';
+import { acquireLock, lockHeld, lockDirBlocked } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
@@ -3049,8 +3049,23 @@ async function doctor() {
   // install.lock is held, cleanup skips update residue (a running update's own staging and backup
   // dirs among it), so doctor does not count it either, and says it did not look (D#297). The holder
   // may be any installer: an update, install, repair, a binding rebuild. It asks without taking it.
+  // A runtime dir install.lock cannot be created in (a sudo run left it root-owned, a read-only data
+  // dir): every update entry skips on it as if a peer held the lock, silently, so this is the only
+  // face that can say why updates stopped (D#307). Counted here unless the Data directory line above
+  // already counts the directory it sits in.
+  const installLockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  if (installLockBlocked) {
+    const line = `Install lock: ${lockBlockedWhy(installLockBlocked)} — every update, install, repair and binding rebuild skips until it can be taken`;
+    if (dataDirDenied) dwarn(line);
+    else {
+      fail(line);
+      issues++;
+    }
+  }
   try {
-    const lockHeldNow = lockHeld(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+    // Blocked is not held: no installer of this user can be running, so an unfinished swap is a real
+    // one and is still counted (D#289), but every repair it names waits on the lock line's fix.
+    const lockHeldNow = !installLockBlocked && lockHeld(INSTALL_LOCK_PATH);
     const { stale, inFlight, unfinishedSwaps, unreadableJournals, notChecked } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
@@ -3058,14 +3073,15 @@ async function doctor() {
       installLockHeld: lockHeldNow,
     });
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
+    const onceLock = installLockBlocked ? ' once install.lock can be taken (see Install lock)' : '';
     if (unfinishedSwaps > 0) {
       dwarn(
-        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup — it finishes them newest first, and stops at one it cannot read or put back)`,
+        `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup${onceLock} — it finishes them newest first, and stops at one it cannot read or put back)`,
       );
     }
     if (unreadableJournals > 0) {
       dwarn(
-        `Unfinished update: ${unreadableJournals} backup dir(s) in ${INSTALL_DIR} whose journal cannot be read, so nothing can finish that update; they hold the files it moved aside (run: ${installer} repair — it reinstalls over them; cleanup then removes them)`,
+        `Unfinished update: ${unreadableJournals} backup dir(s) in ${INSTALL_DIR} whose journal cannot be read, so nothing can finish that update; they hold the files it moved aside (run: ${installer} repair${onceLock} — it reinstalls over them; cleanup then removes them)`,
       );
     }
     const skipped = lockHeldNow
@@ -3075,11 +3091,13 @@ async function doctor() {
       const where = notChecked.map((n) => `${n.dir} is not accessible (${n.code})`).join('; ');
       dwarn(
         `Stale temp files: not checked — ${where}` +
-          (stale > 0 ? `; ${stale} found elsewhere (run: ${installer} cleanup)` : '') +
+          (stale > 0 ? `; ${stale} found elsewhere (run: ${installer} cleanup${onceLock})` : '') +
           (skipped ? `; ${skipped}` : ''),
       );
     } else if (stale > 0) {
-      dwarn(`Stale temp files: ${stale} found (run: ${installer} cleanup)${skipped ? `; ${skipped}` : ''}`);
+      dwarn(
+        `Stale temp files: ${stale} found (run: ${installer} cleanup${onceLock})${skipped ? `; ${skipped}` : ''}`,
+      );
     } else if (skipped) {
       dwarn(`Stale temp files: ${skipped}`);
     } else {
@@ -3527,10 +3545,16 @@ async function cleanup() {
   let finished = 0;
   // --dry-run writes nothing, so it asks whether the lock is held instead of taking it: taking it
   // created the data dir, its runtime dir and the lock on a machine with nothing installed (D#297).
-  const lockPath = join(MEM_DATA_DIR, 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
-  const updateLock = dryRun ? (lockHeld(lockPath) ? null : () => {}) : acquireLock(lockPath);
+  // A lock that cannot be taken at all is not one a peer holds (D#304): both runs name its directory,
+  // and the dry run asks the same question the real run's failed acquire does.
+  const lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  let updateLock = null;
+  if (!lockBlocked)
+    updateLock = dryRun ? (lockHeld(INSTALL_LOCK_PATH) ? null : () => {}) : acquireLock(INSTALL_LOCK_PATH);
   if (!updateLock) {
-    warn('Update residue skipped: install in progress (install.lock held)');
+    warn(
+      `Update residue skipped: ${lockBlocked ? lockBlockedWhy(lockBlocked) : 'install in progress (install.lock held)'}`,
+    );
   } else {
     try {
       let found = [];
@@ -3540,8 +3564,34 @@ async function cleanup() {
         warn(`Update residue: could not list ${INSTALL_DIR} (${e.code || e.message})`);
       }
       if (dryRun) {
+        // Recovery undoes unfinished swaps like a stack, newest first, and stops at the first whose
+        // journal cannot be read, leaving it and every older one (D#293). Judged one dir at a time,
+        // the dry run promised to finish an older swap the real run leaves (D#307 F3), so it walks
+        // them in recovery's own order, taken from hook-update rather than restated here.
+        const swaps = found
+          .filter((r) => r.kind === 'unfinished-swap' || r.kind === 'unreadable-journal')
+          .map((r) => r.f);
+        let order = null;
+        let cannotLoad = null;
+        if (swaps.some((f) => found.find((r) => r.f === f).kind === 'unfinished-swap')) {
+          try {
+            ({ unresolvedSwapOrder: order } = await import('./hook-update.mjs'));
+          } catch (e) {
+            cannotLoad = e.message;
+          }
+        }
+        const blockedBy = new Map();
+        let newestUnreadable = null;
+        for (const f of order ? order(swaps) : swaps) {
+          if (newestUnreadable) blockedBy.set(f, newestUnreadable);
+          else if (found.find((r) => r.f === f).kind === 'unreadable-journal') newestUnreadable = f;
+        }
         for (const { f, kind } of found) {
-          if (kind === 'unfinished-swap') {
+          if (kind === 'unfinished-swap' && cannotLoad) {
+            warn(`Would leave in place: ${f} (the updater that finishes it cannot load: ${cannotLoad})`);
+          } else if (kind === 'unfinished-swap' && blockedBy.has(f)) {
+            warn(`Would leave in place: ${f} (a newer one, ${blockedBy.get(f)}, cannot be finished first)`);
+          } else if (kind === 'unfinished-swap') {
             ok(`Would finish an interrupted update: ${f} (puts back the files its journal lists)`);
             finished++;
           } else if (kind === 'unreadable-journal') {
@@ -3605,10 +3655,18 @@ async function cleanup() {
   // fixture sweep below, whose comment already states the principle: a MANUAL cleanup is
   // the conservative one.
   const runtimeDir = MEM_RUNTIME_DIR;
-  if (existsSync(runtimeDir)) {
+  let runtimeEntries = [];
+  try {
+    runtimeEntries = readdirSync(runtimeDir);
+  } catch (e) {
+    // Absent is nothing to clean. A runtime dir that cannot be listed (a sudo run left it 0700 and
+    // root-owned) threw out of cleanup uncaught, dry run included (D#304).
+    if (e.code !== 'ENOENT') warn(`Runtime scratch: could not list ${runtimeDir} (${e.code || e.message})`);
+  }
+  if (runtimeEntries.length > 0) {
     const now = Date.now();
     let inFlight = 0;
-    for (const f of readdirSync(runtimeDir)) {
+    for (const f of runtimeEntries) {
       if (isEpisodeResidue(f)) {
         // The gate itself lives in lib/doctor-stale-temp.mjs, so doctor's count and this
         // deletion cannot disagree about which files are in flight (D#53).
@@ -3952,12 +4010,17 @@ function bindingHostDir() {
 // two concurrent rebuilds can clobber the .node mid-compile. A live peer → report
 // and exit 0 (it is doing this very work), never race it.
 async function rebuildBinding() {
-  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  const release = acquireLock(INSTALL_LOCK_PATH);
   if (!release) {
     // NOT exit 0: skipping is not healing. Callers key their state on the exit
     // code — a false success would let the launcher drop its cooldown and the
     // CLI re-exec into the same broken binding.
-    console.error('[install] Another install/repair is in progress — it owns the rebuild; skipping.');
+    const blocked = lockDirBlocked(INSTALL_LOCK_PATH);
+    console.error(
+      blocked
+        ? `[install] ${lockBlockedWhy(blocked)} — the binding was not rebuilt.`
+        : '[install] Another install/repair is in progress — it owns the rebuild; skipping.',
+    );
     process.exitCode = 1;
     return;
   }
@@ -4034,6 +4097,13 @@ function sameDir(a, b) {
 // The fix for a data dir this user cannot use, chosen by the error code (lib/wal-open-blocked.mjs).
 export const dataDirAccessRemedy = (code) => dataDirRemedy(code, MEM_DATA_DIR);
 
+// install.lock serialises every installer (install, repair, update, binding rebuild, cleanup's
+// update residue). One that cannot be created at all is not one a peer holds, and each face says
+// which (D#304, D#307): waiting does not clear it, the fix below does.
+const INSTALL_LOCK_PATH = join(MEM_DATA_DIR, 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
+const lockBlockedWhy = ({ dir, code }) =>
+  `install.lock cannot be taken — ${dir} cannot be written (${code}). Fix: ${dataDirRemedy(code, dir)}`;
+
 // This process cannot load better-sqlite3: none installed where it runs (a checkout, or a plugin
 // cache before its first launch installed node_modules), or one that will not load (a stale ABI, a
 // damaged prebuild). The better-sqlite3 line names and counts that; a line that would open the DB
@@ -4051,8 +4121,15 @@ async function runLockedInstall() {
     process.exitCode = 1;
     return;
   }
-  const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  const release = acquireLock(INSTALL_LOCK_PATH);
   if (!release) {
+    const blocked = lockDirBlocked(INSTALL_LOCK_PATH);
+    if (blocked) {
+      // Not a peer: nothing will ever release it, and exit 0 told the caller it installed.
+      console.error(`[install] ${lockBlockedWhy(blocked)} — nothing was done.`);
+      process.exitCode = 1;
+      return;
+    }
     console.log('[install] Another install/repair is in progress — skipping to avoid a torn write.');
     return;
   }

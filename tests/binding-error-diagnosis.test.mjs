@@ -22,10 +22,20 @@
 // directory tree and returns exactly the five lines above.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, chmodSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  chmodSync,
+  cpSync,
+  existsSync,
+} from 'fs';
 import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
+import { RELEASE_SIGNED_FILES } from '../source-files.mjs';
 
 import { flattenBindingError } from '../lib/binding-probe.mjs';
 import { recordNativeBindingBreakage, readNativeBindingBreakage } from '../lib/native-binding-hint.mjs';
@@ -263,5 +273,81 @@ describe('launch.mjs npm-install failure: npm speaks for itself on inherited std
       expect(r.status).toBe(1);
     },
     60_000,
+  );
+});
+
+// D#307. A runtime dir install.lock cannot be created in (a sudo run left it root-owned): the MCP
+// launcher retried acquireLock 20 x 500 ms on EVERY launch before its probe-only pass, and both it
+// and the SessionStart probe then said another install/repair held the lock, which none did. The
+// binding here is better-sqlite3 13's own loader with no addon, so the probe fails fast and neither
+// arm can reach a rebuild.
+describe('a runtime dir install.lock cannot be taken in: the launcher and the session probe say so', () => {
+  let root;
+  let runtime;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'mem-lockblocked-'));
+    for (const rel of [...RELEASE_SIGNED_FILES, 'package.json']) {
+      if (!existsSync(join(REPO, rel))) continue;
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      copyFileSync(join(REPO, rel), join(root, rel));
+    }
+    const pkg = join(root, 'node_modules', 'better-sqlite3');
+    mkdirSync(pkg, { recursive: true });
+    cpSync(join(REPO, 'node_modules', 'better-sqlite3', 'lib'), join(pkg, 'lib'), { recursive: true });
+    copyFileSync(join(REPO, 'node_modules', 'better-sqlite3', 'package.json'), join(pkg, 'package.json'));
+    runtime = join(root, 'data', 'runtime');
+    mkdirSync(runtime, { recursive: true });
+    chmodSync(runtime, 0o555);
+  });
+  afterEach(() => {
+    chmodSync(runtime, 0o755);
+    rmSync(root, { recursive: true, force: true });
+  });
+  const env = () => ({
+    ...process.env,
+    CLAUDE_PLUGIN_ROOT: root,
+    PROBE_ROOT: root,
+    CLAUDE_MEM_DIR: join(root, 'data'),
+  });
+  const blocked = () =>
+    new RegExp(
+      `install\\.lock cannot be taken — ${runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} cannot be written \\(EACCES\\)`,
+    );
+
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
+    'launch.mjs does not wait 10 s for a lock nothing holds, and names the directory',
+    () => {
+      const t0 = Date.now();
+      const r = spawnSync(process.execPath, [join(root, 'scripts', 'launch.mjs')], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: env(),
+      });
+      const elapsed = Date.now() - t0;
+      const err = r.stderr || '';
+      expect(err).toMatch(/better-sqlite3 binding unusable: Cannot find module/); // premise: probe-only pass
+      expect(err).not.toMatch(/another install\/repair holds the lock/);
+      expect(err).toMatch(blocked());
+      expect(r.status).toBe(1);
+      expect(elapsed, err).toBeLessThan(8000); // the retry loop alone was 20 x 500 ms
+    },
+    90_000,
+  );
+
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
+    'the SessionStart binding probe does not blame an install in flight',
+    () => {
+      const r = spawnSync(process.execPath, [join(root, 'scripts', 'binding-probe-cli.mjs')], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: env(),
+      });
+      const err = r.stderr || '';
+      expect(err).toMatch(/binding probe: .*Cannot find module/); // premise
+      expect(err).not.toMatch(/another install\/repair in flight/);
+      expect(err).toMatch(blocked());
+      expect(r.status).toBe(1);
+    },
+    90_000,
   );
 });
