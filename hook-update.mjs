@@ -864,6 +864,35 @@ function journalSwap(backupDir, backedUp, installed) {
   }
 }
 
+// Clean up after a swap that is over: committed, or rolled back. Never throws, because a cleanup
+// that throws reaches the caller's catch, which rolls the swap back again (D#283; EBUSY is
+// ordinary on Windows and `force` does not suppress it). The journal goes first: recovery at the
+// next entry replays whatever a leftover journal lists, and replayed over a committed swap whose
+// backups were half deleted it mixes two releases. If the journal cannot be removed, the backups
+// stay with it, complete, so a replay restores one whole release.
+function discardBackupDir(backupDir) {
+  try {
+    rmSync(join(backupDir, SWAP_JOURNAL), { force: true });
+  } catch (e) {
+    debugCatch(e, 'discard-swap-journal');
+    return;
+  }
+  try {
+    rmSync(backupDir, { recursive: true, force: true });
+  } catch (e) {
+    debugCatch(e, 'discard-backup-dir');
+  }
+}
+
+function discardSwapDirs(stagingDir, backupDir) {
+  try {
+    rmSync(stagingDir, { recursive: true, force: true });
+  } catch (e) {
+    debugCatch(e, 'discard-staging-dir');
+  }
+  discardBackupDir(backupDir);
+}
+
 /**
  * Finish any swap a previous process was killed in the middle of, then clear its
  * residue. Called on every install entry, under the install lock, BEFORE a new
@@ -903,13 +932,8 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
     }
     const backedUp = Array.isArray(journal?.backedUp) ? journal.backedUp : [];
     const installed = Array.isArray(journal?.installed) ? journal.installed : [];
-    // Copies: rollbackInstall reverses the arrays in place.
-    rollbackInstall([...installed], [...backedUp], dir, targetDir);
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (e) {
-      debugCatch(e, 'recover-backup');
-    }
+    rollbackInstall(installed, backedUp, dir, targetDir);
+    discardBackupDir(dir);
     recovered++;
     debugLog(
       'WARN',
@@ -923,17 +947,24 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 // A rollback swaps a file SET back just as the install swapped it in, so it holds the same
 // marker for the same reason (D#239 g). After the MED-5 smoke gate the loop has already cleared
 // it; after a throw inside the loop it is still set, and this call takes it over.
+//
+// Safe to run twice over one journal (D#283). A backed-up path whose backup is gone holds the OLD
+// file already, restored by an earlier rollback or never moved out, so it is not deleted: a
+// second rollback used to delete every installed path, by then the only copy of the old install.
+// The arrays are copied, not reversed in place, so a caller's journal is left as it was.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();
   try {
-    for (const relPath of installed.reverse()) {
+    const restored = new Set(backedUp.filter((relPath) => !existsSync(join(backupDir, relPath))));
+    for (const relPath of [...installed].reverse()) {
+      if (restored.has(relPath)) continue;
       try {
         rmSync(join(targetDir, relPath), { recursive: true, force: true });
       } catch {
         /* best-effort */
       }
     }
-    for (const relPath of backedUp.reverse()) {
+    for (const relPath of [...backedUp].reverse()) {
       const backupPath = join(backupDir, relPath);
       const targetPath = join(targetDir, relPath);
       try {
@@ -1106,13 +1137,12 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // keeps working rather than leaving a broken install with no way back.
     if (!opts.skipSmoke && !smokeInstalledRelease(targetDir)) {
       rollbackInstall(installed, backedUp, backupDir, targetDir);
-      rmSync(stagingDir, { recursive: true, force: true });
-      rmSync(backupDir, { recursive: true, force: true });
+      discardSwapDirs(stagingDir, backupDir);
       return false;
     }
 
-    rmSync(stagingDir, { recursive: true, force: true });
-    rmSync(backupDir, { recursive: true, force: true });
+    // Committed. Nothing from here on may throw into the catch below, which rolls back (D#283).
+    discardSwapDirs(stagingDir, backupDir);
 
     // Post-update migration: reconcile settings.json against the release we just
     // swapped in. `configureHooks()` already strips stale mem entries — but its only
@@ -1199,16 +1229,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   } catch (err) {
     debugCatch(err, 'installExtractedRelease');
     rollbackInstall(installed, backedUp, backupDir, targetDir);
-    try {
-      rmSync(stagingDir, { recursive: true, force: true });
-    } catch {
-      /* best-effort */
-    }
-    try {
-      rmSync(backupDir, { recursive: true, force: true });
-    } catch {
-      /* best-effort */
-    }
+    discardSwapDirs(stagingDir, backupDir);
     return false;
   } finally {
     release();

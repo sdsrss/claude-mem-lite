@@ -8,7 +8,7 @@
 // a backup is restored, then performs the real rename.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -19,6 +19,10 @@ const restores = [];
 const events = [];
 let marker = null;
 let failSwapInto = null; // a target path whose forward rename throws once
+// rmSync faults, each thrown once: { match(path), before? }. `before` runs first, so a fault can model a
+// recursive removal that deleted part of the tree and then hit a busy file (EBUSY on Windows,
+// which `force` does not suppress).
+let rmFaults = [];
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn(), execFileSync: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -39,6 +43,12 @@ vi.mock('node:fs', async (importOriginal) => {
     },
     rmSync(path, opts) {
       const p = String(path);
+      const fault = rmFaults.find((f) => f.match(p));
+      if (fault) {
+        rmFaults = rmFaults.filter((f) => f !== fault);
+        fault.before?.();
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, rm '${p}'`), { code: 'EBUSY' });
+      }
       if (marker && p === marker) events.push({ kind: 'clear', marked: real.existsSync(marker) });
       else if (
         marker &&
@@ -101,6 +111,7 @@ afterEach(() => {
   delete events.recordDeletesUnder;
   marker = null;
   failSwapInto = null;
+  rmFaults = [];
   delete process.env.CLAUDE_MEM_DIR;
   process.env.HOME = originalHome;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -174,5 +185,81 @@ describe('rollbacks restore files under the swap marker (D#239 g)', () => {
     expect(restores.length).toBe(1);
     expect(restores[0].marked).toBe(true);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+// D#283: a swap that is over — rolled back, or committed — was rolled back a SECOND time. The
+// smoke branch's cleanup threw (EBUSY on Windows), the catch below it ran rollbackInstall again,
+// and that call deleted every installed path, which by then held the restored OLD files, with
+// the backups already used up. A journal a failed cleanup left behind did the same at the next
+// entry, through recoverInterruptedSwaps.
+describe('a resolved swap is never rolled back again (D#283)', () => {
+  const isDir = (prefix) => (p) => p.includes(`/${prefix}`) && !p.slice(p.indexOf(prefix)).includes('/');
+  const smokeFails = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) {
+      mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+      return '';
+    }
+    if (String(cmd).includes('cli.mjs') || String(cmd).includes('--check')) throw new Error('broken');
+    return '';
+  };
+  const smokePasses = (cmd, opts = {}) => {
+    if (String(cmd).startsWith('npm install')) mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
+    return '';
+  };
+  const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : null);
+
+  it('a cleanup that throws after the smoke rollback leaves the old install in place', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokeFails);
+    const { installExtractedRelease } = await loadModule(dataDir);
+    rmFaults.push({ match: isDir('.update-staging-') });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
+    expect(rmFaults).toEqual([]); // premise: the fault fired
+    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// server');
+  });
+
+  it('a cleanup that throws after a passed smoke keeps the new release, now and at the next entry', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
+    // The recursive removal deletes one backup, then hits a busy file.
+    rmFaults.push({
+      match: isDir('.update-backup-'),
+      before: () => {
+        const backup = readdirSync(dataDir).find((n) => n.startsWith('.update-backup-'));
+        rmSync(join(dataDir, backup, 'hook.mjs'));
+      },
+    });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
+    expect(rmFaults).toEqual([]);
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// new server');
+    // The next install entry finds the leftover backup dir; it must not mix the two releases.
+    recoverInterruptedSwaps(dataDir);
+    expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// new server');
+  });
+
+  it('recovery over the journal of a swap already rolled back keeps the restored files', async () => {
+    const dataDir = makeDataDir();
+    mockedExecSync.mockImplementation(smokePasses);
+    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
+    failSwapInto = join(dataDir, 'server.mjs'); // the swap throws halfway and is rolled back
+    // Its cleanup cannot remove the backup dir, nor the journal inside it.
+    rmFaults.push({ match: isDir('.update-backup-') }, { match: (p) => p.endsWith('.swap-journal.json') });
+
+    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
+    expect(read(dataDir, 'hook.mjs')).toBe('// old hook'); // premise: rolled back
+    const left = readdirSync(dataDir).find((n) => n.startsWith('.update-backup-'));
+    expect(existsSync(join(dataDir, left, '.swap-journal.json'))).toBe(true); // premise: journal left
+
+    recoverInterruptedSwaps(dataDir);
+    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
+    expect(read(dataDir, 'server.mjs')).toBe('// server');
+    expect(read(dataDir, 'package.json')).toBe(JSON.stringify({ version: '1.0.0' }));
   });
 });
