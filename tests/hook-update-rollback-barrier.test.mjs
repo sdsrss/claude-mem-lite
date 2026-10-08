@@ -19,12 +19,10 @@ const restores = [];
 const events = [];
 let marker = null;
 let failSwapInto = null; // a target path whose forward rename throws once
-// rmSync faults, each thrown once: { match(path), before? }. `before` runs first, so a fault can model a
+// rmSync faults, each thrown once unless sticky: { match(path), before?, sticky? }. `before` runs first, so a fault can model a
 // recursive removal that deleted part of the tree and then hit a busy file (EBUSY on Windows,
 // which `force` does not suppress).
 let rmFaults = [];
-// A relPath whose restore out of the backup dir throws once (EPERM: a file held open on Windows).
-let failRestoreOf = null;
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn(), execFileSync: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -35,10 +33,6 @@ vi.mock('node:fs', async (importOriginal) => {
       if (marker && String(from).includes('.update-backup-')) {
         restores.push({ from: String(from), marked: real.existsSync(marker) });
         events.push({ kind: 'restore', marked: real.existsSync(marker) });
-      }
-      if (failRestoreOf && String(from).includes('.update-backup-') && String(from).endsWith(failRestoreOf)) {
-        failRestoreOf = null;
-        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
       }
       if (failSwapInto && String(to) === failSwapInto && String(from).includes('.update-staging-')) {
         failSwapInto = null;
@@ -51,7 +45,7 @@ vi.mock('node:fs', async (importOriginal) => {
       const p = String(path);
       const fault = rmFaults.find((f) => f.match(p));
       if (fault) {
-        rmFaults = rmFaults.filter((f) => f !== fault);
+        if (!fault.sticky) rmFaults = rmFaults.filter((f) => f !== fault);
         fault.before?.();
         throw Object.assign(new Error(`EBUSY: resource busy or locked, rm '${p}'`), { code: 'EBUSY' });
       }
@@ -118,7 +112,6 @@ afterEach(() => {
   marker = null;
   failSwapInto = null;
   rmFaults = [];
-  failRestoreOf = null;
   delete process.env.CLAUDE_MEM_DIR;
   delete process.env.CLAUDE_MEM_DEBUG;
   vi.restoreAllMocks();
@@ -275,85 +268,20 @@ describe('a resolved swap is never rolled back again (D#283)', () => {
     expect(existsSync(join(dataDir, left))).toBe(false);
   });
 
-  // D#283 review P1-1. A restore that fails inside the rollback leaves its backup the only copy of
-  // that file, and the cleanup after it deleted the backup dir anyway.
-  it('a rollback whose restore fails keeps the backups for the next entry to finish', async () => {
+  // A backup dir that cannot be deleted after its journal was (a root-owned subtree a `sudo` rebuild
+  // left in the old node_modules) belongs to a swap that is over. It must not stop later updates:
+  // a gate on any leftover backup dir did, permanently and silently (D#283 review round 2, F1).
+  it('a leftover backup dir without a journal does not block the next update', async () => {
     const dataDir = makeDataDir();
-    writeFileSync(join(dataDir, 'node_modules', 'dep.js'), 'old-dep');
-    mockedExecSync.mockImplementation((cmd, opts = {}) => {
-      if (String(cmd).startsWith('npm install')) {
-        mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true });
-        writeFileSync(join(opts.cwd, 'node_modules', 'dep.js'), 'new-dep');
-        writeFileSync(join(opts.cwd, 'node_modules', 'extra.js'), 'new-extra');
-        return '';
-      }
-      if (String(cmd).includes('cli.mjs') || String(cmd).includes('--check')) throw new Error('broken');
-      return '';
-    });
-    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
-    // Deleting the NEW node_modules removes one file and hits a busy one, so the old one cannot be
-    // renamed back over it (ENOTEMPTY).
-    const nm = join(dataDir, 'node_modules');
-    rmFaults.push({ match: (p) => p === nm, before: () => rmSync(join(nm, 'extra.js')) });
-
-    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
-    expect(rmFaults).toEqual([]); // premise: the fault fired
-    const left = readdirSync(dataDir).find((n) => n.startsWith('.update-backup-'));
-    expect(left).toBeDefined();
-    expect(read(join(dataDir, left), 'node_modules/dep.js')).toBe('old-dep');
-
-    expect(recoverInterruptedSwaps(dataDir)).toBe(1);
-    expect(read(dataDir, 'node_modules/dep.js')).toBe('old-dep');
-    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
-    expect(existsSync(join(dataDir, left))).toBe(false);
-  });
-
-  it('a restore that throws after a swap failed halfway is finished by the next entry', async () => {
-    const dataDir = makeDataDir();
+    const leftover = join(dataDir, '.update-backup-1700000000000-4242');
+    mkdirSync(join(leftover, 'node_modules', 'build'), { recursive: true });
     mockedExecSync.mockImplementation(smokePasses);
-    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
-    failSwapInto = join(dataDir, 'server.mjs');
-    failRestoreOf = 'server.mjs';
-
-    expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(false);
-    expect(failRestoreOf).toBe(null); // premise: the restore threw
-    expect(read(dataDir, 'server.mjs')).toBe(null);
-
-    failRestoreOf = 'server.mjs'; // the next entry's restore fails as well: kept again
-    expect(recoverInterruptedSwaps(dataDir)).toBe(0);
-    expect(failRestoreOf).toBe(null);
-    expect(readdirSync(dataDir).some((n) => n.startsWith('.update-backup-'))).toBe(true);
-
-    expect(recoverInterruptedSwaps(dataDir)).toBe(1);
-    expect(read(dataDir, 'server.mjs')).toBe('// server');
-    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
-  });
-
-  // D#283 review P3-1. A swap whose backup dir recovery cannot clear is not over. A second swap
-  // stacked on it was undone later by a replay of the FIRST journal, which deleted the paths that
-  // release had added and the second one had installed again.
-  it('no new swap starts over a backup dir recovery could not clear', async () => {
-    const dataDir = makeDataDir();
-    mockedExecSync.mockImplementation(smokePasses);
-    const { installExtractedRelease, recoverInterruptedSwaps } = await loadModule(dataDir);
-    const journalFault = () => ({ match: (p) => p.endsWith('.swap-journal.json') });
-    rmFaults.push(journalFault()); // the commit's cleanup keeps the journal and the backups
+    const { installExtractedRelease } = await loadModule(dataDir);
+    rmFaults.push({ match: (p) => p === leftover, sticky: true });
 
     expect(await installExtractedRelease(makeReleaseDir(), dataDir)).toBe(true);
-    expect(read(dataDir, 'cli.mjs')).toBe('#!/usr/bin/env node\n'); // premise: committed
-
-    const second = makeReleaseDir();
-    writeFileSync(join(second, 'cli.mjs'), '// cli v2');
-    rmFaults.push(journalFault()); // recovery cannot remove it either
-    expect(await installExtractedRelease(second, dataDir)).toBe(false);
-    expect(read(dataDir, 'cli.mjs')).toBe(null); // one whole release: the old one, which had none
-    expect(read(dataDir, 'hook.mjs')).toBe('// old hook');
-
-    // Once the journal can be removed, the next entry clears it and installs.
-    expect(await installExtractedRelease(second, dataDir)).toBe(true);
-    recoverInterruptedSwaps(dataDir);
-    expect(read(dataDir, 'cli.mjs')).toBe('// cli v2');
     expect(read(dataDir, 'hook.mjs')).toBe('// new hook');
+    expect(existsSync(leftover)).toBe(true); // premise: it could not be removed
   });
 
   // D#283 review P3-2. Past the commit point the backups are gone; a throw that reached the catch
