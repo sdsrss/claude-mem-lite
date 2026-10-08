@@ -5,9 +5,12 @@
 // gives SQLITE_READONLY_DIRECTORY "attempt to write a readonly database"; EROFS gives SQLITE_CANTOPEN
 // "unable to open database file" (SQLite retries the -wal read-only and finds none).
 //
-// The test makes the directory unwritable for real, so every write fails, and loads this through
-// NODE_OPTIONS into every node process, which then reports what the kernel would on a read-only
-// mount:
+// The test makes the directory unwritable (0500), so nothing can be created, deleted or renamed in
+// it, and loads this through NODE_OPTIONS into every node process, which then reports what the
+// kernel would on a read-only mount. Faithful for a cleanly closed store only: a real read-only mount
+// also refuses writes to files already there (this one does not), and a store left with -wal and
+// -shm opens on a real one, where this simulation answers as for an unwritable dir. At the two
+// boundaries:
 //   - accessSync on a path under the dir throws EROFS where it threw EACCES;
 //   - a SqliteError SQLITE_READONLY_DIRECTORY on a database under the dir becomes SQLITE_CANTOPEN.
 // CML_EROFS_SIM_DIR names the dir; CML_EROFS_SIM_REQUIRE_FROM a package.json to load better-sqlite3 by.
