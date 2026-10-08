@@ -45,24 +45,28 @@ function sandbox() {
   return { root, home, settings, bin, calls, before: readFileSync(settings, 'utf8') };
 }
 
+function runEnv(s) {
+  return {
+    ...process.env,
+    HOME: s.home,
+    // cleanup sweeps os.tmpdir(); keep an unguarded run inside the sandbox too.
+    TMPDIR: s.root,
+    PATH: `${s.bin}:${process.env.PATH}`,
+    CLAUDE_MEM_DIR: join(s.root, 'data'),
+    CLAUDE_MEM_SKIP_UPDATE: '1',
+    MEM_NO_AUTO_ADOPT: '1',
+    // A runtime-dir override exported in the developer's shell would move the markers the
+    // cases below write; spawnSync drops an undefined value, so the child never sees it.
+    CLAUDE_MEM_RUNTIME_DIR: undefined,
+  };
+}
+
 function run(s, args) {
   return spawnSync(process.execPath, [join(REPO, 'install.mjs'), ...args], {
     cwd: s.root,
     encoding: 'utf8',
     timeout: 60_000,
-    env: {
-      ...process.env,
-      HOME: s.home,
-      // cleanup sweeps os.tmpdir(); keep an unguarded run inside the sandbox too.
-      TMPDIR: s.root,
-      PATH: `${s.bin}:${process.env.PATH}`,
-      CLAUDE_MEM_DIR: join(s.root, 'data'),
-      CLAUDE_MEM_SKIP_UPDATE: '1',
-      MEM_NO_AUTO_ADOPT: '1',
-      // A runtime-dir override exported in the developer's shell would move the markers the
-      // cases below write; spawnSync drops an undefined value, so the child never sees it.
-      CLAUDE_MEM_RUNTIME_DIR: undefined,
-    },
+    env: runEnv(s),
   });
 }
 
@@ -459,6 +463,43 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       chmodSync(data, 0o755);
     }
   });
+
+  // D#296. The deeper doctor modes plain doctor points to, and every other command that opens the
+  // DB through mem-cli, exited 1 relaying "attempt to write a readonly database" for that store.
+  it.skipIf(skip)(
+    'doctor --metrics, --session-audit and search say why a closed WAL store will not open',
+    () => {
+      const s = sandbox();
+      const { data, db } = walStore(s);
+      db.close();
+      chmodSync(data, 0o500);
+      try {
+        for (const args of [
+          ['doctor', '--metrics'],
+          ['doctor', '--session-audit'],
+          ['search', 'x'],
+        ]) {
+          const r = spawnSync(process.execPath, [join(REPO, 'cli.mjs'), ...args], {
+            cwd: s.root,
+            encoding: 'utf8',
+            timeout: 60_000,
+            env: runEnv(s),
+          });
+          const out = r.stdout + r.stderr;
+          expect(r.status, `${args.join(' ')}: ${out}`).toBe(1);
+          expect(out).not.toMatch(/attempt to write a readonly database/);
+          expect(out).toMatch(
+            new RegExp(
+              `SQLite cannot open a WAL database without creating its -wal/-shm files beside it, and ${data} cannot be written \\(EACCES\\)`,
+            ),
+          );
+          expect(out).toMatch(new RegExp(`Fix: chmod u\\+rwx ${data}`));
+        }
+      } finally {
+        chmodSync(data, 0o755);
+      }
+    },
+  );
 
   // D#284. The breakage marker sits in the locked dir, so it read as absent and the line said ✓.
   it.skipIf(skip)('doctor does not put a ✓ on a native-binding marker it could not read', () => {

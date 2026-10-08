@@ -162,6 +162,9 @@ export const SOURCE_FILES = [
   // + auto-update lock). Must ship or a partial install/update skips them.
   'lib/proc-lock.mjs',
   'lib/atomic-write.mjs',
+  // A closed WAL store in an unwritable data dir: one classification for doctor, status and
+  // mem-cli's DB open (D#296), so the CLI does not load install.mjs to word one error.
+  'lib/wal-open-blocked.mjs',
   // Dynamically imported by scripts/launch.mjs BEFORE `npm install` runs, to answer
   // EBADPLATFORM with both sides of the mismatch instead of a guessed cause (issue #28).
   // The import is guarded, so omitting this file would not crash the launcher — it would

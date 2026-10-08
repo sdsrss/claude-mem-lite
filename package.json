@@ -67,6 +67,7 @@
     "adopt-cli.mjs",
     "haiku-client.mjs",
     "lib/activity.mjs",
+    "lib/wal-open-blocked.mjs",
     "lib/bash-file-targets.mjs",
     "lib/cli-flags.mjs",
     "lib/git-state.mjs",

@@ -16,7 +16,6 @@ import {
   readdirSync,
   statSync,
   lstatSync,
-  accessSync,
   constants as fsConstants,
 } from 'fs';
 import { join, resolve, dirname, basename, sep } from 'path';
@@ -101,6 +100,7 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
+import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
 import {
   claudeConfigDir,
   claudeConfigDirFor,
@@ -1903,10 +1903,8 @@ async function status() {
       // SQLite creates beside the DB: in a directory it cannot write, a closed store cannot be opened
       // in place (a copy elsewhere could be read) — 6.24.0 could not open it either. Say so rather than relay "attempt to write a readonly database".
       // The errno stands in for SQLite's message only where the directory is the cause.
-      const walBlocked = dataDirDenied && e.code === 'SQLITE_READONLY_DIRECTORY';
-      const why = walBlocked
-        ? 'exists, but SQLite cannot open a WAL database without creating its -wal/-shm files beside it'
-        : 'exists but check failed — ' + e.message;
+      const walBlocked = walOpenBlocked(e.code, dataDirDenied);
+      const why = walBlocked ? `exists, but ${WAL_BLOCKED_WHY}` : 'exists but check failed — ' + e.message;
       push(dataDirDenied ? 'fail' : 'warn', 'database', `Database: ${why}${unwritable}`, {
         exists: true,
         error: walBlocked ? dataDirDenied : e.message,
@@ -2145,10 +2143,10 @@ async function doctor() {
   // create the -wal/-shm files beside it, so every check that opens the DB fails, for the fault the
   // Data directory line names and counts. Those checks say they did not look, in the words status
   // uses (D#287, the D#199 shape). Keyed on SQLite's code: its message is shared with other faults.
-  const walBlocked = (code) => Boolean(dataDirDenied) && code === 'SQLITE_READONLY_DIRECTORY';
+  const walBlocked = (code) => walOpenBlocked(code, dataDirDenied);
   const notCheckedWal = (what, scope = '') =>
     dwarn(
-      `${what}: not checked${scope} — SQLite cannot open a WAL database without creating its -wal/-shm files beside it, and ${MEM_DATA_DIR} cannot be written (see Data directory above)`,
+      `${what}: not checked${scope} — ${WAL_BLOCKED_WHY}, and ${MEM_DATA_DIR} cannot be written (see Data directory above)`,
     );
   // The code dir is the data dir in the default shape; under CLAUDE_MEM_DIR it is checked apart.
   const codeIsDataDir = sameDir(INSTALL_DIR, MEM_DATA_DIR);
@@ -3947,12 +3945,7 @@ function dataDirAccessError(
   dir = MEM_DATA_DIR,
   mode = fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK,
 ) {
-  try {
-    accessSync(dir, mode);
-    return null;
-  } catch (e) {
-    return e.code === 'ENOENT' ? null : e.code || 'EACCES';
-  }
+  return dirAccessError(dir, mode);
 }
 
 // Same directory however it is spelled (a trailing slash, a symlinked HOME). stat works on a
@@ -3967,13 +3960,8 @@ function sameDir(a, b) {
   }
 }
 
-// The fix for a data dir this user cannot use, chosen by the error code. EROFS is the file system,
-// not the mode bits: accessSync(W_OK) on a read-only mount fails with it, and chmod cannot help
-// there (D#287).
-export const dataDirAccessRemedy = (code) =>
-  code === 'EROFS'
-    ? `the file system holding ${shellWord(MEM_DATA_DIR)} is mounted read-only — remount it read-write`
-    : `chmod u+rwx ${shellWord(MEM_DATA_DIR)} (or chown it back to your user if a sudo run created it)`;
+// The fix for a data dir this user cannot use, chosen by the error code (lib/wal-open-blocked.mjs).
+export const dataDirAccessRemedy = (code) => dataDirRemedy(code, MEM_DATA_DIR);
 
 async function runLockedInstall() {
   const denied = dataDirAccessError();
