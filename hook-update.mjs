@@ -19,7 +19,7 @@ import {
   chmodSync,
   realpathSync,
 } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 // lib/data-paths.mjs, NOT schema.mjs: this module is what install.mjs::repair() imports to
@@ -828,7 +828,8 @@ export async function verifyReleaseAuthenticity(extractedDir, assets, publicKey 
 // updater that was killed mid-swap (it applies the same staleness bound).
 const SWAP_MARKER = join(STATE_DIR, 'runtime', 'swap-in-progress'); // runtime-dir:stays-put — installation identity
 // Intent journal, written INSIDE the backup dir before each rename. On a hard kill
-// the backup dir survives (every normal exit deletes it) and this file says exactly
+// the backup dir survives (a normal exit deletes it, unless its journal or one of its
+// restores could not be completed, D#283) and this file says exactly
 // which paths were in flight, so the next entry can finish the rollback at the right
 // granularity — a bare directory walk cannot tell a nested relPath from a directory
 // relPath like `node_modules`.
@@ -884,13 +885,38 @@ function discardBackupDir(backupDir) {
   }
 }
 
-function discardSwapDirs(stagingDir, backupDir) {
+function discardStagingDir(stagingDir) {
   try {
     rmSync(stagingDir, { recursive: true, force: true });
   } catch (e) {
     debugCatch(e, 'discard-staging-dir');
   }
+}
+
+function discardSwapDirs(stagingDir, backupDir) {
+  discardStagingDir(stagingDir);
   discardBackupDir(backupDir);
+}
+
+// After a rollback the backups go only when every one of them went back. A restore that failed
+// (the target only half deleted, a file held open on Windows) leaves its backup the only copy of
+// that file; the next entry's recovery retries it, which is safe because a replay is idempotent.
+function finishRollback(complete, stagingDir, backupDir) {
+  if (complete) return discardSwapDirs(stagingDir, backupDir);
+  discardStagingDir(stagingDir);
+  debugLog('WARN', 'hook-update', `rollback incomplete: kept ${basename(backupDir)} for the next install`);
+}
+
+// A backup dir recovery could not clear is a swap that is not over. Another swap stacked on it is
+// undone later by a replay of the first journal, which deletes the paths both releases added.
+function unfinishedSwapLeft(targetDir) {
+  try {
+    return readdirSync(targetDir, { withFileTypes: true }).some(
+      (e) => e.isDirectory() && e.name.startsWith('.update-backup-'),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -932,7 +958,14 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
     }
     const backedUp = Array.isArray(journal?.backedUp) ? journal.backedUp : [];
     const installed = Array.isArray(journal?.installed) ? journal.installed : [];
-    rollbackInstall(installed, backedUp, dir, targetDir);
+    if (!rollbackInstall(installed, backedUp, dir, targetDir)) {
+      debugLog(
+        'WARN',
+        'hook-update',
+        `Interrupted update swap ${entry.name}: a restore failed, kept for the next entry`,
+      );
+      continue;
+    }
     discardBackupDir(dir);
     recovered++;
     debugLog(
@@ -952,6 +985,7 @@ export function recoverInterruptedSwaps(targetDir = INSTALL_DIR) {
 // file already, restored by an earlier rollback or never moved out, so it is not deleted: a
 // second rollback used to delete every installed path, by then the only copy of the old install.
 // The arrays are copied, not reversed in place, so a caller's journal is left as it was.
+// Returns whether every backup went back: false leaves at least one file only in the backup dir.
 function rollbackInstall(installed, backedUp, backupDir, targetDir) {
   markSwapStart();
   try {
@@ -976,6 +1010,7 @@ function rollbackInstall(installed, backedUp, backupDir, targetDir) {
         debugCatch(restoreErr, `installExtractedRelease-restore-${relPath}`);
       }
     }
+    return backedUp.every((relPath) => !existsSync(join(backupDir, relPath)));
   } finally {
     clearSwapMarker();
   }
@@ -1080,6 +1115,7 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   const backupDir = join(targetDir, `.update-backup-${ts}`);
   const backedUp = [];
   const installed = [];
+  let committed = false;
 
   const manifest = await loadReleaseManifest(sourceDir);
   const switchablePaths = buildSwitchablePaths(manifest.SOURCE_FILES);
@@ -1089,6 +1125,10 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // one — otherwise this install stacks on top of a mixed-version tree and its
     // own backup can no longer restore a coherent state.
     recoverInterruptedSwaps(targetDir);
+    if (unfinishedSwapLeft(targetDir)) {
+      debugLog('WARN', 'hook-update', 'an earlier update swap is not finished — not starting another');
+      return false;
+    }
 
     mkdirSync(stagingDir, { recursive: true });
     mkdirSync(backupDir, { recursive: true });
@@ -1136,12 +1176,11 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     // If it can't, restore the backup and report failure — the running (old) version
     // keeps working rather than leaving a broken install with no way back.
     if (!opts.skipSmoke && !smokeInstalledRelease(targetDir)) {
-      rollbackInstall(installed, backedUp, backupDir, targetDir);
-      discardSwapDirs(stagingDir, backupDir);
+      finishRollback(rollbackInstall(installed, backedUp, backupDir, targetDir), stagingDir, backupDir);
       return false;
     }
 
-    // Committed. Nothing from here on may throw into the catch below, which rolls back (D#283).
+    committed = true;
     discardSwapDirs(stagingDir, backupDir);
 
     // Post-update migration: reconcile settings.json against the release we just
@@ -1228,8 +1267,10 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
     return true;
   } catch (err) {
     debugCatch(err, 'installExtractedRelease');
-    rollbackInstall(installed, backedUp, backupDir, targetDir);
-    discardSwapDirs(stagingDir, backupDir);
+    // Past the commit point the backups are gone and the new release IS the install: a rollback
+    // would delete the paths it added and restore nothing (D#283).
+    if (committed) return true;
+    finishRollback(rollbackInstall(installed, backedUp, backupDir, targetDir), stagingDir, backupDir);
     return false;
   } finally {
     release();
