@@ -2448,7 +2448,8 @@ function saveHandoffAndFastSummary(
  *
  * Liveness of the two real lock families does not depend on this sweeper, so tightening it
  * cannot wedge either: hook-episode.acquireLock() preempts a >30s episode lock itself at
- * acquire time, and proc-lock.acquireLock() steals on age OR dead pid at 5 min.
+ * acquire time, and proc-lock.acquireLock() steals on a dead pid at once and on age only past
+ * LIVE_HOLDER_MAX_MS (D#294), the same bound as ABANDONED_LOCK_MS here.
  */
 function cleanStaleLockFiles() {
   try {

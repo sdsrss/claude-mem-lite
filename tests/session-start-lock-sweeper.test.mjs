@@ -28,6 +28,7 @@ import { initSchema } from '../schema.mjs';
 // Imported, not re-typed: the sweeper's thresholds are the thing under test, so a local copy
 // would keep these cases green through a change to either constant.
 import { STALE_LOCK_MS, ABANDONED_LOCK_MS } from '../hook-shared.mjs';
+import { LIVE_HOLDER_MAX_MS } from '../lib/proc-lock.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const HOOK = join(REPO, 'hook.mjs');
@@ -104,6 +105,19 @@ describe('SessionStart lock sweeper — liveness before age', () => {
     expect(existsSync(live)).toBe(true);
   });
 
+  // D#294: an update holds install.lock for about 12 minutes on a platform with no prebuild
+  // (npm install, two npm rebuilds, a source build, probes). The sweeper's 10-min backstop for a
+  // live holder removed that lock, and the next installer replayed the running swap's journal.
+  it('keeps an install.lock whose live holder is 12 minutes into an update (D#294)', () => {
+    const live = writeLock('install.lock', { ageMs: 12 * 60 * 1000, pid: process.pid });
+    const decoy = writeLock('decoy.lock', { ageMs: 12 * 60 * 1000, pid: DEAD_PID });
+
+    runSessionStart();
+
+    expect(existsSync(decoy), 'sweeper did not run — the survival below proves nothing').toBe(false);
+    expect(existsSync(live)).toBe(true);
+  });
+
   it('still sweeps a lock whose holder is provably dead, at any age', () => {
     const young = writeLock('young-dead.lock', { ageMs: 1000, pid: DEAD_PID });
     const old = writeLock('old-dead.lock', { ageMs: STALE_LOCK_MS + 1000, pid: DEAD_PID });
@@ -133,9 +147,10 @@ describe('SessionStart lock sweeper — liveness before age', () => {
 
   it('ABANDONED_LOCK_MS still collects a live-pid lock that outlived any real critical section', () => {
     // Guards against the opposite failure: a leaked lock file whose pid was recycled onto an
-    // unrelated live process must not pin the file forever. The backstop is longer than
-    // proc-lock.mjs's own 5-min steal window, so it never decides anything the lock protocol
-    // has not already conceded.
+    // unrelated live process must not pin the file forever. The backstop is the bound
+    // proc-lock.mjs steals a live holder's lock at, so it never decides anything the lock
+    // protocol has not already conceded.
+    expect(ABANDONED_LOCK_MS).toBeGreaterThanOrEqual(LIVE_HOLDER_MAX_MS);
     const ancient = writeLock('ancient.lock', {
       ageMs: ABANDONED_LOCK_MS + 60_000,
       pid: process.pid,

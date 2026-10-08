@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquireLock, withLock, withLockAsync } from '../lib/proc-lock.mjs';
+import { acquireLock, withLock, withLockAsync, LIVE_HOLDER_MAX_MS } from '../lib/proc-lock.mjs';
 
 const dirs = [];
 function tmp() {
@@ -44,14 +44,37 @@ describe('proc-lock', () => {
     expect(existsSync(lock)).toBe(false);
   });
 
-  it('steals a stale lock (timestamp older than staleMs)', () => {
+  it('steals a stale lock that records no pid (timestamp older than staleMs)', () => {
     const lock = join(tmp(), 'x.lock');
-    // Holder recorded far in the past, but pid is OUR live pid so only ts can
-    // make it stale — proves the ts path independently of the pid path.
-    writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: 1000 }));
+    // No pid, so only ts can make it stale — proves the ts path independently of the pid path.
+    writeFileSync(lock, JSON.stringify({ ts: 1000 }));
     const release = acquireLock(lock, { staleMs: 60_000, now: () => 1_000_000 });
     expect(release).toBeTypeOf('function');
     release();
+  });
+
+  // D#294. An update holds install.lock through npm install (60 s) and its smoke gate (two
+  // 120 s rebuilds, a 300 s source build, probes): about 12 minutes on a platform with no
+  // prebuild, and a direct `install` runs npm with no timeout at all. The 5-min age steal took
+  // the lock from that live holder, and the next entry replayed the running swap's journal.
+  it('does NOT steal a lock whose holder is alive, however long past staleMs it has run (D#294)', () => {
+    const lock = join(tmp(), 'x.lock');
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: Date.now() - 6 * 60 * 1000 }));
+    expect(acquireLock(lock)).toBeNull();
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: Date.now() - 12 * 60 * 1000 }));
+    expect(acquireLock(lock)).toBeNull();
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: 1000 }));
+    expect(acquireLock(lock, { staleMs: 60_000, now: () => 1_000_000 })).toBeNull();
+  });
+
+  it('reclaims a live-pid lock past LIVE_HOLDER_MAX_MS: the pid may be recycled onto another process', () => {
+    const lock = join(tmp(), 'x.lock');
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: Date.now() - LIVE_HOLDER_MAX_MS - 60_000 }));
+    const release = acquireLock(lock);
+    expect(release).toBeTypeOf('function');
+    release();
+    // Premise: the bound is above the longest critical section a real holder runs, ~12 min.
+    expect(LIVE_HOLDER_MAX_MS).toBeGreaterThan(30 * 60 * 1000);
   });
 
   it('steals a lock whose holder pid is dead', () => {

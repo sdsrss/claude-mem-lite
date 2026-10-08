@@ -31,6 +31,7 @@ import {
 import { isDbUnusableError, DB_UNUSABLE_MARKER_PREFIX } from './lib/db-unusable.mjs';
 import { shouldRecordOnce } from './lib/record-once.mjs';
 import { backgroundWorkerEnv, workerDirGone } from './lib/worker-data-dir.mjs';
+import { LIVE_HOLDER_MAX_MS } from './lib/proc-lock.mjs';
 import { hookSessionId } from './lib/provenance.mjs';
 import { PROJECT_REKEY_MARKER_PREFIX } from './lib/project-rekey.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
@@ -67,12 +68,13 @@ export const STALE_SESSION_MS = 24 * 60 * 60 * 1000; // 24h
 export const STALE_LOCK_MS = 30000; // 30s
 
 // Backstop for cleanStaleLockFiles(): a lock whose recorded pid is ALIVE is kept until it
-// reaches this age, not STALE_LOCK_MS. Deliberately LONGER than proc-lock.mjs's own 5-min
-// steal window, so the sweeper is never the more aggressive of the two — whatever it
-// removes, the lock protocol itself would already have let the next caller steal. Its only
-// job is to garbage-collect a leaked file whose pid was recycled onto an unrelated live
-// process, which would otherwise pin the file forever. (A20260905-R5-P1-1)
-export const ABANDONED_LOCK_MS = 10 * 60 * 1000; // 10 min
+// reaches this age, not STALE_LOCK_MS. The same bound proc-lock.mjs steals a live holder's lock
+// at, so the sweeper is never the more aggressive of the two — whatever it removes, the lock
+// protocol itself would already have let the next caller steal. Its only job is to
+// garbage-collect a leaked file whose pid was recycled onto an unrelated live process, which
+// would otherwise pin the file forever. (A20260905-R5-P1-1) It was 10 min, shorter than an
+// update holds install.lock while its smoke gate builds the binding from source (D#294).
+export const ABANDONED_LOCK_MS = LIVE_HOLDER_MAX_MS;
 
 // The background-maintenance mutex, defined HERE next to the sweeper policy it has to
 // escape. cleanStaleLockFiles() sweeps every `*.lock` in RUNTIME_DIR; until

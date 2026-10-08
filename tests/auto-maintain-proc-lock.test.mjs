@@ -30,6 +30,7 @@ import { initSchema } from '../schema.mjs';
 // exits on import, so the constant lives in hook-shared.mjs beside STALE_LOCK_MS — the
 // sweeper policy it has to escape.)
 import { AUTO_MAINTAIN_LOCK } from '../hook-shared.mjs';
+import { LIVE_HOLDER_MAX_MS } from '../lib/proc-lock.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const HOOK = join(REPO, 'hook.mjs');
@@ -153,7 +154,9 @@ describe('auto-maintain — cross-process mutex', () => {
 
   it('reclaims a stale lock (aged out) instead of wedging maintenance forever', () => {
     const id = seedRow();
-    holdLock({ ageMs: 20 * 60 * 1000 }); // older than the 10-minute staleMs
+    // The holder pid is live (this process), so age alone reclaims it only past
+    // LIVE_HOLDER_MAX_MS (D#294): the backstop for a pid recycled onto another process.
+    holdLock({ ageMs: LIVE_HOLDER_MAX_MS + 60_000 });
     runAutoMaintain();
     expect(compressedInto(id)).toBe(IDLE_HIDDEN);
     expect(existsSync(gateFile)).toBe(true);
