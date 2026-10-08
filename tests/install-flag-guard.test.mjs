@@ -433,6 +433,33 @@ describe('an inaccessible data dir is named as a permission problem', () => {
     }
   });
 
+  // D#287. doctor over the same closed store relayed SQLite's "attempt to write a readonly
+  // database" on three lines, and its ✗ Database counted a second issue for the fault the
+  // ✗ Data directory line already names and counts (the D#199 shape). The lines now say they did
+  // not look, and why, in status's words.
+  it.skipIf(skip)('doctor says why it could not check a closed WAL store in an unwritable dir', () => {
+    const s = sandbox();
+    const { data, db } = walStore(s);
+    db.exec('CREATE TABLE schema_version (version INTEGER); INSERT INTO schema_version VALUES (1);');
+    db.close();
+    chmodSync(data, 0o500);
+    try {
+      const r = run(s, ['doctor']);
+      expect(r.stdout).toMatch(/✗ Data directory: .*it can be read but not written/); // premise
+      expect(r.stdout).not.toMatch(/attempt to write a readonly database/);
+      expect(r.stdout).not.toMatch(/✗ Database/);
+      for (const what of ['DB schema', 'Database', 'DB stats']) {
+        expect(r.stdout).toMatch(
+          new RegExp(
+            `⚠ ${what}: not checked.* — SQLite cannot open a WAL database without creating its -wal/-shm files beside it`,
+          ),
+        );
+      }
+    } finally {
+      chmodSync(data, 0o755);
+    }
+  });
+
   // D#284. The breakage marker sits in the locked dir, so it read as absent and the line said ✓.
   it.skipIf(skip)('doctor does not put a ✓ on a native-binding marker it could not read', () => {
     const s = sandbox();
@@ -551,5 +578,23 @@ describe('uninstall names an unadopt command that still works afterwards', () =>
     expect(r.status).toBe(0);
     expect(r.stdout).not.toMatch(/while the CLI is still on PATH/);
     expect(r.stdout).toMatch(/npx claude-mem-lite unadopt --all|cli\.mjs"? unadopt --all/);
+  });
+});
+
+// D#287. accessSync(W_OK) on a read-only mount fails with EROFS, and every face printed
+// "Fix: chmod u+rwx <dir>", which cannot help there. The remedy is chosen by the error code; no
+// call site may leave the code out (EROFS itself needs a read-only mount, which this suite cannot make).
+describe('the data dir remedy follows the error', () => {
+  it('a read-only file system is not a chmod problem', async () => {
+    const { dataDirAccessRemedy } = await import('../install.mjs');
+    expect(dataDirAccessRemedy('EROFS')).toMatch(/mounted read-only/);
+    expect(dataDirAccessRemedy('EROFS')).not.toMatch(/chmod/);
+    expect(dataDirAccessRemedy('EACCES')).toMatch(/^chmod u\+rwx /);
+  });
+  it('every call site passes the code it is reporting', () => {
+    const src = readFileSync(join(REPO, 'install.mjs'), 'utf8');
+    const calls = src.match(/dataDirAccessRemedy\([^)]*\)/g) || [];
+    expect(calls.length, 'premise: the call sites are found').toBeGreaterThanOrEqual(4);
+    expect(calls.filter((c) => c === 'dataDirAccessRemedy()')).toEqual([]);
   });
 });

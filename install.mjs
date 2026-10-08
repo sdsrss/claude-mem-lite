@@ -1809,13 +1809,13 @@ async function status() {
     ? dataDirAccessError(MEM_DATA_DIR, fsConstants.R_OK | fsConstants.X_OK)
     : null;
   const unwritable = dataDirDenied
-    ? ` — ${MEM_DATA_DIR} can be read but not written (${dataDirDenied}). Fix: ${dataDirAccessRemedy()}`
+    ? ` — ${MEM_DATA_DIR} can be read but not written (${dataDirDenied}). Fix: ${dataDirAccessRemedy(dataDirDenied)}`
     : '';
   if (dataDirUnreadable) {
     push(
       'fail',
       'database',
-      `Database: ${MEM_DATA_DIR} is not accessible (${dataDirUnreadable}) — Fix: ${dataDirAccessRemedy()}`,
+      `Database: ${MEM_DATA_DIR} is not accessible (${dataDirUnreadable}) — Fix: ${dataDirAccessRemedy(dataDirUnreadable)}`,
       { exists: null, error: dataDirUnreadable },
     );
   } else if (existsSync(DB_PATH)) {
@@ -2074,12 +2074,21 @@ async function doctor() {
     fail(
       `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — ` +
         (dataDirUnreadable ? 'checks that read it say "not checked"' : 'it can be read but not written') +
-        `. Fix: ${dataDirAccessRemedy()}`,
+        `. Fix: ${dataDirAccessRemedy(dataDirDenied)}`,
     );
     issues++;
   }
   const notCheckedDenied = (what, dir = MEM_DATA_DIR) =>
     dwarn(`${what}: not checked — ${dir} is not accessible`);
+  // A closed WAL store in a data dir that can be read but not written: even a read-only open has to
+  // create the -wal/-shm files beside it, so every check that opens the DB fails, for the fault the
+  // Data directory line names and counts. Those checks say they did not look, in the words status
+  // uses (D#287, the D#199 shape). Keyed on SQLite's code: its message is shared with other faults.
+  const walBlocked = (code) => Boolean(dataDirDenied) && code === 'SQLITE_READONLY_DIRECTORY';
+  const notCheckedWal = (what, scope = '') =>
+    dwarn(
+      `${what}: not checked${scope} — SQLite cannot open a WAL database without creating its -wal/-shm files beside it, and ${MEM_DATA_DIR} cannot be written (see Data directory above)`,
+    );
   // The code dir is the data dir in the default shape; under CLAUDE_MEM_DIR it is checked apart.
   const codeIsDataDir = sameDir(INSTALL_DIR, MEM_DATA_DIR);
   const codeDirDenied = codeIsDataDir ? dataDirUnreadable : dataDirAccessError(INSTALL_DIR, readMode);
@@ -2224,7 +2233,8 @@ async function doctor() {
       // printed as a green line is the defect the v6.2.0 round wrote and its pre-ship review
       // caught before the tag — a check that says "nothing to check" and "I could not look"
       // in the same voice ends the reader's search instead of directing it.
-      dwarn(`DB schema: could not determine compatibility for ${u.label} (${u.error})`);
+      if (walBlocked(u.errorCode)) notCheckedWal('DB schema', ` for ${u.label}`);
+      else dwarn(`DB schema: could not determine compatibility for ${u.label} (${u.error})`);
     }
   }
 
@@ -2577,24 +2587,37 @@ async function doctor() {
         dwarn('FTS5 index: missing (will be created on server start)');
       }
     } catch (e) {
-      fail('Database: ' + e.message);
-      // Every other ✗ on this screen carries a remedy; this one used to be the exception,
-      // and a corrupt store is the failure a user is least able to diagnose unaided.
-      // dbCheckRemedy returns null rather than invent one for an error it cannot classify.
-      // Pre-ship review 2026-09-09: dbCheckRemedy became async and lazy (P1-1), which moved
-      // its failure mode from load time into THIS catch — and an unhandled rejection here
-      // aborts doctor exactly as the static import did, so `--json` still emitted zero bytes
-      // on the compound shape "a file is missing AND the database will not open". A remedy
-      // is an extra sentence on a check that has already failed; never let it take the run.
-      let remedy = null;
-      try {
-        remedy = await dbCheckRemedy(DB_PATH, e);
-      } catch (remedyErr) {
-        log(`    (could not build a repair hint: ${remedyErr.message})`);
+      if (walBlocked(e.code)) {
+        notCheckedWal('Database');
+      } else {
+        fail('Database: ' + e.message);
+        // Every other ✗ on this screen carries a remedy; this one used to be the exception,
+        // and a corrupt store is the failure a user is least able to diagnose unaided.
+        // dbCheckRemedy returns null rather than invent one for an error it cannot classify.
+        // Pre-ship review 2026-09-09: dbCheckRemedy became async and lazy (P1-1), which moved
+        // its failure mode from load time into THIS catch — and an unhandled rejection here
+        // aborts doctor exactly as the static import did, so `--json` still emitted zero bytes
+        // on the compound shape "a file is missing AND the database will not open". A remedy
+        // is an extra sentence on a check that has already failed; never let it take the run.
+        let remedy = null;
+        try {
+          remedy = await dbCheckRemedy(DB_PATH, e);
+        } catch (remedyErr) {
+          log(`    (could not build a repair hint: ${remedyErr.message})`);
+        }
+        if (remedy) log(`    ${remedy}`);
+        issues++;
       }
-      if (remedy) log(`    ${remedy}`);
-      issues++;
     }
+  } else if (rootProbes.length === 0) {
+    // "will be created" beside the better-sqlite3 line's "nothing here can open the DB" was a
+    // promise this screen had just contradicted (D#287). With the code home locked the binding
+    // was not looked for, so neither half is claimed.
+    dwarn(
+      codeDirDenied
+        ? 'Database: not found'
+        : 'Database: not found — and nothing here can create it until an install has a native binding (see better-sqlite3 above)',
+    );
   } else {
     dwarn('Database: not found (will be created)');
   }
@@ -2985,7 +3008,8 @@ async function doctor() {
         dwarn(`${stats} — but the install you are running cannot use this database (see DB schema above)`);
       else ok(stats);
     } catch (e) {
-      dwarn('DB stats: ' + e.message);
+      if (walBlocked(e.code)) notCheckedWal('DB stats');
+      else dwarn('DB stats: ' + e.message);
     }
   }
 
@@ -3839,14 +3863,19 @@ function sameDir(a, b) {
   }
 }
 
-const dataDirAccessRemedy = () =>
-  `chmod u+rwx ${shellWord(MEM_DATA_DIR)} (or chown it back to your user if a sudo run created it)`;
+// The fix for a data dir this user cannot use, chosen by the error code. EROFS is the file system,
+// not the mode bits: accessSync(W_OK) on a read-only mount fails with it, and chmod cannot help
+// there (D#287).
+export const dataDirAccessRemedy = (code) =>
+  code === 'EROFS'
+    ? `the file system holding ${shellWord(MEM_DATA_DIR)} is mounted read-only — remount it read-write, or set CLAUDE_MEM_DIR to a directory on a writable one`
+    : `chmod u+rwx ${shellWord(MEM_DATA_DIR)} (or chown it back to your user if a sudo run created it)`;
 
 async function runLockedInstall() {
   const denied = dataDirAccessError();
   if (denied) {
     console.error(
-      `[install] ${MEM_DATA_DIR} is not accessible (${denied}) — nothing was done. Fix: ${dataDirAccessRemedy()}`,
+      `[install] ${MEM_DATA_DIR} is not accessible (${denied}) — nothing was done. Fix: ${dataDirAccessRemedy(denied)}`,
     );
     process.exitCode = 1;
     return;

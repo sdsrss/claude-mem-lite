@@ -210,6 +210,16 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
     );
   });
 
+  // D#287 (pre-existing): "Database: not found (will be created)" sat beside "nothing here can
+  // open the DB". Nothing here can create it either.
+  it('does not promise to create a database that nothing here can open', () => {
+    const checkout = checkoutWithoutDeps();
+    const r = doctorFrom(checkout);
+    expect(r.stdout).toMatch(/✗ better-sqlite3: no install on this machine owns a native binding/); // premise
+    expect(r.stdout).toMatch(/⚠ Database: not found/);
+    expect(r.stdout).not.toMatch(/will be created/);
+  });
+
   // D#284 review P3-4. The managed install DOES own a working binding, inside a dir this process
   // cannot enter: "no install owns one" is a claim the lock kept it from checking.
   it.skipIf(process.getuid?.() === 0)(
