@@ -114,10 +114,9 @@ try {
   process.stderr.write(`[claude-mem-lite] binding probe: ${e.message}\n`);
   process.exit(1);
 }
-const release = helpers.acquireLock(lockPath);
+const { release, error: blocked } = helpers.takeLock(lockPath);
 if (!release) {
-  // A lock dir this user cannot write is not an install in flight (D#307): name it, as doctor does.
-  const blocked = helpers.lockDirBlocked?.(lockPath);
+  // A lock that cannot be created at all is not an install in flight (D#307): name it, as doctor does.
   process.stderr.write(
     `[claude-mem-lite] binding probe: ${helpers.flattenBindingError(first.error)} ` +
       (blocked

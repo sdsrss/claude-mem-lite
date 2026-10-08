@@ -43,7 +43,7 @@ import {
 // because checkForUpdate is silent on network failure the plugin then reports
 // itself permanently up to date. Same tunnel the OpenRouter call site uses.
 import { httpConnectProxyFor, getViaConnectProxy, redactProxyUrl } from './lib/proxy-fetch.mjs';
-import { acquireLock } from './lib/proc-lock.mjs';
+import { takeLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { verifyReleaseFiles, verifyManifestSignature } from './lib/release-digest.mjs';
 import { detectInstallShape } from './lib/install-shape.mjs';
@@ -966,8 +966,27 @@ const nextSwapSeq = (names) => Math.max(0, ...names.map(swapSeqOf)) + 1;
 
 /** Unresolved backup dir names in the order recovery undoes them: newest first, by seq, then name.
  * cleanup --dry-run walks the same order to say what recovery would leave (D#307 F3). */
-export const unresolvedSwapOrder = (names) =>
+const unresolvedSwapOrder = (names) =>
   [...names].sort((a, b) => swapSeqOf(b) - swapSeqOf(a) || b.localeCompare(a));
+
+/**
+ * Which unresolved backup dirs recovery would leave in place because a newer one's journal cannot be
+ * read: recovery walks them newest first and stops there (recoverInterruptedSwaps). cleanup --dry-run
+ * reports from this instead of judging each dir alone (D#307 F3). It cannot foresee a file that
+ * fails to go back, which also stops the walk.
+ * @param {{name: string, readable: boolean}[]} swaps
+ * @returns {Map<string, string>} name → the newer unreadable dir that blocks it
+ */
+export function swapsBlockedByUnreadable(swaps) {
+  const readable = new Map(swaps.map((s) => [s.name, s.readable]));
+  const blockedBy = new Map();
+  let newestUnreadable = null;
+  for (const name of unresolvedSwapOrder([...readable.keys()])) {
+    if (newestUnreadable) blockedBy.set(name, newestUnreadable);
+    else if (!readable.get(name)) newestUnreadable = name;
+  }
+  return blockedBy;
+}
 
 // The `.update-backup-*` dirs in targetDir that carry no resolved marker.
 function unresolvedBackups(targetDir) {
@@ -1245,12 +1264,15 @@ export async function installExtractedRelease(sourceDir, targetDir = INSTALL_DIR
   // holding the lock means an install is already in flight — skip rather than
   // race. Shared path with install.mjs so direct install + repair + auto-update
   // are mutually exclusive.
-  const release = acquireLock(join(STATE_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  const { release, error: lockError } = takeLock(join(STATE_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!release) {
+    // doctor is the face that names a lock that cannot be taken (D#307); this log is debug-only.
     debugLog(
       'DEBUG',
       'hook-update',
-      'installExtractedRelease: another install/update is in progress — skipping',
+      lockError
+        ? `installExtractedRelease: install.lock cannot be taken — ${lockError.dir} (${lockError.code}) — skipping`
+        : 'installExtractedRelease: another install/update is in progress — skipping',
     );
     return false;
   }

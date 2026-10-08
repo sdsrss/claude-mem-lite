@@ -611,9 +611,9 @@ describe('a running update and a dry run (D#297)', () => {
 // uncaught EACCES listing the runtime dir (0000), install exited 0 having done nothing, and doctor
 // sent the user to a cleanup that would not touch the residue. Every update entry skipped the same
 // way, silently, so nothing ever said why updates stopped.
-function runFull(box, args) {
+function runFull(box, args, extra = {}) {
   const r = spawnSync(process.execPath, [INSTALLER, ...args], {
-    env: env(box),
+    env: env(box, extra),
     encoding: 'utf8',
     timeout: 60_000,
   });
@@ -639,7 +639,9 @@ describe('a runtime dir install.lock cannot be taken in (D#304, D#307)', () => {
             expect(r.out, args.join(' ')).toMatch(new RegExp(`Update residue skipped: ${blocked.source}`));
             expect(r.out, args.join(' ')).not.toContain(`Would remove: ${STAGING}`);
             expect(r.out, args.join(' ')).not.toMatch(/Error: EACCES/); // no uncaught crash
-            expect(r.status, `${args.join(' ')}\n${r.out}`).toBe(0);
+            // Review P3-4: residue it knows is there and could not touch is not "nothing found".
+            expect(r.out, args.join(' ')).not.toMatch(/No stale files found/);
+            expect(r.status, `${args.join(' ')}\n${r.out}`).toBe(1);
           }
           expect(existsSync(join(box.codeDir, STAGING))).toBe(true);
 
@@ -707,4 +709,202 @@ describe('cleanup --dry-run walks the swap stack the way recovery does (D#307 F3
     seedUnfinishedSwap(box.codeDir);
     expect(run(box, ['cleanup', '--dry-run'])).toContain(`Would finish an interrupted update: ${JOURNALED}`);
   });
+});
+
+// Pre-ship review of the above (defect lens P2-1, P3-2..P3-6, P3-10; claims lens 7 and 10).
+describe('install.lock that cannot be taken: the review repairs', () => {
+  const skipRoot = process.getuid?.() === 0;
+  const esc = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // No network in either arm: an update check or a repair download fails at once through a dead proxy.
+  const offline = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', NO_PROXY: '' };
+
+  // P2-1: a create that fails for a reason access() does not predict. A runtime dir that is a link to
+  // nowhere (a tmpfs target gone after a reboot) read as "held" on every face.
+  it('a runtime link to nowhere is named on every face, not read as a held lock', () => {
+    const box = sandbox();
+    mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+    const runtime = join(box.dataDir, 'runtime');
+    rmSync(runtime, { recursive: true, force: true });
+    symlinkSync(join(box.home, 'gone', 'runtime'), runtime);
+    const named = new RegExp(`install\\.lock cannot be taken — ${esc(runtime)} .*\\(ENOENT\\)`);
+    for (const args of [['cleanup', '--dry-run'], ['cleanup']]) {
+      const r = runFull(box, args);
+      expect(r.out, args.join(' ')).toMatch(named);
+      expect(r.out, args.join(' ')).not.toMatch(/install in progress|Would remove: \.update-staging/);
+    }
+    const inst = runFull(box, ['install']);
+    expect(inst.out).toMatch(named);
+    expect(inst.status).toBe(1);
+    const lockLine = doctorChecks(run(box, ['doctor', '--json'])).find((c) =>
+      /^Install lock/.test(c.message || ''),
+    );
+    expect(lockLine?.level).toBe('fail');
+  });
+
+  // Claims 7: a lock that is held AND sits in a dir this user cannot write (a sudo-run installer still
+  // running in the root-owned runtime dir it made). The running update's residue is not stale.
+  it.skipIf(skipRoot)(
+    'a held lock in a dir that cannot be written: residue is not counted, the lock line still shows',
+    () => {
+      const box = sandbox();
+      mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+      const runtime = join(box.dataDir, 'runtime');
+      writeFileSync(join(runtime, 'install.lock'), JSON.stringify({ pid: process.pid, ts: Date.now() }));
+      chmodSync(runtime, 0o555);
+      try {
+        const checks = doctorChecks(run(box, ['doctor', '--json']));
+        expect(checks.find((c) => /^Install lock/.test(c.message || ''))?.level).toBe('fail');
+        const stale = checks.find((c) => /^Stale temp files/.test(c.message || ''));
+        expect(stale?.message).not.toMatch(/found/);
+        expect(stale?.message).toMatch(/update residue not checked — install\.lock is held/);
+      } finally {
+        chmodSync(runtime, 0o755);
+      }
+    },
+  );
+
+  // Claims 10 / P3-9: the lock line is a ⚠ only when the Data directory line counts the SAME dir.
+  it.skipIf(skipRoot)(
+    'the lock line is counted when the data dir and its runtime dir both need fixing',
+    () => {
+      const box = sandbox();
+      const runtime = join(box.dataDir, 'runtime');
+      chmodSync(runtime, 0o555);
+      chmodSync(box.dataDir, 0o555);
+      try {
+        const checks = doctorChecks(run(box, ['doctor', '--json']));
+        expect(checks.find((c) => /^Data directory/.test(c.message || ''))?.level).toBe('fail'); // premise
+        const lockLine = checks.find((c) => /^Install lock/.test(c.message || ''));
+        expect(lockLine?.message).toContain(runtime);
+        expect(lockLine?.level).toBe('fail');
+      } finally {
+        chmodSync(box.dataDir, 0o755);
+        chmodSync(runtime, 0o755);
+      }
+    },
+  );
+
+  it.skipIf(skipRoot)(
+    'the lock line is a ⚠ when it names the dir the Data directory line already counts',
+    () => {
+      const box = sandbox();
+      rmSync(join(box.dataDir, 'runtime'), { recursive: true, force: true });
+      chmodSync(box.dataDir, 0o555);
+      try {
+        const checks = doctorChecks(run(box, ['doctor', '--json']));
+        expect(checks.find((c) => /^Data directory/.test(c.message || ''))?.level).toBe('fail'); // premise
+        const lockLine = checks.find((c) => /^Install lock/.test(c.message || ''));
+        expect(lockLine?.message).toMatch(new RegExp(`— ${esc(box.dataDir)} cannot be written`));
+        expect(lockLine?.level).toBe('warn');
+      } finally {
+        chmodSync(box.dataDir, 0o755);
+      }
+    },
+  );
+
+  // P3-2: a data dir that cannot be entered made the runtime dir under it the one named, and the
+  // chmod offered for it fails.
+  it.skipIf(skipRoot)('names the data dir that cannot be entered, not the runtime dir under it', () => {
+    const box = sandbox({ relocate: true });
+    chmodSync(box.dataDir, 0o000);
+    try {
+      const out = runFull(box, ['cleanup']).out;
+      expect(out).toMatch(
+        new RegExp(`install\\.lock cannot be taken — ${esc(box.dataDir)} cannot be written`),
+      );
+      expect(out).not.toMatch(/chmod u\+rwx [^ ]*runtime/);
+    } finally {
+      chmodSync(box.dataDir, 0o755);
+    }
+  });
+
+  // P3-3: a data dir that does not exist yet under one this user cannot write. The fix is to make the
+  // data dir, or point CLAUDE_MEM_DIR elsewhere; never to chmod or chown a parent such as /opt.
+  it.skipIf(skipRoot)('a data dir that cannot be created is not fixed by chmod/chown on its parent', () => {
+    const box = sandbox();
+    const ro = join(box.home, 'ro');
+    mkdirSync(ro);
+    chmodSync(ro, 0o555);
+    const mem = join(ro, 'sub', 'mem');
+    try {
+      const inst = runFull(box, ['install'], { CLAUDE_MEM_DIR: mem });
+      expect(inst.status).toBe(1);
+      expect(inst.out).toMatch(/install\.lock cannot be taken/);
+      expect(inst.out).not.toMatch(new RegExp(`(chmod|chown)[^\n]*${esc(ro)}(?!/)`));
+      expect(inst.out).toContain(mem);
+      expect(inst.out).toMatch(/CLAUDE_MEM_DIR/);
+    } finally {
+      chmodSync(ro, 0o755);
+    }
+  });
+
+  // P3-5: repair downloaded a whole release before its install found the lock, then recommended a
+  // manual fallback that fails the same way; self-update said only "install failed".
+  for (const cmd of ['repair', 'self-update'])
+    it.skipIf(skipRoot)(`${cmd} names the dir before it goes to the network`, () => {
+      const box = sandbox();
+      const runtime = join(box.dataDir, 'runtime');
+      chmodSync(runtime, 0o555);
+      try {
+        const r = runFull(box, [cmd], { ...offline, CLAUDE_MEM_SKIP_UPDATE: '' });
+        expect(r.out).toMatch(
+          new RegExp(`install\\.lock cannot be taken — ${esc(runtime)} cannot be written \\(EACCES\\)`),
+        );
+        expect(r.out).not.toMatch(/Downloading|Checking for updates|Manual fallback/);
+        expect(r.status).toBe(1);
+      } finally {
+        chmodSync(runtime, 0o755);
+      }
+    });
+
+  // P3-6: the legacy data-dir residue sweep, one block above the runtime listing D#304 fixed.
+  it.skipIf(skipRoot)('cleanup survives a relocated data dir it can enter but not list', () => {
+    const box = sandbox({ relocate: true });
+    chmodSync(box.dataDir, 0o300);
+    try {
+      const r = runFull(box, ['cleanup']);
+      expect(r.out).not.toMatch(/Error: EACCES/);
+      expect(r.out).toMatch(new RegExp(`could not list ${esc(box.dataDir)} \\(EACCES\\)`));
+    } finally {
+      chmodSync(box.dataDir, 0o755);
+    }
+  });
+});
+
+// Review P3-9: the e2e case above reads the stack order through readdir in a child, so a file system
+// that lists the dirs newest first lets an unsorted walk pass. The walk itself, both input orders.
+describe('swapsBlockedByUnreadable: the order recovery walks, whatever order the dirs are listed in', () => {
+  const s1 = '.update-backup-s1-1700000000000-1';
+  const s2 = '.update-backup-s2-1700000000001-2';
+  const legacyOld = '.update-backup-1600000000000-1';
+  const legacyNew = '.update-backup-1600000000001-2';
+  for (const reversed of [false, true]) {
+    const ord = (xs) => (reversed ? [...xs].reverse() : xs);
+    it(`an unreadable newer dir blocks the older ones (${reversed ? 'listed newest first' : 'listed oldest first'})`, async () => {
+      const { swapsBlockedByUnreadable } = await import(pathToFileURL(HOOK_UPDATE).href);
+      expect(
+        swapsBlockedByUnreadable(
+          ord([
+            { name: legacyOld, readable: true },
+            { name: s1, readable: true },
+            { name: s2, readable: false },
+          ]),
+        ),
+      ).toEqual(
+        new Map([
+          [s1, s2],
+          [legacyOld, s2],
+        ]),
+      );
+      // An unreadable OLDER dir blocks nothing newer; seq-less names order by their clock.
+      expect(
+        swapsBlockedByUnreadable(
+          ord([
+            { name: legacyOld, readable: false },
+            { name: legacyNew, readable: true },
+          ]),
+        ),
+      ).toEqual(new Map());
+    });
+  }
 });

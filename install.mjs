@@ -18,7 +18,7 @@ import {
   lstatSync,
   constants as fsConstants,
 } from 'fs';
-import { join, resolve, dirname, basename, sep } from 'path';
+import { join, resolve, dirname, basename, sep, relative, isAbsolute } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
@@ -94,11 +94,12 @@ import {
   nativeBindingRepairHint,
   isNativeBindingError,
   probeBindingInFreshProcess,
+  flattenBindingError,
 } from './lib/binding-probe.mjs';
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
-import { acquireLock, lockHeld, lockDirBlocked } from './lib/proc-lock.mjs';
+import { lockHeld, lockDirBlocked, takeLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
@@ -1874,6 +1875,7 @@ async function status() {
   const unwritable = dataDirDenied
     ? ` — ${MEM_DATA_DIR} can be read but not written (${dataDirDenied}). Fix: ${dataDirAccessRemedy(dataDirDenied)}`
     : '';
+  let statusProbe;
   if (dataDirUnreadable) {
     push(
       'fail',
@@ -1881,18 +1883,16 @@ async function status() {
       `Database: ${MEM_DATA_DIR} is not accessible (${dataDirUnreadable}) — Fix: ${dataDirAccessRemedy(dataDirUnreadable)}`,
       { exists: null, error: dataDirUnreadable },
     );
-  } else if (existsSync(DB_PATH) && !probeBindingInFreshProcess(PROJECT_DIR).ok) {
+  } else if (existsSync(DB_PATH) && !(statusProbe = probeBindingInFreshProcess(PROJECT_DIR)).ok) {
     // Out of process first, as doctor does: the open below loads the addon IN this process, and a
     // truncated prebuild raises SIGBUS in dlopen rather than throwing, so status died with no
-    // output (D#306). The binding that does not load is the line's reason, as in the catch below.
+    // output (D#306). The human line says why it did not look; the machine face keeps the loader's
+    // own error (review P3-10).
     push(
       dataDirDenied ? 'fail' : 'warn',
       'database',
       `Database: exists, but not checked — ${BINDING_MISSING_WHY}${unwritable}`,
-      {
-        exists: true,
-        error: BINDING_MISSING_WHY,
-      },
+      { exists: true, error: flattenBindingError(statusProbe.error) },
     );
   } else if (existsSync(DB_PATH)) {
     try {
@@ -3056,16 +3056,27 @@ async function doctor() {
   const installLockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
   if (installLockBlocked) {
     const line = `Install lock: ${lockBlockedWhy(installLockBlocked)} — every update, install, repair and binding rebuild skips until it can be taken`;
-    if (dataDirDenied) dwarn(line);
+    // The same directory the Data directory line counts (or one above it), or the same read-only
+    // mount: one fault, one ✗. A runtime dir inside a data dir that both need fixing is two.
+    const relToData = relative(MEM_DATA_DIR, installLockBlocked.dir);
+    const sameFault =
+      dataDirDenied &&
+      (relToData === '' ||
+        relToData.startsWith('..') ||
+        isAbsolute(relToData) ||
+        (dataDirDenied === 'EROFS' && installLockBlocked.code === 'EROFS'));
+    if (sameFault) dwarn(line);
     else {
       fail(line);
       issues++;
     }
   }
   try {
-    // Blocked is not held: no installer of this user can be running, so an unfinished swap is a real
-    // one and is still counted (D#289), but every repair it names waits on the lock line's fix.
-    const lockHeldNow = !installLockBlocked && lockHeld(INSTALL_LOCK_PATH);
+    // Held and blocked are separate answers. A lock can be both: a sudo-run installer still running
+    // in the root-owned runtime dir it made holds it there (pre-ship review). Held, the residue may
+    // be that installer's own and is not counted; blocked and not held, an unfinished swap is a real
+    // one and is counted (D#289), and every repair it names waits on the lock line's fix.
+    const lockHeldNow = lockHeld(INSTALL_LOCK_PATH);
     const { stale, inFlight, unfinishedSwaps, unreadableJournals, notChecked } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
@@ -3073,7 +3084,8 @@ async function doctor() {
       installLockHeld: lockHeldNow,
     });
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
-    const onceLock = installLockBlocked ? ' once install.lock can be taken (see Install lock)' : '';
+    const onceLock =
+      installLockBlocked && !lockHeldNow ? ' once install.lock can be taken (see Install lock)' : '';
     if (unfinishedSwaps > 0) {
       dwarn(
         `Unfinished update: ${unfinishedSwaps} backup dir(s) in ${INSTALL_DIR} still hold a swap journal — an update was interrupted, or could not put back every file it moved aside (run: ${installer} cleanup${onceLock} — it finishes them newest first, and stops at one it cannot read or put back)`,
@@ -3545,12 +3557,19 @@ async function cleanup() {
   let finished = 0;
   // --dry-run writes nothing, so it asks whether the lock is held instead of taking it: taking it
   // created the data dir, its runtime dir and the lock on a machine with nothing installed (D#297).
-  // A lock that cannot be taken at all is not one a peer holds (D#304): both runs name its directory,
-  // and the dry run asks the same question the real run's failed acquire does.
-  const lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  // A lock that cannot be taken at all is not one a peer holds (D#304): both runs name its directory.
+  // The real run takes the answer from its own failed create (any errno); the dry run, which must not
+  // create anything, predicts it from the directory (lockDirBlocked).
   let updateLock = null;
-  if (!lockBlocked)
-    updateLock = dryRun ? (lockHeld(INSTALL_LOCK_PATH) ? null : () => {}) : acquireLock(INSTALL_LOCK_PATH);
+  let lockBlocked;
+  if (dryRun) {
+    lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+    if (!lockBlocked && !lockHeld(INSTALL_LOCK_PATH)) updateLock = () => {};
+  } else {
+    const taken = takeLock(INSTALL_LOCK_PATH);
+    updateLock = taken.release || null;
+    lockBlocked = taken.error || null;
+  }
   if (!updateLock) {
     warn(
       `Update residue skipped: ${lockBlocked ? lockBlockedWhy(lockBlocked) : 'install in progress (install.lock held)'}`,
@@ -3570,21 +3589,16 @@ async function cleanup() {
         // them in recovery's own order, taken from hook-update rather than restated here.
         const swaps = found
           .filter((r) => r.kind === 'unfinished-swap' || r.kind === 'unreadable-journal')
-          .map((r) => r.f);
-        let order = null;
+          .map((r) => ({ name: r.f, readable: r.kind === 'unfinished-swap' }));
+        let blockedBy = new Map();
         let cannotLoad = null;
-        if (swaps.some((f) => found.find((r) => r.f === f).kind === 'unfinished-swap')) {
+        if (swaps.some((s) => s.readable)) {
           try {
-            ({ unresolvedSwapOrder: order } = await import('./hook-update.mjs'));
+            const { swapsBlockedByUnreadable } = await import('./hook-update.mjs');
+            blockedBy = swapsBlockedByUnreadable(swaps);
           } catch (e) {
             cannotLoad = e.message;
           }
-        }
-        const blockedBy = new Map();
-        let newestUnreadable = null;
-        for (const f of order ? order(swaps) : swaps) {
-          if (newestUnreadable) blockedBy.set(f, newestUnreadable);
-          else if (found.find((r) => r.f === f).kind === 'unreadable-journal') newestUnreadable = f;
         }
         for (const { f, kind } of found) {
           if (kind === 'unfinished-swap' && cannotLoad) {
@@ -3620,21 +3634,29 @@ async function cleanup() {
       }
       // A relocated data dir that an updater older than v2.90.0 swapped into: its residue is stale,
       // whatever it holds, and is never replayed (lib/doctor-stale-temp.mjs, legacyDir).
-      if (!sameDir(INSTALL_DIR, MEM_DATA_DIR) && existsSync(MEM_DATA_DIR)) {
-        for (const f of readdirSync(MEM_DATA_DIR)) {
-          if (!isUpdateResidue(f)) continue;
-          if (dryRun) {
-            ok(`Would remove: ${join(MEM_DATA_DIR, f)}`);
-            removed++;
-            continue;
-          }
-          try {
-            rmSync(join(MEM_DATA_DIR, f), { recursive: true, force: true });
-            ok(`Removed: ${join(MEM_DATA_DIR, f)}`);
-            removed++;
-          } catch (e) {
-            warn(`Failed to remove ${join(MEM_DATA_DIR, f)}: ${e.message}`);
-          }
+      let legacyEntries = [];
+      if (!sameDir(INSTALL_DIR, MEM_DATA_DIR)) {
+        try {
+          legacyEntries = readdirSync(MEM_DATA_DIR);
+        } catch (e) {
+          // Absent is nothing to clean; one it can enter but not list threw out of cleanup (review P3-6).
+          if (e.code !== 'ENOENT')
+            warn(`Update residue: could not list ${MEM_DATA_DIR} (${e.code || e.message})`);
+        }
+      }
+      for (const f of legacyEntries) {
+        if (!isUpdateResidue(f)) continue;
+        if (dryRun) {
+          ok(`Would remove: ${join(MEM_DATA_DIR, f)}`);
+          removed++;
+          continue;
+        }
+        try {
+          rmSync(join(MEM_DATA_DIR, f), { recursive: true, force: true });
+          ok(`Removed: ${join(MEM_DATA_DIR, f)}`);
+          removed++;
+        } catch (e) {
+          warn(`Failed to remove ${join(MEM_DATA_DIR, f)}: ${e.message}`);
         }
       }
     } finally {
@@ -3706,6 +3728,10 @@ async function cleanup() {
   if (removed > 0) done.push(`${removed} stale file(s) ${verb}`);
   if (finished > 0)
     done.push(`${finished} interrupted update(s) ${dryRun ? 'would be finished' : 'finished'}`);
+  // Skipped update residue is not "nothing found" (review P3-4). Held, a peer is working on it; a
+  // lock that cannot be taken is a failure no wait clears, so the exit says so, as install's does.
+  if (!updateLock) done.push('update residue not checked (see above)');
+  if (lockBlocked) process.exitCode = 1;
   console.log(`\n  ${done.length === 0 ? 'No stale files found.' : `${done.join('; ')}.`}\n`);
 }
 
@@ -3729,6 +3755,15 @@ async function manualUpdate() {
   if (disabled === 'dev-install') {
     warn(`Not checked: ${INSTALL_DIR} is a development install (a git checkout or symlinks).`);
     log('  Update the checkout it points to with git instead.');
+    console.log('');
+    return;
+  }
+  // An update installs under install.lock, and hook-update reads a lock it cannot take as "an install
+  // is in progress", which this printed as "install failed" (review P3-5).
+  const lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  if (lockBlocked) {
+    warn(`Not checked: ${lockBlockedWhy(lockBlocked)}`);
+    process.exitCode = 1;
     console.log('');
     return;
   }
@@ -3768,6 +3803,15 @@ async function manualUpdate() {
 // buggy on disk.
 async function repair() {
   console.log('\nclaude-mem-lite repair — re-syncing from the latest SIGNED GitHub release\n');
+  // The install this ends in takes install.lock. One that cannot be taken here fails that install
+  // after a whole release was downloaded, and the manual fallback below fails the same way, so say
+  // it first and stop (review P3-5). A peer holding it is left to the install's own message.
+  const lockBlocked = lockDirBlocked(INSTALL_LOCK_PATH);
+  if (lockBlocked) {
+    fail(`Repair not started: ${lockBlockedWhy(lockBlocked)}`);
+    process.exitCode = 1;
+    return;
+  }
   const stagingDir = mkdtempSync(join(tmpdir(), 'claude-mem-lite-repair-'));
   try {
     // Resolve the latest RELEASE (tag) and cryptographically VERIFY it before running any
@@ -4010,12 +4054,11 @@ function bindingHostDir() {
 // two concurrent rebuilds can clobber the .node mid-compile. A live peer → report
 // and exit 0 (it is doing this very work), never race it.
 async function rebuildBinding() {
-  const release = acquireLock(INSTALL_LOCK_PATH);
+  const { release, error: blocked } = takeLock(INSTALL_LOCK_PATH);
   if (!release) {
     // NOT exit 0: skipping is not healing. Callers key their state on the exit
     // code — a false success would let the launcher drop its cooldown and the
     // CLI re-exec into the same broken binding.
-    const blocked = lockDirBlocked(INSTALL_LOCK_PATH);
     console.error(
       blocked
         ? `[install] ${lockBlockedWhy(blocked)} — the binding was not rebuilt.`
@@ -4102,7 +4145,22 @@ export const dataDirAccessRemedy = (code) => dataDirRemedy(code, MEM_DATA_DIR);
 // which (D#304, D#307): waiting does not clear it, the fix below does.
 const INSTALL_LOCK_PATH = join(MEM_DATA_DIR, 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
 const lockBlockedWhy = ({ dir, code }) =>
-  `install.lock cannot be taken — ${dir} cannot be written (${code}). Fix: ${dataDirRemedy(code, dir)}`;
+  `install.lock cannot be taken — ${dir} cannot be written (${code}). Fix: ${lockDirRemedy(code, dir)}`;
+
+// The fix for the directory lockDirBlocked / takeLock name. One ABOVE the data dir (it does not exist
+// yet and cannot be created there, or cannot be reached) is not this program's to chmod or chown: on
+// a CLAUDE_MEM_DIR under /opt that advice would hand /opt to the user (review P3-3).
+function lockDirRemedy(code, dir) {
+  const rel = relative(MEM_DATA_DIR, dir);
+  if (rel.startsWith('..') || isAbsolute(rel))
+    return `make ${shellWord(MEM_DATA_DIR)} a directory your user owns (e.g. sudo mkdir -p ${shellWord(MEM_DATA_DIR)} && sudo chown "$USER" ${shellWord(MEM_DATA_DIR)}), or set CLAUDE_MEM_DIR to one`;
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return dataDirRemedy(code, dir);
+  if (code === 'ENOSPC' || code === 'EDQUOT')
+    return `free space on the file system holding ${shellWord(dir)}`;
+  if (code === 'ENOENT')
+    return `${shellWord(dir)} is a link to a directory that does not exist — create its target, or remove the link`;
+  return `check that your user can create files in ${shellWord(dir)}`;
+}
 
 // This process cannot load better-sqlite3: none installed where it runs (a checkout, or a plugin
 // cache before its first launch installed node_modules), or one that will not load (a stale ABI, a
@@ -4121,9 +4179,8 @@ async function runLockedInstall() {
     process.exitCode = 1;
     return;
   }
-  const release = acquireLock(INSTALL_LOCK_PATH);
+  const { release, error: blocked } = takeLock(INSTALL_LOCK_PATH);
   if (!release) {
-    const blocked = lockDirBlocked(INSTALL_LOCK_PATH);
     if (blocked) {
       // Not a peer: nothing will ever release it, and exit 0 told the caller it installed.
       console.error(`[install] ${lockBlockedWhy(blocked)} — nothing was done.`);

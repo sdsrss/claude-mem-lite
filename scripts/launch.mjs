@@ -116,14 +116,19 @@ try {
   // mid-compile. Take the lock for the rebuild-capable path; a live peer →
   // wait up to 10s, then degrade to a probe-only pass (healthy binding
   // proceeds; a broken one defers to the peer instead of racing it).
-  const { acquireLock, lockDirBlocked } = await import('../lib/proc-lock.mjs');
+  const { takeLock } = await import('../lib/proc-lock.mjs');
   const { resolveDataDir } = await import('../lib/resolve-data-dir.mjs');
   const lockPath = join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
-  // A lock dir this user cannot write (a sudo run left it root-owned) is not a peer to wait for:
-  // nothing ever releases it, and the wait below cost every MCP launch 10 s (D#307).
-  const blocked = lockDirBlocked(lockPath);
+  // A lock that cannot be created at all (a runtime dir a sudo run left root-owned, a link to
+  // nowhere, a full disk) is not a peer to wait for: nothing ever releases it, and waiting cost
+  // every MCP launch 10 s (D#307). takeLock says which it is.
   let release = null;
-  for (let i = 0; !blocked && i < 20 && !(release = acquireLock(lockPath)); i++) {
+  let blocked = null;
+  for (let i = 0; i < 20; i++) {
+    const taken = takeLock(lockPath);
+    release = taken.release || null;
+    blocked = taken.error || null;
+    if (release || blocked) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   let verify;
@@ -136,13 +141,12 @@ try {
       // dead module handle cached for it. Also keeps the exit(1) guidance below
       // reachable — an in-process load of a stale binding can SIGSEGV instead.
       const probe = probeBindingInFreshProcess(ROOT);
-      const { dataDirRemedy } = blocked ? await import('../lib/wal-open-blocked.mjs') : {};
       verify = probe.ok
         ? { ok: true, action: 'verified' }
         : {
             ok: false,
             error: blocked
-              ? `${probe.error} (install.lock cannot be taken — ${blocked.dir} cannot be written (${blocked.code}), so it was not rebuilt. Fix: ${dataDirRemedy(blocked.code, blocked.dir)})`
+              ? `${probe.error} (install.lock cannot be taken — ${blocked.dir} cannot be written (${blocked.code}), so it was not rebuilt; \`doctor\` names the fix)`
               : `${probe.error} (another install/repair holds the lock — not rebuilding concurrently; reconnect with /mcp once it finishes)`,
           };
     }

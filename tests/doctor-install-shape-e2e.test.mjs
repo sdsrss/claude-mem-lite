@@ -183,13 +183,13 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
 // managed tree, no plugin — doctor said "✗ no install on this machine owns a native binding" and,
 // further down, "✓ Native DB binding: loadable": a ✓ that nothing had been probed for.
 describe('doctor: nothing to probe is not a loadable binding', () => {
-  const doctorFrom = (checkout, extraEnv = {}, cmd = 'doctor') => {
+  const doctorFrom = (checkout, extraEnv = {}, cmd = 'doctor', args = []) => {
     const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
     for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
       delete env[k];
     env.MEM_NO_AUTO_ADOPT = '1';
     Object.assign(env, extraEnv);
-    return spawnSync(process.execPath, [join(checkout, 'install.mjs'), cmd], {
+    return spawnSync(process.execPath, [join(checkout, 'install.mjs'), cmd, ...args], {
       cwd: home,
       encoding: 'utf8',
       env,
@@ -398,6 +398,12 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
         const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
         expect(st.signal).toBeNull();
         expect(st.stdout).toMatch(/Database: exists, but not checked — better-sqlite3 cannot be loaded/);
+        // Review P3-10: the machine face carries the loader's own error, not the generic sentence.
+        const sj = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status', ['--json']);
+        const dbCheck = JSON.parse(sj.stdout).database;
+        expect(dbCheck?.error).toMatch(
+          prebuild === 'none' ? /Cannot find module '.*better_sqlite3\.node'/ : /SIGBUS/,
+        );
       },
     );
   }

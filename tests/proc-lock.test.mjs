@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   withLockAsync,
   LIVE_HOLDER_MAX_MS,
   lockDirBlocked,
+  takeLock,
 } from '../lib/proc-lock.mjs';
 
 const dirs = [];
@@ -197,6 +198,58 @@ describe('lockDirBlocked', () => {
       expect(lockDirBlocked(lock)).toBeNull();
     } finally {
       release();
+    }
+  });
+});
+
+// Review of D#304/D#307 (P2-1): an access() precheck predicts only the faults access() sees. A create
+// that fails for any other reason (a dangling runtime link, a full disk, a Windows ACL access()
+// does not read) still came back as a bare null, read as "held". takeLock reports the create's own
+// errno; acquireLock keeps its release-or-null contract on top of it.
+describe('takeLock', () => {
+  const asRoot = process.getuid?.() === 0;
+
+  it('takes a free lock, and reports a held one as held, not as an error', () => {
+    const lock = join(tmp(), 'install.lock');
+    const first = takeLock(lock);
+    expect(typeof first.release).toBe('function');
+    const second = takeLock(lock);
+    expect(second.release).toBeUndefined();
+    expect(second.error).toBeUndefined();
+    first.release();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it.skipIf(asRoot)('reports the directory and errno of a create that fails', () => {
+    const rt = join(tmp(), 'runtime');
+    mkdirSync(rt);
+    chmodSync(rt, 0o555);
+    try {
+      expect(takeLock(join(rt, 'install.lock'))).toEqual({ error: { dir: rt, code: 'EACCES' } });
+    } finally {
+      chmodSync(rt, 0o755);
+    }
+  });
+
+  it('reports a lock dir that is a link to nowhere, which access() alone reads as absent', () => {
+    const d = tmp();
+    const rt = join(d, 'runtime');
+    symlinkSync(join(d, 'gone', 'runtime'), rt);
+    const lock = join(rt, 'install.lock');
+    expect(takeLock(lock).error?.dir).toBe(rt);
+    expect(lockDirBlocked(lock)).toEqual({ dir: rt, code: 'ENOENT' });
+  });
+});
+
+describe('lockDirBlocked names the directory that has to change', () => {
+  it.skipIf(process.getuid?.() === 0)('an ancestor that cannot be entered, not the lock dir under it', () => {
+    const data = join(tmp(), 'data');
+    mkdirSync(join(data, 'runtime'), { recursive: true });
+    chmodSync(data, 0o000);
+    try {
+      expect(lockDirBlocked(join(data, 'runtime', 'install.lock'))).toEqual({ dir: data, code: 'EACCES' });
+    } finally {
+      chmodSync(data, 0o755);
     }
   });
 });
