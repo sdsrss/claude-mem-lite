@@ -857,12 +857,14 @@ function clearSwapMarker() {
 // backup dir but nothing records it — recovery would then delete the backup dir with
 // the only copy of that file inside it. rollbackInstall guards every entry with
 // existsSync/force, so an intent that never happened is a harmless no-op.
+//
+// By temp file and rename, and it throws (D#289). writeFileSync truncates the journal before it
+// writes it, so a kill or ENOSPC in between left an empty journal, which recovery read as "nothing
+// moved" and then deleted the backups. A write error was swallowed, so the rename it was meant to
+// record went ahead unrecorded. Now the previous journal stays whole until the new one replaces
+// it, and a swap that cannot journal stops before the rename, through the rollback in the caller.
 function journalSwap(backupDir, backedUp, installed) {
-  try {
-    writeFileSync(join(backupDir, SWAP_JOURNAL), JSON.stringify({ backedUp, installed }));
-  } catch (e) {
-    debugCatch(e, 'journalSwap');
-  }
+  atomicWriteFileSync(join(backupDir, SWAP_JOURNAL), JSON.stringify({ backedUp, installed }));
 }
 
 // Clean up after a swap that is over: committed, or rolled back. Never throws, because a cleanup
