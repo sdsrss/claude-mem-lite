@@ -2,6 +2,55 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.25.3 — the self-heal recognises better-sqlite3 13's missing binding; a lock nobody can take is named
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Fix: where better-sqlite3 ships no prebuilt binding, the hooks and the CLI now build it.**
+  better-sqlite3 13 bundles prebuilt bindings for Linux (glibc and musl), macOS and Windows on x64
+  and arm64. Anywhere else (32-bit ARM, Android/Termux, FreeBSD, ppc64le, riscv64, …) the binding
+  has to be compiled, and until it is, loading it fails with
+  `Cannot find module '…/build/Release/better_sqlite3.node'`. Only the MCP server's launcher
+  repaired that. The hooks and the `claude-mem-lite` CLI did not recognise the error: they printed
+  it on every use and never started a repair. Now the CLI compiles the binding the way
+  `rebuild-binding` does (a C++ toolchain is needed) and then runs the command again, and the
+  hooks have it compiled at the next session start. Measured here on a tree with the prebuilt
+  bindings removed: the CLI compiled the binding in 35 s, ran the command again, and exited 0.
+  Without a toolchain each CLI command still tries the build before it fails.
+- **Fix: `doctor` and `status` no longer crash on a damaged prebuilt binding.** A truncated
+  binding file (an interrupted download, a full disk) killed `doctor` and `status` with a bus
+  error (exit 135) before they printed anything. They had already found the binding broken in a
+  separate process, then opened the database in their own process anyway. They now report the
+  database as not checked, and the better-sqlite3 line reports the fault and its fix once;
+  `status --json` keeps the loader's own error. The hooks' warnings no longer guess "Node version
+  change", because better-sqlite3 13's bindings keep working after a Node upgrade.
+- **Fix: when `install.lock` cannot be created, that is named, not mistaken for an install in
+  progress.** This happens when `~/.claude-mem-lite/runtime` cannot be written: a `sudo` run left
+  it owned by root, the data directory is on a read-only mount, the runtime directory is a link to
+  a directory that no longer exists or is a file, or the disk is full. Before this release:
+  - every update skipped silently;
+  - `install` and `repair` printed "Another install/repair is in progress" and exited 0 having
+    done nothing (`repair` after downloading a whole release);
+  - `cleanup` said `install.lock` was held when no lock existed, while `cleanup --dry-run`
+    promised to remove the same leftovers, and both crashed when the directory could not even be
+    listed;
+  - the MCP server waited 10 seconds at every start for a lock nobody held.
+
+  Now `install`, `repair`, `self-update`, `rebuild-binding` and `cleanup` name the directory
+  and the error and exit 1, with the fix: `chmod`/`chown` the directory, remount it read-write,
+  recreate the link's target, move a file aside, free space, or, when the data directory does not
+  exist yet and cannot be created, create it as your user or set `CLAUDE_MEM_DIR`. `repair` and
+  `self-update` stop before going to the network (in plugin mode `self-update` only checks, and
+  still does), and the MCP server starts without waiting. `doctor` and `cleanup --dry-run` must
+  not write, so they predict this from the directory itself: `doctor` reports
+  `Install lock: … cannot be written` for permissions, a read-only mount, a link to nowhere or a
+  file in the way, and the dry run says what the real run will. A full disk shows up
+  only when a command tries to take the lock.
+- **Fix: `cleanup --dry-run` predicts what `cleanup` will finish.** Interrupted updates are
+  finished newest first, and one whose journal cannot be read stops every older one behind it.
+  The dry run judged each update on its own, so it promised to finish older ones that the real
+  run leaves in place.
+
 ## v6.25.2 — a rollback that cannot put a file back keeps it; a running update keeps its lock
 
 Fixes only; no schema change, no migration, no new setting.
