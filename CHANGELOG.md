@@ -2,6 +2,84 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.25.1 — a rolled-back update no longer deletes what it restored; an interrupted one is finished where its journal can be read
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Fix: a rolled-back update could delete the files it had just put back.** When a release fails
+  its start-up check after `self-update`, or after the session-start copy that brings
+  `~/.claude-mem-lite` up to a newer plugin version, the old files are put back. If removing the
+  update's temporary directories then failed (EBUSY, which Windows raises for a file another
+  process holds open), the rollback ran a second time and deleted the files it had just restored,
+  `hook.mjs`, `server.mjs` and `package.json` among them. After `self-update` that left no working
+  direct install. With the plugin, its MCP server kept working, but the `~/.claude-mem-lite` copy
+  behind the standalone CLI and the `settings.json` hooks was broken, and the session-start copy
+  does not repair a tree without its `package.json`. A rollback is now safe to run twice and the cleanup
+  after it never throws. Present since 3.21.0. The Windows trigger is reasoned from Node's
+  documented behaviour; it was reproduced here with an injected EBUSY. If an update left
+  `~/.claude-mem-lite` without `cli.mjs` or `server.mjs`, `npx claude-mem-lite@latest` reinstalls it.
+- **Fix: an update that passed its check is no longer undone by its own leftover journal.** An
+  update records each file it is about to move in a journal, so that an interrupted swap can be
+  undone. A finished swap whose journal could not be removed (EBUSY or EPERM on Windows), or whose
+  updater was killed while it cleaned up, kept the journal, and the next update replayed it: a
+  release that had passed its check went back to the previous one, and the journal of a rolled-back
+  swap could delete a file a later update had installed. A finished swap now marks its backup
+  directory resolved before it removes the journal, and nothing replays a resolved one.
+- **Fix: an update killed while it wrote its journal no longer loses the files it had moved
+  aside.** The journal was rewritten in place, so a kill or a full disk between truncating it and
+  writing it left it empty, and the next update read that as "nothing moved" and deleted the
+  moved-aside originals. It is now written to a temporary file and renamed into place, retried
+  for under a second when the rename is refused (as Windows does while a scanner holds the file),
+  and an update that cannot write it stops and puts back what it had moved. In the test suite's
+  swap of five paths (four files and `node_modules`), 8 of its 9 journal writes, cut short by a
+  kill, left a mix of two releases (8 of 47 kill points with a passing check, 8 of 63 with a
+  failing one); no kill point does now. A
+  journal 6.25.0 or older already left torn is no longer read as "nothing moved": its directory
+  stays where it is and `doctor` names it.
+- **Fix: `install`, `repair` and `cleanup` finish an interrupted update; `doctor` names it.** A
+  swap whose updater was killed leaves the moved-aside originals and the journal in a
+  `.update-backup-*` directory beside the code, and the next update replays it. `install` (and
+  `repair`, which runs the latest release's installer) wrote a newer tree without replaying it
+  first, so the next update replayed the old journal over that tree: it deleted files the install
+  had written and put older ones back. `cleanup` deleted the directory as stale temp, though it
+  held the only copy of those originals, and `doctor` counted it as stale temp and recommended that
+  cleanup. With `CLAUDE_MEM_DIR` set, both looked only in the data directory, which updaters
+  stopped writing to in 2.90.0, and saw nothing. Now `install` and `repair` replay such a swap
+  before they write and retire any journal they could not replay once the tree is written;
+  `cleanup` replays it instead of deleting it (`--dry-run` lists it as "Would finish an interrupted
+  update"); `doctor` reports "Unfinished update" and counts only the leftovers of finished updates
+  as stale. A directory whose journal cannot be read right now is left in place by all three until
+  the next update that completes, or an install, retires it; `doctor` says `repair` reinstalls over
+  it. Leftovers an updater older than 2.90.0 left in a relocated data directory are still counted
+  and removed, never replayed.
+- **Fix: `status` and `doctor` over a data directory that can be read but not written** (the 755 a
+  `sudo` run leaves owned by root). `status` called it not accessible; it now says it can be read
+  but not written, with the fix, and prints the counts whenever SQLite can open the store there,
+  which for a closed WAL store means only while another process holds it open. A closed store
+  cannot be opened in place, because SQLite has to create its -wal/-shm files beside it even to
+  read. `status` and the default `doctor` checks now say that in the same words instead of passing
+  on "attempt to write a readonly database" (`doctor --metrics` and `--session-audit` still pass it
+  on), and `doctor` no longer counts it as a second issue beside its ✗ Data directory line. In
+  `status --json`, such a directory's `database` row now has `exists: true` or `false` instead of
+  `null`, and `error` is `"EACCES"` for the closed-WAL shape and a corrupt store's own error
+  otherwise.
+- **Fix: `doctor` no longer marks as checked what it did not check.** The binding lines said
+  "✓ Native DB binding: loadable" over a breakage marker they could not read in a locked data
+  directory, and, with no install to probe at all (a checkout before `npm install`), beside
+  "✗ better-sqlite3: no install on this machine owns a native binding"; with the managed install
+  locked, "no install owns a native binding" claimed what the lock had kept it from checking. They
+  now say "not checked" and why, and keep the age and reason of a breakage marker they could read.
+  "Database: not found (will be created)" no longer sits beside "nothing here can open the DB", and
+  the stale-temp line no longer reads a directory it cannot list as empty.
+- **Fix: remedies.** On a read-only mount (EROFS), `status`, `doctor` and `install` offered
+  `chmod u+rwx` for the data directory, which cannot help; they now name the read-only mount (not
+  run on a real read-only mount here). `doctor`'s cleanup remedy names the installer by its absolute
+  path instead of `node install.mjs`, and so does its new repair remedy.
+
+Known and not fixed here: a rollback whose own restore fails (for example, a file Windows holds
+open at that moment) can still lose that file and leave the install incomplete;
+`npx claude-mem-lite@latest` reinstalls it.
+
 ## v6.25.0 — every session gets the same recall line again; a locked data directory reads as locked
 
 Fixes plus one default change; no schema change, no migration, and 6.24.0 still opens the
