@@ -171,11 +171,12 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
 // managed tree, no plugin — doctor said "✗ no install on this machine owns a native binding" and,
 // further down, "✓ Native DB binding: loadable": a ✓ that nothing had been probed for.
 describe('doctor: nothing to probe is not a loadable binding', () => {
-  const doctorFrom = (checkout) => {
+  const doctorFrom = (checkout, extraEnv = {}) => {
     const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
     for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
       delete env[k];
     env.MEM_NO_AUTO_ADOPT = '1';
+    Object.assign(env, extraEnv);
     return spawnSync(process.execPath, [join(checkout, 'install.mjs'), 'doctor'], {
       cwd: home,
       encoding: 'utf8',
@@ -231,6 +232,32 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
       }
     },
   );
+
+  // Same, with the data dir relocated and readable (D#284 review round 2, F5/F6): DB schema still
+  // said "no install … owns a native binding", and the binding line dropped a marker it could read.
+  it.skipIf(process.getuid?.() === 0)('the relocated shape says the same and keeps the marker', () => {
+    const checkout = checkoutWithoutDeps();
+    const managed = makeManagedInstall();
+    const data = join(home, 'data');
+    mkdirSync(join(data, 'runtime'), { recursive: true });
+    writeFileSync(join(data, 'claude-mem-lite.db'), '');
+    writeFileSync(
+      join(data, 'runtime', 'native-binding-broken'),
+      JSON.stringify({ reason: 'abi', ts: Date.now() }),
+    );
+    chmodSync(managed, 0o000);
+    try {
+      const r = doctorFrom(checkout, { CLAUDE_MEM_DIR: data });
+      expect(r.stdout).toMatch(/Entry points: .* is not accessible/); // premise: the code home is locked
+      expect(r.stdout).not.toMatch(/no install on this machine owns a native binding/);
+      expect(r.stdout).toMatch(/⚠ DB schema: not checked — .* is not accessible/);
+      expect(r.stdout).toMatch(
+        /⚠ Native DB binding: not checked — .* is not accessible; a fire failed ~0h ago \(abi\)/,
+      );
+    } finally {
+      chmodSync(managed, 0o755);
+    }
+  });
 });
 
 describe('doctor: a stale binding is found in whichever install owns it', () => {

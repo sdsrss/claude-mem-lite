@@ -1778,16 +1778,17 @@ async function status() {
         },
       );
     } catch (e) {
-      // The store is WAL (schema.mjs), and even a read-only open needs <db>-shm, which SQLite creates
-      // beside the DB: in a directory it cannot write, a closed store cannot be read at all — 6.24.0
-      // could not either. Say so rather than relay "attempt to write a readonly database".
-      const why =
-        dataDirDenied && e.code === 'SQLITE_READONLY_DIRECTORY'
-          ? `exists, but SQLite cannot read it without creating ${basename(DB_PATH)}-shm`
-          : 'exists but check failed — ' + e.message;
+      // The store is WAL (schema.mjs), and even a read-only open needs its -wal and -shm files, which
+      // SQLite creates beside the DB: in a directory it cannot write, a closed store cannot be read at
+      // all — 6.24.0 could not either. Say so rather than relay "attempt to write a readonly database".
+      // The errno stands in for SQLite's message only where the directory is the cause.
+      const walBlocked = dataDirDenied && e.code === 'SQLITE_READONLY_DIRECTORY';
+      const why = walBlocked
+        ? 'exists, but SQLite cannot open a WAL database without creating its -wal/-shm files beside it'
+        : 'exists but check failed — ' + e.message;
       push(dataDirDenied ? 'fail' : 'warn', 'database', `Database: ${why}${unwritable}`, {
         exists: true,
-        error: dataDirDenied || e.message,
+        error: walBlocked ? dataDirDenied : e.message,
       });
     }
   } else {
@@ -2090,6 +2091,8 @@ async function doctor() {
     notCheckedDenied('DB schema');
   } else if (!existsSync(DB_PATH)) {
     ok('DB schema: no database yet — nothing to compare');
+  } else if (rootProbes.length === 0 && codeDirDenied) {
+    notCheckedDenied('DB schema', INSTALL_DIR); // the locked code home may own one (D#284 review)
   } else if (rootProbes.length === 0) {
     // The fourth outcome the first cut had and did not print. The `fail` above already tells
     // the reader no install owns a binding, but a block whose stated design point is "three
@@ -2258,13 +2261,14 @@ async function doctor() {
       `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} rebuild-binding\` (repairs every broken install, not just this one)`,
     );
     issues++;
-  } else if (rootProbes.length === 0 && codeDirDenied) {
-    notCheckedDenied('Native DB binding', INSTALL_DIR);
   } else if (rootProbes.length === 0) {
     // Nothing was probed: a ✓ here sat under the better-sqlite3 ✗ for the same machine. Said, not
     // left silent, like DB schema's fourth outcome above; a marker it could read still shows.
+    const why = codeDirDenied
+      ? `${INSTALL_DIR} is not accessible`
+      : 'no install on this machine owns a native binding to probe';
     dwarn(
-      `Native DB binding: not checked — no install on this machine owns a native binding to probe${breakage ? `; a fire failed ${breakageSeen(breakage)}` : ''}`,
+      `Native DB binding: not checked — ${why}${breakage ? `; a fire failed ${breakageSeen(breakage)}` : ''}`,
     );
   } else if (breakageUnread) {
     notCheckedDenied(`Native DB binding: loadable on Node ${process.version}, past failures`);

@@ -396,6 +396,22 @@ describe('an inaccessible data dir is named as a permission problem', () => {
   // Closed, as a `sudo` run leaves it: SQLite cannot read it there at all (D#284 review P2-1). The
   // line says why instead of passing on SQLite's "attempt to write a readonly database", and the
   // JSON keeps the errno a consumer keys on.
+  // The errno replaces SQLite's message only where the directory is the cause: a corrupt store in the
+  // same dir is still reported as corrupt to a JSON consumer (D#284 review round 2, F7).
+  it.skipIf(skip)('status --json names a corrupt store in an unwritable dir by its own error', () => {
+    const s = sandbox();
+    const data = join(s.root, 'data');
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, 'claude-mem-lite.db'), 'this is not an sqlite database, just text '.repeat(200));
+    chmodSync(data, 0o500);
+    try {
+      const j = JSON.parse(run(s, ['status', '--json']).stdout);
+      expect(j.database).toMatchObject({ level: 'fail', exists: true });
+      expect(j.database.error).toMatch(/not a database/);
+    } finally {
+      chmodSync(data, 0o755);
+    }
+  });
   it.skipIf(skip)('status says why a closed WAL store in an unwritable dir has no counts', () => {
     const s = sandbox();
     const { data, db } = walStore(s);
@@ -406,7 +422,7 @@ describe('an inaccessible data dir is named as a permission problem', () => {
       const r = run(s, ['status']);
       expect(r.stdout).toMatch(
         new RegExp(
-          `✗ Database: exists, but SQLite cannot read it without creating claude-mem-lite\\.db-shm — ${data} can be read but not written \\(EACCES\\)`,
+          `✗ Database: exists, but SQLite cannot open a WAL database without creating its -wal/-shm files beside it — ${data} can be read but not written \\(EACCES\\)`,
         ),
       );
       expect(r.stdout).not.toMatch(/attempt to write a readonly database/);
