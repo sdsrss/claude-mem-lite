@@ -97,7 +97,7 @@ import {
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
-import { acquireLock } from './lib/proc-lock.mjs';
+import { acquireLock, lockHeld } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
@@ -3009,16 +3009,16 @@ async function doctor() {
   // file. Counting is all that differs here; the classification is shared, so "what doctor
   // calls stale" and "what cleanup removes" agree on the age gate and on the directory, the
   // axes they diverged on (the third time, D#289: both looked for update residue in the data
-  // dir, which CLAUDE_MEM_DIR moves away from the code dir it lives in). Not on every axis:
-  // cleanup skips update residue entirely while install.lock is held and the scanner has no
-  // such gate, so mid-self-update doctor still counts what cleanup will decline. That one is
-  // milder than D#53 — cleanup SAYS it is skipping — and the unfinished-update line says a
-  // running update looks the same.
+  // dir, which CLAUDE_MEM_DIR moves away from the code dir it lives in). And on the lock: while
+  // an update holds install.lock, cleanup skips update residue, which is that update's own staging
+  // and backup dirs, so doctor does not count it either (D#297). It asks without taking the lock.
   try {
+    const updateRunning = lockHeld(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
     const { stale, inFlight, unfinishedSwaps, unreadableJournals, notChecked } = scanStaleTempFiles({
       codeDir: INSTALL_DIR,
       runtimeDir: MEM_RUNTIME_DIR,
       legacyDir: codeIsDataDir ? undefined : MEM_DATA_DIR,
+      updateRunning,
     });
     const installer = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))}`;
     if (unfinishedSwaps > 0) {
@@ -3052,6 +3052,11 @@ async function doctor() {
     if (inFlight > 0) {
       log(
         `  ${inFlight} episode file(s) newer than ${EPISODE_AGE_LABEL} are in flight, not stale — cleanup keeps these.`,
+      );
+    }
+    if (updateRunning) {
+      log(
+        `  An update holds install.lock right now; its staging and backup dirs in ${INSTALL_DIR} are not counted — cleanup skips them too.`,
       );
     }
   } catch {
@@ -3457,7 +3462,10 @@ async function cleanup() {
   // and doctor tells the user to run cleanup. Non-blocking: if an installer holds the lock we skip
   // only the update residue, not the rest of cleanup.
   let finished = 0;
-  const updateLock = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
+  // --dry-run writes nothing, so it asks whether the lock is held instead of taking it: taking it
+  // created the data dir, its runtime dir and the lock on a machine with nothing installed (D#297).
+  const lockPath = join(MEM_DATA_DIR, 'runtime', 'install.lock'); // runtime-dir:stays-put — install lock serialises real installers
+  const updateLock = dryRun ? (lockHeld(lockPath) ? null : () => {}) : acquireLock(lockPath);
   if (!updateLock) {
     warn('Update residue skipped: install in progress (install.lock held)');
   } else {

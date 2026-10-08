@@ -524,3 +524,56 @@ describe('a swap whose replay cannot put a file back (D#293)', () => {
     expect(existsSync(join(box.codeDir, JOURNALED, '.swap-resolved'))).toBe(true);
   });
 });
+
+// D#297 (v6.25.1 defect review P3-8, P3-9): doctor counted a running update's own staging dir as
+// stale temp while cleanup skipped it, and `cleanup --dry-run` took install.lock, creating the
+// data dir, its runtime dir and the lock on a machine with nothing installed.
+describe('a running update and a dry run (D#297)', () => {
+  for (const relocate of [false, true])
+    it(`doctor does not count a running update’s residue as stale; cleanup skips it too (${relocate ? 'relocated' : 'default shape'})`, () => {
+      const box = sandbox({ relocate });
+      mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+      // Under relocation, residue an updater older than v2.90.0 left in the data dir: cleanup skips
+      // that too while the lock is held.
+      if (relocate) mkdirSync(join(box.dataDir, FINISHED), { recursive: true });
+      const lock = join(box.dataDir, 'runtime', 'install.lock');
+      writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: Date.now() })); // a live holder
+      const checks = doctorChecks(run(box, ['doctor', '--json']));
+      const line = checks.find((c) => /^Stale temp files/.test(c.message || ''));
+      expect(line?.message).not.toMatch(/found/);
+      const text = run(box, ['doctor']);
+      expect(text).toMatch(/An update holds install\.lock right now/);
+      expect(run(box, ['cleanup'])).toMatch(/Update residue skipped: install in progress/);
+      expect(existsSync(join(box.codeDir, STAGING))).toBe(true);
+    });
+
+  it('doctor still counts that staging dir once no update holds the lock', () => {
+    const box = sandbox();
+    mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+    const line = doctorChecks(run(box, ['doctor', '--json'])).find((c) =>
+      /^Stale temp files/.test(c.message || ''),
+    );
+    expect(line?.message).toMatch(/Stale temp files: 1 found/);
+  });
+
+  it('cleanup --dry-run writes nothing on a machine with nothing installed', () => {
+    const home = mkdtempSync(join(tmpdir(), 'upd-residue-'));
+    homes.push(home);
+    const box = { home, codeDir: join(home, '.claude-mem-lite'), dataDir: join(home, '.claude-mem-lite') };
+    const out = run(box, ['cleanup', '--dry-run']);
+    expect(readdirSync(home), out).toEqual([]);
+  });
+
+  it('cleanup --dry-run still names update residue, and skips it while an update holds the lock', () => {
+    const box = sandbox();
+    mkdirSync(join(box.codeDir, STAGING), { recursive: true });
+    expect(run(box, ['cleanup', '--dry-run'])).toContain(`Would remove: ${STAGING}`);
+    const lock = join(box.dataDir, 'runtime', 'install.lock');
+    const holder = JSON.stringify({ pid: process.pid, ts: Date.now() });
+    writeFileSync(lock, holder);
+    const out = run(box, ['cleanup', '--dry-run']);
+    expect(out).toMatch(/Update residue skipped: install in progress/);
+    expect(out).not.toContain(`Would remove: ${STAGING}`);
+    expect(readFileSync(lock, 'utf8')).toBe(holder);
+  });
+});
