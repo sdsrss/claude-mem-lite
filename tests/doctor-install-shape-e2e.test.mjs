@@ -23,6 +23,7 @@ import { tmpdir } from 'os';
 import { join, resolve, dirname } from 'path';
 import { SOURCE_FILES } from '../source-files.mjs';
 import { shellWord } from '../cli-path.mjs';
+import Database from 'better-sqlite3';
 
 const INSTALL_PATH = resolve(import.meta.dirname, '../install.mjs');
 const REPO = resolve(import.meta.dirname, '..');
@@ -171,13 +172,13 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
 // managed tree, no plugin — doctor said "✗ no install on this machine owns a native binding" and,
 // further down, "✓ Native DB binding: loadable": a ✓ that nothing had been probed for.
 describe('doctor: nothing to probe is not a loadable binding', () => {
-  const doctorFrom = (checkout, extraEnv = {}) => {
+  const doctorFrom = (checkout, extraEnv = {}, cmd = 'doctor') => {
     const env = { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', CLAUDE_MEM_SKIP_UPDATE: '1' };
     for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_MEM_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR'])
       delete env[k];
     env.MEM_NO_AUTO_ADOPT = '1';
     Object.assign(env, extraEnv);
-    return spawnSync(process.execPath, [join(checkout, 'install.mjs'), 'doctor'], {
+    return spawnSync(process.execPath, [join(checkout, 'install.mjs'), cmd], {
       cwd: home,
       encoding: 'utf8',
       env,
@@ -268,6 +269,66 @@ describe('doctor: nothing to probe is not a loadable binding', () => {
       chmodSync(managed, 0o755);
     }
   });
+
+  // D#297 (v6.25.1 defect review P3-7). A store this doctor has no binding to open was a second ✗
+  // ("Database: Cannot find package 'better-sqlite3'") beside the better-sqlite3 line that already
+  // named the fault, and DB stats relayed the same message.
+  for (const locked of [false, true]) {
+    it.skipIf(locked && process.getuid?.() === 0)(
+      `a store with no binding to open it is not checked, not a second ✗ (${locked ? 'code home locked' : 'no install'})`,
+      () => {
+        const checkout = checkoutWithoutDeps();
+        const managed = locked ? makeManagedInstall() : null;
+        const data = join(home, 'data');
+        mkdirSync(join(data, 'runtime'), { recursive: true });
+        const db = new Database(join(data, 'claude-mem-lite.db'));
+        db.exec('CREATE TABLE observations (id INTEGER)');
+        db.close();
+        if (managed) chmodSync(managed, 0o000);
+        try {
+          const r = doctorFrom(checkout, { CLAUDE_MEM_DIR: data });
+          expect(r.stdout).toMatch(/better-sqlite3: (no install|not checked)/); // premise: no binding here
+          expect(r.stdout).not.toMatch(/Cannot find package 'better-sqlite3'/);
+          expect(r.stdout).toMatch(/⚠ Database: not checked — /);
+          expect(r.stdout).toMatch(/⚠ DB stats: not checked — /);
+          const st = doctorFrom(checkout, { CLAUDE_MEM_DIR: data }, 'status');
+          expect(st.stdout).not.toMatch(/Cannot find package 'better-sqlite3'/);
+          expect(st.stdout).toMatch(/Database: exists, but not checked — better-sqlite3 cannot be loaded/);
+        } finally {
+          if (managed) chmodSync(managed, 0o755);
+        }
+      },
+    );
+  }
+
+  // P3-7, first half: settings.json hooks that point into a code home this user cannot enter were
+  // "missing files", a second ✗ for the fault the Entry points line names.
+  it.skipIf(process.getuid?.() === 0)(
+    'hooks pointing into a locked code home are not checked, not orphans',
+    () => {
+      const managed = makeManagedInstall();
+      mkdirSync(join(managed, 'scripts'), { recursive: true });
+      writeFileSync(join(managed, 'scripts', 'hook-launcher.mjs'), '// x\n');
+      const data = join(home, 'data');
+      mkdirSync(join(data, 'runtime'), { recursive: true });
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      const command = `node "${join(managed, 'scripts', 'hook-launcher.mjs')}" hook.mjs stop`;
+      writeFileSync(
+        join(home, '.claude', 'settings.json'),
+        JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+      );
+      expect(doctorFrom(REPO, { CLAUDE_MEM_DIR: data }).stdout).toMatch(/✓ Orphan hooks: none/); // premise
+      chmodSync(managed, 0o000);
+      try {
+        const r = doctorFrom(REPO, { CLAUDE_MEM_DIR: data });
+        expect(r.stdout).toMatch(/Entry points: .* is not accessible/); // premise: the code home is locked
+        expect(r.stdout).not.toMatch(/✗ Orphan hooks/);
+        expect(r.stdout).toMatch(/⚠ Orphan hooks: not checked — 2 hook target\(s\) cannot be read/);
+      } finally {
+        chmodSync(managed, 0o755);
+      }
+    },
+  );
 });
 
 describe('doctor: a stale binding is found in whichever install owns it', () => {

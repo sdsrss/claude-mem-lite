@@ -1904,7 +1904,11 @@ async function status() {
       // in place (a copy elsewhere could be read) — 6.24.0 could not open it either. Say so rather than relay "attempt to write a readonly database".
       // The errno stands in for SQLite's message only where the directory is the cause.
       const walBlocked = walOpenBlocked(e.code, dataDirDenied);
-      const why = walBlocked ? `exists, but ${WAL_BLOCKED_WHY}` : 'exists but check failed — ' + e.message;
+      const why = walBlocked
+        ? `exists, but ${WAL_BLOCKED_WHY}`
+        : bindingMissing(e)
+          ? `exists, but not checked — ${BINDING_MISSING_WHY}`
+          : 'exists but check failed — ' + e.message;
       push(dataDirDenied ? 'fail' : 'warn', 'database', `Database: ${why}${unwritable}`, {
         exists: true,
         error: walBlocked ? dataDirDenied : e.message,
@@ -2506,9 +2510,17 @@ async function doctor() {
   // with require-error noise every session. README's Uninstall section warns
   // about the right ordering; this check flags the broken state so it surfaces
   // even when the user skipped the README.
-  const orphanPaths = settings === null ? null : collectOrphanHookPaths(settings);
+  const unreadableHookPaths = [];
+  const orphanPaths =
+    settings === null ? null : collectOrphanHookPaths(settings, INSTALL_DIR, unreadableHookPaths);
   if (orphanPaths === null) {
     dwarn('Orphan hooks: not checked (settings.json unreadable)');
+  } else if (orphanPaths.length === 0 && unreadableHookPaths.length > 0) {
+    // A hook that points into a code home this user cannot enter is not an orphan: the file may
+    // well be there, and the Entry points line names and counts the locked dir (D#297).
+    dwarn(
+      `Orphan hooks: not checked — ${unreadableHookPaths.length} hook target(s) cannot be read (${unreadableHookPaths[0]}${unreadableHookPaths.length > 1 ? ', …' : ''})`,
+    );
   } else if (orphanPaths.length > 0) {
     fail(
       `Orphan hooks: ${orphanPaths.length} settings.json entr${orphanPaths.length === 1 ? 'y references a missing file' : 'ies reference missing files'}`,
@@ -2648,6 +2660,8 @@ async function doctor() {
     } catch (e) {
       if (walBlocked(e.code)) {
         notCheckedWal('Database');
+      } else if (bindingMissing(e)) {
+        dwarn(`Database: not checked — ${BINDING_MISSING_WHY} (see better-sqlite3 above)`);
       } else {
         fail('Database: ' + e.message);
         // Every other ✗ on this screen carries a remedy; this one used to be the exception,
@@ -3086,6 +3100,7 @@ async function doctor() {
       else ok(stats);
     } catch (e) {
       if (walBlocked(e.code)) notCheckedWal('DB stats');
+      else if (bindingMissing(e)) dwarn(`DB stats: not checked — ${BINDING_MISSING_WHY}`);
       else dwarn('DB stats: ' + e.message);
     }
   }
@@ -3211,9 +3226,31 @@ function looksLikeHookPath(p) {
   return HOOK_PATH_EXTS.some((ext) => p.endsWith(ext));
 }
 
-export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
+// 'missing' when the path is not there, 'unreadable' when it cannot be looked at (a directory on the
+// way this user cannot enter). existsSync answers false to both, so hooks pointing into a locked code
+// home were orphans, a second ✗ beside the Entry points line that names the lock (D#297).
+function hookTargetState(p) {
+  try {
+    statSync(p);
+    return 'present';
+  } catch (e) {
+    return e.code === 'ENOENT' || e.code === 'ENOTDIR' ? 'missing' : 'unreadable';
+  }
+}
+
+/**
+ * @param {string[]|null} [unreadable] collects the targets that could not be looked at, which are
+ *   not returned as missing
+ */
+export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR, unreadable = null) {
   if (!settings?.hooks) return [];
   const out = [];
+  const judge = (p) => {
+    if (out.includes(p) || unreadable?.includes(p)) return;
+    const state = hookTargetState(p);
+    if (state === 'missing') out.push(p);
+    else if (state === 'unreadable') unreadable?.push(p);
+  };
   for (const configs of Object.values(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
     for (const cfg of configs) {
@@ -3230,7 +3267,7 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
         // ERR_MODULE_NOT_FOUND — and doctor went back to printing "Orphan hooks: none".
         // Both files have to exist for the hook to run, so both are reportable.
         const entry = launcherEntryPath(cmd, installDir);
-        if (entry && !existsSync(entry) && !out.includes(entry)) out.push(entry);
+        if (entry) judge(entry);
         // v2.80: scan ALL quoted tokens (was: only the first), prefer ones
         // that look like a hook path. Fixes a footgun where a wrapper command
         // like `bash -c "some inline" "/real/path.sh"` would pick "some inline"
@@ -3249,7 +3286,7 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
           path = parts.find((p) => looksLikeHookPath(p)) || null;
         }
         if (!path) continue;
-        if (!existsSync(path) && !out.includes(path)) out.push(path);
+        judge(path);
       }
     }
   }
@@ -3970,6 +4007,12 @@ function sameDir(a, b) {
 
 // The fix for a data dir this user cannot use, chosen by the error code (lib/wal-open-blocked.mjs).
 export const dataDirAccessRemedy = (code) => dataDirRemedy(code, MEM_DATA_DIR);
+
+// This process cannot load better-sqlite3 at all (a checkout, or a plugin cache before its first
+// launch installed node_modules). The better-sqlite3 line names and counts that; a line that would
+// open the DB says it did not look, rather than count the same fault again (D#297).
+const bindingMissing = (e) => e?.code === 'ERR_MODULE_NOT_FOUND' && /'better-sqlite3'/.test(e.message);
+const BINDING_MISSING_WHY = `better-sqlite3 cannot be loaded from ${PROJECT_DIR}`;
 
 async function runLockedInstall() {
   const denied = dataDirAccessError();
