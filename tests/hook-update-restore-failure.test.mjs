@@ -293,6 +293,44 @@ describe('a rollback that cannot put a file back keeps the backup dir for the ne
     }
   }
 
+  // D#308 F7. A dir named before 6.25.2 carries no seq, so every such dir reads as seq 0 and the
+  // name decides: `.update-backup-<ms>-<pid>`, newest wall clock first. Flipping that tiebreak to
+  // oldest first left the whole suite green; this is the case that says no.
+  for (const order of ['asc', 'desc']) {
+    it(`two kept dirs named before 6.25.2 (no seq) are replayed newest first by name (readdir ${order})`, async () => {
+      const dataDir = makeDataDir();
+      mockedExecSync.mockImplementation(smoke(false));
+      const mod = await loadModule(dataDir);
+      ctl.renameFaults.push({
+        name: 'restore-server',
+        code: 'EPERM',
+        sticky: true,
+        match: restoreOf(dataDir, 'server.mjs'),
+      });
+      expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+      const [first] = backups(dataDir);
+      ctl.renameFaults.push({ name: 'restore-hook', code: 'EPERM', match: restoreOf(dataDir, 'hook.mjs') });
+      await new Promise((r) => setTimeout(r, 5)); // a later wall clock for the second dir
+      expect(await runInstall(mod, dataDir, makeReleaseDir())).toBe(false);
+      const second = backups(dataDir).find((n) => n !== first);
+      expect(second, 'the second swap kept no backup dir').toBeDefined();
+
+      // The pre-6.25.2 shape: drop the seq, keep the wall clock and pid.
+      const legacy = (n) => n.replace(/^\.update-backup-s\d+-/, '.update-backup-');
+      for (const n of [first, second]) {
+        expect(legacy(n)).not.toBe(n); // premise: the name carried a seq
+        fs.renameSync(join(dataDir, n), join(dataDir, legacy(n)));
+      }
+      expect(legacy(second) > legacy(first)).toBe(true); // premise: the name order is the clock order
+
+      ctl.renameFaults = [];
+      ctl.readdirOrder = order;
+      mod.recoverInterruptedSwaps(dataDir);
+      expect(snapshot(dataDir)).toEqual(OLD);
+      expect(residue(dataDir)).toEqual([]);
+    });
+  }
+
   it('while the newer kept dir still cannot be finished, the older one is not replayed', async () => {
     const dataDir = makeDataDir();
     mockedExecSync.mockImplementation(smoke(false));
