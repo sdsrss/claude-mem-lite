@@ -85,7 +85,8 @@ export const ABANDONED_LOCK_MS = LIVE_HOLDER_MAX_MS;
 // probe, and pid checks are meaningless across a shared homedir. `tests/auto-maintain-proc-lock.test.mjs`
 // asserts that against THIS constant rather than a re-typed copy: the first version of that
 // test built its own path from a literal, so renaming the lock left it green with the hazard
-// back. proc-lock's own staleness policy (age OR provably-dead pid) is the correct one.
+// back. proc-lock's own staleness policy (a provably-dead pid at once, a live one only past
+// LIVE_HOLDER_MAX_MS) is the correct one.
 export const AUTO_MAINTAIN_LOCK = 'auto-maintain.proclock';
 export const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 min (title dedup)
 export const RELATED_OBS_WINDOW_MS = 7 * DAY_MS; // 7 days

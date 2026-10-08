@@ -2287,10 +2287,12 @@ function scheduleSessionStartAutoMaintain(project) {
 // to minutes (VACUUM INTO snapshot, purge, decay, dedup over the whole DB). It now spares a
 // live holder (A20260905-R5-P1-1), but this escape stays: not being swept is a stronger
 // guarantee than being spared by a pid probe, and pids are meaningless across a shared
-// homedir. proc-lock brings its own staleness policy (age OR provably-dead pid), which is
-// the correct one here.
-// Generous upper bound on one pass; a crashed holder is normally reclaimed sooner via the
-// dead-pid check, so this only matters for a holder killed on another host.
+// homedir. proc-lock brings its own staleness policy (a provably-dead pid at once, a live one
+// only past LIVE_HOLDER_MAX_MS), which is the correct one here.
+// Since D#294 this bound applies only to a lock that records no pid, which acquireLock never
+// writes: a crashed holder is reclaimed through its dead pid, and a pid that looks alive (a
+// recycled one, or one from another host on a shared homedir) holds the lock for
+// LIVE_HOLDER_MAX_MS, 1 h, not 10 min.
 const AUTO_MAINTAIN_LOCK_STALE_MS = 10 * 60 * 1000;
 
 // Detached `auto-maintain` worker entry: opens its own DB and runs the maintenance
