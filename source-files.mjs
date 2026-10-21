@@ -283,6 +283,9 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
+  // repair-db and doctor's integrity check (D#541), imported by install.mjs on demand; after
+  // schema.mjs, which it imports (tests/source-files-swap-order.test.mjs).
+  'lib/db-repair.mjs',
   'cli/doctor.mjs',
   'hook-memory.mjs',
   'haiku-client.mjs',

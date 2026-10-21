@@ -146,11 +146,12 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
         .pop(),
     );
     const model = envelope.hookSpecificOutput.additionalContext;
-    expect(model, 'no shell command reaches the model').not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    expect(model, 'no shell command reaches the model').not.toMatch(/rm -f|\bcp\b|\bmv\b|\bln\b/);
     expect(model, 'it still learns memory is off').toMatch(/Memory is OFF/);
     expect(model).toContain(`${CLI_INVOKE} doctor`);
+    expect(model).not.toContain('repair-db');
     // The premise: the human channel really does carry the command the model must not get.
-    expect(envelope.systemMessage).toMatch(/rm -f/);
+    expect(envelope.systemMessage).toContain('repair-db');
     expect(envelope.systemMessage).toContain('.v1.bak');
   });
 
@@ -178,7 +179,7 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
 // Triage 2026-10-20: a damaged schema row took the generic branch — memory off every session,
 // a stack trace per fire, and nothing the user sees.
 describe('SessionStart speaks when the database schema cannot be read', () => {
-  it('says memory is off, on both channels, with no command on either', () => {
+  it('says memory is off on both channels; only the human one names repair-db, and neither moves a file', () => {
     const dataDir = damagedSchemaDataDir({ withSnapshot: true });
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
     // Premise: the open really failed on the schema.
@@ -192,7 +193,9 @@ describe('SessionStart speaks when the database schema cannot be read', () => {
     expect(envelope.systemMessage).toMatch(/Memory is OFF/);
     expect(envelope.systemMessage).toContain('.v1.bak');
     expect(envelope.systemMessage).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    expect(envelope.systemMessage).toContain('repair-db');
     expect(envelope.hookSpecificOutput?.additionalContext).toMatch(/Memory is OFF/);
+    expect(envelope.hookSpecificOutput?.additionalContext).not.toContain('repair-db');
     expect(r.status).toBe(0);
   });
 

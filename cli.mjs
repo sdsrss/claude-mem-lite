@@ -195,6 +195,7 @@ const INSTALL_COMMANDS = new Set([
   'self-update',
   'repair',
   'rebuild-binding',
+  'repair-db',
   'release',
 ]);
 

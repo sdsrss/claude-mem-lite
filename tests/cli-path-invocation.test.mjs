@@ -367,7 +367,7 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
   const HOSTILE = 'sp ace$HOME`echo INJECTED`"dq\'sq\\bs';
   // Every verb a remedy starts with is shadowed, so evaluating the printed command only
   // reports the words bash split it into — nothing is removed, moved or installed.
-  const PRELUDE = ['node', 'cd', 'rm', 'mv', 'cp', 'npm', 'restart']
+  const PRELUDE = ['node', 'cd', 'rm', 'mv', 'cp', 'npm', 'restart', 'touch', 'ln']
     .map((v) => `${v}() { printf '%s\\n' "$@"; }`)
     .join('\n');
   const words = (cmd) => {
@@ -408,14 +408,20 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
     withHostileDir((dir) => {
       const db = join(dir, 'claude-mem-lite.db');
       writeFileSync(db, '');
-      const setAside = dbUnusableRemedy(db);
+      const notADb = new Error('file is not a database');
+      expect(dbUnusableRemedy(db, notADb).command.split(' ').slice(0, 1)).toEqual(['node']);
+      const setAside = dbUnusableRemedy(db, notADb, { afterRepair: true });
       expect(setAside.kind).toBe('set-aside');
+      const aside = words(setAside.command).find(
+        (w) => w.startsWith(`${db}.damaged-`) && !w.endsWith('-wal'),
+      );
+      expect(aside, setAside.command).toBeDefined();
       expect(words(setAside.command)).toEqual(
-        expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, `${db}.corrupt`]),
+        expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, aside, `${aside}-wal`]),
       );
       const bak = `${db}.2026-09-25T00-00-00Z.bak`;
       writeFileSync(bak, '');
-      const restore = dbUnusableRemedy(db);
+      const restore = dbUnusableRemedy(db, notADb, { afterRepair: true });
       expect(restore.kind).toBe('restore');
       expect(words(restore.command)).toEqual(expect.arrayContaining([`${db}-wal`, bak, db]));
     });

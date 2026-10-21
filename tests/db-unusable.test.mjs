@@ -11,6 +11,8 @@ import {
   dbUnusableRemedy,
   formatDbUnusableNotice,
   formatDbUnusableModelNotice,
+  damagedAsidePath,
+  REPAIR_DB_COMMAND,
   DB_UNUSABLE_MARKER_PREFIX,
 } from '../lib/db-unusable.mjs';
 import { shouldRecordOnce, RELOG_INTERVAL_MS } from '../lib/record-once.mjs';
@@ -98,19 +100,55 @@ describe('isDbUnusableError', () => {
   });
 });
 
+const notADb = new Error('file is not a database');
+const malformed = new Error('database disk image is malformed');
+const schemaErr = Object.assign(new Error('malformed database schema (idx_t_a) - incomplete input'), {
+  code: 'SQLITE_CORRUPT',
+});
+const afterRepair = { afterRepair: true };
+
 describe('dbUnusableRemedy', () => {
-  it('offers set-aside when no snapshot exists, and says so rather than staying vague', () => {
+  // D#541: repair-db reads what it can (writable_schema, or the main file alone when the log is
+  // what breaks the store), so every failure goes there first.
+  it('sends every failure of this family to repair-db, naming the newest snapshot as the fallback', () => {
+    const dir = tmp('rem-repair-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'garbage');
+    for (const [err, family] of [
+      [malformed, 'damaged'],
+      [notADb, 'notadb'],
+      [schemaErr, 'schema'],
+    ]) {
+      const r = dbUnusableRemedy(db, err);
+      expect(r.kind).toBe('repair');
+      expect(r.family).toBe(family);
+      expect(r.command).toBe(REPAIR_DB_COMMAND);
+      expect(r.note).not.toMatch(/snapshot/);
+    }
+    writeFileSync(`${db}.2026-09-07.bak`, 'b');
+    expect(dbUnusableRemedy(db, notADb).note).toContain(`${db}.2026-09-07.bak`);
+  });
+
+  it('after repair-db, offers set-aside when no snapshot exists, and says so rather than staying vague', () => {
     const dir = tmp('rem-none-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'garbage');
-    const r = dbUnusableRemedy(db);
+    const r = dbUnusableRemedy(db, notADb, afterRepair);
     expect(r.kind).toBe('set-aside');
     expect(r.snapshotCount).toBe(0);
-    expect(r.command).toContain(`mv ${shellWord(db)} ${shellWord(`${db}.corrupt`)}`);
-    expect(r.command, 'stale WAL/SHM would resurrect the broken state').toContain(`${db}-wal`);
+    // D#539: the file and its log get a second name before the old one goes; `ln` refuses an
+    // existing name, so running the line twice stops instead of overwriting the kept files.
+    const steps = r.command.split(' && ');
+    expect(steps[0]).toBe(`touch ${shellWord(`${db}-wal`)}`);
+    expect(steps[1]).toMatch(new RegExp(`^ln ${shellWord(db)} ${shellWord(db)}\\.damaged-`));
+    expect(steps[2]).toMatch(new RegExp(`^ln ${shellWord(`${db}-wal`)} .*\\.damaged-.*-wal$`));
+    expect(steps[3]).toBe(`rm ${shellWord(db)} ${shellWord(`${db}-wal`)}`);
+    expect(steps[4]).toBe(`rm -f ${shellWord(`${db}-shm`)}`);
+    expect(r.note).toMatch(/No backup snapshot exists/);
+    expect(r.note).toMatch(/second name/);
   });
 
-  it('offers restore, naming the NEWEST snapshot, when one exists', () => {
+  it('after repair-db, offers restore, naming the NEWEST snapshot, when one exists', () => {
     const dir = tmp('rem-snap-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'garbage');
@@ -122,21 +160,38 @@ describe('dbUnusableRemedy', () => {
     const now = Date.now();
     utimesSync(older, now / 1000 - 1000, now / 1000 - 1000);
     utimesSync(newer, now / 1000, now / 1000);
-    const r = dbUnusableRemedy(db);
+    const r = dbUnusableRemedy(db, notADb, afterRepair);
     expect(r.kind).toBe('restore');
     expect(r.snapshotCount).toBe(2);
     expect(r.command).toContain(newer);
     expect(r.command).not.toContain(older);
+    const steps = r.command.split(' && ');
+    expect(steps.findIndex((x) => x.startsWith(`ln ${shellWord(db)} `))).toBeLessThan(
+      steps.findIndex((x) => x.startsWith('rm ')),
+    );
+    expect(steps.at(-1)).toBe(`cp ${shellWord(newer)} ${shellWord(db)}`);
+  });
+
+  it('never reuses an existing aside name', () => {
+    const dir = tmp('rem-aside-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'garbage');
+    const now = () => Date.UTC(2026, 9, 21, 12);
+    const first = damagedAsidePath(db, now);
+    writeFileSync(first, 'kept');
+    const second = damagedAsidePath(db, now);
+    expect(second).not.toBe(first);
+    expect(second.startsWith(first)).toBe(true);
   });
 
   // Three outcomes, never two — "there is no backup" and "I could not look" must not print in
   // the same voice, which is the rule lib/schema-skew.mjs states and the v6.2.0 doctor check
   // broke. Driven with a path whose parent is a FILE, so readdirSync fails with ENOTDIR.
-  it('says "could not look" rather than "no backup" when the directory is unreadable', () => {
+  it('after repair-db, says "could not look" rather than "no backup" when the directory is unreadable', () => {
     const dir = tmp('rem-unread-');
     const notADir = join(dir, 'blocker');
     writeFileSync(notADir, 'x');
-    const r = dbUnusableRemedy(join(notADir, 'claude-mem-lite.db'));
+    const r = dbUnusableRemedy(join(notADir, 'claude-mem-lite.db'), notADb, afterRepair);
     expect(r.kind).toBe('unknown');
     expect(r.command, 'a command we cannot justify must not be printed').toBe('');
     expect(r.note).toMatch(/Could not read/);
@@ -147,13 +202,10 @@ describe('dbUnusableRemedy', () => {
 // SQLite says "malformed database schema" when it cannot parse a row of sqlite_master. A
 // damaged row is one cause; SQL its parser does not know is another (reasoned, not
 // reproduced), and there restoring a snapshot or setting the file aside is wrong. So this
-// family names the snapshots and gives no command.
+// family gets repair-db (which reads past the row and refuses another schema version), and
+// once repair-db could not read it, the snapshot names and no command.
 describe('a schema SQLite cannot read', () => {
-  const err = Object.assign(new Error('malformed database schema (idx_t_a) - incomplete input'), {
-    code: 'SQLITE_CORRUPT',
-  });
-
-  it('gives no command, and names the newest snapshot when one exists', () => {
+  it('after repair-db, gives no command, and names the newest snapshot when one exists', () => {
     const dir = tmp('rem-schema-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'x');
@@ -162,7 +214,7 @@ describe('a schema SQLite cannot read', () => {
     const now = Date.now();
     utimesSync(`${db}.2026-09-01.bak`, now / 1000 - 1000, now / 1000 - 1000);
     utimesSync(`${db}.2026-09-07.bak`, now / 1000, now / 1000);
-    const r = dbUnusableRemedy(db, err);
+    const r = dbUnusableRemedy(db, schemaErr, afterRepair);
     expect(r.kind).toBe('schema');
     expect(r.command).toBe('');
     expect(r.snapshotCount).toBe(2);
@@ -170,36 +222,36 @@ describe('a schema SQLite cannot read', () => {
     expect(r.note).not.toContain(`${db}.2026-09-01.bak`);
   });
 
-  it('says so when no snapshot exists, still with no command', () => {
+  it('after repair-db, says so when no snapshot exists, still with no command', () => {
     const dir = tmp('rem-schema-none-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'x');
-    const r = dbUnusableRemedy(db, err);
+    const r = dbUnusableRemedy(db, schemaErr, afterRepair);
     expect(r.kind).toBe('schema');
     expect(r.command).toBe('');
     expect(r.note).toMatch(/No backup snapshot exists/);
   });
 
-  it('keeps the other families on their own remedies', () => {
+  it('keeps the other families on their own remedies after repair-db', () => {
     const dir = tmp('rem-schema-ctl-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'x');
-    expect(dbUnusableRemedy(db, new Error('file is not a database')).kind).toBe('set-aside');
-    expect(dbUnusableRemedy(db).kind).toBe('set-aside');
+    expect(dbUnusableRemedy(db, notADb, afterRepair).kind).toBe('set-aside');
+    expect(dbUnusableRemedy(db, malformed, afterRepair).kind).toBe('set-aside');
   });
 
   it('the human notice says the schema cannot be read, not that the file is not a database', () => {
     const dir = tmp('rem-schema-notice-');
     const db = join(dir, 'claude-mem-lite.db');
     writeFileSync(db, 'x');
-    const out = formatDbUnusableNotice({ dbPath: db, remedy: dbUnusableRemedy(db, err) });
+    const out = formatDbUnusableNotice({ dbPath: db, remedy: dbUnusableRemedy(db, schemaErr) });
     expect(out).toMatch(/Memory is OFF/);
-    expect(out).toMatch(/schema/);
+    expect(out).toMatch(/cannot read its schema/);
     expect(out).not.toMatch(/does not recognise it as a database/);
     // The file opens; its schema is what SQLite cannot read (v6.30.0 review leftover, D#499(5)).
     expect(out).not.toMatch(/cannot be opened/);
-    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
-    // No command here, so nothing for "until then" to wait on (v6.30.0 pre-tag claims review P3-6).
+    expect(out).toContain(REPAIR_DB_COMMAND);
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|\bln\b|&&/);
     expect(out).not.toMatch(/until then/i);
   });
 });
@@ -208,6 +260,7 @@ describe('the two notices', () => {
   const db = '/tmp/x/claude-mem-lite.db';
   const restore = {
     kind: 'restore',
+    family: 'notadb',
     command: `rm -f "${db}-wal" "${db}-shm" && cp "${db}.v1.bak" "${db}"`,
     snapshotCount: 1,
     note: 'Restores the newest of 1 backup snapshot(s).',
@@ -221,23 +274,38 @@ describe('the two notices', () => {
     expect(out).toContain(restore.note);
   });
 
-  // D#534: the command deletes the -wal and -shm, then copies over or moves the database file
-  // under any session still holding it, this one included.
-  it('the human notice says to close every session, this one included, before the command', () => {
+  it('names what SQLite said: damaged, not a database, or a schema it cannot read', () => {
+    const dir = tmp('rem-family-');
+    const dbp = join(dir, 'claude-mem-lite.db');
+    writeFileSync(dbp, 'x');
+    const line = (err) =>
+      formatDbUnusableNotice({ dbPath: dbp, remedy: dbUnusableRemedy(dbp, err) }).split('\n')[1];
+    expect(line(malformed)).toMatch(/reports it as damaged/);
+    expect(line(notADb)).toMatch(/does not recognise it as a database/);
+    expect(line(schemaErr)).toMatch(/cannot read its schema/);
+  });
+
+  // D#534: every command writes into, moves or replaces the database file under any session still
+  // holding it, this one included. D#539: what the command keeps is said before it, too.
+  it('the human notice says to close every session, this one included, and what is kept, before the command', () => {
     const dir = tmp('rem-sessions-');
     const dbp = join(dir, 'claude-mem-lite.db');
     writeFileSync(dbp, 'x');
-    const setAside = dbUnusableRemedy(dbp, new Error('file is not a database'));
+    const setAside = dbUnusableRemedy(dbp, notADb, afterRepair);
     writeFileSync(`${dbp}.2026-09-07.bak`, 'b');
-    const restoreReal = dbUnusableRemedy(dbp, new Error('file is not a database'));
-    expect([setAside.kind, restoreReal.kind]).toEqual(['set-aside', 'restore']);
-    for (const remedy of [setAside, restoreReal]) {
+    const restoreReal = dbUnusableRemedy(dbp, notADb, afterRepair);
+    const repair = dbUnusableRemedy(dbp, malformed);
+    expect([setAside.kind, restoreReal.kind, repair.kind]).toEqual(['set-aside', 'restore', 'repair']);
+    for (const remedy of [setAside, restoreReal, repair]) {
       const lines = formatDbUnusableNotice({ dbPath: dbp, remedy }).split('\n');
+      const command = lines.findIndex((l) => l.trim() === remedy.command);
+      expect(command, `${remedy.kind}: the command is on its own line`).toBeGreaterThan(-1);
       const say = lines.findIndex((l) => /every Claude Code session is closed, this one included/.test(l));
       expect(say, remedy.kind).toBeGreaterThan(-1);
-      expect(say, `${remedy.kind}: before the command`).toBeLessThan(
-        lines.findIndex((l) => l.includes('rm -f')),
-      );
+      expect(say, `${remedy.kind}: before the command`).toBeLessThan(command);
+      const keeps = lines.findIndex((l) => /keeps the store as found|second name/.test(l));
+      expect(keeps, `${remedy.kind}: says what is kept`).toBeGreaterThan(-1);
+      expect(keeps, `${remedy.kind}: before the command`).toBeLessThan(command);
     }
     const none = formatDbUnusableNotice({
       dbPath: dbp,
@@ -257,13 +325,13 @@ describe('the two notices', () => {
     expect(out.split('\n').every((l) => l.trim().length > 0)).toBe(true);
   });
 
-  // The model channel gets the FACT, never the command — this family's remedy overwrites the
+  // The model channel gets the FACT, never the command — this family's remedy writes into the
   // database, and an agent holding Bash is not the same audience as a human reading a banner.
   // Asserted here as well as end-to-end so the property survives a refactor of either caller.
   it('the model notice contains no shell command at all', () => {
     const out = formatDbUnusableModelNotice();
     expect(out).toMatch(/Memory is OFF/);
-    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&|repair-db/);
     expect(out, 'it must still route the user somewhere').toContain(`${CLI_INVOKE} doctor`);
   });
 

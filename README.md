@@ -897,6 +897,7 @@ node install.mjs uninstall --purge    # Remove and delete all data
 node install.mjs status               # Show current status
 node cli.mjs doctor                   # Diagnose issues  (cli.mjs, not install.mjs — see note)
 node cli.mjs repair                   # Recover a broken install from the latest signed release
+node cli.mjs repair-db                # Repair a damaged database from the rows SQLite can still read
 node install.mjs cleanup-hooks        # Remove only stale claude-mem-lite hooks from settings.json
 node install.mjs update               # Force-check for updates and install them (direct install / npx mode)
 
@@ -984,6 +985,27 @@ T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-li
 It resolves the latest **release** tag first. A shell one-liner cannot verify the release signature the way `repair` does, so running it is a trust decision you are making explicitly — that is why it is the last resort and not the first suggestion.
 
 After it finishes, `~/.claude-mem-lite/` is back in sync with the latest release and `claude-mem-lite repair` is available for next time.
+
+### Damaged database
+
+When `doctor` prints `✗ Database integrity:` (or `✗ Database:` with a malformed-image or schema
+message), close every Claude Code session and run, from a terminal:
+
+```bash
+claude-mem-lite repair-db
+```
+
+It reads the database without writing to it, copies the rows SQLite can still read into a fresh
+file, checks that file, and writes it back into the database. Before that write, the database
+and its log as found are copied to `claude-mem-lite.db.damaged-<time>` (and `-wal`), and the output
+prints the command that puts them back. When the log is what makes the database unreadable, it
+reads the database file alone, and says so: rows saved only in the log are then not in the
+repaired database. It writes nothing when another connection to the database has read from it
+(close every session: one that has opened the file and not read it yet cannot be seen), when a
+row it read cannot be written to the fresh file, or when the database is from another schema
+version. Rows on a page SQLite cannot read are lost either way; the output names those an index
+lists by id, and the stretch of a table where it could not check the rest. When it cannot read
+the database at all, it prints the snapshot restore or the set-aside instead.
 
 ## Uninstall
 

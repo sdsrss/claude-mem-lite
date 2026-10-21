@@ -476,23 +476,19 @@ export async function dbCheckRemedy(dbPath, err) {
   const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
   const remedy = dbUnusableRemedy(dbPath, err);
-  if (remedy.kind === 'unknown') return remedy.note;
-  if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  // Both commands start by deleting the -wal and -shm and then replace or move the database file,
-  // under any session still holding the store (D#534). The SessionStart notice says the same before
-  // its copy of the command.
-  if (remedy.kind === 'set-aside') {
-    return (
-      `No backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
-      `set the broken file aside so a fresh store is created on the next session: ${remedy.command} ` +
-      `— memories in that file are not recoverable without a backup.`
-    );
-  }
-  return (
-    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s) once every Claude Code session ` +
-    `is closed: ${remedy.command} — move the broken file aside first if you want to keep it for inspection.`
-  );
+  if (!remedy.command) return remedy.note;
+  // repair-db writes into the store, under any session still holding it (D#534), so "once every
+  // session is closed" comes first.
+  return `Once every Claude Code session is closed, run: ${remedy.command} — ${remedy.note}`;
 }
+
+/**
+ * doctor's line under a failed integrity check (D#541). The in-place repairs measured on the 116
+ * damaged-but-readable plants passed 0-59 of them; a fresh-file copy passed 114.
+ */
+const INTEGRITY_REMEDY = (cmd) =>
+  `Once every Claude Code session is closed, run: ${cmd} — it copies every row SQLite can still read into a ` +
+  'fresh file, checks it, writes it back into the store, and keeps the store as found beside it.';
 
 // ─── Install ────────────────────────────────────────────────────────────────
 
@@ -3164,6 +3160,31 @@ async function doctor() {
       } else {
         dwarn('FTS5 index: missing (will be created on server start)');
       }
+      // D#541. Last, so it judges what the FTS rebuild above left. This check is read-only (the
+      // FTS check above is not). v6.30.2 printed no ✗ while it failed on 114 of 869 damaged-WAL
+      // plants (index pages 60, table pages 50). Cost: 679-687 ms on a 286 MB store.
+      if (dbWriteBlocked) {
+        dwarn(`Database integrity: not checked — ${dbWriteBlocked}`);
+      } else {
+        // Its own catch: a module that will not load is not a database fault.
+        let checked;
+        try {
+          const { checkIntegrity, summarizeIntegrity } = await import('./lib/db-repair.mjs');
+          const { REPAIR_DB_COMMAND } = await import('./lib/db-unusable.mjs');
+          checked = { ...checkIntegrity(DB_PATH), summarizeIntegrity, REPAIR_DB_COMMAND };
+        } catch (e) {
+          dwarn(`Database integrity: not checked (${e?.code || e?.message})`);
+        }
+        if (checked?.ok) {
+          ok('Database integrity: ok');
+        } else if (checked?.notChecked) {
+          dwarn(`Database integrity: not checked — ${checked.notChecked}`);
+        } else if (checked) {
+          fail(`Database integrity: ${checked.summarizeIntegrity(checked.problems)}`);
+          log(`    ${INTEGRITY_REMEDY(checked.REPAIR_DB_COMMAND)}`);
+          issues++;
+        }
+      }
     } catch (e) {
       if (walBlocked(e.code)) {
         notCheckedWal('Database');
@@ -4603,6 +4624,33 @@ async function rebuildBinding() {
   }
 }
 
+// D#541: copy the rows SQLite can still read into a fresh file and write it back into the store
+// (lib/db-repair.mjs). It takes install.lock itself; the write-back runs behind the hook barrier,
+// so a hook firing then is dropped rather than waiting on the store.
+async function repairDbCommand() {
+  const denied = dataDirAccessError();
+  if (denied) {
+    console.error(
+      `[repair-db] ${MEM_DATA_DIR} is not accessible (${denied}) — nothing was done. Fix: ${dataDirAccessRemedy(denied)}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  let repairDb;
+  try {
+    ({ repairDb } = await import('./lib/db-repair.mjs'));
+  } catch (e) {
+    const hint = bindingMissing(e) ? ` — ${nativeBindingRepairHint(PROJECT_DIR)}` : '';
+    console.error(`[repair-db] cannot load the database code: ${e.message}${hint}`);
+    process.exitCode = 1;
+    return;
+  }
+  const r = await repairDb(DB_PATH, { lockPath: INSTALL_LOCK_PATH, swapGuard: withSwapBarrier });
+  const print = { ok, warn, fail, info: (text) => log(`  ${text}`) };
+  for (const { level, text } of r.lines) print[level](text);
+  process.exitCode = r.exitCode;
+}
+
 // Cross-process gate around the install write phase. repair() is intentionally
 // NOT locked here: it spawns `install.mjs install` as a child, which takes this
 // lock — locking the parent too would deadlock. A live peer (another session's
@@ -4728,6 +4776,7 @@ export const INSTALL_COMMAND_FLAGS = {
   update: [],
   repair: [],
   'rebuild-binding': [],
+  'repair-db': [],
   release: ['--no-lock'],
 };
 const READ_ONLY_INSTALL_COMMANDS = new Set(['status', 'doctor']);
@@ -4808,6 +4857,9 @@ async function dispatch(cmd) {
     case 'rebuild-binding':
       await rebuildBinding();
       break;
+    case 'repair-db':
+      await repairDbCommand();
+      break;
     case 'release':
       syncVersions();
       if (!flags.has('--no-lock')) regenerateLockfile();
@@ -4845,7 +4897,8 @@ Usage:
   node install.mjs self-update         Check for and install updates
   node install.mjs repair             Recover a broken install: download latest tarball, re-run install
   node install.mjs rebuild-binding    Recompile better-sqlite3 for the running Node (fixes "NODE_MODULE_VERSION" after a Node upgrade)
-  node install.mjs release            Sync versions (plugin/marketplace/CLAUDE.md) + regen lockfile via npm@10.9.2 (use --no-lock to skip lock regen)
+  node install.mjs repair-db          Copy the readable rows of a damaged database into a fresh file and write it back, keeping the database as found (close every Claude Code session first)
+  node install.mjs release           Sync versions (plugin/marketplace/CLAUDE.md) + regen lockfile via npm@10.9.2 (use --no-lock to skip lock regen)
 
   npx claude-mem-lite                 Install via npx (one-liner)
 `);

@@ -120,6 +120,7 @@
     "lib/install-shape.mjs",
     "lib/schema-skew.mjs",
     "lib/db-unusable.mjs",
+    "lib/db-repair.mjs",
     "lib/db-busy.mjs",
     "lib/record-once.mjs",
     "lib/hook-stdin.mjs",

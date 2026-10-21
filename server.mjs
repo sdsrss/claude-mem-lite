@@ -12,7 +12,13 @@ import {
   checkWriteProject,
   unknownProjectNote,
 } from './project-utils.mjs';
-import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
+import {
+  ensureDbWithWalRecovery,
+  isDbCorruptionError,
+  refreshPlannerStats,
+  DB_DIR,
+  CODE_DIR,
+} from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
 import {
@@ -94,7 +100,8 @@ import { recordHookError } from './lib/hook-telemetry.mjs';
 import { stripPrivate } from './lib/private-strip.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
-import { CLI_INVOKE, shellWord } from './cli-path.mjs';
+import { CLI_INVOKE } from './cli-path.mjs';
+import { REPAIR_DB_COMMAND } from './lib/db-unusable.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -253,9 +260,16 @@ try {
   }
   // Fatal: log and exit with descriptive message (Claude Code shows stderr)
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
-  if (err.walRecoveryAttempted) {
+  if (err.walRecoveryAttempted && isDbCorruptionError(err)) {
+    // The -wal and -shm are already gone (ensureDbWithWalRecovery deleted them) and a reinstall
+    // does not touch the data, so the old "Try: rm <wal> <shm> or reinstall" named two steps that
+    // cannot help. A corruption error after that is the database file itself (D#541).
     console.error(
-      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
+      `[claude-mem-lite] The database file itself is damaged. Close every Claude Code session, then run in a terminal: ${REPAIR_DB_COMMAND}`,
+    );
+  } else if (err.walRecoveryAttempted) {
+    console.error(
+      `[claude-mem-lite] The open still failed after the WAL/SHM were removed. If this persists, run: ${CLI_INVOKE} doctor`,
     );
   } else {
     console.error(

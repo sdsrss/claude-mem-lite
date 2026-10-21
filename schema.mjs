@@ -219,7 +219,7 @@ const LATEST_MIGRATION_COLUMNS = [
   { table: 'observation_files', column: 'last_cited_session_id' }, // v43
 ];
 
-function hasLatestMigrationColumn(db) {
+export function hasLatestMigrationColumn(db) {
   try {
     const stmt = db.prepare(`SELECT 1 AS present FROM pragma_table_info(?) WHERE name = ?`);
     return LATEST_MIGRATION_COLUMNS.every(({ table, column }) => Boolean(stmt.get(table, column)));

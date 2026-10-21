@@ -3454,6 +3454,11 @@ Commands:
     --session-audit     Audit session/episode state for orphans and drift
     --json              Machine-readable output (plain doctor run)
 
+  repair-db             Copy the rows SQLite can still read from a damaged database into
+                        a fresh file, check it, and write it back into the database; the
+                        database as found is kept beside it. Close every Claude Code
+                        session first: it refuses when it sees another connection.
+
   fts-check <check|rebuild>  FTS5 index check or rebuild
                         Exit 0 when every index is healthy / rebuilt, 1 otherwise —
                         so "fts-check rebuild && <next step>" is safe to chain.
