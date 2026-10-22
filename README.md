@@ -1004,14 +1004,20 @@ checks the fresh file and writes it into the database through SQLite's backup AP
 the database and its log as found to `claude-mem-lite.db.damaged-<time>` (and `-wal`); the output
 prints the command that puts them back. It needs free space for about three copies of the database.
 
-The output names every table with a damaged page (rows on such a page may be missing, or hold
-damaged values), the rows an index lists that no read returned, and the rows the fresh file
-refused, by id. It writes nothing to the database when another connection to it has read from it
-(close every session: one that has opened the file and not read it yet cannot be seen), when it is
-written while being read, when no row of some table can be written, when no observation can be
-read at all, or when the database is from another schema version. When SQLite cannot read the
-database at all, it prints the snapshot restore or the set-aside instead; when SQLite cannot write
-into it, it leaves the checked copy and prints the command that puts it in place.
+The output names every table it finds with a damaged page (rows on such a page may be missing, or
+hold damaged values), and lists by id the rows an index lists that no read returned, the rows the
+fresh file refused, and the rows whose values disagree with the table's indexes; where the database
+file alone holds such a row intact, that copy is kept. When part of the list of tables cannot be
+read, it says so: a table listed only there is not in the repaired database. Rows on pages no query
+reaches (under a damaged interior page, say) stay only in the kept file, where the sqlite3
+command-line tool's `.recover` may find some of them.
+
+It writes nothing to the database when, at its lock check, another connection to it has read from
+it (close every session: one that has opened the file and not read it yet cannot be seen, and one
+that opens it after the check sees the repaired database), when it is written while being read, when no row of some table can be written, or when the database is from another schema
+version. When it can read no observation, or SQLite cannot read the database at all, it prints the
+snapshot restore or the set-aside instead; when SQLite cannot write into it, it leaves the checked
+copy and prints the command that puts it in place.
 
 ## Uninstall
 

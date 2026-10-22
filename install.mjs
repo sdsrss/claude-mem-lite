@@ -487,8 +487,9 @@ export async function dbCheckRemedy(dbPath, err) {
  * damaged-but-readable plants passed 0-59 of them; a fresh-file copy passed 114.
  */
 const INTEGRITY_REMEDY = (cmd) =>
-  `Once every Claude Code session is closed, run: ${cmd} — it copies every row SQLite can still read into a ` +
-  'fresh file, checks it, writes it back into the store, and keeps the store as found beside it.';
+  `Once every Claude Code session is closed, run: ${cmd} — it copies the rows SQLite can still read into a ` +
+  'fresh file, says which tables may have lost rows, checks the copy, writes it into the store, and keeps the ' +
+  'store as found beside it.';
 
 // ─── Install ────────────────────────────────────────────────────────────────
 
@@ -3158,7 +3159,9 @@ async function doctor() {
         dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
       } else if (fts && !integrityPassed) {
         dwarn(
-          'FTS5 integrity: not checked — it writes to the database, which did not pass the integrity check above (repair-db rebuilds the search indexes)',
+          checked && !checked.ok && !checked.notChecked
+            ? 'FTS5 integrity: not checked — it writes to the database, which did not pass the integrity check above (repair-db rebuilds the search indexes)'
+            : 'FTS5 integrity: not checked — it writes to the database, and the integrity check above did not run',
         );
       } else if (fts) {
         try {
