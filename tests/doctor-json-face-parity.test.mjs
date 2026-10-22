@@ -133,7 +133,7 @@ describe('doctor --json carries the repair instructions the human face prints', 
     // says so rather than passing on an empty set.
     expect(details.length, `fixture produced no detail lines:\n${human}`).toBeGreaterThan(0);
     expect(
-      details.some((d) => d.includes('.db.corrupt')),
+      details.some((d) => d.includes('repair-db')),
       `the corrupt-DB fixture no longer prints a restore remedy:\n${human}`,
     ).toBe(true);
 
@@ -155,7 +155,7 @@ describe('doctor --json carries the repair instructions the human face prints', 
     const report = parseJson(runDoctor(home, { json: true }));
     const dbCheck = report.checks.find((c) => /^Database:/.test(c.message || ''));
     expect(dbCheck, `no Database check in:\n${JSON.stringify(report.checks, null, 1)}`).toBeTruthy();
-    expect(dbCheck.details?.join('\n') || '').toContain('.db.corrupt');
+    expect(dbCheck.details?.join('\n') || '').toContain('repair-db');
   });
 });
 

@@ -31,7 +31,7 @@ Two CLI families, both canonical in `cli.mjs` (`claude-mem-lite help` for flags)
 **`CLI_COMMANDS`** = `search recent recall get timeline browse context save update delete
 defer compress maintain optimize fts-check restore verify-apply export import-jsonl stats citation-stats
 activity memdir-audit adopt unadopt help`; **`INSTALL_COMMANDS`** = `install uninstall status
-doctor cleanup cleanup-hooks self-update repair rebuild-binding release`.
+doctor cleanup cleanup-hooks self-update repair rebuild-binding repair-db release`.
 
 **`rebuild-binding` heals a missing native binding; `npm rebuild better-sqlite3` does not** —
 it exits 0 printing "rebuilt dependencies successfully" while compiling nothing. **Never hand

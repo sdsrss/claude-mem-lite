@@ -476,23 +476,19 @@ export async function dbCheckRemedy(dbPath, err) {
   const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
   const remedy = dbUnusableRemedy(dbPath, err);
-  if (remedy.kind === 'unknown') return remedy.note;
-  if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  // Both commands start by deleting the -wal and -shm and then replace or move the database file,
-  // under any session still holding the store (D#534). The SessionStart notice says the same before
-  // its copy of the command.
-  if (remedy.kind === 'set-aside') {
-    return (
-      `No backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
-      `set the broken file aside so a fresh store is created on the next session: ${remedy.command} ` +
-      `— memories in that file are not recoverable without a backup.`
-    );
-  }
-  return (
-    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s) once every Claude Code session ` +
-    `is closed: ${remedy.command} — move the broken file aside first if you want to keep it for inspection.`
-  );
+  if (!remedy.command) return remedy.note;
+  // repair-db writes into the store, under any session still holding it (D#534), so "once every
+  // session is closed" comes first.
+  return `Once every Claude Code session is closed, run: ${remedy.command} — ${remedy.note}`;
 }
+
+/**
+ * doctor's line under a failed integrity check (D#541). The in-place repairs measured on the 116
+ * damaged-but-readable plants passed 0-59 of them; a fresh-file copy passed 114.
+ */
+const INTEGRITY_REMEDY = (cmd) =>
+  `Once every Claude Code session is closed, run: ${cmd} — it copies every row SQLite can still read into a ` +
+  'fresh file, checks it, writes it back into the store, and keeps the store as found beside it.';
 
 // ─── Install ────────────────────────────────────────────────────────────────
 
@@ -3113,56 +3109,89 @@ async function doctor() {
         .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'")
         .get();
       db.close();
-      if (fts) {
-        ok('FTS5 index: present');
-        // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
+      if (fts) ok('FTS5 index: present');
+      else dwarn('FTS5 index: missing (will be created on server start)');
+      // D#541, D#546. Read-only, and BEFORE the FTS check below, which opens the store read-write:
+      // on a store whose log holds a damaged page, that connection's close folds the page into the
+      // main file, and the rows repair-db reads from the main file alone are gone (round-2 claims
+      // F2: p5-v0/v1, 200 observations). v6.30.2 printed no ✗ while this check failed on 114 of
+      // 869 damaged-WAL plants. Cost: 679-687 ms on a 286 MB store. It runs when dbWriteBlocked
+      // too, which is about writing: withheld, it left 3 of the 869 green (p41: a damaged
+      // schema_version page is also what makes this install unsure it can read the store).
+      let integrityPassed = false;
+      // Its own catch: a module that will not load is not a database fault.
+      let checked;
+      try {
+        const { checkIntegrity, summarizeIntegrity } = await import('./lib/db-repair.mjs');
+        const { REPAIR_DB_COMMAND } = await import('./lib/db-unusable.mjs');
+        checked = { ...checkIntegrity(DB_PATH), summarizeIntegrity, REPAIR_DB_COMMAND };
+      } catch (e) {
+        dwarn(`Database integrity: not checked (${e?.code || e?.message})`);
+      }
+      if (checked?.ok) {
+        ok('Database integrity: ok');
+        integrityPassed = true;
+      } else if (checked?.notChecked) {
+        dwarn(`Database integrity: not checked — ${checked.notChecked}`);
+      } else if (checked) {
+        fail(`Database integrity: ${checked.summarizeIntegrity(checked.problems)}`);
+        log(`    ${INTEGRITY_REMEDY(checked.REPAIR_DB_COMMAND)}`);
         if (dbWriteBlocked) {
-          // Everything past this point wants a WRITE handle on a file this install
-          // has just been told it is too old to write — which is the exact way a
-          // store gets locked out for good. The rebuild below is gated by sitting
-          // inside this else, not by a second condition that could drift from it.
-          //
-          // dwarn rather than silence, and the REASON is interpolated rather than
-          // assumed: "I could not look" and "I looked and it is fine" have to stay
-          // distinguishable, and so does "I did not look, and here is which of the
-          // three reasons applies" — a line that names the wrong reason ends the
-          // reader's search just as a false green does.
-          dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
-        } else {
-          try {
-            const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
-            const rwDb = new Database(DB_PATH);
-            rwDb.pragma('busy_timeout = 3000');
-            try {
-              const { healthy, details, busy } = checkFTSIntegrity(rwDb);
-              if (healthy) {
-                ok('FTS5 integrity: all indexes healthy');
-              } else if (busy) {
-                // In use is not damage: no rebuild, which would be a long write under the
-                // live hooks' feet (or fail on the same lock).
-                dwarn(
-                  'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
-                );
-              } else {
-                dwarn('FTS5 integrity issues detected:');
-                for (const d of details) log(`    ${d}`);
-                log('  Attempting FTS5 rebuild...');
-                const { rebuilt, errors } = rebuildFTS(rwDb);
-                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-                if (errors.length > 0) {
-                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                  issues++;
-                }
-              }
-            } finally {
-              rwDb.close();
-            }
-          } catch (e) {
-            dwarn('FTS5 integrity check failed: ' + e.message);
-          }
+          log(
+            `    Note: ${dbWriteBlocked}; if repair-db refuses it as another version's, run the newest installed claude-mem-lite's repair-db.`,
+          );
         }
-      } else {
-        dwarn('FTS5 index: missing (will be created on server start)');
+        issues++;
+      }
+      // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
+      if (fts && dbWriteBlocked) {
+        // Everything past this point wants a WRITE handle on a file this install
+        // has just been told it is too old to write — which is the exact way a
+        // store gets locked out for good. The rebuild below is gated by sitting
+        // inside this else, not by a second condition that could drift from it.
+        //
+        // dwarn rather than silence, and the REASON is interpolated rather than
+        // assumed: "I could not look" and "I looked and it is fine" have to stay
+        // distinguishable, and so does "I did not look, and here is which of the
+        // three reasons applies" — a line that names the wrong reason ends the
+        // reader's search just as a false green does.
+        dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
+      } else if (fts && !integrityPassed) {
+        dwarn(
+          'FTS5 integrity: not checked — it writes to the database, which did not pass the integrity check above (repair-db rebuilds the search indexes)',
+        );
+      } else if (fts) {
+        try {
+          const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
+          const rwDb = new Database(DB_PATH);
+          rwDb.pragma('busy_timeout = 3000');
+          try {
+            const { healthy, details, busy } = checkFTSIntegrity(rwDb);
+            if (healthy) {
+              ok('FTS5 integrity: all indexes healthy');
+            } else if (busy) {
+              // In use is not damage: no rebuild, which would be a long write under the
+              // live hooks' feet (or fail on the same lock).
+              dwarn(
+                'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
+              );
+            } else {
+              dwarn('FTS5 integrity issues detected:');
+              for (const d of details) log(`    ${d}`);
+              log('  Attempting FTS5 rebuild...');
+              const { rebuilt, errors } = rebuildFTS(rwDb);
+              if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
+              if (errors.length > 0) {
+                fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                issues++;
+              }
+            }
+          } finally {
+            rwDb.close();
+          }
+        } catch (e) {
+          dwarn('FTS5 integrity check failed: ' + e.message);
+        }
       }
     } catch (e) {
       if (walBlocked(e.code)) {
@@ -4603,6 +4632,33 @@ async function rebuildBinding() {
   }
 }
 
+// D#541: copy the rows SQLite can still read into a fresh file and write it back into the store
+// (lib/db-repair.mjs). It takes install.lock itself; the write-back runs behind the hook barrier,
+// so a hook firing then is dropped rather than waiting on the store.
+async function repairDbCommand() {
+  const denied = dataDirAccessError();
+  if (denied) {
+    console.error(
+      `[repair-db] ${MEM_DATA_DIR} is not accessible (${denied}) — nothing was done. Fix: ${dataDirAccessRemedy(denied)}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  let repairDb;
+  try {
+    ({ repairDb } = await import('./lib/db-repair.mjs'));
+  } catch (e) {
+    const hint = bindingMissing(e) ? ` — ${nativeBindingRepairHint(PROJECT_DIR)}` : '';
+    console.error(`[repair-db] cannot load the database code: ${e.message}${hint}`);
+    process.exitCode = 1;
+    return;
+  }
+  const r = await repairDb(DB_PATH, { lockPath: INSTALL_LOCK_PATH, swapGuard: withSwapBarrier });
+  const print = { ok, warn, fail, info: (text) => log(`  ${text}`) };
+  for (const { level, text } of r.lines) print[level](text);
+  process.exitCode = r.exitCode;
+}
+
 // Cross-process gate around the install write phase. repair() is intentionally
 // NOT locked here: it spawns `install.mjs install` as a child, which takes this
 // lock — locking the parent too would deadlock. A live peer (another session's
@@ -4728,6 +4784,7 @@ export const INSTALL_COMMAND_FLAGS = {
   update: [],
   repair: [],
   'rebuild-binding': [],
+  'repair-db': [],
   release: ['--no-lock'],
 };
 const READ_ONLY_INSTALL_COMMANDS = new Set(['status', 'doctor']);
@@ -4808,6 +4865,9 @@ async function dispatch(cmd) {
     case 'rebuild-binding':
       await rebuildBinding();
       break;
+    case 'repair-db':
+      await repairDbCommand();
+      break;
     case 'release':
       syncVersions();
       if (!flags.has('--no-lock')) regenerateLockfile();
@@ -4845,7 +4905,8 @@ Usage:
   node install.mjs self-update         Check for and install updates
   node install.mjs repair             Recover a broken install: download latest tarball, re-run install
   node install.mjs rebuild-binding    Recompile better-sqlite3 for the running Node (fixes "NODE_MODULE_VERSION" after a Node upgrade)
-  node install.mjs release            Sync versions (plugin/marketplace/CLAUDE.md) + regen lockfile via npm@10.9.2 (use --no-lock to skip lock regen)
+  node install.mjs repair-db          Copy the readable rows of a damaged database into a fresh file and write it back, keeping the database as found (close every Claude Code session first)
+  node install.mjs release           Sync versions (plugin/marketplace/CLAUDE.md) + regen lockfile via npm@10.9.2 (use --no-lock to skip lock regen)
 
   npx claude-mem-lite                 Install via npx (one-liner)
 `);

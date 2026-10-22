@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dbCheckRemedy } from '../install.mjs';
+import { REPAIR_DB_COMMAND } from '../lib/db-unusable.mjs';
 import { readSnapshots } from '../lib/db-backup.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
@@ -60,36 +61,35 @@ describe('readSnapshots separates empty from unreadable', () => {
 });
 
 describe('dbCheckRemedy', () => {
-  it('names the newest snapshot when one exists', async () => {
+  // D#541: every failure of this family gets repair-db, which reads what SQLite still can and
+  // prints the snapshot restore or set-aside itself when it cannot read the file at all.
+  it('names repair-db, and the newest snapshot as the fallback', async () => {
     const { db } = withDb([
       'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
     ]);
     const out = await dbCheckRemedy(db, corrupt());
+    expect(out).toContain(REPAIR_DB_COMMAND);
     expect(out).toContain('2026-09-06T00-00-00-000Z');
     expect(out).not.toContain('2026-09-01T00-00-00-000Z');
-    expect(out).toContain('cp ');
-    // The stale WAL/SHM must go first or the restored file is corrupted again by replay.
-    expect(out).toContain('-wal');
-    expect(out).toContain('-shm');
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|\bln\b|&&/);
   });
 
-  it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
+  it('names repair-db without claiming a snapshot when there is none', async () => {
     const { db } = withDb();
     const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toMatch(/no backup snapshot/i);
-    expect(out).not.toContain('cp ');
-    expect(out).toContain('mv ');
+    expect(out).toContain(REPAIR_DB_COMMAND);
+    expect(out).not.toMatch(/snapshot/i);
   });
 
-  it('distinguishes "could not look" from "there are none"', async () => {
+  // The third outcome lives in repair-db's own fallback now; doctor must still not assert an
+  // absence it never checked.
+  it('claims no absence of snapshots when the directory cannot be read', async () => {
     const dir = dataDir();
     const notADir = join(dir, 'wall');
     writeFileSync(notADir, 'x');
     const out = await dbCheckRemedy(join(notADir, 'claude-mem-lite.db'), corrupt());
-    expect(out).toMatch(/could not read/i);
-    expect(out).toContain('ENOTDIR');
-    // The whole point of the third outcome: it must NOT assert the absence it never checked.
+    expect(out).toContain(REPAIR_DB_COMMAND);
     expect(out).not.toMatch(/no backup snapshot/i);
   });
 
@@ -108,8 +108,9 @@ describe('dbCheckRemedy', () => {
     expect(await dbCheckRemedy(db, new Error('EACCES: permission denied, open'))).toBeNull();
   });
 
-  // A schema row SQLite cannot parse: name the snapshots, run nothing (lib/db-unusable.mjs).
-  it('names the newest snapshot for an unreadable schema, with no command', async () => {
+  // A schema row SQLite cannot parse: repair-db, which reads past it (D#541), and the newest
+  // snapshot named as the fallback; no shell line that moves or copies files.
+  it('sends an unreadable schema to repair-db, naming the newest snapshot', async () => {
     const { db } = withDb([
       'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
@@ -118,29 +119,23 @@ describe('dbCheckRemedy', () => {
       code: 'SQLITE_CORRUPT',
     });
     const out = await dbCheckRemedy(db, err);
-    expect(out).toMatch(/schema/);
+    expect(out).toContain(REPAIR_DB_COMMAND);
     expect(out).toContain('2026-09-06T00-00-00-000Z');
     expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
   });
 
-  // D#534: both commands start by deleting the -wal and -shm and then replace or move the
-  // database file, under any session still holding the store.
-  it('says to close every Claude Code session before the restore or set-aside command', async () => {
-    const snap = withDb(['claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak']).db;
-    for (const [what, out] of [
-      ['restore', await dbCheckRemedy(snap, corrupt())],
-      ['set-aside', await dbCheckRemedy(withDb().db, corrupt())],
-    ]) {
-      const at = out.indexOf('every Claude Code session is closed');
-      expect(at, what).toBeGreaterThan(-1);
-      expect(at, `${what}: before the command`).toBeLessThan(out.indexOf('rm -f'));
-    }
+  // D#534: repair-db writes into the store, under any session still holding it.
+  it('says to close every Claude Code session before the command', async () => {
+    const out = await dbCheckRemedy(withDb().db, corrupt());
+    const at = out.indexOf('every Claude Code session is closed');
+    expect(at).toBeGreaterThan(-1);
+    expect(at, 'before the command').toBeLessThan(out.indexOf(REPAIR_DB_COMMAND));
   });
 
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {
-      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no backup snapshot/i);
+      expect(await dbCheckRemedy(db, new Error(msg)), msg).toContain(REPAIR_DB_COMMAND);
     }
   });
 });
@@ -171,22 +166,22 @@ describe('doctor prints the remedy it computes', () => {
     });
   }
 
-  it('emits the no-snapshot remedy under the ✗ Database line', () => {
+  it('emits the repair-db remedy under the ✗ Database line', () => {
     const { dir } = withDb();
     const out = runDoctor(dir).stdout;
     // Premise: the check really did fail. Without this the remedy assertion could pass on
     // output where the database line never appeared at all.
     expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
-    expect(out).toMatch(/No backup snapshot exists beside the database/);
+    expect(out).toContain(REPAIR_DB_COMMAND);
   });
 
-  it('emits the restore remedy naming the newest snapshot', () => {
+  it('names the newest snapshot as the fallback', () => {
     const { dir } = withDb([
       'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
     ]);
     const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/Restore the newest of 2 backup snapshot\(s\)/);
+    expect(out).toMatch(/the newest of 2 backup snapshot\(s\)/);
     expect(out).toContain('2026-09-06T00-00-00-000Z');
   });
 
@@ -202,7 +197,7 @@ describe('doctor prints the remedy it computes', () => {
     // greps too widely reports the wrong thing as a regression.
     expect(out).toMatch(/Database: not found/);
     expect(out).not.toMatch(/No backup snapshot exists beside the database/);
-    expect(out).not.toMatch(/Restore the newest of/);
+    expect(out).not.toContain(REPAIR_DB_COMMAND);
     expect(out).not.toMatch(/Could not read .* to look for a backup snapshot/);
   });
 });
