@@ -1117,13 +1117,16 @@ describe('repairDb: what it reads (D#546)', () => {
 
   // p10-v5 of the 869: damage took two column definitions out of the log's copy of the
   // observations statement, and every later column read shifted. Here the statement is rewritten
-  // in the log the same way, so the rows only the log holds can be checked value by value.
-  it('reads a table whose definition the log garbled through the one the main file holds', async () => {
+  // in the log the same way: the table is read from the main file alone, and the line says so.
+  it('reads a table whose definition the log garbled from the main file alone, and says so', async () => {
     const dir = newDir();
     const { p } = walStore(dir);
-    const truth = record(p).observations;
     const db = new Database(p);
     const keep = readFileSync(p);
+    const alone = join(dir, 'alone.db');
+    writeFileSync(alone, keep);
+    const mainAlone = record(alone).observations;
+    for (const ext of ['', '-wal', '-shm']) rmSync(alone + ext, { force: true });
     db.unsafeMode(true);
     db.pragma('writable_schema = ON');
     db.prepare(
@@ -1149,9 +1152,9 @@ describe('repairDb: what it reads (D#546)', () => {
     plant(p, pages(p, 'idx_obs_project_live')[0], 1000, Array(64).fill(0x41)); // so integrity_check fails
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
-    expect(record(p).observations).toEqual(truth);
+    expect(record(p).observations).toEqual(mainAlone);
     expect(text(r)).toMatch(
-      /observations: its definition reads differently from this version's in the database with its log/,
+      /could not read this table with the log.*observations \(\d+ rows; its definition reads differently from this version's\)/,
     );
   });
 
@@ -1307,13 +1310,15 @@ describe('repairDb: what it reads (D#546)', () => {
   });
 });
 
-// Round-3 claims review: a definition the log garbles while SQLite still parses it is read through
-// the one the main file holds, whatever the table and whether the names or only their order changed.
+// Round-3 claims review: a definition the log garbles while SQLite still parses it is not read
+// through: the table comes from the main file alone, whatever the table, when the names changed or
+// only their order did while the main file's matches this version's.
 describe('repairDb: a definition the log garbled (D#546 r1)', () => {
   /**
    * 200 observations and 50 search runs checkpointed; in the log, 40 more observations and `edit`
    * applied to one table's statement in sqlite_master; an index leaf outside the log damaged, so
-   * integrity_check fails. Returns the truth: every row as the main file holds it.
+   * integrity_check fails. Returns the truth (every row as the store with its log holds it) and the
+   * rows of the main file alone.
    */
   function garbledInLog(table, edit) {
     const dir = newDir();
@@ -1347,6 +1352,10 @@ describe('repairDb: a definition the log garbled (D#546 r1)', () => {
     writeFileSync(p, keep);
     writeFileSync(`${p}-wal`, wal);
     rmSync(`${p}-shm`, { force: true });
+    const alone = join(dir, 'alone.db');
+    writeFileSync(alone, keep);
+    const mainAlone = record(alone);
+    for (const ext of ['', '-wal', '-shm']) rmSync(alone + ext, { force: true });
     const inLog = new Set();
     for (let o = 32; o + 24 + 4096 <= wal.length; o += 24 + 4096) inLog.add(wal.readUInt32BE(o));
     const ro = new Database(p, { readonly: true });
@@ -1359,18 +1368,18 @@ describe('repairDb: a definition the log garbled (D#546 r1)', () => {
     expect(leaf, 'premise: an index leaf the log does not hold').toBeDefined();
     plant(p, leaf, 0, Array(8).fill(0x41));
     premise(p);
-    return { p, truth };
+    return { p, truth, mainAlone };
   }
 
-  it('reads a table this version does not create through the main file definition (a column renamed)', async () => {
+  it('reads a table this version does not create from the main file alone (a column renamed)', async () => {
     const { p, truth } = garbledInLog('search_runs', (sql) => sql.replace(/\bquery\b/, 'qAAry'));
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
     sameExceptVersion(record(p), truth);
-    expect(text(r)).toMatch(/search_runs: its definition reads differently/);
+    expect(text(r)).toMatch(/search_runs \(50 rows; its definition reads differently from this version's\)/);
   });
 
-  it('reads a table this version does not create through the main file definition (two columns gone)', async () => {
+  it('reads a table this version does not create from the main file alone (two columns gone)', async () => {
     const { p, truth } = garbledInLog('search_runs', (sql) =>
       sql.replace(/,\s*query TEXT[^,]*/, '').replace(/,\s*surface TEXT[^,]*/, ''),
     );
@@ -1379,8 +1388,8 @@ describe('repairDb: a definition the log garbled (D#546 r1)', () => {
     sameExceptVersion(record(p), truth);
   });
 
-  it('reads a table whose column definitions the log swapped through the main file definition', async () => {
-    const { p, truth } = garbledInLog('observations', (sql) =>
+  it('reads a table whose column definitions the log swapped from the main file alone', async () => {
+    const { p, truth, mainAlone } = garbledInLog('observations', (sql) =>
       sql
         .replace(/\btitle TEXT/, 'TMPCOL TEXT')
         .replace(/\bsubtitle TEXT/, 'title TEXT')
@@ -1388,8 +1397,10 @@ describe('repairDb: a definition the log garbled (D#546 r1)', () => {
     );
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
-    sameExceptVersion(record(p), truth);
-    expect(text(r)).toMatch(/observations: its definition reads differently/);
+    sameExceptVersion(record(p), { ...truth, observations: mainAlone.observations });
+    expect(text(r)).toMatch(
+      /observations \(200 rows; its definition reads differently from this version's\)/,
+    );
   });
 });
 
@@ -1444,9 +1455,9 @@ describe('repairDb: r1 defects (D#546)', () => {
     rmSync(`${p}-shm`, { force: true });
   }
 
-  // Round-3 claims review H1: a damaged page garbled a row's values and kept its rowid; the
-  // garbled copy was kept although the main file alone holds the row intact (25 of 2,769 plants).
-  it('keeps the main file copy of a row whose values disagree with its indexes', async () => {
+  // Round-3 claims review H1: a damaged page garbled a row's values and kept its rowid (25 of
+  // 2,769 plants). The row is kept as read; its table is named.
+  it('names the table of a row whose values disagree with its indexes', async () => {
     // The 869-plant fixture (docs/audits/20261021-v6.31.0-d541-sweep.md), plant p63-v6.
     const dir = newDir();
     const p = join(dir, DB);
@@ -1506,10 +1517,7 @@ describe('repairDb: r1 defects (D#546)', () => {
     expect(mismatch, 'premise: integrity_check names row 1').toBe(true);
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
-    expect(record(p).observations).toContain(intact);
-    expect(text(r)).toMatch(
-      /observations: \d+ row\(s\) disagreed with its indexes .* kept instead \(ids 1\b/,
-    );
+    expect(text(r)).toMatch(/observations: some of its pages are damaged .*hold damaged values/);
   });
 
   // P1-1: a stale table page (a lost write: valid, older) shows only as a row/index mismatch, and a
@@ -1650,9 +1658,98 @@ describe('repairDb: r1 defects (D#546)', () => {
     expect(text(r)).toMatch(/events: could not be read \(its definition reads differently/);
   });
 
-  // P2-9: one damaged page brought back, from the database file alone, every row the log had
-  // deleted anywhere in the table.
-  it('takes from the database file alone only the rows of the stretch the log could not read', async () => {
+  /**
+   * A store with no log whose events definition `edit` garbled, events whose later columns hold
+   * values, and an index page damaged elsewhere so that integrity_check fails.
+   */
+  function garbledEvents(edit) {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 30 });
+    const db = new Database(p);
+    const ev = db.prepare(
+      `INSERT INTO events (project, event_type, title, created_at_epoch, last_accessed_epoch, search_terms) VALUES ('p', 'bugfix', ?, 1, 1234, 'terms')`,
+    );
+    for (let i = 0; i < 5; i++) ev.run(`event ${i}`);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    const sql = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'events'`).pluck().get();
+    expect(edit(sql), 'premise: the edit applies').not.toBe(sql);
+    db.prepare(`UPDATE sqlite_master SET sql = ? WHERE name = 'events'`).run(edit(sql));
+    db.pragma('writable_schema = OFF');
+    db.close();
+    plant(p, pages(p, 'idx_sess_memory_sid')[0], 0, Array(8).fill(0x41));
+    premise(p);
+    return p;
+  }
+
+  // A definition that lost a column before its last reads every later column one place off.
+  it('does not read a table through a definition that lost a column before its last', async () => {
+    const p = garbledEvents((sql) => sql.replace(/\s*last_accessed_epoch\s+INTEGER,/, ''));
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'events')).toBe(0);
+    expect(text(r)).toMatch(/events: could not be read \(its definition reads differently/);
+  });
+
+  // A definition with a column this version does not have reads every later column one place off,
+  // though it lacks none of this version's.
+  it('does not read a table through a definition with a column this version does not have', async () => {
+    const p = garbledEvents((sql) => sql.replace(/\blast_accessed_epoch\s+INTEGER,/, 'zz_extra INTEGER, $&'));
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'events')).toBe(0);
+    expect(text(r)).toMatch(/events: could not be read \(its definition reads differently/);
+  });
+
+  // F6 when the log cannot be read: the rows come from the database file alone, whose list of
+  // tables lost cells.
+  it('says so when the database file alone, read without its log, lost part of its list of tables', async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 20 });
+    const db = new Database(p);
+    db.exec('CREATE TABLE zz_user (a TEXT)');
+    db.prepare(`INSERT INTO zz_user VALUES ('kept')`).run();
+    for (let i = 0; i < 30; i++) db.exec(`CREATE TABLE zz_pad_${i} (a TEXT)`);
+    const last = db
+      .prepare(
+        `SELECT pageno, ncell FROM dbstat WHERE name = 'sqlite_schema' AND pagetype = 'leaf' ORDER BY path`,
+      )
+      .all()
+      .at(-1);
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const keep = readFileSync(p);
+    db.pragma('wal_autocheckpoint = 0');
+    db.pragma('user_version = 7'); // page 1 into the log
+    for (let i = 0; i < 5; i++) insertObs(db, { title: `in the log ${i}`, narrative: 'n' });
+    const wal = readFileSync(`${p}-wal`);
+    db.close();
+    writeFileSync(p, keep);
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    expect(last.ncell, 'premise: the last sqlite_master leaf holds several rows').toBeGreaterThan(3);
+    plant(p, last.pageno, 3, [0, 1]);
+    plantWal(p, 1, 100, 8, 0x41);
+    const ro = new Database(p, { readonly: true });
+    try {
+      expect(
+        () => ro.prepare('SELECT count(*) FROM pragma_table_list').get(),
+        'premise: the log reads no schema',
+      ).toThrow();
+    } finally {
+      ro.close();
+    }
+    rmSync(`${p}-shm`, { force: true });
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(text(r)).toMatch(/could not read the database together with its log/);
+    expect(text(r)).toMatch(/Part of its list of tables could not be read/);
+  });
+
+  // P2-9: one damaged page brings back, from the database file alone, every row the log had
+  // deleted anywhere in the table (limiting the fill to the damaged stretch lost rows a page dropped
+  // silently: the round-2 delta review, F2). The line says so.
+  it('says a row the log deleted may be back when the database file alone fills a table', async () => {
     const dir = newDir();
     const p = buildStore(dir, { rows: 300 });
     const keep = readFileSync(p);
@@ -1677,9 +1774,11 @@ describe('repairDb: r1 defects (D#546)', () => {
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
     const ids = new Set(record(p).observations.map((row) => Number(JSON.parse(row).id)));
-    const back = [97, 194, 291].filter((id) => ids.has(id));
-    // A deleted row may come back only from inside the stretch the log could not read.
-    expect(back.length, `deleted rows back: ${back.join(',')}`).toBeLessThanOrEqual(1);
+    expect(
+      [97, 194, 291].some((id) => ids.has(id)),
+      'premise: a deleted row is back',
+    ).toBe(true);
+    expect(text(r)).toMatch(/observations: \d+ row\(s\) .*a row the log deleted may be back/);
   });
 
   // P2-6: a backup that failed after writing spilled frames into the log deleted the byte copy of
@@ -1760,6 +1859,316 @@ describe('repairDb: r1 defects (D#546)', () => {
       after.close();
     }
     expect(checkIntegrity(p).ok).toBe(true);
+  });
+
+  // ---- Round-2 delta review (1e0649eb) ----
+
+  /** A log store: rows checkpointed, then `log(db)` run with every frame kept in the log. */
+  function logStore(dir, setup, log) {
+    const p = join(dir, DB);
+    const db = new Database(p);
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    db.pragma('foreign_keys = OFF');
+    insertSession(db, { id: 'sess-1' });
+    setup(db);
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const keep = readFileSync(p);
+    db.pragma('wal_autocheckpoint = 0');
+    log(db);
+    const truth = record(p);
+    const wal = readFileSync(`${p}-wal`);
+    db.close();
+    writeFileSync(p, keep);
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    const alone = join(dir, 'alone.db');
+    writeFileSync(alone, keep);
+    const mainAlone = record(alone);
+    for (const ext of ['', '-wal', '-shm']) rmSync(alone + ext, { force: true });
+    return { p, truth, mainAlone, keep, wal };
+  }
+  const rowsById = (rows) => new Map(rows.map((r) => [JSON.parse(r).__rowid, r]));
+
+  // F1: integrity_check's "row N missing from index" counts rows in scan order; read as a rowid,
+  // it replaced an intact row (one the log had edited) with its older copy.
+  it('never puts an older copy over a row the log changed, when a row below it was deleted', async () => {
+    const dir = newDir();
+    const { p, truth } = logStore(
+      dir,
+      (db) => {
+        for (let i = 0; i < 340; i++)
+          insertObs(db, {
+            title: `title ${i} alpha`,
+            narrative: 'n'.repeat(200),
+            project: `p${i % 3}`,
+            epochOffset: i,
+          });
+      },
+      (db) => {
+        db.prepare('DELETE FROM observations WHERE id % 23 = 0').run();
+        db.prepare(`UPDATE observations SET title = title || ' edited' WHERE id % 17 = 0`).run();
+      },
+    );
+    // Row 248's project garbled in place in its newest log frame, the page's structure intact.
+    const target = JSON.parse(rowsById(truth.observations).get('248'));
+    const needle = Buffer.from(`${target.project}discovery${target.title}`);
+    const wal = Buffer.from(readFileSync(`${p}-wal`));
+    let at = -1;
+    for (let o = 32; o + 24 + 4096 <= wal.length; o += 24 + 4096) {
+      const i = wal.subarray(o + 24, o + 24 + 4096).indexOf(needle);
+      if (i >= 0) at = o + 24 + i;
+    }
+    expect(at, 'premise: row 248 is in the log').toBeGreaterThan(0);
+    wal[at + 1] = '9'.charCodeAt(0);
+    const be = wal.readUInt32BE(0) === 0x377f0683;
+    let [s0, s1] = walChecksum(wal.subarray(0, 24), 0, 0, be);
+    for (let o = 32; o + 24 + 4096 <= wal.length; o += 24 + 4096) {
+      [s0, s1] = walChecksum(wal.subarray(o, o + 8), s0, s1, be);
+      [s0, s1] = walChecksum(wal.subarray(o + 24, o + 24 + 4096), s0, s1, be);
+      wal.writeUInt32BE(s0, o + 16);
+      wal.writeUInt32BE(s1, o + 20);
+    }
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    const after = rowsById(record(p).observations);
+    // Every row the log edited and the damage did not touch is as the log left it.
+    for (const [id, row] of rowsById(truth.observations)) {
+      if (id !== '248' && JSON.parse(row).title.endsWith(' edited'))
+        expect(after.get(id), `row ${id}`).toBe(row);
+    }
+    expect(text(r)).toMatch(/observations: some of its pages are damaged/);
+  });
+
+  // F2: a page that drops rows silently, in a table no full index lists, lost the rows the main
+  // file alone holds intact once the main-file fill was limited to the stretches and listed ids.
+  it('takes from the database file alone the rows a damaged page dropped silently', async () => {
+    const dir = newDir();
+    const { p, mainAlone } = logStore(
+      dir,
+      (db) => {
+        const ins = db.prepare(
+          `INSERT INTO deferred_work (project, title, detail, status, created_at_epoch) VALUES ('p', ?, ?, ?, ?)`,
+        );
+        for (let i = 0; i < 120; i++)
+          ins.run(`todo ${i}`, 'd'.repeat(120), ['open', 'done', 'dropped'][i % 3], 1e12 + i);
+      },
+      (db) => {
+        db.prepare(`UPDATE deferred_work SET detail = detail || ' x' WHERE id % 7 = 0`).run();
+      },
+    );
+    const inLog = new Set();
+    const wal = readFileSync(`${p}-wal`);
+    for (let o = 32; o + 24 + 4096 <= wal.length; o += 24 + 4096) inLog.add(wal.readUInt32BE(o));
+    const leaf = pages(p, 'deferred_work').find((pg) => inLog.has(pg));
+    expect(leaf, 'premise: a deferred_work leaf in the log').toBeDefined();
+    // Its cell count halved in the newest frame: rows dropped from every read, without an error.
+    const buf = Buffer.from(wal);
+    let at = -1;
+    for (let o = 32; o + 24 + 4096 <= buf.length; o += 24 + 4096)
+      if (buf.readUInt32BE(o) === leaf) at = o + 24;
+    buf.writeUInt16BE(Math.floor(buf.readUInt16BE(at + 3) / 2), at + 3);
+    const be = buf.readUInt32BE(0) === 0x377f0683;
+    let [s0, s1] = walChecksum(buf.subarray(0, 24), 0, 0, be);
+    for (let o = 32; o + 24 + 4096 <= buf.length; o += 24 + 4096) {
+      [s0, s1] = walChecksum(buf.subarray(o, o + 8), s0, s1, be);
+      [s0, s1] = walChecksum(buf.subarray(o + 24, o + 24 + 4096), s0, s1, be);
+      buf.writeUInt32BE(s0, o + 16);
+      buf.writeUInt32BE(s1, o + 20);
+    }
+    writeFileSync(`${p}-wal`, buf);
+    rmSync(`${p}-shm`, { force: true });
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    const ids = new Set(record(p).deferred_work.map((row) => JSON.parse(row).__rowid));
+    for (const row of mainAlone.deferred_work)
+      expect(ids, `id ${JSON.parse(row).__rowid}`).toContain(JSON.parse(row).__rowid);
+  });
+
+  // F3: a definition that lost its last columns (a prefix of this version's) in both the main file
+  // and the log was refused everywhere; read by name it shifts nothing.
+  it('reads a table whose definition lost its last columns in both files', async () => {
+    const dir = newDir();
+    const p = join(dir, DB);
+    const db = new Database(p);
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    db.pragma('foreign_keys = OFF');
+    insertSession(db, { id: 'sess-1' });
+    for (let i = 0; i < 200; i++) insertObs(db, { title: `t${i}`, narrative: 'n'.repeat(200) });
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    const sql = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'observations'`).pluck().get();
+    const cols = db.prepare(`SELECT name FROM pragma_table_info('observations')`).pluck().all();
+    db.prepare(`UPDATE sqlite_master SET sql = ? WHERE name = 'observations'`).run(
+      sql.slice(0, sql.lastIndexOf(cols.at(-3))).replace(/,\s*$/, '') + ')',
+    );
+    db.pragma('writable_schema = OFF');
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const keep = readFileSync(p);
+    db.pragma('wal_autocheckpoint = 0');
+    for (let i = 0; i < 10; i++)
+      db.prepare(
+        `INSERT INTO events (project, event_type, title, created_at_epoch) VALUES ('p', 'bugfix', ?, 1)`,
+      ).run(`e${i}`);
+    const wal = readFileSync(`${p}-wal`);
+    db.close();
+    writeFileSync(p, keep);
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    plant(p, pages(p, 'idx_sess_memory_sid')[0], 0, Array(8).fill(0x41));
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'observations')).toBe(200);
+    expect(text(r)).toMatch(
+      new RegExp(`observations: column\\(s\\) ${cols.slice(-3).join(', ')} are missing from its definition`),
+    );
+  });
+
+  // F4: a stale table page beside a damaged index page that makes the check stop: the check never
+  // compared the table with its sound indexes, and the rows the stale page lost went unnamed.
+  it('names a table whose page lost a write when the check stops on a damaged index', async () => {
+    const dir = newDir();
+    const { p, truth } = logStore(
+      dir,
+      (db) => {
+        for (let i = 0; i < 300; i++)
+          insertObs(db, {
+            title: `title ${i}`,
+            narrative: 'n'.repeat(200),
+            project: `p${i % 3}`,
+            epochOffset: i,
+          });
+      },
+      (db) => {
+        db.prepare(
+          `UPDATE observations SET title = title || ' edited', superseded_at = 9 WHERE id % 17 = 0`,
+        ).run();
+      },
+    );
+    // A leaf the log rewrote for an edit, its newest frame replaced by the main file's version (a
+    // lost write: the edit is undone, the page valid), and the root of the one full index damaged.
+    const inLog = new Set();
+    const wal = readFileSync(`${p}-wal`);
+    for (let o = 32; o + 24 + 4096 <= wal.length; o += 24 + 4096) inLog.add(wal.readUInt32BE(o));
+    const ro0 = new Database(p, { readonly: true });
+    const leaf = ro0
+      .prepare(`SELECT pageno FROM dbstat WHERE name = 'observations' AND pagetype = 'leaf' ORDER BY path`)
+      .pluck()
+      .all()
+      .find((pg) => inLog.has(pg));
+    const ixRoot = ro0
+      .prepare(`SELECT pageno FROM dbstat WHERE name = 'idx_obs_epoch_project' AND path = '/'`)
+      .pluck()
+      .get();
+    ro0.close();
+    rmSync(`${p}-shm`, { force: true });
+    staleWal(p, leaf);
+    if (inLog.has(ixRoot)) plantWal(p, ixRoot, 0, 8, 0x41);
+    else plant(p, ixRoot, 0, Array(8).fill(0x41));
+    const ro = new Database(p, { readonly: true });
+    try {
+      const now = rowsById(record(p).observations);
+      const reverted = [...rowsById(truth.observations)].filter(([id, row]) => now.get(id) !== row);
+      expect(reverted.length, 'premise: the stale page undid an edit').toBeGreaterThan(0);
+      expect(
+        () => ro.prepare('PRAGMA integrity_check(observations)').all(),
+        'premise: the check stops',
+      ).toThrow();
+    } finally {
+      ro.close();
+    }
+    rmSync(`${p}-shm`, { force: true });
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(text(r)).toMatch(/observations: (some of its pages are damaged|\d+ row\(s\))/);
+  });
+
+  // F5: SQLite does not count the entries of a partial index, so a table whose only index is
+  // partial passed its own check while a stale page had lost its rows.
+  it('names a table with only a partial index whose page lost a write', async () => {
+    const dir = newDir();
+    const { p } = logStore(
+      dir,
+      (db) => {
+        db.exec(
+          'CREATE TABLE zz_user (a TEXT, b INTEGER); CREATE INDEX zz_user_b ON zz_user(b) WHERE b % 2 = 0',
+        );
+        const ins = db.prepare('INSERT INTO zz_user (a, b) VALUES (?, ?)');
+        for (let i = 0; i < 300; i++) ins.run(`row ${i} ${'q'.repeat(120)}`, i);
+      },
+      (db) => {
+        const ins = db.prepare('INSERT INTO zz_user (a, b) VALUES (?, ?)');
+        for (let i = 300; i < 330; i++) ins.run(`row ${i} ${'q'.repeat(120)}`, i);
+      },
+    );
+    const root = (() => {
+      const ro = new Database(p, { readonly: true });
+      try {
+        return ro.prepare(`SELECT pageno FROM dbstat WHERE name = 'zz_user' AND path = '/'`).pluck().get();
+      } finally {
+        ro.close();
+      }
+    })();
+    rmSync(`${p}-shm`, { force: true });
+    staleWal(p, root);
+    const ro = new Database(p, { readonly: true });
+    try {
+      expect(
+        ro.prepare('SELECT count(*) FROM zz_user NOT INDEXED').pluck().get(),
+        'premise: rows lost',
+      ).toBeLessThan(330);
+      expect(
+        ro.prepare('PRAGMA integrity_check(zz_user)').pluck().get(),
+        'premise: its own check passes',
+      ).toBe('ok');
+    } finally {
+      ro.close();
+    }
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(text(r)).toMatch(/zz_user: /);
+  });
+
+  // F6: a sqlite_master page that lost cells hides tables without an error; this version's own
+  // tables were named, the others vanished with no line.
+  it('says so when part of the list of tables is lost and tables this version does not create vanish', async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 20 });
+    const db = new Database(p);
+    ensureSearchTelemetrySchema(db);
+    db.exec('CREATE TABLE zz_user (a TEXT)');
+    db.prepare(`INSERT INTO zz_user VALUES ('kept')`).run();
+    for (let i = 0; i < 30; i++) db.exec(`CREATE TABLE zz_pad_${i} (a TEXT)`);
+    const leaves = db
+      .prepare(
+        `SELECT pageno, ncell FROM dbstat WHERE name = 'sqlite_schema' AND pagetype = 'leaf' ORDER BY path`,
+      )
+      .all();
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.close();
+    const last = leaves.at(-1);
+    expect(last.ncell, 'premise: the last sqlite_master leaf holds several rows').toBeGreaterThan(3);
+    plant(p, last.pageno, 3, [0, 1]);
+    const ro = new Database(p, { readonly: true });
+    try {
+      expect(
+        ro.prepare(`SELECT count(*) FROM pragma_table_list WHERE name = 'zz_user'`).pluck().get(),
+        'premise: zz_user unlisted',
+      ).toBe(0);
+    } finally {
+      ro.close();
+    }
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(text(r)).toMatch(/Part of its list of tables could not be read/);
   });
 });
 

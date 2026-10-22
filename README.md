@@ -997,24 +997,36 @@ node cli.mjs repair-db
 ```
 
 It reads the database without writing to it and copies the rows SQLite can still give back into a
-fresh file. A table is read past each damaged page; where the database's log hides rows its main
-file still holds, those rows are taken from the main file alone, as of its last checkpoint, and the
-output says so for each table, since what the log changed or deleted in them is not there. It
-checks the fresh file and writes it into the database through SQLite's backup API, after copying
-the database and its log as found to `claude-mem-lite.db.damaged-<time>` (and `-wal`); the output
-prints the command that puts them back. It needs free space for about three copies of the database.
+fresh file, reading each table past its damaged pages. For a table that lost rows that way, it also
+takes every row the database file alone (without its log, as of its last checkpoint) holds and that
+read did not return, and the output says so for each table: what the log changed in those rows is
+not there, and a row the log deleted may be back. It checks the fresh file and writes it into the
+database through SQLite's backup API, after copying the database and its log as found to
+`claude-mem-lite.db.damaged-<time>` (and `-wal`); the output prints the command that puts them back.
+It needs free space for about three copies of the database.
 
-The output names every table it finds with a damaged page (rows on such a page may be missing, or
-hold damaged values), and lists by id the rows an index lists that no read returned, the rows the
-fresh file refused, and the rows whose values disagree with the table's indexes; where the database
-file alone holds such a row intact, that copy is kept. When part of the list of tables cannot be
-read, it says so: a table listed only there is not in the repaired database. Rows on pages no query
-reaches (under a damaged interior page, say) stay only in the kept file, where the sqlite3
-command-line tool's `.recover` may find some of them.
+The output names every table it finds with a damaged page, or with rows that disagree with one of
+its indexes (rows of such a table may be missing, or hold damaged values; they are copied as read),
+and lists by id the rows an index lists that no read returned and the rows the fresh file refused.
+The definition of each table this version makes is checked by its column names. When the database
+file alone holds this version's definition and the database with its log does not, the table is
+read from the database file alone, and the output says so. Otherwise a definition that names a
+column this version does not have, or lacks one before its last, is not read through (the table is
+read from the database file alone when that one's can be, and the output says so), and one that lost
+only its last columns is read, with the columns whose values were not copied named. When part of the list of tables cannot be read, it says so: a table listed only there may
+be missing from the repaired database with no line of its own.
+
+Some damage it cannot see. Rows on pages no query reaches (under a damaged interior page, say) stay
+only in the kept file, where the sqlite3 command-line tool's `.recover` may find some of them. A page
+that lost a write and is otherwise valid shows only against the table's indexes, so when the lost
+write changed only columns no index covers, the older values are copied with no line. A definition
+whose column names were only swapped reads as valid, so unless the database file alone holds this
+version's definition, the two columns' values are copied into each other with no line.
 
 It writes nothing to the database when, at its lock check, another connection to it has read from
 it (close every session: one that has opened the file and not read it yet cannot be seen, and one
-that opens it after the check sees the repaired database), when it is written while being read, when no row of some table can be written, or when the database is from another schema
+that opens it after the check sees the repaired database), when it is written while being read, when
+it reads observations and can write none of them, or when the database is from another schema
 version. When it can read no observation, or SQLite cannot read the database at all, it prints the
 snapshot restore or the set-aside instead; when SQLite cannot write into it, it leaves the checked
 copy and prints the command that puts it in place.
