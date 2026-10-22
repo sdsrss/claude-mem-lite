@@ -989,23 +989,29 @@ After it finishes, `~/.claude-mem-lite/` is back in sync with the latest release
 ### Damaged database
 
 When `doctor` prints `✗ Database integrity:` (or `✗ Database:` with a malformed-image or schema
-message), close every Claude Code session and run, from a terminal:
+message), close every Claude Code session and run, from a terminal, the command doctor prints —
+from a git clone:
 
 ```bash
-claude-mem-lite repair-db
+node cli.mjs repair-db
 ```
 
-It reads the database without writing to it, copies the rows SQLite can still read into a fresh
-file, checks that file, and writes it back into the database. Before that write, the database
-and its log as found are copied to `claude-mem-lite.db.damaged-<time>` (and `-wal`), and the output
-prints the command that puts them back. When the log is what makes the database unreadable, it
-reads the database file alone, and says so: rows saved only in the log are then not in the
-repaired database. It writes nothing when another connection to the database has read from it
-(close every session: one that has opened the file and not read it yet cannot be seen), when a
-row it read cannot be written to the fresh file, or when the database is from another schema
-version. Rows on a page SQLite cannot read are lost either way; the output names those an index
-lists by id, and the stretch of a table where it could not check the rest. When it cannot read
-the database at all, it prints the snapshot restore or the set-aside instead.
+It reads the database without writing to it and copies the rows SQLite can still give back into a
+fresh file. A table is read past each damaged page; where the database's log hides rows its main
+file still holds, those rows are taken from the main file alone, as of its last checkpoint, and the
+output says so for each table, since what the log changed or deleted in them is not there. It
+checks the fresh file and writes it into the database through SQLite's backup API, after copying
+the database and its log as found to `claude-mem-lite.db.damaged-<time>` (and `-wal`); the output
+prints the command that puts them back. It needs free space for about three copies of the database.
+
+The output names every table with a damaged page (rows on such a page may be missing, or hold
+damaged values), the rows an index lists that no read returned, and the rows the fresh file
+refused, by id. It writes nothing to the database when another connection to it has read from it
+(close every session: one that has opened the file and not read it yet cannot be seen), when it is
+written while being read, when no row of some table can be written, when no observation can be
+read at all, or when the database is from another schema version. When SQLite cannot read the
+database at all, it prints the snapshot restore or the set-aside instead; when SQLite cannot write
+into it, it leaves the checked copy and prints the command that puts it in place.
 
 ## Uninstall
 

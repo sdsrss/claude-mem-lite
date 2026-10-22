@@ -283,6 +283,9 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
+  // repair-db's read (D#546); after schema.mjs, which it imports, and before db-repair.mjs, which
+  // imports it (tests/source-files-swap-order.test.mjs).
+  'lib/db-salvage.mjs',
   // repair-db and doctor's integrity check (D#541), imported by install.mjs on demand; after
   // schema.mjs, which it imports (tests/source-files-swap-order.test.mjs).
   'lib/db-repair.mjs',

@@ -3109,80 +3109,88 @@ async function doctor() {
         .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'")
         .get();
       db.close();
-      if (fts) {
-        ok('FTS5 index: present');
-        // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
-        if (dbWriteBlocked) {
-          // Everything past this point wants a WRITE handle on a file this install
-          // has just been told it is too old to write — which is the exact way a
-          // store gets locked out for good. The rebuild below is gated by sitting
-          // inside this else, not by a second condition that could drift from it.
-          //
-          // dwarn rather than silence, and the REASON is interpolated rather than
-          // assumed: "I could not look" and "I looked and it is fine" have to stay
-          // distinguishable, and so does "I did not look, and here is which of the
-          // three reasons applies" — a line that names the wrong reason ends the
-          // reader's search just as a false green does.
-          dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
-        } else {
-          try {
-            const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
-            const rwDb = new Database(DB_PATH);
-            rwDb.pragma('busy_timeout = 3000');
-            try {
-              const { healthy, details, busy } = checkFTSIntegrity(rwDb);
-              if (healthy) {
-                ok('FTS5 integrity: all indexes healthy');
-              } else if (busy) {
-                // In use is not damage: no rebuild, which would be a long write under the
-                // live hooks' feet (or fail on the same lock).
-                dwarn(
-                  'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
-                );
-              } else {
-                dwarn('FTS5 integrity issues detected:');
-                for (const d of details) log(`    ${d}`);
-                log('  Attempting FTS5 rebuild...');
-                const { rebuilt, errors } = rebuildFTS(rwDb);
-                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-                if (errors.length > 0) {
-                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                  issues++;
-                }
-              }
-            } finally {
-              rwDb.close();
-            }
-          } catch (e) {
-            dwarn('FTS5 integrity check failed: ' + e.message);
-          }
-        }
-      } else {
-        dwarn('FTS5 index: missing (will be created on server start)');
+      if (fts) ok('FTS5 index: present');
+      else dwarn('FTS5 index: missing (will be created on server start)');
+      // D#541, D#546. Read-only, and BEFORE the FTS check below, which opens the store read-write:
+      // on a store whose log holds a damaged page, that connection's close folds the page into the
+      // main file, and the rows repair-db reads from the main file alone are gone (round-2 claims
+      // F2: p5-v0/v1, 200 observations). v6.30.2 printed no ✗ while this check failed on 114 of
+      // 869 damaged-WAL plants. Cost: 679-687 ms on a 286 MB store. It runs when dbWriteBlocked
+      // too, which is about writing: withheld, it left 3 of the 869 green (p41: a damaged
+      // schema_version page is also what makes this install unsure it can read the store).
+      let integrityPassed = false;
+      // Its own catch: a module that will not load is not a database fault.
+      let checked;
+      try {
+        const { checkIntegrity, summarizeIntegrity } = await import('./lib/db-repair.mjs');
+        const { REPAIR_DB_COMMAND } = await import('./lib/db-unusable.mjs');
+        checked = { ...checkIntegrity(DB_PATH), summarizeIntegrity, REPAIR_DB_COMMAND };
+      } catch (e) {
+        dwarn(`Database integrity: not checked (${e?.code || e?.message})`);
       }
-      // D#541. Last, so it judges what the FTS rebuild above left. This check is read-only (the
-      // FTS check above is not). v6.30.2 printed no ✗ while it failed on 114 of 869 damaged-WAL
-      // plants (index pages 60, table pages 50). Cost: 679-687 ms on a 286 MB store.
-      if (dbWriteBlocked) {
-        dwarn(`Database integrity: not checked — ${dbWriteBlocked}`);
-      } else {
-        // Its own catch: a module that will not load is not a database fault.
-        let checked;
-        try {
-          const { checkIntegrity, summarizeIntegrity } = await import('./lib/db-repair.mjs');
-          const { REPAIR_DB_COMMAND } = await import('./lib/db-unusable.mjs');
-          checked = { ...checkIntegrity(DB_PATH), summarizeIntegrity, REPAIR_DB_COMMAND };
-        } catch (e) {
-          dwarn(`Database integrity: not checked (${e?.code || e?.message})`);
+      if (checked?.ok) {
+        ok('Database integrity: ok');
+        integrityPassed = true;
+      } else if (checked?.notChecked) {
+        dwarn(`Database integrity: not checked — ${checked.notChecked}`);
+      } else if (checked) {
+        fail(`Database integrity: ${checked.summarizeIntegrity(checked.problems)}`);
+        log(`    ${INTEGRITY_REMEDY(checked.REPAIR_DB_COMMAND)}`);
+        if (dbWriteBlocked) {
+          log(
+            `    Note: ${dbWriteBlocked}; if repair-db refuses it as another version's, run the newest installed claude-mem-lite's repair-db.`,
+          );
         }
-        if (checked?.ok) {
-          ok('Database integrity: ok');
-        } else if (checked?.notChecked) {
-          dwarn(`Database integrity: not checked — ${checked.notChecked}`);
-        } else if (checked) {
-          fail(`Database integrity: ${checked.summarizeIntegrity(checked.problems)}`);
-          log(`    ${INTEGRITY_REMEDY(checked.REPAIR_DB_COMMAND)}`);
-          issues++;
+        issues++;
+      }
+      // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
+      if (fts && dbWriteBlocked) {
+        // Everything past this point wants a WRITE handle on a file this install
+        // has just been told it is too old to write — which is the exact way a
+        // store gets locked out for good. The rebuild below is gated by sitting
+        // inside this else, not by a second condition that could drift from it.
+        //
+        // dwarn rather than silence, and the REASON is interpolated rather than
+        // assumed: "I could not look" and "I looked and it is fine" have to stay
+        // distinguishable, and so does "I did not look, and here is which of the
+        // three reasons applies" — a line that names the wrong reason ends the
+        // reader's search just as a false green does.
+        dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
+      } else if (fts && !integrityPassed) {
+        dwarn(
+          'FTS5 integrity: not checked — it writes to the database, which did not pass the integrity check above (repair-db rebuilds the search indexes)',
+        );
+      } else if (fts) {
+        try {
+          const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
+          const rwDb = new Database(DB_PATH);
+          rwDb.pragma('busy_timeout = 3000');
+          try {
+            const { healthy, details, busy } = checkFTSIntegrity(rwDb);
+            if (healthy) {
+              ok('FTS5 integrity: all indexes healthy');
+            } else if (busy) {
+              // In use is not damage: no rebuild, which would be a long write under the
+              // live hooks' feet (or fail on the same lock).
+              dwarn(
+                'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
+              );
+            } else {
+              dwarn('FTS5 integrity issues detected:');
+              for (const d of details) log(`    ${d}`);
+              log('  Attempting FTS5 rebuild...');
+              const { rebuilt, errors } = rebuildFTS(rwDb);
+              if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
+              if (errors.length > 0) {
+                fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                issues++;
+              }
+            }
+          } finally {
+            rwDb.close();
+          }
+        } catch (e) {
+          dwarn('FTS5 integrity check failed: ' + e.message);
         }
       }
     } catch (e) {

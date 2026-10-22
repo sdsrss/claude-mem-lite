@@ -18,6 +18,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  readSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -193,6 +194,18 @@ const text = (r) => r.lines.map((l) => l.text).join('\n');
 const run = (p, opts = {}) => repairDb(p, { lockPath: join(dirname(p), 'install.lock'), ...opts });
 const premise = (p) => expect(checkIntegrity(p).ok, 'premise: the plant fails integrity_check').toBe(false);
 const ids = (rows) => rows.map((row) => Number(JSON.parse(row).id));
+
+/**
+ * A store whose log holds a damaged index frame: a checkpoint, which a read-write close does, would
+ * change the main file's bytes, so a test on it can see one (round-2 defects F16).
+ */
+function damagedLog() {
+  const dir = newDir();
+  const { p } = walStore(dir);
+  plantWal(p, pages(p, 'idx_obs_project_live')[0], 1000, 64, 0x41);
+  premise(p);
+  return { dir, p };
+}
 
 function indexDamaged() {
   const dir = newDir();
@@ -387,7 +400,7 @@ describe('repairDb', () => {
     const lost = before.filter((row) => !after.some((a) => a.id === row.id)).map((row) => Number(row.id));
     expect(lost.length).toBeGreaterThan(0);
     expect(lost.length).toBeLessThan(20);
-    expect(r.tables.observations.missing).toEqual(lost);
+    expect(r.tables.observations.missing.map(Number)).toEqual(lost);
     expect(text(r)).toMatch(
       new RegExp(
         `observations: ${lost.length} row\\(s\\) an index lists could not be read \\(ids ${lost[0]}, `,
@@ -413,7 +426,7 @@ describe('repairDb', () => {
     // Two leaves of ~9 rows each, nothing between them.
     expect(lost.length).toBeGreaterThan(0);
     expect(lost.length).toBeLessThan(40);
-    expect(r.tables.observations.missing).toEqual(lost);
+    expect(r.tables.observations.missing.map(Number)).toEqual(lost);
   });
 
   it('names the rows a damaged cell count drops from the scan without an error', async () => {
@@ -427,7 +440,7 @@ describe('repairDb', () => {
     expect(r.outcome, text(r)).toBe('repaired');
     const lost = before.filter((id) => !ids(record(p).observations).includes(id));
     expect(lost.length).toBeGreaterThan(0);
-    expect(r.tables.observations.missing).toEqual(lost);
+    expect(r.tables.observations.missing.map(Number)).toEqual(lost);
     expect(text(r)).toMatch(/observations: \d+ row\(s\) an index lists could not be read/);
   });
 
@@ -489,7 +502,7 @@ describe('repairDb', () => {
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('repaired');
     sameExceptVersion(record(p), before);
-    expect(text(r)).toMatch(/zz: its definition does not parse/);
+    expect(text(r)).toMatch(/zz: could not be read \(its definition does not parse\)/);
   });
 
   // The 869-plant sweep of the second round (p61-v1): with the FTS table's definition damaged,
@@ -588,7 +601,8 @@ describe('repairDb', () => {
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('refused');
     expect(text(r)).toMatch(/not a database/);
-    expect(text(r)).toMatch(/Nothing was written to the database/);
+    expect(text(r)).toMatch(/the database is as it was/);
+    expect(text(r)).toMatch(/read from the database file without its log/);
     expect([sha(p), sha(`${p}-wal`)]).toEqual([mainSha, walSha]);
     const cmd = r.lines.at(-1).text;
     expect(cmd).toMatch(/^rm -f .* && mv .*\.repaired-.* /);
@@ -689,7 +703,8 @@ describe('repairDb', () => {
   // p10-v5 in the 869-plant sweep: every observation read NULL in a column the fresh schema
   // declares NOT NULL, all inserts failed, and a copy that did not count them came out sound,
   // empty, and read as healthy by doctor.
-  it('refuses, writing nothing, when a row the old store holds cannot be written', async () => {
+  /** A store whose observations allow NULL in decay_seen_count, which this version declares NOT NULL. */
+  function nullable(where) {
     const dir = newDir();
     const p = buildStore(dir);
     const db = new Database(p);
@@ -700,23 +715,46 @@ describe('repairDb', () => {
     ).run();
     db.close();
     const db2 = new Database(p);
-    db2.prepare('UPDATE observations SET decay_seen_count = NULL WHERE id = 7').run();
+    db2.prepare(`UPDATE observations SET decay_seen_count = NULL WHERE ${where}`).run();
     db2.close();
     plant(p, pages(p, 'idx_obs_project_live')[0], 1000, Array(64).fill(0x41));
     premise(p);
+    return { dir, p };
+  }
+
+  // A row a damaged page garbles reads with NULLs or values the schema forbids; one row is not a
+  // reason to keep the whole store damaged (round-2 defects F6: 56 of 530 plants ended in a
+  // refusal with no next step).
+  it('repairs around a row that cannot be written, and names it by id', async () => {
+    const { p } = nullable('id = 7');
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(text(r)).toMatch(
+      /observations: 1 row\(s\) could not be written to the fresh file \(NOT NULL[^)]*\): ids 7\./,
+    );
+    expect(r.tables.observations.written).toBe(299);
+    expect(checkIntegrity(p).ok).toBe(true);
+  });
+
+  // No row of a table written is a schema read wrong, not damaged rows: refuse, write nothing, and
+  // give the fallback rather than a dead end.
+  it('refuses, writing nothing, when no row of a table can be written, and prints the fallback', async () => {
+    const { dir, p } = nullable('1');
     const original = sha(p);
     const r = await run(p);
     expect(r.outcome).toBe('refused');
     expect(r.exitCode).toBe(1);
-    expect(text(r)).toMatch(/observations: 1 of 300 rows could not be written/);
-    expect(text(r)).toMatch(/NOT NULL/);
+    expect(text(r)).toMatch(
+      /observations: none of its 300 rows could be written to the fresh file \(NOT NULL/,
+    );
+    expect(text(r)).toMatch(/Once every Claude Code session is closed, run:/);
     expect(sha(p)).toBe(original);
     expect(asides(dir)).toEqual([]);
     expect(tmpLeft(dir)).toEqual([]);
   });
 
   it('refuses while another process holds the store, and leaves its files as they were', async () => {
-    const { dir, p } = indexDamaged();
+    const { dir, p } = damagedLog();
     const holder = await holdInChild(p);
     const state = () => [sha(p), existsSync(`${p}-wal`) ? sha(`${p}-wal`) : null];
     const found = state();
@@ -967,6 +1005,405 @@ describe('repairDb', () => {
   });
 });
 
+// D#546: the round-2 reviews of D#541 (docs/audits/20261021-v6.31.0-d541-r2-{defects,claims}.md).
+describe('repairDb: what it reads (D#546)', () => {
+  const masterLeaves = (p) => pages(p, 'sqlite_schema');
+  const rootOf = (p, name) => {
+    const db = new Database(p, { readonly: true });
+    try {
+      return db.prepare(`SELECT pageno FROM dbstat WHERE name = ? AND path = '/'`).pluck().get(name);
+    } finally {
+      db.close();
+    }
+  };
+  const count = (p, t) => {
+    const db = new Database(p, { readonly: true });
+    try {
+      return db.prepare(`SELECT count(*) FROM "${t}"`).pluck().get();
+    } finally {
+      db.close();
+    }
+  };
+  const files = (p) => ({ main: sha(p), wal: existsSync(`${p}-wal`) ? sha(`${p}-wal`) : null });
+
+  // Claims F1: under writable_schema a full scan of sqlite_master threw, the read fell back to the
+  // main file alone, and the 41 observations the log holds were left in the kept files.
+  it('reads every table SQLite parsed when sqlite_master will not scan', async () => {
+    const dir = newDir();
+    const { p } = walStore(dir);
+    plantWal(p, masterLeaves(p)[2], 8, 64, 0xff);
+    const ws = new Database(p, { readonly: true });
+    ws.unsafeMode(true);
+    ws.pragma('writable_schema = ON');
+    try {
+      expect(
+        () => ws.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table'`).all(),
+        'premise',
+      ).toThrow();
+      expect(ws.prepare('SELECT count(*) FROM (SELECT * FROM observations)').pluck().get(), 'premise').toBe(
+        241,
+      );
+    } finally {
+      ws.close();
+    }
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'observations')).toBe(241);
+    expect(text(r)).not.toMatch(/database file alone/);
+  });
+
+  // Defects F2: a log frame that hides most of a table the main file still holds.
+  it('takes the rows the log hides from the main file alone, and says so', async () => {
+    const dir = newDir();
+    const { p, mainAlone } = walStore(dir);
+    plantWal(p, rootOf(p, 'observations'), 3, 2, 0); // the root's cell count read as 0
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    const after = record(p).observations;
+    for (const row of mainAlone.observations)
+      expect(after, 'every row the main file alone holds').toContain(row);
+    expect(text(r)).toMatch(
+      /observations: \d+ row\(s\) SQLite could not read with the log were taken from the database file without it/,
+    );
+    expect(text(r)).toMatch(/observations: some of its pages are damaged/);
+  });
+
+  // Claims F4: no observation reads with the log, and the main file alone has none: an empty
+  // observations table is not a repair.
+  it('refuses when no source gives back an observation, even when the main file alone reads an empty table', async () => {
+    const dir = newDir();
+    const p = join(dir, DB);
+    const db = new Database(p);
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    insertSession(db, { id: 'sess-1' });
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.close();
+    const keep = readFileSync(p);
+    const raw = new Database(p);
+    // Every frame stays in the log: an automatic checkpoint would restart it under the main file
+    // written back below.
+    raw.pragma('wal_autocheckpoint = 0');
+    for (let i = 0; i < 120; i++)
+      insertObs(raw, { title: `only in the log ${i}`, narrative: 'n'.repeat(400) });
+    const wal = readFileSync(`${p}-wal`);
+    raw.close();
+    writeFileSync(p, keep);
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    plantWal(p, rootOf(p, 'observations'), 0, 4096, 0xff);
+    premise(p);
+    const withLog = new Database(p, { readonly: true });
+    try {
+      expect(
+        () => withLog.prepare('SELECT * FROM observations').all(),
+        'premise: no observation reads with the log',
+      ).toThrow();
+    } finally {
+      withLog.close();
+    }
+    const before = files(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('refused');
+    expect(text(r)).toMatch(/no observation could be read/);
+    expect(files(p)).toEqual(before);
+    expect(asides(dir)).toEqual([]);
+  });
+
+  // p10-v5 of the 869: damage took two column definitions out of the log's copy of the
+  // observations statement, and every later column read shifted. Here the statement is rewritten
+  // in the log the same way, so the rows only the log holds can be checked value by value.
+  it('reads a table whose definition the log garbled through the one the main file holds', async () => {
+    const dir = newDir();
+    const { p } = walStore(dir);
+    const truth = record(p).observations;
+    const db = new Database(p);
+    const keep = readFileSync(p);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      `UPDATE sqlite_master SET sql = replace(replace(sql, ', last_decided_session_id TEXT DEFAULT NULL', ''), ', demoted_at INTEGER DEFAULT NULL', '') WHERE name = 'observations'`,
+    ).run();
+    const wal = readFileSync(`${p}-wal`);
+    db.close();
+    writeFileSync(p, keep);
+    writeFileSync(`${p}-wal`, wal);
+    rmSync(`${p}-shm`, { force: true });
+    const columns = (db) =>
+      db.prepare(`SELECT count(*) FROM pragma_table_info('observations')`).pluck().get();
+    const mem = new Database(':memory:');
+    initSchema(mem);
+    const want = columns(mem);
+    mem.close();
+    const shifted = new Database(p, { readonly: true });
+    try {
+      expect(columns(shifted), 'premise: two columns gone').toBe(want - 2);
+    } finally {
+      shifted.close();
+    }
+    plant(p, pages(p, 'idx_obs_project_live')[0], 1000, Array(64).fill(0x41)); // so integrity_check fails
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(record(p).observations).toEqual(truth);
+    expect(text(r)).toMatch(
+      /observations: its definition reads differently from this version's in the database with its log/,
+    );
+  });
+
+  // Defects F1: a page whose cell count is damaged drops rows from every read with no error, and
+  // deferred_work has no index that lists every row.
+  it('names a table whose damaged page dropped rows no read returns', async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 3 });
+    const db = new Database(p);
+    const ins = db.prepare(
+      `INSERT INTO deferred_work (project, title, detail, created_at_epoch) VALUES ('p', ?, ?, ?)`,
+    );
+    for (let i = 1; i <= 40; i++) ins.run(`TODO ${i}`, 'd'.repeat(150), 1e12 + i);
+    db.close();
+    plant(p, pages(p, 'deferred_work')[0], 3, [0, 1]);
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'deferred_work')).toBeLessThan(40);
+    expect(text(r)).toMatch(
+      /deferred_work: some of its pages are damaged \([^)]+\), so rows on them may be missing/,
+    );
+  });
+
+  // Claims F5: rows between two damaged leaves of a table no index lists were lost (578 of 600
+  // read by rowid, 292 kept).
+  it('reads the rows between two damaged leaves of a table with no index', async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 3 });
+    const db = new Database(p);
+    db.exec('CREATE TABLE zz_noindex (a TEXT, b INTEGER)');
+    const ins = db.prepare('INSERT INTO zz_noindex (a, b) VALUES (?, ?)');
+    for (let i = 0; i < 400; i++) ins.run(`row ${i} ${'q'.repeat(150)}`, i);
+    db.close();
+    const leaves = pages(p, 'zz_noindex');
+    expect(leaves.length, 'premise: enough leaves').toBeGreaterThan(8);
+    const onLeaf = (pg) => {
+      const d = new Database(p, { readonly: true });
+      try {
+        return d.prepare(`SELECT ncell FROM dbstat WHERE name = 'zz_noindex' AND pageno = ?`).pluck().get(pg);
+      } finally {
+        d.close();
+      }
+    };
+    const damaged = [leaves[2], leaves[6]];
+    const lostAtMost = damaged.reduce((n, pg) => n + onLeaf(pg), 0);
+    for (const pg of damaged) plant(p, pg, 0, Array(8).fill(0x41));
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'zz_noindex')).toBe(400 - lostAtMost);
+    expect(text(r)).toMatch(/zz_noindex: some of its pages are damaged/);
+  });
+
+  // Defects F3: a newer store whose schema_version page is damaged was "repaired" to v49 with its
+  // newer column dropped.
+  it("refuses a store whose version cannot be read and whose columns are not this version's", async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 20 });
+    const db = new Database(p);
+    db.exec('ALTER TABLE observations ADD COLUMN v50_payload TEXT');
+    db.exec(`UPDATE observations SET v50_payload = 'only-in-v50-' || id`);
+    db.exec('UPDATE schema_version SET version = 50');
+    db.close();
+    plant(p, pages(p, 'schema_version')[0], 0, Array(8).fill(0x41));
+    premise(p);
+    const before = files(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('refused');
+    expect(text(r)).toMatch(
+      /schema version cannot be read, and observations has v50_payload, which this version does not/,
+    );
+    expect(text(r)).toMatch(/Once every Claude Code session is closed, run:|No backup snapshot/);
+    expect(files(p)).toEqual(before);
+  });
+
+  // p61-v10 of the 869: damage in an FTS5 table's stored definition passes integrity_check and
+  // fails every rebuild; repair-db called the store sound.
+  it('repairs a store whose FTS5 definition names a column its content table lacks', async () => {
+    const dir = newDir();
+    const p = buildStore(dir, { rows: 20 });
+    const db = new Database(p);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      `UPDATE sqlite_master SET sql = replace(sql, 'learned,', 'AAAAAAAAed,') WHERE name = 'session_summaries_fts'`,
+    ).run();
+    db.close();
+    const ro = new Database(p, { readonly: true });
+    try {
+      expect(ro.pragma('integrity_check', { simple: true }), 'premise: integrity_check passes').toBe('ok');
+    } finally {
+      ro.close();
+    }
+    expect(checkIntegrity(p)).toMatchObject({
+      ok: false,
+      problems: [expect.stringMatching(/session_summaries_fts: no such column/)],
+    });
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(checkIntegrity(p).ok).toBe(true);
+  });
+
+  // Claims F6: SQLITE_NOMEM from damaged FTS5 data is damage, not a failure to open.
+  it('reads SQLITE_NOMEM from integrity_check as damage, and repairs the store', async () => {
+    const dir = newDir();
+    const { p } = walStore(dir);
+    const fts = pages(p, 'observations_fts_data');
+    let planted = false;
+    for (const pg of fts) {
+      const keep = readFileSync(`${p}-wal`);
+      plantWal(p, pg, 3000, 64, 0xff);
+      const db = new Database(p, { readonly: true });
+      let code = null;
+      try {
+        db.prepare('PRAGMA integrity_check').all();
+      } catch (e) {
+        code = e.code;
+      } finally {
+        db.close();
+      }
+      if (code === 'SQLITE_NOMEM') {
+        planted = true;
+        break;
+      }
+      writeFileSync(`${p}-wal`, keep);
+      rmSync(`${p}-shm`, { force: true });
+    }
+    expect(planted, 'premise: a plant on which integrity_check raises SQLITE_NOMEM').toBe(true);
+    expect(checkIntegrity(p).notChecked).toBeUndefined();
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    expect(count(p, 'observations')).toBe(241);
+  });
+
+  // Defects F8: damage in a full index listed rowids "an index lists" that never existed.
+  it('names no row lost when only an index is damaged', async () => {
+    const dir = newDir();
+    const p = buildStore(dir);
+    const before = record(p);
+    // Into its cells: the page header's bytes 5-6 give where the cell content starts.
+    const leaf = pages(p, 'idx_obs_epoch_project')[1];
+    const head = Buffer.alloc(8);
+    const fd = openSync(p, 'r');
+    readSync(fd, head, 0, 8, (leaf - 1) * 4096);
+    closeSync(fd);
+    plant(p, leaf, head.readUInt16BE(5) + 8, Array(64).fill(0x41));
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    sameExceptVersion(record(p), before);
+    expect(text(r)).not.toMatch(/could not be read|may be missing/);
+  });
+});
+
+describe('repairDb: what it writes (D#546)', () => {
+  const files = (p) => ({ main: sha(p), wal: existsSync(`${p}-wal`) ? sha(`${p}-wal`) : null });
+  const patchBackup = (wrap) => {
+    const original = Database.prototype.backup;
+    Database.prototype.backup = function (...args) {
+      return wrap.call(this, original, ...args);
+    };
+    return () => {
+      Database.prototype.backup = original;
+    };
+  };
+
+  it('the lock probe leaves the main file and its log byte for byte', () => {
+    const { p } = damagedLog();
+    const before = files(p);
+    expect(probeExclusive(p)).toMatchObject({ acquired: true });
+    expect(files(p)).toEqual(before);
+  });
+
+  // Defects F4: a backup that failed after the probe left the store checkpointed.
+  it('leaves the store as found when the write-back fails', async () => {
+    const { dir, p } = damagedLog();
+    const before = files(p);
+    const restore = patchBackup(async function (original, dest, opts) {
+      await original.call(this, dest, {
+        ...opts,
+        progress: (x) => {
+          opts.progress(x);
+          throw Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR_WRITE' });
+        },
+      });
+    });
+    let r;
+    try {
+      r = await run(p);
+    } finally {
+      restore();
+    }
+    expect(r.outcome, text(r)).toBe('refused');
+    expect(files(p)).toEqual(before);
+    expect(asides(dir)).toEqual([]);
+    expect(tmpLeft(dir)).toEqual([]);
+  });
+
+  // Defects F5: a save committed between the lock probe and the backup's first step was lost
+  // from both the store and the kept file.
+  it('refuses, keeping the save, when the store is written after the lock probe', async () => {
+    const { p } = damagedLog();
+    const restore = patchBackup(async function (original, dest, opts) {
+      const w = new Database(dest);
+      w.prepare(
+        `INSERT INTO deferred_work (project, title, created_at_epoch) VALUES ('p', 'saved in the window', 1)`,
+      ).run();
+      w.close();
+      return original.call(this, dest, opts);
+    });
+    let r;
+    try {
+      r = await run(p);
+    } finally {
+      restore();
+    }
+    expect(r.outcome, text(r)).toBe('refused');
+    expect(text(r)).toMatch(/changed while it was being read/);
+    const db = new Database(p, { readonly: true });
+    try {
+      expect(
+        db.prepare(`SELECT count(*) FROM deferred_work WHERE title = 'saved in the window'`).pluck().get(),
+      ).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  // better-sqlite3's backup resolves at once, having copied nothing, when its first step meets
+  // another writer (totalPages 0).
+  it('refuses, writing nothing, when another writer holds the store at the first step', async () => {
+    const { p } = damagedLog();
+    let holder;
+    const restore = patchBackup(async function (original, dest, opts) {
+      holder = new Database(dest);
+      holder.exec('BEGIN IMMEDIATE');
+      try {
+        return await original.call(this, dest, opts);
+      } finally {
+        holder.exec('ROLLBACK');
+        holder.close();
+      }
+    });
+    const before = files(p);
+    let r;
+    try {
+      r = await run(p);
+    } finally {
+      restore();
+    }
+    expect(r.outcome, text(r)).toBe('refused');
+    expect(text(r)).toMatch(/Another process has .* open/);
+    expect(files(p).main).toBe(before.main);
+  });
+});
+
 describe('install.mjs repair-db (the shipped command)', () => {
   function cli(dataDir, args) {
     const home = fixtures.track(mkdtempSync(join(tmpdir(), 'cml-db-repair-home-')));
@@ -1005,6 +1442,31 @@ describe('install.mjs repair-db (the shipped command)', () => {
     const good = cli(dir, ['doctor']).stdout;
     expect(good).toMatch(/✓ Database integrity: ok/);
     expect(good).not.toMatch(/✗ Database/);
+  });
+
+  // Round-2 claims F2: doctor's read-write FTS check ran first and its close folded the damaged
+  // log frame into the main file, so repair-db, run next as doctor says, found no observation the
+  // main file alone could give back (p5-v0/v1: 200 lost).
+  it('doctor leaves a damaged log where it is, so repair-db still reads the main file alone', () => {
+    const dir = newDir();
+    const { p, mainAlone } = walStore(dir);
+    const db = new Database(p, { readonly: true });
+    const root = db
+      .prepare(`SELECT pageno FROM dbstat WHERE name = 'observations' AND path = '/'`)
+      .pluck()
+      .get();
+    db.close();
+    plantWal(p, root, 0, 64, 0xff);
+    premise(p);
+    const before = { main: sha(p), wal: sha(`${p}-wal`) };
+    const out = cli(dir, ['doctor']).stdout;
+    expect(out).toMatch(/✗ Database integrity: /);
+    expect(out).toMatch(/FTS5 integrity: not checked — it writes to the database/);
+    expect({ main: sha(p), wal: sha(`${p}-wal`) }, 'doctor wrote nothing').toEqual(before);
+    const r = cli(dir, ['repair-db']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const after = record(p).observations;
+    for (const row of mainAlone.observations) expect(after).toContain(row);
   });
 
   it('rejects a flag rather than repairing', () => {

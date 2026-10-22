@@ -707,6 +707,7 @@ node install.mjs uninstall --purge    # 移除并删除所有数据
 node install.mjs status               # 显示当前状态
 node cli.mjs doctor                   # 诊断问题（用 cli.mjs 而非 install.mjs，见下方说明）
 node cli.mjs repair                   # 从最新签名发布恢复损坏的安装
+node cli.mjs repair-db                # 用 SQLite 还能读出的行修复损坏的数据库
 node install.mjs cleanup-hooks        # 只清理 settings.json 中残留的 claude-mem-lite hooks
 node install.mjs update               # 强制检查并安装更新（direct install / npx 模式）
 
@@ -759,6 +760,27 @@ T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-li
 它会先解析出最新 **release** 的 tag。shell 单行命令无法像 `repair` 那样校验 release 签名，所以跑它等于你自己做了一次信任决定——这也是它排在最后、而不是被优先推荐的原因。
 
 跑完之后，`~/.claude-mem-lite/` 就和最新 release 对齐，`claude-mem-lite repair` 下次再遇到类似问题也能直接用了。
+
+### 数据库损坏
+
+`doctor` 打印 `✗ Database integrity:`（或带 malformed / schema 字样的 `✗ Database:`）时，先关闭所有
+Claude Code 会话，再在终端里运行 doctor 打印的那条命令——git clone 安装是：
+
+```bash
+node cli.mjs repair-db
+```
+
+它只读地打开数据库，把 SQLite 还能读出的行复制进一个新文件：遇到坏页就越过去继续读；数据库的日志
+（`-wal`）挡住了主文件里仍有的行时，这些行改从单独的主文件里取，是上次 checkpoint 时的版本，日志对
+它们的修改和删除都不在其中，输出会逐表说明。新文件检查通过后，先把原样的数据库和日志复制成
+`claude-mem-lite.db.damaged-<时间>`（和 `-wal`），再通过 SQLite 的 backup API 写回数据库；输出里有
+把原样文件放回去的命令。需要大约三份数据库大小的空闲空间。
+
+输出会点名每张有坏页的表（这些页上的行可能缺失，或值已损坏），并按 id 列出索引里有但读不到的行、
+新文件拒收的行。以下情况它不写数据库：另有连接已经读过这个数据库（关闭所有会话；只打开还没读的
+连接看不出来）、读取期间数据库被写入、某张表一行都写不进、一条观察都读不出、数据库来自另一个
+schema 版本。SQLite 完全读不出数据库时，它改为打印恢复快照或移开文件的命令；SQLite 写不进数据库时，
+它留下检查过的副本，并打印把它放到位的命令。
 
 ## 卸载
 
