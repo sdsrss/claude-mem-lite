@@ -492,6 +492,38 @@ describe('repairDb', () => {
     expect(text(r)).toMatch(/zz: its definition does not parse/);
   });
 
+  // The 869-plant sweep of the second round (p61-v1): with the FTS table's definition damaged,
+  // its shadow tables read as tables of their own, and making one in the fresh file failed.
+  it('repairs a store whose FTS5 table definition does not parse', async () => {
+    const dir = newDir();
+    const p = buildStore(dir);
+    const before = record(p);
+    const db = new Database(p);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      `UPDATE sqlite_master SET sql = replace(sql, 'VIRTUAL', 'VIRTAAL') WHERE name = 'observations_fts'`,
+    ).run();
+    db.close();
+    premise(p);
+    const r = await run(p);
+    expect(r.outcome, text(r)).toBe('repaired');
+    const after = record(p);
+    for (const t of Object.keys(before).filter((t) => !t.startsWith('observations_fts')))
+      expect(after[t], t).toEqual(before[t]);
+    const ro = new Database(p, { readonly: true });
+    try {
+      expect(
+        ro
+          .prepare(`SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'word123'`)
+          .pluck()
+          .get(),
+      ).toBe(1);
+    } finally {
+      ro.close();
+    }
+  });
+
   // First pre-tag review: tables the product makes on first use (search telemetry, the CJK walk's
   // cursor) were dropped with exit 0 and no line.
   it('keeps a table this version does not create, with its index', async () => {
@@ -545,14 +577,19 @@ describe('repairDb', () => {
     expect(sha(join(dir, `${aside}-wal`))).toBe(walSha);
   });
 
-  it('leaves the checked copy to put in place when SQLite cannot write through the file', async () => {
+  // The 869-plant sweep of the second round (p1-v0, p1-v1): the lock probe's read-write close
+  // wrote the damaged first-page frame into a main file that alone read, before this refusal.
+  it('leaves the checked copy to put in place, writing nothing, when the store is not a database', async () => {
     const dir = newDir();
     const { p, mainAlone } = walStore(dir);
     plantWal(p, 1, 0, 64, 0xff);
     premise(p);
+    const [mainSha, walSha] = [sha(p), sha(`${p}-wal`)];
     const r = await run(p);
     expect(r.outcome, text(r)).toBe('refused');
-    expect(text(r)).toMatch(/cannot write into/);
+    expect(text(r)).toMatch(/not a database/);
+    expect(text(r)).toMatch(/Nothing was written to the database/);
+    expect([sha(p), sha(`${p}-wal`)]).toEqual([mainSha, walSha]);
     const cmd = r.lines.at(-1).text;
     expect(cmd).toMatch(/^rm -f .* && mv .*\.repaired-.* /);
     const [aside] = asides(dir);
