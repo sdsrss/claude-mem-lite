@@ -249,11 +249,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "^5.0.5",
     "acorn": "8.19.0",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "fast-check": "^4.10.2",
-    "knip": "^6.41.0",
+    "knip": "^6.42.1",
     "picomatch": "^4.0.4",
     "prettier": "3.9.10",
     "vitest": "^5.0.3"
