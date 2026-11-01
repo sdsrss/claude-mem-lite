@@ -119,6 +119,7 @@
     "lib/binding-probe.mjs",
     "lib/install-shape.mjs",
     "lib/schema-skew.mjs",
+    "lib/store-pages.mjs",
     "lib/db-unusable.mjs",
     "lib/snapshot-probe.mjs",
     "lib/db-busy.mjs",

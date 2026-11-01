@@ -281,6 +281,9 @@ export const SOURCE_FILES = [
   // server.mjs, and hook.mjs before their destructive purge/cleanup — missing it
   // would crash maintain on auto-update with an unresolved import.
   'lib/db-backup.mjs',
+  // The page check every index rebuild runs first (D#593). Imports node built-ins only; schema.mjs
+  // imports it, so it comes before schema.mjs.
+  'lib/store-pages.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
   // Imports schema.mjs, copied before it. lib/db-unusable.mjs runs it as a child by path (not an
