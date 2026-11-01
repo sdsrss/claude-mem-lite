@@ -7,10 +7,14 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as schema from '../schema.mjs';
+import { dataDirCopyCommand } from '../lib/db-unusable.mjs';
+import { pathWithClaudeStub } from './claude-stub.mjs';
 import { intactObservations, makeFixtureTracker, writeCrossLinkedStore } from './test-helpers.mjs';
 
 const fixtures = makeFixtureTracker();
@@ -94,5 +98,161 @@ describe('rebuildFTS and rebuildIndexes write nothing on page-level damage', () 
     } finally {
       db.close();
     }
+  });
+});
+
+describe('doctor checks the pages first, on a read-only handle (D#593)', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const SCHEMA_URL = pathToFileURL(join(REPO, 'schema.mjs')).href;
+  /** The product's opener, once, on the store at `path` (named claude-mem-lite.db), in a child. */
+  const openedByProduct = (path) => {
+    execFileSync(
+      process.execPath,
+      ['-e', `import(${JSON.stringify(SCHEMA_URL)}).then((m) => m.ensureDbWithWalRecovery().close())`],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dirname(path), MEM_NO_AUTO_ADOPT: '1' }, timeout: 60_000 },
+    );
+  };
+  const env = (dir, home) => ({
+    ...process.env,
+    HOME: home,
+    CLAUDE_MEM_DIR: dir,
+    CLAUDE_PROJECT_DIR: home,
+    PATH: pathWithClaudeStub(home),
+    MEM_NO_AUTO_ADOPT: '1',
+    CLAUDE_MEM_SKIP_UPDATE: '1',
+    CLAUDE_MEM_SKIP_MAINTAIN: '1',
+    MEM_QUIET_HOOKS: '1',
+  });
+  /** doctor --json on the store in `dir`; its exit code says nothing here (the sandbox has other issues). */
+  const doctor = (dir, home, { json = true } = {}) => {
+    const r = spawnSync(
+      process.execPath,
+      [join(REPO, 'install.mjs'), 'doctor', ...(json ? ['--json'] : [])],
+      {
+        encoding: 'utf8',
+        env: env(dir, home),
+        timeout: 120_000,
+      },
+    );
+    return json ? JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))) : r.stdout;
+  };
+  const home = () => {
+    const h = dataDir();
+    mkdirSync(join(h, '.claude'), { recursive: true });
+    return h;
+  };
+  const dbChecks = (report) => report.checks.filter((c) => /^(Database|FTS5)/.test(c.message));
+
+  it('a sound store: one ok line for the pages, and the FTS-only damage rebuilt as before', () => {
+    const h = home();
+    const dir = dataDir();
+    const { path, truth } = writeCrossLinkedStore(storeIn(dir), { links: 0, prepare: openedByProduct });
+    const report = doctor(dir, h);
+    expect(dbChecks(report).map((c) => `${c.level} ${c.message.split(':')[0]}`)).toEqual([
+      'ok Database pages',
+      'ok FTS5 index',
+      'warn FTS5 integrity issues detected',
+      'ok FTS5 rebuilt',
+    ]);
+    expect(intactObservations(path, truth)).toBe(truth.length);
+  }, 150_000);
+
+  for (const inLog of [false, true]) {
+    it(`damaged pages${inLog ? ' only in the log' : ''}: one ✗ and one issue, the copy command, nothing written`, () => {
+      const h = home();
+      const baseline = doctor(
+        writeCrossLinkedStore(storeIn(dataDir()), { links: 0, ftsDamage: false }).path.replace(
+          /\/claude-mem-lite\.db$/,
+          '',
+        ),
+        h,
+      );
+      const dir = dataDir();
+      const { path, truth, linked } = writeCrossLinkedStore(storeIn(dir), {
+        prepare: inLog ? undefined : openedByProduct,
+        inLog,
+      });
+      const before = sha(path);
+      const report = doctor(dir, h);
+      expect(sha(path), 'doctor wrote to the store or its log').toBe(before);
+      expect(intactObservations(path, truth)).toBe(truth.length);
+      const checks = dbChecks(report);
+      expect(checks.filter((c) => c.level === 'fail')).toEqual([
+        {
+          level: 'fail',
+          message: expect.stringMatching(
+            new RegExp(`^Database pages: damaged — page ${linked[0]}: in the freelist and in observations`),
+          ),
+          details: expect.arrayContaining([
+            expect.stringMatching(/^With no Claude Code session running, copy the data directory/),
+            expect.stringMatching(/^test ! -e .* && cp -aL /),
+          ]),
+        },
+      ]);
+      expect(checks.find((c) => /^FTS5 integrity/.test(c.message))).toEqual({
+        level: 'warn',
+        message: 'FTS5 integrity: not checked — the database pages are damaged (above)',
+      });
+      expect(report.issues - baseline.issues, 'one damage, one issue').toBe(1);
+    }, 150_000);
+  }
+
+  it('the human face prints the same ✗ and the copy command', () => {
+    const dir = dataDir();
+    const { linked } = writeCrossLinkedStore(storeIn(dir), { prepare: openedByProduct });
+    const out = doctor(dir, home(), { json: false });
+    expect(out).toMatch(
+      new RegExp(`✗ Database pages: damaged — page ${linked[0]}: in the freelist and in observations`),
+    );
+    expect(out).toMatch(/test ! -e .* && cp -aL /);
+    expect(out).toContain('⚠ FTS5 integrity: not checked — the database pages are damaged (above)');
+  }, 150_000);
+});
+
+describe('the copy command doctor and fts-check print', () => {
+  const nowMs = Date.parse('2026-11-01T12:00:00Z');
+  const run = (command) => spawnSync('sh', ['-c', command]).status;
+
+  it('copies the data directory beside itself, and a second run takes a new name', () => {
+    const dir = join(dataDir(), 'data dir');
+    mkdirSync(dir);
+    const { path } = writeCrossLinkedStore(storeIn(dir), { links: 0, ftsDamage: false });
+    const first = dataDirCopyCommand(path, { nowMs });
+    expect(run(first), first).toBe(0);
+    expect(sha(storeIn(`${dir}.copy-2026-11-01`))).toBe(sha(path));
+    const second = dataDirCopyCommand(path, { nowMs });
+    expect(second).toContain(`${dir}.copy-2026-11-01-1'`);
+    expect(run(second), second).toBe(0);
+    expect(sha(storeIn(`${dir}.copy-2026-11-01-1`))).toBe(sha(path));
+  });
+
+  it('stops before copying into a copy made after it was printed', () => {
+    const dir = join(dataDir(), 'data');
+    mkdirSync(dir);
+    const { path } = writeCrossLinkedStore(storeIn(dir), { links: 0, ftsDamage: false });
+    const command = dataDirCopyCommand(path, { nowMs });
+    mkdirSync(`${dir}.copy-2026-11-01`);
+    expect(run(command)).not.toBe(0);
+    expect(existsSync(join(`${dir}.copy-2026-11-01`, 'data'))).toBe(false);
+  });
+
+  // A data directory moved to another disk and linked back is copied as data, beside the real one
+  // (v6.30.9 r1b claims P1-1: `cp -a` copied the link), and so is a store file that is a link.
+  it('copies data, not links, when the directory or the store file is a symlink', () => {
+    const real = join(dataDir(), 'bigdisk');
+    mkdirSync(real);
+    const elsewhere = join(dataDir(), 'store.db');
+    const { path: target } = writeCrossLinkedStore(elsewhere, { links: 0, ftsDamage: false });
+    symlinkSync(target, storeIn(real));
+    const linkDir = join(dataDir(), '.claude-mem-lite');
+    symlinkSync(real, linkDir);
+    const command = dataDirCopyCommand(storeIn(linkDir), { nowMs });
+    expect(command).toContain(`${real}.copy-2026-11-01`);
+    expect(command, 'the command names the link').not.toContain(linkDir);
+    expect(run(command), command).toBe(0);
+    const copied = storeIn(`${real}.copy-2026-11-01`);
+    expect(lstatSync(`${real}.copy-2026-11-01`).isSymbolicLink(), 'the copy is a link').toBe(false);
+    expect(lstatSync(copied).isSymbolicLink(), 'the store in the copy is a link').toBe(false);
+    expect(sha(copied)).toBe(sha(target));
   });
 });

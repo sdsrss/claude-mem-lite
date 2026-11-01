@@ -3146,15 +3146,40 @@ async function doctor() {
     try {
       const Database = (await import('better-sqlite3')).default;
       const db = new Database(DB_PATH, { readonly: true });
-      // Check FTS
-      const fts = db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'")
-        .get();
-      db.close();
+      let fts;
+      let pages;
+      try {
+        // Check FTS. A store that will not open throws here, into the catch below and its remedy.
+        fts = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'").get();
+        // The pages before anything opens the store read-write (D#593): a read-write handle's close
+        // checkpoints the log into the database file, so on damage that lives in the log the FTS
+        // step below would write it there before naming it (v6.30.9 r1b defects P1-1). On a
+        // read-only handle, which writes nothing; on damage nothing below opens a read-write one.
+        const { checkStorePages } = await import('./lib/store-pages.mjs');
+        pages = checkStorePages(db);
+      } finally {
+        db.close();
+      }
+      if (pages.state === 'damaged') {
+        const others = pages.lines.length - 1 + pages.more;
+        fail(`Database pages: damaged — ${pages.lines[0]}${others > 0 ? ` (and ${others} more)` : ''}`);
+        for (const line of pages.lines.slice(1)) log(`    ${line}`);
+        const { PAGE_DAMAGE_COPY_ADVICE, dataDirCopyCommand } = await import('./lib/db-unusable.mjs');
+        log(`    ${PAGE_DAMAGE_COPY_ADVICE}`);
+        log(`    ${dataDirCopyCommand(DB_PATH)}`);
+        issues++;
+      } else if (pages.state === 'unchecked') {
+        dwarn(`Database pages: not checked — ${pages.error}`);
+      } else {
+        ok('Database pages: sound');
+      }
       if (fts) {
         ok('FTS5 index: present');
         // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))
-        if (dbWriteBlocked) {
+        if (pages.state === 'damaged') {
+          // Named once, above; the check needs the read-write handle this skips.
+          dwarn('FTS5 integrity: not checked — the database pages are damaged (above)');
+        } else if (dbWriteBlocked) {
           // Everything past this point wants a WRITE handle on a file this install
           // has just been told it is too old to write — which is the exact way a
           // store gets locked out for good. The rebuild below is gated by sitting
