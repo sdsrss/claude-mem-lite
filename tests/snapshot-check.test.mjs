@@ -131,6 +131,33 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     expect(r.reason).toMatch(/observations_fts: invalid fts5 file format/);
   });
 
+  // The restore command ends with `fts-check rebuild`, which refuses on this snapshot, so the
+  // check that vouches for the command refuses it too (D#593).
+  it('fails a snapshot whose freelist lists a live page, through the real probe', async () => {
+    const { writeCrossLinkedStore } = await import('./test-helpers.mjs');
+    // The probe's opener writes first on its private copy (the first open of a store initSchema
+    // built), so which line the page check meets first varies; the refusal does not.
+    const { path } = writeCrossLinkedStore(join(dataDir(), 'claude-mem-lite.db.pre-delete-x.bak'), {
+      vacuum: true,
+    });
+    const r = du.checkSnapshot(path);
+    expect(r).toMatchObject({ verdict: 'bad', why: 'rebuild' });
+    expect(r.reason).toMatch(/^not rebuilt: the database's pages are damaged/);
+  });
+
+  it('records the page check of the rebuild', async () => {
+    const { probeOpenedStore } = await import('../lib/snapshot-probe.mjs');
+    const snap = writeStoreSnapshot(join(dataDir(), 'claude-mem-lite.db.pre-delete-x.bak'), {
+      damage: 'fts',
+    });
+    const db = new Database(snap);
+    try {
+      expect(probeOpenedStore(db).pages).toEqual({ state: 'ok', error: null, code: null });
+    } finally {
+      db.close();
+    }
+  });
+
   // r1 defects P1-1 of the second attempt, on a real rebuild: a page cap stands in for the disk
   // filling up while the rebuild writes.
   it('reports a full disk during the rebuild with its code', async () => {
@@ -333,6 +360,34 @@ describe('checkSnapshot restores a private copy and opens it with the product op
         observations: 3,
       },
       { verdict: 'bad', why: 'rebuild', reason: 'observations_fts: not found' },
+    ],
+    // The rebuild refused because its page check could not run: the check's failure, not the
+    // snapshot's, whatever its code (D#593; the first attempt read a code-less one as bad).
+    ...[null, 'SQLITE_NOMEM', 'SQLITE_BUSY'].map((code) => [
+      `a rebuild whose page check could not run (code ${code})`,
+      {
+        opened: true,
+        rebuildErrors: [
+          { code, message: "not rebuilt: the database's pages could not be checked first (x)" },
+        ],
+        pages: { state: 'unchecked', error: 'x', code },
+        integrity: 'ok',
+        observations: 3,
+      },
+      { verdict: 'unchecked', reason: 'the pages could not be checked (x)' },
+    ]),
+    [
+      'a rebuild its page check refused',
+      {
+        opened: true,
+        rebuildErrors: [
+          { code: 'SQLITE_CORRUPT', message: "not rebuilt: the database's pages are damaged (p)" },
+        ],
+        pages: { state: 'damaged', error: null, code: null },
+        integrity: 'ok',
+        observations: 3,
+      },
+      { verdict: 'bad', why: 'rebuild', reason: "not rebuilt: the database's pages are damaged (p)" },
     ],
     [
       'a rebuild error, then a throw',
