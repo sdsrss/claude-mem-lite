@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.9 — more cut-off private keys are erased before they are stored
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.8`.
+
+- **Security: a private key cut off before its END line was stored when code or a string opener
+  stood before its BEGIN** (D#168, D#607). In a diff, Read output, grep output or a quoted reply,
+  the BEGIN line then carries more than the line prefix the key's other lines share (`-KEY = '''`,
+  `     5\tKEY = """`, `keys/conf.py:5:KEY = '''`, `> key = "`, or a string opener before a diff
+  mark: `'+`, `"-`, `b'+`). On the test matrix of 4 key kinds × 2 cut points × 15 such contexts × 3
+  wrappings (raw, in a JSON string, in a JSON string inside another), 6.30.8 stored key lines in 236
+  of the 360 cases and 6.30.9 in none; neither lost the text around the key.
+- **The same reading can erase lines below the BEGIN that look like key lines (a hex hash, or the
+  start of a long path or identifier) even when they are not a key** (D#615).
+- **Still as in 6.30.8** (D#614): a cut-off key is stored when its BEGIN sits on a diff context line
+  (no `-` or `+`) over the removed key lines, and, with code before the BEGIN, when a grep path
+  holds, for example, a backslash, a space or a drive letter (`keys\conf.py:5:KEY = '''`,
+  `My Keys/conf.py:5:KEY = '''`, `C:/src/conf.py:5:KEY = '''`), or when its lines carry two prefixes
+  (`> -KEY = '''`).
+- **Known limit** (D#633): a crafted added-diff shape, with a second BEGIN inside a header line, can
+  keep key lines that 6.30.8 erased.
+- **`@modelcontextprotocol/sdk` 1.32.2** (the range moves from `^1.30.0` to `^1.32.2`) **and
+  `@hono/node-server` 2.1.5**, lockfile only. `npm audit --omit=dev` reported the 2.0.11 that 6.30.8
+  shipped (moderate, GHSA-rmxm-3fg6-px4f: `serveStatic` decodes the request path a second time). It
+  comes in through `@modelcontextprotocol/sdk`; claude-mem-lite's MCP server speaks stdio and
+  serves no files.
+- **Development dependencies**: knip 6.43.0. The published package does not install them.
+- **Published from GitHub Actions through npm trusted publishing**: the publish job holds no npm
+  token, and the package carries a provenance attestation
+  (`npm view claude-mem-lite@6.30.9 dist.attestations`).
+
 ## v6.30.8 — doctor checks the backup snapshots before its restore command names one, and the claude-mem backup keeps its log
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
