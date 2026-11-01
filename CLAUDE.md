@@ -24,7 +24,7 @@ before retrieval, measurement, release, migration or schema work.**
 | Dead code | `npm run dead-code` (knip — measure from the **primary working tree**; the NAME SET is the evidence, not the count) |
 | **Plugin manifests** | `npm run validate:manifests` — **`claude plugin validate . --strict` is NOT equivalent**: it never checks `.claude-plugin/plugin.json` |
 | Bench · multipliers | `npm run benchmark:gate` · `benchmark:multipliers:gate` — **run the second after touching any constant in `scoring-sql.mjs` or `MULT_EXPR`; the first is structurally blind to those** |
-| **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **expires 30 days after its own `timestamp`**, and CI + publish pass `--strict`. Sampled **2026-10-07T16:18:48Z** → red from **2026-11-06 16:18 UTC**. The stamp lives in THREE places (`baseline.json`, `ci.yml`, this row); `tests/baseline-stamp-sync.test.mjs` fails if they disagree. **Recapture BEFORE tagging, in its own commit** — otherwise it goes red after the tag is pushed |
+| **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **expires 30 days after its own `timestamp`**, and CI + publish pass `--strict`. Sampled **2026-11-01T07:15:31Z** → red from **2026-12-01 07:15 UTC**. The stamp lives in THREE places (`baseline.json`, `ci.yml`, this row); `tests/baseline-stamp-sync.test.mjs` fails if they disagree. **Recapture BEFORE tagging, in its own commit** — otherwise it goes red after the tag is pushed |
 | Audit metrics | `npm run audit:metrics` · `audit:baseline` · `audit:selfcheck` |
 
 Two CLI families, both canonical in `cli.mjs` (`claude-mem-lite help` for flags):
