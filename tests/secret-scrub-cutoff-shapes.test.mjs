@@ -912,6 +912,8 @@ describe('D#168: code or a string opener between the line prefix and the BEGIN',
   it.each([
     ['> ', '# '],
     ['// ', '-- '],
+    // D#607 F9: keyed by the trimmed prefix, `>` took the regex of `> `.
+    ['>', '> '],
   ])('a cut key under %j after a kept BEGIN under %j', (p2, p1) => {
     const body = [KL, 'q7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6J'.repeat(2), 'Zx8CvB7nM6aS5dF4gH3jK2lQ1wE0rTyU…'];
     const text = [
@@ -926,5 +928,126 @@ describe('D#168: code or a string opener between the line prefix and the BEGIN',
     expect(body.map((l) => l.slice(10, 26)).filter((w) => out.includes(w))).toEqual([]);
     expect(out).toContain('That header is where the key used to start.');
     expect(out).toContain(PROSE);
+  });
+});
+
+// D#607, the independent review of the D#168 reading (2026-11-01), and its repair. Each case pins a
+// clause that one mutation of secret-scrub.mjs broke with every scrub test still green.
+describe('D#607: the D#168 reading, its skip and its memos', () => {
+  const L2 = 'q7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6Jq7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6J';
+  const L3 = 'Hk3PwQ9zLm2VbN8xRt5YcA1sDf6GjU0eHk3PwQ9zLm2VbN8xRt5YcA1sDf6GjU0e';
+  const P = 'The rest of this explanation is prose.';
+  const kept = (out, lines) => lines.map((l) => l.slice(0, 16)).filter((w) => out.includes(w));
+
+  // F5: the skip's gap ended at the next `-----BEGIN ` of any label. `X-----BEGIN : v` is a header
+  // whose name swallows one, so the reading goes through it, and its colon fell past the gap.
+  it('a header whose name holds a -----BEGIN does not end the skip gap', () => {
+    const text = [
+      "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+      '-X-----BEGIN : v',
+      `-${KL}`,
+      `-${L2}`,
+      P,
+    ].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(kept(out, [KL, L2])).toEqual([]);
+      expect(out).toContain(P);
+    }
+  });
+
+  // F9: cases for the grammar's clauses that no test held (each mutant stored all three lines).
+  it.each([
+    [
+      'escaped text that starts with the BEGIN line',
+      ["-KEY = '''-----BEGIN RSA PRIVATE KEY-----", ...[KL, L2, L3].map((l) => `-${l}`), P].join('\\n'),
+    ],
+    [
+      'escaped breaks after a real one',
+      'log entry 1\n' +
+        ["-KEY = '''-----BEGIN RSA PRIVATE KEY-----", ...[KL, L2, L3].map((l) => `-${l}`), P].join('\\n'),
+    ],
+    [
+      'a code line of 40+ characters before the opener, escaped',
+      J(
+        [
+          '$ git diff',
+          "-    PRIVATE_SIGNING_KEY_FOR_TESTS_ONLY = '''-----BEGIN RSA PRIVATE KEY-----",
+          ...[KL, L2, L3].map((l) => `-${l}`),
+          P,
+        ].join('\n'),
+      ),
+    ],
+    [
+      'grep without line numbers',
+      [
+        "keys/conf.py:KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+        ...[KL, L2, L3].map((l) => `keys/conf.py:${l}`),
+        P,
+      ].join('\n'),
+    ],
+    [
+      'a nested quote',
+      ['> > key = "-----BEGIN RSA PRIVATE KEY-----', ...[KL, L2, L3].map((l) => `> > ${l}`), P].join('\n'),
+    ],
+  ])('%s under a code BEGIN', (_, text) => {
+    const out = scrubSecrets(text);
+    expect(kept(out, [KL, L2, L3])).toEqual([]);
+    expect(out).toContain(P);
+  });
+
+  // The memo of what a reading found from its first base64 line holds only for a reading that had
+  // counted nothing before that line: this header BEGIN carries a key start, which the reading from
+  // the code BEGIN above (the memo's writer) never counted.
+  it('a key begun on a header BEGIN line under a code BEGIN', () => {
+    const short = ['QWERTYUIOPASDFGHJKLz', 'ZXCVBNMLKJHGFDSAqwer', 'poiuytrewqlkjhgfdsam'];
+    const text = [
+      "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+      '-Comment: -----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQEA',
+      ...short.map((x) => `-${x}`),
+      P,
+    ].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(short.filter((x) => out.includes(x))).toEqual([]);
+      expect(out).not.toContain('MIIEowIBAAKCAQEA');
+      expect(out).toContain(P);
+    }
+  });
+
+  // Fuzz-found and minimised: each output changed with the blank-run memo recording the line after
+  // the run's end, or with one memo shared by every line shape.
+  it.each([
+    [
+      'a blank run reaching its memo under quoted header BEGINs',
+      [
+        '> X-Foo: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '> Comment: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '> Comment: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        ...Array(8).fill('> '),
+        '> -----BEGIN OPENSSH PRIVATE KEY-----',
+        `> ${KL}`,
+      ].join('\n'),
+      [
+        '> X-Foo: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '> Comment: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '> Comment: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        ...Array(8).fill('> '),
+        '> ***PEM_KEY***',
+      ].join('\n'),
+    ],
+    [
+      'readings under two line shapes reaching one line',
+      [
+        '+X-Foo: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '+Comment: -----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '+ILMyki1sEfmlxDDpiQ48',
+        '+CpI0iqfewyVD5hbsdxHn',
+        '+',
+      ].join('\r\n'),
+      ['+X-Foo: -----BEGIN PGP PRIVATE KEY BLOCK-----', '+Comment: ***PEM_KEY***'].join('\r\n'),
+    ],
+  ])('%s', (_, text, expected) => {
+    expect(scrubSecrets(text)).toBe(expected);
   });
 });

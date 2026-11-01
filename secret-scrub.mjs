@@ -421,6 +421,8 @@ const startsLikeKey = (s) => KEY_MAGIC_RE.test(s) || isDerKeyStart(s);
 const ARMOR_HEADER_RE =
   /^(?:Proc-Type|DEK-Info|Content-Domain|Originator-ID-(?:Asymmetric|Symmetric)|Originator-Certificate|Issuer-Certificate|MIC-Info|Key-Info|Recipient-ID-(?:Asymmetric|Symmetric)|CRL|Version|Comment|Hash|Charset|MessageID|X-[A-Za-z0-9-]+)[ \t]*:/i;
 const MAX_ARMOR_HEADERS = 16;
+// The blank line of a run from which readKeyLines asks its memo where the run ends.
+const BLANK_MEMO_AFTER = 8;
 // A JS/Python string split across source lines: `…\n" +` then `"…` on the next line. Not a comma:
 // `'…\n',` then `'…'` is the next element of a list, and its first word is not the key's last line.
 // One whitespace quantifier on each side of the `+`: `[ \t]*\+?[ \t]*` split a run between two
@@ -562,6 +564,8 @@ const PREFIX_GRAMMAR_RE =
 const PREFIX_GRAMMAR_SCAN = 256;
 // A key line (LONG or CUT) starts with a run of 16+ of these, so a stretch without one holds none.
 const B64_RUN16_RE = /[A-Za-z0-9+/=]{16}/;
+// The longest gap the D#168 skip tests; past it the reading runs.
+const SKIP_GAP_SCAN = 4096;
 
 /** A regex for the line prefix `prefix` has, with digits free and grep's `:`/`-` interchangeable. */
 function prefixShape(prefix) {
@@ -668,7 +672,7 @@ function cutRun(core) {
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
  * block never gets here; the block pattern above takes it first.
  */
-function cutOffKeyEnd(text, b, be, endFollows, shapeOf) {
+function cutOffKeyEnd(text, b, be, ctx) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   for (
@@ -726,7 +730,7 @@ function cutOffKeyEnd(text, b, be, endFollows, shapeOf) {
   let run = 0;
   while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
   const left = text.slice(ls, b);
-  const shape = run >= 16 ? null : shapeOf(left);
+  const shape = run >= 16 ? null : ctx.shapeOf(left);
   // The first character of the prefix after its spaces and tabs: a shape's match can only start a
   // line whose first character after spaces and tabs is this one (a digit, `:` and `-` stand for
   // more, and none of them begins a blank line below).
@@ -734,7 +738,7 @@ function cutOffKeyEnd(text, b, be, endFollows, shapeOf) {
   while (pl < b && (text.charCodeAt(pl) === 32 || text.charCodeAt(pl) === 9)) pl++;
   const shapeLead = shape ? text.charCodeAt(pl) : -1;
   const label = text.slice(b, be);
-  const read = readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end);
+  const read = readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end, ctx.memoOf);
   const found = read.longs > 0 && keyEvidence(read, label, true) ? read.end : -1;
   // D#168: code between the line prefix and the BEGIN (`-KEY = '''`, `     5\tKEY = """`) or a
   // string opener before it (`'+`, `"-`) made the whole left context the shape, which no line below
@@ -750,15 +754,24 @@ function cutOffKeyEnd(text, b, be, endFollows, shapeOf) {
     // BEGIN stored keys twice (D#169), since a quoted or unclosed BEGIN starts no reading of its own.
     // With no key on the BEGIN line, the first line the reading counts is a key line, which starts
     // with a 16+ base64 run, after blank lines and armor headers only, and a header has a colon. A
-    // line holding `-----BEGIN ` (any label) is neither blank nor a key line (its core holds that
-    // text, or starts one `-` into it, and `BEGIN ` ends any run), so with no run and no colon
-    // before the next one (or the end) the reading stops on its line at the latest. Reading every
-    // short BEGIN block again (`'+-----BEGIN …` over a bare `+`, 5,400 per pass) took that shape
-    // from 4.7x to 10.1x benign under coverage, past the linearity budget on CI.
+    // line holding a private-key BEGIN is neither blank nor a key line (its core holds that text, or
+    // starts one `-` into it, and `BEGIN ` ends any run), and no header name holds one (names have
+    // no space, the BEGIN has one after `BEGIN`): a header line holding one has its colon before it.
+    // So with no run and no colon before the next one (or the end) the reading stops on its line at
+    // the latest. Not any `-----BEGIN `: `X-----BEGIN : v` is a header whose name swallows it, read
+    // through, and ending the gap there stored the key below it (D#607 F5). Reading every short
+    // BEGIN block again (`'+-----BEGIN …` over a bare `+`, 5,400 per pass) took that shape from
+    // 4.7x to 10.1x benign under coverage, past the linearity budget on CI.
+    // Only over a short gap, since the skip saves a reading and the reading is the answer: with no
+    // private-key BEGIN below, the gap is the rest of the text, and testing it on each pass took
+    // pemHeaderThenCerts from 75 to 142 ms where the reading stops on its first line.
+    if (longs === 0 && next === -1) return found;
     if (longs === 0) {
-      const nb = next === -1 ? -1 : text.indexOf('-----BEGIN ', next);
-      const gap = next === -1 ? '' : nb === -1 ? text.slice(next) : text.slice(next, nb);
-      if (!B64_RUN16_RE.test(gap) && !gap.includes(':')) return found;
+      const to = ctx.nextBegin(next);
+      if (to - next <= SKIP_GAP_SCAN) {
+        const gap = text.slice(next, to);
+        if (!B64_RUN16_RE.test(gap) && !gap.includes(':')) return found;
+      }
     }
     // The grammar starts the line. In escaped text the prefix above stops at an unescaped single
     // quote, which JSON never escapes (`-KEY = '''` in a JSON string leaves ''), so look past single
@@ -791,11 +804,22 @@ function cutOffKeyEnd(text, b, be, endFollows, shapeOf) {
     while (gp < b && (text.charCodeAt(gp) === 32 || text.charCodeAt(gp) === 9)) gp++;
     // Only when the line is more than its grammar before the BEGIN: an opener before it or code after it.
     if (g && !(gs === gp && gl + g[0].length === b)) {
-      const alt = shapeOf(g[1]);
-      if (alt && !endFollows(be)) {
+      const alt = ctx.shapeOf(g[1]);
+      if (alt && !ctx.endFollows(be)) {
         let lead = gs;
         while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
-        const again = readKeyLines(text, next, u, alt, text.charCodeAt(lead), longs, longest, first, end);
+        const again = readKeyLines(
+          text,
+          next,
+          u,
+          alt,
+          text.charCodeAt(lead),
+          longs,
+          longest,
+          first,
+          end,
+          ctx.memoOf,
+        );
         if (again.longs > 0 && again.end > found && keyEvidence(again, label, false)) return again.end;
       }
     }
@@ -820,14 +844,32 @@ function keyEvidence(r, label, loose) {
 /**
  * The lines of a cut key below its BEGIN line, read with one line shape, from the state the BEGIN
  * line left (`longs`, `longest`, `first`, `end`: a key pasted onto the BEGIN line counts as one line).
+ *
+ * `memoOf(shape)` (one scrubCutOffKeys call's) keeps what a reading found past two points,
+ * keyed by the line, the depth and the shape's lead, of which the rest of the reading is a function:
+ * where a run of blank lines ends, from its BLANK_MEMO_AFTER-th line (the run only sets
+ * pendingBlank), and the result from the first counted base64 line on, when nothing was counted
+ * before it (from there `armors` is never read, and the state is that line's alone). D#607 F1: 17
+ * BEGINs on header lines (`-Comment: -----BEGIN …`) each read the same run again under the prefix
+ * grammar and refused it, 33x benign at 200k chars (186x under coverage). Short runs never reach
+ * the memo: a memo of every blank run made two shapes slower (D#500).
  */
-function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end) {
+function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end, memoOf) {
+  let memo = null;
   let armors = 0;
   let shorts = 0;
   let pendingBlank = false;
+  let blanks = 0;
+  let blankKey = null;
+  let longKey = null;
   while (next !== -1) {
+    const at = next;
     // Another BEGIN line is never part of this key; stop before reading it whole.
-    if (!shape && text.startsWith('-----BEGIN ', next)) break;
+    if (!shape && text.startsWith('-----BEGIN ', next)) {
+      if (blankKey !== null) memo.blank.set(blankKey, at);
+      blankKey = null;
+      break;
+    }
     const line = nextLine(text, next, u);
     // Blank lines read here without lineCore, where the runs a BEGIN reads through spent a third of
     // their time (D#511). Spaces and tabs, at most one quote or backtick, spaces and tabs: blank
@@ -853,11 +895,26 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       next = line.next;
       if (shorts > 0) break;
       pendingBlank = true;
+      if (++blanks === BLANK_MEMO_AFTER) {
+        const key = at + ',' + u + ',' + shapeLead;
+        memo ??= memoOf(shape);
+        const to = memo.blank.get(key);
+        if (to !== undefined) {
+          next = to;
+          blanks = 0;
+        } else blankKey = key;
+      }
       continue;
     }
     const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
     const kind = classify(core);
     next = line.next;
+    // A run ends here (blankKey is set only inside one).
+    if (kind !== BLANK && blanks !== 0) {
+      blanks = 0;
+      if (blankKey !== null) memo.blank.set(blankKey, at);
+      blankKey = null;
+    }
     if (kind === END) {
       if (longs > 0) end = start + KEY_END_LINE_RE.exec(core)[0].length;
       break;
@@ -865,6 +922,15 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
     if (kind === BLANK) {
       if (shorts > 0) break;
       pendingBlank = true;
+      if (++blanks === BLANK_MEMO_AFTER) {
+        const key = at + ',' + u + ',' + shapeLead;
+        memo ??= memoOf(shape);
+        const to = memo.blank.get(key);
+        if (to !== undefined) {
+          next = to;
+          blanks = 0;
+        } else blankKey = key;
+      }
       continue;
     }
     if (longs === 0) {
@@ -872,6 +938,13 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       if (kind !== LONG && kind !== CUT) break;
     }
     if (kind === LONG && shorts === 0) {
+      if (longs === 0) {
+        longKey = at + ',' + u + ',' + shapeLead;
+        memo ??= memoOf(shape);
+        const r = memo.long.get(longKey);
+        if (r !== undefined)
+          return { longs: r.longs, longest: r.longest, first: r.first, end: r.end, armors };
+      }
       if (longs++ === 0) first = core;
       longest = Math.max(longest, core.length);
       end = coreEnd;
@@ -896,12 +969,15 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
     }
     break;
   }
+  if (blankKey !== null) memo.blank.set(blankKey, -1);
+  if (longKey !== null) memo.long.set(longKey, { longs, longest, first, end });
   return { longs, longest, first, end, armors };
 }
 
 // Separate scanners: KEY_BEGIN_RE's lastIndex drives scrubCutOffKeys' loop while these run.
 const KEY_BEGIN_SCAN_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
 const KEY_END_SCAN_RE = new RegExp(KEY_END_RE.source, 'g');
+const KEY_BEGIN_NEXT_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
 
 /** Start offsets of every match of the global regex `re` in `text`. */
 function matchStarts(re, text) {
@@ -937,6 +1013,21 @@ function scrubCutOffKeys(text) {
     const e = firstAtOrAfter(ends, be);
     return e !== Infinity && e < firstAtOrAfter(begins, be);
   };
+  // The first private-key BEGIN at or after line start `x`, or Infinity: the leftmost match from a
+  // start, kept for every x between that start and it (a line start is never inside a match, which
+  // holds no break). Not the positions above: found for every BEGIN on each pass, they cost a shape
+  // whose skip holds before endFollows is asked 14-18% under coverage (a binary search in them, 9.6%).
+  let beginFrom = Infinity;
+  let beginAt = Infinity;
+  const nextBegin = (x) => {
+    if (!(beginFrom <= x && beginAt >= x)) {
+      beginFrom = x;
+      KEY_BEGIN_NEXT_RE.lastIndex = x;
+      const m = KEY_BEGIN_NEXT_RE.exec(text);
+      beginAt = m ? m.index : Infinity;
+    }
+    return beginAt;
+  };
   // One line-prefix regex per distinct short prefix, for this call only: a text repeating one BEGIN
   // line built the same regex for each BEGIN, 15-22% of those shapes' time under coverage.
   const shapes = new Map();
@@ -946,12 +1037,20 @@ function scrubCutOffKeys(text) {
     if (r === undefined) shapes.set(prefix, (r = prefixShape(prefix)));
     return r;
   };
+  // What a reading found past a point, per line shape, for this call only (readKeyLines).
+  const memos = new Map();
+  const memoOf = (shape) => {
+    let m = memos.get(shape);
+    if (m === undefined) memos.set(shape, (m = { blank: new Map(), long: new Map() }));
+    return m;
+  };
+  const ctx = { endFollows, nextBegin, shapeOf, memoOf };
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
   let m;
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, endFollows, shapeOf);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, ctx);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;

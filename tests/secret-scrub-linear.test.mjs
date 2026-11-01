@@ -28,6 +28,18 @@ const CHAIN = Array.from({ length: 40 }, (_, i) => (i % 2 ? 'secret: abcdefgh' :
   ' ',
 );
 
+// D#607 F1: a BEGIN under `left`, `headers` lines `<header>-----BEGIN RSA PRIVATE KEY-----`, a run of
+// `line` to a quarter of N, then prose. One reading of a long blank run is the released reader's own
+// cost (6.30.8, one BEGIN over 200k chars of `-` lines: 2.6x benign, 18x under coverage), so the run
+// is sized for that one reading to fit the budget and for one reading per header BEGIN not to.
+const headerBegins = (left, header, line, headers = 16) => {
+  const head =
+    `${left}-----BEGIN RSA PRIVATE KEY-----\n` + `${header}-----BEGIN RSA PRIVATE KEY-----\n`.repeat(headers);
+  const run = line.repeat(Math.floor((N / 4 - head.length) / line.length));
+  const prose = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
+  return head + run + 'x\n' + prose.slice(0, N - head.length - run.length - 2);
+};
+
 describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   const shapes = {
     jsonVendorKey: '"' + 'secret'.repeat(N / 6),
@@ -103,6 +115,17 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     pemOpenerBeforeBegin: CHAIN + ' ' + "'+-----BEGIN RSA PRIVATE KEY-----\n+\n".repeat(N / 37),
     pemEscapedQuotesBeforeBegin:
       CHAIN + ' ' + JSON.stringify("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 55)),
+    // D#607 F1: 16 header lines that each hold a BEGIN, then a run the reading refuses. Each BEGIN's
+    // grammar reading read the run again (d0766de4 with a 200k-char run: 33x benign raw, 48x escaped,
+    // 186x under coverage); readKeyLines' per-call memos read it once per pass.
+    headerBeginsBlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n'),
+    headerBeginsBlankRunEscaped:
+      CHAIN + ' ' + JSON.stringify(headerBegins("-KEY = '''", '-Comment: ', '-\n')),
+    headerBeginsQuoteBlankRun: CHAIN + ' ' + headerBegins('> key = "', '> Comment: ', '> \n'),
+    headerBeginsReadBlankRun:
+      CHAIN + ' ' + headerBegins('     5\tKEY = """', '     6\tComment: ', '     7\t\n'),
+    headerBeginsShortRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-' + 'A'.repeat(20) + '\n'),
+    headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line
