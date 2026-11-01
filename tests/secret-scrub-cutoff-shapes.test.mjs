@@ -1313,3 +1313,33 @@ describe('D#614 A2: a grep path outside the grammar path class, with code before
     expect(scrubSecrets(J(text))).toBe(J(text));
   });
 });
+
+// A3: in escaped text the first reading's prefix stops at an unescaped single quote, and the D#168
+// reading looked for the line's start past such quotes at most 256 characters back: a longer code
+// line before the last quote (keyword arguments, a dict) left no grammar, and the key was stored.
+// Raw text has no such stop, so only the escaped wraps failed.
+describe('D#614 A3: escaped code longer than 256 characters before the last quote', () => {
+  const pad = 'x'.repeat(300);
+  d614Matrix(
+    {
+      readLongArgs: [
+        `     5\tDEFAULTS = dict(name='svc', ${pad}=1, ua='client', key="""`,
+        (i) => `${String(6 + i).padStart(6)}\t`,
+      ],
+      diffLongDict: [`-    CONFIG = {'name': 'svc', '${pad}': 1, 'key': '''`, () => '-'],
+      grepLongCode: [`keys/conf.py:5:x = '${pad}' + '''`, (i) => `keys/conf.py-${6 + i}-`],
+      quoteLongCode: [`> key = '${pad}' + '''`, () => '> '],
+      contextLongCode: [` KEY = '${pad}' + '''`, () => '-'],
+      codeOf4000: [`-    K = '${'y'.repeat(4000)}' + '''`, () => '-'],
+      // A `\n` in the code is a break one escape level down, not this line's start.
+      escapedNewlineInCode: [`-    x = "a\\nb" + '${pad}' + '''`, () => '-'],
+    },
+    {
+      raw: D614_WRAPS.raw,
+      json: D614_WRAPS.json,
+      jsonTwice: D614_WRAPS.jsonTwice,
+      // Lone CRs: the line starts after an escaped `\r`.
+      jsonLoneCr: (t) => `{"content":${J(t.replace(/\n/g, '\r'))}}`,
+    },
+  );
+});

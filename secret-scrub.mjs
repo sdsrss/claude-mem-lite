@@ -567,6 +567,17 @@ const PREFIX_GRAMMAR_RE =
 const GREP_ANY_PATH_RE = /^[ \t]*(\S.*(?::\d+:|-\d+-))/;
 // A grammar is a few characters; testing more of a long left context costs a pass over it per BEGIN.
 const PREFIX_GRAMMAR_SCAN = 256;
+// How far escaped text is searched back for the start of a BEGIN's line past single quotes (D#614 A3).
+// It was PREFIX_GRAMMAR_SCAN, and a code line of more than 256 characters before its last quote
+// (keyword arguments, a dict literal) left no grammar, so the key under it was stored. Not unbounded:
+// the walks of BEGINs at one escape depth never overlap (each BEGIN's break ends the next one's
+// walk), but those at different depths cross the same run, judging each quote or backslash in it.
+// One BEGIN per depth (1, 2, 4, 8) after 150k characters of escaped quotes read 18x benign under
+// coverage unbounded, 1.2x at this bound.
+const LINE_START_SCAN = 4096;
+// From a position back over the characters that cannot end a line in escaped text: anything but a
+// break, a double quote or a backslash. A lookbehind is matched backward, so this runs natively.
+const LINE_BACK_RE = /(?<=([^\n\r"\\]*))/y;
 // A key line (LONG or CUT) starts with a run of 16+ of these, so a stretch without one holds none.
 const B64_RUN16_RE = /[A-Za-z0-9+/=]{16}/;
 // The longest gap the D#168 skip tests; past it the reading runs.
@@ -781,25 +792,37 @@ function cutOffKeyEnd(text, b, be, ctx) {
     // The grammar starts the line. In escaped text the prefix above stops at an unescaped single
     // quote, which JSON never escapes (`-KEY = '''` in a JSON string leaves ''), so look past single
     // quotes for the start of the line: a break, or a double quote that ends a string at this depth
-    // (the string the line is in). At most PREFIX_GRAMMAR_SCAN characters back; past that, no grammar.
+    // (the string the line is in), or the start of the text. At most LINE_START_SCAN characters back;
+    // past that, no grammar.
     let gl = ls;
     if (u > 0 && ls > 0 && text[ls - 1] === "'") {
       gl = -1;
-      for (let j = ls - 1, lim = Math.max(0, ls - PREFIX_GRAMMAR_SCAN); j >= lim; j--) {
-        if (j === 0) {
-          gl = 0;
+      // Native between candidates: a character by character walk was most of the time of a shape
+      // that repeats one 300-character line (pemEscapedLongCodeBeforeBegin), and now goes the whole line.
+      const lim = Math.max(0, ls - LINE_START_SCAN);
+      for (let j = ls - 1; ;) {
+        LINE_BACK_RE.lastIndex = j;
+        const k = j - LINE_BACK_RE.exec(text)[1].length;
+        if (k === 0) {
+          if (lim === 0) gl = 0;
           break;
         }
-        const ch = text[j - 1];
-        if (
-          ch === '\n' ||
-          ch === '\r' ||
-          ((ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, j - 1, 0), u)) ||
-          (ch === '"' && isStringEnd(backslashesBefore(text, j - 1, 0), u))
-        ) {
-          gl = j;
+        // text[k - 1] is a break, a double quote or a backslash. A backslash run then `n` or `r` at k
+        // is an escaped break at this depth when the run fits it; the line starts after that letter.
+        const c = text.charCodeAt(k - 1);
+        if (c === 92) {
+          const e = text.charCodeAt(k);
+          if (k + 1 < lim) break;
+          if ((e === 110 || e === 114) && isEscBreak(backslashesBefore(text, k, 0), u)) {
+            gl = k + 1;
+            break;
+          }
+        } else if (k < lim) break;
+        else if (c === 10 || c === 13 || isStringEnd(backslashesBefore(text, k - 1, 0), u)) {
+          gl = k;
           break;
         }
+        j = k - 1;
       }
     }
     const head = gl === -1 ? '' : text.slice(gl, Math.min(b, gl + PREFIX_GRAMMAR_SCAN));

@@ -51,6 +51,9 @@ const headerBegins = (left, header, line, headers = 16) => {
 const col = (n) => String(n).padStart(6);
 const LONG_PATH = 'src/very_long/project_path/to_some/deeply_nested/module_dir/sub_pkg/config.py:';
 const CONTEXT_UNIT = " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc: def\n the context line after it\n";
+const ESCAPE_DEPTH_BEGINS = [1, 2, 4, 8]
+  .map((d) => `'-----BEGIN RSA PRIVATE KEY-----${'\\'.repeat(d)}n-a: b${'\\'.repeat(d)}n`)
+  .join('');
 const SPACED_PATH = 'My Keys/conf.py';
 const SPACED_GREP_UNIT =
   `${SPACED_PATH}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----\n${SPACED_PATH}-6-abc: def\n` +
@@ -87,6 +90,11 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       CHAIN +
       ' ' +
       JSON.stringify(('x'.repeat(300) + "'-----BEGIN RSA PRIVATE KEY-----\n-abc\n").repeat(N / 337)),
+    // D#614 A3: the walk back to a line's start past single quotes is bounded (LINE_START_SCAN), since
+    // walks at different escape depths cross one run, judging each backslash in it. One BEGIN per depth
+    // 1-8 after a backslash run: 2.4x under coverage at the bound, 27x without it.
+    pemEscapeDepthsAfterBackslashRun:
+      CHAIN + ' ' + '\\'.repeat(N - ESCAPE_DEPTH_BEGINS.length - CHAIN.length - 1) + ESCAPE_DEPTH_BEGINS,
     // A bare `>` under a quoted code BEGIN (6.19.4 round-2 F3 read it as blank: 168x benign).
     pemBlankQuoteRun: CHAIN + ' > key = "-----BEGIN RSA PRIVATE KEY-----\n' + '>\n'.repeat(N / 2),
     // The grammar reading takes every line of the run, then refuses it (no 40+ line, no key start),
