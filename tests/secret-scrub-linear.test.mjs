@@ -167,8 +167,14 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
         (n) => `conf.py:${n}:Comment: `,
         (n) => `conf.py:${n}:\n`,
       ),
-    headerBeginsLongPathBlankRun:
-      CHAIN + ' ' + headerBegins(LONG_PATH + 'KEY = """', LONG_PATH + 'Comment: ', LONG_PATH + '\n'),
+    // r3 F3: a 79-char path over blank lines leaves ~630 lines a quarter of N, too few to tell
+    // the trees apart; over 20-char base64 lines it does (56af7270 23.9x under coverage).
+    headerBeginsLongPathShortRun:
+      CHAIN +
+      ' ' +
+      headerBegins(LONG_PATH + 'KEY = """', LONG_PATH + 'Comment: ', LONG_PATH + 'A'.repeat(20) + '\n'),
+    // r3 F4: empty lines, read by the blank test before lineCore, the memo's other site.
+    headerBeginsEmptyRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '\n'),
     headerBeginsShortRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-' + 'A'.repeat(20) + '\n'),
     headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
