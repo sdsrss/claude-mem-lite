@@ -54,6 +54,10 @@ const CONTEXT_UNIT = " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc: def\n the
 const ESCAPE_DEPTH_BEGINS = [1, 2, 4, 8]
   .map((d) => `'-----BEGIN RSA PRIVATE KEY-----${'\\'.repeat(d)}n-a: b${'\\'.repeat(d)}n`)
   .join('');
+const HEADER_BEGINS_IN_KEY =
+  "+KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" +
+  '+Comment: -----BEGIN RSA PRIVATE KEY-----\n'.repeat(16) +
+  '+MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n+QWERTYUIOPasdfg\nprose line\n';
 const SPACED_PATH = 'My Keys/conf.py';
 const SPACED_GREP_UNIT =
   `${SPACED_PATH}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----\n${SPACED_PATH}-6-abc: def\n` +
@@ -203,6 +207,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
     // D#614 A1: header BEGINs on context lines between removed ones, each read with a diff mark's shape
     // through the same run; the per-call memos of that shape take it once.
+    // D#614 A4: a code BEGIN's re-read key span holding 16 header BEGINs, each read for the union.
+    headerBeginsInReadKeyEscaped:
+      CHAIN + ' ' + JSON.stringify(HEADER_BEGINS_IN_KEY.repeat(N / (HEADER_BEGINS_IN_KEY.length + 22))),
     headerBeginsContextRun:
       CHAIN + '\n' + headerBegins(" KEY = '''", (n) => (n % 2 ? ' Comment: ' : '-Comment: '), '-\n'),
     // D#614 A2: the same through numbered grep columns after a spaced path.

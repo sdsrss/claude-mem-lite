@@ -836,7 +836,9 @@ function cutOffKeyEnd(text, b, be, ctx) {
       const alt = ctx.shapeOf(prefix);
       if (!alt || ctx.endFollows(be)) return -1;
       const again = readKeyLines(text, next, u, alt, lead, longs, longest, first, end, ctx.memoOf);
-      return again.longs > 0 && again.end > found && keyEvidence(again, label, false) ? again.end : -1;
+      if (!(again.longs > 0 && again.end > found && keyEvidence(again, label, false))) return -1;
+      ctx.reread = true;
+      return again.end;
     };
     // Only when the line is more than its grammar before the BEGIN: an opener before it or code after it.
     if (g && !(gs === gp && gl + g[0].length === b)) {
@@ -1026,6 +1028,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
 const KEY_BEGIN_SCAN_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
 const KEY_END_SCAN_RE = new RegExp(KEY_END_RE.source, 'g');
 const KEY_BEGIN_NEXT_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
+const KEY_BEGIN_INNER_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
 
 /** Start offsets of every match of the global regex `re` in `text`. */
 function matchStarts(re, text) {
@@ -1096,14 +1099,29 @@ function scrubCutOffKeys(text) {
     if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map() }));
     return m;
   };
-  const ctx = { endFollows, nextBegin, shapeOf, memoOf };
+  const ctx = { endFollows, nextBegin, shapeOf, memoOf, reread: false };
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
   let m;
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, ctx);
+    ctx.reread = false;
+    let end = cutOffKeyEnd(text, m.index, m.index + m[0].length, ctx);
     if (end === -1) continue;
+    // D#614 A4 (D#633): a span read again with a named grammar's shape can take a header line that
+    // holds another private-key BEGIN for an armor header and end where that BEGIN's own reading goes
+    // on (a 15-character line, a line that is only its prefix, another header). The span covered the
+    // BEGIN, which then started no reading, so the lines past the span were stored; 6.30.8, whose
+    // first reading found nothing there, read the inner BEGIN and erased them. Each private-key BEGIN
+    // inside such a span is read too, and the span ends where the farthest of them ends. Only for these
+    // readings: under a BEGIN with nothing before it the same holds in 6.30.8 (a separate defect).
+    if (ctx.reread) {
+      KEY_BEGIN_INNER_RE.lastIndex = m.index + m[0].length;
+      for (let n; (n = KEY_BEGIN_INNER_RE.exec(text)) && n.index < end;) {
+        const e = cutOffKeyEnd(text, n.index, n.index + n[0].length, ctx);
+        if (e > end) end = e;
+      }
+    }
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;
     KEY_BEGIN_RE.lastIndex = end;

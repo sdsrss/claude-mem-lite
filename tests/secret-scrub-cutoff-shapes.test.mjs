@@ -1343,3 +1343,76 @@ describe('D#614 A3: escaped code longer than 256 characters before the last quot
     },
   );
 });
+
+// A4 (D#633, a 6.30.9 regression): in an added diff, a header line under a BEGIN that holds a second
+// private-key BEGIN (`+Comment: -----BEGIN …`). The first BEGIN's D#168 reading takes that header as
+// an armor header, ends at a line the second BEGIN's own reading goes past (a 15-character line, a
+// line that is only the second BEGIN's prefix, another header) and its span swallowed the second
+// BEGIN, which then started no reading. 6.30.8 read the second BEGIN (the first found nothing) and
+// erased every key line; 6.30.9 stored the lines past the first one's end. Shapes from the v6.30.9
+// pre-tag r1 defects review (q1_repro.mjs, fuzz seed 33).
+describe('D#614 A4 (D#633): a second BEGIN in a header line under a code BEGIN', () => {
+  const K1 = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
+  const K2 = 'VfLLGRHmAKOLzbCZpNqdM0MGSFhnfRSbxnrDTHjHqNHnL2dsc8RIG1rN7nsUiaHP';
+  const K3 = 'hgsZH+ZH+Nj3KhnWTuotrsusbcuKGV8QotwGpDNSePvXW3QS8FPBrUpgD5lxBrD2';
+  const S15 = 'QWERTYUIOPasdfg';
+  const B = '-----BEGIN RSA PRIVATE KEY-----';
+  it.each([
+    [
+      'a 16-character line under the header BEGIN',
+      ["+KEY = '''" + B, `+Comment: ${B}`, `+${K1}`, `+${S15}`, `+${K2}`, `+${K3}`],
+      [K1, S15, K2, K3],
+    ],
+    [
+      'a line holding only the header BEGIN’s prefix',
+      ["+KEY = '''" + B, `+Comment: ${B}`, `+${K1}`, '+Comment: ', `+${K2}`, `+${K3}`],
+      [K1, K2, K3],
+    ],
+    [
+      'two header BEGINs over a key whose second line is a header value',
+      [
+        '+Comment: -----BEGIN EC PRIVATE KEY-----',
+        '+Comment: -----BEGIN DSA PRIVATE KEY-----',
+        `+${K1}`,
+        `+Comment: ${K2}`,
+      ],
+      [K1, K2],
+    ],
+    // The first header BEGIN's reading ends where the code BEGIN's does; only the second goes on.
+    [
+      'two header BEGINs under a code BEGIN, the second reading farther',
+      ["+KEY = '''" + B, `+Comment: ${B}`, `+Comment: ${B}`, `+${K1}`, `+${S15}`, `+${K2}`, `+${K3}`],
+      [K1, S15, K2, K3],
+    ],
+  ])('%s', (_, lines, keys) => {
+    const text = ['$ git diff', ...lines, PROSE].join('\n');
+    const failures = [];
+    for (const [wrapName, wrap] of Object.entries(D614_WRAPS)) {
+      const out = scrubSecrets(wrap(text));
+      const kept = keys.filter((k) => out.includes(k.slice(0, 15)) || out.includes(k.slice(-15)));
+      if (kept.length) failures.push(`${wrapName}: ${kept.length} key lines kept`);
+      if (!out.includes('$ git diff') || !out.includes(PROSE)) failures.push(`${wrapName}: text lost`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  // Only BEGINs inside the span are read with it: a later key, past prose, is a key of its own.
+  it('a key after prose below the span keeps the prose between', () => {
+    const text = [
+      '$ git diff',
+      "+KEY = '''" + B,
+      `+Comment: ${B}`,
+      `+${K1}`,
+      `+${S15}`,
+      `+${K2}`,
+      PROSE,
+      B,
+      K3,
+    ].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect([K1, S15, K2, K3].filter((k) => out.includes(k.slice(0, 15)))).toEqual([]);
+      expect(out).toContain(PROSE);
+    }
+  });
+});
