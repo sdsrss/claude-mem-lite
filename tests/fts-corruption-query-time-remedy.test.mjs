@@ -126,7 +126,10 @@ describe('a damaged FTS index names its own lossless remedy at query time', () =
     expect(FTS_CORRUPTION_REMEDY).toMatch(/fts-check rebuild/);
     expect(FTS_CORRUPTION_REMEDY).toMatch(/doctor/);
     // "your memories are gone" is the reading this line exists to prevent.
-    expect(FTS_CORRUPTION_REMEDY).toMatch(/intact/i);
+    expect(FTS_CORRUPTION_REMEDY).toMatch(/does not touch the stored observations/);
+    // ...without promising a rebuild that refuses on damaged pages (D#593).
+    expect(FTS_CORRUPTION_REMEDY).not.toMatch(/lossless|are intact/i);
+    expect(FTS_CORRUPTION_REMEDY).toMatch(/checks the database's pages first/);
   });
 
   it('the CLI prints the remedy beside SQLite`s sentence, and still exits 1', () => {

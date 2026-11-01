@@ -12,7 +12,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import * as schema from '../schema.mjs';
+import { handleMemFtsCheck } from '../server/fts-check.mjs';
 import { dataDirCopyCommand } from '../lib/db-unusable.mjs';
 import { pathWithClaudeStub } from './claude-stub.mjs';
 import { intactObservations, makeFixtureTracker, writeCrossLinkedStore } from './test-helpers.mjs';
@@ -21,6 +23,19 @@ const fixtures = makeFixtureTracker();
 afterAll(() => fixtures.disposeAll());
 const dataDir = () => fixtures.track(mkdtempSync(join(tmpdir(), 'cml-pagegate-')));
 const storeIn = (dir) => join(dir, 'claude-mem-lite.db');
+/**
+ * The product's opener, once, on the store at `path` (named claude-mem-lite.db), in a child. The
+ * first open of a store initSchema built writes, and on cross-linked pages any write can overwrite
+ * rows (the ordinary-write exposure, D#546's line): fixtures for the opener's faces run it first.
+ */
+const openedByProduct = (path) => {
+  const schemaUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'schema.mjs')).href;
+  execFileSync(
+    process.execPath,
+    ['-e', `import(${JSON.stringify(schemaUrl)}).then((m) => m.ensureDbWithWalRecovery().close())`],
+    { env: { ...process.env, CLAUDE_MEM_DIR: dirname(path), MEM_NO_AUTO_ADOPT: '1' }, timeout: 60_000 },
+  );
+};
 /** sha1 of the main file and its log together (a missing log reads as an empty one). */
 const sha = (path) => {
   const h = createHash('sha1').update(readFileSync(path));
@@ -103,15 +118,6 @@ describe('rebuildFTS and rebuildIndexes write nothing on page-level damage', () 
 
 describe('doctor checks the pages first, on a read-only handle (D#593)', () => {
   const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-  const SCHEMA_URL = pathToFileURL(join(REPO, 'schema.mjs')).href;
-  /** The product's opener, once, on the store at `path` (named claude-mem-lite.db), in a child. */
-  const openedByProduct = (path) => {
-    execFileSync(
-      process.execPath,
-      ['-e', `import(${JSON.stringify(SCHEMA_URL)}).then((m) => m.ensureDbWithWalRecovery().close())`],
-      { env: { ...process.env, CLAUDE_MEM_DIR: dirname(path), MEM_NO_AUTO_ADOPT: '1' }, timeout: 60_000 },
-    );
-  };
   const env = (dir, home) => ({
     ...process.env,
     HOME: home,
@@ -327,5 +333,87 @@ describe('fts-check rebuild checks the pages before the opener (D#593)', () => {
     const r = cli(dir, 'check');
     expect(r.stdout).not.toMatch(/Not rebuilt/);
     expect(r.stdout).toMatch(/FTS5/);
+  });
+});
+
+describe('the other faces of a refused rebuild (D#593)', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const BSQ_URL = pathToFileURL(createRequire(import.meta.url).resolve('better-sqlite3')).href;
+  const SCHEMA_URL = pathToFileURL(join(REPO, 'schema.mjs')).href;
+
+  it('mem_fts_check rebuild: says not rebuilt and why, gives the model no command, writes nothing', () => {
+    const { path, truth, linked } = writeCrossLinkedStore(storeIn(dataDir()));
+    const db = new Database(path);
+    let text;
+    try {
+      const before = sha(path);
+      text = handleMemFtsCheck(db, { action: 'rebuild' }).content[0].text;
+      expect(sha(path), 'mem_fts_check wrote to the store or its log').toBe(before);
+    } finally {
+      db.close();
+    }
+    expect(intactObservations(path, truth)).toBe(truth.length);
+    expect(text).toMatch(
+      /^Not rebuilt: the database's pages are damaged, so a rebuild could overwrite rows on them \(/,
+    );
+    expect(text).toContain(`page ${linked[0]}: in the freelist and in observations`);
+    expect(text).toContain('copy the data directory before anything writes to it again');
+    expect(text).not.toMatch(/cp -a|test ! -e/);
+  });
+
+  // The opener every face uses rebuilds the FTS5 indexes when the open fails with
+  // SQLITE_CORRUPT_VTAB; the fault is injected `times` times, as tests/wal-recovery.test.mjs does.
+  const openWithInjectedVtabFault = (dir, times) => {
+    const src = `
+      Promise.all([import(${JSON.stringify(BSQ_URL)}), import(${JSON.stringify(SCHEMA_URL)})]).then(([{ default: Database }, m]) => {
+        let thrown = 0;
+        const orig = Database.prototype.pragma;
+        Database.prototype.pragma = function (sql, ...rest) {
+          if (thrown < ${times} && /^\\s*journal_mode\\s*=\\s*WAL/i.test(sql)) {
+            thrown++;
+            throw new Database.SqliteError('database disk image is malformed', 'SQLITE_CORRUPT_VTAB');
+          }
+          return orig.call(this, sql, ...rest);
+        };
+        const msgs = [];
+        let attempted;
+        try { m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x), info: (x) => msgs.push(x) }).close(); }
+        catch (e) { attempted = e.ftsRebuildAttempted; }
+        console.log(JSON.stringify({ thrown, msgs, attempted }));
+      });`;
+    const out = execFileSync(process.execPath, ['-e', src], {
+      env: { ...process.env, CLAUDE_MEM_DIR: dir, MEM_NO_AUTO_ADOPT: '1' },
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    return JSON.parse(out.trim().split('\n').pop());
+  };
+
+  it('the opener: no rebuild over damaged pages, and it does not say it recovered by one', () => {
+    const dir = dataDir();
+    const { path, truth } = writeCrossLinkedStore(storeIn(dir), { inLog: true, prepare: openedByProduct });
+    const r = openWithInjectedVtabFault(dir, 1);
+    expect(r.thrown, 'the injected fault must have fired').toBe(1);
+    expect(r.msgs.join('\n')).toContain('FTS index corruption detected');
+    expect(r.msgs.join('\n')).toMatch(/FTS rebuild reported: not rebuilt: the database's pages are damaged/);
+    expect(r.msgs).toContain('DB opened; the FTS indexes were not rebuilt');
+    expect(r.msgs).not.toContain('DB recovered after FTS rebuild');
+    expect(intactObservations(path, truth)).toBe(truth.length);
+  });
+
+  it('the opener: ftsRebuildAttempted says whether a rebuild ran when the retry fails too', () => {
+    const damaged = dataDir();
+    writeCrossLinkedStore(storeIn(damaged), { inLog: true });
+    expect(openWithInjectedVtabFault(damaged, 2)).toMatchObject({ thrown: 2, attempted: false });
+    const sound = dataDir();
+    writeCrossLinkedStore(storeIn(sound), { links: 0, inLog: true });
+    expect(openWithInjectedVtabFault(sound, 2)).toMatchObject({ thrown: 2, attempted: true });
+  });
+
+  it('the opener on sound pages still rebuilds and says so', () => {
+    const dir = dataDir();
+    writeCrossLinkedStore(storeIn(dir), { links: 0, inLog: true });
+    const r = openWithInjectedVtabFault(dir, 1);
+    expect(r.msgs).toContain('DB recovered after FTS rebuild');
   });
 });

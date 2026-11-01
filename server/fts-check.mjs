@@ -27,9 +27,13 @@ export function handleMemFtsCheck(db, args) {
   // args.action === 'rebuild' (Zod enum enforces one of the two). The FTS5 indexes, then every
   // other index, as `fts-check rebuild` does (D#558).
   const result = rebuildIndexes(db);
+  // Refused by the page check (D#593): its reason alone, which carries the advice but no command
+  // (the human faces print the copy command; this channel is the model's).
   const summary =
-    result.errors.length > 0
-      ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
-      : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
+    result.pages.state !== 'ok'
+      ? `Not rebuilt: ${result.errors[0].replace(/^not rebuilt: /, '')}`
+      : result.errors.length > 0
+        ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
+        : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
   return { content: [{ type: 'text', text: summary }] };
 }

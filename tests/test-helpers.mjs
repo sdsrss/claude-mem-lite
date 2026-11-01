@@ -14,7 +14,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
@@ -239,8 +239,10 @@ export function writeCrossLinkedStore(
   path,
   { observations = 300, links = 1, vacuum = false, ftsDamage = true, prepare, inLog = false } = {},
 ) {
-  // With inLog the store is built beside `path` and copied to it with its log.
-  const build = inLog ? `${path}.build` : path;
+  // With inLog the store is built in a directory beside `path`, under the same name (the product's
+  // opener in `prepare` opens <dir>/claude-mem-lite.db), and copied to `path` with its log.
+  const buildDir = inLog ? mkdtempSync(join(dirname(path), '.build-')) : null;
+  const build = inLog ? join(buildDir, basename(path)) : path;
   let db = new Database(build);
   let holder = null;
   let truth;
@@ -303,9 +305,7 @@ export function writeCrossLinkedStore(
     db.close();
     holder?.close();
   }
-  if (inLog) {
-    for (const f of [build, `${build}-wal`, `${build}-shm`]) rmSync(f, { force: true });
-  }
+  if (inLog) rmSync(buildDir, { recursive: true, force: true });
   if (leaves.length < links + 2)
     throw new Error(`fixture needs ${links + 2} observations leaves, has ${leaves.length}`);
   const plant = (page, pageSize) => {

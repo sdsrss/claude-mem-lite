@@ -4460,7 +4460,7 @@ async function runDispatch(argv) {
     // `fts-check` and `doctor` touch the index too — and both already explain themselves —
     // so `search` is the one command that DEAD-ENDS on SQLite's sentence, while `recent` /
     // `recall` / `browse` / `context` / `stats` never read the index and keep working.
-    // The remedy is lossless (see FTS_CORRUPTION_REMEDY); the exit code stays 1.
+    // The remedy is the page-checked rebuild (see FTS_CORRUPTION_REMEDY); the exit code stays 1.
     if (isFtsCorruptionError(e)) process.stderr.write(`[mem] ${FTS_CORRUPTION_REMEDY}\n`);
     if (process.env.CLAUDE_MEM_DEBUG) process.stderr.write(`${(e && e.stack) || ''}\n`);
     process.exitCode = 1;

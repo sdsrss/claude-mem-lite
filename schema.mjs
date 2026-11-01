@@ -1875,12 +1875,15 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
     if (isFtsCorruptionError(firstErr)) {
       warn?.(`FTS index corruption detected, rebuilding indexes: ${firstErr.message}`);
       let raw = null;
+      let rebuildRan = false;
       try {
         raw = new Database(DB_PATH);
         // D#415: otherwise better-sqlite3's 5000 ms per statement, four rebuilds, in a hook
         // the host kills at 2 s or 5 s.
         if (busyDeadline !== null) capBusyWaits(raw);
-        const { errors } = rebuildFTS(raw);
+        const { errors, pages } = rebuildFTS(raw);
+        // Refused by the page check (D#593): nothing was rebuilt, and the retry below says so.
+        rebuildRan = pages.state === 'ok';
         if (errors.length) warn?.(`FTS rebuild reported: ${errors.join('; ')}`);
       } catch (rebuildErr) {
         warn?.(`FTS rebuild failed: ${rebuildErr.message}`);
@@ -1893,11 +1896,11 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       }
       try {
         const db = ensureDb();
-        info?.('DB recovered after FTS rebuild');
+        info?.(rebuildRan ? 'DB recovered after FTS rebuild' : 'DB opened; the FTS indexes were not rebuilt');
         return db;
       } catch (retryErr) {
         try {
-          retryErr.ftsRebuildAttempted = true;
+          retryErr.ftsRebuildAttempted = rebuildRan;
         } catch {
           /* frozen error — fine */
         }
