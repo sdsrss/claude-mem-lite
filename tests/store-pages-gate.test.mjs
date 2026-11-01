@@ -8,7 +8,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -254,5 +254,78 @@ describe('the copy command doctor and fts-check print', () => {
     expect(lstatSync(`${real}.copy-2026-11-01`).isSymbolicLink(), 'the copy is a link').toBe(false);
     expect(lstatSync(copied).isSymbolicLink(), 'the store in the copy is a link').toBe(false);
     expect(sha(copied)).toBe(sha(target));
+  });
+});
+
+describe('fts-check rebuild checks the pages before the opener (D#593)', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const cli = (dir, ...args) =>
+    spawnSync(process.execPath, [join(REPO, 'cli.mjs'), 'fts-check', ...args], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: dir,
+        CLAUDE_MEM_DIR: dir,
+        CLAUDE_PROJECT_DIR: dir,
+        MEM_NO_AUTO_ADOPT: '1',
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        CLAUDE_MEM_SKIP_MAINTAIN: '1',
+        MEM_QUIET_HOOKS: '1',
+      },
+      timeout: 60_000,
+    });
+
+  // initSchema built it and the product never opened it: the opener's first open writes (r1b claims
+  // P3-6 measured the main file change and a page of a table the opener made on a live leaf).
+  for (const inLog of [false, true]) {
+    it(`refuses with the copy command and writes nothing${inLog ? ', damage only in the log' : ', before the first open'}`, () => {
+      const dir = dataDir();
+      const { path, truth, linked } = writeCrossLinkedStore(storeIn(dir), { inLog });
+      const before = sha(path);
+      const r = cli(dir, 'rebuild');
+      expect(sha(path), 'fts-check rebuild wrote to the store or its log').toBe(before);
+      expect(intactObservations(path, truth)).toBe(truth.length);
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stdout).toMatch(/^\[mem\] Not rebuilt: the database's pages are damaged/);
+      expect(r.stdout).toContain(`  page ${linked[0]}: in the freelist and in observations`);
+      expect(r.stdout).toMatch(/^ {2}test ! -e .* && cp -aL /m);
+    });
+  }
+
+  // A read-only data directory: the read-only handle cannot make the log index, so the pages are not
+  // checked, and "not checked" stops the rebuild before the opener as damage does.
+  it('refuses when the pages could not be checked, before the opener', () => {
+    const dir = dataDir();
+    const { path } = writeCrossLinkedStore(storeIn(dir), { links: 0, ftsDamage: false });
+    const before = sha(path);
+    chmodSync(dir, 0o555);
+    let r;
+    try {
+      r = cli(dir, 'rebuild');
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(r.stdout, r.stderr).toMatch(
+      /^\[mem\] Not rebuilt: the database's pages could not be checked first \(.+\)\.$/m,
+    );
+    expect(r.status).toBe(1);
+    expect(sha(path)).toBe(before);
+  });
+
+  it('still rebuilds a store whose only damage is the search index', () => {
+    const dir = dataDir();
+    const { path, truth } = writeCrossLinkedStore(storeIn(dir), { links: 0 });
+    const r = cli(dir, 'rebuild');
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^\[mem\] Successfully rebuilt: observations_fts/);
+    expect(intactObservations(path, truth)).toBe(truth.length);
+  });
+
+  it('fts-check check is not stopped by the page check', () => {
+    const dir = dataDir();
+    writeCrossLinkedStore(storeIn(dir), { ftsDamage: false });
+    const r = cli(dir, 'check');
+    expect(r.stdout).not.toMatch(/Not rebuilt/);
+    expect(r.stdout).toMatch(/FTS5/);
   });
 });

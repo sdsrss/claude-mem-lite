@@ -1,9 +1,60 @@
 // cli/fts-check.mjs — `claude-mem-lite fts-check <check|rebuild>`.
 // Extracted from mem-cli.mjs (v2.41, god-module split).
 
+import Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import { checkStorePages } from '../lib/store-pages.mjs';
+import { PAGE_DAMAGE_COPY_ADVICE, dataDirCopyCommand } from '../lib/db-unusable.mjs';
 import { parseArgs, out, fail } from './common.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
+
+/**
+ * What `fts-check rebuild` prints when the page check stops it (D#593): the reason, the check's
+ * lines, and on damage the advice and a command that copies the data directory.
+ * @param {ReturnType<typeof checkStorePages>} pages a result that is not `ok`
+ * @param {string} dbPath
+ * @returns {string[]}
+ */
+function refusalLines(pages, dbPath) {
+  if (pages.state !== 'damaged') {
+    return [`[mem] Not rebuilt: the database's pages could not be checked first (${pages.error}).`];
+  }
+  return [
+    "[mem] Not rebuilt: the database's pages are damaged, so a rebuild could overwrite rows on them:",
+    ...pages.lines.map((l) => `  ${l}`),
+    ...(pages.more > 0 ? [`  and ${pages.more} more`] : []),
+    `  ${PAGE_DAMAGE_COPY_ADVICE}`,
+    `  ${dataDirCopyCommand(dbPath)}`,
+  ];
+}
+
+/**
+ * `fts-check rebuild`'s page check, run BEFORE the CLI opens the store with the product opener
+ * (D#593): the opener can write (the first open of a store initSchema built, a migration), and on
+ * damaged pages any write can overwrite rows. A read-only handle writes nothing, not even the
+ * checkpoint a read-write handle's close makes. Returns the lines to print when the rebuild must not
+ * run, else null; also null when a read-only handle cannot be made at all, which the opener's own
+ * error handling then reports as for every other command.
+ * @param {string[]} args the command's arguments
+ * @param {string} dbPath
+ * @returns {string[]|null}
+ */
+export function ftsRebuildPreCheck(args, dbPath) {
+  if (parseArgs(args, { track: false }).positional[0] !== 'rebuild' || !existsSync(dbPath)) return null;
+  let db;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+  try {
+    const pages = checkStorePages(db);
+    return pages.state === 'ok' ? null : refusalLines(pages, dbPath);
+  } finally {
+    db.close();
+  }
+}
 
 export function cmdFtsCheck(db, args) {
   const { positional } = parseArgs(args);

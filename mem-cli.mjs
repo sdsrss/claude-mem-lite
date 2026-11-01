@@ -2916,7 +2916,7 @@ function cmdMaintain(db, args) {
 }
 
 // cmdFtsCheck extracted to cli/fts-check.mjs (v2.41 split).
-import { cmdFtsCheck } from './cli/fts-check.mjs';
+import { cmdFtsCheck, ftsRebuildPreCheck } from './cli/fts-check.mjs';
 
 // ─── memdir-audit ────────────────────────────────────────────────────────────
 // Body-structure audit for ~/.claude/projects/<encoded>/memory/feedback_*.md
@@ -4199,6 +4199,16 @@ async function runDispatch(argv) {
   if (cmd === 'memdir-audit') {
     cmdMemdirAudit(cmdArgs);
     return;
+  }
+
+  if (cmd === 'fts-check') {
+    // The rebuild's page check comes before the opener, which can write (D#593).
+    const refused = ftsRebuildPreCheck(cmdArgs, DB_PATH);
+    if (refused) {
+      for (const line of refused) out(line);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   let db;
