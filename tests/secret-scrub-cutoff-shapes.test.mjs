@@ -686,3 +686,180 @@ describe('blank lines between a BEGIN and a cut key body', () => {
     expect(windows.filter((w) => escaped.includes(w))).toEqual([]);
   });
 });
+
+// D#168 (D#160 reopened): the BEGIN line's whole left context was the line prefix. With code between
+// the line prefix and the BEGIN (`-KEY = '''`, `     5\tKEY = """`) or a string opener before it
+// (`'+`, `"-`), the lines below carry only the prefix, the shape matched none of them and a cut key
+// was stored whole. Measured 2026-11-01 on 491d6414: 212 of the 336 matrix cases stored key lines,
+// every case of the seven code forms. The matrix is 5981f88's (withdrawn from 6.19.4 for regressions
+// elsewhere, which the cases after it pin).
+describe('D#168: code or a string opener between the line prefix and the BEGIN', () => {
+  // Its own generator: drawing from the file's shared one would move every later draw.
+  let s = 20261101;
+  const r = () => (s = (s * 1103515245 + 12345) >>> 0) / 2 ** 32;
+  const k64 = (n) => Array.from({ length: n }, () => B64[Math.floor(r() * 64)]).join('');
+  const LEFT = {
+    diffMinusCode: ["-KEY = '''", () => '-'],
+    diffPlusCode: ['+const k = `', () => '+'],
+    quoteCode: ['> key = "', () => '> '],
+    readToolCode: ['     5\tKEY = """', (i) => `${String(6 + i).padStart(6)}\t`],
+    readToolArrowCode: ['5→KEY = """', (i) => `${6 + i}→`],
+    grepContextCode: ["keys/conf.py:5:KEY = '''", (i) => `keys/conf.py-${6 + i}-`],
+    // `MY_KEY` and the key's `MII…` share an `M` that is not part of the line prefix.
+    diffIdentifierM: ["-MY_KEY = '''", () => '-'],
+    // A diff of YAML: `-key:` is the diff mark and code, not a grep path.
+    diffYamlCode: ["-private_key: '''", () => '-'],
+    quoteThenPlus: ["'+", () => '+'],
+    bytesThenPlus: ["b'+", () => '+'],
+    doubleQuoteThenMinus: ['"-', () => '-'],
+    backtickThenPlus: ['`+', () => '+'],
+    rawBytesThenPlus: ["rb'+", () => '+'],
+    tripleQuoteThenPlus: ["'''+", () => '+'],
+    indentedBytesThenPlus: ["  b'+", () => '+'],
+  };
+  const WRAPS = {
+    raw: (t) => t,
+    json: (t) => `{"type":"tool_result","content":${J(t)}}`,
+    jsonTwice: (t) => J(`{"content":${J(t)}}`),
+  };
+  for (const [kind, key] of Object.entries(KEYS)) {
+    const long = key.body.filter((l) => l.length >= 16).flatMap((l) => [l.slice(0, 16), l.slice(-16)]);
+    for (const cutName of ['head', 'cutMidLine']) {
+      it(`${kind} / ${cutName}: no key window kept, no text lost`, () => {
+        const failures = [];
+        for (const [leftName, [left, pre]] of Object.entries(LEFT)) {
+          for (const [wrapName, wrap] of Object.entries(WRAPS)) {
+            const [begin, ...rest] = CUTS[cutName](key);
+            const text = ['$ git diff', left + begin, ...rest.map((l, i) => pre(i) + l), PROSE].join('\n');
+            const out = scrubSecrets(wrap(text));
+            const kept = long.filter((w) => out.includes(w));
+            if (kept.length) failures.push(`${leftName}/${wrapName}: ${kept.length} key windows kept`);
+            // The code before the BEGIN is escaped in the wrapped forms, so it is looked for raw only.
+            const codeLost = wrapName === 'raw' && !out.includes(left.trim());
+            if (!out.includes('$ git diff') || !out.includes(PROSE) || codeLost)
+              failures.push(`${leftName}/${wrapName}: text lost`);
+          }
+        }
+        expect(failures).toEqual([]);
+      });
+    }
+  }
+
+  it('Read output of a cut key in an import-jsonl content array', () => {
+    const body = [KL, k64(64), k64(64)];
+    const text = [
+      "     5\tKEY = '''-----BEGIN RSA PRIVATE KEY-----",
+      ...body.map((l, i) => `${String(6 + i).padStart(6)}\t${l}`),
+    ].join('\n');
+    const out = scrubSecrets(JSON.stringify([{ type: 'text', text }]));
+    expect(body.map((l) => l.slice(20, 36)).filter((w) => out.includes(w))).toEqual([]);
+  });
+
+  // The key's first chunk on the code BEGIN line (`head -c` output): the reading ended on the BEGIN
+  // line and the prefixed lines below were stored.
+  it.each([
+    [
+      'a diff',
+      (k) => [`-KEY = '''-----BEGIN RSA PRIVATE KEY-----${k[0]}`, ...k.slice(1).map((l) => `-${l}`)],
+    ],
+    [
+      'Read output',
+      (k) => [
+        `     5\tKEY = """-----BEGIN RSA PRIVATE KEY----- ${k[0]}`,
+        ...k.slice(1).map((l, i) => `${String(6 + i).padStart(6)}\t${l}`),
+      ],
+    ],
+  ])('a key begun on its code BEGIN line in %s', (_name, lines) => {
+    const k = [`MIIE${k64(60)}`, k64(64), k64(64), k64(20)];
+    const out = scrubSecrets([...lines(k), PROSE].join('\n'));
+    expect(
+      k
+        .slice(0, 3)
+        .map((l) => l.slice(20, 36))
+        .filter((w) => out.includes(w)),
+    ).toEqual([]);
+    expect(out).toContain(PROSE);
+  });
+
+  // v6.19.4 round-2 F1, the cross-pass leak: a whole key the block pattern did not take on pass 1
+  // (a partial BEGIN inside it blocks the match until the Authorization pattern removes it) is taken
+  // whole on pass 2. Reading its first lines as a cut key on pass 1 would put ***PEM_KEY*** over
+  // its BEGIN, and the lines after the prose line would be stored.
+  it('a whole key blocked on pass 1 is still taken whole under a code BEGIN', () => {
+    const k = [`MIIE${k64(60)}`, k64(64), k64(64), k64(64)];
+    for (const [left, pre] of [
+      ["-KEY = '''", '-'],
+      ['     5\tKEY = """', '     6\t'],
+    ]) {
+      const text = [
+        `${left}-----BEGIN RSA PRIVATE KEY-----`,
+        `${pre}${k[0]}`,
+        `${pre}${k[1]}`,
+        `${pre}Some prose line here.`,
+        `${pre}${k[2]}`,
+        `${pre}${k[3]}`,
+        `${pre}Authorization: Bearer -----BEGIN RSA PRIVATE KEY`,
+        `${pre}-----END RSA PRIVATE KEY-----`,
+        'the end',
+      ].join('\n');
+      const out = scrubSecrets(text);
+      expect(
+        k.map((l) => l.slice(20, 36)).filter((w) => out.includes(w)),
+        left,
+      ).toEqual([]);
+      expect(out).toContain('the end');
+    }
+  });
+
+  // Two prefixed identifiers under a BEGIN with no code before it read as two key lines (as they do
+  // on 491d6414). Under a code BEGIN the reading needs a 40+ line, a key magic or armor headers, so
+  // a list that names a key marker in a diff keeps its words.
+  it('an identifier list under a code BEGIN keeps its text', () => {
+    for (const [left, pre] of [
+      ["-KEY = '''", '- '],
+      ["-KEY = '''", '-'],
+      ['     5\tKEY = """', '     6\t'],
+      ['> key = "', '> '],
+    ]) {
+      const lines = [
+        `${left}-----BEGIN RSA PRIVATE KEY-----`,
+        `${pre}SessionManagerImpl`,
+        `${pre}TokenRefresherImpl`,
+      ];
+      const text = [...lines, 'the end of the list'].join('\n');
+      expect(scrubSecrets(text), left).toBe(text);
+    }
+  });
+
+  // The first design took armor headers as enough under a code BEGIN; the keyless arm of the fuzz
+  // then lost the identifier under them on 858-899 of ~12,000 texts per seed.
+  it('armor headers over an identifier under a code BEGIN keep their text', () => {
+    for (const [left, pre] of [
+      ['keys/conf.py:5:key = "', (i) => `keys/conf.py-${6 + i}-`],
+      ['+MY_KEY = ', () => '+'],
+      ['> MY_KEY = ', () => '> '],
+    ]) {
+      const lines = [
+        `${left}-----BEGIN RSA PRIVATE KEY-----`,
+        ...['Proc-Type: 4,ENCRYPTED', 'DEK-Info: AES-128-CBC,3F2A9C1E', '', 'loadPrivateKeyFromDisk14'].map(
+          (l, i) => pre(i) + l,
+        ),
+      ];
+      const text = [...lines, 'the end'].join('\n');
+      expect(scrubSecrets(text), left).toBe(text);
+      expect(scrubSecrets(J(text)), `${left} escaped`).toBe(J(text));
+    }
+  });
+
+  it('prefixed prose under a code BEGIN keeps its text', () => {
+    for (const [left, pre] of Object.values(LEFT)) {
+      const text = [
+        `${left}-----BEGIN RSA PRIVATE KEY-----`,
+        `${pre(0)}This line explains where the key is loaded from.`,
+        `${pre(1)}`,
+        `${pre(2)}See config/keys.md for the rotation steps.`,
+      ].join('\n');
+      expect(scrubSecrets(text), left).toBe(text);
+    }
+  });
+});

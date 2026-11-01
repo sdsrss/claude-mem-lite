@@ -549,6 +549,18 @@ function prevLine(text, ls, u, floor) {
   return { start: i + 1, end: bs };
 }
 
+// D#168: the line prefix grammars a BEGIN line can carry with code after them, before the BEGIN:
+// a Read column (`     5\t`, `5→`), a diff mark, a quote, a grep column (`path:5:`, `path:`),
+// after at most one string opener (`'+`, `b'+`, `'''+`). Named forms only, not "what the next line
+// shares with this one": that reading took `//`, `#` and a bare `>` for prefixes and was withdrawn
+// from 6.19.4 for the prose it erased and the keys it let through on a later pass. The diff mark
+// comes before the grep forms, so `-key: '''` is a diff line, not a grep path `-key:`. In escaped
+// text a tab is `\t` and a quote may be `\"`.
+const PREFIX_GRAMMAR_RE =
+  /^[ \t]*(?:[rRbBuUfF]{0,2}(?:\\*['"`]){1,3})?([ \t]*\d+(?:\t|\\+t)|\d+→|[-+]|(?:>[ \t]?)+|[^\s'"`:\\]+[:-]\d+[:-]|[^\s'"`:\\]+:)/;
+// A grammar is a few characters; testing more of a long left context costs a pass over it per BEGIN.
+const PREFIX_GRAMMAR_SCAN = 256;
+
 /** A regex for the line prefix `prefix` has, with digits free and grep's `:`/`-` interchangeable. */
 function prefixShape(prefix) {
   const body = prefix.replace(/^[ \t]+/, '');
@@ -654,7 +666,7 @@ function cutRun(core) {
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
  * block never gets here; the block pattern above takes it first.
  */
-function cutOffKeyEnd(text, b, be) {
+function cutOffKeyEnd(text, b, be, endFollows) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   for (
@@ -711,14 +723,89 @@ function cutOffKeyEnd(text, b, be) {
   // per pass (v6.19.2 pre-tag round-5 review F2).
   let run = 0;
   while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
-  const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
+  const left = text.slice(ls, b);
+  const shape = run >= 16 ? null : prefixShape(left);
   // The first character of the prefix after its spaces and tabs: a shape's match can only start a
   // line whose first character after spaces and tabs is this one (a digit, `:` and `-` stand for
   // more, and none of them begins a blank line below).
   let pl = ls;
   while (pl < b && (text.charCodeAt(pl) === 32 || text.charCodeAt(pl) === 9)) pl++;
   const shapeLead = shape ? text.charCodeAt(pl) : -1;
+  const label = text.slice(b, be);
+  const read = readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end);
+  const found = read.longs > 0 && keyEvidence(read, label, true) ? read.end : -1;
+  // D#168: code between the line prefix and the BEGIN (`-KEY = '''`, `     5\tKEY = """`) or a
+  // string opener before it (`'+`, `"-`) made the whole left context the shape, which no line below
+  // starts with, so nothing past the BEGIN line was read and a cut key was stored. Read again with
+  // the prefix grammar alone, only when the reading above took nothing below the BEGIN line (its
+  // output is unchanged otherwise), and only on stronger evidence than that reading's: two prefixed
+  // identifiers under a BEGIN in a diff are a list, not a key. Not when an END follows before the
+  // next BEGIN: that is a whole block the block pattern did not take on this pass (a partial BEGIN
+  // inside it), which it takes whole once the blocker goes; a ***PEM_KEY*** over its BEGIN would
+  // keep every line after the first one that is not base64 (v6.19.4 round-2 F1).
+  if (run < 16 && (found === -1 || found <= i)) {
+    // The grammar starts the line. In escaped text the prefix above stops at an unescaped single
+    // quote, which JSON never escapes (`-KEY = '''` in a JSON string leaves ''), so look past single
+    // quotes for the start of the line: a break, or a double quote that ends a string at this depth
+    // (the string the line is in). At most PREFIX_GRAMMAR_SCAN characters back; past that, no grammar.
+    let gl = ls;
+    if (u > 0 && ls > 0 && text[ls - 1] === "'") {
+      gl = -1;
+      for (let j = ls - 1, lim = Math.max(0, ls - PREFIX_GRAMMAR_SCAN); j >= lim; j--) {
+        if (j === 0) {
+          gl = 0;
+          break;
+        }
+        const ch = text[j - 1];
+        if (
+          ch === '\n' ||
+          ch === '\r' ||
+          ((ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, j - 1, 0), u)) ||
+          (ch === '"' && isStringEnd(backslashesBefore(text, j - 1, 0), u))
+        ) {
+          gl = j;
+          break;
+        }
+      }
+    }
+    const g =
+      gl === -1 ? null : PREFIX_GRAMMAR_RE.exec(text.slice(gl, Math.min(b, gl + PREFIX_GRAMMAR_SCAN)));
+    const gs = g ? gl + g[0].length - g[1].length : -1;
+    let gp = gl;
+    while (gp < b && (text.charCodeAt(gp) === 32 || text.charCodeAt(gp) === 9)) gp++;
+    // Only when the line is more than its grammar before the BEGIN: an opener before it or code after it.
+    if (g && !(gs === gp && gl + g[0].length === b)) {
+      const alt = prefixShape(g[1]);
+      if (alt && !endFollows(be)) {
+        let lead = gs;
+        while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
+        const again = readKeyLines(text, next, u, alt, text.charCodeAt(lead), longs, longest, first, end);
+        if (again.longs > 0 && again.end > found && keyEvidence(again, label, false)) return again.end;
+      }
+    }
+  }
+  return found;
+}
 
+/**
+ * Whether a reading is a key: one base64 line of 40+ characters or a start the way a key encoding
+ * starts; when `loose`, also armor headers or two lines of 16+. The grammar reading (D#168) is not
+ * loose: armor headers over an identifier (`Proc-Type`, `DEK-Info`, then `loadPrivateKeyFromDisk`)
+ * read as a key on 858-899 of ~12,000 keyless fuzz texts per seed, which the reading above keeps.
+ */
+function keyEvidence(r, label, loose) {
+  // Under an opener whose prefix does not match the diff lines below it (`'+`, `rb'+`,
+  // `+KEY = '''`) the line still starts with its `+`; the magic is tested without it (D#167).
+  const body = r.first.replace(/^[-+]/, '');
+  const magic = startsLikeKey(body) || (label.includes('PGP') && PGP_MAGIC_RE.test(body));
+  return (loose && (r.longs >= 2 || r.armors > 0)) || r.longest >= 40 || magic;
+}
+
+/**
+ * The lines of a cut key below its BEGIN line, read with one line shape, from the state the BEGIN
+ * line left (`longs`, `longest`, `first`, `end`: a key pasted onto the BEGIN line counts as one line).
+ */
+function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end) {
   let armors = 0;
   let shorts = 0;
   let pendingBlank = false;
@@ -793,22 +880,53 @@ function cutOffKeyEnd(text, b, be) {
     }
     break;
   }
-  if (longs === 0) return -1;
-  // Under an opener whose prefix does not match the diff lines below it (`'+`, `rb'+`,
-  // `+KEY = '''`) the line still starts with its `+`; the magic is tested without it (D#167).
-  const body = first.replace(/^[-+]/, '');
-  const magic = startsLikeKey(body) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(body));
-  return longs >= 2 || armors > 0 || longest >= 40 || magic ? end : -1;
+  return { longs, longest, first, end, armors };
+}
+
+// Separate scanners: KEY_BEGIN_RE's lastIndex drives scrubCutOffKeys' loop while these run.
+const KEY_BEGIN_SCAN_RE = new RegExp(KEY_BEGIN_RE.source, 'g');
+const KEY_END_SCAN_RE = new RegExp(KEY_END_RE.source, 'g');
+
+/** Start offsets of every match of the global regex `re` in `text`. */
+function matchStarts(re, text) {
+  const starts = [];
+  re.lastIndex = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) starts.push(m.index);
+  return starts;
+}
+
+/** The first value in ascending `arr` at or after `x`, or Infinity. */
+function firstAtOrAfter(arr, x) {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < arr.length ? arr[lo] : Infinity;
 }
 
 function scrubCutOffKeys(text) {
   if (!text.includes('PRIVATE KEY')) return text;
+  // Whether an END follows offset `be` before the next BEGIN. Positions found once per call, on
+  // first use, so a text with many BEGINs is not rescanned to its end for each.
+  let begins = null;
+  let ends = null;
+  const endFollows = (be) => {
+    if (begins === null) {
+      begins = matchStarts(KEY_BEGIN_SCAN_RE, text);
+      ends = matchStarts(KEY_END_SCAN_RE, text);
+    }
+    const e = firstAtOrAfter(ends, be);
+    return e !== Infinity && e < firstAtOrAfter(begins, be);
+  };
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
   let m;
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, endFollows);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;

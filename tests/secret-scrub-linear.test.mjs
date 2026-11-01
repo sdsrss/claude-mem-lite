@@ -53,6 +53,20 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // The same lines with JSON-escaped breaks (a literal backslash and n).
     pemEscapedBodyNoEnd:
       CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\\n' + 'MIIEabcdefghijklmnop\\n'.repeat(N / 22),
+    // D#168: in escaped text the prefix grammar is looked for past the single quotes before each
+    // BEGIN, at most 256 characters back.
+    pemEscapedLongCodeBeforeBegin:
+      CHAIN +
+      ' ' +
+      JSON.stringify(('x'.repeat(300) + "'-----BEGIN RSA PRIVATE KEY-----\n-abc\n").repeat(N / 337)),
+    // A bare `>` under a quoted code BEGIN (6.19.4 round-2 F3 read it as blank: 168x benign).
+    pemBlankQuoteRun: CHAIN + ' > key = "-----BEGIN RSA PRIVATE KEY-----\n' + '>\n'.repeat(N / 2),
+    // The grammar reading takes every line of the run, then refuses it (no 40+ line, no key start),
+    // on each pass.
+    pemGrammarRunRefused:
+      CHAIN +
+      " -KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" +
+      '-abcdefghijklmnopqrstuvwxyzAB\n'.repeat(N / 30),
     // v6.19.1 delta review P1: a whitespace run inside an RFC 1421 header value, ended by a
     // backslash or a lone CR, backtracked quadratically (48.9 s at 200k).
     pemHeaderSpacesBackslash: '-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment:' + ' '.repeat(N) + '\\x',
@@ -83,8 +97,8 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       'MIIEabcdefghijklmnop\n'
     ).repeat(N / 532),
     pemBeginChunksOneLine: '-----BEGIN RSA PRIVATE KEY----- ' + 'MIIEabcdefghijklmnop '.repeat(N / 21),
-    // D#160 (open): code or a string opener around the line prefix on every BEGIN line, raw and
-    // escaped. The fix withdrawn from 6.19.4 read these lines twice; a next attempt must fit here.
+    // D#168 (D#160 reopened): code or a string opener around the line prefix on every BEGIN line,
+    // raw and escaped, so each BEGIN is read again with its prefix grammar on each of the 32 passes.
     pemCodeBeforeBegin: CHAIN + ' ' + "-KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 52),
     pemOpenerBeforeBegin: CHAIN + ' ' + "'+-----BEGIN RSA PRIVATE KEY-----\n+\n".repeat(N / 37),
     pemEscapedQuotesBeforeBegin:
