@@ -460,6 +460,41 @@ describe('checkStorePages reads the freelist from the state its own transaction 
     }
   });
 
+  // The same restart, when the frames were not all in the main file as the check began but a
+  // checkpoint copied the rest just before its read transaction started: the reader then holds read
+  // lock 0, so whether to read the log is decided by nBackfill as the transaction sees it.
+  it('a checkpoint just before its read began, then a log restart while it reads', () => {
+    const { path } = healthy();
+    const writer = new Database(path);
+    try {
+      writer.pragma('wal_autocheckpoint = 0');
+      writer.prepare('DELETE FROM observations WHERE id % 5 = 0').run();
+      const salt = () => readFileSync(`${path}-wal`).subarray(16, 24).toString('hex');
+      const before = salt();
+      let checkpointed = null;
+      let after = null;
+      const r = gate(path, (db) => {
+        const exec = db.exec.bind(db);
+        db.exec = (sql) => {
+          if (sql === 'BEGIN' && checkpointed === null) {
+            const [{ busy, log, checkpointed: done }] = writer.pragma('wal_checkpoint(PASSIVE)');
+            checkpointed = busy === 0 && log === done && log > 0;
+          }
+          return exec(sql);
+        };
+        atPageCount(() => {
+          writer.exec('CREATE TABLE late (x); INSERT INTO late VALUES (randomblob(20000))');
+          after = salt();
+        })(db);
+      });
+      expect(checkpointed, 'premise: every frame reached the main file just before BEGIN').toBe(true);
+      expect(after, 'premise: the writer restarted the log (new salt)').not.toBe(before);
+      expect(r).toMatchObject({ state: 'ok' });
+    } finally {
+      writer.close();
+    }
+  });
+
   it('says it could not check when every try is overtaken by a commit', () => {
     const { path } = healthy();
     const writer = new Database(path);
