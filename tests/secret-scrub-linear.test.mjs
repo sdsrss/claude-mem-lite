@@ -50,6 +50,7 @@ const headerBegins = (left, header, line, headers = 16) => {
 };
 const col = (n) => String(n).padStart(6);
 const LONG_PATH = 'src/very_long/project_path/to_some/deeply_nested/module_dir/sub_pkg/config.py:';
+const CONTEXT_UNIT = " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc: def\n the context line after it\n";
 
 describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   const shapes = {
@@ -126,6 +127,13 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     pemOpenerBeforeBegin: CHAIN + ' ' + "'+-----BEGIN RSA PRIVATE KEY-----\n+\n".repeat(N / 37),
     pemEscapedQuotesBeforeBegin:
       CHAIN + ' ' + JSON.stringify("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 55)),
+    // D#614 A1: a BEGIN on a diff context line over a removed line the reading refuses, read again with
+    // a diff mark's shape on each pass (the colon keeps the D#168 skip from applying), raw and escaped.
+    // Under coverage that reading costs what the D#168 one does on `-KEY = '''` (v6.30.9, the same
+    // units: 6.9x benign over a header, 6.3x without); a context line per unit keeps it near the rest.
+    pemContextBeforeBegin: CHAIN + '\n' + CONTEXT_UNIT.repeat(N / CONTEXT_UNIT.length),
+    pemContextBeforeBeginEscaped:
+      CHAIN + ' ' + JSON.stringify(CONTEXT_UNIT.repeat(N / (CONTEXT_UNIT.length + 3))),
     // D#607 F1: 16 header lines that each hold a BEGIN, then a run the reading refuses. Each BEGIN's
     // grammar reading read the run again (d0766de4 with a 200k-char run: 33x benign raw, 48x escaped,
     // 186x under coverage); readKeyLines' per-call memos read it once per pass and escape depth. The
@@ -177,6 +185,10 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     headerBeginsEmptyRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '\n'),
     headerBeginsShortRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-' + 'A'.repeat(20) + '\n'),
     headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
+    // D#614 A1: header BEGINs on context lines between removed ones, each read with a diff mark's shape
+    // through the same run; the per-call memos of that shape take it once.
+    headerBeginsContextRun:
+      CHAIN + '\n' + headerBegins(" KEY = '''", (n) => (n % 2 ? ' Comment: ' : '-Comment: '), '-\n'),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line

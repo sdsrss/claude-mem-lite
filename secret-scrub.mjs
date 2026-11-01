@@ -802,26 +802,34 @@ function cutOffKeyEnd(text, b, be, ctx) {
     const gs = g ? gl + g[0].length - g[1].length : -1;
     let gp = gl;
     while (gp < b && (text.charCodeAt(gp) === 32 || text.charCodeAt(gp) === 9)) gp++;
+    // The lines below read again with the shape of `prefix`, whose first character after blanks is
+    // `lead`: where the key they hold ends, or -1.
+    const reread = (prefix, lead) => {
+      const alt = ctx.shapeOf(prefix);
+      if (!alt || ctx.endFollows(be)) return -1;
+      const again = readKeyLines(text, next, u, alt, lead, longs, longest, first, end, ctx.memoOf);
+      return again.longs > 0 && again.end > found && keyEvidence(again, label, false) ? again.end : -1;
+    };
     // Only when the line is more than its grammar before the BEGIN: an opener before it or code after it.
     if (g && !(gs === gp && gl + g[0].length === b)) {
-      const alt = ctx.shapeOf(g[1]);
-      if (alt && !ctx.endFollows(be)) {
-        let lead = gs;
-        while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
-        const again = readKeyLines(
-          text,
-          next,
-          u,
-          alt,
-          text.charCodeAt(lead),
-          longs,
-          longest,
-          first,
-          end,
-          ctx.memoOf,
-        );
-        if (again.longs > 0 && again.end > found && keyEvidence(again, label, false)) return again.end;
-      }
+      let lead = gs;
+      while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
+      const r = reread(g[1], text.charCodeAt(lead));
+      if (r !== -1) return r;
+    }
+    // D#614 A1: a unified diff's context line starts with its space, with code after it or none, and
+    // the removed and added lines below it with `-` and `+`, which the line prefix (that space, or the
+    // code) never matched. They are read with a diff mark's shape, which takes a context line too.
+    // Only when the next line starts with a mark: Read output starts its lines with spaces as well,
+    // and a reading there took the next line's number for a key's short last line. Nor when the line
+    // holds an escaped break of another depth: it is then several lines, the first one led by a space.
+    if (
+      text.charCodeAt(gl) === 32 &&
+      (text[next] === '-' || text[next] === '+') &&
+      !/\\[nr]/.test(text.slice(gl, b))
+    ) {
+      const r = reread('-', 45);
+      if (r !== -1) return r;
     }
   }
   return found;
