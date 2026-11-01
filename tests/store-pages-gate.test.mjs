@@ -44,7 +44,11 @@ const sha = (path) => {
 };
 
 describe('rebuildFTS and rebuildIndexes write nothing on page-level damage', () => {
-  for (const name of ['rebuildFTS', 'rebuildIndexes']) {
+  // Named, not schema[name]: a computed member makes knip count every export of schema.mjs as used.
+  for (const [name, rebuild] of [
+    ['rebuildFTS', schema.rebuildFTS],
+    ['rebuildIndexes', schema.rebuildIndexes],
+  ]) {
     for (const vacuum of [false, true]) {
       it(`${name}${vacuum ? ' on a VACUUMed store' : ''}`, () => {
         const { path, truth, linked } = writeCrossLinkedStore(storeIn(dataDir()), { vacuum });
@@ -55,7 +59,7 @@ describe('rebuildFTS and rebuildIndexes write nothing on page-level damage', () 
         try {
           // Taken on the open handle: what this handle's own rebuild would add to the log.
           before = sha(path);
-          r = schema[name](db);
+          r = rebuild(db);
           expect(sha(path), 'the rebuild wrote to the store or its log').toBe(before);
         } finally {
           db.close();
