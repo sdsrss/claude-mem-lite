@@ -10,7 +10,7 @@ permissions:
   # write-scoped token in a runner that has just executed several thousand dev
   # dependencies' install scripts. The `publish` job declares its own
   # `contents: write` + `id-token: write` block, so tightening here does not touch
-  # the release upload or the provenance attestation.
+  # the release upload or npm's trusted publishing.
   contents: read
 
 jobs:
@@ -147,13 +147,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write  # required for npm provenance attestation
+      # npm trusted publishing: npm exchanges this job's OIDC token for a short-lived
+      # publish token, and signs the provenance attestation with it. Without it the
+      # publish step fails.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Node 24, not 22: trusted publishing needs npm >= 11.5.1 and Node >= 22.14
+      # (docs.npmjs.com/trusted-publishers), and Node 22 bundles npm 10. The first 24.x
+      # with npm 11.5.1 is 24.5.0 (nodejs.org/dist/index.json). One npm 11 difference:
+      # without --tag it refuses a version lower than the highest published one
+      # ('Cannot implicitly apply the "latest" tag'), so a tag pushed out of version
+      # order fails at the publish step.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
@@ -165,11 +174,14 @@ jobs:
         run: node scripts/write-shrinkwrap.mjs
 
       - name: Publish to npm
-        # --provenance requires an OIDC-capable token (npm >=9.5). A legacy/classic
-        # NPM_TOKEN fails the provenance step (lesson #8583 — past E404s here were
-        # token issues). Default OFF for publish safety; opt in by setting the repo
-        # variable NPM_PROVENANCE=true once the token is granular/automation-scoped
-        # (the id-token: write permission above is harmless when provenance is OFF).
+        # No token: npm authenticates through trusted publishing (OIDC), configured on
+        # npmjs.com for the package as GitHub `sdsrss/claude-mem-lite`, workflow
+        # `publish.yml`, no environment. With a token in the environment, npm 11 falls
+        # back to it whenever the OIDC exchange fails (one verbose log line), so a broken
+        # trust configuration would still publish and the job would stay green; without
+        # one, the publish fails here. A 401/403/404 here means the trust configuration
+        # or the id-token permission, not a missing token. --provenance: trusted
+        # publishing attests anyway; naming it makes a publish that cannot attest fail.
         run: |
           # Idempotency guard. `npm publish` errors on an existing version, so a job that
           # published successfully and then failed LATER (signing, or the GitHub release
@@ -185,23 +197,9 @@ jobs:
           PKG_VER="$(node -p 'require("./package.json").version')"
           if npm view "${PKG_NAME}@${PKG_VER}" version >/dev/null 2>&1; then
             echo "::notice::${PKG_NAME}@${PKG_VER} is already on the registry — skipping publish and continuing to the release steps."
-          elif [ "${NPM_PROVENANCE}" = "true" ]; then
-            # Provenance needs an OIDC-capable (automation/granular) token. A classic
-            # token can't attest and fails the provenance publish (lesson #8583). Rather
-            # than block the release, fall back to a plain publish with a loud warning —
-            # so enabling NPM_PROVENANCE is safe even before the token is confirmed.
-            if npm publish --provenance --access public; then
-              echo "Published with provenance."
-            else
-              echo "::warning::npm publish --provenance failed (token likely not automation/granular-scoped, see #8583) — retrying without provenance."
-              npm publish --access public
-            fi
           else
-            npm publish --access public
+            npm publish --provenance --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_PROVENANCE: ${{ vars.NPM_PROVENANCE }}
 
       # P1 supply-chain: sign the release manifest. No-op (exits 0, writes nothing)
       # until the RELEASE_SIGNING_KEY secret is provisioned; action-gh-release then

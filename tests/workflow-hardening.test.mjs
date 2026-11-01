@@ -1,15 +1,19 @@
-// Audit 2026-09-02 P2-19. Three properties of the GitHub Actions workflows, guarded because
+// Audit 2026-09-02 P2-19. Properties of the GitHub Actions workflows, guarded because
 // each one regresses the same way — silently, by someone writing the ordinary form.
 //
 //   1. Every `uses:` is pinned to a 40-char commit SHA. A mutable tag (`@v5`) means the
-//      code that runs in CI, with the repo checked out and npm tokens in scope, is whatever
-//      the tag points at TODAY. `softprops/action-gh-release` was already pinned; the
+//      code that runs in CI, with the repo checked out and the right to publish in scope, is
+//      whatever the tag points at TODAY. `softprops/action-gh-release` was already pinned; the
 //      first-party `actions/*` were not, which is the more common half of this shape
 //      because first-party feels safe.
 //   2. Every workflow declares `permissions:`. The default token is broadly scoped, and
 //      `ci.yml` — the one that had no block — is the one that runs on `pull_request`.
 //   3. A pinned SHA without an updater becomes an unpatched SHA, so `.github/dependabot.yml`
 //      must exist and cover both ecosystems.
+//   4. No npm token reaches a workflow. npm publishes through trusted publishing (OIDC). npm 11
+//      tries OIDC first and, when the exchange fails, falls back to a token in the environment
+//      with one verbose log line, so a token left in place keeps a broken trust configuration
+//      publishing and the job green.
 //
 // This is a text guard, and this repo has recorded both directions in which those fail (the
 // anchored thing moves; the rule is bypassed by an alias). It is used here anyway because
@@ -102,6 +106,22 @@ describe('GitHub Actions workflows are hardened', () => {
     const src = readFileSync(p, 'utf8');
     expect(src).toMatch(/package-ecosystem:\s*npm/);
     expect(src).toMatch(/package-ecosystem:\s*github-actions/);
+  });
+
+  it('no workflow line outside a comment names an npm token', () => {
+    // A full-line comment (YAML or a shell comment inside `run:`) runs nothing, so it may tell
+    // the history; every other line counts, a trailing comment included.
+    const found = [];
+    let lines = 0;
+    for (const f of workflows) {
+      for (const [i, line] of readFileSync(join(WF_DIR, f), 'utf8').split('\n').entries()) {
+        if (/^\s*#/.test(line) || !line.trim()) continue;
+        lines++;
+        if (/\b(?:NPM_TOKEN|NODE_AUTH_TOKEN)\b/.test(line)) found.push(`${f}:${i + 1}: ${line.trim()}`);
+      }
+    }
+    expect(lines, 'no non-comment line read — the filter is broken, not the tree clean').toBeGreaterThan(100);
+    expect(found).toEqual([]);
   });
 
   it('the version-consistency check runs before the expensive steps in publish.yml', () => {
