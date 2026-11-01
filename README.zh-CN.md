@@ -513,7 +513,7 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 | `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | 去重 / decay / 清理 / vacuum（`scan` 预览，`execute` 执行）。 |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM 深度优化：re-enrich / normalize / cluster-merge（默认 preview；`--run` 执行）。 |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL 导出，支持项目/类型/日期过滤。 |
-| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 完整性检查；重建 FTS5 索引，再重建其余所有索引（REINDEX）。 |
+| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 完整性检查；先检查数据库的页（页坏时不重建），再重建 FTS5 索引和其余所有索引（REINDEX）。 |
 | `mem_browse` | `claude-mem-lite browse` | 分层仪表盘（working / active / archive）。 |
 
 **无人值守运行（`claude -p`）。** 没有权限确认可答时，Claude Code 2.1.292 拒绝了所有 `mem_*` 调用，直到服务的工具被放行；模型也没有自己改用 CLI。在 88 个无人值守会话里（2026-10-06），13 次调用全部被拒，什么都没存下。在 2.1.284 上（2026-09-29），同样的参数会放行这些调用，所以这取决于 Claude Code 版本。在这次运行读取的 `settings.json` 里放行一次即可：
@@ -734,6 +734,11 @@ npx claude-mem-lite doctor            # 诊断问题
 
 检查 Node.js 版本、依赖、服务器/钩子文件、数据库完整性、FTS5 索引、残留进程、MCP 注册状态，
 以及 marketplace clone 是否还能被更新。
+
+在任何东西以写方式打开数据库之前，doctor 先用只读连接检查数据库的页：空闲页表和每张表的页，每页只记一次。
+页坏了时它列出查到的内容，不往数据库里写任何东西（FTS5 检查要读写连接，会跳过并注明），并给出一条复制数据目录的命令，
+请在没有 Claude Code 会话运行时执行。在坏页上重建索引可能覆盖行：重建会释放页、再取新页，空闲页表若列着一张表还在用的页，
+那张页就会被交出去。`fts-check rebuild` 和 `mem_fts_check rebuild` 先做同样的检查，页坏了或检查没能运行时都不重建。
 
 它用 `claude mcp list` 回答注册状态那一问，而这会**对你配置的每个 MCP server 做健康检查**——
 也就是逐个短暂启动，包括远程 endpoint。`status` 刻意不这么做：插件形态下它从 manifest 回答。

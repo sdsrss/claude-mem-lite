@@ -654,7 +654,7 @@ surface — reach them through the CLI column in the second table.
 | `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | dedup / decay / cleanup / vacuum (`scan` previews, `execute` applies). |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM-powered re-enrich / normalize / cluster-merge (preview default; `--run` to apply). |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL dump, filters by project, type, date. |
-| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity check; rebuild of the FTS5 indexes, then every other index (REINDEX). |
+| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity check; rebuild of the FTS5 indexes, then every other index (REINDEX), after a check of the database's pages (no rebuild over damaged ones). |
 | `mem_browse` | `claude-mem-lite browse` | Tier-grouped dashboard (working / active / archive). |
 
 **Headless runs (`claude -p`).** With no permission prompt to answer, Claude Code 2.1.292
@@ -958,6 +958,15 @@ Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; sc
 
 Checks Node.js version, dependencies, server/hook files, database integrity, FTS5 indexes,
 stale processes, MCP registration, and whether the marketplace clone can still be updated.
+
+Before anything opens the database for writing, doctor checks its pages on a read-only
+connection: the freelist and every table's pages, each counted once. When they are damaged it
+prints what it found, writes nothing to the database (the FTS5 check, which needs a read-write
+connection, is skipped and says so), and prints a command that copies the data directory, to run
+with no Claude Code session open. An index rebuild on damaged pages can overwrite rows: the
+rebuild frees pages and takes new ones, and a freelist that lists a page a table still uses hands
+that page over. `fts-check rebuild` and `mem_fts_check rebuild` run the same check first and do
+not rebuild over damage, or when the check could not run.
 
 It runs `claude mcp list` to answer the registration question, and that **health-checks every
 MCP server you have configured** — i.e. briefly launches each one, including remote endpoints.

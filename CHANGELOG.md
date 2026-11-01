@@ -2,6 +2,62 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.31.0 — an index rebuild checks the database's pages first and writes nothing over damage; the secret scrubber erases keys cut off under code
+
+**Upgrade note: nothing to run; the schema version stays 49.** What changes by default: `doctor`
+checks the database's pages whenever it checks the database, and prints a `Database pages` line; on
+damaged pages `doctor`, `fts-check rebuild`, `mem_fts_check rebuild`, the opener's search-index
+repair and the backup-snapshot check rebuild nothing, where 6.30.8 rebuilt and could overwrite rows.
+Going back is pinning `claude-mem-lite@6.30.8`; there is no switch to skip the check, which would
+bring the overwriting back.
+
+- **Every index rebuild checks the database's pages first, and writes nothing when they are damaged
+  or could not be checked** (D#593).
+  A rebuild (FTS5 `rebuild`, `REINDEX`) frees the old index pages and takes new ones; when the
+  freelist lists a page a table still uses, the new index is written over that table's rows. The
+  check counts every page once: SQLite's B-tree check one table at a time, every tree's pages
+  (`dbstat`), the freelist, the lock-byte page and, with `auto_vacuum`, the pointer maps. It reads
+  page 1 and the freelist trunk pages from the database file and its log as its own read
+  transaction sees them, on a read-only connection, in about four bytes of memory per page.
+  On a regression set of 2,769 stores planted with damage (2,755 of them open), 6.30.8's doctor
+  FTS step and `fts-check rebuild` lost or changed rows on 34 and 33 of the stores (448 and 447 rows
+  unreadable, 10 changed, counting only rows two independent reads agree on); this version refused
+  on every one of them, wrote nothing on the 1,439 it refused, and lost or changed no row in the
+  rebuilds it ran (1,316 stores). Of the 1,439, 957 have a damaged search index that 6.30.8 would
+  have rebuilt: this version leaves their search as it is.
+- **doctor checks the pages before anything opens the database for writing.** `✓ Database pages:
+  sound`, `⚠ … not checked — <why>`, or `✗ … damaged — <what it found>` with a command that copies
+  the data directory, to run with no Claude Code session open; the command copies the files
+  themselves when the directory or the database file is a symlink (`cp -aL` of the real directory).
+  On damage doctor skips its FTS5 check, which needs a read-write connection whose close writes the
+  log into the database file, and says so as a ⚠: one damage, one ✗, one issue. On a 577 MB store the page check takes 0.43 to 0.44 s with the file in the page cache and 2.09 to
+  2.10 s without, and about 29 MB more memory; the FTS5 check doctor already ran takes 2.2 to 2.3 s.
+- **`fts-check rebuild` checks the pages before it opens the store**, so neither the store's
+  first-open writes nor a checkpoint land on damaged pages. On damage it prints what the check
+  found and the copy command, and exits 1; when the check could not run (for example a read-only
+  data directory) it says so and exits 1.
+- **`mem_fts_check rebuild` answers a refused rebuild with `Not rebuilt: <why>`**, with the advice
+  and without the command. The opener's repair of a damaged search index says
+  `DB opened; the FTS indexes were not rebuilt` after a refusal, not that it recovered.
+- **The query-time hint for a damaged search index no longer promises a lossless rebuild**: it says
+  the index damage alone does not touch the stored observations, and that `fts-check rebuild`
+  checks the pages first and does not rebuild over damaged ones.
+- **A backup snapshot whose rebuild's page check could not run is "not checked"**, never "bad", so
+  doctor does not pass over it for an older one; a snapshot with damaged pages fails at the index
+  rebuild, the step its restore command's `fts-check rebuild` refuses at. A 2.2 GiB snapshot checks
+  `ok`.
+- **The secret scrubber erases a private key cut off under code or a string opener on its BEGIN
+  line** (D#168): `KEY = '''-----BEGIN …`, a Read column (`5\tKEY = """`), a grep column
+  (`conf.py:5:KEY = '''`), a quoted reply (`> key = "`), or a string opener before a diff mark
+  (`'+-----BEGIN`). In a test matrix of such lines 6.30.8 stored key lines in 212 of the 336 cases
+  first measured; every case of the matrix (now 360) passes.
+- **Still as in 6.30.8:**
+  - Ordinary writes are not checked: a hook's write, the first open's migration rows of a new store,
+    FTS5 `optimize` in the MCP server's idle pass and in `maintain`, and the FTS rebuild a migration
+    runs can land on damaged pages (D#595, D#546).
+  - Eight more prefix shapes still let a cut key through the scrubber (D#614), and crafted inputs
+    read up to 6.7x a benign text's time (D#617, D#619).
+
 ## v6.30.8 — doctor checks the backup snapshots before its restore command names one, and the claude-mem backup keeps its log
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
