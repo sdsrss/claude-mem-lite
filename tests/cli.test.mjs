@@ -1,6 +1,6 @@
 // Tests for mem-cli.mjs — CLI command layer
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
+import { createFileTestDb, createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -3876,8 +3876,9 @@ describe('CLI timeline query-based anchor', () => {
 // ─── fts-check command ──────────────────────────────────────────────────────
 
 describe('CLI fts-check command', () => {
+  // On a file: a rebuild checks the store's pages in its files first (D#593).
   beforeEach(() => {
-    testDb = createTestDb();
+    testDb = createFileTestDb();
   });
   afterEach(() => {
     testDb.close();

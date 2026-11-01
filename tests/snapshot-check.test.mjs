@@ -152,14 +152,16 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     }
   });
 
-  // The rebuild reads every row of the table, so it is the step that meets the damage first.
+  // The rebuild's page check is the step that meets the damage first (D#593).
   it('fails a snapshot whose observations table is damaged', () => {
     const dir = dataDir();
     const snap = writeStoreSnapshot(join(dir, 'claude-mem-lite.db.pre-delete-x.bak'), { damage: 'page' });
     expect(du.checkSnapshot(snap)).toMatchObject({
       verdict: 'bad',
       why: 'rebuild',
-      reason: 'observations_fts: database disk image is malformed',
+      reason: expect.stringMatching(
+        /^not rebuilt: the database's pages are damaged, .*\(Tree \d+ page \d+ cell/,
+      ),
     });
   });
 

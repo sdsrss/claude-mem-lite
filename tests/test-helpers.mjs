@@ -30,6 +30,28 @@ export function createTestDb() {
 }
 
 /**
+ * createTestDb on a file in a private temp directory, for tests that run an index rebuild: the
+ * rebuild checks the store's pages in its files first, and an in-memory database has none (D#593).
+ * `close()` also removes the directory.
+ */
+export function createFileTestDb() {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-filedb-'));
+  const db = new Database(join(dir, 'claude-mem-lite.db'));
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = OFF');
+  initSchema(db);
+  const close = db.close.bind(db);
+  db.close = () => {
+    try {
+      return close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  return db;
+}
+
+/**
  * A backup snapshot the way lib/db-backup.mjs's snapshotDb writes one: VACUUM INTO of a WAL store
  * initSchema built, holding `observations` rows (D#558). `damage`:
  * - 'fts': the leaf rows of observations_fts_data deleted before the VACUUM, so the snapshot's

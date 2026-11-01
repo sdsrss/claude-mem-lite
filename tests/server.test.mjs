@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import Database from 'better-sqlite3';
 import { sanitizeFtsQuery, jaccardSimilarity, isoWeekKey } from '../utils.mjs';
-import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
+import { createFileTestDb, createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { handleRecentForTest } from '../server.mjs';
 import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 import { reRankWithContext, autoBoostIfNeeded, runIdleCleanup } from '../search-scoring.mjs';
@@ -2375,8 +2375,9 @@ describe('mem_export', () => {
 
 describe('mem_fts_check', () => {
   let db;
+  // On a file: a rebuild checks the store's pages in its files first (D#593).
   beforeEach(() => {
-    db = createTestDb();
+    db = createFileTestDb();
   });
   afterEach(() => {
     db.close();

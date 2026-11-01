@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { isDbCorruptionError, isFtsCorruptionError, rebuildFTS } from '../schema.mjs';
-import { createTestDb } from './test-helpers.mjs';
+import { createFileTestDb } from './test-helpers.mjs';
 
 const err = (code, message = '') => Object.assign(new Error(message), { code });
 
@@ -44,8 +44,9 @@ describe('R10 P3-9 — FTS index corruption is classified apart from file corrup
     }
   });
 
+  // On a file: the rebuild checks the store's pages in its files first (D#593).
   it('rebuildFTS is a real remedy on a live DB — the action the new branch takes', () => {
-    const db = createTestDb();
+    const db = createFileTestDb();
     try {
       const r = rebuildFTS(db);
       expect(r.errors).toEqual([]);

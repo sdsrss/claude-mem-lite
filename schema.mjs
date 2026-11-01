@@ -12,7 +12,9 @@ import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
 import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
-import { isFtsCorruptionError } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, PAGE_DAMAGE_COPY_ADVICE } from './lib/db-unusable.mjs';
+// A leaf (node built-ins only): the page check every rebuild below runs first (D#593).
+import { checkStorePages } from './lib/store-pages.mjs';
 
 // The three location constants now live in lib/data-paths.mjs — a leaf module with no
 // package imports — and are re-exported here so every existing importer is unchanged.
@@ -1950,14 +1952,42 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
  * Idempotent: skips if already exists. Exported for test helpers.
  */
 /**
+ * A rebuild checkStorePages stopped: nothing written, and the reason as its one error.
+ * @param {ReturnType<typeof checkStorePages>} pages
+ */
+function refusedRebuild(pages) {
+  const others = pages.lines.length - 1 + pages.more;
+  const reason =
+    pages.state === 'damaged'
+      ? `not rebuilt: the database's pages are damaged, so a rebuild could overwrite rows on them (${pages.lines[0]}${others > 0 ? `, and ${others} more` : ''}). ${PAGE_DAMAGE_COPY_ADVICE}`
+      : `not rebuilt: the database's pages could not be checked first (${pages.error})`;
+  return {
+    rebuilt: [],
+    errors: [reason],
+    codes: [pages.state === 'damaged' ? 'SQLITE_CORRUPT' : (pages.code ?? null)],
+    pages,
+  };
+}
+
+/**
  * Rebuild all FTS5 indexes. Use after suspected index corruption (e.g. crash mid-trigger).
- * Safe to call at any time — rebuilds are idempotent.
+ * Rebuilds are idempotent. A rebuild frees the old index pages and allocates new ones, so on a
+ * store whose freelist lists a page a table still uses it writes over that table's rows: each call
+ * runs checkStorePages first and writes nothing unless the pages are sound (D#593); `errors` then
+ * holds the reason alone, and `pages` the check's result either way.
  * `codes[i]` is the SQLite code of `errors[i]` (null for a table that is missing), so a caller
  * can tell its own disk filling up from damage: the restore check does (D#558).
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} Results per FTS table
+ * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[], pages: ReturnType<typeof checkStorePages>}}
+ *   Results per FTS table
  */
 export function rebuildFTS(db) {
+  const pages = checkStorePages(db);
+  if (pages.state !== 'ok') return refusedRebuild(pages);
+  return { ...rebuildFtsTables(db), pages };
+}
+
+function rebuildFtsTables(db) {
   const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
   const idRe = /^[a-z][a-z0-9_]*$/;
   const rebuilt = [];
@@ -1991,12 +2021,13 @@ export function rebuildFTS(db) {
  * every other index (REINDEX). What `fts-check rebuild` runs, and what the restore check runs on
  * its copy after the open, so the two cannot drift (D#558). REINDEX repairs an index whose entries
  * no longer match its table, which no FTS rebuild touches and doctor's checks never read (D#562).
+ * Checks the pages first, as rebuildFTS does, and on a refusal runs neither.
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} as rebuildFTS, with
- *   'indexes' standing for the REINDEX
+ * @returns {ReturnType<typeof rebuildFTS>} as rebuildFTS, with 'indexes' standing for the REINDEX
  */
 export function rebuildIndexes(db) {
   const result = rebuildFTS(db);
+  if (result.pages.state !== 'ok') return result;
   try {
     db.exec('REINDEX');
     result.rebuilt.push('indexes');
