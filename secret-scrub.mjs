@@ -560,6 +560,11 @@ function prevLine(text, ls, u, floor) {
 // text a tab is `\t` and a quote may be `\"`.
 const PREFIX_GRAMMAR_RE =
   /^[ \t]*(?:[rRbBuUfF]{0,2}(?:\\*['"`]){1,3})?([ \t]*\d+(?:\t|\\+t)|\d+→|[-+]|(?:>[ \t]?)+|[^\s'"`:\\]+[:-]\d+[:-]|[^\s'"`:\\]+:)/;
+// D#614 A2: a grep column after any path, up to the line's last `:N:` or `-N-` (a number past the path
+// is the grep's; one inside code before the BEGIN is rare): a backslash, a space, a drive letter or
+// another colon, a quote or a backtick in the path, or a leading `-`, `+` or `>`, which the grammar
+// above reads as a diff mark or a quote.
+const GREP_ANY_PATH_RE = /^[ \t]*(\S.*(?::\d+:|-\d+-))/;
 // A grammar is a few characters; testing more of a long left context costs a pass over it per BEGIN.
 const PREFIX_GRAMMAR_SCAN = 256;
 // A key line (LONG or CUT) starts with a run of 16+ of these, so a stretch without one holds none.
@@ -797,8 +802,8 @@ function cutOffKeyEnd(text, b, be, ctx) {
         }
       }
     }
-    const g =
-      gl === -1 ? null : PREFIX_GRAMMAR_RE.exec(text.slice(gl, Math.min(b, gl + PREFIX_GRAMMAR_SCAN)));
+    const head = gl === -1 ? '' : text.slice(gl, Math.min(b, gl + PREFIX_GRAMMAR_SCAN));
+    const g = gl === -1 ? null : PREFIX_GRAMMAR_RE.exec(head);
     const gs = g ? gl + g[0].length - g[1].length : -1;
     let gp = gl;
     while (gp < b && (text.charCodeAt(gp) === 32 || text.charCodeAt(gp) === 9)) gp++;
@@ -815,6 +820,15 @@ function cutOffKeyEnd(text, b, be, ctx) {
       let lead = gs;
       while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
       const r = reread(g[1], text.charCodeAt(lead));
+      if (r !== -1) return r;
+    }
+    // D#614 A2: a grep column after a path the grammar refuses; not the column the grammar read
+    // already, nor the first reading's own prefix. That prefix is the column whenever nothing stands
+    // between it and the BEGIN, except in escaped text after a quote in the path (`it's/`), where the
+    // prefix starts past the quote.
+    const p = gl === -1 ? null : GREP_ANY_PATH_RE.exec(head);
+    if (p && !(g && g[1] === p[1]) && p[1] !== left.replace(/^[ \t]+/, '')) {
+      const r = reread(p[1], text.charCodeAt(gl + p[0].length - p[1].length));
       if (r !== -1) return r;
     }
     // D#614 A1: a unified diff's context line starts with its space, with code after it or none, and

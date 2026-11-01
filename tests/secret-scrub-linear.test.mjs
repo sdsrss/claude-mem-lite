@@ -51,6 +51,10 @@ const headerBegins = (left, header, line, headers = 16) => {
 const col = (n) => String(n).padStart(6);
 const LONG_PATH = 'src/very_long/project_path/to_some/deeply_nested/module_dir/sub_pkg/config.py:';
 const CONTEXT_UNIT = " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc: def\n the context line after it\n";
+const SPACED_PATH = 'My Keys/conf.py';
+const SPACED_GREP_UNIT =
+  `${SPACED_PATH}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----\n${SPACED_PATH}-6-abc: def\n` +
+  `${SPACED_PATH}-7-the line after it\n--\n${SPACED_PATH}-12-and the next match context\n`;
 
 describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   const shapes = {
@@ -134,6 +138,10 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     pemContextBeforeBegin: CHAIN + '\n' + CONTEXT_UNIT.repeat(N / CONTEXT_UNIT.length),
     pemContextBeforeBeginEscaped:
       CHAIN + ' ' + JSON.stringify(CONTEXT_UNIT.repeat(N / (CONTEXT_UNIT.length + 3))),
+    // D#614 A2: a grep column after a spaced path on each BEGIN line, read again with its shape.
+    pemSpacedGrepBeforeBegin: CHAIN + '\n' + SPACED_GREP_UNIT.repeat(N / SPACED_GREP_UNIT.length),
+    pemSpacedGrepBeforeBeginEscaped:
+      CHAIN + ' ' + JSON.stringify(SPACED_GREP_UNIT.repeat(N / (SPACED_GREP_UNIT.length + 5))),
     // D#607 F1: 16 header lines that each hold a BEGIN, then a run the reading refuses. Each BEGIN's
     // grammar reading read the run again (d0766de4 with a 200k-char run: 33x benign raw, 48x escaped,
     // 186x under coverage); readKeyLines' per-call memos read it once per pass and escape depth. The
@@ -189,6 +197,15 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // through the same run; the per-call memos of that shape take it once.
     headerBeginsContextRun:
       CHAIN + '\n' + headerBegins(" KEY = '''", (n) => (n % 2 ? ' Comment: ' : '-Comment: '), '-\n'),
+    // D#614 A2: the same through numbered grep columns after a spaced path.
+    headerBeginsSpacedGrepRun:
+      CHAIN +
+      '\n' +
+      headerBegins(
+        (n) => `${SPACED_PATH}:${n}:KEY = """`,
+        (n) => `${SPACED_PATH}-${n}-Comment: `,
+        (n) => `${SPACED_PATH}-${n}-\n`,
+      ),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line

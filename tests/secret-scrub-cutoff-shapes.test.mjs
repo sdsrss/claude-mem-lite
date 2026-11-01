@@ -1241,3 +1241,75 @@ describe('D#614 A1: a BEGIN on a diff context line over removed key lines', () =
     );
   });
 });
+
+// A2: a grep path the D#168 grammar's path class (`[^\s'"`:\\]+`) refuses, with code after its line
+// number: a backslash, a space, a drive letter or another colon, a quote or a backtick, or a leading
+// `-`, `+` or `>` (read as a diff mark or a quote first). The BEGIN on a match line (`path:5:`) over
+// context lines (`path-6-`), and the reverse. One group per path character class.
+describe('D#614 A2: a grep path outside the grammar path class, with code before the BEGIN', () => {
+  const PATHS = {
+    backslash: 'keys\\conf.py',
+    space: 'My Keys/conf.py',
+    driveLetter: 'C:/src/conf.py',
+    driveAndBackslash: 'C:\\keys\\conf.py',
+    otherColon: 'srv/a:b/conf.py',
+    singleQuote: "it's/conf.py",
+    doubleQuote: 'say"hi/conf.py',
+    backtick: 'a`b/conf.py',
+    leadingMinus: '-x/conf.py',
+    leadingPlus: '+x/conf.py',
+    leadingQuoteMark: '>x/conf.py',
+    // The column is the line's last `:N:` or `-N-`: the first one here is part of the path.
+    spaceAndDashedNumber: 'My Logs/2026-11-01/conf.py',
+    uncPath: '\\\\srv\\keys\\conf.py',
+  };
+  for (const [name, path] of Object.entries(PATHS)) {
+    describe(name, () => {
+      d614Matrix(
+        {
+          matchOverContext: [`${path}:5:KEY = '''`, (i) => `${path}-${6 + i}-`],
+          contextOverMatch: [`${path}-5-KEY = '''`, (i) => `${path}:${6 + i}:`],
+          matchOverContextNoCode: [`${path}:5:`, (i) => `${path}-${6 + i}-`],
+          matchOverContextJs: [`${path}:5:const k = \``, (i) => `${path}-${6 + i}-`],
+        },
+        D614_WRAPS,
+      );
+    });
+  }
+
+  // Both separators of a grep column are the same character: `-1:` in a slice after it is code.
+  it('a slice in the code after a spaced path does not end the grep column', () => {
+    const path = 'My Keys/conf.py';
+    const body = [KL, 'q7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6J'.repeat(2), 'Zx8CvB7nM6aS5dF4gH3jK2lQ1wE0rTyU'];
+    const text = [
+      `${path}:5:KEY = s[n-1:] + '''-----BEGIN RSA PRIVATE KEY-----`,
+      ...body.map((l, i) => `${path}-${6 + i}-${l}`),
+      PROSE,
+    ].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(body.map((l) => l.slice(0, 16)).filter((w) => out.includes(w))).toEqual([]);
+      expect(out).toContain(PROSE);
+    }
+  });
+
+  // The grep column's reading takes the D#168 evidence too: identifiers and prose that a grep for a
+  // key marker printed under it keep their text.
+  it.each([
+    ['an identifier list', ['SessionManagerImpl', 'TokenRefresherImpl']],
+    ['prose', ['Keys are loaded from the vault at startup.', '', 'See docs/keys.md for rotation.']],
+    [
+      'armor headers over an identifier',
+      ['Proc-Type: 4,ENCRYPTED', 'DEK-Info: AES-128-CBC,3F2A9C1E', 'loadKey14x'],
+    ],
+  ])('%s under a grep BEGIN with a spaced path keeps its text', (_, lines) => {
+    const path = 'My Keys/conf.py';
+    const text = [
+      `${path}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----`,
+      ...lines.map((l, i) => `${path}-${6 + i}-${l}`),
+      'the end',
+    ].join('\n');
+    expect(scrubSecrets(text)).toBe(text);
+    expect(scrubSecrets(J(text))).toBe(J(text));
+  });
+});
