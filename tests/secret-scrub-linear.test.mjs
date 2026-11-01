@@ -136,14 +136,29 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   // 1,100-1,700x; with the code-label lookaheads removed, chainedWordRun 15.7-16.2x.
   const benign =
     CHAIN + ' ' + 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42)).slice(0, N);
-  let benignMs;
   beforeAll(() => {
     scrubSecrets(benign);
-    benignMs = Math.max(5, Math.min(...[0, 1, 2].map(() => ms(() => scrubSecrets(benign)))));
   });
+  // D#608: each shape is timed against benign text back to back, three times interleaved, as min
+  // crafted / min benign. Interference only adds time, so each minimum approaches its cost from
+  // above. Before, one crafted reading was divided by benign's min of 3 taken in beforeAll: in 8
+  // full-suite runs under coverage with 3 workers on 2 cores (2026-11-01, D#168 tree) that read up
+  // to 10.88x and failed twice, on shapes that read 4.2-4.5x on a quiet machine, while the same
+  // samples as min of 3 each read at most 6.46x. Timing benign next to each shape but once left
+  // 92% of the inflation: it sits in the single crafted reading. The pre-D#130 scrubber still
+  // reads 20.6-1,125x on the six shapes D#130 made linear.
+  const ratio = (text) => {
+    const benignMs = [];
+    const craftedMs = [];
+    for (let k = 0; k < 3; k++) {
+      benignMs.push(ms(() => scrubSecrets(benign)));
+      craftedMs.push(ms(() => scrubSecrets(text)));
+    }
+    return Math.min(...craftedMs) / Math.max(5, Math.min(...benignMs));
+  };
   for (const [name, text] of Object.entries(shapes)) {
     it(`${name}: 200k chars within 10x of benign text of the same length`, () => {
-      expect(ms(() => scrubSecrets(text)) / benignMs).toBeLessThan(10);
+      expect(ratio(text)).toBeLessThan(10);
     });
   }
 
