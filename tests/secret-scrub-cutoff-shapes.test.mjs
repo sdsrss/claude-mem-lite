@@ -905,4 +905,26 @@ describe('D#168: code or a string opener between the line prefix and the BEGIN',
       }
     },
   );
+
+  // Line-prefix regexes are kept per call, by prefix. A BEGIN the scrubber leaves (prose below it)
+  // stays in every pass, so a regex handed to a later BEGIN by any looser key than its own prefix
+  // (one of the same length here) would store that key on every pass, not only the first.
+  it.each([
+    ['> ', '# '],
+    ['// ', '-- '],
+  ])('a cut key under %j after a kept BEGIN under %j', (p2, p1) => {
+    const body = [KL, 'q7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6J'.repeat(2), 'Zx8CvB7nM6aS5dF4gH3jK2lQ1wE0rTyU…'];
+    const text = [
+      `${p1}-----BEGIN RSA PRIVATE KEY-----`,
+      `${p1}That header is where the key used to start.`,
+      'and then',
+      `${p2}-----BEGIN RSA PRIVATE KEY-----`,
+      ...body.map((l) => p2 + l),
+      PROSE,
+    ].join('\n');
+    const out = scrubSecrets(text);
+    expect(body.map((l) => l.slice(10, 26)).filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain('That header is where the key used to start.');
+    expect(out).toContain(PROSE);
+  });
 });
