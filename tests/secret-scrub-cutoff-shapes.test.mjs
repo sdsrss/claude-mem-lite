@@ -862,4 +862,47 @@ describe('D#168: code or a string opener between the line prefix and the BEGIN',
       expect(scrubSecrets(text), left).toBe(text);
     }
   });
+
+  // The grammar reading is skipped when no key line can follow the BEGIN before the next BEGIN, and
+  // a header line can carry the next BEGIN. Quoted or followed by text, that BEGIN starts no reading
+  // of its own, so the code BEGIN's reading has to go through it: skipping on "no base64 run before
+  // the next BEGIN" alone stored all three lines below, D#169's withdrawn read limit again.
+  it.each([
+    ['a quoted BEGIN', '-Proc-Type: "-----BEGIN RSA PRIVATE KEY-----", 4,ENCRYPTED'],
+    ['a BEGIN followed by text', '-Comment: -----BEGIN RSA PRIVATE KEY----- was here'],
+  ])('a header line holding %s under a code BEGIN', (_, header) => {
+    // Fixed lines: this block's generator feeds the cases above.
+    const L = 'q7Zr0XbN4kT2pWv9sYc1LmA8dE3fGh6J';
+    const body = [L + L, 'Hk3PwQ9zLm2VbN8xRt5YcA1sDf6GjU0e'.repeat(2), `${L}Zx8CvB7n…`];
+    const text = [
+      '$ git diff',
+      "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+      header,
+      '-DEK-Info: AES-128-CBC,3F2A9C1E',
+      '-',
+      ...body.map((l) => `-${l}`),
+      PROSE,
+    ].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(body.map((l) => l.slice(4, 20)).filter((w) => out.includes(w))).toEqual([]);
+      expect(out).toContain(PROSE);
+    }
+  });
+
+  // With the key begun on its BEGIN line, a short last line below needs no base64 run to belong to
+  // it, so that skip must not apply: the reading under the shape of `"-` stops at `-Qx7Zt2` (a `-`
+  // is not base64) and only the grammar reading takes it.
+  it.each([['"-'], ["'-"], ["b'-"], ["-KEY = '''"]])(
+    'a key begun on a %s BEGIN line keeps no short last line',
+    (left) => {
+      const text = [`${left}-----BEGIN RSA PRIVATE KEY----- ${KL}`, '-Qx7Zt2', PROSE].join('\n');
+      for (const t of [text, J(text)]) {
+        const out = scrubSecrets(t);
+        expect(out).not.toContain('Qx7Zt2');
+        expect(out).not.toContain(KL.slice(10, 26));
+        expect(out).toContain(PROSE);
+      }
+    },
+  );
 });
