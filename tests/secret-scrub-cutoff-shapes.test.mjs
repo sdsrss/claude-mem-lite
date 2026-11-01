@@ -1050,4 +1050,45 @@ describe('D#607: the D#168 reading, its skip and its memos', () => {
   ])('%s', (_, text, expected) => {
     expect(scrubSecrets(text)).toBe(expected);
   });
+
+  // D#607 r2 (delta review of 56af7270): three clauses no case held. The skip's gap must end at the
+  // next private-key BEGIN after each BEGIN, not after the first one asked (P3-1); a 16-char base64
+  // run in the gap keeps the reading (P3-4); and a memo's key holds the escape depth, which changes
+  // where lines end (P3-2: the first BEGIN's run is read at depth 1, the header BEGIN's at 0).
+  it.each([
+    [
+      'a second code BEGIN with a key, after one with prose',
+      [
+        "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+        '-abc def',
+        "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+        `-${KL}`,
+        `-${L2}`,
+        P,
+      ].join('\n'),
+      ["-KEY = '''-----BEGIN RSA PRIVATE KEY-----", '-abc def', "-KEY = '''***PEM_KEY***", P].join('\n'),
+    ],
+    [
+      'a key under a code BEGIN with an unrelated BEGIN after the prose',
+      [
+        "-KEY = '''-----BEGIN RSA PRIVATE KEY-----",
+        `-${KL}`,
+        `-${L2}`,
+        P,
+        '-----BEGIN RSA PRIVATE KEY-----',
+        'word',
+      ].join('\n'),
+      ["-KEY = '''***PEM_KEY***", P, '-----BEGIN RSA PRIVATE KEY-----', 'word'].join('\n'),
+    ],
+    [
+      'one blank run read at two escape depths',
+      "-KEY = '''-----BEGIN RSA PRIVATE KEY-----\\n-Comment: x\n-Comment: -----BEGIN RSA PRIVATE KEY-----\n" +
+        '-\n'.repeat(12) +
+        '-\\n-\n-MIIEabcdefghijklmnop\\"\\nx\n' +
+        P,
+      null,
+    ],
+  ])('%s', (_, text, expected) => {
+    expect(scrubSecrets(text)).toBe(expected ?? text);
+  });
 });

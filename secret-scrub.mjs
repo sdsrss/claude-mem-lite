@@ -846,13 +846,16 @@ function keyEvidence(r, label, loose) {
  * line left (`longs`, `longest`, `first`, `end`: a key pasted onto the BEGIN line counts as one line).
  *
  * `memoOf(shape)` (one scrubCutOffKeys call's) keeps what a reading found past two points,
- * keyed by the line, the depth and the shape's lead, of which the rest of the reading is a function:
- * where a run of blank lines ends, from its BLANK_MEMO_AFTER-th line (the run only sets
- * pendingBlank), and the result from the first counted base64 line on, when nothing was counted
- * before it (from there `armors` is never read, and the state is that line's alone). D#607 F1: 17
- * BEGINs on header lines (`-Comment: -----BEGIN …`) each read the same run again under the prefix
- * grammar and refused it, 33x benign at 200k chars (186x under coverage). Short runs never reach
- * the memo: a memo of every blank run made two shapes slower (D#500).
+ * keyed by the line and the depth, of which the rest of the reading is a function (with the shape:
+ * its lead is the first character of the prefix the source was built from, and the one test that
+ * reads it tells only a quote or `<` from the rest, which the source keeps literally): where
+ * a run of blank lines ends, from its BLANK_MEMO_AFTER-th line (the run only sets pendingBlank),
+ * and the result from the first counted base64 line on, when nothing was counted before it (from
+ * there `armors` is never read, and the state is that line's alone). D#607 F1: 16 header lines
+ * that each hold a BEGIN (`-Comment: -----BEGIN …`) under a code BEGIN each read the same run again
+ * under the prefix grammar and refused it, 33x benign at 200k chars (186x under coverage). Short
+ * runs never reach the memo: a memo of every blank run made two shapes slower (D#500). Headers at
+ * different depths still read the run once per depth: a line's end depends on it.
  */
 function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end, memoOf) {
   let memo = null;
@@ -896,7 +899,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       if (shorts > 0) break;
       pendingBlank = true;
       if (++blanks === BLANK_MEMO_AFTER) {
-        const key = at + ',' + u + ',' + shapeLead;
+        const key = at + ',' + u;
         memo ??= memoOf(shape);
         const to = memo.blank.get(key);
         if (to !== undefined) {
@@ -923,7 +926,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       if (shorts > 0) break;
       pendingBlank = true;
       if (++blanks === BLANK_MEMO_AFTER) {
-        const key = at + ',' + u + ',' + shapeLead;
+        const key = at + ',' + u;
         memo ??= memoOf(shape);
         const to = memo.blank.get(key);
         if (to !== undefined) {
@@ -939,7 +942,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
     }
     if (kind === LONG && shorts === 0) {
       if (longs === 0) {
-        longKey = at + ',' + u + ',' + shapeLead;
+        longKey = at + ',' + u;
         memo ??= memoOf(shape);
         const r = memo.long.get(longKey);
         if (r !== undefined)
@@ -1037,11 +1040,15 @@ function scrubCutOffKeys(text) {
     if (r === undefined) shapes.set(prefix, (r = prefixShape(prefix)));
     return r;
   };
-  // What a reading found past a point, per line shape, for this call only (readKeyLines).
+  // What a reading found past a point, per line shape, for this call only (readKeyLines). Keyed by
+  // the shape's source, not the regex: prefixes that differ only in digits (Read columns, grep line
+  // numbers) build the same pattern from different strings, and one over 64 characters a new regex
+  // per BEGIN, which kept every header BEGIN of numbered output in a memo of its own (D#607 r2 P2-1).
   const memos = new Map();
   const memoOf = (shape) => {
-    let m = memos.get(shape);
-    if (m === undefined) memos.set(shape, (m = { blank: new Map(), long: new Map() }));
+    const id = shape && shape.source;
+    let m = memos.get(id);
+    if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map() }));
     return m;
   };
   const ctx = { endFollows, nextBegin, shapeOf, memoOf };

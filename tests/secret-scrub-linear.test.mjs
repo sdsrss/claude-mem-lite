@@ -29,16 +29,27 @@ const CHAIN = Array.from({ length: 40 }, (_, i) => (i % 2 ? 'secret: abcdefgh' :
 );
 
 // D#607 F1: a BEGIN under `left`, `headers` lines `<header>-----BEGIN RSA PRIVATE KEY-----`, a run of
-// `line` to a quarter of N, then prose. One reading of a long blank run is the released reader's own
-// cost (6.30.8, one BEGIN over 200k chars of `-` lines: 2.6x benign, 18x under coverage), so the run
-// is sized for that one reading to fit the budget and for one reading per header BEGIN not to.
+// `line` to a quarter of N, then prose; a prefix given as a function gets the line's number (Read
+// columns, grep). One reading of a long blank run is the released reader's own cost (6.30.8, one
+// BEGIN over 200k chars of `-` lines: 2.6x benign, 18x under coverage), so the run is sized for that
+// one reading to fit the budget and for one reading per header BEGIN not to.
 const headerBegins = (left, header, line, headers = 16) => {
-  const head =
-    `${left}-----BEGIN RSA PRIVATE KEY-----\n` + `${header}-----BEGIN RSA PRIVATE KEY-----\n`.repeat(headers);
-  const run = line.repeat(Math.floor((N / 4 - head.length) / line.length));
+  const at = (p, n) => (typeof p === 'function' ? p(n) : p);
+  let n = 1;
+  let head = `${at(left, n++)}-----BEGIN RSA PRIVATE KEY-----\n`;
+  for (let h = 0; h < headers; h++) head += `${at(header, n++)}-----BEGIN RSA PRIVATE KEY-----\n`;
+  const run = [];
+  for (let len = head.length; len < N / 4;) {
+    const l = at(line, n++);
+    run.push(l);
+    len += l.length;
+  }
+  const body = head + run.join('');
   const prose = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
-  return head + run + 'x\n' + prose.slice(0, N - head.length - run.length - 2);
+  return body + 'x\n' + prose.slice(0, N - body.length - 2);
 };
+const col = (n) => String(n).padStart(6);
+const LONG_PATH = 'src/very_long/project_path/to_some/deeply_nested/module_dir/sub_pkg/config.py:';
 
 describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   const shapes = {
@@ -117,13 +128,47 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       CHAIN + ' ' + JSON.stringify("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 55)),
     // D#607 F1: 16 header lines that each hold a BEGIN, then a run the reading refuses. Each BEGIN's
     // grammar reading read the run again (d0766de4 with a 200k-char run: 33x benign raw, 48x escaped,
-    // 186x under coverage); readKeyLines' per-call memos read it once per pass.
+    // 186x under coverage); readKeyLines' per-call memos read it once per pass and escape depth. The
+    // numbered ones (r2 P2-1): memos keyed by regex object held one per line number (56af7270, 200k
+    // chars: 21x Read, 25x `N→`, 15x grep under coverage).
     headerBeginsBlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n'),
     headerBeginsBlankRunEscaped:
       CHAIN + ' ' + JSON.stringify(headerBegins("-KEY = '''", '-Comment: ', '-\n')),
     headerBeginsQuoteBlankRun: CHAIN + ' ' + headerBegins('> key = "', '> Comment: ', '> \n'),
     headerBeginsReadBlankRun:
-      CHAIN + ' ' + headerBegins('     5\tKEY = """', '     6\tComment: ', '     7\t\n'),
+      CHAIN +
+      ' ' +
+      headerBegins(
+        (n) => `${col(n)}\tKEY = """`,
+        (n) => `${col(n)}\tComment: `,
+        (n) => `${col(n)}\t\n`,
+      ),
+    headerBeginsReadShortRun:
+      CHAIN +
+      ' ' +
+      headerBegins(
+        (n) => `${col(n)}\tKEY = """`,
+        (n) => `${col(n)}\tComment: `,
+        (n) => `${col(n)}\t${'A'.repeat(20)}\n`,
+      ),
+    headerBeginsArrowBlankRun:
+      CHAIN +
+      ' ' +
+      headerBegins(
+        (n) => `${n}→KEY = """`,
+        (n) => `${n}→Comment: `,
+        (n) => `${n}→\n`,
+      ),
+    headerBeginsGrepBlankRun:
+      CHAIN +
+      ' ' +
+      headerBegins(
+        (n) => `conf.py:${n}:KEY = """`,
+        (n) => `conf.py:${n}:Comment: `,
+        (n) => `conf.py:${n}:\n`,
+      ),
+    headerBeginsLongPathBlankRun:
+      CHAIN + ' ' + headerBegins(LONG_PATH + 'KEY = """', LONG_PATH + 'Comment: ', LONG_PATH + '\n'),
     headerBeginsShortRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-' + 'A'.repeat(20) + '\n'),
     headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
