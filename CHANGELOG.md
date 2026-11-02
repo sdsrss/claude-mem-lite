@@ -2,6 +2,31 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.12 — a private key right after a credential label is erased
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.11`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: a private key written right after a credential label lost its BEGIN line to the
+  label's value, and was stored** (D#657). The label patterns run before the private key ones, so
+  under `PRIVATE_KEY=-----BEGIN …`, `private_key:`, `secret_key:`, `API_KEY=`, `SECRET=`, `token:`,
+  and a Terraform `private_key = <<EOT` in a JSON string, every line of a cut-off key was kept. A
+  key printed one string per line after a label (`const PRIVATE_KEY = "-----BEGIN …\n" +`, or
+  Node's `util.inspect` of an object such as a parsed service account) lost its BEGIN the same way,
+  and a whole key printed by `util.inspect` was stored when the text was in a JSON string. These are
+  erased now. On keys made by `ssh-keygen`, `openssl` and `gpg` (13 key types), in `cat` of a
+  Terraform heredoc, a `.env` file and a JavaScript file, `git show`, `git log -p` and `git diff` of
+  a repository holding them and a service account JSON, `node` printing that service account and an
+  object holding a key, and `python` printing the service account, each cut after every line, as
+  is, with CRLF, in a JSON string, in a tool's JSON and in an MCP result: 6.30.11 kept 2,560,712 of
+  5,899,615 sixteen-character key windows, 6.30.12 keeps 728,014, and none that 6.30.11 erased.
+- **Still stored**, besides the shapes 6.30.11 lists: a credential label or token at the start of a
+  line in a JSON string (`\nAPI_KEY=…`, `\nghp_…`) (D#663); a double-quoted credential value in a
+  JSON string (`API_KEY=\"…\"`, `{\"api_key\":\"…\"}`) (D#664); a cut-off key printed one string
+  per line inside a JSON string or in a diff (JavaScript string concatenation, Node's
+  `util.inspect`) (D#662); the `git diff` of a PEM key that gained a passphrase
+  (`ssh-keygen -p -m PEM`) (D#670).
+
 ## v6.30.11 — a cut-off key under a context BEGIN in a diff hunk is erased
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
