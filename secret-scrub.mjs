@@ -70,7 +70,7 @@ export const SECRET_PATTERNS = [
   // its END).
   // The `--password` flag stops at the BEGIN only: with the mark stop as well, a line that the reading
   // of a cut-off key left after its mark, which the flag's value on the next pass erased in 6.30.11,
-  // was kept (1 key window in 200,000 cases).
+  // was kept.
   // A quoted value is left to the key passes when it holds the BEGIN line and nothing else (`'…-----\n'
   // +`: a key concatenated one string per line, Node's util.inspect of an object); a whole key printed
   // that way was stored when the text was in a JSON string. A quoted value with more of the
