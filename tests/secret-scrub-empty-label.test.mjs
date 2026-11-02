@@ -2,9 +2,8 @@
 // next line's first token as its value, because the whitespace after the separator ran over the line
 // break. When that token was a label (`JWT_SECRET:`, `api_key =`, `"api_key":`), the label was erased
 // and its value, which no pattern recognised any more, was stored. One row per changed pattern, plus
-// the compose / INI / YAML files a `cat` prints. A value written on the line after its own label (YAML
-// continuation, prettier's break after `=`, base64 padding, CRLF) is still erased: the guards below.
-// Each condition of the next-line label test has a row that fails without it (v6.30.13 r1).
+// the compose / INI / YAML files a `cat` prints. The guards below hold values written on the line after
+// their own label, which must stay erased.
 import { describe, it, expect } from 'vitest';
 import { scrubSecrets } from '../secret-scrub.mjs';
 
@@ -44,6 +43,8 @@ const LEAKS = [
   ['YAML mapping', `auth:\n  token:\n  client_secret: ${V}\n`, 'client_secret'],
   ['CRLF line breaks', `password:\r\nJWT_SECRET: ${V}\r\n`, 'JWT_SECRET'],
   ['Markdown label on the next line', `password:\n**API_KEY**: ${V}\n`, '**API_KEY**'],
+  ['a hyphenated label on the next line', `  password:\n  client-secret: ${V}\n`, 'client-secret'],
+  ['a full-width colon on the next line', `  token:\n  client_secret：${V}\n`, 'client_secret'],
 ];
 
 describe('D#683: an empty credential label does not take the next line', () => {
