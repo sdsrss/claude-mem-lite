@@ -1938,11 +1938,13 @@ describe('D#657: a BEGIN right after a credential label', () => {
   // line per piece. A cut key in these pieces is stored inside a JSON string with no label in front too
   // (D#662), so only the whole key is checked there.
   const esc = (l) => l.replace(/\\/g, '\\\\');
-  const concat = (name) => (ls) =>
-    `const ${name} = "${ls[0]}\\n" +\n${ls
-      .slice(1)
-      .map((l) => `  "${l}\\n" +`)
-      .join('\n')}\n  "";`;
+  const concat =
+    (name, br = '\\n') =>
+    (ls) =>
+      `const ${name} = "${ls[0]}${br}" +\n${ls
+        .slice(1)
+        .map((l) => `  "${l}${br}" +`)
+        .join('\n')}\n  "";`;
   const inspect = (name) => (ls) =>
     [
       '{',
@@ -1956,6 +1958,9 @@ describe('D#657: a BEGIN right after a credential label', () => {
   const PIECES = {
     'concat, PRIVATE_KEY': concat('PRIVATE_KEY'),
     'concat, TOKEN': concat('TOKEN'),
+    // Windows source escapes a break as \r\n: the `=` quoted pattern's skip must pass a run of escaped
+    // breaks, not one \n (D#669; cutting it to one \n kept the key's lines here and turned nothing else red).
+    'concat with \\r\\n escapes, TOKEN': concat('TOKEN', '\\r\\n'),
     'inspect, private_key': inspect('private_key'),
     'inspect, password': inspect('password'),
     'inspect, secret': inspect('secret'),
