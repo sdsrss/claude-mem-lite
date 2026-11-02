@@ -76,9 +76,18 @@ export const SECRET_PATTERNS = [
   // that way was stored when the text was in a JSON string. A quoted value with more of the
   // key in it is erased to its closing quote as before: the key passes miss some of what that erases
   // (a first body line cut inside its first 40 characters).
+  //
+  // A VALUE ON A LATER LINE (D#683). The whitespace after a separator may run onto the next lines, so a
+  // value written below its label is still erased (`password:` then `  <v>`; prettier's `const X =` then
+  // `  "<v>";`), but not when that line opens with a label of its own (`NAME: v`, `NAME=v`, `"name":`).
+  // A label with an empty value (`POSTGRES_PASSWORD:` in a compose file, `password =` in an INI section)
+  // took the next line's label as its value, and that line's value was stored. Such a line is now read
+  // as it would be on its own; text with no line break between a separator and its value scrubs exactly
+  // as before. A name over 64 characters is not taken for a label, so the check reads a bounded prefix
+  // of the line. The quoted-value, JSON-key and env-name patterns below carry the same rule.
   //   1a. `=` assignment → ALWAYS scrub (config syntax, never prose):
   [
-    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   //   1b. `:` separator, PASSWORD nouns. Position decides how permissive the value
@@ -119,16 +128,16 @@ export const SECRET_PATTERNS = [
   //       Both arms emit `***` (3 chars, under the {6,} floor), so they cannot
   //       double-apply.
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   [
-    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[`*~]*(?:[\s,;'"}\]]|$)))(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[`*~]*(?:[\s,;'"}\]]|$)))(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alicebob"):
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // access_token / refresh_token are the canonical OAuth2 field names — they were
@@ -143,7 +152,7 @@ export const SECRET_PATTERNS = [
   // low-FP decision that `topsecret=` / `access_token_count:` are non-credentials
   // (#8283 + utils.test.mjs:1089-1100); bare `pwd` is omitted so `PWD=` (a path) survives.
   [
-    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // Space-separated credential CLI flag: `--password <value>` (long-form). The KV
@@ -170,21 +179,21 @@ export const SECRET_PATTERNS = [
   //       (mirrors the unquoted 1a/1b split — a quoted value doesn't turn `:` prose
   //       into config, but `<word> password="x"` is still a leak):
   [
-    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   //   (b) structured keys + named env vars are unambiguous config even after a word
   //       (`see api_key: "x"` DOES scrub, mirroring the unquoted structured-key path):
   [
-    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // AWS access keys: AKIA (long-term) + ASIA (STS temp) + AROA (role) + AIDA
@@ -256,7 +265,10 @@ export const SECRET_PATTERNS = [
   // name and the colon, so a `curl -v` / fetch header dump walked straight through. The
   // scheme word is optional because a raw token as the whole value is just as common;
   // `authorization` is not a benign key, and over-scrub is the safe direction here.
-  [/(['"](?:proxy-)?authorization['"]\s*:\s*)(['"])(?:(?:Bearer|Basic|token)\s+)?[^'"]{6,}\2/gi, '$1$2***$2'],
+  [
+    /(['"](?:proxy-)?authorization['"]\s*:(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])(?:(?:Bearer|Basic|token)\s+)?[^'"]{6,}\2/gi,
+    '$1$2***$2',
+  ],
   // R10 P1-6: Azure storage. AccountKey= is the account's master credential and sig= is a
   // live SAS token; neither had any pattern. `sig` is anchored to a URL query position
   // (`?`/`&`) rather than a word boundary — bare `\bsig=` eats `const sig=computeX(y)`.
@@ -264,7 +276,7 @@ export const SECRET_PATTERNS = [
   [/([?&]sig=)[^\s;&'"]{16,}/gi, '$1***'],
   // Supabase / generic long base64 keys (40+ chars, common in env vars)
   [
-    /(\b(?:SUPABASE_KEY|SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|REDIS_URL)\s*[=:]\s*)[^\s,;'"}\]]+/gi,
+    /(\b(?:SUPABASE_KEY|SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|REDIS_URL)\s*[=:](?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?![*~`]{0,3}[\w.-]{1,64}[*~`]{0,3}[^\S\r\n]*(?:[=：](?!=)|:(?=[\s'"]))[^\S\r\n]*\S)))[^\s,;'"}\]]+/gi,
     '$1***',
   ],
   // Basic auth in URLs (https://user:password@host). ftp/ftps added — file-drop
@@ -305,7 +317,7 @@ export const SECRET_PATTERNS = [
   // these slip through. Match the value-quoted form explicitly. Length floor
   // (6) avoids tripping on intentional placeholder shorts ("...", "secret").
   [
-    /("(?:password|passwd|token|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|access[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token|bearer|refresh[_-]?token|session[_-]?id|sessionid)"\s*:\s*")[^"]{6,}(")/gi,
+    /("(?:password|passwd|token|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|access[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token|bearer|refresh[_-]?token|session[_-]?id|sessionid)"\s*:(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：]))")[^"]{6,}(")/gi,
     '$1***$2',
   ],
   // JSON keys with vendor PREFIX/SUFFIX around the core credential noun —
@@ -318,7 +330,7 @@ export const SECRET_PATTERNS = [
   // one quote, `\w*` ran to the end of a word run and backtracked through every keyword in it,
   // each rescanning the run — `"` + `secret` x 33k took 4.6 s. 64 is far past any key name.
   [
-    /("\w{0,64}(?:password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}"\s*:\s*")[^"]{6,}(")/gi,
+    /("\w{0,64}(?:password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}"\s*:(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：]))")[^"]{6,}(")/gi,
     '$1***$2',
   ],
   // Quoted-KEY credential values — Python dict reprs `{'api_key': '...'}`, single-quoted
@@ -334,7 +346,7 @@ export const SECRET_PATTERNS = [
   // `'token_count': 123456`); `passphrase` added here too (double-quoted JSON passphrase is
   // subsumed by this pattern since `['"]` matches `"`). Over-scrub is the safe direction.
   [
-    /(['"](?:\w{0,64}(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}|\w{1,64}_token)['"]\s*:\s*)(['"])[^'"]{6,}\2/gi,
+    /(['"](?:\w{0,64}(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}|\w{1,64}_token)['"]\s*:(?:[^\S\r\n]*|[^\S\r\n]*[\r\n]\s*(?!(?:"[^"\r\n]*"|'[^'\r\n]*')[^\S\r\n]*[:=：])))(['"])[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // Session cookies in headers / urlencoded bodies (sessionid=, session_id=, JSESSIONID=, PHPSESSID=).
