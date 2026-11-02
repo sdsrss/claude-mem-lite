@@ -78,26 +78,31 @@ const contextHeadersOverContextKey = () => {
 // D#642: a header BEGIN over 7 blank lines, repeated (D#634, D#614 r1 F1): each BEGIN's reading took the
 // next 16 headers and their runs, which the blank-run memo (from a run's 8th line) never reached.
 const B_RSA = '-----BEGIN RSA PRIVATE KEY-----';
-const fill = (unit) => unit.repeat(Math.ceil(N / unit.length)).slice(0, N);
 const PROSE_FILL = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
-// Whole units to a quarter of N, then prose, as headerBegins: what is timed is a reading per header
-// BEGIN, not the cost every BEGIN has (a BEGIN per 48 characters over all of N reads 11x benign under
-// coverage with nothing to read). Under coverage, before D#642: 11.8-40.1x; after: 3.2-6.9x.
-const units = (unitOf) => {
+// Whole units to a share of N (a quarter; an eighth escaped), then prose, as headerBegins: what is timed
+// is a reading per header BEGIN, not the cost every BEGIN has (a BEGIN per 48 characters over all of N
+// reads 11x benign under coverage with nothing to read; D#648). Under coverage, before D#642:
+// 11.8-25.4x; after: 3.2-5.2x (the escaped form at an eighth: 17.6x, 3.9x). CI's runners read about
+// 1.45x what this machine does under coverage.
+const units = (unitOf, share = 4) => {
   let body = '';
-  for (let n = 1; body.length < N / 4; n++) body += unitOf(n);
+  for (let n = 1; body.length < N / share; n++) body += unitOf(n);
   return body + 'x\n' + PROSE_FILL.slice(0, Math.max(0, N - body.length - 2));
 };
 const grepUnit = (path) => (n) =>
   `${path}:${n * 8}:Comment: ${B_RSA}\n` +
   Array.from({ length: 7 }, (_, i) => `${path}-${n * 8 + i + 1}-\n`).join('');
 // D#642 (r1 F5): a quoted BEGIN at each of k escape depths in turn, whose walks back to the line start
-// cross every other depth's run.
+// cross every other depth's run; over half of N (under coverage, 8 depths over all of N still read 8x
+// benign here and 11.8x on CI after D#642; D#648). Under coverage: before 21.9x and 37.4x, after 4.4x
+// and 2.9x.
 const depthCycle = (k) =>
-  fill(
-    Array.from({ length: k }, (_, i) => 2 ** i)
-      .map((d) => `'${B_RSA}${'\\'.repeat(d)}n-a: b${'\\'.repeat(d)}n`)
-      .join(''),
+  units(
+    () =>
+      Array.from({ length: k }, (_, i) => 2 ** i)
+        .map((d) => `'${B_RSA}${'\\'.repeat(d)}n-a: b${'\\'.repeat(d)}n`)
+        .join(''),
+    2,
   );
 const SPACED_PATH = 'My Keys/conf.py';
 const SPACED_GREP_UNIT =
@@ -265,7 +270,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     headerBeginUnitsRemoved: CHAIN + '\n' + units(() => `-Comment: ${B_RSA}\n` + '-\n'.repeat(7)),
     headerBeginUnitsContext: CHAIN + '\n' + units(() => ` Comment: ${B_RSA}\n` + '-\n'.repeat(7)),
     headerBeginUnitsContextEscaped:
-      CHAIN + ' ' + JSON.stringify(units(() => ` Comment: ${B_RSA}\n` + '-\n'.repeat(7)).slice(0, N - 2000)),
+      CHAIN +
+      ' ' +
+      JSON.stringify(units(() => ` Comment: ${B_RSA}\n` + '-\n'.repeat(7), 8).slice(0, N - 2000)),
     headerBeginUnitsSpacedGrep: CHAIN + '\n' + units(grepUnit(SPACED_PATH)),
     headerBeginUnitsBackslashGrep: CHAIN + '\n' + units(grepUnit('a\\b')),
     depthCycle8: CHAIN + ' ' + depthCycle(8),
