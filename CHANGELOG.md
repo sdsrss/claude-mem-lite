@@ -2,6 +2,43 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.13 — an empty credential label no longer hides the next line's credential
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.12`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: a credential label with no value took the next line's label as its value, and that
+  line's credential was stored** (D#683). Under `POSTGRES_PASSWORD:` in a compose file, `password =`
+  in an INI section or `token:` in YAML, the next line's `JWT_SECRET:`, `api_key =` or
+  `client_secret:` was erased instead of its value, by the tool-call hook too (a `cat` of such a
+  file). On 100,000 generated config texts (247,410 values), 6.30.12 stored 4,417 values that
+  6.30.13 erases; each of the 96 values 6.30.13 keeps and 6.30.12 erased is on a line that 6.30.12
+  also keeps when the line stands alone (no pattern covers its label, such as `DATABASE_URL：` with a
+  full-width colon).
+- **Security: `import-jsonl` stored credentials and lines of private keys from tool calls** (D#684).
+  Now each string of a tool's input, and of a result made of blocks (an MCP tool's), is scrubbed as
+  text before it is written as JSON, unless a string holds a `<private>` tag; and a tool call's
+  input or result keeps only what comes before its first private-key marker, object keys included,
+  and nothing when that marker is an END. Of 12 shape groups measured, import-jsonl stored 7 and
+  stores none: credential labels at line starts and a JSON object, each in a file written with Write
+  and in an MCP result; a cut-off key printed one string per line in an MCP result; the `git diff`
+  of a PEM key that gained a passphrase; a key line that `git show` printed as a hunk header's
+  context, with the key's END in the hunk. Some text that is not a credential is erased now as well,
+  such as a session id in hook JSON that a command prints (`"session_id": "…"`) and part of a
+  command after a quoted credential name. On Node 22, `JSON.stringify` throws from about 4,200
+  levels of nesting, and such a tool call failed the import of its whole transcript; import-jsonl no
+  longer calls it on a tool call's value.
+- **Still stored**, besides the shapes 6.30.11 lists: the shapes 6.30.12 lists, in text pasted into
+  a prompt; a credential label or token at a line start or a double-quoted credential value in a
+  JSON string, such as one a tool prints
+  (`aws secretsmanager get-secret-value --query SecretString`, `kubectl … | jq -c`) or one written
+  into a file (`APP_CONFIG="{\"api_key\": …}"`), through the tool-call hook and import-jsonl; a key
+  line that `git show` prints as a hunk header's context when the key's END line is outside the
+  hunk; an environment list written as name/value pairs (Kubernetes `name: DB_PASSWORD` then
+  `value: …`), through the tool-call hook, import-jsonl and the prompt hook (D#679); a value under a
+  name no pattern covers, such as `ENCRYPTION_KEY=`, `SECRET_KEY_BASE=` or `APP_KEY=` in a `.env`
+  file (D#690).
+
 ## v6.30.12 — a private key right after a credential label is erased
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
