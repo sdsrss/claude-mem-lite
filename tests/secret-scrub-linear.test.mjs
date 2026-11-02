@@ -62,6 +62,9 @@ const HEADER_BEGINS_IN_KEY =
 // context line, the diff reading reads it again); a rotated key whose removed lines end with a short one
 // (the added lines read on); context header BEGINs over a run of unmarked context key lines with one
 // removed line at its end (each header BEGIN's reading takes the run; only the last spans no BEGIN).
+// The first two in one hunk, under one header: each BEGIN asks whether its line is in a hunk, which the
+// per-call memo answers from the line above (without it, a walk up through every unit above).
+const HUNK = '\n@@ -1,99999 +1,99999 @@\n';
 const OPENSSH_UNIT = ` -----BEGIN OPENSSH PRIVATE KEY-----\n ${'b3BlbnNzaC1rZXktdjE'.padEnd(70, 'A')}\n-x\n`;
 const ROTATED_UNIT = ` -----BEGIN RSA PRIVATE KEY-----\n-MIIEowIBAAKCAQEA${'B'.repeat(48)}\n-abc\n+MIIEpAIBAAKCAQEA${'C'.repeat(48)}\n+abc\n`;
 const contextHeadersOverContextKey = () => {
@@ -267,8 +270,8 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     headerBeginUnitsBackslashGrep: CHAIN + '\n' + units(grepUnit('a\\b')),
     depthCycle8: CHAIN + ' ' + depthCycle(8),
     depthCycle11: CHAIN + ' ' + depthCycle(11),
-    contextKeyThenRemovedShort: CHAIN + '\n' + OPENSSH_UNIT.repeat(Math.floor(N / OPENSSH_UNIT.length)),
-    rotatedKeyShortLast: CHAIN + '\n' + ROTATED_UNIT.repeat(Math.floor(N / ROTATED_UNIT.length)),
+    contextKeyThenRemovedShort: CHAIN + HUNK + OPENSSH_UNIT.repeat(Math.floor(N / OPENSSH_UNIT.length)),
+    rotatedKeyShortLast: CHAIN + HUNK + ROTATED_UNIT.repeat(Math.floor(N / ROTATED_UNIT.length)),
     contextHeadersOverContextKey: CHAIN + '\n' + contextHeadersOverContextKey(),
     contextHeadersOverContextKeyEscaped: CHAIN + ' ' + JSON.stringify(contextHeadersOverContextKey()),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the

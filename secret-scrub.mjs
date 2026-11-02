@@ -779,10 +779,13 @@ function cutOffKeyEnd(text, b, be, ctx) {
   // key's lines) never spans another private-key BEGIN, which no key in a real diff holds: a header line
   // holding one, swallowed by the span, started no reading of its own on a later pass, where it read on
   // over the first pass's ***PEM_KEY*** line and erased a cut line after it (6 of 400,000 r3mix texts).
-  const diffRead = (admitted) => {
+  // What D#641 added reads a diff only inside a unified diff's hunk (ctx.inHunk from the BEGIN's line
+  // start `gl`): an indented cut key in prose read the dash list under it as removed and added key
+  // lines, losing it (6.30.10 pre-tag r1 F2).
+  const diffRead = (admitted, gl) => {
     // Such a reading ends before the next BEGIN and takes a marked line, so with no marked line before
     // that BEGIN there is none to read (header BEGINs over context lines read the same run again each).
-    if (!admitted && !markedLineIn(text, next, ctx.nextBegin(next), u)) return -1;
+    if (!admitted && !(markedLineIn(text, next, ctx.nextBegin(next), u) && ctx.inHunk(gl, u))) return -1;
     let r = reread(
       '-',
       45,
@@ -792,7 +795,7 @@ function cutOffKeyEnd(text, b, be, ctx) {
     const alt = ctx.shapeOf('-');
     for (;;) {
       const n = r.shorts > 0 ? nextLine(text, r.end, u).next : -1;
-      if (n === -1 || (text[n] !== '-' && text[n] !== '+')) return r.end;
+      if (n === -1 || (text[n] !== '-' && text[n] !== '+') || !ctx.inHunk(gl, u)) return r.end;
       const again = readKeyLines(text, n, u, alt, 45, 0, 0, '', -1, ctx.memoOf);
       if (again.longs === 0 || ctx.nextBegin(n) < again.end) return r.end;
       r = again;
@@ -857,7 +860,7 @@ function cutOffKeyEnd(text, b, be, ctx) {
     // the removed and added lines below it with `-` and `+`, which the line prefix (that space, or the
     // code) never matched.
     if (gl !== -1 && isDiffContextLine(text, gl, b)) {
-      const r = diffRead(text[next] === '-' || text[next] === '+');
+      const r = diffRead(text[next] === '-' || text[next] === '+', gl);
       if (r !== -1) return r;
     }
   } else if (run < 16) {
@@ -868,7 +871,7 @@ function cutOffKeyEnd(text, b, be, ctx) {
     if (after !== -1 && (text[after] === '-' || text[after] === '+')) {
       const gl = lineStartPastQuotes(text, ls, u);
       if (gl !== -1 && isDiffContextLine(text, gl, b)) {
-        const r = diffRead(false);
+        const r = diffRead(false, gl);
         if (r !== -1) return r;
       }
     }
@@ -887,6 +890,8 @@ function isDiffContextLine(text, gl, b) {
 
 // A diff mark after a character that can end a line: a break, and at an escape depth an escaped
 // break's letter or (one escape deep) the quote that reopens a string concatenated across lines.
+// A unified diff's hunk header, from a line's start.
+const HUNK_HEADER_RE = /@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/y;
 const MARK_AFTER_BREAK_RE = /[\n\r][-+]/g;
 const MARK_AFTER_ESC_RE = /[\n\r"'nr][-+]/g;
 
@@ -921,6 +926,29 @@ function markedLineIn(text, from, to, u) {
     }
   }
   return false;
+}
+
+/**
+ * Where the line before the one starting at `at` starts, at break depth u, or -1 when no break ends a
+ * line right before `at`. Breaks only: unlike prevLine, a quote does not end a line here (a diff line of
+ * code holds quotes, `-KEY = '''`).
+ */
+function prevLineStart(text, at, u) {
+  if (at <= 0) return -1;
+  const c = text[at - 1];
+  let e;
+  if (c === '\n') e = at - 2 >= 0 && text[at - 2] === '\r' ? at - 2 : at - 1;
+  else if (c === '\r') e = at - 1;
+  else if (u > 0 && (c === 'n' || c === 'r') && isEscBreak(backslashesBefore(text, at - 1, 0), u)) {
+    e = at - 1 - u;
+    if (c === 'n' && text[e - 1] === 'r' && isEscBreak(backslashesBefore(text, e - 1, 0), u)) e -= u + 1;
+  } else return -1;
+  for (let i = e - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === '\n' || ch === '\r') return i + 1;
+    if (u > 0 && (ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, i, 0), u)) return i + 1;
+  }
+  return 0;
 }
 
 /**
@@ -1296,7 +1324,36 @@ function scrubCutOffKeys(text) {
     if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map(), head: new Map() }));
     return m;
   };
-  const ctx = { endFollows, nextBegin, shapeOf, memoOf, reread: false };
+  // Whether the line starting at `s` (depth u) is in a unified diff's hunk: the lines above it, up to a
+  // `@@ -a,b +c,d @@` line, are all diff lines (led by a space, `-` or `+`). Kept per line start for the
+  // call, so a line is read once however many BEGINs ask.
+  const hunks = new Map();
+  const inHunk = (s, u) => {
+    const seen = [];
+    let found = false;
+    for (let at = s; ;) {
+      const key = at + ',' + u;
+      const known = hunks.get(key);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      seen.push(key);
+      const ps = prevLineStart(text, at, u);
+      if (ps === -1) break;
+      const c = text.charCodeAt(ps);
+      if (c === 64) {
+        HUNK_HEADER_RE.lastIndex = ps;
+        found = HUNK_HEADER_RE.test(text) && HUNK_HEADER_RE.lastIndex < at;
+        break;
+      }
+      if (c !== 32 && c !== 45 && c !== 43) break;
+      at = ps;
+    }
+    for (const key of seen) hunks.set(key, found);
+    return found;
+  };
+  const ctx = { endFollows, nextBegin, shapeOf, memoOf, inHunk, reread: false };
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;

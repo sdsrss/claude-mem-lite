@@ -1625,6 +1625,7 @@ describe('D#641: a cut `git diff` of a rotated key, in the shape git writes it',
     const cut2 = `${b64(20)}…`;
     const text = [
       '$ git diff',
+      '@@ -1,8 +1,8 @@',
       ` ${BP}`,
       ...marked,
       ` X-a: ${BO}`,
@@ -1648,6 +1649,7 @@ describe('D#641: a cut `git diff` of a rotated key, in the shape git writes it',
     const add = [b64(64), b64(64)];
     const text = [
       '$ git diff',
+      '@@ -1,6 +1,6 @@',
       `-KEY = '''${BR}`,
       ` Comment: ${BR}`,
       `-MIIEowIBAAKCAQEA${b64(48)}`,
@@ -1662,6 +1664,58 @@ describe('D#641: a cut `git diff` of a rotated key, in the shape git writes it',
         wrapName,
       ).toEqual([]);
       expect(out, wrapName).toContain(PROSE);
+    }
+  });
+
+  // Outside a diff's hunk none of this reads: an indented cut key in prose over a dash list keeps the
+  // list, as in v6.30.9 (6.30.10 pre-tag r1 F2: the list read as removed and added key lines).
+  it.each([
+    [
+      'notes',
+      [
+        'Key (cut):',
+        `    ${BR}`,
+        `    ${KL}`,
+        '- Done',
+        '- src/components/Button',
+        '- Next',
+        '- src/components/Header',
+      ],
+      ['- Done', '- src/components/Button', '- Next', '- src/components/Header'],
+    ],
+    [
+      'a YAML value',
+      ['  key: |', `    ${BR}`, `    ${KL}`, '- v2', '- version: 3', '- deploy/scripts/rotate'],
+      ['- v2', '- version: 3', '- deploy/scripts/rotate'],
+    ],
+    [
+      'one path',
+      ['Key (cut):', `    ${BR}`, `    ${KL}`, '- src/components/Button'],
+      ['- src/components/Button'],
+    ],
+    // A line led by `@` is a hunk header only in a hunk header's shape.
+    [
+      'a reply under a mention',
+      ['@alice the deploy key (cut):', `    ${BR}`, `    ${KL}`, '- Done', '- src/components/Button'],
+      ['- Done', '- src/components/Button'],
+    ],
+  ])('a dash list under an indented cut key in %s keeps its items', (_, lines, items) => {
+    const text = [...lines, 'and the rest of the notes'].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(out).not.toContain(KL.slice(-16));
+      for (const item of items) expect(out).toContain(item);
+    }
+  });
+
+  // Nor are the added key's lines read on outside a hunk: a dash-led key line under an indented BEGIN is
+  // read (D#614 A1), the list item after its short line is not.
+  it('a list item after a dash-led key under an indented BEGIN, outside a hunk, keeps its text', () => {
+    const text = ['Notes:', `    ${BR}`, `-${KL}`, '- v2', '- src/components/Button', 'the end'].join('\n');
+    for (const t of [text, J(text)]) {
+      const out = scrubSecrets(t);
+      expect(out).not.toContain(KL.slice(-16));
+      expect(out).toContain('- src/components/Button');
     }
   });
 
