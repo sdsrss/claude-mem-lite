@@ -1546,15 +1546,103 @@ function scrubKeyTails(text) {
 // this repo has twice decided the text matters more.
 const MAX_SCRUB_PASSES = 32;
 
-export function scrubSecrets(text) {
-  if (!text || typeof text !== 'string') return text || '';
-  let result = stripPrivate(text);
+function runPatterns(text) {
+  let result = text;
   for (let pass = 1; ; pass++) {
     const before = result;
     for (const [pattern, replacement] of SECRET_PATTERNS) {
       result = result.replace(pattern, replacement);
     }
     if (result === before || pass >= MAX_SCRUB_PASSES) break;
+  }
+  return result;
+}
+
+// ─── Escaped string literals (D#687, D#693, D#685) ────────────────────────
+//
+// A JSON string literal holds its text one escape level deep: a key's quotes are `\"` and a line break
+// is the two characters `\n`. The patterns above are written for text, so inside a literal a JSON key
+// never closes on a bare quote, a label never starts a line, and a label's value runs on over the
+// escaped breaks into the next line's label. What `aws secretsmanager get-secret-value --query
+// SecretString` prints (`"{\"password\":\"…\"}"`), a `.env` that `kubectl … | jq -c .data` prints as one
+// string, an escaped JSON literal in a source file or a `.env` value: all were stored. Two attempts that
+// taught the patterns about escaped line starts (D#663, D#668) were withdrawn at review: a pattern
+// that starts in a new place carries its value's run-on there.
+//
+// So each double-quoted literal on one line whose body holds an escape is decoded (as JSON; an escape
+// JSON does not know is kept as written) and scrubbed as text, MAX_LITERAL_DEPTH levels deep, and
+// rewritten, as the scrubbed text encoded as JSON, only when that scrub changed it: a literal it
+// leaves alone keeps every byte. A literal opens at a quote with an even number of backslashes before
+// it, and a text that ends inside one has it read to the end.
+//
+// A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
+// the lines after a label up to a space, and the text reading keeps such a line when it has no label
+// of its own. Without that, 5-8 values in 20,000 generated texts that v6.30.13 erased were stored
+// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before.
+//
+// Bounds: MAX_LITERALS literals are decoded per text and level (real transcripts, 2026-11-02: at most
+// 133 in one text); with no bound, `"\"` repeated over 500,000 characters took 104x the patterns alone
+// (415 ms against 4). A rewritten literal can give the patterns a reading they did not have, so a text
+// that holds a backslash is scrubbed again until it no longer changes, MAX_LITERAL_ROUNDS times at
+// most; with one round, 23-42 of 20,000 generated texts changed on a second call (scrubSecrets is
+// idempotent by contract: import-jsonl's dedup and cmdRestore rely on it).
+const ESCAPED_LITERAL_RE = /(?<=(?:^|[^\\])(?:\\\\)*)"((?:[^"\\\r\n]|\\[^\r\n])*)("|$)/g;
+const JSON_ESCAPE_RE = /\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g;
+const JSON_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+// A value token, and an escape, which is no part of one: `\nAPI_KEY` holds the token `API_KEY`.
+const VALUE_TOKEN_RE = /[A-Za-z0-9+/=_.-]+/g;
+const ESCAPE_RE = /\\(?:u[0-9a-fA-F]{4}|.)/g;
+const MAX_LITERAL_DEPTH = 3;
+const MAX_LITERALS = 256;
+const MAX_LITERAL_ROUNDS = 4;
+
+function decodeLiteral(body) {
+  try {
+    return JSON.parse(`"${body}"`);
+  } catch {
+    return body.replace(JSON_ESCAPE_RE, (_m, e) =>
+      e[0] === 'u' ? String.fromCharCode(parseInt(e.slice(1), 16)) : JSON_ESCAPES[e],
+    );
+  }
+}
+
+const maskEscapes = (text) => text.replace(ESCAPE_RE, (e) => ' '.repeat(e.length));
+const valueTokens = (text) => new Set(maskEscapes(text).match(VALUE_TOKEN_RE));
+
+function scrubEscapedLiterals(text, depth) {
+  if (depth >= MAX_LITERAL_DEPTH || !text.includes('\\')) return text;
+  let budget = MAX_LITERALS;
+  return text.replace(ESCAPED_LITERAL_RE, (literal, body, close) => {
+    if (budget === 0 || !body.includes('\\')) return literal;
+    budget--;
+    const decoded = decodeLiteral(body);
+    const scrubbed = scrubText(decoded, depth + 1);
+    if (scrubbed === decoded) return literal;
+    const encoded = JSON.stringify(scrubbed).slice(1, -1);
+    const keptByPatterns = valueTokens(runPatterns(body));
+    const inBody = valueTokens(body);
+    let out = '';
+    let last = 0;
+    for (const { 0: token, index } of maskEscapes(encoded).matchAll(VALUE_TOKEN_RE)) {
+      if (keptByPatterns.has(token) || !inBody.has(token)) continue;
+      out += encoded.slice(last, index) + '***';
+      last = index + token.length;
+    }
+    return `"${out}${encoded.slice(last)}${close}`;
+  });
+}
+
+function scrubText(text, depth) {
+  return runPatterns(scrubEscapedLiterals(stripPrivate(text), depth));
+}
+
+export function scrubSecrets(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let result = scrubText(text, 0);
+  for (let round = 1; round < MAX_LITERAL_ROUNDS && result.includes('\\'); round++) {
+    const next = scrubText(result, 0);
+    if (next === result) break;
+    result = next;
   }
   return result;
 }

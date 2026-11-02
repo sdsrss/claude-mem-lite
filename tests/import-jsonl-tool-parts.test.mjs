@@ -80,10 +80,9 @@ const V3 = 'a8f3e9d2' + '7c41b5e6';
 
 describe('import-jsonl — strings are scrubbed as text, before the JSON wrap', () => {
   it('a Write of a .env: labels at line starts lose their values (D#663, D#668)', async () => {
+    // Since D#687 the scrubber also erases these in the JSON text (it decodes the escaped string), so
+    // this row and the next pass on either reading; the import's own rule is pinned by the rows below.
     const env = `# ci\nPORT=3000\ntoken: ${V3}\npassword=${V2}\ngithub_token: ${V1}\nLOG_LEVEL=info\n`;
-    expect(scrubSecrets(JSON.stringify({ content: env })), 'premise: the JSON text keeps a value').toMatch(
-      new RegExp(`${V1}|${V2}|${V3}`),
-    );
     const row = await importPair(
       'Write',
       { file_path: '/w/ci.env', content: env },
@@ -91,6 +90,16 @@ describe('import-jsonl — strings are scrubbed as text, before the JSON wrap', 
     );
     for (const v of [V1, V2, V3]) expect(row.narrative).not.toContain(v);
     expect(row.narrative).toContain('PORT=3000');
+  });
+
+  // The scrubber decodes at most 256 escaped strings per text (D#687's cost bound); one after them is read
+  // only by the import's own per-string scrub.
+  it('a part with more escaped strings than the scrubber decodes: each string is still scrubbed', async () => {
+    const input = { lines: [...Array.from({ length: 256 }, (_, i) => `a${i}\nb`), `PORT=1\nAPI_KEY=${V1}`] };
+    expect(scrubSecrets(JSON.stringify(input)), 'premise: the JSON text keeps the value').toContain(V1);
+    const row = await importPair('mcp__x__put', input, [{ type: 'text', text: 'ok' }]);
+    expect(row.narrative).not.toContain(V1);
+    expect(row.narrative).toContain('PORT=1');
   });
 
   // A string scrubbed on its own never sees the object key that labels it.
@@ -101,10 +110,6 @@ describe('import-jsonl — strings are scrubbed as text, before the JSON wrap', 
 
   it('an MCP result holding a JSON object: its credential values are not stored (D#664)', async () => {
     const cfg = JSON.stringify({ api_key: V1, password: V2, region: 'eu-west-1' }, null, 2);
-    expect(
-      scrubSecrets(JSON.stringify([{ type: 'text', text: cfg }])),
-      'premise: the JSON text keeps a value',
-    ).toMatch(new RegExp(`${V1}|${V2}`));
     const row = await importPair('mcp__cfg__get', { name: 'app' }, [{ type: 'text', text: cfg }]);
     expect(row.narrative).not.toContain(V1);
     expect(row.narrative).not.toContain(V2);
