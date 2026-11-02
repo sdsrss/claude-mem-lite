@@ -119,13 +119,23 @@ describe('the hook launcher honours a disabled plugin', () => {
     projectSettings('settings.local.json', { enabledPlugins: { [PLUGIN_KEY]: false } });
     expect(pretool().stdout).toBe('');
   });
+  // SessionStart spawns detached workers (auto-maintain, normalize, the update check) that write
+  // under CLAUDE_MEM_DIR after the hook has exited: 3 of 3 runs, and afterEach's rmSync threw
+  // ENOTEMPTY under load (D#654). This test observes none of them, so they are switched off, as
+  // in integration-scenarios (D#116): 0 of 3 runs with a writer after exit.
   it('hook.mjs agrees: user false, project true still runs SessionStart', () => {
     settings({ enabledPlugins: { [PLUGIN_KEY]: false } });
     projectSettings('settings.json', { enabledPlugins: { [PLUGIN_KEY]: true } });
+    const noWorkers = {
+      CLAUDE_MEM_SKIP_MAINTAIN: '1',
+      CLAUDE_MEM_SKIP_COMPRESS: '1',
+      CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+    };
     const ss = () =>
       spawnSync(process.execPath, [LAUNCHER, 'hook.mjs', 'session-start'], {
         input: JSON.stringify({ session_id: 'ss-1', source: 'startup', cwd: proj }),
-        env: { ...env, MEM_NO_AUTO_ADOPT: '1' },
+        env: { ...env, MEM_NO_AUTO_ADOPT: '1', ...noWorkers },
         encoding: 'utf8',
       });
     expect(ss().stdout).toContain('applyDiscount');

@@ -43,6 +43,22 @@ function startServer(memDir) {
   return proc;
 }
 
+// Remove the directory only after the server has exited (D#661). A fixed 50 ms wait was shorter
+// than its exit under load (2 of 15 exits took 51-58 ms with 36 busy processes on 12 cores), and
+// the swallowed rmSync error then left a mem-audit-t2-* directory with its database behind.
+async function stopServerAndRemove(proc, dir) {
+  const exited =
+    proc.exitCode !== null || proc.signalCode !== null ? null : new Promise((r) => proc.once('exit', r));
+  try {
+    proc.stdin.end();
+  } catch {
+    /* already closed */
+  }
+  proc.kill('SIGTERM');
+  await exited;
+  rmSync(dir, { recursive: true, force: true });
+}
+
 function rpc(proc, id, method, params) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
@@ -235,24 +251,7 @@ describe('MCP audit fixes (stdio)', () => {
     proc = startServer(tmp);
   });
 
-  afterEach(async () => {
-    try {
-      proc.stdin.end();
-    } catch {
-      /* already closed */
-    }
-    try {
-      proc.kill('SIGTERM');
-    } catch {
-      /* already exited */
-    }
-    await new Promise((r) => setTimeout(r, 50));
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
+  afterEach(() => stopServerAndRemove(proc, tmp));
 
   function callTool(name, args) {
     return rpc(proc, Math.floor(Math.random() * 1e9), 'tools/call', { name, arguments: args });
@@ -483,24 +482,7 @@ describe('MCP T2 audit fixes (stdio)', () => {
     proc = startServer(tmp);
   });
 
-  afterEach(async () => {
-    try {
-      proc.stdin.end();
-    } catch {
-      /* already closed */
-    }
-    try {
-      proc.kill('SIGTERM');
-    } catch {
-      /* already exited */
-    }
-    await new Promise((r) => setTimeout(r, 50));
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
+  afterEach(() => stopServerAndRemove(proc, tmp));
 
   function callTool(name, args) {
     return rpc(proc, Math.floor(Math.random() * 1e9), 'tools/call', { name, arguments: args });
@@ -1545,24 +1527,7 @@ describe('MCP T3 audit fixes (stdio)', () => {
     proc = startServer(tmp);
   });
 
-  afterEach(async () => {
-    try {
-      proc.stdin.end();
-    } catch {
-      /* already closed */
-    }
-    try {
-      proc.kill('SIGTERM');
-    } catch {
-      /* already exited */
-    }
-    await new Promise((r) => setTimeout(r, 50));
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
+  afterEach(() => stopServerAndRemove(proc, tmp));
 
   function callTool(name, args) {
     return rpc(proc, Math.floor(Math.random() * 1e9), 'tools/call', { name, arguments: args });
@@ -1703,24 +1668,7 @@ describe('T-anchor-prefix: mem_timeline prefix anchor parity (stdio)', () => {
     proc = startServer(tmp);
   });
 
-  afterEach(async () => {
-    try {
-      proc.stdin.end();
-    } catch {
-      /* already closed */
-    }
-    try {
-      proc.kill('SIGTERM');
-    } catch {
-      /* already exited */
-    }
-    await new Promise((r) => setTimeout(r, 50));
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
+  afterEach(() => stopServerAndRemove(proc, tmp));
 
   function callTool(name, args) {
     return rpc(proc, Math.floor(Math.random() * 1e9), 'tools/call', { name, arguments: args });
