@@ -578,6 +578,8 @@ const LINE_START_SCAN = 4096;
 // From a position back over the characters that cannot end a line in escaped text: anything but a
 // break, a double quote or a backslash. A lookbehind is matched backward, so this runs natively.
 const LINE_BACK_RE = /(?<=([^\n\r"\\]*))/y;
+// From a position back over a run of backslashes, natively.
+const BACKSLASH_BACK_RE = /(?<=(\\*))/y;
 // A key line (LONG or CUT) starts with a run of 16+ of these, so a stretch without one holds none.
 const B64_RUN16_RE = /[A-Za-z0-9+/=]{16}/;
 // The longest gap the D#168 skip tests; past it the reading runs.
@@ -963,11 +965,20 @@ function lineStartPastQuotes(text, ls, u) {
     // an escaped break at this depth when the run fits it; the line starts after that letter.
     const c = text.charCodeAt(k - 1);
     if (c === 92) {
-      const e = text.charCodeAt(k);
       if (k + 1 < lim) return -1;
-      if ((e === 110 || e === 114) && isEscBreak(backslashesBefore(text, k, 0), u)) return k + 1;
-    } else if (k < lim) return -1;
-    else if (c === 10 || c === 13 || isStringEnd(backslashesBefore(text, k - 1, 0), u)) return k;
+      // D#642 (r1 F5): the run measured natively, and passed in one step: every other backslash in it is
+      // followed by a backslash, so no line starts after it (one past the bound, so is the next
+      // candidate). One at a time, the walks of BEGINs at k escape depths in turn crossed the runs of the
+      // k - 1 others: 8 depths 42x benign under coverage, 11 depths 71x.
+      BACKSLASH_BACK_RE.lastIndex = k;
+      const r = BACKSLASH_BACK_RE.exec(text)[1].length;
+      const e = text.charCodeAt(k);
+      if ((e === 110 || e === 114) && isEscBreak(r, u)) return k + 1;
+      j = k - r;
+      continue;
+    }
+    if (k < lim) return -1;
+    if (c === 10 || c === 13 || isStringEnd(backslashesBefore(text, k - 1, 0), u)) return k;
     j = k - 1;
   }
 }
@@ -984,6 +995,103 @@ function keyEvidence(r, label, loose) {
   const body = r.first.replace(/^[-+]/, '');
   const magic = startsLikeKey(body) || (label.includes('PGP') && PGP_MAGIC_RE.test(body));
   return (loose && (r.longs >= 2 || r.armors > 0)) || r.longest >= 40 || magic;
+}
+
+/**
+ * Whether the line [s, le) is blank, read without lineCore, where the runs a BEGIN reads through spent
+ * a third of their time (D#511). Spaces and tabs, at most one quote or backtick, spaces and tabs: blank
+ * whatever the shape, since a shape that matches takes a prefix of it and lineCore takes leading
+ * blanks, one leading quote and trailing blanks from the rest. Spaces and tabs, at most one quote, then
+ * exactly a closing tag and blanks: blank too, unless the shape can start where the line does (lineCore
+ * takes the tag whole, but a shape could take part of it; `shapeLead` is the shape's first character).
+ */
+function isBlankLine(text, s, le, shapeLead) {
+  let k = s;
+  while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
+  const c0 = text.charCodeAt(k);
+  if (k < le && (c0 === 34 || c0 === 39 || c0 === 96)) k++;
+  if (k === le) return true;
+  if (text.charCodeAt(k) === 60 && c0 !== shapeLead) {
+    let e2 = le;
+    while (e2 > k && (text.charCodeAt(e2 - 1) === 32 || text.charCodeAt(e2 - 1) === 9)) e2--;
+    return closingTagLength(text, k, e2) === e2 - k;
+  }
+  if (k > s && (c0 === 34 || c0 === 39 || c0 === 96)) {
+    while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
+    return k === le;
+  }
+  return false;
+}
+
+const KEY_BEGIN_TEST_RE = new RegExp(KEY_BEGIN_RE.source);
+
+/**
+ * D#642: where a reading that counted nothing yet, from line start `p`, passes its blank lines and
+ * armor headers: `{ to, armors }`, `to` the first line that is neither (or -1 at the text's end, or a
+ * BEGIN line under no shape), `armors` the headers before it (more than MAX_ARMOR_HEADERS: the reading
+ * stops at the one past that and holds no key). One walk serves every reading that starts on its way:
+ * a BEGIN in a header line starts one on the next line, so the walk records the same answer there, and
+ * goes on while such a start can still get past MAX_ARMOR_HEADERS headers. Header BEGINs each holding a
+ * key's next run (`-Comment: -----BEGIN …` over 7 `-` lines, repeated) read the same 16 headers and
+ * their runs again each: 20-25x benign at 200k chars, over 100x under coverage (D#634, D#614 r1 F1).
+ */
+function headOf(text, p, u, shape, shapeLead, memo) {
+  const key = p + ',' + u;
+  const known = memo.head.get(key);
+  if (known !== undefined) return known;
+  const starts = [p];
+  const before = [0];
+  let armors = 0;
+  let last = 0;
+  // Blank runs as readKeyLines reads them, through the same memo: a long run under the last header
+  // BEGIN is read once, here or by that BEGIN's own reading.
+  let blanks = 0;
+  let blankKey = null;
+  let s = p;
+  while (s !== -1) {
+    const at = s;
+    if (!shape && text.startsWith('-----BEGIN ', s)) break;
+    const line = nextLine(text, s, u);
+    s = line.next;
+    let core = '';
+    let kind = BLANK;
+    if (!isBlankLine(text, at, line.end, shapeLead)) {
+      core = lineCore(text, at, line.end, shape).core;
+      kind = classify(core);
+    }
+    if (kind === BLANK) {
+      if (++blanks === BLANK_MEMO_AFTER) {
+        const bk = at + ',' + u;
+        const to = memo.blank.get(bk);
+        if (to !== undefined) {
+          s = to;
+          blanks = 0;
+        } else blankKey = bk;
+      }
+      continue;
+    }
+    blanks = 0;
+    if (blankKey !== null) memo.blank.set(blankKey, at);
+    blankKey = null;
+    // Not a header, or the header past MAX_ARMOR_HEADERS from the last start (every reading from these
+    // starts stops on it): the readings read this line themselves.
+    if (kind !== ARMOR || armors - last === MAX_ARMOR_HEADERS) {
+      s = at;
+      break;
+    }
+    armors++;
+    if (s !== -1 && core.includes('PRIVATE KEY') && KEY_BEGIN_TEST_RE.test(core)) {
+      starts.push(s);
+      before.push(armors);
+      last = armors;
+    }
+  }
+  if (blankKey !== null) memo.blank.set(blankKey, s);
+  for (let i = 0; i < starts.length; i++) {
+    const k = starts[i] + ',' + u;
+    if (!memo.head.has(k)) memo.head.set(k, { to: s, armors: armors - before[i] });
+  }
+  return memo.head.get(key);
 }
 
 /**
@@ -1019,27 +1127,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       break;
     }
     const line = nextLine(text, next, u);
-    // Blank lines read here without lineCore, where the runs a BEGIN reads through spent a third of
-    // their time (D#511). Spaces and tabs, at most one quote or backtick, spaces and tabs: blank
-    // whatever the shape, since a shape that matches takes a prefix of it and lineCore takes leading
-    // blanks, one leading quote and trailing blanks from the rest. Spaces and tabs, at most one
-    // quote, then exactly a closing tag and blanks: blank too, unless the shape can start where the
-    // line does (lineCore takes the tag whole, but a shape could take part of it).
-    const le = line.end;
-    let k = next;
-    while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
-    const c0 = text.charCodeAt(k);
-    if (k < le && (c0 === 34 || c0 === 39 || c0 === 96)) k++;
-    let blank = k === le;
-    if (!blank && text.charCodeAt(k) === 60 && c0 !== shapeLead) {
-      let e2 = le;
-      while (e2 > k && (text.charCodeAt(e2 - 1) === 32 || text.charCodeAt(e2 - 1) === 9)) e2--;
-      blank = closingTagLength(text, k, e2) === e2 - k;
-    } else if (!blank && k > next && (c0 === 34 || c0 === 39 || c0 === 96)) {
-      while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
-      blank = k === le;
-    }
-    if (blank) {
+    if (isBlankLine(text, next, line.end, shapeLead)) {
       next = line.next;
       if (shorts > 0) break;
       pendingBlank = true;
@@ -1082,7 +1170,18 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
       continue;
     }
     if (longs === 0) {
-      if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) continue;
+      if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) {
+        // D#642: a header holding a BEGIN starts that BEGIN's reading on the next line, where this one
+        // goes on with the headers counted so far: the walk from there is shared (headOf).
+        if (next !== -1 && core.includes('PRIVATE KEY') && KEY_BEGIN_TEST_RE.test(core)) {
+          memo ??= memoOf(shape);
+          const h = headOf(text, next, u, shape, shapeLead, memo);
+          armors += h.armors;
+          if (armors > MAX_ARMOR_HEADERS) break;
+          next = h.to;
+        }
+        continue;
+      }
       if (kind !== LONG && kind !== CUT) break;
     }
     if (kind === LONG && shorts === 0) {
@@ -1194,7 +1293,7 @@ function scrubCutOffKeys(text) {
   const memoOf = (shape) => {
     const id = shape && shape.source;
     let m = memos.get(id);
-    if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map() }));
+    if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map(), head: new Map() }));
     return m;
   };
   const ctx = { endFollows, nextBegin, shapeOf, memoOf, reread: false };

@@ -1679,3 +1679,48 @@ describe('D#641: a cut `git diff` of a rotated key, in the shape git writes it',
     );
   });
 });
+
+// D#642: a reading that meets a header holding a BEGIN takes that BEGIN's walk over the headers below
+// (shared, memoised), counting the headers before it: the MAX_ARMOR_HEADERS bound falls where the
+// line-by-line reading put it. The expected outputs are v6.30.9 and 1eef3c18's: which BEGIN the
+// marker starts at is where the 16-header bound fell.
+describe('D#642: header BEGINs share one walk over their headers', () => {
+  const B = '-----BEGIN RSA PRIVATE KEY-----';
+  const K1 = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
+  const K2 = 'VfLLGRHmAKOLzbCZpNqdM0MGSFhnfRSbxnrDTHjHqNHnL2dsc8RIG1rN7nsUiaHP';
+  // A code BEGIN, `n` headers (those at `begins` holding a BEGIN), each followed by `blanks` lines
+  // that hold only the prefix, then a key.
+  const lines = (pre, n, blanks, begins) => {
+    const L = ['$ git diff', `${pre}KEY = '''${B}`];
+    for (let i = 0; i < n; i++) {
+      L.push(begins.includes(i) ? `${pre}Comment: ${B}` : `${pre}Comment: x`);
+      for (let b = 0; b < blanks; b++) L.push(pre);
+    }
+    return [...L, pre + K1, pre + K2, 'the end'];
+  };
+  it.each([
+    ['16 headers under the code BEGIN: its reading takes the key', '-', 16, 0, [0, 15], 1],
+    ['17 headers: the first header BEGIN reads the key, 16 below it', '-', 17, 0, [0, 16], 2],
+    ['16 headers over runs of 7 context lines', ' ', 16, 7, [3, 15], 1],
+    ['17 headers over runs of 9: the headers above a header BEGIN count', ' ', 17, 9, [8, 16], 162],
+  ])('%s', (_, pre, n, blanks, begins, markerLine) => {
+    const L = lines(pre, n, blanks, begins);
+    const expected = [...L.slice(0, markerLine), L[markerLine].replace(B, '***PEM_KEY***'), 'the end'].join(
+      '\n',
+    );
+    expect(scrubSecrets(L.join('\n'))).toBe(expected);
+    expect(scrubSecrets(J(L.join('\n')))).toBe(J(expected));
+  });
+
+  // The walk back to an escaped line's start passes a backslash run in one step: a line that starts
+  // with one (a UNC path in grep output, first in a JSON string) starts at the quote before it.
+  it('a grep line with a UNC path, first in a JSON string', () => {
+    const path = '\\\\srv\\keys\\conf.py';
+    const t = [`${path}:5:KEY = '''${B}`, `${path}-6-${K1}`, `${path}-7-${K2}`, 'the end'].join('\n');
+    for (const wrapped of [`{"type":"tool_result","content":${J(t)}}`, J(`{"content":${J(t)}}`)]) {
+      const out = scrubSecrets(wrapped);
+      expect([K1, K2].filter((k) => out.includes(k.slice(0, 16)) || out.includes(k.slice(-16)))).toEqual([]);
+      expect(out).toContain('the end');
+    }
+  });
+});
