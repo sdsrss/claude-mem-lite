@@ -28,13 +28,6 @@ export const SECRET_PATTERNS = [
   // keyword. Allowing a leading `_` catches those while the prose lookbehind still
   // excludes "Marker token: …". `secret` added so a bare SECRET=… with a mixed-alnum
   // value is covered (the hex-only assignment pattern below misses non-hex values).
-  // `(?<=\\[nrt])` too (D#663), here and before every token pattern below that starts with
-  // `\b`: in a JSON string a line starts after the two characters `\n` (or `\r`, `\t`), and
-  // there is no \b between that `n` and the label, so `# env\nAPI_KEY=…` and `\nghp_…` were
-  // stored while the same after a space was erased. An escaped backslash before an `n` (`\\n`,
-  // a literal backslash) is taken for a break as well, which errs toward scrubbing. The
-  // prose-position `password:` arm and the backtick branches keep `(?:\b|_)`: at a line start
-  // the config-position arm fires first, and a backtick branch needs a backtick before the noun.
   //
   // MARKDOWN AROUND A LABEL (D#128). `- **Password**: \`<v>\`` put `**` between the noun and
   // its separator, so no label pattern matched and the value was stored. Models write labels
@@ -84,7 +77,7 @@ export const SECRET_PATTERNS = [
   // (a first body line cut inside its first 40 characters).
   //   1a. `=` assignment → ALWAYS scrub (config syntax, never prose):
   [
-    /((?:\b|_|(?<=\\[nrt]))(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   //   1b. `:` separator, PASSWORD nouns. Position decides how permissive the value
@@ -125,7 +118,7 @@ export const SECRET_PATTERNS = [
   //       Both arms emit `***` (3 chars, under the {6,} floor), so they cannot
   //       double-apply.
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_|(?<=\\[nrt]))(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   [
@@ -134,7 +127,7 @@ export const SECRET_PATTERNS = [
   ],
   //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alicebob"):
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_|(?<=\\[nrt]))(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // access_token / refresh_token are the canonical OAuth2 field names — they were
@@ -149,7 +142,7 @@ export const SECRET_PATTERNS = [
   // low-FP decision that `topsecret=` / `access_token_count:` are non-credentials
   // (#8283 + utils.test.mjs:1089-1100); bare `pwd` is omitted so `PWD=` (a path) survives.
   [
-    /((?:\b|_|(?<=\\[nrt]))(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
+    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // Space-separated credential CLI flag: `--password <value>` (long-form). The KV
@@ -176,37 +169,37 @@ export const SECRET_PATTERNS = [
   //       (mirrors the unquoted 1a/1b split — a quoted value doesn't turn `:` prose
   //       into config, but `<word> password="x"` is still a leak):
   [
-    /((?:\b|_|(?<=\\[nrt]))(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:\b|_|(?<=\\[nrt]))(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_|(?<=\\[nrt]))(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   //   (b) structured keys + named env vars are unambiguous config even after a word
   //       (`see api_key: "x"` DOES scrub, mirroring the unquoted structured-key path):
   [
-    /((?:\b|_|(?<=\\[nrt]))(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // AWS access keys: AKIA (long-term) + ASIA (STS temp) + AROA (role) + AIDA
   // (user) + ANPA/ANVA/AGPA (other principal types). All share the 4-letter
   // prefix + exactly 16 base32 chars shape — specific enough for near-zero FP.
-  [/(?:\b|(?<=\\[nrt]))(?:AKIA|ASIA|AROA|AIDA|ANPA|ANVA|AGPA)[A-Z0-9]{16}(?![A-Za-z0-9])/g, '***'],
+  [/\b(?:AKIA|ASIA|AROA|AIDA|ANPA|ANVA|AGPA)[A-Z0-9]{16}(?![A-Za-z0-9])/g, '***'],
   // OpenAI / Anthropic keys (sk-...) — specific prefixes have lower length threshold
-  [/(?:\b|(?<=\\[nrt]))sk-(?:proj|ant|ant-api\d{2})-[a-zA-Z0-9_-]{8,}\b/g, '***'],
-  [/(?:\b|(?<=\\[nrt]))sk-[a-zA-Z0-9_-]{20,}\b/g, '***'],
+  [/\bsk-(?:proj|ant|ant-api\d{2})-[a-zA-Z0-9_-]{8,}\b/g, '***'],
+  [/\bsk-[a-zA-Z0-9_-]{20,}\b/g, '***'],
   // GitHub tokens (ghp_, gho_, github_pat_)
-  [/(?:\b|(?<=\\[nrt]))(?:ghp_|gho_|ghs_|ghr_|ghu_)[a-zA-Z0-9_]{30,}\b/g, '***'],
-  [/(?:\b|(?<=\\[nrt]))github_pat_[a-zA-Z0-9_]{22,}\b/g, '***'],
+  [/\b(?:ghp_|gho_|ghs_|ghr_|ghu_)[a-zA-Z0-9_]{30,}\b/g, '***'],
+  [/\bgithub_pat_[a-zA-Z0-9_]{22,}\b/g, '***'],
   // GitLab tokens (glpat-)
-  [/(?:\b|(?<=\\[nrt]))glpat-[a-zA-Z0-9_-]{20,}\b/g, '***'],
+  [/\bglpat-[a-zA-Z0-9_-]{20,}\b/g, '***'],
   // Slack tokens (xox[bpasr]-, xapp-, xoxe-)
-  [/(?:\b|(?<=\\[nrt]))(?:xox[bpasr]|xapp|xoxe)-[a-zA-Z0-9-]{10,}\b/g, '***'],
+  [/\b(?:xox[bpasr]|xapp|xoxe)-[a-zA-Z0-9-]{10,}\b/g, '***'],
   // Slack incoming-webhook URL — the path after /services/ is the shared secret.
   [/(https:\/\/hooks\.slack\.com\/services\/)[A-Za-z0-9/]+/g, '$1***'],
   // JWT tokens (eyJ...eyJ...), from any `eyJ`: one glued to a prefix (`my-sess-eyJ…`,
@@ -248,9 +241,9 @@ export const SECRET_PATTERNS = [
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).
   // `hash` deliberately excluded: `hash: <40hex>` / `hash=<md5>` are git SHAs and
   // checksums (real, preserved data in this hash-heavy repo), not credentials.
-  [/((?:\b|(?<=\\[nrt]))(?:key|secret|token)\s*[=:]\s*)[0-9a-f]{32,}\b/gi, '$1***'],
+  [/(\b(?:key|secret|token)\s*[=:]\s*)[0-9a-f]{32,}\b/gi, '$1***'],
   // Google Cloud API keys (AIza...)
-  [/(?:\b|(?<=\\[nrt]))AIza[A-Za-z0-9_-]{35}\b/g, '***'],
+  [/\bAIza[A-Za-z0-9_-]{35}\b/g, '***'],
   // Authorization header credentials — Bearer (opaque), Basic (base64 user:pass),
   // and GitHub's `token` scheme all carry secrets after the scheme word.
   [
@@ -266,11 +259,11 @@ export const SECRET_PATTERNS = [
   // R10 P1-6: Azure storage. AccountKey= is the account's master credential and sig= is a
   // live SAS token; neither had any pattern. `sig` is anchored to a URL query position
   // (`?`/`&`) rather than a word boundary — bare `\bsig=` eats `const sig=computeX(y)`.
-  [/(?:\b|(?<=\\[nrt]))(AccountKey|SharedAccessSignature)=[^\s;&'"]{16,}/gi, '$1=***'],
+  [/\b(AccountKey|SharedAccessSignature)=[^\s;&'"]{16,}/gi, '$1=***'],
   [/([?&]sig=)[^\s;&'"]{16,}/gi, '$1***'],
   // Supabase / generic long base64 keys (40+ chars, common in env vars)
   [
-    /((?:\b|(?<=\\[nrt]))(?:SUPABASE_KEY|SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|REDIS_URL)\s*[=:]\s*)[^\s,;'"}\]]+/gi,
+    /(\b(?:SUPABASE_KEY|SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|REDIS_URL)\s*[=:]\s*)[^\s,;'"}\]]+/gi,
     '$1***',
   ],
   // Basic auth in URLs (https://user:password@host). ftp/ftps added — file-drop
@@ -286,26 +279,26 @@ export const SECRET_PATTERNS = [
     // R10 P1-6: `(\+[\w-]+)?` accepts the DBAPI-driver suffix every ORM writes —
     // `postgresql+psycopg2://`, `mysql+pymysql://`, `mssql+pyodbc://`. Without it a
     // SQLAlchemy create_engine() line leaked user:password in full.
-    /(?:\b|(?<=\\[nrt]))(postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?|rediss?|amqps?)(\+[\w-]+)?:\/\/[^\s,;'"}\]]+/gi,
+    /\b(postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?|rediss?|amqps?)(\+[\w-]+)?:\/\/[^\s,;'"}\]]+/gi,
     '$1$2://***',
   ],
   // npm tokens (npm_...)
-  [/(?:\b|(?<=\\[nrt]))npm_[a-zA-Z0-9]{36,}(?![A-Za-z0-9])/g, '***'],
+  [/\bnpm_[a-zA-Z0-9]{36,}(?![A-Za-z0-9])/g, '***'],
   // Stripe keys (sk_live_, rk_live_, pk_live_, sk_test_, pk_test_) + webhook signing secret (whsec_)
-  [/(?:\b|(?<=\\[nrt]))[srp]k_(?:live|test)_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
-  [/(?:\b|(?<=\\[nrt]))whsec_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
+  [/\b[srp]k_(?:live|test)_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
+  [/\bwhsec_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
   // SendGrid API keys: SG.<22>.<43> — two dots at fixed offsets make this
   // structurally unmistakable; near-zero false-positive risk.
-  [/(?:\b|(?<=\\[nrt]))SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g, '***'],
+  [/\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g, '***'],
   // Twilio identifiers: Account SID (AC…) + API Key SID (SK…), each = prefix
   // + exactly 32 hex. The 2-letter prefix + 32-hex shape is specific: an MD5
   // is 32 hex (no AC/SK prefix → no match) and a 40-hex git SHA has no internal
   // \b so the trailing \b can't land mid-string. We deliberately do NOT scrub
   // the bare-hex Twilio *auth token* — see comment block at end re: SHA collision.
-  [/(?:\b|(?<=\\[nrt]))(?:AC|SK)[0-9a-f]{32}\b/g, '***'],
+  [/\b(?:AC|SK)[0-9a-f]{32}\b/g, '***'],
   // Mailgun private API keys: key-<32 hex>. Prefix-anchored for the same reason;
   // bare 32-hex (no `key-`) is intentionally left alone to avoid hashing FPs.
-  [/(?:\b|(?<=\\[nrt]))key-[0-9a-f]{32}\b/g, '***'],
+  [/\bkey-[0-9a-f]{32}\b/g, '***'],
   // JSON-quoted secrets — error payloads / API responses commonly carry creds
   // as `{"api_key": "..."}`. The base key=value pattern stops at quotes, so
   // these slip through. Match the value-quoted form explicitly. Length floor
@@ -355,11 +348,8 @@ export const SECRET_PATTERNS = [
   // in a comment); the 24-char floor below leaves 0. 24 is not arbitrary — PHPSESSID is
   // 26 chars, JSESSIONID and Django's sessionid are 32, so a real cookie clears it while
   // an identifier-shaped word does not. The named-cookie branch keeps its 16-char floor.
-  [
-    /(?:\b|(?<=\\[nrt]))((?:session[_-]?id|sessionid|jsessionid|phpsessid)\s*[=:]\s*)[^\s,;'"}\]]{16,}/gi,
-    '$1***',
-  ],
-  [/(?:\b|(?<=\\[nrt]))(session\s*=\s*)[^\s,;'"}\]]{24,}/gi, '$1***'],
+  [/\b((?:session[_-]?id|sessionid|jsessionid|phpsessid)\s*[=:]\s*)[^\s,;'"}\]]{16,}/gi, '$1***'],
+  [/\b(session\s*=\s*)[^\s,;'"}\]]{24,}/gi, '$1***'],
   // ── DELIBERATELY NOT COVERED: bare high-entropy / "raw N-char" tokens ──────
   // A generic `[A-Fa-f0-9]{40}` / high-entropy regex would scrub this repo's own
   // legitimate data: 40-hex git SHAs, 32-hex MD5s, 64-hex SHA256s, and stored
