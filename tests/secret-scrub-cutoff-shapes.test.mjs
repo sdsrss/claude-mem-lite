@@ -1881,3 +1881,127 @@ describe('D#649: the hunk a context BEGIN is in, from its header down', () => {
     for (const item of items) expect(out).toContain(item);
   });
 });
+
+// D#657: a credential label's value ran over the BEGIN right after it (`PRIVATE_KEY=-----BEGIN …`, or
+// `private_key = <<EOT\n-----BEGIN …` in a JSON string, where the escaped break is no space) and turned
+// `-----BEGIN` into `***` before the key passes ran: they saw no BEGIN, and every line of a cut-off key was
+// stored. A quoted value that closes on the BEGIN's line (a key concatenated line by line, Node's util.inspect
+// of an object) lost its BEGIN the same way, and there a whole key was stored when the text was in a JSON string.
+describe('D#657: a BEGIN right after a credential label', () => {
+  const VALUE = 'a8f3e9d27c41';
+  const LEADS = {
+    env: 'PRIVATE_KEY=',
+    export: 'export SSH_PRIVATE_KEY=',
+    yaml: 'private_key: ',
+    secretKey: 'secret_key: ',
+    apiKey: 'API_KEY=',
+    secret: 'export SECRET=',
+    token: '- token: ',
+    password: '  password: ',
+    // In prose position a password value must look like a credential, and a BEGIN does.
+    proseP: 'the db password: ',
+    heredoc: 'private_key = <<EOT\n',
+    // A flag's value never starts with `-`, but in a JSON string one before the BEGIN's line runs into it.
+    flag: `deploy --token ${VALUE}\n`,
+    // A value on the line above the BEGIN is still erased, and so is the key under it. In a JSON string the
+    // value runs over the escaped break up to the BEGIN. (`export `: a label right after an escaped break is
+    // a different gap, D#663.)
+    valueAbove: `export API_KEY=${VALUE}\n`,
+  };
+  const windowsOf = (key) =>
+    key.body.filter((l) => l.length >= 16).flatMap((l) => [l.slice(0, 16), l.slice(-16)]);
+  for (const [kind, key] of Object.entries(KEYS)) {
+    const long = windowsOf(key);
+    for (const cutName of ['head', 'cutMidLine', 'whole']) {
+      it(`${kind} / ${cutName}: no key window kept, no text lost`, () => {
+        const failures = [];
+        for (const [leadName, lead] of Object.entries(LEADS)) {
+          for (const [wrapName, wrap] of Object.entries(D614_WRAPS)) {
+            const [begin, ...rest] = CUTS[cutName](key);
+            const out = scrubSecrets(wrap(['$ cat deploy.env', lead + begin, ...rest, PROSE].join('\n')));
+            const kept = long.filter((w) => out.includes(w));
+            if (kept.length) failures.push(`${leadName}/${wrapName}: ${kept.length} key windows kept`);
+            if (out.includes(VALUE)) failures.push(`${leadName}/${wrapName}: the value above kept`);
+            // A flag's value takes the key's mark and the text after it up to a space, as in 6.30.11 for a flag
+            // right before a BEGIN; the label patterns stop at the mark.
+            const after = leadName === 'flag' ? PROSE.slice(PROSE.indexOf(' ') + 1) : PROSE;
+            if (!out.includes('$ cat deploy.env') || !out.includes(after))
+              failures.push(`${leadName}/${wrapName}: text lost`);
+          }
+        }
+        expect(failures).toEqual([]);
+      });
+    }
+  }
+
+  // One string per key line: `"…\n" +` by hand, and util.inspect, which prints a string holding breaks one
+  // line per piece. A cut key in these pieces is stored inside a JSON string with no label in front too
+  // (D#662), so only the whole key is checked there.
+  const esc = (l) => l.replace(/\\/g, '\\\\');
+  const concat = (name) => (ls) =>
+    `const ${name} = "${ls[0]}\\n" +\n${ls
+      .slice(1)
+      .map((l) => `  "${l}\\n" +`)
+      .join('\n')}\n  "";`;
+  const inspect = (name) => (ls) =>
+    [
+      '{',
+      "  type: 'service_account',",
+      `  ${name}: '${ls[0]}\\n' +`,
+      ...ls.slice(1).map((l, i, a) => `    '${l}\\n'${i < a.length - 1 ? ' +' : ','}`),
+      "  client_email: 'deploy@example.invalid'",
+      '}',
+    ].join('\n');
+  // One label per quoted pattern: a key name, `=` after a credential noun, then `:` after each noun family.
+  const PIECES = {
+    'concat, PRIVATE_KEY': concat('PRIVATE_KEY'),
+    'concat, TOKEN': concat('TOKEN'),
+    'inspect, private_key': inspect('private_key'),
+    'inspect, password': inspect('password'),
+    'inspect, secret': inspect('secret'),
+  };
+  for (const [shapeName, shape] of Object.entries(PIECES)) {
+    it(`a key in one string per line (${shapeName}): no key window kept`, () => {
+      const failures = [];
+      for (const [kind, key] of Object.entries(KEYS)) {
+        const long = windowsOf(key);
+        for (const [cutName, wraps] of [
+          ['head', ['raw', 'crlf']],
+          ['whole', Object.keys(D614_WRAPS)],
+        ]) {
+          for (const wrapName of wraps) {
+            const text = `$ node show.js\n${shape(CUTS[cutName](key).map(esc))}\n${PROSE}`;
+            const out = scrubSecrets(D614_WRAPS[wrapName](text));
+            const kept = long.filter((w) => out.includes(w));
+            if (kept.length) failures.push(`${kind}/${cutName}/${wrapName}: ${kept.length} key windows kept`);
+            if (!out.includes(PROSE)) failures.push(`${kind}/${cutName}/${wrapName}: text lost`);
+          }
+        }
+      }
+      expect(failures).toEqual([]);
+    });
+  }
+
+  // The review's real shape: `git show` of an added Terraform heredoc, through a JSON string.
+  it('an added Terraform heredoc in git show', () => {
+    const failures = [];
+    for (const [kind, key] of Object.entries(KEYS)) {
+      const text = [
+        '$ git show',
+        'diff --git a/main.tf b/main.tf',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/main.tf',
+        '@@ -0,0 +1,40 @@',
+        '+resource "tls_private_key" "deploy" {',
+        '+  private_key = <<EOT',
+        ...CUTS.head(key).map((l) => `+${l}`),
+      ].join('\n');
+      for (const [wrapName, wrap] of Object.entries(D614_WRAPS)) {
+        const kept = windowsOf(key).filter((w) => scrubSecrets(wrap(text)).includes(w));
+        if (kept.length) failures.push(`${kind}/${wrapName}: ${kept.length} key windows kept`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});

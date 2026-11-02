@@ -60,9 +60,24 @@ export const SECRET_PATTERNS = [
   // v3.61.0 already had to undo exactly that. `| password | <v> |` table rows stay open for a
   // different reason: those 831k lines held 1 such row and none with a credential-shaped
   // value, so a table pattern's false-positive rate cannot be measured here.
+  //
+  // A KEY'S BEGIN IS NOT A VALUE (D#657). These patterns run before the private key ones below, and
+  // a value took the `-----BEGIN` of a key written right after its label (`PRIVATE_KEY=-----BEGIN …`,
+  // or `private_key = <<EOT\n-----BEGIN …` in a JSON string, where the escaped break is no space):
+  // the key passes then saw no BEGIN and stored every line of a cut-off key. So a value stops before a
+  // private key's BEGIN, and the label patterns' values also before `***PEM_KEY***`, or the next pass
+  // took that mark and the lines after it up to a space (6.30.11 kept them: it erased such a key from
+  // its END).
+  // The `--password` flag stops at the BEGIN only: its value never starts with `-`, so there the key
+  // passes always had the BEGIN, and the next pass took the mark and whatever followed, as before.
+  // A quoted value is left to the key passes when it holds the BEGIN line and nothing else (`'…-----\n'
+  // +`: a key concatenated one string per line, Node's util.inspect of an object); a whole key printed
+  // that way was stored when the text was in a JSON string. A quoted value with more of the
+  // key in it is erased to its closing quote as before: the key passes miss some of what that erases
+  // (a first body line cut inside its first 40 characters).
   //   1a. `=` assignment → ALWAYS scrub (config syntax, never prose):
   [
-    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   //   1b. `:` separator, PASSWORD nouns. Position decides how permissive the value
@@ -103,16 +118,16 @@ export const SECRET_PATTERNS = [
   //       Both arms emit `***` (3 chars, under the {6,} floor), so they cannot
   //       double-apply.
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   [
-    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[`*~]*(?:[\s,;'"}\]]|$)))[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[`*~]*(?:[\s,;'"}\]]|$)))(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alicebob"):
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // access_token / refresh_token are the canonical OAuth2 field names — they were
@@ -127,7 +142,7 @@ export const SECRET_PATTERNS = [
   // low-FP decision that `topsecret=` / `access_token_count:` are non-credentials
   // (#8283 + utils.test.mjs:1089-1100); bare `pwd` is omitted so `PWD=` (a path) survives.
   [
-    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[^\s,;'"}\]]){6,}/gi,
     '$1***',
   ],
   // Space-separated credential CLI flag: `--password <value>` (long-form). The KV
@@ -138,7 +153,10 @@ export const SECRET_PATTERNS = [
   // `gh auth login --token …` and `op … --secret …` are the shapes that actually appear in
   // Bash output. The {6,} floor is what keeps `--token abc` (a placeholder in a usage line)
   // out, so do not lower it.
-  [/(--(?:password|passwd|token|api[-_]?key|secret)[=\s]+)(?!-)[^\s'"]{6,}/gi, '$1***'],
+  [
+    /(--(?:password|passwd|token|api[-_]?key|secret)[=\s]+)(?!-)(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[^\s'"]){6,}/gi,
+    '$1***',
+  ],
   // Bare-key QUOTED values — `api_key="..."`, `password: '...'`. The unquoted KV
   // patterns above stop at `'`/`"` (excluded from their value class), so a quoted
   // value matched 0 chars and slipped through. Consumes the opening quote, the value,
@@ -151,21 +169,21 @@ export const SECRET_PATTERNS = [
   //       (mirrors the unquoted 1a/1b split — a quoted value doesn't turn `:` prose
   //       into config, but `<word> password="x"` is still a leak):
   [
-    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   [
-    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   //   (b) structured keys + named env vars are unambiguous config even after a word
   //       (`see api_key: "x"` DOES scrub, mirroring the unquoted structured-key path):
   [
-    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\+[nr])*\2)[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // AWS access keys: AKIA (long-term) + ASIA (STS temp) + AROA (role) + AIDA
