@@ -2,6 +2,34 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.10 — cut-off private keys in more diff and grep shapes are erased
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.9`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: a private key cut off before its END line was stored in `git diff` output when its
+  BEGIN sat on a context line over the removed lines** (D#614). It is erased now when the line under
+  the BEGIN is a removed or added line, as in the diff of a replaced PKCS#1, PKCS#8 or SEC1 key. On
+  keys made by `ssh-keygen`, `openssl` and `gpg` (13 key types; replaced, inside a longer file,
+  deleted, added; the diff cut after every line; as is, with CRLF, in a JSON string, in a JSON
+  string inside another), 6.30.9 kept 156,704 of 212,388 sixteen-character key windows and 6.30.10
+  67,416, all from the key types the first "Still stored" item names.
+- **Security: with code before the BEGIN, a cut-off key was stored in numbered grep output
+  (`path:5:`, `path-6-`) under a path holding a backslash, a space, a drive letter, another colon,
+  a quote or a backtick, or starting with `-`, `+` or `>`** (`keys\conf.py:5:KEY = '''`,
+  `My Keys/conf.py:5:KEY = '''`), **and, in a JSON string, when the code before the BEGIN's last
+  quote ran over 256 characters** (D#614); up to 4,096 are now read.
+- **Fixed** (D#633): the crafted added-diff shape under 6.30.9's known limits, with a second BEGIN
+  inside a header line, kept key lines that 6.30.8 erased.
+- **These readings, like 6.30.9's, can erase lines that look like key lines without being one**
+  (D#615): a hash or long identifier under a BEGIN, or a short line right after an erased key.
+- **Still stored** (D#641): the diff of an OpenSSH key without a passphrase, an encrypted PEM key
+  or a PGP key, whose first lines under the BEGIN are context lines too (an OpenSSH key's first body
+  line, the `Proc-Type` header, a PGP block's blank line); a cut-off key whose lines carry two
+  prefixes (`> -KEY = '''`); the same grep output without line numbers; a diff printed with color
+  codes; a diff that does not show the BEGIN line (`git diff -U0`); code over 4,096 characters before
+  the BEGIN's last quote.
+
 ## v6.30.9 — more cut-off private keys are erased before they are stored
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
