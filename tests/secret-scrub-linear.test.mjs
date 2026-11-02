@@ -28,25 +28,26 @@ const CHAIN = Array.from({ length: 40 }, (_, i) => (i % 2 ? 'secret: abcdefgh' :
   ' ',
 );
 
+const PROSE = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
+const thenProse = (body) => body + 'x\n' + PROSE.slice(0, N - body.length - 2);
+
 // D#607 F1: a BEGIN under `left`, `headers` lines `<header>-----BEGIN RSA PRIVATE KEY-----`, a run of
-// `line` to a quarter of N, then prose; a prefix given as a function gets the line's number (Read
+// `line` to N / `share`, then prose; a prefix given as a function gets the line's number (Read
 // columns, grep). One reading of a long blank run is the released reader's own cost (6.30.8, one
 // BEGIN over 200k chars of `-` lines: 2.6x benign, 18x under coverage), so the run is sized for that
 // one reading to fit the budget and for one reading per header BEGIN not to.
-const headerBegins = (left, header, line, headers = 16) => {
+const headerBegins = (left, header, line, headers = 16, share = 4) => {
   const at = (p, n) => (typeof p === 'function' ? p(n) : p);
   let n = 1;
   let head = `${at(left, n++)}-----BEGIN RSA PRIVATE KEY-----\n`;
   for (let h = 0; h < headers; h++) head += `${at(header, n++)}-----BEGIN RSA PRIVATE KEY-----\n`;
   const run = [];
-  for (let len = head.length; len < N / 4;) {
+  for (let len = head.length; len < N / share;) {
     const l = at(line, n++);
     run.push(l);
     len += l.length;
   }
-  const body = head + run.join('');
-  const prose = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
-  return body + 'x\n' + prose.slice(0, N - body.length - 2);
+  return thenProse(head + run.join(''));
 };
 const col = (n) => String(n).padStart(6);
 const LONG_PATH = 'src/very_long/project_path/to_some/deeply_nested/module_dir/sub_pkg/config.py:';
@@ -147,9 +148,14 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // a diff mark's shape on each pass (the colon keeps the D#168 skip from applying), raw and escaped.
     // Under coverage that reading costs what the D#168 one does on `-KEY = '''` (v6.30.9, the same
     // units: 6.9x benign over a header, 6.3x without); a context line per unit keeps it near the rest.
-    pemContextBeforeBegin: CHAIN + '\n' + CONTEXT_UNIT.repeat(N / CONTEXT_UNIT.length),
+    // D#651: units to 0.7 of N, then prose. Over all of N they read 5.5-6.1x on the dev machine under
+    // coverage, where CI's runners read 1.65-1.70x as much (headerBeginsBlankRunEscaped, the same code:
+    // 6.2x there, 10.20x and 10.56x on CI's Node 24); at 0.7, 3.9-4.3x. With each BEGIN asking for
+    // an END from scratch (endFollows' cached positions dropped) they read 10.7-18.4x, plain and under
+    // coverage; at half of N the escaped one read 8.6x plain.
+    pemContextBeforeBegin: CHAIN + '\n' + thenProse(CONTEXT_UNIT.repeat((N * 0.7) / CONTEXT_UNIT.length)),
     pemContextBeforeBeginEscaped:
-      CHAIN + ' ' + JSON.stringify(CONTEXT_UNIT.repeat(N / (CONTEXT_UNIT.length + 3))),
+      CHAIN + ' ' + JSON.stringify(thenProse(CONTEXT_UNIT.repeat((N * 0.7) / (CONTEXT_UNIT.length + 3)))),
     // D#614 A2: a grep column after a spaced path on each BEGIN line, read again with its shape.
     pemSpacedGrepBeforeBegin: CHAIN + '\n' + SPACED_GREP_UNIT.repeat(N / SPACED_GREP_UNIT.length),
     pemSpacedGrepBeforeBeginEscaped:
@@ -160,8 +166,12 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // numbered ones (r2 P2-1): memos keyed by regex object held one per line number (56af7270, 200k
     // chars: 21x Read, 25x `N→`, 15x grep under coverage).
     headerBeginsBlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n'),
+    // D#651: an escaped blank line costs more to read than a raw one, and one reading of a run to N/4
+    // read 6.2x benign on the dev machine under coverage, 10.20x and 10.56x on CI's Node 24. To N/8:
+    // 3.5-3.7x. With the blank-run memo dropped (one reading per header BEGIN), 40x under coverage and
+    // 6.1x plain (84x and 11.3x at N/4), so only the coverage run CI makes catches that.
     headerBeginsBlankRunEscaped:
-      CHAIN + ' ' + JSON.stringify(headerBegins("-KEY = '''", '-Comment: ', '-\n')),
+      CHAIN + ' ' + JSON.stringify(headerBegins("-KEY = '''", '-Comment: ', '-\n', 16, 8)),
     headerBeginsQuoteBlankRun: CHAIN + ' ' + headerBegins('> key = "', '> Comment: ', '> \n'),
     headerBeginsReadBlankRun:
       CHAIN +
@@ -202,7 +212,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       ' ' +
       headerBegins(LONG_PATH + 'KEY = """', LONG_PATH + 'Comment: ', LONG_PATH + 'A'.repeat(20) + '\n'),
     // r3 F4: empty lines, read by the blank test before lineCore, the memo's other site.
-    headerBeginsEmptyRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '\n'),
+    // D#651: to N/4, 5.0-5.3x on the dev machine under coverage (9.1x at CI's ratio to it); to N/8,
+    // 3.1x, and 17.8x with the blank-run memo dropped (35.6x at N/4; plain caught it at neither size).
+    headerBeginsEmptyRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '\n', 16, 8),
     headerBeginsShortRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-' + 'A'.repeat(20) + '\n'),
     headerBegins32BlankRun: CHAIN + ' ' + headerBegins('-', '-Comment: ', '-\n', 32),
     // D#614 A1: header BEGINs on context lines between removed ones, each read with a diff mark's shape
