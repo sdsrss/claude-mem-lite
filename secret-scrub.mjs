@@ -68,8 +68,9 @@ export const SECRET_PATTERNS = [
   // private key's BEGIN, and the label patterns' values also before `***PEM_KEY***`, or the next pass
   // took that mark and the lines after it up to a space (6.30.11 kept them: it erased such a key from
   // its END).
-  // The `--password` flag stops at the BEGIN only: its value never starts with `-`, so there the key
-  // passes always had the BEGIN, and the next pass took the mark and whatever followed, as before.
+  // The `--password` flag stops at the BEGIN only: with the mark stop as well, a line that the reading
+  // of a cut-off key left after its mark, which the flag's value on the next pass erased in 6.30.11,
+  // was kept (1 key window in 200,000 cases).
   // A quoted value is left to the key passes when it holds the BEGIN line and nothing else (`'…-----\n'
   // +`: a key concatenated one string per line, Node's util.inspect of an object); a whole key printed
   // that way was stored when the text was in a JSON string. A quoted value with more of the
