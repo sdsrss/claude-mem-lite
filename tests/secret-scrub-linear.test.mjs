@@ -58,6 +58,20 @@ const HEADER_BEGINS_IN_KEY =
   "+KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" +
   '+Comment: -----BEGIN RSA PRIVATE KEY-----\n'.repeat(16) +
   '+MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n+QWERTYUIOPasdfg\nprose line\n';
+// D#641: a context BEGIN over a context key line, then a removed short line (the first reading takes the
+// context line, the diff reading reads it again); a rotated key whose removed lines end with a short one
+// (the added lines read on); context header BEGINs over a run of unmarked context key lines with one
+// removed line at its end (each header BEGIN's reading takes the run; only the last spans no BEGIN).
+const OPENSSH_UNIT = ` -----BEGIN OPENSSH PRIVATE KEY-----\n ${'b3BlbnNzaC1rZXktdjE'.padEnd(70, 'A')}\n-x\n`;
+const ROTATED_UNIT = ` -----BEGIN RSA PRIVATE KEY-----\n-MIIEowIBAAKCAQEA${'B'.repeat(48)}\n-abc\n+MIIEpAIBAAKCAQEA${'C'.repeat(48)}\n+abc\n`;
+const contextHeadersOverContextKey = () => {
+  let t =
+    " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" + ' Comment: -----BEGIN RSA PRIVATE KEY-----\n'.repeat(15);
+  const line = ` ${'D'.repeat(64)}\n`;
+  t += line.repeat(Math.floor((N / 4 - t.length) / line.length)) + '-x\n';
+  const prose = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
+  return t + prose.slice(0, N - t.length);
+};
 const SPACED_PATH = 'My Keys/conf.py';
 const SPACED_GREP_UNIT =
   `${SPACED_PATH}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----\n${SPACED_PATH}-6-abc: def\n` +
@@ -221,6 +235,10 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
         (n) => `${SPACED_PATH}-${n}-Comment: `,
         (n) => `${SPACED_PATH}-${n}-\n`,
       ),
+    contextKeyThenRemovedShort: CHAIN + '\n' + OPENSSH_UNIT.repeat(Math.floor(N / OPENSSH_UNIT.length)),
+    rotatedKeyShortLast: CHAIN + '\n' + ROTATED_UNIT.repeat(Math.floor(N / ROTATED_UNIT.length)),
+    contextHeadersOverContextKey: CHAIN + '\n' + contextHeadersOverContextKey(),
+    contextHeadersOverContextKeyEscaped: CHAIN + ' ' + JSON.stringify(contextHeadersOverContextKey()),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line
