@@ -2,6 +2,31 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.11 — a cut-off key under a context BEGIN in a diff hunk is erased
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.10`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: a cut-off OpenSSH key without a passphrase, encrypted PEM key or PGP key was stored in
+  a diff hunk when its BEGIN and the lines under it were context lines** (D#649; 6.30.10's first
+  "Still stored" item). Under such a BEGIN in a hunk whose `@@ -a,b +c,d @@` line is in the text,
+  the removed and added key lines are erased now: in `git diff`, `git show`, `git log -p` and
+  `git format-patch` output, GNU `diff -u`, with `diff.suppressBlankEmpty`, and in a hunk inside a
+  JSON string (the `patch` and `diff_hunk` fields of `gh api`, `jq` output). On keys
+  made by `ssh-keygen`, `openssl` and `gpg` (13 key types), in `git` and GNU `diff` output and the
+  `gh api` file list for a replaced, added and deleted key with two or more lines of context, as is,
+  with CRLF, in a JSON string, in one inside another and in a JSON object, cut after every line,
+  6.30.10 kept 11,820,908 of 56,451,594 sixteen-character key windows and 6.30.11 none.
+- **Inside a hunk these readings, like the earlier ones, can erase text near a BEGIN that is no key**
+  (D#615): a hash or long identifier under it and the lines between them, or a short line right after
+  an erased key.
+- **Still stored**: a diff shown without its `@@` line or with less than two lines of context
+  (`git diff -U0`, `-U1`); a word diff (`git diff --word-diff`); a diff in a single-quoted string
+  (Python's `repr`, Node's `util.inspect`); a cut-off key whose lines carry two prefixes (`git log --graph -p`,
+  `> -KEY = '''`); an encrypted or PGP key whose first body line is cut inside its first 40
+  characters; grep output without line numbers; a diff printed with color codes; code over 4,096
+  characters before the BEGIN's last quote.
+
 ## v6.30.10 — cut-off private keys in more diff and grep shapes are erased
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
