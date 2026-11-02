@@ -59,6 +59,41 @@ const HEADER_BEGINS_IN_KEY =
   "+KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" +
   '+Comment: -----BEGIN RSA PRIVATE KEY-----\n'.repeat(16) +
   '+MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n+QWERTYUIOPasdfg\nprose line\n';
+// D#641: a context BEGIN over a context key line, then a removed short line (the first reading takes the
+// context line, the diff reading reads it again); a rotated key whose removed lines end with a short one
+// (the added lines read on); context header BEGINs over a run of unmarked context key lines with one
+// removed line at its end (each header BEGIN's reading takes the run; only the last spans no BEGIN).
+// The first two in one hunk, under one header (D#649): those readings apply inside a hunk only.
+const HUNK = '\n@@ -1,99999 +1,99999 @@\n';
+const OPENSSH_UNIT = ` -----BEGIN OPENSSH PRIVATE KEY-----\n ${'b3BlbnNzaC1rZXktdjE'.padEnd(70, 'A')}\n-x\n`;
+const ROTATED_UNIT = ` -----BEGIN RSA PRIVATE KEY-----\n-MIIEowIBAAKCAQEA${'B'.repeat(48)}\n-abc\n+MIIEpAIBAAKCAQEA${'C'.repeat(48)}\n+abc\n`;
+const contextHeadersOverContextKey = () => {
+  let t =
+    " KEY = '''-----BEGIN RSA PRIVATE KEY-----\n" + ' Comment: -----BEGIN RSA PRIVATE KEY-----\n'.repeat(15);
+  const line = ` ${'D'.repeat(64)}\n`;
+  t += line.repeat(Math.floor((N / 4 - t.length) / line.length)) + '-x\n';
+  const prose = 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42));
+  return t + prose.slice(0, N - t.length);
+};
+// D#649: hunks a context BEGIN can be in. Each BEGIN asks for its hunk, read from the header down once
+// per call and depth. Hunks at four escape depths in turn (a hunk's line at one depth runs across the
+// others' text), small hunks one after another, and one large hunk whose lines hold a header's text.
+// Over all of N, under coverage on the dev machine: 9.0x, 6.9x and 5.3-5.7x (v6.30.10 3.9x, 3.5x,
+// 3.6x; D#641's readings alone, every BEGIN taken as in a hunk, 5.7x, 5.3x, 3.9x); plain 3.8x, 3.2x,
+// 2.8x. Sized for CI's margin (D#651), a share of N then prose: 4.3x, 4.6x, 4.3x. A reader made anew for
+// each question reads 68-1,047x, and a hunk read from its header for each, 857x on the large hunk (both
+// past 10x plain too). Finding a line's break natively in a hunk (15x -> 9x on the first, all of N) is
+// measured, not guarded: without it the sized shape reads 6.8x.
+const escBreak = (d) => '\\'.repeat(d) + 'n';
+const HUNK_DEPTHS = [1, 2, 4, 8]
+  .map(
+    (d) =>
+      `@@ -1,3 +1,3 @@${escBreak(d)} -----BEGIN RSA PRIVATE KEY-----${escBreak(d)} a: b${escBreak(d)}-x${escBreak(d)}`,
+  )
+  .join('');
+const SMALL_HUNK = '\n@@ -1,3 +1,3 @@\n -----BEGIN RSA PRIVATE KEY-----\n a: b\n-x';
+const HEADER_TEXT_UNIT = ' x = "@@ -1 +1 @@"\n -----BEGIN RSA PRIVATE KEY-----\n a: b\n';
+const share = (unit, s) => thenProse(unit.repeat(Math.floor((N * s) / unit.length)));
 const SPACED_PATH = 'My Keys/conf.py';
 const SPACED_GREP_UNIT =
   `${SPACED_PATH}:5:KEY = '''-----BEGIN RSA PRIVATE KEY-----\n${SPACED_PATH}-6-abc: def\n` +
@@ -233,6 +268,14 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
         (n) => `${SPACED_PATH}-${n}-Comment: `,
         (n) => `${SPACED_PATH}-${n}-\n`,
       ),
+    contextKeyThenRemovedShort: CHAIN + HUNK + OPENSSH_UNIT.repeat(Math.floor(N / OPENSSH_UNIT.length)),
+    rotatedKeyShortLast: CHAIN + HUNK + ROTATED_UNIT.repeat(Math.floor(N / ROTATED_UNIT.length)),
+    contextHeadersOverContextKey: CHAIN + '\n' + contextHeadersOverContextKey(),
+    contextHeadersOverContextKeyEscaped: CHAIN + ' ' + JSON.stringify(contextHeadersOverContextKey()),
+    hunkDepthsCycle: CHAIN + ' ' + share(HUNK_DEPTHS, 0.4),
+    manySmallHunks: CHAIN + share(SMALL_HUNK, 0.6),
+    headerTextInHunkLines: CHAIN + '\n@@ -1,99999 +1,99999 @@\n' + share(HEADER_TEXT_UNIT, 0.75),
+    contextHeadersInHunk: CHAIN + '\n@@ -1,99999 +1,99999 @@\n' + contextHeadersOverContextKey(),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line

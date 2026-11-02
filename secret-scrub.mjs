@@ -756,6 +756,49 @@ function cutOffKeyEnd(text, b, be, ctx) {
   const label = text.slice(b, be);
   const read = readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, end, ctx.memoOf);
   const found = read.longs > 0 && keyEvidence(read, label, true) ? read.end : -1;
+  // The lines below read again with the shape of `prefix`, whose first character after blanks is
+  // `lead`: the reading of the key they hold, or null. `accept`: a further test of that reading.
+  const reread = (prefix, lead, accept = null) => {
+    const alt = ctx.shapeOf(prefix);
+    if (!alt || ctx.endFollows(be)) return null;
+    const again = readKeyLines(text, next, u, alt, lead, longs, longest, first, end, ctx.memoOf);
+    if (!(again.longs > 0 && again.end > found && keyEvidence(again, label, false))) return null;
+    if (accept && !accept(again)) return null;
+    ctx.reread = true;
+    return again;
+  };
+  // The lines under a diff context BEGIN (D#614 A1, D#641) read with a diff mark's shape, which takes
+  // context lines too: where the key ends, or -1. Only when the lines it takes include a removed or
+  // added one: Read output starts its lines with spaces as well, and a reading there took the next
+  // line's number for a key's short last line. A removed key that ends with its short last line (or a
+  // PGP checksum) is followed by the added key's lines, which the reading stopped at: they are read
+  // on, as lines of the same key.
+  // What D#641 added (a reading of a BEGIN whose next line has no mark, `admitted` false, and the added
+  // key's lines) never spans another private-key BEGIN, which no key in a real diff holds: a header line
+  // holding one, swallowed by the span, started no reading of its own on a later pass, where it read on
+  // over the first pass's ***PEM_KEY*** line and erased a cut line after it (6 of 400,000 r3mix texts).
+  // And what D#641 added reads only inside a unified diff's hunk (ctx.inHunk, from the BEGIN's line
+  // start `gl`): an indented cut key in prose read the dash list under it as removed and added key
+  // lines, losing it (6.30.10 pre-tag r1 F2).
+  const diffRead = (admitted, gl) => {
+    // Such a reading ends before the next BEGIN and takes a marked line, so with no marked line before
+    // that BEGIN there is none to read (header BEGINs over context lines read the same run again each).
+    if (!admitted && !(ctx.inHunk(gl, u) && markedLineIn(text, next, ctx.nextBegin(next), u))) return -1;
+    let r = reread(
+      '-',
+      45,
+      (a) => (admitted || ctx.nextBegin(next) >= a.end) && markedLineIn(text, next, a.end, u),
+    );
+    if (!r) return -1;
+    const alt = ctx.shapeOf('-');
+    for (;;) {
+      const n = r.shorts > 0 ? nextLine(text, r.end, u).next : -1;
+      if (n === -1 || (text[n] !== '-' && text[n] !== '+') || !ctx.inHunk(gl, u)) return r.end;
+      const again = readKeyLines(text, n, u, alt, 45, 0, 0, '', -1, ctx.memoOf);
+      if (again.longs === 0 || ctx.nextBegin(n) < again.end) return r.end;
+      r = again;
+    }
+  };
   // D#168: code between the line prefix and the BEGIN (`-KEY = '''`, `     5\tKEY = """`) or a
   // string opener before it (`'+`, `"-`) made the whole left context the shape, which no line below
   // starts with, so nothing past the BEGIN line was read and a cut key was stored. Read again with
@@ -789,63 +832,18 @@ function cutOffKeyEnd(text, b, be, ctx) {
         if (!B64_RUN16_RE.test(gap) && !gap.includes(':')) return found;
       }
     }
-    // The grammar starts the line. In escaped text the prefix above stops at an unescaped single
-    // quote, which JSON never escapes (`-KEY = '''` in a JSON string leaves ''), so look past single
-    // quotes for the start of the line: a break, or a double quote that ends a string at this depth
-    // (the string the line is in), or the start of the text. At most LINE_START_SCAN characters back;
-    // past that, no grammar.
-    let gl = ls;
-    if (u > 0 && ls > 0 && text[ls - 1] === "'") {
-      gl = -1;
-      // Native between candidates: a character by character walk was most of the time of a shape
-      // that repeats one 300-character line (pemEscapedLongCodeBeforeBegin), and now goes the whole line.
-      const lim = Math.max(0, ls - LINE_START_SCAN);
-      for (let j = ls - 1; ;) {
-        LINE_BACK_RE.lastIndex = j;
-        const k = j - LINE_BACK_RE.exec(text)[1].length;
-        if (k === 0) {
-          if (lim === 0) gl = 0;
-          break;
-        }
-        // text[k - 1] is a break, a double quote or a backslash. A backslash run then `n` or `r` at k
-        // is an escaped break at this depth when the run fits it; the line starts after that letter.
-        const c = text.charCodeAt(k - 1);
-        if (c === 92) {
-          const e = text.charCodeAt(k);
-          if (k + 1 < lim) break;
-          if ((e === 110 || e === 114) && isEscBreak(backslashesBefore(text, k, 0), u)) {
-            gl = k + 1;
-            break;
-          }
-        } else if (k < lim) break;
-        else if (c === 10 || c === 13 || isStringEnd(backslashesBefore(text, k - 1, 0), u)) {
-          gl = k;
-          break;
-        }
-        j = k - 1;
-      }
-    }
+    const gl = lineStartPastQuotes(text, ls, u);
     const head = gl === -1 ? '' : text.slice(gl, Math.min(b, gl + PREFIX_GRAMMAR_SCAN));
     const g = gl === -1 ? null : PREFIX_GRAMMAR_RE.exec(head);
     const gs = g ? gl + g[0].length - g[1].length : -1;
     let gp = gl;
     while (gp < b && (text.charCodeAt(gp) === 32 || text.charCodeAt(gp) === 9)) gp++;
-    // The lines below read again with the shape of `prefix`, whose first character after blanks is
-    // `lead`: where the key they hold ends, or -1.
-    const reread = (prefix, lead) => {
-      const alt = ctx.shapeOf(prefix);
-      if (!alt || ctx.endFollows(be)) return -1;
-      const again = readKeyLines(text, next, u, alt, lead, longs, longest, first, end, ctx.memoOf);
-      if (!(again.longs > 0 && again.end > found && keyEvidence(again, label, false))) return -1;
-      ctx.reread = true;
-      return again.end;
-    };
     // Only when the line is more than its grammar before the BEGIN: an opener before it or code after it.
     if (g && !(gs === gp && gl + g[0].length === b)) {
       let lead = gs;
       while (text.charCodeAt(lead) === 32 || text.charCodeAt(lead) === 9) lead++;
       const r = reread(g[1], text.charCodeAt(lead));
-      if (r !== -1) return r;
+      if (r) return r.end;
     }
     // D#614 A2: a grep column after a path the grammar refuses; not the column the grammar read
     // already, nor the first reading's own prefix. That prefix is the column whenever nothing stands
@@ -854,24 +852,217 @@ function cutOffKeyEnd(text, b, be, ctx) {
     const p = gl === -1 ? null : GREP_ANY_PATH_RE.exec(head);
     if (p && !(g && g[1] === p[1]) && p[1] !== left.replace(/^[ \t]+/, '')) {
       const r = reread(p[1], text.charCodeAt(gl + p[0].length - p[1].length));
-      if (r !== -1) return r;
+      if (r) return r.end;
     }
     // D#614 A1: a unified diff's context line starts with its space, with code after it or none, and
     // the removed and added lines below it with `-` and `+`, which the line prefix (that space, or the
-    // code) never matched. They are read with a diff mark's shape, which takes a context line too.
-    // Only when the next line starts with a mark: Read output starts its lines with spaces as well,
-    // and a reading there took the next line's number for a key's short last line. Nor when the line
-    // holds an escaped break of another depth: it is then several lines, the first one led by a space.
-    if (
-      text.charCodeAt(gl) === 32 &&
-      (text[next] === '-' || text[next] === '+') &&
-      !/\\[nr]/.test(text.slice(gl, b))
-    ) {
-      const r = reread('-', 45);
+    // code) never matched.
+    if (gl !== -1 && isDiffContextLine(text, gl, b)) {
+      const r = diffRead(text[next] === '-' || text[next] === '+', gl);
       if (r !== -1) return r;
+    }
+  } else if (run < 16) {
+    // D#641: in a real diff the lines under a context BEGIN can be context lines too: an OpenSSH key's
+    // first body line is the same for every key of its type. The reading above took them for the key
+    // and stopped at the first removed line, so the removed and added lines were stored.
+    const after = nextLine(text, found, u).next;
+    if (after !== -1 && (text[after] === '-' || text[after] === '+')) {
+      const gl = lineStartPastQuotes(text, ls, u);
+      if (gl !== -1 && isDiffContextLine(text, gl, b)) {
+        const r = diffRead(false, gl);
+        if (r !== -1) return r;
+      }
     }
   }
   return found;
+}
+
+/**
+ * Whether the line from `gl` to the BEGIN at `b` is a unified diff's context line: led by its space,
+ * with code after it or none. Not when the line holds an escaped break of another depth: it is then
+ * several lines, the first one led by a space.
+ */
+function isDiffContextLine(text, gl, b) {
+  return text.charCodeAt(gl) === 32 && !/\\[nr]/.test(text.slice(gl, b));
+}
+
+// A unified diff's hunk header and the counts of old and new lines under it (1 when left out).
+const HUNK_HEADER_RE = /@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/g;
+
+/**
+ * Whether a line starts at `at` at break depth u: the text's start, a break (at an escape depth not a
+ * real one right after a backslash, which nextEscapedLine steps over), or the quote that opens a string
+ * at that depth (`"patch":"@@ …` in JSON, where the line is the string's first).
+ */
+function startsLineAt(text, at, u) {
+  if (at === 0) return true;
+  const c = text[at - 1];
+  if (c === '\n' || c === '\r') return u === 0 || text[at - 2] !== '\\';
+  if (c === 'n' || c === 'r') return isEscBreak(backslashesBefore(text, at - 1, 0), u);
+  return (c === '"' || c === "'") && isStringEnd(backslashesBefore(text, at - 1, 0), u);
+}
+
+// A break at an escape depth, found natively: a backslash run then `n` or `r` (its length decides the
+// depth), or a real break not right after a backslash (nextEscapedLine steps over the character after a
+// run). The lookbehinds start a match at a run's first backslash only, so each run is read once.
+const ESC_BREAK_TOKEN_RE = /(?<!\\)\\+[nr]|(?<!\\)[\n\r]/g;
+const BREAK_RE = /[\n\r]/g;
+
+/**
+ * nextLine from a line start `s`, its break found natively. A hunk's lines are read at the depth asked,
+ * and in text at several depths a line runs across the others' text: nextEscapedLine stopped at each
+ * backslash in it, 33% of the time of hunks at four depths in turn under coverage.
+ */
+function hunkNextLine(text, s, u) {
+  const re = u === 0 ? BREAK_RE : ESC_BREAK_TOKEN_RE;
+  re.lastIndex = s;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const r = m[0].length - 1;
+    if (r === 0 || isEscBreak(r, u)) return nextLine(text, m.index, u);
+  }
+  return { end: text.length, next: -1 };
+}
+
+/**
+ * Whether a line starting at `s` is in a unified diff's hunk at break depth u (D#649), from the headers
+ * `heads` ({ at, old, add }, ascending). A hunk is the lines below a header that starts a line, as
+ * nextLine reads them: a `-` line spends one of the old count, a `+` line one of the new, and a context
+ * line (led by a space, or empty: git's diff.suppressBlankEmpty and GNU diff's --suppress-blank-empty
+ * leave it so) one of each while both last; any other line ends it (`\ No newline at end of file` comes
+ * after one side's last line, so no context line follows it). Only context lines are asked about (a
+ * BEGIN's line led by a space), so once a count is spent nothing after it is in the hunk. A line's
+ * question goes to the nearest header before it that starts a line at u; a header's text inside a line
+ * (the diff of a file that holds one) starts no hunk. A hunk is read from its header only as far as the
+ * line asked about, and on from there for a later one, so no line is read twice: reading each hunk
+ * whole read the last line of every hunk at one depth across the text at the others, 14.7x benign under
+ * coverage (hunks at four depths in turn, 3.9x on v6.30.10).
+ */
+function hunkReader(text, heads, u) {
+  const own = heads.filter((h) => startsLineAt(text, h.at, u));
+  const read = new Map();
+  return (s) => {
+    let lo = 0;
+    let hi = own.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (own[mid].at < s) lo = mid + 1;
+      else hi = mid;
+    }
+    const k = lo - 1;
+    if (k < 0) return false;
+    let h = read.get(k);
+    if (h === undefined) {
+      const { at, old, add } = own[k];
+      read.set(k, (h = { next: hunkNextLine(text, at, u).next, old, add, starts: new Set() }));
+    }
+    // Never past the next header: it is at or after s (a later line's question goes to its hunk).
+    while (h.next !== -1 && h.next <= s) {
+      const at = h.next;
+      const line = hunkNextLine(text, at, u);
+      const c = line.end === at ? 32 : text.charCodeAt(at);
+      if (c === 32 && h.old > 0 && h.add > 0) {
+        h.old--;
+        h.add--;
+      } else if (c === 45) h.old--;
+      else if (c === 43) h.add--;
+      else {
+        h.next = -1;
+        break;
+      }
+      h.starts.add(at);
+      h.next = line.next;
+    }
+    return h.starts.has(s);
+  };
+}
+
+// A diff mark after a character that can end a line: a break, and at an escape depth an escaped
+// break's letter or (one escape deep) the quote that reopens a string concatenated across lines.
+const MARK_AFTER_BREAK_RE = /[\n\r][-+]/g;
+const MARK_AFTER_ESC_RE = /[\n\r"'nr][-+]/g;
+
+/**
+ * Whether a line that starts in [from, to) at break depth u (`from` a line start) starts with a diff's
+ * `-` or `+`. The marks are found natively and each is checked to start a line as nextLine reads them:
+ * reading the lines one by one went through every line of a run under a BEGIN in Read output (each led
+ * by a space) on each of the 32 passes a chain of labelled secrets takes, 42-57% of two linearity
+ * shapes under coverage.
+ */
+function markedLineIn(text, from, to, u) {
+  if (from === -1 || from >= to) return false;
+  const c0 = text.charCodeAt(from);
+  if (c0 === 45 || c0 === 43) return true;
+  const re = u === 0 ? MARK_AFTER_BREAK_RE : MARK_AFTER_ESC_RE;
+  const seg = to === Infinity ? text.slice(from) : text.slice(from, to);
+  re.lastIndex = 0;
+  for (let m = re.exec(seg); m; m = re.exec(seg)) {
+    re.lastIndex = m.index + 1;
+    const c = from + m.index;
+    const ch = text.charCodeAt(c);
+    // At an escape depth a real break right after a backslash run is that run's next character, which
+    // nextEscapedLine steps over.
+    if (ch === 10 || ch === 13) {
+      if (u === 0 || text.charCodeAt(c - 1) !== 92) return true;
+    } else if (ch === 110 || ch === 114) {
+      if (isEscBreak(backslashesBefore(text, c, from), u)) return true;
+    } else if (u === 1) {
+      // The quote that opens the string after `\n" +` and a break: a line start when an escaped break
+      // at depth 1 starts the concatenation (nextEscapedLine's CONCAT_AFTER_RE).
+      if (opensConcat(text, c, from)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the quote at `c` opens the string after a depth-1 escaped break, a quote, an optional `+` and a
+ * break, so that a line starts after it: CONCAT_AFTER_RE (nextEscapedLine) read backward, within `from`.
+ */
+function opensConcat(text, c, from) {
+  const blanks = (j) => {
+    while (j >= from && (text[j] === ' ' || text[j] === '\t')) j--;
+    return j;
+  };
+  let j = blanks(c - 1);
+  if (j < from) return false;
+  if (text[j] === '\n') j -= j - 1 >= from && text[j - 1] === '\r' ? 2 : 1;
+  else if (text[j] === '\r') j--;
+  else return false;
+  j = blanks(j);
+  if (j >= from && text[j] === '+') j = blanks(j - 1);
+  if (j < from || (text[j] !== '"' && text[j] !== "'")) return false;
+  j--;
+  return j >= from && (text[j] === 'n' || text[j] === 'r') && isEscBreak(backslashesBefore(text, j, from), 1);
+}
+
+/**
+ * Where the line that holds the BEGIN starts, from `ls`, the start cutOffKeyEnd's prefix walk found:
+ * that, unless the walk stopped at a single quote in escaped text, or -1. The walk stops at an
+ * unescaped single quote, which JSON never escapes (`-KEY = '''` in a JSON string leaves ''), so look
+ * past single quotes for the start of the line: a break, or a double quote that ends a string at this
+ * depth (the string the line is in), or the start of the text. At most LINE_START_SCAN characters
+ * back; past that, -1.
+ */
+function lineStartPastQuotes(text, ls, u) {
+  if (!(u > 0 && ls > 0 && text[ls - 1] === "'")) return ls;
+  // Native between candidates: a character by character walk was most of the time of a shape that
+  // repeats one 300-character line (pemEscapedLongCodeBeforeBegin), and now goes the whole line.
+  const lim = Math.max(0, ls - LINE_START_SCAN);
+  for (let j = ls - 1; ;) {
+    LINE_BACK_RE.lastIndex = j;
+    const k = j - LINE_BACK_RE.exec(text)[1].length;
+    if (k === 0) return lim === 0 ? 0 : -1;
+    // text[k - 1] is a break, a double quote or a backslash. A backslash run then `n` or `r` at k is
+    // an escaped break at this depth when the run fits it; the line starts after that letter.
+    const c = text.charCodeAt(k - 1);
+    if (c === 92) {
+      const e = text.charCodeAt(k);
+      if (k + 1 < lim) return -1;
+      if ((e === 110 || e === 114) && isEscBreak(backslashesBefore(text, k, 0), u)) return k + 1;
+    } else if (k < lim) return -1;
+    else if (c === 10 || c === 13 || isStringEnd(backslashesBefore(text, k - 1, 0), u)) return k;
+    j = k - 1;
+  }
 }
 
 /**
@@ -993,7 +1184,7 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
         memo ??= memoOf(shape);
         const r = memo.long.get(longKey);
         if (r !== undefined)
-          return { longs: r.longs, longest: r.longest, first: r.first, end: r.end, armors };
+          return { longs: r.longs, longest: r.longest, first: r.first, end: r.end, armors, shorts: r.shorts };
       }
       if (longs++ === 0) first = core;
       longest = Math.max(longest, core.length);
@@ -1020,8 +1211,8 @@ function readKeyLines(text, next, u, shape, shapeLead, longs, longest, first, en
     break;
   }
   if (blankKey !== null) memo.blank.set(blankKey, -1);
-  if (longKey !== null) memo.long.set(longKey, { longs, longest, first, end });
-  return { longs, longest, first, end, armors };
+  if (longKey !== null) memo.long.set(longKey, { longs, longest, first, end, shorts });
+  return { longs, longest, first, end, armors, shorts };
 }
 
 // Separate scanners: KEY_BEGIN_RE's lastIndex drives scrubCutOffKeys' loop while these run.
@@ -1099,7 +1290,23 @@ function scrubCutOffKeys(text) {
     if (m === undefined) memos.set(id, (m = { blank: new Map(), long: new Map() }));
     return m;
   };
-  const ctx = { endFollows, nextBegin, shapeOf, memoOf, reread: false };
+  // Whether the line starting at `s` (depth u) is in a unified diff's hunk (hunkReader): the headers
+  // found once per call, on first use, and one reader per depth.
+  let heads = null;
+  const hunks = new Map();
+  const inHunk = (s, u) => {
+    if (heads === null) {
+      heads = [];
+      HUNK_HEADER_RE.lastIndex = 0;
+      for (let h; (h = HUNK_HEADER_RE.exec(text));) {
+        heads.push({ at: h.index, old: h[1] === undefined ? 1 : +h[1], add: h[2] === undefined ? 1 : +h[2] });
+      }
+    }
+    let has = hunks.get(u);
+    if (has === undefined) hunks.set(u, (has = hunkReader(text, heads, u)));
+    return has(s);
+  };
+  const ctx = { endFollows, nextBegin, shapeOf, memoOf, inHunk, reread: false };
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
