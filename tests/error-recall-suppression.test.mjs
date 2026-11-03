@@ -351,7 +351,9 @@ describe('own-script — the only failure is an exception raised in the agent’
     expect(own({ exitZero: false, response: `Error: Exit code 1\n${PATCH_OUT}` })).toMatchObject({
       reason: 'own-script',
     });
-    expect(own({ exitZero: false, response: `Exit code 2\n${PATCH_OUT}` })).toMatchObject({ reason: 'own-script' });
+    expect(own({ exitZero: false, response: `Exit code 2\n${PATCH_OUT}` })).toMatchObject({
+      reason: 'own-script',
+    });
     const red = `Error: Exit code 1\n${PATCH_OUT}\n FAIL  tests/a.test.mjs > x\nAssertionError: expected 1 to be 2`;
     expect(own({ exitZero: false, response: red })).toBeNull();
   });
