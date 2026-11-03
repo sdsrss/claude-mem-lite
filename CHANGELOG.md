@@ -2,6 +2,31 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.15 — two fixes to the JSON-string scrubbing 6.30.14 added
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.14`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: 6.30.14 stored values that 6.30.13 erased, in JSON one encoder wrote inside a string
+  another encoder wrote** (D#701), such as a PHP service's JSON returned as a string field by a .NET
+  service. PHP's `json_encode` writes `/` as `\/`, .NET's System.Text.Json writes `"`, `'` and `+`
+  as `\u0022`, `\u0027` and `\u002B`, and Gson writes `=` and `'` as `\u003d` and `\u0027`; a
+  webhook URL's token, or a password that a `+` joins into a URL, on a line after a credential was
+  kept. On 40,000 generated texts that nest these encoders and plain JSON (329,366 values), 6.30.14
+  stored 220 values that 6.30.13 erased; 6.30.15 stores none of them, and none that 6.30.14 erased.
+- **`import-jsonl` imports a transcript holding minified JSON of millions of characters in one
+  string**, which 6.30.14 failed on (D#698). Scrubbing still throws on a single unbroken value of
+  millions of characters after a credential label, after a private key's BEGIN line or in a token,
+  and `import-jsonl` then imports nothing from that transcript file (D#705).
+- On about 199,000 texts of Claude Code transcripts from other projects (prompts, tool results and
+  the strings of tool inputs), 6.30.15 gives the same output as 6.30.14.
+- **Still stored**: the shapes 6.30.14 lists; some values on a line after a credential in a JSON
+  string that 6.30.13 erased together with that credential's value, such as the rest of a URL path
+  after a token (D#706); a credential in a JSON string that a text ends inside right after a
+  backslash (D#703); and, in text found only by fuzzing, words that 6.30.14 erased between a private
+  key's BEGIN and END lines or after a credential label, next to an escape in a JSON string (D#707,
+  D#708).
+
 ## v6.30.14 — a credential inside a JSON string is erased
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
