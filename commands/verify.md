@@ -73,15 +73,6 @@ Rules that the measurement showed matter:
 - A record of what happened (what was measured then, what a review found) stays true as
   history. It is stale only if it would mislead about the PRESENT.
 - A note that already records its own fix is not stale because the fix commit landed later.
-- A note that cites a commit (7–12 hex characters) describes that commit's code. Check it is
-  still there: `git merge-base --is-ancestor <sha> HEAD` (exit 0 = on this branch; exit 128 =
-  git does not know the sha, or it is ambiguous — UNVERIFIABLE, not STALE). Exit 1 also covers a
-  commit re-made under another sha (a rebase, a squash, a cherry-pick), so then run
-  `git cherry HEAD <sha> <sha>~1`: `-` = the same change landed under another sha (the code is
-  current), `+` = it never landed on this branch (an abandoned branch or an archive tag). Then
-  `git log --oneline --grep=<first 8 hex>` (a later `revert` or `withdraw` commit naming it).
-  A `+` or such a revert makes the note STALE when it presents the code as current;
-  a note that itself records the revert stays VALID.
 - Do not write, stash, check out or run tests while verifying.
 
 More than ~25 memories: split them into batches and give each batch to a read-only subagent
