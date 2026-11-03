@@ -771,7 +771,9 @@ try {
         /* probe failure → unfiltered */
       }
     }
-    const obsSelect = (limitClause) => `
+    // `LIMIT` stays a literal keyword: tests/order-by-created-at-guard.test.mjs reads the ORDER BY
+    // clause up to it, and the switch-off text must stay what it was.
+    const obsSelect = (limitArgs) => `
       SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
       FROM observations o
       JOIN observation_files of2 ON of2.obs_id = o.id
@@ -788,14 +790,14 @@ try {
         ${citeFactorClause('o')} DESC,
         o.created_at_epoch DESC,
         o.id DESC
-      ${limitClause}
+      LIMIT ${limitArgs}
     `;
     let rows;
     if (!PATH_PRECISION_ON) {
-      rows = db.prepare(obsSelect(`LIMIT ${obsLimit}`)).all(project, cutoff, ...fileParams);
+      rows = db.prepare(obsSelect(`${obsLimit}`)).all(project, cutoff, ...fileParams);
     } else {
       const page = obsLimit + PATH_PRECISION_PAGE_EXTRA;
-      const select = db.prepare(obsSelect('LIMIT ? OFFSET ?'));
+      const select = db.prepare(obsSelect('? OFFSET ?'));
       const projectRoot = inferProjectDir();
       rows = [];
       // Rows the old single LIMIT would have injected and this rule removed (the metric's unit).
