@@ -281,3 +281,126 @@ describe('isDataPrintingCommand', () => {
     expect(isDataPrintingCommand(cmd)).toBe(false);
   });
 });
+
+// R3 O2 (docs/audits/20261103-r3-optimization-plan.md): the agent's own throwaway code failing.
+// 95 of 622 firings on 194 transcripts (2026-10-06..11-03) had that as their only failure, most of
+// them chained with other commands, so data-print (a whole-command printer at exit 0) missed them.
+describe('own-script — the only failure is an exception raised in the agent’s throwaway code', () => {
+  const PATCH_CMD =
+    "python3 - <<'EOF'\np='tests/a.test.mjs'; s=open(p).read()\nassert s.count('old')==1\nEOF\nnpx vitest run tests/a.test.mjs 2>&1 | tail -3";
+  const PATCH_OUT =
+    'Traceback (most recent call last):\n  File "<stdin>", line 3, in <module>\nAssertionError\n' +
+    '      Tests  4 passed (4)\n   Duration  1.2s';
+  const SCRATCH_CMD = 'SP=/tmp/claude-1000/-home-u-proj/s1/scratchpad; node "$SP/count.mjs" | head';
+  const SCRATCH_OUT = [
+    'node:internal/modules/package_json_reader:331',
+    '  throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);',
+    '        ^',
+    '',
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'better-sqlite3' imported from /tmp/claude-1000/-home-u-proj/s1/scratchpad/count.mjs",
+    '    at Object.getPackageJSONURL (node:internal/modules/package_json_reader:331:9)',
+    '    at packageResolve (node:internal/modules/esm/resolve:768:81)',
+    '    at ModuleLoader.resolve (node:internal/modules/esm/loader:614:52) {',
+    "  code: 'ERR_MODULE_NOT_FOUND'",
+    '}',
+    '',
+    'Node.js v26.8.1',
+  ].join('\n');
+  const NODE_STDIN_OUT = [
+    '[stdin]:6',
+    '    if (n !== 1) throw new Error(`${f}: ${n} matches`);',
+    '                 ^',
+    '',
+    'Error: install.mjs: 0 matches',
+    '    at edit ([stdin]:6:24)',
+    '    at [stdin]:12:1',
+    '    at runScriptInThisContext (node:internal/vm:219:10)',
+    '',
+    'Node.js v26.8.1',
+  ].join('\n');
+  const own = (over = {}) =>
+    errorRecallSuppression({
+      cmd: PATCH_CMD,
+      response: PATCH_OUT,
+      entries: [],
+      ccSession: SESSION,
+      exitZero: true,
+      projectDir: REPO,
+      ...over,
+    });
+
+  it('precondition: each fixture is a hard error to the trigger, and none is a data printer', () => {
+    for (const [cmd, out] of [
+      [PATCH_CMD, PATCH_OUT],
+      [SCRATCH_CMD, SCRATCH_OUT],
+      ["node - <<'JS'\nedit()\nJS\nnpx eslint install.mjs", NODE_STDIN_OUT],
+    ]) {
+      expect(detectBashSignificance({ command: cmd }, out).isHardError, cmd).toBe(true);
+      expect(isDataPrintingCommand(cmd), cmd).toBe(false);
+    }
+  });
+
+  it('suppresses a chained patch script whose own assertion failed, at exit 0 and on the failure path', () => {
+    expect(own()).toMatchObject({ reason: 'own-script' });
+    expect(own({ exitZero: false })).toMatchObject({ reason: 'own-script' });
+  });
+
+  it('suppresses a scratch script that cannot import its dependency', () => {
+    expect(own({ cmd: SCRATCH_CMD, response: SCRATCH_OUT, exitZero: false })).toMatchObject({
+      reason: 'own-script',
+    });
+  });
+
+  it("suppresses a heredoc node program's own throw (`[stdin]` frames only)", () => {
+    expect(
+      own({ cmd: "node - <<'JS'\nedit()\nJS\nnpx eslint install.mjs", response: NODE_STDIN_OUT }),
+    ).toMatchObject({ reason: 'own-script' });
+  });
+
+  it('CONTROL: another failure left in the output (a red test run) still fires', () => {
+    const red = PATCH_OUT.replace(
+      'Tests  4 passed (4)',
+      ' FAIL  tests/a.test.mjs > x\nAssertionError: expected 1 to be 2\n      Tests  1 failed | 3 passed (4)',
+    );
+    expect(own({ response: red })).toBeNull();
+    // A bare red summary would not start a firing on its own, and it still keeps this one.
+    const summary = PATCH_OUT.replace('Tests  4 passed (4)', 'Tests  1 failed | 3 passed (4)');
+    expect(
+      detectBashSignificance({ command: PATCH_CMD }, summary.split('\n').slice(3).join('\n')).isError,
+    ).toBe(true);
+    expect(own({ response: summary })).toBeNull();
+  });
+
+  it('CONTROL: a frame in the project, in node_modules or in an installed library still fires', () => {
+    const repoFrame = SCRATCH_OUT.replace(
+      '    at packageResolve (node:internal/modules/esm/resolve:768:81)',
+      '    at openDb (/home/u/proj/lib/db.mjs:12:3)',
+    );
+    expect(own({ cmd: SCRATCH_CMD, response: repoFrame })).toBeNull();
+    const dep = SCRATCH_OUT.replace(
+      '    at packageResolve (node:internal/modules/esm/resolve:768:81)',
+      '    at Database (/home/u/proj/node_modules/better-sqlite3/lib/database.js:65:11)',
+    );
+    expect(own({ cmd: SCRATCH_CMD, response: dep })).toBeNull();
+    const py =
+      'Traceback (most recent call last):\n  File "<stdin>", line 2, in <module>\n' +
+      '  File "/usr/lib/python3.14/json/__init__.py", line 346, in loads\njson.decoder.JSONDecodeError: Expecting value';
+    expect(own({ response: py })).toBeNull();
+  });
+
+  it('CONTROL: a script file inside the project is the project’s code, even under /tmp', () => {
+    const out =
+      'Traceback (most recent call last):\n  File "/tmp/work/proj/tools/x.py", line 3, in <module>\nKeyError: 1';
+    expect(own({ response: out, projectDir: '/tmp/work/proj' })).toBeNull();
+    expect(own({ response: out, projectDir: REPO })).toMatchObject({ reason: 'own-script' });
+  });
+
+  it('CONTROL: CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT=off keeps it firing', () => {
+    expect(
+      errorRecallSuppression(
+        { cmd: PATCH_CMD, response: PATCH_OUT, entries: [], exitZero: true, projectDir: REPO },
+        { CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT: 'off' },
+      ),
+    ).toBeNull();
+  });
+});
