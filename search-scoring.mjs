@@ -52,7 +52,7 @@ const INSTRUCTIONS_BASE = [
   `  ${CLI_INVOKE} get 42,43  — full details by ID`,
   `  ${CLI_INVOKE} timeline --anchor 42  — chronological context`,
   // R3 O6: the write verbs with their flags, so a CLI write does not start with a `help` call
-  // (54 of them against 115 CLI writes on 194 transcripts; the full help is 15.7 KB).
+  // (the full help is 15.7 KB).
   // tests/instructions-cli-write-lines.test.mjs runs both lines as written.
   `  ${CLI_INVOKE} defer add "<title>" --priority 1|2|3 --detail "<why>"  — cross-session TODO (3 = urgent)`,
   `  ${CLI_INVOKE} save "<what happened>" --type bugfix --lesson "<root cause + fix>" --files <path>  — save a lesson (--files ties it to file recall)`,

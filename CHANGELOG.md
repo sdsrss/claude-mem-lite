@@ -11,26 +11,28 @@ switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-s
 - **PreToolUse recall no longer injects the lesson of a same-named file in another directory.**
   Editing `src/snapshot/mod.rs` used to pull the lessons recorded for `src/mcp/server/mod.rs`, and
   a `tasks/x/README.md` those of the root `README.md`: 210 of 4,037 injected rows were such a
-  different file. Bare file names, Claude Code worktree copies, paths outside the project and
-  spellings that cannot be placed (`../`, `~/`, a drive letter) still match; paths are compared as
+  different file. Bare file names, Claude Code worktree copies, paths outside the project,
+  spellings that cannot be placed (`../`, `~/`, a drive letter) and paths that name no file now (a
+  file that moved) still match; paths are compared as
   POSIX paths, so a native Windows host is unchanged. A dropped row's slot goes to the next
   candidate: candidates are read page by page until the slots are filled (at most 10 pages). Back:
   `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
 - **Error recall shows a thread a memory once while the thread lasts** (until `/compact`, `/clear`
   or a new session, or the 24 h runtime GC; a subagent keeps its record for its whole run), not
-  once per 30 minutes (rows already shown to the same thread were 281 of 1,739 recorded
-  error-recall rows). Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+  once per 30 minutes. Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
 - **Error recall stays silent on a git command that succeeded when its only failure words are in
-  the commit records git printed** (`git commit -m "fix: … traceback" && git log --oneline`): 6 of
+  a `[branch sha] subject` line, a `git log --oneline` line or a `commit <sha>` header and its
+  message** (`git commit -m "fix: … traceback" && git log --oneline`): 6 of
   422 exit-0 firings on the maintainer's transcripts (2026-11-03). The rest of the output is judged
   as before, so a pre-commit failure whose exit code an `; echo` hid, or a real failure printed
   next to the records, still fires. Back: `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`.
 - The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
   3 `mem_get` calls); its rows keep their `#id`.
 - The MCP server instructions list `defer add` and `save` with their flags, so a write through
-  the CLI does not start with a `help` call (54 such calls against 115 CLI writes).
-- `/claude-mem-lite:verify` checks the commits a memory cites: one that is not on the current
-  branch, or that a later revert names, makes a memory that presents its code as current STALE.
+  the CLI does not start with a `help` call.
+- `/claude-mem-lite:verify` checks the commits a memory cites: one whose change never landed on
+  the current branch, or that a later revert names, makes a memory that presents its code as
+  current STALE.
 
 ## v6.30.15 — two fixes to the JSON-string scrubbing 6.30.14 added
 

@@ -205,9 +205,9 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
 
 **召回注入的内容里，和当前这一步无关的更少了；不用执行任何操作，schema 版本仍是 49。** 每项会少注入内容的改动都有开关可以退回；要撤销纯文本的改动，请固定 `claude-mem-lite@6.30.15`。
 
-- **PreToolUse 召回不再注入项目里另一个目录下同名文件的教训**（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的）。裸文件名、worktree 副本、项目之外的路径和无法定位的写法仍会匹配。退回：`CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`。
+- **PreToolUse 召回不再注入项目里另一个目录下同名文件的教训**（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的）。裸文件名、worktree 副本、项目之外的路径、无法定位的写法，以及现在已不存在的路径（文件移走了）仍会匹配。退回：`CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`。
 - **同一条记忆，error recall 在同一个线程里只给一次**，不再是每 30 分钟可以再给一次。退回：`CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`。
-- **成功的 git 命令不再触发 error recall**，前提是报错词只出现在 git 打印的提交记录里（比如标题 `fix: a traceback on …`）。退回：`CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`。
+- **成功的 git 命令不再触发 error recall**，前提是报错词只出现在 `[分支 sha] 标题` 行、`git log --oneline` 的行，或 `commit <sha>` 头及其提交说明里（比如标题 `fix: a traceback on …`）。退回：`CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`。
 - **纯文本改动：** error-recall 块末尾不再有 `→ Use mem_get(…)` 这一行；MCP server instructions 列出了 `defer add` 和 `save` 的参数；`/claude-mem-lite:verify` 会核对记忆里引用的提交。详见 CHANGELOG.md。
 
 ## 升级到 6.29.0
@@ -914,7 +914,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `CLAUDE_MEM_SESSION_EVENTS` | 设为 `1`/`on` 时恢复 SessionStart 的 `### Key Events` 一节（`events` 表中最近的高重要度条目）。**v6.13.0 起默认关闭**：对 30 条 event 的核验只有 2 条属实、16 条错误。UserPromptSubmit 的 events 块与 PreToolUse 召回按查询匹配，保持开启；`mem_search` 仍可检索全部 event。 | _(关闭)_ |
 | `CLAUDE_MEM_EPISODE_INPUT_FILTER` | 决定 episode 摘要器能从哪些输入里学。子代理的工具调用不进入 episode 缓冲（修改项目内文件的除外）；变异探针（改文件 → 跑红 → 还原）和 agent 自己失败的内联脚本（补丁的 `anchor not found`）在保存或摘要前被剔除——在 30 条已核验 event 上重放，这一项直接去掉 16 条错误中的 3 条；配合 `CLAUDE_MEM_LESSON_GROUNDING`，16 条错误教训一条都不会被注入。设为 `off` 恢复未过滤的输入。 | _(开启)_ |
 | `CLAUDE_MEM_BASH_RECALL` | 在查看（`cat`、`sed -n`、`head`…）或写入（`sed -i`、`cat > f`、python 补丁…）文件的 Bash 命令执行前做文件召回，与 Read / Edit 召回相同。bash 预过滤让其他命令不启动 Node。设为 `off` 只关闭这一路。 | _(开启)_ |
-| `CLAUDE_MEM_PRETOOL_PATH_PRECISION` | 设为 `off` 恢复 PreToolUse 召回只按文件名匹配的旧行为。**默认开启**（R3 O1）：项目里另一个目录下同名文件的教训不再注入（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的，编辑 `tasks/x/README.md` 时不再给根目录 `README.md` 的）；裸文件名、Claude Code worktree 副本、项目之外的路径和无法定位的写法（`../`、`~/`、盘符）仍会匹配。路径按 POSIX 规则比较，所以在原生 Windows 主机上匹配行为不变。194 个会话记录里，4,037 个注入行中有 210 个属于这种不同的文件。 | _(开启)_ |
+| `CLAUDE_MEM_PRETOOL_PATH_PRECISION` | 设为 `off` 恢复 PreToolUse 召回只按文件名匹配的旧行为。**默认开启**（R3 O1）：项目里另一个目录下同名文件的教训不再注入（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的，编辑 `tasks/x/README.md` 时不再给根目录 `README.md` 的）；裸文件名、Claude Code worktree 副本、项目之外的路径、无法定位的写法（`../`、`~/`、盘符），以及现在已不存在的路径（文件移走了）仍会匹配。路径按 POSIX 规则比较，所以在原生 Windows 主机上匹配行为不变。194 个会话记录里，4,037 个注入行中有 210 个属于这种不同的文件。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_GROUNDING` | 自动捕获的 event 只有在教训引用了本窗口自己的诊断文字（失败输出行、编辑新增的注释或提交信息）时才保留教训；否则保留这一行但去掉教训，importance 降为 1，低于所有注入面的门槛。设为 `off` 保留未引用原文的教训。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果和**工具输出**（命令打印的文字或工具返回的内容，能控制这段输出的人就能写它）有连续 4 个词相同，就不会进入注入面：event 保留这一行和教训、仍可搜索，importance 降为 1；`change` 类 observation 的 importance 之后会被读取次数抬高，所以改为去掉教训，没有教训的这一行随后会像其他同类行一样被丢弃（只有设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` 才保留）。连续 4 个虚词（例如 "is not in the"）也算，所以引用你自己的注释或提交信息的教训，只要碰巧和同一窗口的输出共有这样一串词，也会被降级。这一行的标题不在检查范围内。设为 `off` 恢复模型给出的 importance 和教训。 | _(开启)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 在**所有**项目停止自动 adopt——不注入引导文本、不新建本地文件（`CLAUDE.local.md` 或 `.claude/rules/claude-mem-lite.md`），也不同步已有的 `CLAUDE.md` 或本地托管块（这些托管块会保留并继续加载，直到 `claude-mem-lite unadopt`）。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |

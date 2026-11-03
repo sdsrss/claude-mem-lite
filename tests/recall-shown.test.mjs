@@ -185,7 +185,7 @@ describe('SessionStart wiring (hook.mjs)', () => {
 });
 
 // R3 O3 (docs/audits/20261103-r3-optimization-plan.md): the 30-minute window let one memory back
-// into the same thread — 71 (session, id) pairs were shown 3+ times, up to 11, on 194 transcripts.
+// into the same thread.
 // The thread holds the first copy until compaction, and SessionStart `compact` deletes the marker.
 describe('error-recall marker: one showing per thread until compaction', () => {
   let dir;
