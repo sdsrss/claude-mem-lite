@@ -1613,7 +1613,9 @@ function runPatterns(text) {
 // JSON does not know is kept as written) and scrubbed as text, MAX_LITERAL_DEPTH levels deep, and
 // rewritten, as the scrubbed text encoded as JSON, only when that scrub changed it: a literal it
 // leaves alone keeps every byte. A literal opens at a quote with an even number of backslashes before
-// it, and a text that ends inside one has it read to the end.
+// it, and a text that ends inside one has it read to the end. The quote is matched before that count
+// is checked: Node 22 runs a leading lookbehind at every position, which read a 200,000-character run
+// of backslashes back from each one (5,108 ms; 0 on Node 26).
 //
 // A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
 // the lines after a label up to a space, and the text reading keeps such a line when it has no label
@@ -1626,7 +1628,7 @@ function runPatterns(text) {
 // that holds a backslash is scrubbed again until it no longer changes, MAX_LITERAL_ROUNDS times at
 // most; with one round, 23-42 of 20,000 generated texts changed on a second call (scrubSecrets is
 // idempotent by contract: import-jsonl's dedup and cmdRestore rely on it).
-const ESCAPED_LITERAL_RE = /(?<=(?:^|[^\\])(?:\\\\)*)"((?:[^"\\\r\n]|\\[^\r\n])*)("|$)/g;
+const ESCAPED_LITERAL_RE = /"(?<=(?:^|[^\\])(?:\\\\)*")((?:[^"\\\r\n]|\\[^\r\n])*)("|$)/g;
 const JSON_ESCAPE_RE = /\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g;
 const JSON_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 // A value token, and an escape, which is no part of one: `\nAPI_KEY` holds the token `API_KEY`.
