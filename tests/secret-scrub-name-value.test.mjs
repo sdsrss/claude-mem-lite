@@ -1,16 +1,13 @@
-// D#679: an environment list keeps the credential's name in a `name` field and its value in the `value`
-// field after it (Kubernetes `env:`, ECS `environment`, AWS SSM `get-parameters`, Terraform), where no label
-// pattern sees the pair. D#690: a name no label pattern knows (`ENCRYPTION_KEY=`, Rails `SECRET_KEY_BASE=`,
-// Laravel `APP_KEY=base64:`) and a quoted key with `=` (TOML / HCL). One row per shape, then the writings that
-// must stay as they are.
+// Guards for the next attempt at D#679 / D#690, withdrawn at the v6.30.14 pre-tag review: writings that
+// are not a credential, in environment lists and under `_KEY` names, must stay as they are. A pattern for
+// D#679 (a credential's name in a `name` field, its value in a later `value` field) or D#690 (a name no
+// label pattern knows, such as `ENCRYPTION_KEY=`) has to keep every row below green.
 import { describe, it, expect } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { scrubSecrets } from '../secret-scrub.mjs';
 
-// Assembled or generated at run time so the file holds no secret-shaped literal.
-const V = 'Zr7Kq2Lm' + '9Xv4Tp8W';
+// Generated at run time so the file holds no secret-shaped literal.
 const HEX64 = randomBytes(32).toString('hex');
-const HEX128 = randomBytes(64).toString('hex');
 const B64 = randomBytes(32).toString('base64');
 const B64URL = randomBytes(65).toString('base64url');
 const UUID = randomBytes(16)
@@ -18,39 +15,9 @@ const UUID = randomBytes(16)
   .replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-');
 const J = JSON.stringify;
 
-describe('D#679: a name field naming a credential, then its value field', () => {
-  it.each([
-    [
-      'pod JSON, compact',
-      J({
-        env: [
-          { name: 'PORT', value: '3000' },
-          { name: 'DB_PASSWORD', value: V },
-        ],
-      }),
-    ],
-    ['pod JSON, pretty', J({ env: [{ name: 'API_KEY', value: V }] }, null, 2)],
-    ['YAML list', `env:\n- name: DB_PASSWORD\n  value: ${V}\n- name: PORT\n  value: "3000"\n`],
-    ['YAML list, quoted', `        - name: "GITHUB_TOKEN"\n          value: "${V}"\n`],
-    [
-      'AWS SSM, a key between',
-      J({ Parameters: [{ Name: '/prod/db/password', Type: 'SecureString', Value: V }] }, null, 4),
-    ],
-    ['ECS environment', J({ environment: [{ name: 'STRIPE_SECRET', value: V }] })],
-    ['Terraform', `env {\n  name  = "DB_PASSWORD"\n  value = "${V}"\n}\n`],
-    ['Terraform, one line', `env { name = "API_TOKEN", value = "${V}" }`],
-    [
-      'two value fields in the object',
-      J({ name: 'API_TOKEN', value: V, note: 'x' }).replace('}', ',"value":"later-value"}'),
-    ],
-    ['a name the env form lists whole', J({ env: [{ name: 'MYSQL_PWD', value: V }] })],
-    ['a noun with no separator before it', 'env:\n- name: PGPASSWORD\n  value: ' + V + '\n'],
-  ])('%s', (_name, text) => {
-    expect(scrubSecrets(text)).not.toContain(V);
-  });
-
-  // The name is read as `NAME=VALUE` is: the credential noun ends it. A name that only mentions one
-  // holds a pointer (a path, a secret's name, a URL), and `PWD` is the working directory.
+describe('environment lists', () => {
+  // A name that only mentions a credential holds a pointer (a path, a secret's name, a URL), and `PWD`
+  // is the working directory.
   it.each([
     ['a secret name', J({ environment: [{ name: 'DB_SECRET_NAME', value: 'prod/myapp/db-credentials' }] })],
     ['a token URL', 'env:\n- name: TOKEN_URL\n  value: https://auth.example.com/oauth/token\n'],
@@ -63,28 +30,6 @@ describe('D#679: a name field naming a credential, then its value field', () => 
     ['a token lifetime', J({ env: [{ name: 'TOKEN_TTL', value: '3600' }] })],
   ])('a name that mentions a credential without ending in one stays: %s', (_name, text) => {
     expect(scrubSecrets(text)).toBe(text);
-  });
-});
-
-describe('D#690: a name no label pattern knows, with a key-shaped value', () => {
-  it.each([
-    ['ENCRYPTION_KEY, hex', `ENCRYPTION_KEY=${HEX64}\n`, HEX64],
-    ['SECRET_KEY_BASE (Rails)', `SECRET_KEY_BASE=${HEX128}\n`, HEX128],
-    ['APP_KEY (Laravel)', `APP_KEY=base64:${B64}\n`, B64],
-    ['MASTER_KEY, YAML', `  master_key: ${HEX64.slice(0, 32)}\n`, HEX64.slice(0, 32)],
-    ['SIGNING_KEY, quoted', `SIGNING_KEY="${B64}"\n`, B64],
-    ['PASSWORD_SALT', `password_salt = '${HEX64}'\n`, HEX64],
-    ['a name ending in the letters of an excluded word', `ESCROW_KEY=${HEX64}\n`, HEX64],
-  ])('%s', (_name, text, value) => {
-    expect(scrubSecrets(text)).not.toContain(value);
-  });
-
-  it.each([
-    ['TOML', `"api_key" = "${V}"\n`],
-    ['HCL map', `  "client_secret" = "${V}"\n`],
-    ['single quotes', `'db_password'='${V}'\n`],
-  ])('a quoted credential key with `=`: %s', (_name, text) => {
-    expect(scrubSecrets(text)).not.toContain(V);
   });
 });
 
@@ -110,6 +55,11 @@ describe('writings that are not a credential stay as they are', () => {
     ['a request key', `IDEMPOTENCY_KEY=${UUID}\ndedup_key: ${HEX64.slice(0, 32)}\n`],
     ['an object key', `OBJECT_KEY=uploads/2026/${HEX64.slice(0, 32)}\n`],
     ['a key id after the key', `KMS_KEY_ID=${UUID}\nSIGNING_KEY_ID=${HEX64.slice(0, 32)}\n`],
+    // At a line start in a JSON string (the v6.30.14 review's F1): the name follows an escaped break.
+    [
+      'a public key at an escaped line start',
+      J({ content: `NODE_ENV=production\nPUBLIC_KEY=${B64}\nCACHE_KEY=${HEX64}\n` }),
+    ],
     ['a key flag with no name', `gh cache delete --key=node-modules-linux-${HEX64}\n`],
     [
       'a comparison in code',

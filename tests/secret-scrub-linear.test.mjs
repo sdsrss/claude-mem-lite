@@ -299,10 +299,10 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
-    // D#679 / D#690: with their repeats unbounded, a `_key` name's segments rescanned a hyphen run from
-    // every `-`, and a `name` field rescanned the pairs after it (200k: 13 s and 3.2 s, 2026-11-02).
-    // The name is looked up behind each key segment, so a run of them reads it back from each one (200k
-    // unbounded: 1.9 s).
+    // Guards for the next attempt at D#679 / D#690 (withdrawn at the v6.30.14 pre-tag review): the
+    // drafts' patterns, with their repeats unbounded, took 13 s (a name-first `_key` pattern), 1.9-2.9 s
+    // (a name checked behind each key segment) and 2.7-3.2 s (a `name` field rescanning the pairs after
+    // it) at 200k on these shapes (2026-11-02).
     keyNameHyphenRun: 'a-'.repeat(N / 2) + '_key=',
     keySegmentRun: 'a-key'.repeat(N / 5),
     nameFieldRun: '{' + '"name":"password",'.repeat(N / 18) + '}',

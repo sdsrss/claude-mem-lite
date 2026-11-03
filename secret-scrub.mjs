@@ -372,46 +372,6 @@ export const SECRET_PATTERNS = [
   // The contextual forms (token=…, Authorization: Bearer …, "api_key":"…") above
   // already cover the dangerous *labelled* shapes. If you are tempted to add a
   // bare-token pattern here: don't — anchor it to a provider prefix instead.
-  //
-  // ── An environment list: the name in one field, the value in the next (D#679) ──
-  // Kubernetes `env:`, ECS `environment`, AWS SSM `get-parameters` and Terraform keep a credential's
-  // name in a `name` field and its value in the `value` field after it, so no label above sees the
-  // pair. A `name` naming a credential, then the same object's `value` (JSON, a few simple pairs may sit
-  // between, as SSM's `Type` does; four at most, so a run of pairs is not rescanned from every `name`),
-  // or `value` on the same or the next line (YAML, HCL): the value is erased. `valueFrom` (a secret
-  // reference) has no value to erase. The name is read as the env-variable patterns above read
-  // `NAME=VALUE`, with their nouns: a noun ends the name (`DB_PASSWORD`, `/prod/db/password`,
-  // `MYSQL_PWD`). A name that only mentions one holds a pointer (`DB_SECRET_NAME`, `TOKEN_URL`,
-  // `PASSWORD_FILE`, `GOOGLE_APPLICATION_CREDENTIALS`), and `PWD` is the working directory: they stay.
-  [
-    /("name"\s*:\s*"[\w./-]{0,64}?(?:password|passwd|passphrase|token|bearer|secret|api[_-]?key|secret[_-]?key|access[_-]?key|private[_-]?key|mysql_pwd)"(?:\s*,\s*"\w{1,32}"\s*:\s*(?:"(?:[^"\\\r\n]|\\.){0,200}"|[\w.-]{1,40})){0,4}\s*,\s*"value"\s*:\s*")(?:[^"\\\r\n]|\\.){6,}(")/gi,
-    '$1***$2',
-  ],
-  [
-    /(\bname[ \t]*[:=][ \t]*(["']?)[\w./-]{0,64}?(?:password|passwd|passphrase|token|bearer|secret|api[_-]?key|secret[_-]?key|access[_-]?key|private[_-]?key|mysql_pwd)\2[ \t]*,?[ \t]*(?:\r\n|\n|\r)?[ \t]*value[ \t]*[:=][ \t]*)(?:"(?:[^"\\\r\n]|\\.){6,}"|'[^'\r\n]{6,}'|[^\s"',;}][^\s,;}]{5,})/gi,
-    '$1***',
-  ],
-  // ── A name no label above knows, with a key-shaped value (D#690) ──
-  // `ENCRYPTION_KEY=`, Rails' `SECRET_KEY_BASE=`, Laravel's `APP_KEY=base64:`, `MASTER_KEY`, `SIGNING_KEY`:
-  // a name ending in a `_key` or `_salt` segment (or Rails' `_KEY_BASE`), then 32 or more base64 / hex
-  // characters holding a digit (a name ending in `_secret` is a label above). The value's shape is the gate:
-  // `PRIMARY_KEY=id`, `SORT_KEY=createdAt` and long identifiers stay. A key the name says is an identifier
-  // or public (`CACHE_KEY`, `PARTITION_KEY`, `IDEMPOTENCY_KEY`, `PUBLIC_KEY`, Supabase's `ANON_KEY`, …)
-  // holds a hash, an id or a public key, and stays; so does a name going on after the key (`KMS_KEY_ID`).
-  // `ROUTING_KEY` is not on that list: PagerDuty's routing key is a credential. The match starts by
-  // consuming the key segment and checks the name behind it. Started at the name, it tried every word of
-  // the text, and with the name check before the key segment Node 22 ran that check at every position: on
-  // 198,303 real texts 796 and 3,667 ms on Node 22, against 121 (Node 26: 760, 123, 114). The name's
-  // segments are bounded: `-` starts a word, so `a-a-a-…` would otherwise be read back from each key.
-  [
-    /([_-](?:key|salt))(?<=\b[A-Za-z][A-Za-z0-9]{0,63}(?:[_-][A-Za-z0-9]{1,64}){0,6}(?<!(?:^|[^A-Za-z0-9])(?:public|publishable|anon|cache|partition|sort|idempotency|object|dedupe?|row|host))[_-](?:key|salt))((?:[_-]base)?[ \t]*[:=][ \t]*["']?)(?=[A-Za-z+/_:-]{0,200}\d)(?:base64:)?[A-Za-z0-9+/_-]{32,}={0,2}/gi,
-    '$1$2***',
-  ],
-  // A quoted credential key with `=` (TOML, HCL maps). `==` and `===` never match: a quote must follow the `=`.
-  [
-    /((['"])\w{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}\2[ \t]*=[ \t]*)(["'])(?:(?!\3)[^\\\r\n]|\\.){6,}\3/gi,
-    '$1$3***$3',
-  ],
 ];
 
 // ─── Cut-off private keys (D#145) ──────────────────────────────────────────
