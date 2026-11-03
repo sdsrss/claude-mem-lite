@@ -345,6 +345,17 @@ describe('own-script — the only failure is an exception raised in the agent’
     expect(own({ exitZero: false })).toMatchObject({ reason: 'own-script' });
   });
 
+  // The failure path's text starts with the host's banner — every one of 208 recorded
+  // PostToolUseFailure firings did — and a banner is not a failure of its own.
+  it('on the failure path the host banner `Error: Exit code N` does not count as another failure', () => {
+    expect(own({ exitZero: false, response: `Error: Exit code 1\n${PATCH_OUT}` })).toMatchObject({
+      reason: 'own-script',
+    });
+    expect(own({ exitZero: false, response: `Exit code 2\n${PATCH_OUT}` })).toMatchObject({ reason: 'own-script' });
+    const red = `Error: Exit code 1\n${PATCH_OUT}\n FAIL  tests/a.test.mjs > x\nAssertionError: expected 1 to be 2`;
+    expect(own({ exitZero: false, response: red })).toBeNull();
+  });
+
   it('suppresses a scratch script that cannot import its dependency', () => {
     expect(own({ cmd: SCRATCH_CMD, response: SCRATCH_OUT, exitZero: false })).toMatchObject({
       reason: 'own-script',
