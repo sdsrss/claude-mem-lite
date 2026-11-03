@@ -182,3 +182,88 @@ describe('the literal reading', () => {
     expect(scrubSecrets(once)).toBe(once);
   });
 });
+
+describe('D#701: JSON one encoder wrote, inside a string another encoder wrote', () => {
+  // An escape that decodes to one character joins words where a literal is rewritten: PHP's `\/`, and the
+  // `\uXXXX` that .NET writes for `"`, `'` and `+` and Gson for `=` and `'`. Read one level further in, as
+  // written, such a word was split, so a word the patterns erase in the outer escaped text was new there
+  // and kept (v6.30.14 review r3). In each of the six rows v6.30.13 erases both values and v6.30.14
+  // stores W, and V too where `+` joins it (docs/audits/20261103-v6.30.15-measurements.md).
+  const hex = (c, upper) => {
+    const h = c.charCodeAt(0).toString(16).padStart(4, '0');
+    return '\\u' + (upper ? h.toUpperCase() : h);
+  };
+  const php = (v) => J(v).replace(/\//g, '\\/');
+  const dotnet = (v) =>
+    J(v)
+      .replace(/\\"/g, '\\u0022')
+      .replace(/[+<>&'`]/g, (c) => hex(c, true));
+  const gson = (v) => J(v).replace(/[=<>&']/g, (c) => hex(c, false));
+  const hook = `https://hooks.example.com/services/T0/B0/${W}`;
+  const laravel = `DB_PASSWORD=${V}\nAPP_NAME="Laravel"\nSLACK_WEBHOOK_URL=${hook}\n`;
+
+  it.each([
+    ['PHP inside .NET, `\\/` joining a webhook URL', dotnet({ id: 7, payload: php({ env: laravel }) })],
+    [
+      'PHP inside .NET, `\\u002B` joining a password into a URL',
+      dotnet({
+        id: 7,
+        payload: php({
+          env: `ACCESS_TOKEN: ${V}\nAPP_NAME="Laravel"\nWEBHOOK_URL=https://hooks.example.com/${W}+${V}\n`,
+        }),
+      }),
+    ],
+    [
+      'Gson inside .NET, `\\u003d` and `\\u002B`',
+      dotnet({
+        id: 7,
+        payload: gson({
+          env: `ACCESS_TOKEN: ${V}\nAPP_NAME="Laravel"\nWEBHOOK=${W}+${V}\nLOG_LEVEL: info\n`,
+        }),
+      }),
+    ],
+    [
+      'PHP inside Gson, `\\u0027` hiding the quote that ends a value',
+      gson({
+        id: 7,
+        payload: php({
+          env: `ACCESS_TOKEN: ${V}\nAPP_NAME='Laravel'\nWEBHOOK=https://hooks.example.com/services/T0/${W}\n`,
+        }),
+      }),
+    ],
+    [
+      'three levels: PHP inside .NET inside JSON',
+      J({ log: dotnet({ id: 7, payload: php({ env: laravel }) }) }),
+    ],
+    // Only the outermost reading erases W here, where PHP's slash is written with three backslashes.
+    ['three levels: PHP inside JSON inside .NET', dotnet({ log: J({ payload: php({ env: laravel }) }) })],
+  ])('%s', (_name, text) => {
+    const out = scrubSecrets(text);
+    expect(out).not.toContain(V);
+    expect(out).not.toContain(W);
+    expect(scrubSecrets(out)).toBe(out);
+  });
+
+  it('keeps a word an escape joins two levels in, when nothing erased it', () => {
+    // The URL comes before the credential, where no value runs on over it.
+    const docs = 'https://docs.example.com/v2/setup';
+    const out = scrubSecrets(dotnet({ id: 7, payload: php({ env: `DOCS=${docs}\n${laravel}` }) }));
+    expect(out).not.toContain(W);
+    expect(out).toContain(`DOCS=${docs}\\\\n`);
+  });
+
+  it('erases a word a value runs on into, in a literal it leaves as written', () => {
+    // The literal holding the URL has nothing of its own to erase, so it keeps its `\/`; the patterns
+    // erase the URL in the outer escaped text, where the password's value runs on into it. Each word is
+    // erased with the escapes inside it, and no more.
+    const text = dotnet({ cfg: `PASSWORD=${V}"https:\\/\\/hooks.example.com\\/services\\/${W}"` });
+    expect(scrubSecrets(text)).toBe('{"cfg":"PASSWORD=***\\"***:***\\""}');
+  });
+
+  it('reads a backslash and `u` before letters that are no hex digits as written', () => {
+    // `\uZr7K` is no escape, so the word after the backslash, erased by the run-on of `secret:` in the
+    // escaped text, is erased whole.
+    const out = scrubSecrets(J({ c: `PGPASSWORD=\n  secret:x1y2z3a4\nC:\\keys\\u${V}\n  token=` }));
+    expect(out).not.toContain(V.slice(0, 4));
+  });
+});

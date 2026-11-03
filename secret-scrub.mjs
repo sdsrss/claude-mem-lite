@@ -1580,11 +1580,15 @@ function runPatterns(text) {
 // A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
 // the lines after a label up to a space, and the text reading keeps such a line when it has no label
 // of its own. Without that, 5-8 values in 20,000 generated texts that v6.30.13 erased were stored
-// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before. The words
-// of the body, and of what the patterns leave of it, are read decoded and encoded again: an escape
-// that decodes to a value-token character (`\/` from PHP's json_encode, `+` from .NET) joins
-// words in the rewritten literal, and read from the escaped body such a word was new and kept
-// (266-715 of 20,000 generated `.env` texts, v6.30.14 review r2).
+// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before. The words of
+// the body, of what the patterns leave of it and of the rewritten literal are read with every escape
+// that decodes to one character, at any depth, read as that character. A rewritten literal holds the
+// character itself: `\/` (PHP's json_encode) becomes `/` and `\u002B` (.NET) `+`, which join words, and
+// `\u0022` (.NET) a quote, which no longer sticks `u0022` onto the next word. Read as written, such a
+// word was new and kept (266-715 of 20,000 generated `.env` texts at one level, v6.30.14 review r2; 220
+// of 329,366 generated values two and three levels in, review r3). Every other escape is read as
+// written: decoding literal by literal instead stored values where the patterns had erased a backslash
+// before a quote and so moved where a literal ends (75 of 165,125 generated values, 2026-11-03).
 //
 // Bounds: MAX_LITERALS literals are decoded per text and level (real transcripts, 2026-11-02: at most
 // 133 in one text); with no bound, `"\"` repeated over 500,000 characters took 104x the patterns alone
@@ -1596,9 +1600,8 @@ function runPatterns(text) {
 const LITERAL_STOP_RE = /["\\\r\n]/g;
 const JSON_ESCAPE_RE = /\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g;
 const JSON_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
-// A value token, and an escape, which is no part of one: `\nAPI_KEY` holds the token `API_KEY`.
 const VALUE_TOKEN_RE = /[A-Za-z0-9+/=_.-]+/g;
-const ESCAPE_RE = /\\(?:u[0-9a-fA-F]{4}|.)/g;
+const HEX4_RE = /^[0-9a-fA-F]{4}$/;
 const MAX_LITERAL_DEPTH = 3;
 const MAX_LITERALS = 256;
 const MAX_LITERAL_ROUNDS = 4;
@@ -1613,8 +1616,60 @@ function decodeLiteral(body) {
   }
 }
 
-const maskEscapes = (text) => text.replace(ESCAPE_RE, (e) => ' '.repeat(e.length));
-const valueTokens = (text) => new Set(maskEscapes(text).match(VALUE_TOKEN_RE));
+/**
+ * text with every escape that decodes to one character, at any depth (a run of backslashes, then `/` or
+ * `u` and four hex digits), read as that character; and where each such escape was: [index in the
+ * reading, start, end in text], flat.
+ */
+function joinedReading(text) {
+  let read = '';
+  let last = 0;
+  const units = [];
+  for (let i = text.indexOf('\\'); i !== -1;) {
+    let j = i;
+    while (text.charCodeAt(j) === 92) j++;
+    let end = -1;
+    let ch;
+    if (text[j] === '/') {
+      end = j + 1;
+      ch = '/';
+    } else if (text[j] === 'u' && HEX4_RE.test(text.slice(j + 1, j + 5))) {
+      end = j + 5;
+      ch = String.fromCharCode(parseInt(text.slice(j + 1, end), 16));
+    }
+    if (end === -1) {
+      i = text.indexOf('\\', j);
+      continue;
+    }
+    read += text.slice(last, i);
+    units.push(read.length, i, end);
+    read += ch;
+    last = end;
+    i = text.indexOf('\\', end);
+  }
+  return [read + text.slice(last), units];
+}
+
+const joinedTokens = (text) => new Set(joinedReading(text)[0].match(VALUE_TOKEN_RE));
+
+/** text with each value token in `erase`, as joinedReading reads it, replaced by `***`. */
+function eraseJoined(text, erase) {
+  const [read, units] = joinedReading(text);
+  let u = 0;
+  let shift = 0;
+  const at = (k) => {
+    for (; u < units.length && units[u] < k; u += 3) shift += units[u + 2] - units[u + 1] - 1;
+    return k + shift;
+  };
+  let out = '';
+  let last = 0;
+  for (const { 0: token, index } of read.matchAll(VALUE_TOKEN_RE)) {
+    if (!erase.has(token)) continue;
+    out += text.slice(last, at(index)) + '***';
+    last = at(index + token.length);
+  }
+  return out + text.slice(last);
+}
 
 /**
  * The first literal opening at or after `from`: [start, bodyEnd, end], the body being text[start + 1,
@@ -1642,12 +1697,11 @@ function nextLiteral(text, from) {
 }
 
 /**
- * The literal reading of a text at `depth`: gap(part) for each part between the literals it decodes, as
- * written, and lit(body) for the body of each literal it decodes, joined in order. It decodes a literal
- * whose body holds an escape, the first MAX_LITERALS of them, and none at MAX_LITERAL_DEPTH.
+ * text with the body of each literal it decodes replaced by lit(body): a literal whose body holds an
+ * escape, the first MAX_LITERALS of them, and none at MAX_LITERAL_DEPTH.
  */
-function readLiterals(text, depth, gap, lit) {
-  if (depth >= MAX_LITERAL_DEPTH || !text.includes('\\')) return gap(text);
+function readLiterals(text, depth, lit) {
+  if (depth >= MAX_LITERAL_DEPTH || !text.includes('\\')) return text;
   let budget = MAX_LITERALS;
   let out = '';
   let last = 0;
@@ -1655,31 +1709,21 @@ function readLiterals(text, depth, gap, lit) {
     const body = text.slice(m[0] + 1, m[1]);
     if (!body.includes('\\')) continue;
     budget--;
-    out += gap(text.slice(last, m[0] + 1)) + lit(body);
+    out += text.slice(last, m[0] + 1) + lit(body);
     last = m[1];
   }
-  return out + gap(text.slice(last));
+  return out + text.slice(last);
 }
 
-const asWritten = (part) => part;
-
 function scrubEscapedLiterals(text, depth) {
-  return readLiterals(text, depth, asWritten, (body) => {
+  return readLiterals(text, depth, (body) => {
     const decoded = decodeLiteral(body);
     const scrubbed = scrubText(decoded, depth + 1);
     if (scrubbed === decoded) return body;
-    const encoded = JSON.stringify(scrubbed).slice(1, -1);
-    const reencode = (s) => JSON.stringify(s).slice(1, -1);
-    const keptByPatterns = valueTokens(reencode(decodeLiteral(runPatterns(body))));
-    const inBody = valueTokens(reencode(decoded));
-    let out = '';
-    let last = 0;
-    for (const { 0: token, index } of maskEscapes(encoded).matchAll(VALUE_TOKEN_RE)) {
-      if (keptByPatterns.has(token) || !inBody.has(token)) continue;
-      out += encoded.slice(last, index) + '***';
-      last = index + token.length;
-    }
-    return out + encoded.slice(last);
+    const kept = joinedTokens(decodeLiteral(runPatterns(body)));
+    const erase = new Set();
+    for (const token of joinedTokens(decoded)) if (!kept.has(token)) erase.add(token);
+    return JSON.stringify(eraseJoined(scrubbed, erase)).slice(1, -1);
   });
 }
 
