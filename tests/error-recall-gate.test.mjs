@@ -609,6 +609,19 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     expect(script.block, 'a script file is not a data printer').toBeTruthy();
   }, 60000);
 
+  it('D#717: a successful commit whose subject names a failure is silent; the same text from a script is not', async () => {
+    const records = '1a2b3c4d (HEAD -> main) fix: vitest fail on the shared temp file traceback';
+    // Premise first: the same text from a program that ran recalls the vitest row, so the
+    // silence below is the gate's, not an empty match.
+    const script = await firePostTool('node scripts/print-log.mjs', records);
+    expect(script.block, 'a script printing the same text fires').toBeTruthy();
+    const commit = await firePostTool(
+      'git add -A && git commit -q -m "fix: vitest fail on the shared temp file traceback" && git log --oneline -1',
+      records,
+    );
+    expect(commit.block, 'git commit + git log --oneline').toBeFalsy();
+  }, 60000);
+
   // E2E 2026-10-16 (hooks F10): no thread dedup on this face, so a red/green loop re-sent the
   // identical block on every failing run. Session ids other than cc-errgate keep their marker
   // (fire() clears only that one).

@@ -207,6 +207,7 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
 
 - **PreToolUse 召回不再注入项目里另一个目录下同名文件的教训**（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的）。裸文件名、worktree 副本、项目之外的路径和无法定位的写法仍会匹配。退回：`CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`。
 - **同一条记忆，error recall 在同一个线程里只给一次**，不再是每 30 分钟可以再给一次。退回：`CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`。
+- **成功的 git 命令不再触发 error recall**，前提是报错词只出现在 git 打印的提交记录里（比如标题 `fix: a traceback on …`）。退回：`CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`。
 - **纯文本改动：** error-recall 块末尾不再有 `→ Use mem_get(…)` 这一行；MCP server instructions 列出了 `defer add` 和 `save` 的参数；`/claude-mem-lite:verify` 会核对记忆里引用的提交。详见 CHANGELOG.md。
 
 ## 升级到 6.29.0

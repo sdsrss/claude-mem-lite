@@ -242,6 +242,133 @@ describe('data-printing command at exit 0', () => {
   });
 });
 
+// D#717: a commit that succeeded is not a failure because its SUBJECT names one. The R3 session
+// fired three times on `git commit … && git log --oneline` whose subjects said "traceback" and
+// "fires"; across every transcript on the maintainer's machine (2026-11-03) 6 of 422 exit-0
+// firings turned on git's own commit records alone (docs/audits/20261103-r3-optimization-plan.md
+// §9.3).
+const COMMIT_CMD =
+  'git add -A && git commit -q -m "test(error-recall): a traceback with its frames cut off still fires" && git log --oneline -3';
+const COMMIT_LOG =
+  '99b31d4c (HEAD -> main) test(error-recall): a traceback with its frames cut off still fires\n' +
+  "003a95ca change(error-recall): silent when the only failure is the agent's own throwaway script\n" +
+  '443c5d27 change(error-recall): one showing per thread until compaction, no mem_get footer';
+const git = (over = {}) =>
+  errorRecallSuppression({
+    cmd: COMMIT_CMD,
+    response: COMMIT_LOG,
+    entries: [],
+    ccSession: SESSION,
+    exitZero: true,
+    projectDir: REPO,
+    ...over,
+  });
+
+describe('git commit records at exit 0 (D#717)', () => {
+  it('precondition: each record fixture is a hard error to the trigger', () => {
+    expect(detectBashSignificance({ command: COMMIT_CMD }, COMMIT_LOG).isHardError).toBe(true);
+  });
+
+  it('suppresses `git commit … && git log --oneline` whose subject names a failure', () => {
+    expect(git()).toMatchObject({ reason: 'git-record' });
+  });
+
+  it("suppresses git commit's own `[branch sha] subject` line", () => {
+    const out =
+      '[main 7b25874a] test(api): let exceptions escaping an endpoint fail with their traceback\n' +
+      ' 1 file changed, 12 insertions(+), 1 deletion(-)';
+    const cmd = 'git add tests/test_api.py && git commit -F msg.txt';
+    expect(detectBashSignificance({ command: cmd }, out).isHardError).toBe(true);
+    expect(git({ cmd, response: out })).toMatchObject({ reason: 'git-record' });
+  });
+
+  it('suppresses `git log --graph --oneline` with decorations', () => {
+    const out =
+      '* 1a2b3c4 (HEAD -> main, origin/main) fix: panic on an empty input file\n* 5d6e7f8 docs: readme';
+    const cmd = 'git fetch -q && git log --graph --oneline -2';
+    expect(detectBashSignificance({ command: cmd }, out).isHardError).toBe(true);
+    expect(git({ cmd, response: out })).toMatchObject({ reason: 'git-record' });
+  });
+
+  it('suppresses `git show` whose header and indented message name a failure', () => {
+    const out =
+      'commit 0123456789abcdef0123456789abcdef01234567 (HEAD -> main)\n' +
+      'Author: A <a@b.c>\nDate:   Tue Nov 3 06:32:12 2026 -0800\n\n' +
+      '    fix(hook): TypeError: entries is not iterable on a fresh buffer\n\n' +
+      '    The traceback came from the first PostToolUse of a session.\n\n' +
+      ' hook.mjs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)';
+    const cmd = 'git show --stat HEAD && npm run lint';
+    expect(detectBashSignificance({ command: cmd }, out).isHardError).toBe(true);
+    expect(git({ cmd, response: out })).toMatchObject({ reason: 'git-record' });
+  });
+
+  it('CONTROL: a commit whose pre-commit run FAILED (exit masked by `; echo`) still fires', () => {
+    const out =
+      'AssertionError: expected 1 to be 2\n' +
+      '    at Object.<anonymous> (/home/u/proj/tests/a.test.mjs:3:9)\n' +
+      'Tests failed. Fix before committing.\nrc=1';
+    expect(git({ cmd: 'git commit -q -m "fix: x"; echo "rc=$?"', response: out })).toBeNull();
+  });
+
+  it('CONTROL: a real failure printed next to the records still fires', () => {
+    const cmd = COMMIT_CMD + ' && npm test';
+    const failure =
+      ' FAIL  tests/a.test.mjs > reads the row\n' +
+      "TypeError: Cannot read properties of undefined (reading 'id')\n" +
+      '      Tests  1 failed | 3 passed (4)';
+    // Premise: the failure alone is a hard error, so the records are not what makes it fire.
+    expect(detectBashSignificance({ command: cmd }, failure).isHardError).toBe(true);
+    expect(git({ cmd, response: COMMIT_LOG + '\n' + failure })).toBeNull();
+  });
+
+  it('CONTROL: the same output at NON-zero exit still fires', () => {
+    expect(git({ exitZero: false })).toBeNull();
+  });
+
+  it('CONTROL: a crash printed after a full commit record keeps its indented stack frames', () => {
+    const cmd = 'git log -1 && node app.mjs';
+    const out =
+      'commit 0123456789abcdef0123456789abcdef01234567\n' +
+      'Author: A <a@b.c>\nDate:   Tue Nov 3 06:32:12 2026 -0800\n\n' +
+      '    feat: add the worker\n\n' +
+      'Error: boom\n' +
+      '    at main (/home/u/proj/app.mjs:3:9)';
+    // Premise: the frame is the only hard-error signal, so dropping it would silence a real crash.
+    expect(detectBashSignificance({ command: cmd }, 'Error: boom').isHardError).toBe(false);
+    expect(git({ cmd, response: out })).toBeNull();
+  });
+
+  it('CONTROL: an indented hex-led line is not a record git prints (constructed)', () => {
+    const cmd = 'git log --oneline -1 && node check.mjs';
+    const out = '  deadbeef1 TypeError: x is not a function; the check failed';
+    expect(detectBashSignificance({ command: cmd }, out).isHardError).toBe(true);
+    expect(git({ cmd, response: out })).toBeNull();
+  });
+
+  it('CONTROL: a log line led by an epoch timestamp is not a one-line record', () => {
+    const cmd = 'git log --oneline -1 && node worker.mjs';
+    const out = '1730000000 [worker] TypeError: Cannot read properties of undefined; job failed';
+    expect(detectBashSignificance({ command: cmd }, out).isHardError).toBe(true);
+    expect(git({ cmd, response: out })).toBeNull();
+  });
+
+  it('CONTROL: a command that runs no record-printing git subcommand still fires', () => {
+    expect(git({ cmd: 'node scripts/print-log.mjs' })).toBeNull();
+    expect(git({ cmd: 'git status --short && node scripts/print-log.mjs' })).toBeNull();
+  });
+
+  it('CONTROL: CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off restores the firing', () => {
+    const prev = process.env.CLAUDE_MEM_ERROR_RECALL_GIT_RECORD;
+    process.env.CLAUDE_MEM_ERROR_RECALL_GIT_RECORD = 'off';
+    try {
+      expect(git()).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_MEM_ERROR_RECALL_GIT_RECORD;
+      else process.env.CLAUDE_MEM_ERROR_RECALL_GIT_RECORD = prev;
+    }
+  });
+});
+
 describe('isDataPrintingCommand', () => {
   it.each([
     ['node -e', "node -e 'console.log(1)'"],

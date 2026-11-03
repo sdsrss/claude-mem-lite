@@ -4,7 +4,7 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## Unreleased
 
-**Upgrade note: nothing to run; the schema version stays 49.** The first two changes each have a
+**Upgrade note: nothing to run; the schema version stays 49.** The first three changes each have a
 switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.md` and
 `docs/audits/20261103-r3-optimization-plan.md` (194 session transcripts, 2026-10-06..11-03).
 
@@ -20,6 +20,11 @@ switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-s
   or a new session, or the 24 h runtime GC; a subagent keeps its record for its whole run), not
   once per 30 minutes (rows already shown to the same thread were 281 of 1,739 recorded
   error-recall rows). Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+- **Error recall stays silent on a git command that succeeded when its only failure words are in
+  the commit records git printed** (`git commit -m "fix: … traceback" && git log --oneline`): 6 of
+  422 exit-0 firings on the maintainer's transcripts (2026-11-03). The rest of the output is judged
+  as before, so a pre-commit failure whose exit code an `; echo` hid, or a real failure printed
+  next to the records, still fires. Back: `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`.
 - The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
   3 `mem_get` calls); its rows keep their `#id`.
 - The MCP server instructions list `defer add` and `save` with their flags, so a write through

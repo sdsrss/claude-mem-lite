@@ -251,6 +251,9 @@ changes, pin `claude-mem-lite@6.30.15`.
   `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
 - **Error recall shows a thread a memory once while the thread lasts**, not once per 30 minutes.
   Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+- **Error recall stays silent on a git command that succeeded** when its only failure words are in
+  the commit records git printed (a subject such as `fix: a traceback on …`). Back:
+  `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`.
 - **Text only:** the error-recall block no longer ends with `→ Use mem_get(…)`; the MCP server
   instructions list the flags of `defer add` and `save`; `/claude-mem-lite:verify` checks the
   commits a memory cites. Details in CHANGELOG.md.
@@ -1262,6 +1265,7 @@ benchmark and A/B harness are calibrated against — changing them invalidates t
 | `CLAUDE_MEM_ERROR_RECALL_RERANK` | `off` restores the flat keyword ordering of the error-recall surface. **On by default**, and unlike the floor above it removes nothing: memories that share only the failed command's vocabulary are demoted below memories that mention the failure itself, and when a project has none of the latter the result is unchanged. Measured on a live database over 52 real failing commands × 15 projects: the lead memory matched no error term in 42.3% of firings before, 21.5% after, with the injected row count identical. | _(on)_ |
 | `CLAUDE_MEM_ERROR_RECALL_ON_FAILURE` | `off` stops the plugin from recalling memories when a Bash command **fails at the host level**. On by default. Claude Code delivers failed tool calls to a separate `PostToolUseFailure` hook event, so before this the surface only ever saw commands that exited `0` while printing error-ish text — a genuinely failing build recalled nothing. Denials from your own guardrails (sandbox, policy hooks, declined permission prompts) and commands you interrupted are never recalled for. | _(on)_ |
 | `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN` | Minutes after which error recall may show a thread a memory it already showed. **By default not again while the thread lasts**: the record is cleared when the main thread's context starts over (`/compact`, `/clear`, a new session) and by the 24 h runtime GC; a subagent keeps its own record for its whole run (R3 O3; the earlier default was 30 minutes, which let 71 (session, memory) pairs reach 3+ showings on 194 transcripts). `30` restores the old window. | _(whole thread)_ |
+| `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD` | `off` lets error recall fire again on a git command that exited 0 when its only failure words are in the commit records git printed (`[main 1a2b3c4] fix: a traceback on …`, a `git log --oneline` line, a `commit <sha>` header and its message). **On by default** (D#717): 6 of 422 exit-0 firings on the maintainer's transcripts (2026-11-03) were that shape. The rest of the output is judged as before, so a pre-commit failure whose exit code an `; echo` hid still fires. | _(on)_ |
 | `CLAUDE_MEM_UPS_IDENTIFIER_BYPASS` | `0` disables the bypass that lets an exact identifier match skip the score floors. | _(on)_ |
 | `CLAUDE_MEM_UPS_PROMPT_FALLBACK_LIMIT` | How many past-prompt rows the fallback arm may return. | `1` |
 | `MEM_COVERAGE_THRESHOLD` | Fraction of query terms a memory must cover to qualify (∈ [0,1]). | `0.4` |

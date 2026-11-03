@@ -1010,7 +1010,8 @@ async function handlePostToolUse() {
 
 /**
  * N2 (session-history analysis r2): stay silent on a deliberate TDD RED and on an exit-0
- * command that merely PRINTS error text. The decision is lib/error-recall-gate.mjs; this
+ * command that merely PRINTS error text; D#717 adds an exit-0 git command whose only failure
+ * words are the commit records it printed. The decision is lib/error-recall-gate.mjs; this
  * hands it the episode buffer the hook already keeps (read without the lock: a snapshot is
  * enough, and writeEpisode replaces the file by rename) and meters what it silenced, so the
  * suppressed volume is readable next to `error_recall` rather than inferred from its drop.
