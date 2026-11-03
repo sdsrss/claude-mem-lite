@@ -2,6 +2,43 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.14 — a credential inside a JSON string is erased
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.13`. Text that earlier versions already stored is not rescanned on upgrade.
+
+- **Security: a credential inside a JSON string was stored** (D#687, D#693, D#685). A JSON string
+  writes a quote as `\"` and a line break as `\n`, and a credential written in one was kept: what
+  `aws secretsmanager get-secret-value` prints (the whole JSON or `--query SecretString`), an MCP
+  result holding JSON in a string, a `.env` value holding escaped JSON
+  (`APP_CONFIG="{\"api_key\":…}"`), an escaped JSON literal in source code, a `.env` inside
+  `kubectl … | jq -c .data`, a credential label or token at a line start in a JSON string
+  (`\ntoken: …`, `\nghp_…`), and a cut-off key printed as JavaScript string concatenation or by
+  `util.inspect` inside a JSON string. Now a double-quoted string holding an escape is decoded and
+  scrubbed as text, and rewritten when that erased something. Of 14 recorded shapes, each through
+  the tool-call hook, import-jsonl and a pasted prompt, 6.30.13 stored 13 through at least one of
+  them and 6.30.14 none.
+- **Scrubbing takes longer**: on about 198,000 texts of Claude Code transcripts from other projects,
+  timed in alternating passes over the same texts, 6.30.14 takes 1.13 times as long as 6.30.13 on
+  Node 26 and 1.10 times on Node 22; on prompts 1.12 and 1.12, on tool results 1.07 and 1.05, on
+  the strings of tool inputs 1.30 and 1.21.
+- **Some text that is not a credential is erased or rewritten now as well.** Of those texts,
+  6.30.14 changes 69 and keeps nothing in them that 6.30.13 erased. In 66 it erases the value of a
+  `"token"`, `"session_id"` or `"sessionId"` key in JSON written inside a command
+  (`echo "{\"token\":\"…\"}"`), as 6.30.13 did in JSON outside a string. In 3 it writes `\|` in a
+  grep pattern as `\\|`, in a string it rewrites.
+- **Still stored**, besides the shapes 6.30.11 lists: a cut-off key printed one string per line in
+  a diff or as a JSON array, and the `git diff` of a PEM key that gained a passphrase, in text
+  pasted into a prompt; key lines in a diff hunk that does not show the key's BEGIN line
+  (`git show` of an edited key line); a credential in a text after its first 256 strings
+  holding an escape (a notebook with long outputs); a credential label or token at a line start in
+  a single-quoted string (Python's `repr`, Node's `util.inspect`); a credential label right after
+  a terminal color code (`…[0mAPI_KEY=…`); an environment list written as name/value pairs
+  (Kubernetes `name: DB_PASSWORD` then `value: …`), through the tool-call hook, import-jsonl and
+  the prompt hook (D#679); a value under a name no pattern covers, such as `ENCRYPTION_KEY=`,
+  `SECRET_KEY_BASE=` or `APP_KEY=` in a `.env` file, and under a quoted credential key followed by
+  `=` (`"api_key" = "…"` in TOML or HCL) (D#690).
+
 ## v6.30.13 — an empty credential label no longer hides the next line's credential
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
