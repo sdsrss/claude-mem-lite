@@ -395,6 +395,13 @@ describe('own-script — the only failure is an exception raised in the agent’
     expect(own({ response: out, projectDir: REPO })).toMatchObject({ reason: 'own-script' });
   });
 
+  it('CONTROL: a traceback whose frames were cut off cannot be placed, so it still fires', () => {
+    const cut =
+      'Traceback (most recent call last):\nAssertionError: anchor missing\n      Tests  4 passed (4)';
+    expect(detectBashSignificance({ command: PATCH_CMD }, cut).isHardError).toBe(true);
+    expect(own({ response: cut })).toBeNull();
+  });
+
   it('CONTROL: CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT=off keeps it firing', () => {
     expect(
       errorRecallSuppression(
