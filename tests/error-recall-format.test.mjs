@@ -14,10 +14,14 @@ describe('formatErrorRecallHints (PostToolUse error-recall rendering)', () => {
     expect(formatErrorRecallHints(null)).toBe('');
   });
 
-  it('keeps the header + mem_get pointer line (back-compat with the tracked surface)', () => {
+  // The header is what the citation extractors and injection-budget key on (the tracked surface).
+  // R3 O4: the `→ Use mem_get(ids=[…]) for details.` footer is gone — on 194 transcripts it closed
+  // 622 blocks and MCP mem_get was called 3 times; the rows keep their #id.
+  it('keeps the header and the #id rows, and carries no mem_get footer', () => {
     const out = formatErrorRecallHints([{ id: 5, type: 'bugfix', title: 't', lesson_learned: null }]);
     expect(out).toContain('[claude-mem-lite] Related memories found for this error');
-    expect(out).toContain('→ Use mem_get(ids=[5]) for details.');
+    expect(out).toContain('#5 [bugfix] t');
+    expect(out).not.toContain('mem_get');
     expect(out.endsWith('\n')).toBe(true);
   });
 
@@ -34,7 +38,8 @@ describe('formatErrorRecallHints (PostToolUse error-recall rendering)', () => {
     const out = formatErrorRecallHints(rows);
     expect(out).toContain('#42 [bugfix]');
     expect(out).toContain('Server was not running; start it before curl.'); // top-1 body inlined
-    expect(out).toContain('→ Use mem_get(ids=[42,43])');
+    expect(out).toContain('#43 [decision] Chose port 3000 for dev'); // later rows stay pointers
+    expect(out).not.toContain('arbitrary second');
   });
 
   it('inlines ONLY the top-1 lesson; later rows stay pointers (bounded payload)', () => {

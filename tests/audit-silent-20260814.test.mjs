@@ -747,7 +747,7 @@ describe('B1 — an unopenable DB is recorded, and does not destroy the episode 
 //
 // `compressed_into` is included in the fix, not just `superseded_at`, for two reasons:
 // (a) it is half of the same live-row invariant every sibling applies, and (b) the block's
-// own footer is `→ Use mem_get(ids=[…])`, so a COMPRESSED_PENDING_PURGE row (decay-marked,
+// rows are #id pointers (the `→ Use mem_get` footer went in R3 O4), so a COMPRESSED_PENDING_PURGE row (decay-marked,
 // queued for deletion by `maintain purge_stale`) yields a pointer that resolves to nothing.
 
 describe('F1 — PostToolUse error-recall serves neither retracted nor compressed rows', () => {
@@ -864,8 +864,8 @@ describe('F1 — PostToolUse error-recall serves neither retracted nor compresse
   }, 90000);
 
   // FAILS IF: only `superseded_at` is added and `compressed_into` is left out — the
-  // decay-marked original still leads the block and the `→ Use mem_get(ids=[…])` footer
-  // points at a row that `maintain execute --ops purge_stale` is about to delete.
+  // decay-marked original still leads the block and its #id pointer
+  // names a row that `maintain execute --ops purge_stale` is about to delete.
   it('a compressed / purge-marked original is not served either', async () => {
     const { staleId, liveId, block, stdout } = await seedAndFire('f1comp', {
       mark: { col: 'compressed_into', value: -2 }, // COMPRESSED_PENDING_PURGE

@@ -263,6 +263,11 @@ export function neutralizeSkillDelimiters(s) {
  * moment a fix is needed. Later rows stay as #ID pointers to keep the injected
  * payload bounded (one body, not three). Upstream noise gating (low-signal title
  * exclusion) is the SELECT's job (see triggerErrorRecall).
+ *
+ * No `→ Use mem_get(ids=[…]) for details.` footer (R3 O4,
+ * docs/audits/20261103-r3-optimization-plan.md): on 194 transcripts it closed 622
+ * blocks and MCP mem_get was called 3 times. The header line is the surface the
+ * citation extractors and benchmark/injection-budget.mjs key on, so it stays.
  * @param {Array<{id:number,type:string,title:string,lesson_learned?:string}>} rows
  * @returns {string} stdout block (trailing newline) or '' when there are no rows
  */
@@ -280,8 +285,7 @@ export function formatErrorRecallHints(rows) {
     }
     return head;
   });
-  const ids = rows.map((r) => r.id).join(',');
-  return `[claude-mem-lite] Related memories found for this error:\n${lines.join('\n')}\n  \u2192 Use mem_get(ids=[${ids}]) for details.\n`;
+  return `[claude-mem-lite] Related memories found for this error:\n${lines.join('\n')}\n`;
 }
 
 /**
