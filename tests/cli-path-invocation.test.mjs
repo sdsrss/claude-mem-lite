@@ -192,6 +192,35 @@ describe('steering-surface consistency + injection budget', () => {
     }
   });
 
+  // D#722: the content budget above is normalised to a 45-char path, but the host cuts the
+  // instructions field at 4,096 RAW chars (code.claude.com/docs/en/mcp; the default of
+  // CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH) and the full text embeds the install path 9 times,
+  // so every char of path costs 9 of that cap. The plugin cache lives under the config dir, so a
+  // long home or config dir is a long path. Budgeted at a 120-char macOS install — a 19-char
+  // user name and a CLAUDE_CONFIG_DIR under Application Support (a space, so `shellWord` quotes
+  // it, as the real text would) — the full text left 59 chars on 2026-11-03. Red here means the
+  // text grew into the cap: shorten it, or name the path once, before raising anything.
+  test('the full instructions fit the host cap at a long install path', () => {
+    const HOST_INSTRUCTIONS_CAP = 4096;
+    const LONG_CLI_PATH =
+      '/Users/firstname-lastname1/Library/Application Support/claude-code/plugins/cache/sdsrss/claude-mem-lite/10.10.10/cli.mjs';
+    expect(LONG_CLI_PATH.length, 'premise: the synthetic path is the one the comment sizes').toBe(120);
+    for (const [name, text] of [
+      ['instructions full', buildServerInstructions(false)],
+      ['instructions BASE', buildServerInstructions(true)],
+    ]) {
+      const here = shellWord(CLI_PATH);
+      expect(
+        text.split(here).length - 1,
+        `${name}: premise, the text embeds this install's path`,
+      ).toBeGreaterThan(0);
+      const atLongPath = text.split(here).join(shellWord(LONG_CLI_PATH));
+      expect(atLongPath.length, `${name} at a ${LONG_CLI_PATH.length}-char install path`).toBeLessThanOrEqual(
+        HOST_INSTRUCTIONS_CAP,
+      );
+    }
+  });
+
   // R7 P2-1, the other half: surfaces PERSISTED into the user's project tree must embed
   // the install path ZERO times, so the bytes that land in their repo are identical on
   // every machine and across every plugin version. Stated as a length identity rather
