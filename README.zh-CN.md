@@ -207,8 +207,8 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
 
 - **PreToolUse 召回不再注入项目里另一个目录下同名文件的教训**（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的）。裸文件名、worktree 副本、项目之外的路径、无法定位的写法，以及现在已不存在的路径（文件移走了）仍会匹配。退回：`CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`。
 - **同一条记忆，error recall 在同一个线程里只给一次**，不再是每 30 分钟可以再给一次。退回：`CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`。
-- **成功的 git 命令不再触发 error recall**，前提是报错词只出现在 `[分支 sha] 标题` 行、`git log --oneline` 的行，或 `commit <sha>` 头及其提交说明里（比如标题 `fix: a traceback on …`）。退回：`CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`。
-- **纯文本改动：** error-recall 块末尾不再有 `→ Use mem_get(…)` 这一行；MCP server instructions 列出了 `defer add` 和 `save` 的参数；`/claude-mem-lite:verify` 会核对记忆里引用的提交。详见 CHANGELOG.md。
+- **error recall 读取退出码为 0 的 git 命令的输出时，先去掉 git 打印的提交记录**（比如标题 `fix: a traceback on …`），剩下的内容不再被判为失败就不注入。去掉的是三种行：以 `[<分支> <sha>] ` 开头的行；一行一条的日志 `<sha> 标题`，sha 里至少有一个字母（前面可以有 `--graph` 的列）；以 `commit <40 位 sha>` 开头的行，以及它下面的头字段和缩进的提交说明。命令里必须有 `git log`、`show`、`commit`、`cherry-pick`、`revert`、`merge`、`rebase` 或 `reflog`。退回：`CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`。
+- **纯文本改动：** error-recall 块末尾不再有 `→ Use mem_get(…)` 这一行；MCP server instructions 列出了 `defer add` 和 `save` 的参数。详见 CHANGELOG.md。
 
 ## 升级到 6.29.0
 

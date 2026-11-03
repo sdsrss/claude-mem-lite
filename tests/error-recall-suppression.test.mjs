@@ -243,7 +243,7 @@ describe('data-printing command at exit 0', () => {
 });
 
 // D#717: a commit that succeeded is not a failure because its SUBJECT names one. The R3 session
-// fired three times on `git commit … && git log --oneline` whose subjects said "traceback" and
+// fired on `git commit … && git log --oneline` whose subjects said "traceback" and
 // "fires"; across every transcript on the maintainer's machine (2026-11-03) 6 of 422 exit-0
 // firings turned on git's own commit records alone (docs/audits/20261103-r3-optimization-plan.md
 // §9.3).

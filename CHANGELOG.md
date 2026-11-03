@@ -20,19 +20,18 @@ switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-s
 - **Error recall shows a thread a memory once while the thread lasts** (until `/compact`, `/clear`
   or a new session, or the 24 h runtime GC; a subagent keeps its record for its whole run), not
   once per 30 minutes. Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
-- **Error recall stays silent on a git command that succeeded when its only failure words are in
-  a `[branch sha] subject` line, a `git log --oneline` line or a `commit <sha>` header and its
-  message** (`git commit -m "fix: … traceback" && git log --oneline`): 6 of
-  422 exit-0 firings on the maintainer's transcripts (2026-11-03). The rest of the output is judged
-  as before, so a pre-commit failure whose exit code an `; echo` hid, or a real failure printed
-  next to the records, still fires. Back: `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`.
+- **Error recall reads an exit-0 git command's output without the commit records git prints**,
+  and stays silent when nothing left reads as a failure (`git commit -m "fix: … traceback" && git
+  log --oneline`; 6 of 422 exit-0 firings on the maintainer's transcripts, 2026-11-03). The
+  records set aside are a line starting `[<branch> <sha>] `, a one-line log entry `<sha> subject`
+  whose sha holds a letter (after any `--graph` columns), and a line starting `commit <40-hex sha>`
+  with the header fields and indented message under it; the command must run `git log`, `show`,
+  `commit`, `cherry-pick`, `revert`, `merge`, `rebase` or `reflog`. Back:
+  `CLAUDE_MEM_ERROR_RECALL_GIT_RECORD=off`.
 - The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
   3 `mem_get` calls); its rows keep their `#id`.
 - The MCP server instructions list `defer add` and `save` with their flags, so a write through
   the CLI does not start with a `help` call.
-- `/claude-mem-lite:verify` checks the commits a memory cites: one whose change never landed on
-  the current branch, or that a later revert names, makes a memory that presents its code as
-  current STALE.
 
 ## v6.30.15 — two fixes to the JSON-string scrubbing 6.30.14 added
 
