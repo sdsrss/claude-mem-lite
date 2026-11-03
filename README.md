@@ -239,6 +239,22 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.31.0
+
+**Recall injects less that does not apply to the step at hand; nothing to run, and the schema
+version stays 49.** Each change that drops an injection has a switch back; to undo the text
+changes, pin `claude-mem-lite@6.30.15`.
+
+- **PreToolUse recall no longer injects the lesson of a same-named file in another directory of
+  the project** (`src/mcp/server/mod.rs` when you edit `src/snapshot/mod.rs`). Bare names, worktree
+  copies, paths outside the project and spellings that cannot be placed still match. Back:
+  `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
+- **Error recall shows a thread a memory once while the thread lasts**, not once per 30 minutes.
+  Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+- **Text only:** the error-recall block no longer ends with `→ Use mem_get(…)`; the MCP server
+  instructions list the flags of `defer add` and `save`; `/claude-mem-lite:verify` checks the
+  commits a memory cites. Details in CHANGELOG.md.
+
 ## Upgrading to 6.29.0
 
 **Chinese text in lessons, facts, concepts and aliases becomes searchable, and the database opens

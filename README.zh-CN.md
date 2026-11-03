@@ -201,6 +201,14 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.31.0
+
+**召回注入的内容里，和当前这一步无关的更少了；不用执行任何操作，schema 版本仍是 49。** 每项会少注入内容的改动都有开关可以退回；要撤销纯文本的改动，请固定 `claude-mem-lite@6.30.15`。
+
+- **PreToolUse 召回不再注入项目里另一个目录下同名文件的教训**（编辑 `src/snapshot/mod.rs` 时不再给 `src/mcp/server/mod.rs` 的）。裸文件名、worktree 副本、项目之外的路径和无法定位的写法仍会匹配。退回：`CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`。
+- **同一条记忆，error recall 在同一个线程里只给一次**，不再是每 30 分钟可以再给一次。退回：`CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`。
+- **纯文本改动：** error-recall 块末尾不再有 `→ Use mem_get(…)` 这一行；MCP server instructions 列出了 `defer add` 和 `save` 的参数；`/claude-mem-lite:verify` 会核对记忆里引用的提交。详见 CHANGELOG.md。
+
 ## 升级到 6.29.0
 
 **lesson、facts、concepts 和 aliases 里的中文变得可以搜到；更新后的数据库打开会逐步补上这些索引，不会拖住钩子。** 没有 schema 版本变化：本版打开过的数据库，6.28.1 仍能打开、搜索和写入。要退回，请等补完之后再退：还没补到的行，在 6.28.1 下会缺少粘在中文上的英文标识符。
