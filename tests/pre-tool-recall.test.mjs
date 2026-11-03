@@ -2692,6 +2692,29 @@ describe('pre-tool-recall', () => {
       expect(ctx).not.toMatch(/other-file lesson \d/);
     });
 
+    // More dropped rows than one page holds (a page is the cap + 20): the second page must be read.
+    it('refills across pages: 25 newer other-file lessons still leave the same-file one for a Read', async () => {
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'same-file lesson behind a full page', {
+        epochOffset: -900_000,
+      });
+      for (let k = 0; k < 25; k++)
+        seedObs(join(projectDir, 'src', `pg${k}`, 'mod.rs'), `paged other-file lesson ${k}`, {
+          epochOffset: -k * 1000,
+        });
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Read',
+          session_id: 'sess-live-o1pg',
+          tool_input: { file_path: join(projectDir, 'src', 'snapshot', 'mod.rs') },
+        },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
+      );
+      expect(stdout, 'the Read must not go silent').toBeTruthy();
+      expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toContain(
+        'same-file lesson behind a full page',
+      );
+    });
+
     // Pre-ship review L1: with edge decay on, a decayed same-file edge is no match, so it cannot keep
     // a row that matched only through another directory's same-named file.
     it('with CLAUDE_MEM_EDGE_DECAY on, a decayed same-file edge does not keep an other-file row', async () => {
