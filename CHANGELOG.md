@@ -2,6 +2,32 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## Unreleased
+
+**Upgrade note: nothing to run; the schema version stays 49.** Each change below has its own
+switch back. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.md` and
+`docs/audits/20261103-r3-optimization-plan.md` (194 session transcripts, 2026-10-06..11-03).
+
+- **PreToolUse recall no longer injects the lesson of a same-named file in another directory.**
+  Editing `src/snapshot/mod.rs` used to pull the lessons recorded for `src/mcp/server/mod.rs`, and
+  a `tasks/x/README.md` those of the root `README.md`: 210 of 4,037 injected rows were such a
+  different file. Bare file names, Claude Code worktree copies and paths outside the project still
+  match, and a dropped row's slot goes to the next candidate. Back: `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
+- **Error recall stays silent when the only failure is an exception raised in the agent's own
+  throwaway code**: a `python3 - <<EOF` patch script whose assertion missed, a `node -e` program,
+  a scratch script under `/tmp` that cannot import its dependency, with no frame in the project,
+  `node_modules` or an installed library and nothing else failing in the output. 92 of 622
+  recorded firings were that shape. Back: `CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT=off`.
+- **Error recall shows a thread a memory once until `/compact`**, not once per 30 minutes (220
+  of 1,484 rows in the remaining firings were repeats inside one thread). Back:
+  `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+- The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
+  3 `mem_get` calls); its rows keep their `#id`.
+- The MCP server instructions list `defer add` and `save` with their flags, so a write through
+  the CLI does not start with a `help` call (54 such calls against 115 CLI writes).
+- `/claude-mem-lite:verify` checks the commits a memory cites: one that is not on the current
+  branch, or that a later revert names, makes a memory that presents its code as current STALE.
+
 ## v6.30.15 — two fixes to the JSON-string scrubbing 6.30.14 added
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
