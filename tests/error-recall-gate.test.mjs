@@ -389,7 +389,7 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
 
   function fire(cmd, args, { cwd: dir, stdin = '', timeout = 30000 } = {}) {
     // These cases test the GATE, firing the same failure in one session as their own control.
-    // Error recall now skips ids a thread was shown in the last 30 minutes (E2E 2026-10-16), so
+    // Error recall skips ids a thread was already shown (E2E 2026-10-16; until compaction since R3 O3), so
     // that marker is cleared before every fire; the dedup has its own test.
     rmSync(join(dataDir, 'runtime', 'recall-shown-err-cc-errgate.json'), { force: true });
     return new Promise((resolve, reject) => {

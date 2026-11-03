@@ -1070,7 +1070,8 @@ function triggerErrorRecall(db, toolInput, response, opts = {}) {
     });
     if (!selected) return;
     // Per-thread dedup, like the PreToolUse and UserPromptSubmit faces: a red/green loop re-sent
-    // the identical block on every failing run (lib/recall-shown.mjs ERROR_RECALL_REPEAT_MS).
+    // the identical block on every failing run (lib/recall-shown.mjs errorRecallRepeatMs: once per
+    // thread until compaction, R3 O3).
     const shownPath = errorRecallShownPath(RUNTIME_DIR, opts.thread);
     const shown = readErrorRecallShown(shownPath);
     const rows = selected.rows.filter((r) => !shown.has(String(r.id)));

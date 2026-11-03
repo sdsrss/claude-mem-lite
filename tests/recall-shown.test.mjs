@@ -146,6 +146,16 @@ describe('SessionStart wiring (hook.mjs)', () => {
     });
   };
 
+  // R3 O3 made compaction the only in-session reset of the error-recall marker (review L6).
+  it('compact deletes the error-recall marker; resume keeps it', () => {
+    const err = errorRecallShownPath(runtime, 'sess-e');
+    markErrorRecallShown(err, new Map(), [7]);
+    start('sess-e', 'resume');
+    expect(readErrorRecallShown(err).has('7'), 'resume keeps what the thread was shown').toBe(true);
+    start('sess-e', 'compact');
+    expect(existsSync(err)).toBe(false);
+  });
+
   it('compact and startup clear the main thread; resume keeps it; a subagent thread survives', () => {
     const main = recallShownPath(runtime, 'sess-c');
     const sub = recallShownPath(runtime, 'sess-c-agent1');

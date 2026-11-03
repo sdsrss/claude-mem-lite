@@ -75,7 +75,8 @@ Rules that the measurement showed matter:
 - A note that already records its own fix is not stale because the fix commit landed later.
 - A note that cites a commit (7–12 hex characters) describes that commit's code. Check it is
   still there: `git merge-base --is-ancestor <sha> HEAD` (exit 1 = not on this branch: an
-  abandoned branch or an archive tag) and `git log --oneline --grep=<first 8 hex>` (a later
+  abandoned branch or an archive tag; exit 128 = git does not know the sha, or it is ambiguous —
+  UNVERIFIABLE, not STALE) and `git log --oneline --grep=<first 8 hex>` (a later
   `revert` or `withdraw` commit naming it). Either one makes the note STALE when it presents
   the code as current; a note that itself records the revert stays VALID. In one maintainer
   store, 20 of 177 notes citing a commit cited one that was reverted or never merged.

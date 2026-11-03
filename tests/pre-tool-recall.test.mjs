@@ -2669,6 +2669,56 @@ describe('pre-tool-recall', () => {
       expect(ctx).not.toContain('newer other-file lesson must not take it');
     });
 
+    // Pre-ship review M2: the slot must be refilled however many newer other-file rows come first.
+    it('refills past many dropped rows: five newer other-file lessons do not silence a Read', async () => {
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'the one same-file lesson', {
+        epochOffset: -600_000,
+      });
+      for (let k = 0; k < 5; k++)
+        seedObs(join(projectDir, 'src', `dir${k}`, 'mod.rs'), `other-file lesson ${k}`, {
+          epochOffset: -k * 1000,
+        });
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Read',
+          session_id: 'sess-live-o1m2',
+          tool_input: { file_path: join(projectDir, 'src', 'snapshot', 'mod.rs') },
+        },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
+      );
+      expect(stdout, 'the Read must not go silent').toBeTruthy();
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('the one same-file lesson');
+      expect(ctx).not.toMatch(/other-file lesson \d/);
+    });
+
+    // Pre-ship review L1: with edge decay on, a decayed same-file edge is no match, so it cannot keep
+    // a row that matched only through another directory's same-named file.
+    it('with CLAUDE_MEM_EDGE_DECAY on, a decayed same-file edge does not keep an other-file row', async () => {
+      const same = join(projectDir, 'src', 'snapshot', 'mod.rs');
+      seedObs(same, 'row kept only by a decayed edge', {
+        filesModified: JSON.stringify([same, join(projectDir, 'src', 'server', 'mod.rs')]),
+      });
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      expect(
+        db.prepare('UPDATE observation_files SET miss_streak = 9 WHERE filename = ?').run(same).changes,
+      ).toBe(1);
+      db.close();
+      const run = (env) =>
+        runScript(
+          {
+            tool_name: 'Edit',
+            session_id: `sess-live-l1-${Object.keys(env).length}`,
+            tool_input: { file_path: same },
+          },
+          { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, ...env },
+        );
+      // Premise: with decay off the same-file edge still matches and the row is injected.
+      expect((await run({})).stdout).toContain('row kept only by a decayed edge');
+      const { stdout } = await run({ CLAUDE_MEM_EDGE_DECAY: '1' });
+      expect(stdout).not.toContain('row kept only by a decayed edge');
+    });
+
     it('keeps worktree copies and bare names, and CLAUDE_MEM_PRETOOL_PATH_PRECISION=off restores the old match', async () => {
       seedObs(
         join(projectDir, '.claude', 'worktrees', 'agent-a1', 'src', 'snapshot', 'mod.rs'),

@@ -17,6 +17,7 @@ const FILL = [
   ['"<why>"', '"probe deferred detail"'],
   ['"<what happened>"', '"probe saved text about the anchor"'],
   ['"<root cause + fix>"', '"probe lesson body"'],
+  ['--files <path>', '--files src/probe.mjs'],
 ];
 
 let root, env;
@@ -80,6 +81,7 @@ describe('the CLI write lines in the MCP instructions run as written', () => {
     const got = run(`${CLI_INVOKE} get ${id}`);
     expect(got.stdout).toContain('probe lesson body');
     expect(got.stdout).toMatch(/bugfix/);
+    expect(got.stdout, 'the file edge PreToolUse recall keys on').toContain('src/probe.mjs');
   });
 });
 

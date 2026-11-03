@@ -4,18 +4,22 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## Unreleased
 
-**Upgrade note: nothing to run; the schema version stays 49.** Each change below has its own
-switch back. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.md` and
+**Upgrade note: nothing to run; the schema version stays 49.** The first two changes each have a
+switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.md` and
 `docs/audits/20261103-r3-optimization-plan.md` (194 session transcripts, 2026-10-06..11-03).
 
 - **PreToolUse recall no longer injects the lesson of a same-named file in another directory.**
   Editing `src/snapshot/mod.rs` used to pull the lessons recorded for `src/mcp/server/mod.rs`, and
   a `tasks/x/README.md` those of the root `README.md`: 210 of 4,037 injected rows were such a
-  different file. Bare file names, Claude Code worktree copies and paths outside the project still
-  match, and a dropped row's slot goes to the next candidate. Back: `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
-- **Error recall shows a thread a memory once until `/compact`**, not once per 30 minutes (rows
-  already shown to the same thread were 281 of 1,739 recorded error-recall rows). Back:
-  `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
+  different file. Bare file names, Claude Code worktree copies, paths outside the project and
+  spellings that cannot be placed (`../`, `~/`, a drive letter) still match; paths are compared as
+  POSIX paths, so a native Windows host is unchanged. A dropped row's slot goes to the next
+  candidate: candidates are read page by page until the slots are filled (at most 10 pages). Back:
+  `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
+- **Error recall shows a thread a memory once while the thread lasts** (until `/compact`, `/clear`
+  or a new session, or the 24 h runtime GC; a subagent keeps its record for its whole run), not
+  once per 30 minutes (rows already shown to the same thread were 281 of 1,739 recorded
+  error-recall rows). Back: `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
 - The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
   3 `mem_get` calls); its rows keep their `#id`.
 - The MCP server instructions list `defer add` and `save` with their flags, so a write through

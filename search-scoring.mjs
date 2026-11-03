@@ -55,7 +55,7 @@ const INSTRUCTIONS_BASE = [
   // (54 of them against 115 CLI writes on 194 transcripts; the full help is 15.7 KB).
   // tests/instructions-cli-write-lines.test.mjs runs both lines as written.
   `  ${CLI_INVOKE} defer add "<title>" --priority 1|2|3 --detail "<why>"  — cross-session TODO (3 = urgent)`,
-  `  ${CLI_INVOKE} save "<what happened>" --type bugfix --lesson "<root cause + fix>"  — save a lesson`,
+  `  ${CLI_INVOKE} save "<what happened>" --type bugfix --lesson "<root cause + fix>" --files <path>  — save a lesson (--files ties it to file recall)`,
   '',
   'MCP tools: mem_search, mem_recent, mem_save, mem_get, mem_recall, mem_timeline (plus mem_defer/mem_defer_list/mem_defer_drop for cross-session TODOs). If already loaded, call directly (warm server, fastest path). In tool-heavy sessions these are deferred behind ToolSearch — if using one would cost a ToolSearch load first, run the Bash CLI above instead: one call, not two. Neither needs a PATH/CLI install.',
   'mem_save: Save non-obvious insights (bugfix lessons, architecture decisions).',

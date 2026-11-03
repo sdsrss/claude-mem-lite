@@ -263,14 +263,17 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 // era-confounded. The `(null)` bucket and the face-overall figure ARE, being
 // dominated by legacy rows.
 // R3 O1 (lib/file-edge-match.mjs edgesNameOtherFile): a row whose every same-named edge is ANOTHER
-// file of this project is dropped after the SELECT, which fetches this many extra candidates so
-// the dropped row's slot goes to the next one (the D#172 shape: a filter downstream of a LIMIT
-// shrinks the set instead of refilling it). CLAUDE_MEM_PRETOOL_PATH_PRECISION=off restores the
-// name-only match and the old LIMIT byte for byte.
+// file of this project is dropped after the SELECT. The SELECT is then PAGED until the slots are
+// filled, because a filter downstream of a LIMIT shrinks the set instead of refilling it (the
+// D#172 shape) — and the files this rule exists for are the ones with many same-named siblings:
+// a fixed over-fetch of 3 left a Read of a Rust `mod.rs` silent in 8 of 122 probes on the
+// maintainer's store (pre-ship review M2). Bounded at PATH_PRECISION_MAX_PAGES pages.
+// CLAUDE_MEM_PRETOOL_PATH_PRECISION=off restores the name-only match and the single LIMIT.
 const PATH_PRECISION_ON = !['0', 'off', 'false', 'no'].includes(
   String(process.env.CLAUDE_MEM_PRETOOL_PATH_PRECISION ?? '').toLowerCase(),
 );
-const PATH_PRECISION_SLACK = 3;
+const PATH_PRECISION_PAGE_EXTRA = 20;
+const PATH_PRECISION_MAX_PAGES = 10;
 const SCOPE_FILTER_ON = ['1', 'on', 'true', 'yes'].includes(
   String(process.env.CLAUDE_MEM_SCOPE_FILTER || '').toLowerCase(),
 );
@@ -768,9 +771,7 @@ try {
         /* probe failure → unfiltered */
       }
     }
-    const fetched = db
-      .prepare(
-        `
+    const obsSelect = (limitClause) => `
       SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
       FROM observations o
       JOIN observation_files of2 ON of2.obs_id = o.id
@@ -787,28 +788,44 @@ try {
         ${citeFactorClause('o')} DESC,
         o.created_at_epoch DESC,
         o.id DESC
-      LIMIT ${obsLimit + (PATH_PRECISION_ON ? PATH_PRECISION_SLACK : 0)}
-    `,
-      )
-      .all(project, cutoff, ...fileParams);
-    let rows = fetched;
-    if (PATH_PRECISION_ON && fetched.length > 0) {
-      const ids = fetched.map((r) => r.id);
-      const edges = new Map();
-      for (const e of db
-        .prepare(
-          `SELECT obs_id, filename FROM observation_files WHERE obs_id IN (${ids.map(() => '?').join(',')})`,
-        )
-        .all(...ids)) {
-        if (!edges.has(e.obs_id)) edges.set(e.obs_id, []);
-        edges.get(e.obs_id).push(e.filename);
-      }
+      ${limitClause}
+    `;
+    let rows;
+    if (!PATH_PRECISION_ON) {
+      rows = db.prepare(obsSelect(`LIMIT ${obsLimit}`)).all(project, cutoff, ...fileParams);
+    } else {
+      const page = obsLimit + PATH_PRECISION_PAGE_EXTRA;
+      const select = db.prepare(obsSelect('LIMIT ? OFFSET ?'));
       const projectRoot = inferProjectDir();
-      const kept = fetched.filter((r) => !edgesNameOtherFile(edges.get(r.id) || [], keyPath, projectRoot));
-      if (kept.length < fetched.length) {
-        recordMetric(DATA_DIR, { event: 'pretool_path_dropped', dropped: fetched.length - kept.length });
+      rows = [];
+      // Rows the old single LIMIT would have injected and this rule removed (the metric's unit).
+      let displaced = 0;
+      let position = 0;
+      for (let k = 0; k < PATH_PRECISION_MAX_PAGES && rows.length < obsLimit; k++) {
+        const batch = select.all(project, cutoff, ...fileParams, page, k * page);
+        if (batch.length === 0) break;
+        // The edges the match itself may use: with CLAUDE_MEM_EDGE_DECAY on, a decayed edge is not a
+        // match, so it must not keep the row here either (pre-ship review L1).
+        const ids = batch.map((r) => r.id);
+        const edges = new Map();
+        for (const e of db
+          .prepare(
+            `SELECT of2.obs_id, of2.filename FROM observation_files of2 WHERE of2.obs_id IN (${ids.map(() => '?').join(',')}) ${edgeDecayFilter}`,
+          )
+          .all(...ids)) {
+          if (!edges.has(e.obs_id)) edges.set(e.obs_id, []);
+          edges.get(e.obs_id).push(e.filename);
+        }
+        for (const r of batch) {
+          if (rows.length >= obsLimit) break;
+          if (edgesNameOtherFile(edges.get(r.id) || [], keyPath, projectRoot)) {
+            if (position < obsLimit) displaced++;
+          } else rows.push(r);
+          position++;
+        }
+        if (batch.length < page) break;
       }
-      rows = kept.slice(0, obsLimit);
+      if (displaced > 0) recordMetric(DATA_DIR, { event: 'pretool_path_dropped', dropped: displaced });
     }
 
     // T9: also query the `events` table — after T9, bugfix/lesson/decision/etc.

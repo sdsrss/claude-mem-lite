@@ -50,6 +50,31 @@ describe('edgesNameOtherFile', () => {
     expect(edgesNameOtherFile([], T, ROOT)).toBe(false);
   });
 
+  // Pre-ship review M1: an edge recorded relative to a directory ABOVE the session root (the
+  // `cd packages/api && claude` monorepo shape; #1240 in the maintainer's store) names this file.
+  it('a relative edge recorded from above the session root still names this file', () => {
+    const sub = `${ROOT}/backend`;
+    expect(edgesNameOtherFile(['backend/app/judge.py'], `${sub}/app/judge.py`, sub)).toBe(false);
+    expect(edgesNameOtherFile(['backend/app/other/judge.py'], `${sub}/app/judge.py`, sub)).toBe(true);
+  });
+
+  it('spellings that cannot be placed are kept: `..`, `~`, a drive letter, a URL', () => {
+    for (const e of [
+      '../a/mod.rs',
+      '~/dev/app/src/a/mod.rs',
+      'C:\\work\\app\\src\\a\\mod.rs',
+      'file:///x/src/a/mod.rs',
+    ])
+      expect(edgesNameOtherFile([e], T, ROOT), e).toBe(false);
+  });
+
+  it('`.` segments and doubled separators are normalised on both sides', () => {
+    expect(edgesNameOtherFile([`${ROOT}/src/./snapshot//mod.rs`], T, ROOT)).toBe(false);
+    expect(edgesNameOtherFile(['./src/snapshot/mod.rs'], T, ROOT)).toBe(false);
+    expect(edgesNameOtherFile([T], `${ROOT}/src/x/../snapshot/mod.rs`, ROOT)).toBe(false);
+    expect(edgesNameOtherFile([`${ROOT}/src/./x//mod.rs`], T, ROOT)).toBe(true);
+  });
+
   it('Windows separators in a stored edge are read as separators', () => {
     expect(edgesNameOtherFile(['src\\mcp\\server\\mod.rs'], T, ROOT)).toBe(true);
     expect(edgesNameOtherFile(['src\\snapshot\\mod.rs'], T, ROOT)).toBe(false);
