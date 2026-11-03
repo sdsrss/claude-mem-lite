@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { buildServerInstructions } from '../search-scoring.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -81,7 +82,13 @@ describe('the CLI write lines in the MCP instructions run as written', () => {
     const got = run(`${CLI_INVOKE} get ${id}`);
     expect(got.stdout).toContain('probe lesson body');
     expect(got.stdout).toMatch(/bugfix/);
-    expect(got.stdout, 'the file edge PreToolUse recall keys on').toContain('src/probe.mjs');
+    // The edge PreToolUse recall keys on, read from the junction itself (delta review F5).
+    const db = new Database(join(root, 'data', 'claude-mem-lite.db'), { readonly: true });
+    const edges = db.prepare('SELECT filename FROM observation_files WHERE obs_id = ?').all(Number(id));
+    db.close();
+    expect(edges.map((e) => e.filename).join(' '), 'observation_files carries the --files path').toContain(
+      'probe.mjs',
+    );
   });
 });
 

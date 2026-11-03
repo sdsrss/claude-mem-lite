@@ -800,33 +800,42 @@ try {
       const select = db.prepare(obsSelect('? OFFSET ?'));
       const projectRoot = inferProjectDir();
       rows = [];
-      // Rows the old single LIMIT would have injected and this rule removed (the metric's unit).
+      // Rows the old single LIMIT would have FETCHED and this rule removed (the metric's unit; the
+      // dedup and merge caps downstream may still have kept some of them out — delta review F4).
       let displaced = 0;
       let position = 0;
-      for (let k = 0; k < PATH_PRECISION_MAX_PAGES && rows.length < obsLimit; k++) {
-        const batch = select.all(project, cutoff, ...fileParams, page, k * page);
-        if (batch.length === 0) break;
-        // The edges the match itself may use: with CLAUDE_MEM_EDGE_DECAY on, a decayed edge is not a
-        // match, so it must not keep the row here either (pre-ship review L1).
-        const ids = batch.map((r) => r.id);
-        const edges = new Map();
-        for (const e of db
-          .prepare(
-            `SELECT of2.obs_id, of2.filename FROM observation_files of2 WHERE of2.obs_id IN (${ids.map(() => '?').join(',')}) ${edgeDecayFilter}`,
-          )
-          .all(...ids)) {
-          if (!edges.has(e.obs_id)) edges.set(e.obs_id, []);
-          edges.get(e.obs_id).push(e.filename);
+      const pushed = new Set();
+      // One read transaction for every page, so a write landing between two pages cannot shift
+      // the OFFSET under them (a repeated or a skipped row — delta review F2).
+      db.transaction(() => {
+        for (let k = 0; k < PATH_PRECISION_MAX_PAGES && rows.length < obsLimit; k++) {
+          const batch = select.all(project, cutoff, ...fileParams, page, k * page);
+          if (batch.length === 0) break;
+          // The edges the match itself may use: with CLAUDE_MEM_EDGE_DECAY on, a decayed edge is not a
+          // match, so it must not keep the row here either (pre-ship review L1).
+          const ids = batch.map((r) => r.id);
+          const edges = new Map();
+          for (const e of db
+            .prepare(
+              `SELECT of2.obs_id, of2.filename FROM observation_files of2 WHERE of2.obs_id IN (${ids.map(() => '?').join(',')}) ${edgeDecayFilter}`,
+            )
+            .all(...ids)) {
+            if (!edges.has(e.obs_id)) edges.set(e.obs_id, []);
+            edges.get(e.obs_id).push(e.filename);
+          }
+          for (const r of batch) {
+            if (rows.length >= obsLimit) break;
+            if (edgesNameOtherFile(edges.get(r.id) || [], keyPath, projectRoot)) {
+              if (position < obsLimit) displaced++;
+            } else if (!pushed.has(r.id)) {
+              pushed.add(r.id);
+              rows.push(r);
+            }
+            position++;
+          }
+          if (batch.length < page) break;
         }
-        for (const r of batch) {
-          if (rows.length >= obsLimit) break;
-          if (edgesNameOtherFile(edges.get(r.id) || [], keyPath, projectRoot)) {
-            if (position < obsLimit) displaced++;
-          } else rows.push(r);
-          position++;
-        }
-        if (batch.length < page) break;
-      }
+      })();
       if (displaced > 0) recordMetric(DATA_DIR, { event: 'pretool_path_dropped', dropped: displaced });
     }
 

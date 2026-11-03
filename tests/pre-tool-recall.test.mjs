@@ -2715,6 +2715,40 @@ describe('pre-tool-recall', () => {
       );
     });
 
+    // Delta review F3: the second page must start right after the first — a page at the wrong
+    // OFFSET skips (or repeats) the boundary row. Edit keeps 2 rows and pages of 22: 21 newer
+    // other-file rows put the two same-file lessons at index 21 and 22, the first rows of page 2.
+    it('reads page 2 from the row after page 1, and injects each row once', async () => {
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'boundary lesson A', { epochOffset: -100_000 });
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'boundary lesson B', { epochOffset: -200_000 });
+      for (let k = 0; k < 21; k++)
+        seedObs(join(projectDir, 'src', `bd${k}`, 'mod.rs'), `boundary other ${k}`, {
+          epochOffset: -k * 1000,
+        });
+      const ctx = JSON.parse((await editFile('src/snapshot/mod.rs', 'sess-live-o1bd')).stdout)
+        .hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('boundary lesson A');
+      expect(ctx).toContain('boundary lesson B');
+      expect(ctx.split('boundary lesson A').length - 1, 'A once').toBe(1);
+      expect(ctx).not.toMatch(/boundary other \d/);
+    });
+
+    // Delta review F3: the switch-off path keeps the old single LIMIT (Edit: 2 rows).
+    it('with the switch off an Edit still gets at most two observation rows', async () => {
+      for (let k = 0; k < 4; k++)
+        seedObs(join(projectDir, 'src', 'cap', 'mod.rs'), `cap lesson ${k}`, { epochOffset: -k * 1000 });
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Edit',
+          session_id: 'sess-live-o1cap',
+          tool_input: { file_path: join(projectDir, 'src', 'cap', 'mod.rs') },
+        },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, CLAUDE_MEM_PRETOOL_PATH_PRECISION: 'off' },
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx.match(/cap lesson \d/g)).toHaveLength(2);
+    });
+
     // Pre-ship review L1: with edge decay on, a decayed same-file edge is no match, so it cannot keep
     // a row that matched only through another directory's same-named file.
     it('with CLAUDE_MEM_EDGE_DECAY on, a decayed same-file edge does not keep an other-file row', async () => {

@@ -75,6 +75,21 @@ describe('edgesNameOtherFile', () => {
     expect(edgesNameOtherFile([`${ROOT}/src/./x//mod.rs`], T, ROOT)).toBe(true);
   });
 
+  // Delta review F1: a RELATIVE edge spelled through the worktree directory is the same file too.
+  it('a relative worktree edge names the same file, and the worktree file itself', () => {
+    const wt = '.claude/worktrees/agent-a1/src/snapshot/mod.rs';
+    expect(edgesNameOtherFile([wt], T, ROOT)).toBe(false);
+    expect(edgesNameOtherFile([wt], `${ROOT}/${wt}`, ROOT)).toBe(false);
+    expect(edgesNameOtherFile(['.claude/worktrees/agent-a1/src/x/mod.rs'], T, ROOT)).toBe(true);
+  });
+
+  // Delta review F3: the relative side of the normalisation was untested.
+  it('a relative edge is cleaned of `//` and `./` before it is compared', () => {
+    expect(edgesNameOtherFile(['src//snapshot/mod.rs'], T, ROOT)).toBe(false);
+    expect(edgesNameOtherFile(['src/./snapshot/mod.rs'], T, ROOT)).toBe(false);
+    expect(edgesNameOtherFile(['src//x/mod.rs'], T, ROOT)).toBe(true);
+  });
+
   it('Windows separators in a stored edge are read as separators', () => {
     expect(edgesNameOtherFile(['src\\mcp\\server\\mod.rs'], T, ROOT)).toBe(true);
     expect(edgesNameOtherFile(['src\\snapshot\\mod.rs'], T, ROOT)).toBe(false);
