@@ -81,7 +81,7 @@ const V3 = 'a8f3e9d2' + '7c41b5e6';
 describe('import-jsonl — strings are scrubbed as text, before the JSON wrap', () => {
   it('a Write of a .env: labels at line starts lose their values (D#663, D#668)', async () => {
     // Since D#687 the scrubber also erases these in the JSON text (it decodes the escaped string), so
-    // this row and the next pass on either reading; the import's own rule is pinned by the rows below.
+    // this row and the D#664 row below pass on either reading; the 256-string row pins the import's own rule.
     const env = `# ci\nPORT=3000\ntoken: ${V3}\npassword=${V2}\ngithub_token: ${V1}\nLOG_LEVEL=info\n`;
     const row = await importPair(
       'Write',
