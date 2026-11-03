@@ -95,8 +95,8 @@ describe('the literal reading', () => {
   });
 
   it('decodes a bounded number of literals: fifty thousand cost about what plain strings do', () => {
-    // A decoded literal is scrubbed as a text of its own. With no bound, 50,000 of them read 24x the same
-    // text without the escape (Node 26, 2026-11-03); with it, 0.4x.
+    // A decoded literal is scrubbed as a text of its own. With no bound, 50,000 of them read 22-24x the same
+    // text without the escape; with it, under 1x (Node 26, 2026-11-03).
     const ms = (fn) => {
       const t0 = performance.now();
       fn();
@@ -151,8 +151,8 @@ describe('the literal reading', () => {
   });
 
   it.each([
-    // The regex that found literals pushed a backtrack frame per character and threw RangeError from
-    // 8.5M characters (v6.30.14 review r1); import-jsonl then aborted the whole transcript file.
+    // The regex that found literals pushed a backtrack frame per character and threw RangeError on both
+    // (v6.30.14 review r1); import-jsonl then aborted the whole transcript file.
     ['one escape', `"${'a'.repeat(10_000_000)}\\n"`, (out, text) => expect(out).toBe(text)],
     [
       'minified JSON in a string, a credential at its end',
@@ -184,8 +184,8 @@ describe('the literal reading', () => {
 });
 
 describe('D#701: JSON one encoder wrote, inside a string another encoder wrote', () => {
-  // An escape that decodes to one character joins words where a literal is rewritten: PHP's `\/`, and the
-  // `\uXXXX` that .NET writes for `"`, `'` and `+` and Gson for `=` and `'`. Read one level further in, as
+  // PHP's `\/`, the `\u002B` .NET writes for `+` and the `\u003d` Gson writes for `=` decode to characters
+  // that join words, and a rewritten literal holds those characters. Read one level further in, as
   // written, such a word was split, so a word the patterns erase in the outer escaped text was new there
   // and kept (v6.30.14 review r3). In each of the six rows v6.30.13 erases both values and v6.30.14
   // stores W, and V too where `+` joins it (docs/audits/20261103-v6.30.15-measurements.md).
@@ -235,7 +235,7 @@ describe('D#701: JSON one encoder wrote, inside a string another encoder wrote',
       'three levels: PHP inside .NET inside JSON',
       J({ log: dotnet({ id: 7, payload: php({ env: laravel }) }) }),
     ],
-    // Only the outermost reading erases W here, where PHP's slash is written with three backslashes.
+    // Only the outermost reading erases W here.
     ['three levels: PHP inside JSON inside .NET', dotnet({ log: J({ payload: php({ env: laravel }) }) })],
   ])('%s', (_name, text) => {
     const out = scrubSecrets(text);
@@ -266,4 +266,52 @@ describe('D#701: JSON one encoder wrote, inside a string another encoder wrote',
     const out = scrubSecrets(J({ c: `PGPASSWORD=\n  secret:x1y2z3a4\nC:\\keys\\u${V}\n  token=` }));
     expect(out).not.toContain(V.slice(0, 4));
   });
+
+  const V2 = 'Hy6Rt3Pq' + '8Ws2Kd5N';
+  const GHP = 'gh' + 'p_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+  const JWT =
+    'eyJ' +
+    'hbGciOiJIUzI1NiJ9' +
+    '.eyJ' +
+    'zdWIiOiIxMjM0NTY3ODkwIn0' +
+    '.' +
+    'dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const A = 'Kx9' + 'Lm2pQ7vR';
+  const B = 'tY8' + 'wE3nH6zU';
+  const repo = `ACCESS_TOKEN: ${V}\nAPP_NAME='Laravel'\nREPO=https://git.example.com/${GHP}/${W}\n`;
+  it.each([
+    ['a token in a URL path, PHP inside Gson', gson({ id: 7, payload: php({ env: repo }) }), W],
+    ['a token in a URL path, PHP inside .NET', dotnet({ id: 7, payload: php({ env: repo }) }), W],
+    [
+      'a JWT before a path, PHP inside JSON',
+      J([php({ content: `API_KEY: ${V}\nCLIENT_SECRET: ${V2}\nLOG_LEVEL=${JWT}/${W}\n` })]),
+      W,
+    ],
+    [
+      'a backslash before the `+` .NET escapes, .NET inside Gson',
+      gson({
+        id: 180,
+        message: dotnet({ id: 394, body: `api_key=${V}\nAuthorization: Bearer ${V2}\nLEGACY=${A}\\+${B}\n` }),
+      }),
+      A,
+    ],
+    // From the review's fuzzing; only reading the rewritten literal as written finds the marker.
+    [
+      'a crafted text',
+      JSON.parse(
+        String.raw`"secret=\\\\\"\\napi_key=\\/Mq7q8rZxe6wzMq7q8sZx1m5is` +
+          String.raw`k-Mq7q8tZxgli6Authorization: Bearer Mq7q8uZxg526++\\\\/secret=-Mq7q8vZxctb4="`,
+      ),
+      'Mq7q8uZxg526',
+    ],
+  ])(
+    'keeps erased a word 6.30.14 erased, where the inner level erases part of it: %s',
+    (_name, text, word) => {
+      // Read joined, the word is whole in the body and in pieces in the rewritten literal, where the inner
+      // level erased its middle; v6.30.13 and v6.30.14 erase it (v6.30.15 review r1).
+      const out = scrubSecrets(text);
+      expect(out).not.toContain(word);
+      expect(scrubSecrets(out)).toBe(out);
+    },
+  );
 });

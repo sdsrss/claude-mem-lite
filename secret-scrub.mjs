@@ -1575,20 +1575,23 @@ function runPatterns(text) {
 // leaves alone keeps every byte. A literal opens at a quote with an even number of backslashes before
 // it, and a text that ends inside one has it read to the end. Literals are found by a walk from stop
 // character to stop character: the regex it replaced pushed a backtrack frame per character of a body,
-// `(?:[^"\\\r\n]|\\[^\r\n])*`, and threw RangeError on a literal of 8.5M characters (v6.30.14 review r1).
+// `(?:[^"\\\r\n]|\\[^\r\n])*`, and threw RangeError on a literal of millions of characters (v6.30.14
+// review r1).
 //
 // A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
 // the lines after a label up to a space, and the text reading keeps such a line when it has no label
 // of its own. Without that, 5-8 values in 20,000 generated texts that v6.30.13 erased were stored
-// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before. The words of
-// the body, of what the patterns leave of it and of the rewritten literal are read with every escape
-// that decodes to one character, at any depth, read as that character. A rewritten literal holds the
-// character itself: `\/` (PHP's json_encode) becomes `/` and `\u002B` (.NET) `+`, which join words, and
-// `\u0022` (.NET) a quote, which no longer sticks `u0022` onto the next word. Read as written, such a
-// word was new and kept (266-715 of 20,000 generated `.env` texts at one level, v6.30.14 review r2; 220
-// of 329,366 generated values two and three levels in, review r3). Every other escape is read as
-// written: decoding literal by literal instead stored values where the patterns had erased a backslash
-// before a quote and so moved where a literal ends (75 of 165,125 generated values, 2026-11-03).
+// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before. A word is
+// erased from the rewritten literal when the body holds it and what the patterns leave of the body does
+// not, in either of two readings, and the rewritten literal is read both ways. As written, a word ends at
+// every escape. Joined, a run of backslashes followed by `/` or by `u` and four hex digits reads as that
+// one character: a rewritten literal holds the character itself, so PHP's `\/` and .NET's `\u002B` join
+// words there that the body split (read only as written, 266-715 of 20,000 generated `.env` texts at one
+// level kept such a word, v6.30.14 review r2; 220 of 329,366 generated values two and three levels in,
+// review r3). Read only joined, a word the inner level erased part of was gone and its pieces were new
+// (194 of 649,498 generated values, v6.30.15 review r1). Decoding literal by literal instead stored values
+// where the patterns had erased a backslash before a quote and so moved where a literal ends (75 of
+// 165,125 generated values, 2026-11-03).
 //
 // Bounds: MAX_LITERALS literals are decoded per text and level (real transcripts, 2026-11-02: at most
 // 133 in one text); with no bound, `"\"` repeated over 500,000 characters took 104x the patterns alone
@@ -1720,10 +1723,16 @@ function scrubEscapedLiterals(text, depth) {
     const decoded = decodeLiteral(body);
     const scrubbed = scrubText(decoded, depth + 1);
     if (scrubbed === decoded) return body;
-    const kept = joinedTokens(decodeLiteral(runPatterns(body)));
+    const left = decodeLiteral(runPatterns(body));
     const erase = new Set();
-    for (const token of joinedTokens(decoded)) if (!kept.has(token)) erase.add(token);
-    return JSON.stringify(eraseJoined(scrubbed, erase)).slice(1, -1);
+    const keptJoined = joinedTokens(left);
+    for (const token of joinedTokens(decoded)) if (!keptJoined.has(token)) erase.add(token);
+    const keptAsWritten = new Set(left.match(VALUE_TOKEN_RE));
+    for (const token of decoded.match(VALUE_TOKEN_RE) ?? []) if (!keptAsWritten.has(token)) erase.add(token);
+    const out = eraseJoined(scrubbed, erase).replace(VALUE_TOKEN_RE, (token) =>
+      erase.has(token) ? '***' : token,
+    );
+    return JSON.stringify(out).slice(1, -1);
   });
 }
 
