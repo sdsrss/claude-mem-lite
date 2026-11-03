@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { spawn } from 'child_process';
-import { resolve, join } from 'path';
+import { resolve, join, dirname } from 'path';
 import { writeFileSync, mkdirSync, rmSync, readFileSync, mkdtempSync, existsSync, readdirSync } from 'fs';
 import {
   createTestDb,
@@ -2575,6 +2575,15 @@ describe('pre-tool-recall', () => {
         ...extra,
       });
       db.close();
+      // The files a lesson names exist, as they do for a real lesson: a path that names no file now
+      // is kept as possibly moved (v6.31.0 review r1), so every project path stored here is created.
+      for (const f of extra.filesModified ? JSON.parse(extra.filesModified) : [file]) {
+        const onDisk = f.startsWith('/') ? f : /[\\/]/.test(f) ? join(projectDir, f) : null;
+        if (onDisk && onDisk.startsWith(projectDir + '/')) {
+          mkdirSync(dirname(onDisk), { recursive: true });
+          writeFileSync(onDisk, '');
+        }
+      }
     }
 
     function editFile(name, session) {
@@ -2649,6 +2658,20 @@ describe('pre-tool-recall', () => {
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('snapshot mod lesson must survive');
       expect(ctx).not.toContain('server mod lesson must not inject');
+    });
+
+    // v6.31.0 review r1: a file that moved inside the project keeps the lessons on its old path.
+    it('a lesson on a path that names no file now is kept (the file moved here)', async () => {
+      const old = join(projectDir, 'src', 'old', 'mod.rs');
+      seedObs(old, 'lesson recorded before the move');
+      // Premise: while the old file exists it is another file, and its lesson is dropped.
+      const before = await editFile('src/snapshot/mod.rs', 'sess-live-moved-1');
+      expect(before.stdout).not.toContain('lesson recorded before the move');
+      rmSync(old);
+      const { stdout } = await editFile('src/snapshot/mod.rs', 'sess-live-moved-2');
+      expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toContain(
+        'lesson recorded before the move',
+      );
     });
 
     it('a dropped row gives its slot to the next candidate (Read keeps one row)', async () => {
