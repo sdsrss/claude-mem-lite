@@ -1627,7 +1627,8 @@ function runPatterns(text) {
 // (415 ms against 4). A rewritten literal can give the patterns a reading they did not have, so a text
 // that holds a backslash is scrubbed again until it no longer changes, MAX_LITERAL_ROUNDS times at
 // most; with one round, 23-42 of 20,000 generated texts changed on a second call (scrubSecrets is
-// idempotent by contract: import-jsonl's dedup and cmdRestore rely on it).
+// idempotent by contract: import-jsonl's dedup and cmdRestore rely on it). A text the first round
+// leaves as it is is a fixed point already, and is not scrubbed again.
 const ESCAPED_LITERAL_RE = /"(?<=(?:^|[^\\])(?:\\\\)*")((?:[^"\\\r\n]|\\[^\r\n])*)("|$)/g;
 const JSON_ESCAPE_RE = /\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g;
 const JSON_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
@@ -1681,6 +1682,7 @@ function scrubText(text, depth) {
 export function scrubSecrets(text) {
   if (!text || typeof text !== 'string') return text || '';
   let result = scrubText(text, 0);
+  if (result === text) return result;
   for (let round = 1; round < MAX_LITERAL_ROUNDS && result.includes('\\'); round++) {
     const next = scrubText(result, 0);
     if (next === result) break;
