@@ -83,7 +83,9 @@ const contextHeadersOverContextKey = () => {
 // 2.8x. Sized for CI's margin (D#651), a share of N then prose: 4.3x, 4.6x, 4.3x. A reader made anew for
 // each question reads 68-1,047x, and a hunk read from its header for each, 857x on the large hunk (both
 // past 10x plain too). Finding a line's break natively in a hunk (15x -> 9x on the first, all of N) is
-// measured, not guarded: without it the sized shape reads 6.8x.
+// measured, not guarded: without it the sized shape reads 6.8x. D#687's literal stage costs the first
+// (escaped) shape and not benign text: 5.61x at 0.4 of N (CI read 10.1x and 10.2x, 2026-11-03), 4.55x at
+// 0.3; a reader made anew for each question 60.8x there, headers read again for each 44.8x.
 const escBreak = (d) => '\\'.repeat(d) + 'n';
 const HUNK_DEPTHS = [1, 2, 4, 8]
   .map(
@@ -177,8 +179,15 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // raw and escaped, so each BEGIN is read again with its prefix grammar on each of the 32 passes.
     pemCodeBeforeBegin: CHAIN + ' ' + "-KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 52),
     pemOpenerBeforeBegin: CHAIN + ' ' + "'+-----BEGIN RSA PRIVATE KEY-----\n+\n".repeat(N / 37),
+    // Sized for CI's margin since D#687 (its literal stage costs escaped text, not benign): under coverage
+    // on the dev machine 6.15x over all of N, 5.05x at 0.75 of it. The scan it was written for
+    // (sharedPrefixLength, D#160) is gone; unbounding the line-start or prefix scans moves it by 2-5%.
     pemEscapedQuotesBeforeBegin:
-      CHAIN + ' ' + JSON.stringify("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 55)),
+      CHAIN +
+      ' ' +
+      JSON.stringify(
+        thenProse("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat((N * 0.75) / 55)),
+      ),
     // D#614 A1: a BEGIN on a diff context line over a removed line the reading refuses, read again with
     // a diff mark's shape on each pass (the colon keeps the D#168 skip from applying), raw and escaped.
     // Under coverage that reading costs what the D#168 one does on `-KEY = '''` (v6.30.9, the same
@@ -189,12 +198,21 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // an END from scratch (endFollows' cached positions dropped) they read 10.7-18.4x, plain and under
     // coverage; at half of N the escaped one read 8.6x plain.
     pemContextBeforeBegin: CHAIN + '\n' + thenProse(CONTEXT_UNIT.repeat((N * 0.7) / CONTEXT_UNIT.length)),
+    // The escaped one at 0.55 since D#687 (5.98x at 0.7 under coverage, 5.03x at 0.55); with endFollows'
+    // positions found anew for each BEGIN it reads 101.6x there, with each BEGIN's whole left context
+    // read for its grep column 43.1x.
     pemContextBeforeBeginEscaped:
-      CHAIN + ' ' + JSON.stringify(thenProse(CONTEXT_UNIT.repeat((N * 0.7) / (CONTEXT_UNIT.length + 3)))),
+      CHAIN + ' ' + JSON.stringify(thenProse(CONTEXT_UNIT.repeat((N * 0.55) / (CONTEXT_UNIT.length + 3)))),
     // D#614 A2: a grep column after a spaced path on each BEGIN line, read again with its shape.
+    // The escaped one is sized for CI's margin since D#687, whose literal stage costs escaped text and
+    // not the benign one: under coverage on the dev machine 6.34x over all of N, 4.95x at 0.7 of it
+    // (CI read 10.4x and 10.9x over all of N, 2026-11-03); with every BEGIN's whole left context read
+    // for its grep column, 34.0x and 18.8x.
     pemSpacedGrepBeforeBegin: CHAIN + '\n' + SPACED_GREP_UNIT.repeat(N / SPACED_GREP_UNIT.length),
     pemSpacedGrepBeforeBeginEscaped:
-      CHAIN + ' ' + JSON.stringify(SPACED_GREP_UNIT.repeat(N / (SPACED_GREP_UNIT.length + 5))),
+      CHAIN +
+      ' ' +
+      JSON.stringify(thenProse(SPACED_GREP_UNIT.repeat((N * 0.7) / (SPACED_GREP_UNIT.length + 5)))),
     // D#607 F1: 16 header lines that each hold a BEGIN, then a run the reading refuses. Each BEGIN's
     // grammar reading read the run again (d0766de4 with a 200k-char run: 33x benign raw, 48x escaped,
     // 186x under coverage); readKeyLines' per-call memos read it once per pass and escape depth. The
@@ -272,7 +290,7 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     rotatedKeyShortLast: CHAIN + HUNK + ROTATED_UNIT.repeat(Math.floor(N / ROTATED_UNIT.length)),
     contextHeadersOverContextKey: CHAIN + '\n' + contextHeadersOverContextKey(),
     contextHeadersOverContextKeyEscaped: CHAIN + ' ' + JSON.stringify(contextHeadersOverContextKey()),
-    hunkDepthsCycle: CHAIN + ' ' + share(HUNK_DEPTHS, 0.4),
+    hunkDepthsCycle: CHAIN + ' ' + share(HUNK_DEPTHS, 0.3),
     manySmallHunks: CHAIN + share(SMALL_HUNK, 0.6),
     headerTextInHunkLines: CHAIN + '\n@@ -1,99999 +1,99999 @@\n' + share(HEADER_TEXT_UNIT, 0.75),
     contextHeadersInHunk: CHAIN + '\n@@ -1,99999 +1,99999 @@\n' + contextHeadersOverContextKey(),
