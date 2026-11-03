@@ -1573,9 +1573,9 @@ function runPatterns(text) {
 // JSON does not know is kept as written) and scrubbed as text, MAX_LITERAL_DEPTH levels deep, and
 // rewritten, as the scrubbed text encoded as JSON, only when that scrub changed it: a literal it
 // leaves alone keeps every byte. A literal opens at a quote with an even number of backslashes before
-// it, and a text that ends inside one has it read to the end. The quote is matched before that count
-// is checked: Node 22 runs a leading lookbehind at every position, which read a 200,000-character run
-// of backslashes back from each one (5,108 ms; 0 on Node 26).
+// it, and a text that ends inside one has it read to the end. Literals are found by a walk from stop
+// character to stop character: the regex it replaced pushed a backtrack frame per character of a body,
+// `(?:[^"\\\r\n]|\\[^\r\n])*`, and threw RangeError on a literal of 8.5M characters (v6.30.14 review r1).
 //
 // A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
 // the lines after a label up to a space, and the text reading keeps such a line when it has no label
@@ -1593,7 +1593,7 @@ function runPatterns(text) {
 // most; with one round, 23-42 of 20,000 generated texts changed on a second call (scrubSecrets is
 // idempotent by contract: import-jsonl's dedup and cmdRestore rely on it). A text the first round
 // leaves as it is is a fixed point already, and is not scrubbed again.
-const ESCAPED_LITERAL_RE = /"(?<=(?:^|[^\\])(?:\\\\)*")((?:[^"\\\r\n]|\\[^\r\n])*)("|$)/g;
+const LITERAL_STOP_RE = /["\\\r\n]/g;
 const JSON_ESCAPE_RE = /\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g;
 const JSON_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 // A value token, and an escape, which is no part of one: `\nAPI_KEY` holds the token `API_KEY`.
@@ -1616,15 +1616,58 @@ function decodeLiteral(body) {
 const maskEscapes = (text) => text.replace(ESCAPE_RE, (e) => ' '.repeat(e.length));
 const valueTokens = (text) => new Set(maskEscapes(text).match(VALUE_TOKEN_RE));
 
-function scrubEscapedLiterals(text, depth) {
-  if (depth >= MAX_LITERAL_DEPTH || !text.includes('\\')) return text;
+/**
+ * The first literal opening at or after `from`: [start, bodyEnd, end], the body being text[start + 1,
+ * bodyEnd) and the closing quote, if any, text[bodyEnd, end). Null when there is none. A quote whose body
+ * meets a line break, or a backslash before one or at the end of the text, opens no literal.
+ */
+function nextLiteral(text, from) {
+  const n = text.length;
+  for (let q = text.indexOf('"', from); q !== -1; q = text.indexOf('"', q + 1)) {
+    if (backslashesBefore(text, q, 0) % 2 === 1) continue;
+    let i = q + 1;
+    for (;;) {
+      LITERAL_STOP_RE.lastIndex = i;
+      if (!LITERAL_STOP_RE.test(text)) return [q, n, n];
+      i = LITERAL_STOP_RE.lastIndex - 1;
+      const c = text.charCodeAt(i);
+      if (c === 34) return [q, i, i + 1];
+      if (c !== 92 || i + 1 === n) break;
+      const d = text.charCodeAt(i + 1);
+      if (d === 10 || d === 13) break;
+      i += 2;
+    }
+  }
+  return null;
+}
+
+/**
+ * The literal reading of a text at `depth`: gap(part) for each part between the literals it decodes, as
+ * written, and lit(body) for the body of each literal it decodes, joined in order. It decodes a literal
+ * whose body holds an escape, the first MAX_LITERALS of them, and none at MAX_LITERAL_DEPTH.
+ */
+function readLiterals(text, depth, gap, lit) {
+  if (depth >= MAX_LITERAL_DEPTH || !text.includes('\\')) return gap(text);
   let budget = MAX_LITERALS;
-  return text.replace(ESCAPED_LITERAL_RE, (literal, body, close) => {
-    if (budget === 0 || !body.includes('\\')) return literal;
+  let out = '';
+  let last = 0;
+  for (let m = nextLiteral(text, 0); m && budget > 0; m = nextLiteral(text, m[2])) {
+    const body = text.slice(m[0] + 1, m[1]);
+    if (!body.includes('\\')) continue;
     budget--;
+    out += gap(text.slice(last, m[0] + 1)) + lit(body);
+    last = m[1];
+  }
+  return out + gap(text.slice(last));
+}
+
+const asWritten = (part) => part;
+
+function scrubEscapedLiterals(text, depth) {
+  return readLiterals(text, depth, asWritten, (body) => {
     const decoded = decodeLiteral(body);
     const scrubbed = scrubText(decoded, depth + 1);
-    if (scrubbed === decoded) return literal;
+    if (scrubbed === decoded) return body;
     const encoded = JSON.stringify(scrubbed).slice(1, -1);
     const reencode = (s) => JSON.stringify(s).slice(1, -1);
     const keptByPatterns = valueTokens(reencode(decodeLiteral(runPatterns(body))));
@@ -1636,7 +1679,7 @@ function scrubEscapedLiterals(text, depth) {
       out += encoded.slice(last, index) + '***';
       last = index + token.length;
     }
-    return `"${out}${encoded.slice(last)}${close}`;
+    return out + encoded.slice(last);
   });
 }
 

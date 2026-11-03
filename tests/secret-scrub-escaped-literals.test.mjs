@@ -94,6 +94,24 @@ describe('the literal reading', () => {
     expect(out).not.toContain(V);
   });
 
+  it('decodes a bounded number of literals: fifty thousand cost about what plain strings do', () => {
+    // A decoded literal is scrubbed as a text of its own. With no bound, 50,000 of them read 24x the same
+    // text without the escape (Node 26, 2026-11-03); with it, 0.4x.
+    const ms = (fn) => {
+      const t0 = performance.now();
+      fn();
+      return performance.now() - t0;
+    };
+    const escaped = '"\\n"'.repeat(50_000);
+    const plain = '"_n"'.repeat(50_000);
+    const took = { escaped: [], plain: [] };
+    for (let k = 0; k < 3; k++) {
+      took.plain.push(ms(() => scrubSecrets(plain)));
+      took.escaped.push(ms(() => scrubSecrets(escaped)));
+    }
+    expect(Math.min(...took.escaped) / Math.max(5, Math.min(...took.plain))).toBeLessThan(10);
+  });
+
   it('reads three levels deep', () => {
     const out = scrubSecrets(J(J(J({ note: 'a\nb', api_key: V }))));
     expect(out).not.toContain(V);
@@ -130,6 +148,22 @@ describe('the literal reading', () => {
     expect(JSON.parse(scrubSecrets(text)).c).toBe(
       'PORT=1\nDOCS=https://docs.example.com/v2/setup\nAPI_KEY=***\n',
     );
+  });
+
+  it.each([
+    // The regex that found literals pushed a backtrack frame per character and threw RangeError from
+    // 8.5M characters (v6.30.14 review r1); import-jsonl then aborted the whole transcript file.
+    ['one escape', `"${'a'.repeat(10_000_000)}\\n"`, (out, text) => expect(out).toBe(text)],
+    [
+      'minified JSON in a string, a credential at its end',
+      J({
+        c: J(Array.from({ length: 330_000 }, (_, i) => ({ id: i, name: `item${i}` }))) + `\npassword=${V}\n`,
+      }),
+      (out) => expect(out).not.toContain(V),
+    ],
+  ])('reads a literal of ten million characters on one line: %s', (_name, text, check) => {
+    expect(text.length).toBeGreaterThan(10_000_000);
+    check(scrubSecrets(text), text);
   });
 
   it('is idempotent where a rewritten literal gives the patterns a new reading', () => {
