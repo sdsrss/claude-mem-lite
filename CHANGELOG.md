@@ -2,7 +2,7 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## Unreleased
+## v6.31.0 — recall injects less that does not apply to the step at hand
 
 **Upgrade note: nothing to run; the schema version stays 49.** The first three changes each have a
 switch back; the rest change text only. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.md` and
