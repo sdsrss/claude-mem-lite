@@ -106,6 +106,32 @@ describe('the literal reading', () => {
     expect(scrubSecrets(text)).not.toContain(V);
   });
 
+  it.each([
+    [
+      '`\\/` (PHP json_encode)',
+      (t) => t.replace(/\//g, '\\/'),
+      `https://hooks.example.com/services/${W}${V}`,
+    ],
+    ['`\\u002B` (.NET System.Text.Json)', (t) => t.replace(/\+/g, '\\u002B'), `${W}+${V}+${W}`],
+  ])('keeps erased what the patterns erase when an escape joins words: %s', (_name, escape, value) => {
+    // The short value is kept read as text, so its label is erased whole (it was erased in the escaped
+    // body), and the run-on that erased the next line in the escaped body is gone: that line's value,
+    // written with an escape that decodes to a word character, must stay erased (v6.30.14 review r2).
+    const text = escape(J({ content: `MYSQL_ROOT_PASSWORD=root\nWEBHOOK=${value}\nMAIL_PASSWORD=${V}x\n` }));
+    expect(scrubSecrets(text)).not.toContain(V);
+    expect(scrubSecrets(text)).not.toContain(W);
+  });
+
+  it('keeps a word an escape joins in a literal it rewrites, when nothing erased it', () => {
+    const text = J({ c: `PORT=1\nDOCS=https://docs.example.com/v2/setup\nAPI_KEY=${V}\n` }).replace(
+      /\//g,
+      '\\/',
+    );
+    expect(JSON.parse(scrubSecrets(text)).c).toBe(
+      'PORT=1\nDOCS=https://docs.example.com/v2/setup\nAPI_KEY=***\n',
+    );
+  });
+
   it('is idempotent where a rewritten literal gives the patterns a new reading', () => {
     // Three levels of escaping, from the D#687 differential (seed 1, case 94); one round left a second
     // call erasing more.

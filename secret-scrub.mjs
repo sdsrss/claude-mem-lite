@@ -1580,7 +1580,10 @@ function runPatterns(text) {
 // A rewritten literal keeps erased what the patterns erase in its escaped body: their run-on erases
 // the lines after a label up to a space, and the text reading keeps such a line when it has no label
 // of its own. Without that, 5-8 values in 20,000 generated texts that v6.30.13 erased were stored
-// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before.
+// (D#687 differential, 2026-11-02). The patterns then run over the whole text as before. Both sides
+// are compared as the rewritten literal is encoded: an escape that decodes to a word character (`\/`
+// from PHP's json_encode, `+` from .NET) joins words there, and against the escaped body such a
+// word was new and kept (266-715 of 20,000 generated `.env` texts, v6.30.14 review r2).
 //
 // Bounds: MAX_LITERALS literals are decoded per text and level (real transcripts, 2026-11-02: at most
 // 133 in one text); with no bound, `"\"` repeated over 500,000 characters took 104x the patterns alone
@@ -1622,8 +1625,9 @@ function scrubEscapedLiterals(text, depth) {
     const scrubbed = scrubText(decoded, depth + 1);
     if (scrubbed === decoded) return literal;
     const encoded = JSON.stringify(scrubbed).slice(1, -1);
-    const keptByPatterns = valueTokens(runPatterns(body));
-    const inBody = valueTokens(body);
+    const reencode = (s) => JSON.stringify(s).slice(1, -1);
+    const keptByPatterns = valueTokens(reencode(decodeLiteral(runPatterns(body))));
+    const inBody = valueTokens(reencode(decoded));
     let out = '';
     let last = 0;
     for (const { 0: token, index } of maskEscapes(encoded).matchAll(VALUE_TOKEN_RE)) {
