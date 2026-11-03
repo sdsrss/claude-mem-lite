@@ -2393,9 +2393,13 @@ describe('pre-tool-recall', () => {
       expect(ctx).toContain('lesson stored under bare basename');
     });
 
+    // R3 O1 restated this control: its first fixture edited <root>/utils.mjs against an edge for
+    // scripts/utils.mjs — a different file, which is now excluded on purpose (see the "same-named
+    // file in another directory" case). The D#78 intent is unchanged: a RELATIVE edge still
+    // recalls the file it names, through the path-boundary arm.
     it('still matches relative path via /basename boundary (positive control)', async () => {
       seedObs(['scripts/utils.mjs'], 'lesson stored under relative path');
-      const { stdout } = await editFile('utils.mjs', 'sess-p0-rel');
+      const { stdout } = await editFile('scripts/utils.mjs', 'sess-p0-rel');
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('lesson stored under relative path');
     });
@@ -2416,9 +2420,10 @@ describe('pre-tool-recall', () => {
       expect(ctx).toContain('lesson stored under case-variant basename');
     });
 
+    // Restated with the case above (R3 O1): the edge names lib/utils.mjs, so that is the file edited.
     it('still matches a backslash-separated stored path', async () => {
       seedObs(['lib\\utils.mjs'], 'lesson stored under backslash path');
-      const { stdout } = await editFile('utils.mjs', 'sess-p0-bslash');
+      const { stdout } = await editFile('lib/utils.mjs', 'sess-p0-bslash');
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('lesson stored under backslash path');
     });
@@ -2631,6 +2636,63 @@ describe('pre-tool-recall', () => {
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('importance-2 lesson must survive');
       expect(ctx).not.toContain('importance-1 lesson must not inject');
+    });
+
+    // R3 O1: a same-named file in another directory of the project is not this file.
+    it('does not inject the lesson of a same-named file in another directory', async () => {
+      seedObs(join(projectDir, 'src', 'server', 'mod.rs'), 'server mod lesson must not inject');
+      seedObs('src/server/mod.rs', 'relative server mod lesson must not inject');
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'snapshot mod lesson must survive', {
+        epochOffset: -120_000,
+      });
+      const { stdout } = await editFile('src/snapshot/mod.rs', 'sess-live-o1');
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('snapshot mod lesson must survive');
+      expect(ctx).not.toContain('server mod lesson must not inject');
+    });
+
+    it('a dropped row gives its slot to the next candidate (Read keeps one row)', async () => {
+      seedObs(join(projectDir, 'src', 'snapshot', 'mod.rs'), 'older same-file lesson fills the slot', {
+        epochOffset: -120_000,
+      });
+      seedObs(join(projectDir, 'src', 'server', 'mod.rs'), 'newer other-file lesson must not take it');
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Read',
+          session_id: 'sess-live-o1r',
+          tool_input: { file_path: join(projectDir, 'src', 'snapshot', 'mod.rs') },
+        },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('older same-file lesson fills the slot');
+      expect(ctx).not.toContain('newer other-file lesson must not take it');
+    });
+
+    it('keeps worktree copies and bare names, and CLAUDE_MEM_PRETOOL_PATH_PRECISION=off restores the old match', async () => {
+      seedObs(
+        join(projectDir, '.claude', 'worktrees', 'agent-a1', 'src', 'snapshot', 'mod.rs'),
+        'worktree copy lesson stays',
+      );
+      seedObs('mod.rs', 'bare-name lesson stays', { epochOffset: -60_000 });
+      const kept = JSON.parse((await editFile('src/snapshot/mod.rs', 'sess-live-o1k')).stdout)
+        .hookSpecificOutput.additionalContext;
+      expect(kept).toContain('worktree copy lesson stays');
+      expect(kept).toContain('bare-name lesson stays');
+      seedObs(join(projectDir, 'src', 'server', 'mod.rs'), 'other-file lesson under the off switch', {
+        epochOffset: 60_000,
+      });
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Edit',
+          session_id: 'sess-live-o1off',
+          tool_input: { file_path: join(projectDir, 'src', 'snapshot', 'mod.rs') },
+        },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, CLAUDE_MEM_PRETOOL_PATH_PRECISION: 'off' },
+      );
+      expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toContain(
+        'other-file lesson under the off switch',
+      );
     });
 
     // Same untested-clause argument as the live filter: the 60-day

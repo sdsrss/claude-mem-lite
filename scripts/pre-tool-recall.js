@@ -25,6 +25,7 @@ import {
   fileMatchClause,
   fileMatchParams,
   basenameAnySep,
+  edgesNameOtherFile,
   jsonArrayLikeNeedle,
   toolEditPath,
 } from '../lib/file-edge-match.mjs';
@@ -261,6 +262,15 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 // environment and project pairs sit in the same bands, so the head-to-head is not
 // era-confounded. The `(null)` bucket and the face-overall figure ARE, being
 // dominated by legacy rows.
+// R3 O1 (lib/file-edge-match.mjs edgesNameOtherFile): a row whose every same-named edge is ANOTHER
+// file of this project is dropped after the SELECT, which fetches this many extra candidates so
+// the dropped row's slot goes to the next one (the D#172 shape: a filter downstream of a LIMIT
+// shrinks the set instead of refilling it). CLAUDE_MEM_PRETOOL_PATH_PRECISION=off restores the
+// name-only match and the old LIMIT byte for byte.
+const PATH_PRECISION_ON = !['0', 'off', 'false', 'no'].includes(
+  String(process.env.CLAUDE_MEM_PRETOOL_PATH_PRECISION ?? '').toLowerCase(),
+);
+const PATH_PRECISION_SLACK = 3;
 const SCOPE_FILTER_ON = ['1', 'on', 'true', 'yes'].includes(
   String(process.env.CLAUDE_MEM_SCOPE_FILTER || '').toLowerCase(),
 );
@@ -758,7 +768,7 @@ try {
         /* probe failure → unfiltered */
       }
     }
-    const rows = db
+    const fetched = db
       .prepare(
         `
       SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
@@ -777,10 +787,29 @@ try {
         ${citeFactorClause('o')} DESC,
         o.created_at_epoch DESC,
         o.id DESC
-      LIMIT ${obsLimit}
+      LIMIT ${obsLimit + (PATH_PRECISION_ON ? PATH_PRECISION_SLACK : 0)}
     `,
       )
       .all(project, cutoff, ...fileParams);
+    let rows = fetched;
+    if (PATH_PRECISION_ON && fetched.length > 0) {
+      const ids = fetched.map((r) => r.id);
+      const edges = new Map();
+      for (const e of db
+        .prepare(
+          `SELECT obs_id, filename FROM observation_files WHERE obs_id IN (${ids.map(() => '?').join(',')})`,
+        )
+        .all(...ids)) {
+        if (!edges.has(e.obs_id)) edges.set(e.obs_id, []);
+        edges.get(e.obs_id).push(e.filename);
+      }
+      const projectRoot = inferProjectDir();
+      const kept = fetched.filter((r) => !edgesNameOtherFile(edges.get(r.id) || [], keyPath, projectRoot));
+      if (kept.length < fetched.length) {
+        recordMetric(DATA_DIR, { event: 'pretool_path_dropped', dropped: fetched.length - kept.length });
+      }
+      rows = kept.slice(0, obsLimit);
+    }
 
     // T9: also query the `events` table — after T9, bugfix/lesson/decision/etc.
     // route here instead of observations, so we must read both sources to keep
