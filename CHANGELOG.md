@@ -13,13 +13,8 @@ switch back. Evidence: `docs/audits/20261103-124956-session-history-analysis-r3.
   a `tasks/x/README.md` those of the root `README.md`: 210 of 4,037 injected rows were such a
   different file. Bare file names, Claude Code worktree copies and paths outside the project still
   match, and a dropped row's slot goes to the next candidate. Back: `CLAUDE_MEM_PRETOOL_PATH_PRECISION=off`.
-- **Error recall stays silent when the only failure is an exception raised in the agent's own
-  throwaway code**: a `python3 - <<EOF` patch script whose assertion missed, a `node -e` program,
-  a scratch script under `/tmp` that cannot import its dependency, with no frame in the project,
-  `node_modules` or an installed library and nothing else failing in the output. 92 of 622
-  recorded firings were that shape. Back: `CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT=off`.
-- **Error recall shows a thread a memory once until `/compact`**, not once per 30 minutes (220
-  of 1,484 rows in the remaining firings were repeats inside one thread). Back:
+- **Error recall shows a thread a memory once until `/compact`**, not once per 30 minutes (rows
+  already shown to the same thread were 281 of 1,739 recorded error-recall rows). Back:
   `CLAUDE_MEM_ERROR_RECALL_REPEAT_MIN=30`.
 - The error-recall block no longer ends with `→ Use mem_get(ids=[…]) for details.` (622 blocks,
   3 `mem_get` calls); its rows keep their `#id`.

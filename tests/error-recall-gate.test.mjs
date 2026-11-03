@@ -609,60 +609,6 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     expect(script.block, 'a script file is not a data printer').toBeTruthy();
   }, 60000);
 
-  // R3 O2: the agent's own patch script failing, chained with a real command, on both events.
-  it('own-script: a chained patch script whose own assert failed is silent; a repo frame still fires', async () => {
-    const cmd =
-      "python3 - <<'EOF'\np='src/app.py'; s=open(p).read()\nassert s.count('old')==1\nEOF\nnpm run build";
-    const own =
-      'Traceback (most recent call last):\n  File "<stdin>", line 3, in <module>\nAssertionError\nbuild ok';
-    // A row this failure's terms DO match, so "silent" below is the gate and not an empty pool.
-    const seeded = await fire(
-      process.execPath,
-      [
-        CLI_PATH,
-        'save',
-        'A python3 patch script raising AssertionError with a traceback means its anchor moved',
-        '--type',
-        'bugfix',
-        '--importance',
-        '3',
-        '--lesson',
-        'python3 traceback AssertionError in a patch script: re-read the file before patching again',
-      ],
-      { cwd },
-    );
-    expect(seeded.code, seeded.stderr).toBe(0);
-    // Premise: with the gate switched off, this exact input fires.
-    BASE_ENV.CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT = 'off';
-    try {
-      const premise = await firePostTool(cmd, own);
-      expect(premise.block, `premise: the input reaches the surface\n${premise.stdout}`).toBeTruthy();
-    } finally {
-      delete BASE_ENV.CLAUDE_MEM_ERROR_RECALL_OWN_SCRIPT;
-    }
-    const silent = await firePostTool(cmd, own);
-    expect(silent.block, `own-script on PostToolUse:\n${silent.stdout}`).toBeFalsy();
-    const viaFailure = await fire(process.execPath, [HOOK_PATH, 'post-tool-failure'], {
-      cwd,
-      stdin: JSON.stringify({
-        hook_event_name: 'PostToolUseFailure',
-        session_id: 'cc-errgate',
-        cwd,
-        tool_name: 'Bash',
-        tool_input: { command: cmd },
-        error: own,
-      }),
-    });
-    expect(viaFailure.stdout).not.toContain('Related memories found for this error');
-    // Control: the same chain where the traceback runs through the project's code fires.
-    const repo = own.replace(
-      '  File "<stdin>", line 3, in <module>',
-      `  File "<stdin>", line 3, in <module>\n  File "${cwd}/src/vitest_helper.py", line 9, in run`,
-    );
-    const fires = await firePostTool(cmd, repo);
-    expect(fires.block, 'a frame in the project keeps the firing').toBeTruthy();
-  }, 60000);
-
   // E2E 2026-10-16 (hooks F10): no thread dedup on this face, so a red/green loop re-sent the
   // identical block on every failing run. Session ids other than cc-errgate keep their marker
   // (fire() clears only that one).
