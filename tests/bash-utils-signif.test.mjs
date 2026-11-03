@@ -185,6 +185,25 @@ describe('detectBashSignificance — isHardError (bugfix-nudge gate)', () => {
     expect(sig.isError).toBe(false);
     expect(sig.isHardError).toBe(false);
   });
+
+  // D#734: the frame anchor's `\n\s+` let every newline of a blank run start a match that ran to
+  // the run's end and back — 100k newlines took ~2.8 s per call (2026-11-03), and the PostToolUse
+  // hook has 5 s. Frames are indented on their own line, so only spaces/tabs follow the `\n`.
+  it('stays linear on a long run of blank lines (D#734)', () => {
+    const out = 'Error: x' + '\n'.repeat(100_000) + 'at';
+    const t = Date.now();
+    const sig = detectBashSignificance({ command: 'npm run build' }, out);
+    expect(Date.now() - t).toBeLessThan(500);
+    expect(sig.isError).toBe(true); // premise: the frame anchor is reached at all
+    expect(sig.isHardError).toBe(false);
+  });
+
+  it.each([
+    ['after a blank line', 'Error: boom\n\n    at /p/app.mjs:10:3'],
+    ['with CRLF line ends', 'Error: boom\r\n    at Object.<anonymous> (C:\\p\\x.js:5:3)\r\n'],
+  ])('an indented frame %s is still a frame', (_, out) => {
+    expect(detectBashSignificance({ command: 'node app.mjs' }, out).isHardError).toBe(true);
+  });
 });
 
 // The read-only exemption used to look at ONE word: the first token left of the first

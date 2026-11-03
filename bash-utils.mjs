@@ -75,8 +75,12 @@ const GIT_READ_SUBCMDS = new Set([
 // intentionally excluded — they appear too often in benign search/log output. Gates
 // the bugfix-shape save-nudge (lib/cite-back-hint.mjs) so `node cli.mjs search "error"`
 // + an edit in the same episode no longer looks like an unsaved fix.
+// D#734: only spaces/tabs between the `\n` and `at` (a frame is indented on its own line). With
+// `\s+` there, every newline of a blank run started a match that ran to the run's end and back:
+// 100k newlines took ~2.8 s per call. Replayed over 44,630 real exit-0 Bash results
+// (2026-11-03), the narrower prefix changed no isHardError verdict.
 const HARD_ERROR_RE =
-  /\bERR!|\bpanic\b|traceback|segfault|core dumped|\benoent\b|command not found|assertion\s?error|\n\s+at\s+\S|(?:type|reference|range|syntax|eval|uri)error:/i;
+  /\bERR!|\bpanic\b|traceback|segfault|core dumped|\benoent\b|command not found|assertion\s?error|\n[ \t]+at\s+\S|(?:type|reference|range|syntax|eval|uri)error:/i;
 
 // Commands that only set the shell up for the next one. They neither make a command
 // read-only nor stop it being one: `cd repo && grep …` is a grep. This matters because
@@ -886,7 +890,7 @@ function collectErrorTerms(cmd, response) {
   // `fail`, no `not found` — npm says "no such file") and `panic: assignment to entry
   // in nil map`, while letting `panic: runtime error: …` through purely because that
   // message happens to contain the substring `error`.
-  // Note HARD_ERROR_RE's `\n\s+at\s+\S` alternative cannot match a single line (it
+  // Note HARD_ERROR_RE's `\n[ \t]+at\s+\S` alternative cannot match a single line (it
   // needs the preceding newline); that is fine — it is a stack-frame anchor, and the
   // frames it guards are accompanied by a line the other alternatives do catch.
   const errLines = String(response || '')
