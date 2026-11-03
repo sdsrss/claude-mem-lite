@@ -95,8 +95,8 @@ describe('the literal reading', () => {
   });
 
   it('decodes a bounded number of literals: fifty thousand cost about what plain strings do', () => {
-    // A decoded literal is scrubbed as a text of its own. With no bound, 50,000 of them read 22-24x the same
-    // text without the escape; with it, under 1x (Node 26, 2026-11-03).
+    // A decoded literal is scrubbed as a text of its own; with the bound, 50,000 of them read under 1x the same
+    // text without the escape (Node 26, 2026-11-03).
     const ms = (fn) => {
       const t0 = performance.now();
       fn();
@@ -304,14 +304,10 @@ describe('D#701: JSON one encoder wrote, inside a string another encoder wrote',
       ),
       'Mq7q8uZxg526',
     ],
-  ])(
-    'keeps erased a word 6.30.14 erased, where the inner level erases part of it: %s',
-    (_name, text, word) => {
-      // Read joined, the word is whole in the body and in pieces in the rewritten literal, where the inner
-      // level erased its middle; v6.30.13 and v6.30.14 erase it (v6.30.15 review r1).
-      const out = scrubSecrets(text);
-      expect(out).not.toContain(word);
-      expect(scrubSecrets(out)).toBe(out);
-    },
-  );
+  ])('keeps erased a word 6.30.14 erased: %s', (_name, text, word) => {
+    // v6.30.13 and v6.30.14 erase the word (v6.30.15 review r1).
+    const out = scrubSecrets(text);
+    expect(out).not.toContain(word);
+    expect(scrubSecrets(out)).toBe(out);
+  });
 });
