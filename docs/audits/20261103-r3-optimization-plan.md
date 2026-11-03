@@ -334,7 +334,7 @@ CLAUDE.md 的 Baselines 表已按这棵树重盖（`96d274d1`）。
 - 不满足就不提交这条规则，并在这里记下读数。
 - **已知局限**：n=6 几乎没有统计功效。这条规则的作用是否决，不是证明。主要依据是机理：这些命令并没有失败。
 
-**盲评读数**（一个新起的子代理，36 个案例，原始结果在 `~/.cache/tmp/d717/judge/results.jsonl`，分组键在 `~/.cache/tmp/d717/judge717-key.json`）：
+**盲评读数**（一个新起的子代理，36 个案例，原始结果、案例和分组键在 `tasks/release-6310/judge/`（本地，不进库：案例里有其他项目的提示词原文））：
 
 | 组 | APPLICABLE | TOPICAL | IRRELEVANT | MISLEADING | UNCLEAR |
 |---|---|---|---|---|---|
