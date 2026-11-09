@@ -80,6 +80,62 @@ if git diff --cached --name-only | grep -qx 'package-lock.json'; then
   fi
 fi
 
+# ── Baselines move guard ────────────────────────────────────────────────────
+# docs/measurement/baselines.md has promised since e1824ffd (2026-09-08) that every row
+# CLAUDE.md's Baselines table replaces is moved there verbatim. Nothing enforced it: of the
+# 14 commits after the promise that changed the rows, 9 overwrote the old row instead, and
+# the rows were recovered from git on 2026-11-09. When the staged table differs from HEAD's,
+# the outgoing rows must be in the STAGED record as one `> `-quoted block. Checking line by
+# line is not enough: Knip rows repeat byte for byte across stamps, so lines of an unmoved
+# row are often already in the file. Tested by tests/pre-commit-baselines-guard.test.mjs.
+BASELINES_RC=0
+BASELINES_OUT=$(node --input-type=module - <<'NODE'
+import { execFileSync } from 'node:child_process';
+const show = (spec) => {
+  try {
+    return execFileSync('git', ['show', spec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return '';
+  }
+};
+const rows = (text) => {
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('| Baseline | Value'));
+  if (at < 0) return [];
+  const out = [];
+  for (const l of lines.slice(at + 1)) {
+    if (l.startsWith('|---')) continue;
+    if (!/^\| (Tests|Knip|Coverage) \|/.test(l)) break;
+    out.push(l);
+  }
+  return out;
+};
+const outgoing = rows(show('HEAD:CLAUDE.md'));
+const staged = rows(show(':CLAUDE.md'));
+// No table at HEAD gives an empty block, which every record includes.
+if (outgoing.join('\n') === staged.join('\n')) process.exit(0);
+const block = outgoing.map((r) => `> ${r}`).join('\n');
+if (show(':docs/measurement/baselines.md').includes(block)) process.exit(0);
+console.log(block);
+process.exit(1);
+NODE
+) || BASELINES_RC=$?
+if [ "$BASELINES_RC" -eq 1 ]; then
+  if [ "${DISABLE_BASELINES_GUARD:-0}" = "1" ]; then
+    echo "[pre-commit] ⚠ Baselines rows replaced without moving the old ones (DISABLE_BASELINES_GUARD=1, allowing)"
+  else
+    echo "[pre-commit] ❌ CLAUDE.md's Baselines rows changed, but the rows they replace are not in"
+    echo "[pre-commit]    the staged docs/measurement/baselines.md. Add them there verbatim, as one"
+    echo "[pre-commit]    quoted block under a 'Superseded row moved from CLAUDE.md' heading:"
+    while IFS= read -r line; do echo "[pre-commit]      $line"; done <<< "$BASELINES_OUT"
+    echo "[pre-commit]    Override (the old row was never a reading, e.g. a typo fix): DISABLE_BASELINES_GUARD=1 git commit ..."
+    exit 1
+  fi
+elif [ "$BASELINES_RC" -ne 0 ]; then
+  echo "[pre-commit] ❌ The Baselines move guard could not run (node exited $BASELINES_RC)."
+  exit 1
+fi
+
 # ── Frozen-corpus guard ─────────────────────────────────────────────────────
 # The LIVE replay benchmarks dump frozen corpora so a later A/B can be run over the same
 # denominator. `benchmark/results/` is gitignored, but that is one door and these files

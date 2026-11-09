@@ -37,6 +37,8 @@ text differs in kind.
   (`e1824ffd`, 2026-09-08) had overwritten the old row instead of moving it here: eight
   between 2026-09-09 and 2026-09-14, one on 2026-11-03. Those rows are now below, verbatim
   from git, each under the commit that wrote it and the one that replaced it.
+  `scripts/pre-commit.sh` now refuses a commit that changes the table's rows unless the
+  outgoing rows are staged here as one `> `-quoted block.
 
 ## Test-case count — history and why it is partly generated
 
