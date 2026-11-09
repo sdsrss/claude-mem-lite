@@ -36,6 +36,31 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-11-09 (after dev-deps PR #52)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `e9f29568` replaced it:
+
+> | Tests | **553 files / 9937**, 0 skipped | `main` @ `ec3510eb`, 2026-11-03, v6.30.15 + R3 (unreleased) |
+> | Knip | **36** unused exports, **0** unused files, **7** unlisted binaries | same tree, primary working tree, knip 6.43.0 |
+> | Coverage | **87.87** stmts · **82.97** branches · **92.51** funcs · **89.16** lines | same tree, vitest 5.0.5 |
+
+**The rulers changed under this row; on this tree that moved none of the three readings.**
+PR #52 (`e9f29568`) took knip 6.43.0 → 6.44.1 and vitest + @vitest/coverage-v8 5.0.5 →
+5.1.0, and touched only `package.json` and `package-lock.json`. Both arms ran back-to-back
+on 2026-11-09 in the primary working tree: the old tools on `7f66776f`, then `npm install`
+(lockfile left unchanged) and the new tools on `e9f29568`.
+
+| Reading | Old tools on `7f66776f` | New tools on `e9f29568` |
+|---------|-------------------------|-------------------------|
+| `npm run test:coverage` | 553 files / 9958 passed | 553 files / 9958 passed |
+| Knip | 36 / 0 / 7 | same name set; text and JSON reports compared |
+| Coverage, v8 text reporter | 87.89 · 82.99 · 92.52 · 89.18 | the same 131-row table, uncovered-line lists included |
+
+Test NAME sets were not diffed. The test sources are the same bytes in both arms, so what
+the equal counts leave open is only how vitest enumerates them. The +21 cases against the
+outgoing row lie between `ec3510eb` and `7f66776f` and were not attributed per commit; both
+arms above read 9958, so none of the 21 comes from the tool bump.
+
 ### Superseded row moved from CLAUDE.md 2026-09-25 (v6.12.0)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until v6.12.1 replaced it:
