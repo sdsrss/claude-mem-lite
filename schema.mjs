@@ -1910,7 +1910,6 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       } catch (retryErr) {
         try {
           retryErr.ftsRebuildAttempted = true;
-          if (refused) retryErr.ftsRebuildRefused = true;
         } catch {
           /* frozen error — fine */
         }
@@ -1966,11 +1965,12 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
  */
 /**
  * Rebuild all FTS5 indexes. Use after suspected index corruption (e.g. crash mid-trigger).
- * Safe to call at any time — rebuilds are idempotent.
+ * Commits only when the store reads sound inside the rebuild's transaction (checkedRebuild below).
  * `codes[i]` is the SQLite code of `errors[i]` (null for a table that is missing), so a caller
  * can tell its own disk filling up from damage: the restore check does (D#558).
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} Results per FTS table
+ * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[], check: 'ok'|'damaged'|'unchecked', lines: string[]}}
+ *   Results per FTS table; `check` and `lines` as lib/checked-write.mjs's checkedWrite
  */
 export function rebuildFTS(db) {
   return checkedRebuild(db, { reindex: false });
@@ -1995,8 +1995,8 @@ const firstCheckLine = (lines) =>
  * that transaction. On a store whose freelist lists a live page the rebuild hands that page to the
  * new index and overwrites rows (D#591); the reused page then sits in two trees, the in-transaction
  * check reports it, and the whole rebuild rolls back. A missing table is listed and skipped, not a
- * reason to write nothing. Refused: rebuilt is empty and one more error says why, its code
- * SQLITE_CORRUPT when the store read damaged.
+ * reason to write nothing. Refused: rebuilt is empty and one more error says why; its code is the
+ * failing step's, or SQLITE_CORRUPT when the quick_check itself reported damage.
  */
 function checkedRebuild(db, { reindex }) {
   const errors = [];
@@ -2038,8 +2038,8 @@ function checkedRebuild(db, { reindex }) {
  * its copy after the open, so the two cannot drift (D#558). REINDEX repairs an index whose entries
  * no longer match its table, which no FTS rebuild touches and doctor's checks never read (D#562).
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} as rebuildFTS, with
- *   'indexes' standing for the REINDEX
+ * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[], check: 'ok'|'damaged'|'unchecked', lines: string[]}}
+ *   as rebuildFTS, with 'indexes' standing for the REINDEX
  */
 export function rebuildIndexes(db) {
   return checkedRebuild(db, { reindex: true });

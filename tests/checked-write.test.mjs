@@ -90,6 +90,37 @@ describe('checkedWrite', () => {
     }
   }
 
+  // The design's reason to check AFTER the write: with a sound FTS index, a VACUUMed store's
+  // pre-write check reads 'ok' (it skips the freelist), so a check-first gate would let this
+  // rebuild through; the in-transaction check sees the reused page.
+  it('rolls back where a check before the write reads ok (VACUUMed, sound FTS index)', () => {
+    for (const links of [1, 3]) {
+      const p = join(tempDir(), 'claude-mem-lite.db');
+      const { truth } = writeCrossLinkedStore(p, { vacuum: true, ftsDamage: false, links });
+      const pre = new Database(p, { readonly: true });
+      try {
+        expect(pre.pragma('quick_check').map((r) => r.quick_check)).toEqual(['ok']);
+      } finally {
+        pre.close();
+      }
+      const control = join(tempDir(), 'claude-mem-lite.db');
+      copyFileSync(p, control);
+      const c = new Database(control);
+      for (const s of rebuildSteps) c.exec(s.sql);
+      c.close();
+      expect(intactObservations(control, truth)).toBeLessThan(truth.length);
+      const db = new Database(p);
+      let r;
+      try {
+        r = checkedWrite(db, rebuildSteps);
+      } finally {
+        db.close();
+      }
+      expect(r).toMatchObject({ committed: false, check: 'damaged' });
+      expect(intactObservations(p, truth)).toBe(truth.length);
+    }
+  });
+
   it('reads a step that fails with corruption as damaged, not as unchecked', () => {
     // With three cross-links REINDEX itself throws SQLITE_CORRUPT after the FTS rebuilds ran: the
     // caller has to point at the snapshots, not at "try again".
@@ -119,7 +150,8 @@ describe('checkedWrite', () => {
         { name: 'broken', sql: 'INSERT INTO no_such_table VALUES (1)' },
         { name: 'after', sql: 'INSERT INTO side VALUES (2)' },
       ]);
-      // A failure of the store's own (here SQLITE_ERROR) is damage; only the environment's is not.
+      // A failing step whose code is not the environment's reads as damage (here SQLITE_ERROR, a
+      // table the step names that is not there); only busy, disk, memory and the like do not.
       expect(r).toMatchObject({ committed: false, failedStep: 'broken', check: 'damaged', done: [] });
       expect(r.error).toMatch(/no such table/);
       expect(db.prepare('SELECT count(*) AS n FROM side').get().n).toBe(0);
@@ -150,8 +182,8 @@ describe('checkedWrite', () => {
   });
 
   it('stops when a step ends the transaction, so nothing after it runs in autocommit', () => {
-    // SQLITE_FULL / IOERR / BUSY / NOMEM can roll the whole transaction back by themselves; a step
-    // that does it on purpose stands in for them.
+    // A step that ends the transaction without throwing (here a ROLLBACK statement): the steps
+    // after it would run in autocommit, each committing on its own, unchecked.
     const db = new Database(soundStore());
     try {
       const r = checkedWrite(db, [
@@ -203,7 +235,13 @@ describe('checkedWrite', () => {
       other.exec('BEGIN IMMEDIATE');
       db.pragma('busy_timeout = 0');
       const r = checkedWrite(db, [{ name: 'side', sql: 'INSERT INTO side VALUES (1)' }]);
-      expect(r).toMatchObject({ committed: false, check: 'unchecked', code: 'SQLITE_BUSY' });
+      // failedStep null: BEGIN IMMEDIATE itself met the lock, before any step ran.
+      expect(r).toMatchObject({
+        committed: false,
+        check: 'unchecked',
+        code: 'SQLITE_BUSY',
+        failedStep: null,
+      });
       other.exec('ROLLBACK');
       expect(db.prepare('SELECT count(*) AS n FROM side').get().n).toBe(0);
     } finally {

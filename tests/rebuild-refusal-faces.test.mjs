@@ -6,19 +6,33 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { initSchema } from '../schema.mjs';
-import { intactObservations, writeCrossLinkedStore } from './test-helpers.mjs';
+import { intactObservations, writeCrossLinkedStore, writeStoreSnapshot } from './test-helpers.mjs';
 
 const REPO = resolve(import.meta.dirname, '..');
 const SCHEMA_URL = pathToFileURL(join(REPO, 'schema.mjs')).href;
 const BSQ_URL = pathToFileURL(createRequire(import.meta.url).resolve('better-sqlite3')).href;
 const DB = 'claude-mem-lite.db';
 const sha = (p) => createHash('sha1').update(readFileSync(p)).digest('hex');
+/** The main file and its log together: a face that commits to the log changes this too. */
+const storeSha = (p) =>
+  createHash('sha1')
+    .update(readFileSync(p))
+    .update(existsSync(`${p}-wal`) ? readFileSync(`${p}-wal`) : Buffer.alloc(0))
+    .digest('hex');
 
 let root;
 let home;
@@ -115,7 +129,7 @@ describe('the opener’s FTS-corruption branch', () => {
 describe('doctor', () => {
   it('reports one ✗ for a rebuild it did not commit, and changes no byte of the store', () => {
     const { dir, p, truth } = crossLinked('doctor', { inLog: true });
-    const before = sha(p);
+    const before = storeSha(p);
     const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor', '--json'], {
       env: env(dir),
       cwd: root,
@@ -128,13 +142,41 @@ describe('doctor', () => {
     expect(lines[0]).toMatchObject({ level: 'fail' });
     expect(lines[0].message).toMatch(/^FTS5 not rebuilt: the store is damaged \(quick_check: .+\)/);
     expect(intactObservations(p, truth)).toBe(truth.length);
-    expect(sha(p)).toBe(before);
+    expect(storeSha(p)).toBe(before);
   });
+
+  // The store opens and its rows read: advice is a snapshot that passes, or keeping a copy; never
+  // the set-aside ("a fresh store is created") the will-not-open path gives without a snapshot.
+  const doctorText = (dir) =>
+    spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor'], {
+      env: env(dir),
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 180_000,
+    }).stdout;
+
+  it('with no snapshot, offers none and does not tell the user to set the store aside', () => {
+    const { dir } = crossLinked('doctor-nosnap');
+    const out = doctorText(dir);
+    expect(out).toMatch(/FTS5 not rebuilt: the store is damaged/);
+    expect(out).toMatch(/No backup snapshot passes its check, so none is offered\. The store still opens/);
+    expect(out).not.toMatch(/set the broken file aside|fresh store is created/);
+  }, 60_000);
+
+  it('with a snapshot that passes, names the command that restores it', () => {
+    const { dir } = crossLinked('doctor-snap');
+    writeStoreSnapshot(join(dir, `${DB}.pre-delete-x.bak`), { observations: 12 });
+    const out = doctorText(dir);
+    expect(out).toMatch(/FTS5 not rebuilt: the store is damaged/);
+    expect(out).toMatch(/restore it: /);
+    expect(out).toMatch(/pre-delete-x\.bak/);
+  }, 120_000);
 });
 
 describe('doctor’s MCP registration check', () => {
   // `claude mcp list` starts the MCP server, which writes as it opens; on this fixture that start
-  // alone left 288 of 300 rows. A stand-in that really starts it for two seconds, as a health check.
+  // alone left 288 of 300 rows. The stand-in starts it as a health check does; with stdin closed
+  // the server exits on its own within about 150 ms, after that startup write.
   function serverStartingClaude() {
     writeFileSync(
       join(home, 'bin', 'claude'),
@@ -241,6 +283,7 @@ describe('the snapshot check', () => {
 });
 
 describe('FTS5 optimize (maintain and the MCP idle pass)', () => {
+  // A sound FTS index: with a damaged one even an unchecked optimize throws and loses nothing.
   it('optimizeFts commits on a sound store and writes nothing on a cross-linked one', async () => {
     const { optimizeFts } = await import('../lib/maintain-core.mjs');
     const sound = join(root, 'sound.db');
@@ -251,7 +294,14 @@ describe('FTS5 optimize (maintain and the MCP idle pass)', () => {
     } finally {
       s.close();
     }
-    const { p, truth } = crossLinked('optimize', { vacuum: true });
+    const { p, truth } = crossLinked('optimize', { ftsDamage: false });
+    // Premise: the bare statement loses rows on this store.
+    const control = join(root, 'optimize-control.db');
+    copyFileSync(p, control);
+    const c = new Database(control);
+    c.exec("INSERT INTO observations_fts(observations_fts) VALUES('optimize')");
+    c.close();
+    expect(intactObservations(control, truth)).toBeLessThan(truth.length);
     const db = new Database(p);
     try {
       expect(optimizeFts(db)).toMatchObject({ committed: false, check: 'damaged' });
@@ -263,7 +313,7 @@ describe('FTS5 optimize (maintain and the MCP idle pass)', () => {
 
   it('maintain says the index was not optimized', async () => {
     const { runMaintainOps } = await import('../lib/maintain-core.mjs');
-    const { p, truth } = crossLinked('maintain', { vacuum: true });
+    const { p, truth } = crossLinked('maintain', { ftsDamage: false });
     const db = new Database(p);
     let lines;
     try {

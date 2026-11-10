@@ -536,11 +536,12 @@ export function editLogPage(path, pageno, edit) {
 
 /**
  * A live store (WAL, initSchema) whose freelist lists `links` leaf pages the observations table
-
+ * still uses: the page-level damage on which an index rebuild overwrites rows, because the rebuild
  * frees and allocates pages and the freelist hands it those leaves (D#591). `ftsDamage` deletes the
  * leaf rows of observations_fts_data first, so FTS5's own check fails and doctor goes on to rebuild.
  * `vacuum` VACUUMs the store before the freelist is made; SQLite 3.53.4's integrity check then
- * starts at a virtual table, skips the freelist and reads 'ok' on this store. `prepare(path)` runs
+ * starts at a virtual table and skips the freelist, so with `ftsDamage: false` it reads 'ok' on this
+ * store (with the FTS damage it reports that instead). `prepare(path)` runs
  * on the closed store before the damage is planted: the product's opener writes on its first open
  * of a store initSchema built, and on these pages any write can overwrite rows.
  * `inLog`: the freelist is made while another connection holds the log open, and the store is copied

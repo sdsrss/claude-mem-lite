@@ -465,23 +465,6 @@ export function nonPluginMemRegistrations(listOutput) {
 }
 
 /**
- * The remedy line for a `doctor` database check that threw — or null when the failure is
- * one this cannot classify.
- *
- * Returning null is deliberate and is the case worth defending: a diagnostic that always
- * prints a fix eventually prints the wrong one, and the bare error message is a better
- * answer than a confident irrelevance. The three CLASSIFIED outcomes are kept apart for the
- * same reason — "restore this snapshot", "there is no snapshot", and "I could not read the
- * directory to find out" are three different situations, and collapsing the last two ends
- * the reader's search with a fact nobody checked.
- *
- * Shell commands only, no `claude-mem-lite <cmd>`: the remedy for a broken store must not
- * itself depend on which install shape the user has (the plugin cache has no CLI on PATH).
- *
- * Exported for tests/doctor-db-remedy.test.mjs, which also drives the shipped doctor over a
- * corrupt file — a pure function nothing calls is the wiring gap this repo keeps finding.
- */
-/**
  * The first damage line PRAGMA quick_check reports on the store, read through a read-only handle
  * (its close never checkpoints), or null: sound, absent, or not checkable here (no binding, a lock,
  * an error that is not damage). D#593: doctor reads this before `claude mcp list` starts a server.
@@ -513,7 +496,24 @@ async function readOnlyStoreDamage(dbPath) {
   }
 }
 
-export async function dbCheckRemedy(dbPath, err) {
+/**
+ * The remedy line for a `doctor` database check that threw — or null when the failure is
+ * one this cannot classify.
+ *
+ * Returning null is deliberate and is the case worth defending: a diagnostic that always
+ * prints a fix eventually prints the wrong one, and the bare error message is a better
+ * answer than a confident irrelevance. The three CLASSIFIED outcomes are kept apart for the
+ * same reason — "restore this snapshot", "there is no snapshot", and "I could not read the
+ * directory to find out" are three different situations, and collapsing the last two ends
+ * the reader's search with a fact nobody checked.
+ *
+ * Shell commands only, no `claude-mem-lite <cmd>`: the remedy for a broken store must not
+ * itself depend on which install shape the user has (the plugin cache has no CLI on PATH).
+ *
+ * Exported for tests/doctor-db-remedy.test.mjs, which also drives the shipped doctor over a
+ * corrupt file — a pure function nothing calls is the wiring gap this repo keeps finding.
+ */
+export async function dbCheckRemedy(dbPath, err, { restoreOnly = false } = {}) {
   if (isNativeBindingError(err)) return `Repair: ${nativeBindingRepairHint(PROJECT_DIR)}`;
   // Classification and remedy both live in lib/db-unusable.mjs since v6.5.0, because the hook
   // path now has to answer the same question in-session and two copies of a SQLite-message
@@ -541,6 +541,9 @@ export async function dbCheckRemedy(dbPath, err) {
       return checkSnapshot(path);
     },
   });
+  // A store that opens and reads (doctor's refused rebuild, D#593) is not a store that will not open:
+  // only a passing snapshot to restore is advice there; moving it aside to start fresh is not.
+  if (restoreOnly && remedy.kind !== 'restore') return null;
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
   // Both commands move the database file and its -wal aside and delete the -shm, under any session
@@ -3261,16 +3264,23 @@ async function doctor() {
               fail(`FTS5 ${notRebuiltReason(refused)}`);
               issues++;
               if (refused.check === 'damaged') {
+                // The store opens and its rows read: a passing snapshot is offered when there is one,
+                // never the set-aside the open-failure path gives when there is not.
                 let remedy = null;
                 try {
                   remedy = await dbCheckRemedy(
                     DB_PATH,
                     Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' }),
+                    { restoreOnly: true },
                   );
                 } catch (remedyErr) {
                   log(`    (could not build a repair hint: ${remedyErr.message})`);
                 }
-                if (remedy) log(`    ${remedy}`);
+                log(
+                  remedy
+                    ? `    ${remedy}`
+                    : '    No backup snapshot passes its check, so none is offered. The store still opens and its rows read; until it is repaired, a write to it can overwrite rows, so keep a copy of the data directory made while no session is running.',
+                );
               } else {
                 log('    Run doctor again when no session is writing to the store.');
               }
