@@ -17,8 +17,9 @@ Next to an `AGENTS.md` that file would switch off, and where it cannot be writte
 for example), it adds the text to each session's context instead; with
 `CLAUDE_MEM_RULES_STEERING=1` it keeps the block in `.claude/rules/claude-mem-lite.md` next to
 an `AGENTS.md`, excluded the same way. Run `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
-so your team gets it too. It removes the local copy so the text does not load twice. A project that carries the block is kept in sync on every SessionStart, and a
-`CLAUDE.md` holding nothing but the block gets the `AGENTS.md` import described below.
+so your team gets it too. It removes the local copy so the text does not load twice. While auto-adopt is on, a session started
+in the directory whose `CLAUDE.md` carries the block refreshes it when the shipped template changes and, where that file holds
+nothing but the block, adds the `AGENTS.md` import described below.
 
 ## What it writes
 
