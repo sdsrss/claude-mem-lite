@@ -36,6 +36,7 @@ import {
   localSteeringRemembered,
   isSharedAncestor,
   excludeWouldFail,
+  steeringDetailDocPath,
 } from '../lib/local-steering.mjs';
 import { silentAutoAdopt, cmdUnadopt, cmdAdopt } from '../adopt-cli.mjs';
 import { isOwnAdoptionArtifact, readBlock, writeManaged } from '../claudemd.mjs';
@@ -3044,7 +3045,8 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
     process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
     expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
-    expect(existsSync(join(wt, LOCAL_MD))).toBe(false);
+    // Frozen, the copy may hold the user's edits: it stays (v6.32.0 r1 defects F2).
+    expect(existsSync(join(wt, LOCAL_MD))).toBe(true);
   });
 
   // M3: a tracked CLAUDE.local.md is the team's file; the session does not edit it.
@@ -3060,6 +3062,9 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     });
     expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe(before);
     expect(status(app())).toBe('');
+    const st = statusIn(app());
+    expect(st).toContain('tracked by git; the plugin leaves it as it is');
+    expect(st).toMatch(/load it twice/);
   });
 
   // M12a / M12b / M13: where claudeMdExcludes is read, and what counts as set.
@@ -3176,5 +3181,78 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
       action: 'already-adopted',
       reason: 'above-root',
     });
+  });
+
+  // v6.32.0 pre-release defects review.
+  // F2: CLAUDE_MEM_NO_TEMPLATE_REFRESH=1 is how a user keeps edits inside the markers; a block above
+  // standing in must not delete the copy that holds them.
+  it('frozen, a local copy with edits stays when a block above stands in, and --status promises nothing', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const p = join(app(), LOCAL_MD);
+    const edited = readFileSync(p, 'utf8').replace(HEADING, `${HEADING}\nMY OWN NOTE`);
+    expect(edited, 'premise: the edit landed inside the block').not.toBe(readFileSync(p, 'utf8'));
+    writeFileSync(p, edited);
+    adoptIn(work());
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    const st = statusIn(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    expect(readFileSync(p, 'utf8')).toBe(edited);
+    expect(st).not.toMatch(/is removed at the next session start/);
+    expect(st).toMatch(/load it twice/);
+  });
+
+  // F7: the main checkout's CLAUDE.local.md points at the detail doc in the data directory; a session
+  // that relies on it keeps that doc there and current, as a session writing its own copy does.
+  it('a session relying on a CLAUDE.local.md above keeps the detail doc it points at', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    rmSync(steeringDetailDocPath());
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+    expect(existsSync(steeringDetailDocPath())).toBe(true);
+  });
+
+  // F9: sites no test pinned.
+  it('adopt names the root copy only from a subdirectory, and only when it carries the block', () => {
+    const pkgs = join(app(), 'packages');
+    mkdirSync(pkgs);
+    expect(adoptIn(pkgs), 'no root copy at all').not.toMatch(/also carries the block/);
+    rmSync(join(pkgs, 'CLAUDE.md'));
+    // At the root a copy behind a symlink stays (adopt leaves it alone); the note is for subdirectories.
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    renameSync(join(app(), LOCAL_MD), join(work(), 'real-local.md'));
+    symlinkSync(join(work(), 'real-local.md'), join(app(), LOCAL_MD));
+    expect(adoptIn(app())).not.toMatch(/also carries the block/);
+  });
+
+  it('--status from a subdirectory looks above the top-level, not above itself', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const sub = join(app(), 'src');
+    mkdirSync(sub);
+    expect(statusIn(sub)).not.toMatch(/carries the block/);
+  });
+
+  it('--status does not promise to remove a copy behind a symlink or in a directory it cannot write', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    adoptIn(work());
+    const p = join(app(), LOCAL_MD);
+    renameSync(p, join(work(), 'real-local.md'));
+    symlinkSync(join(work(), 'real-local.md'), p);
+    const linked = statusIn(app());
+    expect(linked).toContain('behind a symbolic link; the plugin leaves it as it is');
+    expect(linked).toMatch(/load it twice/);
+    rmSync(p);
+    writeFileSync(p, readFileSync(join(work(), 'real-local.md'), 'utf8'));
+    chmodSync(app(), 0o555);
+    try {
+      const locked = statusIn(app());
+      expect(locked).not.toMatch(/is removed at the next session start/);
+      expect(locked).toMatch(/load it twice/);
+    } finally {
+      chmodSync(app(), 0o755);
+    }
   });
 });

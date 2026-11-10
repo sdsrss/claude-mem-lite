@@ -15,7 +15,19 @@
 //
 // See docs/CLAUDE-MD-STEERING-PLAN.md for rationale + migration.
 
-import { readFileSync, existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync } from 'fs';
+import {
+  readFileSync,
+  existsSync,
+  unlinkSync,
+  mkdirSync,
+  rmdirSync,
+  readdirSync,
+  lstatSync,
+  openSync,
+  fstatSync,
+  closeSync,
+  constants as fsConstants,
+} from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join, basename } from 'path';
 import { createHash } from 'crypto';
@@ -264,6 +276,25 @@ export function readBlock(cwd, slug) {
   return readBlockAt(claudeMdPath(cwd), slug);
 }
 
+// A regular file's text. The session sync reads instruction files in every directory above the
+// project (D#509(4)), /tmp among them, where any local user can put a FIFO: opened non-blocking and
+// checked on the descriptor, anything but a regular file throws (EISDIR for a directory, as a plain
+// read did) instead of stalling the hook (v6.32.0 pre-release defects review F1). Claude Code skips
+// such files too.
+function readRegularText(p) {
+  const fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile())
+      throw Object.assign(new Error(`${p}: not a regular file`), {
+        code: st.isDirectory() ? 'EISDIR' : 'ENOTREG',
+      });
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * readBlock for any instructions file — CLAUDE.md, or the CLAUDE.local.md that auto-adopt
  * writes (lib/local-steering.mjs). One parser, so both files get the same CRLF, orphan and
@@ -274,7 +305,7 @@ export function readBlock(cwd, slug) {
  */
 export function readBlockAt(p, slug) {
   if (!existsSync(p)) return { exists: false, version: null, body: null, raw: '' };
-  const raw = readFileSync(p, 'utf8');
+  const raw = readRegularText(p);
   const m = raw.match(blockRegex(slug));
   if (!m) return { exists: true, version: null, body: null, raw };
   // Normalize CRLF in the captured body so drift comparison (needsRefresh) is
@@ -374,7 +405,7 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
   if (!existsSync(dp)) return true;
   let cur;
   try {
-    cur = readFileSync(dp, 'utf8');
+    cur = readRegularText(dp);
   } catch {
     return true;
   }

@@ -424,10 +424,17 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         // The shipped block already loads from above the top-level (an enclosing directory's
         // CLAUDE.md, or in a worktree the main checkout's CLAUDE.local.md): a local copy would be the
         // second (D#509(4)). One the plugin wrote goes and is forgotten, so the file comes back if that
-        // block goes or falls behind; one the user removed stays removed.
+        // block goes or falls behind; one the user removed stays removed. Frozen
+        // (CLAUDE_MEM_NO_TEMPLATE_REFRESH=1, how edits inside the markers are kept), it stays: removing
+        // it would lose them (v6.32.0 pre-release defects review F2). The detail doc in the data
+        // directory, which a CLAUDE.local.md above points at, is kept current as when writing one (F7).
         if (steeringAbove(root, cwd).current) {
-          if (removeLocalSteering(root, PLUGIN_SLUG, { keepTracked: true }).action === 'removed')
+          if (
+            process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH !== '1' &&
+            removeLocalSteering(root, PLUGIN_SLUG, { keepTracked: true }).action === 'removed'
+          )
             forgetLocalSteering(root);
+          ensureSteeringDetailDoc();
           return { ok: true, action: 'already-adopted', reason: 'above-root' };
         }
         const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
@@ -791,13 +798,14 @@ function localSteeringStatus(cwd) {
       : trackedByGit(root, relative(root, cur.path))
         ? 'tracked by git'
         : null;
-    // Any session in the repository takes the copy out, when the sync runs and where it can, and
-    // unless a damaged sentinel line in CLAUDE.md stops it first.
+    // Any session in the repository takes the copy out, when the sync runs and where it can, unless
+    // a damaged sentinel line in CLAUDE.md stops it first or the template is frozen.
     if (
       !kept &&
       runs &&
       removable(cur.path) &&
-      straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG).length === 0
+      straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG).length === 0 &&
+      process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH !== '1'
     )
       return `— none: ${above.current} carries the block (the local copy in ${cur.path} is removed at the next session start)`;
     return `⚠ ${above.current} carries the block, and ${cur.path} also does${kept ? ` (${kept}; the plugin leaves it as it is)` : ''}: sessions here load it twice`;

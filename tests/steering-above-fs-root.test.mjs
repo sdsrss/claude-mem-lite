@@ -2,10 +2,10 @@
 // including, the filesystem root (2.1.322: `for (d = cwd; d !== path.parse(d).root; d = dirname(d))`;
 // a real run with a block in /CLAUDE.md loaded nothing from /). A block there must not stand in for
 // the local copy or the injected text, or the session gets no steering at all. The root cannot be
-// written from a test, so `fs` answers for files there from a map; a copy of the same file one level
-// below the session's parent is the control that shows the map is read.
+// written from a test, so `fs` opens a real file in their place (a map of path -> stand-in); the same
+// stand-in one level below the session's parent is the control that shows the map is read.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, parse } from 'path';
 import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
@@ -13,9 +13,12 @@ import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
 const fake = vi.hoisted(() => new Map());
 vi.mock('fs', async (importOriginal) => {
   const real = await importOriginal();
-  const existsSync = (p, ...a) => fake.has(String(p)) || real.existsSync(p, ...a);
-  const readFileSync = (p, ...a) => (fake.has(String(p)) ? fake.get(String(p)) : real.readFileSync(p, ...a));
-  return { ...real, default: { ...real, existsSync, readFileSync }, existsSync, readFileSync };
+  const to = (p) => (typeof p === 'string' && fake.has(p) ? fake.get(p) : p);
+  const existsSync = (p, ...a) => real.existsSync(to(p), ...a);
+  const openSync = (p, ...a) => real.openSync(to(p), ...a);
+  const readFileSync = (p, ...a) => real.readFileSync(to(p), ...a);
+  const mocked = { existsSync, openSync, readFileSync };
+  return { ...real, ...mocked, default: { ...real, ...mocked } };
 });
 
 const { silentAutoAdopt } = await import('../adopt-cli.mjs');
@@ -47,11 +50,11 @@ describe('the filesystem root is not a directory Claude Code loads instructions 
     delete process.env.MEM_NO_AUTO_ADOPT;
     delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
     process.env.HOME = home;
-    // The shipped local copy, as a session writes it.
+    // The shipped local copy, as a session writes it: the stand-in for the files faked below.
     const first = join(home, 'first');
     initRepo(first);
     expect(silentAutoAdopt({ cwd: first }).action, 'premise: a repository gets its local copy').toBe('local');
-    copy = readFileSync(join(first, LOCAL_MD), 'utf8');
+    copy = join(first, LOCAL_MD);
     fake.clear();
   });
   afterEach(() => {
