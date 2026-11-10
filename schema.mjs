@@ -26,6 +26,7 @@ import { DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
 import { isDbBusyError } from './lib/db-busy.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
 import { looksAlreadyDerived } from './lib/observation-write.mjs';
+import { checkedWrite, holdOpen } from './lib/checked-write.mjs';
 export { DB_DIR, DB_PATH, CODE_DIR };
 
 // Increment when schema changes (tables, columns, indexes, FTS, migrations)
@@ -1873,29 +1874,43 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
     if (isFtsCorruptionError(firstErr)) {
       warn?.(`FTS index corruption detected, rebuilding indexes: ${firstErr.message}`);
       let raw = null;
+      let holder = null;
+      let refused = false;
       try {
+        // D#593: held across raw's close, so that close does not checkpoint the log into the main
+        // file after a refused rebuild (with damage only in a log frame, it would write it over
+        // intact pages).
+        holder = holdOpen(Database, DB_PATH);
         raw = new Database(DB_PATH);
         // D#415: otherwise better-sqlite3's 5000 ms per statement, four rebuilds, in a hook
         // the host kills at 2 s or 5 s.
         if (busyDeadline !== null) capBusyWaits(raw);
-        const { errors } = rebuildFTS(raw);
-        if (errors.length) warn?.(`FTS rebuild reported: ${errors.join('; ')}`);
+        const { errors, check } = rebuildFTS(raw);
+        if (check !== 'ok') {
+          refused = true;
+          warn?.(
+            `FTS rebuild not committed, nothing written: ${errors.at(-1).replace(/^not rebuilt: /, '')}`,
+          );
+        } else if (errors.length) warn?.(`FTS rebuild reported: ${errors.join('; ')}`);
       } catch (rebuildErr) {
         warn?.(`FTS rebuild failed: ${rebuildErr.message}`);
       } finally {
-        try {
-          raw?.close();
-        } catch {
-          /* best-effort */
+        for (const h of [raw, holder]) {
+          try {
+            h?.close();
+          } catch {
+            /* best-effort */
+          }
         }
       }
       try {
         const db = ensureDb();
-        info?.('DB recovered after FTS rebuild');
+        if (!refused) info?.('DB recovered after FTS rebuild');
         return db;
       } catch (retryErr) {
         try {
           retryErr.ftsRebuildAttempted = true;
+          if (refused) retryErr.ftsRebuildRefused = true;
         } catch {
           /* frozen error — fine */
         }
@@ -1958,32 +1973,63 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
  * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} Results per FTS table
  */
 export function rebuildFTS(db) {
-  const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
-  const idRe = /^[a-z][a-z0-9_]*$/;
-  const rebuilt = [];
+  return checkedRebuild(db, { reindex: false });
+}
+
+const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
+
+/** The first line of a quick_check report that says something ("*** in database main ***" does not). */
+const firstCheckLine = (lines) =>
+  (
+    lines
+      .join('\n')
+      .split('\n')
+      .find((l) => l && !l.startsWith('***')) ??
+    lines[0] ??
+    ''
+  ).slice(0, 200);
+
+/**
+ * The rebuild both exports run (D#593): one checked transaction (lib/checked-write.mjs) over every
+ * FTS table that exists, then REINDEX when asked, committed only when the store reads sound inside
+ * that transaction. On a store whose freelist lists a live page the rebuild hands that page to the
+ * new index and overwrites rows (D#591); the reused page then sits in two trees, the in-transaction
+ * check reports it, and the whole rebuild rolls back. A missing table is listed and skipped, not a
+ * reason to write nothing. Refused: rebuilt is empty and one more error says why, its code
+ * SQLITE_CORRUPT when the store read damaged.
+ */
+function checkedRebuild(db, { reindex }) {
   const errors = [];
   const codes = [];
+  const steps = [];
   for (const fts of FTS_TABLES) {
+    let exists;
     try {
-      if (!idRe.test(fts)) {
-        errors.push(`${fts}: invalid identifier`);
-        codes.push(null);
-        continue;
-      }
-      const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(fts);
-      if (!exists) {
-        errors.push(`${fts}: not found`);
-        codes.push(null);
-        continue;
-      }
-      db.exec(`INSERT INTO ${fts}(${fts}) VALUES('rebuild')`);
-      rebuilt.push(fts);
+      exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(fts);
     } catch (e) {
       errors.push(`${fts}: ${e.message}`);
       codes.push(e.code ?? null);
+      continue;
     }
+    if (!exists) {
+      errors.push(`${fts}: not found`);
+      codes.push(null);
+      continue;
+    }
+    steps.push({ name: fts, sql: `INSERT INTO ${fts}(${fts}) VALUES('rebuild')` });
   }
-  return { rebuilt, errors, codes };
+  if (reindex) steps.push({ name: 'indexes', sql: 'REINDEX' });
+  const r = checkedWrite(db, steps);
+  if (r.committed) return { rebuilt: r.done, errors, codes, check: 'ok', lines: [] };
+  const why =
+    r.failedStep !== null
+      ? `${r.failedStep}: ${r.error}`
+      : r.check === 'damaged'
+        ? `quick_check: ${firstCheckLine(r.lines)}`
+        : r.error;
+  errors.push(`not rebuilt: ${why}`);
+  codes.push(r.code ?? (r.check === 'damaged' ? 'SQLITE_CORRUPT' : null));
+  return { rebuilt: [], errors, codes, check: r.check, lines: r.lines };
 }
 
 /**
@@ -1996,15 +2042,7 @@ export function rebuildFTS(db) {
  *   'indexes' standing for the REINDEX
  */
 export function rebuildIndexes(db) {
-  const result = rebuildFTS(db);
-  try {
-    db.exec('REINDEX');
-    result.rebuilt.push('indexes');
-  } catch (e) {
-    result.errors.push(`indexes: ${e.message}`);
-    result.codes.push(e.code ?? null);
-  }
-  return result;
+  return checkedRebuild(db, { reindex: true });
 }
 
 /**

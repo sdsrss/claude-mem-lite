@@ -6,6 +6,7 @@
 // in from the server-process module scope.
 
 import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import { notRebuiltText } from '../lib/db-unusable.mjs';
 
 /**
  * Handle `mem_fts_check({ action })`. Returns an MCP content wrapper.
@@ -27,9 +28,13 @@ export function handleMemFtsCheck(db, args) {
   // args.action === 'rebuild' (Zod enum enforces one of the two). The FTS5 indexes, then every
   // other index, as `fts-check rebuild` does (D#558).
   const result = rebuildIndexes(db);
+  // The rebuild commits only when the store reads sound inside its transaction (D#593); a refusal
+  // wrote nothing and says why.
   const summary =
-    result.errors.length > 0
-      ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
-      : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
+    result.check !== 'ok'
+      ? notRebuiltText(result)
+      : result.errors.length > 0
+        ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`
+        : `Successfully rebuilt: ${result.rebuilt.join(', ')}`;
   return { content: [{ type: 'text', text: summary }] };
 }

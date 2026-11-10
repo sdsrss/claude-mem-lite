@@ -585,7 +585,10 @@ describe('the FTS rebuild arm under a busy deadline (D#415)', () => {
     }
     expect(r.thrown, 'the injected fault must have fired').toBe(1);
     expect(r.msgs.join('\n')).toContain('FTS index corruption detected');
-    expect(r.msgs.join('\n'), 'the rebuild must have met the lock').toMatch(/FTS rebuild reported: .*locked/);
+    // D#593: the checked rebuild meets the lock at BEGIN IMMEDIATE and writes nothing.
+    expect(r.msgs.join('\n'), 'the rebuild must have met the lock').toMatch(
+      /FTS rebuild not committed, nothing written: .*locked/,
+    );
     expect(r.ms).toBeLessThan(4000);
   }, 90000);
 });

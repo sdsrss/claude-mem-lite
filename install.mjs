@@ -3169,8 +3169,14 @@ async function doctor() {
         } else {
           try {
             const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
+            const { holdOpen } = await import('./lib/checked-write.mjs');
+            // D#593: held across rwDb's close, so that close is not the store's last and does not
+            // checkpoint the log into the main file (with damage only in a log frame, that
+            // checkpoint writes it over intact pages; FTS5's integrity-check needs this handle).
+            const holder = holdOpen(Database, DB_PATH);
             const rwDb = new Database(DB_PATH);
             rwDb.pragma('busy_timeout = 3000');
+            let refused = null;
             try {
               const { healthy, details, busy } = checkFTSIntegrity(rwDb);
               if (healthy) {
@@ -3185,15 +3191,42 @@ async function doctor() {
                 dwarn('FTS5 integrity issues detected:');
                 for (const d of details) log(`    ${d}`);
                 log('  Attempting FTS5 rebuild...');
-                const { rebuilt, errors } = rebuildFTS(rwDb);
-                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-                if (errors.length > 0) {
-                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                  issues++;
+                const result = rebuildFTS(rwDb);
+                if (result.check !== 'ok') {
+                  refused = result;
+                } else {
+                  if (result.rebuilt.length > 0) ok(`FTS5 rebuilt: ${result.rebuilt.join(', ')}`);
+                  if (result.errors.length > 0) {
+                    fail(`FTS5 rebuild errors: ${result.errors.join(', ')}`);
+                    issues++;
+                  }
                 }
               }
             } finally {
               rwDb.close();
+              holder?.close();
+            }
+            if (refused) {
+              // The rebuild committed nothing: the store read damaged inside its transaction, or the
+              // write could not be made or checked. One ✗ for it, and on damage the restore remedy
+              // the open-failure path gives (it checks the snapshots), not a rebuild hint.
+              const { notRebuiltReason } = await import('./lib/db-unusable.mjs');
+              fail(`FTS5 ${notRebuiltReason(refused)}`);
+              issues++;
+              if (refused.check === 'damaged') {
+                let remedy = null;
+                try {
+                  remedy = await dbCheckRemedy(
+                    DB_PATH,
+                    Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' }),
+                  );
+                } catch (remedyErr) {
+                  log(`    (could not build a repair hint: ${remedyErr.message})`);
+                }
+                if (remedy) log(`    ${remedy}`);
+              } else {
+                log('    Run doctor again when no session is writing to the store.');
+              }
             }
           } catch (e) {
             dwarn('FTS5 integrity check failed: ' + e.message);

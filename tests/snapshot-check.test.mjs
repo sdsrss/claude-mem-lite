@@ -143,10 +143,13 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     try {
       db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true })}`);
       const r = probeOpenedStore(db);
+      // D#593: the rebuild is one checked transaction, so its one error says nothing was rebuilt.
+      // Inside one transaction the FTS rebuilds fit in the cache; whichever step meets the cap names it.
       expect(r.rebuildErrors).toContainEqual({
         code: 'SQLITE_FULL',
-        message: 'observations_fts: database or disk is full',
+        message: expect.stringMatching(/^not rebuilt: \w+: database or disk is full$/),
       });
+      expect(r.rebuildCheck).toBe('unchecked');
     } finally {
       db.close();
     }
@@ -159,7 +162,7 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     expect(du.checkSnapshot(snap)).toMatchObject({
       verdict: 'bad',
       why: 'rebuild',
-      reason: 'observations_fts: database disk image is malformed',
+      reason: 'not rebuilt: observations_fts: database disk image is malformed',
     });
   });
 
@@ -487,7 +490,9 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     try {
       const r = rebuildIndexes(h);
       expect(r.rebuilt).not.toContain('indexes');
-      const at = r.errors.findIndex((e) => e.startsWith('indexes: '));
+      // D#593: one checked transaction, so the failing REINDEX rolls the FTS rebuilds back with it.
+      expect(r.rebuilt).toEqual([]);
+      const at = r.errors.findIndex((e) => e.startsWith('not rebuilt: indexes: '));
       expect(at, r.errors.join('\n')).toBeGreaterThan(-1);
       expect(r.codes[at]).toBe('SQLITE_CONSTRAINT_UNIQUE');
     } finally {

@@ -119,9 +119,31 @@ describe('checkedWrite', () => {
         { name: 'broken', sql: 'INSERT INTO no_such_table VALUES (1)' },
         { name: 'after', sql: 'INSERT INTO side VALUES (2)' },
       ]);
-      expect(r).toMatchObject({ committed: false, failedStep: 'broken', check: 'unchecked', done: [] });
+      // A failure of the store's own (here SQLITE_ERROR) is damage; only the environment's is not.
+      expect(r).toMatchObject({ committed: false, failedStep: 'broken', check: 'damaged', done: [] });
       expect(r.error).toMatch(/no such table/);
       expect(db.prepare('SELECT count(*) AS n FROM side').get().n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('reads a step the environment failed (a full disk) as unchecked, not as damage', () => {
+    const db = new Database(soundStore());
+    try {
+      db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true })}`);
+      const r = checkedWrite(db, [
+        {
+          name: 'fill',
+          sql: 'INSERT INTO side SELECT hex(randomblob(4000)) FROM (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3)',
+        },
+      ]);
+      expect(r).toMatchObject({
+        committed: false,
+        check: 'unchecked',
+        failedStep: 'fill',
+        code: 'SQLITE_FULL',
+      });
     } finally {
       db.close();
     }

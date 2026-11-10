@@ -1,7 +1,10 @@
 // cli/fts-check.mjs — `claude-mem-lite fts-check <check|rebuild>`.
 // Extracted from mem-cli.mjs (v2.41, god-module split).
 
-import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import Database from 'better-sqlite3';
+import { DB_PATH, checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import { notRebuiltText } from '../lib/db-unusable.mjs';
+import { holdOpen } from '../lib/checked-write.mjs';
 import { parseArgs, out, fail } from './common.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -50,8 +53,16 @@ export function cmdFtsCheck(db, args) {
   if (action === 'rebuild') {
     // The FTS5 indexes, then every other index (REINDEX): the last step of doctor's restore
     // command, which the restore check ran on its copy (D#558).
+    // A read-only connection held until this process exits, after mem-cli closes `db`: that close
+    // is then not the store's last and does not checkpoint the log into the main file, which on a
+    // store damaged only in a log frame writes the damage over intact pages (D#593).
+    const holder = holdOpen(Database, DB_PATH);
+    if (holder) process.once('exit', () => holder.close());
     const result = rebuildIndexes(db);
-    if (result.errors.length > 0) {
+    if (result.check !== 'ok') {
+      out(`[mem] ${notRebuiltText(result)}`);
+      process.exitCode = 1;
+    } else if (result.errors.length > 0) {
       // Partial success is a failure of the requested operation: the caller asked
       // for a rebuild and at least one index still is not rebuilt.
       out(`[mem] Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`);

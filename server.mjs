@@ -57,6 +57,7 @@ import {
   resolveDefaultMaintainOps,
   DEFAULT_MAINTAIN_OPS,
   DEFAULT_RETAIN_DAYS,
+  optimizeFts,
 } from './lib/maintain-core.mjs';
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
@@ -2318,9 +2319,16 @@ const idleTimer = setInterval(() => {
       );
     if (compressed > 0) debugLog('INFO', 'idle-cleanup', `Compressed ${compressed} old observations`);
 
-    // FTS5 index optimization (outside transaction — WAL-friendly)
-    db.exec("INSERT INTO observations_fts(observations_fts) VALUES('optimize')");
-    debugLog('DEBUG', 'idle-cleanup', 'FTS5 optimize complete');
+    // FTS5 index optimization, committed only on a store that reads sound inside its transaction
+    // (D#761): it rewrites the whole index, unattended.
+    const opt = optimizeFts(db);
+    if (opt.committed) debugLog('DEBUG', 'idle-cleanup', 'FTS5 optimize complete');
+    else
+      debugLog(
+        'WARN',
+        'idle-cleanup',
+        `FTS5 optimize not committed (${opt.check}): ${opt.error ?? opt.lines[0] ?? ''}`,
+      );
   } catch (e) {
     debugCatch(e, 'idle-cleanup');
   }
