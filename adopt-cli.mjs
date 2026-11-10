@@ -26,7 +26,7 @@ import {
   realpathSync,
 } from 'fs';
 import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
-import { join, isAbsolute, relative, dirname } from 'path';
+import { join, isAbsolute, relative, dirname, resolve, basename } from 'path';
 import {
   memdirPath,
   disableSentinelPath,
@@ -45,6 +45,7 @@ import {
   hasResidue as claudeMdHasResidue,
   needsRefresh,
   readBlock,
+  readBlockAt,
   migrateLegacyMemoryDir,
   hasLegacyMemdirSentinel,
   claudeMdPath,
@@ -78,7 +79,9 @@ import {
   samePath,
   localFileLinked,
   userInstructionFiles,
+  steeringDetailDocPath,
 } from './lib/local-steering.mjs';
+import { pluginSettingsScopes } from './lib/plugin-key.mjs';
 import { CLI_INVOKE } from './cli-path.mjs';
 
 /**
@@ -272,6 +275,15 @@ function adoptOne(cwd, { force, dryRun }) {
     log(`[adopt] ${cwd} → ${r.action}${docNote}${migNote}${localNote}${importNote}`);
     for (const line of elsewhere('stops')) log(line);
     for (const line of sharedNote('stops')) log(line);
+    // In a subdirectory the root's local copy stays for the root's sessions, and sessions started
+    // here load it as an ancestor too. No layout the plugin could pick loads the block once in every
+    // session without moving the root's sessions to injection (D#509(4) spec), so say which one does.
+    const top = localSteeringRoot(cwd);
+    const rootCopy = top && !samePath(top, cwd) ? readLocalSteering(top, PLUGIN_SLUG) : null;
+    if (rootCopy && rootCopy.body !== null)
+      log(
+        `  ⚠ ${rootCopy.path} also carries the block, and sessions started here load both, so they load it twice. For one copy in every session, keep the block in one CLAUDE.md at ${top} (\`${CLI_INVOKE} adopt\` there, \`${CLI_INVOKE} unadopt\` here).`,
+      );
     // The copy that could not come out loads beside CLAUDE.md: said, and not a success (R3-4).
     if (local.action === 'failed') {
       if (local.residue) log(`  ⚠ ${local.residue}`);
@@ -409,6 +421,15 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
           // (delta review P2-2; lib/quiet-scope.mjs mirrors it).
           if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'disabled', reason: 'root-disabled' };
         }
+        // The shipped block already loads from above the top-level (an enclosing directory's
+        // CLAUDE.md, or in a worktree the main checkout's CLAUDE.local.md): a local copy would be the
+        // second (D#509(4)). One the plugin wrote goes and is forgotten, so the file comes back if that
+        // block goes or falls behind; one the user removed stays removed.
+        if (steeringAbove(root, cwd).current) {
+          if (removeLocalSteering(root, PLUGIN_SLUG, { keepTracked: true }).action === 'removed')
+            forgetLocalSteering(root);
+          return { ok: true, action: 'already-adopted', reason: 'above-root' };
+        }
         const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
         const r = writeLocalSteering(root, {
           slug: PLUGIN_SLUG,
@@ -442,9 +463,10 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       // claims review P2-5; inside a git work tree the reason is local-managed-only).
       if (managedOnly) return { ok: true, action: 'inject', reason: 'managed-only' };
       // Outside git there is no top-level to stop at, and the host loads every CLAUDE.md above the
-      // session as an ancestor: a block there already steers it, and injecting was a second copy
-      // (D#760).
-      if (blockAbove(cwd, null)) return { ok: true, action: 'already-adopted', reason: 'ancestor-claude-md' };
+      // session as an ancestor: the shipped block there already steers it, and injecting was a
+      // second copy (D#760). An out-of-date one is not relied on (D#509(4)).
+      if (steeringAbove(cwd).current)
+        return { ok: true, action: 'already-adopted', reason: 'ancestor-claude-md' };
       return { ok: true, action: 'inject' };
     }
     dropLocalSteering(cwd, { atRootOnly: true, keepTracked: true });
@@ -525,13 +547,87 @@ function blockIn(dir) {
   }
 }
 
-// The nearest directory above `cwd`, up to and including `root` (a null `root`: up to the filesystem
-// root), whose CLAUDE.md carries the block: the host loads it as an ancestor. `adopt` run in packages/ and a session in packages/web/src got a
+// The nearest directory above `cwd`, up to and including `root`, whose CLAUDE.md carries the block:
+// the host loads it as an ancestor. `adopt` run in packages/ and a session in packages/web/src got a
 // root CLAUDE.local.md on top of packages/CLAUDE.md, the block twice (D#177(2)).
 function blockAbove(cwd, root) {
   for (let d = dirname(cwd); ; d = dirname(d)) {
     if (blockIn(d)) return d;
-    if ((root && samePath(d, root)) || dirname(d) === d) return null;
+    if (samePath(d, root) || dirname(d) === d) return null;
+  }
+}
+
+// The main checkout of the linked worktree at `top`, read from its `.git` file
+// (`gitdir: <checkout>/.git/worktrees/<name>`), or null. A submodule's names .git/modules/.
+function worktreeMainCheckout(top) {
+  try {
+    const g = join(top, '.git');
+    if (!statSync(g).isFile()) return null;
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(g, 'utf8'));
+    const w = m && /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+[\\/]?$/.exec(resolve(top, m[1]));
+    return w ? w[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether a settings file a hook can read sets claudeMdExcludes. An excluded file does not load, and
+// its globs are not evaluated here, so with any set nothing above is relied on: the worst case is
+// the block loading twice, never a session with none.
+function claudeMdExcludesSet(dirs) {
+  const files = new Set(dirs.flatMap((d) => pluginSettingsScopes(claudeConfigDir(), d)));
+  for (const f of files) {
+    try {
+      const v = JSON.parse(readFileSync(f, 'utf8'))?.claudeMdExcludes;
+      if (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null) return true;
+    } catch {
+      /* absent or unparseable: sets nothing */
+    }
+  }
+  return false;
+}
+
+/**
+ * The plugin's block in the instruction files Claude Code loads at launch from ABOVE `top` — a git
+ * top-level, or outside git the session's directory (D#509(4), D#760). Checked on Claude Code
+ * 2.1.322 with InstructionsLoaded (tasks/specs/d509-steering-above-root.md): every CLAUDE.md and
+ * CLAUDE.local.md above the session loads, inside other git repositories too, except that a worktree
+ * session skips its main checkout's CLAUDE.md (and rules) while still loading that checkout's
+ * CLAUDE.local.md. Rules files never count here.
+ *
+ * `current` is the nearest such file whose block is the shipped one — a CLAUDE.md compared as the
+ * sync compares it (block and detail doc), a CLAUDE.local.md against the local block — or any block
+ * under CLAUDE_MEM_NO_TEMPLATE_REFRESH=1; `stale` the nearest one that is not. Only a current block
+ * may stand in for the local copy: an out-of-date one alone would swap the shipped text for an older
+ * one (6.19's block lacks the row on checking a memory against the code). Nothing counts under
+ * managed-only (no project file loads) or where claudeMdExcludes is set.
+ * @returns {{current: string|null, stale: string|null}} file paths
+ */
+function steeringAbove(top, cwd = top) {
+  const found = { current: null, stale: null };
+  if (userInstructionFiles() === 'managed-only') return found;
+  const main = worktreeMainCheckout(top);
+  if (claudeMdExcludesSet(main ? [cwd, top, main] : [cwd, top])) return found;
+  const frozen = process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1';
+  const version = CURRENT_SENTINEL_VERSION;
+  const shipped = { slug: PLUGIN_SLUG, version, block: buildClaudeMdBlock(), doc: getDetailDoc() };
+  const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(steeringDetailDocPath()) });
+  const note = (file, current) => {
+    if (current) found.current ??= file;
+    else found.stale ??= file;
+  };
+  for (let d = dirname(top); ; d = dirname(d)) {
+    if (!(main && samePath(d, main)) && blockIn(d))
+      note(claudeMdPath(d), frozen || !needsRefresh(d, shipped));
+    let local = null;
+    try {
+      local = readBlockAt(join(d, LOCAL_MD), PLUGIN_SLUG);
+    } catch {
+      /* a directory or an unreadable file: no block of ours */
+    }
+    if (local && local.body !== null)
+      note(join(d, LOCAL_MD), frozen || (local.version === version && local.body === localBlock));
+    if (found.current || dirname(d) === d) return found;
   }
 }
 
@@ -656,8 +752,7 @@ function localSteeringStatus(cwd) {
   const runs = autoAdoptRuns(cwd, root);
   // CLAUDE.md first: where it carries the block, no local file is written, in a git work tree or not
   // (pre-tag delta review of the D#212 repairs, D11).
-  // Outside git the session walks every directory above (D#760), so status does too.
-  if (blockIn(cwd) || (root ? !samePath(root, cwd) && blockAbove(cwd, root) : blockAbove(cwd, null))) {
+  if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
     if (userInstructionFiles() === 'managed-only')
       return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it';
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
@@ -673,6 +768,34 @@ function localSteeringStatus(cwd) {
       return `— none: CLAUDE.md carries the block (the local copy in ${cur.path} is removed at the next session start)`;
     return `⚠ CLAUDE.md carries the block, and ${cur.path} also does${kept ? ` (${kept}; the plugin leaves it as it is)` : ''}: sessions here load it twice`;
   }
+  // Then the files above the top-level (outside git, above the session), as the session checks them
+  // (D#509(4), D#760).
+  const above = steeringAbove(root ?? cwd, cwd);
+  if (above.current) {
+    const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
+    if (cur === null || cur.body === null) return `— none: ${above.current} carries the block`;
+    const kept = localFileLinked(root, cur.path)
+      ? 'behind a symbolic link'
+      : trackedByGit(root, relative(root, cur.path))
+        ? 'tracked by git'
+        : null;
+    // Any session in the repository takes the copy out, when the sync runs and where it can.
+    if (!kept && runs && removable(cur.path))
+      return `— none: ${above.current} carries the block (the local copy in ${cur.path} is removed at the next session start)`;
+    return `⚠ ${above.current} carries the block, and ${cur.path} also does${kept ? ` (${kept}; the plugin leaves it as it is)` : ''}: sessions here load it twice`;
+  }
+  const line = localFileLine(cwd, root, runs);
+  if (!above.stale) return line;
+  // Out of date, it does not stand in for the local copy, and it loads here all the same.
+  const how =
+    basename(above.stale) === LOCAL_MD
+      ? `the next session started in ${dirname(above.stale)} (with auto-adopt on there) brings it up to date`
+      : `\`${CLI_INVOKE} adopt\` there brings it up to date`;
+  return `${line}\n              ⚠ ${above.stale} holds an out-of-date copy of the block, which sessions here load as well; ${how}`;
+}
+
+// The rest of the `local:` line: the local file, or why there is none and what changes it.
+function localFileLine(cwd, root, runs) {
   if (root) {
     const cur = readLocalSteering(root, PLUGIN_SLUG);
     if (cur.body !== null) return currentLocalLine(root, cwd, cur, runs);

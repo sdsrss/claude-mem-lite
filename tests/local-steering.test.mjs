@@ -32,6 +32,7 @@ import {
   readLocalSteering,
   removeLocalSteering,
   forgetLocalSteering,
+  localSteeringRemembered,
   isSharedAncestor,
   excludeWouldFail,
 } from '../lib/local-steering.mjs';
@@ -670,7 +671,7 @@ describe('pre-tag defect review: local steering edges', () => {
     expect(readdirSync(deep)).toEqual([]);
     // adopt --status there says the same as the session does (D#226: two implementations drift).
     const status = withCwd(deep, () => captureLog(() => cmdAdopt(['--status'])));
-    expect(status).toMatch(/local: +— none: CLAUDE\.md carries the block/);
+    expect(status).toMatch(/local: +— none: .*notes[/\\]CLAUDE\.md carries the block/);
     // And the quiet gate still counts it as steered.
     expect(isAdoptedHere(deep)).toBe(true);
   });
@@ -2824,5 +2825,182 @@ describe('pre-tag delta review of the opt-in repairs', () => {
     } finally {
       chmodSync(join(app(), '.claude', 'rules'), 0o755);
     }
+  });
+});
+
+// D#509(4): Claude Code loads CLAUDE.md and CLAUDE.local.md from every directory above the session,
+// git boundaries or not, except that a worktree session skips its main checkout's CLAUDE.md (checked
+// on Claude Code 2.1.322 with InstructionsLoaded, tasks/specs/d509-steering-above-root.md). A block
+// already loaded from above the top-level made the local copy a second one.
+describe('D#509(4): steering already loaded from above the top-level', () => {
+  const work = () => join(home, 'work');
+  const app = () => join(work(), 'app');
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const captureLog = (fn) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      fn();
+    } finally {
+      console.log = orig;
+    }
+    return lines.join('\n');
+  };
+  const localBlock = (dir) => readLocalSteering(dir, SLUG).body;
+  const adoptIn = (dir) => captureLog(() => withCwd(dir, () => cmdAdopt([])));
+  const statusIn = (dir) => withCwd(dir, () => captureLog(() => cmdAdopt(['--status'])));
+  beforeEach(() => {
+    initRepo(app());
+    delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+  });
+  afterEach(() => {
+    delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+  });
+
+  it('a CLAUDE.md above the top-level with the current block: no local copy, the old one removed and forgotten', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action, 'premise: the repository gets its local file').toBe(
+      'local',
+    );
+    expect(localBlock(app())).not.toBeNull();
+    adoptIn(work());
+    expect(
+      readBlock(work(), SLUG).body,
+      'premise: adopt wrote the block above the repository',
+    ).not.toBeNull();
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    // The plugin's own removal is not the user's: if that block goes, the file comes back.
+    expect(localSteeringRemembered(app())).toBe(false);
+    const sub = join(app(), 'src');
+    mkdirSync(sub);
+    expect(silentAutoAdopt({ cwd: sub })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+    expect(statusIn(app())).toMatch(/local: +— none: .*work[/\\]CLAUDE\.md carries the block/);
+    captureLog(() => withCwd(work(), () => cmdUnadopt([])));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('an out-of-date block above keeps the local copy, and --status names the file to refresh', () => {
+    adoptIn(work());
+    const docPath = join(work(), '.claude', 'plugin_claude_mem_lite.md');
+    writeFileSync(docPath, `${readFileSync(docPath, 'utf8')}\nan older detail doc\n`);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    expect(localBlock(app())).not.toBeNull();
+    const st = statusIn(app());
+    expect(st).toMatch(/out-of-date copy/);
+    expect(st).toContain(join(work(), 'CLAUDE.md'));
+    // Frozen on purpose, the block above is the one the user wants.
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+  });
+
+  it('a local copy the user deleted stays deleted', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    rmSync(join(app(), LOCAL_MD));
+    adoptIn(work());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    expect(localSteeringRemembered(app()), 'the deletion is still remembered').toBe(true);
+    captureLog(() => withCwd(work(), () => cmdUnadopt([])));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-removed' });
+  });
+
+  it("a worktree under the main checkout: the checkout's CLAUDE.local.md counts, its CLAUDE.md does not", () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    expect(localSteeringRoot(wt), 'premise: the worktree is its own top-level').toBe(wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+    expect(existsSync(join(wt, LOCAL_MD))).toBe(false);
+    // The main checkout's CLAUDE.md is not loaded in a worktree session: it must not count.
+    adoptIn(app());
+    expect(readBlock(app(), SLUG).body, 'premise: the block is in the checkout').not.toBeNull();
+    expect(existsSync(join(app(), LOCAL_MD)), 'premise: adopt took the local copy out').toBe(false);
+    const wt2 = join(app(), '.claude', 'worktrees', 'wt2');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt2', wt2);
+    expect(existsSync(join(wt2, 'CLAUDE.md')), 'premise: the worktree branch has no CLAUDE.md').toBe(false);
+    expect(silentAutoAdopt({ cwd: wt2 })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it("an out-of-date CLAUDE.local.md in the main checkout does not stand in for the worktree's copy", () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const p = join(app(), LOCAL_MD);
+    writeFileSync(p, readFileSync(p, 'utf8').replace('mem_recall', 'mem_recall_old'));
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('under managed-only a CLAUDE.md above is not loaded, so it stands in for nothing', () => {
+    adoptIn(work());
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        pluginConfigs: { 'cc-plugin-agents-md@builtin': { options: { instructionFiles: 'managed-only' } } },
+      }),
+    );
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+  });
+
+  it('claudeMdExcludes set anywhere a hook can read: nothing above is relied on', () => {
+    adoptIn(work());
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({ claudeMdExcludes: ['**/work/CLAUDE.md'] }),
+    );
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    // The same holds outside git (D#760's walk).
+    const deep = join(work(), 'notes', 'a');
+    mkdirSync(deep, { recursive: true });
+    expect(silentAutoAdopt({ cwd: deep }).action).toBe('inject');
+    // In the project's own settings too.
+    rmSync(join(home, '.claude', 'settings.json'));
+    rmSync(join(app(), LOCAL_MD));
+    forgetLocalSteering(app());
+    mkdirSync(join(app(), '.claude'), { recursive: true });
+    writeFileSync(join(app(), '.claude', 'settings.local.json'), JSON.stringify({ claudeMdExcludes: ['x'] }));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('outside git, an out-of-date block above still gets the steering injected', () => {
+    adoptIn(work());
+    const docPath = join(work(), '.claude', 'plugin_claude_mem_lite.md');
+    writeFileSync(docPath, `${readFileSync(docPath, 'utf8')}\nan older detail doc\n`);
+    const deep = join(work(), 'notes', 'a');
+    mkdirSync(deep, { recursive: true });
+    expect(silentAutoAdopt({ cwd: deep }).action).toBe('inject');
+  });
+
+  // Case A: adopt in a subdirectory of the repository while the root's local file carries the block.
+  // No automatic layout loads it once in every session (spec), so adopt says so.
+  it('adopt in a subdirectory names the root copy that sessions there load as well', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const pkgs = join(app(), 'packages');
+    mkdirSync(pkgs);
+    process.exitCode = undefined;
+    const out = adoptIn(pkgs);
+    expect(out).toContain(`${join(app(), LOCAL_MD)} also carries the block`);
+    expect(out).toMatch(/load it twice/);
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });

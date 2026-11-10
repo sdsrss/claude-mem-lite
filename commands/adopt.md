@@ -12,7 +12,9 @@ in the project's memory-dir `MEMORY.md`: that index belongs to the user's own
 memories.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
-in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`.
+in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`. Where a `CLAUDE.md` or
+`CLAUDE.local.md` above the repository root already carries the current block (in a `claude --worktree` session, the main
+checkout's `CLAUDE.local.md`), Claude Code loads that one and no local copy is kept.
 Next to an `AGENTS.md` that file would switch off, and where it cannot be written (outside git,
 for example), it adds the text to each session's context instead; with
 `CLAUDE_MEM_RULES_STEERING=1` it keeps the block in `.claude/rules/claude-mem-lite.md` next to
