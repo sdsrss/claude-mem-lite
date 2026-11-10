@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // claude-mem-lite: PreToolUse:Agent|Task hook — subagent dispatch-time memory injection.
-// Plugin hooks do fire inside subagents now (#8848 no longer holds: 166 of 190 subagent
-// transcripts on one machine carried PreToolUse recall, 2026-11-10), but a subagent starts
+// Plugin hooks do fire inside subagents now (#8848 no longer holds: subagent transcripts on one
+// machine carry PreToolUse recall, 2026-11-10), but a subagent starts
 // without the SessionStart context, so it sees no memory before its first tool call. This hook
 // injects ONE relevant project lesson into a dispatched subagent's prompt by mutating
 // tool_input.prompt via hookSpecificOutput.updatedInput. Verified live 2026-07-03

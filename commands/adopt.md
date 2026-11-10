@@ -1,6 +1,6 @@
 ---
 name: adopt
-description: "Use when: user asks to put the claude-mem-lite steering block into the current project's CLAUDE.md (for example to share it with the team), or to (re)install it there. Writes a sentinel-wrapped managed block into <cwd>/CLAUDE.md plus a <cwd>/.claude/plugin_claude_mem_lite.md detail doc, removes the auto-written local copy (CLAUDE.local.md or .claude/rules/claude-mem-lite.md), and migrates away any legacy memory-dir sentinel. Auto-adopt never adds the block to CLAUDE.md itself; it only keeps an existing one in sync. Run /unadopt to remove."
+description: "Use when: user asks to put the claude-mem-lite steering block into the current project's CLAUDE.md (for example to share it with the team), or to (re)install it there. Writes a sentinel-wrapped managed block into <cwd>/CLAUDE.md plus a <cwd>/.claude/plugin_claude_mem_lite.md detail doc, removes the auto-written local copy (CLAUDE.local.md or .claude/rules/claude-mem-lite.md) when run at the repository root, and migrates away any legacy memory-dir sentinel. Auto-adopt never adds the block to CLAUDE.md itself; it only keeps an existing one in sync. Run /unadopt to remove."
 ---
 
 # /adopt
@@ -14,12 +14,13 @@ memories.
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
 in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`. Where Claude Code already loads the current block from a `CLAUDE.md` or
 `CLAUDE.local.md` above the repository root (outside git, above the session's directory; in a `claude --worktree` session,
-the main checkout's `CLAUDE.local.md`), no local copy is written and nothing is added.
+the main checkout's `CLAUDE.local.md`), no local copy is written and nothing is added, unless your user or project settings
+set `claudeMdExcludes`.
 Otherwise, next to an `AGENTS.md` that file would switch off, and where it cannot be written (outside git,
 for example), it adds the text to each session's context instead; with
 `CLAUDE_MEM_RULES_STEERING=1` it keeps the block in `.claude/rules/claude-mem-lite.md` next to
 an `AGENTS.md`, excluded the same way. Run `/adopt` when you want the block in `CLAUDE.md` — a file that is normally committed,
-so your team gets it too. It removes the local copy so the text does not load twice. While auto-adopt is on, a session started
+so your team gets it too. Run at the repository root, it removes the local copy so the text does not load twice. While auto-adopt is on, a session started
 in the directory whose `CLAUDE.md` carries the block refreshes it when the shipped template changes and, where that file holds
 nothing but the block, adds the `AGENTS.md` import described below.
 

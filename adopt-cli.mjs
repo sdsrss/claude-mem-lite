@@ -578,9 +578,10 @@ function worktreeMainCheckout(top) {
   }
 }
 
-// Whether a settings file a hook can read sets claudeMdExcludes. An excluded file does not load, and
-// its globs are not evaluated here, so with any set nothing above is relied on: the worst case is
-// the block loading twice, never a session with none.
+// Whether the user settings or a project's settings files set claudeMdExcludes. An excluded file does
+// not load, and its globs are not evaluated here, so with any set nothing above is relied on and the
+// block at worst loads twice. One set where these files do not reach (--settings, managed settings)
+// is not seen (D#781).
 function claudeMdExcludesSet(dirs) {
   const files = new Set(dirs.flatMap((d) => pluginSettingsScopes(claudeConfigDir(), d)));
   for (const f of files) {
