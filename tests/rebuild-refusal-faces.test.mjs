@@ -132,6 +132,56 @@ describe('doctor', () => {
   });
 });
 
+describe('doctor’s MCP registration check', () => {
+  // `claude mcp list` starts the MCP server, which writes as it opens; on this fixture that start
+  // alone left 288 of 300 rows. A stand-in that really starts it for two seconds, as a health check.
+  function serverStartingClaude() {
+    writeFileSync(
+      join(home, 'bin', 'claude'),
+      `#!/bin/sh
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  "${process.execPath}" "${join(REPO, 'server.mjs')}" < /dev/null > /dev/null 2>&1 &
+  pid=$!; sleep 2; kill -TERM $pid; wait $pid
+  echo "mem-lite: node server.mjs - ✓ Connected"
+fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+  }
+  const doctor = (dir) => {
+    const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'doctor', '--json'], {
+      env: env(dir),
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 120_000,
+    });
+    return JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))).checks.map((c) => c.message);
+  };
+
+  it('does not start the server on a store that reads damaged, and every row stays', () => {
+    serverStartingClaude();
+    const { dir, p, truth } = crossLinked('doctor-mcp', { inLog: true });
+    const messages = doctor(dir);
+    expect(messages.find((m) => /^MCP registration/.test(m))).toMatch(
+      /^MCP registration: not checked — the store reads damaged \(.+\), and checking starts the MCP server/,
+    );
+    expect(intactObservations(p, truth)).toBe(truth.length);
+  }, 60_000);
+
+  it('still checks the registration on a sound store', () => {
+    serverStartingClaude();
+    const dir = join(root, 'sound');
+    mkdirSync(dir);
+    const db = new Database(join(dir, DB));
+    initSchema(db);
+    db.close();
+    const line = doctor(dir).find((m) => /^MCP registration/.test(m));
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/not checked/);
+  }, 60_000);
+});
+
 describe('fts-check rebuild (CLI)', () => {
   it('exits 1 with the refusal, keeps every row, and its close does not checkpoint a log-only damage', () => {
     const { dir, p, truth } = crossLinked('cli', { inLog: true });

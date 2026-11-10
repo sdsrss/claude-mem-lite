@@ -481,6 +481,38 @@ export function nonPluginMemRegistrations(listOutput) {
  * Exported for tests/doctor-db-remedy.test.mjs, which also drives the shipped doctor over a
  * corrupt file — a pure function nothing calls is the wiring gap this repo keeps finding.
  */
+/**
+ * The first damage line PRAGMA quick_check reports on the store, read through a read-only handle
+ * (its close never checkpoints), or null: sound, absent, or not checkable here (no binding, a lock,
+ * an error that is not damage). D#593: doctor reads this before `claude mcp list` starts a server.
+ * @param {string} dbPath
+ * @returns {Promise<string|null>}
+ */
+async function readOnlyStoreDamage(dbPath) {
+  if (!existsSync(dbPath)) return null;
+  let db = null;
+  try {
+    const Database = (await import('better-sqlite3')).default;
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const lines = db.pragma('quick_check(1)').map((r) => r.quick_check);
+    if (lines.length === 1 && lines[0] === 'ok') return null;
+    return (
+      lines
+        .join('\n')
+        .split('\n')
+        .find((l) => l && !l.startsWith('***')) ?? lines[0]
+    ).slice(0, 160);
+  } catch (e) {
+    return /^SQLITE_(CORRUPT|NOTADB)/.test(e?.code ?? '') ? String(e.message).slice(0, 160) : null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 export async function dbCheckRemedy(dbPath, err) {
   if (isNativeBindingError(err)) return `Repair: ${nativeBindingRepairHint(PROJECT_DIR)}`;
   // Classification and remedy both live in lib/db-unusable.mjs since v6.5.0, because the hook
@@ -3040,40 +3072,55 @@ async function doctor() {
   // has warned since v3 that a plugin user who once ran the npx/git-clone installer keeps a
   // bare-name registration that double-registers the server — and nothing in the tool
   // detected it. Orphan hooks had a check; its MCP twin did not.
-  try {
-    const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 60000 });
-    const bare = nonPluginMemRegistrations(list);
-    // Registration, not directory — see pluginIsRegistered. Crediting a leftover cache dir
-    // here told a working npm-channel install to delete its ONLY MCP registration.
-    // Reuses the `settings` read above rather than calling readSettings() a second time:
-    // the second call carried the same throw, so guarding only the first would have moved
-    // the abort eleven checks later instead of removing it (P1-2).
-    const viaPlugin = !!shape?.activePluginVersion && settings !== null && pluginIsRegistered({ settings });
-    if (settings === null) {
-      dwarn(
-        `MCP registration: found ${bare.length} bare registration(s); whether the plugin also provides one is not checked (settings.json unreadable)`,
-      );
-    } else if (viaPlugin && bare.length > 0) {
-      dwarn(
-        `MCP registration: the plugin manifest provides the server AND a bare "${bare.join('", "')}" registration exists — the server is registered twice`,
-      );
-      // No `-s` flag, deliberately: `nonPluginMemRegistrations`'s own docblock says `mcp list`
-      // does not label scope, and this repo's tracked `.mcp.json` registers a bare `mem-lite`
-      // at PROJECT scope, which `-s user` cannot remove. `claude mcp remove` without the flag
-      // removes from whichever scope the entry is in. Every name, not just the first.
-      for (const name of bare) log(`    Fix: claude mcp remove ${name}`);
-    } else if (viaPlugin) {
-      ok('MCP registration: provided by the plugin manifest only (no duplicate)');
-    } else if (bare.length > 0) {
-      ok(`MCP registration: "${bare.join('", "')}" registered`);
-    } else {
-      dwarn('MCP registration: no claude-mem-lite MCP server is registered and no plugin provides one');
+  // D#593: `claude mcp list` STARTS this server, and the server writes to the store as it opens. On a
+  // store with page-level damage any write can overwrite rows: on the cross-linked fixture with the
+  // damage in a log frame, that start alone left 288 of 300 rows (2026-11-10). So the store is read
+  // first, read-only, and the server is not started when it reads damaged. A VACUUMed store's check
+  // skips its freelist (lesson #1051), so this cannot see every such store; any session's hooks
+  // write to it the same way.
+  // Behind the same gate as the database checks below: loading a truncated addon in this process
+  // is a SIGBUS no catch survives (D#312), so only a binding the fresh-process probe loaded is used.
+  const storeDamage = dataDirUnreadable || bindingBrokenHere ? null : await readOnlyStoreDamage(DB_PATH);
+  if (storeDamage) {
+    dwarn(
+      `MCP registration: not checked — the store reads damaged (${storeDamage}), and checking starts the MCP server, which writes to it. See the database checks below.`,
+    );
+  } else {
+    try {
+      const list = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 60000 });
+      const bare = nonPluginMemRegistrations(list);
+      // Registration, not directory — see pluginIsRegistered. Crediting a leftover cache dir
+      // here told a working npm-channel install to delete its ONLY MCP registration.
+      // Reuses the `settings` read above rather than calling readSettings() a second time:
+      // the second call carried the same throw, so guarding only the first would have moved
+      // the abort eleven checks later instead of removing it (P1-2).
+      const viaPlugin = !!shape?.activePluginVersion && settings !== null && pluginIsRegistered({ settings });
+      if (settings === null) {
+        dwarn(
+          `MCP registration: found ${bare.length} bare registration(s); whether the plugin also provides one is not checked (settings.json unreadable)`,
+        );
+      } else if (viaPlugin && bare.length > 0) {
+        dwarn(
+          `MCP registration: the plugin manifest provides the server AND a bare "${bare.join('", "')}" registration exists — the server is registered twice`,
+        );
+        // No `-s` flag, deliberately: `nonPluginMemRegistrations`'s own docblock says `mcp list`
+        // does not label scope, and this repo's tracked `.mcp.json` registers a bare `mem-lite`
+        // at PROJECT scope, which `-s user` cannot remove. `claude mcp remove` without the flag
+        // removes from whichever scope the entry is in. Every name, not just the first.
+        for (const name of bare) log(`    Fix: claude mcp remove ${name}`);
+      } else if (viaPlugin) {
+        ok('MCP registration: provided by the plugin manifest only (no duplicate)');
+      } else if (bare.length > 0) {
+        ok(`MCP registration: "${bare.join('", "')}" registered`);
+      } else {
+        dwarn('MCP registration: no claude-mem-lite MCP server is registered and no plugin provides one');
+      }
+    } catch (e) {
+      // Third outcome, kept apart from "none found" on purpose: the `claude` CLI may not be on
+      // PATH at all, and a green "no duplicate" would end the reader's search on a check that
+      // never ran.
+      dwarn(`MCP registration: could not run \`claude mcp list\` (${e.code || e.message}) — not checked`);
     }
-  } catch (e) {
-    // Third outcome, kept apart from "none found" on purpose: the `claude` CLI may not be on
-    // PATH at all, and a green "no duplicate" would end the reader's search on a check that
-    // never ran.
-    dwarn(`MCP registration: could not run \`claude mcp list\` (${e.code || e.message}) — not checked`);
   }
 
   // Marketplace clone updatability — see marketplaceCloneHealth for why this is the
