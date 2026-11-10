@@ -440,9 +440,12 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       }
       // managed-only loads no project CLAUDE.md, so the hook does not offer /adopt (v6.30.0 pre-tag
       // claims review P2-5; inside a git work tree the reason is local-managed-only).
-      return managedOnly
-        ? { ok: true, action: 'inject', reason: 'managed-only' }
-        : { ok: true, action: 'inject' };
+      if (managedOnly) return { ok: true, action: 'inject', reason: 'managed-only' };
+      // Outside git there is no top-level to stop at, and the host loads every CLAUDE.md above the
+      // session as an ancestor: a block there already steers it, and injecting was a second copy
+      // (D#760).
+      if (blockAbove(cwd, null)) return { ok: true, action: 'already-adopted', reason: 'ancestor-claude-md' };
+      return { ok: true, action: 'inject' };
     }
     dropLocalSteering(cwd, { atRootOnly: true, keepTracked: true });
     let action = 'already-adopted';
@@ -522,13 +525,13 @@ function blockIn(dir) {
   }
 }
 
-// The nearest directory above `cwd`, up to and including `root`, whose CLAUDE.md carries the block:
-// the host loads it as an ancestor. `adopt` run in packages/ and a session in packages/web/src got a
+// The nearest directory above `cwd`, up to and including `root` (a null `root`: up to the filesystem
+// root), whose CLAUDE.md carries the block: the host loads it as an ancestor. `adopt` run in packages/ and a session in packages/web/src got a
 // root CLAUDE.local.md on top of packages/CLAUDE.md, the block twice (D#177(2)).
 function blockAbove(cwd, root) {
   for (let d = dirname(cwd); ; d = dirname(d)) {
     if (blockIn(d)) return d;
-    if (samePath(d, root) || dirname(d) === d) return null;
+    if ((root && samePath(d, root)) || dirname(d) === d) return null;
   }
 }
 
@@ -653,7 +656,8 @@ function localSteeringStatus(cwd) {
   const runs = autoAdoptRuns(cwd, root);
   // CLAUDE.md first: where it carries the block, no local file is written, in a git work tree or not
   // (pre-tag delta review of the D#212 repairs, D11).
-  if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
+  // Outside git the session walks every directory above (D#760), so status does too.
+  if (blockIn(cwd) || (root ? !samePath(root, cwd) && blockAbove(cwd, root) : blockAbove(cwd, null))) {
     if (userInstructionFiles() === 'managed-only')
       return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it';
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;

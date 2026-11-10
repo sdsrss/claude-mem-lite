@@ -652,6 +652,35 @@ describe('pre-tag defect review: local steering edges', () => {
     expect(isAdoptedHere(deep)).toBe(true);
   });
 
+  // D#760: outside git there is no top-level to stop at, so the walk above was skipped and a session
+  // started below a directory whose CLAUDE.md carries the block got the steering injected as well —
+  // Claude Code loads that CLAUDE.md as an ancestor, so the block reached it twice (2,444 bytes of
+  // injection in a sandbox session on 7b6e98c4).
+  it('outside git, a session below a directory whose CLAUDE.md carries the block gets no injected copy', () => {
+    const notes = join(home, 'work', 'notes');
+    const deep = join(notes, 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+    captureLog(() => withCwd(notes, () => cmdAdopt([])));
+    expect(readBlock(notes, SLUG).body, 'premise: adopt wrote the block there').not.toBeNull();
+    expect(localSteeringRoot(deep), 'premise: not a git work tree').toBeNull();
+    expect(silentAutoAdopt({ cwd: deep })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'ancestor-claude-md',
+    });
+    expect(readdirSync(deep)).toEqual([]);
+    // adopt --status there says the same as the session does (D#226: two implementations drift).
+    const status = withCwd(deep, () => captureLog(() => cmdAdopt(['--status'])));
+    expect(status).toMatch(/local: +— none: CLAUDE\.md carries the block/);
+    // And the quiet gate still counts it as steered.
+    expect(isAdoptedHere(deep)).toBe(true);
+  });
+
+  it('outside git with no CLAUDE.md above, a subdirectory still gets the injected steering', () => {
+    const deep = join(home, 'work', 'plain', 'a');
+    mkdirSync(deep, { recursive: true });
+    expect(silentAutoAdopt({ cwd: deep }).action).toBe('inject');
+  });
+
   it('a symlinked CLAUDE.local.md is not written through', () => {
     const other = join(home, 'dotfiles');
     mkdirSync(other);
