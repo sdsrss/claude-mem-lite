@@ -252,7 +252,9 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
   let tmpHome, fakeCwd, markerDir, origHome, origCwd;
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'silent-adopt-'));
+    // Outside git the sync walks every directory above the session (D#760): a CLAUDE.md carrying
+    // the block above the temp root would turn this suite's 'inject' into 'already-adopted'.
+    tmpHome = mkdtempWithoutInstructionAncestors('silent-adopt-');
     fakeCwd = join(tmpHome, 'work', 'proj');
     mkdirSync(fakeCwd, { recursive: true });
     markerDir = join(tmpHome, 'runtime');
@@ -364,7 +366,8 @@ describe('cmdAdopt --disable / --enable', () => {
   let tmpHome, fakeCwd, markerDir, origHome, origCwd, logs;
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'adopt-disable-'));
+    // A clean ancestor chain, as above (D#760).
+    tmpHome = mkdtempWithoutInstructionAncestors('adopt-disable-');
     fakeCwd = join(tmpHome, 'work', 'proj');
     mkdirSync(fakeCwd, { recursive: true });
     markerDir = join(tmpHome, 'runtime');
