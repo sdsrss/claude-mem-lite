@@ -3235,6 +3235,32 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     expect(statusIn(sub)).not.toMatch(/carries the block/);
   });
 
+  // Delta review R2-1 / R2-3: Claude Code skips an instruction file over 4,194,304 bytes; one above
+  // the project must not stand in for the local copy (zero blocks loaded), nor be read whole.
+  it("an instruction file above over Claude Code's 4 MiB limit stands in for nothing", () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const copy = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    const above = join(work(), LOCAL_MD);
+    writeFileSync(above, copy);
+    expect(silentAutoAdopt({ cwd: app() }), 'control: the same file under the limit stands in').toMatchObject(
+      {
+        action: 'already-adopted',
+        reason: 'above-root',
+      },
+    );
+    writeFileSync(above, `${copy}\n<!-- ${'x'.repeat(4194304)} -->\n`);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // Delta review R2-5: a CLAUDE.md that is not a regular file (here a link to /dev/null) reads as
+  // holding no block, as a plain read of it did, so the quiet gate still sees the local copy.
+  it('a CLAUDE.md linked to /dev/null reads as no block', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    symlinkSync('/dev/null', join(app(), 'CLAUDE.md'));
+    expect(readBlock(app(), SLUG)).toMatchObject({ exists: true, body: null });
+    expect(isAdoptedHere(app())).toBe(true);
+  });
+
   it('--status does not promise to remove a copy behind a symlink or in a directory it cannot write', () => {
     expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
     adoptIn(work());

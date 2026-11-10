@@ -6,12 +6,12 @@
 // segment capped at 1 GiB, so an endless device read fails in a fraction of a second instead of
 // filling memory.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
-import { writeManaged } from '../claudemd.mjs';
+import { holdsOnlyOwnLines, holdsOnlyPluginLines, readBlockAt, writeManaged } from '../claudemd.mjs';
 import {
   PLUGIN_SLUG,
   CURRENT_SENTINEL_VERSION,
@@ -118,5 +118,52 @@ describe('a FIFO or a device where an instruction file would sit above the proje
     // Read, the device fills the capped data segment before the read fails and is caught: the
     // outcome alone cannot tell, the peak memory can.
     expect(s.rssKb, 'the sync must not read the device').toBeLessThan(400_000);
+  });
+
+  // Delta review R2-2: the AGENTS.md check above the project read the same files with a plain read.
+  it('beside an AGENTS.md, a FIFO CLAUDE.md above does not stall the AGENTS.md check', () => {
+    const app = join(home, 'work', 'app');
+    initRepo(app);
+    writeFileSync(join(app, 'AGENTS.md'), '# agents\n');
+    mkfifo(join(home, 'work', 'CLAUDE.md'));
+    const s = sessionIn(app);
+    expect(s.signal, 'the sync must not block on the FIFO').toBeNull();
+    expect(s.result).toMatchObject({ action: 'inject', reason: 'local-agents-md' });
+  });
+});
+
+describe('the instruction-file readers', () => {
+  // A file Claude Code would not load (over 4,194,304 bytes) is not read whole, and is never taken for
+  // one holding only plugin text: unadopt deletes a file that holds nothing else.
+  it('an over-limit file holding only the block is not plugin-only text', () => {
+    const dir = mkdtempWithoutInstructionAncestors('cml-big-');
+    try {
+      const p = join(dir, 'CLAUDE.local.md');
+      writeFileSync(
+        p,
+        `<!-- ${PLUGIN_SLUG}:begin ${CURRENT_SENTINEL_VERSION} -->\n${'x'.repeat(4194304)}\n<!-- ${PLUGIN_SLUG}:end -->\n`,
+      );
+      expect(holdsOnlyOwnLines(p, PLUGIN_SLUG)).toBe(false);
+      expect(holdsOnlyPluginLines(p, PLUGIN_SLUG)).toBe(false);
+      expect(readBlockAt(p, PLUGIN_SLUG).body).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Delta review R2-6: every read opens a descriptor; a long-lived process (the MCP server) must not
+  // leak them.
+  it('closes the descriptor it opens', () => {
+    const dir = mkdtempWithoutInstructionAncestors('cml-fd-');
+    try {
+      const p = join(dir, 'CLAUDE.md');
+      writeFileSync(p, '# notes\n');
+      const open = () => readdirSync('/proc/self/fd').length;
+      const before = open();
+      for (let i = 0; i < 200; i++) readBlockAt(p, PLUGIN_SLUG);
+      expect(open() - before).toBeLessThan(10);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

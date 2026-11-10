@@ -586,9 +586,8 @@ function worktreeMainCheckout(top) {
 }
 
 // Whether the user settings or a project's settings files set claudeMdExcludes. An excluded file does
-// not load, and its globs are not evaluated here, so with any set nothing above is relied on and the
-// block at worst loads twice. One set where these files do not reach (--settings, managed settings)
-// is not seen (D#781).
+// not load, and its globs are not evaluated here, so with any set nothing above is relied on. One set
+// where these files do not reach (--settings, managed settings) is not seen (D#781, D#787).
 function claudeMdExcludesSet(dirs) {
   const files = new Set(dirs.flatMap((d) => pluginSettingsScopes(claudeConfigDir(), d)));
   for (const f of files) {
@@ -798,8 +797,8 @@ function localSteeringStatus(cwd) {
       : trackedByGit(root, relative(root, cur.path))
         ? 'tracked by git'
         : null;
-    // Any session in the repository takes the copy out, when the sync runs and where it can, unless
-    // a damaged sentinel line in CLAUDE.md stops it first or the template is frozen.
+    // A session started here takes the copy out, when the sync runs and where it can, unless a damaged
+    // sentinel line in CLAUDE.md stops it first or the template is frozen.
     if (
       !kept &&
       runs &&

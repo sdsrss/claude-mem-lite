@@ -186,7 +186,9 @@ function isOwnImportsOnly(rest, slug) {
 export function holdsOnlyOwnLines(p, slug) {
   try {
     if (!existsSync(p)) return false;
-    const rest = readFileSync(p, 'utf8').replace(blockRegexG(slug), '');
+    const text = readRegularText(p);
+    if (text === null) return false;
+    const rest = text.replace(blockRegexG(slug), '');
     return rest.trim() === '' || isOwnImportsOnly(rest, slug);
   } catch {
     return false;
@@ -211,7 +213,9 @@ const ANY_BLOCK_RE_G =
 export function holdsOnlyPluginLines(p, slug) {
   try {
     if (!existsSync(p)) return false;
-    const rest = readFileSync(p, 'utf8').replace(blockRegexG(slug), '').replace(ANY_BLOCK_RE_G, '');
+    const text = readRegularText(p);
+    if (text === null) return false;
+    const rest = text.replace(blockRegexG(slug), '').replace(ANY_BLOCK_RE_G, '');
     return rest.trim() === '' || isOwnImportsOnly(rest, slug);
   } catch {
     return false;
@@ -276,19 +280,22 @@ export function readBlock(cwd, slug) {
   return readBlockAt(claudeMdPath(cwd), slug);
 }
 
-// A regular file's text. The session sync reads instruction files in every directory above the
-// project (D#509(4)), /tmp among them, where any local user can put a FIFO: opened non-blocking and
-// checked on the descriptor, anything but a regular file throws (EISDIR for a directory, as a plain
-// read did) instead of stalling the hook (v6.32.0 pre-release defects review F1). Claude Code skips
-// such files too.
+// Claude Code 2.1.322 skips an instruction file that is "not a regular file or exceeds 4194304 byte
+// limit" (its own message).
+const INSTRUCTION_FILE_MAX_BYTES = 4194304;
+
+// A regular file's text, or null for one Claude Code would not load: a FIFO, a device, a socket, or
+// over its size limit. The session sync reads instruction files in every directory above the
+// project (D#509(4)), /tmp among them, where any local user can put a FIFO (a blocking read stalled
+// SessionStart, v6.32.0 pre-release defects review F1) or a huge sparse file (read whole, it filled
+// memory, delta review R2-1). Opened non-blocking and checked on the descriptor, so a file swapped in
+// after the check is not the one read. A directory still throws EISDIR, as a plain read did.
 function readRegularText(p) {
   const fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
   try {
     const st = fstatSync(fd);
-    if (!st.isFile())
-      throw Object.assign(new Error(`${p}: not a regular file`), {
-        code: st.isDirectory() ? 'EISDIR' : 'ENOTREG',
-      });
+    if (st.isDirectory()) throw Object.assign(new Error(`${p}: is a directory`), { code: 'EISDIR' });
+    if (!st.isFile() || st.size > INSTRUCTION_FILE_MAX_BYTES) return null;
     return readFileSync(fd, 'utf8');
   } finally {
     closeSync(fd);
@@ -306,6 +313,7 @@ function readRegularText(p) {
 export function readBlockAt(p, slug) {
   if (!existsSync(p)) return { exists: false, version: null, body: null, raw: '' };
   const raw = readRegularText(p);
+  if (raw === null) return { exists: true, version: null, body: null, raw: '' };
   const m = raw.match(blockRegex(slug));
   if (!m) return { exists: true, version: null, body: null, raw };
   // Normalize CRLF in the captured body so drift comparison (needsRefresh) is
