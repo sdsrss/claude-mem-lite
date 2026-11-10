@@ -1,7 +1,7 @@
 // tests/pre-agent-inject.test.mjs
-// P0 subagent dispatch-time memory injection (2026-07-03). Subagents are
-// memory-blind (plugin hooks do not fire inside them — #8848); this feature
-// injects one relevant project lesson into a dispatched subagent's prompt via a
+// P0 subagent dispatch-time memory injection (2026-07-03). A subagent starts
+// without the SessionStart context (plugin hooks do fire inside it now; #8848 no
+// longer holds); this feature injects one relevant project lesson into a dispatched subagent's prompt via a
 // PreToolUse:Agent hook that mutates tool_input.prompt (hookSpecificOutput.updatedInput).
 // Mechanism + safe framing verified live 2026-07-03 (Phase 0a/0b): a raw prepend
 // tripped the subagent's prompt-injection detector -> refusal; an appended,

@@ -1341,8 +1341,9 @@ function configureHooks() {
   };
 
   // P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
-  // Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
-  // can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
+  // Fires on the Agent/Task dispatch so a subagent, which starts without the SessionStart
+  // context, can receive one relevant lesson via updatedInput before its first tool call.
+  // Parity with hooks/hooks.json.
   // Behind the bash prefilter since 2026-08-22 (audit P2-5): the flag is off by
   // default, and a disabled feature was starting a Node interpreter on every single
   // Agent dispatch (22.6ms → 2.4ms; see scripts/pre-agent-inject.sh). The prefilter
