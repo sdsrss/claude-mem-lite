@@ -55,8 +55,32 @@ jobs:
           SBX_BASE: /tmp
         run: node tests/sandbox/${{ matrix.phase.script }}
 
+  # Phases A–C stand in a FAKE `claude`; this one runs the real CLI through the documented
+  # install (marketplace add from GitHub, then plugin install). It exists for D#463: the
+  # validator already rejects the name "claude-mem-lite" as reserved, install does not yet,
+  # and a rename is breaking — so the week install starts refusing is the week to know.
+  #
+  # NOT pinned, unlike ci.yml's plugin-manifests job, and for the opposite reason: that job
+  # gates every commit, where an upstream rule change must not turn an unrelated commit red;
+  # this job runs weekly to SEE upstream rule changes, so it tracks `latest`.
+  claude-cli:
+    if: github.repository == 'sdsrss/claude-mem-lite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the Claude Code CLI (latest, on purpose)
+        run: npm install -g @anthropic-ai/claude-code@latest
+      - name: Phase D — real Claude Code install
+        env:
+          SBX_BASE: /tmp
+        run: node tests/sandbox/phaseD-claude-cli.mjs
+
   report-failure:
-    needs: sandbox
+    needs: [sandbox, claude-cli]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -87,6 +111,7 @@ jobs:
             'node tests/sandbox/phaseA-plugin.mjs' \
             'node tests/sandbox/phaseB-npm.mjs' \
             'node tests/sandbox/phaseC-update.mjs' \
+            'node tests/sandbox/phaseD-claude-cli.mjs   # needs the real claude on PATH' \
             '```')
           EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then

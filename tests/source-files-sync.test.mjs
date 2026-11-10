@@ -231,7 +231,9 @@ test('ci-gate rejects unknown flags instead of silently ignoring them', () => {
 test('weekly sandbox workflow points at phase scripts that exist', () => {
   const wf = readFileSync(resolve(ROOT, '.github/workflows/sandbox-install.yml'), 'utf8');
   const referenced = [...wf.matchAll(/tests\/sandbox\/(phase[A-Z][A-Za-z-]*\.mjs)/g)].map((m) => m[1]);
-  expect(new Set(referenced)).toEqual(new Set(['phaseA-plugin.mjs', 'phaseB-npm.mjs', 'phaseC-update.mjs']));
+  expect(new Set(referenced)).toEqual(
+    new Set(['phaseA-plugin.mjs', 'phaseB-npm.mjs', 'phaseC-update.mjs', 'phaseD-claude-cli.mjs']),
+  );
   for (const f of new Set(referenced)) {
     expect(existsSync(resolve(ROOT, 'tests/sandbox', f)), `${f} referenced by the workflow but missing`).toBe(
       true,
