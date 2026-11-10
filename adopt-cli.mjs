@@ -564,7 +564,7 @@ function worktreeMainCheckout(top) {
     const g = join(top, '.git');
     if (!statSync(g).isFile()) return null;
     const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(g, 'utf8'));
-    const w = m && /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+[\\/]?$/.exec(resolve(top, m[1]));
+    const w = m && /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+$/.exec(resolve(top, m[1]));
     return w ? w[1] : null;
   } catch {
     return null;
@@ -590,9 +590,10 @@ function claudeMdExcludesSet(dirs) {
 /**
  * The plugin's block in the instruction files Claude Code loads at launch from ABOVE `top` — a git
  * top-level, or outside git the session's directory (D#509(4), D#760). Checked on Claude Code
- * 2.1.322 with InstructionsLoaded (tasks/specs/d509-steering-above-root.md): every CLAUDE.md and
- * CLAUDE.local.md above the session loads, inside other git repositories too, except that a worktree
- * session skips its main checkout's CLAUDE.md (and rules) while still loading that checkout's
+ * 2.1.322 with InstructionsLoaded and in its source (tasks/specs/d509-steering-above-root.md): the
+ * CLAUDE.md and CLAUDE.local.md of every directory above the session load, inside other git
+ * repositories too, up to but not including the filesystem root; a worktree session skips the
+ * CLAUDE.md (and rules) of every directory from its main checkout down, while still loading their
  * CLAUDE.local.md. Rules files never count here.
  *
  * `current` is the nearest such file whose block is the shipped one — a CLAUDE.md compared as the
@@ -616,9 +617,11 @@ function steeringAbove(top, cwd = top) {
     if (current) found.current ??= file;
     else found.stale ??= file;
   };
-  for (let d = dirname(top); ; d = dirname(d)) {
-    if (!(main && samePath(d, main)) && blockIn(d))
-      note(claudeMdPath(d), frozen || !needsRefresh(d, shipped));
+  const dirs = [];
+  for (let d = dirname(top); dirname(d) !== d; d = dirname(d)) dirs.push(d);
+  const lastSkipped = main ? dirs.findIndex((d) => samePath(d, main)) : -1;
+  for (const [i, d] of dirs.entries()) {
+    if (i > lastSkipped && blockIn(d)) note(claudeMdPath(d), frozen || !needsRefresh(d, shipped));
     let local = null;
     try {
       local = readBlockAt(join(d, LOCAL_MD), PLUGIN_SLUG);
@@ -627,8 +630,9 @@ function steeringAbove(top, cwd = top) {
     }
     if (local && local.body !== null)
       note(join(d, LOCAL_MD), frozen || (local.version === version && local.body === localBlock));
-    if (found.current || dirname(d) === d) return found;
+    if (found.current) return found;
   }
+  return found;
 }
 
 function writeMarker(markerDir, markerKey) {
@@ -779,19 +783,30 @@ function localSteeringStatus(cwd) {
       : trackedByGit(root, relative(root, cur.path))
         ? 'tracked by git'
         : null;
-    // Any session in the repository takes the copy out, when the sync runs and where it can.
-    if (!kept && runs && removable(cur.path))
+    // Any session in the repository takes the copy out, when the sync runs and where it can, and
+    // unless a damaged sentinel line in CLAUDE.md stops it first.
+    if (
+      !kept &&
+      runs &&
+      removable(cur.path) &&
+      straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG).length === 0
+    )
       return `— none: ${above.current} carries the block (the local copy in ${cur.path} is removed at the next session start)`;
     return `⚠ ${above.current} carries the block, and ${cur.path} also does${kept ? ` (${kept}; the plugin leaves it as it is)` : ''}: sessions here load it twice`;
   }
   const line = localFileLine(cwd, root, runs);
   if (!above.stale) return line;
-  // Out of date, it does not stand in for the local copy, and it loads here all the same.
+  // Out of date, it does not stand in for the local copy, and it loads here all the same. A session
+  // refreshes a CLAUDE.local.md only at a git top-level it writes to; elsewhere it injects.
+  const staleDir = dirname(above.stale);
+  const staleTop = basename(above.stale) === LOCAL_MD ? localSteeringRoot(staleDir) : null;
   const how =
-    basename(above.stale) === LOCAL_MD
-      ? `the next session started in ${dirname(above.stale)} (with auto-adopt on there) brings it up to date`
-      : `\`${CLI_INVOKE} adopt\` there brings it up to date`;
-  return `${line}\n              ⚠ ${above.stale} holds an out-of-date copy of the block, which sessions here load as well; ${how}`;
+    basename(above.stale) !== LOCAL_MD
+      ? `; \`${CLI_INVOKE} adopt\` there brings it up to date`
+      : staleTop && samePath(staleTop, staleDir)
+        ? `; the next session started in ${staleDir} (with auto-adopt on there) brings it up to date`
+        : '';
+  return `${line}\n              ⚠ ${above.stale} holds an out-of-date copy of the block, which sessions here load as well${how}`;
 }
 
 // The rest of the `local:` line: the local file, or why there is none and what changes it.

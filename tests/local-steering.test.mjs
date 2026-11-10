@@ -3003,4 +3003,127 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     expect(out).toMatch(/load it twice/);
     expect(process.exitCode ?? 0).toBe(0);
   });
+
+  // Pre-ship review of D#509(4).
+  // P3-1: the host skips the CLAUDE.md of every directory from the main checkout down to the worktree
+  // (2.1.322's own test: inside mainRepoRoot and not inside worktreeRoot), not only the checkout's.
+  it('a worktree nested deeper in the checkout: a CLAUDE.md between the two does not count', () => {
+    const wts = join(app(), 'wts');
+    mkdirSync(wts);
+    adoptIn(wts);
+    expect(readBlock(wts, SLUG).body, 'premise: the block is between checkout and worktree').not.toBeNull();
+    expect(existsSync(join(app(), LOCAL_MD)), 'premise: the checkout has no local copy').toBe(false);
+    const wt = join(wts, 'feature');
+    git(app(), 'worktree', 'add', '-q', '-b', 'feature', wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // M19a: git (2.48+, --relative-paths) may write the worktree's gitdir relative to the worktree.
+  it('a worktree whose .git names its gitdir by a relative path: the checkout is still found', () => {
+    adoptIn(app());
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    writeFileSync(join(wt, '.git'), 'gitdir: ../../../.git/worktrees/wt1\n');
+    expect(localSteeringRoot(wt), 'premise: git reads the relative gitdir').toBe(wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // M9 / M8b: a CLAUDE.local.md above counts only when its version and text are the shipped ones,
+  // or when the user froze the template.
+  it("the checkout's CLAUDE.local.md under another sentinel version is out of date, unless frozen", () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const p = join(app(), LOCAL_MD);
+    writeFileSync(p, readFileSync(p, 'utf8').replace(`:begin ${V} -->`, ':begin v0 -->'));
+    expect(readLocalSteering(app(), SLUG).version, 'premise: the copy parses as v0').toBe('v0');
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+    expect(existsSync(join(wt, LOCAL_MD))).toBe(false);
+  });
+
+  // M3: a tracked CLAUDE.local.md is the team's file; the session does not edit it.
+  it('a tracked local copy is left as it is', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    git(app(), 'add', '-f', LOCAL_MD);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'track it');
+    adoptIn(work());
+    const before = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe(before);
+    expect(status(app())).toBe('');
+  });
+
+  // M12a / M12b / M13: where claudeMdExcludes is read, and what counts as set.
+  it("claudeMdExcludes in the session's own directory or in the worktree's checkout counts; an empty list does not", () => {
+    adoptIn(work());
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ claudeMdExcludes: [] }));
+    expect(silentAutoAdopt({ cwd: app() }), 'an empty list excludes nothing').toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    const sub = join(app(), 'src');
+    mkdirSync(join(sub, '.claude'), { recursive: true });
+    writeFileSync(join(sub, '.claude', 'settings.json'), JSON.stringify({ claudeMdExcludes: ['x'] }));
+    expect(silentAutoAdopt({ cwd: sub })).toMatchObject({ action: 'local', written: 'created' });
+    // A worktree of a checkout whose own settings set it.
+    rmSync(join(work(), 'CLAUDE.md'));
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    expect(
+      silentAutoAdopt({ cwd: wt }),
+      "premise: the checkout's CLAUDE.local.md stands in for the worktree's",
+    ).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+    writeFileSync(join(app(), '.claude', 'settings.local.json'), JSON.stringify({ claudeMdExcludes: ['x'] }));
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // M15a / M15b, and P3-3: --status promises the removal only where the session makes it.
+  it('--status promises to remove the local copy only where the next session does', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    adoptIn(work());
+    const promise = /the local copy in .*CLAUDE\.local\.md is removed at the next session start/;
+    expect(statusIn(app())).toMatch(promise);
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    try {
+      const off = statusIn(app());
+      expect(off).not.toMatch(promise);
+      expect(off).toMatch(/load it twice/);
+    } finally {
+      delete process.env.MEM_NO_AUTO_ADOPT;
+    }
+    // P3-3: a damaged sentinel line in the repository's CLAUDE.md stops the session before it.
+    writeFileSync(join(app(), 'CLAUDE.md'), `# mine\n<!-- ${SLUG}:begin --> (team note)\nsome text\n`);
+    const st = statusIn(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'damaged', reason: 'stray-sentinel' });
+    expect(existsSync(join(app(), LOCAL_MD)), 'premise: the session kept the copy').toBe(true);
+    expect(st).not.toMatch(promise);
+  });
+
+  // M16, and P3-4: who brings an out-of-date CLAUDE.local.md above up to date.
+  it('--status says a session brings a stale CLAUDE.local.md up to date only where one does', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const p = join(app(), LOCAL_MD);
+    const stale = readFileSync(p, 'utf8').replace('mem_recall', 'mem_recall_old');
+    writeFileSync(p, stale);
+    const wt = join(app(), '.claude', 'worktrees', 'wt1');
+    git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    expect(silentAutoAdopt({ cwd: wt }).action).toBe('local');
+    const inWt = statusIn(wt);
+    expect(inWt).toContain(`${p} holds an out-of-date copy`);
+    expect(inWt).toContain(`the next session started in ${app()}`);
+    // In a directory that is not a git top-level a session injects, and the file stays as it is.
+    rmSync(p);
+    writeFileSync(join(work(), LOCAL_MD), stale);
+    const inApp = statusIn(app());
+    expect(inApp).toContain(`${join(work(), LOCAL_MD)} holds an out-of-date copy`);
+    expect(inApp).not.toMatch(/the next session started in/);
+    expect(silentAutoAdopt({ cwd: work() }).action, 'premise: a session there injects').toBe('inject');
+    expect(readFileSync(join(work(), LOCAL_MD), 'utf8')).toBe(stale);
+  });
 });
