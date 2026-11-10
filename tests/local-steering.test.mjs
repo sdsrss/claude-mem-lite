@@ -20,6 +20,7 @@ import {
   symlinkSync,
   appendFileSync,
   chmodSync,
+  renameSync,
 } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -2902,6 +2903,7 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     const st = statusIn(app());
     expect(st).toMatch(/out-of-date copy/);
     expect(st).toContain(join(work(), 'CLAUDE.md'));
+    expect(st).toContain(`\`${CLI_INVOKE} adopt\` there brings it up to date`);
     // Frozen on purpose, the block above is the one the user wants.
     process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
@@ -3023,7 +3025,9 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     adoptIn(app());
     const wt = join(app(), '.claude', 'worktrees', 'wt1');
     git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    // Both pointers relative, as `git worktree add --relative-paths` writes them.
     writeFileSync(join(wt, '.git'), 'gitdir: ../../../.git/worktrees/wt1\n');
+    writeFileSync(join(app(), '.git', 'worktrees', 'wt1', 'gitdir'), '../../../.claude/worktrees/wt1/.git\n');
     expect(localSteeringRoot(wt), 'premise: git reads the relative gitdir').toBe(wt);
     expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
   });
@@ -3103,27 +3107,74 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'damaged', reason: 'stray-sentinel' });
     expect(existsSync(join(app(), LOCAL_MD)), 'premise: the session kept the copy').toBe(true);
     expect(st).not.toMatch(promise);
+    // From a subdirectory the session reads that directory's CLAUDE.md, not the root's.
+    rmSync(join(app(), 'CLAUDE.md'));
+    const sub = join(app(), 'src');
+    mkdirSync(sub);
+    expect(statusIn(sub), 'premise: a session there takes the copy out').toMatch(promise);
+    writeFileSync(join(sub, 'CLAUDE.md'), `<!-- ${SLUG}:begin --> (team note)\n`);
+    const fromSub = statusIn(sub);
+    expect(silentAutoAdopt({ cwd: sub })).toMatchObject({ action: 'damaged', reason: 'stray-sentinel' });
+    expect(fromSub).not.toMatch(promise);
   });
 
-  // M16, and P3-4: who brings an out-of-date CLAUDE.local.md above up to date.
-  it('--status says a session brings a stale CLAUDE.local.md up to date only where one does', () => {
+  // An out-of-date CLAUDE.local.md above has no remedy that holds everywhere: a session in its
+  // directory refreshes it, takes it out (a CLAUDE.md block there), leaves it (tracked), or injects
+  // (no git top-level). --status names the file and promises nothing.
+  it('--status names a stale CLAUDE.local.md above without promising a session refreshes it', () => {
     expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
     const p = join(app(), LOCAL_MD);
     const stale = readFileSync(p, 'utf8').replace('mem_recall', 'mem_recall_old');
     writeFileSync(p, stale);
     const wt = join(app(), '.claude', 'worktrees', 'wt1');
     git(app(), 'worktree', 'add', '-q', '-b', 'worktree-wt1', wt);
+    // Tracked in the checkout's branch only, after the worktree's branch was made.
+    git(app(), 'add', '-f', LOCAL_MD);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'track it');
     expect(silentAutoAdopt({ cwd: wt }).action).toBe('local');
     const inWt = statusIn(wt);
     expect(inWt).toContain(`${p} holds an out-of-date copy`);
-    expect(inWt).toContain(`the next session started in ${app()}`);
-    // In a directory that is not a git top-level a session injects, and the file stays as it is.
-    rmSync(p);
-    writeFileSync(join(work(), LOCAL_MD), stale);
-    const inApp = statusIn(app());
-    expect(inApp).toContain(`${join(work(), LOCAL_MD)} holds an out-of-date copy`);
-    expect(inApp).not.toMatch(/the next session started in/);
-    expect(silentAutoAdopt({ cwd: work() }).action, 'premise: a session there injects').toBe('inject');
-    expect(readFileSync(join(work(), LOCAL_MD), 'utf8')).toBe(stale);
+    expect(inWt).not.toMatch(/brings it up to date/);
+    silentAutoAdopt({ cwd: app() });
+    expect(readFileSync(p, 'utf8'), 'premise: a session in the checkout leaves a tracked copy').toBe(stale);
+  });
+
+  // Review of the repairs, F1: Claude Code takes a bare repository holding the worktree for the
+  // checkout (its canonical root) and skips that directory's CLAUDE.md. In the `proj/.bare` layout
+  // the bare directory is a sibling, so nothing above the worktree is skipped.
+  it('a worktree inside a bare repository: the bare directory is the checkout', () => {
+    const bare = join(work(), 'proj.git');
+    git(work(), 'clone', '-q', '--bare', app(), bare);
+    adoptIn(bare);
+    expect(readBlock(bare, SLUG).body, 'premise: the block is in the bare directory').not.toBeNull();
+    const wt = join(bare, 'main');
+    git(bare, 'worktree', 'add', '-q', '-b', 'wt-main', wt);
+    expect(localSteeringRoot(wt), 'premise: the worktree is its own top-level').toBe(wt);
+    expect(silentAutoAdopt({ cwd: wt })).toMatchObject({ action: 'local', written: 'created' });
+    const proj = join(work(), 'proj');
+    git(work(), 'clone', '-q', '--bare', app(), join(proj, '.bare'));
+    writeFileSync(join(proj, '.git'), 'gitdir: ./.bare\n');
+    adoptIn(proj);
+    expect(readBlock(proj, SLUG).body, 'premise: the block is above the worktree').not.toBeNull();
+    const wt2 = join(proj, 'main');
+    git(proj, 'worktree', 'add', '-q', '-b', 'wt-main', wt2);
+    expect(silentAutoAdopt({ cwd: wt2 })).toMatchObject({ action: 'already-adopted', reason: 'above-root' });
+  });
+
+  // F2: a worktree moved without `git worktree repair` points back at its old place, and Claude Code
+  // does not take it for a worktree: every CLAUDE.md above it loads.
+  it('a worktree moved into the checkout without a repair is not a worktree to Claude Code', () => {
+    const wts = join(app(), 'wts');
+    mkdirSync(wts);
+    adoptIn(wts);
+    const elsewhere = join(work(), 'elsewhere', 'feature');
+    git(app(), 'worktree', 'add', '-q', '-b', 'feature', elsewhere);
+    const moved = join(wts, 'feature');
+    renameSync(elsewhere, moved);
+    expect(localSteeringRoot(moved), 'premise: git still runs in the moved worktree').toBe(moved);
+    expect(silentAutoAdopt({ cwd: moved })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
   });
 });

@@ -557,15 +557,22 @@ function blockAbove(cwd, root) {
   }
 }
 
-// The main checkout of the linked worktree at `top`, read from its `.git` file
-// (`gitdir: <checkout>/.git/worktrees/<name>`), or null. A submodule's names .git/modules/.
+// The main checkout of the linked worktree at `top` as Claude Code 2.1.322 finds it from `.git` (its
+// canonical-root lookup), or null. `.git` reads `gitdir: <gitdir>`; that directory's `gitdir` file
+// must point back at `<top>/.git` (a worktree moved without `git worktree repair` does not, and is
+// no worktree to the host); its `commondir` names the common directory, whose parent is the checkout
+// when it is named `.git`, and which is itself the checkout otherwise (a bare repository). A
+// submodule's gitdir has no back-pointer, so null. The host's further checks reject layouts git does
+// not make; where they would differ, this skips more and the block loads twice, never not at all.
 function worktreeMainCheckout(top) {
   try {
-    const g = join(top, '.git');
-    if (!statSync(g).isFile()) return null;
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(g, 'utf8'));
-    const w = m && /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+$/.exec(resolve(top, m[1]));
-    return w ? w[1] : null;
+    const dotGit = readFileSync(join(top, '.git'), 'utf8').trim();
+    if (!dotGit.startsWith('gitdir:')) return null;
+    const gitdir = resolve(top, dotGit.slice(7).trim());
+    const back = resolve(gitdir, readFileSync(join(gitdir, 'gitdir'), 'utf8').trim());
+    if (realpathSync(back) !== join(realpathSync(top), '.git')) return null;
+    const common = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf8').trim());
+    return basename(common) === '.git' ? dirname(common) : common;
   } catch {
     return null;
   }
@@ -796,16 +803,11 @@ function localSteeringStatus(cwd) {
   }
   const line = localFileLine(cwd, root, runs);
   if (!above.stale) return line;
-  // Out of date, it does not stand in for the local copy, and it loads here all the same. A session
-  // refreshes a CLAUDE.local.md only at a git top-level it writes to; elsewhere it injects.
-  const staleDir = dirname(above.stale);
-  const staleTop = basename(above.stale) === LOCAL_MD ? localSteeringRoot(staleDir) : null;
+  // Out of date, it does not stand in for the local copy, and it loads here all the same. Only a
+  // CLAUDE.md has a remedy that holds in every state: what a session does to a CLAUDE.local.md
+  // depends on that directory (refreshed, taken out, or left as it is when tracked).
   const how =
-    basename(above.stale) !== LOCAL_MD
-      ? `; \`${CLI_INVOKE} adopt\` there brings it up to date`
-      : staleTop && samePath(staleTop, staleDir)
-        ? `; the next session started in ${staleDir} (with auto-adopt on there) brings it up to date`
-        : '';
+    basename(above.stale) === LOCAL_MD ? '' : `; \`${CLI_INVOKE} adopt\` there brings it up to date`;
   return `${line}\n              ⚠ ${above.stale} holds an out-of-date copy of the block, which sessions here load as well${how}`;
 }
 

@@ -14,7 +14,7 @@ memories.
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
 in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`. Where Claude Code already loads the current block from a `CLAUDE.md` or
 `CLAUDE.local.md` above the repository root (outside git, above the session's directory; in a `claude --worktree` session,
-the main checkout's `CLAUDE.local.md`), no local copy is kept and nothing is added.
+the main checkout's `CLAUDE.local.md`), no local copy is written and nothing is added.
 Otherwise, next to an `AGENTS.md` that file would switch off, and where it cannot be written (outside git,
 for example), it adds the text to each session's context instead; with
 `CLAUDE_MEM_RULES_STEERING=1` it keeps the block in `.claude/rules/claude-mem-lite.md` next to
