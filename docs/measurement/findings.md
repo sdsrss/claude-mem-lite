@@ -1683,6 +1683,35 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   still model-sourced and label them; retiring the per-Stop model worker is the candidate
   if they read wrong. D#95 (the input) stays open.
 
+- **Dropping the MCP idle pass's FTS5 `optimize` — measured 2026-11-10, REJECTED (D#595,
+  now D#761).** The idle pass (`server.mjs`, once per MCP process after 5 idle minutes)
+  rewrites the whole FTS index with no page check, and on a store whose freelist lists a live
+  leaf one such rewrite garbled 12 of 300 observations (D#595). Taking it off the unattended
+  path, leaving only the explicit `maintain` one, was the cheap narrowing. Measured first,
+  with the decision rule written down before the run (≤ 1 ms p50, ≤ 5 ms p95, ≤ 1.5× FTS data
+  to drop it). Population: a backup copy of this machine's store on tree `08d84680` (1,211
+  observations, every project), the 300 most recent distinct user prompts, each through
+  `searchProductionHybrid`, the two arms interleaved ABBA × 6, median per query. The
+  not-optimized arm is the same copy after FTS `delete-all` and a row-by-row replay (one
+  transaction per insert, then one per delete + insert), automerge only:
+
+  | arm | p50 / p95 ms per search | FTS data |
+  |---|---|---|
+  | optimized | 3.380 / 19.351 | 1,442,295 B |
+  | not optimized | 8.026 / 63.221 | 2.043× |
+  | per-query difference | 4.890 / 44.314 | — |
+
+  At 4× (the rows copied, 4,844) the difference is 8.008 / 74.128 ms. The same ids came back
+  for 300 of 300 queries and FTS `integrity-check` passed on both arms. An insert-only replay
+  (exploratory, not in the rule) leaves FTS data at 1.033× and still reads 8.299 against
+  3.505 ms at p50: the gain is merging the per-transaction segments, not dropping tombstones,
+  so a gentler write mix keeps it. Removing the pass would charge every search about 5 ms at
+  p50 to close one path to a hazard that ordinary writes also reach (automerge allocates from
+  the same freelist — reasoned from SQLite's allocator, not reproduced). It stays until
+  D#593's page check can gate it. Not ways around it: a
+  `quick_check` gate (SQLite skips the freelist check in some layouts), FTS5 `merge` (it
+  allocates pages the same way). Script `tasks/remaining-6310/d595.mjs` (local, untracked).
+
 ## Condensed surfaces — original wording (pre-20 KB cap, v6.5.0)
 
 The 2026-09-08 cap rewrote CLAUDE.md's header and its Commands / module / Rulers tables in
