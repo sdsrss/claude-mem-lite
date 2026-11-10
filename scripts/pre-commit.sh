@@ -87,17 +87,23 @@ fi
 # the rows were recovered from git on 2026-11-09. When the staged table differs from HEAD's,
 # the outgoing rows must be in the STAGED record as one `> `-quoted block. Checking line by
 # line is not enough: Knip rows repeat byte for byte across stamps, so lines of an unmoved
-# row are often already in the file. Tested by tests/pre-commit-baselines-guard.test.mjs.
+# row are often already in the file. Every row change committed since the promise is
+# re-checked against the staged record too, so a commit made with this hook off, or a later
+# edit that drops a moved block, is refused at the next commit; replaying this on the 14 real
+# changes refused the 9 overwrites and passed the 5 moves. The history runs strictly after
+# e1824ffd's commit time: that commit recorded the rows it replaced in a reformatted shape.
+# Tested by tests/pre-commit-baselines-guard.test.mjs.
 BASELINES_RC=0
 BASELINES_OUT=$(node --input-type=module - <<'NODE'
 import { execFileSync } from 'node:child_process';
-const show = (spec) => {
+const git = (...args) => {
   try {
-    return execFileSync('git', ['show', spec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
     return '';
   }
 };
+const show = (spec) => git('show', spec);
 const rows = (text) => {
   const lines = text.split('\n');
   const at = lines.findIndex((l) => l.startsWith('| Baseline | Value'));
@@ -110,13 +116,24 @@ const rows = (text) => {
   }
   return out;
 };
-const outgoing = rows(show('HEAD:CLAUDE.md'));
-const staged = rows(show(':CLAUDE.md'));
-// No table at HEAD gives an empty block, which every record includes.
-if (outgoing.join('\n') === staged.join('\n')) process.exit(0);
-const block = outgoing.map((r) => `> ${r}`).join('\n');
-if (show(':docs/measurement/baselines.md').includes(block)) process.exit(0);
-console.log(block);
+const record = show(':docs/measurement/baselines.md');
+const missing = [];
+const check = (label, outgoing, incoming) => {
+  if (outgoing.join('\n') === incoming.join('\n')) return;
+  // No table before the change gives an empty block, which every record includes.
+  const block = outgoing.map((r) => `> ${r}`).join('\n');
+  if (!record.includes(block)) missing.push(label, block);
+};
+check('Replaced by this commit:', rows(show('HEAD:CLAUDE.md')), rows(show(':CLAUDE.md')));
+// Filtered here, not with `git log --since`, which stops at the first run of older commits.
+const PROMISE = Date.parse('2026-09-08T23:24:04Z') / 1000;
+for (const line of git('log', '--format=%H %ct', 'HEAD', '--', 'CLAUDE.md').split('\n')) {
+  const [sha, time] = line.split(' ');
+  if (!sha || Number(time) <= PROMISE) continue;
+  check(`Replaced by ${sha.slice(0, 8)}, already committed:`, rows(show(`${sha}^:CLAUDE.md`)), rows(show(`${sha}:CLAUDE.md`)));
+}
+if (missing.length === 0) process.exit(0);
+console.log(missing.join('\n'));
 process.exit(1);
 NODE
 ) || BASELINES_RC=$?
@@ -124,8 +141,8 @@ if [ "$BASELINES_RC" -eq 1 ]; then
   if [ "${DISABLE_BASELINES_GUARD:-0}" = "1" ]; then
     echo "[pre-commit] ⚠ Baselines rows replaced without moving the old ones (DISABLE_BASELINES_GUARD=1, allowing)"
   else
-    echo "[pre-commit] ❌ CLAUDE.md's Baselines rows changed, but the rows they replace are not in"
-    echo "[pre-commit]    the staged docs/measurement/baselines.md. Add them there verbatim, as one"
+    echo "[pre-commit] ❌ CLAUDE.md's Baselines rows were replaced, but the rows they replaced are not in"
+    echo "[pre-commit]    the staged docs/measurement/baselines.md. Add each block there verbatim, as one"
     echo "[pre-commit]    quoted block under a 'Superseded row moved from CLAUDE.md' heading:"
     while IFS= read -r line; do echo "[pre-commit]      $line"; done <<< "$BASELINES_OUT"
     echo "[pre-commit]    Override (the old row was never a reading, e.g. a typo fix): DISABLE_BASELINES_GUARD=1 git commit ..."

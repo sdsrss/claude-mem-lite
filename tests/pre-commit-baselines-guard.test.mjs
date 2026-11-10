@@ -2,7 +2,9 @@
 // CLAUDE.md's Baselines table replaces is moved there verbatim. Nothing enforced it: of the
 // 14 commits after the promise that changed the rows, 9 overwrote the old row instead, and
 // the rows were recovered from git on 2026-11-09. The guard in scripts/pre-commit.sh now
-// refuses such a commit.
+// refuses such a commit, and also re-checks every row change committed since the promise,
+// so a commit made with the hook off, or a later edit that drops a moved block, is refused
+// at the next commit instead of going unnoticed.
 //
 // Same approach as pre-commit-corpus-guard.test.mjs: the guard runs the SHIPPED script's
 // own bytes, sliced out of scripts/pre-commit.sh, in a throwaway repo.
@@ -68,6 +70,20 @@ const stage = (rel, body) => {
   write(rel, body);
   git('add', rel);
 };
+/** Commit with both dates pinned. @returns {string} the commit's 8-char sha */
+const commitAt = (iso, msg) => {
+  execFileSync('git', ['commit', '-qm', msg], {
+    cwd: repo,
+    stdio: 'pipe',
+    env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+  });
+  return git('rev-parse', '--short=8', 'HEAD').trim();
+};
+
+// e1824ffd's commit time. That commit made the promise and recorded the rows it replaced in
+// a reformatted shape, not as a verbatim block, so the history check starts strictly after it.
+const PROMISE = '2026-09-08T23:24:04Z';
+const AFTER_PROMISE = '2026-09-08T23:24:05Z';
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'mem-baselinesguard-'));
@@ -143,10 +159,59 @@ describe('pre-commit Baselines move guard', () => {
   });
 
   it('checks nothing when HEAD has no Baselines table', () => {
+    // The commit that removes the table moves its rows, so the history check has nothing
+    // to refuse and the staged check is what this case exercises.
     stage('CLAUDE.md', '# CLAUDE.md\n');
+    stage(RECORD_REL, record(quote(OUTGOING), EARLIER_BLOCK));
     git('commit', '-qm', 'no table');
     stage('CLAUDE.md', claudeMd(INCOMING));
     expect(runGuard().code).toBe(0);
+  });
+
+  it('refuses the next commit when an earlier commit replaced the rows without moving them', () => {
+    // A commit made with the hook off: --no-verify, a web edit, a clone without core.hooksPath.
+    stage('CLAUDE.md', claudeMd(INCOMING));
+    const bypassed = commitAt(AFTER_PROMISE, 'replaced the rows with the hook off');
+    stage('CLAUDE.md', claudeMd(INCOMING, '1.0.1'));
+    const r = runGuard();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('428 files / 6628');
+    // Names the commit, so the reader knows which change lost the row.
+    expect(r.out).toContain(bypassed);
+  });
+
+  it("passes once that commit's outgoing rows are moved", () => {
+    stage('CLAUDE.md', claudeMd(INCOMING));
+    commitAt(AFTER_PROMISE, 'replaced the rows with the hook off');
+    stage(RECORD_REL, record(quote(OUTGOING), EARLIER_BLOCK));
+    expect(runGuard().code).toBe(0);
+  });
+
+  it('refuses a commit that drops a block an earlier commit moved', () => {
+    stage('CLAUDE.md', claudeMd(INCOMING));
+    stage(RECORD_REL, record(quote(OUTGOING), EARLIER_BLOCK));
+    commitAt(AFTER_PROMISE, 'replaced and moved');
+    stage('CLAUDE.md', claudeMd(INCOMING, '1.0.1'));
+    expect(runGuard().code, 'premise: the moved state passes').toBe(0);
+    stage(RECORD_REL, record(EARLIER_BLOCK));
+    const r = runGuard();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('428 files / 6628');
+  });
+
+  it("ignores a commit at the promise commit's own second, and checks the next second", () => {
+    stage('CLAUDE.md', claudeMd(INCOMING));
+    commitAt(PROMISE, 'the promise commit itself');
+    expect(runGuard().code).toBe(0);
+    stage('CLAUDE.md', claudeMd(OUTGOING, '1.0.1'));
+    commitAt(AFTER_PROMISE, 'the first commit under the promise');
+    // INCOMING was replaced by OUTGOING one second after the promise, and INCOMING is not in
+    // the record.
+    stage('CLAUDE.md', claudeMd(OUTGOING, '1.0.2'));
+    const r = runGuard();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('553 files / 9937');
+    expect(r.out).not.toContain('428 files / 6628');
   });
 
   it('honours the documented override', () => {

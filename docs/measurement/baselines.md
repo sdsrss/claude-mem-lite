@@ -38,7 +38,9 @@ text differs in kind.
   between 2026-09-09 and 2026-09-14, one on 2026-11-03. Those rows are now below, verbatim
   from git, each under the commit that wrote it and the one that replaced it.
   `scripts/pre-commit.sh` now refuses a commit that changes the table's rows unless the
-  outgoing rows are staged here as one `> `-quoted block.
+  outgoing rows are staged here as one `> `-quoted block. Since 2026-11-10 it also re-checks
+  every row change committed after `e1824ffd`, so a change committed with the hook off, or
+  an edit that deletes a moved block, is refused at the next commit.
 
 ## Test-case count — history and why it is partly generated
 
