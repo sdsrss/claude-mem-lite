@@ -4,7 +4,7 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
 import { fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
@@ -496,4 +496,193 @@ export function makeFixtureTracker() {
       return left;
     },
   };
+}
+
+// ── page-level damage fixtures (D#593; first written for attempt 2, archive/d593-page-check) ──
+
+function walChecksum(buf, s0, s1, bigEndian) {
+  for (let i = 0; i < buf.length; i += 8) {
+    const a = bigEndian ? buf.readUInt32BE(i) : buf.readUInt32LE(i);
+    const b = bigEndian ? buf.readUInt32BE(i + 4) : buf.readUInt32LE(i + 4);
+    s0 = (s0 + a + s1) >>> 0;
+    s1 = (s1 + b + s0) >>> 0;
+  }
+  return [s0, s1];
+}
+
+/**
+ * Rewrites one page image of the log at `${path}-wal` (the newest frame holding `pageno`) and signs
+ * the checksum chain again, so SQLite reads the edit as committed. `edit(page)` changes the Buffer.
+ */
+export function editLogPage(path, pageno, edit) {
+  const wal = Buffer.from(readFileSync(`${path}-wal`));
+  const bigEndian = wal.readUInt32BE(0) === 0x377f0683;
+  const pageSize = wal.readUInt32BE(8);
+  const frames = [];
+  for (let at = 32; at + 24 + pageSize <= wal.length; at += 24 + pageSize) frames.push(at);
+  const target = frames.filter((at) => wal.readUInt32BE(at) === pageno).pop();
+  if (target === undefined) throw new Error(`fixture: page ${pageno} has no frame in the log`);
+  edit(wal.subarray(target + 24, target + 24 + pageSize));
+  let [s0, s1] = walChecksum(wal.subarray(0, 24), 0, 0, bigEndian);
+  for (const at of frames) {
+    [s0, s1] = walChecksum(wal.subarray(at, at + 8), s0, s1, bigEndian);
+    [s0, s1] = walChecksum(wal.subarray(at + 24, at + 24 + pageSize), s0, s1, bigEndian);
+    wal.writeUInt32BE(s0, at + 16);
+    wal.writeUInt32BE(s1, at + 20);
+  }
+  writeFileSync(`${path}-wal`, wal);
+  rmSync(`${path}-shm`, { force: true });
+}
+
+/**
+ * A live store (WAL, initSchema) whose freelist lists `links` leaf pages the observations table
+
+ * frees and allocates pages and the freelist hands it those leaves (D#591). `ftsDamage` deletes the
+ * leaf rows of observations_fts_data first, so FTS5's own check fails and doctor goes on to rebuild.
+ * `vacuum` VACUUMs the store before the freelist is made; SQLite 3.53.4's integrity check then
+ * starts at a virtual table, skips the freelist and reads 'ok' on this store. `prepare(path)` runs
+ * on the closed store before the damage is planted: the product's opener writes on its first open
+ * of a store initSchema built, and on these pages any write can overwrite rows.
+ * `inLog`: the freelist is made while another connection holds the log open, and the store is copied
+ * with its log before any checkpoint, so the cross-link is only in a log frame and the main file on
+ * its own is sound: a read-write handle's close then checkpoints the damage into the main file
+ * (v6.30.9 r1b defects P1-1).
+ * @param {string} path
+ * @param {{observations?: number, links?: number, vacuum?: boolean, ftsDamage?: boolean, prepare?: (path: string) => void, inLog?: boolean}} [opts]
+ * @returns {{path: string, truth: {id: number, title: string, narrative: string}[], linked: number[]}}
+ */
+export function writeCrossLinkedStore(
+  path,
+  { observations = 300, links = 1, vacuum = false, ftsDamage = true, prepare, inLog = false } = {},
+) {
+  // With inLog the store is built in a directory beside `path`, under the same name (the product's
+  // opener in `prepare` opens <dir>/claude-mem-lite.db), and copied to `path` with its log.
+  const buildDir = inLog ? mkdtempSync(join(dirname(path), '.build-')) : null;
+  const build = inLog ? join(buildDir, basename(path)) : path;
+  let db = new Database(build);
+  let holder = null;
+  let truth;
+  let leaves;
+  try {
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+       VALUES ('c-s1', 's1', 'p', datetime('now'), 1)`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'discovery', ?, ?, datetime('now'), ?)`,
+    );
+    db.transaction(() => {
+      for (let i = 0; i < observations; i++) {
+        insert.run(`title ${i} alpha`, `narrative ${i} ${'x'.repeat(200)} w${i}`, 1_700_000_000_000 + i);
+      }
+    })();
+    if (ftsDamage) {
+      db.unsafeMode(true);
+      if (db.prepare('DELETE FROM observations_fts_data WHERE id > 10').run().changes === 0) {
+        throw new Error('fixture did not damage anything: observations_fts_data had no leaf rows');
+      }
+      db.unsafeMode(false);
+    }
+    if (vacuum) db.exec('VACUUM');
+    if (prepare) {
+      db.close();
+      prepare(build);
+      db = new Database(build);
+    }
+    if (inLog) {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.pragma('wal_autocheckpoint = 0');
+      // A second connection keeps the first one's close from checkpointing the log.
+      holder = new Database(build, { readonly: true });
+      holder.prepare('SELECT 1').get();
+    }
+    // A dropped table's pages are the freelist.
+    db.exec('CREATE TABLE junk (x)');
+    const junk = db.prepare('INSERT INTO junk VALUES (?)');
+    db.transaction(() => {
+      for (let i = 0; i < 60; i++) junk.run('j'.repeat(1000));
+    })();
+    db.exec('DROP TABLE junk');
+    truth = db.prepare('SELECT id, title, narrative FROM observations ORDER BY id').all();
+    leaves = db
+      .prepare("SELECT pageno FROM dbstat WHERE name = 'observations' AND pagetype = 'leaf' ORDER BY pageno")
+      .pluck()
+      .all();
+    if (inLog) {
+      writeFileSync(path, readFileSync(build));
+      writeFileSync(`${path}-wal`, readFileSync(`${build}-wal`));
+    } else {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    }
+  } finally {
+    db.close();
+    holder?.close();
+  }
+  if (inLog) rmSync(buildDir, { recursive: true, force: true });
+  if (leaves.length < links + 2)
+    throw new Error(`fixture needs ${links + 2} observations leaves, has ${leaves.length}`);
+  const plant = (page, pageSize) => {
+    if (page.readUInt32BE(4) < links) throw new Error('fixture freelist trunk lists too few pages');
+    leaves.slice(2, 2 + links).forEach((pageno, k) => page.writeUInt32BE(pageno, 8 + 4 * k));
+    return pageSize;
+  };
+  if (inLog) {
+    // The freelist's first trunk page, as the log's newest page 1 names it.
+    const wal = readFileSync(`${path}-wal`);
+    const pageSize = wal.readUInt32BE(8);
+    let page1 = null;
+    for (let at = 32; at + 24 + pageSize <= wal.length; at += 24 + pageSize) {
+      if (wal.readUInt32BE(at) === 1) page1 = wal.subarray(at + 24, at + 24 + pageSize);
+    }
+    if (!page1) throw new Error('fixture: the log holds no page 1');
+    const trunk = page1.readUInt32BE(32);
+    if (trunk === 0) throw new Error('fixture made no freelist');
+    editLogPage(path, trunk, (page) => plant(page, pageSize));
+  } else {
+    const image = readFileSync(path);
+    const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+    const trunk = image.readUInt32BE(32);
+    if (trunk === 0) throw new Error('fixture made no freelist');
+    plant(image.subarray((trunk - 1) * pageSize, trunk * pageSize), pageSize);
+    writeFileSync(path, image);
+  }
+  return { path, truth, linked: leaves.slice(2, 2 + links) };
+}
+
+/**
+ * How many of `truth` read back from the store at `path` (its table, not an index) with the title
+ * and narrative they were written with. Opens a copy, so the store and its log are not touched.
+ * `mainOnly` reads the main file without its log.
+ * @param {string} path
+ * @param {{id: number, title: string, narrative: string}[]} truth
+ * @param {{mainOnly?: boolean}} [opts]
+ */
+export function intactObservations(path, truth, { mainOnly = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-intact-'));
+  try {
+    const copy = join(dir, 'copy.db');
+    writeFileSync(copy, readFileSync(path));
+    if (!mainOnly && existsSync(`${path}-wal`)) writeFileSync(`${copy}-wal`, readFileSync(`${path}-wal`));
+    const db = new Database(copy, { readonly: true });
+    try {
+      const get = db.prepare('SELECT title, narrative FROM observations NOT INDEXED WHERE id = ?');
+      let intact = 0;
+      for (const t of truth) {
+        try {
+          const r = get.get(t.id);
+          if (r && r.title === t.title && r.narrative === t.narrative) intact++;
+        } catch {
+          /* a row that does not read is not intact */
+        }
+      }
+      return intact;
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }

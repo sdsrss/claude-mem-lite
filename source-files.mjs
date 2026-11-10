@@ -282,6 +282,8 @@ export const SOURCE_FILES = [
   // would crash maintain on auto-update with an unresolved import.
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
+  // Leaf (no imports); schema.mjs's rebuilds import it, so it is copied before schema.mjs (D#593).
+  'lib/checked-write.mjs',
   'schema.mjs',
   // Imports schema.mjs, copied before it. lib/db-unusable.mjs runs it as a child by path (not an
   // import), and only install.mjs's doctor asks it to; install.mjs is copied after both.
