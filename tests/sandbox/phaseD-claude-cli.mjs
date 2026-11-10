@@ -33,7 +33,7 @@ const HOME = join(SBX, 'home');
 const MP = 'sdsrss';
 const PLUGIN = `claude-mem-lite@${MP}`;
 // Same convention as phases A–C: a phase that quietly shrinks has stopped measuring.
-const EXPECTED_CHECKS = 7;
+const EXPECTED_CHECKS = 8;
 
 console.log(`sandbox: ${SBX}`);
 mkdirSync(join(HOME, 'tmp'), { recursive: true });
@@ -69,19 +69,24 @@ check(`claude plugin install ${PLUGIN} exits 0`, () => {
   return { ok: r.code === 0, detail: tail(r) };
 });
 
+const cacheDir = () => join(HOME, '.claude', 'plugins', 'cache', MP, 'claude-mem-lite', pluginVersion);
 check('the plugin is copied into the cache under its version', () => {
-  const p = join(
-    HOME,
-    '.claude',
-    'plugins',
-    'cache',
-    MP,
-    'claude-mem-lite',
-    pluginVersion,
-    '.claude-plugin',
-    'plugin.json',
-  );
+  const p = join(cacheDir(), '.claude-plugin', 'plugin.json');
   return { ok: existsSync(p) && JSON.parse(readFileSync(p, 'utf8')).name === 'claude-mem-lite', detail: p };
+});
+
+// Claude Code 2.1.322 installs the packages a plugin's package.json lists, unless it sets
+// `overrides` ("plugin list" then notes they were not installed). Ours does: the overrides
+// are security floors for transitive dependencies, which setup.sh's own `npm install`
+// applies. So the cache arrives without node_modules — the shape phases A–C stand in and
+// setup.sh provisions. A Claude Code that starts installing here (for one, by applying
+// overrides) changes that shape, and this is where it shows.
+check('the cache has no node_modules (the shape phases A–C model)', () => {
+  const nm = join(cacheDir(), 'node_modules');
+  return {
+    ok: !existsSync(nm),
+    detail: existsSync(nm) ? `${nm} exists: Claude Code installed the dependencies itself` : 'absent',
+  };
 });
 
 check('settings.json enables the plugin', () => {
