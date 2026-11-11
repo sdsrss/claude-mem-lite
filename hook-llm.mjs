@@ -27,7 +27,8 @@ import { acquireLLMSlot, releaseLLMSlot, LLM_SEM_TIMEOUT } from './hook-semaphor
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
-import { extractTailAssistantText } from './lib/summary-extractor.mjs';
+import { extractTailAssistantText, sessionTurnReplies, sessionTurnWindow } from './lib/summary-extractor.mjs';
+import { readTranscriptEntries } from './lib/transcript-scan.mjs';
 import { recordMetric } from './lib/metrics.mjs';
 import { DB_DIR } from './schema.mjs';
 import {
@@ -1884,10 +1885,26 @@ export async function handleLLMSummary() {
     // the flush wait ran long (a later turn's Stop supersedes this worker anyway). argv[6] is the
     // transcript the spawning hook named: Stop's own, or SessionStart's previousTranscriptPath.
     // Without one, or when it cannot be read, the prompt is the pre-D19 one.
+    // The reply is this session's last: after /compact the transcript carries on into the next
+    // session, whose first reply can land before this worker reads it (pre-tag review 6.33.0,
+    // defects F1). The window closes at the first compaction after the session's first stored
+    // prompt. With no stored prompt, or no turn in the window and no compaction after it, the
+    // transcript's last assistant text, as before.
     let finalReply = null;
     if (process.argv[6]) {
       try {
-        finalReply = extractTailAssistantText(process.argv[6]);
+        const first = db
+          .prepare('SELECT MIN(created_at_epoch) AS e FROM user_prompts WHERE content_session_id = ?')
+          .get(sessionId)?.e;
+        let window = null;
+        if (Number.isFinite(first)) {
+          const entries = readTranscriptEntries(process.argv[6]);
+          window = sessionTurnWindow(entries, first);
+          finalReply = sessionTurnReplies(entries, window).at(-1) ?? null;
+        }
+        if (finalReply === null && (window === null || window.to === Infinity)) {
+          finalReply = extractTailAssistantText(process.argv[6]);
+        }
       } catch (e) {
         debugCatch(e, 'llm-summary-final-reply');
       }

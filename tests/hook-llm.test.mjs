@@ -2314,6 +2314,149 @@ describe('handleLLMSummary', () => {
       expect(db.prepare('SELECT COUNT(*) AS n FROM session_summaries').get().n).toBe(1);
     });
 
+    it("after /compact the previous session's worker takes that session's last reply, not the next one's", async () => {
+      // Pre-tag review 6.33.0 (defects F1): SessionStart hands the /compact worker the same
+      // transcript, which carries on into the next session; a reply typed there before the
+      // worker reads it was taken as this session's final reply.
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'fix the login bug', 1, ?, ?)`,
+      ).run(new Date(t0).toISOString(), t0);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-compact.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'user', timestamp: at(-1), message: { content: 'fix the login bug' } },
+          {
+            type: 'assistant',
+            timestamp: at(10),
+            message: { content: [{ type: 'text', text: 'Login fixed; 8/8 pass.' }] },
+          },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(60) },
+          {
+            type: 'user',
+            timestamp: at(61),
+            isCompactSummary: true,
+            message: { content: 'Summary of the conversation' },
+          },
+          { type: 'user', timestamp: at(70), message: { content: 'now the next task' } },
+          {
+            type: 'assistant',
+            timestamp: at(75),
+            message: { content: [{ type: 'text', text: 'POST-COMPACT: deleting the old migrations' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      const { user } = callLLM.mock.calls[0][0];
+      expect(user).toContain('Final reply:\nLogin fixed; 8/8 pass.');
+      expect(user).not.toContain('POST-COMPACT');
+    });
+
+    it("a compaction after a turn with no reply gives no final reply rather than the next session's", async () => {
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'fix it', 1, ?, ?)`,
+      ).run(new Date(t0).toISOString(), t0);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-interrupted.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'user', timestamp: at(-1), message: { content: 'fix it' } },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(60) },
+          { type: 'user', timestamp: at(70), message: { content: 'next' } },
+          {
+            type: 'assistant',
+            timestamp: at(75),
+            message: { content: [{ type: 'text', text: 'POST-COMPACT reply' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0].user).not.toContain('Final reply');
+    });
+
+    it('the session after a compaction takes its own last reply from the shared transcript', async () => {
+      // SessionStart rotates the session at /compact and the transcript carries on: the new
+      // session's window opens at its own first stored prompt, after the boundary.
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'next task', 1, ?, ?)`,
+      ).run(new Date(t0 + 70000).toISOString(), t0 + 70000);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-after.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'user', timestamp: at(-1), message: { content: 'old task' } },
+          {
+            type: 'assistant',
+            timestamp: at(5),
+            message: { content: [{ type: 'text', text: 'OLD SESSION reply' }] },
+          },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(60) },
+          { type: 'user', timestamp: at(69), message: { content: 'next task' } },
+          {
+            type: 'assistant',
+            timestamp: at(75),
+            message: { content: [{ type: 'text', text: 'Next task done.' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nNext task done.');
+    });
+
+    it('a record that is not an object does not cost the session its window', async () => {
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'fix it', 1, ?, ?)`,
+      ).run(new Date(t0).toISOString(), t0);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-null.jsonl');
+      writeFileSync(
+        t,
+        [
+          JSON.stringify({ type: 'user', timestamp: at(-1), message: { content: 'fix it' } }),
+          'null',
+          JSON.stringify({
+            type: 'assistant',
+            timestamp: at(5),
+            message: { content: [{ type: 'text', text: 'Fixed.' }] },
+          }),
+          JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp: at(60) }),
+          JSON.stringify({ type: 'user', timestamp: at(70), message: { content: 'next' } }),
+          JSON.stringify({
+            type: 'assistant',
+            timestamp: at(75),
+            message: { content: [{ type: 'text', text: 'POST-COMPACT' }] },
+          }),
+        ].join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nFixed.');
+    });
+
     it('a transcript that cannot be read leaves the prompt without one, and the summary is still written', async () => {
       process.argv[5] = '';
       process.argv[6] = join(dir, 'missing.jsonl');
