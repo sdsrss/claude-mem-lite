@@ -283,13 +283,17 @@ describe('claude-mem-lite defer CLI', () => {
   });
 
   // R31 delta review T1: the all-or-nothing guarantee was tested only on dropDeferredMany; the
-  // command resolving and dropping row by row passed every test. A failure on the SECOND row's
-  // UPDATE, after the first was written, must leave both open.
+  // command resolving and dropping row by row passed every test. Whichever row is dropped SECOND
+  // fails, after the first was written (keyed on order, not on an id, so a loop that drops in
+  // either order is caught — depth-2 review), and both must stay open.
   it('defer drop: a failure on a later row leaves the earlier one open', () => {
     const [a, b] = ['batch-A', 'batch-B'].map(
       (title) => insertDeferred(db, { project: 'parent--testproj', title, priority: 2 }).id,
     );
-    db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work WHEN NEW.id = ${b}
+    db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work
+             WHEN NEW.status = 'dropped' AND OLD.project = 'parent--testproj'
+               AND (SELECT COUNT(*) FROM deferred_work
+                    WHERE project = 'parent--testproj' AND status = 'dropped') > 0
              BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     const drop = runCli(['defer', 'drop', '1,2', '--reason', 'batch test']);
     expect(drop.exitCode).not.toBe(0);

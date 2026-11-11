@@ -448,8 +448,9 @@ describe('MCP feature sweep: public tools', () => {
   }, 30000);
 
   // R31 delta review T1: the all-or-nothing guarantee was tested only on dropDeferredMany; the
-  // handler resolving and dropping row by row passed every test. A failure on the SECOND row's
-  // UPDATE, after the first was written, must leave both open.
+  // handler resolving and dropping row by row passed every test. Whichever row is dropped SECOND
+  // fails, after the first was written (keyed on order, not on an id, so a loop that drops in
+  // either order is caught — depth-2 review), and both must stay open.
   it('mem_defer_drop: a failure on a later row leaves the earlier one open', async () => {
     const P = 'mcpsweep-defer-atomic';
     const ids = [];
@@ -457,7 +458,9 @@ describe('MCP feature sweep: public tools', () => {
       ids.push(Number((await call('mem_defer', { title, priority: 2, project: P })).match(/D#(\d+)/)[1]));
     }
     withDb((db) =>
-      db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work WHEN NEW.id = ${ids[1]}
+      db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work
+               WHEN NEW.status = 'dropped' AND OLD.project = '${P}'
+                 AND (SELECT COUNT(*) FROM deferred_work WHERE project = '${P}' AND status = 'dropped') > 0
                BEGIN SELECT RAISE(ABORT, 'injected failure'); END`),
     );
     try {
@@ -805,7 +808,9 @@ describe('MCP feature sweep: hidden tools', () => {
       new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date(e));
     const base = Date.now() - 3 * 86400000;
     const [y, m, d] = la(base).split('-').map(Number);
-    let evening = Date.UTC(y, m - 1, d + 1, 5, 30);
+    // Seconds and milliseconds, as every writer stores them: the shown time must be the same
+    // instant on each of the four sites, not one up to 999 ms earlier (R31 delta review F1).
+    let evening = Date.UTC(y, m - 1, d + 1, 5, 30, 7, 456);
     if (la(evening) !== la(base)) evening -= 3600000;
     const iso = new Date(evening).toISOString();
     expect(iso.slice(0, 10), 'premise: the UTC day differs').not.toBe(la(evening));
