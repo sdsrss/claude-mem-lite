@@ -8,18 +8,22 @@
 // defect is work reported in an EARLIER turn that later turns no longer mention — a ruler blind
 // to earlier turns cannot say NO here (doctrine rule 9). Judges here see every turn's reply.
 //
-// ARMS, both through the shipped buildSessionSummaryPrompt (with the final reply, as shipped
-// since D19), callLLM and parseJsonFromLLM, back to back per session, order alternating by item:
+// ARMS, both through the shipped buildSessionSummaryPrompt (with a final reply, the D19 form; here
+// the session's last in-window turn reply, which is the transcript tail the worker read at the
+// session's last Stop), callLLM and parseJsonFromLLM, back to back, order alternating by item:
 //   A  observations only — the input shipped before D21.
 //   B  observations + the session's events, merged by the shipped mergeSummaryRows (≤ 30 events).
 //
 // WHICH EVENTS. Rows written before D21 carry no session id, so "the session's events" is a
-// time-window proxy: same project, created between the session's first prompt and its last
-// summary, minus events older than its own first activity (R34 measured 29/253 sessions with
-// such rows: the previous session's late episodes). A session another real session (not the
-// `manual-<project>` save bucket) was active in during the window is left out of the population.
-// What ships (sessionEventsForSummary) reads the recorded session id instead; the proxy can only
-// add a stray event, not miss one of the session's own.
+// time-window proxy over the same project. It starts at the session's first prompt or observation
+// (earlier rows are the previous session's late episodes: R34 measured 29/253 sessions with some).
+// It ends WINDOW_GRACE_MS after the session's last own activity (a prompt, an observation or its
+// summary row), for the last turn's episode flush (the R34 review measured 1.4-244.5 s), and never
+// after another real session in the project begins. NOT at the summary row: a session has ONE
+// row, stamped by its FIRST Stop and never moved (lib/fast-summary.mjs), so the first cut of this
+// ruler judged every multi-turn session on its first turn only (R34 review H1; that reading is
+// void). A session another real session (not the `manual-<project>` save bucket) was active
+// inside is left out of the population.
 //
 // POPULATION. Summary row newer than --days; ≥ 1 observation past the low-signal filter (the
 // worker's own query); transcript on disk; ≥ 1 turn reply inside the window; ≥ 1 proxy event;
@@ -43,6 +47,7 @@
 // Usage:
 //   node benchmark/summary-events-ab.mjs run --out rows.json [--n 30] [--days 45] [--db path]
 //   node benchmark/summary-events-ab.mjs prepare rows.json outdir [--seed 20261111] [--batches 2]
+//     (judge files in outdir/judge/, key.json in outdir; verdicts-<k>-<a|b>.json go back into outdir)
 //   node benchmark/summary-events-ab.mjs score outdir
 
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -62,15 +67,27 @@ const TURN_HEAD = 700;
 const TURN_TAIL = 300;
 const TURNS_FIRST = 4;
 const TURNS_LAST = 8;
+const WINDOW_GRACE_MS = 10 * 60 * 1000;
 
-/** Text of a human prompt entry, or null for tool results, meta and slash-command records. */
+// Records Claude Code stores as a user message that no person typed: slash commands and their
+// output, a background task's completion notice, bash-mode echoes, an interrupt marker. A notice
+// is not a turn: the turn's real answer usually follows it (R34 review M1: 1142 notices in the
+// population transcripts against 574 prompts, splitting a turn at each).
+const NOT_TYPED_RE =
+  /^\s*(?:<(?:command-|local-command-|task-notification>|bash-(?:input|stdout|stderr)>)|\[Request interrupted)/;
+
+/** Text of a prompt a person typed, or null for every other record. */
 function humanText(entry) {
-  if (entry.type !== 'user' || entry.isSidechain || entry.isMeta || !entry.message) return null;
+  if (entry.type !== 'user' || entry.isSidechain || entry.isMeta || entry.isCompactSummary) return null;
+  if (!entry.message || entry.origin?.kind === 'task-notification') return null;
   const c = entry.message.content;
-  if (typeof c === 'string') return /^\s*<(command-|local-command-)/.test(c) ? null : c;
-  if (!Array.isArray(c) || c.some((b) => b?.type === 'tool_result')) return null;
-  const t = c.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text);
-  return t.length ? t.join('\n') : null;
+  let t;
+  if (typeof c === 'string') t = c;
+  else if (Array.isArray(c) && !c.some((b) => b?.type === 'tool_result')) {
+    const parts = c.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text);
+    t = parts.length ? parts.join('\n') : null;
+  } else return null;
+  return t == null || NOT_TYPED_RE.test(t) ? null : t;
 }
 
 /**
@@ -118,6 +135,14 @@ export function judgeReplies(replies) {
  */
 export function gateD21({ A, B, agreement, n }) {
   const reasons = [];
+  // An item without two valid verdicts counts as NO in every question, which favours an arm
+  // only by missing data (R34 review L7): the reading is incomplete, so it cannot ship.
+  for (const [arm, s] of [
+    ['A', A],
+    ['B', B],
+  ]) {
+    if (s.judged !== undefined && s.judged < n) reasons.push(`judged(${arm}) = ${s.judged} < ${n}`);
+  }
   for (const q of QUESTIONS) {
     if (!(agreement[q] >= 0.7)) reasons.push(`${q} agreement ${agreement[q]} < 0.70`);
   }
@@ -167,7 +192,7 @@ export function scoreVerdicts(key, a, b, usableByArm) {
 }
 
 /** The population, oldest first. `db` is a read-only handle on the store. */
-function collectSessions(db, { days, now, projectsDir, notLowSignalTitleClause, readEntries }) {
+export function collectSessions(db, { days, now, projectsDir, notLowSignalTitleClause, readEntries }) {
   const sessions = db
     .prepare(
       `SELECT memory_session_id AS sid, project, MAX(created_at_epoch) AS e FROM session_summaries
@@ -183,6 +208,16 @@ function collectSessions(db, { days, now, projectsDir, notLowSignalTitleClause, 
   const firstQ = db.prepare(`SELECT MIN(e) AS e FROM (
       SELECT MIN(created_at_epoch) AS e FROM user_prompts WHERE content_session_id = ?
       UNION ALL SELECT MIN(created_at_epoch) FROM observations WHERE memory_session_id = ?)`);
+  const lastQ = db.prepare(`SELECT MAX(e) AS e FROM (
+      SELECT MAX(created_at_epoch) AS e FROM user_prompts WHERE content_session_id = ?
+      UNION ALL SELECT MAX(created_at_epoch) FROM observations WHERE memory_session_id = ?
+      UNION ALL SELECT MAX(created_at_epoch) FROM session_summaries WHERE memory_session_id = ?)`);
+  // The first activity of another real session in the project after `at`: the window ends before it.
+  const nextQ = db.prepare(`SELECT MIN(e) AS e FROM (
+      SELECT memory_session_id AS sid, created_at_epoch AS e FROM observations WHERE project = ? AND created_at_epoch > ?
+      UNION ALL SELECT u.content_session_id, u.created_at_epoch FROM user_prompts u JOIN sdk_sessions k ON k.content_session_id = u.content_session_id
+        WHERE k.project = ? AND u.created_at_epoch > ?)
+    WHERE sid != ? AND sid NOT LIKE 'manual-%'`);
   const otherQ = db.prepare(`SELECT COUNT(*) AS n FROM (
       SELECT memory_session_id AS sid FROM observations WHERE project = ? AND created_at_epoch BETWEEN ? AND ?
       UNION ALL SELECT u.content_session_id FROM user_prompts u JOIN sdk_sessions k ON k.content_session_id = u.content_session_id
@@ -206,11 +241,14 @@ function collectSessions(db, { days, now, projectsDir, notLowSignalTitleClause, 
       drop.noFirst++;
       continue;
     }
-    if (otherQ.get(s.project, first, s.e, s.project, first, s.e, s.sid).n > 0) {
+    const last = lastQ.get(s.sid, s.sid, s.sid).e;
+    if (otherQ.get(s.project, first, last, s.project, first, last, s.sid).n > 0) {
       drop.overlap++;
       continue;
     }
-    const events = eventsQ.all(s.project, first, s.e, 30);
+    const next = nextQ.get(s.project, last, s.project, last, s.sid).e;
+    const end = Math.min(last + WINDOW_GRACE_MS, next == null ? Infinity : next - 1);
+    const events = eventsQ.all(s.project, first, end, 30);
     if (events.length === 0) {
       drop.noEvents++;
       continue;
@@ -221,7 +259,7 @@ function collectSessions(db, { days, now, projectsDir, notLowSignalTitleClause, 
       continue;
     }
     // 5 s before the first stored prompt: the transcript stamps the prompt as it was sent.
-    const replies = turnReplies(readEntries(transcript), { from: first - 5000, to: s.e });
+    const replies = turnReplies(readEntries(transcript), { from: first - 5000, to: end });
     if (replies.length === 0) {
       drop.noTurns++;
       continue;
@@ -383,10 +421,13 @@ function prepare() {
     seed: Number(arg('--seed', '20261111')),
     batches: Number(arg('--batches', '2')),
   });
-  mkdirSync(outdir, { recursive: true });
+  // Judges get `<outdir>/judge/` and nothing else; key.json stays one level up, out of the
+  // directory they are pointed at (R34 review L6). Copy judge/ elsewhere to keep it out of reach.
+  const judgeDir = join(outdir, 'judge');
+  mkdirSync(judgeDir, { recursive: true });
   batches.forEach((b, k) => {
-    writeFileSync(join(outdir, `batch-${k + 1}-a.json`), JSON.stringify(b.a, null, 2));
-    writeFileSync(join(outdir, `batch-${k + 1}-b.json`), JSON.stringify(b.b, null, 2));
+    writeFileSync(join(judgeDir, `batch-${k + 1}-a.json`), JSON.stringify(b.a, null, 2));
+    writeFileSync(join(judgeDir, `batch-${k + 1}-b.json`), JSON.stringify(b.b, null, 2));
   });
   const usable = Object.fromEntries(
     ARMS.map((a) => [a, dump.rows.filter((r) => r.arm === a && r.usable).length]),

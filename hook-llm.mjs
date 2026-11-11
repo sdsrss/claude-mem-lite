@@ -1755,13 +1755,6 @@ export function summaryReplyExcerpt(reply) {
 }
 
 /**
- * The session summary prompt. `observations` are {type, title, narrative} newest first,
- * `userPrompts` the raw prompt texts in order; both are cut here. `finalReply`, when given, is
- * the session's last assistant message (D19): it goes into the user part behind the same input
- * guard, and the system part says the outcome it reports wins. Without one the prompt is the
- * one shipped before D19, byte for byte.
- */
-/**
  * D21: how many of a session's events the summary reads, newest first — the same bound the
  * observation query has (LIMIT 30). R34 measured a median of 9 events in a session's window on
  * the maintainer's store, at most 111.
@@ -1799,6 +1792,13 @@ export function mergeSummaryRows(observations, events) {
   return rows.map((r) => r.row);
 }
 
+/**
+ * The session summary prompt. `observations` are {type, title, narrative} newest first,
+ * `userPrompts` the raw prompt texts in order; both are cut here. `finalReply`, when given, is
+ * the session's last assistant message (D19): it goes into the user part behind the same input
+ * guard, and the system part says the outcome it reports wins. Without one the prompt is the
+ * one shipped before D19, byte for byte.
+ */
 export function buildSessionSummaryPrompt({ project, observations, userPrompts, finalReply }) {
   const obsList = observations
     .map((o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`)

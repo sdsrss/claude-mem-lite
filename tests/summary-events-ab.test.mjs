@@ -1,7 +1,20 @@
 // D21 (R34): the A/B ruler that gates wiring the session's events into the summary.
 // The gate must be able to say NO on every registered condition (doctrine rule 5).
 import { describe, it, expect } from 'vitest';
-import { gateD21, scoreVerdicts, turnReplies, judgeReplies } from '../benchmark/summary-events-ab.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createTestDb, insertSession } from './test-helpers.mjs';
+import { notLowSignalTitleClause } from '../utils.mjs';
+import { readTranscriptEntries } from '../lib/transcript-scan.mjs';
+import {
+  gateD21,
+  scoreVerdicts,
+  turnReplies,
+  judgeReplies,
+  buildBlind,
+  collectSessions,
+} from '../benchmark/summary-events-ab.mjs';
 
 describe('turnReplies', () => {
   const user = (text, ts, extra = {}) => ({
@@ -106,5 +119,179 @@ describe('scoreVerdicts', () => {
       usable: 2,
     });
     expect(r.agreement).toEqual({ missed_done: 0.5, false_open: 1, unsupported: 0.5, n: 2 });
+  });
+});
+
+describe('buildBlind', () => {
+  it('gives judges no arm, the same ids in both orders, and a key that maps every id back', () => {
+    const row = (item, arm) => ({
+      item,
+      arm,
+      completed: `c${item}${arm}`,
+      remaining_items: '',
+      next_steps: '',
+    });
+    const dump = {
+      items: [0, 1, 2].map((i) => ({ replies: { turns: 1, shown: [{ turn: 1, reply: `r${i}` }] } })),
+      rows: [row(0, 'A'), row(0, 'B'), row(1, 'B'), row(1, 'A'), row(2, 'A'), row(2, 'B')],
+    };
+    const { batches, key } = buildBlind(dump, { seed: 7, batches: 2 });
+    const seen = batches.flatMap((b) => b.a);
+    expect(seen.map((e) => e.id).sort()).toEqual(Object.keys(key).sort());
+    for (const b of batches) expect(b.b.map((e) => e.id).sort()).toEqual(b.a.map((e) => e.id).sort());
+    for (const e of seen) {
+      expect(Object.keys(e).sort()).toEqual(['id', 'replies', 'summary']);
+      expect(Object.keys(e.summary).sort()).toEqual(['completed', 'next_steps', 'remaining_items']);
+      const { arm, item } = key[e.id];
+      expect(e.summary.completed).toBe(`c${item}${arm}`); // the key points at the row the judge saw
+      expect(e.replies).toBe(dump.items[item].replies);
+    }
+  });
+});
+
+describe('turnReplies: records no person typed are not turns (R34 review M1)', () => {
+  const at = (m) => `2026-11-11T01:${String(m).padStart(2, '0')}:00Z`;
+  const user = (content, m, extra = {}) => ({
+    type: 'user',
+    timestamp: at(m),
+    message: { content },
+    ...extra,
+  });
+  const asst = (text, m) => ({
+    type: 'assistant',
+    timestamp: at(m),
+    message: { content: [{ type: 'text', text }] },
+  });
+  const win = { from: Date.parse(at(0)), to: Date.parse(at(50)) };
+
+  it.each([
+    ['a task notification (text)', user('<task-notification>agent done</task-notification>', 3)],
+    ['a task notification (origin)', user('agent done', 3, { origin: { kind: 'task-notification' } })],
+    ['a compaction summary', user('Summary of the conversation so far', 3, { isCompactSummary: true })],
+    ['an interrupt marker', user('[Request interrupted by user]', 3)],
+    ['a bash-mode echo', user('<bash-input>ls</bash-input>', 3)],
+    ['a slash command', user('<command-name>/clear</command-name>', 3)],
+    ['a meta record', user('caveat', 3, { isMeta: true })],
+    ["a subagent's prompt", user('do the thing', 3, { isSidechain: true })],
+  ])('%s continues the turn before it', (_name, record) => {
+    const entries = [
+      user('fix it', 1),
+      asst('waiting for the agent', 2),
+      record,
+      asst('fixed, 12/12 pass', 4),
+    ];
+    expect(turnReplies(entries, win)).toEqual(['fixed, 12/12 pass']);
+  });
+
+  it('drops a turn whose prompt falls after the window', () => {
+    const entries = [user('one', 1), asst('r1', 2), user('two', 55), asst('r2', 56)];
+    expect(turnReplies(entries, win)).toEqual(['r1']);
+  });
+});
+
+describe('collectSessions: the window is the session, not its first Stop (R34 review H1)', () => {
+  it("counts events and turns after the session's one summary row, up to the next session", () => {
+    const db = createTestDb();
+    const projects = mkdtempSync(join(tmpdir(), 'd21-ab-'));
+    try {
+      const T0 = Date.parse('2026-11-01T00:00:00Z');
+      const min = (m) => T0 + m * 60000;
+      insertSession(db, { id: 'S', project: 'p' });
+      insertSession(db, { id: 'N', project: 'p' });
+      const prompt = db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch, cc_session_id)
+         VALUES (?, ?, ?, '', ?, ?)`,
+      );
+      prompt.run('S', 'first ask', 1, min(0), 'cc-S');
+      prompt.run('S', 'second ask', 2, min(60), 'cc-S');
+      prompt.run('N', 'next session', 1, min(66), 'cc-N'); // inside S's 10-minute grace
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+         VALUES ('S', 'p', '', 'decision', 'Designed the cache layer', '', 1, '', ?)`,
+      ).run(min(1));
+      // The one summary row, stamped by the FIRST Stop and never moved.
+      db.prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, created_at, created_at_epoch) VALUES ('S', 'p', '', ?)`,
+      ).run(min(5));
+      const event = db.prepare(
+        `INSERT INTO events (project, event_type, title, importance, created_at_epoch) VALUES ('p', 'bugfix', ?, 1, ?)`,
+      );
+      event.run('previous session, late', min(-1));
+      event.run('turn 1 fix', min(2));
+      event.run('turn 2 fix, after the summary row', min(62));
+      event.run('after the grace', min(72));
+      event.run('the next session', min(67)); // before S's grace ends, after N began
+      mkdirSync(join(projects, 'proj'));
+      const at = (m) => new Date(min(m)).toISOString();
+      writeFileSync(
+        join(projects, 'proj', 'cc-S.jsonl'),
+        [
+          { type: 'user', timestamp: at(0), message: { content: 'first ask' } },
+          {
+            type: 'assistant',
+            timestamp: at(3),
+            message: { content: [{ type: 'text', text: 'turn 1 done' }] },
+          },
+          { type: 'user', timestamp: at(60), message: { content: 'second ask' } },
+          {
+            type: 'assistant',
+            timestamp: at(61),
+            message: { content: [{ type: 'text', text: 'turn 2 done' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      const pop = collectSessions(db, {
+        days: 30,
+        now: min(24 * 60),
+        projectsDir: projects,
+        notLowSignalTitleClause,
+        readEntries: readTranscriptEntries,
+      });
+      expect(pop.items.map((i) => i.sid)).toEqual(['S']); // N has no summary row
+      expect(pop.items[0].events.map((e) => e.title)).toEqual([
+        'turn 2 fix, after the summary row',
+        'turn 1 fix',
+      ]);
+      expect(pop.items[0].replies).toEqual(['turn 1 done', 'turn 2 done']);
+    } finally {
+      db.close();
+      rmSync(projects, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('gateD21 boundaries and completeness', () => {
+  const base = () => ({
+    n: 30,
+    agreement: { missed_done: 0.7, false_open: 0.7, unsupported: 0.7 },
+    A: { usable: 28, judged: 30, missed_done: 10, false_open: 3, unsupported: 2 },
+    B: { usable: 28, judged: 30, missed_done: 7, false_open: 4, unsupported: 3 },
+  });
+  it('ships at exactly n-2 usable and exactly 0.70 agreement', () => {
+    expect(gateD21(base()).ship).toBe(true);
+  });
+  it('says NO at n-3 usable, and when an item lacks two valid verdicts', () => {
+    const a = base();
+    a.A.usable = 27;
+    expect(gateD21(a).ship).toBe(false);
+    const b = base();
+    b.B.judged = 29;
+    expect(gateD21(b)).toEqual({ ship: false, reasons: ['judged(B) = 29 < 30'] });
+  });
+});
+
+describe('buildBlind ids', () => {
+  it('are shuffled, so an id says nothing about row order or arm', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      item: i >> 1,
+      arm: i % 2 ? 'B' : 'A',
+      completed: '',
+    }));
+    const dump = { items: Array.from({ length: 5 }, () => ({ replies: {} })), rows };
+    const { key } = buildBlind(dump, { seed: 3, batches: 1 });
+    const inRowOrder = Object.keys(key);
+    expect(inRowOrder).not.toEqual([...inRowOrder].sort());
   });
 });
