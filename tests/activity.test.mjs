@@ -224,6 +224,24 @@ describe('cmdActivity CLI: --type validation', () => {
     }
   });
 
+  // converge R30 (E2E 2026-11-10, CLI P2-5): the list printed event ids as `#N`, the form every
+  // other command reads as an OBSERVATION id — `delete #1` copied from `activity recent` previewed
+  // an unrelated observation. Events are E#N everywhere else (search, get, --supersedes).
+  test('activity recent prints event ids as E#N, and the printed id works with show', () => {
+    setupDir();
+    try {
+      runCli(['activity', 'save', '--type', 'discovery', 'the cache key folds the locale']);
+      const listed = runCli(['activity', 'recent']);
+      const m = listed.stdout.match(/^E#(\d+) \[discovery\] the cache key folds the locale$/m);
+      expect(m, listed.stdout).toBeTruthy();
+      expect(listed.stdout).not.toMatch(/^#\d+ /m);
+      const show = runCli(['activity', 'show', `E#${m[1]}`]);
+      expect(JSON.parse(show.stdout.trim()).title).toBe('the cache key folds the locale');
+    } finally {
+      teardownDir();
+    }
+  });
+
   // Round3-P1/P2: activity --limit used bare parseInt — "2abc" coerced to 2, "-1"
   // became SQLite LIMIT -1 (unlimited full-table dump), huge values uncapped. Now
   // routed through parseIntFlag (default 20, max 1000). Behavioral assertion because

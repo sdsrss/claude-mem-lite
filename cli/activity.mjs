@@ -17,9 +17,11 @@ import { snapshotDb } from '../lib/db-backup.mjs';
 import { isBlankText } from '../lib/blank-text.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
+// E#N, the form search, get and --supersedes use for an event: a bare #N names an observation
+// everywhere else, so an id copied from this list into `delete` hit an unrelated row (converge R30).
 function formatActivityResults(rows) {
   if (!rows || rows.length === 0) return '(no events)';
-  return rows.map((r) => `#${r.id} [${r.event_type}] ${r.title}`).join('\n');
+  return rows.map((r) => `E#${r.id} [${r.event_type}] ${r.title}`).join('\n');
 }
 
 /** An event id as typed: N, #N or E#N (the form search and get print), else null. */
