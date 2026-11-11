@@ -2,6 +2,65 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.33.0 — `uninstall --purge` leaves your own files in a relocated data directory
+
+**Upgrade note: nothing to run; the schema version stays 49.** The first open adds a nullable
+`memory_session_id` column to `events`; an older build ignores it. Going back is pinning
+`claude-mem-lite@6.32.0`. Two defaults change: dates are shown in local time, and the daily
+maintenance pass no longer runs `normalize`.
+
+- **`uninstall --purge` with `CLAUDE_MEM_DIR` set removed the whole directory, your own files in
+  it included.** It now removes only what claude-mem-lite writes there: files matched by each
+  writer's exact file-name format (the store and its sidecars, snapshots, legacy backups, the
+  steering doc, metrics/errors shards, verify-apply backups, update residue), and its `runtime/`
+  and `managed/` directories, whole, when nothing of yours sits beside them. Beside files of yours
+  they stay, and that run says the purge is incomplete. It names what it leaves. The store is
+  removed last. A purge that cannot remove an entry of its own, or cannot look into the
+  directory, says the purge is incomplete, keeps the store and exits 1 instead of printing
+  `Done!`. The directory itself goes only when it is empty. The default `~/.claude-mem-lite` is
+  removed whole, as before.
+- **The daily unattended maintenance pass no longer runs `normalize`.** It rewrote concept tags
+  with synonym groups a model picked, with no record and no undo; one run on a copy of the
+  maintainer's store returned 21 groups, among them `fmtDate ← date` and
+  `CLAUDE.md ← CLAUDE.local.md`. Re-enrich, cluster-merge and smart-compress
+  still run daily. To run it yourself: `claude-mem-lite optimize --run --task normalize`
+  (`--run-all` instead of `--run` skips its weekly gate) or `mem_optimize`. Tags it rewrote before
+  stay.
+- **Dates and times are shown in local time**, the zone `--from` / `--to` and
+  `date_from` / `date_to` already read a bare date in. A save made in the evening west of
+  Greenwich showed as the next day, and filtering by the date shown did not find it. This covers
+  the lists, SessionStart's `Recent (<date>)`, `stats`' daily activity and `maintain`'s purge
+  preview;
+  `mem_get` and `get D#N` print ISO 8601 with the offset and milliseconds, so a time pasted back
+  as `date_to` finds its row. Compress weeks and metric files stay in UTC.
+- **`mem_defer_drop` takes several items in one call** (`id`: one id, an array, or `"1,2"`). The
+  open list renumbers after each drop, so dropping items 1 and 2 in two calls dropped the wrong
+  second item. Every id resolves against one snapshot, one bad id drops nothing, and the drop is
+  one transaction (CLI `defer drop 1,2` too). `defer add` and `mem_defer` answer `Deferred as D#N`
+  without the `(item N)` that went stale.
+- `--project .` and `--project current` mean the current project on every CLI command; before,
+  only `optimize` read them, and `save --project .` filed the row under a project named `.`.
+- Database snapshots are created owner-only (0600) like the store; one written into an existing
+  0755 `CLAUDE_MEM_DIR` was readable by every local user.
+- `maintain scan`'s suggested merges and the hook's automatic dedup keep the copy that carries a
+  lesson, then the higher importance; a bare re-save no longer hides the copy with the lesson.
+  Weekly summaries are no longer offered as duplicates of each other.
+- A save refused as a near-duplicate says nothing was saved, the lesson included, and names
+  `force` / `--force`.
+- SessionStart's Recent Activity names the project of a row borrowed from another project.
+- `activity recent` / `activity search` print event ids as `E#N`, the spelling `get` and
+  `activity show` read as an event.
+- `help` lists the install commands (`status`, `repair`, `rebuild-binding`, `self-update`,
+  `cleanup`, `cleanup-hooks`, `install`, `uninstall`).
+- The MCP server that cannot open the database points at `doctor` instead of telling you to
+  remove the WAL files.
+- `help` no longer calls `export` a complete backup: its default leaves out rows hidden from
+  search, and `--include-compressed` adds the compressed, merged and idle ones.
+- A normal install over an `install --dev` one no longer copies the hook scripts through the
+  dev-mode link into the developer's checkout; both dev links are removed first, and install
+  says so.
+- Episodes stored as events record the session they came from. Nothing reads it yet.
+
 ## v6.32.0 — the steering sync looks above the repository before writing its copy
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

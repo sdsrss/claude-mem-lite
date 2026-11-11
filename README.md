@@ -239,6 +239,23 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.33.0
+
+**`uninstall --purge` leaves your own files in a relocated data directory; nothing to run, and the
+schema version stays 49.** The first open adds a nullable column to `events`, which an older build
+ignores. To go back, pin `claude-mem-lite@6.32.0`.
+
+- **With `CLAUDE_MEM_DIR` set, `uninstall --purge` removes only what claude-mem-lite writes
+  there**: its files by each writer's exact file-name format, and its `runtime/` and `managed/`
+  directories whole when nothing of yours sits beside them. It names what it leaves. It used to
+  remove the whole directory, your files included. The default
+  `~/.claude-mem-lite` is removed whole, as before.
+- **The daily unattended maintenance pass no longer runs `normalize`**, which rewrote concept tags
+  with model-picked synonym groups and kept no record. Run it yourself with
+  `claude-mem-lite optimize --run --task normalize` (`--run-all` skips its weekly gate).
+- **Dates and times are shown in local time**, the zone the date filters already read.
+- Details in CHANGELOG.md.
+
 ## Upgrading to 6.32.0
 
 **The steering sync looks above the repository before writing its copy; nothing to run, and the

@@ -201,6 +201,15 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.33.0
+
+**数据目录改过位置时，`uninstall --purge` 不再删你自己的文件；不用执行任何操作，schema 版本仍是 49。** 第一次打开数据库时会给 `events` 加一个可空列，旧版本会忽略它。想退回，请固定 `claude-mem-lite@6.32.0`。
+
+- **设了 `CLAUDE_MEM_DIR` 时，`uninstall --purge` 只删 claude-mem-lite 在那里写的东西**：按每个写入方的确切文件名格式匹配的文件；旁边没有你的东西时，再整个删掉它的 `runtime/` 和 `managed/` 目录。留下的东西会列出来。以前会删掉整个目录，连同你的文件。默认目录 `~/.claude-mem-lite` 仍然整个删除，和以前一样。
+- **每日无人值守的维护不再运行 `normalize`**：它按模型挑的同义词组改写概念标签，而且不留记录。需要时手动运行 `claude-mem-lite optimize --run --task normalize`（用 `--run-all` 可跳过它的每周闸门）。
+- **日期和时间按本地时区显示**，和日期筛选一直使用的时区一致。
+- 详见 CHANGELOG.md。
+
 ## 升级到 6.32.0
 
 **写引导副本之前，插件先看仓库之上的文件；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.31.0`；它的下一个会话会把本地副本写回来。用户或项目设置里有 `claudeMdExcludes` 时，下面两条都不适用。
