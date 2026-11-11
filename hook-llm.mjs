@@ -1728,6 +1728,64 @@ async function waitForEpisodeFlushes(flushTimeout, superseded) {
   return false;
 }
 
+/**
+ * D19 — how much of the session's final reply the summary prompt carries: its first
+ * SUMMARY_REPLY_HEAD and last SUMMARY_REPLY_TAIL characters. On this machine's 159 sessions
+ * (2026-11-11) the reply's median length was 2293 chars, p90 3211, max 4704, and the report
+ * convention there puts the open items LAST, so a head-only cut would drop exactly the part
+ * that says what is left (tasks/specs/converge-r31-decisions.md).
+ */
+export const SUMMARY_REPLY_HEAD = 2000;
+export const SUMMARY_REPLY_TAIL = 1000;
+
+/**
+ * The final reply as the summary prompt carries it: scrubbed whole first, so a secret
+ * straddling a cut is never half-kept, then cut to head + tail with the omitted length named.
+ * Cuts land on code-point boundaries. Empty for an empty or missing reply.
+ */
+export function summaryReplyExcerpt(reply) {
+  const text = scrubSecrets(String(reply ?? '')).trim();
+  const points = Array.from(text);
+  if (points.length <= SUMMARY_REPLY_HEAD + SUMMARY_REPLY_TAIL) return text;
+  const omitted = points.length - SUMMARY_REPLY_HEAD - SUMMARY_REPLY_TAIL;
+  return `${points.slice(0, SUMMARY_REPLY_HEAD).join('')}\n[… ${omitted} characters omitted …]\n${points.slice(-SUMMARY_REPLY_TAIL).join('')}`;
+}
+
+/**
+ * The session summary prompt. `observations` are {type, title, narrative} newest first,
+ * `userPrompts` the raw prompt texts in order; both are cut here. `finalReply`, when given, is
+ * the session's last assistant message (D19): it goes into the user part behind the same input
+ * guard, and the system part says the outcome it reports wins. Without one the prompt is the
+ * one shipped before D19, byte for byte.
+ */
+export function buildSessionSummaryPrompt({ project, observations, userPrompts, finalReply }) {
+  const obsList = observations
+    .map((o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`)
+    .join('\n');
+  const prompts = userPrompts.map((p) => truncate(p, 300));
+  const promptCtx = prompts.length > 0 ? `\nUser requests: ${prompts.join(' → ')}\n` : '';
+  const reply = summaryReplyExcerpt(finalReply);
+
+  // cso F#4: split system/user. The userPrompts content is the single highest-leakage path
+  // for memory poisoning — putting it in the user role behind an explicit boundary is the
+  // main win here. The final reply is captured content too and goes on the same side.
+  const system = `Summarize this coding session. Return ONLY valid JSON, no markdown fences.
+${MEMORY_INPUT_GUARD}
+
+JSON: {"request":"what the user was working on","completed":"specific items accomplished with file names","remaining_items":"specific unfinished items from the original request — compare investigation scope with actual changes to infer what was NOT yet done; be precise with file:issue format, or empty string if all done","next_steps":"suggested follow-up","lessons":["non-obvious insights discovered during this session"],"key_decisions":["important design choices made and WHY"]}
+lessons: Only genuinely non-obvious insights (debugging discoveries, gotchas, architectural reasons). Empty array if routine.
+key_decisions: Only decisions with lasting impact (library choices, architecture, data model). Include reasoning. Empty array if none.${
+    reply
+      ? `
+Final reply: the user message ends with the session's final reply, the assistant's own account of the outcome. Work it reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. What it reports as unfinished, failed or left for later belongs in remaining_items.`
+      : ''
+  }`;
+  const user = `Project: ${project}${promptCtx}
+Observations (${observations.length} total):
+${obsList}${reply ? `\n\nFinal reply:\n${reply}` : ''}`;
+  return { system, user };
+}
+
 export async function handleLLMSummary() {
   // Seconds. The default spans an episode worker's whole bound (E2E 2026-10-16 P2-4): it was 15,
   // below one CLI-leg episode (2-5 s delay + 8-13 s call, + the lesson retry on a bugfix), so the
@@ -1789,12 +1847,6 @@ export async function handleLLMSummary() {
 
     if (recentObs.length < 1) return outcome('no-obs');
 
-    const obsList = recentObs
-      .map(
-        (o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`,
-      )
-      .join('\n');
-
     // Include user prompts for richer context
     const userPrompts = db
       .prepare(
@@ -1804,22 +1856,8 @@ export async function handleLLMSummary() {
     `,
       )
       .all(sessionId)
-      .map((p) => truncate(p.prompt_text, 300));
-    const promptCtx = userPrompts.length > 0 ? `\nUser requests: ${userPrompts.join(' → ')}\n` : '';
-
-    // cso F#4: split system/user. The userPrompts content (line 921) is the
-    // single highest-leakage path for memory poisoning — putting it in the
-    // user role behind an explicit boundary is the main win here.
-    const system = `Summarize this coding session. Return ONLY valid JSON, no markdown fences.
-${MEMORY_INPUT_GUARD}
-
-JSON: {"request":"what the user was working on","completed":"specific items accomplished with file names","remaining_items":"specific unfinished items from the original request — compare investigation scope with actual changes to infer what was NOT yet done; be precise with file:issue format, or empty string if all done","next_steps":"suggested follow-up","lessons":["non-obvious insights discovered during this session"],"key_decisions":["important design choices made and WHY"]}
-lessons: Only genuinely non-obvious insights (debugging discoveries, gotchas, architectural reasons). Empty array if routine.
-key_decisions: Only decisions with lasting impact (library choices, architecture, data model). Include reasoning. Empty array if none.`;
-    const user = `Project: ${project}${promptCtx}
-Observations (${recentObs.length} total):
-${obsList}`;
-    const prompt = { system, user };
+      .map((p) => p.prompt_text);
+    const prompt = buildSessionSummaryPrompt({ project, observations: recentObs, userPrompts });
 
     if (!(await acquireLLMSlot())) {
       debugLog('WARN', 'llm-summary', 'semaphore timeout, skipping summary');

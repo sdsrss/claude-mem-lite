@@ -41,6 +41,7 @@ import {
   isLowSignalLesson,
   hasEnrichmentContent,
   buildEpisodePrompt,
+  buildSessionSummaryPrompt,
 } from '../hook-llm.mjs';
 import { splitEpisodeFiles } from '../utils.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
@@ -2223,6 +2224,33 @@ describe('handleLLMSummary', () => {
     expect(summaries[0].request).toBe('Implementing auth system');
     expect(summaries[0].completed).toBe('Basic auth flow with login/logout');
     expect(summaries[0].next_steps).toBe('Add refresh token rotation');
+  });
+
+  it('sends buildSessionSummaryPrompt of the session it read (D19)', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    const ins = db.prepare(
+      `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+       VALUES ('test-session', 'test-proj', '', 'bugfix', ?, ?, 1, ?, ?)`,
+    );
+    ins.run('Fixed the login redirect', 'x'.repeat(260), new Date().toISOString(), 1000);
+    ins.run('Added a regression test', '', new Date().toISOString(), 2000);
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+       VALUES ('test-session', ?, 1, ?, 1)`,
+    ).run('fix the login bug', new Date().toISOString());
+
+    await handleLLMSummary();
+
+    expect(callLLM.mock.calls[0][0]).toEqual(
+      buildSessionSummaryPrompt({
+        project: 'test-proj',
+        observations: [
+          { type: 'bugfix', title: 'Added a regression test', narrative: '' },
+          { type: 'bugfix', title: 'Fixed the login redirect', narrative: 'x'.repeat(260) },
+        ],
+        userPrompts: ['fix the login bug'],
+      }),
+    );
   });
 
   it('preserves structural extractor content when Haiku returns empty for a field', async () => {
