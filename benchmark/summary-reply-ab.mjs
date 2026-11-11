@@ -53,12 +53,12 @@ import { pickEvenly, enterArm, CLI_ARM } from './haiku-model-ab.mjs';
 import { seededShuffle } from './lesson-blind-read.mjs';
 import { wilson95 } from './wilson.mjs';
 
-export const ARMS = ['A', 'B'];
+const ARMS = ['A', 'B'];
 const FO = ['YES', 'NO'];
 const MO = ['YES', 'NO', 'NONE_STATED'];
 
 /** The worker's text coercion for a prose field (hook-llm.mjs handleLLMSummary `asText`). */
-export function asText(v) {
+function asText(v) {
   if (Array.isArray(v)) return v.filter((x) => typeof x === 'string' && x.trim()).join('; ');
   return typeof v === 'string' ? v : '';
 }
@@ -167,7 +167,7 @@ function findTranscript(cc, projectsDir) {
 }
 
 /** The population, oldest first. `db` is a read-only handle on the store. */
-export function collectSessions(db, { days, now, projectsDir, readReply, notLowSignalTitleClause }) {
+function collectSessions(db, { days, now, projectsDir, readReply, notLowSignalTitleClause }) {
   const summaries = db
     .prepare(
       `SELECT memory_session_id AS sid, project, MAX(created_at_epoch) AS e FROM session_summaries

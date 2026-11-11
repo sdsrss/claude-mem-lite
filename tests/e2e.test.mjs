@@ -3349,72 +3349,83 @@ describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence',
     }
   }
 
-  it('both summary workers read the final reply: Stop hands its transcript, /clear the previous one (D19)', async () => {
-    // The /clear worker carries no Stop epoch, so it is never superseded and lands after the
-    // Stop worker. Without the previous transcript it summarized blind to the reply and put back
-    // the "not done" lines the Stop worker had just dropped. The host names only the NEW
-    // session's transcript at /clear; the previous one sits beside it under the old session id.
-    const capture = join(tmpHome, 'prompts.jsonl');
-    const dir = join(tmpHome, 'transcripts');
-    mkdirSync(dir, { recursive: true });
-    const tA = join(dir, `${CC_A}.jsonl`);
-    const tB = join(dir, `${CC_B}.jsonl`);
-    const REPLY = 'D19 final reply: all 12 tests pass and the lesson is saved.';
-    writeFileSync(
-      tA,
-      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: REPLY }] } }) + '\n',
-    );
-    writeFileSync(tB, '');
-    const quiet = { HOME: tmpHome };
-    const worker = {
-      HOME: tmpHome,
-      CLAUDE_MEM_SKIP_SUMMARY: undefined,
-      CLAUDE_MEM_FLUSH_TIMEOUT: '0',
-      CLAUDE_MEM_METRICS: '1',
-      MOCK_CLAUDE_CAPTURE: capture,
-    };
-    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC_A }), env: quiet });
-    runHook('user-prompt', { stdin: JSON.stringify({ prompt: PROMPT, session_id: CC_A }), env: quiet });
-    const sessionId = getSessionIdFromFile(tmpHome);
-    const db = openTestDb(tmpHome);
-    const { project } = db
-      .prepare('SELECT project FROM sdk_sessions WHERE content_session_id = ?')
-      .get(sessionId);
-    db.prepare(
-      `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+  // /compact keeps the host session id, so the previous transcript is the file it names itself
+  // (R31 review L7).
+  it.each([
+    ['clear', CC_B],
+    ['compact', CC_A],
+  ])(
+    'both summary workers read the final reply: Stop hands its transcript, /%s the previous one (D19)',
+    async (source, nextCc) => {
+      // The /clear worker carries no Stop epoch, so it is never superseded and lands after the
+      // Stop worker. Without the previous transcript it summarized blind to the reply and put back
+      // the "not done" lines the Stop worker had just dropped. The host names only the NEW
+      // session's transcript at /clear; the previous one sits beside it under the old session id.
+      const capture = join(tmpHome, 'prompts.jsonl');
+      const dir = join(tmpHome, 'transcripts');
+      mkdirSync(dir, { recursive: true });
+      const tA = join(dir, `${CC_A}.jsonl`);
+      const tB = join(dir, `${nextCc}.jsonl`);
+      const REPLY = 'D19 final reply: all 12 tests pass and the lesson is saved.';
+      writeFileSync(
+        tA,
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: REPLY }] } }) + '\n',
+      );
+      if (tB !== tA) writeFileSync(tB, '');
+      const quiet = { HOME: tmpHome };
+      const worker = {
+        HOME: tmpHome,
+        CLAUDE_MEM_SKIP_SUMMARY: undefined,
+        CLAUDE_MEM_FLUSH_TIMEOUT: '0',
+        CLAUDE_MEM_METRICS: '1',
+        MOCK_CLAUDE_CAPTURE: capture,
+      };
+      runHook('session-start', {
+        stdin: JSON.stringify({ source: 'startup', session_id: CC_A }),
+        env: quiet,
+      });
+      runHook('user-prompt', { stdin: JSON.stringify({ prompt: PROMPT, session_id: CC_A }), env: quiet });
+      const sessionId = getSessionIdFromFile(tmpHome);
+      const db = openTestDb(tmpHome);
+      const { project } = db
+        .prepare('SELECT project FROM sdk_sessions WHERE content_session_id = ?')
+        .get(sessionId);
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
        VALUES (?, ?, '', 'bugfix', 'Fixed the retry backoff in worker.mjs', 'n', 2, ?, ?)`,
-    ).run(sessionId, project, new Date().toISOString(), Date.now());
-    db.close();
+      ).run(sessionId, project, new Date().toISOString(), Date.now());
+      db.close();
 
-    const written = () => readMetricRows(tmpHome).filter((r) => r.event === 'summary_worker');
-    const alive = () =>
-      execFileSync('ps', ['-ww', '-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
-    const settle = async (n) => {
-      const deadline = Date.now() + 15_000;
-      while ((written().length < n || alive()) && Date.now() < deadline)
-        await new Promise((r) => setTimeout(r, 50));
-    };
+      const written = () => readMetricRows(tmpHome).filter((r) => r.event === 'summary_worker');
+      const alive = () =>
+        execFileSync('ps', ['-ww', '-eo', 'args'], { encoding: 'utf8' }).includes(`llm-summary ${sessionId}`);
+      const settle = async (n) => {
+        const deadline = Date.now() + 15_000;
+        while ((written().length < n || alive()) && Date.now() < deadline)
+          await new Promise((r) => setTimeout(r, 50));
+      };
 
-    runHook('stop', { stdin: JSON.stringify({ session_id: CC_A, transcript_path: tA }), env: worker });
-    await settle(1);
-    runHook('session-start', {
-      stdin: JSON.stringify({ source: 'clear', session_id: CC_B, transcript_path: tB }),
-      env: worker,
-    });
-    await settle(2);
+      runHook('stop', { stdin: JSON.stringify({ session_id: CC_A, transcript_path: tA }), env: worker });
+      await settle(1);
+      runHook('session-start', {
+        stdin: JSON.stringify({ source, session_id: nextCc, transcript_path: tB }),
+        env: worker,
+      });
+      await settle(2);
 
-    expect(
-      written().map((r) => r.outcome),
-      'premise: both workers called the model',
-    ).toEqual(['written', 'written']);
-    const prompts = readFileSync(capture, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l))
-      .filter((p) => p.includes('"request":"what the user was working on"'));
-    expect(prompts).toHaveLength(2);
-    for (const p of prompts) expect(p).toContain(`Final reply:\n${REPLY}`);
-  });
+      expect(
+        written().map((r) => r.outcome),
+        'premise: both workers called the model',
+      ).toEqual(['written', 'written']);
+      const prompts = readFileSync(capture, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+        .filter((p) => p.includes('"request":"what the user was working on"'));
+      expect(prompts).toHaveLength(2);
+      for (const p of prompts) expect(p).toContain(`Final reply:\n${REPLY}`);
+    },
+  );
 
   it('/clear builds the previous transcript path only from a session id that stays in its directory (D19)', async () => {
     // The previous host session id comes from a stored prompt row, which came from hook stdin.

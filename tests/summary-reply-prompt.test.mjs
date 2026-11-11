@@ -3,6 +3,7 @@
 // next_steps. This file pins the prompt builder and the A/B ruler's pure parts
 // (benchmark/summary-reply-ab.mjs); the worker's wiring is tested in hook-llm.test.mjs.
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   buildSessionSummaryPrompt,
   summaryReplyExcerpt,
@@ -36,6 +37,16 @@ describe('buildSessionSummaryPrompt', () => {
     expect(system).toMatch(/Work it reports as done .* never list it in remaining_items or next_steps/);
     // The reply is captured content: it stays on the user side of the input guard.
     expect(system).not.toContain('All 12 tests pass');
+  });
+
+  it('without a final reply is the prompt shipped before D19, byte for byte', () => {
+    // The hash was taken twice (2026-11-11): from this builder, and from the inline template at
+    // a3a29a03 evaluated with the same input. A deliberate change to the prompt updates it, and
+    // re-measures with benchmark/summary-reply-ab.mjs (R31 review L7).
+    const { system, user } = buildSessionSummaryPrompt(base);
+    expect(createHash('sha256').update(`${system}\u0000${user}`).digest('hex')).toBe(
+      'd153b5a94774ecc16378d4067f600ac7fb2e279124dd881aa753e2ffa1b16726',
+    );
   });
 
   it('a blank reply is treated as none', () => {

@@ -2299,6 +2299,21 @@ describe('handleLLMSummary', () => {
       expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nAll 12 tests pass; lesson saved.');
     });
 
+    it('a transcript the extractor throws on leaves the prompt without one, and the summary is still written', async () => {
+      // A `null` line parses, and reading `.type` off it throws inside extractTailAssistantText:
+      // the worker's catch is what keeps the summary (R31 review L7).
+      const t = join(dir, 'cc-2.jsonl');
+      writeFileSync(
+        t,
+        `null\n${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } })}\n`,
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0]).toEqual(expected(null));
+      expect(db.prepare('SELECT COUNT(*) AS n FROM session_summaries').get().n).toBe(1);
+    });
+
     it('a transcript that cannot be read leaves the prompt without one, and the summary is still written', async () => {
       process.argv[5] = '';
       process.argv[6] = join(dir, 'missing.jsonl');
