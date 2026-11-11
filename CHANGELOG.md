@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.32.0 — the steering sync looks above the repository before writing its copy
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.31.0`: its next session writes the local copy back.
+
+- **No `CLAUDE.local.md` copy where Claude Code already loads the current block from above the
+  repository root.** Claude Code loads `CLAUDE.md` and `CLAUDE.local.md` from every directory above
+  the session, across git boundaries, up to but not including the filesystem root. A
+  `claude --worktree` session loaded the main checkout's `CLAUDE.local.md` and the copy the plugin
+  wrote in the worktree; a repository below a directory you ran `adopt` in loaded that directory's
+  `CLAUDE.md` and its own copy. Counted with Claude Code 2.1.322's InstructionsLoaded hook in a
+  sandbox, each session loaded the block twice before and once now. The plugin now writes nothing
+  there and takes out an untracked copy it wrote before (frozen with
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`, the copy stays, with any edits in it); the copy comes back if
+  that block goes. Only the block as this version ships it stands in (any block while frozen).
+  In a worktree session the `CLAUDE.md` of the main checkout and of the directories between it and
+  the worktree never does, since Claude Code does not load them; while `claudeMdExcludes` is set in
+  your user or project settings, nothing does. `adopt --status` names the file that carries the
+  block, or an out-of-date one that loads as well. A `CLAUDE.md` block names the detail file
+  relative to itself (`.claude/plugin_claude_mem_lite.md`): in one run from a repository below
+  such a directory, the model's first read of it missed and its second found it.
+- **Outside git, a session below a directory whose `CLAUDE.md` carries the current block no longer
+  gets the text injected as well.**
+- `adopt` run in a subdirectory of a git repository whose root `CLAUDE.local.md` carries the block
+  says that sessions there load both, and how to keep one copy.
+- The PostToolUse error check no longer goes quadratic on a long run of blank lines followed by an
+  indented `at` (constructed input; 100,000 newlines: 2,805 ms → 0.3 ms per call on the
+  maintainer's machine, against the hook's 5 s).
+- Docs and the `citation-stats --sidechain` message no longer say the plugin's hooks do not fire
+  inside subagents: they do. A subagent starts without the SessionStart context.
+
 ## v6.31.0 — recall injects less that does not apply to the step at hand
 
 **Upgrade note: nothing to run; the schema version stays 49.** The first three changes each have a
