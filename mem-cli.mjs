@@ -3397,13 +3397,15 @@ Commands:
     --narrative T       New narrative
     --concepts T        Space-separated concept tags
 
-  export                Export observations as JSON/JSONL (complete backup by default)
+  export                Export observations as JSON/JSONL (every live observation by default;
+                        rows hidden from search — compressed, merged or idle — need
+                        --include-compressed)
     --project P         Filter by project
     --type T            Filter by type
     --format F          json (default) or jsonl
     --from DATE         Start date
     --to DATE           End date
-    --include-compressed  Include compressed observations
+    --include-compressed  Also export rows hidden from search (compressed, merged or idle)
     --limit N           Cap output at N rows (default: export ALL matching rows)
   restore <file>        Restore observations from an export file (JSON/JSONL)
     --project P         Override the restored project for every row
