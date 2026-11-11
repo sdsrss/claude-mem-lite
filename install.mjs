@@ -2001,7 +2001,10 @@ async function uninstall() {
         purgeIncomplete = true;
       } else if (storeLookup === null) {
         const r = purgeOwnedDataEntries(MEM_DATA_DIR);
-        const list = (xs) => `${xs.slice(0, 10).join(', ')}${xs.length > 10 ? ', …' : ''}`;
+        // Up to 50 names, then how many more: a bare "…" after 10 hid a user's notes.txt among
+        // 19 kept entries (R33 review L2).
+        const list = (xs) =>
+          `${xs.slice(0, 50).join(', ')}${xs.length > 50 ? ` and ${xs.length - 50} more` : ''}`;
         if (r.unreadable) {
           warn(`Could not list ${MEM_DATA_DIR} (${r.unreadable}) — nothing there was removed.`);
           purgeIncomplete = true;
@@ -2017,13 +2020,26 @@ async function uninstall() {
           }
           if (r.failed.length > 0) {
             warn(
-              `Could not remove ${r.failed.length} of its own entries in ${MEM_DATA_DIR}: ${list(r.failed)}`,
+              `Could not remove ${r.failed.length} of its own entries in ${MEM_DATA_DIR}: ${list(r.failed)}` +
+                (r.storeKept
+                  ? ' — claude-mem-lite.db stays until they go, so running the purge again finishes it'
+                  : ''),
             );
             purgeIncomplete = true;
-          } else if (removedDir) {
-            ok(`Relocated data purged (${MEM_DATA_DIR})`);
-          } else {
-            ok(`Relocated data purged from ${MEM_DATA_DIR}`);
+          }
+          if (r.left.length > 0) {
+            warn(
+              `Left ${r.left.join(', ')} in ${MEM_DATA_DIR}: claude-mem-lite's own, but the directory also holds ` +
+                `entries that are not, so a file of yours may be inside. Remove ${r.left.length === 1 ? 'it' : 'them'} yourself once nothing of yours is.`,
+            );
+            purgeIncomplete = true;
+          }
+          if (r.failed.length === 0 && r.left.length === 0) {
+            ok(
+              removedDir
+                ? `Relocated data purged (${MEM_DATA_DIR})`
+                : `Relocated data purged from ${MEM_DATA_DIR}`,
+            );
           }
           if (r.kept.length > 0) {
             warn(
@@ -2091,10 +2107,10 @@ const OWNED_TOP_RE = new RegExp(
     `${STORE_RE}\\.[a-z][a-z0-9-]*-${ISO_RE}-\\d+-\\d+\\.bak(?:-journal)?`,
     `${STORE_RE}\\.legacy-backup-\\d+(?:-wal|-shm)?`, // legacy migration backup (here, scripts/setup.sh)
     `${STORE_RE}-(?:wal|shm)\\.legacy-backup-\\d+`, // its log under the pre-fix name
-    // a set-aside damaged store (lib/db-unusable.mjs); bare `.corrupt` is the name v6.12.2–v6.30.7's
-    // remedy told the user to `mv` it to
+    // a set-aside damaged store (lib/db-unusable.mjs); bare `.corrupt` is the name an earlier
+    // release's remedy told the user to `mv` it to
     `${STORE_RE}\\.corrupt(?:-${ISO_RE}(?:-\\d+)?(?:-wal|-shm)?)?`,
-    'resource-registry\\.db(?:-wal|-shm|-journal)?', // the 2.90–4.x skill registry, left by 5.0.0
+    'resource-registry\\.db(?:-wal|-shm|-journal)?', // the skill registry releases before 5.0.0 kept
     'plugin_claude_mem_lite\\.md(?:\\.tmp-\\d+)?', // steering detail doc (lib/local-steering.mjs)
     '\\.legacy-backup-(?:copy|setup)-\\d+-\\d+(?:-wal|-shm)?', // backup copy temps (here, setup.sh)
     '\\.snapshot-check-\\d+-[A-Za-z0-9]{6}', // lib/db-unusable.mjs CHECK_DIR_RE
@@ -2103,9 +2119,7 @@ const OWNED_TOP_RE = new RegExp(
 );
 // Directories it creates there, and the only files it writes in each: daily shards
 // (lib/metrics.mjs, lib/err-sampler.mjs) and verify-apply's backups (lib/verify-apply-core.mjs).
-// A file of any other name in them is the user's. `runtime/` is not here: it is the working
-// directory every hook writes dozens of kinds of state into (lib/resolve-data-dir.mjs's
-// default), so it goes whole.
+// A file of any other name in them is the user's.
 const OWNED_DIR_FILES = Object.freeze({
   metrics: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
   errors: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
@@ -2114,18 +2128,32 @@ const OWNED_DIR_FILES = Object.freeze({
   backups: new RegExp(`^verify-${ISO_RE}-[0-9a-f]{6}\\.json(?:\\.tmp-\\d+)?$`),
 });
 
+// Its directories whose files it cannot tell from a user's by name: `runtime/`, the working
+// directory every hook writes dozens of kinds of state into (lib/resolve-data-dir.mjs's default),
+// and `managed/`, the resource clones releases before 5.0.0 installed. Each goes whole, and only from a
+// directory that holds nothing that is not claude-mem-lite's; beside a user's files it stays and
+// is named (R33 review H1, H2: runtime/my-notes.txt went with it).
+const OWNED_WHOLE_DIRS = new Set(['runtime', 'managed']);
+// The store goes last, and only once nothing of its own failed: it is how a re-run knows the
+// directory is claude-mem-lite's (R33 review M2: removed first, the re-run the failure message
+// asks for found no store, left the rest and said Done!).
+const LIVE_STORE_RE = /^claude-mem-lite\.db(?:-wal|-shm|-journal)?$/;
+
 /**
  * Remove what claude-mem-lite wrote into a relocated data dir, and nothing else (R32 E2E
  * install F1 and its review). A name it does not recognise stays and is reported: a leftover
  * can be removed later, a deleted user file cannot be recovered. Never throws.
  * @param {string} dir
- * @returns {{unreadable?: string, kept: string[], failed: string[]}} `kept` = entries left
- *   because they are not its own (paths relative to `dir`); `failed` = its own entries it
- *   could not remove, with the reason
+ * @returns {{unreadable?: string, kept: string[], failed: string[], left: string[], storeKept?: boolean}}
+ *   `kept` = entries left because they are not its own (paths relative to `dir`); `failed` = its
+ *   own entries it could not remove, with the reason; `left` = its own whole directories left
+ *   because `kept` is not empty; `storeKept` = the store stayed because something failed
  */
 function purgeOwnedDataEntries(dir) {
   const kept = [];
   const failed = [];
+  const whole = [];
+  const store = [];
   const remove = (rel) => {
     try {
       rmSync(join(dir, rel), { recursive: true, force: true });
@@ -2137,10 +2165,18 @@ function purgeOwnedDataEntries(dir) {
   try {
     names = readdirSync(dir);
   } catch (e) {
-    return { unreadable: e.code || e.message, kept, failed };
+    return { unreadable: e.code || e.message, kept, failed, left: [] };
   }
   for (const name of names) {
-    if (OWNED_TOP_RE.test(name) || name === 'runtime') {
+    if (LIVE_STORE_RE.test(name)) {
+      store.push(name);
+      continue;
+    }
+    if (OWNED_WHOLE_DIRS.has(name)) {
+      whole.push(name);
+      continue;
+    }
+    if (OWNED_TOP_RE.test(name)) {
       remove(name);
       continue;
     }
@@ -2192,7 +2228,11 @@ function purgeOwnedDataEntries(dir) {
       /* not empty: what is left is listed above */
     }
   }
-  return { kept: kept.sort(), failed: failed.sort() };
+  const left = kept.length === 0 ? [] : whole.sort();
+  if (left.length === 0) for (const name of whole) remove(name);
+  const storeKept = failed.length > 0 && store.length > 0;
+  if (!storeKept) for (const name of store) remove(name);
+  return { kept: kept.sort(), failed: failed.sort(), left, storeKept };
 }
 
 /**

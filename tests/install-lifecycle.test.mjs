@@ -441,7 +441,7 @@ describe('install lifecycle checks', () => {
       'claude-mem-lite.db-shm.legacy-backup-1700000000000',
       'claude-mem-lite.db.corrupt-2026-11-11T00-00-00-000Z',
       'claude-mem-lite.db.corrupt-2026-11-11T00-00-00-000Z-wal',
-      'claude-mem-lite.db.corrupt', // the set-aside name v6.12.2-v6.30.7 told users to `mv` to
+      'claude-mem-lite.db.corrupt', // the set-aside name an earlier remedy told users to `mv` to
       'claude-mem.db',
       'claude-mem.db-wal',
       'resource-registry.db',
@@ -460,6 +460,8 @@ describe('install lifecycle checks', () => {
       '.update-backup-s2-1700000000000-4242/hook.mjs',
       'runtime/session.json',
       'runtime/hook-errors/2026-11-11.json',
+      'managed/repos/superpowers/README.md', // resource clones from releases before 5.0.0
+      'managed/skills/foo/SKILL.md',
       'metrics/2026-11-11.jsonl',
       'errors/2026-11-11.jsonl',
       'backups/verify-2026-11-11T00-00-00-000Z-a1b2c3.json',
@@ -514,17 +516,38 @@ describe('install lifecycle checks', () => {
         .map((e) => join(e.parentPath, e.name).slice(dir.length + 1))
         .sort();
 
+    // runtime/ and managed/ are its own, but it cannot tell every file inside them from one a
+    // user put there; beside the user's files they stay, named, and the purge is not done
+    // (R33 review H2: they went whole, a user's runtime/my-notes.txt with them).
+    const WHOLE = OURS.filter((f) => /^(runtime|managed)\//.test(f));
     it("removes every file it wrote and none of the user's, and names what it kept", () => {
       const home = makeTmpDir();
       try {
         const dir = join(home, 'shared');
         seed(dir, [...OURS, ...THEIRS]);
         const { output, status } = purge(home, dir);
-        expect(tree(dir)).toEqual([...THEIRS].sort());
-        expect(output).toMatch(/notes\.txt/);
+        expect(tree(dir)).toEqual([...THEIRS, ...WHOLE].sort());
+        expect(output).toMatch(/[ ,]notes\.txt/);
         expect(output).toMatch(/backups\/photos/);
-        expect(output).not.toContain(`Relocated data purged (${dir})`);
-        expect(status).toBe(0);
+        expect(output).toMatch(/Left managed, runtime in /);
+        expect(output).not.toMatch(/Relocated data purged|Done!/);
+        expect(status).not.toBe(0);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps a user's files inside runtime/ when the directory holds files of theirs", () => {
+      const home = makeTmpDir();
+      try {
+        const dir = join(home, 'work');
+        const mine = ['metrics/q3-revenue.csv', 'runtime/my-notes.txt', 'runtime/my-service/config.yaml'];
+        seed(dir, ['claude-mem-lite.db', 'claude-mem-lite.db-wal', 'runtime/session.json', ...mine]);
+        const { output, status } = purge(home, dir);
+        expect(tree(dir)).toEqual([...mine, 'runtime/session.json'].sort());
+        expect(output).toMatch(/Left runtime in /);
+        expect(output).not.toMatch(/Done!/);
+        expect(status).not.toBe(0);
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
@@ -661,7 +684,8 @@ describe('install lifecycle checks', () => {
         expect(output).toMatch(/claude-mem-lite uninstaller/); // the preload loaded and install ran
         expect(existsSync(join(dir, 'metrics'))).toBe(false);
         expect(output).not.toMatch(/metrics\/2026-01-01\.jsonl/);
-        expect(tree(dir)).toEqual(['errors/2026-01-01.jsonl']);
+        // the store stays while one of its own entries does: a re-run must still find it
+        expect(tree(dir)).toEqual(['claude-mem-lite.db', 'errors/2026-01-01.jsonl']);
         expect(output).toMatch(/Could not remove[^\n]*errors\/2026-01-01\.jsonl \(EPERM\)/);
         expect(output).not.toMatch(/does not recognise[^\n]*errors/);
         expect(status).not.toBe(0);
@@ -691,6 +715,14 @@ describe('install lifecycle checks', () => {
         expect(output).toMatch(/Could not remove[^\n]*metrics\/2026-11-11\.jsonl \(EACCES\)/);
         expect(output).not.toMatch(/Relocated data purged|Done!/);
         expect(status).not.toBe(0);
+        // R33 review M2: the first run removed the store, so the run the message asks for found
+        // "no claude-mem-lite.db", left the rest and said Done!. The store now goes last.
+        expect(tree(dir)).toContain('claude-mem-lite.db');
+        expect(output).toMatch(/claude-mem-lite\.db stays until they go/);
+        const again = purge(home, dir);
+        expect(again.output).toMatch(/Done!/);
+        expect(again.status).toBe(0);
+        expect(existsSync(dir)).toBe(false);
       } finally {
         for (const d of locked) if (existsSync(d)) chmodSync(d, 0o700);
         rmSync(home, { recursive: true, force: true });
