@@ -1970,6 +1970,7 @@ async function uninstall() {
   }
 
   // 6. Purge data if requested
+  let purgeIncomplete = false; // reported, and not followed by "Done!" and exit 0
   if (flags.has('--purge')) {
     const homeDir = join(homedir(), '.claude-mem-lite');
     // Always remove the homedir code/install dir (guarded to the canonical path).
@@ -1990,6 +1991,7 @@ async function uninstall() {
         const list = (xs) => `${xs.slice(0, 10).join(', ')}${xs.length > 10 ? ', …' : ''}`;
         if (r.unreadable) {
           warn(`Could not list ${MEM_DATA_DIR} (${r.unreadable}) — nothing there was removed.`);
+          purgeIncomplete = true;
         } else {
           let removedDir = false;
           if (r.kept.length === 0 && r.failed.length === 0) {
@@ -2004,6 +2006,7 @@ async function uninstall() {
             warn(
               `Could not remove ${r.failed.length} of its own entries in ${MEM_DATA_DIR}: ${list(r.failed)}`,
             );
+            purgeIncomplete = true;
           } else if (removedDir) {
             ok(`Relocated data purged (${MEM_DATA_DIR})`);
           } else {
@@ -2011,7 +2014,7 @@ async function uninstall() {
           }
           if (r.kept.length > 0) {
             warn(
-              `Kept ${r.kept.length} entr${r.kept.length === 1 ? 'y' : 'ies'} there that are not claude-mem-lite's: ` +
+              `Kept ${r.kept.length} entr${r.kept.length === 1 ? 'y' : 'ies'} there that it does not recognise as claude-mem-lite's: ` +
                 `${list(r.kept)}. Remove them yourself if intended.`,
             );
           }
@@ -2055,18 +2058,33 @@ async function uninstall() {
     process.exitCode = EXIT_MCP_UNREGISTERED;
     return;
   }
+  if (purgeIncomplete) {
+    console.log('\n  ✗ Uninstalled, but the purge is incomplete: see the lines above.\n');
+    process.exitCode = 1;
+    return;
+  }
   console.log('\n  Done!\n');
 }
 
-// What claude-mem-lite writes at the top of a relocated data dir, anchored so a user file that
-// merely starts with the same letters is not taken for one: the store (and the pre-rename
-// claude-mem.db) with its -wal/-shm, `.`-suffixed snapshots and legacy backups, and the
-// `-wal.legacy-backup-*` logs; the steering detail doc (lib/local-steering.mjs) and its
-// atomic-write temp; and crash leftovers whose prefixes only it uses — the legacy-backup copy
-// temps (this file, scripts/setup.sh) and snapshot-check dirs (lib/db-unusable.mjs). Update
-// residue is matched by isUpdateResidue.
-const OWNED_TOP_RE =
-  /^(?:claude-mem(?:-lite)?\.db(?:-wal|-shm)?(?:\..+)?|plugin_claude_mem_lite\.md(?:\.tmp-\d+)?|\.legacy-backup-(?:copy|setup)-.+|\.snapshot-check-.+)$/;
+// What claude-mem-lite writes at the top of a relocated data dir, in the exact formats its writers
+// use, so a user file that merely starts with the same letters is never taken for one (R32
+// reviews). STORE is the store and its pre-rename name; ISO is toISOString() with [:.] → '-'.
+const STORE_RE = 'claude-mem(?:-lite)?\\.db';
+const ISO_RE = '\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z';
+const OWNED_TOP_RE = new RegExp(
+  `^(?:${[
+    `${STORE_RE}(?:-wal|-shm|-journal)?`, // the store; SQLite's own sidecars
+    `${STORE_RE}\\.[a-z][a-z0-9-]*-${ISO_RE}-\\d+-\\d+\\.bak`, // snapshots (lib/db-backup.mjs)
+    `${STORE_RE}\\.legacy-backup-\\d+(?:-wal|-shm)?`, // legacy migration backup (here, scripts/setup.sh)
+    `${STORE_RE}-(?:wal|shm)\\.legacy-backup-\\d+`, // its log under the pre-fix name
+    `${STORE_RE}\\.corrupt-${ISO_RE}(?:-\\d+)?(?:-wal|-shm)?`, // a set-aside damaged store (lib/db-unusable.mjs)
+    'resource-registry\\.db(?:-wal|-shm)?', // the 2.90–4.x skill registry, left on disk by 5.0.0
+    'plugin_claude_mem_lite\\.md(?:\\.tmp-\\d+)?', // steering detail doc (lib/local-steering.mjs)
+    '\\.legacy-backup-(?:copy|setup)-\\d+-\\d+(?:-wal|-shm)?', // backup copy temps (here, setup.sh)
+    '\\.snapshot-check-\\d+-[A-Za-z0-9]{6}', // lib/db-unusable.mjs CHECK_DIR_RE
+    '\\.update-(?:staging|backup)-(?:s\\d+-)?\\d+-\\d+', // update residue (hook-update.mjs)
+  ].join('|')})$`,
+);
 // Directories it creates there, and the only files it writes in each: daily shards
 // (lib/metrics.mjs, lib/err-sampler.mjs) and verify-apply's backups (lib/verify-apply-core.mjs).
 // A file of any other name in them is the user's. `runtime/` is not here: it is the working
@@ -2104,7 +2122,7 @@ function purgeOwnedDataEntries(dir) {
     return { unreadable: e.code || e.message, kept, failed };
   }
   for (const name of names) {
-    if (OWNED_TOP_RE.test(name) || isUpdateResidue(name) || name === 'runtime') {
+    if (OWNED_TOP_RE.test(name) || name === 'runtime') {
       remove(name);
       continue;
     }
@@ -2127,8 +2145,17 @@ function purgeOwnedDataEntries(dir) {
       continue;
     }
     for (const c of children) {
-      if (inner.test(c)) remove(join(name, c));
-      else kept.push(join(name, c));
+      if (!inner.test(c)) {
+        kept.push(join(name, c));
+        continue;
+      }
+      // A file only: a directory carrying a shard's name is not one of its files.
+      try {
+        unlinkSync(join(dir, name, c));
+      } catch (e) {
+        if (e.code === 'EISDIR' || e.code === 'EPERM') kept.push(join(name, c));
+        else failed.push(`${join(name, c)} (${e.code || e.message})`);
+      }
     }
     try {
       rmdirSync(join(dir, name));
