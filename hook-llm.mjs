@@ -546,6 +546,8 @@ export function persistHaikuSummary(db, summary, ctx) {
             : null,
         importance: summary.importance ?? 1,
         created_at_epoch: Date.now(),
+        // D21: so the session summary can read the episodes this session stored as events.
+        memory_session_id: ctx.session_id ?? null,
       });
 
     if (ctx.preSavedObsId) {

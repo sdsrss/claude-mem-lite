@@ -212,6 +212,8 @@ const LATEST_MIGRATION_COLUMNS = [
   // must also run when the column exists but events_fts is still (or again) the 4-column shape
   // (tests/events-cjk-search.test.mjs pins the upgrade).
   { table: 'events_fts', column: 'search_terms' },
+  // D21, no bump either (tests/d21-events-session-id.test.mjs pins the upgrade).
+  { table: 'events', column: 'memory_session_id' },
   { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
@@ -837,7 +839,8 @@ export function initSchema(db) {
       last_accessed_epoch  INTEGER,
       superseded_at_epoch  INTEGER,
       superseded_by_id     INTEGER REFERENCES events(id),
-      search_terms         TEXT
+      search_terms         TEXT,
+      memory_session_id    TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_project ON events(project);
     CREATE INDEX IF NOT EXISTS idx_events_type    ON events(event_type);
@@ -867,6 +870,13 @@ export function initSchema(db) {
     .all()
     .map((c) => c.name);
   if (!eventCols.includes('search_terms')) db.exec(`ALTER TABLE events ADD COLUMN search_terms TEXT`);
+  // D21 (2026-11-11): the session an episode-written event came from, so the session summary can
+  // read it (it read `observations` alone and missed every episode typed as an event). Additive +
+  // nullable, no CURRENT_SCHEMA_VERSION bump: an older build opening this DB ignores the column and
+  // its event writes leave it NULL. Outside a swallowing catch for the search_terms reason: saveEvent
+  // names the column, so carrying on without it would fail every event write.
+  if (!eventCols.includes('memory_session_id'))
+    db.exec(`ALTER TABLE events ADD COLUMN memory_session_id TEXT`);
 
   // v42: column-aware self-heal for events_fts (the one FTS table the generic ensureFTS can't
   // manage — UNINDEXED cols + custom tokenizer + events_fts_* triggers). Creates events_fts and its
