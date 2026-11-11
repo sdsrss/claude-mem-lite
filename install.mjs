@@ -643,6 +643,22 @@ export function deployCodeTree(IS_DEV) {
   } else {
     log('Installing to ~/.claude-mem-lite/...');
     const scriptsDir = join(DATA_DIR, 'scripts');
+    // An earlier `install --dev` left scripts/ as a symlink into the developer's checkout.
+    // existsSync is true for it, so the copies below went THROUGH it: they overwrote the
+    // checkout's uncommitted edits, and hooks kept running out of the checkout (R32 E2E install
+    // F2, P0). Drop the link itself. The per-file source links need nothing (atomicCopyFileSync
+    // renames over a link, it does not write through it), and npm replaced the node_modules link
+    // without touching the checkout's node_modules in the same sandbox run.
+    let scriptsWasLink = false;
+    try {
+      scriptsWasLink = lstatSync(scriptsDir).isSymbolicLink();
+    } catch {
+      /* absent */
+    }
+    if (scriptsWasLink) {
+      unlinkSync(scriptsDir);
+      log('Replaced the dev-mode scripts/ link with a copy');
+    }
     if (!existsSync(scriptsDir)) mkdirSync(scriptsDir, { recursive: true });
     for (const f of SOURCE_FILES) {
       const src = join(PROJECT_DIR, f);

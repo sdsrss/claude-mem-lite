@@ -28,6 +28,8 @@ import {
   rmSync,
   readdirSync,
   chmodSync,
+  symlinkSync,
+  lstatSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -226,6 +228,27 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
       .join('\n');
     expect(body).toMatch(
       /prepareInstallDirs\(\);\s*await finishInterruptedSwaps\(\);\s*await withSwapBarrier\(async \(\) => \{\s*deployCodeTree\(IS_DEV\);\s*retireLeftoverJournals\(\);\s*await installDependencies\(IS_DEV\);\s*\}\);/,
+    );
+  });
+  // R32 E2E install F2 (P0): `install --dev` leaves scripts/ as a symlink into the developer's
+  // checkout. A later normal install kept it (existsSync is true for a link) and copied the hook
+  // scripts THROUGH it, overwriting uncommitted edits in the checkout, and the "copy" install
+  // went on running hooks out of that checkout. The link is replaced by a real directory.
+  it('a copy install over a dev install does not write into the checkout', () => {
+    const checkout = sandbox('mem-dev-checkout-');
+    const edited = join(checkout, 'post-tool-use.sh');
+    writeFileSync(edited, '# DEV-LOCAL-EDIT\n');
+    const scripts = join(dataDir, 'scripts');
+    rmSync(scripts, { recursive: true, force: true });
+    symlinkSync(checkout, scripts);
+
+    install.deployCodeTree(false);
+
+    expect(readFileSync(edited, 'utf8')).toBe('# DEV-LOCAL-EDIT\n');
+    expect(readdirSync(checkout)).toEqual(['post-tool-use.sh']);
+    expect(lstatSync(scripts).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(scripts, 'post-tool-use.sh'), 'utf8')).toBe(
+      readFileSync(join(REPO, 'scripts', 'post-tool-use.sh'), 'utf8'),
     );
   });
 });
