@@ -2093,7 +2093,9 @@ const OWNED_TOP_RE = new RegExp(
 const OWNED_DIR_FILES = Object.freeze({
   metrics: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
   errors: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
-  backups: /^verify-[\w-]+\.json(?:\.tmp-\d+)?$/,
+  // verify-<ISO>-<6 hex>.json, the only name it has ever written there (v6.12.0 on); anything
+  // looser took a user's backups/verify-settings.json (R32 depth-2 review M2).
+  backups: new RegExp(`^verify-${ISO_RE}-[0-9a-f]{6}\\.json(?:\\.tmp-\\d+)?$`),
 });
 
 /**

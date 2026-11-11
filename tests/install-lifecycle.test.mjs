@@ -458,13 +458,17 @@ describe('install lifecycle checks', () => {
       'backups/verify-2026-11-11T00-00-00-000Z-a1b2c3.json.tmp-4242',
     ];
     // A user's own files: several sit in directories that share the product's names, or carry
-    // names that start like the product's.
+    // names that start like the product's. `before-upgrade.bak` is the hand-made copy
+    // lib/db-backup.mjs names as one no sweep may take; `verify-settings.json` sits beside
+    // verify-apply's backups and matched their pattern when it was looser than their writer's.
     const THEIRS = [
       'notes.txt',
       'taxes/2025.pdf',
       'backups/photos/wedding.jpg',
       'backups/old-laptop.tar',
       'backups/verify-passport.pdf',
+      'backups/verify-settings.json',
+      'claude-mem-lite.db.before-upgrade.bak',
       'metrics/q3-revenue.csv',
       'metrics/notes.jsonl',
       'metrics/2026-01-02.jsonl/inner.txt',
