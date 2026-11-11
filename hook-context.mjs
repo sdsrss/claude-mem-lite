@@ -757,7 +757,10 @@ export function buildSessionContextLines(
     if (recentObs.length > 0) {
       summaryLines.push('### Recent Activity');
       for (const o of recentObs) {
-        summaryLines.push(`- ${truncate(o.title || '(untitled)', 80)}`);
+        // A row the top-up borrowed from another project says whose it is, as the Recent table
+        // does; bare, the model read it as this project's history (converge R30, E2E hooks F5).
+        const proj = o.project && o.project !== project ? ` (${o.project})` : '';
+        summaryLines.push(`- ${truncate(o.title || '(untitled)', 80)}${proj}`);
       }
       summaryLines.push('');
     }
