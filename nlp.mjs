@@ -3,7 +3,6 @@
 
 import { BASE_STOP_WORDS, CJK_STOP_WORDS } from './stop-words.mjs';
 import { SYNONYM_MAP, CJK_COMPOUNDS } from './synonyms.mjs';
-import { porterStem } from './tfidf.mjs';
 
 // Re-export for backward compatibility (consumers import from nlp.mjs or utils.mjs)
 export { SYNONYM_MAP, CJK_COMPOUNDS };
@@ -535,35 +534,6 @@ export function sanitizeFtsQuery(query, opts = {}) {
   // FTS5 requires explicit AND after parenthesized OR groups
   const hasGroup = finalTokens.some((e) => e.startsWith('('));
   return finalTokens.join(hasGroup ? ' AND ' : ' ');
-}
-
-// Shortest stem the word-form tier turns into a prefix: `run*` would reach runtime and rung.
-const WORD_FORM_MIN_STEM = 4;
-
-/**
- * The word-form fallback for a search the strict query and its OR relaxation both missed: each
- * Latin word of `ftsQuery` (the sanitized query, synonyms included) as an FTS5 prefix of its
- * Porter stem, OR-joined — `crash*` reaches `crashes`, `input*` reaches `inputs`. The index is not
- * stemmed (a Porter tokenizer on it was measured net-negative, findings.md § Levers measured and
- * rejected), so the stem is a prefix of the indexed forms except where Porter turned a final y
- * into i: then the y spelling goes in as well (deploi* OR deploy*). Stems under four letters are
- * left out (`run*`), as are digits and non-Latin words. Null when no word qualifies.
- * @param {string|null} ftsQuery output of sanitizeFtsQuery
- * @returns {string|null}
- */
-export function wordFormPrefixQuery(ftsQuery) {
-  if (!ftsQuery) return null;
-  const prefixes = new Set();
-  for (const m of String(ftsQuery).matchAll(/"((?:[^"]|"")*)"|[^\s()"]+/g)) {
-    const word = (m[1] ?? m[0]).replace(/""/g, '"');
-    // The operators AND / OR / NOT stem below the minimum length and drop out with the short stems.
-    if (!/^[A-Za-z]+$/.test(word)) continue;
-    const stem = porterStem(word.toLowerCase());
-    for (const p of stem.endsWith('i') ? [stem, `${stem.slice(0, -1)}y`] : [stem]) {
-      if (p.length >= WORD_FORM_MIN_STEM) prefixes.add(p);
-    }
-  }
-  return prefixes.size > 0 ? [...prefixes].map((p) => `${p}*`).join(' OR ') : null;
 }
 
 /**

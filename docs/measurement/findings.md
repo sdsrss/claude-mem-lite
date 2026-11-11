@@ -1633,12 +1633,18 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   query-side expansion — mapping a query term to the word forms the index actually holds —
   is untested and would need its own run of this same ruler.
 
-  **Query side, 2026-11-10 (converge R29), shipped narrow: a word-form tier that runs only when
-  the strict AND and the OR relaxation both return nothing** (`searchObservationsHybrid`, each
+  **Query side, 2026-11-10 (converge R29): a word-form tier that runs only when the strict AND
+  and the OR relaxation both return nothing — WITHDRAWN before 6.33.0's tag, never released.**
+  Two pre-tag review rounds each found a real-shape defect in it: r1, its rows joined a search
+  another leg had answered and ranked above the exact match; r2, the repair that dropped them
+  then removed the very memories the search was for whenever any other leg matched (a stored
+  prompt saying "crashes" sufficed), and in MCP's auto mode three word-form rows first blocked
+  the deep escalation. A return should rank these rows after the as-written ones rather than
+  drop them, and measure on queries that return nothing as written. The record below is of the
+  withdrawn tier (`searchObservationsHybrid`, each
   Latin word's Porter stem as an FTS5 prefix, the y spelling added where Porter wrote i, stems
   under four letters skipped). It cannot reorder a search that found anything, so its cost is
-  confined to searches that had no result (since the 6.33.0 pre-tag review, no result in ANY
-  leg: its rows are dropped when events, sessions or prompts found the words as written).
+  confined to searches that had no observation result.
   **Read this ruler result before quoting it**: denoise-ab read Δ=0.000 on all four suites. The
   reach probe first recorded here (`tasks/converge-r29/reach.mjs`, local) read 0 of 76 suite
   queries reaching the tier, but it counted a reach by `effectiveFtsQuery`, which the tier never
