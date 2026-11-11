@@ -19,7 +19,7 @@
 // you're changing it.
 
 import { randomUUID } from 'crypto';
-import { join, basename, dirname, resolve as resolvePath } from 'path';
+import { join, basename, resolve as resolvePath } from 'path';
 import {
   readFileSync,
   writeFileSync,
@@ -1919,10 +1919,8 @@ async function handleStop() {
   // the first prompt + the head of the final reply (D#121, since v6.18.0; observation titles
   // before), and this worker's model summary is the only multi-field summary (Next / Lessons /
   // Decisions) such a user gets — when observations exist for it to read.
-  // The transcript rides along so the worker can read the final reply (D19); '' keeps the
-  // argument positions when the host sent none.
   if (!process.env.CLAUDE_MEM_SKIP_SUMMARY)
-    spawnBackground('llm-summary', sessionId, project, String(stopEpoch), transcriptPath || '');
+    spawnBackground('llm-summary', sessionId, project, String(stopEpoch));
 
   // The session file deliberately SURVIVES Stop (R10-P1-1). It used to be unlinked here,
   // on the model "Stop = /exit = the session is over". The host does not work that way:
@@ -2431,36 +2429,9 @@ function handleAutoMaintain(project) {
   }
 }
 
-/**
- * D19 — the previous session's transcript, for the summary worker SessionStart spawns on /clear
- * or /compact: without it that worker summarizes without the final reply and, holding no Stop
- * epoch, overwrites what the last Stop's worker wrote with it. The host names only the NEW
- * session's transcript; the previous one sits beside it under its own host session id, the last
- * one recorded on the previous session's prompts (the same file again after /compact). '' when
- * any piece is missing — the worker then runs the pre-D19 prompt.
- */
-function previousTranscriptPath(db, prevSessionId, transcriptPath) {
-  if (!transcriptPath) return '';
-  try {
-    const cc = db
-      .prepare(
-        `SELECT cc_session_id AS cc FROM user_prompts
-         WHERE content_session_id = ? AND cc_session_id IS NOT NULL ORDER BY prompt_number DESC LIMIT 1`,
-      )
-      .get(prevSessionId)?.cc;
-    // A host session id is a UUID; anything that could leave the directory is not one.
-    if (typeof cc !== 'string' || !/^[\w-]+$/.test(cc)) return '';
-    const p = join(dirname(transcriptPath), `${cc}.jsonl`);
-    return existsSync(p) ? p : '';
-  } catch (e) {
-    debugCatch(e, 'session-start-prev-transcript');
-    return '';
-  }
-}
-
 function saveHandoffAndFastSummary(
   db,
-  { prevSessionId, prevProject, project, ccSessionId, transcriptPath, episodeSnapshot, now },
+  { prevSessionId, prevProject, project, ccSessionId, episodeSnapshot, now },
 ) {
   // Shared clear handoff reference — queried once, used by fast summary + working state
   let prevClearHandoff = null;
@@ -2506,10 +2477,7 @@ function saveHandoffAndFastSummary(
     // 432ms there. Gating one of two call sites left the flag unable to do the one job
     // it exists for whenever this branch is reached.
     if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) {
-      // No Stop epoch (''), so this worker is never superseded; the transcript gives it the
-      // final reply the Stop-spawned one had (D19).
-      const prevTranscript = previousTranscriptPath(db, prevSessionId, transcriptPath);
-      spawnBackground('llm-summary', prevSessionId, prevProject || project, '', prevTranscript);
+      spawnBackground('llm-summary', prevSessionId, prevProject || project);
     }
 
     // Build fast synchronous summary for immediate context availability.
@@ -3238,7 +3206,6 @@ async function handleSessionStart() {
   // started, and the host's own word is the only non-guess (R10-P1-1).
   let ccSessionId = null;
   let startSource = null;
-  let startTranscriptPath = null;
   try {
     const raw = await readStdin();
     const hookData = JSON.parse(raw.text);
@@ -3247,9 +3214,6 @@ async function handleSessionStart() {
     }
     if (typeof hookData?.source === 'string' && hookData.source.length > 0) {
       startSource = hookData.source;
-    }
-    if (typeof hookData?.transcript_path === 'string' && hookData.transcript_path.length > 0) {
-      startTranscriptPath = hookData.transcript_path;
     }
   } catch {
     /* stdin unavailable — legacy behavior */
@@ -3391,15 +3355,7 @@ async function handleSessionStart() {
 
     // ── Non-transactional operations (side effects, background work) ──
 
-    saveHandoffAndFastSummary(db, {
-      prevSessionId,
-      prevProject,
-      project,
-      ccSessionId,
-      transcriptPath: startTranscriptPath,
-      episodeSnapshot,
-      now,
-    });
+    saveHandoffAndFastSummary(db, { prevSessionId, prevProject, project, ccSessionId, episodeSnapshot, now });
 
     cleanStaleLockFiles();
 
