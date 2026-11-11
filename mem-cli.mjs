@@ -3458,6 +3458,16 @@ Commands:
     --session-audit     Audit session/episode state for orphans and drift
     --json              Machine-readable output (plain doctor run)
 
+  status                Show the install's state (--json for structured output)
+  repair                Recover a broken install: download the latest package, re-run install
+  rebuild-binding       Recompile better-sqlite3 for the running Node (fixes
+                        "NODE_MODULE_VERSION" after a Node upgrade)
+  self-update           Check for and install updates
+  cleanup               Remove stale temp/staging files (--dry-run to preview)
+  cleanup-hooks         Remove only claude-mem-lite's hooks from Claude Code's settings
+  install               Install or re-install (what \`npx claude-mem-lite\` runs)
+  uninstall             Remove the install, keep the data (--purge also deletes the data)
+
   fts-check <check|rebuild>  FTS5 index check, or a rebuild of the FTS5 indexes and then
                         every other index (REINDEX)
                         Exit 0 when the FTS5 indexes are healthy (check) or every index

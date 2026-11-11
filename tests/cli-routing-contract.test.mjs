@@ -92,4 +92,16 @@ describe('CLI routing contract (#8414 — three-edits invariant)', () => {
       `cli.mjs CLI_COMMANDS exposes these subcommands but cmdHelp() never lists them — users running 'claude-mem-lite help' see nothing about them: ${undocumented.join(', ')}`,
     ).toEqual([]);
   });
+
+  // converge R30 (E2E 2026-11-10, CLI P2-7): `help` listed doctor alone of the install family, so
+  // status, repair, rebuild-binding, uninstall, cleanup and the rest worked but were never shown.
+  // `release` is the maintainers' (install.mjs prints it with its own usage).
+  it('every user-facing INSTALL_COMMANDS entry is documented in cmdHelp() output', () => {
+    const m = CLI_SRC.match(/INSTALL_COMMANDS\s*=\s*new Set\(\[([^\]]+)\]\)/);
+    expect(m, 'premise: INSTALL_COMMANDS located').toBeTruthy();
+    const installCmds = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).filter((c) => c !== 'release');
+    expect(installCmds.length, 'premise: the family parsed').toBeGreaterThan(5);
+    const documented = parseHelpDocumentedCommands(MEM_CLI_SRC);
+    expect(installCmds.filter((c) => !documented.has(c))).toEqual([]);
+  });
 });
