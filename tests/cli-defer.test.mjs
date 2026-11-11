@@ -282,6 +282,24 @@ describe('claude-mem-lite defer CLI', () => {
     expect(list.stdout).toMatch(/still-open/);
   });
 
+  // R31 delta review T1: the all-or-nothing guarantee was tested only on dropDeferredMany; the
+  // command resolving and dropping row by row passed every test. A failure on the SECOND row's
+  // UPDATE, after the first was written, must leave both open.
+  it('defer drop: a failure on a later row leaves the earlier one open', () => {
+    const [a, b] = ['batch-A', 'batch-B'].map(
+      (title) => insertDeferred(db, { project: 'parent--testproj', title, priority: 2 }).id,
+    );
+    db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work WHEN NEW.id = ${b}
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+    const drop = runCli(['defer', 'drop', '1,2', '--reason', 'batch test']);
+    expect(drop.exitCode).not.toBe(0);
+    expect(drop.stderr).toMatch(/injected failure/);
+    const status = db
+      .prepare('SELECT id, status FROM deferred_work WHERE id IN (?, ?) ORDER BY id')
+      .all(a, b);
+    expect(status.map((r) => r.status)).toEqual(['open', 'open']);
+  });
+
   it('duplicate save with --closes-deferred does NOT close the deferred item', () => {
     runCli(['defer', 'add', 'fix dedup leak', '--priority', '2']);
 

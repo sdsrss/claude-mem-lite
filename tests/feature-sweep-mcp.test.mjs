@@ -447,6 +447,35 @@ describe('MCP feature sweep: public tools', () => {
     expect(left).not.toMatch(/Alpha task|Bravo task/);
   }, 30000);
 
+  // R31 delta review T1: the all-or-nothing guarantee was tested only on dropDeferredMany; the
+  // handler resolving and dropping row by row passed every test. A failure on the SECOND row's
+  // UPDATE, after the first was written, must leave both open.
+  it('mem_defer_drop: a failure on a later row leaves the earlier one open', async () => {
+    const P = 'mcpsweep-defer-atomic';
+    const ids = [];
+    for (const title of ['Alpha atomic', 'Bravo atomic']) {
+      ids.push(Number((await call('mem_defer', { title, priority: 2, project: P })).match(/D#(\d+)/)[1]));
+    }
+    withDb((db) =>
+      db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work WHEN NEW.id = ${ids[1]}
+               BEGIN SELECT RAISE(ABORT, 'injected failure'); END`),
+    );
+    try {
+      const res = await client.callTool({
+        name: 'mem_defer_drop',
+        arguments: { id: [1, 2], reason: 'scope changed', project: P },
+      });
+      expect(res.isError, textOf(res)).toBe(true);
+      expect(textOf(res)).toMatch(/injected failure/);
+    } finally {
+      withDb((db) => db.exec('DROP TRIGGER fail_second'));
+    }
+    const status = withDb((db) =>
+      db.prepare('SELECT status FROM deferred_work WHERE id IN (?, ?) ORDER BY id').all(ids[0], ids[1]),
+    );
+    expect(status.map((r) => r.status)).toEqual(['open', 'open']);
+  }, 30000);
+
   itTool('mem_defer_list', async () => {
     // Seeds its own rows (no dependency on the mem_defer case) in its own project.
     const P = 'mcpsweep-deferlist';
