@@ -1,6 +1,6 @@
 // Tests for hook-llm.mjs — saveObservation, dedup tiers, related linking, LLM episode/summary
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFileSync, rmSync, existsSync } from 'fs';
+import { writeFileSync, rmSync, existsSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTestDb, insertSession } from './test-helpers.mjs';
@@ -2251,6 +2251,61 @@ describe('handleLLMSummary', () => {
         userPrompts: ['fix the login bug'],
       }),
     );
+  });
+
+  describe('carries the final reply of the transcript it was handed (D19)', () => {
+    let dir;
+    const savedArgv = process.argv.slice(5, 7);
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'd19-worker-'));
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+         VALUES ('test-session', 'test-proj', '', 'bugfix', 'Fixed the login redirect', '', 1, ?, 1000)`,
+      ).run(new Date().toISOString());
+    });
+    afterEach(() => {
+      process.argv.splice(5, 2, ...savedArgv);
+      process.argv.length = 5 + savedArgv.length;
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const expected = (finalReply) =>
+      buildSessionSummaryPrompt({
+        project: 'test-proj',
+        observations: [{ type: 'bugfix', title: 'Fixed the login redirect', narrative: '' }],
+        userPrompts: [],
+        finalReply,
+      });
+
+    it('argv[6] names the transcript; its last assistant text goes into the prompt', async () => {
+      const t = join(dir, 'cc-1.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'assistant', message: { content: [{ type: 'text', text: 'Looking into it.' }] } },
+          { type: 'user', message: { content: 'go on' } },
+          {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'All 12 tests pass; lesson saved.' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0]).toEqual(expected('All 12 tests pass; lesson saved.'));
+      expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nAll 12 tests pass; lesson saved.');
+    });
+
+    it('a transcript that cannot be read leaves the prompt without one, and the summary is still written', async () => {
+      process.argv[5] = '';
+      process.argv[6] = join(dir, 'missing.jsonl');
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0]).toEqual(expected(null));
+      expect(db.prepare('SELECT COUNT(*) AS n FROM session_summaries').get().n).toBe(1);
+    });
   });
 
   it('preserves structural extractor content when Haiku returns empty for a field', async () => {

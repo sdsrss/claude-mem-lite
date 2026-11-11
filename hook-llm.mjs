@@ -27,6 +27,7 @@ import { acquireLLMSlot, releaseLLMSlot, LLM_SEM_TIMEOUT } from './hook-semaphor
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
+import { extractTailAssistantText } from './lib/summary-extractor.mjs';
 import { recordMetric } from './lib/metrics.mjs';
 import { DB_DIR } from './schema.mjs';
 import {
@@ -1857,7 +1858,19 @@ export async function handleLLMSummary() {
       )
       .all(sessionId)
       .map((p) => p.prompt_text);
-    const prompt = buildSessionSummaryPrompt({ project, observations: recentObs, userPrompts });
+    // D19: the session's final reply, read here rather than at Stop so it is the newest one when
+    // the flush wait ran long (a later turn's Stop supersedes this worker anyway). argv[6] is the
+    // transcript the spawning hook named: Stop's own, or SessionStart's previousTranscriptPath.
+    // Without one, or when it cannot be read, the prompt is the pre-D19 one.
+    let finalReply = null;
+    if (process.argv[6]) {
+      try {
+        finalReply = extractTailAssistantText(process.argv[6]);
+      } catch (e) {
+        debugCatch(e, 'llm-summary-final-reply');
+      }
+    }
+    const prompt = buildSessionSummaryPrompt({ project, observations: recentObs, userPrompts, finalReply });
 
     if (!(await acquireLLMSlot())) {
       debugLog('WARN', 'llm-summary', 'semaphore timeout, skipping summary');
