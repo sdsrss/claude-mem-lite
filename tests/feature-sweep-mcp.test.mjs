@@ -200,6 +200,9 @@ beforeAll(async () => {
     CLAUDE_MEM_SKIP_REPOS: '1',
     MEM_QUIET_HOOKS: '1',
     CLAUDE_MEM_QUIET_TRACE: '0',
+    // D18 (converge R31): displayed dates are local; a zone west of UTC is what tells a local day
+    // from a UTC one, and CI runs in UTC.
+    TZ: 'America/Los_Angeles',
   };
   delete env.CLAUDE_MEM_HOOK_RUNNING;
   // Both project-dir env vars are removed so the transport's `cwd` is the ONLY source
@@ -723,6 +726,46 @@ describe('MCP feature sweep: hidden tools', () => {
     const scan = await call('mem_maintain', { action: 'scan', project: P });
     expect(scan).toContain(`merge_ids=${JSON.stringify([[rich, bare]])}`);
     expect(scan).toMatch(new RegExp(`\\[${rich}\\] "[^"]*" <-> \\[${bare}\\]`));
+  }, 30000);
+
+  // D18 (converge R31): the purge preview's Oldest/Newest were the UTC day. The rows sit at 22:30
+  // Los Angeles time (the server runs in that zone), when the UTC date is already the next day.
+  it('mem_maintain purge preview dates its rows in local time', async () => {
+    const P = 'mcpsweep-purge-dates';
+    for (const title of ['Idle note one', 'Idle note two', 'Idle note three'])
+      await save({
+        title,
+        content: `${title} about an unused staging bucket`,
+        importance: 1,
+        project: P,
+        force: true,
+      });
+    expect(asMachineWritten(P)).toBe(3);
+    const la = (e) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date(e));
+    const base = Date.now() - 60 * 86400000;
+    const [y, m, d] = la(base).split('-').map(Number);
+    // 22:30 in Los Angeles that day, as an instant: 05:30 or 06:30 UTC the next day.
+    let evening = Date.UTC(y, m - 1, d + 1, 5, 30);
+    if (la(evening) !== la(base)) evening -= 3600000;
+    expect(la(evening), 'premise: still that Los Angeles day').toBe(la(base));
+    expect(new Date(evening).toISOString().slice(0, 10), 'premise: the UTC day differs').not.toBe(
+      la(evening),
+    );
+    withDb((db) =>
+      db
+        .prepare(
+          'UPDATE observations SET compressed_into = -2, created_at_epoch = ?, created_at = ? WHERE project = ?',
+        )
+        .run(evening, new Date(evening).toISOString(), P),
+    );
+    const preview = await call('mem_maintain', {
+      action: 'execute',
+      operations: ['purge_stale'],
+      project: P,
+    });
+    expect(preview).toContain(`Oldest: ${la(evening)}`);
+    expect(preview).toContain(`Newest: ${la(evening)}`);
   }, 30000);
 
   itTool(

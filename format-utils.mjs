@@ -309,23 +309,42 @@ export function typeIcon(type) {
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Displayed dates and times are LOCAL (D18, converge R31, user-chosen 2026-11-11): `--from/--to`
+// and date_from/date_to read a bare date as the local day (lib/search-core.mjs parseCalendarBound),
+// and the dates printed in UTC disagreed with them — an evening save west of Greenwich showed as
+// tomorrow and the date on screen did not find it.
+
 /**
- * Format an ISO date string as "Mon DD HH:MM" for compact display.
+ * A date (Date, epoch ms or ISO string) as the local calendar day "YYYY-MM-DD"; '' when unparseable.
+ * @param {Date|number|string} value
+ * @returns {string}
+ */
+export function localYmd(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * Format an ISO date string as local "Mon DD HH:MM" for compact display.
  * @param {string} iso ISO 8601 date string
  * @returns {string} Formatted date or empty string
  */
 export function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  const mon = MONTHS[d.getUTCMonth()];
-  const day = d.getUTCDate();
-  const h = String(d.getUTCHours()).padStart(2, '0');
-  const m = String(d.getUTCMinutes()).padStart(2, '0');
+  const mon = MONTHS[d.getMonth()];
+  const day = d.getDate();
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
   return `${mon} ${day} ${h}:${m}`;
 }
 
 /**
- * Format an ISO date string as "HH:MM" for time-only display.
+ * Format an ISO date string as local "HH:MM" for time-only display.
  * @param {string} iso ISO 8601 date string
  * @returns {string} Formatted time or empty string
  */
@@ -333,11 +352,11 @@ export function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   // Guard against an unparseable timestamp (e.g. corrupt/imported created_at):
-  // a bare new Date('garbage') yields Invalid Date → getUTCHours() is NaN →
+  // a bare new Date('garbage') yields Invalid Date → getHours() is NaN →
   // "NaN:NaN" leaking into the SessionStart Recent table. Degrade to '' like the
   // falsy-input case above.
   if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 // ─── ISO Week ────────────────────────────────────────────────────────────────

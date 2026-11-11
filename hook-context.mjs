@@ -13,6 +13,7 @@ import {
   truncate,
   typeIcon,
   fmtTime,
+  localYmd,
   inferProject,
   debugLog,
   neutralizeContextDelimiters,
@@ -933,17 +934,17 @@ export function buildSessionContextLines(
     (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
   );
   if (obsToShow.length > 0) {
-    const today = now.toISOString().slice(0, 10);
+    const today = localYmd(now);
     obsLines.push(`### Recent (${today})`);
     obsLines.push('');
     obsLines.push('| ID | Time | T | Title |');
     obsLines.push('|----|------|---|-------|');
     // A row from another day carries its date: under the "Recent (<today>)" heading a bare
     // HH:MM read as today, and a 5-day-old row looked like this morning's (E2E 2026-10-16).
-    // Same UTC calendar as the heading.
+    // Same local calendar as the heading (D18).
     const when = (iso) =>
-      typeof iso === 'string' && fmtTime(iso) && iso.slice(0, 10) !== today
-        ? `${iso.slice(5, 10)} ${fmtTime(iso)}`
+      typeof iso === 'string' && fmtTime(iso) && localYmd(iso) !== today
+        ? `${localYmd(iso).slice(5)} ${fmtTime(iso)}`
         : fmtTime(iso);
     for (const o of obsToShow) {
       const proj = o.project && o.project !== project ? ` (${o.project})` : '';

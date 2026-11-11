@@ -1812,9 +1812,9 @@ describe('fmtDate', () => {
     expect(fmtDate(undefined)).toBe('');
   });
 
-  it('formats ISO date to "Mon DD HH:MM" in UTC', () => {
-    // Jan 15, 2026, 14:30 UTC
-    const result = fmtDate('2026-01-15T14:30:00.000Z');
+  // D18 (converge R31): local time, the zone the date filters read; the instant is built locally.
+  it('formats ISO date to "Mon DD HH:MM" in local time', () => {
+    const result = fmtDate(new Date(2026, 0, 15, 14, 30).toISOString());
     expect(result).toBe('Jan 15 14:30');
   });
 });
@@ -1827,8 +1827,8 @@ describe('fmtTime', () => {
     expect(fmtTime(null)).toBe('');
   });
 
-  it('formats ISO date to "HH:MM" in UTC', () => {
-    const result = fmtTime('2026-01-15T09:05:00.000Z');
+  it('formats ISO date to "HH:MM" in local time', () => {
+    const result = fmtTime(new Date(2026, 0, 15, 9, 5).toISOString());
     expect(result).toBe('09:05');
   });
 

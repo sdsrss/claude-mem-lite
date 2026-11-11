@@ -96,7 +96,12 @@ import { stripPrivate } from './lib/private-strip.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
 import { CLI_INVOKE } from './cli-path.mjs';
-import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
+import {
+  neutralizeContextDelimiters,
+  neutralizeSkillDelimiters,
+  queryLabel,
+  localYmd,
+} from './format-utils.mjs';
 import {
   memSearchSchema,
   memSearchFeedbackSchema,
@@ -1857,8 +1862,8 @@ server.registerTool(
             lines.push('  Nothing to delete.');
             return lines.join('\n');
           }
-          lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-          lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
+          lines.push(`  Oldest: ${localYmd(previewRow.oldest)}`);
+          lines.push(`  Newest: ${localYmd(previewRow.newest)}`);
           lines.push('  Nothing was deleted. To delete, re-run with confirm=true:');
           lines.push(
             `  mem_maintain(action="execute", operations=${JSON.stringify(ops)}, confirm=true${args.retain_days ? `, retain_days=${args.retain_days}` : ''}${args.project ? `, project="${args.project}"` : ''})`,

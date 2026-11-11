@@ -2071,6 +2071,68 @@ describe('CLI compress command', () => {
     expect(output).toContain('--execute');
   });
 
+  // D18 (converge R31): `maintain execute --ops purge_stale` previews its Oldest/Newest rows, and
+  // they were the UTC day; displayed dates are local. The rows sit at 22:30 Los Angeles time, when
+  // the UTC date is already the next day. -2 = COMPRESSED_PENDING_PURGE.
+  it('the purge preview dates its oldest and newest rows in local time', async () => {
+    const saved = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const now = new Date();
+      const evening = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 60, 22, 30).getTime();
+      const day = (e) => {
+        const d = new Date(e);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+      expect(day(evening), 'premise: the UTC day differs').not.toBe(
+        new Date(evening).toISOString().slice(0, 10),
+      );
+      for (let i = 0; i < 3; i++) {
+        insertObs(testDb, {
+          sessionId: 'mem-s1',
+          project: 'test--project',
+          type: 'discovery',
+          title: `Idle obs ${i}`,
+          text: `idle content ${i}`,
+          importance: 1,
+        });
+      }
+      testDb
+        .prepare('UPDATE observations SET compressed_into = -2, created_at_epoch = ?, created_at = ?')
+        .run(evening, new Date(evening).toISOString());
+      const output = await captureStdout(() => run(['maintain', 'execute', '--ops', 'purge_stale']));
+      expect(output).toContain(`Oldest: ${day(evening)}`);
+      expect(output).toContain(`Newest: ${day(evening)}`);
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  });
+
+  // D18: citation-stats dates each resolved session of its funnel; the UTC day disagreed with the
+  // local one the rest of the output uses.
+  it('citation-stats dates a resolved session in local time', async () => {
+    const saved = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const now = new Date();
+      const evening = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 22, 30).getTime();
+      const d = new Date(evening);
+      const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      expect(local, 'premise: the UTC day differs').not.toBe(d.toISOString().slice(0, 10));
+      testDb
+        .prepare(
+          'INSERT INTO citation_log (project, memory_session_id, resolved_at, injected_n, cited_n) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run('test--project', 'mem-s1', evening, 4, 1);
+      const output = await captureStdout(() => run(['citation-stats']));
+      expect(output).toMatch(new RegExp(`^  ${local}  test--project`, 'm'));
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  });
+
   it('shows no candidates when all are recent', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',

@@ -48,6 +48,7 @@ export {
   typeIcon,
   fmtDate,
   fmtTime,
+  localYmd,
   isoWeekKey,
   formatErrorRecallHints,
   neutralizeContextDelimiters,

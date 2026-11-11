@@ -13,6 +13,7 @@ import {
   inferProject,
   scrubSecrets,
   COMPRESSED_PENDING_PURGE,
+  localYmd,
 } from './utils.mjs';
 import { isBlankText } from './lib/blank-text.mjs';
 import { resolveProject, checkWriteProject, unknownProjectNote } from './project-utils.mjs';
@@ -2907,8 +2908,8 @@ function cmdMaintain(db, args) {
         lines.push('  Nothing to delete.');
         return lines.join('\n');
       }
-      lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-      lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
+      lines.push(`  Oldest: ${localYmd(previewRow.oldest)}`);
+      lines.push(`  Newest: ${localYmd(previewRow.newest)}`);
       lines.push('  To delete, re-run with --confirm.');
       return lines.join('\n');
     },
@@ -3204,7 +3205,7 @@ function cmdCitationStats(db, args) {
     out('  (no resolved sessions in window)');
   } else {
     for (const s of funnel.sessions) {
-      const day = s.resolved_at ? new Date(s.resolved_at).toISOString().slice(0, 10) : '—'.repeat(10);
+      const day = s.resolved_at ? localYmd(s.resolved_at) : '—'.repeat(10);
       const pct = (s.rate * 100).toFixed(1) + '%';
       out(
         `  ${day}  ${(s.project || '').padEnd(28)} inj ${String(s.injected_n).padStart(3)}  cited ${String(s.cited_n).padStart(3)}  ${pct.padStart(6)}`,

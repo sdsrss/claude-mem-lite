@@ -120,13 +120,15 @@ describe('format-utils.mjs', () => {
     expect(directIcon('unknown')).toBe('\u26AA'); // white circle
   });
 
-  it('fmtDate formats ISO dates', () => {
-    const result = directFmtDate('2026-03-15T10:30:00Z');
+  // D18 (converge R31): display is local time; the instant is built in the local zone so the
+  // expectation holds in any TZ (tests/local-dates.test.mjs pins a non-UTC zone explicitly).
+  it('fmtDate formats ISO dates in local time', () => {
+    const result = directFmtDate(new Date(2026, 2, 15, 10, 30).toISOString());
     expect(result).toBe('Mar 15 10:30');
   });
 
-  it('fmtTime formats ISO time only', () => {
-    expect(directFmtTime('2026-03-15T10:30:00Z')).toBe('10:30');
+  it('fmtTime formats ISO time only, in local time', () => {
+    expect(directFmtTime(new Date(2026, 2, 15, 10, 30).toISOString())).toBe('10:30');
   });
 
   it('isoWeekKey returns correct week', () => {
