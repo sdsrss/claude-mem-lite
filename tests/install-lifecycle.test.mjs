@@ -9,6 +9,7 @@ import {
   existsSync,
   symlinkSync,
   readlinkSync,
+  chmodSync,
 } from 'fs';
 import { join, resolve, isAbsolute } from 'path';
 import { tmpdir } from 'os';
@@ -423,16 +424,36 @@ describe('install lifecycle checks', () => {
   // once it held claude-mem-lite.db, so files a user keeps beside the store went with it. Only
   // what claude-mem-lite writes there is removed; anything else stays, and the output says so.
   describe('uninstall --purge with a relocated CLAUDE_MEM_DIR', () => {
+    // Names claude-mem-lite really writes there (R32 review: the first fix matched top-level
+    // names only and took `backups/`, `metrics/`, `errors/` whole, user files included).
     const OURS = [
       'claude-mem-lite.db',
       'claude-mem-lite.db-wal',
       'claude-mem-lite.db.pre-delete-2026-11-11T00-00-00-000Z-1-1.bak',
+      'claude-mem-lite.db-wal.legacy-backup-1700000000000',
       'claude-mem.db',
+      'claude-mem.db-wal',
+      'plugin_claude_mem_lite.md',
+      'plugin_claude_mem_lite.md.tmp-4242',
+      '.legacy-backup-copy-4242-1700000000',
+      '.snapshot-check-4242-abc123/probe.db',
+      '.update-backup-1700000000000-4242/hook.mjs',
       'runtime/session.json',
+      'runtime/hook-errors/2026-11-11.json',
       'metrics/2026-11-11.jsonl',
       'errors/2026-11-11.jsonl',
-      'backups/pre-apply.db',
-      '.update-backup-1700000000000-4242/hook.mjs',
+      'backups/verify-2026-11-11T00-00-00-000Z-a1b2c3.json',
+    ];
+    // A user's own files, several of them in directories that share the product's names.
+    const THEIRS = [
+      'notes.txt',
+      'taxes/2025.pdf',
+      'backups/photos/wedding.jpg',
+      'backups/old-laptop.tar',
+      'metrics/q3-revenue.csv',
+      'errors/notes.txt',
+      'claude-mem-lite.db-schema-notes.md',
+      'claude-mem.dbx-thesis.tex',
     ];
     const seed = (dir, files) => {
       for (const f of files) {
@@ -445,20 +466,22 @@ describe('install lifecycle checks', () => {
         PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}`,
         CLAUDE_MEM_DIR: dir,
       });
+    const tree = (dir) =>
+      readdirSync(dir, { recursive: true, withFileTypes: true })
+        .filter((e) => e.isFile())
+        .map((e) => join(e.parentPath, e.name).slice(dir.length + 1))
+        .sort();
 
-    it("keeps the user's own files and names them", () => {
+    it("removes every file it wrote and none of the user's, and names what it kept", () => {
       const home = makeTmpDir();
       try {
         const dir = join(home, 'shared');
-        seed(dir, OURS);
-        writeFileSync(join(dir, 'notes.txt'), 'mine');
-        mkdirSync(join(dir, 'taxes'));
-        writeFileSync(join(dir, 'taxes', '2025.pdf'), 'mine');
+        seed(dir, [...OURS, ...THEIRS]);
         const output = purge(home, dir);
-        expect(readdirSync(dir).sort()).toEqual(['notes.txt', 'taxes']);
-        expect(readFileSync(join(dir, 'taxes', '2025.pdf'), 'utf8')).toBe('mine');
+        expect(tree(dir)).toEqual([...THEIRS].sort());
         expect(output).toMatch(/notes\.txt/);
-        expect(output).toMatch(/taxes/);
+        expect(output).toMatch(/backups\/photos/);
+        expect(output).not.toContain(`Relocated data purged (${dir})`);
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
@@ -473,6 +496,41 @@ describe('install lifecycle checks', () => {
         expect(existsSync(dir)).toBe(false);
         expect(output).toContain(`Relocated data purged (${dir})`);
       } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // A directory that cannot be listed must not take the "nothing else is here" path, which
+    // removes the directory.
+    it('removes nothing when the directory cannot be listed', () => {
+      const home = makeTmpDir();
+      const dir = join(home, 'locked');
+      try {
+        seed(dir, ['claude-mem-lite.db', 'notes.txt']);
+        chmodSync(dir, 0o300);
+        const output = purge(home, dir);
+        chmodSync(dir, 0o700);
+        expect(tree(dir)).toEqual(['claude-mem-lite.db', 'notes.txt']);
+        expect(output).toMatch(/Could not list/);
+      } finally {
+        chmodSync(dir, 0o700);
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('says which of its own entries it could not remove, and does not claim the purge', () => {
+      const home = makeTmpDir();
+      const dir = join(home, 'stuck');
+      const rt = join(dir, 'runtime');
+      try {
+        seed(dir, ['claude-mem-lite.db', 'runtime/install.lock']);
+        chmodSync(rt, 0o500);
+        const output = purge(home, dir);
+        chmodSync(rt, 0o700);
+        expect(output).toMatch(/Could not remove[^\n]*runtime/);
+        expect(output).not.toMatch(/Relocated data purged/);
+      } finally {
+        chmodSync(rt, 0o700);
         rmSync(home, { recursive: true, force: true });
       }
     });

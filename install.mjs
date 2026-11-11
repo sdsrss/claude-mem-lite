@@ -14,6 +14,7 @@ import {
   renameSync,
   symlinkSync,
   unlinkSync,
+  rmdirSync,
   readdirSync,
   statSync,
   lstatSync,
@@ -1981,16 +1982,35 @@ async function uninstall() {
     // nothing else is left in it.
     if (MEM_DATA_DIR !== homeDir) {
       if (existsSync(join(MEM_DATA_DIR, 'claude-mem-lite.db'))) {
-        const kept = purgeOwnedDataEntries(MEM_DATA_DIR);
-        if (kept.length === 0) {
-          rmSync(MEM_DATA_DIR, { recursive: true, force: true });
-          ok(`Relocated data purged (${MEM_DATA_DIR})`);
+        const r = purgeOwnedDataEntries(MEM_DATA_DIR);
+        const list = (xs) => `${xs.slice(0, 10).join(', ')}${xs.length > 10 ? ', …' : ''}`;
+        if (r.unreadable) {
+          warn(`Could not list ${MEM_DATA_DIR} (${r.unreadable}) — nothing there was removed.`);
         } else {
-          ok(`Relocated data purged from ${MEM_DATA_DIR}`);
-          warn(
-            `Kept ${kept.length} entr${kept.length === 1 ? 'y' : 'ies'} there that claude-mem-lite did not write: ` +
-              `${kept.slice(0, 10).join(', ')}${kept.length > 10 ? ', …' : ''}. Remove them yourself if intended.`,
-          );
+          let removedDir = false;
+          if (r.kept.length === 0 && r.failed.length === 0) {
+            try {
+              rmdirSync(MEM_DATA_DIR); // never recursive: something written meanwhile stays
+              removedDir = true;
+            } catch {
+              /* not empty after all, or not removable — reported below */
+            }
+          }
+          if (r.failed.length > 0) {
+            warn(
+              `Could not remove ${r.failed.length} of its own entries in ${MEM_DATA_DIR}: ${list(r.failed)}`,
+            );
+          } else if (removedDir) {
+            ok(`Relocated data purged (${MEM_DATA_DIR})`);
+          } else {
+            ok(`Relocated data purged from ${MEM_DATA_DIR}`);
+          }
+          if (r.kept.length > 0) {
+            warn(
+              `Kept ${r.kept.length} entr${r.kept.length === 1 ? 'y' : 'ies'} there that are not claude-mem-lite's: ` +
+                `${list(r.kept)}. Remove them yourself if intended.`,
+            );
+          }
         }
       } else if (existsSync(MEM_DATA_DIR)) {
         warn(
@@ -2034,44 +2054,85 @@ async function uninstall() {
   console.log('\n  Done!\n');
 }
 
-// Directories claude-mem-lite creates in a data dir: runtime state (lib/resolve-data-dir.mjs),
-// metrics shards (lib/metrics.mjs), sampled errors (lib/err-sampler.mjs) and verify-apply's
-// backups (cli/verify-apply.mjs).
-const OWNED_DATA_DIRS = new Set(['runtime', 'metrics', 'errors', 'backups']);
+// What claude-mem-lite writes at the top of a relocated data dir, anchored so a user file that
+// merely starts with the same letters is not taken for one: the store (and the pre-rename
+// claude-mem.db) with its -wal/-shm, `.`-suffixed snapshots and legacy backups, and the
+// `-wal.legacy-backup-*` logs; the steering detail doc (lib/local-steering.mjs) and its
+// atomic-write temp; and crash leftovers whose prefixes only it uses — the legacy-backup copy
+// temps (this file, scripts/setup.sh) and snapshot-check dirs (lib/db-unusable.mjs). Update
+// residue is matched by isUpdateResidue.
+const OWNED_TOP_RE =
+  /^(?:claude-mem(?:-lite)?\.db(?:-wal|-shm)?(?:\..+)?|plugin_claude_mem_lite\.md(?:\.tmp-\d+)?|\.legacy-backup-(?:copy|setup)-.+|\.snapshot-check-.+)$/;
+// Directories it creates there, and the only files it writes in each: daily shards
+// (lib/metrics.mjs, lib/err-sampler.mjs) and verify-apply's backups (lib/verify-apply-core.mjs).
+// A file of any other name in them is the user's. `runtime/` is not here: it is the working
+// directory every hook writes dozens of kinds of state into (lib/resolve-data-dir.mjs's
+// default), so it goes whole.
+const OWNED_DIR_FILES = Object.freeze({
+  metrics: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
+  errors: /^\d{4}-\d{2}-\d{2}\.jsonl$/,
+  backups: /^verify-[\w-]+\.json(?:\.tmp-\d+)?$/,
+});
 
 /**
- * Remove what claude-mem-lite writes into a relocated data dir — the store and every file named
- * after it (WAL/SHM, `.bak` snapshots, legacy backups), the legacy `claude-mem.db*`, its own
- * directories and update residue — and nothing else. A name it does not recognise stays: a
- * leftover is reported, a deleted user file is not recoverable. Never throws.
+ * Remove what claude-mem-lite wrote into a relocated data dir, and nothing else (R32 E2E
+ * install F1 and its review). A name it does not recognise stays and is reported: a leftover
+ * can be removed later, a deleted user file cannot be recovered. Never throws.
  * @param {string} dir
- * @returns {string[]} the entries left in place, sorted
+ * @returns {{unreadable?: string, kept: string[], failed: string[]}} `kept` = entries left
+ *   because they are not its own (paths relative to `dir`); `failed` = its own entries it
+ *   could not remove, with the reason
  */
 function purgeOwnedDataEntries(dir) {
+  const kept = [];
+  const failed = [];
+  const remove = (rel) => {
+    try {
+      rmSync(join(dir, rel), { recursive: true, force: true });
+    } catch (e) {
+      failed.push(`${rel} (${e.code || e.message})`);
+    }
+  };
   let names;
   try {
     names = readdirSync(dir);
-  } catch {
-    return [];
+  } catch (e) {
+    return { unreadable: e.code || e.message, kept, failed };
   }
-  const kept = [];
   for (const name of names) {
-    const owned =
-      name.startsWith('claude-mem-lite.db') ||
-      name.startsWith('claude-mem.db') ||
-      OWNED_DATA_DIRS.has(name) ||
-      isUpdateResidue(name);
-    if (!owned) {
-      kept.push(name);
+    if (OWNED_TOP_RE.test(name) || isUpdateResidue(name) || name === 'runtime') {
+      remove(name);
       continue;
     }
+    const inner = OWNED_DIR_FILES[name];
+    let isDir = false;
     try {
-      rmSync(join(dir, name), { recursive: true, force: true });
+      isDir = inner !== undefined && lstatSync(join(dir, name)).isDirectory();
     } catch {
-      kept.push(name);
+      /* raced away */
+    }
+    if (!isDir) {
+      kept.push(name); // a symlink under one of its names is listed, never followed
+      continue;
+    }
+    let children;
+    try {
+      children = readdirSync(join(dir, name));
+    } catch (e) {
+      failed.push(`${name} (${e.code || e.message})`);
+      continue;
+    }
+    for (const c of children) {
+      if (inner.test(c)) remove(join(name, c));
+      else kept.push(join(name, c));
+    }
+    try {
+      rmdirSync(join(dir, name));
+    } catch {
+      /* not empty: what is left is listed above */
     }
   }
-  return kept.sort();
+  return { kept: kept.sort(), failed: failed.sort() };
 }
 
 /**
