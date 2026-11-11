@@ -1633,6 +1633,19 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   query-side expansion — mapping a query term to the word forms the index actually holds —
   is untested and would need its own run of this same ruler.
 
+  **Query side, 2026-11-10 (converge R29), shipped narrow: a word-form tier that runs only when
+  the strict AND and the OR relaxation both return nothing** (`searchObservationsHybrid`, each
+  Latin word's Porter stem as an FTS5 prefix, the y spelling added where Porter wrote i, stems
+  under four letters skipped). It cannot reorder a search that found anything, so its cost is
+  confined to searches that had no result. **Read this ruler result before quoting it**:
+  denoise-ab read Δ=0.000 on all four suites, and a reach probe shows the ruler never ran the tier —
+  **0 of the 76 suite queries return nothing before it** (`tasks/converge-r29/reach.mjs`, local).
+  On this machine's real searches — 30 unique `mem_search` / CLI `search` queries from the
+  transcripts, against a read-only copy of the store — 2 returned nothing and the tier fired on
+  neither. So its precision when it fires is unmeasured, and the gain shown is the constructed
+  single-word shape (`crash` → a memory saying "crashes"). A future ruler for this face needs
+  queries that return nothing as written; neither population above has one.
+
 - **A real shell parser (tree-sitter-bash) for the hook-path file extraction — measured
   2026-09-26, REJECTED (D#100 item 4).** Three reviews in a row found superlinear shapes in
   the hand-written parser, which is why this was worth deciding once. Measured in a scratch
