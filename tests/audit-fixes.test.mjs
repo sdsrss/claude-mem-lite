@@ -1070,6 +1070,60 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
     }
   });
 
+  // converge R28 (E2E 2026-11-10): the pass picked its keeper by importance and scan position
+  // only, so of two equal-importance copies the newer one stayed even when the older carried the
+  // lesson. The hook must hand each row's lesson to the shared keeper rule.
+  it('keeps the copy that carries the lesson', () => {
+    const { db, dbPath } = initHomeDb(tmpHome);
+    const now = Date.now();
+    db.prepare(
+      `
+      INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+      VALUES ('fuzzy-sess', 'fuzzy-mem', 'audit--t4', ?, ?, 'active')
+    `,
+    ).run(new Date().toISOString(), now);
+    const insert = db.prepare(`
+      INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
+        files_read, files_modified, importance, compressed_into, access_count, lesson_learned,
+        created_at, created_at_epoch)
+      VALUES ('fuzzy-mem', 'audit--t4', '', 'bugfix', ?, '', ?, '', '', '[]', '[]', 2, NULL, 0, ?, ?, ?)
+    `);
+    const body = 'token refresh raced between two tabs and the second request got a 401';
+    insert.run(
+      'Fixed refresh race in auth',
+      body,
+      'Serialize the refresh behind a mutex',
+      new Date(now - 3 * DAY_MS).toISOString(),
+      now - 3 * DAY_MS,
+    );
+    insert.run(
+      'Fixed auth refresh race in',
+      body,
+      null,
+      new Date(now - 1 * DAY_MS).toISOString(),
+      now - 1 * DAY_MS,
+    );
+    db.close();
+
+    runHookCmd('session-start', {
+      home: tmpHome,
+      cwd: projDir,
+      stdin: JSON.stringify({ session_id: 'cc-fuzzy-lesson' }),
+    });
+    runHookCmd('auto-maintain', { home: tmpHome, cwd: projDir });
+
+    const db2 = new Database(dbPath, { readonly: true });
+    try {
+      const rows = db2.prepare('SELECT lesson_learned, superseded_by FROM observations ORDER BY id').all();
+      expect(rows).toHaveLength(2);
+      expect(rows.filter((r) => r.superseded_by === 'auto-dedup-fuzzy')).toHaveLength(1);
+      const live = rows.find((r) => r.superseded_by === null);
+      expect(live.lesson_learned).toBe('Serialize the refresh behind a mutex');
+    } finally {
+      db2.close();
+    }
+  });
+
   it('supersedes near-identical titles (Jaccard ≥ 0.95) and leaves unrelated rows untouched', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();

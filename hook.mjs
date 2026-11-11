@@ -153,6 +153,7 @@ import {
   resolveDefaultMaintainOps,
   markAutoCompressible,
   selectFuzzyDedupeIds,
+  selectExactDedupeIds,
   stampDedupSuperseded,
   hardDeleteCandidateCount,
   purgeStale,
@@ -2173,34 +2174,13 @@ function runSessionStartAutoMaintain(db, project) {
         debugLog('DEBUG', 'auto-maintain', `boosted ${boosted} frequently-accessed observations`);
 
       // Auto-dedup (exact): merge identical-title observations within 1h.
-      // Catches rapid duplicate writes (same hook firing twice, race conditions).
-      // BOTH join sides must be live (audit 2026-08-14 H-1): without the
-      // superseded_at filters (which the fuzzy channel below always had), a row the
-      // fuzzy pass had tombstoned could come back as `a` (a.id < b.id) and tombstone
-      // the LIVE keeper `b` — both copies gone from every read path. Worse, a user
-      // correction saved with supersedes=[#A] (A.superseded_by = B's NUMERIC id) has
-      // the same title as A, so the pair (A, B) tombstoned the correction B itself
-      // and the string 'auto-dedup' write clobbered numeric supersession chains that
-      // citation-tracker decay hand-off and timeline re-anchoring both follow. The
-      // UPDATE repeats the guard so a concurrent writer can't re-stamp a chain.
-      const dupPairs = db
-        .prepare(
-          `
-        SELECT a.id as keep_id, b.id as remove_id
-        FROM observations a
-        JOIN observations b ON a.title = b.title AND a.project = b.project
-          AND a.id < b.id
-          AND ABS(a.created_at_epoch - b.created_at_epoch) < 3600000
-          AND ${liveObsFilterSql('a')}
-          AND ${liveObsFilterSql('b')}
-        LIMIT 20
-      `,
-        )
-        .all();
-      if (dupPairs.length > 0) {
-        const removeIds = dupPairs.map((p) => p.remove_id);
+      // Catches rapid duplicate writes (same hook firing twice, race conditions). Both join
+      // sides live (audit 2026-08-14 H-1); the keeper is the copy carrying a lesson, then the
+      // older one (converge R28) — lib/maintain-core.mjs selectExactDedupeIds.
+      const removeIds = selectExactDedupeIds(db);
+      if (removeIds.length > 0) {
         stampDedupSuperseded(db, removeIds, 'auto-dedup');
-        debugLog('DEBUG', 'auto-maintain', `auto-deduped ${dupPairs.length} near-identical observations`);
+        debugLog('DEBUG', 'auto-maintain', `auto-deduped ${removeIds.length} near-identical observations`);
       }
 
       // Auto-dedup (fuzzy): catches near-identical titles that exact-match
@@ -2222,7 +2202,7 @@ function runSessionStartAutoMaintain(db, project) {
         const recent = db
           .prepare(
             `
-          SELECT id, project, title, importance, created_at_epoch, narrative, text
+          SELECT id, project, title, importance, created_at_epoch, narrative, text, lesson_learned
           FROM observations
           WHERE ${liveObsFilterSql('')}
             AND created_at_epoch > ?
@@ -2240,6 +2220,7 @@ function runSessionStartAutoMaintain(db, project) {
             project: r.project,
             title: r.title,
             importance: r.importance,
+            lesson: r.lesson_learned,
             body: (r.narrative && r.narrative.trim()) || (r.text && r.text.trim()) || '',
           }));
           const fuzzyRemoveIds = selectFuzzyDedupeIds(rows, { maxMerges: FUZZY_MAX_MERGES });

@@ -654,6 +654,32 @@ describe('MCP feature sweep: hidden tools', () => {
     30000,
   );
 
+  // converge R28 (E2E 2026-11-10): mem_maintain's suggested merge kept the bare re-save and hid
+  // the copy carrying the lesson; the CLI scan shared the rule (tests/cli.test.mjs).
+  it('mem_maintain scan suggests keeping the copy that carries the lesson', async () => {
+    const P = 'mcpsweep-dedup-keeper';
+    const title = 'Fixed token refresh race in auth middleware';
+    const rich = await save({
+      type: 'bugfix',
+      title,
+      content: 'Two tabs refreshed the token at once and the loser got a 401.',
+      lesson_learned: 'Serialize the refresh behind a mutex',
+      importance: 2,
+      project: P,
+    });
+    const bare = await save({
+      type: 'bugfix',
+      title,
+      content: 'Two tabs refreshed the token at once and the loser got a 401.',
+      importance: 2,
+      project: P,
+      force: true,
+    });
+    const scan = await call('mem_maintain', { action: 'scan', project: P });
+    expect(scan).toContain(`merge_ids=${JSON.stringify([[rich, bare]])}`);
+    expect(scan).toMatch(new RegExp(`\\[${rich}\\] "[^"]*" <-> \\[${bare}\\]`));
+  }, 30000);
+
   itTool(
     'mem_optimize',
     async () => {

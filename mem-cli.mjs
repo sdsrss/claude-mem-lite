@@ -57,6 +57,7 @@ import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from '
 import {
   runMaintainOps,
   findDuplicates,
+  pickDedupKeeper,
   reviewRows,
   maintenanceStats,
   OP_CAP,
@@ -2797,14 +2798,14 @@ function cmdMaintain(db, args) {
       if (autoMergeable.length > 0) {
         out(`  Auto-mergeable (similarity >= ${AUTO_MERGE_THRESHOLD}):`);
         for (const d of autoMergeable.slice(0, 15)) {
-          const keep = (d.a.importance ?? 1) >= (d.b.importance ?? 1) ? d.a : d.b;
+          const keep = pickDedupKeeper(d.a, d.b);
           const remove = keep === d.a ? d.b : d.a;
           out(
             `    [${keep.id}] "${truncate(keep.title, 40)}" <-> [${remove.id}] "${truncate(remove.title, 40)}" (${d.similarity})`,
           );
         }
         const mergeIds = autoMergeable.map((d) => {
-          const keep = (d.a.importance ?? 1) >= (d.b.importance ?? 1) ? d.a : d.b;
+          const keep = pickDedupKeeper(d.a, d.b);
           const remove = keep === d.a ? d.b : d.a;
           return `${keep.id}:${remove.id}`;
         });

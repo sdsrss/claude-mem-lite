@@ -19,6 +19,9 @@ import {
   recoverOrphanedChildren,
   recoverBuriedLessons,
   selectFuzzyDedupeIds,
+  selectExactDedupeIds,
+  findDuplicates,
+  pickDedupKeeper,
   maintenanceStats,
   hardDeleteCandidateCount,
   sweepDeferredWorkOrphans,
@@ -706,6 +709,85 @@ describe('selectFuzzyDedupeIds — title + body fuzzy dedup (audit #8)', () => {
       row(2, 'Fix the auth bug in login', 'identical body text shared by both candidate rows', 3),
     ];
     expect(selectFuzzyDedupeIds(rows)).toEqual([1]);
+  });
+
+  // converge R28 (E2E 2026-11-10): the keeper was chosen by importance alone, so an equal-
+  // importance bare copy kept its place and the copy carrying the lesson was tombstoned — the
+  // lesson then reached no search, recall or injection face.
+  test('keeps the row carrying the lesson over an equal-importance bare copy', () => {
+    const body = 'token refresh raced between two tabs and the second request got a 401';
+    const rows = [
+      { ...row(1, TITLE_A, body, 2), lesson: null },
+      { ...row(2, TITLE_B, body, 2), lesson: 'Serialize the refresh behind a mutex' },
+    ];
+    expect(selectFuzzyDedupeIds(rows)).toEqual([1]);
+  });
+});
+
+describe('pickDedupKeeper — which of two duplicates survives (converge R28)', () => {
+  const r = (id, o = {}) => ({ id, importance: 2, lesson: null, accessCount: 0, ...o });
+  test('the row with a lesson wins, whatever the importance', () => {
+    expect(pickDedupKeeper(r(1, { importance: 3 }), r(2, { lesson: 'why' })).id).toBe(2);
+  });
+  test("a lesson of 'none' or blank counts as none", () => {
+    expect(pickDedupKeeper(r(1, { lesson: 'none', importance: 1 }), r(2)).id).toBe(2);
+    expect(pickDedupKeeper(r(1, { lesson: '  ' }), r(2, { importance: 3 })).id).toBe(2);
+  });
+  test('then importance, then access count, then the first argument', () => {
+    expect(pickDedupKeeper(r(1), r(2, { importance: 3 })).id).toBe(2);
+    expect(pickDedupKeeper(r(1), r(2, { accessCount: 4 })).id).toBe(2);
+    expect(pickDedupKeeper(r(1), r(2)).id).toBe(1);
+  });
+});
+
+// The hook's exact channel (identical title, same project, within an hour) kept the OLDER row
+// unconditionally: a lesson-bearing bugfix saved 5-60 minutes after a bare note with the same
+// title was the one tombstoned.
+describe('selectExactDedupeIds — identical titles within an hour (converge R28)', () => {
+  const idOf = (res) => Number(res.lastInsertRowid);
+  test('tombstones the bare copy, not the one carrying the lesson', () => {
+    const db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    const bare = idOf(
+      insertObs(db, { title: 'Fixed token refresh race', importance: 2, epochOffset: -600000 }),
+    );
+    insertObs(db, {
+      title: 'Fixed token refresh race',
+      type: 'bugfix',
+      importance: 2,
+      lessonLearned: 'Serialize the refresh behind a mutex',
+    });
+    expect(selectExactDedupeIds(db)).toEqual([bare]);
+    db.close();
+  });
+  test('an older copy still wins a tie, as before', () => {
+    const db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    const older = idOf(insertObs(db, { title: 'Same note twice', importance: 2, epochOffset: -600000 }));
+    const newer = idOf(insertObs(db, { title: 'Same note twice', importance: 2 }));
+    expect(selectExactDedupeIds(db)).toEqual([newer]);
+    expect(older).toBeLessThan(newer);
+    db.close();
+  });
+});
+
+// converge R28: compressGroup titles a week only by its count and type ("Weekly summary: 3
+// discovery observations"), so two different weeks scored 1.00 and the suggested merge hid one
+// week's content. A summary row is a different memory from any other by construction.
+describe('findDuplicates — compression summaries are not candidates (converge R28)', () => {
+  test('two weekly summaries with the same title are not paired', () => {
+    const db = createTestDb();
+    insertSession(db, { id: 'compress-test', project: 'test' });
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    for (const sid of ['compress-test', 'compress-test']) {
+      insertObs(db, { sessionId: sid, title: 'Weekly summary: 3 discovery observations', importance: 2 });
+    }
+    const mctx = { projectFilter: '', baseParams: [] };
+    expect(findDuplicates(db, mctx)).toEqual([]);
+    // Control: the same two rows from an ordinary writer are paired.
+    db.prepare("UPDATE observations SET memory_session_id = 'sess-1'").run();
+    expect(findDuplicates(db, mctx)).toHaveLength(1);
+    db.close();
   });
 });
 

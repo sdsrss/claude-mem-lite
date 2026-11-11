@@ -50,6 +50,7 @@ import {
 import {
   runMaintainOps,
   findDuplicates,
+  pickDedupKeeper,
   reviewRows,
   maintenanceStats,
   OP_CAP,
@@ -1761,8 +1762,8 @@ server.registerTool(
         if (autoMergeable.length > 0) {
           lines.push('', `Auto-mergeable pairs (similarity >= ${AUTO_MERGE_THRESHOLD}):`);
           for (const d of autoMergeable.slice(0, DUPLICATE_DISPLAY)) {
-            // Keep the higher-importance or newer observation
-            const keep = d.a.importance >= d.b.importance ? d.a : d.b;
+            // The copy carrying a lesson, then the higher importance (pickDedupKeeper)
+            const keep = pickDedupKeeper(d.a, d.b);
             const remove = keep === d.a ? d.b : d.a;
             lines.push(
               `  [${keep.id}] "${truncate(keep.title, 40)}" <-> [${remove.id}] "${truncate(remove.title, 40)}" (${d.similarity})`,
@@ -1770,7 +1771,7 @@ server.registerTool(
           }
           // Build ready-to-use merge_ids for auto-mergeable pairs
           const mergeIds = autoMergeable.map((d) => {
-            const keep = d.a.importance >= d.b.importance ? d.a : d.b;
+            const keep = pickDedupKeeper(d.a, d.b);
             const remove = keep === d.a ? d.b : d.a;
             return [keep.id, remove.id];
           });

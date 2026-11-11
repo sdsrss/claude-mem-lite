@@ -2431,6 +2431,50 @@ describe('CLI maintain command', () => {
     expect(output).toContain(`Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids 1:2`);
   });
 
+  // converge R28 (E2E 2026-11-10): the keeper was the higher-importance row and, on a tie, the
+  // newer one — a bare re-save of a fix kept its place and the merge hid the copy carrying the
+  // lesson from search and recall.
+  it("scan's merge command keeps the row that carries the lesson", async () => {
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'bugfix',
+      title: 'Fixed token refresh race in auth middleware',
+      text: 'x',
+      importance: 2,
+      lessonLearned: 'Serialize the refresh behind a mutex',
+    });
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'bugfix',
+      title: 'Fixed token refresh race in auth middleware',
+      text: 'x',
+      importance: 2,
+    });
+    const output = await captureStdout(() => run(['maintain', 'scan']));
+    expect(output).toContain('--merge-ids 1:2');
+    expect(output).toMatch(/\[1\] "Fixed token refresh race in auth middl[^"]*" <-> \[2\]/);
+  });
+
+  // converge R28: two weekly summaries share a title built from their count and type alone.
+  it('scan does not offer to merge two compression summaries', async () => {
+    insertSession(testDb, { id: 'compress-test--project', project: 'test--project' });
+    for (let i = 0; i < 2; i++) {
+      insertObs(testDb, {
+        sessionId: 'compress-test--project',
+        project: 'test--project',
+        type: 'discovery',
+        title: 'Weekly summary: 3 discovery observations',
+        text: 'x',
+        importance: 2,
+      });
+    }
+    const output = await captureStdout(() => run(['maintain', 'scan']));
+    expect(output).toContain('Total active: 2');
+    expect(output).not.toMatch(/Needs review|Auto-mergeable/);
+  });
+
   // D#464: a scan over every project paired rows of two projects, which execute then skips
   // ("different projects"), so the printed command held pairs it would not merge.
   it('scan pairs duplicates within a project only', async () => {
