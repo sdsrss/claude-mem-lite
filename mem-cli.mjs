@@ -3998,9 +3998,23 @@ export async function run(argv) {
   }
 }
 
+// cmdArgs with `--project .` / `--project current` (and the `=` forms) spelled as the current
+// project. Words after a bare `--` are text, not flags, and stay as written.
+function currentProjectSpelled(cmdArgs, current) {
+  const isCurrent = (v) => v === '.' || v === 'current';
+  const out = [...cmdArgs];
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] === '--') break;
+    if (out[i] === '--project' && isCurrent(out[i + 1])) out[i + 1] = current();
+    else if (out[i].startsWith('--project=') && isCurrent(out[i].slice('--project='.length)))
+      out[i] = `--project=${current()}`;
+  }
+  return out;
+}
+
 async function runDispatch(argv) {
   const cmd = argv[0];
-  const cmdArgs = argv.slice(1);
+  let cmdArgs = argv.slice(1);
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     cmdHelp();
@@ -4351,6 +4365,10 @@ async function runDispatch(argv) {
     const note = unknownProjectNote(db, projectFlag);
     if (note) process.stderr.write(`[mem] ${note}\n`);
   }
+  // `.` and `current` name the current project on every command, as optimize always read them.
+  // Elsewhere they matched a project literally named "." — no results and no note on a read,
+  // a new project of that name on a write (converge R28, E2E 2026-11-10).
+  cmdArgs = currentProjectSpelled(cmdArgs, () => cliProject(db));
 
   try {
     switch (cmd) {

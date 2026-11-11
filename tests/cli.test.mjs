@@ -2431,6 +2431,33 @@ describe('CLI maintain command', () => {
     expect(output).toContain(`Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids 1:2`);
   });
 
+  // converge R28 (E2E 2026-11-10): `--project .` / `current` meant "this project" only to
+  // optimize. Everywhere else it matched a project literally named "." (no results, no note),
+  // and `save --project .` created one.
+  it('--project . and --project=current name the current project on every command', async () => {
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'discovery',
+      title: 'Kafka retention dropped the replay topic',
+      text: 'kafka retention replay topic',
+      importance: 2,
+    });
+    const dot = await captureStdout(() => run(['search', 'kafka', '--project', '.']));
+    expect(dot).toContain('Kafka retention dropped the replay topic');
+    const current = await captureStdout(() => run(['recent', '--project=current']));
+    expect(current).toContain('Kafka retention dropped the replay topic');
+    await captureStdout(() => run(['save', 'A note filed under the dot spelling', '--project', '.']));
+    const filed = testDb
+      .prepare("SELECT project FROM observations WHERE title LIKE 'A note filed under%'")
+      .get();
+    expect(filed.project).toBe('test--project');
+    // After a bare `--` the words are the note's text, not a flag.
+    await captureStdout(() => run(['save', '--', 'Use', '--project', '.', 'for the current one']));
+    const literal = testDb.prepare("SELECT text FROM observations WHERE text LIKE 'Use --project%'").get();
+    expect(literal.text).toContain('Use --project . for the current one');
+  });
+
   // converge R28 (E2E 2026-11-10): a save the 5-minute window refused answered only "Skipped:
   // similar to existing #N" — a bugfix carrying a lesson was dropped and nothing said so, or that
   // --force exists for a memory that really is different.
