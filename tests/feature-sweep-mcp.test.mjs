@@ -768,6 +768,62 @@ describe('MCP feature sweep: hidden tools', () => {
     expect(preview).toContain(`Newest: ${la(evening)}`);
   }, 30000);
 
+  // D18 review M1 (converge R31): mem_get printed each row's created_at as the stored UTC string,
+  // whose date is the next day for an evening row here — not the day date_from/date_to find it on.
+  it('mem_get shows created_at in local time with its offset, on all four row kinds', async () => {
+    const P = 'mcpsweep-get-dates';
+    const la = (e) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date(e));
+    const base = Date.now() - 3 * 86400000;
+    const [y, m, d] = la(base).split('-').map(Number);
+    let evening = Date.UTC(y, m - 1, d + 1, 5, 30);
+    if (la(evening) !== la(base)) evening -= 3600000;
+    const iso = new Date(evening).toISOString();
+    expect(iso.slice(0, 10), 'premise: the UTC day differs').not.toBe(la(evening));
+    const obsId = await save({
+      title: 'Evening note on the staging bucket',
+      content: 'x',
+      project: P,
+      force: true,
+    });
+    const ids = withDb((db) => {
+      db.prepare('UPDATE observations SET created_at = ?, created_at_epoch = ? WHERE id = ?').run(
+        iso,
+        evening,
+        obsId,
+      );
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+         VALUES ('get-dates-sess', 'get-dates-mem', ?, ?, ?)`,
+      ).run(P, iso, evening);
+      const s = db
+        .prepare(
+          `INSERT INTO session_summaries (memory_session_id, project, request, created_at, created_at_epoch)
+           VALUES ('get-dates-mem', ?, 'evening request', ?, ?)`,
+        )
+        .run(P, iso, evening);
+      const pr = db
+        .prepare(
+          `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+           VALUES ('get-dates-sess', 'evening prompt', 1, ?, ?)`,
+        )
+        .run(iso, evening);
+      const e = db
+        .prepare(
+          `INSERT INTO events (project, event_type, title, created_at_epoch) VALUES (?, 'discovery', 'evening event', ?)`,
+        )
+        .run(P, evening);
+      return [s, pr, e].map((r) => Number(r.lastInsertRowid));
+    });
+    const out = await call('mem_get', { ids: `#${obsId},S#${ids[0]},P#${ids[1]},E#${ids[2]}` });
+    const shown = [...out.matchAll(/created_at: (\S+)/g)].map((x) => x[1]);
+    expect(shown, out).toHaveLength(4);
+    for (const t of shown) {
+      expect(t.slice(0, 10)).toBe(la(evening));
+      expect(Date.parse(t)).toBe(evening);
+    }
+  }, 30000);
+
   itTool(
     'mem_optimize',
     async () => {

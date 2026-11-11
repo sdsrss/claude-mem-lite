@@ -14,6 +14,7 @@ import {
   neutralizeSkillDelimiters,
   truncate,
   localYmd,
+  localIsoTime,
 } from '../format-utils.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -632,6 +633,10 @@ export function formatObsFieldValue(field, val) {
   if (OBS_TIME_FIELDS.includes(field) && typeof val === 'number') {
     return `${val} (${relativeTime(val)})`;
   }
+  // The stored ISO string is UTC; shown raw, its date is the next day for an evening save west of
+  // Greenwich, a day the date filters (local) do not find it on (D18). The CLI shows the local
+  // day in its header instead and skips the field.
+  if (field === 'created_at' && typeof val === 'string') return localIsoTime(val) || val;
   return val;
 }
 

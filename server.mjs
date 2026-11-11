@@ -101,6 +101,7 @@ import {
   neutralizeSkillDelimiters,
   queryLabel,
   localYmd,
+  localIsoTime,
 } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -1210,8 +1211,9 @@ server.registerTool(
         foundBySource.session.add(row.id);
         const lines = [`── S#${row.id} ──`];
         for (const f of sessFields) {
-          const val = row[f];
-          if (val === null || val === undefined || val === '') continue;
+          const raw = row[f];
+          if (raw === null || raw === undefined || raw === '') continue;
+          const val = f === 'created_at' ? localIsoTime(raw) || raw : raw;
           const maxLen = 500;
           lines.push(
             `${f}: ${typeof val === 'string' && val.length > maxLen ? val.slice(0, maxLen) + '…' : val}`,
@@ -1227,8 +1229,9 @@ server.registerTool(
         const lines = [`── P#${row.id} ──`];
         for (const f of PROMPT_DETAIL_FIELDS) {
           if (f === 'id') continue; // already in the header
-          const val = row[f];
-          if (val === null || val === undefined || val === '') continue;
+          const raw = row[f];
+          if (raw === null || raw === undefined || raw === '') continue;
+          const val = f === 'created_at' ? localIsoTime(raw) || raw : raw;
           lines.push(`${f}: ${typeof val === 'string' && val.length > 500 ? val.slice(0, 500) + '…' : val}`);
         }
         sections.push(lines.join('\n'));
@@ -1245,8 +1248,9 @@ server.registerTool(
         if (retired) lines.push(retired);
         for (const f of EVENT_DETAIL_FIELDS) {
           if (f === 'id' || f === 'event_type') continue; // already in the header
-          const val = row[f];
-          if (val === null || val === undefined || val === '') continue;
+          const raw = row[f];
+          if (raw === null || raw === undefined || raw === '') continue;
+          const val = f === 'created_at' ? localIsoTime(raw) || raw : raw;
           lines.push(`${f}: ${typeof val === 'string' && val.length > 500 ? val.slice(0, 500) + '…' : val}`);
         }
         sections.push(lines.join('\n'));

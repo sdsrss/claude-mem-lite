@@ -329,6 +329,23 @@ export function localYmd(value) {
 }
 
 /**
+ * An instant (Date, epoch ms or ISO string) as local ISO 8601 with its UTC offset,
+ * "2026-11-10T21:52:00-08:00": as exact as the stored UTC string, and its date is the local day
+ * the date filters read. For detail views that print a full timestamp. '' when unparseable.
+ * @param {Date|number|string} value
+ * @returns {string}
+ */
+export function localIsoTime(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset();
+  const zone = `${off < 0 ? '-' : '+'}${p(Math.floor(Math.abs(off) / 60))}:${p(Math.abs(off) % 60)}`;
+  return `${localYmd(d)}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${zone}`;
+}
+
+/**
  * Format an ISO date string as local "Mon DD HH:MM" for compact display.
  * @param {string} iso ISO 8601 date string
  * @returns {string} Formatted date or empty string

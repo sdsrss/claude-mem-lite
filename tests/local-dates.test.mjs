@@ -4,8 +4,9 @@
 // it; SessionStart's "Recent (<date>)" disagreed with the model's own date. Display is local now.
 // The instant used: 2026-11-11T05:52Z = 2026-11-10 21:52 in Los Angeles.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { fmtDate, fmtTime, localYmd } from '../format-utils.mjs';
-import { fmtDateShort, formatReviewSide } from '../cli/common.mjs';
+import { fmtDate, fmtTime, localYmd, localIsoTime } from '../format-utils.mjs';
+import { fmtDateShort, formatReviewSide, formatObsFieldValue } from '../cli/common.mjs';
+import { formatDeferredDetail } from '../lib/deferred-work.mjs';
 import { parseDateBounds } from '../lib/search-core.mjs';
 import { supersededEventNotice } from '../lib/get-core.mjs';
 import { computeStatsFeed } from '../lib/stats-core.mjs';
@@ -36,6 +37,26 @@ describe('dates are shown in local time (D18)', () => {
     expect(fmtDateShort(ISO)).toBe('2026-11-10');
     expect(fmtDate(ISO)).toBe('Nov 10 21:52');
     expect(fmtTime(ISO)).toBe('21:52');
+  });
+
+  it('a full timestamp keeps the instant and shows the local day, with its offset', () => {
+    expect(localIsoTime(ISO)).toBe('2026-11-10T21:52:00-08:00');
+    expect(localIsoTime(EPOCH)).toBe('2026-11-10T21:52:00-08:00');
+    expect(Date.parse(localIsoTime(ISO))).toBe(EPOCH);
+    expect(localIsoTime('not a date')).toBe('');
+  });
+
+  it("mem_get's observation created_at and get D#N's created line are local (review M1)", () => {
+    expect(formatObsFieldValue('created_at', ISO)).toBe('2026-11-10T21:52:00-08:00');
+    const out = formatDeferredDetail({
+      id: 4,
+      project: 'p',
+      title: 'x',
+      status: 'open',
+      priority: 2,
+      created_at_epoch: EPOCH,
+    });
+    expect(out).toContain('created: 2026-11-10T21:52:00-08:00');
   });
 
   it('the date shown is a date the filter finds', () => {
