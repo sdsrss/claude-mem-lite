@@ -58,7 +58,7 @@ const FO = ['YES', 'NO'];
 const MO = ['YES', 'NO', 'NONE_STATED'];
 
 /** The worker's text coercion for a prose field (hook-llm.mjs handleLLMSummary `asText`). */
-function asText(v) {
+export function asText(v) {
   if (Array.isArray(v)) return v.filter((x) => typeof x === 'string' && x.trim()).join('; ');
   return typeof v === 'string' ? v : '';
 }
@@ -157,7 +157,7 @@ export function scoreVerdicts(key, a, b, usableByArm) {
   return { arms, agreement };
 }
 
-function findTranscript(cc, projectsDir) {
+export function findTranscript(cc, projectsDir) {
   if (!cc || !existsSync(projectsDir)) return null;
   for (const d of readdirSync(projectsDir)) {
     const p = join(projectsDir, d, `${cc}.jsonl`);
