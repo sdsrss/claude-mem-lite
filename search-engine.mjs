@@ -13,6 +13,7 @@ import {
   DEFAULT_DECAY_HALF_LIFE_MS,
   notLowSignalTitleClause,
   relaxFtsQueryToOr,
+  wordFormPrefixQuery,
   debugLog,
   debugCatch,
   estimateTokens,
@@ -673,6 +674,39 @@ export function searchObservationsHybrid(db, ctx) {
         for (const r of orRows) results.push(ftsRowToResult(r, { snippet: true }));
       } catch (e) {
         debugCatch(e, 'searchObservationsHybrid-or-fallback');
+      }
+    }
+  }
+
+  // Word-form fallback (converge R29): the strict query and its OR relaxation found nothing, so
+  // no word of the query is in the index as written. Try each word's stem as a prefix (`crash*`
+  // reaches `crashes`). It runs only on an empty result, so it adds rows to a search that had none
+  // and cannot reorder one that had any. It sets neither orFallbackFired (the "relaxed AND→OR" label
+  // would misname a one-word search) nor effectiveFtsQuery: PRF stays inert on these rows rather
+  // than padding them with rows that hold no word of the query.
+  if (results.length === 0) {
+    const formsQuery = wordFormPrefixQuery(ftsQuery);
+    if (formsQuery) {
+      try {
+        const formRows = db
+          .prepare(
+            buildObsFtsQuery('full', { multiplier: 0.5, withSnippet: true, withOffset: true, includeNoise }),
+          )
+          .all(
+            ...buildObsFtsParams({
+              now,
+              projectBoost,
+              ftsQuery: formsQuery,
+              args,
+              epochFrom,
+              epochTo,
+              limit: perSourceLimit,
+              offset: perSourceOffset,
+            }),
+          );
+        for (const r of formRows) results.push(ftsRowToResult(r, { snippet: true }));
+      } catch (e) {
+        debugCatch(e, 'searchObservationsHybrid-word-form-fallback');
       }
     }
   }

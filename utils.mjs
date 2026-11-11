@@ -31,7 +31,14 @@ export {
   notLowSignalTitleClause,
   noisePenaltyClause,
 } from './scoring-sql.mjs';
-export { cjkBigrams, cjkIndexTerms, sanitizeFtsQuery, ftsQueryTokens, relaxFtsQueryToOr } from './nlp.mjs';
+export {
+  cjkBigrams,
+  cjkIndexTerms,
+  sanitizeFtsQuery,
+  ftsQueryTokens,
+  relaxFtsQueryToOr,
+  wordFormPrefixQuery,
+} from './nlp.mjs';
 export { inferProject } from './project-utils.mjs';
 export { scrubSecrets } from './secret-scrub.mjs';
 export { stripPrivate } from './lib/private-strip.mjs';
