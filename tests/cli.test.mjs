@@ -2431,6 +2431,27 @@ describe('CLI maintain command', () => {
     expect(output).toContain(`Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids 1:2`);
   });
 
+  // converge R28 (E2E 2026-11-10): a save the 5-minute window refused answered only "Skipped:
+  // similar to existing #N" — a bugfix carrying a lesson was dropped and nothing said so, or that
+  // --force exists for a memory that really is different.
+  it('a save skipped as a near-duplicate says nothing was stored and how to store it anyway', async () => {
+    await captureStdout(() =>
+      run(['save', 'Fixed token refresh race in auth middleware', '--type', 'discovery']),
+    );
+    const out = await captureStdout(() =>
+      run([
+        'save',
+        'Fixed token refresh race in auth middleware',
+        '--type',
+        'bugfix',
+        '--lesson',
+        'Serialize the refresh behind a mutex',
+      ]),
+    );
+    expect(out).toMatch(/Skipped: similar to existing #\d+ — nothing was saved, including the lesson/);
+    expect(out).toContain('run the same save with --force');
+  });
+
   // converge R28 (E2E 2026-11-10): the keeper was the higher-importance row and, on a tie, the
   // newer one — a bare re-save of a fix kept its place and the merge hid the copy carrying the
   // lesson from search and recall.

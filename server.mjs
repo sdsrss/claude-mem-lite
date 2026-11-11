@@ -1458,7 +1458,10 @@ server.registerTool(
     if (result.kind === 'duplicate') {
       // D#201: this branch returns before the note below, so it renders its own.
       const dupSkip = formatSupersedeSkipped(result.supersedeSkipped);
-      const dupText = `Skipped: similar to existing #${result.existingId} in project "${project}". Use mem_get(ids=[${result.existingId}]) to review.`;
+      // converge R28: say what did not happen — a lesson riding on the refused save is gone too —
+      // and the way past the window for a memory that really is different (force).
+      const lost = args.lesson_learned ? ', including lesson_learned' : '';
+      const dupText = `Skipped: similar to existing #${result.existingId} in project "${project}" — nothing was saved${lost}. Use mem_get(ids=[${result.existingId}]) to review; if this is a different memory, call mem_save again with force: true.`;
       return { content: [{ type: 'text', text: dupSkip ? `${dupText}\n${dupSkip}` : dupText }] };
     }
 

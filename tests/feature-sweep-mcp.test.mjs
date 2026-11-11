@@ -654,6 +654,29 @@ describe('MCP feature sweep: hidden tools', () => {
     30000,
   );
 
+  // converge R28 (E2E 2026-11-10): a refused near-duplicate answered only "Skipped: similar to
+  // existing #N"; the lesson it carried was gone and nothing named force.
+  it('mem_save refused as a near-duplicate says nothing was stored and names force', async () => {
+    const P = 'mcpsweep-dup-message';
+    const title = 'Cart total drifts a cent on multi-line orders';
+    await save({ title, content: 'Rounding per line item drifts the total by a cent.', project: P });
+    const res = await client.callTool({
+      name: 'mem_save',
+      arguments: {
+        title,
+        content: 'Rounding per line item drifts the total by a cent.',
+        type: 'bugfix',
+        lesson_learned: 'Round once, at the total',
+        project: P,
+      },
+    });
+    const text = textOf(res);
+    expect(text).toMatch(
+      /Skipped: similar to existing #\d+ in project "[^"]+" — nothing was saved, including lesson_learned/,
+    );
+    expect(text).toContain('call mem_save again with force: true');
+  }, 30000);
+
   // converge R28 (E2E 2026-11-10): mem_maintain's suggested merge kept the bare re-save and hid
   // the copy carrying the lesson; the CLI scan shared the rule (tests/cli.test.mjs).
   it('mem_maintain scan suggests keeping the copy that carries the lesson', async () => {

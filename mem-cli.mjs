@@ -1454,8 +1454,11 @@ function cmdSave(db, args) {
   }
 
   if (result.kind === 'duplicate') {
+    // converge R28: say what did not happen — a --lesson riding on the refused save is gone too —
+    // and the way past the window for a memory that really is different (--force).
+    const lost = rawLesson ? ', including the lesson' : '';
     out(
-      `[mem] Skipped: similar to existing #${result.existingId}. Use "${CLI_INVOKE} get ${result.existingId}" to review.`,
+      `[mem] Skipped: similar to existing #${result.existingId} — nothing was saved${lost}. Use "${CLI_INVOKE} get ${result.existingId}" to review; if this is a different memory, run the same save with --force.`,
     );
     // D#201: the dedup swallowed the requested supersession too — say so here,
     // because this branch returns before the note below is ever reached.
