@@ -235,21 +235,44 @@ describe('install: deploying the code tree under live hook traffic (D#223)', () 
   // scripts THROUGH it, overwriting uncommitted edits in the checkout, and the "copy" install
   // went on running hooks out of that checkout. The link is replaced by a real directory.
   it('a copy install over a dev install does not write into the checkout', () => {
+    // Own setup: run alone (-t), no earlier case has created the code home (R32 review).
+    mkdirSync(dataDir, { recursive: true });
     const checkout = sandbox('mem-dev-checkout-');
-    const edited = join(checkout, 'post-tool-use.sh');
+    const edited = join(checkout, 'scripts', 'post-tool-use.sh');
+    const depFile = join(checkout, 'node_modules', 'dep', 'index.js');
+    mkdirSync(dirname(edited), { recursive: true });
+    mkdirSync(dirname(depFile), { recursive: true });
     writeFileSync(edited, '# DEV-LOCAL-EDIT\n');
+    writeFileSync(depFile, '// dev dependency\n');
     const scripts = join(dataDir, 'scripts');
-    rmSync(scripts, { recursive: true, force: true });
-    symlinkSync(checkout, scripts);
-
-    install.deployCodeTree(false);
+    const nodeModules = join(dataDir, 'node_modules');
+    for (const [link, target] of [
+      [scripts, join(checkout, 'scripts')],
+      [nodeModules, join(checkout, 'node_modules')],
+    ]) {
+      rmSync(link, { recursive: true, force: true });
+      symlinkSync(target, link);
+    }
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let lines;
+    try {
+      install.deployCodeTree(false);
+      lines = logged.mock.calls.map((c) => String(c[0])); // before mockRestore clears them
+    } finally {
+      logged.mockRestore();
+    }
 
     expect(readFileSync(edited, 'utf8')).toBe('# DEV-LOCAL-EDIT\n');
-    expect(readdirSync(checkout)).toEqual(['post-tool-use.sh']);
+    expect(readdirSync(join(checkout, 'scripts'))).toEqual(['post-tool-use.sh']);
+    expect(readFileSync(depFile, 'utf8')).toBe('// dev dependency\n');
     expect(lstatSync(scripts).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(scripts, 'post-tool-use.sh'), 'utf8')).toBe(
       readFileSync(join(REPO, 'scripts', 'post-tool-use.sh'), 'utf8'),
     );
+    // npm writes into a linked node_modules when its `force` option is set; npm then installs
+    // a real one into the emptied path.
+    expect(existsSync(nodeModules)).toBe(false);
+    expect(lines.filter((l) => /dev-mode (scripts|node_modules)\/ link/.test(l))).toHaveLength(2);
   });
 });
 

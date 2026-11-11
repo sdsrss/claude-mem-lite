@@ -644,21 +644,25 @@ export function deployCodeTree(IS_DEV) {
   } else {
     log('Installing to ~/.claude-mem-lite/...');
     const scriptsDir = join(DATA_DIR, 'scripts');
-    // An earlier `install --dev` left scripts/ as a symlink into the developer's checkout.
-    // existsSync is true for it, so the copies below went THROUGH it: they overwrote the
-    // checkout's uncommitted edits, and hooks kept running out of the checkout (R32 E2E install
-    // F2, P0). Drop the link itself. The per-file source links need nothing (atomicCopyFileSync
-    // renames over a link, it does not write through it), and npm replaced the node_modules link
-    // without touching the checkout's node_modules in the same sandbox run.
-    let scriptsWasLink = false;
-    try {
-      scriptsWasLink = lstatSync(scriptsDir).isSymbolicLink();
-    } catch {
-      /* absent */
-    }
-    if (scriptsWasLink) {
-      unlinkSync(scriptsDir);
-      log('Replaced the dev-mode scripts/ link with a copy');
+    // An earlier `install --dev` left scripts/ and node_modules/ as symlinks into the developer's
+    // checkout. existsSync is true for a link, so the hook-script copies below went THROUGH
+    // scripts/ — overwriting the checkout's uncommitted edits, with hooks then running out of
+    // the checkout (R32 E2E install F2, P0) — and npm writes through a linked node_modules when
+    // its `force` option is set (it replaces the link otherwise; R32 review). Drop the links
+    // themselves. The per-file source links need nothing: atomicCopyFileSync renames over a
+    // link, it does not write through it.
+    for (const name of ['scripts', 'node_modules']) {
+      const p = join(DATA_DIR, name);
+      let isLink = false;
+      try {
+        isLink = lstatSync(p).isSymbolicLink();
+      } catch {
+        /* absent */
+      }
+      if (isLink) {
+        unlinkSync(p);
+        log(`Removed the dev-mode ${name}/ link into the checkout; installing a real copy`);
+      }
     }
     if (!existsSync(scriptsDir)) mkdirSync(scriptsDir, { recursive: true });
     for (const f of SOURCE_FILES) {
