@@ -1637,14 +1637,18 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   the strict AND and the OR relaxation both return nothing** (`searchObservationsHybrid`, each
   Latin word's Porter stem as an FTS5 prefix, the y spelling added where Porter wrote i, stems
   under four letters skipped). It cannot reorder a search that found anything, so its cost is
-  confined to searches that had no result. **Read this ruler result before quoting it**:
-  denoise-ab read Δ=0.000 on all four suites, and a reach probe shows the ruler never ran the tier —
-  **0 of the 76 suite queries return nothing before it** (`tasks/converge-r29/reach.mjs`, local).
-  On this machine's real searches — 30 unique `mem_search` / CLI `search` queries from the
-  transcripts, against a read-only copy of the store — 2 returned nothing and the tier fired on
-  neither. So its precision when it fires is unmeasured, and the gain shown is the constructed
-  single-word shape (`crash` → a memory saying "crashes"). A future ruler for this face needs
-  queries that return nothing as written; neither population above has one.
+  confined to searches that had no result (since the 6.33.0 pre-tag review, no result in ANY
+  leg: its rows are dropped when events, sessions or prompts found the words as written).
+  **Read this ruler result before quoting it**: denoise-ab read Δ=0.000 on all four suites. The
+  reach probe first recorded here (`tasks/converge-r29/reach.mjs`, local) read 0 of 76 suite
+  queries reaching the tier, but it counted a reach by `effectiveFtsQuery`, which the tier never
+  sets, so it could only read 0; the 6.33.0 pre-tag claims review re-measured by disabling the
+  tier: **8 of the 76 reach it (all in identifier_parts, e.g. `LayoutEffect` → `layouteffect*`),
+  and it returned 0 rows on each**, so Δ=0 holds and the ruler did run it. The real-search
+  figure (30 unique `mem_search` / CLI `search` queries, 2 returned nothing) came from the same
+  blind counter, so whether the tier fired there is unknown. Its precision when it fires is
+  unmeasured, and the gain shown is the constructed single-word shape (`crash` → a memory
+  saying "crashes").
 
 - **A real shell parser (tree-sitter-bash) for the hook-path file extraction — measured
   2026-09-26, REJECTED (D#100 item 4).** Three reviews in a row found superlinear shapes in

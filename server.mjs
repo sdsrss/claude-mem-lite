@@ -2100,7 +2100,7 @@ async function runExport(db, args) {
     const total = db.prepare(`SELECT COUNT(*) AS c FROM observations ${where}`).get(...params).c;
     cap =
       `\nWARNING — PARTIAL EXPORT, NOT A COMPLETE BACKUP: capped at ${exportLimit} of ${total} matching observations; ${total - exportLimit} rows are missing from this payload and restoring it would lose them.` +
-      `\nFor a complete backup, write it to a FILE instead of pulling it through this conversation: \`${CLI_INVOKE} export --format jsonl > backup.jsonl\` (the CLI has no row cap). Narrowing with date_from/date_to also works.` +
+      `\nFor a backup without this cap, write it to a FILE instead of pulling it through this conversation: \`${CLI_INVOKE} export --format jsonl > backup.jsonl\` (the CLI has no row cap). Narrowing with date_from/date_to also works.` +
       `\nRaising \`limit\` here is the last resort, not the first: this result is model context, so all ${total} rows would be loaded into the transcript.`;
   }
   return {
