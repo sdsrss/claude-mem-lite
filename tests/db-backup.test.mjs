@@ -12,6 +12,7 @@ import {
   writeSync,
   writeFileSync,
   closeSync,
+  chmodSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -49,6 +50,24 @@ describe('snapshotDb', () => {
     ).toBeTruthy();
     expect(snap.prepare(`SELECT COUNT(*) c FROM sdk_sessions`).get().c).toBe(1);
     snap.close();
+    db.close();
+  });
+
+  // converge R28 (E2E 2026-11-10): the store is chmod 0600 but VACUUM INTO created its copy with
+  // the process umask (0644 here), so under a CLAUDE_MEM_DIR that already existed as 0755 every
+  // other local user could read the pre-delete snapshot of a memory the user had just deleted.
+  it.skipIf(process.platform === 'win32')('writes the snapshot owner-only, whatever the umask', () => {
+    const { db, d } = fileDb();
+    chmodSync(d, 0o755);
+    const prev = process.umask(0o022);
+    let out;
+    try {
+      out = snapshotDb(db, { tag: 'pre-delete' });
+    } finally {
+      process.umask(prev);
+    }
+    expect(out).toBeTruthy();
+    expect(statSync(out).mode & 0o777).toBe(0o600);
     db.close();
   });
 
