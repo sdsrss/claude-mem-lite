@@ -2087,11 +2087,14 @@ const ISO_RE = '\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z';
 const OWNED_TOP_RE = new RegExp(
   `^(?:${[
     `${STORE_RE}(?:-wal|-shm|-journal)?`, // the store; SQLite's own sidecars
-    `${STORE_RE}\\.[a-z][a-z0-9-]*-${ISO_RE}-\\d+-\\d+\\.bak`, // snapshots (lib/db-backup.mjs)
+    // snapshots (lib/db-backup.mjs); VACUUM INTO's own journal stays behind if it is killed
+    `${STORE_RE}\\.[a-z][a-z0-9-]*-${ISO_RE}-\\d+-\\d+\\.bak(?:-journal)?`,
     `${STORE_RE}\\.legacy-backup-\\d+(?:-wal|-shm)?`, // legacy migration backup (here, scripts/setup.sh)
     `${STORE_RE}-(?:wal|shm)\\.legacy-backup-\\d+`, // its log under the pre-fix name
-    `${STORE_RE}\\.corrupt-${ISO_RE}(?:-\\d+)?(?:-wal|-shm)?`, // a set-aside damaged store (lib/db-unusable.mjs)
-    'resource-registry\\.db(?:-wal|-shm)?', // the 2.90–4.x skill registry, left on disk by 5.0.0
+    // a set-aside damaged store (lib/db-unusable.mjs); bare `.corrupt` is the name v6.12.2–v6.30.7's
+    // remedy told the user to `mv` it to
+    `${STORE_RE}\\.corrupt(?:-${ISO_RE}(?:-\\d+)?(?:-wal|-shm)?)?`,
+    'resource-registry\\.db(?:-wal|-shm|-journal)?', // the 2.90–4.x skill registry, left by 5.0.0
     'plugin_claude_mem_lite\\.md(?:\\.tmp-\\d+)?', // steering detail doc (lib/local-steering.mjs)
     '\\.legacy-backup-(?:copy|setup)-\\d+-\\d+(?:-wal|-shm)?', // backup copy temps (here, setup.sh)
     '\\.snapshot-check-\\d+-[A-Za-z0-9]{6}', // lib/db-unusable.mjs CHECK_DIR_RE
