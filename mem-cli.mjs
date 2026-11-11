@@ -177,7 +177,6 @@ import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
-  openOrdinalOf,
   deferredDropLabel,
   dropDeferred,
   formatDropReasonHint,
@@ -1565,10 +1564,9 @@ function cmdDeferAdd(db, args) {
     fail(`[mem] defer add failed: ${e.message}`);
     return;
   }
-  // Compute the freshly-inserted row's ordinal for an immediately-actionable
-  // response ("ok, deferred this as item N"), as mem_defer does.
-  const ord = openOrdinalOf(db, project, r.id) ?? '?';
-  out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".${projectCheck.note}`);
+  // D#N only (D17): an `(item N)` here went stale on the next higher-priority add, and dropping by
+  // it hit another item.
+  out(`[mem] Deferred as D#${r.id} in project "${project}".${projectCheck.note}`);
 }
 
 function cmdDeferList(db, args) {

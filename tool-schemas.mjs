@@ -669,16 +669,17 @@ export const memDeferListSchema = {
 };
 
 export const memDeferDropSchema = {
-  id: z
-    .union([
-      boundedInt(z.number().int().positive()),
-      z.string().regex(/^D#\d+$/, 'expected D#N or positive integer'),
-    ])
+  // D17 (converge R31, user-chosen 2026-11-11): one call takes every item to drop, resolved against
+  // the list as it stands before any is dropped. Two calls renumbered in between and the second
+  // dropped the wrong item (E2E MCP F1). A single id, `"D#12"` and `"1,2"` still parse.
+  id: coerceDeferredTokens
     // `.nonoptional()` for the published-`required` reason documented on memDeleteSchema.ids.
     // This is the CORE tool of the three — it ships in tools/list, so the drift was visible
     // to every agent, and the tool's own description already calls the reason "required".
     .nonoptional()
-    .describe('Deferred item id — accepts D#N (raw id) or positive integer (ordinal-within-project)'),
+    .describe(
+      'Deferred item(s) to drop: D#N (raw id) or a positive integer (ordinal-within-project), or an array of them — pass every item in ONE call; ordinals are read from the list before any is dropped',
+    ),
   reason: z.string().min(1).max(500).describe('Why this item is being dropped (required for audit trail)'),
   project: z.string().optional().describe('Project name (default: inferred from CWD)'),
 };
@@ -1099,9 +1100,11 @@ export const tools = [
       '  - Scope changed and the work is no longer needed\n' +
       '  - User explicitly says "drop the deferred X, never mind"\n' +
       '\n' +
+      'Several items: ONE call, id: [1, 2].\n' +
+      '\n' +
       'Equivalent CLI: ' +
       CLI_INVOKE +
-      ' defer drop <D#N|ordinal> --reason "..."',
+      ' defer drop <D#N|ordinal>[,...] --reason "..."',
     inputSchema: memDeferDropSchema,
   },
 ];

@@ -95,12 +95,13 @@ afterEach(() => {
 });
 
 describe('claude-mem-lite defer CLI', () => {
-  it('defer add prints D#N + ordinal', () => {
+  // D17 (converge R31, user-chosen 2026-11-11): the receipt's `(item N)` went stale as soon as a
+  // higher-priority item was added, and dropping by it hit another item. The receipt names D#N only.
+  it('defer add prints the D# id and no ordinal', () => {
     const { stdout, exitCode } = runCli(['defer', 'add', 'test item one', '--priority', '3']);
     expect(exitCode).toBe(0);
-    expect(stdout).toMatch(/D#\d+/);
-    // Ordinal "(item 1)" — first open item in this fresh project.
-    expect(stdout).toMatch(/item 1/);
+    expect(stdout).toMatch(/Deferred as D#\d+ in project/);
+    expect(stdout).not.toMatch(/\(item/);
   });
 
   it('defer list shows ordinal + priority + title', () => {
@@ -400,13 +401,16 @@ describe('get D#N — deferred detail read surface', () => {
     expect(all).not.toMatch(/more open item/);
   });
 
-  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
-  it('defer add past 50 open items prints its ordinal', () => {
+  // D#123 asked that an item added past 50 open be named right; since D17 the receipt names it by
+  // D# id alone, which must be the new row's.
+  it('defer add past 50 open items names the new row by its D# id', () => {
     runCli(['defer', 'add', 'deep item 0']);
     const { project } = db.prepare('SELECT project FROM deferred_work LIMIT 1').get();
     for (let i = 1; i <= 55; i++) insertDeferred(db, { project, title: `deep item ${i}`, priority: 2 });
     const { stdout } = runCli(['defer', 'add', 'deep item last', '--priority', '1']);
-    expect(stdout).toMatch(/\(item 57\)/);
+    const id = Number(stdout.match(/Deferred as D#(\d+)/)[1]);
+    expect(db.prepare('SELECT title FROM deferred_work WHERE id = ?').get(id).title).toBe('deep item last');
+    expect(stdout).not.toMatch(/\(item/);
   });
 
   // FAILS IF: a page already at --limit's maximum still tells the reader to raise it

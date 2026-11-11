@@ -396,8 +396,10 @@ describe('MCP feature sweep: public tools', () => {
       detail: 'needs a load fixture first',
       project: 'mcpsweep-defer',
     });
-    const m = text.match(/Deferred as D#(\d+) \(item (\d+)\) in project "mcpsweep-defer"/);
+    // D17 (converge R31): the confirmation names D#N only; a `(item N)` went stale on the next add.
+    const m = text.match(/Deferred as D#(\d+) in project "mcpsweep-defer"/);
     expect(m, `unexpected mem_defer confirmation: ${text}`).toBeTruthy();
+    expect(text).not.toMatch(/\(item/);
     const row = withDb((db) =>
       db
         .prepare('SELECT title, priority, detail, status, project FROM deferred_work WHERE id = ?')
@@ -412,15 +414,35 @@ describe('MCP feature sweep: public tools', () => {
     });
   });
 
-  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
-  it('mem_defer past 50 open items prints its ordinal', async () => {
+  // D#123 asked that an item added past 50 open be named right; since D17 by its D# id alone.
+  it('mem_defer past 50 open items names the new row by its D# id', async () => {
     const P = 'mcpsweep-defer-deep';
     withDb((db) => {
       for (let i = 1; i <= 55; i++) insertDeferred(db, { project: P, title: `deep item ${i}`, priority: 2 });
     });
     const text = await call('mem_defer', { title: 'deep item last', priority: 1, project: P });
-    expect(text).toMatch(/\(item 56\)/);
+    const id = Number(text.match(/Deferred as D#(\d+)/)[1]);
+    expect(withDb((db) => db.prepare('SELECT title FROM deferred_work WHERE id = ?').get(id).title)).toBe(
+      'deep item last',
+    );
+    expect(text).not.toMatch(/\(item/);
   });
+
+  // D17 (converge R31, user-chosen 2026-11-11, E2E MCP F1): "drop items 1 and 2" took two calls,
+  // and the list renumbered between them — the second dropped "Charlie" instead of "Bravo". One
+  // call now takes every id, resolved against the list as it stands before any is dropped.
+  it('mem_defer_drop takes several ordinals in one call, read from one list', async () => {
+    const P = 'mcpsweep-defer-multi';
+    for (const title of ['Alpha task', 'Bravo task', 'Charlie task']) {
+      await call('mem_defer', { title, priority: 2, project: P });
+    }
+    const dropped = await call('mem_defer_drop', { id: [1, 2], reason: 'scope changed', project: P });
+    expect(dropped).toContain('Alpha task');
+    expect(dropped).toContain('Bravo task');
+    const left = await call('mem_defer_list', { project: P });
+    expect(left).toContain('Charlie task');
+    expect(left).not.toMatch(/Alpha task|Bravo task/);
+  }, 30000);
 
   itTool('mem_defer_list', async () => {
     // Seeds its own rows (no dependency on the mem_defer case) in its own project.

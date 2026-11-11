@@ -146,7 +146,6 @@ import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
-  openOrdinalOf,
   deferredDropLabel,
   dropDeferred,
   formatDropReasonHint,
@@ -1508,14 +1507,12 @@ server.registerTool(
       detail: args.detail ?? null,
       files: args.files ?? null,
     });
-    // Compute the ordinal for the freshly-inserted row so the response is
-    // immediately actionable ("ok, I deferred this as item 1").
-    const ord = openOrdinalOf(db, project, r.id);
+    // D#N only (D17): an `(item N)` here went stale on the next higher-priority add.
     return {
       content: [
         {
           type: 'text',
-          text: `Deferred as D#${r.id} (item ${ord ?? '?'}) in project "${project}"${projectCheck.note} — surfaces in next SessionStart banner.`,
+          text: `Deferred as D#${r.id} in project "${project}"${projectCheck.note} — surfaces in next SessionStart banner.`,
         },
       ],
     };
@@ -1562,18 +1559,19 @@ server.registerTool(
   safeHandler(async (args) => {
     if (args.project) args = { ...args, project: resolveProject(args.project) };
     const project = args.project || inferProject();
-    // Resolve id (accept D#N or ordinal int) via resolveDeferredIds with a
-    // single-element array — reuses the same project + status validation.
-    const [realId] = resolveDeferredIds(db, project, [args.id]);
-    const r = dropDeferred(db, realId, args.reason);
-    if (r.changed === 0) {
-      return { content: [{ type: 'text', text: `D#${realId} was not in 'open' status — drop is a no-op.` }] };
-    }
+    // Every id (D#N or ordinal) resolves against ONE snapshot of the open list before any drop, the
+    // same project + status validation as before; one bad id drops nothing (D17).
+    const realIds = resolveDeferredIds(db, project, args.id);
+    const lines = realIds.map((realId) =>
+      dropDeferred(db, realId, args.reason).changed === 0
+        ? `D#${realId} was not in 'open' status — drop is a no-op.`
+        : `Dropped ${deferredDropLabel(db, realId)} in project "${project}". Reason: ${args.reason}`,
+    );
     // D#195 (c): same advisory as the CLI's `defer drop`, so an agent reaching
     // this through MCP gets the same steer toward `mem_save(closes_deferred)`.
     const hint = formatDropReasonHint(args.reason);
-    const dropText = `Dropped ${deferredDropLabel(db, realId)} in project "${project}". Reason: ${args.reason}`;
-    return { content: [{ type: 'text', text: hint ? `${dropText}\n${hint}` : dropText }] };
+    if (hint) lines.push(hint);
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   }),
 );
 
