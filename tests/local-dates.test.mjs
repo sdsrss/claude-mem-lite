@@ -40,14 +40,33 @@ describe('dates are shown in local time (D18)', () => {
   });
 
   it('a full timestamp keeps the instant and shows the local day, with its offset', () => {
-    expect(localIsoTime(ISO)).toBe('2026-11-10T21:52:00-08:00');
-    expect(localIsoTime(EPOCH)).toBe('2026-11-10T21:52:00-08:00');
+    expect(localIsoTime(ISO)).toBe('2026-11-10T21:52:00.000-08:00');
+    expect(localIsoTime(EPOCH)).toBe('2026-11-10T21:52:00.000-08:00');
     expect(Date.parse(localIsoTime(ISO))).toBe(EPOCH);
     expect(localIsoTime('not a date')).toBe('');
   });
 
+  // R31 delta review F1: the shown time dropped the milliseconds every writer stores, so it sat up
+  // to 999 ms before the row, and pasting it back as `date_to` (an inclusive <= bound) missed the
+  // row it was copied from. A +05:30 zone pins the offset's minutes; the other fixtures are whole hours.
+  it('a shown timestamp pasted back as date_to finds the row it came from', () => {
+    const stored = '2026-11-11T05:52:07.456Z';
+    const epoch = Date.parse(stored);
+    const shown = localIsoTime(stored);
+    expect(shown).toBe('2026-11-10T21:52:07.456-08:00');
+    expect(parseDateBounds(null, shown).epochTo).toBe(epoch);
+    expect(parseDateBounds(shown, null).epochFrom).toBe(epoch);
+    process.env.TZ = 'Asia/Kolkata';
+    try {
+      expect(localIsoTime(stored)).toBe('2026-11-11T11:22:07.456+05:30');
+      expect(Date.parse(localIsoTime(stored))).toBe(epoch);
+    } finally {
+      process.env.TZ = 'America/Los_Angeles';
+    }
+  });
+
   it("mem_get's observation created_at and get D#N's created line are local (review M1)", () => {
-    expect(formatObsFieldValue('created_at', ISO)).toBe('2026-11-10T21:52:00-08:00');
+    expect(formatObsFieldValue('created_at', ISO)).toBe('2026-11-10T21:52:00.000-08:00');
     const out = formatDeferredDetail({
       id: 4,
       project: 'p',
@@ -56,7 +75,7 @@ describe('dates are shown in local time (D18)', () => {
       priority: 2,
       created_at_epoch: EPOCH,
     });
-    expect(out).toContain('created: 2026-11-10T21:52:00-08:00');
+    expect(out).toContain('created: 2026-11-10T21:52:00.000-08:00');
   });
 
   it('the date shown is a date the filter finds', () => {

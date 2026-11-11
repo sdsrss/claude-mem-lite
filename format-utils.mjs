@@ -330,8 +330,10 @@ export function localYmd(value) {
 
 /**
  * An instant (Date, epoch ms or ISO string) as local ISO 8601 with its UTC offset,
- * "2026-11-10T21:52:00-08:00": as exact as the stored UTC string, and its date is the local day
- * the date filters read. For detail views that print a full timestamp. '' when unparseable.
+ * "2026-11-10T21:52:00.000-08:00": the same instant as the stored UTC string, milliseconds
+ * included (writers store them, and a shown time pasted back as an inclusive `date_to` must not
+ * fall before its own row), and its date is the local day the date filters read. For detail
+ * views that print a full timestamp. '' when unparseable.
  * @param {Date|number|string} value
  * @returns {string}
  */
@@ -342,7 +344,8 @@ export function localIsoTime(value) {
   const p = (n) => String(n).padStart(2, '0');
   const off = -d.getTimezoneOffset();
   const zone = `${off < 0 ? '-' : '+'}${p(Math.floor(Math.abs(off) / 60))}:${p(Math.abs(off) % 60)}`;
-  return `${localYmd(d)}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${zone}`;
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${localYmd(d)}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${ms}${zone}`;
 }
 
 /**
