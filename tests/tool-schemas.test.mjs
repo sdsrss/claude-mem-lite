@@ -290,3 +290,19 @@ describe('advertised JSON Schema bounds match runtime enforcement', () => {
     expect(published.mem_delete.properties.ids).toMatchObject({ minItems: 1, maxItems: 50 });
   });
 });
+
+// D17 (converge R31), AC2; review L5: dropping several deferred items is one call, and both the
+// published schema and the description say so. A single id still works through the coercion,
+// which the MCP sweep exercises; this pins what a model reads.
+describe('mem_defer_drop advertises the batch form (D17)', () => {
+  const tool = tools.find((t) => t.name === 'mem_defer_drop');
+  test('the published id is an array of D#N or ordinals', () => {
+    const id = z.toJSONSchema(z.object(tool.inputSchema), { io: 'input', unrepresentable: 'any' }).properties
+      .id;
+    expect(id.type).toBe('array');
+    expect(id.minItems).toBe(1);
+  });
+  test('the description tells the model to pass every id in one call', () => {
+    expect(tool.description).toContain('Several items: ONE call, id: [1, 2].');
+  });
+});

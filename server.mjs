@@ -153,9 +153,8 @@ import {
   insertDeferred,
   listOpenWithOrdinal,
   deferredDropLabel,
-  dropDeferred,
+  dropDeferredMany,
   formatDropReasonHint,
-  resolveDeferredIds,
   getDeferredByIds,
   formatDeferredDetail,
   searchDeferredWork,
@@ -1568,17 +1567,20 @@ server.registerTool(
   safeHandler(async (args) => {
     if (args.project) args = { ...args, project: resolveProject(args.project) };
     const project = args.project || inferProject();
-    // Every id (D#N or ordinal) resolves against ONE snapshot of the open list before any drop, the
-    // same project + status validation as before; one bad id drops nothing (D17).
-    const realIds = resolveDeferredIds(db, project, args.id);
-    const lines = realIds.map((realId) =>
-      dropDeferred(db, realId, args.reason).changed === 0
-        ? `D#${realId} was not in 'open' status — drop is a no-op.`
-        : `Dropped ${deferredDropLabel(db, realId)} in project "${project}". Reason: ${args.reason}`,
-    );
+    // Every id (D#N or ordinal) resolves against ONE snapshot of the open list, and every drop
+    // runs in the same transaction: one bad id, or a failure part-way, drops nothing (D17).
+    const { dropped, noop } = dropDeferredMany(db, project, args.id, args.reason);
+    const lines = [
+      ...dropped.map(
+        (realId) =>
+          `Dropped ${deferredDropLabel(db, realId)} in project "${project}". Reason: ${args.reason}`,
+      ),
+      ...noop.map((realId) => `D#${realId} was not in 'open' status — drop is a no-op.`),
+    ];
     // D#195 (c): same advisory as the CLI's `defer drop`, so an agent reaching
-    // this through MCP gets the same steer toward `mem_save(closes_deferred)`.
-    const hint = formatDropReasonHint(args.reason);
+    // this through MCP gets the same steer toward `mem_save(closes_deferred)` — and, like the
+    // CLI, only when something was dropped (R31 review L4).
+    const hint = dropped.length > 0 ? formatDropReasonHint(args.reason) : null;
     if (hint) lines.push(hint);
     return { content: [{ type: 'text', text: lines.join('\n') }] };
   }),

@@ -179,9 +179,8 @@ import {
   insertDeferred,
   listOpenWithOrdinal,
   deferredDropLabel,
-  dropDeferred,
+  dropDeferredMany,
   formatDropReasonHint,
-  resolveDeferredIds,
   getDeferredByIds,
   formatDeferredDetail,
   searchDeferredWork,
@@ -1620,19 +1619,14 @@ function cmdDeferDrop(db, args) {
   const tokens = rawTokens.map((t) => (/^\d+$/.test(t) ? parseInt(t, 10) : t));
   const project = flags.project ? resolveProject(db, flags.project) : cliProject(db);
 
-  let realIds;
+  // One transaction for every token (dropDeferredMany): a bad id, or a failure part-way, drops
+  // nothing, so retrying the same ordinals cannot hit renumbered items.
+  let dropped, noop;
   try {
-    realIds = resolveDeferredIds(db, project, tokens);
+    ({ dropped, noop } = dropDeferredMany(db, project, tokens, reason));
   } catch (e) {
     fail(`[mem] defer drop: ${e.message}`);
     return;
-  }
-  const dropped = [];
-  const noop = [];
-  for (const realId of realIds) {
-    const r = dropDeferred(db, realId, reason);
-    if (r.changed === 0) noop.push(realId);
-    else dropped.push(realId);
   }
   if (dropped.length > 0) {
     out(

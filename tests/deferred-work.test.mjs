@@ -11,6 +11,7 @@ import {
   insertDeferred,
   listOpenWithOrdinal,
   dropDeferred,
+  dropDeferredMany,
   resolveDeferredIds,
   closeDeferredItems,
 } from '../lib/deferred-work.mjs';
@@ -412,7 +413,8 @@ describe('deferred_work closure', () => {
     const missing = [];
     for (const face of faces) {
       const src = readFileSync(join(REPO, face), 'utf8');
-      const drops = [...src.matchAll(/dropDeferred\(/g)].length;
+      // dropDeferredMany is the faces' batch form since R31 (one transaction for every id).
+      const drops = [...src.matchAll(/dropDeferred(?:Many)?\(/g)].length;
       const hints = [...src.matchAll(/formatDropReasonHint\(/g)].length;
       if (drops === 0) missing.push(`${face}: no dropDeferred call site — sweep would pass vacuously`);
       else if (hints === 0) missing.push(`${face}: drops without consulting formatDropReasonHint`);
@@ -648,5 +650,35 @@ describe('defer list age + stale hint (G11)', () => {
     expect(hint).toContain('2');
     expect(hint).toMatch(/30/);
     expect(hint.toLowerCase()).toMatch(/refresh|drop/);
+  });
+});
+
+describe('dropDeferredMany (D17, R31 review L3)', () => {
+  const setup = () => {
+    const db = createTestDb();
+    const ids = ['Alpha', 'Bravo', 'Charlie'].map(
+      (title) => insertDeferred(db, { project: 'p', title, priority: 2 }).id,
+    );
+    const status = () =>
+      db
+        .prepare('SELECT title, status FROM deferred_work ORDER BY id')
+        .all()
+        .map((r) => `${r.title}:${r.status}`);
+    return { db, ids, status };
+  };
+
+  it('drops every token against one snapshot', () => {
+    const { db, status } = setup();
+    expect(dropDeferredMany(db, 'p', [1, 2], 'not needed')).toMatchObject({ noop: [] });
+    expect(status()).toEqual(['Alpha:dropped', 'Bravo:dropped', 'Charlie:open']);
+  });
+
+  it('a failure part-way rolls back the drops before it', () => {
+    const { db, ids, status } = setup();
+    // A real failure on the SECOND row's UPDATE, after the first has been written.
+    db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON deferred_work WHEN NEW.id = ${ids[1]}
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+    expect(() => dropDeferredMany(db, 'p', [1, 2], 'not needed')).toThrow(/injected failure/);
+    expect(status()).toEqual(['Alpha:open', 'Bravo:open', 'Charlie:open']);
   });
 });
