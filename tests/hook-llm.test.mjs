@@ -2424,6 +2424,78 @@ describe('handleLLMSummary', () => {
       expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nNext task done.');
     });
 
+    it('a prompt sent right after /compact opens a window past that compaction', async () => {
+      // Claude Code queues a prompt typed during /compact and sends it as compaction ends, so the
+      // session's first prompt can follow the boundary by under the window's 5 s slack.
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'next task', 1, ?, ?)`,
+      ).run(new Date(t0).toISOString(), t0);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-queued.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'user', timestamp: at(-90), message: { content: 'old task' } },
+          {
+            type: 'assistant',
+            timestamp: at(-80),
+            message: { content: [{ type: 'text', text: 'OLD SESSION reply' }] },
+          },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(-2) },
+          { type: 'user', timestamp: at(-0.5), message: { content: 'next task' } },
+          {
+            type: 'assistant',
+            timestamp: at(9),
+            message: { content: [{ type: 'text', text: 'Next task done.' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nNext task done.');
+    });
+
+    it("a session between two compactions with no reply of its own does not take an older session's", async () => {
+      const t0 = Date.parse('2026-11-11T10:00:00Z');
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('test-session', 'middle task', 1, ?, ?)`,
+      ).run(new Date(t0).toISOString(), t0);
+      const at = (s) => new Date(t0 + s * 1000).toISOString();
+      const t = join(dir, 'cc-between.jsonl');
+      writeFileSync(
+        t,
+        [
+          { type: 'user', timestamp: at(-120), message: { content: 'first task' } },
+          {
+            type: 'assistant',
+            timestamp: at(-110),
+            message: { content: [{ type: 'text', text: 'FIRST SESSION reply' }] },
+          },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(-30) },
+          { type: 'user', timestamp: at(-0.5), message: { content: 'middle task' } },
+          { type: 'system', subtype: 'compact_boundary', timestamp: at(60) },
+          { type: 'user', timestamp: at(70), message: { content: 'last task' } },
+          {
+            type: 'assistant',
+            timestamp: at(75),
+            message: { content: [{ type: 'text', text: 'LAST SESSION reply' }] },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n'),
+      );
+      process.argv[5] = '';
+      process.argv[6] = t;
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0].user).not.toContain('Final reply');
+    });
+
     it('a record that is not an object does not cost the session its window', async () => {
       const t0 = Date.parse('2026-11-11T10:00:00Z');
       db.prepare(
