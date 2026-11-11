@@ -487,8 +487,8 @@ describe('install lifecycle checks', () => {
         writeFileSync(join(dir, f), 'x');
       }
     };
-    const purge = (home, dir) => {
-      const r = spawnSync(process.execPath, [INSTALL_PATH, 'uninstall', '--purge'], {
+    const purge = (home, dir, nodeArgs = []) => {
+      const r = spawnSync(process.execPath, [...nodeArgs, INSTALL_PATH, 'uninstall', '--purge'], {
         encoding: 'utf8',
         env: {
           ...process.env,
@@ -622,18 +622,64 @@ describe('install lifecycle checks', () => {
       }
     });
 
+    // What is left after a failed unlink decides the report, not the error code alone. A shard a
+    // live session pruned between the listing and the unlink (ENOENT) is gone, as wanted; a file
+    // of its own that will not go (EPERM: on Linux an immutable file, or another user's in a
+    // sticky dir) is a failure, not an entry it "does not recognise". Neither can be produced
+    // here without root, so a preload makes unlink answer that way (R32 depth-2 review L3, L4).
+    it('counts a shard pruned meanwhile as removed, and its own file it may not remove as a failure', () => {
+      const home = makeTmpDir();
+      try {
+        const dir = join(home, 'live');
+        seed(dir, ['claude-mem-lite.db', 'metrics/2026-01-01.jsonl', 'errors/2026-01-01.jsonl']);
+        const preload = join(home, 'unlink-faults.mjs');
+        writeFileSync(
+          preload,
+          [
+            "import fs from 'node:fs';",
+            "import { syncBuiltinESMExports } from 'node:module';",
+            'const real = fs.unlinkSync;',
+            'fs.unlinkSync = (p, ...rest) => {',
+            "  if (String(p).endsWith('/metrics/2026-01-01.jsonl')) real(p);",
+            "  if (String(p).endsWith('/errors/2026-01-01.jsonl'))",
+            "    throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });",
+            '  return real(p, ...rest);',
+            '};',
+            'syncBuiltinESMExports();',
+          ].join('\n'),
+        );
+        const { output, status } = purge(home, dir, ['--import', preload]);
+        expect(output).toMatch(/claude-mem-lite uninstaller/); // the preload loaded and install ran
+        expect(existsSync(join(dir, 'metrics'))).toBe(false);
+        expect(output).not.toMatch(/metrics\/2026-01-01\.jsonl/);
+        expect(tree(dir)).toEqual(['errors/2026-01-01.jsonl']);
+        expect(output).toMatch(/Could not remove[^\n]*errors\/2026-01-01\.jsonl \(EPERM\)/);
+        expect(output).not.toMatch(/does not recognise[^\n]*errors/);
+        expect(status).not.toBe(0);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('says which of its own entries it could not remove, and does not claim the purge', () => {
       const home = makeTmpDir();
       const dir = join(home, 'stuck');
-      const locked = [join(dir, 'runtime'), join(dir, 'errors')];
+      const locked = [join(dir, 'runtime'), join(dir, 'errors'), join(dir, 'metrics')];
       try {
-        seed(dir, ['claude-mem-lite.db', 'runtime/install.lock', 'errors/2026-11-11.jsonl']);
+        seed(dir, [
+          'claude-mem-lite.db',
+          'runtime/install.lock',
+          'errors/2026-11-11.jsonl',
+          'metrics/2026-11-11.jsonl',
+        ]);
         chmodSync(locked[0], 0o500); // its entries cannot be removed
         chmodSync(locked[1], 0o300); // it cannot be listed
+        chmodSync(locked[2], 0o600); // listed, but neither unlink nor lstat can reach the shard
         const { output, status } = purge(home, dir);
         for (const d of locked) chmodSync(d, 0o700);
         expect(output).toMatch(/Could not remove[^\n]*runtime/);
         expect(output).toMatch(/Could not remove[^\n]*errors/);
+        expect(output).toMatch(/Could not remove[^\n]*metrics\/2026-11-11\.jsonl \(EACCES\)/);
         expect(output).not.toMatch(/Relocated data purged|Done!/);
         expect(status).not.toBe(0);
       } finally {

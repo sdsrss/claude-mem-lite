@@ -2164,12 +2164,23 @@ function purgeOwnedDataEntries(dir) {
         kept.push(join(name, c));
         continue;
       }
-      // A file only: a directory carrying a shard's name is not one of its files.
+      // A file only: a directory carrying a shard's name is not one of its files. When unlink
+      // fails, what is there decides, not the code: a directory is EISDIR on Linux but EPERM on
+      // macOS, EPERM on Linux is a file it may not remove, and nothing there means a live session
+      // pruned the shard meanwhile, which is what was wanted (R32 depth-2 review L3, L4).
+      const path = join(dir, name, c);
       try {
-        unlinkSync(join(dir, name, c));
+        unlinkSync(path);
       } catch (e) {
-        if (e.code === 'EISDIR' || e.code === 'EPERM') kept.push(join(name, c));
-        else failed.push(`${join(name, c)} (${e.code || e.message})`);
+        let isDir = false;
+        let gone = false;
+        try {
+          isDir = lstatSync(path).isDirectory();
+        } catch (le) {
+          gone = le.code === 'ENOENT';
+        }
+        if (isDir) kept.push(join(name, c));
+        else if (!gone) failed.push(`${join(name, c)} (${e.code || e.message})`);
       }
     }
     try {
