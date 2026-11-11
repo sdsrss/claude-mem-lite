@@ -92,4 +92,16 @@ describe('D20: the daily unattended pass does not normalize', () => {
       db.close();
     }
   });
+
+  it('runs exactly re-enrich (wide scope), cluster-merge and smart-compress', async () => {
+    // The case above shows only that normalize is gone; this pins what stays (R34 review L5:
+    // dropping cluster-merge, smart-compress or the wide scope passed the suite).
+    const { DAILY_OPTIMIZE, distributeBudget } = await import('../hook-optimize.mjs');
+    expect(DAILY_OPTIMIZE).toEqual({
+      reenrichScope: 'wide',
+      tasks: ['re-enrich', 'cluster-merge', 'smart-compress'],
+    });
+    // Budgets the three keep: distributeBudget's normalize share was nominal.
+    expect(distributeBudget(15)).toMatchObject({ reenrich: 6, clusterMerge: 4, smartCompress: 4 });
+  });
 });

@@ -149,7 +149,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 ### Unattended LLM paths
 
-- **The daily unattended `normalize` fans out to one scoped pass per project** — a union pass let ONE observation's content rewrite every project. **A corpus-derived whitelist cannot fix that**: if the attacker can write to the corpus they can write to the whitelist. Layer 1 is `isConceptShaped`, a Unicode **property**, never a hand-drawn class; the guard is `lib/memory-input-guard.mjs`, kept separate from `deep-search.mjs`'s `INJECTION_GUARD`. The 8-project cap **ROTATES** via a cursor the escape hatch must not reset.
+- **An unscoped `normalize` fans out to one scoped pass per project** — a union pass let ONE observation's content rewrite every project. **A corpus-derived whitelist cannot fix that**: if the attacker can write to the corpus they can write to the whitelist. Layer 1 is `isConceptShaped`, a Unicode **property**, never a hand-drawn class; the guard is `lib/memory-input-guard.mjs`, kept separate from `deep-search.mjs`'s `INJECTION_GUARD`. The 8-project cap **ROTATES** via a cursor the escape hatch must not reset.
 - **An `if (x)` guard whose else-branch is a LOOSER RULE is a second policy nobody reviewed, and deleting the `if` promotes it**. Smart-compress fails **CLOSED** on a missing `should_compress`; the measured veto argues **against** disabling the branch outright.
 - **Repetition must vary something** — `DEFAULT_LLM_TEMPERATURE` is 0, so on the sonnet tier re-asking the same prompt measures nothing (Haiku 5.5 runs unpinned). Rotate member order.
 

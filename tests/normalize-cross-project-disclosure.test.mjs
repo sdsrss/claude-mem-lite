@@ -89,6 +89,8 @@ describe('CLAUDE_MEM_NORMALIZE_CROSS_PROJECT disclosure', () => {
     const text = lines.map((c) => c.message).join(' ');
     // The finding id, so a reader can reach the reasoning rather than just the fact.
     expect(text).toContain('R10-P3-21');
+    // What the flag reaches since D20: unscoped runs, not a daily normalize (R34 review L4).
+    expect(text).toMatch(/normalize run without --project/);
   });
 
   it('says nothing, and costs no issue, when the hatch is off', () => {

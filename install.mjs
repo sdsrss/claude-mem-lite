@@ -3914,18 +3914,14 @@ async function doctor() {
     }
   }
 
-  // Protections the operator has switched off. `doctor` is the channel because the surface
-  // that would otherwise carry it cannot: the daily normalize runs in a worker spawned by
-  // hook-shared.mjs::spawnBackground with `stdio: 'ignore'`, so its `console.error` warning
-  // reaches /dev/null. That warning is still correct for the foreground CLI path; this is
-  // the unattended one. Same shape as the CLAUDE_MEM_SKIP_SIG_VERIFY notice.
+  // Protections the operator has switched off, said where the user looks. The flag reaches a
+  // normalize run without --project from the CLI, which warns in the user's own terminal, or
+  // from `mem_optimize`, whose warning lands in the host's MCP log; the daily pass runs no
+  // normalize since D20 (2026-11-11). Same shape as the CLAUDE_MEM_SKIP_SIG_VERIFY notice.
   // dwarn, not fail: the flag is set deliberately, so it must be VISIBLE without pushing
   // doctor to exit 1 — a diagnostic that fails on a supported configuration stops being run.
   // `=== '1'` mirrors executeNormalize exactly; warning on `true` would describe a machine
   // that is in fact still fanning out.
-  // Since D20 (2026-11-11) the daily pass runs no normalize; what the flag still reaches is a
-  // normalize run without --project from the CLI or from `mem_optimize`, whose stderr is the
-  // host's MCP log.
   if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
     dwarn(
       'CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1: a normalize run without --project goes over every ' +
