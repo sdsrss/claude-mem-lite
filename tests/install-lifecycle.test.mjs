@@ -571,6 +571,57 @@ describe('install lifecycle checks', () => {
       }
     });
 
+    // existsSync() is false on EACCES too, so a store it could not even look for was reported
+    // absent: "has no claude-mem-lite.db" (untrue), then "Done!" and exit 0 (R32 depth-2 review
+    // M1). Three ways to be unable to look: the directory unreadable and unsearchable, readable
+    // but not searchable, and its parent not searchable.
+    it('does not report a store it could not look for as absent', () => {
+      const home = makeTmpDir();
+      const parent = join(home, 'p');
+      const dir = join(parent, 'data');
+      try {
+        for (const [locked, mode] of [
+          [dir, 0o000],
+          [dir, 0o600],
+          [parent, 0o000],
+        ]) {
+          seed(dir, ['claude-mem-lite.db', 'notes.txt']);
+          chmodSync(locked, mode);
+          const { output, status } = purge(home, dir);
+          chmodSync(locked, 0o700);
+          const shape = `${locked === dir ? 'data dir' : 'parent'} ${mode.toString(8)}`;
+          expect(tree(dir), shape).toEqual(['claude-mem-lite.db', 'notes.txt']);
+          expect(output, shape).toMatch(/Could not look for claude-mem-lite\.db/);
+          expect(output, shape).not.toMatch(/has no claude-mem-lite\.db|Relocated data purged|Done!/);
+          expect(status, shape).not.toBe(0);
+        }
+      } finally {
+        for (const d of [parent, dir]) if (existsSync(d)) chmodSync(d, 0o700);
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // ...whereas a CLAUDE_MEM_DIR with no store in it (a mistyped one; or a file, where stat says
+    // ENOTDIR) is not ours to touch: "left untouched", not a lookup that failed.
+    it('leaves a CLAUDE_MEM_DIR with no store in it untouched and says why', () => {
+      const home = makeTmpDir();
+      try {
+        const dir = join(home, 'mistyped');
+        const file = join(home, 'not-a-dir');
+        seed(dir, ['notes.txt', 'metrics/2026-11-11.jsonl']);
+        writeFileSync(file, 'mine');
+        for (const target of [dir, file]) {
+          const { output, status } = purge(home, target);
+          expect(output, target).toMatch(/has no claude-mem-lite\.db — left untouched/);
+          expect(status, target).toBe(0);
+        }
+        expect(tree(dir)).toEqual(['metrics/2026-11-11.jsonl', 'notes.txt']);
+        expect(readFileSync(file, 'utf8')).toBe('mine');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('says which of its own entries it could not remove, and does not claim the purge', () => {
       const home = makeTmpDir();
       const dir = join(home, 'stuck');

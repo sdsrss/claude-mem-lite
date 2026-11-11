@@ -1986,7 +1986,20 @@ async function uninstall() {
     // and removing it whole took those too (R32 E2E install F1, P0). It is removed only once
     // nothing else is left in it.
     if (MEM_DATA_DIR !== homeDir) {
-      if (existsSync(join(MEM_DATA_DIR, 'claude-mem-lite.db'))) {
+      // Not existsSync: it is false on EACCES too, so a store it could not look for was reported
+      // absent, then "Done!" (R32 depth-2 review M1).
+      let storeLookup = null;
+      try {
+        statSync(join(MEM_DATA_DIR, 'claude-mem-lite.db'));
+      } catch (e) {
+        storeLookup = e.code || e.message;
+      }
+      if (storeLookup !== null && storeLookup !== 'ENOENT' && storeLookup !== 'ENOTDIR') {
+        warn(
+          `Could not look for claude-mem-lite.db in ${MEM_DATA_DIR} (${storeLookup}) — nothing there was removed.`,
+        );
+        purgeIncomplete = true;
+      } else if (storeLookup === null) {
         const r = purgeOwnedDataEntries(MEM_DATA_DIR);
         const list = (xs) => `${xs.slice(0, 10).join(', ')}${xs.length > 10 ? ', …' : ''}`;
         if (r.unreadable) {
