@@ -1761,6 +1761,44 @@ export function summaryReplyExcerpt(reply) {
  * guard, and the system part says the outcome it reports wins. Without one the prompt is the
  * one shipped before D19, byte for byte.
  */
+/**
+ * D21: how many of a session's events the summary reads, newest first — the same bound the
+ * observation query has (LIMIT 30). R34 measured a median of 9 events in a session's window on
+ * the maintainer's store, at most 111.
+ */
+export const SUMMARY_EVENTS_LIMIT = 30;
+
+/** D21: this session's live events, newest first, as the episode path recorded them. */
+export function sessionEventsForSummary(db, sessionId) {
+  return db
+    .prepare(
+      `SELECT id, event_type, title, body, created_at_epoch FROM events
+       WHERE memory_session_id = ? AND superseded_at_epoch IS NULL
+       ORDER BY created_at_epoch DESC, id DESC LIMIT ?`,
+    )
+    .all(sessionId, SUMMARY_EVENTS_LIMIT);
+}
+
+/**
+ * D21: one list for the summary prompt, newest first. An event becomes an observation-shaped
+ * row (its body is the lesson or narrative the episode stored); at equal times the observation
+ * comes first, so the order never depends on the two tables' unrelated ids.
+ * @param {{created_at_epoch?: number}[]} observations newest first
+ * @param {{event_type: string, title: string, body: string|null, created_at_epoch: number}[]} events
+ */
+export function mergeSummaryRows(observations, events) {
+  const rows = [
+    ...observations.map((o) => ({ row: o, at: o.created_at_epoch ?? 0, table: 0 })),
+    ...events.map((e) => ({
+      row: { type: e.event_type, title: e.title, narrative: e.body || '' },
+      at: e.created_at_epoch ?? 0,
+      table: 1,
+    })),
+  ];
+  rows.sort((a, b) => b.at - a.at || a.table - b.table);
+  return rows.map((r) => r.row);
+}
+
 export function buildSessionSummaryPrompt({ project, observations, userPrompts, finalReply }) {
   const obsList = observations
     .map((o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`)
