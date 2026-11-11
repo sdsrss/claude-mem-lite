@@ -8,12 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
 import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 import { saveEvent } from '../lib/activity.mjs';
-import {
-  persistHaikuSummary,
-  mergeSummaryRows,
-  sessionEventsForSummary,
-  SUMMARY_EVENTS_LIMIT,
-} from '../hook-llm.mjs';
+import { persistHaikuSummary, mergeSummaryRows } from '../hook-llm.mjs';
 
 const cols = (db) =>
   db
@@ -82,29 +77,5 @@ describe('mergeSummaryRows', () => {
     const events = [{ event_type: 'feature', title: 'e', body: null, created_at_epoch: 5 }];
     expect(mergeSummaryRows(obs, events).map((r) => r.title)).toEqual(['o', 'e']);
     expect(mergeSummaryRows(obs, [])).toEqual(obs);
-  });
-});
-
-describe('sessionEventsForSummary', () => {
-  it("reads this session's live events only, newest first, bounded", () => {
-    const db = createTestDb();
-    const add = (sid, title, at) =>
-      saveEvent(db, {
-        project: 'p',
-        event_type: 'bugfix',
-        title,
-        created_at_epoch: at,
-        memory_session_id: sid,
-      });
-    add('s1', 'mine-old', 1);
-    add('s1', 'mine-new', 2);
-    add('s2', 'theirs', 3);
-    add(null, 'manual', 4);
-    const gone = add('s1', 'superseded', 5);
-    db.prepare('UPDATE events SET superseded_at_epoch = 9 WHERE id = ?').run(gone);
-    expect(sessionEventsForSummary(db, 's1').map((e) => e.title)).toEqual(['mine-new', 'mine-old']);
-    for (let i = 0; i < SUMMARY_EVENTS_LIMIT + 5; i++) add('s3', `x${i}`, 100 + i);
-    expect(sessionEventsForSummary(db, 's3')).toHaveLength(SUMMARY_EVENTS_LIMIT);
-    db.close();
   });
 });

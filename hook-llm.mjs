@@ -1755,24 +1755,6 @@ export function summaryReplyExcerpt(reply) {
 }
 
 /**
- * D21: how many of a session's events the summary reads, newest first — the same bound the
- * observation query has (LIMIT 30). R34 measured a median of 9 events in a session's window on
- * the maintainer's store, at most 111.
- */
-export const SUMMARY_EVENTS_LIMIT = 30;
-
-/** D21: this session's live events, newest first, as the episode path recorded them. */
-export function sessionEventsForSummary(db, sessionId) {
-  return db
-    .prepare(
-      `SELECT id, event_type, title, body, created_at_epoch FROM events
-       WHERE memory_session_id = ? AND superseded_at_epoch IS NULL
-       ORDER BY created_at_epoch DESC, id DESC LIMIT ?`,
-    )
-    .all(sessionId, SUMMARY_EVENTS_LIMIT);
-}
-
-/**
  * D21: one list for the summary prompt, newest first. An event becomes an observation-shaped
  * row (its body is the lesson or narrative the episode stored); at equal times the observation
  * comes first, so the order never depends on the two tables' unrelated ids.
