@@ -3883,11 +3883,14 @@ async function doctor() {
   // doctor to exit 1 — a diagnostic that fails on a supported configuration stops being run.
   // `=== '1'` mirrors executeNormalize exactly; warning on `true` would describe a machine
   // that is in fact still fanning out.
+  // Since D20 (2026-11-11) the daily pass runs no normalize; what the flag still reaches is a
+  // normalize run without --project from the CLI or from `mem_optimize`, whose stderr is the
+  // host's MCP log.
   if (String(process.env.CLAUDE_MEM_NORMALIZE_CROSS_PROJECT || '') === '1') {
     dwarn(
-      'CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1: the daily normalize runs over every project at ' +
-        "once, so one project's stored content can steer the synonym groups applied to all of " +
-        'them (R10-P3-21). Unset it for the per-project default.',
+      'CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1: a normalize run without --project goes over every ' +
+        "project at once, so one project's stored content can steer the synonym groups applied " +
+        'to all of them (R10-P3-21). Unset it for the per-project default.',
     );
   }
 

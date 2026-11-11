@@ -118,6 +118,8 @@ describe('CLAUDE_MEM_NORMALIZE_CROSS_PROJECT disclosure', () => {
     // console.error alone is enough and whether this disclosure is still the only channel.
     // Read as source rather than executed because `spawnBackground` hands back no handle:
     // with stdio:'ignore' there is, by construction, nothing to capture.
+    // D20 (2026-11-11): the daily worker no longer runs normalize; doctor keeps the disclosure
+    // for `mem_optimize`, whose stderr is the host's MCP log.
     const src = readFileSync(HOOK_SHARED, 'utf8');
     const at = src.indexOf('export function spawnBackground');
     expect(at, 'spawnBackground moved — re-point this tripwire').toBeGreaterThanOrEqual(0);

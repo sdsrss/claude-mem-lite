@@ -1081,6 +1081,9 @@ export async function executeNormalize(db, force = false, { project } = {}) {
       // user runs in their own terminal — same shape and prefix as install.mjs's
       // CLAUDE_MEM_SKIP_SIG_VERIFY notice. Do not delete either half; they cover different
       // paths, and tests/normalize-cross-project-disclosure.test.mjs pins both.
+      // Since D20 (2026-11-11) the daily pass no longer reaches here at all (handleLLMOptimize
+      // leaves normalize out); the two callers left are the CLI and the MCP server, and doctor
+      // keeps the disclosure for the MCP one, whose stderr is a log the user rarely opens.
       console.error(
         '[claude-mem-lite] WARNING: CLAUDE_MEM_NORMALIZE_CROSS_PROJECT=1 — normalize is ' +
           'running over every project at once, so one project’s stored content can steer the ' +
@@ -2108,10 +2111,21 @@ export async function handleLLMOptimize() {
     // targets bugfix/refactor/feature/decision rows with substantive narrative
     // but missing lesson_learned, which is exactly the audit's 11.2% coverage
     // gap. CLI `mem optimize` keeps narrow as default for explicit invocations.
-    const results = await optimizeRun(db, { reenrichScope: 'wide' });
+    //
+    // No normalize here (D20, 2026-11-11). It rewrites observations.concepts with whatever
+    // synonym groups the model returns, and one real call on a copy of the maintainer's store
+    // returned 21 groups, about half of them not synonyms (`fmtDate <- date`,
+    // `CLAUDE.md <- CLAUDE.local.md`); nothing recorded the rewrite and nothing undoes it. The
+    // groups it gets right are mostly case and plural variants, which search already covers:
+    // the FTS tokenizer folds case, wordFormPrefixQuery adds the stem prefix, and the original
+    // word stays in search_aliases. An explicit `optimize --run --task normalize` still runs it.
+    // The three tasks keep the budgets they had: distributeBudget's normalize share is nominal.
+    const results = await optimizeRun(db, {
+      reenrichScope: 'wide',
+      tasks: ['re-enrich', 'cluster-merge', 'smart-compress'],
+    });
     const parts = [];
     if (results.reenrich?.processed) parts.push(`re-enriched: ${results.reenrich.processed}`);
-    if (results.normalize?.processed) parts.push(`normalized: ${results.normalize.processed}`);
     if (results.clusterMerge?.merged) parts.push(`merged: ${results.clusterMerge.merged}`);
     if (results.smartCompress?.compressed) parts.push(`compressed: ${results.smartCompress.compressed}`);
     if (parts.length > 0) debugLog('DEBUG', 'llm-optimize', parts.join(', '));
