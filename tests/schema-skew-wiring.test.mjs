@@ -340,6 +340,23 @@ describe('the MCP server stops printing a repair that cannot work', () => {
     expect(out).toMatch(/FATAL: Database cannot be opened/);
   });
 
+  // converge R30 (E2E 2026-11-10, MCP F7): after a failed WAL recovery the server told the user to
+  // `rm` the -wal/-shm files — which that recovery had already deleted, and whose removal loses
+  // uncommitted writes — or to run `node install.mjs install` from wherever they stood. The CLI on
+  // the same file says to run doctor, which names the remedy (D#488: an overwriting remedy is
+  // doctor's to print). The server now says the same.
+  it('a database the server cannot open points at doctor, not at rm or a relative install', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skew-srv-doctor-'));
+    fixtures.push(dir);
+    writeFileSync(join(dir, 'claude-mem-lite.db'), 'not a database at all');
+    const r = run([join(REPO, 'server.mjs')], dir, { stdin: '' });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out, 'premise: the open failed').toMatch(/FATAL: Database cannot be opened/);
+    expect(out).toMatch(/Next: run .*cli\.mjs.* doctor/);
+    expect(out).not.toMatch(/\brm /);
+    expect(out).not.toMatch(/node install\.mjs install/);
+  });
+
   it('starts normally on a healthy database', () => {
     // Keeps the pair above from passing by breaking the server outright: with stdin closed
     // the stdio transport ends and the process exits 0, having printed no skew notice.

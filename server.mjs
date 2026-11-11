@@ -12,7 +12,7 @@ import {
   checkWriteProject,
   unknownProjectNote,
 } from './project-utils.mjs';
-import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, refreshPlannerStats, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
 import {
@@ -95,7 +95,7 @@ import { recordHookError } from './lib/hook-telemetry.mjs';
 import { stripPrivate } from './lib/private-strip.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
-import { CLI_INVOKE, shellWord } from './cli-path.mjs';
+import { CLI_INVOKE } from './cli-path.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -254,15 +254,16 @@ try {
   }
   // Fatal: log and exit with descriptive message (Claude Code shows stderr)
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
+  // The remedy is doctor's to name (D#488): it reads which damage this is and prints the command,
+  // the CLI's line on the same failure says so too. This used to say `rm` the -wal/-shm files —
+  // which the failed recovery had already deleted, and whose removal loses uncommitted writes — or
+  // run `node install.mjs install` from wherever the user stood (converge R30, E2E MCP F7).
   if (err.walRecoveryAttempted) {
-    console.error(
-      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
-    );
+    console.error('[claude-mem-lite] Recovering from the write-ahead log did not help.');
   } else {
-    console.error(
-      `[claude-mem-lite] Left WAL/SHM intact (not a corruption error). If this persists, retry or reinstall: node install.mjs install`,
-    );
+    console.error('[claude-mem-lite] Left WAL/SHM intact (not a corruption error). If this persists:');
   }
+  console.error(`[claude-mem-lite] Next: run \`${CLI_INVOKE} doctor\`.`);
   process.exit(1);
 }
 // Server process uses longer busy_timeout for concurrent MCP requests
