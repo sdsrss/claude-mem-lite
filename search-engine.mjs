@@ -681,7 +681,8 @@ export function searchObservationsHybrid(db, ctx) {
   // Word-form fallback (converge R29): the strict query and its OR relaxation found nothing, so
   // no word of the query is in the index as written. Try each word's stem as a prefix (`crash*`
   // reaches `crashes`). It runs only on an empty result, so it adds rows to a search that had none
-  // and cannot reorder one that had any. It sets neither orFallbackFired (the "relaxed AND→OR" label
+  // and cannot reorder one that had any; it sets ctx.wordFormFired, and the cross-source search
+  // drops these rows when another leg found the words as written. It sets neither orFallbackFired (the "relaxed AND→OR" label
   // would misname a one-word search) nor effectiveFtsQuery: PRF stays inert on these rows rather
   // than padding them with rows that hold no word of the query.
   if (results.length === 0) {
@@ -704,6 +705,7 @@ export function searchObservationsHybrid(db, ctx) {
               offset: perSourceOffset,
             }),
           );
+        if (formRows.length > 0) ctx.wordFormFired = true;
         for (const r of formRows) results.push(ftsRowToResult(r, { snippet: true }));
       } catch (e) {
         debugCatch(e, 'searchObservationsHybrid-word-form-fallback');

@@ -9,6 +9,8 @@ import Database from 'better-sqlite3';
 import { sanitizeFtsQuery, wordFormPrefixQuery } from '../nlp.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
+import { coreRunSearchPipeline, buildSearchFtsQuery } from '../lib/search-core.mjs';
+import { saveEvent } from '../lib/activity.mjs';
 
 // Exact production tokenizer config (schema.mjs observations_fts).
 const TOKENIZE = "unicode61 remove_diacritics 2 tokenchars '_-'";
@@ -90,5 +92,102 @@ describe('searchObservationsHybrid — the word-form tier', () => {
   });
   it('a word with no form in the store still finds nothing', () => {
     expect(search('kubernetes')).toEqual([]);
+  });
+});
+
+// Pre-tag review 6.33.0 (defects F2): the tier sat inside the observation leg, so it fired
+// whenever observations alone found nothing, even when another leg found the query's words as
+// written; its stem-prefix rows then joined that result and ranked above the exact match.
+describe('the word-form tier in a cross-source search', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    insertObs(db, { title: 'Parser crash on startup', narrative: 'crash in the parser', importance: 2 });
+    insertObs(db, { title: 'Crash report notes', narrative: 'a crash we saw', importance: 2 });
+  });
+  afterEach(() => db.close());
+  const run = async (query) => {
+    const res = await coreRunSearchPipeline(
+      {
+        db,
+        currentProject: 'test',
+        env: {},
+        searchObservationsHybrid,
+        deepSearch: async () => ({ rows: [] }),
+        shouldEscalateToDeep: () => false,
+        autoDeepLlmReady: () => false,
+        reRankWithContext: async (rows) => rows,
+        llm: null,
+      },
+      {
+        query,
+        ftsQuery: buildSearchFtsQuery(query),
+        effectiveSource: null,
+        deepMode: 'normal',
+        limit: 10,
+        offset: 0,
+        rerankPolicy: 'cli',
+        rerankProject: 'test',
+        tolerateMissingFts: true,
+        tierPosition: 'early',
+      },
+    );
+    return res.page.map((r) => `${r.source}:${r.title}`);
+  };
+
+  it('fills a search no leg answered', async () => {
+    expect((await run('crashes')).sort()).toEqual(['obs:Crash report notes', 'obs:Parser crash on startup']);
+  });
+
+  it('keeps the rows of a deep escalation beside another leg', async () => {
+    saveEvent(db, {
+      project: 'test',
+      event_type: 'bugfix',
+      title: 'Worker crashes on reload',
+      body: 'crashes',
+    });
+    const res = await coreRunSearchPipeline(
+      {
+        db,
+        currentProject: 'test',
+        env: {},
+        searchObservationsHybrid,
+        deepSearch: async () => ({
+          results: [{ id: 99, source: 'obs', title: 'Deep row', score: 1 }],
+          variants: [],
+          reranked: false,
+        }),
+        shouldEscalateToDeep: () => true,
+        autoDeepLlmReady: () => true,
+        reRankWithContext: async (rows) => rows,
+        llm: null,
+      },
+      {
+        query: 'crashes',
+        ftsQuery: buildSearchFtsQuery('crashes'),
+        effectiveSource: null,
+        deepMode: 'auto',
+        limit: 10,
+        offset: 0,
+        rerankPolicy: 'cli',
+        rerankProject: 'test',
+        tolerateMissingFts: true,
+        tierPosition: 'early',
+      },
+    );
+    const got = res.page.map((r) => `${r.source}:${r.title}`);
+    expect(got).toContain('obs:Deep row');
+    expect(got).toContain('event:Worker crashes on reload');
+  });
+
+  it('adds nothing when another leg found the words as written', async () => {
+    saveEvent(db, {
+      project: 'test',
+      event_type: 'bugfix',
+      title: 'Worker crashes on reload',
+      body: 'crashes',
+    });
+    expect(await run('crashes')).toEqual(['event:Worker crashes on reload']);
   });
 });
