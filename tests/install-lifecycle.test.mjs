@@ -419,6 +419,65 @@ describe('install lifecycle checks', () => {
     }
   });
 
+  // R32 E2E install F1 (P0): with CLAUDE_MEM_DIR relocated, --purge removed the WHOLE directory
+  // once it held claude-mem-lite.db, so files a user keeps beside the store went with it. Only
+  // what claude-mem-lite writes there is removed; anything else stays, and the output says so.
+  describe('uninstall --purge with a relocated CLAUDE_MEM_DIR', () => {
+    const OURS = [
+      'claude-mem-lite.db',
+      'claude-mem-lite.db-wal',
+      'claude-mem-lite.db.pre-delete-2026-11-11T00-00-00-000Z-1-1.bak',
+      'claude-mem.db',
+      'runtime/session.json',
+      'metrics/2026-11-11.jsonl',
+      'errors/2026-11-11.jsonl',
+      'backups/pre-apply.db',
+      '.update-backup-1700000000000-4242/hook.mjs',
+    ];
+    const seed = (dir, files) => {
+      for (const f of files) {
+        mkdirSync(join(dir, f, '..'), { recursive: true });
+        writeFileSync(join(dir, f), 'x');
+      }
+    };
+    const purge = (home, dir) =>
+      runInstall('uninstall', home, ['--purge'], {
+        PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}`,
+        CLAUDE_MEM_DIR: dir,
+      });
+
+    it("keeps the user's own files and names them", () => {
+      const home = makeTmpDir();
+      try {
+        const dir = join(home, 'shared');
+        seed(dir, OURS);
+        writeFileSync(join(dir, 'notes.txt'), 'mine');
+        mkdirSync(join(dir, 'taxes'));
+        writeFileSync(join(dir, 'taxes', '2025.pdf'), 'mine');
+        const output = purge(home, dir);
+        expect(readdirSync(dir).sort()).toEqual(['notes.txt', 'taxes']);
+        expect(readFileSync(join(dir, 'taxes', '2025.pdf'), 'utf8')).toBe('mine');
+        expect(output).toMatch(/notes\.txt/);
+        expect(output).toMatch(/taxes/);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('removes the directory when it held only claude-mem-lite files', () => {
+      const home = makeTmpDir();
+      try {
+        const dir = join(home, 'mem');
+        seed(dir, OURS);
+        const output = purge(home, dir);
+        expect(existsSync(dir)).toBe(false);
+        expect(output).toContain(`Relocated data purged (${dir})`);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
   // A plain uninstall said "Data preserved (use --purge to remove)". True, and it named
   // the wrong half of what is left: on a real sandbox install the DB was 0.2MB while the
   // now-unreachable code and node_modules were 53MB — the symlink, hooks and MCP entry are

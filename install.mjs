@@ -1958,12 +1958,24 @@ async function uninstall() {
     } else if (existsSync(DATA_DIR)) {
       fail('DATA_DIR path mismatch, refusing to purge for safety: ' + DATA_DIR);
     }
-    // Also remove the relocated data dir — but ONLY if it's genuinely our data dir
-    // (contains claude-mem-lite.db), so a mistyped CLAUDE_MEM_DIR is never rm'd.
+    // Also purge the relocated data dir — ONLY if it's genuinely our data dir (contains
+    // claude-mem-lite.db), so a mistyped CLAUDE_MEM_DIR is never touched. Even then only what
+    // claude-mem-lite writes there goes: the directory may be one the user keeps other files in,
+    // and removing it whole took those too (R32 E2E install F1, P0). It is removed only once
+    // nothing else is left in it.
     if (MEM_DATA_DIR !== homeDir) {
       if (existsSync(join(MEM_DATA_DIR, 'claude-mem-lite.db'))) {
-        rmSync(MEM_DATA_DIR, { recursive: true, force: true });
-        ok(`Relocated data purged (${MEM_DATA_DIR})`);
+        const kept = purgeOwnedDataEntries(MEM_DATA_DIR);
+        if (kept.length === 0) {
+          rmSync(MEM_DATA_DIR, { recursive: true, force: true });
+          ok(`Relocated data purged (${MEM_DATA_DIR})`);
+        } else {
+          ok(`Relocated data purged from ${MEM_DATA_DIR}`);
+          warn(
+            `Kept ${kept.length} entr${kept.length === 1 ? 'y' : 'ies'} there that claude-mem-lite did not write: ` +
+              `${kept.slice(0, 10).join(', ')}${kept.length > 10 ? ', …' : ''}. Remove them yourself if intended.`,
+          );
+        }
       } else if (existsSync(MEM_DATA_DIR)) {
         warn(
           `CLAUDE_MEM_DIR (${MEM_DATA_DIR}) has no claude-mem-lite.db — left untouched. Remove manually if intended.`,
@@ -2004,6 +2016,46 @@ async function uninstall() {
     return;
   }
   console.log('\n  Done!\n');
+}
+
+// Directories claude-mem-lite creates in a data dir: runtime state (lib/resolve-data-dir.mjs),
+// metrics shards (lib/metrics.mjs), sampled errors (lib/err-sampler.mjs) and verify-apply's
+// backups (cli/verify-apply.mjs).
+const OWNED_DATA_DIRS = new Set(['runtime', 'metrics', 'errors', 'backups']);
+
+/**
+ * Remove what claude-mem-lite writes into a relocated data dir — the store and every file named
+ * after it (WAL/SHM, `.bak` snapshots, legacy backups), the legacy `claude-mem.db*`, its own
+ * directories and update residue — and nothing else. A name it does not recognise stays: a
+ * leftover is reported, a deleted user file is not recoverable. Never throws.
+ * @param {string} dir
+ * @returns {string[]} the entries left in place, sorted
+ */
+function purgeOwnedDataEntries(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const kept = [];
+  for (const name of names) {
+    const owned =
+      name.startsWith('claude-mem-lite.db') ||
+      name.startsWith('claude-mem.db') ||
+      OWNED_DATA_DIRS.has(name) ||
+      isUpdateResidue(name);
+    if (!owned) {
+      kept.push(name);
+      continue;
+    }
+    try {
+      rmSync(join(dir, name), { recursive: true, force: true });
+    } catch {
+      kept.push(name);
+    }
+  }
+  return kept.sort();
 }
 
 /**
