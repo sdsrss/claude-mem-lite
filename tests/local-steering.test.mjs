@@ -21,6 +21,7 @@ import {
   appendFileSync,
   chmodSync,
   renameSync,
+  statSync,
 } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -3249,6 +3250,25 @@ describe('D#509(4): steering already loaded from above the top-level', () => {
       },
     );
     writeFileSync(above, `${copy}\n<!-- ${'x'.repeat(4194304)} -->\n`);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // Round-3 review F7: the limit is Claude Code's exactly — 4,194,304 bytes loads, one more does not.
+  it('a CLAUDE.local.md above of exactly 4,194,304 bytes stands in; one byte more does not', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    const copy = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    const above = join(work(), LOCAL_MD);
+    const sized = (bytes) => {
+      const pad = bytes - Buffer.byteLength(copy) - Buffer.byteLength('<!--  -->\n');
+      writeFileSync(above, `${copy}<!-- ${'x'.repeat(pad)} -->\n`);
+      expect(statSync(above).size, 'premise: the file has the size under test').toBe(bytes);
+    };
+    sized(4194304);
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'above-root',
+    });
+    sized(4194305);
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
   });
 

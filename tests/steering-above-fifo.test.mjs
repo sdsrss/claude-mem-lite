@@ -120,6 +120,19 @@ describe('a FIFO or a device where an instruction file would sit above the proje
     expect(s.rssKb, 'the sync must not read the device').toBeLessThan(400_000);
   });
 
+  // Round-3 review F1: a /proc file reports size 0 and reads without end; the size check alone let it
+  // through, and the read filled memory.
+  it('a symlink to /proc/self/pagemap as CLAUDE.local.md above is not read without bound', () => {
+    const app = join(home, 'work', 'app');
+    initRepo(app);
+    symlinkSync('/proc/self/pagemap', join(home, 'work', 'CLAUDE.local.md'));
+    const s = sessionIn(app);
+    expect(s.signal).toBeNull();
+    expect(s.status).toBe(0);
+    expect(s.result).toMatchObject({ action: 'local', written: 'created' });
+    expect(s.rssKb, 'the sync must stop reading at the limit').toBeLessThan(400_000);
+  });
+
   // Delta review R2-2: the AGENTS.md check above the project read the same files with a plain read.
   it('beside an AGENTS.md, a FIFO CLAUDE.md above does not stall the AGENTS.md check', () => {
     const app = join(home, 'work', 'app');
@@ -133,8 +146,8 @@ describe('a FIFO or a device where an instruction file would sit above the proje
 });
 
 describe('the instruction-file readers', () => {
-  // A file Claude Code would not load (over 4,194,304 bytes) is not read whole, and is never taken for
-  // one holding only plugin text: unadopt deletes a file that holds nothing else.
+  // A file Claude Code would not load (over 4,194,304 bytes) is not read whole, and does not count as
+  // holding only plugin text (the AGENTS.md checks and the dashboard's own-files count ask that).
   it('an over-limit file holding only the block is not plugin-only text', () => {
     const dir = mkdtempWithoutInstructionAncestors('cml-big-');
     try {

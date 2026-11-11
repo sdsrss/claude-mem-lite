@@ -26,6 +26,7 @@ import {
   openSync,
   fstatSync,
   closeSync,
+  readSync,
   constants as fsConstants,
 } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
@@ -284,19 +285,31 @@ export function readBlock(cwd, slug) {
 // limit" (its own message).
 const INSTRUCTION_FILE_MAX_BYTES = 4194304;
 
-// A regular file's text, or null for one Claude Code would not load: a FIFO, a device, a socket, or
-// over its size limit. The session sync reads instruction files in every directory above the
-// project (D#509(4)), /tmp among them, where any local user can put a FIFO (a blocking read stalled
-// SessionStart, v6.32.0 pre-release defects review F1) or a huge sparse file (read whole, it filled
-// memory, delta review R2-1). Opened non-blocking and checked on the descriptor, so a file swapped in
-// after the check is not the one read. A directory still throws EISDIR, as a plain read did.
+// A regular file's text, or null for one Claude Code would not load: a FIFO or a device, or over its
+// size limit. The session sync reads instruction files in every directory above the project
+// (D#509(4)), /tmp among them, where any local user can put a FIFO (a blocking read stalled
+// SessionStart, v6.32.0 pre-release defects review F1) or a huge file (read whole, it filled memory,
+// delta review R2-1). Opened non-blocking and checked on the descriptor, so a file swapped in after
+// the check is not the one read. The size fstat reports is no bound — a /proc file reports 0 and
+// never ends, and a file can grow — so at most one byte past the limit is read, as Claude Code's own
+// bounded read does (round-3 review F1). A directory still throws EISDIR, as a plain read did.
 function readRegularText(p) {
   const fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
   try {
     const st = fstatSync(fd);
     if (st.isDirectory()) throw Object.assign(new Error(`${p}: is a directory`), { code: 'EISDIR' });
     if (!st.isFile() || st.size > INSTRUCTION_FILE_MAX_BYTES) return null;
-    return readFileSync(fd, 'utf8');
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(65536);
+      const n = readSync(fd, chunk, 0, chunk.length, null);
+      if (n === 0) break;
+      total += n;
+      if (total > INSTRUCTION_FILE_MAX_BYTES) return null;
+      chunks.push(chunk.subarray(0, n));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
   } finally {
     closeSync(fd);
   }
