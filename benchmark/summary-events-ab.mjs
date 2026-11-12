@@ -30,6 +30,11 @@
 //      importance, change nothing else), and every arm called twice, so the gate reads pooled
 //      counts against the noise of a fresh call; gate: gateD26
 //      (docs/audits/20261112-d26-preregistration.md).
+//   S, D, M, M2, S2  D27 (`run --arms S,D,M`), on D23's population from `--since`: S and M as in
+//      D23 (M through the shipped prompt, 6.35.0 since D#845), D = S's row with `completed`
+//      extended by what each Stop would write for its turn alone (armDCompleted, zero calls),
+//      M2 = M called again, S2 = S verbatim. Judged on both views; gate: gateD27
+//      (docs/audits/20261112-d27-preregistration.md).
 //
 // WHICH REPLIES (D#825). The worker reads what Stop recorded under the session (lib/turn-replies.mjs);
 // stopReplies rebuilds that from the transcript. Reading 3 (D22's gate) took the replies from a
@@ -71,7 +76,8 @@
 //
 // Usage:
 //   node benchmark/summary-events-ab.mjs run --out rows.json [--n 30] [--days 45] [--db path]
-//     [--arms A,B | A,C | S,M | C,C2,P | C,C2,Q,Q2] [--exclude earlier-rows.json[,…]]
+//     [--arms A,B | A,C | S,M | C,C2,P | C,C2,Q,Q2 | S,D,M] [--exclude earlier-rows.json[,…]]
+//     [--since ISO] [--projects-dir dir] [--exclude-text s] [--count-only]   (S,M and S,D,M)
 //   node benchmark/summary-events-ab.mjs prepare rows.json outdir [--seed 20261111] [--batches 2]
 //     (judge files in outdir/judge/, key.json in outdir; verdicts-<k>-<a|b>.json go back into outdir)
 //   node benchmark/summary-events-ab.mjs score outdir
@@ -104,9 +110,11 @@ import { buildSummaryLines } from '../hook-context.mjs';
 // prompt with COMPLETED_LEAD.
 // Q and Q2 are D26's (`run --arms C,C2,Q,Q2`): Q is arm C's prompt with COMPLETED_ORDER, Q2 is Q
 // called again; C2 and Q2 together are judged apart from their session's C and Q.
-const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2', 'C2', 'P', 'Q', 'Q2'];
+// D and M2 are D27's (`run --arms S,D,M`): D is the zero-call arm, M2 is M called again; S2 and
+// M2 are judged apart from their session's S, D and M.
+const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2', 'C2', 'P', 'Q', 'Q2', 'D', 'M2'];
 // An A/A copy is judged in a batch apart from its own session's other arms (buildBlind).
-const COPY_ARMS = new Set(['S2', 'A2', 'C2', 'Q2']);
+const COPY_ARMS = new Set(['S2', 'A2', 'C2', 'Q2', 'M2']);
 
 /**
  * D25's candidate (docs/audits/20261112-d25-preregistration.md): D24 found the 120-character
@@ -158,6 +166,22 @@ export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows 
       `arm ${arm}: the shipped prompt carries COMPLETED_ORDER since D#845; run D25/D26 at e51a8c69`,
     );
   return armPPrompt(shipped, CANDIDATE[arm]);
+}
+
+/**
+ * D#847 F-2: armPrompt refuses a candidate arm only when it builds that arm's prompt, so
+ * `run --arms C,C2,Q,Q2` paid for item 0's C and C2 calls before Q threw. run() asks once,
+ * before it reads the store, on a two-reply probe session (every candidate arm sends replies).
+ */
+export function refuseStaleCandidates(arms, deps) {
+  const probe = {
+    project: 'probe',
+    observations: [],
+    events: [],
+    userPrompts: ['probe'],
+    replies: ['first reply', 'second reply'],
+  };
+  for (const arm of arms) if (CANDIDATE[arm]) armPrompt(arm, probe, deps);
 }
 
 /** The order the arms are called in for item i: rotated by one per item. */
@@ -479,6 +503,103 @@ export function gateD26({ line, fields, n }) {
   return { decision: reasons.length === 0 ? 'ship' : 'no', reasons };
 }
 
+// D27's six counts, both views: [view, question].
+const D27_COUNTS = [
+  ['line', 'line_misses_main'],
+  ['line', 'false_open'],
+  ['line', 'unsupported'],
+  ['fields', 'missed_done'],
+  ['fields', 'false_open'],
+  ['fields', 'unsupported'],
+];
+const D27_PRIMARY = [
+  ['line', 'line_misses_main'],
+  ['fields', 'missed_done'],
+];
+
+/**
+ * D27's registered rule (docs/audits/20261112-d27-preregistration.md §4). Counts are both-YES
+ * items out of n. Invalid ('none'): n below 20; an arm of S, D, M, M2, S2 not judged in full in
+ * either view; usable below n - 2; agreement below 0.70 on any question of either view; the
+ * verbatim copy S2 off S by more than 2 on either primary; the second call M2 off M by more than 8
+ * on line_misses_main or 6 on missed_done. Then:
+ *   D passes  missed_done(D) <= missed_done(S) - 3, and every other count of D <= S + 1;
+ *   M passes  the same against S, for M and for M2 each;
+ *   M beats D on a primary when M and M2 are each at least 3 below D there, with every count of
+ *             M and of M2 at most D + 1.
+ * Decision: 'M' when M beats D and (D passes or M passes); 'D' when D passes and M does not beat
+ * it; 'M' when only M passes; else 'no'. The extra calls are the price M pays, so a model arm
+ * that only ties the zero-call arm is not taken.
+ */
+export function gateD27({ line, fields, n }) {
+  const reasons = [];
+  if (!(n >= 20)) return { decision: 'none', reasons: [`n = ${n} < 20`] };
+  const arms = ['S', 'D', 'M', 'M2', 'S2'];
+  const views = { line, fields };
+  for (const [view, r, questions] of [
+    ['line', line, LINE_QUESTIONS],
+    ['fields', fields, QUESTIONS],
+  ]) {
+    for (const arm of arms) {
+      const s = r?.arms?.[arm];
+      if (!s || !(s.judged >= n)) reasons.push(`${view}: judged(${arm}) = ${s?.judged ?? 0} < ${n}`);
+    }
+    for (const q of questions) {
+      if (!(r?.agreement?.[q] >= 0.7)) reasons.push(`${view}: ${q} agreement ${r?.agreement?.[q]} < 0.70`);
+    }
+  }
+  for (const arm of arms) {
+    const s = fields?.arms?.[arm];
+    if (s && s.usable < n - 2) reasons.push(`usable(${arm}) = ${s.usable} < ${n - 2}`);
+  }
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  const c = (arm, [view, q]) => views[view].arms[arm][q];
+  for (const [copy, of, limits] of [
+    ['S2', 'S', [2, 2]],
+    ['M2', 'M', [8, 6]],
+  ]) {
+    D27_PRIMARY.forEach((k, i) => {
+      const gap = Math.abs(c(copy, k) - c(of, k));
+      if (gap > limits[i]) reasons.push(`A/A: |${k[1]}(${copy}) - ${k[1]}(${of})| = ${gap} > ${limits[i]}`);
+    });
+  }
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  const passes = (x) => {
+    const why = [];
+    const md = ['fields', 'missed_done'];
+    if (c(x, md) > c('S', md) - 3) why.push(`missed_done(${x}) = ${c(x, md)} > S-3 = ${c('S', md) - 3}`);
+    for (const k of D27_COUNTS) {
+      if (k[1] === 'missed_done') continue;
+      if (c(x, k) > c('S', k) + 1) why.push(`${k[0]} ${k[1]}(${x}) = ${c(x, k)} > S+1 = ${c('S', k) + 1}`);
+    }
+    return why;
+  };
+  const dWhy = passes('D');
+  const mWhy = [...passes('M'), ...passes('M2')];
+  const beatWhy = [];
+  const beatsOn = D27_PRIMARY.filter((k) => ['M', 'M2'].every((x) => c(x, k) <= c('D', k) - 3));
+  if (beatsOn.length === 0) beatWhy.push('M beats D on no primary: M and M2 are not each 3 below D');
+  for (const x of ['M', 'M2']) {
+    for (const k of D27_COUNTS) {
+      if (c(x, k) > c('D', k) + 1)
+        beatWhy.push(`${k[0]} ${k[1]}(${x}) = ${c(x, k)} > D+1 = ${c('D', k) + 1}`);
+    }
+  }
+  const dPasses = dWhy.length === 0;
+  const mPasses = mWhy.length === 0;
+  const mBeatsD = beatWhy.length === 0;
+  const detail = { dPasses, mPasses, mBeatsD, beatsOn: beatsOn.map((k) => k[1]) };
+  const all = [
+    ...dWhy.map((w) => `D vs S: ${w}`),
+    ...mWhy.map((w) => `M vs S: ${w}`),
+    ...beatWhy.map((w) => `M vs D: ${w}`),
+  ];
+  if (mBeatsD && (dPasses || mPasses)) return { decision: 'M', ...detail, reasons: all };
+  if (dPasses) return { decision: 'D', ...detail, reasons: all };
+  if (mPasses) return { decision: 'M', ...detail, reasons: all };
+  return { decision: 'no', ...detail, reasons: all };
+}
+
 /** Unblind two judges' verdicts (id → {question: 'YES' | 'NO'}), over `questions`. */
 export function scoreVerdicts(key, a, b, usableByArm, questions = QUESTIONS) {
   const present = ALL_ARMS.filter((x) => x in usableByArm || Object.values(key).some((k) => k.arm === x));
@@ -641,9 +762,14 @@ function sessionStopReader(db) {
  * newer than `days`, no observation past the low-signal filter (the worker's own query, so it
  * returns no-obs), the transcript on disk, at least two recorded replies. Each item carries what
  * arm S replays: every Stop, and the session's prompts and observations with their stamps.
- * `db` is a read-only handle on the store.
+ * `db` is a read-only handle on the store. D27: `since` (epoch ms) drops a session whose first
+ * prompt or observation is older; `excludeText` drops a session whose transcript holds it (the
+ * session running the ruler, which may not have its observations flushed yet).
  */
-export function collectNoObsSessions(db, { days, now, projectsDir, notLowSignalTitleClause, readEntries }) {
+export function collectNoObsSessions(
+  db,
+  { days, now, projectsDir, notLowSignalTitleClause, readEntries, since = 0, excludeText = '' },
+) {
   const sessions = db
     .prepare(
       `SELECT memory_session_id AS sid, project, MAX(created_at_epoch) AS e FROM session_summaries
@@ -663,7 +789,7 @@ export function collectNoObsSessions(db, { days, now, projectsDir, notLowSignalT
     WHERE content_session_id = ? AND cc_session_id IS NOT NULL ORDER BY prompt_number DESC LIMIT 1`);
   const stopsOf = sessionStopReader(db);
   const out = [];
-  const drop = { hasObs: 0, noFirst: 0, noTranscript: 0, fewReplies: 0 };
+  const drop = { hasObs: 0, noFirst: 0, beforeSince: 0, noTranscript: 0, excluded: 0, fewReplies: 0 };
   for (const s of sessions) {
     if (filteredQ.get(s.sid).n > 0) {
       drop.hasObs++;
@@ -674,13 +800,22 @@ export function collectNoObsSessions(db, { days, now, projectsDir, notLowSignalT
       drop.noFirst++;
       continue;
     }
+    if (first < since) {
+      drop.beforeSince++;
+      continue;
+    }
     const cc = ccQ.get(s.sid)?.cc;
     const transcript = findTranscript(cc, projectsDir);
     if (!transcript) {
       drop.noTranscript++;
       continue;
     }
-    const { stops, replies } = stopsOf(s.sid, cc, first, readEntries(transcript));
+    const entries = readEntries(transcript);
+    if (excludeText && JSON.stringify(entries).includes(excludeText)) {
+      drop.excluded++;
+      continue;
+    }
+    const { stops, replies } = stopsOf(s.sid, cc, first, entries);
     if (replies.length < 2) {
       drop.fewReplies++;
       continue;
@@ -773,6 +908,55 @@ export function mergeModelRow(db, { sid, project, parsed, now }) {
   return db.prepare(SUMMARY_ROW_SQL).get(sid) ?? null;
 }
 
+/**
+ * D27: what Stop would write as `completed` for each turn alone — the shipped writeStopSummary
+ * fed that turn's last reply (its report's Done, else the reply's head) on an empty store
+ * (`newDb()` returns one with the schema), oldest first, '' where it writes none.
+ */
+export function turnDones(newDb, { sid, project, replies, at }) {
+  return replies.map((text) => {
+    const db = newDb();
+    try {
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(sid, sid, project, new Date(at).toISOString(), at);
+      const r = extractStructuredSummary(text);
+      const lines = [r.failed && `Failed: ${r.failed}`, r.uncertain && `Uncertain: ${r.uncertain}`]
+        .filter(Boolean)
+        .join('\n');
+      writeStopSummary(db, {
+        sessionId: sid,
+        project,
+        report: { done: r.done, notDone: r.notDone, lines, tail: text },
+        source: readFastSummarySource(db, sid),
+        now: new Date(at),
+        limits: FAST_SUMMARY_LIMITS.stop,
+      });
+      return db.prepare(SUMMARY_ROW_SQL).get(sid)?.completed ?? '';
+    } finally {
+      db.close();
+    }
+  });
+}
+
+/**
+ * D27's arm D (docs/audits/20261112-d27-preregistration.md §3): S's own `completed` first, so the
+ * line a new session reads stays S's, then each turn's Done (turnDones) oldest first, blank and
+ * repeated ones skipped, joined by '; ', whole items only, stopping at the first that would take
+ * the total past `limit` (the Stop path's shipped cap).
+ */
+export function armDCompleted(sCompleted, dones, limit = FAST_SUMMARY_LIMITS.stop.completed) {
+  const items = [];
+  for (const raw of [sCompleted, ...dones]) {
+    const x = String(raw ?? '').trim();
+    if (!x || items.includes(x)) continue;
+    if ([...items, x].join('; ').length > limit) break;
+    items.push(x);
+  }
+  return items.join('; ');
+}
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -787,17 +971,29 @@ async function run() {
   const d23 = arms.join(',') === 'S,M';
   const d25 = arms.join(',') === 'C,C2,P';
   const d26 = arms.join(',') === 'C,C2,Q,Q2';
+  const d27 = arms.join(',') === 'S,D,M';
   if (
     !d23 &&
     !d25 &&
     !d26 &&
+    !d27 &&
     (arms.length < 2 || arms.some((x) => !['A', 'B', 'C'].includes(x)) || new Set(arms).size !== arms.length)
   )
     throw new Error(
-      '--arms takes two or more of A,B,C, or exactly S,M (D23), or exactly C,C2,P (D25), or exactly C,C2,Q,Q2 (D26)',
+      '--arms takes two or more of A,B,C, or exactly S,M (D23), C,C2,P (D25), C,C2,Q,Q2 (D26) or S,D,M (D27)',
     );
   const exclude = arg('--exclude', null);
   const dbPath = arg('--db', join(homedir(), '.claude-mem-lite', 'claude-mem-lite.db'));
+  // D27: the population's start, a frozen transcript root, the text that marks the running
+  // session, and a count-only pass that stops before any call.
+  const sinceArg = arg('--since', null);
+  const since = sinceArg ? Date.parse(sinceArg) : 0;
+  if (sinceArg && !Number.isFinite(since)) throw new Error(`--since ${sinceArg}: not a date`);
+  const projectsDir = arg('--projects-dir', join(homedir(), '.claude', 'projects'));
+  const excludeText = arg('--exclude-text', d27 ? 'summary-events-ab.mjs run' : '');
+  const countOnly = process.argv.includes('--count-only');
+  if ((sinceArg || countOnly) && !d23 && !d27)
+    throw new Error('--since and --count-only are S,M / S,D,M only');
   // Before any shipped module loads: DB_DIR resolves from it at import time.
   const sandbox = mkdtempSync(join(tmpdir(), 'summary-events-ab-'));
   process.env.CLAUDE_MEM_DIR = sandbox;
@@ -809,6 +1005,7 @@ async function run() {
     const { parseJsonFromLLM, scrubSecrets, notLowSignalTitleClause } = await import('../utils.mjs');
     const { buildSessionSummaryPrompt, mergeSummaryRows } = await import('../hook-llm.mjs');
     const { readTranscriptEntries } = await import('../lib/transcript-scan.mjs');
+    refuseStaleCandidates(arms, { buildSessionSummaryPrompt, mergeSummaryRows });
 
     const restore = enterArm(CLI_ARM, process.env, hc._resetMode);
     try {
@@ -817,7 +1014,7 @@ async function run() {
         encoding: 'utf8',
         timeout: 30000,
       }).trim();
-      if (d23) {
+      if (d23 || d27) {
         const { initSchema } = await import('../schema.mjs');
         await runNoObs({
           dbPath,
@@ -825,6 +1022,11 @@ async function run() {
           days,
           out,
           cliVersion,
+          d27,
+          since,
+          projectsDir,
+          excludeText,
+          countOnly,
           deps: {
             Database,
             initSchema,
@@ -845,7 +1047,7 @@ async function run() {
         pop = collectSessions(db, {
           days,
           now: Date.now(),
-          projectsDir: join(homedir(), '.claude', 'projects'),
+          projectsDir,
           notLowSignalTitleClause,
           readEntries: readTranscriptEntries,
         });
@@ -924,6 +1126,8 @@ async function run() {
 /**
  * D23's run: per session, arm S replayed into a private in-memory store, one model call for arm
  * M merged onto that row, and S2 = S verbatim (the A/A copy). Only M calls the model.
+ * D27 (`d27`): also arm D (S's row, `completed` from armDCompleted, no call) and M2 (M called
+ * again, merged onto its own replay of S); the population starts at `since`.
  */
 async function runNoObs({
   dbPath,
@@ -931,6 +1135,11 @@ async function runNoObs({
   days,
   out,
   cliVersion,
+  d27 = false,
+  since = 0,
+  projectsDir,
+  excludeText = '',
+  countOnly = false,
   deps,
   buildSessionSummaryPrompt,
   readTranscriptEntries,
@@ -942,38 +1151,77 @@ async function runNoObs({
     pop = collectNoObsSessions(db, {
       days,
       now: Date.now(),
-      projectsDir: join(homedir(), '.claude', 'projects'),
+      projectsDir,
       notLowSignalTitleClause,
       readEntries: readTranscriptEntries,
+      since,
+      excludeText,
     });
   } finally {
     db.close();
   }
+  const population = {
+    windowed: pop.windowed,
+    drop: pop.drop,
+    population: pop.items.length,
+    ...(since ? { since: new Date(since).toISOString() } : {}),
+    projectsDir,
+    ...(excludeText ? { excludeText } : {}),
+  };
+  if (countOnly) {
+    // D27 §5: the population count is all a check before the run may look at.
+    console.log(JSON.stringify(population, null, 2));
+    return;
+  }
+  const newStore = () => {
+    const m = new Database(':memory:');
+    initSchema(m);
+    return m;
+  };
+  const callModel = async (prompt, label) => {
+    const t0 = Date.now();
+    let raw = null;
+    try {
+      raw = await callLLM(prompt, hc.BG_LLM_TIMEOUT_MS);
+    } catch (e) {
+      console.error(`${label}: ${e?.message || e}`);
+    }
+    return { ms: Date.now() - t0, parsed: raw ? parseJsonFromLLM(raw) : null };
+  };
   const picked = pickEvenly(pop.items, n);
   const items = [];
   const rows = [];
+  let calls = 0;
   for (let i = 0; i < picked.length; i++) {
     const s = picked[i];
-    const mem = new Database(':memory:');
+    const mem = newStore();
+    const mem2 = d27 ? newStore() : null;
     try {
-      initSchema(mem);
       const sRow = replayStopRow(mem, s);
       const prompt = buildSessionSummaryPrompt(armMPromptInput(s));
-      const t0 = Date.now();
-      let raw = null;
-      try {
-        raw = await callLLM(prompt, hc.BG_LLM_TIMEOUT_MS);
-      } catch (e) {
-        console.error(`item ${i}: ${e?.message || e}`);
-      }
-      const ms = Date.now() - t0;
-      const parsed = raw ? parseJsonFromLLM(raw) : null;
+      const { ms, parsed } = await callModel(prompt, `item ${i}`);
+      calls++;
       const mRow = mergeModelRow(mem, {
         sid: s.sid,
         project: s.project,
         parsed,
         now: new Date(s.stops.at(-1).at),
       });
+      let m2 = null;
+      if (d27) {
+        replayStopRow(mem2, s);
+        const second = await callModel(prompt, `item ${i} M2`);
+        calls++;
+        m2 = {
+          ...second,
+          row: mergeModelRow(mem2, {
+            sid: s.sid,
+            project: s.project,
+            parsed: second.parsed,
+            now: new Date(s.stops.at(-1).at),
+          }),
+        };
+      }
       const r = extractStructuredSummary(s.replies.at(-1));
       items.push({
         item: i,
@@ -1004,21 +1252,50 @@ async function runNoObs({
         ...fields(mRow),
       });
       rows.push({ item: i, arm: 'S2', usable: sRow !== null, ms: 0, promptChars: 0, ...fields(sRow) });
+      if (d27) {
+        const dones = turnDones(newStore, {
+          sid: s.sid,
+          project: s.project,
+          replies: s.replies,
+          at: s.stops.at(-1).at,
+        });
+        const dRow = sRow ? { ...sRow, completed: armDCompleted(sRow.completed, dones) } : null;
+        rows.push({ item: i, arm: 'D', usable: dRow !== null, ms: 0, promptChars: 0, ...fields(dRow) });
+        rows.push({
+          item: i,
+          arm: 'M2',
+          usable: summaryUsable(m2.parsed),
+          ms: m2.ms,
+          promptChars: prompt.system.length + prompt.user.length,
+          modelCompleted: asText(m2.parsed?.completed),
+          doneSource: parseSummaryNotes(m2.row?.notes).done,
+          ...fields(m2.row),
+        });
+      }
       console.error(`item ${i + 1}/${picked.length}: M ${summaryUsable(parsed) ? 'usable' : 'NOT usable'}`);
     } finally {
       mem.close();
+      mem2?.close();
     }
   }
-  const arms = ['S', 'M', 'S2'];
+  const arms = d27 ? ['S', 'D', 'M', 'M2', 'S2'] : ['S', 'M', 'S2'];
+  const sameLines = (x, y) => {
+    const lines = new Map(
+      rows.filter((r) => r.arm === y).map((r) => [r.item, JSON.stringify(lastSessionLines(r))]),
+    );
+    return rows.filter((r) => r.arm === x && lines.get(r.item) === JSON.stringify(lastSessionLines(r)))
+      .length;
+  };
   const meta = {
     at: new Date().toISOString(),
     cliVersion,
     days,
-    windowed: pop.windowed,
-    drop: pop.drop,
-    population: pop.items.length,
+    ...population,
     n: picked.length,
     arms,
+    // D27 §5, descriptive: model calls made, second calls verbatim equal to the first, and items
+    // whose rendered lines D leaves exactly as S's.
+    ...(d27 ? { calls, m2SameAsM: sameFields(rows, 'M', 'M2'), dLineSameAsS: sameLines('D', 'S') } : {}),
   };
   writeFileSync(out, JSON.stringify({ meta, items, rows }, null, 2));
   console.log(JSON.stringify({ meta, ...describeRows(rows, arms) }, null, 2));
@@ -1189,13 +1466,20 @@ function scoreDir(outdir) {
 }
 
 /**
- * `score <outdir>`, or D25's / D26's `score <line outdir> <fields outdir>`: the same rows judged
- * on both views, decided together by gateD25 (arm P) or gateD26 (arm Q).
+ * `score <outdir>`, or D25's / D26's / D27's `score <line outdir> <fields outdir>`: the same rows
+ * judged on both views, decided together by gateD25 (arm P), gateD26 (arm Q) or gateD27 (arm D).
  */
 function score() {
   const dirs = process.argv.slice(3);
   if (dirs.length === 0) throw new Error('score <outdir> [<outdir>]');
   const scored = dirs.map(scoreDir);
+  if (scored.some((s) => s.result.arms.D)) {
+    const line = scored.find((s) => s.view === 'line');
+    const fields = scored.find((s) => s.view === 'fields');
+    const gate = gateD27({ line: line?.result, fields: fields?.result, n: scored[0].n });
+    console.log(JSON.stringify({ views: scored, gateD27: gate }, null, 2));
+    return;
+  }
   if (scored.some((s) => s.result.arms.Q)) {
     const line = scored.find((s) => s.view === 'line');
     const fields = scored.find((s) => s.view === 'fields');
@@ -1210,7 +1494,7 @@ function score() {
     console.log(JSON.stringify({ views: scored, gateD25: gate }, null, 2));
     return;
   }
-  if (dirs.length > 1) throw new Error('two outdirs are D25 or D26 only (arm P or Q)');
+  if (dirs.length > 1) throw new Error('two outdirs are D25, D26 or D27 only (arm P, Q or D)');
   const [{ view, n, result, split }] = scored;
   // D22 is registered as the D21 gate with arm C in B's place (tasks/specs/d22-summary-turn-replies.md).
   const gate =

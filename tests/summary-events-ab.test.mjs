@@ -35,6 +35,10 @@ import {
   gateD25,
   COMPLETED_ORDER,
   gateD26,
+  refuseStaleCandidates,
+  turnDones,
+  armDCompleted,
+  gateD27,
 } from '../benchmark/summary-events-ab.mjs';
 import { buildSessionSummaryPrompt, mergeSummaryRows, SUMMARY_COMPLETED_ORDER } from '../hook-llm.mjs';
 import { parseSummaryNotes } from '../lib/fast-summary.mjs';
@@ -569,7 +573,14 @@ describe('D23: collectNoObsSessions', () => {
         readEntries: readTranscriptEntries,
       });
       expect(pop.items.map((i) => i.sid)).toEqual(['Q']);
-      expect(pop.drop).toEqual({ hasObs: 1, noFirst: 0, noTranscript: 1, fewReplies: 1 });
+      expect(pop.drop).toEqual({
+        hasObs: 1,
+        noFirst: 0,
+        beforeSince: 0,
+        noTranscript: 1,
+        excluded: 0,
+        fewReplies: 1,
+      });
       const q = pop.items[0];
       expect(q.replies).toEqual(['Q turn 1', 'Q turn 2']);
       expect(q.stops.map((s) => s.text)).toEqual(['Q turn 1', 'Q turn 2']);
@@ -1450,6 +1461,416 @@ describe('D26: prepare both views, then score them together', () => {
         decision: 'no',
         reasons: ['line: line_misses_main(Q+Q2) = 0 > (C+C2)-10 = -4'],
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// D#847 F-2 (6.35.0 pre-tag summary review): run() asks once, before it reads the store or calls
+// the model, whether every candidate arm can still be built.
+describe('D#847 F-2: refuseStaleCandidates', () => {
+  it('throws for a candidate arm on the shipped prompt, before any call, and passes the rest', () => {
+    const shipped = { buildSessionSummaryPrompt, mergeSummaryRows };
+    for (const arms of [
+      ['C', 'C2', 'Q', 'Q2'],
+      ['C', 'C2', 'P'],
+    ]) {
+      expect(() => refuseStaleCandidates(arms, shipped), arms.join()).toThrow(/carries COMPLETED_ORDER/);
+    }
+    for (const arms of [
+      ['A', 'B'],
+      ['A', 'C'],
+      ['S', 'M'],
+      ['S', 'D', 'M'],
+      ['C', 'C2', 'Q', 'Q2'],
+    ]) {
+      const deps = arms.includes('Q') ? deps6340 : shipped;
+      expect(() => refuseStaleCandidates(arms, deps), arms.join()).not.toThrow();
+    }
+  });
+});
+
+// D27 (docs/audits/20261112-d27-preregistration.md): on sessions the worker skips for having no
+// observation, does a zero-call Stop row that keeps every turn's Done (D) leave the main finished
+// work out less than the shipped row (S), and does a model call (M, M2) beat D by enough to pay
+// for its calls?
+describe('D27: collectNoObsSessions from --since, without the session running the ruler', () => {
+  it('drops sessions that began before since and a transcript holding the exclude text', () => {
+    const db = createTestDb();
+    const projects = mkdtempSync(join(tmpdir(), 'd27-ab-'));
+    try {
+      const T0 = Date.parse('2026-11-12T00:00:00Z');
+      const min = (m) => T0 + m * 60000;
+      const iso = (m) => new Date(min(m)).toISOString();
+      mkdirSync(join(projects, 'proj'));
+      const add = (sid, base, lastText = 'done') => {
+        insertSession(db, { id: sid, project: 'p' });
+        db.prepare('UPDATE sdk_sessions SET started_at_epoch = ? WHERE content_session_id = ?').run(
+          min(base - 1),
+          sid,
+        );
+        const ts = [
+          [base, `${sid} first`],
+          [base + 10, `${sid} ${lastText}`],
+        ];
+        ts.forEach(([m], k) =>
+          db
+            .prepare(
+              `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch, cc_session_id)
+               VALUES (?, ?, ?, '', ?, ?)`,
+            )
+            .run(sid, `ask ${m}`, k + 1, min(m), `cc-${sid}`),
+        );
+        db.prepare(
+          `INSERT INTO session_summaries (memory_session_id, project, created_at, created_at_epoch) VALUES (?, 'p', '', ?)`,
+        ).run(sid, min(base + 1));
+        writeFileSync(
+          join(projects, 'proj', `cc-${sid}.jsonl`),
+          ts
+            .flatMap(([m, text]) => [
+              { type: 'user', timestamp: iso(m), message: { content: `ask ${m}` } },
+              { type: 'assistant', timestamp: iso(m + 1), message: { content: [{ type: 'text', text }] } },
+            ])
+            .map((e) => JSON.stringify(e))
+            .join('\n'),
+        );
+      };
+      add('Old', 0);
+      add('New', 100);
+      add('Runner', 200, 'ran node benchmark/summary-events-ab.mjs run --arms S,D,M');
+      const opts = {
+        days: 30,
+        now: min(24 * 60),
+        projectsDir: projects,
+        notLowSignalTitleClause,
+        readEntries: readTranscriptEntries,
+      };
+      expect(collectNoObsSessions(db, opts).items.map((i) => i.sid)).toEqual(['Old', 'New', 'Runner']);
+      const pop = collectNoObsSessions(db, {
+        ...opts,
+        since: min(50),
+        excludeText: 'summary-events-ab.mjs run',
+      });
+      expect(pop.items.map((i) => i.sid)).toEqual(['New']);
+      expect(pop.drop).toMatchObject({ beforeSince: 1, excluded: 1 });
+      // since is inclusive at the first prompt's stamp.
+      expect(collectNoObsSessions(db, { ...opts, since: min(100) }).items.map((i) => i.sid)).toEqual([
+        'New',
+        'Runner',
+      ]);
+    } finally {
+      db.close();
+      rmSync(projects, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('D27: arm D, each turn’s Done after S’s own', () => {
+  const head = (w) => `${w} `.repeat(200).trim();
+  it('turnDones gives what Stop writes for each turn alone: the report’s Done, else the reply’s head', () => {
+    const dones = turnDones(createTestDb, {
+      sid: 'T',
+      project: 'p',
+      at: Date.parse('2026-11-12T00:00:00Z'),
+      replies: ['Done: shipped the parser\nNot done: docs', head('alpha'), 'Failed: the build broke', ''],
+    });
+    expect(dones[0]).toBe('shipped the parser');
+    expect(dones[1].startsWith('alpha alpha')).toBe(true);
+    expect(dones[1].length).toBeLessThanOrEqual(120);
+    expect(dones.slice(2)).toEqual(['', '']);
+  });
+
+  it('turnDones writes into a fresh store per turn, so no turn sees another’s row', () => {
+    const dones = turnDones(createTestDb, {
+      sid: 'T',
+      project: 'p',
+      at: 0,
+      replies: ['Done: first', 'short reply'],
+    });
+    // On one store the second turn's head would not replace the first's report Done.
+    expect(dones).toEqual(['first', 'short reply']);
+  });
+
+  it('armDCompleted puts S first, skips blanks and repeats, joins by "; " and keeps whole items', () => {
+    expect(armDCompleted('S lead', ['', 'turn one', 'S lead', ' turn one ', 'turn two'])).toBe(
+      'S lead; turn one; turn two',
+    );
+    expect(armDCompleted('', ['turn one'])).toBe('turn one');
+    // Stops at the first item that would pass the cap, even when a later one would fit.
+    // ('abcde; fghij; k' is exactly 15: continuing past the long item would take it.)
+    expect(armDCompleted('abcde', ['fghij', 'x'.repeat(20), 'k'], 15)).toBe('abcde; fghij');
+    expect(armDCompleted('abcde', ['fghij'], 12)).toBe('abcde; fghij');
+    expect(armDCompleted('abcde', ['fghij'], 11)).toBe('abcde');
+    expect(armDCompleted('a', ['b'.repeat(600)]).length).toBe(1);
+    expect(armDCompleted('a', ['b'.repeat(597)]).length).toBe(600);
+    expect(armDCompleted('a', ['b'.repeat(598)]).length).toBe(1);
+  });
+
+  it('the Last Session line still starts with S’s Done', () => {
+    const sRow = { completed: 'Released v1.2.0', remaining_items: 'docs', next_steps: '' };
+    const dRow = { ...sRow, completed: armDCompleted(sRow.completed, ['Fixed the flaky test']) };
+    expect(lastSessionLines(dRow)[0]).toBe('Completed: Released v1.2.0; Fixed the flaky test');
+    expect(lastSessionLines(dRow).slice(1)).toEqual(lastSessionLines(sRow).slice(1));
+  });
+});
+
+describe('D27: buildBlind keeps S, D and M together, S2 and M2 in another batch', () => {
+  it('places every copy arm away from its own session', () => {
+    const arms = ['S', 'D', 'M', 'M2', 'S2'];
+    const n = 6;
+    const dump = {
+      meta: { arms },
+      items: Array.from({ length: n }, (_, i) => ({
+        replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+      })),
+      rows: Array.from({ length: n }, (_, item) =>
+        arms.map((arm) => ({ item, arm, completed: `${arm}${item}`, remaining_items: '', next_steps: '' })),
+      ).flat(),
+    };
+    const { batches, key } = buildBlind(dump, { seed: 20261120, batches: 3 });
+    const where = {};
+    batches.forEach((b, k) => {
+      for (const e of b.a) where[`${key[e.id].arm}:${key[e.id].item}`] = k;
+      expect(new Set(b.b.map((e) => e.id))).toEqual(new Set(b.a.map((e) => e.id)));
+    });
+    expect(Object.keys(where)).toHaveLength(n * arms.length);
+    for (let item = 0; item < n; item++) {
+      expect(where[`D:${item}`]).toBe(where[`S:${item}`]);
+      expect(where[`M:${item}`]).toBe(where[`S:${item}`]);
+      expect(where[`M2:${item}`]).not.toBe(where[`S:${item}`]);
+      expect(where[`S2:${item}`]).not.toBe(where[`S:${item}`]);
+    }
+  });
+});
+
+describe('D27: gateD27 (registered before any call)', () => {
+  const lineArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    line_misses_main: m,
+    false_open: 2,
+    unsupported: 2,
+    ...extra,
+  });
+  const fieldsArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    missed_done: m,
+    false_open: 2,
+    unsupported: 2,
+    ...extra,
+  });
+  const lineAgree = { line_misses_main: 0.8, false_open: 0.9, unsupported: 0.9 };
+  const fieldsAgree = { missed_done: 0.8, false_open: 0.9, unsupported: 0.9 };
+  // Default: D passes against S (missed_done exactly 3 lower), M ties D (does not beat it).
+  const reading = ({ line = {}, fields = {}, n = 30 } = {}) => ({
+    n,
+    line: {
+      arms: {
+        S: lineArm(20),
+        D: lineArm(20),
+        M: lineArm(20),
+        M2: lineArm(20),
+        S2: lineArm(20),
+        ...line.arms,
+      },
+      agreement: { ...lineAgree, ...line.agreement },
+    },
+    fields: {
+      arms: {
+        S: fieldsArm(20),
+        D: fieldsArm(17),
+        M: fieldsArm(17),
+        M2: fieldsArm(17),
+        S2: fieldsArm(20),
+        ...fields.arms,
+      },
+      agreement: { ...fieldsAgree, ...fields.agreement },
+    },
+  });
+
+  it('takes D when D is 3 below S on missed_done and M does not beat it', () => {
+    const g = gateD27(reading());
+    expect(g).toMatchObject({ decision: 'D', dPasses: true, mPasses: true, mBeatsD: false });
+  });
+
+  it('says no when D and M are each only 2 below S', () => {
+    const g = gateD27(
+      reading({ fields: { arms: { D: fieldsArm(18), M: fieldsArm(18), M2: fieldsArm(18) } } }),
+    );
+    expect(g.decision).toBe('no');
+    expect(g.reasons).toContain('D vs S: missed_done(D) = 18 > S-3 = 17');
+  });
+
+  it('says D fails when any other count rises by 2, in either view, and passes at 1', () => {
+    for (const [view, q] of [
+      ['line', 'line_misses_main'],
+      ['line', 'false_open'],
+      ['line', 'unsupported'],
+      ['fields', 'false_open'],
+      ['fields', 'unsupported'],
+    ]) {
+      const arm = view === 'line' ? lineArm : fieldsArm;
+      const base = view === 'line' ? 20 : 17;
+      const at = (k) => ({
+        [view]: { arms: { D: arm(base, { [q]: (q === 'line_misses_main' ? 20 : 2) + k }) } },
+      });
+      expect(gateD27(reading(at(1))).dPasses, `${view} ${q} +1`).toBe(true);
+      expect(gateD27(reading(at(2))).dPasses, `${view} ${q} +2`).toBe(false);
+    }
+  });
+
+  it('takes M when both calls are 3 below D on the line and nothing is worse than D + 1', () => {
+    const g = gateD27(reading({ line: { arms: { M: lineArm(17), M2: lineArm(17) } } }));
+    expect(g).toMatchObject({ decision: 'M', mBeatsD: true, beatsOn: ['line_misses_main'] });
+  });
+
+  it('takes M on missed_done alone when both calls are 3 below D there', () => {
+    const g = gateD27(reading({ fields: { arms: { M: fieldsArm(14), M2: fieldsArm(14) } } }));
+    expect(g).toMatchObject({ decision: 'M', beatsOn: ['missed_done'] });
+  });
+
+  it('does not take M when only one call beats D, or a call is worse than D + 1 anywhere', () => {
+    const one = gateD27(reading({ line: { arms: { M: lineArm(17), M2: lineArm(18) } } }));
+    expect(one).toMatchObject({ decision: 'D', mBeatsD: false });
+    const worse = gateD27(
+      reading({
+        line: { arms: { M: lineArm(17), M2: lineArm(17) } },
+        fields: { arms: { M2: fieldsArm(17, { false_open: 4 }) } },
+      }),
+    );
+    expect(worse.mBeatsD).toBe(false);
+    expect(worse.reasons).toContain('M vs D: fields false_open(M2) = 4 > D+1 = 3');
+  });
+
+  it('takes M when only M passes against S, and M beats D', () => {
+    const g = gateD27(
+      reading({
+        fields: { arms: { D: fieldsArm(19), M: fieldsArm(16), M2: fieldsArm(16) } },
+      }),
+    );
+    expect(g).toMatchObject({ decision: 'M', dPasses: false, mPasses: true, mBeatsD: true });
+  });
+
+  it('takes M when only M passes against S, even without beating D', () => {
+    const g = gateD27(
+      reading({
+        fields: { arms: { D: fieldsArm(17, { unsupported: 4 }), M: fieldsArm(17), M2: fieldsArm(17) } },
+      }),
+    );
+    expect(g).toMatchObject({ decision: 'M', dPasses: false, mPasses: true, mBeatsD: false });
+  });
+
+  it('says no when M beats D but neither M nor D passes against S', () => {
+    const g = gateD27(
+      reading({
+        line: { arms: { M: lineArm(17), M2: lineArm(17) } },
+        fields: {
+          arms: {
+            D: fieldsArm(20, { false_open: 3 }),
+            M: fieldsArm(20, { false_open: 4 }),
+            M2: fieldsArm(20, { false_open: 4 }),
+          },
+        },
+      }),
+    );
+    expect(g).toMatchObject({ decision: 'no', dPasses: false, mPasses: false, mBeatsD: true });
+  });
+
+  it('decides nothing under 20 sessions, on an incomplete reading, low usable or agreement', () => {
+    expect(gateD27(reading({ n: 19 })).decision).toBe('none');
+    expect(gateD27(reading({ n: 20 })).decision).toBe('D');
+    const cases = [
+      { line: { arms: { D: lineArm(20, { judged: 29 }) } } },
+      { fields: { arms: { M2: fieldsArm(17, { judged: 29 }) } } },
+      { fields: { arms: { M: fieldsArm(17, { usable: 27 }) } } },
+      { line: { agreement: { unsupported: 0.69 } } },
+      { fields: { agreement: { missed_done: 0.69 } } },
+      { line: { arms: { S2: undefined } } },
+    ];
+    for (const c of cases) expect(gateD27(reading(c)).decision, JSON.stringify(c)).toBe('none');
+    expect(gateD27(reading({ fields: { arms: { M: fieldsArm(17, { usable: 28 }) } } })).decision).toBe('D');
+  });
+
+  it('decides nothing when S2 is off S by more than 2, or M2 off M by more than 8 / 6', () => {
+    const none = (c) => gateD27(reading(c)).decision;
+    expect(none({ line: { arms: { S2: lineArm(23) } } })).toBe('none');
+    expect(none({ line: { arms: { S2: lineArm(22) } } })).toBe('D');
+    expect(none({ fields: { arms: { S2: fieldsArm(17) } } })).toBe('none');
+    expect(none({ fields: { arms: { S2: fieldsArm(18) } } })).toBe('D');
+    expect(none({ line: { arms: { M2: lineArm(29) } } })).toBe('none');
+    expect(none({ line: { arms: { M2: lineArm(28) } } })).toBe('D');
+    expect(none({ fields: { arms: { M2: fieldsArm(24) } } })).toBe('none');
+    expect(none({ fields: { arms: { M2: fieldsArm(23) } } })).not.toBe('none');
+  });
+});
+
+describe('D27: prepare both views, then score them together', () => {
+  it('scores a line and a fields reading of S, D, M, M2, S2 with gateD27', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const ruler = join(import.meta.dirname, '..', 'benchmark', 'summary-events-ab.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'd27-cli-'));
+    try {
+      const n = 20;
+      const arms = ['S', 'D', 'M', 'M2', 'S2'];
+      const dump = {
+        meta: { arms },
+        items: Array.from({ length: n }, (_, i) => ({
+          turns: 2,
+          replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+        })),
+        rows: Array.from({ length: n }, (_, item) =>
+          arms.map((arm) => ({
+            item,
+            arm,
+            usable: true,
+            completed: `${arm}${item}`,
+            remaining_items: '',
+            next_steps: '',
+          })),
+        ).flat(),
+      };
+      writeFileSync(join(dir, 'rows.json'), JSON.stringify(dump));
+      const outs = {};
+      for (const view of ['line', 'fields']) {
+        const out = join(dir, view);
+        outs[view] = out;
+        const p = spawnSync(
+          process.execPath,
+          [ruler, 'prepare', join(dir, 'rows.json'), out, '--view', view, '--seed', '7', '--batches', '3'],
+          { encoding: 'utf8' },
+        );
+        expect(p.status, p.stderr).toBe(0);
+        const k = JSON.parse(readFileSync(join(out, 'key.json'), 'utf8'));
+        const qs =
+          view === 'line'
+            ? ['line_misses_main', 'false_open', 'unsupported']
+            : ['missed_done', 'false_open', 'unsupported'];
+        // S and S2 miss the main work in the fields view; nothing else is flagged.
+        const verdicts = Object.fromEntries(
+          Object.entries(k.key).map(([id, { arm }]) => [
+            id,
+            {
+              main: 'm',
+              ...Object.fromEntries(
+                qs.map((q) => [q, q === 'missed_done' && arm.startsWith('S') ? 'YES' : 'NO']),
+              ),
+            },
+          ]),
+        );
+        for (let b = 1; b <= 3; b++)
+          for (const side of ['a', 'b'])
+            writeFileSync(join(out, `verdicts-${b}-${side}.json`), JSON.stringify(verdicts));
+      }
+      const r = spawnSync(process.execPath, [ruler, 'score', outs.line, outs.fields], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.gateD26).toBeUndefined();
+      expect(out.views[1].result.arms.D.judged).toBe(n);
+      // D and M both clear S by 20 on missed_done; M is not 3 below D anywhere, so D (no calls).
+      expect(out.gateD27).toMatchObject({ decision: 'D', dPasses: true, mPasses: true, mBeatsD: false });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
