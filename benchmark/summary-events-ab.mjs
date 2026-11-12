@@ -16,6 +16,12 @@
 //   C  D22: observations + every turn's last reply as the Stop record holds them
 //      (buildSessionSummaryPrompt's turnReplies), in place of the final reply alone.
 //      `run --arms A,C` (default A,B).
+//   S, M, S2  D23 (`run --arms S,M`), on its own population: sessions the worker skips because
+//      no observation passes its filter (collectNoObsSessions). S = the row 6.34.0's Stop leaves,
+//      replayed Stop by Stop into a private in-memory store (replayStopRow); M = one model call
+//      over every recorded reply, merged onto S's row as the worker merges (mergeModelRow);
+//      S2 = S verbatim, the A/A copy, judged in a batch apart from its session's S and M.
+//      Gate: gateD23 (docs/audits/20261112-d23-preregistration.md).
 //
 // WHICH REPLIES (D#825). The worker reads what Stop recorded under the session (lib/turn-replies.mjs);
 // stopReplies rebuilds that from the transcript. Reading 3 (D22's gate) took the replies from a
@@ -71,10 +77,18 @@ import { seededShuffle } from './lesson-blind-read.mjs';
 import { wilson95 } from './wilson.mjs';
 import { asText, summaryUsable, findTranscript } from './summary-reply-ab.mjs';
 import { extractStructuredSummary } from '../lib/summary-extractor.mjs';
-import { parseSummaryNotes } from '../lib/fast-summary.mjs';
+import {
+  parseSummaryNotes,
+  writeStopSummary,
+  readFastSummarySource,
+  mergeModelSummary,
+  modelSummaryFields,
+  FAST_SUMMARY_LIMITS,
+} from '../lib/fast-summary.mjs';
 
 // A and B are D21's arms; C is D22's (every turn's last reply). `run --arms` picks which run.
-const ALL_ARMS = ['A', 'B', 'C'];
+// S, M and S2 are D23's: `run --arms S,M` runs its own population and adds S2, the A/A copy.
+const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2'];
 const QUESTIONS = ['missed_done', 'false_open', 'unsupported'];
 const YN = ['YES', 'NO'];
 const TURN_HEAD = 700;
@@ -122,13 +136,28 @@ export function judgeReplies(replies) {
  * @returns {string[]} in prompt order
  */
 export function stopReplies(entries, { start, end, prompts }) {
+  return groupStops(stopEvents(entries, { start, end }), prompts);
+}
+
+/** Each Stop's text under the number of prompts stored by then, a later one replacing an earlier. */
+function groupStops(stops, prompts) {
   const groups = new Map();
+  for (const s of stops) groups.set(prompts.filter((p) => p <= s.at).length, s.text);
+  return [...groups].sort((a, b) => a[0] - b[0]).map((g) => g[1]);
+}
+
+/**
+ * Every Stop of one memory session in [start, end), in file order, as `{at, text}`: the rule
+ * stopReplies documents, before grouping. D23's arm S replays each one, as Stop writes the
+ * summary row on every turn.
+ */
+export function stopEvents(entries, { start, end }) {
+  const out = [];
   const hostStops = entries.some((e) => e?.type === 'system' && e.subtype === 'stop_hook_summary');
   let last = null;
   let lastAt = null;
   const stop = () => {
-    if (last !== null && lastAt >= start && lastAt < end)
-      groups.set(prompts.filter((p) => p <= lastAt).length, last);
+    if (last !== null && lastAt >= start && lastAt < end) out.push({ at: lastAt, text: last });
     last = null;
   };
   for (const e of entries) {
@@ -170,7 +199,7 @@ export function stopReplies(entries, { start, end, prompts }) {
     else stop();
   }
   if (!hostStops) stop();
-  return [...groups].sort((a, b) => a[0] - b[0]).map((g) => g[1]);
+  return out;
 }
 
 export function gateD21({ A, B, agreement, n }) {
@@ -199,6 +228,21 @@ export function gateD21({ A, B, agreement, n }) {
   if (B.unsupported > A.unsupported + 1)
     reasons.push(`unsupported(B) = ${B.unsupported} > unsupported(A)+1 = ${A.unsupported + 1}`);
   return { ship: reasons.length === 0, reasons };
+}
+
+/**
+ * D23's registered rule (docs/audits/20261112-d23-preregistration.md §3, §4, §7). Fewer than 20
+ * sessions, an A/A copy not judged in full, or an A/A gap in missed_done above 1 decides nothing
+ * ('none'); otherwise gateD21 with S as A and M as B decides 'ship' or 'no'.
+ */
+export function gateD23({ S, M, S2, agreement, n }) {
+  if (n < 20) return { decision: 'none', reasons: [`n = ${n} < 20`] };
+  if (!S2 || S2.judged < n)
+    return { decision: 'none', reasons: [`A/A: judged(S2) = ${S2?.judged ?? 0} < ${n}`] };
+  const gap = Math.abs(S2.missed_done - S.missed_done);
+  if (gap > 1) return { decision: 'none', reasons: [`A/A: |missed_done(S2) - missed_done(S)| = ${gap} > 1`] };
+  const g = gateD21({ A: S, B: M, agreement, n });
+  return { decision: g.ship ? 'ship' : 'no', reasons: g.reasons };
 }
 
 /** Unblind two judges' verdicts (id → {missed_done, false_open, unsupported}). */
@@ -269,17 +313,7 @@ export function collectSessions(db, { days, now, projectsDir, notLowSignalTitleC
     ORDER BY created_at_epoch DESC, id DESC LIMIT ?`);
   const notesQ = db.prepare(`SELECT notes FROM session_summaries WHERE memory_session_id = ?
     ORDER BY created_at_epoch DESC, id DESC LIMIT 1`);
-  // The Stop record's owner bounds (stopReplies): the session's own start, up to the next memory
-  // session of the same transcript (a resume, or a rotation that stored a prompt) or the first
-  // compaction after it began (SessionStart rotates there, prompt or not). Another terminal's
-  // session in the project does not end it.
-  const startQ = db.prepare('SELECT started_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?');
-  const promptEpochsQ = db.prepare(
-    'SELECT created_at_epoch AS e FROM user_prompts WHERE content_session_id = ? ORDER BY created_at_epoch',
-  );
-  const nextInTranscriptQ = db.prepare(`SELECT MIN(k.started_at_epoch) AS e FROM sdk_sessions k
-    WHERE k.started_at_epoch > ? AND k.content_session_id != ?
-      AND EXISTS (SELECT 1 FROM user_prompts u WHERE u.content_session_id = k.content_session_id AND u.cc_session_id = ?)`);
+  const stopsOf = sessionStopReader(db);
   const ccQ = db.prepare(`SELECT cc_session_id AS cc FROM user_prompts
     WHERE content_session_id = ? AND cc_session_id IS NOT NULL ORDER BY prompt_number DESC LIMIT 1`);
   const out = [];
@@ -313,20 +347,7 @@ export function collectSessions(db, { days, now, projectsDir, notLowSignalTitleC
       drop.noTranscript++;
       continue;
     }
-    const entries = readEntries(transcript);
-    const start = startQ.get(s.sid)?.e ?? first;
-    let stopEnd = nextInTranscriptQ.get(start, s.sid, cc)?.e ?? Infinity;
-    for (const e of entries) {
-      if (e?.type !== 'system' || e.subtype !== 'compact_boundary') continue;
-      const at = Date.parse(e.timestamp || '');
-      // A session /compact opened starts 49-259 ms before its boundary (manual, 52 of 52 here).
-      if (at > start + 5000 && at < stopEnd) stopEnd = at;
-    }
-    const replies = stopReplies(entries, {
-      start,
-      end: stopEnd,
-      prompts: promptEpochsQ.all(s.sid).map((p) => p.e),
-    });
+    const { replies } = stopsOf(s.sid, cc, first, readEntries(transcript));
     if (replies.length === 0) {
       drop.noTurns++;
       continue;
@@ -346,6 +367,178 @@ export function collectSessions(db, { days, now, projectsDir, notLowSignalTitleC
   return { windowed: sessions.length, drop, items: out };
 }
 
+/**
+ * One memory session's Stops (stopEvents) and replies (stopReplies) from its transcript. The
+ * Stop record's owner bounds: the session's own start, up to the next memory session of the same
+ * transcript (a resume, or a rotation that stored a prompt) or the first compaction after it
+ * began (SessionStart rotates there, prompt or not). Another terminal's session in the project
+ * does not end it.
+ */
+function sessionStopReader(db) {
+  const startQ = db.prepare('SELECT started_at_epoch AS e FROM sdk_sessions WHERE content_session_id = ?');
+  const promptEpochsQ = db.prepare(
+    'SELECT created_at_epoch AS e FROM user_prompts WHERE content_session_id = ? ORDER BY created_at_epoch',
+  );
+  const nextInTranscriptQ = db.prepare(`SELECT MIN(k.started_at_epoch) AS e FROM sdk_sessions k
+    WHERE k.started_at_epoch > ? AND k.content_session_id != ?
+      AND EXISTS (SELECT 1 FROM user_prompts u WHERE u.content_session_id = k.content_session_id AND u.cc_session_id = ?)`);
+  return (sid, cc, first, entries) => {
+    const start = startQ.get(sid)?.e ?? first;
+    let end = nextInTranscriptQ.get(start, sid, cc)?.e ?? Infinity;
+    for (const e of entries) {
+      if (e?.type !== 'system' || e.subtype !== 'compact_boundary') continue;
+      const at = Date.parse(e.timestamp || '');
+      // A session /compact opened starts 49-259 ms before its boundary (manual, 52 of 52 here).
+      if (at > start + 5000 && at < end) end = at;
+    }
+    const stops = stopEvents(entries, { start, end });
+    return {
+      stops,
+      replies: groupStops(
+        stops,
+        promptEpochsQ.all(sid).map((p) => p.e),
+      ),
+    };
+  };
+}
+
+/**
+ * D23's population (docs/audits/20261112-d23-preregistration.md §3), oldest first: a summary row
+ * newer than `days`, no observation past the low-signal filter (the worker's own query, so it
+ * returns no-obs), the transcript on disk, at least two recorded replies. Each item carries what
+ * arm S replays: every Stop, and the session's prompts and observations with their stamps.
+ * `db` is a read-only handle on the store.
+ */
+export function collectNoObsSessions(db, { days, now, projectsDir, notLowSignalTitleClause, readEntries }) {
+  const sessions = db
+    .prepare(
+      `SELECT memory_session_id AS sid, project, MAX(created_at_epoch) AS e FROM session_summaries
+       WHERE created_at_epoch > ? GROUP BY memory_session_id ORDER BY e ASC, sid ASC`,
+    )
+    .all(now - days * 86400e3);
+  const filteredQ = db.prepare(`SELECT COUNT(*) AS n FROM observations
+    WHERE memory_session_id = ? AND ${notLowSignalTitleClause('')}`);
+  const firstQ = db.prepare(`SELECT MIN(e) AS e FROM (
+      SELECT MIN(created_at_epoch) AS e FROM user_prompts WHERE content_session_id = ?
+      UNION ALL SELECT MIN(created_at_epoch) FROM observations WHERE memory_session_id = ?)`);
+  const promptRowsQ = db.prepare(`SELECT prompt_text, prompt_number, created_at_epoch FROM user_prompts
+    WHERE content_session_id = ? ORDER BY prompt_number ASC`);
+  const obsRowsQ = db.prepare(`SELECT type, title, compressed_into, created_at_epoch FROM observations
+    WHERE memory_session_id = ? ORDER BY created_at_epoch ASC, id ASC`);
+  const ccQ = db.prepare(`SELECT cc_session_id AS cc FROM user_prompts
+    WHERE content_session_id = ? AND cc_session_id IS NOT NULL ORDER BY prompt_number DESC LIMIT 1`);
+  const stopsOf = sessionStopReader(db);
+  const out = [];
+  const drop = { hasObs: 0, noFirst: 0, noTranscript: 0, fewReplies: 0 };
+  for (const s of sessions) {
+    if (filteredQ.get(s.sid).n > 0) {
+      drop.hasObs++;
+      continue;
+    }
+    const first = firstQ.get(s.sid, s.sid).e;
+    if (first == null) {
+      drop.noFirst++;
+      continue;
+    }
+    const cc = ccQ.get(s.sid)?.cc;
+    const transcript = findTranscript(cc, projectsDir);
+    if (!transcript) {
+      drop.noTranscript++;
+      continue;
+    }
+    const { stops, replies } = stopsOf(s.sid, cc, first, readEntries(transcript));
+    if (replies.length < 2) {
+      drop.fewReplies++;
+      continue;
+    }
+    const prompts = promptRowsQ.all(s.sid);
+    out.push({
+      sid: s.sid,
+      project: s.project,
+      prompts,
+      observations: obsRowsQ.all(s.sid),
+      stops,
+      replies,
+      // The worker's own read: the first 10 by prompt_number.
+      userPrompts: prompts.slice(0, 10).map((p) => p.prompt_text),
+    });
+  }
+  return { windowed: sessions.length, drop, items: out };
+}
+
+const SUMMARY_ROW_SQL = `SELECT completed, remaining_items, next_steps, notes FROM session_summaries
+  WHERE memory_session_id = ? ORDER BY created_at_epoch DESC, id DESC LIMIT 1`;
+
+/**
+ * Arm S (D23): the row 6.34.0's Stop leaves for the session. Each Stop in turn sees the prompts
+ * and observations stamped by then, extracts its reply's report and writes through the shipped
+ * writeStopSummary, as hook.mjs's writeFastSummaryBaseline does on every turn. `db` is an empty
+ * store with the schema. Returns the session's row, or null.
+ */
+export function replayStopRow(db, { sid, project, prompts, observations, stops }) {
+  const begin = Math.min(
+    ...[...prompts, ...observations].map((r) => r.created_at_epoch),
+    ...stops.map((s) => s.at),
+  );
+  db.prepare(
+    `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(sid, sid, project, new Date(begin).toISOString(), begin);
+  const insPrompt = db.prepare(`INSERT INTO user_prompts
+    (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?)`);
+  const insObs = db.prepare(`INSERT INTO observations
+    (memory_session_id, project, type, title, compressed_into, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  let p = 0;
+  let o = 0;
+  for (const s of stops) {
+    for (; p < prompts.length && prompts[p].created_at_epoch <= s.at; p++) {
+      const r = prompts[p];
+      const at = r.created_at_epoch;
+      insPrompt.run(sid, r.prompt_text, r.prompt_number, new Date(at).toISOString(), at);
+    }
+    for (; o < observations.length && observations[o].created_at_epoch <= s.at; o++) {
+      const r = observations[o];
+      const at = r.created_at_epoch;
+      insObs.run(sid, project, r.type, r.title, r.compressed_into, new Date(at).toISOString(), at);
+    }
+    const r = extractStructuredSummary(s.text);
+    const lines = [r.failed && `Failed: ${r.failed}`, r.uncertain && `Uncertain: ${r.uncertain}`]
+      .filter(Boolean)
+      .join('\n');
+    writeStopSummary(db, {
+      sessionId: sid,
+      project,
+      report: { done: r.done, notDone: r.notDone, lines, tail: s.text },
+      source: readFastSummarySource(db, sid),
+      now: new Date(s.at),
+      limits: FAST_SUMMARY_LIMITS.stop,
+    });
+  }
+  return db.prepare(SUMMARY_ROW_SQL).get(sid) ?? null;
+}
+
+/** Arm M's prompt input (§1's candidate): no observations, every recorded reply, the worker's prompts. */
+export function armMPromptInput(s) {
+  return {
+    project: s.project,
+    observations: [],
+    userPrompts: s.userPrompts,
+    finalReply: s.replies.at(-1),
+    turnReplies: s.replies,
+  };
+}
+
+/**
+ * Arm M (D23): the model's parsed reply merged onto arm S's row in the same store, through the
+ * worker's own cleaning (modelSummaryFields) and write (mergeModelSummary). A reply with nothing
+ * to write leaves the row as it was, as in the worker.
+ */
+export function mergeModelRow(db, { sid, project, parsed, now }) {
+  const fields = modelSummaryFields(parsed);
+  if (fields) mergeModelSummary(db, { sessionId: sid, project, fields, now });
+  return db.prepare(SUMMARY_ROW_SQL).get(sid) ?? null;
+}
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -357,8 +550,12 @@ async function run() {
   const n = Number(arg('--n', '30'));
   const days = Number(arg('--days', '45'));
   const arms = arg('--arms', 'A,B').split(',');
-  if (arms.length < 2 || arms.some((x) => !ALL_ARMS.includes(x)) || new Set(arms).size !== arms.length)
-    throw new Error(`--arms takes two or more of ${ALL_ARMS.join(',')}`);
+  const d23 = arms.join(',') === 'S,M';
+  if (
+    !d23 &&
+    (arms.length < 2 || arms.some((x) => !['A', 'B', 'C'].includes(x)) || new Set(arms).size !== arms.length)
+  )
+    throw new Error('--arms takes two or more of A,B,C, or exactly S,M (D23)');
   const dbPath = arg('--db', join(homedir(), '.claude-mem-lite', 'claude-mem-lite.db'));
   // Before any shipped module loads: DB_DIR resolves from it at import time.
   const sandbox = mkdtempSync(join(tmpdir(), 'summary-events-ab-'));
@@ -379,6 +576,28 @@ async function run() {
         encoding: 'utf8',
         timeout: 30000,
       }).trim();
+      if (d23) {
+        const { initSchema } = await import('../schema.mjs');
+        await runNoObs({
+          dbPath,
+          n,
+          days,
+          out,
+          cliVersion,
+          deps: {
+            Database,
+            initSchema,
+            hc,
+            callLLM,
+            parseJsonFromLLM,
+            scrubSecrets,
+            notLowSignalTitleClause,
+          },
+          buildSessionSummaryPrompt,
+          readTranscriptEntries,
+        });
+        return;
+      }
       const db = new Database(dbPath, { readonly: true, fileMustExist: true });
       let pop;
       try {
@@ -461,6 +680,109 @@ async function run() {
   }
 }
 
+/**
+ * D23's run: per session, arm S replayed into a private in-memory store, one model call for arm
+ * M merged onto that row, and S2 = S verbatim (the A/A copy). Only M calls the model.
+ */
+async function runNoObs({
+  dbPath,
+  n,
+  days,
+  out,
+  cliVersion,
+  deps,
+  buildSessionSummaryPrompt,
+  readTranscriptEntries,
+}) {
+  const { Database, initSchema, hc, callLLM, parseJsonFromLLM, scrubSecrets, notLowSignalTitleClause } = deps;
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  let pop;
+  try {
+    pop = collectNoObsSessions(db, {
+      days,
+      now: Date.now(),
+      projectsDir: join(homedir(), '.claude', 'projects'),
+      notLowSignalTitleClause,
+      readEntries: readTranscriptEntries,
+    });
+  } finally {
+    db.close();
+  }
+  const picked = pickEvenly(pop.items, n);
+  const items = [];
+  const rows = [];
+  for (let i = 0; i < picked.length; i++) {
+    const s = picked[i];
+    const mem = new Database(':memory:');
+    try {
+      initSchema(mem);
+      const sRow = replayStopRow(mem, s);
+      const prompt = buildSessionSummaryPrompt(armMPromptInput(s));
+      const t0 = Date.now();
+      let raw = null;
+      try {
+        raw = await callLLM(prompt, hc.BG_LLM_TIMEOUT_MS);
+      } catch (e) {
+        console.error(`item ${i}: ${e?.message || e}`);
+      }
+      const ms = Date.now() - t0;
+      const parsed = raw ? parseJsonFromLLM(raw) : null;
+      const mRow = mergeModelRow(mem, {
+        sid: s.sid,
+        project: s.project,
+        parsed,
+        now: new Date(s.stops.at(-1).at),
+      });
+      const r = extractStructuredSummary(s.replies.at(-1));
+      items.push({
+        item: i,
+        sid: s.sid,
+        project: s.project,
+        turns: s.replies.length,
+        stops: s.stops.length,
+        provenance: parseSummaryNotes(sRow?.notes).done,
+        finalReport: Boolean(r.done || r.notDone),
+        replies: judgeReplies(s.replies.map((x) => scrubSecrets(x).trim())),
+      });
+      const fields = (row) => ({
+        completed: row?.completed ?? '',
+        remaining_items: row?.remaining_items ?? '',
+        next_steps: row?.next_steps ?? '',
+        completedChars: (row?.completed ?? '').length,
+      });
+      rows.push({ item: i, arm: 'S', usable: sRow !== null, ms: 0, promptChars: 0, ...fields(sRow) });
+      rows.push({
+        item: i,
+        arm: 'M',
+        usable: summaryUsable(parsed),
+        ms,
+        promptChars: prompt.system.length + prompt.user.length,
+        // Not shown to judges: what the model wrote for `completed`, and whose Done the row kept.
+        modelCompleted: asText(parsed?.completed),
+        doneSource: parseSummaryNotes(mRow?.notes).done,
+        ...fields(mRow),
+      });
+      rows.push({ item: i, arm: 'S2', usable: sRow !== null, ms: 0, promptChars: 0, ...fields(sRow) });
+      console.error(`item ${i + 1}/${picked.length}: M ${summaryUsable(parsed) ? 'usable' : 'NOT usable'}`);
+    } finally {
+      mem.close();
+    }
+  }
+  const arms = ['S', 'M', 'S2'];
+  const meta = {
+    at: new Date().toISOString(),
+    cliVersion,
+    days,
+    windowed: pop.windowed,
+    drop: pop.drop,
+    population: pop.items.length,
+    n: picked.length,
+    arms,
+  };
+  writeFileSync(out, JSON.stringify({ meta, items, rows }, null, 2));
+  console.log(JSON.stringify({ meta, ...describeRows(rows, arms) }, null, 2));
+}
+
 /** Per arm: usable count, mean / max prompt chars, mean `completed` chars, median call ms. */
 export function describeRows(rows, arms) {
   const per = (f) => Object.fromEntries(arms.map((a) => [a, f(rows.filter((r) => r.arm === a))]));
@@ -511,6 +833,25 @@ export function buildBlind(dump, { seed = 20261111, batches = 2 } = {}) {
       summary: { completed: r.completed, remaining_items: r.remaining_items, next_steps: r.next_steps },
     };
   });
+  if (dump.rows.some((r) => r.arm === 'S2')) {
+    // D23's A/A copy goes to a batch other than its own session's S and M: a judge shown the
+    // same item twice agrees with itself, which hides the noise the copy is there to measure
+    // (docs/audits/20261112-d23-preregistration.md §7). Sessions are split evenly by a shuffle.
+    const sessions = seededShuffle([...new Set(dump.rows.map((r) => r.item))], seed + 1);
+    const batchOf = new Map(sessions.map((it, i) => [it, Math.floor((i * batches) / sessions.length)]));
+    const parts = Array.from({ length: batches }, () => []);
+    dump.rows.forEach((r, i) => {
+      const b = batchOf.get(r.item);
+      parts[r.arm === 'S2' ? (b + 1) % batches : b].push(entries[i]);
+    });
+    return {
+      batches: parts.map((part, k) => ({
+        a: seededShuffle(part, seed + 100 + k),
+        b: seededShuffle(part, seed + 2 + k),
+      })),
+      key,
+    };
+  }
   const shuffled = seededShuffle(entries, seed + 1);
   const size = Math.ceil(shuffled.length / batches);
   const out = [];
@@ -565,9 +906,11 @@ function score() {
   }
   const result = scoreVerdicts(key, merged.a, merged.b, usable);
   // D22 is registered as the D21 gate with arm C in B's place (tasks/specs/d22-summary-turn-replies.md).
-  const gate = result.arms.C
-    ? { gateD22: gateD21({ A: result.arms.A, B: result.arms.C, agreement: result.agreement, n }) }
-    : { gateD21: gateD21({ ...result.arms, agreement: result.agreement, n }) };
+  const gate = result.arms.M
+    ? { gateD23: gateD23({ ...result.arms, agreement: result.agreement, n }) }
+    : result.arms.C
+      ? { gateD22: gateD21({ A: result.arms.A, B: result.arms.C, agreement: result.agreement, n }) }
+      : { gateD21: gateD21({ ...result.arms, agreement: result.agreement, n }) };
   const split = items ? splitBothYes(key, merged.a, merged.b, items) : undefined;
   console.log(JSON.stringify({ ...result, ...gate, split }, null, 2));
 }

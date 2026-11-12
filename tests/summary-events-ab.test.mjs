@@ -16,7 +16,14 @@ import {
   describeRows,
   splitBothYes,
   stopReplies,
+  stopEvents,
+  collectNoObsSessions,
+  replayStopRow,
+  mergeModelRow,
+  armMPromptInput,
+  gateD23,
 } from '../benchmark/summary-events-ab.mjs';
+import { parseSummaryNotes } from '../lib/fast-summary.mjs';
 
 // D#825: the ruler's replies are the ones the shipped Stop record would hold for the session.
 describe('stopReplies', () => {
@@ -467,5 +474,259 @@ describe('D22 arm C: scoring, descriptive rows and the split', () => {
       meanCompletedChars: { A: 5, C: 40 },
       medianMs: { A: 5, C: 7 },
     });
+  });
+});
+
+// D23 (docs/audits/20261112-d23-preregistration.md): arm S replays 6.34.0's Stop writes for a
+// session with no observation, arm M merges one model reply onto that row, S2 is the A/A copy.
+describe('D23: stopEvents', () => {
+  it('keeps every Stop with its time; stopReplies keeps the last one per prompt', () => {
+    const at = (m) => `2026-11-11T02:${String(m).padStart(2, '0')}:00Z`;
+    const entries = [
+      { type: 'user', timestamp: at(0), message: { content: 'ask' } },
+      { type: 'assistant', timestamp: at(1), message: { content: [{ type: 'text', text: 'first' }] } },
+      { type: 'system', subtype: 'stop_hook_summary', timestamp: at(1) },
+      { type: 'assistant', timestamp: at(2), message: { content: [{ type: 'text', text: 'rewrite' }] } },
+      { type: 'system', subtype: 'stop_hook_summary', timestamp: at(2) },
+    ];
+    const span = { start: Date.parse(at(0)), end: Infinity };
+    expect(stopEvents(entries, span)).toEqual([
+      { at: Date.parse(at(1)), text: 'first' },
+      { at: Date.parse(at(2)), text: 'rewrite' },
+    ]);
+    expect(stopReplies(entries, { ...span, prompts: [Date.parse(at(0))] })).toEqual(['rewrite']);
+  });
+});
+
+describe('D23: collectNoObsSessions', () => {
+  it('takes sessions the worker skips (no observation past the filter) with two or more replies', () => {
+    const db = createTestDb();
+    const projects = mkdtempSync(join(tmpdir(), 'd23-ab-'));
+    try {
+      const T0 = Date.parse('2026-11-01T00:00:00Z');
+      const min = (m) => T0 + m * 60000;
+      const iso = (m) => new Date(min(m)).toISOString();
+      const prompt = db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch, cc_session_id)
+         VALUES (?, ?, ?, '', ?, ?)`,
+      );
+      const obs = db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+         VALUES (?, 'p', '', 'change', ?, '', 1, '', ?)`,
+      );
+      const summary = db.prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, created_at, created_at_epoch) VALUES (?, 'p', '', ?)`,
+      );
+      mkdirSync(join(projects, 'proj'));
+      const transcript = (cc, turns) =>
+        writeFileSync(
+          join(projects, 'proj', `${cc}.jsonl`),
+          turns
+            .flatMap(([m, text]) => [
+              { type: 'user', timestamp: iso(m), message: { content: `ask ${m}` } },
+              { type: 'assistant', timestamp: iso(m + 1), message: { content: [{ type: 'text', text }] } },
+            ])
+            .map((e) => JSON.stringify(e))
+            .join('\n'),
+        );
+      // base: m0 of each session; two turns unless said otherwise
+      const add = (sid, base, { obsTitle, turns = 2, onDisk = true } = {}) => {
+        insertSession(db, { id: sid, project: 'p' });
+        db.prepare('UPDATE sdk_sessions SET started_at_epoch = ? WHERE content_session_id = ?').run(
+          min(base - 1),
+          sid,
+        );
+        const ts = Array.from({ length: turns }, (_, k) => [base + 10 * k, `${sid} turn ${k + 1}`]);
+        ts.forEach(([m], k) => prompt.run(sid, `ask ${m}`, k + 1, min(m), `cc-${sid}`));
+        if (obsTitle) obs.run(sid, obsTitle, min(base + 2));
+        summary.run(sid, min(base + 1));
+        if (onDisk) transcript(`cc-${sid}`, ts);
+      };
+      add('Q', 0, { obsTitle: 'Modified foo.mjs' }); // low-signal only: the worker sees none
+      add('O', 100, { obsTitle: 'Designed the cache layer' });
+      add('One', 200, { turns: 1 });
+      add('NT', 300, { onDisk: false });
+      const pop = collectNoObsSessions(db, {
+        days: 30,
+        now: min(24 * 60),
+        projectsDir: projects,
+        notLowSignalTitleClause,
+        readEntries: readTranscriptEntries,
+      });
+      expect(pop.items.map((i) => i.sid)).toEqual(['Q']);
+      expect(pop.drop).toEqual({ hasObs: 1, noFirst: 0, noTranscript: 1, fewReplies: 1 });
+      const q = pop.items[0];
+      expect(q.replies).toEqual(['Q turn 1', 'Q turn 2']);
+      expect(q.stops.map((s) => s.text)).toEqual(['Q turn 1', 'Q turn 2']);
+      expect(q.prompts.map((p) => p.created_at_epoch)).toEqual([min(0), min(10)]);
+      expect(q.observations.map((o) => o.title)).toEqual(['Modified foo.mjs']);
+      expect(q.userPrompts).toEqual(['ask 0', 'ask 10']);
+    } finally {
+      db.close();
+      rmSync(projects, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('D23: arm S replays every Stop, arm M merges onto its row', () => {
+  const T0 = Date.parse('2026-11-01T00:00:00Z');
+  const min = (m) => T0 + m * 60000;
+  const session = (stops, extra = {}) => ({
+    sid: 'R',
+    project: 'p',
+    prompts: [
+      { prompt_text: 'build the parser', prompt_number: 1, created_at_epoch: min(0) },
+      { prompt_text: 'and the docs', prompt_number: 2, created_at_epoch: min(10) },
+    ],
+    observations: [
+      { type: 'change', title: 'Modified parser.mjs', compressed_into: null, created_at_epoch: min(2) },
+      { type: 'change', title: 'Modified late.mjs', compressed_into: null, created_at_epoch: min(90) },
+    ],
+    stops: stops.map(([m, text]) => ({ at: min(m), text })),
+    ...extra,
+  });
+  const long = 'The parser now reads nested blocks and the tests cover them all. '.repeat(3);
+
+  it("an earlier Stop's report stands when a later reply has none", () => {
+    const db = createTestDb();
+    try {
+      const row = replayStopRow(
+        db,
+        session([
+          [5, 'Done: built the parser\nNot done: the docs'],
+          [15, 'Thanks!'],
+        ]),
+      );
+      expect(row.completed).toBe('built the parser');
+      expect(row.remaining_items).toBe('the docs');
+      expect(parseSummaryNotes(row.notes)).toMatchObject({ done: 'report', left: 'report' });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('each Stop sees only the observations stamped by then, and a Failed line writes no reply head', () => {
+    const db = createTestDb();
+    try {
+      const row = replayStopRow(db, session([[5, 'Failed: the build broke']]));
+      expect(row.completed).toBe('Modified parser.mjs');
+      expect(parseSummaryNotes(row.notes)).toMatchObject({
+        done: 'titles',
+        lines: 'Failed: the build broke',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('a reply with no report gives its head as the Done', () => {
+    const db = createTestDb();
+    try {
+      const row = replayStopRow(db, session([[5, long]], { observations: [] }));
+      expect(row.completed).toMatch(
+        /^The parser now reads nested blocks and the tests cover them all\. The parser/,
+      );
+      expect(parseSummaryNotes(row.notes).done).toBe('tail');
+    } finally {
+      db.close();
+    }
+  });
+
+  it("the model's reply goes through the worker's cleaning, and a report's Done and Not done are kept", () => {
+    const db = createTestDb();
+    try {
+      replayStopRow(db, session([[5, 'Done: built the parser\nNot done: the docs']]));
+      const parsed = {
+        completed: 'model says parser',
+        remaining_items: 'model says docs',
+        next_steps: ['a', 'b'],
+      };
+      const row = mergeModelRow(db, { sid: 'R', project: 'p', parsed, now: new Date(min(5)) });
+      expect(row.completed).toBe('built the parser');
+      expect(row.remaining_items).toBe('the docs');
+      expect(row.next_steps).toBe('a; b');
+    } finally {
+      db.close();
+    }
+  });
+
+  it("the model's completed replaces a reply head; a reply with nothing to write leaves the row", () => {
+    const db = createTestDb();
+    try {
+      const s = replayStopRow(db, session([[5, long]], { observations: [] }));
+      expect(mergeModelRow(db, { sid: 'R', project: 'p', parsed: null, now: new Date(min(5)) })).toEqual(s);
+      const row = mergeModelRow(db, {
+        sid: 'R',
+        project: 'p',
+        parsed: { completed: ['built the parser', 'tests'] },
+        now: new Date(min(5)),
+      });
+      expect(row.completed).toBe('built the parser; tests');
+      expect(parseSummaryNotes(row.notes).done).toBe('model');
+    } finally {
+      db.close();
+    }
+  });
+
+  it("arm M's prompt has no observations and every recorded reply", () => {
+    const s = { project: 'p', userPrompts: ['a', 'b'], replies: ['one', 'two'] };
+    expect(armMPromptInput(s)).toEqual({
+      project: 'p',
+      observations: [],
+      userPrompts: ['a', 'b'],
+      finalReply: 'two',
+      turnReplies: ['one', 'two'],
+    });
+  });
+});
+
+describe('D23: buildBlind keeps the A/A copy out of its own session’s batch', () => {
+  it('S and M share a batch, S2 is in another, every id appears in both orders', () => {
+    const rows = [];
+    for (let item = 0; item < 6; item++)
+      for (const arm of ['S', 'M', 'S2'])
+        rows.push({ item, arm, completed: `c${item}${arm}`, remaining_items: '', next_steps: '' });
+    const dump = {
+      items: Array.from({ length: 6 }, (_, i) => ({
+        replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+      })),
+      rows,
+    };
+    const { batches, key } = buildBlind(dump, { seed: 20261114, batches: 2 });
+    const where = {};
+    batches.forEach((b, k) => {
+      expect(b.b.map((e) => e.id).sort()).toEqual(b.a.map((e) => e.id).sort());
+      for (const e of b.a) where[`${key[e.id].item}${key[e.id].arm}`] = k;
+    });
+    expect(Object.keys(where)).toHaveLength(18);
+    expect(batches.map((b) => b.a.length)).toEqual([9, 9]);
+    for (let item = 0; item < 6; item++) {
+      expect(where[`${item}S`]).toBe(where[`${item}M`]);
+      expect(where[`${item}S2`]).not.toBe(where[`${item}S`]);
+    }
+  });
+});
+
+describe('D23: gateD23', () => {
+  const arm = (missed, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    missed_done: missed,
+    false_open: 2,
+    unsupported: 2,
+    ...extra,
+  });
+  const agreement = { missed_done: 0.9, false_open: 0.9, unsupported: 0.9 };
+  const pass = () => ({ n: 30, agreement, S: arm(10), M: arm(7), S2: arm(11) });
+  it('ships when the A/A copy agrees within 1 and gateD21 holds with S as A, M as B', () => {
+    expect(gateD23(pass())).toEqual({ decision: 'ship', reasons: [] });
+  });
+  it('says no when M misses as much as S', () => {
+    expect(gateD23({ ...pass(), M: arm(8) }).decision).toBe('no');
+  });
+  it('decides nothing under 20 sessions, an A/A gap above 1, or an A/A copy not judged in full', () => {
+    expect(gateD23({ ...pass(), n: 19 }).decision).toBe('none');
+    expect(gateD23({ ...pass(), S2: arm(12) }).decision).toBe('none');
+    expect(gateD23({ ...pass(), S2: arm(10, { judged: 29 }) }).decision).toBe('none');
   });
 });
