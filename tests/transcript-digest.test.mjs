@@ -273,6 +273,33 @@ describe('digestTranscript', () => {
     expect([...digest.main.cited].sort()).toEqual([1, 2]);
   });
 
+  // D#854 F10: v6.35.0 kept the subagent face out of the main results' way (a throwing file
+  // emptied that face, and the main results were still written).
+  it('a subagent file holding a record a rule cannot read adds nothing; the rest is answered', () => {
+    writeFileSync(path, lines(MAIN_RECORDS));
+    const subDir = join(dir, 'sess', 'subagents');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, 'agent-a.jsonl'), lines(SUB_RECORDS));
+    const poisoned = join(subDir, 'agent-b.jsonl');
+    writeFileSync(poisoned, lines([{ type: 'assistant', isSidechain: true, message: { content: [null] } }]));
+    expect(
+      () => extractCitationsFromTranscript(poisoned),
+      'premise: the record makes a subagent rule throw',
+    ).toThrow();
+
+    const digest = digestTranscript(path, { runtimeDir });
+    expect(digest.complete).toBe(true);
+    expect(subagentSurfaceFrom(digest.subagents)).toEqual({
+      injected: new Set([801, 802]),
+      cited: new Set([801]),
+      files: 1,
+    });
+    const { subagent: _s, ...main } = answers(digest);
+    rmSync(poisoned);
+    const { subagent: _o, ...expected } = oracle(path);
+    expect(main).toEqual(expected);
+  });
+
   it('an incomplete call reports complete: false', () => {
     writeFileSync(path, lines([say('a #1'), say('b #2'), say('c #3')]));
     const first = digestTranscript(path, { runtimeDir, maxBytes: 10 });
