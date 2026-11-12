@@ -217,6 +217,13 @@ describe('digestTranscript', () => {
     expect(answers(digest)).toEqual(oracle(path));
   });
 
+  it('a line holding JSON that is not an object adds nothing and stops nothing (D#853 F4)', () => {
+    writeFileSync(path, lines([say('a #1')]) + 'null\n42\n"s"\ntrue\n[1]\n' + lines([say('b #2')]));
+    const digest = digestTranscript(path, { runtimeDir });
+    expect(digest.complete).toBe(true);
+    expect([...digest.main.cited].sort()).toEqual([1, 2]);
+  });
+
   it('an incomplete call reports complete: false', () => {
     writeFileSync(path, lines([say('a #1'), say('b #2'), say('c #3')]));
     const first = digestTranscript(path, { runtimeDir, maxBytes: 10 });

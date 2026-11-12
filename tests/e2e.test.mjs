@@ -3259,6 +3259,87 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     expect(payload.gateRecalled).toBe(1);
   });
 
+  // D#853 F8: the test above holds only the payload. Decay decides an id injected in the part
+  // already read, and cited only past the budget, uncited — and its idempotency key then keeps the
+  // complete Stop from deciding it again.
+  it('a Stop that has not read the whole transcript changes no decay column and no citation log', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+    const db = openTestDb(tmpHome);
+    const now = new Date();
+    db.prepare(
+      `
+      INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+      VALUES (?, 'parent--testproj', 'catch-up probe row', 'bugfix', 'Catch-up probe observation', '', '', '', '', '[]', '[]', 2, ?, ?)
+    `,
+    ).run(sessionId, now.toISOString(), now.getTime());
+    const obsId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+    db.close();
+
+    const filler = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: 'z'.repeat(1024 * 1024) },
+    });
+    const transcript = join(tmpHome, 'big-decay-transcript.jsonl');
+    writeFileSync(
+      transcript,
+      [
+        {
+          type: 'attachment',
+          attachment: {
+            type: 'hook_success',
+            command: 'bash "/home/x/.claude-mem-lite/scripts/post-tool-use.sh"',
+            stdout: `[claude-mem-lite] Related memories found for this error:\n  #${obsId} [bugfix] Catch-up probe observation\n`,
+          },
+        },
+        {
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'still investigating' }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .concat(Array(DIGEST_BYTES_PER_STOP / (1024 * 1024) + 2).fill(filler))
+        .concat(
+          JSON.stringify({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: `#${obsId} applied` }] },
+          }),
+        )
+        .join('\n') + '\n',
+    );
+    const state = () => {
+      const d = openTestDb(tmpHome);
+      const row = d
+        .prepare('SELECT uncited_streak, decay_seen_count, access_count FROM observations WHERE id = ?')
+        .get(obsId);
+      const logs = {
+        citation_log: d.prepare('SELECT COUNT(*) AS n FROM citation_log').get().n,
+        citation_surface_log: d.prepare('SELECT COUNT(*) AS n FROM citation_surface_log').get().n,
+      };
+      d.close();
+      return { ...row, ...logs };
+    };
+    const stop = () =>
+      runHook('stop', {
+        stdin: JSON.stringify({ session_id: 'cc-big-decay', transcript_path: transcript }),
+        env: { HOME: tmpHome },
+      });
+
+    const before = state();
+    stop();
+    expect(state(), 'the first Stop read part of the transcript').toEqual(before);
+    stop();
+    const after = state();
+    expect(after.decay_seen_count, 'premise: the complete Stop decides the row').toBe(
+      before.decay_seen_count + 1,
+    );
+    expect(after.uncited_streak, 'it is cited in the part the first Stop had not read').toBe(0);
+    expect(after.citation_log, 'premise: the complete Stop writes the funnel').toBeGreaterThan(
+      before.citation_log,
+    );
+    expect(after.citation_surface_log).toBeGreaterThan(before.citation_surface_log);
+  });
+
   // The gate asks whether the agent ANSWERED what the hooks showed it. `#NN n/a — why`
   // is a complete answer, so it must count here even though the crediting callers drop
   // it — otherwise the nudge nags an agent for following the convention to the letter.
