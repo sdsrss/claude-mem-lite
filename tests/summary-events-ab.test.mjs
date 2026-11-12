@@ -39,85 +39,178 @@ describe('stopReplies', () => {
     timestamp: at(m),
     message: { content: [{ type: 'tool_result', content: 'ok' }] },
   });
+  const hostStop = (m) => ({ type: 'system', subtype: 'stop_hook_summary', timestamp: at(m) });
+  const boundary = (m) => ({ type: 'system', subtype: 'compact_boundary', timestamp: at(m) });
+  const synthetic = (m) =>
+    asst('No response requested.', m, {
+      message: { model: '<synthetic>', content: [{ type: 'text', text: 'x' }] },
+    });
   const session = (prompts, start = ms(0), end = Infinity) => ({ start, end, prompts: prompts.map(ms) });
 
-  it('one reply per stored prompt: the last text before the turn ends', () => {
-    const entries = [
-      user('one', 1),
-      asst('looking', 2),
-      tool(3),
-      asst('r1', 4),
-      user('two', 5),
-      asst('r2', 6),
-    ];
-    expect(stopReplies(entries, session([1, 5]))).toEqual(['r1', 'r2']);
+  describe('with the host’s Stop records', () => {
+    it('each Stop record takes the last text since the one before, under the prompts stored by then', () => {
+      const entries = [
+        user('one', 1),
+        asst('looking', 2),
+        tool(2),
+        asst('r1', 3),
+        hostStop(3),
+        user('two', 4),
+        asst('r2', 5),
+        hostStop(5),
+      ];
+      expect(stopReplies(entries, session([1, 4]))).toEqual(['r1', 'r2']);
+    });
+
+    it('a blocked Stop and its rewrite: the later Stop replaces the earlier under the same prompt', () => {
+      const entries = [
+        user('one', 1),
+        asst('in English', 2),
+        hostStop(2),
+        user('Stop hook feedback: reply in Chinese', 2, { isMeta: true }),
+        asst('用中文', 3),
+        hostStop(3),
+      ];
+      expect(stopReplies(entries, session([1]))).toEqual(['用中文']);
+    });
+
+    it('a notice’s turn stores no prompt, so its reply replaces the turn’s; one before any prompt is turn 0', () => {
+      const notice = (m) =>
+        user('<task-notification>done</task-notification>', m, { origin: { kind: 'task-notification' } });
+      const entries = [
+        notice(1),
+        asst('build passed', 2),
+        hostStop(2),
+        user('one', 3),
+        asst('started', 4),
+        hostStop(4),
+        notice(5),
+        asst('suite 12/12', 6),
+        hostStop(6),
+      ];
+      expect(stopReplies(entries, session([3]))).toEqual(['build passed', 'suite 12/12']);
+    });
+
+    it('text no Stop record follows is dropped: a cut turn, an interrupt, an API error, a compaction', () => {
+      const entries = [
+        user('one', 1),
+        asst('r1', 2),
+        hostStop(2),
+        user('two', 3),
+        asst('halfway', 4),
+        synthetic(5),
+        user('three', 6),
+        asst('partial', 7),
+        user('[Request interrupted by user]', 8),
+        user('four', 9),
+        asst('before the error', 10),
+        asst('API Error: Connection lost', 11, { isApiErrorMessage: true }),
+        user('five', 12),
+        asst('orphan', 13),
+        user('six', 14),
+        asst('r6', 15),
+        hostStop(15),
+        user('seven', 16),
+        asst('working on it', 17),
+        boundary(18),
+        user('summary', 18, { isCompactSummary: true }),
+      ];
+      expect(stopReplies(entries, session([1, 3, 6, 9, 12, 14, 16], ms(0), ms(18)))).toEqual(['r1', 'r6']);
+    });
+
+    it('a turn compacted mid-way ends in the next session’s span, under its turn 0', () => {
+      const entries = [
+        user('one', 1),
+        asst('working on it', 2),
+        boundary(3),
+        user('summary', 3, { isCompactSummary: true }),
+        asst('done after compaction', 4),
+        hostStop(4),
+      ];
+      expect(stopReplies(entries, session([1], ms(0), ms(3)))).toEqual([]);
+      expect(stopReplies(entries, session([], ms(3)))).toEqual(['done after compaction']);
+    });
+
+    it('a meta record changes nothing: a skill’s body inside a turn, a /loop prompt after one', () => {
+      const entries = [
+        user('one', 1),
+        asst('I will use the skill.', 2),
+        user('skill body', 2, { isMeta: true }),
+        asst('r1', 3),
+        hostStop(3),
+        user('/loop wakeup', 5, { isMeta: true }),
+        asst('r2', 6),
+        user('[Image: original 100x100]', 6, { isMeta: true }),
+        hostStop(6),
+      ];
+      expect(stopReplies(entries, session([1, 5]))).toEqual(['r1', 'r2']);
+    });
+
+    it("text after the last Stop record is not a Stop's yet", () => {
+      const entries = [user('one', 1), asst('r1', 2), hostStop(2), user('two', 3), asst('still writing', 4)];
+      expect(stopReplies(entries, session([1, 3]))).toEqual(['r1']);
+    });
+
+    it("Stops outside the session's span are another session's", () => {
+      const entries = [
+        user('before', 1),
+        asst('old', 2),
+        hostStop(2),
+        user('one', 10),
+        asst('mine', 11),
+        hostStop(11),
+        user('after', 20),
+        asst('next', 21),
+        hostStop(21),
+      ];
+      expect(stopReplies(entries, session([10], ms(5), ms(20)))).toEqual(['mine']);
+    });
   });
 
-  it("a notice's turn stores no prompt, so its reply replaces the turn's", () => {
-    const entries = [
-      user('one', 1),
-      asst('started the suite', 2),
-      user('<task-notification>done</task-notification>', 3, { origin: { kind: 'task-notification' } }),
-      asst('suite 12/12', 4),
-    ];
-    expect(stopReplies(entries, session([1]))).toEqual(['suite 12/12']);
-  });
+  describe('in a transcript with no Stop record', () => {
+    it('a Stop before each prompt, notice or command record and at the end; a notice continues the prompt’s turn', () => {
+      const entries = [
+        user('one', 1),
+        asst('started', 2),
+        user('<task-notification>done</task-notification>', 3, { origin: { kind: 'task-notification' } }),
+        asst('suite 12/12', 4),
+        user('two', 5),
+        asst('r2', 6),
+      ];
+      expect(stopReplies(entries, session([1, 5]))).toEqual(['suite 12/12', 'r2']);
+    });
 
-  it('a reply before the first stored prompt is its own turn, first', () => {
-    const entries = [
-      user('<task-notification>build done</task-notification>', 1),
-      asst('the build passed', 2),
-      user('next', 3),
-      asst('r', 4),
-    ];
-    expect(stopReplies(entries, session([3]))).toEqual(['the build passed', 'r']);
-  });
+    it('an interrupt, an API error, a synthetic record or a compaction leaves no Stop', () => {
+      const entries = [
+        user('one', 1),
+        asst('partial', 2),
+        user('[Request interrupted by user]', 3),
+        user('two', 4),
+        asst('before the error', 5),
+        asst('API Error', 6, { isApiErrorMessage: true }),
+        user('three', 7),
+        asst('halfway', 8),
+        synthetic(9),
+        user('four', 10),
+        asst('working', 11),
+        boundary(12),
+        user('summary', 12, { isCompactSummary: true }),
+        user('five', 13),
+        asst('r5', 14),
+      ];
+      expect(stopReplies(entries, session([1, 4, 7, 10, 13]))).toEqual(['r5']);
+    });
 
-  it("Stops outside the session's span are another session's", () => {
-    const entries = [
-      user('before', 1),
-      asst('old', 2),
-      user('one', 10),
-      asst('mine', 11),
-      user('after', 20),
-      asst('next', 21),
-    ];
-    expect(stopReplies(entries, session([10], ms(5), ms(20)))).toEqual(['mine']);
-  });
-
-  it('a compaction ends the turn: what follows is the next turn', () => {
-    const entries = [
-      user('one', 1),
-      asst('mine', 2),
-      { type: 'system', subtype: 'compact_boundary', timestamp: at(3) },
-      user('summary', 3, { isCompactSummary: true }),
-      asst('after compaction', 4),
-    ];
-    expect(stopReplies(entries, session([1], ms(0), ms(3)))).toEqual(['mine']);
-  });
-
-  it('a turn ended by an API error fires no Stop and records nothing', () => {
-    const entries = [
-      user('one', 1),
-      asst('r1', 2),
-      user('two', 3),
-      asst('partial', 4),
-      asst('API Error: Connection lost', 5, { isApiErrorMessage: true }),
-      user('three', 6),
-      asst('r3', 7),
-    ];
-    expect(stopReplies(entries, session([1, 3, 6]))).toEqual(['r1', 'r3']);
-  });
-
-  it("ignores a subagent's records, meta records and text-less assistant records", () => {
-    const entries = [
-      user('one', 1),
-      asst('r1', 2),
-      asst('sub', 3, { isSidechain: true }),
-      user('caveat', 3, { isMeta: true }),
-      { type: 'assistant', timestamp: at(4), message: { content: [{ type: 'tool_use' }] } },
-    ];
-    expect(stopReplies(entries, session([1]))).toEqual(['r1']);
+    it("ignores a subagent's records, meta records and text-less assistant records", () => {
+      const entries = [
+        user('one', 1),
+        asst('r1', 2),
+        asst('sub', 3, { isSidechain: true }),
+        user('caveat', 3, { isMeta: true }),
+        { type: 'assistant', timestamp: at(4), message: { content: [{ type: 'tool_use' }] } },
+      ];
+      expect(stopReplies(entries, session([1]))).toEqual(['r1']);
+    });
   });
 });
 

@@ -108,32 +108,34 @@ export function judgeReplies(replies) {
  */
 /**
  * D#825: the replies the shipped Stop record (lib/turn-replies.mjs) would hold for one memory
- * session, rebuilt from its transcript. A Stop is the end of a host turn: before the next user
- * record that starts one (a typed prompt, a notice, a command record; not a tool result, a meta
- * record or a compaction summary), before a compaction, or at the end of the file. A turn the
- * host ends on an API error fires StopFailure, not Stop, and records nothing. A Stop's last
- * assistant text goes under the number of the session's prompts stored by then (0 before the
- * first), replacing an earlier one; a Stop outside [start, end) is another session's.
+ * session, rebuilt from its transcript. Where the host left Stop records (stop_hook_summary, 181
+ * of 183 transcripts here, 2026-11-12) they are the Stops: each takes the last assistant text since
+ * the previous one. Text not followed by one before the next prompt, interrupt, compaction,
+ * synthetic record (a cut turn) or API error (StopFailure) was never a Stop's and is dropped; a
+ * meta record (a skill's body, a /loop prompt) changes nothing. In a transcript with no Stop record
+ * at all, a Stop is the end of a host turn: before the next prompt, notice or command record, or
+ * at the end of the file, a compaction not ending it. A Stop's text goes under the number of the
+ * session's prompts stored by then (0 before the first), replacing an earlier one; a Stop outside
+ * [start, end) is another session's (pre-ship reviews of abeac529 F4 and of e77aba2d).
  * @param {object[]} entries transcript records, in file order
  * @param {{start: number, end: number, prompts: number[]}} session epoch ms; stored prompt epochs
  * @returns {string[]} in prompt order
  */
 export function stopReplies(entries, { start, end, prompts }) {
   const groups = new Map();
+  const hostStops = entries.some((e) => e?.type === 'system' && e.subtype === 'stop_hook_summary');
   let last = null;
   let lastAt = null;
   const stop = () => {
     if (last !== null && lastAt >= start && lastAt < end)
       groups.set(prompts.filter((p) => p <= lastAt).length, last);
     last = null;
-    lastAt = null;
   };
   for (const e of entries) {
     if (!e || typeof e !== 'object' || e.isSidechain) continue;
     if (e.type === 'assistant') {
-      if (e.isApiErrorMessage) {
+      if (e.isApiErrorMessage || e.message?.model === '<synthetic>') {
         last = null;
-        lastAt = null;
         continue;
       }
       if (!Array.isArray(e.message?.content)) continue;
@@ -147,16 +149,27 @@ export function stopReplies(entries, { start, end, prompts }) {
       }
       continue;
     }
+    if (e.type === 'system' && e.subtype === 'stop_hook_summary') {
+      if (hostStops) stop();
+      continue;
+    }
     if (e.type === 'system' && e.subtype === 'compact_boundary') {
-      stop();
+      last = null;
       continue;
     }
     if (e.type !== 'user' || e.isMeta || e.isCompactSummary) continue;
     const c = e.message?.content;
     if (Array.isArray(c) && c.some((b) => b?.type === 'tool_result')) continue;
-    stop();
+    const t =
+      typeof c === 'string'
+        ? c
+        : Array.isArray(c)
+          ? c.map((b) => (b?.type === 'text' ? b.text : '')).join('')
+          : '';
+    if (hostStops || /^\s*\[Request interrupted/.test(t)) last = null;
+    else stop();
   }
-  stop();
+  if (!hostStops) stop();
   return [...groups].sort((a, b) => a[0] - b[0]).map((g) => g[1]);
 }
 
