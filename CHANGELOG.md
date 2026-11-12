@@ -2,6 +2,23 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.1 — Stop no longer re-reads the whole transcript every turn
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.0`.
+
+- **Citation tracking at Stop reads only what the transcript gained since its previous run**
+  (issue #53). Stop runs at the end of every assistant turn, and it parsed the session's whole
+  transcript each time, once per question it asks when the transcript was too large to keep in
+  memory. Stop now keeps its results so far in one file per transcript in its runtime directory
+  (`~/.claude-mem-lite/runtime/` by default) and parses only the lines added since.
+  - A transcript first seen above 64 MiB, such as a long session already running when you update,
+    is read over several turns. Citation tracking writes nothing for it until it has been read to
+    the end.
+- **The session summary takes the turn's final reply from Claude Code** (`last_assistant_message`,
+  issue #53) when Claude Code sends it, as the per-turn reply record already did. Otherwise the reply is read
+  from the end of the transcript rather than by parsing the whole file.
+
 ## v6.35.0 — the Last Session line names the session's main outcome more often
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
