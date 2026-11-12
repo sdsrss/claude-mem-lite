@@ -217,6 +217,55 @@ describe('digestTranscript', () => {
     expect(answers(digest)).toEqual(oracle(path));
   });
 
+  // D#852: catch-up makes progress only when the next call resumes from this call's state.
+  describe('a call whose progress the next call cannot resume from', () => {
+    const forty = () => {
+      const records = [];
+      for (let i = 1; i <= 40; i++) records.push(say(`turn ${i} cites #${i}`));
+      return lines(records);
+    };
+
+    it('another version of the code saving its own state between calls does not reset this one', () => {
+      writeFileSync(path, forty());
+      const other = '1:0.0.0-another-version';
+      let calls = 0;
+      let digest;
+      do {
+        digest = digestTranscript(path, { runtimeDir, maxBytes: 300 });
+        // That version's Stop on the same transcript: it cannot use this version's state, so it
+        // reads from byte 0 and saves a state of its own under its own name.
+        writeFileSync(
+          join(runtimeDir, digestFileName(path, other)),
+          JSON.stringify({ v: 1, code: other, path, files: {} }),
+        );
+        calls++;
+      } while (!digest.complete && calls < 100);
+      expect(digest.complete, `still catching up after ${calls} calls`).toBe(true);
+      expect(answers(digest)).toEqual(oracle(path));
+      expect(calls, 'premise: the budget split the read').toBeGreaterThan(1);
+    });
+
+    it('when the state cannot be saved, the call reads to the end', () => {
+      writeFileSync(path, forty());
+      expect(
+        digestTranscript(path, { runtimeDir, maxBytes: 300 }).complete,
+        'premise: with a writable runtime dir this budget does not finish in one call',
+      ).toBe(false);
+      const notADir = join(dir, 'runtime-is-a-file');
+      writeFileSync(notADir, '');
+      const digest = digestTranscript(path, { runtimeDir: notADir, maxBytes: 300 });
+      expect(digest.complete).toBe(true);
+      expect(answers(digest)).toEqual(oracle(path));
+    });
+
+    it('without a runtime dir, the call reads to the end', () => {
+      writeFileSync(path, forty());
+      const digest = digestTranscript(path, { maxBytes: 300 });
+      expect(digest.complete).toBe(true);
+      expect(answers(digest)).toEqual(oracle(path));
+    });
+  });
+
   it('a line holding JSON that is not an object adds nothing and stops nothing (D#853 F4)', () => {
     writeFileSync(path, lines([say('a #1')]) + 'null\n42\n"s"\ntrue\n[1]\n' + lines([say('b #2')]));
     const digest = digestTranscript(path, { runtimeDir });
