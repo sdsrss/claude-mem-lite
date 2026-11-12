@@ -427,29 +427,29 @@ describe('install lifecycle checks', () => {
   // CLAUDE_MEM_DIR naming the link's target by another spelling ended in "Done!" with the store
   // left (r2 R2-1). Now a link means the purge removes nothing at all, the link included, and
   // says so; CLAUDE_MEM_DIR is not purged either, however it is spelled.
+  const purgeWith = (home, memDir, nodeArgs = []) => {
+    const env = { ...process.env, HOME: home, PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}` };
+    delete env.CLAUDE_MEM_DIR;
+    if (memDir !== undefined) env.CLAUDE_MEM_DIR = memDir;
+    const r = spawnSync(process.execPath, [...nodeArgs, INSTALL_PATH, 'uninstall', '--purge'], {
+      encoding: 'utf8',
+      env,
+    });
+    return { output: r.stdout + r.stderr, status: r.status };
+  };
+  const files = (dir) =>
+    readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => join(e.parentPath, e.name).slice(dir.length + 1))
+      .sort();
+  const seed = (dir, names) => {
+    for (const f of names) {
+      mkdirSync(join(dir, f, '..'), { recursive: true });
+      writeFileSync(join(dir, f), 'x');
+    }
+  };
   describe('uninstall --purge with ~/.claude-mem-lite a symbolic link', () => {
-    const purgeWith = (home, memDir) => {
-      const env = { ...process.env, HOME: home, PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}` };
-      delete env.CLAUDE_MEM_DIR;
-      if (memDir !== undefined) env.CLAUDE_MEM_DIR = memDir;
-      const r = spawnSync(process.execPath, [INSTALL_PATH, 'uninstall', '--purge'], {
-        encoding: 'utf8',
-        env,
-      });
-      return { output: r.stdout + r.stderr, status: r.status };
-    };
-    const files = (dir) =>
-      readdirSync(dir, { recursive: true, withFileTypes: true })
-        .filter((e) => e.isFile())
-        .map((e) => join(e.parentPath, e.name).slice(dir.length + 1))
-        .sort();
     const STORE = ['claude-mem-lite.db', 'server.mjs', 'my-notes.txt', 'runtime/session.json'];
-    const seed = (dir, names) => {
-      for (const f of names) {
-        mkdirSync(join(dir, f, '..'), { recursive: true });
-        writeFileSync(join(dir, f), 'x');
-      }
-    };
 
     // Each shape: how the link is spelled, and the CLAUDE_MEM_DIR beside it (undefined = unset).
     const SHAPES = {
@@ -565,6 +565,126 @@ describe('install lifecycle checks', () => {
       if (existsSync(locked)) chmodSync(locked, 0o700);
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  // D#835 (D#829 reviews r1 F2, r2 X1): two more ways the purge said "Data purged" and "Done!"
+  // and exited 0 with the store left. A link INSIDE a real ~/.claude-mem-lite (the store, runtime/)
+  // was unlinked and what it pointed to stayed; and rmSync returned normally with the directory
+  // still there while another process deleted files in it (7 of 12 runs, tasks/d835/race.mjs).
+  describe('uninstall --purge with data left behind ~/.claude-mem-lite', () => {
+    const INNER = {
+      'the store a link to a file elsewhere': (home) => ({
+        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db') },
+      }),
+      'the store a relative link, named as spelled': () => ({
+        links: { 'claude-mem-lite.db': join('..', 'ext', 'store.db') },
+      }),
+      'runtime/ a link to a directory elsewhere': (home) => ({
+        links: { runtime: join(home, 'ext', 'rt') },
+      }),
+      'two links, both named': (home) => ({
+        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db'), runtime: join(home, 'ext', 'rt') },
+      }),
+      'CLAUDE_MEM_DIR = an unrelated directory': (home) => ({
+        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db') },
+        mem: join(home, 'other'),
+      }),
+    };
+
+    for (const [name, shape] of Object.entries(INNER)) {
+      it(`removes nothing and does not say Done: ${name}`, () => {
+        const home = makeTmpDir();
+        const dir = join(home, '.claude-mem-lite');
+        try {
+          const { links, mem } = shape(home);
+          seed(join(home, 'ext'), ['store.db', 'rt/session.json']);
+          seed(dir, ['metrics/2026-11-12.jsonl', 'notes.txt']);
+          if (mem) seed(mem, ['claude-mem-lite.db']);
+          for (const [n, to] of Object.entries(links)) symlinkSync(to, join(dir, n));
+          const before = { ext: files(join(home, 'ext')), dir: files(dir), mem: mem && files(mem) };
+          const { output, status } = purgeWith(home, mem);
+          for (const [n, to] of Object.entries(links)) {
+            expect(lstatSync(join(dir, n)).isSymbolicLink(), n).toBe(true);
+            expect(readlinkSync(join(dir, n)), n).toBe(to);
+          }
+          expect(files(join(home, 'ext'))).toEqual(before.ext);
+          expect(files(dir)).toEqual(before.dir);
+          if (mem) expect(files(mem)).toEqual(before.mem);
+          const named = Object.keys(links)
+            .sort()
+            .map((n) => `~/.claude-mem-lite/${n} is a link to ${links[n]}`)
+            .join(', ');
+          expect(output).toContain(
+            `${named}. --purge does not delete through a link, so it removed nothing` +
+              (mem === undefined ? '.' : ` (CLAUDE_MEM_DIR ${mem} included).`),
+          );
+          expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
+          expect(output).toContain('the purge is incomplete');
+          expect(status).toBe(1);
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+
+    // A dev install links its code into ~/.claude-mem-lite on purpose (deployCodeTree): those links
+    // go, as before, and what they point to stays.
+    it('removes the links a dev install makes, and not what they point to', () => {
+      const home = makeTmpDir();
+      const dir = join(home, '.claude-mem-lite');
+      try {
+        seed(join(home, 'repo'), ['cli.mjs', 'node_modules/x/index.js', 'scripts/setup.sh']);
+        seed(dir, ['claude-mem-lite.db', 'runtime/session.json']);
+        for (const n of ['cli.mjs', 'node_modules', 'scripts'])
+          symlinkSync(join(home, 'repo', n), join(dir, n));
+        const before = files(join(home, 'repo'));
+        const { output, status } = purgeWith(home);
+        expect(output).toContain('Data purged (~/.claude-mem-lite/)');
+        expect(output).toContain('Done!');
+        expect(status).toBe(0);
+        expect(existsSync(dir)).toBe(false);
+        expect(files(join(home, 'repo'))).toEqual(before);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // The race itself cannot be scheduled in a test, so a preload makes rmSync do what it was
+    // seen doing under it: return normally with part of the tree, the store included, still there.
+    it('does not say Data purged when ~/.claude-mem-lite is still there after the removal returns', () => {
+      const home = makeTmpDir();
+      const dir = join(home, '.claude-mem-lite');
+      try {
+        seed(dir, ['claude-mem-lite.db', 'runtime/session.json', 'metrics/2026-11-12.jsonl']);
+        const preload = join(home, 'rm-returns-early.mjs');
+        writeFileSync(
+          preload,
+          [
+            "import fs from 'node:fs';",
+            "import { join } from 'node:path';",
+            "import { syncBuiltinESMExports } from 'node:module';",
+            'const real = fs.rmSync;',
+            'fs.rmSync = (p, ...rest) => {',
+            "  if (!String(p).endsWith('/.claude-mem-lite')) return real(p, ...rest);",
+            "  for (const e of fs.readdirSync(p)) if (e !== 'claude-mem-lite.db') real(join(p, e), ...rest);",
+            '};',
+            'syncBuiltinESMExports();',
+          ].join('\n'),
+        );
+        const { output, status } = purgeWith(home, undefined, ['--import', preload]);
+        expect(output).toMatch(/claude-mem-lite uninstaller/); // the preload loaded and install ran
+        expect(existsSync(join(dir, 'runtime'))).toBe(false); // and the stand-in removed something
+        expect(output).toContain(
+          'Could not remove ~/.claude-mem-lite: it was still there when the removal returned.',
+        );
+        expect(output).not.toMatch(/Data purged|Done!/);
+        expect(output).toContain('the purge is incomplete');
+        expect(status).toBe(1);
+        expect(existsSync(join(dir, 'claude-mem-lite.db'))).toBe(true);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   // R32 E2E install F1 (P0): with CLAUDE_MEM_DIR relocated, --purge removed the WHOLE directory

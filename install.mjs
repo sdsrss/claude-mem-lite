@@ -604,6 +604,10 @@ function devNodeModules() {
   }
 }
 
+// The links deployCodeTree makes at the top of ~/.claude-mem-lite for a dev install: code, not
+// data, so `uninstall --purge` removes them like any other entry (D#835).
+const DEV_LINK_NAMES = new Set([...SOURCE_FILES.map((f) => f.split('/')[0]), 'scripts', 'node_modules']);
+
 export function deployCodeTree(IS_DEV) {
   if (IS_DEV) {
     log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
@@ -1980,22 +1984,31 @@ async function uninstall() {
     // "Done!" with the store left when CLAUDE_MEM_DIR named the target by another spelling
     // (`<link>/`), and telling that spelling apart needs resolved paths, whose failures were read
     // as "the target is gone" (D#811 reviews r1 F1, r2 R2-1). One lstat decides; the link stays as
-    // the record of where the store is.
-    let homeIsLink = false;
+    // the record of where the store is. D#835: the same holds one level down — a link inside a
+    // real ~/.claude-mem-lite (the store, runtime/) was unlinked under "Data purged" and "Done!"
+    // and what it pointed to stayed (D#829 review r1 F2). A dev install's code links are not data.
+    let links = []; // [as shown, path] of each link the purge would have to delete through
     try {
-      homeIsLink = lstatSync(DATA_DIR).isSymbolicLink();
+      if (lstatSync(DATA_DIR).isSymbolicLink()) links = [['~/.claude-mem-lite', DATA_DIR]];
+      else
+        links = readdirSync(DATA_DIR, { withFileTypes: true })
+          .filter((e) => e.isSymbolicLink() && !DEV_LINK_NAMES.has(e.name))
+          .map((e) => [`~/.claude-mem-lite/${e.name}`, join(DATA_DIR, e.name)]);
     } catch {
-      /* absent, or not lstat-able: existsSync below decides, as before */
+      /* absent, not lstat-able, or not listable: existsSync and rmSync below decide, as before */
     }
-    if (homeIsLink) {
-      let to = '';
-      try {
-        to = ` to ${readlinkSync(DATA_DIR)}`;
-      } catch {
-        /* raced away */
-      }
+    if (links.length > 0) {
+      const named = links.map(([shown, path]) => {
+        let to = '';
+        try {
+          to = ` to ${readlinkSync(path)}`;
+        } catch {
+          /* raced away */
+        }
+        return `${shown} is a link${to}`;
+      });
       warn(
-        `~/.claude-mem-lite is a link${to}. --purge does not delete through a link, so it removed nothing` +
+        `${named.join(', ')}. --purge does not delete through a link, so it removed nothing` +
           (MEM_DATA_DIR !== homeDir ? ` (CLAUDE_MEM_DIR ${MEM_DATA_DIR} included).` : '.'),
       );
       purgeIncomplete = true;
@@ -2004,7 +2017,12 @@ async function uninstall() {
       // may not remove threw out of here uncaught, and the relocated purge below never ran (D#815).
       try {
         rmSync(DATA_DIR, { recursive: true, force: true });
-        ok('Data purged (~/.claude-mem-lite/)');
+        // D#835 (D#829 review r2 X1): with another process deleting files in it, rmSync returned
+        // normally and the directory, store included, was still there (7 of 12 runs on Node 26).
+        if (existsSync(DATA_DIR)) {
+          warn('Could not remove ~/.claude-mem-lite: it was still there when the removal returned.');
+          purgeIncomplete = true;
+        } else ok('Data purged (~/.claude-mem-lite/)');
       } catch (e) {
         warn(`Could not remove ~/.claude-mem-lite (${e.code || e.message}).`);
         purgeIncomplete = true;
@@ -2016,8 +2034,8 @@ async function uninstall() {
     // claude-mem-lite.db), so a mistyped CLAUDE_MEM_DIR is never touched. Even then only what
     // claude-mem-lite writes there goes: the directory may be one the user keeps other files in,
     // and removing it whole took those too (R32 E2E install F1, P0). It is removed only once
-    // nothing else is left in it. Not when ~/.claude-mem-lite is a link (above).
-    if (MEM_DATA_DIR !== homeDir && !homeIsLink) {
+    // nothing else is left in it. Not when ~/.claude-mem-lite is or holds a link (above).
+    if (MEM_DATA_DIR !== homeDir && links.length === 0) {
       // Not existsSync: it is false on EACCES too, so a store it could not look for was reported
       // absent, then "Done!" (R32 depth-2 review M1).
       let storeLookup = null;
