@@ -1491,8 +1491,9 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
     if (transcriptPath && !process.env.CLAUDE_MEM_NO_CITATION_TRACK) {
       // Issue #53: every question below is answered from the digest, which parses only the
       // bytes appended since the previous Stop (lib/transcript-digest.mjs). Each of them used
-      // to parse the whole transcript, once per Stop below 256 MB and once per question above
-      // it. Each answer is copied where the code below used to get a fresh Set and may add to it.
+      // to parse the whole transcript: one shared parse per Stop within lib/transcript-scan.mjs's
+      // heap budget (256 MB at most), one parse per question above it. Each answer is copied
+      // where the code below used to get a fresh Set and may add to it.
       const digest = digestTranscript(transcriptPath, { runtimeDir: RUNTIME_DIR });
       if (!digest.complete) {
         // A transcript first seen larger than one Stop's read budget is caught up over several

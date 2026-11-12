@@ -1319,8 +1319,8 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
   });
 
   // Issue #53: Stop parsed the whole transcript on every turn to find the final reply the host
-  // already sends as `last_assistant_message` — 1.6 s on a 475 MB transcript, and Stop timed out
-  // at 5 s on nearly every turn of that session. The two texts differ here only so the row shows
+  // already sends as `last_assistant_message` — 1.6 s on a 475 MB transcript, the session that
+  // 600 of the reporter's 613 logged Stop timeouts came from. The two texts differ here only so the row shows
   // which one was read; from the host they are the same message.
   it("the host's last_assistant_message is the Stop row's reply, not the transcript tail (issue #53)", () => {
     runHook('session-start', { env: env() });
@@ -3216,8 +3216,8 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     expect(typeof payload.ratio).toBe('number');
   });
 
-  // Issue #53: Stop reads at most DIGEST_BYTES_PER_STOP new transcript bytes. A transcript first
-  // seen larger than that is caught up over several Stops, and nothing is written until then.
+  // Issue #53: one Stop takes at most DIGEST_BYTES_PER_STOP bytes of new transcript lines. A
+  // transcript first seen larger than that is caught up over several Stops, nothing written until then.
   it('a transcript over one Stop budget writes nothing until a later Stop has read it all', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const filler = JSON.stringify({
