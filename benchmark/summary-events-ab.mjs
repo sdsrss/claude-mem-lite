@@ -85,11 +85,17 @@ import {
   modelSummaryFields,
   FAST_SUMMARY_LIMITS,
 } from '../lib/fast-summary.mjs';
+import { buildSummaryLines } from '../hook-context.mjs';
 
 // A and B are D21's arms; C is D22's (every turn's last reply). `run --arms` picks which run.
 // S, M and S2 are D23's: `run --arms S,M` runs its own population and adds S2, the A/A copy.
-const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2'];
+// A2 is D24's A/A copy of arm A (`prepare --aa A`).
+const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2'];
+// An A/A copy is judged in a batch apart from its own session's other arms (buildBlind).
+const COPY_ARMS = new Set(['S2', 'A2']);
 const QUESTIONS = ['missed_done', 'false_open', 'unsupported'];
+// D24's questions, asked of the lines a new session is shown (`prepare --view line`).
+export const LINE_QUESTIONS = ['line_misses_main', 'false_open', 'unsupported'];
 const YN = ['YES', 'NO'];
 const TURN_HEAD = 700;
 const TURN_TAIL = 300;
@@ -245,34 +251,67 @@ export function gateD23({ S, M, S2, agreement, n }) {
   return { decision: g.ship ? 'ship' : 'no', reasons: g.reasons };
 }
 
-/** Unblind two judges' verdicts (id → {missed_done, false_open, unsupported}). */
-export function scoreVerdicts(key, a, b, usableByArm) {
+/**
+ * D24's registered rule (docs/audits/20261112-d24-preregistration.md §4), on the line view.
+ * Invalid ('none'): an arm of A, C, A2 not judged in full, usable(A or C) below n - 2,
+ * line_misses_main agreement below 0.70, or an A/A gap above 2. Otherwise 'open' when
+ * C >= A + 3 (d1) or C >= a third of n (d2), else 'record'.
+ */
+export function gateD24({ A, C, A2, agreement, n }) {
+  const reasons = [];
+  for (const [arm, s] of [
+    ['A', A],
+    ['C', C],
+    ['A2', A2],
+  ]) {
+    if (!s || !(s.judged >= n)) reasons.push(`judged(${arm}) = ${s?.judged ?? 0} < ${n}`);
+  }
+  for (const [arm, s] of [
+    ['A', A],
+    ['C', C],
+  ]) {
+    if (s && s.usable < n - 2) reasons.push(`usable(${arm}) = ${s.usable} < ${n - 2}`);
+  }
+  if (!(agreement.line_misses_main >= 0.7))
+    reasons.push(`line_misses_main agreement ${agreement.line_misses_main} < 0.70`);
+  if (A && A2) {
+    const gap = Math.abs(A2.line_misses_main - A.line_misses_main);
+    if (gap > 2) reasons.push(`A/A: |line_misses_main(A2) - line_misses_main(A)| = ${gap} > 2`);
+  }
+  if (reasons.length > 0) return { decision: 'none', d1: false, d2: false, reasons };
+  const d1 = C.line_misses_main >= A.line_misses_main + 3;
+  const d2 = C.line_misses_main >= Math.ceil(n / 3);
+  return { decision: d1 || d2 ? 'open' : 'record', d1, d2, reasons };
+}
+
+/** Unblind two judges' verdicts (id → {question: 'YES' | 'NO'}), over `questions`. */
+export function scoreVerdicts(key, a, b, usableByArm, questions = QUESTIONS) {
   const present = ALL_ARMS.filter((x) => x in usableByArm || Object.values(key).some((k) => k.arm === x));
   const arms = Object.fromEntries(
     present.map((arm) => [
       arm,
-      { n: 0, judged: 0, usable: usableByArm[arm] ?? 0, ...Object.fromEntries(QUESTIONS.map((q) => [q, 0])) },
+      { n: 0, judged: 0, usable: usableByArm[arm] ?? 0, ...Object.fromEntries(questions.map((q) => [q, 0])) },
     ]),
   );
-  const same = Object.fromEntries(QUESTIONS.map((q) => [q, 0]));
+  const same = Object.fromEntries(questions.map((q) => [q, 0]));
   let judged = 0;
   for (const [id, { arm }] of Object.entries(key)) {
     const s = arms[arm];
     s.n++;
     const va = a[id];
     const vb = b[id];
-    if (!va || !vb || QUESTIONS.some((q) => !YN.includes(va[q]) || !YN.includes(vb[q]))) continue;
+    if (!va || !vb || questions.some((q) => !YN.includes(va[q]) || !YN.includes(vb[q]))) continue;
     s.judged++;
     judged++;
-    for (const q of QUESTIONS) {
+    for (const q of questions) {
       if (va[q] === vb[q]) same[q]++;
       if (va[q] === 'YES' && vb[q] === 'YES') s[q]++;
     }
   }
   for (const s of Object.values(arms)) {
-    for (const q of QUESTIONS) s[`${q}CI`] = wilson95(s[q], s.judged);
+    for (const q of questions) s[`${q}CI`] = wilson95(s[q], s.judged);
   }
-  const agreement = Object.fromEntries(QUESTIONS.map((q) => [q, judged ? same[q] / judged : 0]));
+  const agreement = Object.fromEntries(questions.map((q) => [q, judged ? same[q] / judged : 0]));
   return { arms, agreement: { ...agreement, n: judged } };
 }
 
@@ -804,22 +843,47 @@ export function describeRows(rows, arms) {
  * Descriptive, outside the gate: both-YES counts per arm and question within groups of items —
  * single vs multi-turn, and the stored row's `completed` source.
  */
-export function splitBothYes(key, a, b, items) {
+export function splitBothYes(key, a, b, items, questions = QUESTIONS) {
   const out = {};
   for (const [id, { arm, item }] of Object.entries(key)) {
     const meta = items[item] ?? {};
     const groups = [meta.turns > 1 ? 'multi' : 'single', `provenance:${meta.provenance ?? 'unknown'}`];
     for (const g of groups) {
-      const cell = ((out[g] ??= {})[arm] ??= { n: 0, ...Object.fromEntries(QUESTIONS.map((q) => [q, 0])) });
+      const cell = ((out[g] ??= {})[arm] ??= { n: 0, ...Object.fromEntries(questions.map((q) => [q, 0])) });
       cell.n++;
-      for (const q of QUESTIONS) if (a[id]?.[q] === 'YES' && b[id]?.[q] === 'YES') cell[q]++;
+      for (const q of questions) if (a[id]?.[q] === 'YES' && b[id]?.[q] === 'YES') cell[q]++;
     }
   }
   return out;
 }
 
-/** Blind the rows: judge-facing batches in two orders each, and the key. */
-export function buildBlind(dump, { seed = 20261111, batches = 2 } = {}) {
+/**
+ * The lines a new session is shown about a summary row: the Completed / Remaining / Next lines
+ * of the shipped SessionStart renderer (hook-context.mjs buildSummaryLines), cut there.
+ */
+export function lastSessionLines(row) {
+  return buildSummaryLines({
+    completed: row.completed,
+    remaining_items: row.remaining_items,
+    next_steps: row.next_steps,
+  }).filter((l) => /^(Completed|Remaining|Next): /.test(l));
+}
+
+/** D24's A/A copy: every row of `arm` again, verbatim, as `<arm>2`. */
+export function addCopyArm(dump, arm) {
+  const copy = `${arm}2`;
+  return {
+    ...dump,
+    meta: { ...dump.meta, arms: [...(dump.meta?.arms ?? []), copy] },
+    rows: [...dump.rows, ...dump.rows.filter((r) => r.arm === arm).map((r) => ({ ...r, arm: copy }))],
+  };
+}
+
+/**
+ * Blind the rows: judge-facing batches in two orders each, and the key. `view` 'line' shows
+ * judges the lines a new session is shown (lastSessionLines) instead of the full fields (D24).
+ */
+export function buildBlind(dump, { seed = 20261111, batches = 2, view = 'fields' } = {}) {
   const ids = seededShuffle(
     Array.from({ length: dump.rows.length }, (_, i) => `e${String(i + 1).padStart(3, '0')}`),
     seed,
@@ -827,13 +891,15 @@ export function buildBlind(dump, { seed = 20261111, batches = 2 } = {}) {
   const key = {};
   const entries = dump.rows.map((r, i) => {
     key[ids[i]] = { arm: r.arm, item: r.item };
-    return {
-      id: ids[i],
-      replies: dump.items[r.item].replies,
-      summary: { completed: r.completed, remaining_items: r.remaining_items, next_steps: r.next_steps },
-    };
+    const shown =
+      view === 'line'
+        ? { lines: lastSessionLines(r) }
+        : {
+            summary: { completed: r.completed, remaining_items: r.remaining_items, next_steps: r.next_steps },
+          };
+    return { id: ids[i], replies: dump.items[r.item].replies, ...shown };
   });
-  if (dump.rows.some((r) => r.arm === 'S2')) {
+  if (dump.rows.some((r) => COPY_ARMS.has(r.arm))) {
     // D23's A/A copy goes to a batch other than its own session's S and M: a judge shown the
     // same item twice agrees with itself, which hides the noise the copy is there to measure
     // (docs/audits/20261112-d23-preregistration.md §7). Sessions are split evenly by a shuffle.
@@ -842,7 +908,7 @@ export function buildBlind(dump, { seed = 20261111, batches = 2 } = {}) {
     const parts = Array.from({ length: batches }, () => []);
     dump.rows.forEach((r, i) => {
       const b = batchOf.get(r.item);
-      parts[r.arm === 'S2' ? (b + 1) % batches : b].push(entries[i]);
+      parts[COPY_ARMS.has(r.arm) ? (b + 1) % batches : b].push(entries[i]);
     });
     return {
       batches: parts.map((part, k) => ({
@@ -865,10 +931,15 @@ export function buildBlind(dump, { seed = 20261111, batches = 2 } = {}) {
 function prepare() {
   const [dumpPath, outdir] = process.argv.slice(3, 5);
   if (!dumpPath || !outdir) throw new Error('prepare <rows.json> <outdir>');
-  const dump = JSON.parse(readFileSync(dumpPath, 'utf8'));
+  const aa = arg('--aa', null);
+  const view = arg('--view', 'fields');
+  if (view !== 'fields' && view !== 'line') throw new Error(`--view ${view}: fields | line`);
+  const read = JSON.parse(readFileSync(dumpPath, 'utf8'));
+  const dump = aa ? addCopyArm(read, aa) : read;
   const { batches, key } = buildBlind(dump, {
     seed: Number(arg('--seed', '20261111')),
     batches: Number(arg('--batches', '2')),
+    view,
   });
   // Judges get `<outdir>/judge/` and nothing else; key.json stays one level up, out of the
   // directory they are pointed at (R34 review L6). Copy judge/ elsewhere to keep it out of reach.
@@ -890,7 +961,7 @@ function prepare() {
   }));
   writeFileSync(
     join(outdir, 'key.json'),
-    JSON.stringify({ key, usable, n: dump.items.length, items, meta: dump.meta }, null, 2),
+    JSON.stringify({ key, usable, n: dump.items.length, items, meta: dump.meta, view }, null, 2),
   );
   console.log(`${Object.keys(key).length} items in ${batches.length} batches → ${outdir}`);
 }
@@ -898,20 +969,24 @@ function prepare() {
 function score() {
   const outdir = process.argv[3];
   if (!outdir) throw new Error('score <outdir>');
-  const { key, usable, n, items } = JSON.parse(readFileSync(join(outdir, 'key.json'), 'utf8'));
+  const { key, usable, n, items, view } = JSON.parse(readFileSync(join(outdir, 'key.json'), 'utf8'));
+  const questions = view === 'line' ? LINE_QUESTIONS : QUESTIONS;
   const merged = { a: {}, b: {} };
   for (const f of readdirSync(outdir)) {
     const m = /^verdicts-\d+-(a|b)\.json$/.exec(f);
     if (m) Object.assign(merged[m[1]], JSON.parse(readFileSync(join(outdir, f), 'utf8')));
   }
-  const result = scoreVerdicts(key, merged.a, merged.b, usable);
+  const result = scoreVerdicts(key, merged.a, merged.b, usable, questions);
   // D22 is registered as the D21 gate with arm C in B's place (tasks/specs/d22-summary-turn-replies.md).
-  const gate = result.arms.M
-    ? { gateD23: gateD23({ ...result.arms, agreement: result.agreement, n }) }
-    : result.arms.C
-      ? { gateD22: gateD21({ A: result.arms.A, B: result.arms.C, agreement: result.agreement, n }) }
-      : { gateD21: gateD21({ ...result.arms, agreement: result.agreement, n }) };
-  const split = items ? splitBothYes(key, merged.a, merged.b, items) : undefined;
+  const gate =
+    view === 'line'
+      ? { gateD24: gateD24({ ...result.arms, agreement: result.agreement, n }) }
+      : result.arms.M
+        ? { gateD23: gateD23({ ...result.arms, agreement: result.agreement, n }) }
+        : result.arms.C
+          ? { gateD22: gateD21({ A: result.arms.A, B: result.arms.C, agreement: result.agreement, n }) }
+          : { gateD21: gateD21({ ...result.arms, agreement: result.agreement, n }) };
+  const split = items ? splitBothYes(key, merged.a, merged.b, items, questions) : undefined;
   console.log(JSON.stringify({ ...result, ...gate, split }, null, 2));
 }
 

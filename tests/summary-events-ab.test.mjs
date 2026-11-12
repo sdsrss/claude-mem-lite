@@ -22,8 +22,13 @@ import {
   mergeModelRow,
   armMPromptInput,
   gateD23,
+  lastSessionLines,
+  addCopyArm,
+  LINE_QUESTIONS,
+  gateD24,
 } from '../benchmark/summary-events-ab.mjs';
 import { parseSummaryNotes } from '../lib/fast-summary.mjs';
+import { buildSummaryLines } from '../hook-context.mjs';
 
 // D#825: the ruler's replies are the ones the shipped Stop record would hold for the session.
 describe('stopReplies', () => {
@@ -728,5 +733,218 @@ describe('D23: gateD23', () => {
     expect(gateD23({ ...pass(), n: 19 }).decision).toBe('none');
     expect(gateD23({ ...pass(), S2: arm(12) }).decision).toBe('none');
     expect(gateD23({ ...pass(), S2: arm(10, { judged: 29 }) }).decision).toBe('none');
+  });
+});
+
+// D24 (docs/audits/20261112-d24-preregistration.md): judges see the lines a new session is shown,
+// cut by the shipped renderer, not the full fields.
+describe('D24: the Last Session lines', () => {
+  const long = '第 1 步完成：复核测量。'.repeat(20);
+  it('are the Completed / Remaining / Next lines buildSummaryLines renders, cut to 120', () => {
+    const row = { completed: long, remaining_items: 'r1\nr2', next_steps: 'n1' };
+    const lines = lastSessionLines(row);
+    expect(lines).toEqual(buildSummaryLines(row).filter((l) => /^(Completed|Remaining|Next): /.test(l)));
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe('Next: n1');
+    expect(lines[0].startsWith('Completed: 第 1 步完成')).toBe(true);
+    expect(lines[0].endsWith('…')).toBe(true);
+    expect(lines[0].length).toBe('Completed: '.length + 120);
+    expect(lines[1]).toBe('Remaining: r1 r2');
+  });
+  it('are empty for an empty row', () => {
+    expect(lastSessionLines({ completed: '', remaining_items: '', next_steps: '' })).toEqual([]);
+  });
+});
+
+describe('D24: addCopyArm and the line view', () => {
+  const dump = () => ({
+    meta: { arms: ['A', 'C'] },
+    items: Array.from({ length: 6 }, (_, i) => ({
+      replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+    })),
+    rows: Array.from({ length: 6 }, (_, item) =>
+      ['A', 'C'].map((arm) => ({
+        item,
+        arm,
+        usable: item !== 5 || arm !== 'A',
+        completed: `${arm}${item} ${'x'.repeat(200)}`,
+        remaining_items: '',
+        next_steps: `n${item}`,
+      })),
+    ).flat(),
+  });
+  it('copies every row of the arm verbatim as <arm>2 and adds it to the arms', () => {
+    const d = addCopyArm(dump(), 'A');
+    const copies = d.rows.filter((r) => r.arm === 'A2');
+    expect(copies).toHaveLength(6);
+    for (const c of copies) {
+      const a = d.rows.find((r) => r.arm === 'A' && r.item === c.item);
+      expect({ ...c, arm: 'A' }).toEqual(a);
+    }
+    expect(d.meta.arms).toEqual(['A', 'C', 'A2']);
+    expect(d.rows).toHaveLength(18);
+  });
+  it('gives judges the rendered lines and no fields, and keeps A2 out of its session’s batch', () => {
+    const d = addCopyArm(dump(), 'A');
+    const { batches, key } = buildBlind(d, { seed: 20261115, batches: 2, view: 'line' });
+    const where = {};
+    batches.forEach((b, k) => {
+      expect(b.b.map((e) => e.id).sort()).toEqual(b.a.map((e) => e.id).sort());
+      for (const e of b.a) {
+        const { item, arm } = key[e.id];
+        where[`${item}${arm}`] = k;
+        expect(e.summary).toBeUndefined();
+        expect(e.lines).toEqual(lastSessionLines(d.rows.find((r) => r.item === item && r.arm === arm)));
+      }
+    });
+    expect(Object.keys(where)).toHaveLength(18);
+    for (let item = 0; item < 6; item++) {
+      expect(where[`${item}A`]).toBe(where[`${item}C`]);
+      expect(where[`${item}A2`]).not.toBe(where[`${item}A`]);
+    }
+  });
+  it('the default view still gives judges the full fields', () => {
+    const { batches } = buildBlind(dump(), { seed: 20261115, batches: 2 });
+    const e = batches[0].a[0];
+    expect(e.lines).toBeUndefined();
+    expect(e.summary.completed.length).toBeGreaterThan(200);
+  });
+});
+
+describe('D24: scoring the line questions', () => {
+  it('counts line_misses_main both-YES, and an item missing it is not judged', () => {
+    const key = { e1: { arm: 'A', item: 0 }, e2: { arm: 'C', item: 0 }, e3: { arm: 'A2', item: 0 } };
+    const v = (m, extra = {}) => ({
+      main: 'x',
+      line_misses_main: m,
+      false_open: 'NO',
+      unsupported: 'NO',
+      ...extra,
+    });
+    const a = { e1: v('YES'), e2: v('YES'), e3: v('NO') };
+    const b = { e1: v('YES'), e2: v('NO'), e3: { main: 'x', false_open: 'NO', unsupported: 'NO' } };
+    const r = scoreVerdicts(key, a, b, { A: 1, C: 1, A2: 1 }, LINE_QUESTIONS);
+    expect(r.arms.A).toMatchObject({ judged: 1, line_misses_main: 1 });
+    expect(r.arms.C).toMatchObject({ judged: 1, line_misses_main: 0 });
+    expect(r.arms.A2).toMatchObject({ judged: 0, line_misses_main: 0 });
+    expect(r.agreement).toMatchObject({ line_misses_main: 0.5, n: 2 });
+    expect(r.agreement.missed_done).toBeUndefined();
+  });
+});
+
+describe('D24: gateD24 (registered before any verdict)', () => {
+  const arm = (m, extra = {}) => ({ usable: 30, judged: 30, line_misses_main: m, ...extra });
+  const agreement = { line_misses_main: 0.8, false_open: 0.9, unsupported: 0.9 };
+  const base = () => ({ n: 30, agreement, A: arm(6), C: arm(6), A2: arm(6) });
+  it('records when C misses no more than A + 2 and fewer than a third', () => {
+    expect(gateD24(base())).toMatchObject({ decision: 'record', d1: false, d2: false });
+    expect(gateD24({ ...base(), C: arm(8) })).toMatchObject({ decision: 'record', d1: false, d2: false });
+    expect(gateD24({ ...base(), A: arm(7), A2: arm(7), C: arm(9) }).decision).toBe('record');
+  });
+  it('opens on C >= A + 3 (decision 1)', () => {
+    expect(gateD24({ ...base(), C: arm(9) })).toMatchObject({ decision: 'open', d1: true, d2: false });
+  });
+  it('opens on C >= a third of n even when A misses as much (decision 2)', () => {
+    expect(gateD24({ ...base(), A: arm(10), A2: arm(10), C: arm(10) })).toMatchObject({
+      decision: 'open',
+      d1: false,
+      d2: true,
+    });
+  });
+  it('decides nothing on an incomplete reading, low usable or agreement, or an A/A gap above 2', () => {
+    expect(gateD24({ ...base(), A2: arm(8) }).decision).toBe('record');
+    expect(gateD24({ ...base(), A2: arm(9) }).decision).toBe('none');
+    expect(gateD24({ ...base(), A2: arm(3) }).decision).toBe('none');
+    expect(gateD24({ ...base(), C: arm(6, { judged: 29 }) }).decision).toBe('none');
+    expect(gateD24({ ...base(), A: arm(6, { judged: 29 }) }).decision).toBe('none');
+    expect(gateD24({ ...base(), A2: arm(6, { judged: 29 }) }).decision).toBe('none');
+    expect(gateD24({ ...base(), A: arm(6, { usable: 28 }) }).decision).toBe('record');
+    expect(gateD24({ ...base(), A: arm(6, { usable: 27 }) }).decision).toBe('none');
+    expect(gateD24({ ...base(), C: arm(6, { usable: 27 }) }).decision).toBe('none');
+    expect(gateD24({ ...base(), agreement: { ...agreement, line_misses_main: 0.7 } }).decision).toBe(
+      'record',
+    );
+    expect(gateD24({ ...base(), agreement: { ...agreement, line_misses_main: 0.69 } }).decision).toBe('none');
+    expect(gateD24({ ...base(), A2: undefined }).decision).toBe('none');
+  });
+});
+
+describe('D24: prepare --view line --aa A, then score', () => {
+  it('writes judge files with the lines, a key with A2 and the view, and scores with gateD24', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const ruler = join(import.meta.dirname, '..', 'benchmark', 'summary-events-ab.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'd24-cli-'));
+    try {
+      const n = 3;
+      const dump = {
+        meta: { arms: ['A', 'C'] },
+        items: Array.from({ length: n }, (_, i) => ({
+          turns: 2,
+          replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+        })),
+        rows: Array.from({ length: n }, (_, item) =>
+          ['A', 'C'].map((arm) => ({
+            item,
+            arm,
+            usable: true,
+            completed: `${arm}${item}`,
+            remaining_items: '',
+            next_steps: '',
+          })),
+        ).flat(),
+      };
+      writeFileSync(join(dir, 'rows.json'), JSON.stringify(dump));
+      const out = join(dir, 'blind');
+      const p = spawnSync(
+        process.execPath,
+        [
+          ruler,
+          'prepare',
+          join(dir, 'rows.json'),
+          out,
+          '--view',
+          'line',
+          '--aa',
+          'A',
+          '--seed',
+          '7',
+          '--batches',
+          '1',
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(p.status, p.stderr).toBe(0);
+      const k = JSON.parse(readFileSync(join(out, 'key.json'), 'utf8'));
+      expect(k.view).toBe('line');
+      expect(k.usable).toEqual({ A: n, C: n, A2: n });
+      const judged = JSON.parse(readFileSync(join(out, 'judge', 'batch-1-a.json'), 'utf8'));
+      expect(judged).toHaveLength(3 * n);
+      for (const e of judged) {
+        expect(e.summary).toBeUndefined();
+        expect(e.lines).toEqual([`Completed: ${k.key[e.id].arm.slice(0, 1)}${k.key[e.id].item}`]);
+      }
+      // Both judges: every C line misses the main work, no A or A2 line does.
+      const verdicts = Object.fromEntries(
+        Object.entries(k.key).map(([id, { arm }]) => [
+          id,
+          { main: 'm', line_misses_main: arm === 'C' ? 'YES' : 'NO', false_open: 'NO', unsupported: 'NO' },
+        ]),
+      );
+      for (const side of ['a', 'b'])
+        writeFileSync(join(out, `verdicts-1-${side}.json`), JSON.stringify(verdicts));
+      expect(readdirSync(out)).toContain('verdicts-1-b.json');
+      const s = spawnSync(process.execPath, [ruler, 'score', out], { encoding: 'utf8' });
+      expect(s.status, s.stderr).toBe(0);
+      const r = JSON.parse(s.stdout);
+      expect(r.arms.C.line_misses_main).toBe(n);
+      expect(r.arms.A.line_misses_main).toBe(0);
+      expect(r.arms.A2.judged).toBe(n);
+      expect(r.agreement.line_misses_main).toBe(1);
+      expect(r.gateD24).toMatchObject({ decision: 'open', d1: true, d2: true });
+      expect(r.split.multi.C.line_misses_main).toBe(n);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
