@@ -17,6 +17,7 @@ import {
   writeStopSummary,
   writeClearSummary,
   mergeModelSummary,
+  modelSummaryFields,
   summarySourceLabel,
   FAST_SUMMARY_LIMITS,
   TAIL_FLOOR_CHARS,
@@ -877,5 +878,61 @@ describe('a model reply from a superseded Stop does not land (P3-6)', () => {
     expect(model('s3', T + 1000), 'no Stop recorded').toBe(true);
     expect(model('s4', Number('')), 'an empty argv epoch is not epoch 0').toBe(true);
     for (const sid of ['s1', 's2', 's3', 's4']) expect(read(sid)[0].request, sid).toBe('model request');
+  });
+});
+
+// D#847 F-3 (6.35.0 pre-tag summary review): modelSummaryFields is the worker's only write
+// boundary for the model's reply, and replacing its scrubRecord call with a plain copy, dropping
+// its whitespace filter or item trim, or taking remaining_items / key_decisions out of the
+// content gate left the whole suite green. Every prompt input is scrubbed upstream today, so no
+// live leak; these cases hold the boundary itself.
+describe('modelSummaryFields: the model reply’s write boundary (D#847 F-3)', () => {
+  // Assembled in pieces so the literal in this file is not itself a push-protection hit.
+  const secret = 'gh' + 'p_' + 'C'.repeat(36);
+
+  it('scrubs every text field and both JSON lists before the write', () => {
+    const f = modelSummaryFields({
+      request: `req ${secret}`,
+      investigated: `inv ${secret}`,
+      learned: `learned ${secret}`,
+      completed: `done ${secret}`,
+      next_steps: `next ${secret}`,
+      remaining_items: `left ${secret}`,
+      lessons: [`lesson ${secret}`],
+      key_decisions: [`decision ${secret}`],
+    });
+    for (const [k, v] of Object.entries(f)) {
+      expect(v, k).not.toContain(secret.slice(0, 10));
+    }
+    expect(f.completed.startsWith('done ')).toBe(true);
+    expect(JSON.parse(f.lessons)).toHaveLength(1);
+    expect(JSON.parse(f.key_decisions)).toHaveLength(1);
+  });
+
+  it('keeps only non-blank string items in the lists, each trimmed', () => {
+    const f = modelSummaryFields({
+      completed: 'x',
+      lessons: ['  ', '  real lesson  ', 7, null, '\n'],
+      key_decisions: ['\t', ' one decision '],
+    });
+    expect(JSON.parse(f.lessons)).toEqual(['real lesson']);
+    expect(JSON.parse(f.key_decisions)).toEqual(['one decision']);
+    expect(modelSummaryFields({ completed: 'x', lessons: ['  ', '\n'] }).lessons).toBeNull();
+  });
+
+  it('writes a reply whose only content is any one field, and none with nothing in it', () => {
+    for (const parsed of [
+      { request: 'r' },
+      { completed: 'c' },
+      { remaining_items: 'left' },
+      { next_steps: 'n' },
+      { lessons: ['l'] },
+      { key_decisions: ['d'] },
+    ]) {
+      expect(modelSummaryFields(parsed), JSON.stringify(parsed)).not.toBeNull();
+    }
+    expect(modelSummaryFields({})).toBeNull();
+    expect(modelSummaryFields({ lessons: ['  '], key_decisions: [' '], completed: [] })).toBeNull();
+    expect(modelSummaryFields(null)).toBeNull();
   });
 });
