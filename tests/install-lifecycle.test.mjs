@@ -494,8 +494,11 @@ describe('install lifecycle checks', () => {
           expect(readlinkSync(join(home, '.claude-mem-lite'))).toBe(to);
           expect(files(join(home, 'data'))).toEqual(before);
           if (others) expect(files(join(home, 'other'))).toEqual(others);
-          expect(output).toContain(`~/.claude-mem-lite is a link to ${to}.`);
-          if (mem !== undefined) expect(output).toContain(`CLAUDE_MEM_DIR ${mem} included`);
+          // The whole sentence, so a CLAUDE_MEM_DIR named when unset fails (review F5).
+          expect(output).toContain(
+            `~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing` +
+              (mem === undefined ? '.' : ` (CLAUDE_MEM_DIR ${mem} included).`),
+          );
           expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
           expect(output).toContain('the purge is incomplete');
           expect(status).toBe(1);
@@ -513,7 +516,9 @@ describe('install lifecycle checks', () => {
           symlinkSync(to, join(home, '.claude-mem-lite'));
           const { output, status } = purgeWith(home);
           expect(readlinkSync(join(home, '.claude-mem-lite')), to).toBe(to);
-          expect(output, to).toContain(`~/.claude-mem-lite is a link to ${to}.`);
+          expect(output, to).toContain(
+            `~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing.`,
+          );
           expect(output, to).not.toMatch(/Data purged|Done!/);
           expect(status, to).toBe(1);
           rmSync(join(home, '.claude-mem-lite'));
@@ -550,7 +555,7 @@ describe('install lifecycle checks', () => {
       });
       const output = r.stdout + r.stderr;
       chmodSync(locked, 0o700);
-      expect(output).toContain('Could not remove everything in ~/.claude-mem-lite (EACCES)');
+      expect(output).toContain('Could not remove ~/.claude-mem-lite (EACCES).');
       expect(output).not.toMatch(/Data purged \(|Done!|^\s+at /m);
       expect(existsSync(join(locked, 'inner.txt'))).toBe(true);
       expect(existsSync(join(home, 'reloc', 'claude-mem-lite.db'))).toBe(false);

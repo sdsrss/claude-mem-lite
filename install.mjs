@@ -2006,9 +2006,7 @@ async function uninstall() {
         rmSync(DATA_DIR, { recursive: true, force: true });
         ok('Data purged (~/.claude-mem-lite/)');
       } catch (e) {
-        warn(
-          `Could not remove everything in ~/.claude-mem-lite (${e.code || e.message}); what it could not remove stays there.`,
-        );
+        warn(`Could not remove ~/.claude-mem-lite (${e.code || e.message}).`);
         purgeIncomplete = true;
       }
     } else if (existsSync(DATA_DIR)) {
