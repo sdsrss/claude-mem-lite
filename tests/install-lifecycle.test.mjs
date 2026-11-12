@@ -10,6 +10,7 @@ import {
   symlinkSync,
   readlinkSync,
   chmodSync,
+  lstatSync,
 } from 'fs';
 import { join, resolve, isAbsolute } from 'path';
 import { tmpdir } from 'os';
@@ -418,6 +419,61 @@ describe('install lifecycle checks', () => {
         rmSync(home, { recursive: true, force: true });
       } catch {}
     }
+  });
+
+  // D#811 (6.33.0 pre-tag review, defects F9): with ~/.claude-mem-lite a symbolic link, rmSync took
+  // the link alone, printed "Data purged" and "Done!", and the store stayed behind it. The target
+  // can be a directory the user chose, like a relocated CLAUDE_MEM_DIR, and holds the code too, so
+  // nothing is removed through the link: the link goes, the output names what is left, and the
+  // purge is not done.
+  describe('uninstall --purge with ~/.claude-mem-lite a symbolic link', () => {
+    const purgeDefault = (home) => {
+      const env = { ...process.env, HOME: home, PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}` };
+      delete env.CLAUDE_MEM_DIR;
+      const r = spawnSync(process.execPath, [INSTALL_PATH, 'uninstall', '--purge'], {
+        encoding: 'utf8',
+        env,
+      });
+      return { output: r.stdout + r.stderr, status: r.status };
+    };
+
+    it('removes the link, leaves every file behind it, names the target, and does not say Done', () => {
+      const home = makeTmpDir();
+      try {
+        const target = join(home, 'data', 'mem');
+        mkdirSync(join(target, 'runtime'), { recursive: true });
+        for (const f of ['claude-mem-lite.db', 'server.mjs', 'my-notes.txt'])
+          writeFileSync(join(target, f), 'x');
+        symlinkSync(target, join(home, '.claude-mem-lite'));
+        const { output, status } = purgeDefault(home);
+        expect(existsSync(join(home, '.claude-mem-lite'))).toBe(false);
+        expect(readdirSync(target).sort()).toEqual([
+          'claude-mem-lite.db',
+          'my-notes.txt',
+          'runtime',
+          'server.mjs',
+        ]);
+        expect(output).toContain(target);
+        expect(output).not.toMatch(/Data purged|Done!/);
+        expect(status).not.toBe(0);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a link whose target is gone is removed, and the purge is done', () => {
+      const home = makeTmpDir();
+      try {
+        symlinkSync(join(home, 'gone'), join(home, '.claude-mem-lite'));
+        const { output, status } = purgeDefault(home);
+        expect(() => lstatSync(join(home, '.claude-mem-lite'))).toThrow();
+        expect(output).toContain('Data purged');
+        expect(output).toContain('Done!');
+        expect(status).toBe(0);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   // R32 E2E install F1 (P0): with CLAUDE_MEM_DIR relocated, --purge removed the WHOLE directory

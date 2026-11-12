@@ -1973,8 +1973,38 @@ async function uninstall() {
   let purgeIncomplete = false; // reported, and not followed by "Done!" and exit 0
   if (flags.has('--purge')) {
     const homeDir = join(homedir(), '.claude-mem-lite');
+    let homeLink = false;
+    try {
+      homeLink = DATA_DIR === homeDir && lstatSync(DATA_DIR).isSymbolicLink();
+    } catch {
+      /* absent */
+    }
     // Always remove the homedir code/install dir (guarded to the canonical path).
-    if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
+    if (homeLink) {
+      // D#811: rmSync takes a link alone, and "Data purged" was then false. The target may be a
+      // directory the user chose, as a relocated CLAUDE_MEM_DIR is, and it holds the code too, so
+      // nothing is removed through the link: the link goes, and what is left behind it is named.
+      let target = null;
+      try {
+        target = realpathSync(DATA_DIR);
+      } catch {
+        /* the target is gone */
+      }
+      try {
+        unlinkSync(DATA_DIR);
+        if (target === null) ok('Data purged (~/.claude-mem-lite/ was a link to nothing)');
+        else {
+          warn(
+            `~/.claude-mem-lite was a link to ${target}: the link is removed, nothing behind it was. ` +
+              `Remove ${target} yourself to delete the memories and code there.`,
+          );
+          purgeIncomplete = true;
+        }
+      } catch (e) {
+        warn(`Could not remove the link ~/.claude-mem-lite (${e.code || e.message}).`);
+        purgeIncomplete = true;
+      }
+    } else if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
       rmSync(DATA_DIR, { recursive: true, force: true });
       ok('Data purged (~/.claude-mem-lite/)');
     } else if (existsSync(DATA_DIR)) {
