@@ -198,8 +198,13 @@ describe('the Stop handler wires Key Context as promotion-only', () => {
     // clean call of either name appearing earlier in the file would shadow a
     // dirty one below it. At HEAD that was unreachable (one name, one site);
     // "keep extractAllInjected for a non-mainOnly path" makes it reachable.
+    // Issue #53: the Stop handler reads the extraction from its digest
+    // (lib/transcript-digest.mjs), whose accumulators call the per-record rule
+    // addInjectedBySurfaceOf. Every such call there, and any direct call left in hook.mjs.
+    const digestSrc = readFileSync(join(ROOT, 'lib', 'transcript-digest.mjs'), 'utf8');
     const calls = [
       ...src.matchAll(/(?:extractAllInjected|extractInjectedBySurface)\(transcriptPath,\s*\{[^}]*\}/gs),
+      ...digestSrc.matchAll(/addInjectedBySurfaceOf\([^)]*\)/gs),
     ];
     expect(calls.length, 'query-conditioned extraction call site not found').toBeGreaterThan(0);
     for (const [call] of calls) {

@@ -4,7 +4,16 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync, spawn } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, unlinkSync } from 'fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  statSync,
+} from 'fs';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -14,6 +23,7 @@ import { initSchema } from '../schema.mjs';
 import { saveEvent } from '../lib/activity.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
 import { readTurnReplies } from '../lib/turn-replies.mjs';
+import { DIGEST_BYTES_PER_STOP } from '../lib/transcript-digest.mjs';
 
 const HOOK_PATH = resolve('hook.mjs');
 const MOCK_CLAUDE = resolve('scripts/mock-claude.mjs');
@@ -1441,14 +1451,15 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rows[0].completed).toContain('LATER-TURN-OBS');
   });
 
-  it('a Stop in a session with subagents parses the parent transcript once', () => {
-    // lib/transcript-scan.mjs memoizes ONE file, and reading a subagent transcript evicts the
-    // parent. Stop's citation tracking reads the subagents first so the parent is parsed once
-    // (D#152); the summary refresh now runs every turn and has to come after that, not before.
+  it('a Stop reads the parent transcript only from where the previous Stop stopped (issue #53)', () => {
+    // This was D#152's "the parent is parsed once": lib/transcript-scan.mjs memoized ONE file, so
+    // the order of Stop's scanners decided how many whole parses it paid. Since issue #53 Stop
+    // folds only the bytes appended since its previous run (lib/transcript-digest.mjs) and never
+    // reads the file whole; subagent files are read beside it without touching the parent.
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);
     seedPrompt(sid);
-    turn('start', 'Done: X');
+    turn('start', `Done: X ${'p'.repeat(200 * 1024)}`);
     const subDir = join(transcript.slice(0, -'.jsonl'.length), 'subagents');
     mkdirSync(subDir, { recursive: true });
     writeFileSync(
@@ -1458,22 +1469,47 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
         message: { role: 'assistant', content: [{ type: 'text', text: 'sub' }] },
       }) + '\n',
     );
-    const countFile = join(tmpHome, 'parent-reads.txt');
+    const countFile = join(tmpHome, 'parent-reads.json');
     const preload = join(tmpHome, 'count-reads.cjs');
     writeFileSync(
       preload,
       `const fs = require('fs'); const { syncBuiltinESMExports } = require('module');
-       const orig = fs.readFileSync; let n = 0;
-       fs.readFileSync = function (p, ...rest) { if (String(p) === process.env.COUNT_PATH) n++; return orig.call(this, p, ...rest); };
+       const { openSync, readSync, readFileSync } = fs; const fds = new Set(); let whole = 0; let bytes = 0;
+       fs.openSync = function (p, ...r) { const fd = openSync.call(this, p, ...r); if (String(p) === process.env.COUNT_PATH) fds.add(fd); return fd; };
+       fs.readSync = function (fd, ...r) { const n = readSync.call(this, fd, ...r); if (fds.has(fd)) bytes += n; return n; };
+       fs.readFileSync = function (p, ...r) { if (String(p) === process.env.COUNT_PATH) whole++; return readFileSync.call(this, p, ...r); };
        syncBuiltinESMExports();
-       process.on('exit', () => fs.writeFileSync(process.env.COUNT_FILE, String(n)));`,
+       process.on('exit', () => fs.writeFileSync(process.env.COUNT_FILE, JSON.stringify({ whole, bytes })));`,
     );
-    runHook('stop', {
-      stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
-      env: { ...env(), NODE_OPTIONS: `--require ${preload}`, COUNT_PATH: transcript, COUNT_FILE: countFile },
-    });
+    const stop = (reply) => {
+      runHook('stop', {
+        stdin: JSON.stringify({
+          session_id: 'cc-4b',
+          transcript_path: transcript,
+          last_assistant_message: reply,
+        }),
+        env: {
+          ...env(),
+          NODE_OPTIONS: `--require ${preload}`,
+          COUNT_PATH: transcript,
+          COUNT_FILE: countFile,
+        },
+      });
+      return JSON.parse(readFileSync(countFile, 'utf8'));
+    };
+
+    const first = stop('Done: X');
     expect(rowsOf(sid)[0]?.completed, 'premise: the Stop ran the summary writer').toContain('X');
-    expect(Number(readFileSync(countFile, 'utf8'))).toBe(1);
+    expect(first.whole).toBe(0);
+    expect(first.bytes, 'premise: the first Stop read the transcript').toBeGreaterThan(200 * 1024);
+
+    turn('go on', 'Done: Y');
+    const second = stop('Done: Y');
+    expect(rowsOf(sid)[0]?.completed, 'premise: the second Stop ran too').toContain('Y');
+    expect(second.whole).toBe(0);
+    expect(second.bytes, 'the appended turn and the probes, not the 200 KB before them').toBeLessThan(
+      32 * 1024,
+    );
   });
 
   it("/clear keeps a first-turn report's Done instead of replacing it with observation titles", () => {
@@ -3178,6 +3214,49 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
     // gate falling back to it is the documented back-compat path.
     expect(typeof payload.injected).toBe('number');
     expect(typeof payload.ratio).toBe('number');
+  });
+
+  // Issue #53: Stop reads at most DIGEST_BYTES_PER_STOP new transcript bytes. A transcript first
+  // seen larger than that is caught up over several Stops, and nothing is written until then.
+  it('a transcript over one Stop budget writes nothing until a later Stop has read it all', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const filler = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: 'z'.repeat(1024 * 1024) },
+    });
+    const lines = Array(DIGEST_BYTES_PER_STOP / (1024 * 1024) + 2).fill(filler);
+    lines.push(
+      JSON.stringify({
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          command: 'node "/x/scripts/pre-tool-recall.js"',
+          stdout: '  #101 [lesson] alpha\n  #102 [bugfix] beta',
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: '#102 applied' }] },
+      }),
+    );
+    const transcript = join(tmpHome, 'big-transcript.jsonl');
+    writeFileSync(transcript, lines.join('\n') + '\n');
+    expect(statSync(transcript).size, 'premise: one Stop cannot read it all').toBeGreaterThan(
+      DIGEST_BYTES_PER_STOP,
+    );
+    const payloadFile = join(tmpHome, '.claude-mem-lite', 'runtime', 'cite-recall-parent--testproj.json');
+    const stop = () =>
+      runHook('stop', {
+        stdin: JSON.stringify({ session_id: 'cc-big', transcript_path: transcript }),
+        env: { HOME: tmpHome },
+      });
+
+    stop();
+    expect(existsSync(payloadFile), 'the first Stop read part of it and wrote nothing').toBe(false);
+    stop();
+    const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+    expect(payload.gateInjected).toBe(2);
+    expect(payload.gateRecalled).toBe(1);
   });
 
   // The gate asks whether the agent ANSWERED what the hooks showed it. `#NN n/a — why`

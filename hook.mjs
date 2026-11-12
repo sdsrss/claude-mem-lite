@@ -164,19 +164,17 @@ import {
 } from './lib/maintain-core.mjs';
 import { snapshotDb } from './lib/db-backup.mjs';
 import {
-  extractCitationsFromTranscript,
-  extractInjectedBySurface,
-  buildCitationRelevanceSet,
+  citationRelevanceSetFrom,
   unionSurfaces,
   extractInjectedFromKeyContext,
   bumpCitationAccess,
-  computeCiteRecall,
+  citeRecallStats,
   applyCitationDecay,
   recordCitationFunnel,
   recordCitationSurfaces,
-  collectSubagentSurface,
-  hasMainThreadAssistantText,
+  subagentSurfaceFrom,
 } from './lib/citation-tracker.mjs';
+import { digestTranscript, DIGEST_FILE_PREFIX } from './lib/transcript-digest.mjs';
 import { resolveEdgeAttribution, readPreRecallFileEdges } from './lib/edge-attribution.mjs';
 import { extractTailAssistantText, extractStructuredSummary } from './lib/summary-extractor.mjs';
 import { recordTurnReply, TURN_REPLIES_PREFIX } from './lib/turn-replies.mjs';
@@ -211,11 +209,10 @@ import {
 } from './hook-handoff.mjs';
 import {
   loadCiteBackForEpisode,
-  extractCiteBackSignals,
   buildUnsavedBugfixHint,
   claimBugfixNudge,
   BUGFIX_NUDGE_MARKER_PREFIX,
-  countUnsavedBugfixShape,
+  bugfixShapeStats,
   buildCiteRecallNudge as libBuildCiteRecallNudge,
   nextCiteStreakState,
 } from './lib/cite-back-hint.mjs';
@@ -1281,10 +1278,9 @@ async function readStopHookInput() {
 
 /**
  * This turn's final reply: the host's `last_assistant_message` when it sends one, else the
- * transcript's last assistant text. Only the fallback reads the transcript — a parse of the whole
- * file, linear in its size, which on a 475 MB transcript alone took 1.6 s of Stop's 5 s budget on
- * every turn (issue #53). Claude Code 2.1.322 omits the field only when its last assistant
- * message carries no text. Can throw on the fallback path; callers catch.
+ * transcript's last assistant text, read backwards from the end of the file. A forward parse of
+ * the whole file took 1.6 s on a 475 MB transcript, on every turn (issue #53). Claude Code
+ * 2.1.322 omits the field only when its last assistant message carries no text.
  */
 function stopFinalReply({ transcriptPath, lastAssistantMessage }) {
   if (lastAssistantMessage !== null) return lastAssistantMessage;
@@ -1445,9 +1441,7 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath, last
     // CLAUDE.md §10 mandates Done/Not done/Failed/Uncertain markers, so the
     // tail is deterministically parseable without Haiku. Prior baseline left
     // remaining_items=='' for every session whose Haiku pass failed (≈66%
-    // in prod data), losing the user-visible "Not done" list. handleStop calls this
-    // AFTER trackCitationsAtStop so that, when the host sends no reply and the transcript
-    // is parsed after all, the parse is the one it left memoized.
+    // in prod data), losing the user-visible "Not done" list.
     let structuredCompleted = '';
     let structuredNotDone = '';
     let structuredNotes = '';
@@ -1495,23 +1489,25 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
   // applyCitationDecay checks separately.
   try {
     if (transcriptPath && !process.env.CLAUDE_MEM_NO_CITATION_TRACK) {
+      // Issue #53: every question below is answered from the digest, which parses only the
+      // bytes appended since the previous Stop (lib/transcript-digest.mjs). Each of them used
+      // to parse the whole transcript, once per Stop below 256 MB and once per question above
+      // it. Each answer is copied where the code below used to get a fresh Set and may add to it.
+      const digest = digestTranscript(transcriptPath, { runtimeDir: RUNTIME_DIR });
+      if (!digest.complete) {
+        // A transcript first seen larger than one Stop's read budget is caught up over several
+        // Stops. Writing from part of it would bank verdicts the rest contradicts — an id cited
+        // later in the unread part would be decided uncited — so this Stop writes nothing.
+        debugLog('DEBUG', 'handleStop', 'citations: transcript digest still catching up; nothing written');
+        return;
+      }
+      const d = digest.main;
       // D#152/D#177: the `subagent` face, collected ONCE, up front, and used twice —
       // by the decay block below (only under CLAUDE_MEM_SUBAGENT_DECAY) and by its own
-      // metering call at the tail. It used to be collected at the tail only, with a
-      // comment saying the position was load-bearing because lib/transcript-scan.mjs
-      // memoizes ONE file and reading the sidechains evicts the parent. That constraint
-      // is real but it is not "last" — it is "not BETWEEN two parent scans". Running it
-      // FIRST parses the sidechains before anything has memoized the parent, so the
-      // parent is then parsed once and stays memoized for every scanner after it:
-      // still one parent parse per Stop, the property the tail comment was protecting.
-      let sub = { injected: new Set(), cited: new Set(), files: 0 };
-      try {
-        sub = collectSubagentSurface(transcriptPath);
-      } catch (e) {
-        debugCatch(e, 'handleStop-subagent-collect');
-      }
+      // metering call at the tail.
+      const sub = subagentSurfaceFrom(digest.subagents);
 
-      const ids = extractCitationsFromTranscript(transcriptPath);
+      const ids = new Set(d.cited);
       if (ids.size > 0) {
         // Gate the access-count channel on relevance (audit FLOW-2 / D#179). The cited
         // set is every `#NN` in this session's assistant text and cannot tell a
@@ -1519,8 +1515,9 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // session names dozens of ids in prose, and access_count > 3 promotes a row a
         // tier via boostAccessed. The population to credit — all seven faces, and why
         // extractAllInjected alone is the wrong five — lives in the builder.
-        const relevant = buildCitationRelevanceSet({
-          transcriptPath,
+        const relevant = citationRelevanceSetFrom({
+          attachmentInjected: unionSurfaces(d.injected),
+          userTyped: d.userTyped,
           runtimeDir: RUNTIME_DIR,
           project,
           sessionId: ccSessionId,
@@ -1538,11 +1535,9 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         );
       }
 
-      // v32 citation-decay: tighter feedback loop on top of P4. Re-scan
-      // transcript with main-thread filter, extract injected IDs from BOTH
-      // surfaces (PTR + UserPromptSubmit <memory-context>) via extractAllInjected,
-      // then mutate importance/streak per applyCitationDecay's contract.
-      // Cheap (file still in OS cache).
+      // v32 citation-decay: tighter feedback loop on top of P4. The main-thread
+      // injected ids from every attachment face (PTR + UserPromptSubmit
+      // <memory-context> + …), then mutate the streaks per applyCitationDecay's contract.
       //
       // v34.x: pre-v34 this only saw pre-tool-recall injections, leaving the
       // UPS surface (highest-volume — all decision-type FTS hits) starved.
@@ -1559,13 +1554,13 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // survives to citation_surface_log below so "which face earns its
         // budget" becomes answerable. Before this, every face was merged
         // before anything was recorded and no lever had a target.
-        const injectedBySurface = extractInjectedBySurface(transcriptPath, { mainOnly: true });
+        const injectedBySurface = d.injectedMain;
         const injected = unionSurfaces(injectedBySurface);
         // P5 ①: cite-back signals — observations whose warned file the agent
         // edited this session. Union into injected so they're resolved (they
         // were injected via pre-tool-recall) and, below, into cited so the
         // edit promotes them even without a literal #NN in text.
-        const citeBackIds = extractCiteBackSignals(transcriptPath);
+        const citeBackIds = d.citeBack;
         for (const id of citeBackIds) injected.add(id);
         // D#124, promotion-only (v3.66.1): the SessionStart Key Context block
         // leaves no hook attachment, so its ids come from the per-session
@@ -1602,14 +1597,14 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
           // contract is "NEXT time you produce user-facing text," so a
           // session with zero main-thread text gets a free pass — the
           // next Stop in the same session will re-evaluate.
-          if (!hasMainThreadAssistantText(transcriptPath)) {
+          if (!d.mainText.seen) {
             debugLog(
               'DEBUG',
               'handleStop',
               `citation-decay: skipped (no main-thread assistant text yet, injected=${injected.size})`,
             );
           } else {
-            const citedMain = extractCitationsFromTranscript(transcriptPath, { mainOnly: true });
+            const citedMain = new Set(d.citedMain);
             for (const id of citeBackIds) citedMain.add(id);
             // D#177: admit the `subagent` face to the decay loop. It cannot ride the
             // normal path because its injection lands in a dispatched agent's PROMPT
@@ -1738,15 +1733,9 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
       }
 
       // Persist cite-recall ratio for the next SessionStart to surface as
-      // feedback. This block re-scans the transcript rather than threading the
-      // count through `extractCitationsFromTranscript`, so the bump path stays
-      // unchanged — and since P2-8 every scanner in it shares ONE parse via
-      // lib/transcript-scan.mjs, so "scan again" costs an array iteration, not a
-      // re-read. (The old wording, "cheap; the file is already in OS cache", was
-      // arguing the pre-memo case: the OS cache saved the read, never the parse,
-      // which was ~all of the cost.)
+      // feedback.
       try {
-        const stats = computeCiteRecall(transcriptPath);
+        const stats = citeRecallStats(d.citeRecall);
         // D#19: the RATIO GATE's own denominator, alongside the wide one. `stats` counts
         // every `#NN`-shaped token in non-assistant text — tool_result bodies, file
         // contents, CLI output, pasted reports — which is the right caliber for "what has
@@ -1754,24 +1743,19 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         // (measured 11.2x inflation, R11-B-P2-2). Both are persisted; buildCiteRecallNudge
         // gates on this pair and falls back to the wide one for older payloads.
         //
-        // Cost is an array iteration, not a parse: this block runs after the decay loop's
-        // own extractInjectedBySurface on the same path, and lib/transcript-scan.mjs memoizes
-        // the parse. mainOnly mirrors the decay loop — an id injected only inside a subagent
+        // mainOnly mirrors the decay loop — an id injected only inside a subagent
         // would otherwise enter the denominator while its citation lands in another
         // transcript, scoring a miss the main thread never had a chance to avoid.
         let gate = { gateInjected: null, gateRecalled: null, gateRatio: null };
         try {
-          const gateInjectedIds = unionSurfaces(extractInjectedBySurface(transcriptPath, { mainOnly: true }));
+          const gateInjectedIds = unionSurfaces(d.injectedMain);
           // The nudge asks whether the agent ANSWERED what the hooks showed it, so a
           // `#NN n/a — <reason>` still counts. Since D#98 the default directive asks for no
           // reply on a lesson that did not apply, so that silence now reads as a miss here and
           // the gate fires more (projected 78/95 → up to 87/95 qualifying sessions,
           // docs/audits/20260927-d98-dismissal-baseline.md). Left as is: the gate already fired
           // on most sessions and self-silences after 3; D#111's readout re-measures it.
-          const gateCited = extractCitationsFromTranscript(transcriptPath, {
-            mainOnly: true,
-            includeDismissed: true,
-          });
+          const gateCited = d.citedMainAnswered;
           let hit = 0;
           for (const id of gateInjectedIds) if (gateCited.has(id)) hit++;
           gate = {
@@ -1786,9 +1770,8 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         }
         // B2 (v2.83.1): also persist the bugfix-shape nudge/save delta so
         // the next SessionStart can surface "N unsaved bugfix-shape edits"
-        // alongside cite-recall. Same scan target (transcript already in OS
-        // cache); same persistence file; one extra line in buildCiteRecallNudge.
-        const bugfixStats = countUnsavedBugfixShape(transcriptPath);
+        // alongside cite-recall. Same persistence file; one extra line in buildCiteRecallNudge.
+        const bugfixStats = bugfixShapeStats(d.bugfixShape);
         const dest = citeRecallPathFor(RUNTIME_DIR, project);
         // Carry the consecutive-low-cite streak forward so the SessionStart
         // nag can self-silence after the project has ignored it N times.
@@ -1819,11 +1802,11 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
           `,
             )
             .all(sessionId);
-          const d = detectUnpersistedDecision({
+          const u = detectUnpersistedDecision({
             prompts: promptRows.map((r) => r.prompt_text),
-            transcriptPath,
+            persistenceCount: d.persistence.count,
           });
-          if (d.fire) decisionSignal = d.signal;
+          if (u.fire) decisionSignal = u.signal;
         } catch (e) {
           debugCatch(e, 'handleStop-persist-reminder');
         }
@@ -1860,25 +1843,14 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
       // promotion all keep the un-widened set. `CLAUDE_MEM_SUBAGENT_DECAY=0` returns
       // the face to metering-only.
       //
-      // The "placed LAST" note below is now historical: `collectSubagentSurface` runs
-      // at the HEAD of this block (the decay loop needs its result), and `sub` here is
-      // that same object rather than a second call. The parse-count property the note
-      // defends is unchanged — see the comment at the collection site.
-      // earlier, this block costs ONE extra parse of the parent — the memo
-      // re-caches on the first re-read, so it is one, not one per later
-      // scanner — and breaks the "one parse per Stop" property the block
-      // above documents. Measured by instrumenting the parse: 1 parent parse
-      // at this position, 2 when relocated earlier. ~25ms on the largest
-      // real transcript here (5.4MB), matching lib/transcript-scan.mjs's
-      // own header figure.
+      // `sub` is the one collected at the head of this block (the decay loop needs it too).
       // The text floor is re-checked rather than inherited — same reason as
       // every other face: a tool-only Stop must not bank a verdict, and it
       // must not enter the funnel's session denominator either.
       try {
-        if (hasMainThreadAssistantText(transcriptPath)) {
-          // `sub` is the one collected at the top of this block — a second
-          // collectSubagentSurface call here would re-parse every sidechain file and,
-          // worse, could disagree with the set the decay loop above just scored.
+        if (d.mainText.seen) {
+          // `sub` is the one collected at the top of this block, so this records the set
+          // the decay loop above just scored.
           if (sub.injected.size > 0) {
             recordCitationSurfaces(
               db,
@@ -1927,9 +1899,6 @@ async function handleStop() {
   if (db) {
     try {
       markSessionCompletedAndSaveHandoff(db, { sessionId, project, ccSessionId, episodeSnapshot, stopEpoch });
-      // Citations first: they read the subagent transcripts before the parent, so the parent is
-      // parsed once and stays memoized (D#152). The summary reads the parent's tail on every
-      // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
       writeFastSummaryBaseline(db, { sessionId, project, transcriptPath, lastAssistantMessage });
     } catch (e) {
@@ -2024,7 +1993,8 @@ function gcStalePreRecallCooldowns() {
         name.startsWith('.claude-mem-keyctx-') || // D#123 Key Context marker — same per-session growth, same 24h GC
         name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX) || // §9-B once-per-session nudge claim — same shape
         name.startsWith(RECALL_SHOWN_PREFIX) || // injection budget C1/C3 per-thread marker — same shape
-        name.startsWith(TURN_REPLIES_PREFIX); // D#825 per-session turn replies; its workers read it within minutes
+        name.startsWith(TURN_REPLIES_PREFIX) || // D#825 per-session turn replies; its workers read it within minutes
+        name.startsWith(DIGEST_FILE_PREFIX); // issue #53 per-transcript Stop digest; a later Stop re-reads from byte 0
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);

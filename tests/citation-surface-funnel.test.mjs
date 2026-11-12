@@ -486,7 +486,14 @@ describe('hook.mjs Stop wiring', () => {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hook.mjs'), 'utf8');
 
   it('feeds the decay denominator from the per-surface breakdown', () => {
-    expect(src).toMatch(/extractInjectedBySurface\(transcriptPath,\s*\{[^}]*mainOnly:\s*true/);
+    // Issue #53 moved the extraction into the Stop digest: hook.mjs reads the digest's
+    // `injectedMain`, which folds extractInjectedBySurface's per-record rule with mainOnly.
+    const digestSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'transcript-digest.mjs'),
+      'utf8',
+    );
+    expect(src).toMatch(/const injectedBySurface = d\.injectedMain;/);
+    expect(digestSrc).toMatch(/injectedMain:\s*\{[^}]*addInjectedBySurfaceOf\(s, e, \{ mainOnly: true \}\)/);
   });
 
   it('records the surface funnel next to the aggregate funnel', () => {

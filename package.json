@@ -173,6 +173,7 @@
     "lib/memory-input-guard.mjs",
     "lib/fast-summary.mjs",
     "lib/transcript-scan.mjs",
+    "lib/transcript-digest.mjs",
     "lib/ups-query.mjs",
     "lib/prompt-admission.mjs",
     "lib/dedup-constants.mjs",

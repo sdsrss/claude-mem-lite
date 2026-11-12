@@ -253,6 +253,10 @@ export const SOURCE_FILES = [
   // ERR_MODULE_NOT_FOUND on every Stop.
   'lib/edge-attribution.mjs',
   'lib/cite-back-hint.mjs',
+  // Issue #53: Stop's transcript questions read from the appended bytes only. Imports
+  // citation-tracker, cite-back-hint, persist-reminder and atomic-write (all above);
+  // statically imported by hook.mjs.
+  'lib/transcript-digest.mjs',
   // D#124: Key Context marker write + injection_count bump, shared by
   // handleSessionStart and handlePreCompact. Statically imported by hook.mjs.
   'lib/keyctx-marker.mjs',

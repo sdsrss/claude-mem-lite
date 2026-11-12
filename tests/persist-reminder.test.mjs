@@ -102,7 +102,10 @@ describe('detectUnpersistedDecision', () => {
   it('fires on finalization signal + zero persistence', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
     const p = writeTranscript(dir, [assistantToolUse('Bash', { command: 'npx vitest run' })]);
-    const r = detectUnpersistedDecision({ prompts: ['方案 B 拍板，开工'], transcriptPath: p });
+    const r = detectUnpersistedDecision({
+      prompts: ['方案 B 拍板，开工'],
+      persistenceCount: countDeliberatePersistence(p),
+    });
     expect(r.fire).toBe(true);
     expect(r.signal).toBe('拍板');
     rmSync(dir, { recursive: true, force: true });
@@ -113,7 +116,10 @@ describe('detectUnpersistedDecision', () => {
     const p = writeTranscript(dir, [
       assistantToolUse('mcp__plugin_claude-mem-lite_mem-lite__mem_defer', { title: 'the decision' }),
     ]);
-    const r = detectUnpersistedDecision({ prompts: ['方案 B 拍板，开工'], transcriptPath: p });
+    const r = detectUnpersistedDecision({
+      prompts: ['方案 B 拍板，开工'],
+      persistenceCount: countDeliberatePersistence(p),
+    });
     expect(r.fire).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -121,7 +127,10 @@ describe('detectUnpersistedDecision', () => {
   it('does NOT fire without a finalization signal', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
     const p = writeTranscript(dir, [assistantToolUse('Bash', { command: 'ls' })]);
-    const r = detectUnpersistedDecision({ prompts: ['继续修 bug'], transcriptPath: p });
+    const r = detectUnpersistedDecision({
+      prompts: ['继续修 bug'],
+      persistenceCount: countDeliberatePersistence(p),
+    });
     expect(r.fire).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });

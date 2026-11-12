@@ -1,9 +1,10 @@
 // Tests for lib/summary-extractor.mjs — deterministic Done/Not done extractor.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, openSync, writeSync, closeSync, ftruncateSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { extractTailAssistantText, extractStructuredSummary } from '../lib/summary-extractor.mjs';
+import { readTranscriptEntries, _resetTranscriptCache } from '../lib/transcript-scan.mjs';
 
 describe('extractStructuredSummary — EN markers', () => {
   it('extracts single-line Done', () => {
@@ -338,6 +339,88 @@ describe('extractTailAssistantText', () => {
     const good = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } });
     writeFileSync(p, `garbage\n${good}\n{"broken"\n`);
     expect(extractTailAssistantText(p)).toBe('ok');
+  });
+
+  // Issue #53: the reader goes backwards from the end of the file. The oracle is the forward
+  // parse it replaced (extractTailAssistantText before the change, verbatim).
+  describe('reads backwards and answers what the forward parse answered', () => {
+    const forward = (p) => {
+      _resetTranscriptCache();
+      let last = null;
+      for (const entry of readTranscriptEntries(p)) {
+        if (entry.type !== 'assistant' || !entry.message) continue;
+        const content = entry.message.content;
+        if (!Array.isArray(content)) continue;
+        const texts = content
+          .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text);
+        if (texts.length === 0) continue;
+        last = texts.join('\n');
+      }
+      return last;
+    };
+    const say = (text) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+    const toolOnly = {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] },
+    };
+    const result = (n) => ({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', content: 'r'.repeat(n) }] },
+    });
+    const cases = {
+      'last text far behind tool records, across many chunks': [
+        say('the answer'),
+        ...Array(60).fill(result(9000)),
+        toolOnly,
+      ],
+      'a line longer than every chunk': [
+        say('early'),
+        say(`long ${'y'.repeat(9 * 1024 * 1024)} end`),
+        result(10),
+      ],
+      'the text line straddles a chunk edge': [say('a'), result(65536 - 200), say('straddler'), result(150)],
+      'an empty text block counts, as before': [say('earlier'), say('')],
+      'no text anywhere': [toolOnly, result(70000), toolOnly],
+      'garbage and blank lines around it': ['garbage', say('kept'), '', '{"broken"', '   '],
+    };
+    for (const [name, records] of Object.entries(cases)) {
+      for (const ending of ['\n', '', '\n{"type":"assistant","mess']) {
+        it(`${name} (file ends with ${JSON.stringify(ending)})`, () => {
+          const p = join(dir, 't.jsonl');
+          writeFileSync(
+            p,
+            records.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n') + ending,
+          );
+          expect(extractTailAssistantText(p)).toBe(forward(p));
+        });
+      }
+    }
+
+    it('premise: the cases are not all one answer', () => {
+      const answers = new Set();
+      for (const records of Object.values(cases)) {
+        const p = join(dir, 't.jsonl');
+        writeFileSync(p, records.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n'));
+        answers.add(forward(p));
+      }
+      expect(answers.size).toBeGreaterThanOrEqual(5);
+    });
+
+    it('reads only the end: a sparse 600 MB file whose head the forward parse cannot hold', () => {
+      // 600 MB of zero bytes, then the last turn. Only the last chunks are read; a forward read
+      // would need a 600 MB string, past V8's string limit.
+      const p = join(dir, 'sparse.jsonl');
+      const tail = Buffer.from('\n' + JSON.stringify(say('the final reply')) + '\n');
+      const fd = openSync(p, 'w');
+      try {
+        ftruncateSync(fd, 600 * 1024 * 1024);
+        writeSync(fd, tail, 0, tail.length, 600 * 1024 * 1024);
+      } finally {
+        closeSync(fd);
+      }
+      expect(extractTailAssistantText(p)).toBe('the final reply');
+    });
   });
 
   it('round-trips with extractStructuredSummary on a realistic tail', () => {
