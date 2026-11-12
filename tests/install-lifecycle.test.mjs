@@ -448,6 +448,8 @@ describe('install lifecycle checks', () => {
       writeFileSync(join(dir, f), 'x');
     }
   };
+  // The output's lines: asserting one whole line pins its status mark and its end.
+  const lines = (output) => output.split('\n');
   describe('uninstall --purge with ~/.claude-mem-lite a symbolic link', () => {
     const STORE = ['claude-mem-lite.db', 'server.mjs', 'my-notes.txt', 'runtime/session.json'];
 
@@ -494,9 +496,10 @@ describe('install lifecycle checks', () => {
           expect(readlinkSync(join(home, '.claude-mem-lite'))).toBe(to);
           expect(files(join(home, 'data'))).toEqual(before);
           if (others) expect(files(join(home, 'other'))).toEqual(others);
-          // The whole sentence, so a CLAUDE_MEM_DIR named when unset fails (review F5).
-          expect(output).toContain(
-            `~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing` +
+          // The whole line, so a CLAUDE_MEM_DIR named when unset fails (review F5), and so does a
+          // sentence appended after it or a success mark (D#836: review r2 R2-1, R2-3).
+          expect(lines(output)).toContain(
+            `  ⚠ ~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing` +
               (mem === undefined ? '.' : ` (CLAUDE_MEM_DIR ${mem} included).`),
           );
           expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
@@ -516,8 +519,8 @@ describe('install lifecycle checks', () => {
           symlinkSync(to, join(home, '.claude-mem-lite'));
           const { output, status } = purgeWith(home);
           expect(readlinkSync(join(home, '.claude-mem-lite')), to).toBe(to);
-          expect(output, to).toContain(
-            `~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing.`,
+          expect(lines(output), to).toContain(
+            `  ⚠ ~/.claude-mem-lite is a link to ${to}. --purge does not delete through a link, so it removed nothing.`,
           );
           expect(output, to).not.toMatch(/Data purged|Done!/);
           expect(status, to).toBe(1);
@@ -555,7 +558,7 @@ describe('install lifecycle checks', () => {
       });
       const output = r.stdout + r.stderr;
       chmodSync(locked, 0o700);
-      expect(output).toContain('Could not remove ~/.claude-mem-lite (EACCES).');
+      expect(lines(output)).toContain('  ⚠ Could not remove ~/.claude-mem-lite (EACCES).');
       expect(output).not.toMatch(/Data purged \(|Done!|^\s+at /m);
       expect(existsSync(join(locked, 'inner.txt'))).toBe(true);
       expect(existsSync(join(home, 'reloc', 'claude-mem-lite.db'))).toBe(false);
@@ -563,6 +566,39 @@ describe('install lifecycle checks', () => {
       expect(r.status).toBe(1);
     } finally {
       if (existsSync(locked)) chmodSync(locked, 0o700);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // The line names the code the removal failed with, not EACCES alone (D#836: review r2 R2-3). A
+  // preload stands in for a removal that throws EBUSY, which no unprivileged fixture can produce.
+  it('uninstall --purge names the code the removal of ~/.claude-mem-lite failed with', () => {
+    const home = makeTmpDir();
+    const dir = join(home, '.claude-mem-lite');
+    try {
+      seed(dir, ['claude-mem-lite.db', 'runtime/session.json']);
+      const preload = join(home, 'rm-throws-ebusy.mjs');
+      writeFileSync(
+        preload,
+        [
+          "import fs from 'node:fs';",
+          "import { syncBuiltinESMExports } from 'node:module';",
+          'const real = fs.rmSync;',
+          'fs.rmSync = (p, ...rest) => {',
+          "  if (!String(p).endsWith('/.claude-mem-lite')) return real(p, ...rest);",
+          "  throw Object.assign(new Error('EBUSY: resource busy or locked, rm'), { code: 'EBUSY' });",
+          '};',
+          'syncBuiltinESMExports();',
+        ].join('\n'),
+      );
+      const { output, status } = purgeWith(home, undefined, ['--import', preload]);
+      expect(output).toMatch(/claude-mem-lite uninstaller/); // the preload loaded and install ran
+      expect(lines(output)).toContain('  ⚠ Could not remove ~/.claude-mem-lite (EBUSY).');
+      expect(output).not.toMatch(/Data purged|Done!/);
+      expect(output).toContain('the purge is incomplete');
+      expect(status).toBe(1);
+      expect(existsSync(join(dir, 'claude-mem-lite.db'))).toBe(true);
+    } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -614,8 +650,8 @@ describe('install lifecycle checks', () => {
             .sort()
             .map((n) => `~/.claude-mem-lite/${n} is a link to ${links[n]}`)
             .join(', ');
-          expect(output).toContain(
-            `${named}. --purge does not delete through a link, so it removed nothing` +
+          expect(lines(output)).toContain(
+            `  ⚠ ${named}. --purge does not delete through a link, so it removed nothing` +
               (mem === undefined ? '.' : ` (CLAUDE_MEM_DIR ${mem} included).`),
           );
           expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
@@ -674,8 +710,8 @@ describe('install lifecycle checks', () => {
         const { output, status } = purgeWith(home, undefined, ['--import', preload]);
         expect(output).toMatch(/claude-mem-lite uninstaller/); // the preload loaded and install ran
         expect(existsSync(join(dir, 'runtime'))).toBe(false); // and the stand-in removed something
-        expect(output).toContain(
-          'Could not remove ~/.claude-mem-lite: it was still there when the removal returned.',
+        expect(lines(output)).toContain(
+          '  ⚠ Could not remove ~/.claude-mem-lite: it was still there when the removal returned.',
         );
         expect(output).not.toMatch(/Data purged|Done!/);
         expect(output).toContain('the purge is incomplete');
