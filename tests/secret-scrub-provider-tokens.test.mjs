@@ -83,6 +83,13 @@ describe('a body one character off the shape stays as written', () => {
       }
     });
   }
+  it('digitalocean and shopify: a body with a letter past f is not hex, and stays', () => {
+    for (const text of [
+      'value ' + 'dop' + '_v1_' + HEX64.slice(0, -1) + 'g end',
+      'value ' + 'shp' + 'at_' + HEX32.slice(0, -1) + 'G end',
+    ])
+      expect(scrubSecrets(text)).toBe(text);
+  });
   it('pypi: a body one short of 50', () => {
     const text = 'value ' + 'pypi' + '-AgE' + 'x'.repeat(49) + ' end';
     expect(scrubSecrets(text)).toBe(text);
