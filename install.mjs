@@ -604,10 +604,6 @@ function devNodeModules() {
   }
 }
 
-// The links deployCodeTree makes at the top of ~/.claude-mem-lite for a dev install: code, not
-// data, so `uninstall --purge` removes them like any other entry (D#835).
-const DEV_LINK_NAMES = new Set([...SOURCE_FILES.map((f) => f.split('/')[0]), 'scripts', 'node_modules']);
-
 export function deployCodeTree(IS_DEV) {
   if (IS_DEV) {
     log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
@@ -1986,13 +1982,16 @@ async function uninstall() {
     // as "the target is gone" (D#811 reviews r1 F1, r2 R2-1). One lstat decides; the link stays as
     // the record of where the store is. D#835: the same holds one level down — a link inside a
     // real ~/.claude-mem-lite (the store, runtime/) was unlinked under "Data purged" and "Done!"
-    // and what it pointed to stayed (D#829 review r1 F2). A dev install's code links are not data.
+    // and what it pointed to stayed (D#829 review r1 F2). Only a link under a name it writes data
+    // under counts: the code links of a dev install, this release's or an earlier one's (whose
+    // names no install removes), and a user's own links are unlinked, never followed, as before
+    // (6.35.0 pre-tag review F1: an earlier dev install's link blocked every purge).
     let links = []; // [as shown, path] of each link the purge would have to delete through
     try {
       if (lstatSync(DATA_DIR).isSymbolicLink()) links = [['~/.claude-mem-lite', DATA_DIR]];
       else
         links = readdirSync(DATA_DIR, { withFileTypes: true })
-          .filter((e) => e.isSymbolicLink() && !DEV_LINK_NAMES.has(e.name))
+          .filter((e) => e.isSymbolicLink() && isOwnedDataName(e.name))
           .map((e) => [`~/.claude-mem-lite/${e.name}`, join(DATA_DIR, e.name)]);
     } catch {
       /* absent, not lstat-able, or not listable: existsSync and rmSync below decide, as before */
@@ -2188,6 +2187,10 @@ const OWNED_WHOLE_DIRS = new Set(['runtime', 'managed']);
 // directory is claude-mem-lite's (R33 review M2: removed first, the re-run the failure message
 // asks for found no store, left the rest and said Done!).
 const LIVE_STORE_RE = /^claude-mem-lite\.db(?:-wal|-shm|-journal)?$/;
+// A top-level name it writes data under, by the matchers above.
+// (OWNED_TOP_RE covers the live store's names too.)
+const isOwnedDataName = (name) =>
+  OWNED_WHOLE_DIRS.has(name) || OWNED_TOP_RE.test(name) || Object.hasOwn(OWNED_DIR_FILES, name);
 
 /**
  * Remove what claude-mem-lite wrote into a relocated data dir, and nothing else (R32 E2E

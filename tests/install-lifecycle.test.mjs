@@ -625,6 +625,22 @@ describe('install lifecycle checks', () => {
         links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db') },
         mem: join(home, 'other'),
       }),
+      // Every name it writes data under, not only the store and runtime/ (6.35.0 pre-tag review M13).
+      'the store’s log a link': (home) => ({
+        links: { 'claude-mem-lite.db-wal': join(home, 'ext', 'store.db') },
+      }),
+      'a snapshot a link': (home) => ({
+        links: {
+          'claude-mem-lite.db.pre-delete-2026-09-27T15-58-06-551Z-4159742-0.bak': join(
+            home,
+            'ext',
+            'store.db',
+          ),
+        },
+      }),
+      'metrics/ a link': (home) => ({ links: { metrics: join(home, 'ext', 'rt') } }),
+      'backups/ a link': (home) => ({ links: { backups: join(home, 'ext', 'rt') } }),
+      'managed/ a link': (home) => ({ links: { managed: join(home, 'ext', 'rt') } }),
     };
 
     for (const [name, shape] of Object.entries(INNER)) {
@@ -634,7 +650,7 @@ describe('install lifecycle checks', () => {
         try {
           const { links, mem } = shape(home);
           seed(join(home, 'ext'), ['store.db', 'rt/session.json']);
-          seed(dir, ['metrics/2026-11-12.jsonl', 'notes.txt']);
+          seed(dir, links.metrics ? ['notes.txt'] : ['metrics/2026-11-12.jsonl', 'notes.txt']);
           if (mem) seed(mem, ['claude-mem-lite.db']);
           for (const [n, to] of Object.entries(links)) symlinkSync(to, join(dir, n));
           const before = { ext: files(join(home, 'ext')), dir: files(dir), mem: mem && files(mem) };
@@ -680,6 +696,44 @@ describe('install lifecycle checks', () => {
         expect(status).toBe(0);
         expect(existsSync(dir)).toBe(false);
         expect(files(join(home, 'repo'))).toEqual(before);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    // Only a link under one of its own data names holds data back. A dev install from an earlier
+    // release left code links under names the running one no longer ships, which no install
+    // removes, and a user may keep a link of their own there: those are unlinked, never followed,
+    // as before D#835 (6.35.0 pre-tag review F1: they blocked every purge, CLAUDE_MEM_DIR included).
+    it('removes the code links an earlier dev install left, and a link of the user’s own, and not what they point to', () => {
+      const home = makeTmpDir();
+      const dir = join(home, '.claude-mem-lite');
+      const mem = join(home, 'reloc');
+      try {
+        seed(join(home, 'repo'), [
+          'cli.mjs',
+          '.mcp.json',
+          'commands/mem.md',
+          'node_modules/x/index.js',
+          'scripts/a.sh',
+        ]);
+        seed(join(home, 'notes'), ['todo.md']);
+        seed(dir, ['claude-mem-lite.db', 'runtime/session.json']);
+        seed(mem, ['claude-mem-lite.db']);
+        for (const n of ['cli.mjs', 'node_modules', 'scripts', '.mcp.json', 'commands'])
+          symlinkSync(join(home, 'repo', n), join(dir, n));
+        symlinkSync(join(home, 'repo', 'registry.mjs'), join(dir, 'registry.mjs')); // dangling
+        symlinkSync(join(home, 'notes'), join(dir, 'my-notes'));
+        const before = { repo: files(join(home, 'repo')), notes: files(join(home, 'notes')) };
+        const { output, status } = purgeWith(home, mem);
+        expect(output).not.toContain('is a link');
+        expect(output).toContain('Data purged (~/.claude-mem-lite/)');
+        expect(output).toContain('Done!');
+        expect(status).toBe(0);
+        expect(existsSync(dir)).toBe(false);
+        expect(existsSync(join(mem, 'claude-mem-lite.db'))).toBe(false);
+        expect(files(join(home, 'repo'))).toEqual(before.repo);
+        expect(files(join(home, 'notes'))).toEqual(before.notes);
       } finally {
         rmSync(home, { recursive: true, force: true });
       }

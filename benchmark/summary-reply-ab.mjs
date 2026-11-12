@@ -8,6 +8,8 @@
 // ARMS, both through the shipped prompt builder, callLLM and parseJsonFromLLM:
 //   A  buildSessionSummaryPrompt without the final reply — the prompt shipped before D19.
 //   B  the same with `finalReply`: the reply's head + tail in the user part, one rule in the system.
+//      Since D#845 (6.35.0) that rule ends with SUMMARY_COMPLETED_ORDER, which D19's reading did
+//      not have: a re-run here measures today's prompt, not the one D19 recorded.
 // Each session runs both arms back to back, arm order alternating by item (doctrine rule 2).
 // The leg is the CLI one default users run (`claude -p --model haiku`, isolated by the shipped
 // flags); the report records `claude --version`.
