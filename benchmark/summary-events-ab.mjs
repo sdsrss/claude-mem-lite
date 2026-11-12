@@ -26,6 +26,10 @@
 //      prompt with COMPLETED_LEAD (completed opens with the main outcome). `--exclude rows.json`
 //      leaves out the sessions an earlier reading drew. Judged on both views; gate: gateD25
 //      (docs/audits/20261112-d25-preregistration.md).
+//   C, C2, Q, Q2  D26 (`run --arms C,C2,Q,Q2`): Q = C's prompt with COMPLETED_ORDER (order by
+//      importance, change nothing else), and every arm called twice, so the gate reads pooled
+//      counts against the noise of a fresh call; gate: gateD26
+//      (docs/audits/20261112-d26-preregistration.md).
 //
 // WHICH REPLIES (D#825). The worker reads what Stop recorded under the session (lib/turn-replies.mjs);
 // stopReplies rebuilds that from the transcript. Reading 3 (D22's gate) took the replies from a
@@ -67,7 +71,7 @@
 //
 // Usage:
 //   node benchmark/summary-events-ab.mjs run --out rows.json [--n 30] [--days 45] [--db path]
-//     [--arms A,B | A,C | S,M | C,C2,P] [--exclude earlier-rows.json]
+//     [--arms A,B | A,C | S,M | C,C2,P | C,C2,Q,Q2] [--exclude earlier-rows.json[,…]]
 //   node benchmark/summary-events-ab.mjs prepare rows.json outdir [--seed 20261111] [--batches 2]
 //     (judge files in outdir/judge/, key.json in outdir; verdicts-<k>-<a|b>.json go back into outdir)
 //   node benchmark/summary-events-ab.mjs score outdir
@@ -98,9 +102,11 @@ import { buildSummaryLines } from '../hook-context.mjs';
 // A2 is D24's A/A copy of arm A (`prepare --aa A`).
 // C2 and P are D25's (`run --arms C,C2,P`): C2 is arm C called again, the A/A arm; P is arm C's
 // prompt with COMPLETED_LEAD.
-const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2', 'C2', 'P'];
+// Q and Q2 are D26's (`run --arms C,C2,Q,Q2`): Q is arm C's prompt with COMPLETED_ORDER, Q2 is Q
+// called again; C2 and Q2 together are judged apart from their session's C and Q.
+const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2', 'C2', 'P', 'Q', 'Q2'];
 // An A/A copy is judged in a batch apart from its own session's other arms (buildBlind).
-const COPY_ARMS = new Set(['S2', 'A2', 'C2']);
+const COPY_ARMS = new Set(['S2', 'A2', 'C2', 'Q2']);
 
 /**
  * D25's candidate (docs/audits/20261112-d25-preregistration.md): D24 found the 120-character
@@ -111,17 +117,28 @@ export const COMPLETED_LEAD =
   "completed starts with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), in one short clause of at most 100 characters; the other finished items follow it.";
 
 /**
+ * D26's candidate (docs/audits/20261112-d26-preregistration.md). D25's COMPLETED_LEAD put the
+ * main outcome on the line but halved `completed` and wrote done work as open more often; this
+ * one asks for the order alone, with no length, and restates that the latest reply sets a state.
+ */
+export const COMPLETED_ORDER =
+  "Order completed by importance: begin with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), then list every other finished item. This changes only the order: keep every item and detail you would otherwise include, and an item's state is still the one given by the latest reply that mentions it.";
+
+/** The sentence each candidate arm adds to arm C's prompt. */
+const CANDIDATE = { P: COMPLETED_LEAD, Q: COMPLETED_ORDER, Q2: COMPLETED_ORDER };
+
+/**
  * Arm P: arm C's prompt with COMPLETED_LEAD closing the system part, where the paragraph on the
  * replies ends. Every session in the population has a reply, so that paragraph is always there.
  */
-export function armPPrompt(prompt) {
-  return { system: `${prompt.system} ${COMPLETED_LEAD}`, user: prompt.user };
+export function armPPrompt(prompt, sentence = COMPLETED_LEAD) {
+  return { system: `${prompt.system} ${sentence}`, user: prompt.user };
 }
 
 /**
  * One arm's prompt for session `s`, through the shipped builder (passed in: run() loads it only
  * after pointing CLAUDE_MEM_DIR at its sandbox). A: observations + final reply; B: + events;
- * C and C2: every turn's reply; P: C's prompt with COMPLETED_LEAD.
+ * C and C2: every turn's reply; P: C's prompt with COMPLETED_LEAD; Q and Q2: with COMPLETED_ORDER.
  */
 export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows }) {
   const shipped = buildSessionSummaryPrompt({
@@ -129,9 +146,9 @@ export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows 
     observations: arm === 'B' ? mergeSummaryRows(s.observations, s.events) : s.observations,
     userPrompts: s.userPrompts,
     finalReply: s.replies.at(-1),
-    ...(['C', 'C2', 'P'].includes(arm) ? { turnReplies: s.replies } : {}),
+    ...(['C', 'C2', 'P', 'Q', 'Q2'].includes(arm) ? { turnReplies: s.replies } : {}),
   });
-  return arm === 'P' ? armPPrompt(shipped) : shipped;
+  return CANDIDATE[arm] ? armPPrompt(shipped, CANDIDATE[arm]) : shipped;
 }
 
 /** The order the arms are called in for item i: rotated by one per item. */
@@ -139,9 +156,9 @@ export function armOrder(arms, i) {
   return arms.map((_, k) => arms[(k + i) % arms.length]);
 }
 
-/** The population minus the sessions an earlier reading drew (`run --exclude <rows.json>`). */
-export function holdout(items, drawn) {
-  const seen = new Set(drawn.items.map((it) => it.sid));
+/** The population minus the sessions earlier readings drew (`run --exclude <rows.json>[,…]`). */
+export function holdout(items, ...drawn) {
+  const seen = new Set(drawn.flatMap((d) => d.items.map((it) => it.sid)));
   return items.filter((s) => !seen.has(s.sid));
 }
 const QUESTIONS = ['missed_done', 'false_open', 'unsupported'];
@@ -381,6 +398,74 @@ export function gateD25({ line, fields, n }) {
     ['fields', F, 'unsupported'],
   ]) {
     if (A.P[q] > A.C[q] + 1) reasons.push(`${view}: ${q}(P) = ${A.P[q]} > ${q}(C)+1 = ${A.C[q] + 1}`);
+  }
+  return { decision: reasons.length === 0 ? 'ship' : 'no', reasons };
+}
+
+/**
+ * D26's registered rule (docs/audits/20261112-d26-preregistration.md §4). Every arm is called
+ * twice (C, C2; Q, Q2) and counts are pooled over the two calls (out of 2n).
+ * 'none' when a reading is incomplete, an arm's usable is below n - 2, an agreement is below 0.70,
+ * or a second call is off its first by more than 8 on line_misses_main or 2 on missed_done.
+ * Otherwise 'ship' when Q + Q2 miss the main work on the line at least 10 fewer times than
+ * C + C2, each call of Q at least 3 fewer than its batch-mate call of C (Q vs C, Q2 vs C2), and
+ * every other pooled count in either view rises by at most 2; else 'no'.
+ */
+export function gateD26({ line, fields, n }) {
+  const reasons = [];
+  const arms = ['C', 'C2', 'Q', 'Q2'];
+  for (const [view, r, questions] of [
+    ['line', line, LINE_QUESTIONS],
+    ['fields', fields, QUESTIONS],
+  ]) {
+    for (const arm of arms) {
+      const s = r?.arms?.[arm];
+      if (!s || !(s.judged >= n)) reasons.push(`${view}: judged(${arm}) = ${s?.judged ?? 0} < ${n}`);
+    }
+    for (const q of questions) {
+      if (!(r?.agreement?.[q] >= 0.7)) reasons.push(`${view}: ${q} agreement ${r?.agreement?.[q]} < 0.70`);
+    }
+  }
+  for (const arm of arms) {
+    const s = line?.arms?.[arm];
+    if (s && s.usable < n - 2) reasons.push(`usable(${arm}) = ${s.usable} < ${n - 2}`);
+  }
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  const L = line.arms;
+  const F = fields.arms;
+  for (const [x, y] of [
+    ['C', 'C2'],
+    ['Q', 'Q2'],
+  ]) {
+    const lineGap = Math.abs(L[y].line_misses_main - L[x].line_misses_main);
+    if (lineGap > 8) reasons.push(`A/A: |line_misses_main(${y}) - line_misses_main(${x})| = ${lineGap} > 8`);
+    const fieldsGap = Math.abs(F[y].missed_done - F[x].missed_done);
+    if (fieldsGap > 2) reasons.push(`A/A: |missed_done(${y}) - missed_done(${x})| = ${fieldsGap} > 2`);
+  }
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  const pooled = (A, arm, q) => A[arm][q] + A[`${arm}2`][q];
+  const cLine = pooled(L, 'C', 'line_misses_main');
+  const qLine = pooled(L, 'Q', 'line_misses_main');
+  if (qLine > cLine - 10) reasons.push(`line: line_misses_main(Q+Q2) = ${qLine} > (C+C2)-10 = ${cLine - 10}`);
+  for (const [q, c] of [
+    ['Q', 'C'],
+    ['Q2', 'C2'],
+  ]) {
+    if (L[q].line_misses_main > L[c].line_misses_main - 3)
+      reasons.push(
+        `line: line_misses_main(${q}) = ${L[q].line_misses_main} > line_misses_main(${c})-3 = ${L[c].line_misses_main - 3}`,
+      );
+  }
+  for (const [view, A, q] of [
+    ['line', L, 'false_open'],
+    ['line', L, 'unsupported'],
+    ['fields', F, 'missed_done'],
+    ['fields', F, 'false_open'],
+    ['fields', F, 'unsupported'],
+  ]) {
+    const cq = pooled(A, 'C', q);
+    const qq = pooled(A, 'Q', q);
+    if (qq > cq + 2) reasons.push(`${view}: ${q}(Q+Q2) = ${qq} > (C+C2)+2 = ${cq + 2}`);
   }
   return { decision: reasons.length === 0 ? 'ship' : 'no', reasons };
 }
@@ -692,12 +777,16 @@ async function run() {
   const arms = arg('--arms', 'A,B').split(',');
   const d23 = arms.join(',') === 'S,M';
   const d25 = arms.join(',') === 'C,C2,P';
+  const d26 = arms.join(',') === 'C,C2,Q,Q2';
   if (
     !d23 &&
     !d25 &&
+    !d26 &&
     (arms.length < 2 || arms.some((x) => !['A', 'B', 'C'].includes(x)) || new Set(arms).size !== arms.length)
   )
-    throw new Error('--arms takes two or more of A,B,C, or exactly S,M (D23), or exactly C,C2,P (D25)');
+    throw new Error(
+      '--arms takes two or more of A,B,C, or exactly S,M (D23), or exactly C,C2,P (D25), or exactly C,C2,Q,Q2 (D26)',
+    );
   const exclude = arg('--exclude', null);
   const dbPath = arg('--db', join(homedir(), '.claude-mem-lite', 'claude-mem-lite.db'));
   // Before any shipped module loads: DB_DIR resolves from it at import time.
@@ -754,8 +843,8 @@ async function run() {
       } finally {
         db.close();
       }
-      const drawn = exclude ? JSON.parse(readFileSync(exclude, 'utf8')) : null;
-      const eligible = drawn ? holdout(pop.items, drawn) : pop.items;
+      const drawn = exclude ? exclude.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8'))) : null;
+      const eligible = drawn ? holdout(pop.items, ...drawn) : pop.items;
       const picked = pickEvenly(eligible, n);
       const items = picked.map((s, i) => ({
         item: i,
@@ -810,7 +899,8 @@ async function run() {
         n: picked.length,
         arms,
         // D25's A/A premise: a second call that returned C's fields verbatim measures judges only.
-        ...(d25 ? { c2SameAsC: sameFields(rows, 'C', 'C2') } : {}),
+        ...(d25 || d26 ? { c2SameAsC: sameFields(rows, 'C', 'C2') } : {}),
+        ...(d26 ? { q2SameAsQ: sameFields(rows, 'Q', 'Q2') } : {}),
       };
       writeFileSync(out, JSON.stringify({ meta, items, rows }, null, 2));
       console.log(JSON.stringify({ meta, ...describeRows(rows, arms) }, null, 2));
@@ -1090,13 +1180,20 @@ function scoreDir(outdir) {
 }
 
 /**
- * `score <outdir>`, or D25's `score <line outdir> <fields outdir>`: the same rows judged on both
- * views, decided together by gateD25.
+ * `score <outdir>`, or D25's / D26's `score <line outdir> <fields outdir>`: the same rows judged
+ * on both views, decided together by gateD25 (arm P) or gateD26 (arm Q).
  */
 function score() {
   const dirs = process.argv.slice(3);
   if (dirs.length === 0) throw new Error('score <outdir> [<outdir>]');
   const scored = dirs.map(scoreDir);
+  if (scored.some((s) => s.result.arms.Q)) {
+    const line = scored.find((s) => s.view === 'line');
+    const fields = scored.find((s) => s.view === 'fields');
+    const gate = gateD26({ line: line?.result, fields: fields?.result, n: scored[0].n });
+    console.log(JSON.stringify({ views: scored, gateD26: gate }, null, 2));
+    return;
+  }
   if (scored.some((s) => s.result.arms.P)) {
     const line = scored.find((s) => s.view === 'line');
     const fields = scored.find((s) => s.view === 'fields');
@@ -1104,7 +1201,7 @@ function score() {
     console.log(JSON.stringify({ views: scored, gateD25: gate }, null, 2));
     return;
   }
-  if (dirs.length > 1) throw new Error('two outdirs are D25 only (arm P)');
+  if (dirs.length > 1) throw new Error('two outdirs are D25 or D26 only (arm P or Q)');
   const [{ view, n, result, split }] = scored;
   // D22 is registered as the D21 gate with arm C in B's place (tasks/specs/d22-summary-turn-replies.md).
   const gate =

@@ -33,6 +33,8 @@ import {
   holdout,
   sameFields,
   gateD25,
+  COMPLETED_ORDER,
+  gateD26,
 } from '../benchmark/summary-events-ab.mjs';
 import { buildSessionSummaryPrompt, mergeSummaryRows } from '../hook-llm.mjs';
 import { parseSummaryNotes } from '../lib/fast-summary.mjs';
@@ -1213,6 +1215,224 @@ describe('D25: prepare both views, then score them together', () => {
       const one = spawnSync(process.execPath, [ruler, 'score', outs.line], { encoding: 'utf8' });
       expect(one.status, one.stderr).toBe(0);
       expect(JSON.parse(one.stdout).gateD25.decision).toBe('none');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// D26 (docs/audits/20261112-d26-preregistration.md): the order alone, every arm called twice.
+describe('D26: arms Q and Q2', () => {
+  const s = {
+    project: 'p',
+    observations: [
+      { type: 'bugfix', title: 'Fixed the login redirect', narrative: 'n', created_at_epoch: 2 },
+    ],
+    events: [],
+    userPrompts: ['fix the login bug', 'ship it'],
+    replies: ['Fixed it; 12/12 pass.', 'v1.2.0 released.'],
+  };
+  const deps = { buildSessionSummaryPrompt, mergeSummaryRows };
+  it('Q and Q2 send C’s prompt with COMPLETED_ORDER closing the system part, and nothing else', () => {
+    const c = armPrompt('C', s, deps);
+    const q = armPrompt('Q', s, deps);
+    expect(q).toEqual({ system: `${c.system} ${COMPLETED_ORDER}`, user: c.user });
+    expect(armPrompt('Q2', s, deps)).toEqual(q);
+    expect(armPrompt('P', s, deps)).toEqual(armPPrompt(c));
+    expect(armPrompt('P', s, deps)).not.toEqual(q);
+    expect(COMPLETED_ORDER).toMatch(/^Order completed by importance: begin with/);
+    expect(COMPLETED_ORDER).toContain('keep every item and detail');
+    expect(COMPLETED_ORDER).toContain('the latest reply that mentions it');
+    expect(COMPLETED_ORDER).not.toMatch(/characters/);
+  });
+  it('holdout drops the sessions of every earlier reading given', () => {
+    const items = ['s1', 's2', 's3', 's4', 's5'].map((sid) => ({ sid }));
+    expect(holdout(items, { items: [{ sid: 's1' }] }, { items: [{ sid: 's4' }, { sid: 's5' }] })).toEqual([
+      { sid: 's2' },
+      { sid: 's3' },
+    ]);
+  });
+  it('buildBlind keeps C with Q, and C2 with Q2 in another batch, over three batches', () => {
+    const rows = [];
+    for (let item = 0; item < 9; item++)
+      for (const arm of ['C', 'C2', 'Q', 'Q2'])
+        rows.push({ item, arm, completed: `c${item}${arm}`, remaining_items: '', next_steps: '' });
+    const dump = {
+      items: Array.from({ length: 9 }, (_, i) => ({
+        replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+      })),
+      rows,
+    };
+    const { batches, key } = buildBlind(dump, { seed: 20261118, batches: 3, view: 'line' });
+    const where = {};
+    batches.forEach((b, k) => {
+      expect(b.b.map((e) => e.id).sort()).toEqual(b.a.map((e) => e.id).sort());
+      for (const e of b.a) where[`${key[e.id].item}${key[e.id].arm}`] = k;
+    });
+    expect(Object.keys(where)).toHaveLength(36);
+    expect(batches.map((b) => b.a.length)).toEqual([12, 12, 12]);
+    for (let item = 0; item < 9; item++) {
+      expect(where[`${item}Q`]).toBe(where[`${item}C`]);
+      expect(where[`${item}Q2`]).toBe(where[`${item}C2`]);
+      expect(where[`${item}C2`]).not.toBe(where[`${item}C`]);
+    }
+  });
+});
+
+describe('D26: gateD26 (registered before any call)', () => {
+  const lineArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    line_misses_main: m,
+    false_open: 1,
+    unsupported: 2,
+    ...extra,
+  });
+  const fieldsArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    missed_done: m,
+    false_open: 1,
+    unsupported: 2,
+    ...extra,
+  });
+  const lineAgree = { line_misses_main: 0.8, false_open: 0.9, unsupported: 0.9 };
+  const fieldsAgree = { missed_done: 0.8, false_open: 0.9, unsupported: 0.9 };
+  // Pooled line: C+C2 = 24, Q+Q2 = 14 (exactly 10 fewer); each Q call exactly 3 fewer than its C.
+  const pass = (line = {}, fields = {}) => ({
+    n: 30,
+    line: {
+      arms: { C: lineArm(12), C2: lineArm(12), Q: lineArm(7), Q2: lineArm(7), ...line.arms },
+      agreement: { ...lineAgree, ...line.agreement },
+    },
+    fields: {
+      arms: { C: fieldsArm(1), C2: fieldsArm(1), Q: fieldsArm(1), Q2: fieldsArm(1), ...fields.arms },
+      agreement: { ...fieldsAgree, ...fields.agreement },
+    },
+  });
+  it('ships when the pooled line misses drop by 10, each call by 3, and nothing else rises by more than 2', () => {
+    expect(gateD26(pass())).toEqual({ decision: 'ship', reasons: [] });
+  });
+  it('says no when the pooled drop is 9, or one call of Q drops by only 2', () => {
+    expect(gateD26(pass({ arms: { Q: lineArm(8), Q2: lineArm(7) } })).decision).toBe('no');
+    expect(gateD26(pass({ arms: { C: lineArm(14), Q: lineArm(12), Q2: lineArm(4) } })).decision).toBe('no');
+    expect(gateD26(pass({ arms: { C2: lineArm(14), Q: lineArm(4), Q2: lineArm(12) } })).decision).toBe('no');
+    expect(gateD26(pass({ arms: { C: lineArm(14), Q: lineArm(11), Q2: lineArm(5) } })).decision).toBe('ship');
+  });
+  it('says no when a pooled count rises by 3 in either view, and ships at 2', () => {
+    const up = (mk, m, q, a, b) => ({ arms: { Q: mk(m, { [q]: a }), Q2: mk(m, { [q]: b }) } });
+    for (const q of ['false_open', 'unsupported']) {
+      const base = q === 'false_open' ? 1 : 2;
+      expect(gateD26(pass(up(lineArm, 7, q, base + 2, base))).decision).toBe('ship');
+      expect(gateD26(pass(up(lineArm, 7, q, base + 2, base + 1))).decision).toBe('no');
+      expect(gateD26(pass({}, up(fieldsArm, 1, q, base + 2, base))).decision).toBe('ship');
+      expect(gateD26(pass({}, up(fieldsArm, 1, q, base + 2, base + 1))).decision).toBe('no');
+    }
+    expect(gateD26(pass({}, { arms: { Q: fieldsArm(2), Q2: fieldsArm(2) } })).decision).toBe('ship');
+    expect(gateD26(pass({}, { arms: { Q: fieldsArm(3), Q2: fieldsArm(2) } })).decision).toBe('no');
+  });
+  it('decides nothing when a second call is off its first by more than 8 on the line or 2 on the field', () => {
+    expect(
+      gateD26(pass({ arms: { C: lineArm(16), C2: lineArm(8), Q: lineArm(7), Q2: lineArm(5) } })).decision,
+    ).toBe('ship');
+    expect(gateD26(pass({ arms: { C: lineArm(17), C2: lineArm(8) } })).decision).toBe('none');
+    expect(gateD26(pass({ arms: { Q: lineArm(0), Q2: lineArm(9) } })).decision).toBe('none');
+    expect(gateD26(pass({}, { arms: { C2: fieldsArm(3) } })).decision).toBe('ship');
+    expect(gateD26(pass({}, { arms: { C2: fieldsArm(4) } })).decision).toBe('none');
+    expect(gateD26(pass({}, { arms: { Q2: fieldsArm(4) } })).decision).toBe('none');
+  });
+  it('decides nothing on an incomplete reading, low usable or low agreement in either view', () => {
+    for (const arm of ['C', 'C2', 'Q', 'Q2']) {
+      expect(gateD26(pass({ arms: { [arm]: { ...pass().line.arms[arm], judged: 29 } } })).decision).toBe(
+        'none',
+      );
+      expect(
+        gateD26(pass({}, { arms: { [arm]: { ...pass().fields.arms[arm], judged: 29 } } })).decision,
+      ).toBe('none');
+      expect(gateD26(pass({ arms: { [arm]: { ...pass().line.arms[arm], usable: 28 } } })).decision).toBe(
+        'ship',
+      );
+      expect(gateD26(pass({ arms: { [arm]: { ...pass().line.arms[arm], usable: 27 } } })).decision).toBe(
+        'none',
+      );
+    }
+    expect(gateD26({ ...pass(), fields: undefined }).decision).toBe('none');
+    for (const q of LINE_QUESTIONS) {
+      expect(gateD26(pass({ agreement: { [q]: 0.7 } })).decision).toBe('ship');
+      expect(gateD26(pass({ agreement: { [q]: 0.69 } })).decision).toBe('none');
+    }
+    for (const q of ['missed_done', 'false_open', 'unsupported']) {
+      expect(gateD26(pass({}, { agreement: { [q]: 0.69 } })).decision).toBe('none');
+    }
+  });
+});
+
+describe('D26: prepare both views, then score them together', () => {
+  it('scores a line and a fields reading of C, C2, Q, Q2 with gateD26', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const ruler = join(import.meta.dirname, '..', 'benchmark', 'summary-events-ab.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'd26-cli-'));
+    try {
+      const n = 3;
+      const arms = ['C', 'C2', 'Q', 'Q2'];
+      const dump = {
+        meta: { arms },
+        items: Array.from({ length: n }, (_, i) => ({
+          turns: 2,
+          replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+        })),
+        rows: Array.from({ length: n }, (_, item) =>
+          arms.map((arm) => ({
+            item,
+            arm,
+            usable: true,
+            completed: `${arm}${item}`,
+            remaining_items: '',
+            next_steps: '',
+          })),
+        ).flat(),
+      };
+      writeFileSync(join(dir, 'rows.json'), JSON.stringify(dump));
+      const outs = {};
+      for (const view of ['line', 'fields']) {
+        const out = join(dir, view);
+        outs[view] = out;
+        const p = spawnSync(
+          process.execPath,
+          [ruler, 'prepare', join(dir, 'rows.json'), out, '--view', view, '--seed', '7', '--batches', '1'],
+          { encoding: 'utf8' },
+        );
+        expect(p.status, p.stderr).toBe(0);
+        const k = JSON.parse(readFileSync(join(out, 'key.json'), 'utf8'));
+        const qs =
+          view === 'line'
+            ? ['line_misses_main', 'false_open', 'unsupported']
+            : ['missed_done', 'false_open', 'unsupported'];
+        const verdicts = Object.fromEntries(
+          Object.entries(k.key).map(([id, { arm }]) => [
+            id,
+            {
+              main: 'm',
+              ...Object.fromEntries(
+                qs.map((q) => [q, q === 'line_misses_main' && arm.startsWith('C') ? 'YES' : 'NO']),
+              ),
+            },
+          ]),
+        );
+        for (const side of ['a', 'b'])
+          writeFileSync(join(out, `verdicts-1-${side}.json`), JSON.stringify(verdicts));
+      }
+      const r = spawnSync(process.execPath, [ruler, 'score', outs.line, outs.fields], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.views[0].result.arms.Q2.judged).toBe(n);
+      expect(out.gateD25).toBeUndefined();
+      // n = 3: every C call misses, no Q call does, but a pooled drop of 6 is below 10.
+      expect(out.gateD26).toEqual({
+        decision: 'no',
+        reasons: ['line: line_misses_main(Q+Q2) = 0 > (C+C2)-10 = -4'],
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
