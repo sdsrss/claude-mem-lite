@@ -1308,6 +1308,31 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     writeFileSync(transcript, '');
   });
 
+  // Issue #53: Stop parsed the whole transcript on every turn to find the final reply the host
+  // already sends as `last_assistant_message` — 1.6 s on a 475 MB transcript, and Stop timed out
+  // at 5 s on nearly every turn of that session. The two texts differ here only so the row shows
+  // which one was read; from the host they are the same message.
+  it("the host's last_assistant_message is the Stop row's reply, not the transcript tail (issue #53)", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+
+    turn('start', 'Done: TRANSCRIPT-DONE\nNot done: TRANSCRIPT-LEFT');
+    runHook('stop', {
+      stdin: JSON.stringify({
+        session_id: 'cc-4b',
+        transcript_path: transcript,
+        last_assistant_message: 'Done: HOST-DONE\nNot done: HOST-LEFT',
+      }),
+      env: { ...env(), CLAUDE_MEM_NO_CITATION_TRACK: '1' },
+    });
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('HOST-DONE');
+    expect(rows[0].remaining_items).toContain('HOST-LEFT');
+    expect(rows[0].completed).not.toContain('TRANSCRIPT-DONE');
+  });
+
   it("a later turn's report replaces the first turn's Done / Not done", () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);

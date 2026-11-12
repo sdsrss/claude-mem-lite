@@ -1280,20 +1280,26 @@ async function readStopHookInput() {
 }
 
 /**
+ * This turn's final reply: the host's `last_assistant_message` when it sends one, else the
+ * transcript's last assistant text. Only the fallback reads the transcript — a parse of the whole
+ * file, linear in its size, which on a 475 MB transcript alone took 1.6 s of Stop's 5 s budget on
+ * every turn (issue #53). Claude Code 2.1.322 omits the field only when its last assistant
+ * message carries no text. Can throw on the fallback path; callers catch.
+ */
+function stopFinalReply({ transcriptPath, lastAssistantMessage }) {
+  if (lastAssistantMessage !== null) return lastAssistantMessage;
+  return transcriptPath ? extractTailAssistantText(transcriptPath) : null;
+}
+
+/**
  * D#825 — record this turn's final reply under this Stop's memory session and its current prompt
- * number, for the summary worker (lib/turn-replies.mjs). The host's `last_assistant_message`
- * when it sends one; from a host that does not, the transcript's last assistant text, the reply
+ * number, for the summary worker (lib/turn-replies.mjs). The reply is stopFinalReply's, the one
  * the Stop baseline reads. A turn answering a task notice stores no prompt, so its reply lands
  * on the prompt before it and replaces that reply: a turn's last reply wins. Never throws.
  */
 function recordStopTurnReply(db, { sessionId, transcriptPath, lastAssistantMessage }) {
   try {
-    const reply =
-      lastAssistantMessage !== null
-        ? lastAssistantMessage
-        : transcriptPath
-          ? extractTailAssistantText(transcriptPath)
-          : null;
+    const reply = stopFinalReply({ transcriptPath, lastAssistantMessage });
     if (!reply || !reply.trim()) return;
     const n =
       db
@@ -1423,7 +1429,7 @@ function markSessionCompletedAndSaveHandoff(
 }
 
 /** Fast summary baseline — ensures a summary exists even if the background LLM fails. */
-function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
+function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath, lastAssistantMessage }) {
   // Stop fires once per assistant TURN and the mem session survives it (R10-P1-1), so this
   // runs on every turn of a session. The first turn with anything to say INSERTs the row
   // (T4-P2-B's guard: never a second row); every later turn REFRESHES that row from its tail's
@@ -1440,7 +1446,8 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     // tail is deterministically parseable without Haiku. Prior baseline left
     // remaining_items=='' for every session whose Haiku pass failed (≈66%
     // in prod data), losing the user-visible "Not done" list. handleStop calls this
-    // AFTER trackCitationsAtStop so the parse is the one it left memoized.
+    // AFTER trackCitationsAtStop so that, when the host sends no reply and the transcript
+    // is parsed after all, the parse is the one it left memoized.
     let structuredCompleted = '';
     let structuredNotDone = '';
     let structuredNotes = '';
@@ -1448,7 +1455,7 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     // (D#121, lib/fast-summary.mjs writeStopSummary).
     let tail = null;
     try {
-      tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
+      tail = stopFinalReply({ transcriptPath, lastAssistantMessage });
       if (tail) {
         const s = extractStructuredSummary(tail);
         structuredCompleted = s.done;
@@ -1924,7 +1931,7 @@ async function handleStop() {
       // parsed once and stays memoized (D#152). The summary reads the parent's tail on every
       // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
-      writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
+      writeFastSummaryBaseline(db, { sessionId, project, transcriptPath, lastAssistantMessage });
     } catch (e) {
       // Another process held the write lock past HOOK_DB_DEADLINE_MS: this turn's handoff,
       // citations and baseline are lost either way. The summary worker below does not run under
