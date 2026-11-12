@@ -117,7 +117,8 @@ export const COMPLETED_LEAD =
   "completed starts with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), in one short clause of at most 100 characters; the other finished items follow it.";
 
 /**
- * D26's candidate (docs/audits/20261112-d26-preregistration.md). D25's COMPLETED_LEAD put the
+ * D26's candidate (docs/audits/20261112-d26-preregistration.md), shipped by D#845 as hook-llm.mjs
+ * SUMMARY_COMPLETED_ORDER; a test holds the two equal. D25's COMPLETED_LEAD put the
  * main outcome on the line but halved `completed` and wrote done work as open more often; this
  * one asks for the order alone, with no length, and restates that the latest reply sets a state.
  */
@@ -139,6 +140,7 @@ export function armPPrompt(prompt, sentence = COMPLETED_LEAD) {
  * One arm's prompt for session `s`, through the shipped builder (passed in: run() loads it only
  * after pointing CLAUDE_MEM_DIR at its sandbox). A: observations + final reply; B: + events;
  * C and C2: every turn's reply; P: C's prompt with COMPLETED_LEAD; Q and Q2: with COMPLETED_ORDER.
+ * Since D#845 the shipped prompt (C) is D26's Q, and P, Q and Q2 throw.
  */
 export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows }) {
   const shipped = buildSessionSummaryPrompt({
@@ -148,7 +150,14 @@ export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows 
     finalReply: s.replies.at(-1),
     ...(['C', 'C2', 'P', 'Q', 'Q2'].includes(arm) ? { turnReplies: s.replies } : {}),
   });
-  return CANDIDATE[arm] ? armPPrompt(shipped, CANDIDATE[arm]) : shipped;
+  if (!CANDIDATE[arm]) return shipped;
+  // D#845 shipped COMPLETED_ORDER: a candidate added to the shipped prompt is no longer the arm
+  // D25 or D26 measured, which added it to 6.34.0's. Re-run them on tree e51a8c69.
+  if (shipped.system.includes(COMPLETED_ORDER))
+    throw new Error(
+      `arm ${arm}: the shipped prompt carries COMPLETED_ORDER since D#845; run D25/D26 at e51a8c69`,
+    );
+  return armPPrompt(shipped, CANDIDATE[arm]);
 }
 
 /** The order the arms are called in for item i: rotated by one per item. */

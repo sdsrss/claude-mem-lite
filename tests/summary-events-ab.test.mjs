@@ -36,7 +36,7 @@ import {
   COMPLETED_ORDER,
   gateD26,
 } from '../benchmark/summary-events-ab.mjs';
-import { buildSessionSummaryPrompt, mergeSummaryRows } from '../hook-llm.mjs';
+import { buildSessionSummaryPrompt, mergeSummaryRows, SUMMARY_COMPLETED_ORDER } from '../hook-llm.mjs';
 import { parseSummaryNotes } from '../lib/fast-summary.mjs';
 import { buildSummaryLines } from '../hook-context.mjs';
 
@@ -961,6 +961,14 @@ describe('D24: prepare --view line --aa A, then score', () => {
 
 // D25 (docs/audits/20261112-d25-preregistration.md): does a prompt that asks `completed` to open
 // with the session's main outcome put it on the 120-character line, at no cost to the full field?
+// D25 and D26 compared candidates against 6.34.0's prompt. D#845 shipped D26's sentence, so these
+// tests rebuild 6.34.0's prompt from the shipped one, and the candidate arms refuse the shipped one.
+const prompt6340 = (args) => {
+  const p = buildSessionSummaryPrompt(args);
+  return { ...p, system: p.system.replace(` ${SUMMARY_COMPLETED_ORDER}`, '') };
+};
+const deps6340 = { buildSessionSummaryPrompt: prompt6340, mergeSummaryRows };
+
 describe('D25: arm P is arm C’s prompt with COMPLETED_LEAD', () => {
   const base = {
     project: 'p',
@@ -969,7 +977,7 @@ describe('D25: arm P is arm C’s prompt with COMPLETED_LEAD', () => {
   };
   it('closes the replies paragraph with the lead, for several turns and for one, and leaves the user part', () => {
     for (const replies of [['Fixed it; 12/12 pass.', 'v1.2.0 released.'], ['v1.2.0 released.']]) {
-      const c = buildSessionSummaryPrompt({ ...base, finalReply: replies.at(-1), turnReplies: replies });
+      const c = prompt6340({ ...base, finalReply: replies.at(-1), turnReplies: replies });
       const p = armPPrompt(c);
       expect(p.user).toBe(c.user);
       expect(p.system).toBe(`${c.system} ${COMPLETED_LEAD}`);
@@ -994,7 +1002,7 @@ describe('D25: armPrompt, the prompt each arm sends', () => {
     const c = armPrompt('C', s, deps);
     expect(c.user).toContain('[Turn 1 of 2]\nFixed it; 12/12 pass.');
     expect(armPrompt('C2', s, deps)).toEqual(c);
-    expect(armPrompt('P', s, deps)).toEqual(armPPrompt(c));
+    expect(armPrompt('P', s, deps6340)).toEqual(armPPrompt(armPrompt('C', s, deps6340)));
     const a = armPrompt('A', s, deps);
     expect(a.user).not.toContain('[Turn 1 of 2]');
     expect(a.user).toContain('Final reply:\nv1.2.0 released.');
@@ -1232,7 +1240,7 @@ describe('D26: arms Q and Q2', () => {
     userPrompts: ['fix the login bug', 'ship it'],
     replies: ['Fixed it; 12/12 pass.', 'v1.2.0 released.'],
   };
-  const deps = { buildSessionSummaryPrompt, mergeSummaryRows };
+  const deps = deps6340;
   it('Q and Q2 send C’s prompt with COMPLETED_ORDER closing the system part, and nothing else', () => {
     const c = armPrompt('C', s, deps);
     const q = armPrompt('Q', s, deps);
@@ -1244,6 +1252,15 @@ describe('D26: arms Q and Q2', () => {
     expect(COMPLETED_ORDER).toContain('keep every item and detail');
     expect(COMPLETED_ORDER).toContain('the latest reply that mentions it');
     expect(COMPLETED_ORDER).not.toMatch(/characters/);
+  });
+  it('D#845: the shipped prompt is arm Q, and the candidate arms refuse it', () => {
+    const shipped = { buildSessionSummaryPrompt, mergeSummaryRows };
+    expect(COMPLETED_ORDER).toBe(SUMMARY_COMPLETED_ORDER);
+    expect(armPrompt('C', s, shipped)).toEqual(armPrompt('Q', s, deps6340));
+    expect(armPrompt('C2', s, shipped)).toEqual(armPrompt('C', s, shipped));
+    for (const arm of ['P', 'Q', 'Q2']) {
+      expect(() => armPrompt(arm, s, shipped)).toThrow(/carries COMPLETED_ORDER/);
+    }
   });
   it('holdout drops the sessions of every earlier reading given', () => {
     const items = ['s1', 's2', 's3', 's4', 's5'].map((sid) => ({ sid }));

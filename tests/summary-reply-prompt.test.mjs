@@ -13,6 +13,7 @@ import {
   SUMMARY_TURN_TAIL,
   SUMMARY_TURNS_FIRST,
   SUMMARY_TURNS_LAST,
+  SUMMARY_COMPLETED_ORDER,
 } from '../hook-llm.mjs';
 import { gateD19, scoreVerdicts, buildBlind, summaryUsable } from '../benchmark/summary-reply-ab.mjs';
 
@@ -22,6 +23,36 @@ const base = {
   observations: [{ type: 'bugfix', title: 'Fixed the login redirect', narrative: 'n' }],
   userPrompts: ['fix the login bug'],
 };
+
+// D#845 (D26, docs/audits/20261112-d26-reading.md): completed is ordered by importance, so the
+// 120-character Completed line a new session is shown starts with the session's main outcome.
+describe('buildSessionSummaryPrompt: the completed order (D26)', () => {
+  const D26 =
+    "Order completed by importance: begin with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), then list every other finished item. This changes only the order: keep every item and detail you would otherwise include, and an item's state is still the one given by the latest reply that mentions it.";
+  it('is the sentence D26 registered and measured, word for word', () => {
+    expect(SUMMARY_COMPLETED_ORDER).toBe(D26);
+  });
+  it('closes the replies paragraph of the every-turn and the final-reply prompt, once', () => {
+    for (const p of [
+      buildSessionSummaryPrompt({ ...base, finalReply: 'b', turnReplies: ['a', 'b'] }),
+      buildSessionSummaryPrompt({ ...base, finalReply: 'All 12 tests pass.' }),
+    ]) {
+      expect(p.system.endsWith(`belongs in remaining_items. ${D26}`)).toBe(true);
+      expect(p.system.split(D26)).toHaveLength(2);
+      expect(p.user).not.toContain('Order completed by importance');
+    }
+  });
+  it('is not in the prompt without a reply', () => {
+    expect(buildSessionSummaryPrompt(base).system).not.toContain('Order completed by importance');
+  });
+  it('a one-reply prompt is the one D26 measured, byte for byte', () => {
+    // From D26's arm Q on tree e51a8c69 with this input (a single-turn session).
+    const { system, user } = buildSessionSummaryPrompt({ ...base, finalReply: 'All 12 tests pass.' });
+    expect(createHash('sha256').update(`${system}\u0000${user}`).digest('hex')).toBe(
+      '826dc9ea5f2ab51dfc55d95730a4062a28744d5050129d127fc8a8b3d6b23124',
+    );
+  });
+});
 
 describe('buildSessionSummaryPrompt', () => {
   it('without a final reply carries no reply section and no reply rule', () => {
@@ -244,16 +275,17 @@ describe('buildSessionSummaryPrompt with turnReplies (D22)', () => {
   });
 
   it('a two-turn prompt is the one measured, byte for byte, and so are its cuts', () => {
-    // Taken twice (2026-11-12): from this builder and from the measured tree d18a14a9
-    // (rulers.md, session summary events A/B, Reading 3). A deliberate change to the text or a
-    // cut updates it and re-measures with benchmark/summary-events-ab.mjs arm C.
+    // D#845: taken twice (2026-11-12): from this builder and from D26's arm Q on the measured
+    // tree e51a8c69 (rulers.md, session summary events A/B, Reading D26). The pin before it,
+    // 7892c582…, was arm C (Reading 3). A deliberate change to the text or a cut updates it and
+    // re-measures with benchmark/summary-events-ab.mjs.
     const { system, user } = buildSessionSummaryPrompt({
       ...base,
       finalReply: 'Committed the README fix.',
       turnReplies: ['Fixed the login redirect; 8/8 pass.', 'Committed the README fix.'],
     });
     expect(createHash('sha256').update(`${system}\u0000${user}`).digest('hex')).toBe(
-      '7892c582eb19b54582c66293914778ba24509fd5d06c465e18fc16d667d3d143',
+      'c8ff1aaaea5182f07045443c426b0ff5b553a3dd473812434a1c577573efb6f5',
     );
     expect([SUMMARY_TURN_HEAD, SUMMARY_TURN_TAIL, SUMMARY_TURNS_FIRST, SUMMARY_TURNS_LAST]).toEqual([
       700, 300, 4, 8,

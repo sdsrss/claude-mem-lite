@@ -1755,6 +1755,16 @@ export const SUMMARY_TURNS_FIRST = 4;
 export const SUMMARY_TURNS_LAST = 8;
 
 /**
+ * D26 (D#845) — the last sentence of both reply rules: `completed` ordered by importance, so the
+ * Last Session line SessionStart cuts to 120 characters starts with the session's main finished
+ * outcome. That line left it out in 23 of 60 calls without this sentence and 11 of 60 with it;
+ * no other count rose by more than 1 (docs/audits/20261112-d26-reading.md). The prompt without
+ * a reply does not carry it.
+ */
+export const SUMMARY_COMPLETED_ORDER =
+  "Order completed by importance: begin with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), then list every other finished item. This changes only the order: keep every item and detail you would otherwise include, and an item's state is still the one given by the latest reply that mentions it.";
+
+/**
  * The final reply as the summary prompt carries it: scrubbed whole first, so a secret
  * straddling a cut is never half-kept, then cut to head + tail with the omitted length named.
  * Cuts land on code-point boundaries. Empty for an empty or missing reply.
@@ -1813,8 +1823,9 @@ export function mergeSummaryRows(observations, events) {
  * The session summary prompt. `observations` are {type, title, narrative} newest first,
  * `userPrompts` the raw prompt texts in order; both are cut here. `finalReply`, when given, is
  * the session's last assistant message (D19): it goes into the user part behind the same input
- * guard, and the system part says the outcome it reports wins. Without one the prompt is the
- * one shipped before D19, byte for byte. `turnReplies` (D22), each turn's last reply oldest
+ * guard, and the system part says the outcome it reports wins and that completed is ordered by
+ * importance (SUMMARY_COMPLETED_ORDER, D26). Without one the prompt is the one shipped before D19,
+ * byte for byte. `turnReplies` (D22), each turn's last reply oldest
  * first, replaces the final reply when it holds two or more turns with text (its last one IS
  * the final reply); with fewer the prompt is the D19 one.
  */
@@ -1838,10 +1849,10 @@ lessons: Only genuinely non-obvious insights (debugging discoveries, gotchas, ar
 key_decisions: Only decisions with lasting impact (library choices, architecture, data model). Include reasoning. Empty array if none.${
     turns
       ? `
-Replies: the user message ends with the assistant's last reply of each turn, oldest first; the last one is the session's final reply. These are the assistant's own account of the outcome. completed lists the main work the replies report as done in every turn, not only the last. Work a reply reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. An item's state is the one given by the latest reply that mentions it. What is still unfinished, failed or left for later belongs in remaining_items.`
+Replies: the user message ends with the assistant's last reply of each turn, oldest first; the last one is the session's final reply. These are the assistant's own account of the outcome. completed lists the main work the replies report as done in every turn, not only the last. Work a reply reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. An item's state is the one given by the latest reply that mentions it. What is still unfinished, failed or left for later belongs in remaining_items. ${SUMMARY_COMPLETED_ORDER}`
       : reply
         ? `
-Final reply: the user message ends with the session's final reply, the assistant's own account of the outcome. Work it reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. What it reports as unfinished, failed or left for later belongs in remaining_items.`
+Final reply: the user message ends with the session's final reply, the assistant's own account of the outcome. Work it reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. What it reports as unfinished, failed or left for later belongs in remaining_items. ${SUMMARY_COMPLETED_ORDER}`
         : ''
   }`;
   const user = `Project: ${project}${promptCtx}
