@@ -1973,53 +1973,8 @@ async function uninstall() {
   let purgeIncomplete = false; // reported, and not followed by "Done!" and exit 0
   if (flags.has('--purge')) {
     const homeDir = join(homedir(), '.claude-mem-lite');
-    let homeLink = false;
-    try {
-      homeLink = DATA_DIR === homeDir && lstatSync(DATA_DIR).isSymbolicLink();
-    } catch {
-      /* absent */
-    }
     // Always remove the homedir code/install dir (guarded to the canonical path).
-    if (homeLink) {
-      // D#811: rmSync takes a link alone, and "Data purged" was then false. The target may be a
-      // directory the user chose, as a relocated CLAUDE_MEM_DIR is, and it holds the code too, so
-      // nothing is removed through the link. A target it cannot resolve (an unmounted drive, a
-      // directory it may not read) proves nothing gone, so the purge is never done here — unless
-      // CLAUDE_MEM_DIR is the target, which the relocated purge below handles and reports.
-      let target = null;
-      try {
-        target = realpathSync(DATA_DIR);
-      } catch {
-        try {
-          target = resolve(dirname(DATA_DIR), readlinkSync(DATA_DIR));
-        } catch {
-          /* raced away */
-        }
-      }
-      let purgedBelow = false;
-      try {
-        purgedBelow = MEM_DATA_DIR !== homeDir && realpathSync(MEM_DATA_DIR) === target;
-      } catch {
-        /* no relocated dir to compare */
-      }
-      try {
-        unlinkSync(DATA_DIR);
-        if (purgedBelow)
-          ok(`Removed the link ~/.claude-mem-lite to ${target}, the CLAUDE_MEM_DIR purged below`);
-        else {
-          warn(
-            `~/.claude-mem-lite was a link to ${target}: the link is removed and was not followed, so ` +
-              `claude-mem-lite's files there, if any, stay.`,
-          );
-          purgeIncomplete = true;
-        }
-      } catch (e) {
-        warn(
-          `Could not remove the link ~/.claude-mem-lite to ${target} (${e.code || e.message}); nothing behind it was removed.`,
-        );
-        purgeIncomplete = true;
-      }
-    } else if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
+    if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
       rmSync(DATA_DIR, { recursive: true, force: true });
       ok('Data purged (~/.claude-mem-lite/)');
     } else if (existsSync(DATA_DIR)) {
