@@ -20,8 +20,8 @@
 // WHICH REPLIES (D#825). The worker reads what Stop recorded under the session (lib/turn-replies.mjs);
 // stopReplies rebuilds that from the transcript. Reading 3 (D22's gate) took the replies from a
 // time window instead, and that window carried the defect the 6.33.0 reviews found in the wiring:
-// on 13 of its 30 sessions it differs from the record, among them a next session's report taken
-// as the final reply (tasks/d825/equiv.out).
+// on 14 of its 30 sessions it differs from the record as stopReplies rebuilds it, among them a next
+// session's report taken as the final reply (docs/measurement/rulers.md, reading 3).
 // Per item it also records, outside the gate, the turn count, whether the final reply carries a
 // Done / Not done report, and who wrote the stored row's `completed`; `score` splits by them.
 //
