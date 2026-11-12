@@ -297,6 +297,14 @@ export const SECRET_PATTERNS = [
   ],
   // npm tokens (npm_...)
   [/\bnpm_[a-zA-Z0-9]{36,}(?![A-Za-z0-9])/g, '***'],
+  // D#812: fixed-prefix, fixed-body provider tokens. Shapes from gitleaks (config/gitleaks.toml
+  // @ 5f6ec56c: huggingface-*, digitalocean-*, pypi-upload-token, shopify-*) and trufflehog
+  // (pkg/detectors/groq). Each body is one character class, so a failing match is linear.
+  [/\b(?:hf|api_org)_[a-zA-Z0-9]{34}(?![A-Za-z0-9])/g, '***'],
+  [/\bdo[opr]_v1_[a-f0-9]{64}(?![A-Za-z0-9])/g, '***'],
+  [/\bpypi-AgE[A-Za-z0-9_-]{50,}/g, '***'],
+  [/\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}(?![A-Za-z0-9])/g, '***'],
+  [/\bgsk_[a-zA-Z0-9]{52}(?![A-Za-z0-9])/g, '***'],
   // Stripe keys (sk_live_, rk_live_, pk_live_, sk_test_, pk_test_) + webhook signing secret (whsec_)
   [/\b[srp]k_(?:live|test)_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
   [/\bwhsec_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
