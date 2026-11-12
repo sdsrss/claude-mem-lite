@@ -1925,8 +1925,6 @@ async function handleStop() {
       // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
       writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
-      // Before the worker below is spawned: it reads these replies.
-      recordStopTurnReply(db, { sessionId, transcriptPath, lastAssistantMessage });
     } catch (e) {
       // Another process held the write lock past HOOK_DB_DEADLINE_MS: this turn's handoff,
       // citations and baseline are lost either way. The summary worker below does not run under
@@ -1935,6 +1933,9 @@ async function handleStop() {
       if (!isDbBusyError(e)) throw e;
       debugLog('WARN', 'stop', 'database locked by another process; this turn was not recorded');
     } finally {
+      // A read and a file write, so it records even when the writes above lost the lock (pre-ship
+      // review of abeac529, F2); before the worker below is spawned, which reads these replies.
+      recordStopTurnReply(db, { sessionId, transcriptPath, lastAssistantMessage });
       db.close();
     }
   }

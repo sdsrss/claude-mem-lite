@@ -3,7 +3,7 @@
 // Isolation via HOME env var → redirects ~/.claude-mem-lite/ to temp dir
 
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, unlinkSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
@@ -13,6 +13,7 @@ import { computeMinHash } from '../utils.mjs';
 import { initSchema } from '../schema.mjs';
 import { saveEvent } from '../lib/activity.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
+import { readTurnReplies } from '../lib/turn-replies.mjs';
 
 const HOOK_PATH = resolve('hook.mjs');
 const MOCK_CLAUDE = resolve('scripts/mock-claude.mjs');
@@ -3495,6 +3496,41 @@ describe('Suite: D#825 — the summary reads its own session’s turns, recorded
     expect(p2).toContain('[Turn 1 of 2]\nS2 notice: the background build finished.');
     expect(p2).toContain('[Turn 2 of 2, final]\nS2 turn 1: gates 10/10.');
     expect(p2).not.toContain('S1 ');
+  });
+
+  it('records the reply while another process holds the write lock (pre-ship review F2)', async () => {
+    // Stop's writes give up after HOOK_DB_DEADLINE_MS; the record needs only a read.
+    const e = { HOME: tmpHome };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC }), env: e });
+    const sid = getSessionIdFromFile(tmpHome);
+    prompt('fix it');
+    stop({ last_assistant_message: 'turn 1 reply' });
+    prompt('and the docs');
+    const locker = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const D = require('better-sqlite3');
+         const db = new D(${JSON.stringify(join(tmpHome, '.claude-mem-lite', 'claude-mem-lite.db'))});
+         db.exec('BEGIN IMMEDIATE');
+         process.stdout.write('locked\\n');
+         setTimeout(() => { db.exec('ROLLBACK'); db.close(); }, 15000);`,
+      ],
+      { cwd: dirname(HOOK_PATH), stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    try {
+      await new Promise((r, j) => {
+        locker.stdout.on('data', (d) => String(d).includes('locked') && r());
+        locker.once('exit', () => j(new Error('locker exited before locking')));
+      });
+      stop({ last_assistant_message: 'turn 2 reply: docs done' });
+    } finally {
+      locker.kill('SIGKILL');
+    }
+    expect(readTurnReplies(join(tmpHome, '.claude-mem-lite', 'runtime'), sid)).toEqual([
+      'turn 1 reply',
+      'turn 2 reply: docs done',
+    ]);
   });
 
   it('a host without the field gives the transcript tail; an empty one records nothing', () => {

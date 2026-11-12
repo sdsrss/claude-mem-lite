@@ -123,6 +123,12 @@ describe('recordTurnReply / readTurnReplies', () => {
     expect(readTurnReplies(dir, 'sess-a')[0]).toBe(reply);
   });
 
+  it('counts code points, not UTF-16 units: a reply of astral characters at the limit stays whole', () => {
+    const reply = '\u{1F600}'.repeat(TURN_REPLY_MAX_CHARS);
+    recordTurnReply(dir, 'sess-a', 1, reply);
+    expect(readTurnReplies(dir, 'sess-a')[0]).toBe(reply);
+  });
+
   it('an unreadable file reads as no turns, and the next reply starts it over', () => {
     writeFileSync(turnRepliesPath(dir, 'sess-a'), '{not json');
     expect(readTurnReplies(dir, 'sess-a')).toEqual([]);
