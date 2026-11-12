@@ -201,6 +201,14 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.34.0
+
+**会话摘要会读每一轮的最后回复；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.33.0`，并删掉数据目录里的 `runtime/turn-replies-*.json`：6.33.0 不读它们。
+
+- **会话摘要模型除了观察和提示，还读每一轮的最后回复。** Stop 把每一轮的最后回复脱敏后存在 `runtime/`。
+- **密钥脱敏会抹掉 Hugging Face、DigitalOcean、PyPI、Shopify 和 Groq 的令牌。**
+- 详见 CHANGELOG.md。
+
 ## 升级到 6.33.0
 
 **数据目录改过位置时，`uninstall --purge` 不再删你自己的文件；不用执行任何操作，schema 版本仍是 49。** 第一次打开数据库时会给 `events` 加一个可空列，旧版本会忽略它。想退回，请固定 `claude-mem-lite@6.32.0`。

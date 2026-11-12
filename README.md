@@ -239,6 +239,17 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.34.0
+
+**The session summary reads every turn's last reply; nothing to run, and the schema version stays
+49.** To go back, pin `claude-mem-lite@6.33.0` and delete `runtime/turn-replies-*.json` from the
+data directory: 6.33.0 never reads them.
+
+- **The session summary model reads each turn's last reply**, not only the observations and
+  prompts. Stop keeps each turn's last reply, scrubbed, in `runtime/`.
+- **The secret scrubber erases Hugging Face, DigitalOcean, PyPI, Shopify and Groq tokens.**
+- See CHANGELOG.md.
+
 ## Upgrading to 6.33.0
 
 **`uninstall --purge` leaves your own files in a relocated data directory; nothing to run, and the

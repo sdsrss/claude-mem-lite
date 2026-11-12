@@ -2,6 +2,23 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.34.0 — the session summary reads every turn's last reply
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.33.0`, which never reads the `runtime/turn-replies-*.json` files this version
+writes: delete them by hand. One default changes: the session summary model reads each turn's last
+reply.
+
+- **The session summary model reads each turn's last reply**, oldest first, and its prompt says
+  that work a reply reports as done is completed. It read the session's observations and prompts
+  only. Stop records each turn's last reply (Claude Code's own copy when it sends one, else the
+  transcript's last assistant text), scrubbed, under its session in `runtime/`, and the summary
+  reads that record. On 30 of the maintainer's own sessions, against the same prompt with only the
+  final reply: a main piece of finished work missing from the summary went from 12 to 0, done work
+  written as not done from 4 to 0. On those sessions the prompt grows from 2,411 characters on
+  average in 6.33.0 to 5,435.
+- **The secret scrubber erases Hugging Face, DigitalOcean, PyPI, Shopify and Groq tokens.**
+
 ## v6.33.0 — `uninstall --purge` leaves your own files in a relocated data directory
 
 **Upgrade note: nothing to run; the schema version stays 49.** The first open adds a nullable
