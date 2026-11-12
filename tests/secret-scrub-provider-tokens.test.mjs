@@ -63,3 +63,28 @@ describe('the same prefixes on ordinary text stay as written', () => {
     });
   }
 });
+
+// Pre-ship review of abeac529 (F8): each body has an exact length, and a pattern that widened to
+// one more or one fewer character would erase identifiers no provider issues. Every near miss
+// stays as written.
+describe('a body one character off the shape stays as written', () => {
+  const near = {
+    huggingface: ['hf' + '_', 'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3h'],
+    huggingfaceOrg: ['api' + '_org_', 'aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgH'],
+    digitalocean: ['dop' + '_v1_', HEX64],
+    shopify: ['shp' + 'at_', HEX32],
+    groq: ['gsk' + '_', 'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6kL9mN2pQ5sT8vW1y'],
+  };
+  for (const [name, [prefix, body]] of Object.entries(near)) {
+    it(`${name}: one short and one long`, () => {
+      for (const b of [body.slice(0, -1), body + body[0]]) {
+        const text = `value ${prefix}${b} end`;
+        expect(scrubSecrets(text)).toBe(text);
+      }
+    });
+  }
+  it('pypi: a body one short of 50', () => {
+    const text = 'value ' + 'pypi' + '-AgE' + 'x'.repeat(49) + ' end';
+    expect(scrubSecrets(text)).toBe(text);
+  });
+});
