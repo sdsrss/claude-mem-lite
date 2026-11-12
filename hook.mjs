@@ -179,6 +179,7 @@ import {
 } from './lib/citation-tracker.mjs';
 import { resolveEdgeAttribution, readPreRecallFileEdges } from './lib/edge-attribution.mjs';
 import { extractTailAssistantText, extractStructuredSummary } from './lib/summary-extractor.mjs';
+import { recordTurnReply, TURN_REPLIES_PREFIX } from './lib/turn-replies.mjs';
 import { searchRelevantMemories, formatMemoryLine, selectImperativeLesson } from './hook-memory.mjs';
 import { searchInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
 import { upsFtsQuery } from './lib/ups-query.mjs';
@@ -1257,6 +1258,9 @@ async function readStopHookInput() {
   // collides across parallel sessions for the same project (see docs/bug.txt).
   let ccSessionId = null;
   let transcriptPath = null;
+  // The host's own copy of this turn's final reply (Claude Code's Stop input, optional). Kept as
+  // given, '' included: an empty one means the turn ended without text, not that it is unknown.
+  let lastAssistantMessage = null;
   try {
     const raw = await readStdin();
     const hookData = JSON.parse(raw.text);
@@ -1266,10 +1270,39 @@ async function readStopHookInput() {
     if (typeof hookData?.transcript_path === 'string' && hookData.transcript_path.length > 0) {
       transcriptPath = hookData.transcript_path;
     }
+    if (typeof hookData?.last_assistant_message === 'string') {
+      lastAssistantMessage = hookData.last_assistant_message;
+    }
   } catch {
     /* stdin unavailable — fall back to local session id */
   }
-  return { ccSessionId, transcriptPath };
+  return { ccSessionId, transcriptPath, lastAssistantMessage };
+}
+
+/**
+ * D#825 — record this turn's final reply under this Stop's memory session and its current prompt
+ * number, for the summary worker (lib/turn-replies.mjs). The host's `last_assistant_message`
+ * when it sends one; from a host that does not, the transcript's last assistant text, the reply
+ * the Stop baseline reads. A turn answering a task notice stores no prompt, so its reply lands
+ * on the prompt before it and replaces that reply: a turn's last reply wins. Never throws.
+ */
+function recordStopTurnReply(db, { sessionId, transcriptPath, lastAssistantMessage }) {
+  try {
+    const reply =
+      lastAssistantMessage !== null
+        ? lastAssistantMessage
+        : transcriptPath
+          ? extractTailAssistantText(transcriptPath)
+          : null;
+    if (!reply || !reply.trim()) return;
+    const n =
+      db
+        .prepare('SELECT MAX(prompt_number) AS n FROM user_prompts WHERE content_session_id = ?')
+        .get(sessionId)?.n ?? 0;
+    recordTurnReply(RUNTIME_DIR, sessionId, n, reply);
+  } catch (e) {
+    debugCatch(e, 'stop-turn-reply');
+  }
 }
 
 /** Flush whatever is left in the episode buffer, under the PostToolUse lock. */
@@ -1865,7 +1898,7 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
 
 async function handleStop() {
   // Read Claude Code's real session_id from hook stdin for parallel-session scoping.
-  const { ccSessionId, transcriptPath } = await readStopHookInput();
+  const { ccSessionId, transcriptPath, lastAssistantMessage } = await readStopHookInput();
 
   // Capture session info BEFORE cleanup. All DB lookups use the mem-internal id
   // (that's what handleUserPrompt wrote into user_prompts / sdk_sessions / observations
@@ -1892,6 +1925,8 @@ async function handleStop() {
       // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
       writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
+      // Before the worker below is spawned: it reads these replies.
+      recordStopTurnReply(db, { sessionId, transcriptPath, lastAssistantMessage });
     } catch (e) {
       // Another process held the write lock past HOOK_DB_DEADLINE_MS: this turn's handoff,
       // citations and baseline are lost either way. The summary worker below does not run under
@@ -1980,7 +2015,8 @@ function gcStalePreRecallCooldowns() {
         name.startsWith('.claude-mem-injected-') ||
         name.startsWith('.claude-mem-keyctx-') || // D#123 Key Context marker — same per-session growth, same 24h GC
         name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX) || // §9-B once-per-session nudge claim — same shape
-        name.startsWith(RECALL_SHOWN_PREFIX); // injection budget C1/C3 per-thread marker — same shape
+        name.startsWith(RECALL_SHOWN_PREFIX) || // injection budget C1/C3 per-thread marker — same shape
+        name.startsWith(TURN_REPLIES_PREFIX); // D#825 per-session turn replies; its workers read it within minutes
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);

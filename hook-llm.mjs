@@ -28,6 +28,7 @@ import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
 import { recordMetric } from './lib/metrics.mjs';
+import { readTurnReplies } from './lib/turn-replies.mjs';
 import { DB_DIR } from './schema.mjs';
 import {
   insertObservationRow,
@@ -1920,7 +1921,18 @@ export async function handleLLMSummary() {
       )
       .all(sessionId)
       .map((p) => p.prompt_text);
-    const prompt = buildSessionSummaryPrompt({ project, observations: recentObs, userPrompts });
+    // D19 + D22 (D#825): every turn's last reply, as Stop recorded them under this session
+    // (lib/turn-replies.mjs). Two or more show every turn; one is the final reply; none gives the
+    // prompt without a reply. The Stop worker and the /clear or /compact one read the same record,
+    // so neither depends on which transcript it was handed or what was written there since.
+    const turnReplies = readTurnReplies(RUNTIME_DIR, sessionId);
+    const prompt = buildSessionSummaryPrompt({
+      project,
+      observations: recentObs,
+      userPrompts,
+      finalReply: turnReplies.at(-1) ?? null,
+      turnReplies,
+    });
 
     if (!(await acquireLLMSlot())) {
       debugLog('WARN', 'llm-summary', 'semaphore timeout, skipping summary');

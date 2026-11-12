@@ -180,6 +180,9 @@ export const SOURCE_FILES = [
   'cli/common.mjs',
   'lib/transcript-scan.mjs',
   'lib/summary-extractor.mjs',
+  // D#825: each turn's reply, recorded by Stop (hook.mjs) and read by the summary worker
+  // (hook-llm.mjs); both import it, so it swaps in before them.
+  'lib/turn-replies.mjs',
   // D#69 episode-summarizer input filters + lesson grounding check. Statically imported
   // by hook.mjs (PostToolUse capture, episode flush) and hook-llm.mjs (llm-episode) —
   // missing it from the manifest would break both on auto-update.

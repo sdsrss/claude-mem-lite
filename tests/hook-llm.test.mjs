@@ -25,6 +25,13 @@ vi.mock('../hook-shared.mjs', async () => {
   };
 });
 
+// D#825: the summary worker reads the turns Stop recorded; the record's own file IO is
+// tests/turn-replies.test.mjs, and the end-to-end path is in tests/e2e.test.mjs.
+vi.mock('../lib/turn-replies.mjs', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readTurnReplies: vi.fn(() => []),
+}));
+
 vi.mock('../lib/metrics.mjs', async () => {
   const actual = await vi.importActual('../lib/metrics.mjs');
   return { ...actual, recordMetric: vi.fn() };
@@ -44,7 +51,8 @@ import {
   buildSessionSummaryPrompt,
 } from '../hook-llm.mjs';
 import { splitEpisodeFiles } from '../utils.mjs';
-import { openDb, callLLM } from '../hook-shared.mjs';
+import { openDb, callLLM, RUNTIME_DIR } from '../hook-shared.mjs';
+import { readTurnReplies } from '../lib/turn-replies.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
 import { recordMetric } from '../lib/metrics.mjs';
 import { buildSessionContextLines } from '../hook-context.mjs';
@@ -2202,6 +2210,50 @@ describe('handleLLMSummary', () => {
     process.argv[4] = originalArgv4;
     delete process.env.CLAUDE_MEM_FLUSH_TIMEOUT;
     vi.clearAllMocks();
+  });
+
+  describe('reads the turns Stop recorded under this session (D19 + D22, D#825)', () => {
+    const obs = [{ type: 'bugfix', title: 'Fixed the login redirect', narrative: '' }];
+    beforeEach(() => {
+      insertSession(db, { id: 'test-session', project: 'test-proj' });
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+         VALUES ('test-session', 'test-proj', '', 'bugfix', 'Fixed the login redirect', '', 1, ?, 1000)`,
+      ).run(new Date().toISOString());
+    });
+    const expected = (turnReplies) =>
+      buildSessionSummaryPrompt({
+        project: 'test-proj',
+        observations: obs,
+        userPrompts: [],
+        finalReply: turnReplies.at(-1) ?? null,
+        turnReplies,
+      });
+
+    it('two turns: every reply goes into the prompt, oldest first', async () => {
+      const turns = ['Fixed the login redirect; 8/8 pass.', 'Committed the README fix.'];
+      readTurnReplies.mockReturnValueOnce(turns);
+      await handleLLMSummary();
+      expect(readTurnReplies).toHaveBeenCalledWith(RUNTIME_DIR, 'test-session');
+      expect(callLLM.mock.calls[0][0]).toEqual(expected(turns));
+      expect(callLLM.mock.calls[0][0].user).toContain(
+        'Replies, one per turn, oldest first:\n[Turn 1 of 2]\nFixed the login redirect; 8/8 pass.',
+      );
+    });
+
+    it('one turn: the final reply, as D19 measured it', async () => {
+      readTurnReplies.mockReturnValueOnce(['All 12 tests pass; lesson saved.']);
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0]).toEqual(expected(['All 12 tests pass; lesson saved.']));
+      expect(callLLM.mock.calls[0][0].user).toContain('Final reply:\nAll 12 tests pass; lesson saved.');
+    });
+
+    it('none recorded: the prompt without a reply, as before D19', async () => {
+      await handleLLMSummary();
+      expect(callLLM.mock.calls[0][0]).toEqual(
+        buildSessionSummaryPrompt({ project: 'test-proj', observations: obs, userPrompts: [] }),
+      );
+    });
   });
 
   it('creates session summary from observations', async () => {

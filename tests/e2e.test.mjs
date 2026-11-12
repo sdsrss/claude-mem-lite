@@ -3427,6 +3427,109 @@ describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence',
 // 22-character project with dashes at 3, 8, 13 and 18 that is the uuid shape sdk_sessions refuses,
 // and every hook write in the project failed. The hook still exits 0, so the error reached only its
 // stderr and the hook-errors log.
+// D#825 (D19 + D22): Stop records each turn's last reply under its own memory session, and the
+// summary worker reads that record. The pre-tag reviews of 6.33.0 found the transcript-reading
+// wiring giving one session another's reply across /compact: a notice answered before the next
+// session's first prompt, a prompt queued during the compaction. Here the previous session's
+// worker runs only after the next session has answered both.
+describe('Suite: D#825 — the summary reads its own session’s turns, recorded at Stop', () => {
+  const CC = 'cc-33333333-3333-4333-8333-333333333333';
+
+  function addObservation(sessionId, title) {
+    const db = openTestDb(tmpHome);
+    try {
+      const { project } = db
+        .prepare('SELECT project FROM sdk_sessions WHERE content_session_id = ?')
+        .get(sessionId);
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, importance, created_at, created_at_epoch)
+         VALUES (?, ?, '', 'bugfix', ?, 'n', 2, ?, ?)`,
+      ).run(sessionId, project, title, new Date().toISOString(), Date.now());
+      return project;
+    } finally {
+      db.close();
+    }
+  }
+  const prompt = (text) =>
+    runHook('user-prompt', {
+      stdin: JSON.stringify({ prompt: text, session_id: CC }),
+      env: { HOME: tmpHome },
+    });
+  const stop = (fields) =>
+    runHook('stop', { stdin: JSON.stringify({ session_id: CC, ...fields }), env: { HOME: tmpHome } });
+
+  it('across /compact each worker gets its own turns, each turn its last reply', () => {
+    const e = { HOME: tmpHome };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC }), env: e });
+    const s1 = getSessionIdFromFile(tmpHome);
+    const project = addObservation(s1, 'Fixed the retry backoff in worker.mjs');
+    prompt('fix the retry backoff in worker.mjs');
+    stop({ last_assistant_message: 'S1 turn 1, first: started the suite in the background.' });
+    // A background task's notice answered in the same turn: no prompt is stored for it.
+    stop({ last_assistant_message: 'S1 turn 1, last: backoff fixed, suite 562/562 green.' });
+    prompt('commit it');
+    stop({ last_assistant_message: 'S1 turn 2: committed as abc123.' });
+
+    runHook('session-start', { stdin: JSON.stringify({ source: 'compact', session_id: CC }), env: e });
+    const s2 = getSessionIdFromFile(tmpHome);
+    expect(s2, 'premise: /compact rotated the memory session').not.toBe(s1);
+    addObservation(s2, 'Ran the release gates');
+    stop({ last_assistant_message: 'S2 notice: the background build finished.' });
+    prompt('run the release gates');
+    stop({ last_assistant_message: 'S2 turn 1: gates 10/10.' });
+
+    const capture = join(tmpHome, 'prompts.jsonl');
+    const worker = { HOME: tmpHome, CLAUDE_MEM_FLUSH_TIMEOUT: '0', MOCK_CLAUDE_CAPTURE: capture };
+    for (const sid of [s1, s2]) {
+      const { exitCode } = runHook('llm-summary', { env: worker, args: [sid, project] });
+      expect(exitCode).toBe(0);
+    }
+    const [p1, p2] = readFileSync(capture, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(p1).toContain('[Turn 1 of 2]\nS1 turn 1, last: backoff fixed, suite 562/562 green.');
+    expect(p1).toContain('[Turn 2 of 2, final]\nS1 turn 2: committed as abc123.');
+    expect(p1).not.toContain('S1 turn 1, first');
+    expect(p1).not.toContain('S2 ');
+    expect(p2).toContain('[Turn 1 of 2]\nS2 notice: the background build finished.');
+    expect(p2).toContain('[Turn 2 of 2, final]\nS2 turn 1: gates 10/10.');
+    expect(p2).not.toContain('S1 ');
+  });
+
+  it('a host without the field gives the transcript tail; an empty one records nothing', () => {
+    const e = { HOME: tmpHome };
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: CC }), env: e });
+    const sid = getSessionIdFromFile(tmpHome);
+    const project = addObservation(sid, 'Fixed the retry backoff in worker.mjs');
+    const t = join(tmpHome, 'cc.jsonl');
+    writeFileSync(
+      t,
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Tail reply: 8/8 pass.' }] },
+      }) + '\n',
+    );
+    prompt('fix it');
+    stop({ transcript_path: t });
+    prompt('anything else?');
+    // The turn ended without text: the host says so with ''. The tail is the previous turn's.
+    stop({ transcript_path: t, last_assistant_message: '' });
+
+    const capture = join(tmpHome, 'prompts.jsonl');
+    runHook('llm-summary', {
+      env: { HOME: tmpHome, CLAUDE_MEM_FLUSH_TIMEOUT: '0', MOCK_CLAUDE_CAPTURE: capture },
+      args: [sid, project],
+    });
+    const [p] = readFileSync(capture, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(p).toContain('Final reply:\nTail reply: 8/8 pass.');
+    expect(p).not.toContain('[Turn');
+  });
+});
+
 describe('Suite: D#156 — a project name that gives the hook id the uuid shape', () => {
   it('session-start, user-prompt and stop all write', () => {
     const dir = join(tmpHome, 'dev', 'abc-efgh-jklm-opq');

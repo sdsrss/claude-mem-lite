@@ -3,6 +3,8 @@
 // Usage: CLAUDE_CODE_PATH=scripts/mock-claude.mjs
 // Called as: node mock-claude.mjs -p --model haiku  (with prompt on stdin)
 
+import { appendFileSync } from 'node:fs';
+
 let data = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -10,6 +12,9 @@ process.stdin.on('data', (chunk) => {
 });
 process.stdin.on('end', () => {
   const prompt = data.trim();
+  // A test that needs to see what a worker asked appends each prompt here, one JSON string a line.
+  if (process.env.MOCK_CLAUDE_CAPTURE)
+    appendFileSync(process.env.MOCK_CLAUDE_CAPTURE, JSON.stringify(prompt) + '\n');
 
   // Detect prompt type and return appropriate JSON
   if (prompt.includes('"type":"decision|bugfix|feature|refactor|discovery|change"')) {
