@@ -1983,25 +1983,40 @@ async function uninstall() {
     if (homeLink) {
       // D#811: rmSync takes a link alone, and "Data purged" was then false. The target may be a
       // directory the user chose, as a relocated CLAUDE_MEM_DIR is, and it holds the code too, so
-      // nothing is removed through the link: the link goes, and what is left behind it is named.
+      // nothing is removed through the link. A target it cannot resolve (an unmounted drive, a
+      // directory it may not read) proves nothing gone, so the purge is never done here — unless
+      // CLAUDE_MEM_DIR is the target, which the relocated purge below handles and reports.
       let target = null;
       try {
         target = realpathSync(DATA_DIR);
       } catch {
-        /* the target is gone */
+        try {
+          target = resolve(dirname(DATA_DIR), readlinkSync(DATA_DIR));
+        } catch {
+          /* raced away */
+        }
+      }
+      let purgedBelow = false;
+      try {
+        purgedBelow = MEM_DATA_DIR !== homeDir && realpathSync(MEM_DATA_DIR) === target;
+      } catch {
+        /* no relocated dir to compare */
       }
       try {
         unlinkSync(DATA_DIR);
-        if (target === null) ok('Data purged (~/.claude-mem-lite/ was a link to nothing)');
+        if (purgedBelow)
+          ok(`Removed the link ~/.claude-mem-lite to ${target}, the CLAUDE_MEM_DIR purged below`);
         else {
           warn(
-            `~/.claude-mem-lite was a link to ${target}: the link is removed, nothing behind it was. ` +
-              `Remove ${target} yourself to delete the memories and code there.`,
+            `~/.claude-mem-lite was a link to ${target}: the link is removed and was not followed, so ` +
+              `claude-mem-lite's files there, if any, stay.`,
           );
           purgeIncomplete = true;
         }
       } catch (e) {
-        warn(`Could not remove the link ~/.claude-mem-lite (${e.code || e.message}).`);
+        warn(
+          `Could not remove the link ~/.claude-mem-lite to ${target} (${e.code || e.message}); nothing behind it was removed.`,
+        );
         purgeIncomplete = true;
       }
     } else if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
