@@ -1973,10 +1973,44 @@ async function uninstall() {
   let purgeIncomplete = false; // reported, and not followed by "Done!" and exit 0
   if (flags.has('--purge')) {
     const homeDir = join(homedir(), '.claude-mem-lite');
-    // Always remove the homedir code/install dir (guarded to the canonical path).
-    if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
-      rmSync(DATA_DIR, { recursive: true, force: true });
-      ok('Data purged (~/.claude-mem-lite/)');
+    // D#829: with ~/.claude-mem-lite a link, rmSync took the link alone and the run said
+    // "Data purged" and "Done!" with the store left behind it. The target may be a directory the
+    // user chose, and it holds the code too, so nothing is removed through the link. Nothing is
+    // removed at all: removing the link first and leaving the rest to the relocated purge ended in
+    // "Done!" with the store left when CLAUDE_MEM_DIR named the target by another spelling
+    // (`<link>/`), and telling that spelling apart needs resolved paths, whose failures were read
+    // as "the target is gone" (D#811 reviews r1 F1, r2 R2-1). One lstat decides; the link stays as
+    // the record of where the store is.
+    let homeIsLink = false;
+    try {
+      homeIsLink = lstatSync(DATA_DIR).isSymbolicLink();
+    } catch {
+      /* absent, or not lstat-able: existsSync below decides, as before */
+    }
+    if (homeIsLink) {
+      let to = '';
+      try {
+        to = ` to ${readlinkSync(DATA_DIR)}`;
+      } catch {
+        /* raced away */
+      }
+      warn(
+        `~/.claude-mem-lite is a link${to}. --purge does not delete through a link, so it removed nothing` +
+          (MEM_DATA_DIR !== homeDir ? ` (CLAUDE_MEM_DIR ${MEM_DATA_DIR} included).` : '.'),
+      );
+      purgeIncomplete = true;
+    } else if (existsSync(DATA_DIR) && DATA_DIR === homeDir) {
+      // Always remove the homedir code/install dir (guarded to the canonical path). An entry it
+      // may not remove threw out of here uncaught, and the relocated purge below never ran (D#815).
+      try {
+        rmSync(DATA_DIR, { recursive: true, force: true });
+        ok('Data purged (~/.claude-mem-lite/)');
+      } catch (e) {
+        warn(
+          `Could not remove everything in ~/.claude-mem-lite (${e.code || e.message}); what it could not remove stays there.`,
+        );
+        purgeIncomplete = true;
+      }
     } else if (existsSync(DATA_DIR)) {
       fail('DATA_DIR path mismatch, refusing to purge for safety: ' + DATA_DIR);
     }
@@ -1984,8 +2018,8 @@ async function uninstall() {
     // claude-mem-lite.db), so a mistyped CLAUDE_MEM_DIR is never touched. Even then only what
     // claude-mem-lite writes there goes: the directory may be one the user keeps other files in,
     // and removing it whole took those too (R32 E2E install F1, P0). It is removed only once
-    // nothing else is left in it.
-    if (MEM_DATA_DIR !== homeDir) {
+    // nothing else is left in it. Not when ~/.claude-mem-lite is a link (above).
+    if (MEM_DATA_DIR !== homeDir && !homeIsLink) {
       // Not existsSync: it is false on EACCES too, so a store it could not look for was reported
       // absent, then "Done!" (R32 depth-2 review M1).
       let storeLookup = null;

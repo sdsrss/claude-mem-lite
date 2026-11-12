@@ -10,6 +10,7 @@ import {
   symlinkSync,
   readlinkSync,
   chmodSync,
+  lstatSync,
 } from 'fs';
 import { join, resolve, isAbsolute } from 'path';
 import { tmpdir } from 'os';
@@ -417,6 +418,147 @@ describe('install lifecycle checks', () => {
       try {
         rmSync(home, { recursive: true, force: true });
       } catch {}
+    }
+  });
+
+  // D#829 (D#811 retry; 6.33.0 pre-tag review, defects F9): with ~/.claude-mem-lite a symbolic
+  // link, rmSync took the link alone, printed "Data purged" and "Done!", and the store stayed
+  // behind it. The first fix removed the link and then let the relocated purge decide, and a
+  // CLAUDE_MEM_DIR naming the link's target by another spelling ended in "Done!" with the store
+  // left (r2 R2-1). Now a link means the purge removes nothing at all, the link included, and
+  // says so; CLAUDE_MEM_DIR is not purged either, however it is spelled.
+  describe('uninstall --purge with ~/.claude-mem-lite a symbolic link', () => {
+    const purgeWith = (home, memDir) => {
+      const env = { ...process.env, HOME: home, PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}` };
+      delete env.CLAUDE_MEM_DIR;
+      if (memDir !== undefined) env.CLAUDE_MEM_DIR = memDir;
+      const r = spawnSync(process.execPath, [INSTALL_PATH, 'uninstall', '--purge'], {
+        encoding: 'utf8',
+        env,
+      });
+      return { output: r.stdout + r.stderr, status: r.status };
+    };
+    const files = (dir) =>
+      readdirSync(dir, { recursive: true, withFileTypes: true })
+        .filter((e) => e.isFile())
+        .map((e) => join(e.parentPath, e.name).slice(dir.length + 1))
+        .sort();
+    const STORE = ['claude-mem-lite.db', 'server.mjs', 'my-notes.txt', 'runtime/session.json'];
+    const seed = (dir, names) => {
+      for (const f of names) {
+        mkdirSync(join(dir, f, '..'), { recursive: true });
+        writeFileSync(join(dir, f), 'x');
+      }
+    };
+
+    // Each shape: how the link is spelled, and the CLAUDE_MEM_DIR beside it (undefined = unset).
+    const SHAPES = {
+      'absolute link': (home) => ({ to: join(home, 'data', 'mem') }),
+      'relative link, named as spelled': () => ({ to: join('data', 'mem') }),
+      'CLAUDE_MEM_DIR = the target': (home) => ({
+        to: join(home, 'data', 'mem'),
+        mem: join(home, 'data', 'mem'),
+      }),
+      'CLAUDE_MEM_DIR = the link with a trailing slash': (home) => ({
+        to: join(home, 'data', 'mem'),
+        mem: join(home, '.claude-mem-lite') + '/',
+      }),
+      'CLAUDE_MEM_DIR = the link with /.': (home) => ({
+        to: join(home, 'data', 'mem'),
+        mem: join(home, '.claude-mem-lite') + '/.',
+      }),
+      'CLAUDE_MEM_DIR = a directory inside the target': (home) => ({
+        to: join(home, 'data', 'mem'),
+        mem: join(home, 'data', 'mem', 'sub'),
+        extra: { 'data/mem/sub': ['claude-mem-lite.db'] },
+      }),
+      'CLAUDE_MEM_DIR = an unrelated directory': (home) => ({
+        to: join(home, 'data', 'mem'),
+        mem: join(home, 'other'),
+        extra: { other: ['claude-mem-lite.db'] },
+      }),
+    };
+
+    for (const [name, shape] of Object.entries(SHAPES)) {
+      it(`removes nothing and does not say Done: ${name}`, () => {
+        const home = makeTmpDir();
+        try {
+          const { to, mem, extra = {} } = shape(home);
+          seed(join(home, 'data', 'mem'), STORE);
+          for (const [dir, names] of Object.entries(extra)) seed(join(home, dir), names);
+          symlinkSync(to, join(home, '.claude-mem-lite'));
+          const before = files(join(home, 'data'));
+          const others = mem && extra.other ? files(join(home, 'other')) : null;
+          const { output, status } = purgeWith(home, mem);
+          expect(lstatSync(join(home, '.claude-mem-lite')).isSymbolicLink()).toBe(true);
+          expect(readlinkSync(join(home, '.claude-mem-lite'))).toBe(to);
+          expect(files(join(home, 'data'))).toEqual(before);
+          if (others) expect(files(join(home, 'other'))).toEqual(others);
+          expect(output).toContain(`~/.claude-mem-lite is a link to ${to}.`);
+          if (mem !== undefined) expect(output).toContain(`CLAUDE_MEM_DIR ${mem} included`);
+          expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
+          expect(output).toContain('the purge is incomplete');
+          expect(status).toBe(1);
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it('a link to nothing, or to a file, stays, and the purge is not done', () => {
+      const home = makeTmpDir();
+      try {
+        writeFileSync(join(home, 'notes.txt'), 'mine');
+        for (const to of [join(home, 'gone'), join(home, 'notes.txt')]) {
+          symlinkSync(to, join(home, '.claude-mem-lite'));
+          const { output, status } = purgeWith(home);
+          expect(readlinkSync(join(home, '.claude-mem-lite')), to).toBe(to);
+          expect(output, to).toContain(`~/.claude-mem-lite is a link to ${to}.`);
+          expect(output, to).not.toMatch(/Data purged|Done!/);
+          expect(status, to).toBe(1);
+          rmSync(join(home, '.claude-mem-lite'));
+        }
+        expect(readFileSync(join(home, 'notes.txt'), 'utf8')).toBe('mine');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // D#815 (6.33.0 pre-tag claims F8): an entry of ~/.claude-mem-lite it may not remove threw out
+  // of rmSync, uncaught, so the relocated CLAUDE_MEM_DIR was never reached and no line said what
+  // was left. The failure is named, the purge is not done, and the relocated purge still runs.
+  it('uninstall --purge names what it could not remove in ~/.claude-mem-lite and still purges CLAUDE_MEM_DIR', () => {
+    const home = makeTmpDir();
+    const locked = join(home, '.claude-mem-lite', 'locked');
+    try {
+      mkdirSync(locked, { recursive: true });
+      writeFileSync(join(locked, 'inner.txt'), 'x');
+      writeFileSync(join(home, '.claude-mem-lite', 'claude-mem-lite.db'), 'x');
+      mkdirSync(join(home, 'reloc'));
+      writeFileSync(join(home, 'reloc', 'claude-mem-lite.db'), 'x');
+      chmodSync(locked, 0o555);
+      const env = {
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: join(home, 'reloc'),
+        PATH: `${makeFakeClaudeBin(home)}:${process.env.PATH}`,
+      };
+      const r = spawnSync(process.execPath, [INSTALL_PATH, 'uninstall', '--purge'], {
+        encoding: 'utf8',
+        env,
+      });
+      const output = r.stdout + r.stderr;
+      chmodSync(locked, 0o700);
+      expect(output).toContain('Could not remove everything in ~/.claude-mem-lite (EACCES)');
+      expect(output).not.toMatch(/Data purged \(|Done!|^\s+at /m);
+      expect(existsSync(join(locked, 'inner.txt'))).toBe(true);
+      expect(existsSync(join(home, 'reloc', 'claude-mem-lite.db'))).toBe(false);
+      expect(output).toContain('the purge is incomplete');
+      expect(r.status).toBe(1);
+    } finally {
+      if (existsSync(locked)) chmodSync(locked, 0o700);
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
