@@ -10,47 +10,114 @@ import { readTranscriptEntries } from '../lib/transcript-scan.mjs';
 import {
   gateD21,
   scoreVerdicts,
-  turnReplies,
   judgeReplies,
   buildBlind,
   collectSessions,
+  describeRows,
+  splitBothYes,
+  stopReplies,
 } from '../benchmark/summary-events-ab.mjs';
 
-describe('turnReplies', () => {
-  const user = (text, ts, extra = {}) => ({
+// D#825: the ruler's replies are the ones the shipped Stop record would hold for the session.
+describe('stopReplies', () => {
+  const at = (m) => `2026-11-11T01:${String(m).padStart(2, '0')}:00Z`;
+  const ms = (m) => Date.parse(at(m));
+  const user = (content, m, extra = {}) => ({
     type: 'user',
-    timestamp: ts,
-    message: { content: text },
+    timestamp: at(m),
+    message: { content },
     ...extra,
   });
-  const asst = (text, ts, extra = {}) => ({
+  const asst = (text, m, extra = {}) => ({
     type: 'assistant',
-    timestamp: ts,
+    timestamp: at(m),
     message: { content: [{ type: 'text', text }] },
     ...extra,
   });
-  const toolResult = (ts) => ({
+  const tool = (m) => ({
     type: 'user',
-    timestamp: ts,
+    timestamp: at(m),
     message: { content: [{ type: 'tool_result', content: 'ok' }] },
   });
+  const session = (prompts, start = ms(0), end = Infinity) => ({ start, end, prompts: prompts.map(ms) });
 
-  it("returns each human turn's last assistant text inside the window", () => {
+  it('one reply per stored prompt: the last text before the turn ends', () => {
     const entries = [
-      user('before the window', '2026-11-11T00:00:00Z'),
-      asst('old reply', '2026-11-11T00:00:01Z'),
-      user('first', '2026-11-11T01:00:00Z'),
-      asst('working', '2026-11-11T01:00:01Z'),
-      toolResult('2026-11-11T01:00:02Z'),
-      asst('turn 1 done', '2026-11-11T01:00:03Z'),
-      asst('a subagent', '2026-11-11T01:00:04Z', { isSidechain: true }),
-      user('<command-name>/clear</command-name>', '2026-11-11T01:30:00Z'),
-      user('second', '2026-11-11T02:00:00Z'),
-      asst('turn 2 done', '2026-11-11T02:00:01Z'),
+      user('one', 1),
+      asst('looking', 2),
+      tool(3),
+      asst('r1', 4),
+      user('two', 5),
+      asst('r2', 6),
     ];
-    const from = Date.parse('2026-11-11T00:30:00Z');
-    const to = Date.parse('2026-11-11T03:00:00Z');
-    expect(turnReplies(entries, { from, to })).toEqual(['turn 1 done', 'turn 2 done']);
+    expect(stopReplies(entries, session([1, 5]))).toEqual(['r1', 'r2']);
+  });
+
+  it("a notice's turn stores no prompt, so its reply replaces the turn's", () => {
+    const entries = [
+      user('one', 1),
+      asst('started the suite', 2),
+      user('<task-notification>done</task-notification>', 3, { origin: { kind: 'task-notification' } }),
+      asst('suite 12/12', 4),
+    ];
+    expect(stopReplies(entries, session([1]))).toEqual(['suite 12/12']);
+  });
+
+  it('a reply before the first stored prompt is its own turn, first', () => {
+    const entries = [
+      user('<task-notification>build done</task-notification>', 1),
+      asst('the build passed', 2),
+      user('next', 3),
+      asst('r', 4),
+    ];
+    expect(stopReplies(entries, session([3]))).toEqual(['the build passed', 'r']);
+  });
+
+  it("Stops outside the session's span are another session's", () => {
+    const entries = [
+      user('before', 1),
+      asst('old', 2),
+      user('one', 10),
+      asst('mine', 11),
+      user('after', 20),
+      asst('next', 21),
+    ];
+    expect(stopReplies(entries, session([10], ms(5), ms(20)))).toEqual(['mine']);
+  });
+
+  it('a compaction ends the turn: what follows is the next turn', () => {
+    const entries = [
+      user('one', 1),
+      asst('mine', 2),
+      { type: 'system', subtype: 'compact_boundary', timestamp: at(3) },
+      user('summary', 3, { isCompactSummary: true }),
+      asst('after compaction', 4),
+    ];
+    expect(stopReplies(entries, session([1], ms(0), ms(3)))).toEqual(['mine']);
+  });
+
+  it('a turn ended by an API error fires no Stop and records nothing', () => {
+    const entries = [
+      user('one', 1),
+      asst('r1', 2),
+      user('two', 3),
+      asst('partial', 4),
+      asst('API Error: Connection lost', 5, { isApiErrorMessage: true }),
+      user('three', 6),
+      asst('r3', 7),
+    ];
+    expect(stopReplies(entries, session([1, 3, 6]))).toEqual(['r1', 'r3']);
+  });
+
+  it("ignores a subagent's records, meta records and text-less assistant records", () => {
+    const entries = [
+      user('one', 1),
+      asst('r1', 2),
+      asst('sub', 3, { isSidechain: true }),
+      user('caveat', 3, { isMeta: true }),
+      { type: 'assistant', timestamp: at(4), message: { content: [{ type: 'tool_use' }] } },
+    ];
+    expect(stopReplies(entries, session([1]))).toEqual(['r1']);
   });
 });
 
@@ -149,46 +216,6 @@ describe('buildBlind', () => {
   });
 });
 
-describe('turnReplies: records no person typed are not turns (R34 review M1)', () => {
-  const at = (m) => `2026-11-11T01:${String(m).padStart(2, '0')}:00Z`;
-  const user = (content, m, extra = {}) => ({
-    type: 'user',
-    timestamp: at(m),
-    message: { content },
-    ...extra,
-  });
-  const asst = (text, m) => ({
-    type: 'assistant',
-    timestamp: at(m),
-    message: { content: [{ type: 'text', text }] },
-  });
-  const win = { from: Date.parse(at(0)), to: Date.parse(at(50)) };
-
-  it.each([
-    ['a task notification (text)', user('<task-notification>agent done</task-notification>', 3)],
-    ['a task notification (origin)', user('agent done', 3, { origin: { kind: 'task-notification' } })],
-    ['a compaction summary', user('Summary of the conversation so far', 3, { isCompactSummary: true })],
-    ['an interrupt marker', user('[Request interrupted by user]', 3)],
-    ['a bash-mode echo', user('<bash-input>ls</bash-input>', 3)],
-    ['a slash command', user('<command-name>/clear</command-name>', 3)],
-    ['a meta record', user('caveat', 3, { isMeta: true })],
-    ["a subagent's prompt", user('do the thing', 3, { isSidechain: true })],
-  ])('%s continues the turn before it', (_name, record) => {
-    const entries = [
-      user('fix it', 1),
-      asst('waiting for the agent', 2),
-      record,
-      asst('fixed, 12/12 pass', 4),
-    ];
-    expect(turnReplies(entries, win)).toEqual(['fixed, 12/12 pass']);
-  });
-
-  it('drops a turn whose prompt falls after the window', () => {
-    const entries = [user('one', 1), asst('r1', 2), user('two', 55), asst('r2', 56)];
-    expect(turnReplies(entries, win)).toEqual(['r1']);
-  });
-});
-
 describe('collectSessions: the window is the session, not its first Stop (R34 review H1)', () => {
   it("counts events and turns after the session's one summary row, up to the next session", () => {
     const db = createTestDb();
@@ -198,6 +225,9 @@ describe('collectSessions: the window is the session, not its first Stop (R34 re
       const min = (m) => T0 + m * 60000;
       insertSession(db, { id: 'S', project: 'p' });
       insertSession(db, { id: 'N', project: 'p' });
+      const started = db.prepare('UPDATE sdk_sessions SET started_at_epoch = ? WHERE content_session_id = ?');
+      started.run(min(-1), 'S');
+      started.run(min(65), 'N');
       const prompt = db.prepare(
         `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch, cc_session_id)
          VALUES (?, ?, ?, '', ?, ?)`,
@@ -293,5 +323,56 @@ describe('buildBlind ids', () => {
     const { key } = buildBlind(dump, { seed: 3, batches: 1 });
     const inRowOrder = Object.keys(key);
     expect(inRowOrder).not.toEqual([...inRowOrder].sort());
+  });
+});
+
+describe('D22 arm C: scoring, descriptive rows and the split', () => {
+  const Y = { missed_done: 'YES', false_open: 'NO', unsupported: 'NO' };
+  const N = { missed_done: 'NO', false_open: 'NO', unsupported: 'NO' };
+
+  it('scores arm C when the key holds it, and only the arms present', () => {
+    const key = { e1: { arm: 'A', item: 0 }, e2: { arm: 'C', item: 0 } };
+    const { arms } = scoreVerdicts(key, { e1: Y, e2: N }, { e1: Y, e2: N }, { A: 1, C: 1 });
+    expect(Object.keys(arms)).toEqual(['A', 'C']);
+    expect(arms.A.missed_done).toBe(1);
+    expect(arms.C.missed_done).toBe(0);
+    expect(arms.C.judged).toBe(1);
+  });
+
+  it('splits both-YES counts by turns and by the stored provenance', () => {
+    const key = {
+      e1: { arm: 'A', item: 0 },
+      e2: { arm: 'C', item: 0 },
+      e3: { arm: 'A', item: 1 },
+      e4: { arm: 'C', item: 1 },
+    };
+    const v = { e1: Y, e2: N, e3: Y, e4: Y };
+    const items = [
+      { turns: 3, provenance: 'model' },
+      { turns: 1, provenance: 'report' },
+    ];
+    const out = splitBothYes(key, v, v, items);
+    expect(out.multi.A).toEqual({ n: 1, missed_done: 1, false_open: 0, unsupported: 0 });
+    expect(out.multi.C.missed_done).toBe(0);
+    expect(out.single.C.missed_done).toBe(1);
+    expect(out['provenance:model'].A.missed_done).toBe(1);
+    expect(out['provenance:report'].A.n).toBe(1);
+    // one judge saying NO is not a hit
+    expect(splitBothYes(key, v, { ...v, e1: N }, items).multi.A.missed_done).toBe(0);
+  });
+
+  it('describes each arm: usable, prompt size, completed size, median call time', () => {
+    const rows = [
+      { arm: 'A', usable: true, promptChars: 100, completedChars: 10, ms: 5 },
+      { arm: 'A', usable: false, promptChars: 300, completedChars: 0, ms: 9 },
+      { arm: 'C', usable: true, promptChars: 900, completedChars: 40, ms: 7 },
+    ];
+    expect(describeRows(rows, ['A', 'C'])).toEqual({
+      usable: { A: 1, C: 1 },
+      meanPromptChars: { A: 200, C: 900 },
+      maxPromptChars: { A: 300, C: 900 },
+      meanCompletedChars: { A: 5, C: 40 },
+      medianMs: { A: 5, C: 7 },
+    });
   });
 });

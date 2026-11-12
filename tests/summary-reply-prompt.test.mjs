@@ -9,6 +9,10 @@ import {
   summaryReplyExcerpt,
   SUMMARY_REPLY_HEAD,
   SUMMARY_REPLY_TAIL,
+  SUMMARY_TURN_HEAD,
+  SUMMARY_TURN_TAIL,
+  SUMMARY_TURNS_FIRST,
+  SUMMARY_TURNS_LAST,
 } from '../hook-llm.mjs';
 import { gateD19, scoreVerdicts, buildBlind, summaryUsable } from '../benchmark/summary-reply-ab.mjs';
 
@@ -166,5 +170,93 @@ describe('summary-reply-ab ruler', () => {
     expect(summaryUsable({ request: '', lessons: [''] })).toBe(false);
     expect(summaryUsable({ next_steps: ['run it'] })).toBe(true);
     expect(summaryUsable({ key_decisions: ['chose X because Y'] })).toBe(true);
+  });
+});
+
+// D22 (2026-11-11): a session of two or more turns gives the prompt every turn's last reply.
+describe('buildSessionSummaryPrompt with turnReplies (D22)', () => {
+  it('one turn, or one turn with text, is the D19 prompt byte for byte', () => {
+    const d19 = buildSessionSummaryPrompt({ ...base, finalReply: 'All 12 tests pass.' });
+    expect(
+      buildSessionSummaryPrompt({
+        ...base,
+        finalReply: 'All 12 tests pass.',
+        turnReplies: ['All 12 tests pass.'],
+      }),
+    ).toEqual(d19);
+    expect(
+      buildSessionSummaryPrompt({
+        ...base,
+        finalReply: 'All 12 tests pass.',
+        turnReplies: [' ', 'All 12 tests pass.', ''],
+      }),
+    ).toEqual(d19);
+  });
+
+  it('two turns: every reply, oldest first, behind the guard, with the every-turn rule', () => {
+    const { system, user } = buildSessionSummaryPrompt({
+      ...base,
+      finalReply: 'Committed the README fix.',
+      turnReplies: ['Fixed the login redirect; 8/8 pass.', 'Committed the README fix.'],
+    });
+    expect(
+      user.endsWith(
+        '\n\nReplies, one per turn, oldest first:\n[Turn 1 of 2]\nFixed the login redirect; 8/8 pass.\n\n[Turn 2 of 2, final]\nCommitted the README fix.',
+      ),
+    ).toBe(true);
+    expect(user).not.toContain('Final reply:');
+    expect(system).toContain('completed lists the main work the replies report as done in every turn');
+    expect(system).toContain("An item's state is the one given by the latest reply that mentions it.");
+    expect(system).not.toContain('Final reply: the user message ends');
+    expect(system).not.toContain('Fixed the login redirect');
+  });
+
+  it('cuts an earlier turn to its own head and tail, and keeps the final reply at the D19 cut', () => {
+    const early = 'H'.repeat(SUMMARY_TURN_HEAD) + 'M'.repeat(50) + 'T'.repeat(SUMMARY_TURN_TAIL);
+    const last = 'h'.repeat(SUMMARY_REPLY_HEAD) + 'm'.repeat(50) + 't'.repeat(SUMMARY_REPLY_TAIL);
+    const { user } = buildSessionSummaryPrompt({ ...base, turnReplies: [early, last] });
+    expect(user).toContain(
+      `[Turn 1 of 2]\n${'H'.repeat(SUMMARY_TURN_HEAD)}\n[… 50 characters omitted …]\n${'T'.repeat(SUMMARY_TURN_TAIL)}\n\n`,
+    );
+    expect(user.endsWith(`\n[… 50 characters omitted …]\n${'t'.repeat(SUMMARY_REPLY_TAIL)}`)).toBe(true);
+    expect(user).not.toContain('M');
+    expect(user).toContain('h'.repeat(SUMMARY_REPLY_HEAD));
+  });
+
+  it('shows the first 4 and the last 8 of 15 turns and names the 3 left out', () => {
+    const replies = Array.from({ length: 15 }, (_, i) => `reply ${i + 1}`);
+    const { user } = buildSessionSummaryPrompt({ ...base, turnReplies: replies });
+    const shown = [...user.matchAll(/\[Turn (\d+) of 15/g)].map((m) => Number(m[1]));
+    expect(shown).toEqual([1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(user).toContain('[Turn 4 of 15]\nreply 4\n\n[… 3 turns omitted …]\n\n[Turn 8 of 15]');
+    expect(user).toContain('[Turn 15 of 15, final]\nreply 15');
+    expect(user).not.toContain('reply 5\n');
+  });
+
+  it('scrubs an earlier turn whole before the cut, so a key straddling it never shows', () => {
+    // The key starts 10 characters before the head cut. Cut first, the head would keep
+    // `sk-ant-api`, too short for the scrubber to know (D22 review F5: at 19 characters before,
+    // the cut piece was itself scrubbed and the test could not fail).
+    const early = 'a'.repeat(SUMMARY_TURN_HEAD - 11) + ' ' + KEY + ' ' + 'b'.repeat(800);
+    const { user } = buildSessionSummaryPrompt({ ...base, turnReplies: [early, 'done'] });
+    expect(user).not.toContain('sk-ant-api');
+    expect(user).toContain(`${'a'.repeat(SUMMARY_TURN_HEAD - 11)} *** `);
+  });
+
+  it('a two-turn prompt is the one measured, byte for byte, and so are its cuts', () => {
+    // Taken twice (2026-11-12): from this builder and from the measured tree d18a14a9
+    // (rulers.md, session summary events A/B, Reading 3). A deliberate change to the text or a
+    // cut updates it and re-measures with benchmark/summary-events-ab.mjs arm C.
+    const { system, user } = buildSessionSummaryPrompt({
+      ...base,
+      finalReply: 'Committed the README fix.',
+      turnReplies: ['Fixed the login redirect; 8/8 pass.', 'Committed the README fix.'],
+    });
+    expect(createHash('sha256').update(`${system}\u0000${user}`).digest('hex')).toBe(
+      '7892c582eb19b54582c66293914778ba24509fd5d06c465e18fc16d667d3d143',
+    );
+    expect([SUMMARY_TURN_HEAD, SUMMARY_TURN_TAIL, SUMMARY_TURNS_FIRST, SUMMARY_TURNS_LAST]).toEqual([
+      700, 300, 4, 8,
+    ]);
   });
 });

@@ -1741,16 +1741,51 @@ export const SUMMARY_REPLY_HEAD = 2000;
 export const SUMMARY_REPLY_TAIL = 1000;
 
 /**
+ * D22 — a session of two or more turns gives the summary prompt every turn's last reply, not
+ * only the final one: on 20 multi-turn sessions the final-reply prompt left a main finished
+ * piece of work out of `completed` in 13 (rulers.md, session summary events A/B, reading 2).
+ * An earlier turn's reply is cut to its first SUMMARY_TURN_HEAD and last SUMMARY_TURN_TAIL
+ * characters (the final one keeps the D19 cut), and at most the first SUMMARY_TURNS_FIRST and
+ * the last SUMMARY_TURNS_LAST turns are shown — the cuts the D21/D22 judges read.
+ */
+export const SUMMARY_TURN_HEAD = 700;
+export const SUMMARY_TURN_TAIL = 300;
+export const SUMMARY_TURNS_FIRST = 4;
+export const SUMMARY_TURNS_LAST = 8;
+
+/**
  * The final reply as the summary prompt carries it: scrubbed whole first, so a secret
  * straddling a cut is never half-kept, then cut to head + tail with the omitted length named.
  * Cuts land on code-point boundaries. Empty for an empty or missing reply.
  */
-export function summaryReplyExcerpt(reply) {
+export function summaryReplyExcerpt(reply, head = SUMMARY_REPLY_HEAD, tail = SUMMARY_REPLY_TAIL) {
   const text = scrubSecrets(String(reply ?? '')).trim();
   const points = Array.from(text);
-  if (points.length <= SUMMARY_REPLY_HEAD + SUMMARY_REPLY_TAIL) return text;
-  const omitted = points.length - SUMMARY_REPLY_HEAD - SUMMARY_REPLY_TAIL;
-  return `${points.slice(0, SUMMARY_REPLY_HEAD).join('')}\n[… ${omitted} characters omitted …]\n${points.slice(-SUMMARY_REPLY_TAIL).join('')}`;
+  if (points.length <= head + tail) return text;
+  const omitted = points.length - head - tail;
+  return `${points.slice(0, head).join('')}\n[… ${omitted} characters omitted …]\n${points.slice(-tail).join('')}`;
+}
+
+/**
+ * D22: the turns block of the summary prompt, oldest first, or '' for fewer than two turns with
+ * text. The last turn is the final reply and keeps the D19 cut.
+ * @param {string[]} replies each turn's last assistant text, oldest first
+ */
+function summaryTurnsBlock(replies) {
+  const turns = (Array.isArray(replies) ? replies : []).filter((r) => typeof r === 'string' && r.trim());
+  if (turns.length < 2) return '';
+  const n = turns.length;
+  const cut = (r, i) =>
+    i === n - 1 ? summaryReplyExcerpt(r) : summaryReplyExcerpt(r, SUMMARY_TURN_HEAD, SUMMARY_TURN_TAIL);
+  const block = (i) => `[Turn ${i + 1} of ${n}${i === n - 1 ? ', final' : ''}]\n${cut(turns[i], i)}`;
+  const idx = turns.map((_, i) => i);
+  if (n <= SUMMARY_TURNS_FIRST + SUMMARY_TURNS_LAST) return idx.map(block).join('\n\n');
+  const omitted = n - SUMMARY_TURNS_FIRST - SUMMARY_TURNS_LAST;
+  return [
+    ...idx.slice(0, SUMMARY_TURNS_FIRST).map(block),
+    `[… ${omitted} turns omitted …]`,
+    ...idx.slice(-SUMMARY_TURNS_LAST).map(block),
+  ].join('\n\n');
 }
 
 /**
@@ -1778,15 +1813,18 @@ export function mergeSummaryRows(observations, events) {
  * `userPrompts` the raw prompt texts in order; both are cut here. `finalReply`, when given, is
  * the session's last assistant message (D19): it goes into the user part behind the same input
  * guard, and the system part says the outcome it reports wins. Without one the prompt is the
- * one shipped before D19, byte for byte.
+ * one shipped before D19, byte for byte. `turnReplies` (D22), each turn's last reply oldest
+ * first, replaces the final reply when it holds two or more turns with text (its last one IS
+ * the final reply); with fewer the prompt is the D19 one.
  */
-export function buildSessionSummaryPrompt({ project, observations, userPrompts, finalReply }) {
+export function buildSessionSummaryPrompt({ project, observations, userPrompts, finalReply, turnReplies }) {
   const obsList = observations
     .map((o, i) => `${i + 1}. [${o.type}] ${o.title}${o.narrative ? ': ' + truncate(o.narrative, 200) : ''}`)
     .join('\n');
   const prompts = userPrompts.map((p) => truncate(p, 300));
   const promptCtx = prompts.length > 0 ? `\nUser requests: ${prompts.join(' → ')}\n` : '';
-  const reply = summaryReplyExcerpt(finalReply);
+  const turns = summaryTurnsBlock(turnReplies);
+  const reply = turns ? '' : summaryReplyExcerpt(finalReply);
 
   // cso F#4: split system/user. The userPrompts content is the single highest-leakage path
   // for memory poisoning — putting it in the user role behind an explicit boundary is the
@@ -1797,14 +1835,17 @@ ${MEMORY_INPUT_GUARD}
 JSON: {"request":"what the user was working on","completed":"specific items accomplished with file names","remaining_items":"specific unfinished items from the original request — compare investigation scope with actual changes to infer what was NOT yet done; be precise with file:issue format, or empty string if all done","next_steps":"suggested follow-up","lessons":["non-obvious insights discovered during this session"],"key_decisions":["important design choices made and WHY"]}
 lessons: Only genuinely non-obvious insights (debugging discoveries, gotchas, architectural reasons). Empty array if routine.
 key_decisions: Only decisions with lasting impact (library choices, architecture, data model). Include reasoning. Empty array if none.${
-    reply
+    turns
       ? `
+Replies: the user message ends with the assistant's last reply of each turn, oldest first; the last one is the session's final reply. These are the assistant's own account of the outcome. completed lists the main work the replies report as done in every turn, not only the last. Work a reply reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. An item's state is the one given by the latest reply that mentions it. What is still unfinished, failed or left for later belongs in remaining_items.`
+      : reply
+        ? `
 Final reply: the user message ends with the session's final reply, the assistant's own account of the outcome. Work it reports as done (tests passed, saved, committed, fixed) is completed — never list it in remaining_items or next_steps. What it reports as unfinished, failed or left for later belongs in remaining_items.`
-      : ''
+        : ''
   }`;
   const user = `Project: ${project}${promptCtx}
 Observations (${observations.length} total):
-${obsList}${reply ? `\n\nFinal reply:\n${reply}` : ''}`;
+${obsList}${turns ? `\n\nReplies, one per turn, oldest first:\n${turns}` : reply ? `\n\nFinal reply:\n${reply}` : ''}`;
   return { system, user };
 }
 
