@@ -22,6 +22,10 @@
 //      over every recorded reply, merged onto S's row as the worker merges (mergeModelRow);
 //      S2 = S verbatim, the A/A copy, judged in a batch apart from its session's S and M.
 //      Gate: gateD23 (docs/audits/20261112-d23-preregistration.md).
+//   C, C2, P  D25 (`run --arms C,C2,P`): C as above, C2 = C called again (the A/A arm), P = C's
+//      prompt with COMPLETED_LEAD (completed opens with the main outcome). `--exclude rows.json`
+//      leaves out the sessions an earlier reading drew. Judged on both views; gate: gateD25
+//      (docs/audits/20261112-d25-preregistration.md).
 //
 // WHICH REPLIES (D#825). The worker reads what Stop recorded under the session (lib/turn-replies.mjs);
 // stopReplies rebuilds that from the transcript. Reading 3 (D22's gate) took the replies from a
@@ -63,9 +67,11 @@
 //
 // Usage:
 //   node benchmark/summary-events-ab.mjs run --out rows.json [--n 30] [--days 45] [--db path]
+//     [--arms A,B | A,C | S,M | C,C2,P] [--exclude earlier-rows.json]
 //   node benchmark/summary-events-ab.mjs prepare rows.json outdir [--seed 20261111] [--batches 2]
 //     (judge files in outdir/judge/, key.json in outdir; verdicts-<k>-<a|b>.json go back into outdir)
 //   node benchmark/summary-events-ab.mjs score outdir
+//   node benchmark/summary-events-ab.mjs score line-outdir fields-outdir   (D25: both views)
 
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -90,9 +96,54 @@ import { buildSummaryLines } from '../hook-context.mjs';
 // A and B are D21's arms; C is D22's (every turn's last reply). `run --arms` picks which run.
 // S, M and S2 are D23's: `run --arms S,M` runs its own population and adds S2, the A/A copy.
 // A2 is D24's A/A copy of arm A (`prepare --aa A`).
-const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2'];
+// C2 and P are D25's (`run --arms C,C2,P`): C2 is arm C called again, the A/A arm; P is arm C's
+// prompt with COMPLETED_LEAD.
+const ALL_ARMS = ['A', 'B', 'C', 'S', 'M', 'S2', 'A2', 'C2', 'P'];
 // An A/A copy is judged in a batch apart from its own session's other arms (buildBlind).
-const COPY_ARMS = new Set(['S2', 'A2']);
+const COPY_ARMS = new Set(['S2', 'A2', 'C2']);
+
+/**
+ * D25's candidate (docs/audits/20261112-d25-preregistration.md): D24 found the 120-character
+ * `Completed:` line missing the session's main finished work in 13 of 30 sessions while the
+ * full field held it, listed after the details.
+ */
+export const COMPLETED_LEAD =
+  "completed starts with the session's most important finished outcome, the one a person picking this work up next most needs to know (such as a release published, a deploy live, a fix merged or a measurement's verdict), in one short clause of at most 100 characters; the other finished items follow it.";
+
+/**
+ * Arm P: arm C's prompt with COMPLETED_LEAD closing the system part, where the paragraph on the
+ * replies ends. Every session in the population has a reply, so that paragraph is always there.
+ */
+export function armPPrompt(prompt) {
+  return { system: `${prompt.system} ${COMPLETED_LEAD}`, user: prompt.user };
+}
+
+/**
+ * One arm's prompt for session `s`, through the shipped builder (passed in: run() loads it only
+ * after pointing CLAUDE_MEM_DIR at its sandbox). A: observations + final reply; B: + events;
+ * C and C2: every turn's reply; P: C's prompt with COMPLETED_LEAD.
+ */
+export function armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows }) {
+  const shipped = buildSessionSummaryPrompt({
+    project: s.project,
+    observations: arm === 'B' ? mergeSummaryRows(s.observations, s.events) : s.observations,
+    userPrompts: s.userPrompts,
+    finalReply: s.replies.at(-1),
+    ...(['C', 'C2', 'P'].includes(arm) ? { turnReplies: s.replies } : {}),
+  });
+  return arm === 'P' ? armPPrompt(shipped) : shipped;
+}
+
+/** The order the arms are called in for item i: rotated by one per item. */
+export function armOrder(arms, i) {
+  return arms.map((_, k) => arms[(k + i) % arms.length]);
+}
+
+/** The population minus the sessions an earlier reading drew (`run --exclude <rows.json>`). */
+export function holdout(items, drawn) {
+  const seen = new Set(drawn.items.map((it) => it.sid));
+  return items.filter((s) => !seen.has(s.sid));
+}
 const QUESTIONS = ['missed_done', 'false_open', 'unsupported'];
 // D24's questions, asked of the lines a new session is shown (`prepare --view line`).
 export const LINE_QUESTIONS = ['line_misses_main', 'false_open', 'unsupported'];
@@ -282,6 +333,56 @@ export function gateD24({ A, C, A2, agreement, n }) {
   const d1 = C.line_misses_main >= A.line_misses_main + 3;
   const d2 = C.line_misses_main >= Math.ceil(n / 3);
   return { decision: d1 || d2 ? 'open' : 'record', d1, d2, reasons };
+}
+
+/**
+ * D25's registered rule (docs/audits/20261112-d25-preregistration.md §4). `line` and `fields` are
+ * scoreVerdicts results over the same rows, judged on the line view and on the full fields.
+ * 'none' when a reading is incomplete, usable(C or P) is below n - 2, an agreement is below 0.70,
+ * or the A/A arm C2 is off C by more than 2 on line_misses_main or 1 on missed_done. Otherwise
+ * 'ship' when P misses the main work on the line at least 3 fewer times than C and adds at most
+ * 1 to every other count in either view, else 'no'.
+ */
+export function gateD25({ line, fields, n }) {
+  const reasons = [];
+  for (const [view, r, questions] of [
+    ['line', line, LINE_QUESTIONS],
+    ['fields', fields, QUESTIONS],
+  ]) {
+    for (const arm of ['C', 'C2', 'P']) {
+      const s = r?.arms?.[arm];
+      if (!s || !(s.judged >= n)) reasons.push(`${view}: judged(${arm}) = ${s?.judged ?? 0} < ${n}`);
+    }
+    for (const q of questions) {
+      if (!(r?.agreement?.[q] >= 0.7)) reasons.push(`${view}: ${q} agreement ${r?.agreement?.[q]} < 0.70`);
+    }
+  }
+  for (const arm of ['C', 'P']) {
+    const s = line?.arms?.[arm];
+    if (s && s.usable < n - 2) reasons.push(`usable(${arm}) = ${s.usable} < ${n - 2}`);
+  }
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  const L = line.arms;
+  const F = fields.arms;
+  const lineGap = Math.abs(L.C2.line_misses_main - L.C.line_misses_main);
+  if (lineGap > 2) reasons.push(`A/A: |line_misses_main(C2) - line_misses_main(C)| = ${lineGap} > 2`);
+  const fieldsGap = Math.abs(F.C2.missed_done - F.C.missed_done);
+  if (fieldsGap > 1) reasons.push(`A/A: |missed_done(C2) - missed_done(C)| = ${fieldsGap} > 1`);
+  if (reasons.length > 0) return { decision: 'none', reasons };
+  if (L.P.line_misses_main > L.C.line_misses_main - 3)
+    reasons.push(
+      `line: line_misses_main(P) = ${L.P.line_misses_main} > line_misses_main(C)-3 = ${L.C.line_misses_main - 3}`,
+    );
+  for (const [view, A, q] of [
+    ['line', L, 'false_open'],
+    ['line', L, 'unsupported'],
+    ['fields', F, 'missed_done'],
+    ['fields', F, 'false_open'],
+    ['fields', F, 'unsupported'],
+  ]) {
+    if (A.P[q] > A.C[q] + 1) reasons.push(`${view}: ${q}(P) = ${A.P[q]} > ${q}(C)+1 = ${A.C[q] + 1}`);
+  }
+  return { decision: reasons.length === 0 ? 'ship' : 'no', reasons };
 }
 
 /** Unblind two judges' verdicts (id → {question: 'YES' | 'NO'}), over `questions`. */
@@ -590,11 +691,14 @@ async function run() {
   const days = Number(arg('--days', '45'));
   const arms = arg('--arms', 'A,B').split(',');
   const d23 = arms.join(',') === 'S,M';
+  const d25 = arms.join(',') === 'C,C2,P';
   if (
     !d23 &&
+    !d25 &&
     (arms.length < 2 || arms.some((x) => !['A', 'B', 'C'].includes(x)) || new Set(arms).size !== arms.length)
   )
-    throw new Error('--arms takes two or more of A,B,C, or exactly S,M (D23)');
+    throw new Error('--arms takes two or more of A,B,C, or exactly S,M (D23), or exactly C,C2,P (D25)');
+  const exclude = arg('--exclude', null);
   const dbPath = arg('--db', join(homedir(), '.claude-mem-lite', 'claude-mem-lite.db'));
   // Before any shipped module loads: DB_DIR resolves from it at import time.
   const sandbox = mkdtempSync(join(tmpdir(), 'summary-events-ab-'));
@@ -650,7 +754,9 @@ async function run() {
       } finally {
         db.close();
       }
-      const picked = pickEvenly(pop.items, n);
+      const drawn = exclude ? JSON.parse(readFileSync(exclude, 'utf8')) : null;
+      const eligible = drawn ? holdout(pop.items, drawn) : pop.items;
+      const picked = pickEvenly(eligible, n);
       const items = picked.map((s, i) => ({
         item: i,
         sid: s.sid,
@@ -667,14 +773,8 @@ async function run() {
       const rows = [];
       for (let i = 0; i < picked.length; i++) {
         const s = picked[i];
-        for (const arm of i % 2 === 0 ? arms : [...arms].reverse()) {
-          const prompt = buildSessionSummaryPrompt({
-            project: s.project,
-            observations: arm === 'B' ? mergeSummaryRows(s.observations, s.events) : s.observations,
-            userPrompts: s.userPrompts,
-            finalReply: s.replies.at(-1),
-            ...(arm === 'C' ? { turnReplies: s.replies } : {}),
-          });
+        for (const arm of armOrder(arms, i)) {
+          const prompt = armPrompt(arm, s, { buildSessionSummaryPrompt, mergeSummaryRows });
           const t0 = Date.now();
           let raw = null;
           try {
@@ -706,8 +806,11 @@ async function run() {
         windowed: pop.windowed,
         drop: pop.drop,
         population: pop.items.length,
+        ...(drawn ? { excluded: pop.items.length - eligible.length, eligible: eligible.length } : {}),
         n: picked.length,
         arms,
+        // D25's A/A premise: a second call that returned C's fields verbatim measures judges only.
+        ...(d25 ? { c2SameAsC: sameFields(rows, 'C', 'C2') } : {}),
       };
       writeFileSync(out, JSON.stringify({ meta, items, rows }, null, 2));
       console.log(JSON.stringify({ meta, ...describeRows(rows, arms) }, null, 2));
@@ -820,6 +923,13 @@ async function runNoObs({
   };
   writeFileSync(out, JSON.stringify({ meta, items, rows }, null, 2));
   console.log(JSON.stringify({ meta, ...describeRows(rows, arms) }, null, 2));
+}
+
+/** How many items have the same completed / remaining_items / next_steps in arms x and y. */
+export function sameFields(rows, x, y) {
+  const key = (r) => JSON.stringify([r.completed, r.remaining_items, r.next_steps]);
+  const ys = new Map(rows.filter((r) => r.arm === y).map((r) => [r.item, key(r)]));
+  return rows.filter((r) => r.arm === x && ys.get(r.item) === key(r)).length;
 }
 
 /** Per arm: usable count, mean / max prompt chars, mean `completed` chars, median call ms. */
@@ -966,9 +1076,7 @@ function prepare() {
   console.log(`${Object.keys(key).length} items in ${batches.length} batches → ${outdir}`);
 }
 
-function score() {
-  const outdir = process.argv[3];
-  if (!outdir) throw new Error('score <outdir>');
+function scoreDir(outdir) {
   const { key, usable, n, items, view } = JSON.parse(readFileSync(join(outdir, 'key.json'), 'utf8'));
   const questions = view === 'line' ? LINE_QUESTIONS : QUESTIONS;
   const merged = { a: {}, b: {} };
@@ -977,6 +1085,27 @@ function score() {
     if (m) Object.assign(merged[m[1]], JSON.parse(readFileSync(join(outdir, f), 'utf8')));
   }
   const result = scoreVerdicts(key, merged.a, merged.b, usable, questions);
+  const split = items ? splitBothYes(key, merged.a, merged.b, items, questions) : undefined;
+  return { view: view ?? 'fields', n, result, split };
+}
+
+/**
+ * `score <outdir>`, or D25's `score <line outdir> <fields outdir>`: the same rows judged on both
+ * views, decided together by gateD25.
+ */
+function score() {
+  const dirs = process.argv.slice(3);
+  if (dirs.length === 0) throw new Error('score <outdir> [<outdir>]');
+  const scored = dirs.map(scoreDir);
+  if (scored.some((s) => s.result.arms.P)) {
+    const line = scored.find((s) => s.view === 'line');
+    const fields = scored.find((s) => s.view === 'fields');
+    const gate = gateD25({ line: line?.result, fields: fields?.result, n: scored[0].n });
+    console.log(JSON.stringify({ views: scored, gateD25: gate }, null, 2));
+    return;
+  }
+  if (dirs.length > 1) throw new Error('two outdirs are D25 only (arm P)');
+  const [{ view, n, result, split }] = scored;
   // D22 is registered as the D21 gate with arm C in B's place (tasks/specs/d22-summary-turn-replies.md).
   const gate =
     view === 'line'
@@ -986,7 +1115,6 @@ function score() {
         : result.arms.C
           ? { gateD22: gateD21({ A: result.arms.A, B: result.arms.C, agreement: result.agreement, n }) }
           : { gateD21: gateD21({ ...result.arms, agreement: result.agreement, n }) };
-  const split = items ? splitBothYes(key, merged.a, merged.b, items, questions) : undefined;
   console.log(JSON.stringify({ ...result, ...gate, split }, null, 2));
 }
 

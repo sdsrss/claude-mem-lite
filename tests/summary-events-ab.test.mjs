@@ -26,7 +26,15 @@ import {
   addCopyArm,
   LINE_QUESTIONS,
   gateD24,
+  COMPLETED_LEAD,
+  armPPrompt,
+  armPrompt,
+  armOrder,
+  holdout,
+  sameFields,
+  gateD25,
 } from '../benchmark/summary-events-ab.mjs';
+import { buildSessionSummaryPrompt, mergeSummaryRows } from '../hook-llm.mjs';
 import { parseSummaryNotes } from '../lib/fast-summary.mjs';
 import { buildSummaryLines } from '../hook-context.mjs';
 
@@ -943,6 +951,268 @@ describe('D24: prepare --view line --aa A, then score', () => {
       expect(r.agreement.line_misses_main).toBe(1);
       expect(r.gateD24).toMatchObject({ decision: 'open', d1: true, d2: true });
       expect(r.split.multi.C.line_misses_main).toBe(n);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// D25 (docs/audits/20261112-d25-preregistration.md): does a prompt that asks `completed` to open
+// with the session's main outcome put it on the 120-character line, at no cost to the full field?
+describe('D25: arm P is arm C’s prompt with COMPLETED_LEAD', () => {
+  const base = {
+    project: 'p',
+    observations: [{ type: 'bugfix', title: 'Fixed the login redirect', narrative: 'n' }],
+    userPrompts: ['fix the login bug', 'ship it'],
+  };
+  it('closes the replies paragraph with the lead, for several turns and for one, and leaves the user part', () => {
+    for (const replies of [['Fixed it; 12/12 pass.', 'v1.2.0 released.'], ['v1.2.0 released.']]) {
+      const c = buildSessionSummaryPrompt({ ...base, finalReply: replies.at(-1), turnReplies: replies });
+      const p = armPPrompt(c);
+      expect(p.user).toBe(c.user);
+      expect(p.system).toBe(`${c.system} ${COMPLETED_LEAD}`);
+      expect(c.system).toMatch(/\n(Replies|Final reply): [^\n]*belongs in remaining_items\.$/);
+    }
+    expect(COMPLETED_LEAD).toMatch(/^completed starts with the session's most important finished outcome/);
+  });
+});
+
+describe('D25: armPrompt, the prompt each arm sends', () => {
+  const s = {
+    project: 'p',
+    observations: [
+      { type: 'bugfix', title: 'Fixed the login redirect', narrative: 'n', created_at_epoch: 2 },
+    ],
+    events: [{ event_type: 'feature', title: 'Added the export', body: 'b', created_at_epoch: 1 }],
+    userPrompts: ['fix the login bug', 'ship it'],
+    replies: ['Fixed it; 12/12 pass.', 'v1.2.0 released.'],
+  };
+  const deps = { buildSessionSummaryPrompt, mergeSummaryRows };
+  it('C and C2 send every turn, P sends C with the lead, A the final reply only, B the events too', () => {
+    const c = armPrompt('C', s, deps);
+    expect(c.user).toContain('[Turn 1 of 2]\nFixed it; 12/12 pass.');
+    expect(armPrompt('C2', s, deps)).toEqual(c);
+    expect(armPrompt('P', s, deps)).toEqual(armPPrompt(c));
+    const a = armPrompt('A', s, deps);
+    expect(a.user).not.toContain('[Turn 1 of 2]');
+    expect(a.user).toContain('Final reply:\nv1.2.0 released.');
+    expect(a.user).not.toContain('Added the export');
+    expect(armPrompt('B', s, deps).user).toContain('Added the export');
+  });
+});
+
+describe('D25: run helpers', () => {
+  it('armOrder alternates two arms as before and rotates three, each arm once per position', () => {
+    expect([0, 1, 2].map((i) => armOrder(['A', 'C'], i))).toEqual([
+      ['A', 'C'],
+      ['C', 'A'],
+      ['A', 'C'],
+    ]);
+    const orders = [0, 1, 2].map((i) => armOrder(['C', 'C2', 'P'], i));
+    expect(orders).toEqual([
+      ['C', 'C2', 'P'],
+      ['C2', 'P', 'C'],
+      ['P', 'C', 'C2'],
+    ]);
+  });
+  it('holdout drops the sessions an earlier reading drew and keeps the order', () => {
+    const items = ['s1', 's2', 's3', 's4'].map((sid) => ({ sid }));
+    expect(holdout(items, { items: [{ sid: 's3' }, { sid: 's1' }, { sid: 'gone' }] })).toEqual([
+      { sid: 's2' },
+      { sid: 's4' },
+    ]);
+  });
+  it('sameFields counts items whose three fields match across two arms', () => {
+    const r = (item, arm, completed, next_steps = '') => ({
+      item,
+      arm,
+      completed,
+      remaining_items: '',
+      next_steps,
+    });
+    const rows = [
+      r(0, 'C', 'a'),
+      r(0, 'C2', 'a'),
+      r(1, 'C', 'b'),
+      r(1, 'C2', 'b', 'n'),
+      r(2, 'C', 'c'),
+      r(2, 'C2', 'x'),
+      r(3, 'C', 'd'),
+      r(3, 'P', 'd'),
+    ];
+    expect(sameFields(rows, 'C', 'C2')).toBe(1);
+  });
+  it('buildBlind keeps C and P in one batch and C2 in another', () => {
+    const rows = [];
+    for (let item = 0; item < 6; item++)
+      for (const arm of ['C', 'C2', 'P'])
+        rows.push({ item, arm, completed: `c${item}${arm}`, remaining_items: '', next_steps: '' });
+    const dump = {
+      items: Array.from({ length: 6 }, (_, i) => ({
+        replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+      })),
+      rows,
+    };
+    for (const view of ['line', 'fields']) {
+      const { batches, key } = buildBlind(dump, { seed: 20261116, batches: 2, view });
+      const where = {};
+      batches.forEach((b, k) => {
+        for (const e of b.a) where[`${key[e.id].item}${key[e.id].arm}`] = k;
+      });
+      expect(Object.keys(where)).toHaveLength(18);
+      for (let item = 0; item < 6; item++) {
+        expect(where[`${item}C`]).toBe(where[`${item}P`]);
+        expect(where[`${item}C2`]).not.toBe(where[`${item}C`]);
+      }
+    }
+  });
+});
+
+describe('D25: gateD25 (registered before any call)', () => {
+  const lineArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    line_misses_main: m,
+    false_open: 2,
+    unsupported: 2,
+    ...extra,
+  });
+  const fieldsArm = (m, extra = {}) => ({
+    usable: 30,
+    judged: 30,
+    missed_done: m,
+    false_open: 2,
+    unsupported: 2,
+    ...extra,
+  });
+  const lineAgree = { line_misses_main: 0.8, false_open: 0.9, unsupported: 0.9 };
+  const fieldsAgree = { missed_done: 0.8, false_open: 0.9, unsupported: 0.9 };
+  const pass = (line = {}, fields = {}, rest = {}) => ({
+    n: 30,
+    line: {
+      arms: { C: lineArm(12), C2: lineArm(12), P: lineArm(9), ...line.arms },
+      agreement: { ...lineAgree, ...line.agreement },
+    },
+    fields: {
+      arms: { C: fieldsArm(1), C2: fieldsArm(1), P: fieldsArm(2), ...fields.arms },
+      agreement: { ...fieldsAgree, ...fields.agreement },
+    },
+    ...rest,
+  });
+  it('ships when P misses the line 3 fewer times and adds at most 1 elsewhere', () => {
+    expect(gateD25(pass())).toEqual({ decision: 'ship', reasons: [] });
+  });
+  it('says no when P misses the line only 2 fewer times', () => {
+    expect(gateD25(pass({ arms: { P: lineArm(10) } })).decision).toBe('no');
+  });
+  it('says no when P adds 2 to any other count, in either view', () => {
+    expect(gateD25(pass({ arms: { P: lineArm(9, { false_open: 4 }) } })).decision).toBe('no');
+    expect(gateD25(pass({ arms: { P: lineArm(9, { unsupported: 4 }) } })).decision).toBe('no');
+    expect(gateD25(pass({}, { arms: { P: fieldsArm(3) } })).decision).toBe('no');
+    expect(gateD25(pass({}, { arms: { P: fieldsArm(1, { false_open: 4 }) } })).decision).toBe('no');
+    expect(gateD25(pass({}, { arms: { P: fieldsArm(1, { unsupported: 4 }) } })).decision).toBe('no');
+    expect(gateD25(pass({ arms: { P: lineArm(9, { false_open: 3, unsupported: 3 }) } })).decision).toBe(
+      'ship',
+    );
+  });
+  it('decides nothing when the A/A arm is off by more than 2 on the line or 1 on the field', () => {
+    expect(gateD25(pass({ arms: { C2: lineArm(14) } })).decision).toBe('ship');
+    expect(gateD25(pass({ arms: { C2: lineArm(15) } })).decision).toBe('none');
+    expect(gateD25(pass({ arms: { C2: lineArm(9) } })).decision).toBe('none');
+    expect(gateD25(pass({}, { arms: { C2: fieldsArm(2) } })).decision).toBe('ship');
+    expect(gateD25(pass({}, { arms: { C2: fieldsArm(3) } })).decision).toBe('none');
+  });
+  it('decides nothing on an incomplete reading, low usable or low agreement in either view', () => {
+    for (const arm of ['C', 'C2', 'P']) {
+      expect(gateD25(pass({ arms: { [arm]: { ...pass().line.arms[arm], judged: 29 } } })).decision).toBe(
+        'none',
+      );
+      expect(
+        gateD25(pass({}, { arms: { [arm]: { ...pass().fields.arms[arm], judged: 29 } } })).decision,
+      ).toBe('none');
+    }
+    expect(gateD25(pass({ arms: { C2: undefined } })).decision).toBe('none');
+    expect(gateD25({ ...pass(), fields: undefined }).decision).toBe('none');
+    expect(gateD25(pass({ arms: { C: lineArm(12, { usable: 28 }) } })).decision).toBe('ship');
+    expect(gateD25(pass({ arms: { C: lineArm(12, { usable: 27 }) } })).decision).toBe('none');
+    expect(gateD25(pass({ arms: { P: lineArm(9, { usable: 27 }) } })).decision).toBe('none');
+    for (const q of LINE_QUESTIONS) {
+      expect(gateD25(pass({ agreement: { [q]: 0.7 } })).decision).toBe('ship');
+      expect(gateD25(pass({ agreement: { [q]: 0.69 } })).decision).toBe('none');
+    }
+    for (const q of ['missed_done', 'false_open', 'unsupported']) {
+      expect(gateD25(pass({}, { agreement: { [q]: 0.69 } })).decision).toBe('none');
+    }
+  });
+});
+
+describe('D25: prepare both views, then score them together', () => {
+  it('scores a line and a fields reading of the same rows with gateD25, and one alone decides nothing', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const ruler = join(import.meta.dirname, '..', 'benchmark', 'summary-events-ab.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'd25-cli-'));
+    try {
+      const n = 3;
+      const dump = {
+        meta: { arms: ['C', 'C2', 'P'] },
+        items: Array.from({ length: n }, (_, i) => ({
+          turns: 2,
+          replies: { turns: 2, shown: [{ turn: 1, reply: `r${i}` }] },
+        })),
+        rows: Array.from({ length: n }, (_, item) =>
+          ['C', 'C2', 'P'].map((arm) => ({
+            item,
+            arm,
+            usable: true,
+            completed: `${arm}${item}`,
+            remaining_items: '',
+            next_steps: '',
+          })),
+        ).flat(),
+      };
+      writeFileSync(join(dir, 'rows.json'), JSON.stringify(dump));
+      const outs = {};
+      for (const view of ['line', 'fields']) {
+        const out = join(dir, view);
+        outs[view] = out;
+        const p = spawnSync(
+          process.execPath,
+          [ruler, 'prepare', join(dir, 'rows.json'), out, '--view', view, '--seed', '7', '--batches', '1'],
+          { encoding: 'utf8' },
+        );
+        expect(p.status, p.stderr).toBe(0);
+        const k = JSON.parse(readFileSync(join(out, 'key.json'), 'utf8'));
+        expect(k.usable).toEqual({ C: n, C2: n, P: n });
+        const qs =
+          view === 'line'
+            ? ['line_misses_main', 'false_open', 'unsupported']
+            : ['missed_done', 'false_open', 'unsupported'];
+        // Both judges: C and C2 miss the main work on the line, P does not; nothing else.
+        const verdicts = Object.fromEntries(
+          Object.entries(k.key).map(([id, { arm }]) => [
+            id,
+            {
+              main: 'm',
+              ...Object.fromEntries(
+                qs.map((q) => [q, q === 'line_misses_main' && arm !== 'P' ? 'YES' : 'NO']),
+              ),
+            },
+          ]),
+        );
+        for (const side of ['a', 'b'])
+          writeFileSync(join(out, `verdicts-1-${side}.json`), JSON.stringify(verdicts));
+      }
+      const s = spawnSync(process.execPath, [ruler, 'score', outs.line, outs.fields], { encoding: 'utf8' });
+      expect(s.status, s.stderr).toBe(0);
+      const r = JSON.parse(s.stdout);
+      expect(r.views.map((v) => v.view)).toEqual(['line', 'fields']);
+      expect(r.views[0].result.arms.C.line_misses_main).toBe(n);
+      expect(r.views[0].result.arms.P.line_misses_main).toBe(0);
+      expect(r.gateD25).toEqual({ decision: 'ship', reasons: [] });
+      const one = spawnSync(process.execPath, [ruler, 'score', outs.line], { encoding: 'utf8' });
+      expect(one.status, one.stderr).toBe(0);
+      expect(JSON.parse(one.stdout).gateD25.decision).toBe('none');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
