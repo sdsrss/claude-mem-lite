@@ -603,84 +603,14 @@ describe('install lifecycle checks', () => {
     }
   });
 
-  // D#835 (D#829 reviews r1 F2, r2 X1): two more ways the purge said "Data purged" and "Done!"
-  // and exited 0 with the store left. A link INSIDE a real ~/.claude-mem-lite (the store, runtime/)
-  // was unlinked and what it pointed to stayed; and rmSync returned normally with the directory
-  // still there while another process deleted files in it (7 of 12 runs, tasks/d835/race.mjs).
+  // D#835 (D#829 review r2 X1): the purge said "Data purged" and "Done!" and exited 0 with the
+  // store left when rmSync returned normally with the directory still there while another process
+  // deleted files in it (7 of 12 runs, tasks/d835/race.mjs).
   describe('uninstall --purge with data left behind ~/.claude-mem-lite', () => {
-    const INNER = {
-      'the store a link to a file elsewhere': (home) => ({
-        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db') },
-      }),
-      'the store a relative link, named as spelled': () => ({
-        links: { 'claude-mem-lite.db': join('..', 'ext', 'store.db') },
-      }),
-      'runtime/ a link to a directory elsewhere': (home) => ({
-        links: { runtime: join(home, 'ext', 'rt') },
-      }),
-      'two links, both named': (home) => ({
-        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db'), runtime: join(home, 'ext', 'rt') },
-      }),
-      'CLAUDE_MEM_DIR = an unrelated directory': (home) => ({
-        links: { 'claude-mem-lite.db': join(home, 'ext', 'store.db') },
-        mem: join(home, 'other'),
-      }),
-      // Every name it writes data under, not only the store and runtime/ (6.35.0 pre-tag review M13).
-      'the store’s log a link': (home) => ({
-        links: { 'claude-mem-lite.db-wal': join(home, 'ext', 'store.db') },
-      }),
-      'a snapshot a link': (home) => ({
-        links: {
-          'claude-mem-lite.db.pre-delete-2026-09-27T15-58-06-551Z-4159742-0.bak': join(
-            home,
-            'ext',
-            'store.db',
-          ),
-        },
-      }),
-      'metrics/ a link': (home) => ({ links: { metrics: join(home, 'ext', 'rt') } }),
-      'backups/ a link': (home) => ({ links: { backups: join(home, 'ext', 'rt') } }),
-      'managed/ a link': (home) => ({ links: { managed: join(home, 'ext', 'rt') } }),
-    };
-
-    for (const [name, shape] of Object.entries(INNER)) {
-      it(`removes nothing and does not say Done: ${name}`, () => {
-        const home = makeTmpDir();
-        const dir = join(home, '.claude-mem-lite');
-        try {
-          const { links, mem } = shape(home);
-          seed(join(home, 'ext'), ['store.db', 'rt/session.json']);
-          seed(dir, links.metrics ? ['notes.txt'] : ['metrics/2026-11-12.jsonl', 'notes.txt']);
-          if (mem) seed(mem, ['claude-mem-lite.db']);
-          for (const [n, to] of Object.entries(links)) symlinkSync(to, join(dir, n));
-          const before = { ext: files(join(home, 'ext')), dir: files(dir), mem: mem && files(mem) };
-          const { output, status } = purgeWith(home, mem);
-          for (const [n, to] of Object.entries(links)) {
-            expect(lstatSync(join(dir, n)).isSymbolicLink(), n).toBe(true);
-            expect(readlinkSync(join(dir, n)), n).toBe(to);
-          }
-          expect(files(join(home, 'ext'))).toEqual(before.ext);
-          expect(files(dir)).toEqual(before.dir);
-          if (mem) expect(files(mem)).toEqual(before.mem);
-          const named = Object.keys(links)
-            .sort()
-            .map((n) => `~/.claude-mem-lite/${n} is a link to ${links[n]}`)
-            .join(', ');
-          expect(lines(output)).toContain(
-            `  ⚠ ${named}. --purge does not delete through a link, so it removed nothing` +
-              (mem === undefined ? '.' : ` (CLAUDE_MEM_DIR ${mem} included).`),
-          );
-          expect(output).not.toMatch(/Data purged|Relocated data purged|Done!/);
-          expect(output).toContain('the purge is incomplete');
-          expect(status).toBe(1);
-        } finally {
-          rmSync(home, { recursive: true, force: true });
-        }
-      });
-    }
-
-    // A dev install links its code into ~/.claude-mem-lite on purpose (deployCodeTree): those links
-    // go, as before, and what they point to stays.
+    // A link inside a real ~/.claude-mem-lite goes with the directory and is never followed. D#835's
+    // rule that a link under a data name holds the purge back was withdrawn from 6.35.0 after both
+    // pre-tag rounds found a real shape it got wrong (r1 F1, r2 F1). A dev install links its code
+    // there on purpose (deployCodeTree): those links go, as before, and what they point to stays.
     it('removes the links a dev install makes, and not what they point to', () => {
       const home = makeTmpDir();
       const dir = join(home, '.claude-mem-lite');
@@ -701,10 +631,9 @@ describe('install lifecycle checks', () => {
       }
     });
 
-    // Only a link under one of its own data names holds data back. A dev install from an earlier
-    // release left code links under names the running one no longer ships, which no install
-    // removes, and a user may keep a link of their own there: those are unlinked, never followed,
-    // as before D#835 (6.35.0 pre-tag review F1: they blocked every purge, CLAUDE_MEM_DIR included).
+    // A dev install from an earlier release leaves code links under names the running one no longer
+    // ships, which no install removes, and a user may keep a link of their own there: they go too,
+    // never followed, and do not stop the relocated purge (6.35.0 pre-tag review r1 F1).
     it('removes the code links an earlier dev install left, and a link of the user’s own, and not what they point to', () => {
       const home = makeTmpDir();
       const dir = join(home, '.claude-mem-lite');

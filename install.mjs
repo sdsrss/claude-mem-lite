@@ -1980,34 +1980,22 @@ async function uninstall() {
     // "Done!" with the store left when CLAUDE_MEM_DIR named the target by another spelling
     // (`<link>/`), and telling that spelling apart needs resolved paths, whose failures were read
     // as "the target is gone" (D#811 reviews r1 F1, r2 R2-1). One lstat decides; the link stays as
-    // the record of where the store is. D#835: the same holds one level down — a link inside a
-    // real ~/.claude-mem-lite (the store, runtime/) was unlinked under "Data purged" and "Done!"
-    // and what it pointed to stayed (D#829 review r1 F2). Only a link under a name it writes data
-    // under counts: the code links of a dev install, this release's or an earlier one's (whose
-    // names no install removes), and a user's own links are unlinked, never followed, as before
-    // (6.35.0 pre-tag review F1: an earlier dev install's link blocked every purge).
-    let links = []; // [as shown, path] of each link the purge would have to delete through
+    // the record of where the store is.
+    let homeIsLink = false;
     try {
-      if (lstatSync(DATA_DIR).isSymbolicLink()) links = [['~/.claude-mem-lite', DATA_DIR]];
-      else
-        links = readdirSync(DATA_DIR, { withFileTypes: true })
-          .filter((e) => e.isSymbolicLink() && isOwnedDataName(e.name))
-          .map((e) => [`~/.claude-mem-lite/${e.name}`, join(DATA_DIR, e.name)]);
+      homeIsLink = lstatSync(DATA_DIR).isSymbolicLink();
     } catch {
-      /* absent, not lstat-able, or not listable: existsSync and rmSync below decide, as before */
+      /* absent, or not lstat-able: existsSync below decides, as before */
     }
-    if (links.length > 0) {
-      const named = links.map(([shown, path]) => {
-        let to = '';
-        try {
-          to = ` to ${readlinkSync(path)}`;
-        } catch {
-          /* raced away */
-        }
-        return `${shown} is a link${to}`;
-      });
+    if (homeIsLink) {
+      let to = '';
+      try {
+        to = ` to ${readlinkSync(DATA_DIR)}`;
+      } catch {
+        /* raced away */
+      }
       warn(
-        `${named.join(', ')}. --purge does not delete through a link, so it removed nothing` +
+        `~/.claude-mem-lite is a link${to}. --purge does not delete through a link, so it removed nothing` +
           (MEM_DATA_DIR !== homeDir ? ` (CLAUDE_MEM_DIR ${MEM_DATA_DIR} included).` : '.'),
       );
       purgeIncomplete = true;
@@ -2033,8 +2021,8 @@ async function uninstall() {
     // claude-mem-lite.db), so a mistyped CLAUDE_MEM_DIR is never touched. Even then only what
     // claude-mem-lite writes there goes: the directory may be one the user keeps other files in,
     // and removing it whole took those too (R32 E2E install F1, P0). It is removed only once
-    // nothing else is left in it. Not when ~/.claude-mem-lite is or holds a link (above).
-    if (MEM_DATA_DIR !== homeDir && links.length === 0) {
+    // nothing else is left in it. Not when ~/.claude-mem-lite is a link (above).
+    if (MEM_DATA_DIR !== homeDir && !homeIsLink) {
       // Not existsSync: it is false on EACCES too, so a store it could not look for was reported
       // absent, then "Done!" (R32 depth-2 review M1).
       let storeLookup = null;
@@ -2187,10 +2175,6 @@ const OWNED_WHOLE_DIRS = new Set(['runtime', 'managed']);
 // directory is claude-mem-lite's (R33 review M2: removed first, the re-run the failure message
 // asks for found no store, left the rest and said Done!).
 const LIVE_STORE_RE = /^claude-mem-lite\.db(?:-wal|-shm|-journal)?$/;
-// A top-level name it writes data under, by the matchers above.
-// (OWNED_TOP_RE covers the live store's names too.)
-const isOwnedDataName = (name) =>
-  OWNED_WHOLE_DIRS.has(name) || OWNED_TOP_RE.test(name) || Object.hasOwn(OWNED_DIR_FILES, name);
 
 /**
  * Remove what claude-mem-lite wrote into a relocated data dir, and nothing else (R32 E2E
