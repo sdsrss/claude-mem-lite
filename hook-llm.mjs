@@ -26,7 +26,7 @@ import {
 import { acquireLLMSlot, releaseLLMSlot, LLM_SEM_TIMEOUT } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
-import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
+import { mergeModelSummary, modelSummaryFields, summarySuperseded } from './lib/fast-summary.mjs';
 import { recordMetric } from './lib/metrics.mjs';
 import { readTurnReplies } from './lib/turn-replies.mjs';
 import { DB_DIR } from './schema.mjs';
@@ -1953,65 +1953,17 @@ export async function handleLLMSummary() {
       releaseLLMSlot();
     }
 
-    // Coerce a prose field to a string before scrub/bind. Haiku sometimes returns a LIST for
-    // completed/next_steps/remaining_items; binding a non-string straight to SQL throws
-    // ("Too many parameter values") out of this try/finally and drops the WHOLE summary incl.
-    // lessons + key_decisions. Join array items; non-strings → ''. (lessons/key_decisions are
-    // JSON.stringify'd separately below.)
-    const asText = (v) =>
-      Array.isArray(v)
-        ? v.filter((x) => typeof x === 'string' && x.trim()).join('; ')
-        : typeof v === 'string'
-          ? v
-          : '';
-
-    // Persist when ANY meaningful field is present — not just `request`. Gating on `request`
-    // alone dropped the whole INSERT/UPDATE (losing the session's highest-value fields:
-    // lessons + key_decisions) whenever Haiku returned an empty request string but a rich
-    // `{completed, lessons, key_decisions}` — a common degraded shape. Downstream tolerates an
-    // empty request: INSERT writes '' and the UPDATE keeps the row's own request (or an older row's)
-    // when the reply's is empty. Use asText in the gate so a non-string / empty-array field can't falsely
-    // trigger it.
-    // Items are kept only when they are non-empty strings. Array.isArray alone stored a reply of
-    // [123, null, {…}, "real lesson"] as-is, and SessionStart then injected
-    // "Lessons: 123; ; [object Object]", pushing the real lesson out of its 3-item window.
-    const textItems = (v) =>
-      Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : [];
-    const lessons = llmParsed ? textItems(llmParsed.lessons) : [];
-    const keyDecisions = llmParsed ? textItems(llmParsed.key_decisions) : [];
-    const hasSummaryContent =
-      llmParsed &&
-      (asText(llmParsed.request) ||
-        asText(llmParsed.completed) ||
-        asText(llmParsed.remaining_items) ||
-        asText(llmParsed.next_steps) ||
-        lessons.length > 0 ||
-        keyDecisions.length > 0);
-    if (hasSummaryContent) {
+    // The reply's fields, coerced and scrubbed (lib/fast-summary.mjs), or null with nothing to
+    // write.
+    const safe = modelSummaryFields(llmParsed);
+    if (safe) {
       const now = new Date();
-      const lessonsJson = lessons.length > 0 ? JSON.stringify(lessons) : null;
-      const decisionsJson = keyDecisions.length > 0 ? JSON.stringify(keyDecisions) : null;
-
       // Upgrade the session's summary row instead of creating another. This worker runs after
       // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path; selecting
       // only a `notes = 'fast'` row found nothing once the first run had upgraded it, and each
       // later turn INSERTed (one live session: 37 rows in 65 minutes). mergeModelSummary lands
       // on the session's newest row and keeps a report's Done / Not done over the model's
       // (lib/fast-summary.mjs).
-      //
-      // Scrub LLM-output text fields at the write boundary. lessons / key_decisions are
-      // JSON.stringify(array<string>); scrubSecrets uses opaque placeholders that preserve
-      // JSON structure, so the JSON string is scrubbed whole.
-      const safe = scrubRecord('session_summaries', {
-        request: asText(llmParsed.request),
-        investigated: asText(llmParsed.investigated),
-        learned: asText(llmParsed.learned),
-        completed: asText(llmParsed.completed),
-        next_steps: asText(llmParsed.next_steps),
-        remaining_items: asText(llmParsed.remaining_items),
-        lessons: lessonsJson,
-        key_decisions: decisionsJson,
-      });
       if (mergeModelSummary(db, { sessionId, project, fields: safe, now, spawnEpoch })) {
         outcome('written');
       } else {
