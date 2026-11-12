@@ -13,8 +13,10 @@ import {
   mkdirSync,
   renameSync,
 } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
+import { execFileSync, spawnSync } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { digestTranscript, digestFileName, DIGEST_FILE_PREFIX } from '../lib/transcript-digest.mjs';
 import {
   extractCitationsFromTranscript,
@@ -388,6 +390,44 @@ describe('digestTranscript', () => {
       appendFileSync(path, lines([say('more #11')]));
       expect(answers(digestTranscript(path, { runtimeDir }))).toEqual(oracle(path));
     });
+
+    // D#854 F9: the version check passes a state from a tree whose accumulators changed shape
+    // under the same version string (a development checkout), or one edited by hand.
+    it.each([
+      ['a Set saved as an array', (acc) => (acc.cited = [999])],
+      ['a Set inside an object saved as a number', (acc) => (acc.injected.pretool = 5)],
+      ['a counter saved as a string', (acc) => (acc.bugfixShape.nudged = 'x')],
+      ['an accumulator saved as null', (acc) => (acc.citeRecall = null)],
+    ])('a saved accumulator of another shape: %s', (_name, plant) => {
+      const statePath = join(runtimeDir, digestFileName(path));
+      const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      plant(state.files.main.acc);
+      writeFileSync(statePath, JSON.stringify(state));
+      appendFileSync(path, lines([say('more #12')]));
+      expect(answers(digestTranscript(path, { runtimeDir }))).toEqual(oracle(path));
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('a FIFO at the state path is not waited on (D#854 F9)', () => {
+    writeFileSync(path, lines([say('a #1')]));
+    execFileSync('mkfifo', [join(runtimeDir, digestFileName(path))]);
+    // In a child: a read that waits for a FIFO's writer would hang this worker for good.
+    const lib = pathToFileURL(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'transcript-digest.mjs'),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const { digestTranscript } = await import(${JSON.stringify(lib.href)});
+         const d = digestTranscript(${JSON.stringify(path)}, { runtimeDir: ${JSON.stringify(runtimeDir)} });
+         process.stdout.write(JSON.stringify([...d.main.cited]));`,
+      ],
+      { encoding: 'utf8', timeout: 10000 },
+    );
+    expect(r.signal, 'the call returned instead of waiting for a writer').toBeNull();
+    expect(JSON.parse(r.stdout)).toEqual([1]);
   });
 
   // Files past both 4 KiB probe windows, so each check is the only one that can see the change.
