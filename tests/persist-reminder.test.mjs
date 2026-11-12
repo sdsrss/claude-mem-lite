@@ -124,6 +124,22 @@ describe('detectUnpersistedDecision', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // D#853 F2: an update swaps lib/persist-reminder.mjs before hook.mjs, and v6.35.0's hook.mjs
+  // passes the transcript path, not a count.
+  it('counts from transcriptPath when the caller passes no persistenceCount', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
+    const persisted = writeTranscript(dir, [
+      assistantToolUse('mcp__plugin_claude-mem-lite_mem-lite__mem_defer', { title: 'the decision' }),
+    ]);
+    expect(
+      detectUnpersistedDecision({ prompts: ['方案 B 拍板，开工'], transcriptPath: persisted }).fire,
+    ).toBe(false);
+    const p2 = join(dir, 'none.jsonl');
+    writeFileSync(p2, JSON.stringify(assistantToolUse('Bash', { command: 'ls' })) + '\n');
+    expect(detectUnpersistedDecision({ prompts: ['方案 B 拍板，开工'], transcriptPath: p2 }).fire).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('does NOT fire without a finalization signal', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persist-rem-'));
     const p = writeTranscript(dir, [assistantToolUse('Bash', { command: 'ls' })]);
