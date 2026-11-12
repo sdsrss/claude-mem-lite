@@ -201,6 +201,14 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.35.0
+
+**Last Session 那一行更常写出会话最重要的结果；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.34.0`。
+
+- **会话摘要提示里讲会话回复的那条规则，要求模型按重要性排列 completed 里的完成事项**，所以 SessionStart 显示的、截到 120 字符的 Last Session 那一行，更常以会话最重要的完成结果开头。Completed 字段比以前长。
+- **`~/.claude-mem-lite` 是符号链接时，`uninstall --purge` 不再打印 `Done!`。** 这时 purge 什么都不删，并说明是哪个链接。
+- 详见 CHANGELOG.md。
+
 ## 升级到 6.34.0
 
 **会话摘要会读每一轮的最后回复；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.33.0`，并删掉数据目录里的 `runtime/turn-replies-*.json`：6.33.0 不读它们。
@@ -738,7 +746,7 @@ Episode 缓冲区 -> 刷新为 JSON -> claude -p --model haiku -> 结构化观�
 # git clone 安装：
 node install.mjs install              # 安装并配置
 node install.mjs uninstall            # 移除（保留数据）
-node install.mjs uninstall --purge    # 移除并删除所有数据
+node install.mjs uninstall --purge    # 移除并删除数据（见「卸载」）
 node install.mjs status               # 显示当前状态
 node cli.mjs doctor                   # 诊断问题（用 cli.mjs 而非 install.mjs，见下方说明）
 node cli.mjs repair                   # 从最新签名发布恢复损坏的安装
@@ -804,12 +812,14 @@ T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-li
 # git clone：
 cd claude-mem-lite
 node install.mjs uninstall            # 保留 ~/.claude-mem-lite/ 数据
-node install.mjs uninstall --purge    # 删除 ~/.claude-mem-lite/ 及所有数据
+node install.mjs uninstall --purge    # 删除 ~/.claude-mem-lite/ 及其数据
 
 # npx：
 npx claude-mem-lite uninstall
 npx claude-mem-lite uninstall --purge
 ```
+
+`~/.claude-mem-lite` 是符号链接时，`--purge` 什么都不删，并说明是哪个链接。
 
 数据默认保留在 `~/.claude-mem-lite/` 中。如需删除：
 ```bash

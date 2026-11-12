@@ -2,6 +2,29 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.0 — the Last Session line names the session's main outcome more often
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.34.0`. One default changes: the session summary prompt's rule for the
+session's replies asks the model to order the work it lists as completed by importance.
+
+- **The Last Session line names the session's main finished work more often.** SessionStart shows
+  a new session the summary's Completed field cut to 120 characters, and the summary model listed
+  finished work in the order it happened, so a release or a deploy came after the details and fell
+  past the cut. The prompt's rule for the session's replies now asks for the most important
+  finished outcome first, with every other finished item kept. On 30 of the maintainer's own
+  sessions, each prompt called twice, the line left the main finished work out in 11 of 60 calls,
+  against 23 of 60 with 6.34.0's prompt. The Completed field the summary writes is longer: 936 characters on average,
+  against 635. A continuation handoff shows it whole.
+- **`uninstall --purge` no longer says `Done!` when `~/.claude-mem-lite` is a symbolic link.**
+  - With `~/.claude-mem-lite` a link, the purge removed the link, printed `Done!` and left the
+    store where the link pointed. It now removes nothing, `CLAUDE_MEM_DIR` included, and names the
+    link.
+  - A removal of `~/.claude-mem-lite` that fails is named, where it printed a stack trace; the
+    relocated `CLAUDE_MEM_DIR` purge still runs.
+  - When `~/.claude-mem-lite` is still there after the removal returned, the run says so.
+  - None of these ends in `Done!` or exit 0.
+
 ## v6.34.0 — the session summary reads every turn's last reply
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

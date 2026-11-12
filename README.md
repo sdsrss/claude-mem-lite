@@ -239,6 +239,19 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.35.0
+
+**The Last Session line names the session's main outcome more often; nothing to run, and the
+schema version stays 49.** To go back, pin `claude-mem-lite@6.34.0`.
+
+- **The session summary prompt's rule for the session's replies asks the model to order the work
+  it lists as completed by importance**, so the Last Session line SessionStart shows, cut to 120
+  characters, starts with the session's main finished outcome more often. The Completed field is
+  longer than before.
+- **`uninstall --purge` no longer says `Done!` when `~/.claude-mem-lite` is a symbolic link.** The
+  purge then removes nothing and names the link.
+- See CHANGELOG.md.
+
 ## Upgrading to 6.34.0
 
 **The session summary reads every turn's last reply; nothing to run, and the schema version stays
@@ -957,7 +970,7 @@ Each observation includes type, title, narrative, concepts, facts, importance (1
 # git clone install:
 node install.mjs install              # Install and configure
 node install.mjs uninstall            # Remove (keep data)
-node install.mjs uninstall --purge    # Remove and delete all data
+node install.mjs uninstall --purge    # Remove and delete the data (see Uninstall)
 node install.mjs status               # Show current status
 node cli.mjs doctor                   # Diagnose issues  (cli.mjs, not install.mjs — see note)
 node cli.mjs repair                   # Recover a broken install from the latest signed release
@@ -1058,12 +1071,14 @@ After it finishes, `~/.claude-mem-lite/` is back in sync with the latest release
 # git clone:
 cd claude-mem-lite
 node install.mjs uninstall            # Keeps ~/.claude-mem-lite/ data
-node install.mjs uninstall --purge    # Deletes ~/.claude-mem-lite/ and all data
+node install.mjs uninstall --purge    # Deletes ~/.claude-mem-lite/ and its data
 
 # npx:
 npx claude-mem-lite uninstall
 npx claude-mem-lite uninstall --purge
 ```
+
+When `~/.claude-mem-lite` is a symbolic link, `--purge` removes nothing and names the link.
 
 Data in `~/.claude-mem-lite/` is preserved by default. Delete manually if needed:
 ```bash

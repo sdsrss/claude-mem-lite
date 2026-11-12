@@ -5141,7 +5141,7 @@ Usage:
   node install.mjs install            Install (copy files to ~/.claude-mem-lite/)
   node install.mjs install --dev      Install dev mode (symlinks to dev dir)
   node install.mjs uninstall          Remove (keep data)
-  node install.mjs uninstall --purge  Remove and delete all data
+  node install.mjs uninstall --purge  Remove and delete the data
   node install.mjs status             Show current status (use --json for structured output)
   node install.mjs doctor             Diagnose issues (use --json for structured output)
   node install.mjs cleanup            Remove stale temp/staging files (use --dry-run to preview)
