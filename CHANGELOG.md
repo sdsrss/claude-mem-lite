@@ -2,6 +2,19 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.2 — `hono` dependency updates; a reminder fix for half-applied updates
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.1`.
+
+- **The unsaved-decision reminder counts the session's saves again while an update is half
+  applied.** An update replaces files one at a time; a hook from 6.35.0 or earlier running over
+  6.35.1's library counted no saves, so the next SessionStart could say a finalized decision went
+  unsaved in a session that had saved it.
+- **Dependencies: `hono` 4.13.13 → 4.13.18 and `@hono/node-server` 2.1.5 → 2.1.8**, both through
+  `@modelcontextprotocol/sdk`. `npm audit --omit=dev` reported advisories against the replaced
+  versions: five for `hono`, two for `@hono/node-server`.
+
 ## v6.35.1 — Stop no longer re-reads the whole transcript every turn
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
