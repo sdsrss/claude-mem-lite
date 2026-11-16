@@ -89,13 +89,12 @@ import {
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
 import { join, dirname } from 'path';
-import { spawnSync } from 'child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 
 // v2.41: shared CLI helpers extracted to cli/common.mjs. Keep this file as the
 // router + remaining-command bodies during the incremental split. Future work:
 // move each cmdXxx into its own cli/<cmd>.mjs; mem-cli.mjs becomes pure dispatch.
-import { isNativeBindingError, healAndReexec } from './lib/binding-probe.mjs';
+import { isNativeBindingError, healAndReexec, rebuildBindingViaCli } from './lib/binding-probe.mjs';
 import {
   isSchemaSkewError,
   schemaSkewFromError,
@@ -4238,21 +4237,7 @@ async function runDispatch(argv) {
     // has already dlopen'd the stale binary, so it cannot use the new one.
     if (isNativeBindingError(e)) {
       const healed = await healAndReexec({
-        // Delegate the actual rebuild to `cli.mjs rebuild-binding` so there is
-        // ONE healer: it takes install.lock, resolves which node_modules tree
-        // the running code uses, and clears the hooks' breakage marker.
-        ensure: async () => {
-          // Child stdout is DISCARDED, not inherited: install.mjs logs progress
-          // to stdout, and this CLI's stdout is a data channel (`search --json`
-          // is piped into jq). Progress still reaches the user via stderr.
-          const r = spawnSync(process.execPath, [CLI_PATH, 'rebuild-binding'], {
-            stdio: ['ignore', 'ignore', 'inherit'],
-            timeout: 300_000,
-          });
-          return r.status === 0
-            ? { ok: true, action: 'rebuilt' }
-            : { ok: false, error: `rebuild-binding exited ${r.status ?? 'on signal'}` };
-        },
+        ensure: async () => rebuildBindingViaCli(CLI_PATH),
         log: (m) => process.stderr.write(`[mem] ${m}\n`),
       });
       if (healed.healed) {

@@ -29,6 +29,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import {
   isNativeBindingError,
   healAndReexec,
+  rebuildBindingViaCli,
   ensureBetterSqlite3Working,
   NATIVE_BINDING_REBUILD_CMD,
   NATIVE_BINDING_SOURCE_BUILD_CMD,
@@ -366,6 +367,37 @@ describe('healAndReexec — CLI-side heal must re-exec, never retry in-process',
     });
     expect(r.healed).toBe(false);
     expect(r.error).toContain('npm missing');
+  });
+});
+
+// D#311. The CLI's cap on its rebuild child was sized in v3.60.0 for one npm step (240 s) in one
+// code home. rebuild-binding then grew to every code home (v3.70.0) and a source build after the
+// npm step (a240f630, another 240 s), and the cap stayed at 300 s. Killing the child mid-compile is
+// destructive — the source build deletes build/ first, the quarantined prebuild is never put back,
+// and install.lock is left to a dead pid. The foreground path is documented as having no budget.
+describe('rebuildBindingViaCli — the CLI lets rebuild-binding finish (D#311)', () => {
+  const run = (status) => {
+    const calls = [];
+    const r = rebuildBindingViaCli('/x/cli.mjs', (cmd, args, opts) => {
+      calls.push({ cmd, args, opts });
+      return { status };
+    });
+    return { r, calls };
+  };
+
+  it('runs rebuild-binding with no time cap, stdout discarded', () => {
+    const { r, calls } = run(0);
+    expect(r).toEqual({ ok: true, action: 'rebuilt' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cmd).toBe(process.execPath);
+    expect(calls[0].args).toEqual(['/x/cli.mjs', 'rebuild-binding']);
+    expect(calls[0].opts.timeout).toBeUndefined();
+    expect(calls[0].opts.stdio).toEqual(['ignore', 'ignore', 'inherit']);
+  });
+
+  it('reports a failed or signalled child as not rebuilt', () => {
+    expect(run(1).r).toEqual({ ok: false, error: 'rebuild-binding exited 1' });
+    expect(run(null).r).toEqual({ ok: false, error: 'rebuild-binding exited on signal' });
   });
 });
 
