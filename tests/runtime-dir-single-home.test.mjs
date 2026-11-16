@@ -18,6 +18,7 @@ import { join, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { walkShipped, sweepShipped, relShipped } from './shipped-tree.mjs';
+import config from '../vitest.config.mjs';
 
 let sandbox;
 let override;
@@ -36,6 +37,18 @@ afterEach(() => {
   } catch {
     /* best-effort */
   }
+});
+
+describe('the suite does not inherit a developer CLAUDE_MEM_RUNTIME_DIR (D#860)', () => {
+  // A test that spawns `{ ...process.env, CLAUDE_MEM_DIR: dataDir }` isolates the data dir and
+  // still hands the child an inherited CLAUDE_MEM_RUNTIME_DIR, which wins over
+  // `<dataDir>/runtime`. Reproduced 2026-11-16: with the variable pointing at a directory that
+  // held native-binding-cli-lastheal, native-binding-selfheal's "is routed by cli.mjs" case
+  // deleted it. Same seam as tests/vitest-config-exclude.test.mjs: the value is in the env the
+  // runner applies to every worker, or it is not; '' reading as unset is asserted below.
+  it('is cleared in vitest.config.mjs for every worker, as CLAUDE_MEM_DIR is', () => {
+    expect(config.test.env).toMatchObject({ CLAUDE_MEM_DIR: '', CLAUDE_MEM_RUNTIME_DIR: '' });
+  });
 });
 
 describe('resolveRuntimeDir', () => {

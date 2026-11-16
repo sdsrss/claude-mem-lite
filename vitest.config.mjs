@@ -85,6 +85,9 @@ export default defineConfig({
       OPENROUTER_API_KEY: '',
       MEM_QUIET_HOOKS: '',
       CLAUDE_MEM_DIR: '',
+      // D#860: the runtime-dir override wins over `<CLAUDE_MEM_DIR>/runtime`, so a test that
+      // isolates only the data dir would still write markers into a developer's override.
+      CLAUDE_MEM_RUNTIME_DIR: '',
       CLAUDE_MEM_TEST_GUARD: '1',
       // D14: Claude Code exports its pid to every shell it starts, and hook-shared.mjs keys the
       // session file and episode buffer on it. A suite run from inside a Claude Code session
