@@ -4899,8 +4899,17 @@ async function rebuildBinding() {
     if (failed > 0) {
       process.exitCode = 1;
     } else {
-      // Every tree is loadable → drop the marker so session-start stops retrying.
+      // Every tree is loadable → drop the marker so session-start stops retrying, and the CLI's
+      // cooldown (D#311) so a later, unrelated break heals on the next command. The name is
+      // binding-probe's CLI_HEAL_MARKER written out, not imported: 6.35.2's lib lacks that export,
+      // and a named import of it would stop this recovery path loading over a half-swapped tree.
+      // tests/native-binding-selfheal.test.mjs runs rebuild-binding against the constant.
       clearNativeBindingBreakage(MEM_RUNTIME_DIR);
+      try {
+        unlinkSync(join(MEM_RUNTIME_DIR, 'native-binding-cli-lastheal'));
+      } catch {
+        /* none armed */
+      }
     }
   } finally {
     release();

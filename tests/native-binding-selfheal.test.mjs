@@ -14,7 +14,16 @@
 //   3. a breakage marker is recorded on EVERY failing fire (even when the hint
 //      is rate-limited) so the next session-start can heal unattended.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, cpSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  cpSync,
+  chmodSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { acquireLock } from '../lib/proc-lock.mjs';
 import { spawnSync } from 'node:child_process';
@@ -29,6 +38,10 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 import {
   isNativeBindingError,
   healAndReexec,
+  healCliBinding,
+  cliHealSkipNote,
+  CLI_HEAL_MARKER,
+  CLI_HEAL_COOLDOWN_MS,
   rebuildBindingViaCli,
   ensureBetterSqlite3Working,
   NATIVE_BINDING_REBUILD_CMD,
@@ -401,6 +414,159 @@ describe('rebuildBindingViaCli — the CLI lets rebuild-binding finish (D#311)',
   });
 });
 
+// D#311 part 1. With no prebuild for the platform and no way to build one, every CLI command
+// re-ran the rebuild before failing: 73-81 ms became 20.5 s on the first call and 0.47 s on each
+// one after; with a toolchain whose compile fails, every command runs that compile. The hooks'
+// heal has had a 6 h cooldown since v3.60.0; the CLI gets its own marker, armed before the try,
+// kept on failure and cleared once a rebuild works.
+describe('healCliBinding — at most one automatic rebuild per 6 h (D#311)', () => {
+  const NOW = 1_800_000_000_000;
+  let dir;
+  let marker;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cml-cliheal-'));
+    marker = join(dir, CLI_HEAL_MARKER);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** status: the rebuild-binding child's exit code. */
+  const heal = (status, { runtimeDir = dir, now = NOW, env = {} } = {}) => {
+    const c = { spawn: 0, reexec: 0, markerAtSpawn: null };
+    const p = healCliBinding({
+      cliPath: '/x/cli.mjs',
+      runtimeDir,
+      now,
+      env,
+      argv: ['node', '/x/cli.mjs', 'search', 'q'],
+      spawn: () => {
+        c.spawn++;
+        c.markerAtSpawn = existsSync(join(runtimeDir, CLI_HEAL_MARKER));
+        return { status };
+      },
+      reexec: () => {
+        c.reexec++;
+        return 0;
+      },
+    });
+    return p.then((r) => ({ r, c }));
+  };
+
+  it('with no marker: arms it before the rebuild starts', async () => {
+    const { r, c } = await heal(1);
+    expect(c.spawn).toBe(1);
+    expect(c.markerAtSpawn).toBe(true);
+    expect(r).toMatchObject({ healed: false, reason: 'rebuild-failed' });
+  });
+
+  it('a runtime dir that does not exist yet is created for the marker', async () => {
+    const fresh = join(dir, 'runtime');
+    await heal(1, { runtimeDir: fresh });
+    expect(Number(readFileSync(join(fresh, CLI_HEAL_MARKER), 'utf8'))).toBe(NOW);
+  });
+
+  it('a marker exactly 6 h old is outside the window', async () => {
+    writeFileSync(marker, String(NOW - CLI_HEAL_COOLDOWN_MS));
+    const { c } = await heal(1);
+    expect(c.spawn).toBe(1);
+  });
+
+  it('a marker dated after now (the clock moved back) counts as absent', async () => {
+    for (const v of [String(NOW + 60_000), String(NOW + 24 * 3600 * 1000), 'Infinity', '1e999']) {
+      writeFileSync(marker, v);
+      const { c } = await heal(1);
+      expect(c.spawn, `marker ${v}`).toBe(1);
+    }
+  });
+
+  it('a directory at the marker path counts as absent', async () => {
+    mkdirSync(marker);
+    const { r, c } = await heal(0);
+    expect(c.spawn).toBe(1);
+    expect(r).toEqual({ healed: true, exitCode: 0 });
+  });
+
+  // Root writes through 0o444, so there the test would pass without the shared writer.
+  it.skipIf(process.getuid?.() === 0)(
+    'a stale marker this user cannot write (left by a sudo run) is still replaced',
+    async () => {
+      writeFileSync(marker, String(NOW - CLI_HEAL_COOLDOWN_MS - 1));
+      chmodSync(marker, 0o444);
+      await heal(1);
+      expect(Number(readFileSync(marker, 'utf8'))).toBe(NOW);
+      expect((await heal(1, { now: NOW + 60_000 })).c.spawn).toBe(0);
+    },
+  );
+
+  it('within 6 h of the last try: does not rebuild, and says when that try was', async () => {
+    writeFileSync(marker, String(NOW - 60 * 60 * 1000));
+    const { r, c } = await heal(0);
+    expect(c.spawn).toBe(0);
+    expect(c.reexec).toBe(0);
+    expect(r).toEqual({ healed: false, reason: 'cooldown', since: NOW - 60 * 60 * 1000 });
+  });
+
+  it('past 6 h: rebuilds again', async () => {
+    writeFileSync(marker, String(NOW - CLI_HEAL_COOLDOWN_MS - 1));
+    const { c } = await heal(1);
+    expect(c.spawn).toBe(1);
+  });
+
+  it('an unreadable marker value counts as no marker', async () => {
+    writeFileSync(marker, 'garbage');
+    const { c } = await heal(1);
+    expect(c.spawn).toBe(1);
+  });
+
+  it('a failed rebuild keeps the marker, so the next command skips', async () => {
+    await heal(1);
+    expect(Number(readFileSync(marker, 'utf8'))).toBe(NOW);
+    const next = await heal(1, { now: NOW + 60_000 });
+    expect(next.c.spawn).toBe(0);
+    expect(next.r.reason).toBe('cooldown');
+  });
+
+  it('a rebuild that works clears the marker, so a later break heals at once', async () => {
+    const { r, c } = await heal(0);
+    expect(r).toEqual({ healed: true, exitCode: 0 });
+    expect(c.reexec).toBe(1);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  // The parent's rebuild reported success, yet the re-exec'd child still cannot load the binding:
+  // the rebuild did not fix the tree this CLI runs from (one rebuild-binding does not repair), so
+  // the next command must not run it again.
+  it("a re-exec'd child whose binding still fails arms the marker, without rebuilding", async () => {
+    const guard = { env: { [BINDING_HEAL_GUARD_ENV]: '1' } };
+    const { r, c } = await heal(0, guard);
+    expect(r.reason).toBe('already-attempted');
+    expect(c.spawn).toBe(0);
+    expect(Number(readFileSync(marker, 'utf8'))).toBe(NOW);
+    // The guard is asked before the marker: a fresh marker does not turn this into a cooldown skip.
+    const again = await heal(0, { ...guard, now: NOW + 60_000 });
+    expect(again.r.reason).toBe('already-attempted');
+  });
+
+  it('a runtime dir that cannot be written does not stop the rebuild', async () => {
+    const blocker = join(dir, 'not-a-dir');
+    writeFileSync(blocker, '');
+    const { r, c } = await heal(0, { runtimeDir: blocker });
+    expect(c.spawn).toBe(1);
+    expect(r).toEqual({ healed: true, exitCode: 0 });
+  });
+
+  it('the skip note says how long ago the last try was and names the 6 h window', () => {
+    expect(cliHealSkipNote(NOW - 30 * 1000, NOW)).toBe(
+      'automatic rebuild skipped: last attempted under a minute ago (one per 6 h)',
+    );
+    expect(cliHealSkipNote(NOW - 25 * 60 * 1000, NOW)).toBe(
+      'automatic rebuild skipped: last attempted 25 min ago (one per 6 h)',
+    );
+    expect(cliHealSkipNote(NOW - 185 * 60 * 1000, NOW)).toBe(
+      'automatic rebuild skipped: last attempted 3 h ago (one per 6 h)',
+    );
+  });
+});
+
 describe('native-binding breakage marker — the unattended-heal trigger', () => {
   let dir;
   beforeEach(() => {
@@ -524,6 +690,32 @@ describe('cli.mjs rebuild-binding — the local, network-free repair command', (
     expect(out).toMatch(/verified|rebuilt/);
   });
 
+  it("clears the CLI's heal cooldown once every tree loads, so a later break heals at once (D#311)", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cml-rb-cd-'));
+    const fakeHome = mkdtempSync(join(tmpdir(), 'cml-rb-cd-home-'));
+    try {
+      const marker = join(dataDir, 'runtime', CLI_HEAL_MARKER);
+      mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+      writeFileSync(marker, String(Date.now()));
+      const r = spawnSync(process.execPath, [join(REPO_ROOT, 'cli.mjs'), 'rebuild-binding'], {
+        encoding: 'utf8',
+        timeout: 300_000,
+        env: (() => {
+          const e = { ...process.env, CLAUDE_MEM_DIR: dataDir, HOME: fakeHome, MEM_NO_AUTO_ADOPT: '1' };
+          // Unset, not blanked: either one points rebuild-binding outside this sandbox.
+          delete e.CLAUDE_MEM_RUNTIME_DIR;
+          delete e.CLAUDE_CONFIG_DIR;
+          return e;
+        })(),
+      });
+      expect(r.status).toBe(0); // premise: the healthy-binding path, the one that clears
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   it('exits NON-zero when another install holds the lock — skipping is not healing', () => {
     // Callers key their state on this exit code: a false 0 would let the launcher
     // drop its cooldown (npm re-spawned every session) and let the CLI re-exec
@@ -547,6 +739,80 @@ describe('cli.mjs rebuild-binding — the local, network-free repair command', (
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+// D#311, end to end through the real CLI: the units above do not reach mem-cli's own wiring
+// (which runtime dir it passes, which reason it prints). The binding is broken by a preload that
+// fails every better-sqlite3 dlopen. The rebuild fails because this test holds the sandbox's
+// install.lock, so rebuild-binding refuses before it runs npm at all: nothing is compiled or
+// fetched, and no rebuild can run in this checkout (cwd of the npm step) whatever PATH holds.
+describe('CLI on a broken binding — one automatic rebuild per 6 h, end to end (D#311)', () => {
+  let root;
+  let env;
+  let releaseLock;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cml-cli-cd-'));
+    for (const d of ['home', 'proj', join('data', 'runtime')]) mkdirSync(join(root, d), { recursive: true });
+    releaseLock = acquireLock(join(root, 'data', 'runtime', 'install.lock'));
+    expect(releaseLock).toBeTruthy();
+    writeFileSync(
+      join(root, 'dlopen-fail.cjs'),
+      [
+        'const orig = process.dlopen;',
+        'process.dlopen = function (m, filename, ...rest) {',
+        '  if (/better[_-]sqlite3/.test(String(filename)))',
+        "    throw Object.assign(new Error('fixture: invalid ELF header'), { code: 'ERR_DLOPEN_FAILED' });",
+        '  return orig.call(this, m, filename, ...rest);',
+        '};',
+      ].join('\n'),
+    );
+    env = {
+      ...process.env,
+      HOME: join(root, 'home'),
+      CLAUDE_MEM_DIR: join(root, 'data'),
+      MEM_NO_AUTO_ADOPT: '1',
+      NODE_OPTIONS: `--require ${join(root, 'dlopen-fail.cjs')}`,
+    };
+    for (const k of [
+      'CLAUDE_CONFIG_DIR',
+      'CLAUDE_PROJECT_DIR',
+      'CLAUDE_MEM_RUNTIME_DIR',
+      BINDING_HEAL_GUARD_ENV,
+    ])
+      delete env[k];
+  });
+  afterEach(() => {
+    releaseLock?.();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const cli = () => {
+    const r = spawnSync(process.execPath, [join(REPO, 'cli.mjs'), 'recent', '1'], {
+      encoding: 'utf8',
+      timeout: 120_000,
+      cwd: join(root, 'proj'),
+      env,
+    });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+
+  it('rebuilds on the first command, skips on the next with the reason, and names the fix both times', () => {
+    const first = cli();
+    expect(first.err).toMatch(/rebuilding for this Node/); // premise: the heal branch ran
+    expect(first.err).toMatch(/in progress/i); // premise: rebuild-binding stopped at the lock, before npm
+    expect(first.out).toMatch(/Error: native DB binding unusable .* rebuild-binding exited 1/);
+    expect(first.out).toMatch(/Fix: .*rebuild-binding/);
+    expect(first.code).toBe(1);
+    expect(existsSync(join(root, 'data', 'runtime', CLI_HEAL_MARKER))).toBe(true);
+
+    const second = cli();
+    expect(second.err).not.toMatch(/rebuilding for this Node/);
+    expect(second.out).toContain(
+      'automatic rebuild skipped: last attempted under a minute ago (one per 6 h)',
+    );
+    expect(second.out).toMatch(/Fix: .*rebuild-binding/);
+    expect(second.code).toBe(1);
   });
 });
 

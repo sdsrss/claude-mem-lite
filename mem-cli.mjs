@@ -94,7 +94,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 // v2.41: shared CLI helpers extracted to cli/common.mjs. Keep this file as the
 // router + remaining-command bodies during the incremental split. Future work:
 // move each cmdXxx into its own cli/<cmd>.mjs; mem-cli.mjs becomes pure dispatch.
-import { isNativeBindingError, healAndReexec, rebuildBindingViaCli } from './lib/binding-probe.mjs';
+import { isNativeBindingError, healCliBinding, cliHealSkipNote } from './lib/binding-probe.mjs';
 import {
   isSchemaSkewError,
   schemaSkewFromError,
@@ -4235,18 +4235,19 @@ async function runDispatch(argv) {
     // healer was an MCP server start the user might never perform — the shape of
     // the 4-day outage on 2026-08-13. Heal in place, then RE-EXEC: this process
     // has already dlopen'd the stale binary, so it cannot use the new one.
+    // One automatic try per 6 h (D#311); `rebuild-binding` itself is never gated.
     if (isNativeBindingError(e)) {
-      const healed = await healAndReexec({
-        ensure: async () => rebuildBindingViaCli(CLI_PATH),
+      const healed = await healCliBinding({
+        cliPath: CLI_PATH,
+        runtimeDir: resolveRuntimeDir(DB_DIR),
         log: (m) => process.stderr.write(`[mem] ${m}\n`),
       });
       if (healed.healed) {
         process.exitCode = healed.exitCode;
         return;
       }
-      out(
-        `[mem] Error: native DB binding unusable on Node ${process.version}${healed.error ? ` — ${healed.error}` : ''}`,
-      );
+      const why = healed.reason === 'cooldown' ? cliHealSkipNote(healed.since) : healed.error;
+      out(`[mem] Error: native DB binding unusable on Node ${process.version}${why ? ` — ${why}` : ''}`);
       out(`[mem] Fix: ${CLI_INVOKE} rebuild-binding`);
       process.exitCode = 1;
       return;

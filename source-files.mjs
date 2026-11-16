@@ -78,6 +78,8 @@ export const SOURCE_FILES = [
   // are present in the pre-edit file (component 2). Imported ONLY by
   // scripts/pre-tool-recall.js; kept here for the same reason as file-intel.mjs.
   'lib/lesson-idents.mjs',
+  // Leaf (node: imports only). Ahead of binding-probe, which writes the CLI heal marker through it.
+  'lib/atomic-write.mjs',
   // v2.71.x: better-sqlite3 ABI probe + auto-rebuild. Shared by install.mjs
   // (post-`npm install` verify) and scripts/launch.mjs (pre-server-launch
   // self-heal after Node ABI changes). Missing from manifest → auto-update
@@ -98,7 +100,6 @@ export const SOURCE_FILES = [
   'lib/hook-text-cap.mjs',
   'lib/hook-stdout.mjs',
   'lib/recall-framing.mjs',
-  'lib/atomic-write.mjs',
   'lib/recall-shown.mjs',
   // A closed WAL store in an unwritable data dir: one classification for doctor, status and
   // mem-cli's DB open (D#296), so the CLI does not load install.mjs to word one error.
