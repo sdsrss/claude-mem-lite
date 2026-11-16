@@ -6,8 +6,7 @@ All notable changes to claude-mem-lite are documented in this file.
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
 `claude-mem-lite@6.35.0`. 6.35.0 does not remove the `transcript-digest-*.json` files this
-release writes to its runtime directory; `rm ~/.claude-mem-lite/runtime/transcript-digest-*.json`
-does.
+release writes to its runtime directory.
 
 - **Citation tracking at Stop reads only what the transcript gained since its previous run**
   (issue #53). Stop runs at the end of every assistant turn, and it parsed the session's whole

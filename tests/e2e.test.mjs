@@ -3260,8 +3260,7 @@ describe('Suite: G3 unpersisted-decision reminder (Stop → payload → next Ses
   });
 
   // D#853 F8: the test above holds only the payload. Decay decides an id injected in the part
-  // already read, and cited only past the budget, uncited — and its idempotency key then keeps the
-  // complete Stop from deciding it again.
+  // already read, and cited only past the budget, uncited.
   it('a Stop that has not read the whole transcript changes no decay column and no citation log', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const sessionId = getSessionIdFromFile(tmpHome);
