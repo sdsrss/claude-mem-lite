@@ -248,8 +248,8 @@ describe('digestTranscript', () => {
     });
 
     // The budget is what keeps Stop inside its hook timeout, so it holds when the state cannot be
-    // saved too: such a transcript stays incomplete (no citation writes) while saving fails. Reading
-    // the rest instead took Stop past its 5 s timeout on a 1 GiB transcript (6.35.2 review F1).
+    // saved too. Reading the rest instead took Stop past its 5 s timeout on a 1 GiB transcript
+    // (6.35.2 review F1).
     it('when the state cannot be saved, each call still stops at its budget', () => {
       writeFileSync(path, forty());
       expect(
