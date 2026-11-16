@@ -247,7 +247,10 @@ describe('digestTranscript', () => {
       expect(calls, 'premise: the budget split the read').toBeGreaterThan(1);
     });
 
-    it('when the state cannot be saved, the call reads to the end', () => {
+    // The budget is what keeps Stop inside its hook timeout, so it holds when the state cannot be
+    // saved too: such a transcript stays incomplete (no citation writes) while saving fails. Reading
+    // the rest instead took Stop past its 5 s timeout on a 1 GiB transcript (6.35.2 review F1).
+    it('when the state cannot be saved, each call still stops at its budget', () => {
       writeFileSync(path, forty());
       expect(
         digestTranscript(path, { runtimeDir, maxBytes: 300 }).complete,
@@ -255,16 +258,16 @@ describe('digestTranscript', () => {
       ).toBe(false);
       const notADir = join(dir, 'runtime-is-a-file');
       writeFileSync(notADir, '');
-      const digest = digestTranscript(path, { runtimeDir: notADir, maxBytes: 300 });
-      expect(digest.complete).toBe(true);
-      expect(answers(digest)).toEqual(oracle(path));
+      for (let i = 0; i < 3; i++) {
+        expect(digestTranscript(path, { runtimeDir: notADir, maxBytes: 300 }).complete).toBe(false);
+      }
     });
 
-    it('without a runtime dir, the call reads to the end', () => {
+    it('without a runtime dir, each call still stops at its budget', () => {
       writeFileSync(path, forty());
-      const digest = digestTranscript(path, { maxBytes: 300 });
-      expect(digest.complete).toBe(true);
-      expect(answers(digest)).toEqual(oracle(path));
+      for (let i = 0; i < 3; i++) {
+        expect(digestTranscript(path, { maxBytes: 300 }).complete).toBe(false);
+      }
     });
   });
 
