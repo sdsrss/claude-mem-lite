@@ -935,6 +935,14 @@ describe('install.lock that cannot be taken: the delta review repairs', () => {
       join(tree, 'lib', 'proc-lock.mjs'),
       "export { acquireLock, lockHeld, withLock, withLockAsync, LIVE_HOLDER_MAX_MS } from './proc-lock-current.mjs';\n",
     );
+    // Same for lib/plugin-key.mjs, whose readSettingsScope install.mjs takes through a namespace. Its
+    // export set in v6.35.2 (git show v6.35.2:lib/plugin-key.mjs).
+    copyFileSync(join(REPO, 'lib', 'plugin-key.mjs'), join(tree, 'lib', 'plugin-key-current.mjs'));
+    writeFileSync(
+      join(tree, 'lib', 'plugin-key.mjs'),
+      'export { MARKETPLACE_KEY, PLUGIN_NAME, PLUGIN_KEY, isPluginExplicitlyDisabled, pluginSettingsScopes, ' +
+        "isPluginDisabledInScopes, isPluginDisabledForProject } from './plugin-key-current.mjs';\n",
+    );
     const load = spawnSync(
       process.execPath,
       [
@@ -963,6 +971,21 @@ describe('install.lock that cannot be taken: the delta review repairs', () => {
     expect(`${r.stdout}${r.stderr}`).not.toMatch(/does not provide an export named|is not a function/);
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(existsSync(join(box.codeDir, STAGING))).toBe(false); // it took the lock and cleaned up
+    // status calls readSettingsScope (the project override): without it, the previous plain read.
+    const proj = join(box.home, 'proj');
+    mkdirSync(join(proj, '.claude'), { recursive: true });
+    writeFileSync(
+      join(proj, '.claude', 'settings.local.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': false } }),
+    );
+    const st = spawnSync(process.execPath, [join(tree, 'install.mjs'), 'status'], {
+      cwd: proj,
+      env: env(box, { CLAUDE_PROJECT_DIR: proj }),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(`${st.stdout}${st.stderr}`).not.toMatch(/does not provide an export named|is not a function/);
+    expect(st.stdout).toMatch(/Plugin: disabled in this project by .*settings\.local\.json/);
   });
 
   // P3-1. Above the data dir, "create it as your user" fixes only a parent that can be entered but

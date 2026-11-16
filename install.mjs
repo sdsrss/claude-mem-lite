@@ -77,6 +77,18 @@ import {
   isPluginExplicitlyDisabled,
   pluginSettingsScopes,
 } from './lib/plugin-key.mjs';
+// A namespace, as for lib/proc-lock.mjs below: readSettingsScope is newer than v6.35.2 and this file
+// is the repair path. Without it, the plain read that release used.
+import * as pluginKeyModule from './lib/plugin-key.mjs';
+const readSettingsScope =
+  pluginKeyModule.readSettingsScope ??
+  ((p) => {
+    try {
+      return JSON.parse(readFileSync(p, 'utf8'));
+    } catch {
+      return null;
+    }
+  });
 import { isNpxRun } from './lib/npx-run.mjs';
 import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 // Static, matching doctor-modes above. Safe here where it would not be for a heavier
@@ -896,7 +908,8 @@ function noteForeignMem(foreignMem) {
 export function projectScopedMemRegistrations(cwd) {
   const file = join(cwd, '.mcp.json');
   try {
-    const servers = JSON.parse(readFileSync(file, 'utf8'))?.mcpServers;
+    // Bounded like a settings scope: a repository can commit `.mcp.json -> /dev/zero`.
+    const servers = readSettingsScope(file)?.mcpServers;
     // Array.isArray is load-bearing: `typeof [] === 'object'`, so without it an array
     // falls through to the membership filter and the guard cannot fire on its own
     // named input — which is how the test case for it was passing.
@@ -1745,12 +1758,9 @@ function projectPluginOverride(userSettings) {
   const userValue = userSettings?.enabledPlugins?.[PLUGIN_KEY];
   let found = null;
   for (const file of pluginSettingsScopes(claudeConfigDir(), projectDir).slice(1)) {
-    try {
-      const v = JSON.parse(readFileSync(file, 'utf8'))?.enabledPlugins?.[PLUGIN_KEY];
-      if (typeof v === 'boolean') found = { enabled: v, file };
-    } catch {
-      /* missing or unparseable: sets nothing */
-    }
+    // Missing, unparseable or not a regular file: sets nothing.
+    const v = readSettingsScope(file)?.enabledPlugins?.[PLUGIN_KEY];
+    if (typeof v === 'boolean') found = { enabled: v, file };
   }
   if (!found) return null;
   // The user scope's effective reading: an absent key is enabled unless set false.

@@ -80,6 +80,9 @@ export const SOURCE_FILES = [
   'lib/lesson-idents.mjs',
   // Leaf (node: imports only). Ahead of binding-probe, which writes the CLI heal marker through it.
   'lib/atomic-write.mjs',
+  // Leaf (node: imports only): bounded reads of files someone else can occupy. Ahead of plugin-key,
+  // claudemd, local-steering, paused-reader, hook-context and adopt-cli, which import it.
+  'lib/regular-file.mjs',
   // v2.71.x: better-sqlite3 ABI probe + auto-rebuild. Shared by install.mjs
   // (post-`npm install` verify) and scripts/launch.mjs (pre-server-launch
   // self-heal after Node ABI changes). Missing from manifest → auto-update

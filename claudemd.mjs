@@ -15,21 +15,9 @@
 //
 // See docs/CLAUDE-MD-STEERING-PLAN.md for rationale + migration.
 
-import {
-  readFileSync,
-  existsSync,
-  unlinkSync,
-  mkdirSync,
-  rmdirSync,
-  readdirSync,
-  lstatSync,
-  openSync,
-  fstatSync,
-  closeSync,
-  readSync,
-  constants as fsConstants,
-} from 'fs';
+import { existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
+import { readRegularText, readRegularTextOrThrow } from './lib/regular-file.mjs';
 import { join, basename } from 'path';
 import { createHash } from 'crypto';
 import { memdirPath, removePluginSection, removePluginDoc, isAdopted as memdirIsAdopted } from './memdir.mjs';
@@ -129,7 +117,8 @@ function orphanSentinelCount(raw, slug) {
 export function straySentinelLines(p, slug) {
   let raw;
   try {
-    raw = readFileSync(p, 'utf8');
+    // Not a regular file, or over the limit: Claude Code does not load it, so nothing in it is.
+    raw = readRegularTextOrThrow(p);
   } catch {
     return [];
   }
@@ -231,7 +220,7 @@ export function holdsOnlyPluginLines(p, slug) {
  */
 export function addAgentsImports(cwd, slug, imports) {
   const p = claudeMdPath(cwd);
-  const raw = existsSync(p) ? readFileSync(p, 'utf8') : '';
+  const raw = existsSync(p) ? readRegularTextOrThrow(p) : '';
   const marker = agentsImportMarker(slug);
   if (raw.includes(marker)) return 'present';
   const lines = `${marker}\n${imports.map((i) => `@${i}`).join('\n')}\n`;
@@ -281,39 +270,11 @@ export function readBlock(cwd, slug) {
   return readBlockAt(claudeMdPath(cwd), slug);
 }
 
-// Claude Code 2.1.322 skips an instruction file that is "not a regular file or exceeds 4194304 byte
-// limit" (its own message).
-const INSTRUCTION_FILE_MAX_BYTES = 4194304;
-
-// A regular file's text, or null for one Claude Code would not load: a FIFO or a device, or over its
-// size limit. The session sync reads instruction files in every directory above the project
-// (D#509(4)), /tmp among them, where any local user can put a FIFO (a blocking read stalled
-// SessionStart, v6.32.0 pre-release defects review F1) or a huge file (read whole, it filled memory,
-// delta review R2-1). Opened non-blocking and checked on the descriptor, so a file swapped in after
-// the check is not the one read. The size fstat reports is no bound — a /proc file reports 0 and
-// never ends, and a file can grow — so at most one byte past the limit is read, as Claude Code's own
-// bounded read does (round-3 review F1). A directory still throws EISDIR, as a plain read did.
-function readRegularText(p) {
-  const fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
-  try {
-    const st = fstatSync(fd);
-    if (st.isDirectory()) throw Object.assign(new Error(`${p}: is a directory`), { code: 'EISDIR' });
-    if (!st.isFile() || st.size > INSTRUCTION_FILE_MAX_BYTES) return null;
-    const chunks = [];
-    let total = 0;
-    for (;;) {
-      const chunk = Buffer.allocUnsafe(65536);
-      const n = readSync(fd, chunk, 0, chunk.length, null);
-      if (n === 0) break;
-      total += n;
-      if (total > INSTRUCTION_FILE_MAX_BYTES) return null;
-      chunks.push(chunk.subarray(0, n));
-    }
-    return Buffer.concat(chunks, total).toString('utf8');
-  } finally {
-    closeSync(fd);
-  }
-}
+// Every read of an instruction file in this module goes through lib/regular-file.mjs: null (or a
+// throw) for a FIFO, a device or a file over Claude Code's 4194304-byte limit. The session sync
+// reads instruction files in every directory above the project (D#509(4)), /tmp among them, where
+// any local user can put a FIFO (v6.32.0 pre-release defects review F1) or a huge file (delta
+// review R2-1); inside the project a repository can commit a symlink to a device.
 
 /**
  * readBlock for any instructions file — CLAUDE.md, or the CLAUDE.local.md that auto-adopt
@@ -361,7 +322,7 @@ export function isOwnAdoptionArtifact(cwd, relPath, slug) {
     const ownFile = (name) =>
       name === stateName ||
       (name === docName &&
-        readFileSync(join(dotClaudeDir(cwd), name), 'utf8').startsWith(managedByMarker(slug)));
+        readRegularTextOrThrow(join(dotClaudeDir(cwd), name)).startsWith(managedByMarker(slug)));
     if (rel === '.claude') {
       const names = readdirSync(dotClaudeDir(cwd));
       return names.length > 0 && names.every(ownFile);
@@ -454,7 +415,7 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
   const dp = detailDocPath(cwd, slug);
   const dir = dotClaudeDir(cwd);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const existingDoc = existsSync(dp) ? readFileSync(dp, 'utf8') : null;
+  const existingDoc = existsSync(dp) ? readRegularTextOrThrow(dp) : null;
   if (existingDoc !== docContent) atomicWrite(dp, docContent);
   const docAction = existingDoc === null ? 'created' : existingDoc === docContent ? 'unchanged' : 'updated';
 
@@ -465,7 +426,7 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
   const docHash = sha256(doc);
   let prev = null;
   try {
-    prev = JSON.parse(readFileSync(stateFilePath(cwd, slug), 'utf8'));
+    prev = JSON.parse(readRegularTextOrThrow(stateFilePath(cwd, slug)));
   } catch {
     /* absent or unreadable: write it */
   }
@@ -483,7 +444,8 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
  * @returns {{action: 'created'|'updated'|'unchanged'}}
  */
 export function writeBlockAt(p, { slug, version, block }) {
-  const raw = existsSync(p) ? readFileSync(p, 'utf8') : '';
+  // Throws for a FIFO, a device or an over-limit file: nothing is written over it.
+  const raw = existsSync(p) ? readRegularTextOrThrow(p) : '';
   const section = renderBlock(slug, version, block);
   const m = raw.match(blockRegex(slug));
 
@@ -588,8 +550,11 @@ export function orphanResidueNote(orphans, slug, p) {
 export function removeBlockAt(p, slug) {
   let action = 'absent';
   let orphans = 0;
-  if (existsSync(p)) {
-    let raw = readFileSync(p, 'utf8');
+  // A FIFO, a device or a file over the instruction-file limit holds no block Claude Code loads,
+  // as readBlockAt answers, and is not read: a repository can commit `CLAUDE.md -> /dev/zero`.
+  const found = existsSync(p) ? readRegularText(p) : null;
+  if (found !== null) {
+    let raw = found;
     // H2: loop so ALL same-slug blocks are removed, not just the first (a
     // duplicate/CRLF-orphaned copy must not survive unadopt).
     let m;

@@ -133,6 +133,7 @@
     "lib/recent-table.mjs",
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",
+    "lib/regular-file.mjs",
     "lib/platform-gate.mjs",
     "lib/hook-prune.mjs",
     "lib/proxy-fetch.mjs",

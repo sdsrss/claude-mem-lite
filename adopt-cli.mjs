@@ -81,7 +81,7 @@ import {
   userInstructionFiles,
   steeringDetailDocPath,
 } from './lib/local-steering.mjs';
-import { pluginSettingsScopes } from './lib/plugin-key.mjs';
+import { pluginSettingsScopes, readSettingsScope } from './lib/plugin-key.mjs';
 import { CLI_INVOKE } from './cli-path.mjs';
 
 /**
@@ -591,12 +591,9 @@ function worktreeMainCheckout(top) {
 function claudeMdExcludesSet(dirs) {
   const files = new Set(dirs.flatMap((d) => pluginSettingsScopes(claudeConfigDir(), d)));
   for (const f of files) {
-    try {
-      const v = JSON.parse(readFileSync(f, 'utf8'))?.claudeMdExcludes;
-      if (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null) return true;
-    } catch {
-      /* absent or unparseable: sets nothing */
-    }
+    // Absent, unparseable or not a regular file: sets nothing.
+    const v = readSettingsScope(f)?.claudeMdExcludes;
+    if (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null) return true;
   }
   return false;
 }

@@ -6,8 +6,9 @@
 // Handles adaptive time windows, token-budgeted selection, and legacy CLAUDE.md cleanup.
 
 import { basename, join } from 'path';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, writeFileSync } from 'fs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { readRegularTextOrThrow } from './lib/regular-file.mjs';
 import {
   estimateTokens,
   truncate,
@@ -422,7 +423,8 @@ export function cleanupClaudeMdLegacyBlock() {
   const claudeMdPath = join(inferProjectDir(), 'CLAUDE.md');
   let content;
   try {
-    content = readFileSync(claudeMdPath, 'utf8');
+    // Bounded: a repository can commit `CLAUDE.md -> /dev/zero`; such a file is treated as missing.
+    content = readRegularTextOrThrow(claudeMdPath);
   } catch {
     // CLAUDE.md missing — still drop the marker so we don't re-stat every session
     try {
