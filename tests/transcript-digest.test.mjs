@@ -250,23 +250,33 @@ describe('digestTranscript', () => {
     // The budget is what keeps Stop inside its hook timeout, so it holds when the state cannot be
     // saved too. Reading the rest instead took Stop past its 5 s timeout on a 1 GiB transcript
     // (6.35.2 review F1).
+    // What one call may read: the first budgeted call from byte 0, with a runtime dir it can write.
+    const firstBudget = () => {
+      const first = digestTranscript(path, { runtimeDir, maxBytes: 300 });
+      expect(first.complete, 'premise: this budget does not finish the file in one call').toBe(false);
+      expect(first.main.cited.size, 'premise: one budget takes some lines').toBeGreaterThan(0);
+      return answers(first);
+    };
+
     it('when the state cannot be saved, each call still stops at its budget', () => {
       writeFileSync(path, forty());
-      expect(
-        digestTranscript(path, { runtimeDir, maxBytes: 300 }).complete,
-        'premise: with a writable runtime dir this budget does not finish in one call',
-      ).toBe(false);
+      const one = firstBudget();
       const notADir = join(dir, 'runtime-is-a-file');
       writeFileSync(notADir, '');
       for (let i = 0; i < 3; i++) {
-        expect(digestTranscript(path, { runtimeDir: notADir, maxBytes: 300 }).complete).toBe(false);
+        const digest = digestTranscript(path, { runtimeDir: notADir, maxBytes: 300 });
+        expect(digest.complete).toBe(false);
+        expect(answers(digest), 'it reads what one budget from byte 0 reads, no more').toEqual(one);
       }
     });
 
     it('without a runtime dir, each call still stops at its budget', () => {
       writeFileSync(path, forty());
+      const one = firstBudget();
       for (let i = 0; i < 3; i++) {
-        expect(digestTranscript(path, { maxBytes: 300 }).complete).toBe(false);
+        const digest = digestTranscript(path, { maxBytes: 300 });
+        expect(digest.complete).toBe(false);
+        expect(answers(digest), 'it reads what one budget from byte 0 reads, no more').toEqual(one);
       }
     });
   });
