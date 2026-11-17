@@ -2,6 +2,36 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.4 — a repository's links no longer lead the plugin's writes out of it
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.3`.
+
+- **A cloned repository's committed links no longer make the plugin write or delete files
+  outside it.** With `.claude` committed as a link out of the repository, a session started in a
+  repository whose `CLAUDE.md` carries the managed block, and `adopt`, wrote the detail doc and
+  its state file into the directory the link named, and `unadopt` deleted them there. With
+  `CLAUDE.md` committed as such a link, that session refreshed the block in the file the link
+  named and added the `AGENTS.md` import to it, `adopt` appended the block to it, and the
+  one-time cleanup of the old `<claude-mem-context>` block rewrote it when it held one. A link at
+  `CLAUDE.md` or `.claude` is now written through only when it resolves inside the project and
+  outside `.git` (in any letter case), or when git lists it as untracked, which is how git shows
+  a link you made. An archive unpacked into a git work tree, or one you run `git init` in, is not
+  covered: git lists its links as untracked too. A link at the detail doc or the state file itself
+  is never written through, as in 6.35.3.
+- **Layouts 6.35.3 wrote and 6.35.4 refuses.** A link at `CLAUDE.md` or `.claude` that leads out
+  of the project is refused when the project is not in a git work tree, when git does not answer
+  (a repository it refuses as another user's, git missing, a 5-second timeout), when you
+  committed the link yourself, and when your link sits where the repository tracks a file of
+  that name. `adopt` names the link. A session started there leaves the block as it was and says
+  nothing; `adopt --status` still reports the project adopted.
+- **`unadopt` leaves a refused link and what is behind it alone, and says so.** When the block is
+  in a file that a refused `CLAUDE.md` link names, the block, the detail doc and its state file
+  stay, and `unadopt` exits 1 and says to remove the block from that file by hand; `unadopt --all`
+  counts that project as not removed.
+- **The cleanup of the old `<claude-mem-context>` block no longer turns `keep this`, the block,
+  then `trailing` into `keep thistrailing`.**
+
 ## v6.35.3 — project files committed as links; native-binding repair from the CLI
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
