@@ -11,7 +11,16 @@
 // does for files ABOVE the project); peak RSS tells a read that was stopped from one that failed
 // only when memory ran out.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { lstatSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -153,6 +162,38 @@ describe('every hook event reads the project settings scopes', () => {
     expectBounded(s);
   });
 
+  // hooks.json runs every node hook through scripts/hook-launcher.mjs, whose own disabled check
+  // reads the same scopes before it imports the entry (v6.35.3 pre-tag review D1).
+  const LAUNCH = `process.argv = [process.execPath, ${JSON.stringify(join(REPO, 'scripts', 'hook-launcher.mjs'))}, 'hook.mjs', 'not-an-event'];
+await import(${url('scripts/hook-launcher.mjs')});`;
+
+  it('the hook launcher does not read a .claude/settings.json committed as a link to /dev/zero', () => {
+    mkdirSync(join(app, '.claude'));
+    symlinkSync('/dev/zero', join(app, '.claude', 'settings.json'));
+    commitAll(app);
+    const s = capped(LAUNCH, { CLAUDE_PROJECT_DIR: app });
+    expectBounded(s);
+    expect(s.status).toBe(0);
+  });
+
+  // A regular file whose reported size (0) says nothing about its length.
+  it('the hook launcher reads at most 4 MiB of a .claude/settings.local.json linked to /proc/self/pagemap', () => {
+    mkdirSync(join(app, '.claude'));
+    symlinkSync('/proc/self/pagemap', join(app, '.claude', 'settings.local.json'));
+    commitAll(app);
+    const s = capped(LAUNCH, { CLAUDE_PROJECT_DIR: app });
+    expectBounded(s);
+    expect(s.status).toBe(0);
+  });
+
+  it('the hook launcher does not stall on a FIFO .claude/settings.local.json', () => {
+    mkdirSync(join(app, '.claude'));
+    mkfifo(join(app, '.claude', 'settings.local.json'));
+    const s = capped(LAUNCH, { CLAUDE_PROJECT_DIR: app });
+    expectBounded(s);
+    expect(s.status).toBe(0);
+  });
+
   it('isPluginDisabledForProject reads a linked scope as setting nothing', () => {
     mkdirSync(join(app, '.claude'));
     symlinkSync('/dev/zero', join(app, '.claude', 'settings.json'));
@@ -160,6 +201,92 @@ describe('every hook event reads the project settings scopes', () => {
 globalThis.__r = k.isPluginDisabledForProject(process.env.HOME + '/.claude', process.cwd());`);
     expectBounded(s);
     expect(s.r).toBe(false);
+  });
+});
+
+// The PostToolUse Read fast path decides "disabled" in bash and never reaches node unless bash
+// says disabled (v6.35.3 pre-tag review D1). A reads-* file in the runtime dir is bash's
+// "enabled": the Read was recorded.
+describe('the bash PostToolUse filter reads the project settings scopes', () => {
+  const SCRIPT = join(REPO, 'scripts', 'post-tool-use.sh');
+  const which = (cmd) => execFileSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).trim();
+  const BASH = which('bash');
+
+  function readEvent({ path = null, dataKb = 1048576, lang = null } = {}) {
+    const env = { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'), CLAUDE_PROJECT_DIR: app };
+    for (const k of ['CLAUDE_CONFIG_DIR', 'CLAUDE_MEM_RUNTIME_DIR', 'CLAUDE_PID']) delete env[k];
+    if (path) env.PATH = path;
+    if (lang) env.LC_ALL = lang;
+    const r = spawnSync('/bin/sh', ['-c', `ulimit -d ${dataKb}; exec "$0" "$@"`, BASH, SCRIPT], {
+      cwd: app,
+      env,
+      input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(app, 'README.md') } }),
+      encoding: 'utf8',
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+    });
+    const runtime = join(home, 'data', 'runtime');
+    const reads = existsSync(runtime) ? readdirSync(runtime).filter((f) => f.startsWith('reads-')) : [];
+    return { signal: r.signal, status: r.status, reads, stderr: r.stderr };
+  }
+  // head (the stdin read) and mkdir are the Read path's only commands; node is left out, so
+  // bash's own verdict stands (the script keeps it when node cannot run).
+  function binWithoutNode() {
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    for (const c of ['head', 'mkdir']) symlinkSync(which(c), join(bin, c));
+    return bin;
+  }
+
+  it('a .claude/settings.json committed as a link to /dev/zero is not read', () => {
+    mkdirSync(join(app, '.claude'));
+    symlinkSync('/dev/zero', join(app, '.claude', 'settings.json'));
+    commitAll(app);
+    const s = readEvent();
+    expect(s.signal, `killed (stderr: ${s.stderr.slice(0, 300)})`).toBeNull();
+    expect(s.status).toBe(0);
+    expect(s.reads).toHaveLength(1);
+  });
+
+  it('a FIFO .claude/settings.local.json is not opened for reading', () => {
+    mkdirSync(join(app, '.claude'));
+    mkfifo(join(app, '.claude', 'settings.local.json'));
+    const s = readEvent();
+    expect(s.signal, `killed (stderr: ${s.stderr.slice(0, 300)})`).toBeNull();
+    expect(s.reads).toHaveLength(1);
+  });
+
+  it('a settings file over 4 MiB reads as unreadable, as node reads it', () => {
+    mkdirSync(join(app, '.claude'));
+    writeFileSync(
+      join(app, '.claude', 'settings.local.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': false } }) + ' '.repeat(4194304),
+    );
+    const s = readEvent({ path: binWithoutNode() });
+    expect(s.status, s.stderr.slice(0, 300)).toBe(0);
+    expect(s.reads).toHaveLength(1);
+  });
+
+  it('counts the 4 MiB in bytes, whatever the locale', () => {
+    mkdirSync(join(app, '.claude'));
+    // 2,200,000 two-byte characters: over 4 MiB in bytes, under it in characters.
+    writeFileSync(
+      join(app, '.claude', 'settings.local.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': false } }) + '\u00e9'.repeat(2_200_000),
+    );
+    const s = readEvent({ path: binWithoutNode(), lang: 'C.UTF-8' });
+    expect(s.status, s.stderr.slice(0, 300)).toBe(0);
+    expect(s.reads).toHaveLength(1);
+  });
+
+  it('reads at most 4 MiB of a large settings file', () => {
+    mkdirSync(join(app, '.claude'));
+    writeFileSync(join(app, '.claude', 'settings.json'), Buffer.alloc(48 * 1024 * 1024, 0x20));
+    // 32 MiB of data segment: the 4 MiB read fits, the 48 MiB one does not.
+    const s = readEvent({ dataKb: 32768 });
+    expect(s.signal).toBeNull();
+    expect(s.status, s.stderr.slice(0, 300)).toBe(0);
+    expect(s.reads).toHaveLength(1);
   });
 });
 

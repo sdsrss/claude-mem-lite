@@ -48,10 +48,18 @@ _mem_settings_file="$_mem_config_home/settings.json"
 _mem_project_dir="${CLAUDE_PROJECT_DIR:-$PWD}"
 _mem_plugin_disabled() {
   local _f _settings _value=""
+  # Bytes, for -n and ${#} below. Function-local: restored on return.
+  local LC_ALL=C
   for _f in "$_mem_settings_file" "$_mem_project_dir/.claude/settings.json" \
     "$_mem_project_dir/.claude/settings.local.json"; do
-    [[ -r "$_f" ]] || continue
-    _settings=$(<"$_f")
+    # A regular file of at most 4 MiB, as node reads it (lib/regular-file.mjs): a cloned
+    # repository can commit `.claude/settings.json -> /dev/zero`, which `$(<file)` read without
+    # end, and a FIFO there blocked the open. -f follows a link and is false for a device or a
+    # FIFO; a longer file reads as unreadable. Builtins only (~50 µs over `$(<file)` on 7 KB).
+    [[ -f "$_f" && -r "$_f" ]] || continue
+    _settings=
+    IFS= read -r -d '' -n 4194305 _settings <"$_f"
+    ((${#_settings} <= 4194304)) || continue
     [[ "$_settings" =~ \"claude-mem-lite@sdsrss\"[[:space:]]*:[[:space:]]*(true|false) ]] &&
       _value="${BASH_REMATCH[1]}"
   done

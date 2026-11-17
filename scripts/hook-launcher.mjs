@@ -26,7 +26,19 @@
 // would defeat the entire purpose — the launcher must survive a broken
 // install.
 
-import { existsSync, mkdirSync, writeFileSync, statSync, unlinkSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -196,6 +208,33 @@ if (swapInProgress()) process.exit(0);
 // and local scopes are merged as the host merges them, highest last (lib/plugin-key.mjs
 // pluginSettingsScopes / isPluginDisabledInScopes): reading the user scope alone killed a
 // plugin a project enabled (E2E 2026-10-16 round 2).
+//
+// Each scope is read only when it is a regular file of at most 4 MiB: a cloned repository can
+// commit `.claude/settings.json -> /dev/zero`, which a plain read followed without end on every
+// hook event, and a FIFO there blocked the open. lib/regular-file.mjs readRegularText, inline per
+// the charter; null for anything else, which sets nothing (fail open).
+const SETTINGS_MAX_BYTES = 4194304;
+function readSettingsText(path) {
+  const fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > SETTINGS_MAX_BYTES) return null;
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(65536);
+      const n = readSync(fd, chunk, 0, chunk.length, null);
+      if (n === 0) break;
+      total += n;
+      if (total > SETTINGS_MAX_BYTES) return null;
+      chunks.push(chunk.subarray(0, n));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function pluginDisabled() {
   const d = process.env.CLAUDE_CONFIG_DIR;
   const configHome = d && isAbsolute(d) ? d : join(homedir(), '.claude');
@@ -207,7 +246,9 @@ function pluginDisabled() {
     join(projectDir, '.claude', 'settings.local.json'),
   ]) {
     try {
-      const v = JSON.parse(readFileSync(path, 'utf8'))?.enabledPlugins?.['claude-mem-lite@sdsrss'];
+      const text = readSettingsText(path);
+      if (text === null) continue;
+      const v = JSON.parse(text)?.enabledPlugins?.['claude-mem-lite@sdsrss'];
       if (typeof v === 'boolean') value = v;
     } catch {
       /* missing or unparseable: sets nothing (fail open) */
