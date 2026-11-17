@@ -308,6 +308,17 @@ describe('layouts built with links keep working', () => {
     expect(existsSync(join(app, 'shared-claude', 'plugin_claude_mem_lite.md'))).toBe(true);
   });
 
+  it('an untracked detail doc linked into a dotfiles directory is written', () => {
+    ok(run(ADOPT_OLDER_DOC));
+    const dot = join(home, 'dotfiles', 'plugin_claude_mem_lite.md');
+    mkdirSync(dirname(dot), { recursive: true });
+    renameSync(join(app, DOC), dot);
+    symlinkSync(dot, join(app, DOC));
+    ok(run(SESSION_START));
+    expect(read(dot)).not.toContain('an older doc');
+    expect(lstatSync(join(app, DOC)).isSymbolicLink()).toBe(true);
+  });
+
   it('an untracked state sidecar linked into a stow-style tree is written (round 2, F3)', () => {
     ok(run(ADOPT_OLDER_DOC));
     commitAll(app);
