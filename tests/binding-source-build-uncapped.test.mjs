@@ -1,6 +1,6 @@
 // D#859. ensureBetterSqlite3Working's default exec capped EVERY step at 240 s, the source
-// build included. execSync's timeout signals only its direct child, so a compile that ran past
-// the cap killed `npm` and left node-gyp compiling while the heal reported failure, put the
+// build included. execSync's timeout signals only its direct child, the shell it starts, so a
+// compile that ran past the cap kept running while the heal reported failure, put the
 // shadowing prebuild back and released install.lock (measured with stand-ins: execSync of an
 // `npm run` script that sleeps returned ETIMEDOUT at 2006 ms with the script's `sleep` still
 // running). The platforms that need the compile are the ones 13 ships no prebuild for; how
