@@ -2,7 +2,8 @@
 // SessionStart, adopt and unadopt write or delete files outside it (v6.35.3 pre-tag round 2, F1;
 // v6.35.2 alike). git lists a link the user made at `.claude` or CLAUDE.md as untracked, and a link
 // the repository commits as a staged symlink. Those links of the user's keep working inside a git work
-// tree; the detail doc and the state file are never written through a link (pre-tag round 1, F1).
+// tree; a link at the detail doc or the state file itself is never written through (pre-tag round 1,
+// F1).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   appendFileSync,

@@ -1100,7 +1100,7 @@ function unadoptProject(dir, dryRun) {
 // unadopt's line when CLAUDE.md is a link it will not write through: the block, the detail doc and its
 // state file all stay, and only the user can take the block out (v6.35.4 pre-tag round 1, F5).
 const BLOCK_LEFT_NOTE =
-  'the block stays in the file CLAUDE.md links to, with the detail doc and its state file beside it: remove the block from that file by hand, then run unadopt again';
+  'the block stays in the file CLAUDE.md links to, and the detail doc and its state file stay too: remove the block from that file by hand, then run unadopt again';
 
 export function cmdUnadopt(args = []) {
   if (hasFlag(args, '--status')) return statusAll();
