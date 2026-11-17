@@ -230,8 +230,8 @@ describe('the bash PostToolUse filter reads the project settings scopes', () => 
     const reads = existsSync(runtime) ? readdirSync(runtime).filter((f) => f.startsWith('reads-')) : [];
     return { signal: r.signal, status: r.status, reads, stderr: r.stderr };
   }
-  // head (the stdin read) and mkdir are the Read path's only commands; node is left out, so
-  // bash's own verdict stands (the script keeps it when node cannot run).
+  // head (the stdin read) and mkdir are the only commands this Read runs while bash says enabled;
+  // node is left out, so bash's own verdict stands (the script keeps it when node cannot run).
   function binWithoutNode() {
     const bin = join(home, 'bin');
     mkdirSync(bin);

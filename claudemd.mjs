@@ -553,8 +553,8 @@ export function orphanResidueNote(orphans, slug, p) {
 }
 
 // readRegularText's limit for removing our block: its default (Claude Code's 4194304-byte limit)
-// unless `p` reports a larger size, then that size. A device, a FIFO and a /proc file report 0
-// and keep the default (readRegularText reads neither of the first two).
+// unless `p` reports a larger size, then that size. A device, a FIFO and /proc/self/pagemap
+// report 0 and keep the default (readRegularText reads neither of the first two).
 function regularFileLimit(p) {
   try {
     const st = statSync(p);
