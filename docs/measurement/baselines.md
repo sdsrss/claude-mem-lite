@@ -44,6 +44,25 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-11-16 (v6.35.3 release tree)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `47f5a8cc` replaced it:
+
+> | Tests | **553 files / 9958**, 0 skipped | `main` @ `e9f29568`, 2026-11-09, v6.31.0 + 4 commits |
+> | Knip | **36** unused exports, **0** unused files, **7** unlisted binaries | same tree, primary working tree, knip 6.44.1 |
+> | Coverage | **87.89** stmts · **82.99** branches · **92.52** funcs · **89.18** lines | same tree, vitest 5.1.0 |
+
+**Knip's unlisted-binaries count moved with the ruler, not the code.** Read in the primary
+working tree on 2026-11-16: knip 6.44.1 on `4e040a82` gave 36 unused exports and 10 unlisted
+binaries; v6.35.2's gate (`261eb4e3`, same knip) had read 9, and the one added is `mkfifo` in
+`tests/project-files-not-regular.test.mjs`. PR #55 (`77584895`, knip 6.44.1 → 6.44.2, lockfile
+and `package.json` only) on the same tree: the same 36 export names, 7 binaries — knip 6.44.2
+no longer reports `du` and `pgrep` in `install.mjs` or `pgrep` in
+`tests/summary-worker-spawn.test.mjs`. PR #58 (`0fc8b450`, knip 6.45.1, eslint 10.15.0,
+prettier 3.10.1) read the same name set as 6.44.2. The new row is the release gate's reading
+on `47f5a8cc` (`tasks/remaining-6312/gates.sh`, claude off PATH): test:ci-env and
+test:coverage both 567 files / 10365 passed.
+
 ### Superseded row moved from CLAUDE.md 2026-11-09 (after dev-deps PR #52)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `e9f29568` replaced it:
