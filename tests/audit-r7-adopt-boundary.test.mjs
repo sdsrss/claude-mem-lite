@@ -32,6 +32,7 @@ import {
   lstatSync,
   rmSync,
 } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { buildClaudeMdBlock, getDetailDoc, PLUGIN_SLUG } from '../adopt-content.mjs';
@@ -79,6 +80,8 @@ describe('R7 P2-2 — unadopt preserves a symlinked CLAUDE.md', () => {
     const dotfiles = join(ROOT, 'dotfiles');
     mkdirSync(proj, { recursive: true });
     mkdirSync(dotfiles, { recursive: true });
+    // A git work tree, where the link is untracked: the user's own, so written through (D#880).
+    execFileSync('git', ['init', '-q'], { cwd: proj, stdio: 'ignore' });
     const target = join(dotfiles, 'CLAUDE.md');
     writeFileSync(target, targetContent);
     symlinkSync(target, join(proj, 'CLAUDE.md'));

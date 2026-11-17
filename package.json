@@ -134,6 +134,7 @@
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",
     "lib/regular-file.mjs",
+    "lib/project-link.mjs",
     "lib/platform-gate.mjs",
     "lib/hook-prune.mjs",
     "lib/proxy-fetch.mjs",

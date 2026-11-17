@@ -8,6 +8,7 @@
 import { basename, join } from 'path';
 import { existsSync, writeFileSync } from 'fs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { linkRefusal, refusalText } from './lib/project-link.mjs';
 import { readRegularTextOrThrow } from './lib/regular-file.mjs';
 import {
   estimateTokens,
@@ -489,6 +490,15 @@ export function cleanupClaudeMdLegacyBlock() {
   const normalized = cleaned.replace(/\n{3,}/g, '\n\n').replace(/\s*$/, '\n');
 
   if (normalized === content) {
+    dropMarker();
+    return;
+  }
+
+  // Not through a CLAUDE.md link the repository may have committed: it rewrote the outside file
+  // it names, with auto-adopt off too (D#880). Marked done, as a file without a block is.
+  const refusal = linkRefusal(inferProjectDir(), 'CLAUDE.md');
+  if (refusal) {
+    debugLog('WARN', 'cleanupClaudeMdLegacyBlock', refusalText(refusal));
     dropMarker();
     return;
   }

@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, rmSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { walkShipped, sweepShipped, sourceWithoutComments, REPO } from './shipped-tree.mjs';
@@ -45,6 +46,10 @@ function symlinkedConfig(basename, initialContent) {
   const dotfiles = join(root, 'dotfiles');
   mkdirSync(project, { recursive: true });
   mkdirSync(dotfiles, { recursive: true });
+  // A git work tree, where the link is untracked: git shows the user made it, which is what lets
+  // the plugin write through a link out of the project (D#880, lib/project-link.mjs). Outside git
+  // such a link is refused (tests/project-links-out.test.mjs).
+  execFileSync('git', ['init', '-q'], { cwd: project, stdio: 'ignore' });
   const real = join(dotfiles, basename);
   const link = join(project, basename);
   writeFileSync(real, initialContent);

@@ -1078,10 +1078,13 @@ function unadoptProject(dir, dryRun) {
   if (r.action === 'removed') {
     log(`[unadopt --all] ${dir} → removed`);
     n.blocks++;
+  } else if (r.action === 'skipped-symlink') {
+    log(`[unadopt --all] ${dir} → skipped-symlink`);
   } else {
     log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
     n.partial++;
   }
+  for (const l of r.left ?? []) log(`  ⚠ left ${l.link} alone: ${l.why}`);
   // OUTSIDE the branch, because residue is orthogonal to what happened to the block: a
   // project can have its block removed AND still carry an unpaired sentinel. An orphan is
   // the one kind of residue the sweep cannot finish — its block has no end marker, so its
@@ -1126,6 +1129,7 @@ export function cmdUnadopt(args = []) {
   const mig = migrateLegacyMemoryDir(cwd, PLUGIN_SLUG, { force });
   const migNote = mig.action === 'removed' ? ' (+cleaned legacy memdir)' : '';
   log(`[unadopt] ${cwd} → ${r.action}${migNote}`);
+  for (const l of r.left ?? []) log(`  ⚠ left ${l.link} alone: ${l.why}`);
   const local = dropLocalSteering(cwd);
   if (local.action !== 'absent') log(`[unadopt] ${local.path} → ${local.action}`);
   if (local.residue) log(`  ⚠ ${local.residue}`);

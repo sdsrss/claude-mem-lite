@@ -83,6 +83,9 @@ export const SOURCE_FILES = [
   // Leaf (node: imports only): bounded reads of files someone else can occupy. Ahead of plugin-key,
   // claudemd, local-steering and hook-context, which import it.
   'lib/regular-file.mjs',
+  // Leaf (node: imports only): whether a project file reached through a link may be written. Ahead
+  // of claudemd and hook-context, which import it.
+  'lib/project-link.mjs',
   // v2.71.x: better-sqlite3 ABI probe + auto-rebuild. Shared by install.mjs
   // (post-`npm install` verify) and scripts/launch.mjs (pre-server-launch
   // self-heal after Node ABI changes). Missing from manifest → auto-update

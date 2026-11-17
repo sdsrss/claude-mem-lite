@@ -18,6 +18,7 @@
 import { existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync, statSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { readRegularText, readRegularTextOrThrow } from './lib/regular-file.mjs';
+import { linkRefusal, refusalText } from './lib/project-link.mjs';
 import { join, basename } from 'path';
 import { createHash } from 'crypto';
 import { memdirPath, removePluginSection, removePluginDoc, isAdopted as memdirIsAdopted } from './memdir.mjs';
@@ -34,11 +35,26 @@ export function claudeMdPath(cwd) {
 function dotClaudeDir(cwd) {
   return join(cwd, '.claude');
 }
+const docRel = (slug) => `.claude/plugin_${slugSnake(slug)}.md`;
+const stateRel = (slug) => `.claude/.plugin_${slugSnake(slug)}_state.json`;
 export function detailDocPath(cwd, slug) {
-  return join(dotClaudeDir(cwd), `plugin_${slugSnake(slug)}.md`);
+  return join(cwd, docRel(slug));
 }
 function stateFilePath(cwd, slug) {
-  return join(dotClaudeDir(cwd), `.plugin_${slugSnake(slug)}_state.json`);
+  return join(cwd, stateRel(slug));
+}
+
+// The three files adopt writes, each with whether the plugin writes it whole (lib/project-link.mjs).
+const managedTargets = (slug) => [
+  ['CLAUDE.md', false],
+  [docRel(slug), true],
+  [stateRel(slug), true],
+];
+
+// Throws the first refusal: a link on the way to `rel` that the plugin must not write through.
+function assertWritable(cwd, rel, whole) {
+  const r = linkRefusal(cwd, rel, { whole });
+  if (r) throw new Error(refusalText(r));
 }
 
 // First line of the detail doc — an invisible (in rendered markdown) marker that
@@ -219,6 +235,7 @@ export function holdsOnlyPluginLines(p, slug) {
  * @returns {'added'|'present'}
  */
 export function addAgentsImports(cwd, slug, imports) {
+  assertWritable(cwd, 'CLAUDE.md', false);
   const p = claudeMdPath(cwd);
   const raw = existsSync(p) ? readRegularTextOrThrow(p) : '';
   const marker = agentsImportMarker(slug);
@@ -407,19 +424,11 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
  *   (block disposition, and the detail doc's)
  */
 export function writeManaged(cwd, { slug, version, block, doc }) {
-  // The detail doc and the state sidecar are this plugin's own files, and the shared writer writes
-  // THROUGH a link (for a dotfiles-managed CLAUDE.md): a cloned repository that committed either as
-  // a link out of the project had SessionStart overwrite the file it names. Refused before
-  // anything is written.
-  for (const p of [detailDocPath(cwd, slug), stateFilePath(cwd, slug)]) {
-    let link = false;
-    try {
-      link = lstatSync(p).isSymbolicLink();
-    } catch {
-      /* absent */
-    }
-    if (link) throw new Error(`${p}: a symbolic link; not written through`);
-  }
+  // The shared writer writes THROUGH a link (for a dotfiles-managed CLAUDE.md), and a cloned
+  // repository can commit links: one as the doc or the state, as `.claude`, or as CLAUDE.md had this
+  // write outside the project (D#880). All three are checked before anything is written, so a
+  // refusal leaves CLAUDE.md as it was too.
+  for (const [rel, whole] of managedTargets(slug)) assertWritable(cwd, rel, whole);
   const { action } = writeBlockAt(claudeMdPath(cwd), { slug, version, block });
 
   // Detail doc (marker on first line so unadopt/refresh can tell it apart from a
@@ -506,10 +515,26 @@ export function writeBlockAt(p, { slug, version, block }) {
  * (that is the defect, not a detail), and guessing a span in a file we do not own is how the
  * adopt side came to delete a user's runbook. Report, do not repair.
  *
- * @returns {{action: 'removed'|'partial'|'absent', residue?: string}}
+ * A file reached through a link the plugin must not write through (lib/project-link.mjs) is left as
+ * it is, and named in `left`: a cloned repository's committed `.claude` link had unadopt delete two
+ * files in the directory it picked (D#880). `skipped-symlink` = CLAUDE.md was such a file.
+ *
+ * @returns {{action: 'removed'|'partial'|'absent'|'skipped-symlink', residue?: string,
+ *   left?: {link: string, why: string}[]}}
  */
 export function removeManaged(cwd, slug) {
-  const { action, orphans } = removeBlockAt(claudeMdPath(cwd), slug);
+  const left = [];
+  const refused = (rel, whole) => {
+    const r = linkRefusal(cwd, rel, { whole });
+    if (r && !left.some((l) => l.link === r.link)) left.push(r);
+    return r !== null;
+  };
+  const [[mdRel], [dRel], [sRel]] = managedTargets(slug);
+  const { action, orphans } = refused(mdRel, false)
+    ? { action: 'skipped-symlink', orphans: 0 }
+    : removeBlockAt(claudeMdPath(cwd), slug);
+  const docLeft = refused(dRel, true);
+  const stateLeft = refused(sRel, true);
   // Captured BEFORE the deletions below, because they are what it asks about: is there any
   // evidence the plugin ever wrote in this project? An unpaired sentinel is NOT such
   // evidence — it is text, and a project that merely documents the marker in prose has one
@@ -517,13 +542,13 @@ export function removeManaged(cwd, slug) {
   // own paragraph, on a project this tool has never touched.
   const dp = detailDocPath(cwd, slug);
   const wasOurs = action === 'removed' || existsSync(dp) || existsSync(stateFilePath(cwd, slug));
-  if (existsSync(dp))
+  if (!docLeft && existsSync(dp))
     try {
       unlinkSync(dp);
     } catch {
       /* best-effort */
     }
-  clearState(cwd, slug);
+  if (!stateLeft) clearState(cwd, slug);
   // Drop an emptied .claude/ so unadopt leaves no trace (skips if it holds
   // anything else — e.g. settings.local.json).
   try {
@@ -539,9 +564,10 @@ export function removeManaged(cwd, slug) {
   // `partial++`, so a sweep that DID remove a block reported "no block" and tallied zero
   // removals. Two facts, two fields.
   const residue = orphans > 0 && wasOurs ? orphanResidueNote(orphans, slug, claudeMdPath(cwd)) : null;
-  if (action === 'removed') return residue ? { action, residue } : { action };
-  if (residue) return { action: 'partial', residue };
-  return { action };
+  const leftField = left.length > 0 ? { left } : {};
+  if (action === 'removed') return residue ? { action, residue, ...leftField } : { action, ...leftField };
+  if (residue) return { action: 'partial', residue, ...leftField };
+  return { action, ...leftField };
 }
 
 /**
