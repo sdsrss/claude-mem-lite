@@ -44,6 +44,21 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-11-17 (v6.35.4 release tree)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `755d4e1c` replaced it:
+
+> | Tests | **567 files / 10365**, 0 skipped | `main` @ `47f5a8cc`, 2026-11-16, v6.35.3 release tree |
+> | Knip | **36** unused exports, **0** unused files, **7** unlisted binaries | same tree, primary working tree, knip 6.45.1 |
+> | Coverage | **88.38** stmts · **83.51** branches · **92.98** funcs · **89.67** lines | same tree, vitest 5.1.0 |
+
+The new row is the release gate's reading on `755d4e1c` (`tasks/remaining-6312/gates.sh`, claude
+off PATH): test:ci-env 568 files / 10397 passed; knip 6.45.1 read the same 36 export names and 7
+binaries as on `47f5a8cc`. Statements read 16668 / 18904 against 16622 / 18807: 51 more
+uncovered, 35 of them in the new `lib/project-link.mjs` (27 of its 62 covered, 43.54%). Its
+behaviour cases in `tests/project-links-out.test.mjs` run it in child processes, which the
+parent's v8 coverage does not see.
+
 ### Superseded row moved from CLAUDE.md 2026-11-16 (v6.35.3 release tree)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `47f5a8cc` replaced it:

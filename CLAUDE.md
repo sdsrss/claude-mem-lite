@@ -104,9 +104,9 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **567 files / 10365**, 0 skipped | `main` @ `47f5a8cc`, 2026-11-16, v6.35.3 release tree |
+| Tests | **568 files / 10397**, 0 skipped | `main` @ `755d4e1c`, 2026-11-17, v6.35.4 release tree |
 | Knip | **36** unused exports, **0** unused files, **7** unlisted binaries | same tree, primary working tree, knip 6.45.1 |
-| Coverage | **88.38** stmts · **83.51** branches · **92.98** funcs · **89.67** lines | same tree, vitest 5.1.0 |
+| Coverage | **88.17** stmts · **83.26** branches · **92.85** funcs · **89.49** lines | same tree, vitest 5.1.0 |
 
 Coverage `include` is a **denylist** — staying out costs a named `exclude`. Outside by
 design: `install.mjs`, `server.mjs`, `hook.mjs`, `cli.mjs`, `benchmark/**`, `scripts/**`
