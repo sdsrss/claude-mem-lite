@@ -2,6 +2,36 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.3 — project files committed as links; native-binding repair from the CLI
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.2`.
+
+- **The detail doc and the state file under `.claude/` are no longer written through a symbolic
+  link.** A repository that carried the managed block in `CLAUDE.md` and committed either file as
+  a link out of the repository had a session started in it overwrite the file the link named.
+  Both are now refused when they are links; `adopt` reports the refusal.
+- **Project files that are not regular files are no longer read without bound.** A repository
+  can commit `CLAUDE.md` as a symlink to `/dev/zero`, which SessionStart's automatic adoption read
+  without bound, and every hook event read the project's `.claude/settings*.json` the same way.
+  The plugin now reads `CLAUDE.md`, `CLAUDE.local.md`, the rules file, the detail doc and its
+  state file, `.claude/settings*.json`, `.mcp.json`, and the `package.json`, `.npmignore` or
+  `.gitignore` it checks for publishing only when they are regular files, and treats one over
+  4 MiB, Claude Code's limit for an instruction file, as unreadable; `unadopt` still removes its
+  block from a larger one. The managed block, the `AGENTS.md` imports and the detail doc are not
+  written into a FIFO, a device or a file over 4 MiB.
+- **A CLI command over a native binding that will not load starts at most one automatic
+  rebuild every 6 hours.** Before, every command ran `rebuild-binding` again before failing;
+  measured with no prebuild for the platform and no compiler, a command that failed in
+  73–81 ms took 20.5 s on the first call and 0.47 s on each one after it. Inside the 6 hours
+  the command prints `automatic rebuild skipped: last attempted … ago (one per 6 h)` and the
+  Fix line. A rebuild that works ends the wait, as does a `rebuild-binding` run after which
+  every code home loads. `rebuild-binding` itself is never held back.
+- **The CLI's automatic rebuild and `rebuild-binding` no longer stop the compile partway.** The
+  CLI stopped its rebuild after 300 s, and a rebuild stopped its compile from source after 240 s.
+  Neither stop reached the compiler, which kept running after the repair had reported failure.
+  The two `npm rebuild` steps keep their 240 s limit.
+
 ## v6.35.2 — `hono` dependency updates; a reminder fix for half-applied updates
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
