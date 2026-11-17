@@ -1080,11 +1080,13 @@ function unadoptProject(dir, dryRun) {
     n.blocks++;
   } else if (r.action === 'skipped-symlink') {
     log(`[unadopt --all] ${dir} → skipped-symlink`);
+    n.failures++;
   } else {
     log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
     n.partial++;
   }
   for (const l of r.left ?? []) log(`  ⚠ left ${l.link} alone: ${l.why}`);
+  if (r.action === 'skipped-symlink') log(`  ⚠ ${BLOCK_LEFT_NOTE}`);
   // OUTSIDE the branch, because residue is orthogonal to what happened to the block: a
   // project can have its block removed AND still carry an unpaired sentinel. An orphan is
   // the one kind of residue the sweep cannot finish — its block has no end marker, so its
@@ -1094,6 +1096,11 @@ function unadoptProject(dir, dryRun) {
   if (r.residue) log(`  ⚠ ${r.residue}`);
   return n;
 }
+
+// unadopt's line when CLAUDE.md is a link it will not write through: the block, the detail doc and its
+// state file all stay, and only the user can take the block out (v6.35.4 pre-tag round 1, F5).
+const BLOCK_LEFT_NOTE =
+  'the block stays in the file CLAUDE.md links to, with the detail doc and its state file beside it: remove the block from that file by hand, then run unadopt again';
 
 export function cmdUnadopt(args = []) {
   if (hasFlag(args, '--status')) return statusAll();
@@ -1130,6 +1137,10 @@ export function cmdUnadopt(args = []) {
   const migNote = mig.action === 'removed' ? ' (+cleaned legacy memdir)' : '';
   log(`[unadopt] ${cwd} → ${r.action}${migNote}`);
   for (const l of r.left ?? []) log(`  ⚠ left ${l.link} alone: ${l.why}`);
+  if (r.action === 'skipped-symlink') {
+    log(`  ⚠ ${BLOCK_LEFT_NOTE}`);
+    process.exitCode = 1;
+  }
   const local = dropLocalSteering(cwd);
   if (local.action !== 'absent') log(`[unadopt] ${local.path} → ${local.action}`);
   if (local.residue) log(`  ⚠ ${local.residue}`);

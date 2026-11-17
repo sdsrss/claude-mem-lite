@@ -517,24 +517,30 @@ export function writeBlockAt(p, { slug, version, block }) {
  *
  * A file reached through a link the plugin must not write through (lib/project-link.mjs) is left as
  * it is, and named in `left`: a cloned repository's committed `.claude` link had unadopt delete two
- * files in the directory it picked (D#880). `skipped-symlink` = CLAUDE.md was such a file.
+ * files in the directory it picked (D#880). `skipped-symlink` = CLAUDE.md was such a file; the doc
+ * and the state then stay too.
  *
  * @returns {{action: 'removed'|'partial'|'absent'|'skipped-symlink', residue?: string,
  *   left?: {link: string, why: string}[]}}
  */
 export function removeManaged(cwd, slug) {
   const left = [];
-  const refused = (rel, whole) => {
-    const r = linkRefusal(cwd, rel, { whole });
-    if (r && !left.some((l) => l.link === r.link)) left.push(r);
-    return r !== null;
-  };
-  const [[mdRel], [dRel], [sRel]] = managedTargets(slug);
-  const { action, orphans } = refused(mdRel, false)
+  // A CLAUDE.md the plugin will not write through is left alone only while the block is in it (read
+  // with a bound, never written): once the user has taken the block out by hand, the rest goes.
+  const mdRefusal = linkRefusal(cwd, 'CLAUDE.md');
+  const mdLeft = mdRefusal !== null && readBlockAt(claudeMdPath(cwd), slug).body !== null;
+  if (mdLeft) left.push(mdRefusal);
+  const { action, orphans } = mdLeft
     ? { action: 'skipped-symlink', orphans: 0 }
-    : removeBlockAt(claudeMdPath(cwd), slug);
-  const docLeft = refused(dRel, true);
-  const stateLeft = refused(sRel, true);
+    : mdRefusal
+      ? { action: 'absent', orphans: 0 }
+      : removeBlockAt(claudeMdPath(cwd), slug);
+  // The doc and the state go only with the block: a block left behind a link still points at the
+  // doc (v6.35.4 pre-tag round 1, F5). Deleting either one is unlinkSync, which removes a link
+  // itself, not what it names; what can lead it out of the project is a `.claude` link.
+  const dirRefusal = linkRefusal(cwd, '.claude');
+  if (dirRefusal) left.push(dirRefusal);
+  const keep = dirRefusal !== null || mdLeft;
   // Captured BEFORE the deletions below, because they are what it asks about: is there any
   // evidence the plugin ever wrote in this project? An unpaired sentinel is NOT such
   // evidence — it is text, and a project that merely documents the marker in prose has one
@@ -542,13 +548,13 @@ export function removeManaged(cwd, slug) {
   // own paragraph, on a project this tool has never touched.
   const dp = detailDocPath(cwd, slug);
   const wasOurs = action === 'removed' || existsSync(dp) || existsSync(stateFilePath(cwd, slug));
-  if (!docLeft && existsSync(dp))
+  if (!keep && existsSync(dp))
     try {
       unlinkSync(dp);
     } catch {
       /* best-effort */
     }
-  if (!stateLeft) clearState(cwd, slug);
+  if (!keep) clearState(cwd, slug);
   // Drop an emptied .claude/ so unadopt leaves no trace (skips if it holds
   // anything else — e.g. settings.local.json).
   try {
