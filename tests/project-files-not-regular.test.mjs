@@ -15,6 +15,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   symlinkSync,
@@ -22,7 +23,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
 
@@ -290,6 +291,45 @@ describe('the bash PostToolUse filter reads the project settings scopes', () => 
   });
 });
 
+// The detail doc and the state sidecar are the plugin's own files. The shared writer writes
+// THROUGH a link (for a dotfiles-managed CLAUDE.md), so a cloned repository that committed either
+// as a link out of the project had SessionStart overwrite the file it names (v6.35.3 pre-tag
+// review D2; v6.35.2 alike).
+describe('plugin files committed as links out of the project', () => {
+  const ADOPT_OLDER_DOC = `const m = await import(${url('claudemd.mjs')});
+const c = await import(${url('adopt-content.mjs')});
+m.writeManaged(process.cwd(), { slug: c.PLUGIN_SLUG, version: c.CURRENT_SENTINEL_VERSION, block: c.buildClaudeMdBlock(), doc: 'an older doc' });`;
+  const linkOut = (p, victim) => {
+    writeFileSync(victim, 'VICTIM original user content\n');
+    rmSync(p, { force: true });
+    symlinkSync(relative(dirname(p), victim), p);
+  };
+
+  it('SessionStart does not write through a committed detail-doc link', () => {
+    expect(capped(ADOPT_OLDER_DOC).status).toBe(0);
+    const doc = join(app, '.claude', 'plugin_claude_mem_lite.md');
+    const victim = join(home, 'victim-doc.txt');
+    linkOut(doc, victim);
+    commitAll(app);
+    const s = capped(ADOPT_IN_APP);
+    expect(s.status, s.stderr.slice(0, 300)).toBe(0);
+    expect(readFileSync(victim, 'utf8')).toBe('VICTIM original user content\n');
+    expect(lstatSync(doc).isSymbolicLink()).toBe(true);
+  });
+
+  it('SessionStart does not write through a committed state-sidecar link', () => {
+    expect(capped(ADOPT_OLDER_DOC).status).toBe(0);
+    const state = join(app, '.claude', '.plugin_claude_mem_lite_state.json');
+    const victim = join(home, 'victim-state.txt');
+    linkOut(state, victim);
+    commitAll(app);
+    const s = capped(ADOPT_IN_APP);
+    expect(s.status, s.stderr.slice(0, 300)).toBe(0);
+    expect(readFileSync(victim, 'utf8')).toBe('VICTIM original user content\n');
+    expect(lstatSync(state).isSymbolicLink()).toBe(true);
+  });
+});
+
 describe('the other readers of project files', () => {
   it('removeBlockAt (unadopt) on a CLAUDE.md linked to /dev/zero finds no block', () => {
     symlinkSync('/dev/zero', join(app, 'CLAUDE.md'));
@@ -319,8 +359,6 @@ try { m.writeBlockAt(process.cwd() + '/CLAUDE.local.md', { slug: 'claude-mem-lit
     expect(lstatSync(p).isFIFO()).toBe(true);
   });
 
-  // The state is then written through the link (atomicWriteFileSync follows links on purpose, for
-  // dotfile repos) and that write fails into /dev: unchanged, and not what this case is about.
   it("writeManaged's state read does not read a sidecar linked to /dev/zero", () => {
     mkdirSync(join(app, '.claude'));
     const state = join(app, '.claude', '.plugin_claude_mem_lite_state.json');
@@ -329,7 +367,7 @@ try { m.writeBlockAt(process.cwd() + '/CLAUDE.local.md', { slug: 'claude-mem-lit
 try { m.writeManaged(process.cwd(), { slug: 'claude-mem-lite', version: 'v1', block: 'b', doc: 'd' }); globalThis.__r = 'done'; } catch { globalThis.__r = 'threw'; }`);
     expectBounded(s);
     expect(s.status).toBe(0);
-    expect(s.r).not.toBeNull();
+    expect(s.r).toBe('threw');
     expect(lstatSync(state).isSymbolicLink()).toBe(true);
   });
 

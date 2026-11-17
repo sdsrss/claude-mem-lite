@@ -407,6 +407,19 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
  *   (block disposition, and the detail doc's)
  */
 export function writeManaged(cwd, { slug, version, block, doc }) {
+  // The detail doc and the state sidecar are this plugin's own files, and the shared writer writes
+  // THROUGH a link (for a dotfiles-managed CLAUDE.md): a cloned repository that committed either as
+  // a link out of the project had SessionStart overwrite the file it names. Refused before
+  // anything is written.
+  for (const p of [detailDocPath(cwd, slug), stateFilePath(cwd, slug)]) {
+    let link = false;
+    try {
+      link = lstatSync(p).isSymbolicLink();
+    } catch {
+      /* absent */
+    }
+    if (link) throw new Error(`${p}: a symbolic link; not written through`);
+  }
   const { action } = writeBlockAt(claudeMdPath(cwd), { slug, version, block });
 
   // Detail doc (marker on first line so unadopt/refresh can tell it apart from a
