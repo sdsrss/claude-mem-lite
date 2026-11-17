@@ -331,6 +331,22 @@ m.writeManaged(process.cwd(), { slug: c.PLUGIN_SLUG, version: c.CURRENT_SENTINEL
 });
 
 describe('the other readers of project files', () => {
+  it('removeBlockAt (unadopt) removes the block from a regular CLAUDE.md over 4 MiB, as 6.35.2 did', () => {
+    const s0 = capped(`const m = await import(${url('claudemd.mjs')});
+m.writeBlockAt(process.cwd() + '/CLAUDE.md', { slug: 'claude-mem-lite', version: 'v1', block: 'the block' });`);
+    expect(s0.status).toBe(0);
+    const p = join(app, 'CLAUDE.md');
+    writeFileSync(p, readFileSync(p, 'utf8') + '\n' + 'user text\n'.repeat(450_000));
+    expect(lstatSync(p).size).toBeGreaterThan(4194304);
+    const s = capped(`const m = await import(${url('claudemd.mjs')});
+globalThis.__r = m.removeBlockAt(process.cwd() + '/CLAUDE.md', 'claude-mem-lite');`);
+    expect(s.status).toBe(0);
+    expect(s.r).toMatchObject({ action: 'removed' });
+    const after = readFileSync(p, 'utf8');
+    expect(after).not.toContain('claude-mem-lite:begin');
+    expect(after.split('user text\n')).toHaveLength(450_001);
+  });
+
   it('removeBlockAt (unadopt) on a CLAUDE.md linked to /dev/zero finds no block', () => {
     symlinkSync('/dev/zero', join(app, 'CLAUDE.md'));
     const s = capped(`const m = await import(${url('claudemd.mjs')});

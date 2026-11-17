@@ -15,7 +15,7 @@
 //
 // See docs/CLAUDE-MD-STEERING-PLAN.md for rationale + migration.
 
-import { existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync } from 'fs';
+import { existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync, statSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { readRegularText, readRegularTextOrThrow } from './lib/regular-file.mjs';
 import { join, basename } from 'path';
@@ -552,6 +552,18 @@ export function orphanResidueNote(orphans, slug, p) {
   return `${orphans} unpaired \`${slug}\` sentinel line(s) remain in ${p} — the block they opened has no matching end marker, so its extent cannot be determined safely. Remove those lines and the text they wrap by hand.`;
 }
 
+// readRegularText's limit for removing our block: its default (Claude Code's 4194304-byte limit)
+// unless `p` reports a larger size, then that size. A device, a FIFO and a /proc file report 0
+// and keep the default (readRegularText reads neither of the first two).
+function regularFileLimit(p) {
+  try {
+    const st = statSync(p);
+    return st.size > 4194304 ? st.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Remove every well-formed block of `slug` from one instructions file, keeping all other
  * text; a file left holding only whitespace is deleted (a symlink is emptied through the
@@ -563,9 +575,10 @@ export function orphanResidueNote(orphans, slug, p) {
 export function removeBlockAt(p, slug) {
   let action = 'absent';
   let orphans = 0;
-  // A FIFO, a device or a file over the instruction-file limit holds no block Claude Code loads,
-  // as readBlockAt answers, and is not read: a repository can commit `CLAUDE.md -> /dev/zero`.
-  const found = existsSync(p) ? readRegularText(p) : null;
+  // A FIFO or a device is not read and holds no block: a repository can commit
+  // `CLAUDE.md -> /dev/zero`. A regular file is read whatever its size, as before: Claude Code
+  // does not load one over 4 MiB, but the block the user asked to remove still comes out.
+  const found = existsSync(p) ? readRegularText(p, regularFileLimit(p)) : null;
   if (found !== null) {
     let raw = found;
     // H2: loop so ALL same-slug blocks are removed, not just the first (a
