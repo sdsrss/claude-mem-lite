@@ -353,3 +353,23 @@ describe('a directory git does not track', () => {
     expect(existsSync(join(plain, 'cfg', 'plugin_claude_mem_lite.md'))).toBe(true);
   });
 });
+
+describe("the legacy <claude-mem-context> cleanup keeps the user's line breaks", () => {
+  it('removes the span without joining the lines around it', () => {
+    writeFileSync(
+      join(app, 'CLAUDE.md'),
+      'keep this\n<claude-mem-context>\nold context\n</claude-mem-context>\ntrailing\n',
+    );
+    ok(run(LEGACY_CLEANUP, { env: { CLAUDE_PROJECT_DIR: app, MEM_NO_AUTO_ADOPT: '1' } }));
+    expect(read(join(app, 'CLAUDE.md'))).toBe('keep this\ntrailing\n');
+  });
+
+  it('a span between blank lines leaves one blank line', () => {
+    writeFileSync(
+      join(app, 'CLAUDE.md'),
+      'keep this\n\n<claude-mem-context>\nold context\n</claude-mem-context>\n\ntrailing\n',
+    );
+    ok(run(LEGACY_CLEANUP, { env: { CLAUDE_PROJECT_DIR: app, MEM_NO_AUTO_ADOPT: '1' } }));
+    expect(read(join(app, 'CLAUDE.md'))).toBe('keep this\n\ntrailing\n');
+  });
+});

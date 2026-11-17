@@ -482,8 +482,11 @@ export function cleanupClaudeMdLegacyBlock() {
     }
   }
 
-  // Swallow a single preceding newline to avoid leaving a blank-line gap behind.
-  if (removeStart > 0 && content[removeStart - 1] === '\n') removeStart -= 1;
+  // A span at the end of the file has no newline after it: take the one before it instead. Never
+  // both — that joined the lines around the span (`keep this` + `trailing` → `keep thistrailing`,
+  // v6.35.3 pre-tag round 2, O1).
+  if (removeEnd === endIdx + endTag.length && removeStart > 0 && content[removeStart - 1] === '\n')
+    removeStart -= 1;
 
   const cleaned = content.slice(0, removeStart) + content.slice(removeEnd);
   // Collapse any ≥3 consecutive newlines to two, then ensure exactly one trailing newline.
