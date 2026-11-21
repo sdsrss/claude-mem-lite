@@ -862,17 +862,17 @@ describe('formatHookError — the hint must name a repair that actually applies'
 // manual command it printed could not fix it either. doctor stayed red permanently.
 //
 // The mechanism, measured in a scratch tree with a control (`docs/measurement/findings.md`):
-// better-sqlite3 13's `lib/binding.js` picks `prebuilds/<target>.node` on EXISTENCE alone
-// and prefers it over `build/`. So a prebuild that is present and unloadable — an old
-// glibc, a truncated download, the wrong arch baked into an image — shadows the binding the
+// better-sqlite3 13.0.x's `lib/binding.js` picked `prebuilds/<target>.node` on EXISTENCE
+// alone, before `build/`. So a prebuild that is present and unloadable — an old glibc, a
+// truncated download, the wrong arch baked into an image — shadowed the binding the
 // source-compile fallback produces. Corrupt prebuild + healthy build/Release → `wrong ELF
 // class`; move the prebuild aside → loads; remove both → fails (the control proving
-// build/Release is what saved it). v4.0.0 added the source build for "a platform 13 ships no
-// prebuild for" and this is its neighbour: a prebuild that exists but cannot be used.
+// build/Release is what saved it). 13.2.0 loads `build/` first, so on it the compile alone
+// heals this shape; the quarantine these tests pin is kept, not required.
 //
-// These tests build the fixture around the REAL `lib/binding.js` from the installed
-// dependency, so a future version that changes how a prebuild is chosen breaks them here
-// rather than in the field.
+// The fixture runs the REAL `lib/binding.js` only for `getPrebuildPath()`, so a version that
+// renames the prebuild breaks these tests here. They cannot see the load ORDER: `verify` is a
+// stub modelling 13.0.x, and 13.2.0 inverted that order with this file green.
 describe('ensureBetterSqlite3Working — an unloadable prebuild shadows the source build', () => {
   const made = [];
   const realBindingJs = join(REPO, 'node_modules', 'better-sqlite3', 'lib', 'binding.js');

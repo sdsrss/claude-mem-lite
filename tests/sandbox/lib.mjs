@@ -283,21 +283,31 @@ export function runHook(cmdline, payload, { env, cwd }) {
  *
  * NOT a hardcoded path, and that is the entire point. Both phases used to name
  * `build/Release/better_sqlite3.node`, which is where better-sqlite3 **12** compiled its
- * addon. Version 13 ships `prebuilds/<platform>.node` and its `lib/binding.js` prefers a
- * prebuild over `build/`, so from v4.0.0 the file the phases broke was one no resolver
- * loads — and the self-heal sections have measured nothing since. The controls said so
- * ("binding is genuinely unloadable now" went red); nothing else did.
+ * addon. Version 13 ships `prebuilds/<platform>.node` and a normal install compiles nothing,
+ * so from v4.0.0 the file the phases broke was one 13.0.x never loaded — and the self-heal
+ * sections measured nothing through v5.1.0. The controls said so ("binding is genuinely
+ * unloadable now" went red); nothing else did.
  *
- * So ask the installed package rather than guessing: its own `getPrebuildPath()` applies
- * the platform/arch/musl logic that decides this, and it tests EXISTENCE only, so it still
- * answers for a prebuild that is present and unloadable — which is the case that matters.
- * `lib/binding.js` is not in the package's `exports` map, so it is required by file path.
+ * The ORDER mirrors 13.2.0's `getBinding()`: a compiled `build/Debug` or `build/Release`
+ * addon first, the prebuild only when neither exists. 13.0.x had it the other way round, and
+ * a helper still asking for the prebuild first named a file 13.2.0 does not load whenever a
+ * compiled addon sat beside it (checked 2026-11-21 against the addon Node actually maps).
+ * The prebuild comes from the installed package's own `getPrebuildPath()`, which applies the
+ * platform/arch/musl logic and tests EXISTENCE only, so it still answers for a prebuild that
+ * is present and unloadable. `lib/binding.js` is not in the package's `exports` map, so it
+ * is required by file path.
  *
  * @param {string} installDir Directory whose node_modules holds better-sqlite3
  * @returns {string|null} absolute path, or null when the package resolves no addon at all
  */
 export function loadedBindingPath(installDir) {
   const pkgRoot = join(installDir, 'node_modules', 'better-sqlite3');
+  for (const p of [
+    join(pkgRoot, 'build', 'Debug', 'better_sqlite3.node'),
+    join(pkgRoot, 'build', 'Release', 'better_sqlite3.node'),
+  ]) {
+    if (existsSync(p)) return p;
+  }
   const bindingJs = join(pkgRoot, 'lib', 'binding.js');
   if (existsSync(bindingJs)) {
     const r = node([
@@ -307,13 +317,6 @@ export function loadedBindingPath(installDir) {
     ]);
     const prebuild = r.code === 0 ? r.stdout.trim() : '';
     if (prebuild && existsSync(prebuild)) return prebuild;
-  }
-  // better-sqlite3's own fallback order, for a tree with no matching prebuild.
-  for (const p of [
-    join(pkgRoot, 'build', 'Debug', 'better_sqlite3.node'),
-    join(pkgRoot, 'build', 'Release', 'better_sqlite3.node'),
-  ]) {
-    if (existsSync(p)) return p;
   }
   return null;
 }

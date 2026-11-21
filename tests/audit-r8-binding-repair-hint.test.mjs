@@ -99,12 +99,12 @@ describe('hook-launcher keeps its literal in sync with the constants', () => {
 });
 
 // 2026-09-06, found by tests/sandbox/phaseB-npm.mjs after its self-heal section was
-// un-blinded: the npm pair above heals a platform that ships NO prebuild, and cannot heal a
-// prebuild that is present and will not load. better-sqlite3 13 picks
-// `prebuilds/<target>.node` on existence alone and prefers it over `build/`, so the addon
-// the source build produces stays shadowed — measured with a control in
-// docs/measurement/findings.md. The only repair that covers both is the bundled CLI's
-// `rebuild-binding`, because the quarantine step lives inside ensureBetterSqlite3Working.
+// un-blinded: the npm pair above heals a platform that ships NO prebuild, and on
+// better-sqlite3 13.0.x could not heal a prebuild that is present and will not load — 13.0.x
+// picked `prebuilds/<target>.node` on existence alone, before `build/`, so the addon the
+// source build produces stayed shadowed (measured with a control in
+// docs/measurement/findings.md). 13.2.0 loads `build/` first and the pair now heals that
+// shape too; `rebuild-binding` still leads because it runs the whole chain.
 //
 // So the hint must LEAD with that, and the npm pair becomes the fallback for a tree with no
 // CLI beside it. Same defect as A20260906-R8-P1-1 in a new shape: a printed repair that

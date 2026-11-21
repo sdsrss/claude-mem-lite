@@ -1025,21 +1025,39 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   (benchmark fixture, same-tree A/B) — against **+0.0002 R@10** for all eight scoring
   multipliers combined — but that is *what they are worth*, NOT what backfilling recovers
   in production, which is still unmeasured.
-- **A prebuilt addon that is PRESENT and will not load cannot be healed by compiling one.**
-  better-sqlite3 13's `lib/binding.js` picks `prebuilds/<target>.node` on **existence alone**
-  and prefers it over `build/`, so whatever `npm run --prefix node_modules/better-sqlite3
-  build-release` produces stays shadowed. Measured 2026-09-06 with a control: corrupt prebuild
-  + healthy `build/Release` → `wrong ELF class`; prebuild moved aside → opens; neither → fails.
-  Real triggers are a glibc too old for the shipped binary, a truncated download, the wrong
-  arch baked into an image. Before the fix `rebuild-binding` exited 1 on that shape and printed
-  a manual command with the same dead end, so `doctor` stayed red forever.
-  `ensureBetterSqlite3Working` now renames the dead prebuild to `<name>.node.unusable` before
-  the source build and puts it back if the compile did not help. **Only inside the source-build
+- **better-sqlite3 13.2.0 loads a compiled `build/` addon BEFORE `prebuilds/`; 13.0.x did the
+  reverse, and this entry's first half is the 13.0.x record.** 13.0.x's `lib/binding.js` picked
+  `prebuilds/<target>.node` on **existence alone**, so whatever `npm run --prefix
+  node_modules/better-sqlite3 build-release` produced stayed shadowed. Measured 2026-09-06 with a
+  control: corrupt prebuild + healthy `build/Release` → `wrong ELF class`; prebuild moved aside →
+  opens; neither → fails. Real triggers are a glibc too old for the shipped binary, a truncated
+  download, the wrong arch baked into an image. Before the fix `rebuild-binding` exited 1 on that
+  shape and printed a manual command with the same dead end, so `doctor` stayed red forever.
+  `ensureBetterSqlite3Working` renames the dead prebuild to `<name>.node.unusable` before the
+  source build and puts it back if the compile did not help. **Only inside the source-build
   branch** — quarantining with no compile to follow turns "broken addon" into "no addon", and
   that branch is exactly what the 20 s SessionStart path opts out of (`sourceBuild: false`).
+
+  **13.2.0 (PR #59, measured 2026-11-21, Node v26.8.1, linux-x64, scratch copies of the
+  installed package):** corrupt prebuild + healthy `build/Release` → **opens via
+  `build/Release`**; corrupt prebuild alone → fails (control); **healthy prebuild + corrupt
+  `build/Release` → fails** — the shadow now runs the other way. On that last shape step 1
+  (`npm rebuild better-sqlite3 --dangerously-allow-all-scripts`) prints "rebuilt dependencies
+  successfully" and leaves the dead file, so the time-budgeted SessionStart path cannot heal it;
+  only the source-build branch recompiles it. A normal install never writes a `build/` addon:
+  `binding.gyp` (byte-identical to 13.0.3) compiles nothing when `node lib/binding.js` reports
+  a prebuild, so the implicit `node-gyp rebuild` only touches two `.stamp` files — checked with
+  install scripts blocked (npm 11.19.0 default) and allowed, and in both 13.2.0 dlopens the
+  prebuild. Only `build-release` (`--force_build=1`) compiles, i.e. our own source build, which
+  quarantines the prebuild first. The quarantine is no longer what makes the compile load; it is
+  kept. Sandbox phases on the PR tree: A 47/47, B 56/56, both self-heal arms executed.
 - **Never name the native addon's path — ask `lib/binding.js`'s `getPrebuildPath()`.** The
   literal has now gone stale twice on one dependency bump: `tests/install-bsqlite-probe.test.mjs`
   (caught by its control) and both sandbox phases (caught by nothing for four minor versions).
+  The ORDER is a third thing that moves: `getPrebuildPath()` names the prebuild, not the file
+  that loads, and the sandbox's `loadedBindingPath()` asked it first until 13.2.0 inverted the
+  order — on a tree holding both it named a file 13.2.0 does not load (checked 2026-11-21
+  against the addon Node maps).
 - **Deep search answers questions the corpus cannot answer, and the recall ruler cannot
   see it.** Measured 2026-09-06 with `benchmark/deep-search-holdout.mjs` (the suite's own
   queries asked of a corpus with their `relevant_ids` deleted): **mean FP@10 = 10.00,

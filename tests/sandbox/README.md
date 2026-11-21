@@ -24,10 +24,11 @@ with better-sqlite3 13, so eight checks silently stopped running and the only wi
 run printing 37 where this file said 45 — a number nobody diffs. Change the constant when
 you add or remove a check on purpose, never to quiet a mismatch.
 
-**Never name the native addon's path.** `loadedBindingPath()` in `lib.mjs` asks
-better-sqlite3's own `lib/binding.js` which file it would load; 12 compiled
+**Never name the native addon's path.** `loadedBindingPath()` in `lib.mjs` returns the
+file better-sqlite3 would load: a compiled `build/` addon when one exists (13.2.0 loads it
+first), otherwise the prebuild its own `lib/binding.js` names. 12 compiled
 `build/Release/better_sqlite3.node` and 13 ships `prebuilds/<platform>.node`, so the
-literal both phases used to carry pointed at a file that no longer exists and the self-heal
+literal both phases used to carry pointed at a file 13.0.x never loaded and the self-heal
 checks were vacuous from v4.0.0 to v5.1.0.
 Sandboxes are created under `SBX_BASE`, falling back to `$TMPDIR`, and are **left on
 disk** so a failure can be inspected — delete them when you are done. Phase B alone
