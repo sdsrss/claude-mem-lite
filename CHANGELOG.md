@@ -2,6 +2,22 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.5 — better-sqlite3 13.2.0, and a repair for the shape its load order opens
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.4`.
+
+- **better-sqlite3 13.0.3 → 13.2.0 (SQLite 3.54.1).** 13.2.0 loads an addon compiled into its
+  `build/` directory before the prebuilt one it ships. A normal install compiles nothing there
+  on a platform it ships a prebuilt addon for, so that addon still loads: checked on Linux x64
+  with npm's install scripts blocked and with them allowed.
+- **A compiled addon that will not load no longer keeps the database closed when the prebuilt
+  one would load.** Under 13.2.0 such an addon in `node_modules/better-sqlite3/build/` hides the
+  prebuilt one. The binding repair now renames it to
+  `<file>.unusable` when the prebuilt addon loads in its place, before any npm step and without
+  compiling, so the repair at SessionStart covers it too; `claude-mem-lite rebuild-binding` and
+  the SessionStart probe name the file they moved. A compiled addon that loads is left alone.
+
 ## v6.35.4 — a repository's links no longer lead the plugin's writes out of it
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
