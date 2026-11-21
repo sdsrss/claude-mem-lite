@@ -284,9 +284,8 @@ export function runHook(cmdline, payload, { env, cwd }) {
  * NOT a hardcoded path, and that is the entire point. Both phases used to name
  * `build/Release/better_sqlite3.node`, which is where better-sqlite3 **12** compiled its
  * addon. Version 13 ships `prebuilds/<platform>.node` and a normal install compiles nothing,
- * so from v4.0.0 the file the phases broke was one 13.0.x never loaded — and the self-heal
- * sections measured nothing through v5.1.0. The controls said so ("binding is genuinely
- * unloadable now" went red); nothing else did.
+ * so from v4.0.0 through v5.1.0 the self-heal sections measured nothing. The controls said so
+ * ("binding is genuinely unloadable now" went red); nothing else did.
  *
  * The ORDER mirrors 13.2.0's `getBinding()`: a compiled `build/Debug` or `build/Release`
  * addon first, the prebuild only when neither exists. 13.0.x had it the other way round, and

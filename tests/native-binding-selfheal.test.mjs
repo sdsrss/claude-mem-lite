@@ -989,12 +989,11 @@ describe('ensureBetterSqlite3Working — an unloadable prebuild shadows the sour
 
 // D#928. better-sqlite3 13.2.0 loads a compiled `build/{Debug,Release}/better_sqlite3.node`
 // BEFORE the prebuild, so a compiled addon that will not load hides a prebuild that would.
-// Measured 2026-11-21: that tree does not open, step 1 (`npm rebuild …`) prints success and
-// leaves the dead file, and the SessionStart path (`sourceBuild: false`) stops there.
+// Measured 2026-11-21: that tree does not open.
 //
 // These fixtures are REAL: the installed package's own lib/ and this platform's own prebuild,
-// probed in fresh processes. Only `exec` is stubbed, so no npm runs. The premise assertion in
-// the first case is what keeps them honest across a version that changes the load order again.
+// probed in fresh processes. The premise assertion in the first case is what keeps them
+// honest across a version that changes the load order again.
 describe('ensureBetterSqlite3Working — a dead compiled addon hides a loadable prebuild (D#928)', () => {
   const made = [];
   const realPkg = join(REPO, 'node_modules', 'better-sqlite3');

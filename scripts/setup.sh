@@ -336,11 +336,8 @@ if [[ -d "$ROOT/node_modules/better-sqlite3" ]]; then
     # better-sqlite3 13 (no install script to run), so it never signals failure and
     # an `||` chain would never reach the source build. A20260906-R8-P1-1.
     #
-    # …and the pair alone is still not enough. It heals a platform 13 ships no prebuild
-    # for; it cannot heal a prebuild that is PRESENT and will not load, because 13 prefers
-    # `prebuilds/<target>.node` over anything the source build produces. This string is what
-    # the SessionStart dashboard prints as `Repair:`, so it leads with the CLI, which is the
-    # only path that moves the dead prebuild aside first (lib/binding-probe.mjs). Mirrors
+    # This string is what the SessionStart dashboard prints as `Repair:`, so it leads with
+    # the CLI, which runs the whole chain (lib/binding-probe.mjs). Mirrors
     # nativeBindingRepairHint(); this file may not import lib/, hence the duplication —
     # tests/audit-r8-binding-repair-hint.test.mjs pins the set of files allowed to do that.
     # mark_deps_broken already prefixes `cd <root> && `, so these are root-relative.

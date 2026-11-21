@@ -27,9 +27,8 @@ you add or remove a check on purpose, never to quiet a mismatch.
 **Never name the native addon's path.** `loadedBindingPath()` in `lib.mjs` returns the
 file better-sqlite3 would load: a compiled `build/` addon when one exists (13.2.0 loads it
 first), otherwise the prebuild its own `lib/binding.js` names. 12 compiled
-`build/Release/better_sqlite3.node` and 13 ships `prebuilds/<platform>.node`, so the
-literal both phases used to carry pointed at a file 13.0.x never loaded and the self-heal
-checks were vacuous from v4.0.0 to v5.1.0.
+`build/Release/better_sqlite3.node` and 13 ships `prebuilds/<platform>.node`; with the
+literal both phases used to carry, the self-heal checks were vacuous from v4.0.0 to v5.1.0.
 Sandboxes are created under `SBX_BASE`, falling back to `$TMPDIR`, and are **left on
 disk** so a failure can be inspected — delete them when you are done. Phase B alone
 leaves ~50 MB (a real `npm i -g` tree).

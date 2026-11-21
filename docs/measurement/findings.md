@@ -1041,19 +1041,17 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   **13.2.0 (PR #59, measured 2026-11-21, Node v26.8.1, linux-x64, scratch copies of the
   installed package):** corrupt prebuild + healthy `build/Release` → **opens via
   `build/Release`**; corrupt prebuild alone → fails (control); **healthy prebuild + corrupt
-  `build/Release` → fails** — the shadow now runs the other way. On that last shape step 1
-  (`npm rebuild better-sqlite3 --dangerously-allow-all-scripts`) prints "rebuilt dependencies
-  successfully" and leaves the dead file. D#928 (v6.35.5): before any npm step,
+  `build/Release` → fails** — the shadow now runs the other way. D#928 (v6.35.5): before any npm step,
   `ensureBetterSqlite3Working` renames compiled addons that fail to load in a fresh process to
   `<file>.unusable`, only when the prebuild loads in their place, and puts them back if the tree
   still does not open — no compile, so the SessionStart path heals it too (real-fixture tests in
   `tests/native-binding-selfheal.test.mjs`, `binding-probe-cli.mjs` and `rebuild-binding` end to
   end). A normal install never writes a `build/` addon:
   `binding.gyp` (byte-identical to 13.0.3) compiles nothing when `node lib/binding.js` reports
-  a prebuild, so the implicit `node-gyp rebuild` only touches two `.stamp` files — checked with
-  install scripts blocked (npm 11.19.0 default) and allowed, and in both 13.2.0 dlopens the
-  prebuild. Only `build-release` (`--force_build=1`) compiles, i.e. our own source build, which
-  quarantines the prebuild first. The quarantine is no longer what makes the compile load; it is
+  a prebuild, so the implicit `node-gyp rebuild` writes no addon — checked with
+  `npm ci --ignore-scripts` (no `build/`) and with npm 11.19.0's default, which runs the script
+  and only warns; in both 13.2.0 dlopens the prebuild. Our own source build (`build-release`,
+  `--force_build=1`) compiles, and quarantines the prebuild first. The quarantine is no longer what makes the compile load; it is
   kept. Sandbox phases on the PR tree: A 47/47, B 56/56, both self-heal arms executed.
 - **Never name the native addon's path — ask `lib/binding.js`'s `getPrebuildPath()`.** The
   literal has now gone stale twice on one dependency bump: `tests/install-bsqlite-probe.test.mjs`
