@@ -4901,9 +4901,7 @@ async function rebuildBinding() {
           log(`  the shipped prebuild would not load — moved aside to ${verify.quarantined}.unusable`);
         }
         for (const f of verify.setAside || []) {
-          log(
-            `  a compiled addon would not load and hid the shipped prebuild — moved aside to ${f}.unusable`,
-          );
+          log(`  a compiled addon would not load — moved aside to ${f}.unusable`);
         }
       } else {
         fail(`better-sqlite3 binding still unusable in ${label}: ${verify.error}`);

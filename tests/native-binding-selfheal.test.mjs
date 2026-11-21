@@ -1159,9 +1159,7 @@ describe('ensureBetterSqlite3Working — a dead compiled addon hides a loadable 
     const out = `${r.stdout}${r.stderr}`;
     expect(r.status, out).toBe(0);
     expect(out).toMatch(/binding restored for Node .* plugin cache v6\.35\.4/);
-    expect(out).toContain(
-      `a compiled addon would not load and hid the shipped prebuild — moved aside to ${built}.unusable`,
-    );
+    expect(out).toContain(`a compiled addon would not load — moved aside to ${built}.unusable`);
     expect(existsSync(`${built}.unusable`)).toBe(true);
   }, 300_000);
 });
