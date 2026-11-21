@@ -157,4 +157,9 @@ if (!result.ok) {
 if (result.action === 'rebuilt') {
   process.stderr.write('[claude-mem-lite] rebuilt better-sqlite3 binding for current Node ABI\n');
 }
+for (const f of result.setAside || []) {
+  process.stderr.write(
+    `[claude-mem-lite] moved a compiled better-sqlite3 addon that would not load aside: ${f}.unusable\n`,
+  );
+}
 process.exit(0);

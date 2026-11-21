@@ -27,7 +27,7 @@ import {
 import { createRequire } from 'node:module';
 import { acquireLock } from '../lib/proc-lock.mjs';
 import { spawnSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
@@ -44,6 +44,7 @@ import {
   CLI_HEAL_COOLDOWN_MS,
   rebuildBindingViaCli,
   ensureBetterSqlite3Working,
+  probeBindingInFreshProcess,
   NATIVE_BINDING_REBUILD_CMD,
   NATIVE_BINDING_SOURCE_BUILD_CMD,
   BINDING_HEAL_GUARD_ENV,
@@ -984,4 +985,184 @@ describe('ensureBetterSqlite3Working — an unloadable prebuild shadows the sour
     expect(existsSync(prebuild)).toBe(true);
     expect(existsSync(`${prebuild}.unusable`)).toBe(false);
   });
+});
+
+// D#928. better-sqlite3 13.2.0 loads a compiled `build/{Debug,Release}/better_sqlite3.node`
+// BEFORE the prebuild, so a compiled addon that will not load hides a prebuild that would.
+// Measured 2026-11-21: that tree does not open, step 1 (`npm rebuild …`) prints success and
+// leaves the dead file, and the SessionStart path (`sourceBuild: false`) stops there.
+//
+// These fixtures are REAL: the installed package's own lib/ and this platform's own prebuild,
+// probed in fresh processes. Only `exec` is stubbed, so no npm runs. The premise assertion in
+// the first case is what keeps them honest across a version that changes the load order again.
+describe('ensureBetterSqlite3Working — a dead compiled addon hides a loadable prebuild (D#928)', () => {
+  const made = [];
+  const realPkg = join(REPO, 'node_modules', 'better-sqlite3');
+  const JUNK = Buffer.from('\x7fELF not an addon');
+
+  /** The installed package's prebuild for this platform, or null when it ships none. */
+  const realPrebuild = (() => {
+    const r = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const b=require(${JSON.stringify(join(realPkg, 'lib', 'binding.js'))});` +
+          `process.stdout.write((b.getPrebuildPath&&b.getPrebuildPath())||'')`,
+      ],
+      { encoding: 'utf8' },
+    );
+    const p = (r.stdout || '').trim();
+    return p && existsSync(p) ? p : null;
+  })();
+
+  /** A tree with a compiled addon and a prebuild, each `good` (a real addon) or `dead` (junk). */
+  function fixture({ build, prebuild }) {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-deadbuild-'));
+    made.push(dir);
+    const pkg = join(dir, 'node_modules', 'better-sqlite3');
+    writeFileSync(join(dir, 'package.json'), '{"name":"host","version":"1.0.0"}');
+    cpSync(join(realPkg, 'lib'), join(pkg, 'lib'), { recursive: true });
+    cpSync(join(realPkg, 'package.json'), join(pkg, 'package.json'));
+    const pre = join(pkg, 'prebuilds', basename(realPrebuild));
+    const built = join(pkg, 'build', 'Release', 'better_sqlite3.node');
+    for (const [file, state] of [
+      [pre, prebuild],
+      [built, build],
+    ]) {
+      mkdirSync(dirname(file), { recursive: true });
+      if (state === 'good') cpSync(realPrebuild, file);
+      else writeFileSync(file, JUNK);
+    }
+    return { dir, pre, built };
+  }
+
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('sets the dead compiled addon aside on the SessionStart path, with no npm step and no compile', async () => {
+    if (!realPrebuild) return;
+    const { dir, pre, built } = fixture({ build: 'dead', prebuild: 'good' });
+    expect(probeBindingInFreshProcess(dir).ok, 'premise: the dead build/ addon shadows the prebuild').toBe(
+      false,
+    );
+    const cmds = [];
+    const r = await ensureBetterSqlite3Working(dir, { exec: (cmd) => cmds.push(cmd), sourceBuild: false });
+    expect(r).toEqual({ ok: true, action: 'restored', setAside: [built] });
+    expect(cmds, 'healed before any npm step').toEqual([]);
+    expect(existsSync(built)).toBe(false);
+    expect(existsSync(`${built}.unusable`), 'kept, not deleted').toBe(true);
+    expect(existsSync(pre)).toBe(true);
+    expect(probeBindingInFreshProcess(dir).ok).toBe(true);
+  });
+
+  it('leaves a compiled addon that loads where it is — the user may have built it on purpose', async () => {
+    if (!realPrebuild) return;
+    const { dir, built } = fixture({ build: 'good', prebuild: 'good' });
+    // The first probe fails for a reason that has nothing to do with the addon; the real
+    // verify then finds the tree healthy, so only the guard stands between this and a move.
+    const r = await ensureBetterSqlite3Working(dir, {
+      probe: () => ({ ok: false, error: 'probe timed out' }),
+      verify: () => probeBindingInFreshProcess(dir),
+      exec: () => {},
+      sourceBuild: false,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.setAside).toBeUndefined();
+    expect(existsSync(built)).toBe(true);
+    expect(existsSync(`${built}.unusable`)).toBe(false);
+  });
+
+  it('never moves the compiled addon when the prebuild would not load either', async () => {
+    if (!realPrebuild) return;
+    const { dir, pre, built } = fixture({ build: 'dead', prebuild: 'dead' });
+    let builtMissingAtVerify = false;
+    const r = await ensureBetterSqlite3Working(dir, {
+      verify: () => {
+        builtMissingAtVerify ||= !existsSync(built);
+        return probeBindingInFreshProcess(dir);
+      },
+      exec: () => {},
+      sourceBuild: false,
+    });
+    expect(r.ok).toBe(false);
+    // Not even for the length of one verify: "broken addon" must never become "no addon".
+    expect(builtMissingAtVerify).toBe(false);
+    expect(existsSync(built)).toBe(true);
+    expect(existsSync(pre)).toBe(true);
+    expect(existsSync(`${built}.unusable`)).toBe(false);
+  });
+
+  it('puts the compiled addon back when setting it aside did not fix the tree', async () => {
+    if (!realPrebuild) return;
+    const { dir, built } = fixture({ build: 'dead', prebuild: 'good' });
+    const r = await ensureBetterSqlite3Working(dir, {
+      verify: () => ({ ok: false, error: 'still dead' }),
+      exec: () => {},
+      sourceBuild: false,
+    });
+    expect(r.ok).toBe(false);
+    expect(existsSync(built), 'restored').toBe(true);
+    expect(existsSync(`${built}.unusable`)).toBe(false);
+  });
+
+  // The path the fix exists for, end to end: setup.sh runs this script on SessionStart.
+  it('the SessionStart probe heals the tree and says which file it moved', () => {
+    if (!realPrebuild) return;
+    const { dir, built } = fixture({ build: 'dead', prebuild: 'good' });
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    cpSync(join(REPO, 'scripts', 'binding-probe-cli.mjs'), join(dir, 'scripts', 'binding-probe-cli.mjs'));
+    cpSync(join(REPO, 'lib'), join(dir, 'lib'), { recursive: true });
+    cpSync(join(REPO, 'cli-path.mjs'), join(dir, 'cli-path.mjs'));
+    const data = join(dir, 'data');
+    mkdirSync(data);
+    const r = spawnSync(process.execPath, [join(dir, 'scripts', 'binding-probe-cli.mjs')], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, PROBE_ROOT: dir, CLAUDE_MEM_DIR: data },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toContain(
+      `moved a compiled better-sqlite3 addon that would not load aside: ${built}.unusable`,
+    );
+    expect(probeBindingInFreshProcess(dir).ok).toBe(true);
+  }, 90_000);
+
+  // And the foreground repair doctor prints, against a plugin-cache code home in a fake HOME.
+  it('rebuild-binding heals a plugin cache in that shape and says which file it moved', () => {
+    if (!realPrebuild) return;
+    const home = mkdtempSync(join(tmpdir(), 'mem-deadbuild-home-'));
+    made.push(home);
+    const version = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.35.4');
+    const pkg = join(version, 'node_modules', 'better-sqlite3');
+    mkdirSync(join(version, 'scripts'), { recursive: true });
+    writeFileSync(join(version, 'scripts', 'launch.mjs'), ''); // what marks a cache dir as a version
+    writeFileSync(join(version, 'package.json'), '{"name":"claude-mem-lite","version":"6.35.4"}');
+    cpSync(join(realPkg, 'lib'), join(pkg, 'lib'), { recursive: true });
+    cpSync(join(realPkg, 'package.json'), join(pkg, 'package.json'));
+    mkdirSync(join(pkg, 'prebuilds'));
+    cpSync(realPrebuild, join(pkg, 'prebuilds', basename(realPrebuild)));
+    const built = join(pkg, 'build', 'Release', 'better_sqlite3.node');
+    mkdirSync(dirname(built), { recursive: true });
+    writeFileSync(built, JUNK);
+    const data = join(home, 'data');
+    mkdirSync(data);
+    const env = { ...process.env, HOME: home, CLAUDE_MEM_DIR: data, MEM_NO_AUTO_ADOPT: '1' };
+    // Unset, not blanked: each one points rebuild-binding outside this sandbox.
+    delete env.CLAUDE_MEM_RUNTIME_DIR;
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.CLAUDE_PLUGIN_ROOT;
+    const r = spawnSync(process.execPath, [join(REPO, 'cli.mjs'), 'rebuild-binding'], {
+      encoding: 'utf8',
+      timeout: 300_000,
+      env,
+    });
+    const out = `${r.stdout}${r.stderr}`;
+    expect(r.status, out).toBe(0);
+    expect(out).toMatch(/binding restored for Node .* plugin cache v6\.35\.4/);
+    expect(out).toContain(
+      `a compiled addon would not load and hid the shipped prebuild — moved aside to ${built}.unusable`,
+    );
+    expect(existsSync(`${built}.unusable`)).toBe(true);
+  }, 300_000);
 });

@@ -1043,8 +1043,12 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `build/Release`**; corrupt prebuild alone → fails (control); **healthy prebuild + corrupt
   `build/Release` → fails** — the shadow now runs the other way. On that last shape step 1
   (`npm rebuild better-sqlite3 --dangerously-allow-all-scripts`) prints "rebuilt dependencies
-  successfully" and leaves the dead file, so the time-budgeted SessionStart path cannot heal it;
-  only the source-build branch recompiles it. A normal install never writes a `build/` addon:
+  successfully" and leaves the dead file. D#928 (v6.35.5): before any npm step,
+  `ensureBetterSqlite3Working` renames compiled addons that fail to load in a fresh process to
+  `<file>.unusable`, only when the prebuild loads in their place, and puts them back if the tree
+  still does not open — no compile, so the SessionStart path heals it too (real-fixture tests in
+  `tests/native-binding-selfheal.test.mjs`, `binding-probe-cli.mjs` and `rebuild-binding` end to
+  end). A normal install never writes a `build/` addon:
   `binding.gyp` (byte-identical to 13.0.3) compiles nothing when `node lib/binding.js` reports
   a prebuild, so the implicit `node-gyp rebuild` only touches two `.stamp` files — checked with
   install scripts blocked (npm 11.19.0 default) and allowed, and in both 13.2.0 dlopens the
