@@ -726,6 +726,7 @@ export function spawnBackground(bgEvent, ...extraArgs) {
   try {
     const child = spawn(process.execPath, args, {
       detached: true,
+      windowsHide: true,
       stdio: 'ignore',
       env: backgroundWorkerEnv(),
     });

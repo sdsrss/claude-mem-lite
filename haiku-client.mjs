@@ -951,6 +951,7 @@ export function execClaudeCliSync(modelName, { input, timeout }) {
     env: cliSpawnEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
+    windowsHide: true,
   };
   const args = claudeArgs(modelName);
   const started = Date.now();
@@ -1032,6 +1033,7 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
         child = spawn(getClaudePath(), args, {
           env: cliSpawnEnv(),
           cwd: cliSpawnCwd(), // private dir, not /tmp — see cliSpawnCwd (R10 P2-13)
+          windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (e) {
