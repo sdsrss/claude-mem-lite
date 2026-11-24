@@ -62,3 +62,19 @@ Sonnet 每组 4 条，只描述，看 09-29 的 0/4 对 12/12 是否复现。
 - 场景只有一个，任务小，会话短；真实会话（R4：平均 3.5 h、上百次请求、`/clear` 后接着做）的成本占比和这里不同，费用结论不外推。
 - 本轮只测"接续"这一个此前测出过收益的场景，不重测 09-29 已经测过无差别的其余 6 类任务。
 - n=8 对二元结果的检验力有限：只有差距 ≥5 个才能到 p ≤ 0.05。
+
+## 7. 冒烟之后、主批次之前的修订（2026-11-24 23:35Z）
+
+冒烟两条轨迹（smoke-c、smoke-p，Opus，S1+S2，不计入）暴露了一个环境问题：
+
+- **Claude Code 2.1.331 在 `-p` + `acceptEdits` 下拒绝 `npm test`、`node --test` 和 `node <插件>/cli.mjs …`**（"This command requires approval"），两组都一样。09-29 的 2.1.284 不拒。结果两组的 S1 都没能跑测试，插件组模型想用 CLI 记待办也被拒。
+- 真实用户在交互里会批准这些命令，所以**主批次两组的 `settings.json` 都改为放行 `Bash` 和 mem-lite 的 MCP 工具**。判定规则、样本量、提示词都不变。
+
+冒烟里已经看到的（如实记录，不改规则）：
+
+| | smoke-c | smoke-p |
+|---|---|---|
+| S2 完整接续 | 4/4 | 4/4 |
+| 接续靠什么 | 宿主 auto-memory 在 S1 自己写了 `discount-feature-plan.md`（三步计划、第 2/3 步待做） | 宿主 auto-memory 为空；SessionStart 注入的 Last Session（Request 原话 + Remaining） |
+| 插件引导送达方式 | — | 注入。种子的 `package.json` 有 `bin`、没有 `private`，插件把它判为可发布的 npm 包根，不写 `CLAUDE.local.md`（已发布行为） |
+| 后台 LLM | — | 3 次，Haiku 5.5，合计名义 $0.004 |
