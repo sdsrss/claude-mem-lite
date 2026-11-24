@@ -161,7 +161,9 @@ describe('steering-surface consistency + injection budget', () => {
   const contentLen = (s) => s.split(CLI_PATH).join(REF_CLI_PATH).length;
 
   test('steering surfaces stay within their injection budget', () => {
-    expect(contentLen(buildClaudeMdBlock()), 'CLAUDE.md block').toBeLessThan(2000);
+    // Raised 2000 → 2300 for D#934 T4 (2026-11-24): the block gained the CLI defer update / drop /
+    // --closes-deferred / --supersedes forms, 1,866 → 2,118 bytes.
+    expect(contentLen(buildClaudeMdBlock()), 'CLAUDE.md block').toBeLessThan(2300);
     expect(contentLen(getDetailDoc()), 'detail doc').toBeLessThan(8000);
     expect(contentLen(buildServerInstructions(false)), 'instructions full').toBeLessThan(3500);
     expect(contentLen(buildServerInstructions(true)), 'instructions BASE').toBeLessThan(2200);
