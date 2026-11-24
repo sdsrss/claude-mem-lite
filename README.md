@@ -81,7 +81,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Episode batching** -- Groups related file operations into coherent episodes before LLM encoding
 - **Error-triggered recall** -- Automatically searches memory when Bash errors occur, surfacing relevant past fixes
 - **Proactive file history** -- When editing a file, automatically shows relevant past observations for that file
-- **Session summaries** -- written at every Stop (the assistant's final report when it has Done / Not done sections, else — when the final reply has no report section at all — its first 120 characters, else the first prompt and recent observation titles), then upgraded by a background model summary when the session has observations
+- **Session summaries** -- written at every Stop (the assistant's final report when it has Done / Not done sections — or the Changes / Open items parts of a `## Report`, 变更 / 遗留 in a `## 汇报` — else — when the final reply has no report section at all — its first 120 characters, else the first prompt and recent observation titles), then upgraded by a background model summary when the session has observations
 - **Project-scoped context** -- Injects recent memory into `CLAUDE.md` and session startup for immediate context
 - **Observation types** -- Categorized as `decision`, `bugfix`, `feature`, `refactor`, `discovery`, or `change`
 - **Importance grading** -- LLM assigns 1-3 importance levels (routine / notable / critical) to each observation

@@ -290,6 +290,95 @@ describe('extractStructuredSummary — markdown heading reports', () => {
   });
 });
 
+// The report shape the claudemd spec has required since at least 2026-10-24: `## 汇报` (or
+// `## Report`) with 变更 / 验证 / 遗留 (Changes / Verification / Open items) parts. R4
+// (docs/audits/20261124-r4-session-history-analysis.md §8.1) fed 162 such final reports to this
+// extractor: done 0/162, notDone 17/158 — and those 17 were prose lines starting 剩下的 / 还剩.
+describe('extractStructuredSummary — 汇报 / Report parts (变更 / 验证 / 遗留)', () => {
+  const report = (changes, verify, open) =>
+    [
+      '## 汇报',
+      '',
+      '上一轮的三项都处理完了，本轮不发版。',
+      '',
+      ...changes,
+      '- **D#101**（`a1b2c3d4`，已推送）：purge 在数据还在时不再说 Done!，改为退出码 1。',
+      '  - 两种情况都加了回归测试。',
+      '- **D#102**：README 的用法文字同步。',
+      '',
+      ...verify,
+      '- `npx vitest run` → 通过（568 个文件）',
+      '- 变异验证：去掉新分支，两个用例变红 → 通过',
+      '',
+      ...open,
+      '1. D#103：发版说明要写进 CHANGELOG，下次发版时做。',
+      '2. 基线 12-01 过期，要在那之前重采。',
+    ].join('\n');
+
+  it('reads `**变更**` / `**验证**` / `**遗留**` bold parts: 变更 → done, 遗留 → notDone, 验证 → neither', () => {
+    const r = extractStructuredSummary(report(['**变更**'], ['**验证**'], ['**遗留**']));
+    expect(r.done).toContain('D#101');
+    expect(r.done).toContain('两种情况都加了回归测试');
+    expect(r.done).toContain('D#102');
+    expect(r.notDone).toContain('D#103');
+    expect(r.notDone).toContain('基线 12-01 过期');
+    expect(r.done).not.toContain('npx vitest');
+    expect(r.notDone).not.toContain('npx vitest');
+    expect(r.done).not.toContain('本轮不发版');
+  });
+
+  it('reads `### 变更` / `### 验证` / `### 遗留` heading parts', () => {
+    const r = extractStructuredSummary(report(['### 变更'], ['### 验证'], ['### 遗留']));
+    expect(r.done).toContain('D#101');
+    expect(r.notDone).toContain('D#103');
+    expect(r.notDone).not.toContain('变异验证');
+  });
+
+  it('a part with a parenthetical or a colon label still opens the part', () => {
+    expect(
+      extractStructuredSummary(
+        report(['**变更**（本地 main，未推送）'], ['**验证**'], ['**遗留（需要你决定）**']),
+      ).notDone,
+    ).toContain('D#103');
+    expect(
+      extractStructuredSummary(report(['**变更**'], ['**验证**'], ['**遗留：需要你决定的事**'])).notDone,
+    ).toContain('基线 12-01');
+    expect(extractStructuredSummary('**变更**：没有改任何文件。').done).toBe('没有改任何文件。');
+  });
+
+  it('a report with no 遗留 part has an empty notDone', () => {
+    const r = extractStructuredSummary(report(['**变更**'], ['**验证**'], ['']));
+    expect(r.done).toContain('D#101');
+    expect(r.notDone).toBe('');
+  });
+
+  it('reads the English `## Report` parts: Changes / Verification / Open items', () => {
+    const text = [
+      '## Report',
+      '',
+      '**Changes**',
+      '- `lib/x.mjs`: the cap is now per session (commit `a1b2c3d4`).',
+      '',
+      '**Verification**',
+      '- `npx vitest run` → passed (568 files)',
+      '',
+      '**Open items**',
+      '- D#103: write the release note at the next release.',
+    ].join('\n');
+    const r = extractStructuredSummary(text);
+    expect(r.done).toContain('the cap is now per session');
+    expect(r.notDone).toContain('D#103');
+    expect(r.done).not.toContain('npx vitest');
+  });
+
+  it('prose that merely starts with 变更 / 遗留 / 验证 is not a part', () => {
+    const r = extractStructuredSummary(
+      '遗留项都处理完了，没有需要你决定的事。\n变更了两处注释。\n验证过的结论不变。',
+    );
+    expect(r).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });
+  });
+});
+
 describe('extractTailAssistantText', () => {
   let dir;
   beforeEach(() => {

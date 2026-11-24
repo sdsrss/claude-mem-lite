@@ -1343,6 +1343,43 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rows[0].completed).not.toContain('TRANSCRIPT-DONE');
   });
 
+  // R4 §8.1: the claudemd spec's report is `## 汇报` with 变更 / 验证 / 遗留 parts; until the
+  // extractor read them, this shape wrote no report Done (0/162) and the model's summary,
+  // cut to 120 chars at SessionStart, was all the next session saw of the open items.
+  it("a 汇报 report's 变更 / 遗留 parts are the Stop row's Done / Not done, its 验证 part neither", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+
+    const reply = [
+      '## 汇报',
+      '',
+      '本轮修好了一处。',
+      '',
+      '**变更**',
+      '- REPORT-CHANGE：purge 在数据还在时不再说 Done!。',
+      '',
+      '**验证**',
+      '- REPORT-CHECK `npx vitest run` → 通过',
+      '',
+      '**遗留**',
+      '1. REPORT-LEFT：发版说明下次发版时写。',
+    ].join('\n');
+    runHook('stop', {
+      stdin: JSON.stringify({
+        session_id: 'cc-4b',
+        transcript_path: transcript,
+        last_assistant_message: reply,
+      }),
+      env: { ...env(), CLAUDE_MEM_NO_CITATION_TRACK: '1' },
+    });
+    const rows = rowsOf(sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].completed).toContain('REPORT-CHANGE');
+    expect(rows[0].remaining_items).toContain('REPORT-LEFT');
+    expect(rows[0].completed + rows[0].remaining_items).not.toContain('REPORT-CHECK');
+  });
+
   it("a later turn's report replaces the first turn's Done / Not done", () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);
