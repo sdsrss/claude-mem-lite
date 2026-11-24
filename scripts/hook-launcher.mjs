@@ -495,6 +495,7 @@ function healRecordedBreakage() {
     );
     const child = spawn(process.execPath, [installer, 'repair'], {
       detached: true,
+      windowsHide: true,
       stdio: 'ignore',
     });
     child.unref();
@@ -572,6 +573,7 @@ function healNativeBindingIfBroken() {
     process.stderr.write('[claude-mem-lite] native DB binding unusable — rebuilding in the background\n');
     const child = spawn(process.execPath, [installer, 'rebuild-binding'], {
       detached: true,
+      windowsHide: true,
       stdio: 'ignore',
     });
     child.unref();
