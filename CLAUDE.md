@@ -2,6 +2,10 @@
 
 Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
+**Maintenance mode (user's pick, 2026-11-24):** work only on the session handoff, `defer` and
+explicit save/get; injection tuning frozen; release only for bugs and host compatibility
+→ `docs/audits/20261124-plugin-value-assessment.md`.
+
 - **Version**: 6.37.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`.
@@ -88,11 +92,8 @@ produces a number that looks measured and is not.** → `findings.md § Measurem
 + `error-recall-suite.mjs` command-vocabulary admits, and the bm25 floor denoise-ab is blind
 to · `citation-live-replay.mjs` per-face cite-rate from transcripts (prefer over
 `citation-stats`) · `episode-flush-replay.mjs` flush decisions through the shipped batcher ·
-`{rerank,keyctx,imperative}-pool-replay.mjs` candidate-pool bounds, Key Context's unit being
-a PROJECT · `patha-exclude-report.mjs` D#216, deciding column `refilled` ·
-`deep-search-holdout.mjs` deep search's PRECISION arm ·
-`compress-veto-rate.mjs` whether D#10's veto FIRES, three arms · `haiku-model-ab.mjs` a haiku-tier
-model swap · `multiplier-discrimination.mjs` whether each of the 8 multipliers is WIRED at its magnitude · `longmemeval.mjs` standard
+frozen (see `rulers.md`): `{rerank,keyctx,imperative}-pool-replay`,
+`patha-exclude-report`, `deep-search-holdout`, `compress-veto-rate`, `haiku-model-ab` · `multiplier-discrimination.mjs` whether each of the 8 multipliers is WIRED at its magnitude · `longmemeval.mjs` standard
 recall, lexical baseline · `injection-budget.mjs` hook bytes per face, frozen corpus.
 
 ## Baselines
