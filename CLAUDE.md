@@ -121,7 +121,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 ### Hooks and session lifecycle
 
-- **`PostToolUse` does NOT fire for a host-flagged failure** — those go to `PostToolUseFailure` (text in `error`, no `tool_response`; `additionalContext` is the channel). **Do not widen `HARD_ERROR_RE`** — every anchor measured zero gain.
+- **`PostToolUse` does NOT fire for a host-flagged failure** — those go to `PostToolUseFailure` (text in `error`, no `tool_response`; `additionalContext` is the channel). **Do not widen `HARD_ERROR_RE`** — every anchor measured zero gain. Most such failures are the agent's own guardrails refusing.
 - **`Stop` fires once per assistant TURN, and `/clear` ROTATES the host session id.** The session file survives Stop, so **its presence no longer tells you why a session started** — ask stdin's `source` (`startup|clear|compact|resume`).
 - **Every Stop-side writer needs a per-session idempotency key**, since Stop rescans the whole transcript; `access_count` written before v5.6.0 is an upper bound, not a count.
 - **`hooks/hooks.json` and `install.mjs`'s `settings.json` entries are two hook sets and must change together** (`tests/audit-silent-20260814.test.mjs` diffs them) — **but the diff ignores `timeout`**. Adding a field? Ask whether the guard reads it.
