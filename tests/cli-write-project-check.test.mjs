@@ -189,3 +189,85 @@ describe('restore checks the project it writes to', () => {
     expect(projects()).toContain('zebra-billing');
   });
 });
+
+// R4 §8.2 (docs/audits/20261124-r4-session-history-analysis.md): an agent ran
+// `cd ~/.claude/projects/-home-ai-dev-daagu/memory && python3 … MEMORY.md … ; node cli.mjs save …`
+// in one Bash command. With no CLAUDE_PROJECT_DIR in that shell, the write took its project from
+// PWD and filed 4 lessons and a deferred item under `-home-ai-dev-daagu--memory`, a project no
+// session's recall ever reads. Claude Code's per-project state directory holds no user project, so
+// a write whose project would come from there is refused with a way out; --project still works.
+describe("a write whose project would come from Claude Code's per-project state is refused", () => {
+  /** Run the CLI the way that agent's shell did: cwd and PWD in `dir`, no CLAUDE_PROJECT_DIR. */
+  function cliIn(dir, ...args) {
+    const env = {
+      ...process.env,
+      HOME: join(root, 'home'),
+      PWD: dir,
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
+    };
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.CLAUDE_MEM_HOOK_RUNNING;
+    return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', timeout: 20000, cwd: dir, env });
+  }
+  const stateDir = () => {
+    const d = join(root, 'home', '.claude', 'projects', '-tmp-work-invoice-app', 'memory');
+    mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const refused = (r) => {
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/Claude Code's own per-project state/);
+    expect(r.stderr).toMatch(/--project/);
+  };
+
+  it('save, defer add and activity save are refused and write nothing', () => {
+    const dir = stateDir();
+    refused(cliIn(dir, 'save', 'element plus lazy css beats overrides', '--type', 'bugfix'));
+    refused(cliIn(dir, 'defer', 'add', 'evaluate the chan bi extension'));
+    refused(cliIn(dir, 'activity', 'save', 'a lesson', '--title', 'x'));
+    expect(projects()).toEqual([]);
+  });
+
+  it('import-jsonl and the restore of a row without a project are refused', () => {
+    const dir = stateDir();
+    refused(cliIn(dir, 'import-jsonl', transcript()));
+    const file = join(root, 'export.jsonl');
+    writeFileSync(file, JSON.stringify({ type: 'discovery', title: 'restored row', narrative: 'x' }) + '\n');
+    refused(cliIn(dir, 'restore', file));
+    expect(projects()).toEqual([]);
+  });
+
+  it('--project still writes from there, and the project directory itself is unaffected', () => {
+    const dir = stateDir();
+    expect(cliIn(dir, 'save', 'rounding is per line', '--project', 'work--invoice-app').status).toBe(0);
+    expect(cliIn(projectDir, 'save', 'totals drift by a cent').status).toBe(0);
+    expect(projects()).toEqual(['work--invoice-app']);
+  });
+
+  it('follows CLAUDE_CONFIG_DIR, and the config home outside projects/ is not refused', () => {
+    const cfg = join(root, 'cfg');
+    const mem = join(cfg, 'projects', '-tmp-x', 'memory');
+    mkdirSync(mem, { recursive: true });
+    const withCfg = (dir, ...args) => {
+      const env = {
+        ...process.env,
+        HOME: join(root, 'home'),
+        PWD: dir,
+        CLAUDE_MEM_DIR: dataDir,
+        CLAUDE_CONFIG_DIR: cfg,
+        CLAUDE_MEM_SKIP_SAVE_ENRICH: '1',
+      };
+      delete env.CLAUDE_PROJECT_DIR;
+      delete env.CLAUDE_MEM_HOOK_RUNNING;
+      return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', timeout: 20000, cwd: dir, env });
+    };
+    refused(withCfg(mem, 'save', 'a lesson'));
+    // A user who keeps their Claude Code config in a repository and works in it is a project.
+    expect(withCfg(cfg, 'save', 'hooks run in order').status).toBe(0);
+    const names = projects();
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/--cfg$/);
+  });
+});

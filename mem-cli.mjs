@@ -10,7 +10,6 @@ import {
   truncate,
   queryLabel,
   typeIcon,
-  inferProject,
   scrubSecrets,
   COMPRESSED_PENDING_PURGE,
   localYmd,
@@ -21,11 +20,12 @@ import { editDistance } from './lib/edit-distance.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
 // session's hooks wrote. WRITE commands (save / defer add / restore / import-jsonl) keep
-// plain inferProject() — pre-tag review reproduced the reason: for a read, "cwd holds
+// plain inferProject(), through cliWriteProject(), which only refuses a directory inside
+// Claude Code's per-project state — pre-tag review reproduced the reason: for a read, "cwd holds
 // nothing" means there is nothing to lose, but for a write it is the normal precondition of
 // a project about to be born, and absorbing it into the enclosing repo strands the row once
 // the session's hooks start writing the subdirectory's own name. Hook-side is untouched.
-import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
+import { resolveCliProject as cliProject, cliWriteProject } from './lib/cli-project.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
 import { autoHeaderNote, autoLegend, autoTag, isAutoWritten, writerSessionId } from './lib/provenance.mjs';
@@ -1342,7 +1342,12 @@ function cmdSave(db, args) {
   }
   // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
   // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
-  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  const fromDir = flags.project ? null : cliWriteProject();
+  if (fromDir && !fromDir.ok) {
+    fail(`[mem] ${fromDir.message}`);
+    return;
+  }
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : fromDir.project;
   // A named project that does not exist: a near-miss is refused, a new name is noted (cli F14).
   const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
   if (!projectCheck.ok) {
@@ -1542,7 +1547,12 @@ function cmdDeferAdd(db, args) {
   }
   // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
   // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
-  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  const fromDir = flags.project ? null : cliWriteProject();
+  if (fromDir && !fromDir.ok) {
+    fail(`[mem] ${fromDir.message}`);
+    return;
+  }
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : fromDir.project;
   const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
   if (!projectCheck.ok) {
     fail(`[mem] ${projectCheck.message}`);
@@ -2480,6 +2490,14 @@ function cmdRestore(db, argv) {
     fail(`[mem] ${projectCheck.message}`);
     return;
   }
+  // A row without its own project takes the directory's; refuse before restoring anything when
+  // that directory is Claude Code's per-project state (cliWriteProject).
+  const fromDir =
+    projOverride || rows.every((r) => !r || typeof r !== 'object' || r.project) ? null : cliWriteProject();
+  if (fromDir && !fromDir.ok) {
+    fail(`[mem] ${fromDir.message}`);
+    return;
+  }
   const dryRun = asksDryRun(flags['dry-run']);
   const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 
@@ -2519,7 +2537,7 @@ function cmdRestore(db, argv) {
       tombstoned++;
       continue;
     }
-    const project = projOverride || r.project || inferProject();
+    const project = projOverride || r.project || fromDir.project;
     const createdEpoch = Number.isFinite(Number(r.created_at_epoch))
       ? Number(r.created_at_epoch)
       : Date.now();
@@ -3564,7 +3582,12 @@ async function cmdImportJsonl(db, argv) {
     fail('[mem] --project needs a name, e.g. --project my-repo');
     return;
   }
-  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  const fromDir = flags.project ? null : cliWriteProject();
+  if (fromDir && !fromDir.ok) {
+    fail(`[mem] ${fromDir.message}`);
+    return;
+  }
+  const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : fromDir.project;
   // The check `save` and `defer add` make: a near miss is refused before anything is imported,
   // a new name is noted (pre-tag review 2026-10-16 P3-4).
   const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };

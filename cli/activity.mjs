@@ -8,9 +8,8 @@
 // lib/activity.mjs::saveEvent, which enforces the type CHECK and populates
 // events_fts via triggers.
 
-import { inferProject } from '../utils.mjs';
 import { resolveProject, checkWriteProject } from '../project-utils.mjs';
-import { resolveCliProject as cliProject } from '../lib/cli-project.mjs';
+import { resolveCliProject as cliProject, cliWriteProject } from '../lib/cli-project.mjs';
 import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
 import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
 import { snapshotDb } from '../lib/db-backup.mjs';
@@ -42,16 +41,22 @@ export async function cmdActivity(db, args) {
   const { saveEvent, searchEvents, recentEvents, getEvent, EVENT_TYPES, promoteInsightEvents } =
     await import('../lib/activity.mjs');
   const VALID_EVENT_TYPES = new Set(EVENT_TYPES);
-  // `save` CREATES a row, so it keeps plain inferProject(): the DB-aware fallback is a read
+  // `save` CREATES a row, so it keeps plain inferProject() (via cliWriteProject, which refuses
+  // Claude Code's per-project state directory): the DB-aware fallback is a read
   // affordance, and applying it to a write absorbs a not-yet-born subproject's first event
   // into the enclosing repo (pre-tag review, reproduced). Every other subcommand reads or
   // operates on rows that already exist, where falling back is what finds them. A named
   // project is resolved for `save` the way `save` and `defer add` resolve theirs: exact
   // matching only, then checkWriteProject below.
+  const fromDir = sub === 'save' && !flags.project ? cliWriteProject() : null;
+  if (fromDir && !fromDir.ok) {
+    fail(`[mem] ${fromDir.message}`);
+    return;
+  }
   const project = flags.project
     ? resolveProject(db, flags.project, sub === 'save' ? { mode: 'write' } : undefined)
     : sub === 'save'
-      ? inferProject()
+      ? fromDir.project
       : cliProject(db);
 
   if (sub === 'save') {
