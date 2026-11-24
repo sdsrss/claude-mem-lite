@@ -3450,10 +3450,11 @@ Commands:
       --limit N         Max results (default 10)
       --project P       Filter by project
     update <D#N|ordinal>  Rewrite one open item in place (not drop + re-add)
+      --id D#N          ID as a flag (alias for the positional)
       --title T         New title (≤200 chars)
       --detail T        New detail (--detail= clears it)
       --priority N      New priority: 1=low, 2=normal, 3=urgent
-      --project P       Project for ordinal resolution (default: current)
+      --project P       Project the item belongs to (default: current)
     drop <D#N|ordinal>[,...]  Drop one or more deferred items (no fix needed)
       --id D#N          ID as a flag (alias for the positional)
       --reason "..."    Required audit trail
