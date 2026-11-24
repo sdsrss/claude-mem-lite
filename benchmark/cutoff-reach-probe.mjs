@@ -34,7 +34,7 @@
 //
 // Read-only: the database is opened { readonly: true } and nothing else is written.
 //
-//   node benchmark/cutoff-reach-probe.mjs [--project P] [--json] [--now ISO]
+//   node benchmark/cutoff-reach-probe.mjs [--project P] [--json] [--now ISO] [--split ISO]
 
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -45,9 +45,11 @@ import { PRETOOL_LOOKBACK_MS, DAY_MS } from '../lib/time-constants.mjs';
 
 /**
  * @param {import('better-sqlite3').Database} db
- * @param {{now?: number, project?: string|null}} [opts]
+ * @param {{now?: number, project?: string|null, splitAt?: number|null}} [opts] `splitAt` (epoch ms):
+ *   also count each side of that instant by the row's created_at (D#353 decides B3 on the side
+ *   written after the 2026-09-22 regime boundary only).
  */
-export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) {
+export function probeCutoffReach(db, { now = Date.now(), project = null, splitAt = null } = {}) {
   const cutoff = now - PRETOOL_LOOKBACK_MS;
   const projClause = project ? 'AND o.project = ?' : '';
   const projArgs = project ? [project] : [];
@@ -114,8 +116,26 @@ export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) 
       neverInjected: neverInjected.length,
       // The NAME SET is the evidence (doctrine rule 4) — the ever-cited edges the cut removes.
       inUse: cited.map((e) => ({ id: e.id, project: e.project, file: e.filename })),
+      ...(splitAt === null
+        ? {}
+        : {
+            split: {
+              at: new Date(splitAt).toISOString(),
+              before: splitCounts(edges.filter((e) => e.created_at_epoch < splitAt)),
+              after: splitCounts(edges.filter((e) => e.created_at_epoch >= splitAt)),
+            },
+          }),
     },
     events: { total: events.length, ids: events.map((e) => e.id) },
+  };
+}
+
+/** Edges, the injected ones among them (cited or shown), and the cited ones. */
+function splitCounts(edges) {
+  return {
+    edges: edges.length,
+    injected: edges.filter((e) => e.last_cited_session_id || e.inject_count > 0).length,
+    cited: edges.filter((e) => e.last_cited_session_id).length,
   };
 }
 
@@ -126,6 +146,12 @@ function main() {
     return i === -1 ? null : argv[i + 1];
   };
   const nowArg = arg('--now');
+  const splitArg = arg('--split');
+  const splitAt = splitArg ? Date.parse(splitArg) : null;
+  if (splitArg && !Number.isFinite(splitAt)) {
+    process.stderr.write(`cutoff-reach-probe: --split ${splitArg} is not a date\n`);
+    process.exit(2);
+  }
   const now = nowArg ? Date.parse(nowArg) : Date.now();
   if (!Number.isFinite(now)) {
     process.stderr.write(`cutoff-reach-probe: --now ${nowArg} is not a date\n`);
@@ -136,7 +162,7 @@ function main() {
   });
   let r;
   try {
-    r = probeCutoffReach(db, { now, project: arg('--project') });
+    r = probeCutoffReach(db, { now, project: arg('--project'), splitAt });
   } finally {
     db.close();
   }
@@ -150,6 +176,15 @@ function main() {
   console.log(
     `observation edges removed: ${o.total}  ·  ever cited ${o.cited} (missed since ${o.citedThenMissed})  ·  missed only ${o.missed}  ·  never injected ${o.neverInjected}`,
   );
+  if (o.split) {
+    for (const side of ['before', 'after']) {
+      const c = o.split[side];
+      const share = c.injected ? `${((100 * c.cited) / c.injected).toFixed(1)}%` : '-';
+      console.log(
+        `  written ${side} ${o.split.at}: ${c.edges} edges, ${c.injected} injected, ${c.cited} cited (${share} of injected)`,
+      );
+    }
+  }
   console.log(`events removed: ${r.events.total}`);
   if (o.inUse.length) console.table(o.inUse);
 }

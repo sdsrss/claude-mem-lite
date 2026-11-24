@@ -79,6 +79,30 @@ describe('probeCutoffReach', () => {
     expect(r.obsEdges.inUse.map((e) => e.id)).toEqual([citedId, citedId, reusedId]);
   });
 
+  // D#353: B3 is decided on edges written on or after the regime boundary only, so the removed
+  // edges split by their row's created_at at a given instant, each side with its own cited share.
+  it('--split counts each side of an instant: edges, injected, cited', () => {
+    obs({ ageDays: 100, state: 'hit' }); // before
+    obs({ ageDays: 95, state: 'miss' }); // before
+    obs({ ageDays: 70, state: 'hit', files: ['/r/a.mjs', '/r/b.mjs'] }); // after, 2 edges
+    obs({ ageDays: 68, state: 'miss' }); // after
+    obs({ ageDays: 65 }); // after, never injected
+    const splitAt = NOW - 80 * DAY_MS;
+    const r = probeCutoffReach(db, { now: NOW, splitAt });
+    expect(r.obsEdges.split).toEqual({
+      at: new Date(splitAt).toISOString(),
+      before: { edges: 2, injected: 2, cited: 1 },
+      after: { edges: 4, injected: 3, cited: 2 },
+    });
+    // The NO answer: nothing written after the instant has reached the cut yet.
+    expect(probeCutoffReach(db, { now: NOW, splitAt: NOW - 50 * DAY_MS }).obsEdges.split.after).toEqual({
+      edges: 0,
+      injected: 0,
+      cited: 0,
+    });
+    expect(probeCutoffReach(db, { now: NOW }).obsEdges.split).toBeUndefined();
+  });
+
   it('a superseded row is not counted — liveObsFilterSql, as recall applies it', () => {
     const id = obs({ ageDays: 90, state: 'hit' });
     db.prepare('UPDATE observations SET superseded_at = ? WHERE id = ?').run(NOW, id);
