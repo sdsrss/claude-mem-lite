@@ -343,7 +343,7 @@ describe('extractStructuredSummary — 汇报 / Report parts (变更 / 验证 / 
     expect(
       extractStructuredSummary(report(['**变更**'], ['**验证**'], ['**遗留：需要你决定的事**'])).notDone,
     ).toContain('基线 12-01');
-    expect(extractStructuredSummary('**变更**：没有改任何文件。').done).toBe('没有改任何文件。');
+    expect(extractStructuredSummary('## 汇报\n\n**变更**：没有改任何文件。').done).toBe('没有改任何文件。');
   });
 
   it('a report with no 遗留 part has an empty notDone', () => {
@@ -369,6 +369,47 @@ describe('extractStructuredSummary — 汇报 / Report parts (变更 / 验证 / 
     expect(r.done).toContain('the cap is now per session');
     expect(r.notDone).toContain('D#103');
     expect(r.done).not.toContain('npx vitest');
+  });
+
+  // Pre-tag review of 6.35.6 (defects r1). F2: outside a `## 汇报` / `## Report` the part names are
+  // ordinary words — a generic `### Changes` list must not lock Remaining to '' (v6.35.5 read none).
+  it('without a 汇报 / Report heading, Changes / 变更 / Open items open nothing', () => {
+    for (const t of [
+      '### Changes\n- Moved the parser\n\n### Next steps\n- wire the flag',
+      '**Changes:**\n- Moved the parser\n**Still to do:** wire the CLI flag',
+      'Changes: moved the parser',
+      '**变更**\n- 改了解析\n\n**遗留**\n- 接上参数',
+      '## Changes\n1. Split the parser\n2. Add a cache\n\nShall I proceed?',
+    ])
+      expect(extractStructuredSummary(t), t).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });
+  });
+
+  // F1: a part header carrying a label, then a blank line, then a bold lead line or a table.
+  it('a labelled 遗留 part keeps what follows a blank line, a bold lead or a table', () => {
+    const a = extractStructuredSummary(
+      '## 汇报\n\n**变更**\n- a\n\n### 遗留（需要你决定）\n\n**评审的 MEDIUM 已复现。**\n1. 决定 X\n2. 决定 Y',
+    );
+    expect(a.notDone).toContain('决定 X');
+    expect(a.notDone).toContain('决定 Y');
+    const b = extractStructuredSummary(
+      '## 汇报\n\n**变更**\n- a\n\n**遗留：需要你决定**\n\n| 项 | 选项 |\n|---|---|\n| X | a/b |',
+    );
+    expect(b.notDone).toContain('| X | a/b |');
+  });
+
+  // F3: a bold sub-heading inside a part does not end it; the next part header does.
+  it('a bold sub-heading inside a part stays in the part', () => {
+    const r = extractStructuredSummary(
+      '## 汇报\n\n**变更**\n- a\n**发版。**\n- b\n\n**验证**\n- c → 通过\n\n**遗留**\n**需要你决定**\n1. X\n**需要你授权的**\n2. Y',
+    );
+    expect(r.done).toContain('- b');
+    expect(r.notDone).toContain('2. Y');
+    expect(r.done + r.notDone).not.toContain('通过');
+  });
+
+  // F4: a header the case-insensitive match accepts but no key names (`ſ` folds to `s`) is no header.
+  it('a part name that only matches through case folding is not a header and does not throw', () => {
+    expect(() => extractStructuredSummary('## Report\n\nChangeſ: fixed X\nOpen items: Y')).not.toThrow();
   });
 
   it('prose that merely starts with 变更 / 遗留 / 验证 is not a part', () => {
