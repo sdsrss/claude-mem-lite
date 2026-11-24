@@ -407,6 +407,48 @@ describe('extractStructuredSummary — 汇报 / Report parts (变更 / 验证 / 
     expect(r.done + r.notDone).not.toContain('通过');
   });
 
+  // D#941 (decided 2026-11-24): a 剩下… / 剩余… line inside a 变更 or 验证 part stays in that part.
+  // In 6 of 299 real reports, 53 of the 54 such lines were finished work, check results or analysis
+  // (`剩余工作：D#… 核实后关闭` lists closed items), and the one real open item was also in 遗留.
+  it('剩余… / 剩下… lines inside 变更 and 验证 stay there, and only 遗留 is Not done', () => {
+    const r = extractStructuredSummary(
+      [
+        '## 汇报',
+        '',
+        '### 变更',
+        '- **推送**：之前的三个本地提交已推送。',
+        '- **剩余工作**：D#873、D#875、D#821 逐条在代码里核实后关闭，不改代码。',
+        '  - D#873：标记文件在你自己的 700 权限目录里。',
+        '',
+        '### 验证',
+        '- `npx vitest run` → 通过',
+        '- 剩下的时间都是跑测试本身，CI 不再改。',
+        '',
+        '### 遗留',
+        '- **D#880（P2）**：仓库里提交的目录链接仍能让 SessionStart 写到仓库外。',
+      ].join('\n'),
+    );
+    expect(r.done).toContain('**剩余工作**：D#873');
+    expect(r.done).toContain('D#873：标记文件');
+    expect(r.notDone).toBe('- **D#880（P2）**：仓库里提交的目录链接仍能让 SessionStart 写到仓库外。');
+    expect(r.done + r.notDone).not.toContain('剩下的时间');
+  });
+
+  // D#942 R2-A: the extra names of a multi-name header are read with the four old names only, so a
+  // header outside a report extracts as v6.35.5 did (fuzz: 1548 of 199,612 inputs diverged).
+  it('outside a report, a multi-name header naming a report part extracts as before', () => {
+    for (const t of [
+      '**Done / Changes**: shipped X',
+      '**Uncertain / 验证**\n- flaky on CI\n- needs a rerun',
+      'Failed / Verification: none',
+      '**Not done / Open items**: wire the flag',
+      '**Done、变更**：x',
+      '- Done, Changes: x',
+    ])
+      expect(extractStructuredSummary(t), t).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });
+    expect(extractStructuredSummary('**Not done / Failed / Uncertain**：none').notDone).toBe('none');
+  });
+
   // F4: a header the case-insensitive match accepts but no key names (`ſ` folds to `s`) is no header.
   it('a part name that only matches through case folding is not a header and does not throw', () => {
     expect(() => extractStructuredSummary('## Report\n\nChangeſ: fixed X\nOpen items: Y')).not.toThrow();
