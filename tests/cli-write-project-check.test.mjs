@@ -256,27 +256,40 @@ describe("a write whose project would come from Claude Code's per-project state 
         '\n',
     );
     refused(cliIn(dir, 'restore', file, '--project', '.'));
+    refused(cliIn(dir, 'import-jsonl', transcript(), '--project=.'));
+    const proposals = join(root, 'proposals.json');
+    writeFileSync(proposals, JSON.stringify([{ id: 1, action: 'supersede', reason: 'x' }]));
+    refused(cliIn(dir, 'verify-apply', proposals, '--project', 'current'));
     expect(projects()).toEqual([]);
+    // Only those six: a read, or a write that creates no row, naming `.` there runs as before
+    // (6.36.0 pre-tag r2 F4: refusing every command passed the suite). The `=` form, since the
+    // state directory's project name starts with `-` (D#945).
+    for (const args of [
+      ['recent', '--project=.'],
+      ['defer', 'list', '--project=current'],
+    ]) {
+      const r = cliIn(dir, ...args);
+      expect(r.status, `${args.join(' ')}\n${r.stdout}${r.stderr}`).toBe(0);
+      expect(r.stderr).not.toMatch(/per-project state/);
+    }
   });
 
-  // The same fix makes `.` on a write mean what no --project means on a write: the directory's
-  // own project (plain inferProject), not the read side's fallback to an enclosing work tree.
-  it('a write naming . takes the project a write naming nothing takes', () => {
+  // Outside that state, `.` on a write still resolves as on a read (6.36.0 pre-tag review F3): from
+  // a subdirectory of a work tree whose own name holds no rows it names the work tree's project, so
+  // closing the work tree's deferred item from there with `--project .` keeps working as in 6.35.6.
+  it('outside the state directory, `.` on a write resolves as it did before', () => {
     mkdirSync(join(projectDir, '.git'));
-    expect(cli('save', 'totals drift by a cent').status).toBe(0);
-    const sub = join(projectDir, 'billing');
+    const add = cli('defer', 'add', 'totals drift by a cent');
+    expect(add.status, add.stderr).toBe(0);
+    const id = /D#(\d+)/.exec(add.stdout)[1];
+    const sub = join(projectDir, 'src');
     mkdirSync(sub);
-    // `.` first: while the subdirectory holds no rows, the read side would pick the work tree.
-    expect(cliIn(sub, 'save', 'tax rounds per invoice', '--project', '.').status).toBe(0);
-    expect(cliIn(sub, 'save', 'rounding is per line').status).toBe(0);
+    const r = cliIn(sub, 'save', 'fixed the rounding', '--closes-deferred', `D#${id}`, '--project', '.');
+    expect(r.status, r.stdout + r.stderr).toBe(0);
     const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
-    const rows = db.prepare('SELECT project FROM observations ORDER BY id').all();
+    expect(db.prepare('SELECT status FROM deferred_work WHERE id = ?').get(id).status).toBe('done');
     db.close();
-    expect(rows.map((r) => r.project)).toEqual([
-      'work--invoice-app',
-      'invoice-app--billing',
-      'invoice-app--billing',
-    ]);
+    expect(projects()).toEqual(['work--invoice-app']);
   });
 
   it('--project still writes from there, and the project directory itself is unaffected', () => {

@@ -4448,16 +4448,18 @@ async function runDispatch(argv) {
   }
   // `.` and `current` name the current project on every command, as optimize always read them.
   // Elsewhere they matched a project literally named "." — no results and no note on a read,
-  // a new project of that name on a write (converge R28, E2E 2026-11-10). On a write they name
-  // the project a write without --project takes, refusal included: spelled by the read resolver,
-  // `save --project=.` from Claude Code's per-project state filed the row under that directory's
-  // name past cliWriteProject (D#940).
+  // a new project of that name on a write (converge R28, E2E 2026-11-10). A write that creates rows
+  // is refused here when the directory is Claude Code's per-project state (cliWriteProject): spelled
+  // by the read resolver alone, `defer add --project=current` there filed the item under that
+  // directory's name (D#940). Elsewhere `.` resolves as on a read, so from a subdirectory
+  // `save --closes-deferred D#N --project .` still names the work tree that owns D#N.
   let writeRefused = null;
   cmdArgs = currentProjectSpelled(cmdArgs, () => {
-    if (!PROJECT_WRITE_CMDS.has(subKey)) return cliProject(db);
-    const fromDir = cliWriteProject();
-    if (!fromDir.ok) writeRefused = fromDir.message;
-    return fromDir.project ?? '';
+    if (PROJECT_WRITE_CMDS.has(subKey)) {
+      const fromDir = cliWriteProject();
+      if (!fromDir.ok) writeRefused = fromDir.message;
+    }
+    return cliProject(db);
   });
   if (writeRefused) {
     fail(`[mem] ${writeRefused}`);
