@@ -292,8 +292,8 @@ describe('extractStructuredSummary — markdown heading reports', () => {
 
 // The report shape the claudemd spec has required since at least 2026-10-24: `## 汇报` (or
 // `## Report`) with 变更 / 验证 / 遗留 (Changes / Verification / Open items) parts. R4
-// (docs/audits/20261124-r4-session-history-analysis.md §8.1) fed 162 such final reports to this
-// extractor: done 0/162, notDone 17/158 — and those 17 were prose lines starting 剩下的 / 还剩.
+// (docs/audits/20261124-r4-session-history-analysis.md §8.1) fed 162 such reports to this
+// extractor: done 0/162, notDone 17/158.
 describe('extractStructuredSummary — 汇报 / Report parts (变更 / 验证 / 遗留)', () => {
   const report = (changes, verify, open) =>
     [

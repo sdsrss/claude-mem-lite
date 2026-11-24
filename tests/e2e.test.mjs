@@ -1344,8 +1344,7 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
   });
 
   // R4 §8.1: the claudemd spec's report is `## 汇报` with 变更 / 验证 / 遗留 parts; until the
-  // extractor read them, this shape wrote no report Done (0/162) and the model's summary,
-  // cut to 120 chars at SessionStart, was all the next session saw of the open items.
+  // extractor read them, this shape wrote no report Done (0/162).
   it("a 汇报 report's 变更 / 遗留 parts are the Stop row's Done / Not done, its 验证 part neither", () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);

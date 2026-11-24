@@ -193,8 +193,8 @@ describe('restore checks the project it writes to', () => {
 // R4 §8.2 (docs/audits/20261124-r4-session-history-analysis.md): an agent ran
 // `cd ~/.claude/projects/-home-ai-dev-daagu/memory && python3 … MEMORY.md … ; node cli.mjs save …`
 // in one Bash command. With no CLAUDE_PROJECT_DIR in that shell, the write took its project from
-// PWD and filed 4 lessons and a deferred item under `-home-ai-dev-daagu--memory`, a project no
-// session's recall ever reads. Claude Code's per-project state directory holds no user project, so
+// PWD and filed 4 lessons and a deferred item under `-home-ai-dev-daagu--memory`. Claude Code's
+// per-project state directory holds no user project, so
 // a write whose project would come from there is refused with a way out; --project still works.
 describe("a write whose project would come from Claude Code's per-project state is refused", () => {
   /** Run the CLI the way that agent's shell did: cwd and PWD in `dir`, no CLAUDE_PROJECT_DIR. */
