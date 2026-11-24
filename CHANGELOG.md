@@ -2,6 +2,32 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.36.0 — `defer update`; the steering block lists the CLI write forms; `save --project .` and five other writes are refused in Claude Code's `projects/` folder
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.6`.
+
+- **`defer update <D#N|ordinal> [--title T] [--detail T] [--priority 1|2|3]` changes an open
+  deferred item in place and keeps its id.** Until now an item could only be dropped and added
+  again under a new id. Only the fields given change, and `--detail=` clears the detail. An item
+  that is done or dropped, or belongs to another project, is refused.
+- **The steering block lists the CLI forms for editing, closing and dropping a deferred item and
+  for superseding a memory:** `defer update D#N …`, `save "<fix>" --closes-deferred D#N`,
+  `defer drop D#N --reason "<why>"` and `save "<correction>" --supersedes NN,E#NN`. The first
+  session of this version refreshes the block, so a `CLAUDE.md` that carries it shows a two-line
+  change; `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the block as it is. The detail file gains rows
+  for `defer update` and `defer drop`.
+- **`save`, `defer add`, `activity save`, `import-jsonl`, `verify-apply` and `restore` given
+  `--project .` or `--project current` are refused inside Claude Code's `projects/` folder
+  (`~/.claude/projects/` by default).** In 6.35.6, `defer add --project=current` run in a folder
+  there still filed the item under that folder's name.
+- **Windows: background workers and `claude` CLI calls no longer open a console window** (PR #60,
+  from an outside contributor).
+- **In a header naming several sections, the names after the first are Done, Not done, Failed or
+  Uncertain only.** Outside a `## 汇报` / `## Report` heading this is the 6.35.5 reading again: in
+  6.35.6, `**Done / Changes**: …` there became the session's Done. Inside a report, a header naming
+  two parts (`**Changes / Open items**: …`) is read as a line of the part before it.
+
 ## v6.35.6 — Last Session reads 汇报 reports; a save without --project from Claude Code's own project folder is refused
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

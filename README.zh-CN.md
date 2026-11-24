@@ -201,6 +201,15 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.36.0
+
+**新增 `defer update` 命令，引导块列出了 CLI 写入的写法；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.35.6`。
+
+- **`defer update D#N --title T --detail T --priority 1|2|3`** 原地修改一条未完成的推迟项（给其中一个参数就行），id 不变。
+- **引导块加上了 `defer update`、`save --closes-deferred`、`defer drop --reason` 和 `save --supersedes` 的 CLI 写法。** 第一个会话会刷新这个块，所以带着它的 `CLAUDE.md` 会多出两行改动；设 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` 可以保持原样。
+- **`save`、`defer add`、`activity save`、`import-jsonl`、`verify-apply` 和 `restore` 带 `--project .` / `current` 时，在 Claude Code 的 `projects/` 目录（默认 `~/.claude/projects/`）之内被拒绝。**
+- 详见 CHANGELOG.md。
+
 ## 升级到 6.35.0
 
 **Last Session 那一行更常写出会话最重要的结果；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.34.0`。

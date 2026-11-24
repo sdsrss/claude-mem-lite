@@ -239,6 +239,22 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.36.0
+
+**A new `defer update` command, and the steering block lists the CLI write forms; nothing to run,
+and the schema version stays 49.** To go back, pin `claude-mem-lite@6.35.6`.
+
+- **`defer update D#N --title T --detail T --priority 1|2|3`** changes an open deferred item in
+  place (any one flag is enough); the id stays.
+- **The steering block gains the CLI forms for `defer update`, `save --closes-deferred`,
+  `defer drop --reason` and `save --supersedes`.** The first session refreshes the block, so a
+  `CLAUDE.md` that carries it shows a two-line change; `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps it
+  as it is.
+- **`save`, `defer add`, `activity save`, `import-jsonl`, `verify-apply` and `restore`, given
+  `--project .` / `current`, are refused inside Claude Code's `projects/` folder
+  (`~/.claude/projects/` by default).**
+- See CHANGELOG.md.
+
 ## Upgrading to 6.35.0
 
 **The Last Session line names the session's main outcome more often; nothing to run, and the
