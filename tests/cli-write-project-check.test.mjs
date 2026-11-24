@@ -239,6 +239,46 @@ describe("a write whose project would come from Claude Code's per-project state 
     expect(projects()).toEqual([]);
   });
 
+  // D#940 (6.35.6 pre-tag C3): `.` and `current` were spelled out by the READ resolver before
+  // dispatch, so these writes never reached the refusal and filed the row under the state
+  // directory's own name — the form a user reaches for when the refusal says "pass --project".
+  it('--project . and --project=current are refused there too, and write nothing', () => {
+    const dir = stateDir();
+    refused(cliIn(dir, 'save', 'element plus lazy css beats overrides', '--project', '.'));
+    refused(cliIn(dir, 'defer', 'add', 'evaluate the chan bi extension', '--project=current'));
+    refused(cliIn(dir, 'activity', 'save', 'a lesson', '--title', 'x', '--project', 'current'));
+    // restore's --project replaces every row's own, so `.` there is not the same as no flag: rows
+    // that all carry a project would restore under theirs, the user's `.` read by nothing.
+    const file = join(root, 'export.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'discovery', title: 'restored row', narrative: 'x', project: 'work--other' }) +
+        '\n',
+    );
+    refused(cliIn(dir, 'restore', file, '--project', '.'));
+    expect(projects()).toEqual([]);
+  });
+
+  // The same fix makes `.` on a write mean what no --project means on a write: the directory's
+  // own project (plain inferProject), not the read side's fallback to an enclosing work tree.
+  it('a write naming . takes the project a write naming nothing takes', () => {
+    mkdirSync(join(projectDir, '.git'));
+    expect(cli('save', 'totals drift by a cent').status).toBe(0);
+    const sub = join(projectDir, 'billing');
+    mkdirSync(sub);
+    // `.` first: while the subdirectory holds no rows, the read side would pick the work tree.
+    expect(cliIn(sub, 'save', 'tax rounds per invoice', '--project', '.').status).toBe(0);
+    expect(cliIn(sub, 'save', 'rounding is per line').status).toBe(0);
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    const rows = db.prepare('SELECT project FROM observations ORDER BY id').all();
+    db.close();
+    expect(rows.map((r) => r.project)).toEqual([
+      'work--invoice-app',
+      'invoice-app--billing',
+      'invoice-app--billing',
+    ]);
+  });
+
   it('--project still writes from there, and the project directory itself is unaffected', () => {
     const dir = stateDir();
     expect(cliIn(dir, 'save', 'rounding is per line', '--project', 'work--invoice-app').status).toBe(0);

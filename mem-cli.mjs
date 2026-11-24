@@ -4381,8 +4381,21 @@ async function runDispatch(argv) {
   }
   // `.` and `current` name the current project on every command, as optimize always read them.
   // Elsewhere they matched a project literally named "." — no results and no note on a read,
-  // a new project of that name on a write (converge R28, E2E 2026-11-10).
-  cmdArgs = currentProjectSpelled(cmdArgs, () => cliProject(db));
+  // a new project of that name on a write (converge R28, E2E 2026-11-10). On a write they name
+  // the project a write without --project takes, refusal included: spelled by the read resolver,
+  // `save --project=.` from Claude Code's per-project state filed the row under that directory's
+  // name past cliWriteProject (D#940).
+  let writeRefused = null;
+  cmdArgs = currentProjectSpelled(cmdArgs, () => {
+    if (!PROJECT_WRITE_CMDS.has(subKey)) return cliProject(db);
+    const fromDir = cliWriteProject();
+    if (!fromDir.ok) writeRefused = fromDir.message;
+    return fromDir.project ?? '';
+  });
+  if (writeRefused) {
+    fail(`[mem] ${writeRefused}`);
+    return;
+  }
 
   try {
     switch (cmd) {
