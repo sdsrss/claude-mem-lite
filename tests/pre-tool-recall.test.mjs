@@ -1230,11 +1230,13 @@ describe('pre-tool-recall', () => {
     });
   });
 
-  // ─── A1.5 (v2.83.2): cite_factor in pre-tool-recall tie-break ────────────
-  // When multiple lessons match the same file, prefer the one with proven
-  // cite history over the merely-most-recent one. Single-match files are
-  // unaffected (obsLimit=1 for Read, 2 for Edit).
-  describe('cite_factor tie-break across multiple file-matching lessons (A1.5)', () => {
+  // ─── D#949 (v6.37.0): recency first, cite_factor breaks ties ──────────────
+  // A1.5 (v2.83.2) ranked cite history ahead of recency when several lessons match one file.
+  // D#771's blind re-run (docs/audits/20261016-citation-regime-consumers.md §9) preferred the
+  // order by write time 37:9 on the stratum written after 2026-09-22, so the default is now
+  // lesson-first, created_at DESC, cite_factor DESC, id DESC. CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off
+  // restores the A1.5 order; the three A1.5 cases run under it unchanged.
+  describe('per-file lesson order: recency first, cite_factor breaks ties (D#949)', () => {
     let tmpRoot;
     let projectDir;
 
@@ -1257,140 +1259,136 @@ describe('pre-tool-recall', () => {
       } catch {}
     });
 
-    it('Edit: prefers the heavily-cited older lesson over the never-cited newer one', async () => {
+    const lesson = (title, body, extra) => ({
+      sessionId: 'mem-a15',
+      project: 'parent--a15test',
+      type: 'bugfix',
+      importance: 2,
+      title,
+      lessonLearned: body,
+      filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
+      ...extra,
+    });
+
+    /** An older lesson cited five times, then a newer one never cited. */
+    function seedOldCitedNewFresh() {
       const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
       db.pragma('foreign_keys = OFF');
       initSchema(db);
-      // Older (60d ago) but cited 5 times — proven helpful.
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'OLD-CITED lesson',
-        lessonLearned: 'this body was cited five times across sessions',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: -50 * 86400000,
-        citedCount: 5,
-      });
-      // Newer (today) but never cited.
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'NEW-FRESH lesson',
-        lessonLearned: 'fresh body never cited',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: 0,
-        citedCount: 0,
-      });
+      insertObs(
+        db,
+        lesson('OLD-CITED lesson', 'this body was cited five times across sessions', {
+          epochOffset: -50 * 86400000,
+          citedCount: 5,
+        }),
+      );
+      insertObs(db, lesson('NEW-FRESH lesson', 'fresh body never cited', { epochOffset: 0, citedCount: 0 }));
       db.close();
+    }
 
+    /** A newer lesson with an uncited streak of 2, then an older neutral one. */
+    function seedNewStreakedOldNeutral() {
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      db.pragma('foreign_keys = OFF');
+      initSchema(db);
+      insertObs(
+        db,
+        lesson('STREAKED lesson', 'body with streak of 2 uncited sessions', {
+          epochOffset: 0,
+          uncitedStreak: 2,
+        }),
+      );
+      insertObs(db, lesson('NEUTRAL lesson', 'older body neutral state', { epochOffset: -3 * 86400000 }));
+      db.close();
+    }
+
+    // `order` undefined = the variable is unset in the child (spawn drops undefined values), so a
+    // developer shell that exports it cannot turn the default-order cases into off-order ones.
+    async function recall(toolName, sessionId, order) {
       const { stdout } = await runScript(
         {
-          tool_name: 'Edit',
+          tool_name: toolName,
           tool_input: { file_path: join(projectDir, 'shared.mjs') },
-          session_id: 'sess-a15-1',
+          session_id: sessionId,
         },
-        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
+        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir, CLAUDE_MEM_PRETOOL_RECENCY_FIRST: order },
       );
+      return JSON.parse(stdout).hookSpecificOutput.additionalContext;
+    }
 
-      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      // Edit caps at 2 rows total — both surface, but the cited one MUST come first.
+    it('Edit: the never-cited newer lesson comes before the heavily-cited older one', async () => {
+      seedOldCitedNewFresh();
+      const ctx = await recall('Edit', 'sess-a15-d1');
+      // Edit caps at 2 rows total — both surface, the newer one first.
       const oldIdx = ctx.indexOf('cited five times');
       const newIdx = ctx.indexOf('fresh body never cited');
       expect(oldIdx).toBeGreaterThanOrEqual(0);
       expect(newIdx).toBeGreaterThanOrEqual(0);
-      expect(oldIdx).toBeLessThan(newIdx);
+      expect(newIdx).toBeLessThan(oldIdx);
     });
 
-    it('Read (obsLimit=1): surfaces the cited lesson, drops the never-cited fresh one', async () => {
-      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
-      db.pragma('foreign_keys = OFF');
-      initSchema(db);
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'OLD-CITED lesson',
-        lessonLearned: 'this body was cited five times across sessions',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: -50 * 86400000,
-        citedCount: 5,
-      });
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'NEW-FRESH lesson',
-        lessonLearned: 'fresh body never cited',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: 0,
-        citedCount: 0,
-      });
-      db.close();
-
-      const { stdout } = await runScript(
-        {
-          tool_name: 'Read',
-          tool_input: { file_path: join(projectDir, 'shared.mjs') },
-          session_id: 'sess-a15-2',
-        },
-        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
-      );
-
-      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      expect(ctx).toContain('cited five times');
-      expect(ctx).not.toContain('fresh body never cited');
+    it('Read (obsLimit=1): surfaces the newer lesson, drops the cited older one', async () => {
+      seedOldCitedNewFresh();
+      const ctx = await recall('Read', 'sess-a15-d2');
+      expect(ctx).toContain('fresh body never cited');
+      expect(ctx).not.toContain('cited five times');
     });
 
-    it('Edit: demotes the uncited-streak lesson below the fresh one', async () => {
-      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
-      db.pragma('foreign_keys = OFF');
-      initSchema(db);
-      // Newer but accumulating uncited streak — agent has been declining it.
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'STREAKED lesson',
-        lessonLearned: 'body with streak of 2 uncited sessions',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: 0,
-        uncitedStreak: 2,
-      });
-      // Older and neutral (cited=0, streak=0).
-      insertObs(db, {
-        sessionId: 'mem-a15',
-        project: 'parent--a15test',
-        type: 'bugfix',
-        importance: 2,
-        title: 'NEUTRAL lesson',
-        lessonLearned: 'older body neutral state',
-        filesModified: `["${join(projectDir, 'shared.mjs')}"]`,
-        epochOffset: -3 * 86400000,
-      });
-      db.close();
-
-      const { stdout } = await runScript(
-        {
-          tool_name: 'Edit',
-          tool_input: { file_path: join(projectDir, 'shared.mjs') },
-          session_id: 'sess-a15-3',
-        },
-        { CLAUDE_MEM_DIR: tmpRoot, CLAUDE_PROJECT_DIR: projectDir },
-      );
-
-      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+    it('Edit: a newer lesson with an uncited streak still comes before an older neutral one', async () => {
+      seedNewStreakedOldNeutral();
+      const ctx = await recall('Edit', 'sess-a15-d3');
       const neutralIdx = ctx.indexOf('older body neutral state');
       const streakedIdx = ctx.indexOf('body with streak of 2');
       expect(neutralIdx).toBeGreaterThanOrEqual(0);
       expect(streakedIdx).toBeGreaterThanOrEqual(0);
-      expect(neutralIdx).toBeLessThan(streakedIdx);
+      expect(streakedIdx).toBeLessThan(neutralIdx);
+    });
+
+    it('Read: on a same-millisecond tie the cited lesson wins, though its id is the lower one', async () => {
+      const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+      db.pragma('foreign_keys = OFF');
+      initSchema(db);
+      // Inserted first, so `id DESC` alone would pick the other one.
+      insertObs(db, lesson('TIED-CITED lesson', 'tied body cited five times', { citedCount: 5 }));
+      insertObs(db, lesson('TIED-FRESH lesson', 'tied body never cited', {}));
+      const ids = db.prepare('SELECT id FROM observations ORDER BY id').all();
+      expect(ids.length).toBe(2);
+      db.prepare('UPDATE observations SET created_at_epoch = ?').run(Date.now() - 60_000);
+      db.close();
+
+      const ctx = await recall('Read', 'sess-a15-d4');
+      expect(ctx).toContain('tied body cited five times');
+      expect(ctx).not.toContain('tied body never cited');
+    });
+
+    describe('CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off restores the A1.5 order', () => {
+      it('Edit: prefers the heavily-cited older lesson over the never-cited newer one', async () => {
+        seedOldCitedNewFresh();
+        const ctx = await recall('Edit', 'sess-a15-1', 'off');
+        // Edit caps at 2 rows total — both surface, but the cited one MUST come first.
+        const oldIdx = ctx.indexOf('cited five times');
+        const newIdx = ctx.indexOf('fresh body never cited');
+        expect(oldIdx).toBeGreaterThanOrEqual(0);
+        expect(newIdx).toBeGreaterThanOrEqual(0);
+        expect(oldIdx).toBeLessThan(newIdx);
+      });
+
+      it('Read (obsLimit=1): surfaces the cited lesson, drops the never-cited fresh one', async () => {
+        seedOldCitedNewFresh();
+        const ctx = await recall('Read', 'sess-a15-2', 'off');
+        expect(ctx).toContain('cited five times');
+        expect(ctx).not.toContain('fresh body never cited');
+      });
+
+      it('Edit: demotes the uncited-streak lesson below the fresh one', async () => {
+        seedNewStreakedOldNeutral();
+        const ctx = await recall('Edit', 'sess-a15-3', 'off');
+        const neutralIdx = ctx.indexOf('older body neutral state');
+        const streakedIdx = ctx.indexOf('body with streak of 2');
+        expect(neutralIdx).toBeGreaterThanOrEqual(0);
+        expect(streakedIdx).toBeGreaterThanOrEqual(0);
+        expect(neutralIdx).toBeLessThan(streakedIdx);
+      });
     });
   });
 
@@ -2033,10 +2031,12 @@ describe('pre-tool-recall', () => {
       initSchema(db);
       insertSession(db, { id: 'sess-a4', project: 'parent--algo4', memoryId: 'mem-a4' });
       const target = join(projectDir, 'shared.mjs');
-      // Four lesson rows on one file. The query sorts lesson-first, then cite_factor
-      // DESC — so cited_count pins a deterministic rank order without relying on
-      // insertion timing (created_at is only the tertiary key and can tie at ms
-      // resolution). Ranks: A(3) > B(2) > C(1) > D(0).
+      // Four lesson rows on one file, ranked A > B > C > D under BOTH per-file orders: the
+      // default (D#949) sorts lesson-first, then created_at DESC, so explicit timestamps one
+      // minute apart pin the rank — insertion alone can tie at ms resolution, which made these
+      // cases flaky once recency led; the CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off order sorts by
+      // cite_factor first, so cited_count 3 > 2 > 1 > 0 pins the same rank there.
+      const base = Date.now() - 60_000;
       ids = [3, 2, 1, 0].map((cited, i) => {
         const info = insertObs(db, {
           sessionId: 'mem-a4',
@@ -2048,7 +2048,11 @@ describe('pre-tool-recall', () => {
           filesModified: `["${target}"]`,
         });
         const id = Number(info?.lastInsertRowid ?? info);
-        db.prepare('UPDATE observations SET cited_count = ? WHERE id = ?').run(cited, id);
+        db.prepare('UPDATE observations SET cited_count = ?, created_at_epoch = ? WHERE id = ?').run(
+          cited,
+          base - i * 60_000,
+          id,
+        );
         return id;
       });
       // Four EVENTS rows on a DIFFERENT file, so the events arm can be exercised in

@@ -272,6 +272,14 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 const PATH_PRECISION_ON = !['0', 'off', 'false', 'no'].includes(
   String(process.env.CLAUDE_MEM_PRETOOL_PATH_PRECISION ?? '').toLowerCase(),
 );
+// D#949 (v6.37.0): the lessons matching one file come newest first, and cite history
+// (citeFactorClause) only breaks a same-millisecond tie ahead of `id`. D#771's pre-registered
+// blind re-run preferred this order 37:9 on lessons written after 2026-09-22
+// (docs/audits/20261016-citation-regime-consumers.md §9). CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off
+// restores the A1.5 (v2.83.2) order: cite history ahead of recency.
+const RECENCY_FIRST_ON = !['0', 'off', 'false', 'no'].includes(
+  String(process.env.CLAUDE_MEM_PRETOOL_RECENCY_FIRST ?? '').toLowerCase(),
+);
 const PATH_PRECISION_PAGE_EXTRA = 20;
 const PATH_PRECISION_MAX_PAGES = 10;
 const SCOPE_FILTER_ON = ['1', 'on', 'true', 'yes'].includes(
@@ -738,11 +746,6 @@ try {
     const crossHookSeen = readCrossHookInjected(project, dedupKey);
     const dedupSlack = Math.min(crossHookSeen.size, CROSS_HOOK_DEDUP_SLACK_MAX);
     const obsLimit = (isRead ? 1 : 2) + dedupSlack;
-    // A1.5 (v2.83.2): cite_factor as a tertiary sort key. When multiple file-
-    // matching lessons exist, the one with proven cite history outranks the
-    // merely-most-recent one. Single-match files unchanged (obsLimit=1 Read /
-    // 2 Edit). Composes with v2.83.0 A1 to extend the citation-decay feedback
-    // loop to the 85%-recall PreToolUse:Read/Edit path.
     // P2 (D#78): decayed-edge filter. This readonly fast-path never migrates,
     // so a pre-v43 DB has no miss_streak column and the filter would throw at
     // prepare time — probe pragma_table_info and fall back to unfiltered
@@ -771,20 +774,38 @@ try {
         /* probe failure → unfiltered */
       }
     }
-    // `LIMIT` stays a literal keyword: tests/order-by-created-at-guard.test.mjs reads the ORDER BY
-    // clause up to it, and the switch-off text must stay what it was.
-    const obsSelect = (limitArgs) => `
-      SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
-      FROM observations o
-      JOIN observation_files of2 ON of2.obs_id = o.id
-      WHERE o.project = ?
+    // Several lessons matching one file: D#949 orders them newest first, cite history breaking a
+    // tie (RECENCY_FIRST_ON); the `off` arm is A1.5 (v2.83.2), cite history ahead of recency.
+    // Each arm is a whole SELECT with its own FROM and ORDER BY, so
+    // tests/order-by-created-at-guard.test.mjs resolves the table and checks each id tiebreak.
+    // `LIMIT` stays a literal keyword, and the PATH_PRECISION switch-off text must stay what it was.
+    const obsWhere = `WHERE o.project = ?
         AND o.importance >= 2
         AND ${liveObsFilterSql('o')}
         AND o.created_at_epoch > ?
         AND ${fileMatch}
         ${edgeDecayFilter}
         ${scopeFilter}
-        ${typeFallback}
+        ${typeFallback}`;
+    const obsSelect = (limitArgs) =>
+      RECENCY_FIRST_ON
+        ? `
+      SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
+      FROM observations o
+      JOIN observation_files of2 ON of2.obs_id = o.id
+      ${obsWhere}
+      ORDER BY
+        CASE WHEN o.lesson_learned IS NOT NULL AND o.lesson_learned != '' THEN 0 ELSE 1 END,
+        o.created_at_epoch DESC,
+        ${citeFactorClause('o')} DESC,
+        o.id DESC
+      LIMIT ${limitArgs}
+    `
+        : `
+      SELECT DISTINCT o.id, o.type, o.title, o.lesson_learned
+      FROM observations o
+      JOIN observation_files of2 ON of2.obs_id = o.id
+      ${obsWhere}
       ORDER BY
         CASE WHEN o.lesson_learned IS NOT NULL AND o.lesson_learned != '' THEN 0 ELSE 1 END,
         ${citeFactorClause('o')} DESC,
