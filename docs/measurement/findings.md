@@ -1755,6 +1755,33 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   `quick_check` gate (SQLite skips the freelist check in some layouts), FTS5 `merge` (it
   allocates pages the same way). Script `tasks/remaining-6310/d595.mjs` (local, untracked).
 
+- **PreToolUse volume levers S2(a) per-session cap and S2(b) type filter — measured
+  2026-11-24 (R4), REJECTED by the maintainer.** Pre-registered in
+  `docs/audits/20261110-r4-preregistration.md` before any reading; run on a frozen corpus
+  (`benchmark/results/r4-corpus-20261124`, 55 sessions on 6.31.0, 1,847 pretool blocks).
+  S2(a) keeps the first N = 22 blocks per session (median, floor) and removes 856 blocks,
+  48.2% of pretool bytes; S2(b) keeps only bugfix / decision rows with importance ≥ 2 and a
+  lesson and removes 802 whole blocks, 44.1% of the bytes. Blind judge, 30 per group:
+
+  | group | as registered | pointer blocks given their text |
+  |---|---|---|
+  | A — removed by S2(a) | APPLICABLE 2/30 | **3/30** [3.5, 25.6] |
+  | B — removed by S2(b) | APPLICABLE 2/30 | **3/30** |
+  | C — kept by both | APPLICABLE 4/30 | 4/30 [5.3, 29.7] |
+
+  MISLEADING 0 of 97 judgements. **As written, both levers pass** (≤ 2/30, not above C,
+  ≥ 30% of bytes) — but all 19 UNCLEAR samples were pointer-only Read→Edit nudges
+  (`Lessons #X were shown when you Read …`) carrying no lesson text, 29.5% of the population,
+  so the registered sample format (R3 §4.3) could not see them. Given the text the model saw
+  at that Read (a supplementary judge, decided after the readings), both removed groups read
+  3/30 and fail the ≤ 2/30 condition. The two arms cannot be told apart from C at n = 30
+  either way, and the saving is about 0.1–0.2% of input tokens against roughly 1.5
+  applicable blocks lost per session. **Do not re-propose either lever without new data**
+  (evidence that non-applicable blocks cause harm, or a lever aimed at a narrower population).
+  **Ruler lesson:** a blind-judge sample of a pointer block must carry the content it points
+  at — register that before the run. Report: `docs/audits/20261124-r4-session-history-analysis.md`
+  §5; raw labels in `tasks/r4/` (local only).
+
 ## Condensed surfaces — original wording (pre-20 KB cap, v6.5.0)
 
 The 2026-09-08 cap rewrote CLAUDE.md's header and its Commands / module / Rulers tables in
