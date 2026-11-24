@@ -1319,7 +1319,7 @@ describe('pre-tool-recall', () => {
     it('Edit: the never-cited newer lesson comes before the heavily-cited older one', async () => {
       seedOldCitedNewFresh();
       const ctx = await recall('Edit', 'sess-a15-d1');
-      // Edit caps at 2 rows total — both surface, the newer one first.
+      // The Edit observations query takes 2 rows here — both surface, the newer one first.
       const oldIdx = ctx.indexOf('cited five times');
       const newIdx = ctx.indexOf('fresh body never cited');
       expect(oldIdx).toBeGreaterThanOrEqual(0);
@@ -1361,11 +1361,31 @@ describe('pre-tool-recall', () => {
       expect(ctx).not.toContain('tied body never cited');
     });
 
+    it.each([undefined, 'off'])(
+      'Edit: a row with a lesson comes before a newer row without one (switch %s)',
+      async (order) => {
+        const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+        db.pragma('foreign_keys = OFF');
+        initSchema(db);
+        insertObs(db, lesson('OLDER-LESSON row', 'older lesson body text', { epochOffset: -10 * 86400000 }));
+        // Edit admits a bugfix without a lesson (typeFallback); it is the newer row.
+        insertObs(db, lesson('NEWER-BODYLESS bugfix in shared', null, { epochOffset: 0 }));
+        db.close();
+
+        const ctx = await recall('Edit', `sess-a15-lf-${order ?? 'default'}`, order);
+        const lessonIdx = ctx.indexOf('older lesson body text');
+        const bodylessIdx = ctx.indexOf('NEWER-BODYLESS');
+        expect(lessonIdx).toBeGreaterThanOrEqual(0);
+        expect(bodylessIdx).toBeGreaterThanOrEqual(0);
+        expect(lessonIdx).toBeLessThan(bodylessIdx);
+      },
+    );
+
     describe('CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off restores the A1.5 order', () => {
       it('Edit: prefers the heavily-cited older lesson over the never-cited newer one', async () => {
         seedOldCitedNewFresh();
         const ctx = await recall('Edit', 'sess-a15-1', 'off');
-        // Edit caps at 2 rows total — both surface, but the cited one MUST come first.
+        // The Edit observations query takes 2 rows here — both surface, but the cited one MUST come first.
         const oldIdx = ctx.indexOf('cited five times');
         const newIdx = ctx.indexOf('fresh body never cited');
         expect(oldIdx).toBeGreaterThanOrEqual(0);
@@ -1388,6 +1408,20 @@ describe('pre-tool-recall', () => {
         expect(neutralIdx).toBeGreaterThanOrEqual(0);
         expect(streakedIdx).toBeGreaterThanOrEqual(0);
         expect(neutralIdx).toBeLessThan(streakedIdx);
+      });
+
+      it.each(['OFF', '0', 'false', 'No'])('Read: the spelling %s turns it off too', async (spelling) => {
+        seedOldCitedNewFresh();
+        const ctx = await recall('Read', `sess-a15-sp-${spelling}`, spelling);
+        expect(ctx).toContain('cited five times');
+        expect(ctx).not.toContain('fresh body never cited');
+      });
+
+      it('Read: any other value keeps the default order', async () => {
+        seedOldCitedNewFresh();
+        const ctx = await recall('Read', 'sess-a15-sp-on', 'on');
+        expect(ctx).toContain('fresh body never cited');
+        expect(ctx).not.toContain('cited five times');
       });
     });
   });

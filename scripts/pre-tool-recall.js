@@ -272,7 +272,7 @@ const EDGE_DECAY_K = Math.max(1, Number.isNaN(EDGE_DECAY_K_RAW) ? 3 : EDGE_DECAY
 const PATH_PRECISION_ON = !['0', 'off', 'false', 'no'].includes(
   String(process.env.CLAUDE_MEM_PRETOOL_PATH_PRECISION ?? '').toLowerCase(),
 );
-// D#949 (v6.37.0): the lessons matching one file come newest first, and cite history
+// D#949 (v6.37.0): the observations matching one file come newest first, and cite history
 // (citeFactorClause) only breaks a same-millisecond tie ahead of `id`. D#771's pre-registered
 // blind re-run preferred this order 37:9 on lessons written after 2026-09-22
 // (docs/audits/20261016-citation-regime-consumers.md §9). CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off
