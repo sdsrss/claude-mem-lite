@@ -33,7 +33,7 @@
    - SessionStart 的 `Remaining:` 行截到 120 字符：36 次中 30 次被截断。
    - 你粘回来的"遗留"段里提到的 83 个 `D#` 编号，只有 17 个出现在当次的 SessionStart 注入里。
 4. **其他已证实的问题**
-   - 有记忆写错了项目：模型在同一条命令里先 `cd` 进 Claude Code 自带的记忆目录，再运行 `cli.mjs save`。daagu 的 4 条 bugfix 教训和 1 条待办因此落在 `-home-ai-dev-daagu--memory` 下，以后不会再被 daagu 的召回用到。
+   - 有记忆写错了项目：模型在同一条命令里先 `cd` 进 Claude Code 自带的记忆目录，再运行 `cli.mjs save`。daagu 的 4 条 bugfix 教训和 1 条待办因此落在 `-home-ai-dev-daagu--memory` 下，daagu 按项目过滤的自动注入（pretool、SessionStart 待办）不会选到它们。
    - 待办没有"修改"操作：窗口内 131 次 drop 中，41 次是为了改写内容而先删后建。
    - v6.31.0 的 O6 没达标：非本项目会话里查用法的次数与写入次数之比是 34/124 = 0.27，目标是 <0.1。模型查的主要是 `--closes-deferred`、`defer drop`、改待办这几项，O6 没有写进去。
 5. **开销与稳定性（已证实）**
@@ -361,7 +361,7 @@ hook_success 里有记录的耗时（65 个会话）：
   - 它不认"汇报 / 变更 / 验证 / 遗留"，也不认英文的 "Changes / Verification / Open items"。
 - **复现**：把冻结语料里每一份带 `## 汇报` / `## Report` 标题的助手消息（162 份）喂给发布的 `extractStructuredSummary`（`tasks/r4/scripts/extract-probe.mjs`）：
   - `done` 非空 **0/162**；
-  - 含"遗留"段的 158 份中，`notDone` 非空 **17/158**。这 17 份全是命中了正文里以"剩下的 / 还剩"开头的句子（17/17，`tasks/r4/scripts/why17.mjs`），取到的是那句叙述，不是"遗留"段本身。
+  - 含"遗留"段的 158 份中，`notDone` 非空 **17/158**。这 17 份都是命中了正文里的中文标题词（剩下的 11、还剩 2、剩余 1、下次 3），取到的是那一行，不是"遗留"段本身。
 - **格式何时变的**：活目录里还在的 transcript（最早 10-24）中，每天带"汇报"标题的消息都有十几到几十条，带 Done / Not done 标题的全期只有 5 条。也就是说，至少一个月里，确定性的那条摘要路径在本机等于没在工作。
 - **后果链**：
   1. 提取器取不到 → `remaining_items` 只能来自模型摘要（`hook-llm.mjs`）；
@@ -412,7 +412,7 @@ hook_success 里有记录的耗时（65 个会话）：
 
 | 编号 | 优先级 | 建议 | 依据 | 验收 / 测量 | 级别 |
 |---|---|---|---|---|---|
-| T1 | **P1** | **提取器认出现行汇报格式**：`ZH_HEADER` / `SECTION` 加"遗留"（→ notDone）和"变更"（→ done），英文加 "Open items" / "Changes"。"验证"不进 done（它是检查结果，不是完成项）。另行决定是否放宽 SessionStart `Remaining:` 的 120 字符截断 | §8.1：done 0/162、遗留 17/158；§6.3：52 条粘贴、`D#` 覆盖 17/83、截断 30/36 | ① 把 `extract-probe.mjs` 改成带真实汇报夹具的测试：遗留 ≥150/158、变更 ≥150/162；② 变异验证：去掉新标题，测试变红；③ 发版后一个窗口，读粘贴占比和 `D#` 覆盖率（只报告） | 加标题：L2（恢复提取器文档写明的行为）。放宽截断：L3（改注入量，先用 `injection-budget` 定价） |
+| T1 | **P1** | **提取器认出现行汇报格式**：`ZH_HEADER` / `SECTION` 加"遗留"（→ notDone）和"变更"（→ done），英文加 "Open items" / "Changes"。"验证"不进 done（它是检查结果，不是完成项）。另行决定是否放宽 SessionStart `Remaining:` 的 120 字符截断 | §8.1：done 0/162、遗留 17/158；§6.3：52 条粘贴、`D#` 覆盖 17/83、截断 30/36 | ① 把 `extract-probe.mjs` 改成带真实汇报夹具的测试：遗留 ≥150/158、变更 ≥150/150（有变更段的汇报）；② 变异验证：去掉新标题，测试变红；③ 发版后一个窗口，读粘贴占比和 `D#` 覆盖率（只报告） | 加标题：L2（恢复提取器文档写明的行为）。放宽截断：L3（改注入量，先用 `injection-budget` 定价） |
 | T2 | **P2** | **CLI 写入拦住来自 `~/.claude/` 的项目 id**：推断出的目录在 `~/.claude/projects/*/memory` 下（或更宽：在 `~/.claude/` 下）时，写操作拒绝并提示用 `--project`，或者映射回该目录编码的项目。另外把 5 行落错的数据移回 `dev--daagu` | §8.2：4 条 bugfix、1 条待办落在 `-home-ai-dev-daagu--memory` | sandbox HOME 复现"cd 记忆目录 && save"；修后写入不再产生新的非项目 id；数据迁移前先 `backup` | 拦截：L2。改 5 行数据：要你同意（改的是你的真实库） |
 | T3 | P3 | **加 `defer update D#N --title/--detail/--priority`**（CLI）。MCP 是否加对应参数另议 | §8.3：41/131 次 drop 是先删后建；help 查 update / edit | 单测；发版后读"先删后建"的 drop 数 | CLI：L2（新增动词，属增量契约）。MCP 工具描述：L3 |
 | T4 | P3 | **常驻说明补上查得最多的 CLI 写法**：`save … --closes-deferred D#N`、`defer drop D#N --reason "…"`、`--supersedes`（各一行，控制在 MCP instructions 的 4,096 字符内） | §8.3：help / 写入 = 0.27，目标 <0.1；grep 目标集中在 close / drop / supersede | 发版后读 help / 写入比值 | **L3**（LLM 可见元数据） |
@@ -492,3 +492,36 @@ python3 -I tasks/r4/scripts/clicalls.py    # §6.1、§8.3
 ```
 
 `tasks/r4/scripts/` 里的路径写死为本次会话的 scratchpad 与冻结目录，复用前要改。评审的原始标注在 `tasks/r4/judge{1,2,3}/labels.jsonl`，组别对照表在 `tasks/r4/judge-key.jsonl`。
+
+---
+
+## 13. 执行结果（2026-11-24，维护者选择「按建议执行」）
+
+| 问题 | 选择 | 结果 |
+|---|---|---|
+| Q1 两个 pretool 杠杆 | (b) 不采纳 | 读数写进 `docs/measurement/findings.md` 的 "Levers measured and rejected"（`3d54f479`） |
+| Q2 T1 与 D27 的先后 | (a) 先做 T1 | T1 `5576d377`；D27 登记修订 §8（`dd7b4273`），发版前审查后又追加更正 §8.1 |
+| Q3 写错项目的 5 行 | 先拦截、发版，再迁移 | T2 `5cd85290`；迁移在 v6.35.6 发布之后完成（见下） |
+
+**v6.35.6**（发版提交 `15b3115b`，tag `v6.35.6`）：
+- 发版前审查：
+  - 缺陷面 r1 找出两个 P2：带标签的遗留段只取到标签（真实，4/156）；没有报告标题的 `### Changes` 会把 Remaining 锁成空（对其他用户的默认行为）。
+  - 修复 `0a8c4643`：段名只在 `## 汇报` / `## Report` 标题之下生效，一段读到下一个段为止。
+  - 修复后，在 R4 语料上：变更段丢行 139/1523 → 0；遗留段 89/1442 → 6（都是收尾提问和分隔线之后的文字）。没有报告标题的 11,153 个文本块与 6.35.5 逐字相同。
+  - 说法面 r1 证伪的说法已删去或收窄（`21da049d` 和 CHANGELOG），已推送的提交说明在发版提交正文里更正。
+  - r2 只出 P3。
+  - 评审报告：`docs/audits/20261124-v6.35.6-pretag-{r1-defects,r1-claims,r2-delta}.md`。
+- 门禁：9/9 通过；全量用例 10,418 个；Node 22.23.5 下 303/303；tarball 冒烟 PASS。
+- 发布：CI 11/11、Release 通过；npm 6.35.6 由 GitHub Actions OIDC 发布，shasum `d7bddfd9…` 与发布日志一致，带 provenance；GitHub Release 不是草稿，附带签名清单。
+- 迁移（在真实库上执行；先备份到 `~/.claude-mem-lite/backups/pre-r4-project-move-20261124T183428Z.db`）：
+  - `#1548`、`#1623`、`#1673` 和 D#890 改到 `dev--daagu`；
+  - `#1632` 在 `dev--daagu` 已有重复（`#1633`），标记为被它取代；
+  - 那条手动会话行也改了；
+  - 错误项目名下剩 0 行，`quick_check` ok；从 daagu 读取已能看到这些行。
+
+**本节新增的延期项**：D#939–D#942（构造形态的边角形态，以及 R2-E「变更段里的"剩下…"行该不该进 Not done」待你决定）。T3/T4 仍是 D#934。
+
+**更正**（与说法审查同类，扫到本报告的副本一并改了）：
+- §0 的"以后不会再被 daagu 的召回用到"改为只说按项目过滤的自动注入：不带项目的 `mem_recall` / `mem_search` 仍能查到。
+- §8.1 的"17 份全是以'剩下的 / 还剩'开头"改为实际分布：剩下的 11、还剩 2、剩余 1、下次 3。
+- §10 T1 的验收"变更 ≥150/162"改为"≥150/150（有变更段的汇报）"。
