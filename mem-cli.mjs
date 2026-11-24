@@ -179,6 +179,7 @@ import {
   listOpenWithOrdinal,
   deferredDropLabel,
   dropDeferredMany,
+  updateDeferred,
   formatDropReasonHint,
   getDeferredByIds,
   formatDeferredDetail,
@@ -1486,7 +1487,10 @@ function cmdSave(db, args) {
   if (skipNote) out(`[mem] ${skipNote}`);
 }
 
-// ─── cmdDefer (sub-dispatch: add | list | drop) ──────────────────────────────
+// ─── cmdDefer (sub-dispatch: add | list | update | drop) ─────────────────────
+
+const DEFER_UPDATE_USAGE =
+  'defer update <D#N|ordinal> [--title T] [--detail T] [--priority 1|2|3] [--project P]';
 
 function cmdDefer(db, args) {
   const sub = args[0];
@@ -1498,13 +1502,17 @@ function cmdDefer(db, args) {
     case 'list':
       cmdDeferList(db, rest);
       break;
+    case 'update':
+      cmdDeferUpdate(db, rest);
+      break;
     case 'drop':
       cmdDeferDrop(db, rest);
       break;
     default:
-      fail(`[mem] Usage: ${CLI_INVOKE} defer <add|list|drop> ...`);
+      fail(`[mem] Usage: ${CLI_INVOKE} defer <add|list|update|drop> ...`);
       fail('[mem]   defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P]');
       fail('[mem]   defer list [--project P] [--limit N]');
+      fail(`[mem]   ${DEFER_UPDATE_USAGE}`);
       fail('[mem]   defer drop <id-or-D#N> --reason "<reason>" [--project P]');
   }
 }
@@ -1598,6 +1606,59 @@ function cmdDeferList(db, args) {
   // Affordance for the detail field — list stays title-only by design (it is
   // mirrored into the SessionStart dashboard, where detail would be noise).
   out(`  Full detail: ${CLI_INVOKE} get D#<id>`);
+}
+
+// D#934 T3: change an open item in place. Without it, a rewritten item was dropped and added
+// again under a new id (R4 §8.3: 41 of 131 drops). Resolves like drop (D#N or ordinal, checked
+// against the project), validates like add.
+function cmdDeferUpdate(db, args) {
+  const { positional, flags } = parseArgs(args);
+  if (rejectBareStringFlags(flags, ['id', 'title', 'detail', 'project'])) return;
+  const idStr = resolvePositionalAlias(positional.length > 0 ? positional[0] : '', flags, ['id']);
+  if (idStr === null) return;
+  const token = idStr.trim();
+  if (!token || token.includes(',') || positional.length > 1) {
+    fail(
+      `[mem] Usage: ${CLI_INVOKE} ${DEFER_UPDATE_USAGE} — one item, and the new text goes in --title / --detail`,
+    );
+    return;
+  }
+  const fields = {};
+  if (flags.title !== undefined) {
+    const title = flags.title.trim();
+    if (!title || title.length > 200) {
+      fail(
+        `[mem] defer update: the title must be 1-200 characters (got ${title.length}). Move detail to --detail.`,
+      );
+      return;
+    }
+    fields.title = title;
+  }
+  if (flags.detail !== undefined) fields.detail = flags.detail;
+  if (flags.priority !== undefined) {
+    if (!isNumericToken(flags.priority) || ![1, 2, 3].includes(parseInt(flags.priority, 10))) {
+      fail(`[mem] Invalid --priority "${flags.priority}". Must be 1 (low), 2 (normal), or 3 (urgent).`);
+      return;
+    }
+    fields.priority = parseInt(flags.priority, 10);
+  }
+  if (Object.keys(fields).length === 0) {
+    fail(
+      `[mem] Usage: ${CLI_INVOKE} ${DEFER_UPDATE_USAGE} — give at least one of --title, --detail, --priority`,
+    );
+    return;
+  }
+  const project = flags.project ? resolveProject(db, flags.project) : cliProject(db);
+  let id;
+  try {
+    ({ id } = updateDeferred(db, project, /^\d+$/.test(token) ? parseInt(token, 10) : token, fields));
+  } catch (e) {
+    fail(`[mem] defer update: ${e.message}`);
+    return;
+  }
+  out(
+    `[mem] Updated ${deferredDropLabel(db, id)} in project "${project}" (${Object.keys(fields).join(', ')}).`,
+  );
 }
 
 function cmdDeferDrop(db, args) {
@@ -3388,6 +3449,11 @@ Commands:
     list                List open deferred items (title-only; full detail via get D#N)
       --limit N         Max results (default 10)
       --project P       Filter by project
+    update <D#N|ordinal>  Rewrite one open item in place (not drop + re-add)
+      --title T         New title (≤200 chars)
+      --detail T        New detail (--detail= clears it)
+      --priority N      New priority: 1=low, 2=normal, 3=urgent
+      --project P       Project for ordinal resolution (default: current)
     drop <D#N|ordinal>[,...]  Drop one or more deferred items (no fix needed)
       --id D#N          ID as a flag (alias for the positional)
       --reason "..."    Required audit trail
@@ -3933,6 +3999,7 @@ const CONTENT_WRITER_FLAGS = {
   ],
   update: ['id', 'title', 'narrative', 'lesson', 'lesson-learned', 'concepts', 'importance', 'type', 'json'],
   'defer add': ['title', 'priority', 'detail', 'files', 'project', 'json'],
+  'defer update': ['id', 'title', 'priority', 'detail', 'project', 'json'],
   'activity save': ['type', 'title', 'body', 'files', 'file', 'project', 'importance', 'json'],
 };
 // Commands whose --project names where rows are WRITTEN (a new project is theirs to create).
