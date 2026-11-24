@@ -4,7 +4,7 @@ Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
 - **Version**: 6.36.0 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
-  `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
+  `package.json`, `plugin.json` and `marketplace.json`.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0), ESM · npm · better-sqlite3 + FTS5
 
 **Capped at 20 KB: RULES ONLY.** Each rule was expensive to establish and several shipped as
@@ -23,7 +23,7 @@ before retrieval, measurement, release, migration or schema work.**
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |
 | Dead code | `npm run dead-code` (knip — measure from the **primary working tree**; the NAME SET is the evidence, not the count) |
 | **Plugin manifests** | `npm run validate:manifests` — **`claude plugin validate . --strict` is NOT equivalent**: it never checks `.claude-plugin/plugin.json` |
-| Bench · multipliers | `npm run benchmark:gate` · `benchmark:multipliers:gate` — **run the second after touching any constant in `scoring-sql.mjs` or `MULT_EXPR`; the first is structurally blind to those** |
+| Bench · multipliers | `npm run benchmark:gate` · `benchmark:multipliers:gate` — **run the second after touching any constant in `scoring-sql.mjs` or `MULT_EXPR`** |
 | **Recapture the gate baseline** | `node benchmark/benchmark.mjs --production-hybrid > benchmark/baseline.json` — **expires 30 days after its own `timestamp`**, and CI + publish pass `--strict`. Sampled **2026-11-24T19:45:22Z** → red from **2026-12-24 19:45 UTC**. The stamp lives in THREE places (`baseline.json`, `ci.yml`, this row); `tests/baseline-stamp-sync.test.mjs` fails if they disagree. **Recapture BEFORE tagging, in its own commit** — otherwise it goes red after the tag is pushed |
 | Audit metrics | `npm run audit:metrics` · `audit:baseline` · `audit:selfcheck` |
 
@@ -46,7 +46,7 @@ Seven hook events in `hooks/hooks.json`: `SessionStart`, `PreCompact`, `PreToolU
 `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has THREE
 matchers** (Bash via a prefilter).
 
-`code-graph-mcp overview .` maps the tree; the modules whose ROLE the filename does not give
+The modules whose ROLE the filename does not give
 away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone
 since the vector engine was removed; `lib/tool-refusal.mjs` gates PostToolUseFailure,
 separating a program failing from the agent's own chain refusing; `hook-optimize.mjs` is
@@ -117,11 +117,11 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 ## Invariants that bite
 
-**Full text, measured evidence and the wrong drafts: `findings.md § Invariants`.**
+→ `findings.md § Invariants`.
 
 ### Hooks and session lifecycle
 
-- **`PostToolUse` does NOT fire for a host-flagged failure** — those go to `PostToolUseFailure` (text in `error`, no `tool_response`; `additionalContext` is the channel). **Do not widen `HARD_ERROR_RE`** — every anchor measured zero gain. Gated on `lib/tool-refusal.mjs`: most such failures are the agent's own guardrails refusing.
+- **`PostToolUse` does NOT fire for a host-flagged failure** — those go to `PostToolUseFailure` (text in `error`, no `tool_response`; `additionalContext` is the channel). **Do not widen `HARD_ERROR_RE`** — every anchor measured zero gain.
 - **`Stop` fires once per assistant TURN, and `/clear` ROTATES the host session id.** The session file survives Stop, so **its presence no longer tells you why a session started** — ask stdin's `source` (`startup|clear|compact|resume`).
 - **Every Stop-side writer needs a per-session idempotency key**, since Stop rescans the whole transcript; `access_count` written before v5.6.0 is an upper bound, not a count.
 - **`hooks/hooks.json` and `install.mjs`'s `settings.json` entries are two hook sets and must change together** (`tests/audit-silent-20260814.test.mjs` diffs them) — **but the diff ignores `timeout`**. Adding a field? Ask whether the guard reads it.
@@ -135,7 +135,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 - **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
 - **Deep search floods on questions the corpus cannot answer** — holdout reads **FP@10 = 10.00, 12/12**. The flood is the **AND→OR fallback**, which is also the vocab-mismatch recall win, so three gates were tested against both arms and **rejected**.
 - **That same OR fallback DISARMS auto-escalation**, so both deep rulers describe EXPLICIT deep only and an escalation A/B reading Δ=0 is a blind instrument (rule 9).
-- **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. Use `multiplier-discrimination.mjs`; all eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.
+- **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. All eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.
 
 ### Writes, liveness and concurrency
 
@@ -156,7 +156,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 ### Install, platform and recovery
 
 - **`package.json`'s `os` is an npm INSTALL gate sitting on every MCP launch after an update** (the plugin cache ships without `node_modules`): on Windows it killed the stdio server. **A gate is not a message.** `doctor` keys on whether **bash runs** and returns **three** outcomes: "I could not look" gets its own warning, because a green "nothing to check" ends the search.
-- **A recovery path must not import the thing it recovers** — one import edge, for two path constants, put the signature-verified repair out of reach on the broken install it exists to repair. They live in `lib/data-paths.mjs` (a leaf): importing a constant drags in its module's whole load graph.
+- **A recovery path must not import the thing it recovers** — one import edge, for two path constants, put the signature-verified repair out of reach on the broken install it exists to repair. They live in `lib/data-paths.mjs` (a leaf).
 - **better-sqlite3 13.2.0 loads a compiled `build/` addon BEFORE `prebuilds/`** (13.0.x: reverse): a dead one hides a good prebuild, so the heal sets it aside if the prebuild loads (D#928). Quarantine prebuilds **only in the source-build branch**; **never name the addon's path — ask `getPrebuildPath()`**.
 - **A DB written by a NEWER claude-mem-lite locks every older code home out, permanently.** `lib/schema-skew.mjs` computes the remedy from the ROOT that is behind, not the machine's global shape — **grep its importers rather than enumerating surfaces here.** The dedup marker must be per PROJECT; nothing called from `openDb`'s catch may throw (`getSessionId()` MINTS and writes).
 - **A database file SQLite will not open is that shape with a DESTRUCTIVE remedy.** `SQLITE_CORRUPT_VTAB` (a damaged FTS index) carries the **same message text** as a damaged file — classify on `err.code` via `isFtsCorruptionError`, or you offer to overwrite a database whose rows are intact. The two channels carry **different strings**: the human gets the shell command, the model none. Register new per-project markers in `GC_PROJECT_MARKER_PREFIXES`.
