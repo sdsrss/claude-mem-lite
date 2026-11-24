@@ -2,6 +2,24 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.35.6 — Last Session reads 汇报 reports; a save without --project from Claude Code's own project folder is refused
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.35.5`.
+
+- **Last Session reads a final report written as `## 汇报` with 变更 / 验证 / 遗留 parts, or as
+  `## Report` with Changes / Verification / Open items.** The Stop hook's report reader did not know
+  these part names. Below the report's heading, 变更 / Changes is now the session's Done and
+  遗留 / Open items its Not done; 验证 / Verification ends the part before it. As with Done / Not
+  done since 6.13.5, the report takes precedence over the model's summary.
+- **A write without `--project` run inside Claude Code's own per-project folder is refused instead
+  of filed under a project named after that folder.** `save`, `defer add`, `activity save`,
+  `import-jsonl` and `restore`, run in `~/.claude/projects/<dir>/…` (for example right after
+  `cd`-ing into its `memory/` to edit `MEMORY.md`), took that folder as the project. They now exit 1
+  and say to run from the project directory or pass `--project`. `restore` refuses only when some
+  row carries no project and no `--project` was given. `$CLAUDE_CONFIG_DIR` is followed when
+  absolute; the config folder outside `projects/` stays writable.
+
 ## v6.35.5 — better-sqlite3 13.2.0, and a repair for the shape its load order opens
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
