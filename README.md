@@ -239,6 +239,21 @@ rm -rf ~/claude-mem-lite/   # unhidden data dir from before the first release (n
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.37.0
+
+**PreToolUse recall ranks a file's observations by write time before citation history; nothing to
+run, and the schema version stays 49.** To go back, set `CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off` or
+pin `claude-mem-lite@6.36.0`.
+
+- **When several observations match the file being read or edited, write time now comes before
+  citation history**, which only breaks a tie between observations written in the same
+  millisecond. As before, observations with a lesson come before those without one, and matches
+  from the events table come after the observations. Read shows at most one lesson and Edit at
+  most three, so on a file with several matches the ones shown can change. Search and prompt-time
+  injection keep their ranking.
+- **The detail doc changes one line** to say where citation still ranks.
+- See CHANGELOG.md.
+
 ## Upgrading to 6.36.0
 
 **A new `defer update` command, and the steering block lists the CLI write forms; nothing to run,

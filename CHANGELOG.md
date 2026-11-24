@@ -2,6 +2,31 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.37.0 — PreToolUse recall ranks a file's observations by write time before citation history
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is setting
+`CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off`, or pinning `claude-mem-lite@6.36.0`.
+
+- **When several observations match the file being read or edited, PreToolUse recall now ranks
+  them by write time before citation history.** Until now citation history came before write
+  time; it now only breaks a tie between observations written in the same millisecond. As before,
+  observations with a lesson come before those without one, and matches from the events table
+  come after the observations. Read shows at most one lesson and Edit at most three, so on a file
+  with several matches the ones shown can change. `CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off` restores
+  the old order.
+- **Why:** in a pre-registered blind comparison on the maintainer's transcripts (D#771,
+  `docs/audits/20261016-citation-regime-consumers.md` §9), 177 edits (at most two per file and
+  lesson pair) had both compared lessons written after 2026-09-22 and the two orders showed different
+  lessons. In 46 of them exactly one side's lesson was rated as constraining the edit by both of
+  two blind judges: the newest-first side in 37, the old order in 9 (two-sided exact sign test
+  p = 4.1 × 10⁻⁵). The judges were Claude subagents, the transcripts come from one machine, and
+  only edits were judged, not Read.
+- **Search and the lessons injected at prompt time still use citation history in their
+  ranking;** only the per-file order of PreToolUse recall changes. The detail doc
+  `.claude/plugin_claude_mem_lite.md` now says so: in a project whose `CLAUDE.md` carries the
+  block, the first session rewrites that file with one changed line, and
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps it as it is.
+
 ## v6.36.0 — `defer update`; the steering block lists the CLI write forms; `save --project .` and five other writes are refused in Claude Code's `projects/` folder
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

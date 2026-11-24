@@ -201,6 +201,14 @@ rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是�
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.37.0
+
+**PreToolUse 召回对同一文件的 observations 先按写入时间、再按引用历史排；不用执行任何操作，schema 版本仍是 49。** 想退回，设 `CLAUDE_MEM_PRETOOL_RECENCY_FIRST=off`，或固定 `claude-mem-lite@6.36.0`。
+
+- **多条 observations 匹配正在读或编辑的文件时，写入时间现在排在引用历史之前**，引用历史只在同一毫秒写入的 observations 之间决定先后。和以前一样，带 lesson 的排在不带的前面，events 表里的匹配项排在 observations 之后。Read 最多给一条、Edit 最多给三条，所以文件有多条匹配时，看到的可能会变。搜索和提示时注入的排序不变。
+- **详情文档改了一行**，写明引用在哪里仍影响排序。
+- 详见 CHANGELOG.md。
+
 ## 升级到 6.36.0
 
 **新增 `defer update` 命令，引导块列出了 CLI 写入的写法；不用执行任何操作，schema 版本仍是 49。** 想退回，请固定 `claude-mem-lite@6.35.6`。
