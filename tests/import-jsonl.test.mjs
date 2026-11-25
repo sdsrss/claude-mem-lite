@@ -539,6 +539,59 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
     }
   });
 
+  // The budget for one prompt text must not depend on which transcript line carries the
+  // legacy shape: the old importer stored a capped block-bearing row AND a plain row for
+  // these two lines, and either order of them must be recognised as both already stored.
+  for (const order of ['block line first', 'plain line first']) {
+    it(`a block-bearing line and a plain twin of one long prompt add nothing (${order})`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+      try {
+        const session = order === 'block line first' ? 'bi-6a' : 'bi-6b';
+        const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+        const typed = 'q'.repeat(10500);
+        const ts = '2026-04-01T12:00:00Z';
+        db.prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+           VALUES (?, ?, 'proj', ?, ?, 'completed', 2)`,
+        ).run(session, `import-${session}`, ts, Date.parse(ts));
+        const insertRow = db.prepare(
+          `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+           VALUES (?, ?, ?, ?, ?)`,
+        );
+        insertRow.run(session, scrubSecrets(`${block}\n${typed}`).slice(0, 10000), 1, ts, Date.parse(ts));
+        insertRow.run(session, scrubSecrets(typed).slice(0, 10000), 2, ts, Date.parse(ts));
+        const blockLine = {
+          type: 'user',
+          sessionId: session,
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: block },
+              { type: 'text', text: typed },
+            ],
+          },
+        };
+        const plainLine = { type: 'user', sessionId: session, message: { role: 'user', content: typed } };
+        const lines = order === 'block line first' ? [blockLine, plainLine] : [plainLine, blockLine];
+        const file = join(dir, 'bi6.jsonl');
+        writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+
+        for (let run = 1; run <= 2; run++) {
+          const r = await importJsonl(db, file, { project: 'proj' });
+          expect(r.prompts, `run ${run}`).toBe(0);
+          expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n, `run ${run}`).toBe(2);
+          expect(
+            db.prepare('SELECT prompt_counter FROM sdk_sessions WHERE content_session_id = ?').get(session)
+              .prompt_counter,
+            `run ${run}`,
+          ).toBe(2);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   // A <private> region and a trailing newline: the old importer kept the newline; the new
   // one must produce the same stored text, or the old row and the new key never meet.
   it('a repeated short timestamp-less line with <private>, first copy stored in the old format, stays at 2', async () => {
