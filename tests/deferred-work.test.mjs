@@ -651,6 +651,15 @@ describe('defer list age + stale hint (G11)', () => {
     expect(hint).toMatch(/30/);
     expect(hint.toLowerCase()).toMatch(/refresh|drop/);
   });
+
+  it('formatDeferStaleHint names only an action that clears it (D#944): drop with a reason, not refresh', () => {
+    // Staleness counts from created_at_epoch and `defer update` keeps it, so "refresh" sent
+    // agents to an action that never clears the hint, or to drop + re-add under a new id.
+    const hint = dw.formatDeferStaleHint(3);
+    expect(hint).not.toMatch(/refresh/i);
+    expect(hint).toMatch(/drop/i);
+    expect(hint).toMatch(/reason/i);
+  });
 });
 
 describe('dropDeferredMany (D17, R31 review L3)', () => {
