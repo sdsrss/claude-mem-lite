@@ -61,8 +61,16 @@ function readLines(file) {
 }
 
 function scan(files) {
-  const info = { injectKey: false, memCalls: [], readsJsonl: false, firstCtx: null, denied: 0 };
+  const info = {
+    injectKey: false,
+    upsHandoff: false,
+    memCalls: [],
+    readsJsonl: false,
+    firstCtx: null,
+    denied: 0,
+  };
   for (const f of files) {
+    if (readFileSync(f, 'utf8').includes('<session-handoff')) info.upsHandoff = true;
     for (const e of readLines(f)) {
       const a = e.attachment ?? {};
       if (a.type === 'hook_additional_context' && a.hookEvent === 'SessionStart') {
@@ -101,6 +109,8 @@ export function analyze(workdir) {
     if (!m) continue;
     const run = join(runsDir, id);
     const r = { id, model: m[1], arm: m[2] };
+    const metaFile = join(run, 'meta.json');
+    r.gapDays = existsSync(metaFile) ? (JSON.parse(readFileSync(metaFile, 'utf8')).gapDays ?? 0) : 0;
     try {
       for (const n of [1, 2]) {
         const d = JSON.parse(readFileSync(join(run, `S${n}.json`), 'utf8'));
@@ -138,6 +148,7 @@ export function analyze(workdir) {
       s1Mem: s1.memCalls,
       s2Mem: s2.memCalls,
       s2InjectPlan: s2.injectKey,
+      s2Handoff: s2.upsHandoff,
       s2ReadsJsonl: s2.readsJsonl,
       s1FirstCtx: s1.firstCtx,
       denied: s1.denied + s2.denied,
@@ -165,6 +176,8 @@ export function analyze(workdir) {
         s2Complete: a.filter((r) => r.eval2.E2all).length,
         s1E1: a.filter((r) => r.eval1.E1).length,
         hostMemPlan: a.filter((r) => r.hostMemPlan).length,
+        s2Handoff: a.filter((r) => r.s2Handoff).length,
+        gapDays: [...new Set(a.map((r) => r.gapDays))],
         s1Cost: mean((r) => r.S1.cost),
         s1Sec: mean((r) => r.S1.sec),
         s1Turns: mean((r) => r.S1.turns),
@@ -202,6 +215,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         `hostMemPlan ${r.hostMemPlan ? 'Y' : 'n'}`,
         `repoPlan ${r.repoPlan ? 'Y' : 'n'}`,
         `inject ${r.s2InjectPlan ? 'Y' : 'n'}`,
+        `upsHandoff ${r.s2Handoff ? 'Y' : 'n'}`,
         `S1 ${r.s1Mem.join(',') || '-'}`,
         `S2 ${r.s2Mem.join(',') || '-'}`,
         `$ ${r.S1.cost.toFixed(3)}/${r.S2.cost.toFixed(3)}`,

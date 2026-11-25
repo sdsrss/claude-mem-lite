@@ -27,7 +27,8 @@ if [ "$ARM" = p ]; then
     VALUEAB_CLAUDE_BIN="$CLAUDE_BIN" WRAP_LOG="$LOG/bg")
   extra=(--plugin-dir "$VA/plugin")
 fi
-echo "{\"id\":\"$ID\",\"arm\":\"$ARM\",\"model\":\"$MODEL\",\"start\":\"$(date -u +%FT%TZ)\"}" > "$LOG/meta.json"
+GAP_DAYS="${GAP_DAYS:-0}"
+echo "{\"id\":\"$ID\",\"arm\":\"$ARM\",\"model\":\"$MODEL\",\"gapDays\":$GAP_DAYS,\"start\":\"$(date -u +%FT%TZ)\"}" > "$LOG/meta.json"
 for N in 1 2; do
   if [ "$N" = 2 ]; then
     # what the S2 session can see before it starts
@@ -61,5 +62,14 @@ for N in 1 2; do
     sqlite3 -readonly "$MEMD/claude-mem-lite.db" ".backup '$LOG/post-S$N/mem.db'"
   fi
   git -C "$PROJ" show --stat HEAD > "$LOG/post-S$N/commit.txt"
+  if [ "$N" = 1 ] && [ "$GAP_DAYS" != 0 ]; then
+    # Long-gap arm: S2 starts as if S1 were GAP_DAYS old. The plugin's private store and runtime files move back
+    # (age-store.mjs); the host's transcripts get old mtimes in both arms. The system clock is not touched.
+    if [ "$ARM" = p ] && [ -f "$MEMD/claude-mem-lite.db" ]; then
+      node "$HERE/age-store.mjs" "$MEMD/claude-mem-lite.db" "$GAP_DAYS" --runtime "$MEMD/runtime" > "$LOG/aged.json"
+    fi
+    old=$(( $(date +%s) - GAP_DAYS * 86400 ))
+    [ -d "$CFG/projects" ] && find "$CFG/projects" -type f -exec touch -d "@$old" {} +
+  fi
 done
 echo "done $(date -u +%FT%TZ)" >> "$LOG/progress.txt"
