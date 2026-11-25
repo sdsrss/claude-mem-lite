@@ -1729,6 +1729,64 @@ describe('Suite 5: User Prompt', () => {
     expect(prompts.length).toBe(0);
   });
 
+  // The VS Code extension (with Claude in Chrome) prepends a <browser_instruction> block to
+  // every prompt. Stored whole, it became prompt_text and the handoff's "Working On" line.
+  const BROWSER_BLOCK =
+    '<browser_instruction># Claude in Chrome browser automation\n\nYou have access to browser ' +
+    'automation tools for interacting with web pages in Chrome.</browser_instruction>';
+
+  it('host <browser_instruction> block is stripped; the typed text is stored', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+
+    const { exitCode } = runHook('user-prompt', {
+      stdin: JSON.stringify({ prompt: `${BROWSER_BLOCK}\n\nHelp me fix the authentication bug` }),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+
+    const db = openTestDb(tmpHome);
+    const prompts = db
+      .prepare('SELECT prompt_text FROM user_prompts WHERE content_session_id = ?')
+      .all(sessionId);
+    db.close();
+    expect(prompts.map((p) => p.prompt_text)).toEqual(['Help me fix the authentication bug']);
+  });
+
+  it('a prompt that is only a host <browser_instruction> block is not stored', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+
+    const { exitCode } = runHook('user-prompt', {
+      stdin: JSON.stringify({ prompt: BROWSER_BLOCK }),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+
+    const db = openTestDb(tmpHome);
+    const prompts = db.prepare('SELECT * FROM user_prompts WHERE content_session_id = ?').all(sessionId);
+    db.close();
+    expect(prompts.length).toBe(0);
+  });
+
+  it('a task-notification behind a host <browser_instruction> block is still dropped', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+
+    const { exitCode } = runHook('user-prompt', {
+      stdin: JSON.stringify({
+        prompt: `${BROWSER_BLOCK}\n\n<task-notification>\n<task-id>abc123</task-id>\n</task-notification>`,
+      }),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+
+    const db = openTestDb(tmpHome);
+    const prompts = db.prepare('SELECT * FROM user_prompts WHERE content_session_id = ?').all(sessionId);
+    db.close();
+    expect(prompts.length).toBe(0);
+  });
+
   it('prompt counter increments across multiple prompts', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const sessionId = getSessionIdFromFile(tmpHome);

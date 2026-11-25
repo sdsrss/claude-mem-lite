@@ -922,6 +922,48 @@ describe('user-prompt-search subprocess integration', () => {
     expect(stdout).toBe('');
   });
 
+  // The VS Code extension (with Claude in Chrome) prepends a <browser_instruction> block of
+  // about 4KB to every prompt. The FTS query is capped at 2000 chars / 64 tokens
+  // (lib/ups-query.mjs), so the block filled it and the typed request never reached the
+  // search. The control is the typed request alone; the block in front must not change it.
+  // The block here is synthetic text of the real one's length and kind.
+  const HOST_BLOCK = `<browser_instruction># Browser automation\n\n${Array.from(
+    { length: 40 },
+    (_, n) => `Step ${n}: navigate the tab, read the page, capture a screenshot and check the console.`,
+  ).join('\n')}</browser_instruction>`;
+  const TYPED = 'fix the ledger export dropping the quarterly column';
+  function seedLedgerObs() {
+    insertObs(db, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'bugfix',
+      title: 'Ledger export dropped the quarterly column',
+      text: 'ledger export dropping quarterly column fix',
+      importance: 3,
+    });
+    db.pragma('wal_checkpoint(FULL)');
+  }
+
+  it('control: the typed request alone recalls its observation', async () => {
+    expect(HOST_BLOCK.length).toBeGreaterThan(3000); // premise: as long as the real block
+    seedLedgerObs();
+    const { stdout } = await runScript({ prompt: TYPED });
+    expect(stdout).toContain('Ledger export dropped the quarterly column');
+  });
+
+  it('a host <browser_instruction> block does not crowd the typed request out of the query', async () => {
+    seedLedgerObs();
+    const { stdout } = await runScript({ prompt: `${HOST_BLOCK}\n\n${TYPED}` });
+    expect(stdout).toContain('Ledger export dropped the quarterly column');
+  });
+
+  it('a host block in front of a task-notification still skips it', async () => {
+    const { stdout } = await runScript({
+      prompt: `${HOST_BLOCK}\n\n<task-notification>some internal protocol message that is long enough</task-notification>`,
+    });
+    expect(stdout).toBe('');
+  });
+
   // R1: LOW_SIGNAL title filtering — degraded titles from hook-llm fallback
   // (Modified X, Worked on X, Reviewed N files:) must not appear in injection output.
   // Both seed obs use type='bugfix' so detectIntent's type filter doesn't

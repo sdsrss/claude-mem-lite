@@ -378,6 +378,78 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
     }
   });
 
+  // Same parity for the host-prepended <browser_instruction> block (lib/host-blocks.mjs).
+  // In a real transcript it is its own text part ahead of the typed one.
+  it('strips a host <browser_instruction> part and keeps the typed text', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+    try {
+      const file = join(dir, 'bi.jsonl');
+      const event = {
+        type: 'user',
+        sessionId: 'bi-1',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '<browser_instruction># Claude in Chrome browser automation</browser_instruction>',
+            },
+            { type: 'text', text: 'a real question about billing retries' },
+          ],
+        },
+        timestamp: '2026-04-01T12:00:00Z',
+      };
+      writeFileSync(file, JSON.stringify(event) + '\n');
+
+      const r = await importJsonl(db, file, { project: 'proj' });
+      expect(r.prompts).toBe(1);
+
+      const rows = db.prepare('SELECT prompt_text FROM user_prompts').all();
+      expect(rows.map((row) => row.prompt_text)).toEqual(['a real question about billing retries']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A transcript imported before the strip landed left a row that still carries the block.
+  // Re-importing it must stay a no-op, not add a stripped second copy.
+  it('re-importing over a row stored with the block adds nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+    try {
+      const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+      const typed = 'a real question about billing retries';
+      const ts = '2026-04-01T12:00:00Z';
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+         VALUES ('bi-2', 'import-bi-2', 'proj', ?, ?, 'completed')`,
+      ).run(ts, Date.parse(ts));
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('bi-2', ?, 1, ?, ?)`,
+      ).run(`${block}\n${typed}`, ts, Date.parse(ts));
+      const file = join(dir, 'bi2.jsonl');
+      const event = {
+        type: 'user',
+        sessionId: 'bi-2',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: block },
+            { type: 'text', text: typed },
+          ],
+        },
+        timestamp: ts,
+      };
+      writeFileSync(file, JSON.stringify(event) + '\n');
+
+      const r = await importJsonl(db, file, { project: 'proj' });
+      expect(r.prompts).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Driven to failure the other way: the guard must not swallow a prompt that merely
   // MENTIONS the sentinel mid-sentence — only one that opens with it is protocol.
   it('keeps a prompt that only mentions the sentinel', async () => {
