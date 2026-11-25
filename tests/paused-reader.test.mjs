@@ -172,20 +172,27 @@ describe('readPausedNote', () => {
     // tasks/session-end-b3c0c20d-paused.md. Per-file vi.spyOn stubs fix the same leak but
     // nothing goes red when a new suite forgets one.
     writePaused('guarded-paused.md', '# Paused — guarded\n\n## Not done\n\n- an item\n');
-    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    // The default is the project root (inferProjectDir), so point that at the fixture.
+    const savedProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = root;
 
-    expect(process.env.CLAUDE_MEM_TEST_GUARD).toBe('1'); // premise: the guard is actually on
-
-    expect(readPausedNote()).toBeNull(); // default path is neutralised
-    expect(readPausedNote({ projectPath: root })?.items).toEqual(['an item']); // explicit is not
-
-    // ...and the default reads normally once the guard is off, so this is containment and
-    // not a reader that simply never returns anything.
-    process.env.CLAUDE_MEM_TEST_GUARD = 'off';
     try {
-      expect(readPausedNote()?.items).toEqual(['an item']);
+      expect(process.env.CLAUDE_MEM_TEST_GUARD).toBe('1'); // premise: the guard is actually on
+
+      expect(readPausedNote()).toBeNull(); // default path is neutralised
+      expect(readPausedNote({ projectPath: root })?.items).toEqual(['an item']); // explicit is not
+
+      // ...and the default reads normally once the guard is off, so this is containment and
+      // not a reader that simply never returns anything.
+      process.env.CLAUDE_MEM_TEST_GUARD = 'off';
+      try {
+        expect(readPausedNote()?.items).toEqual(['an item']);
+      } finally {
+        process.env.CLAUDE_MEM_TEST_GUARD = '1';
+      }
     } finally {
-      process.env.CLAUDE_MEM_TEST_GUARD = '1';
+      if (savedProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = savedProjectDir;
     }
   });
 

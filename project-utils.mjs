@@ -42,10 +42,11 @@ export function inferProject() {
  * process was not spawned with cwd == project root, and the result is a surface that
  * labels directory A's git/tasks with directory B's project name. That was live in the
  * startup dashboard: `buildDashboard({ project: inferProject(), projectPath: process.cwd() })`
- * — the identity came from the env, the filesystem root from the process. In production the
- * two happen to coincide, so only the test face showed it (a hook subprocess spawned with the
- * repo root as cwd read the REAL repo's git state, and the assertion pinning the dashboard
- * leg passed or failed on whether the host tree was dirty).
+ * — the identity came from the env, the filesystem root from the process. The test face showed
+ * it first (a hook subprocess spawned with the repo root as cwd read the REAL repo's git state,
+ * and the assertion pinning the dashboard leg passed or failed on whether the host tree was
+ * dirty). Production diverges too: a session that has `cd`'d elsewhere fires its hooks from
+ * there, so cwd is that directory while CLAUDE_PROJECT_DIR still names the project.
  *
  * @returns {string} Absolute project root directory.
  */

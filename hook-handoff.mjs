@@ -31,6 +31,7 @@ import { RESUME_PAST_KEYWORDS, NOT_EXCLUDED_HANDOFF_SQL } from './lib/handoff-co
 // immutable in ESM and cannot be mocked after the fact.
 import * as gitStateModule from './lib/git-state.mjs';
 import * as taskReaderModule from './lib/task-reader.mjs';
+import { inferProjectDir } from './project-utils.mjs';
 // Namespace import for the same reason as the two above: ESM named bindings are immutable,
 // so a named import could not be spied on in tests.
 import * as pausedReaderModule from './lib/paused-reader.mjs';
@@ -337,7 +338,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // pending entries, those stay (they're fresher than the task file).
   if (!unfinished) {
     try {
-      const tasks = taskReaderModule.readProjectTasks({ projectPath: process.cwd() });
+      const tasks = taskReaderModule.readProjectTasks({ projectPath: inferProjectDir() });
       if (tasks.length > 0) {
         // Join with the ENTRY separator ('; '), NOT '\n': extractUnfinishedSummary
         // and renderHandoffFromRow split pending work on UNFINISHED_ENTRY_SEP, so a
@@ -505,7 +506,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // paused note.
   let nextSteps = null;
   try {
-    // No explicit projectPath: the reader defaults to cwd, and neutralises that default
+    // No explicit projectPath: the reader defaults to the project root, and neutralises that default
     // under the test guard so no suite writes this repo's own paused note into its rows.
     const note = pausedReaderModule.readPausedNote();
     if (note) {
@@ -589,7 +590,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   let gitBranch = null;
   let gitDirtyCount = null;
   try {
-    const st = gitStateModule.readGitState({ cwd: process.cwd() });
+    const st = gitStateModule.readGitState({ cwd: inferProjectDir() });
     gitShaAtHandoff = st.headSha || null;
     gitBranch = st.branch || null;
     // 0 and NULL are different answers here: "measured, and the tree is clean" versus "no
@@ -764,7 +765,7 @@ export function detectContinuationIntent(
   // auto-continuing weeks-old context. For older anchors, the rest of the
   // pipeline (Stage 0/1/2) still evaluates normally.
   try {
-    const currentSha = gitStateModule.readGitState({ cwd: process.cwd() }).headSha;
+    const currentSha = gitStateModule.readGitState({ cwd: inferProjectDir() }).headSha;
     if (currentSha) {
       // Scope like Stage 2: an 'exit' anchor is cross-session (resume after /exit), but a 'clear'
       // anchor is same-session only — else a parallel same-project session at the same commit
