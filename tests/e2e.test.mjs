@@ -1769,6 +1769,27 @@ describe('Suite 5: User Prompt', () => {
     expect(prompts.length).toBe(0);
   });
 
+  it('a <private> region crossing the host block edge is redacted; no secret is stored', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const sessionId = getSessionIdFromFile(tmpHome);
+
+    const { exitCode } = runHook('user-prompt', {
+      stdin: JSON.stringify({
+        prompt:
+          '<browser_instruction>x <private>a</browser_instruction> hunter2</private> Help me fix the bug',
+      }),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+
+    const db = openTestDb(tmpHome);
+    const prompts = db
+      .prepare('SELECT prompt_text FROM user_prompts WHERE content_session_id = ?')
+      .all(sessionId);
+    db.close();
+    expect(prompts.map((p) => p.prompt_text)).toEqual(['[redacted] Help me fix the bug']);
+  });
+
   it('a task-notification behind a host <browser_instruction> block is still dropped', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const sessionId = getSessionIdFromFile(tmpHome);

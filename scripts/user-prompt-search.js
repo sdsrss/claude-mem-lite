@@ -11,12 +11,11 @@ import {
   inferProject,
   OBS_BM25,
   notLowSignalTitleClause,
-  stripPrivate,
   neutralizeContextDelimiters,
   MAX_UPS_PROMPT_BYTES,
 } from '../utils.mjs';
 import { readHookStdin } from '../lib/hook-stdin.mjs';
-import { stripHostBlocks } from '../lib/host-blocks.mjs';
+import { stripHostBlocks, stripPromptBlocks } from '../lib/host-blocks.mjs';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
 import {
@@ -781,8 +780,10 @@ async function main() {
   // construction — private content must not pad effective length nor leak
   // into the FTS MATCH query terms. Mirrors hook.mjs handleUserPrompt, including the
   // host-prepended <browser_instruction> block: at ~4KB it filled the capped query on
-  // its own and the typed terms never reached the search (lib/host-blocks.mjs).
-  const promptText = stripHostBlocks(stripPrivate(rawPrompt));
+  // its own and the typed terms never reached the search. One combined pass because
+  // stripPrivate then stripHostBlocks mishandles a <private> that sits in or crosses the
+  // block (lib/host-blocks.mjs stripPromptBlocks).
+  const promptText = stripPromptBlocks(rawPrompt);
   if (!promptText) return;
 
   // P0: User-explicit "ignore memory" override (mirrors CC built-in

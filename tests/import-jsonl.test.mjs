@@ -6,6 +6,7 @@ import { writeFileSync, truncateSync, rmSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl, MAX_IMPORT_BYTES } from '../lib/import-jsonl.mjs';
+import { scrubSecrets } from '../utils.mjs';
 import { recallByFile } from '../lib/recall-core.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -445,6 +446,122 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
       const r = await importJsonl(db, file, { project: 'proj' });
       expect(r.prompts).toBe(0);
       expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The old importer stored scrubSecrets(joined).slice(0, 10000), block included. With typed
+  // text near the cap, the new key (block removed first, so more typed characters kept) is
+  // longer than the stripped legacy row; re-import must still recognise the row.
+  for (const withTimestamp of [true, false]) {
+    it(`re-importing a legacy capped row adds nothing (${withTimestamp ? 'timestamped' : 'no timestamp'})`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+      try {
+        const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+        const typed = 'q'.repeat(10500);
+        const ts = '2026-04-01T12:00:00Z';
+        db.prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+           VALUES ('bi-3', 'import-bi-3', 'proj', ?, ?, 'completed', 1)`,
+        ).run(ts, Date.parse(ts));
+        db.prepare(
+          `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+           VALUES ('bi-3', ?, 1, ?, ?)`,
+        ).run(scrubSecrets(`${block}\n${typed}`).slice(0, 10000), ts, Date.parse(ts));
+        const file = join(dir, 'bi3.jsonl');
+        const event = {
+          type: 'user',
+          sessionId: 'bi-3',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: block },
+              { type: 'text', text: typed },
+            ],
+          },
+          ...(withTimestamp ? { timestamp: ts } : {}),
+        };
+        writeFileSync(file, JSON.stringify(event) + '\n');
+
+        const r = await importJsonl(db, file, { project: 'proj' });
+        expect(r.prompts).toBe(0);
+        expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(1);
+        expect(
+          db.prepare("SELECT prompt_counter FROM sdk_sessions WHERE content_session_id = 'bi-3'").get()
+            .prompt_counter,
+        ).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // Timestamp-less lines are admitted by occurrence count against what the store holds. A
+  // store mixing the old shape (block kept) and the new one for the same long prompt must
+  // count as two stored copies, not be re-admitted under each key in turn.
+  it('a store mixing old- and new-format rows of one long prompt stays stable across re-imports', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+    try {
+      const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+      const typed = 'q'.repeat(10500);
+      const ts = '2026-04-01T12:00:00Z';
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+         VALUES ('bi-4', 'import-bi-4', 'proj', ?, ?, 'completed', 2)`,
+      ).run(ts, Date.parse(ts));
+      const insertRow = db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('bi-4', ?, ?, ?, ?)`,
+      );
+      insertRow.run(scrubSecrets(`${block}\n${typed}`).slice(0, 10000), 1, ts, Date.parse(ts));
+      insertRow.run(scrubSecrets(typed).slice(0, 10000), 2, ts, Date.parse(ts));
+      const file = join(dir, 'bi4.jsonl');
+      const event = {
+        type: 'user',
+        sessionId: 'bi-4',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: block },
+            { type: 'text', text: typed },
+          ],
+        },
+      };
+      writeFileSync(file, `${JSON.stringify(event)}\n`.repeat(3));
+
+      for (let run = 1; run <= 2; run++) {
+        await importJsonl(db, file, { project: 'proj' });
+        expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n, `run ${run}`).toBe(3);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A <private> region and a trailing newline: the old importer kept the newline; the new
+  // one must produce the same stored text, or the old row and the new key never meet.
+  it('a repeated short timestamp-less line with <private>, first copy stored in the old format, stays at 2', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+    try {
+      const line = 'use <private>tok</private> to deploy\n';
+      const ts = '2026-04-01T12:00:00Z';
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+         VALUES ('bi-5', 'import-bi-5', 'proj', ?, ?, 'completed', 1)`,
+      ).run(ts, Date.parse(ts));
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('bi-5', ?, 1, ?, ?)`,
+      ).run(scrubSecrets(line).slice(0, 10000), ts, Date.parse(ts));
+      const file = join(dir, 'bi5.jsonl');
+      const event = { type: 'user', sessionId: 'bi-5', message: { role: 'user', content: line } };
+      writeFileSync(file, `${JSON.stringify(event)}\n`.repeat(2));
+
+      for (let run = 1; run <= 2; run++) {
+        await importJsonl(db, file, { project: 'proj' });
+        expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n, `run ${run}`).toBe(2);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

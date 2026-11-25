@@ -957,6 +957,21 @@ describe('user-prompt-search subprocess integration', () => {
     expect(stdout).toContain('Ledger export dropped the quarterly column');
   });
 
+  it('a prompt that is only a host block runs no search', async () => {
+    seedLedgerObs();
+    const { stdout } = await runScript({ prompt: HOST_BLOCK });
+    expect(stdout).toBe('');
+  });
+
+  it('a <private> region crossing the host block edge is redacted and the typed request still searches', async () => {
+    seedLedgerObs();
+    const { stdout } = await runScript({
+      prompt: `<browser_instruction>x <private>zebrafish</browser_instruction> hunter2</private> ${TYPED}`,
+    });
+    expect(stdout).toContain('Ledger export dropped the quarterly column');
+    expect(stdout).not.toContain('hunter2');
+  });
+
   it('a host block in front of a task-notification still skips it', async () => {
     const { stdout } = await runScript({
       prompt: `${HOST_BLOCK}\n\n<task-notification>some internal protocol message that is long enough</task-notification>`,
