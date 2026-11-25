@@ -183,7 +183,8 @@ C 里两个需要单独授权的子项：
 ## 附录：复现
 
 - **设计与规则**：`docs/audits/20261124-value-ab-preregistration.md`。
-- **原始数据与脚本**（gitignore，只在本机）：`tasks/value-ab-20261124/`，内容包括：
+- **可复跑的脚本（2026-11-25 起在仓库里）**：`benchmark/value-ab/`，用法与陷阱见 `docs/measurement/rulers.md` 的 "value A/B" 条目；种子与提示词和本轮逐字节一致，分析脚本在本轮数据上复现了上面的数字。
+- **本轮原始数据与当时的脚本**（gitignore，只在本机）：`tasks/value-ab-20261124/`，内容包括：
   - `bin/run_traj.sh`：单条轨迹；
   - `bin/launch.sh`：批次；
   - `bin/eval.mjs`：隐藏验收；

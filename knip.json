@@ -26,6 +26,7 @@
     "benchmark/injection-budget.mjs",
     "benchmark/prompt-guard-ab.mjs",
     "benchmark/tool-text-ab.mjs",
+    "benchmark/value-ab/*.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"
