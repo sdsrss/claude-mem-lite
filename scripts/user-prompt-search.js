@@ -780,7 +780,7 @@ async function main() {
   // construction — private content must not pad effective length nor leak
   // into the FTS MATCH query terms. Mirrors hook.mjs handleUserPrompt, including the
   // host-prepended <browser_instruction> block: at ~4KB it filled the capped query on
-  // its own and the typed terms never reached the search. One combined pass because
+  // its own and the typed terms never reached the full-text search. One combined pass because
   // stripPrivate then stripHostBlocks mishandles a <private> that sits in or crosses the
   // block (lib/host-blocks.mjs stripPromptBlocks).
   const promptText = stripPromptBlocks(rawPrompt);
