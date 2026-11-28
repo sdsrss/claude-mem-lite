@@ -924,8 +924,8 @@ describe('user-prompt-search subprocess integration', () => {
 
   // The VS Code extension (with Claude in Chrome) prepends a <browser_instruction> block of
   // about 4KB to every prompt. The FTS query is capped at 2000 chars / 64 tokens
-  // (lib/ups-query.mjs), so the block filled it and the typed request never reached the
-  // search. The control is the typed request alone; the block in front must not change it.
+  // (lib/ups-query.mjs), so the block filled it. The control is the typed request alone; the
+  // block in front must not change it.
   // The block here is synthetic text of the real one's length and kind.
   const HOST_BLOCK = `<browser_instruction># Browser automation\n\n${Array.from(
     { length: 40 },
