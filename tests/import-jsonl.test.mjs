@@ -413,43 +413,51 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
   });
 
   // A transcript imported before the strip landed left a row that still carries the block.
-  // Re-importing it must stay a no-op, not add a stripped second copy.
-  it('re-importing over a row stored with the block adds nothing', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
-    try {
-      const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
-      const typed = 'a real question about billing retries';
-      const ts = '2026-04-01T12:00:00Z';
-      db.prepare(
-        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-         VALUES ('bi-2', 'import-bi-2', 'proj', ?, ?, 'completed')`,
-      ).run(ts, Date.parse(ts));
-      db.prepare(
-        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
-         VALUES ('bi-2', ?, 1, ?, ?)`,
-      ).run(`${block}\n${typed}`, ts, Date.parse(ts));
-      const file = join(dir, 'bi2.jsonl');
-      const event = {
-        type: 'user',
-        sessionId: 'bi-2',
-        message: {
-          role: 'user',
-          content: [
-            { type: 'text', text: block },
-            { type: 'text', text: typed },
-          ],
-        },
-        timestamp: ts,
-      };
-      writeFileSync(file, JSON.stringify(event) + '\n');
+  // Re-importing it must stay a no-op, not add a stripped second copy. A timestamped line is
+  // matched through the legacy key (importPrompt); a timestamp-less one has only the stored
+  // count under the stripped text (the noTsStored seeding in importJsonl), so both run.
+  for (const withTimestamp of [true, false]) {
+    it(`re-importing over a row stored with the block adds nothing (${withTimestamp ? 'timestamped' : 'no timestamp'})`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+      try {
+        const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+        const typed = 'a real question about billing retries';
+        const ts = '2026-04-01T12:00:00Z';
+        db.prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+           VALUES ('bi-2', 'import-bi-2', 'proj', ?, ?, 'completed', 1)`,
+        ).run(ts, Date.parse(ts));
+        db.prepare(
+          `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+           VALUES ('bi-2', ?, 1, ?, ?)`,
+        ).run(`${block}\n${typed}`, ts, Date.parse(ts));
+        const file = join(dir, 'bi2.jsonl');
+        const event = {
+          type: 'user',
+          sessionId: 'bi-2',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: block },
+              { type: 'text', text: typed },
+            ],
+          },
+          ...(withTimestamp ? { timestamp: ts } : {}),
+        };
+        writeFileSync(file, JSON.stringify(event) + '\n');
 
-      const r = await importJsonl(db, file, { project: 'proj' });
-      expect(r.prompts).toBe(0);
-      expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+        const r = await importJsonl(db, file, { project: 'proj' });
+        expect(r.prompts).toBe(0);
+        expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(1);
+        expect(
+          db.prepare("SELECT prompt_counter FROM sdk_sessions WHERE content_session_id = 'bi-2'").get()
+            .prompt_counter,
+        ).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   // The old importer stored scrubSecrets(joined).slice(0, 10000), block included. With typed
   // text near the cap, the new key (block removed first, so more typed characters kept) is
@@ -609,6 +617,46 @@ describe('importJsonl — <task-notification> parity with the live writers', () 
       ).run(scrubSecrets(line).slice(0, 10000), ts, Date.parse(ts));
       const file = join(dir, 'bi5.jsonl');
       const event = { type: 'user', sessionId: 'bi-5', message: { role: 'user', content: line } };
+      writeFileSync(file, `${JSON.stringify(event)}\n`.repeat(2));
+
+      for (let run = 1; run <= 2; run++) {
+        await importJsonl(db, file, { project: 'proj' });
+        expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n, `run ${run}`).toBe(2);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The same repeat with a host block: the old-format row strips back to the new key, so it
+  // is already counted under that key and must not be counted again as a legacy row. Counted
+  // twice, the one stored row would cover both lines and the genuine repeat would be lost.
+  it('a repeated short timestamp-less line with a host block, first copy stored in the old format, stays at 2', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-bi-'));
+    try {
+      const block = '<browser_instruction># Claude in Chrome browser automation</browser_instruction>';
+      const typed = 'deploy the staging branch';
+      const ts = '2026-04-01T12:00:00Z';
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, prompt_counter)
+         VALUES ('bi-7', 'import-bi-7', 'proj', ?, ?, 'completed', 1)`,
+      ).run(ts, Date.parse(ts));
+      db.prepare(
+        `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
+         VALUES ('bi-7', ?, 1, ?, ?)`,
+      ).run(scrubSecrets(`${block}\n${typed}`).slice(0, 10000), ts, Date.parse(ts));
+      const file = join(dir, 'bi7.jsonl');
+      const event = {
+        type: 'user',
+        sessionId: 'bi-7',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: block },
+            { type: 'text', text: typed },
+          ],
+        },
+      };
       writeFileSync(file, `${JSON.stringify(event)}\n`.repeat(2));
 
       for (let run = 1; run <= 2; run++) {

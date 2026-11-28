@@ -972,9 +972,12 @@ describe('user-prompt-search subprocess integration', () => {
     expect(stdout).not.toContain('hunter2');
   });
 
+  // Seeded, and the notification carries the typed request's words: if the sentinel were
+  // tested on the raw text (block first), the search would run and recall the ledger row.
   it('a host block in front of a task-notification still skips it', async () => {
+    seedLedgerObs();
     const { stdout } = await runScript({
-      prompt: `${HOST_BLOCK}\n\n<task-notification>some internal protocol message that is long enough</task-notification>`,
+      prompt: `${HOST_BLOCK}\n\n<task-notification>${TYPED}</task-notification>`,
     });
     expect(stdout).toBe('');
   });
