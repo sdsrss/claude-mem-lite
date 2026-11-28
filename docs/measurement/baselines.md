@@ -44,6 +44,26 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-11-28 (v6.37.1 release tree)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `c6a43b43` replaced it:
+
+> | Tests | **568 files / 10397**, 0 skipped | `main` @ `755d4e1c`, 2026-11-17, v6.35.4 release tree |
+> | Knip | **36** unused exports, **0** unused files, **7** unlisted binaries | same tree, primary working tree, knip 6.45.1 |
+> | Coverage | **88.17** stmts · **83.26** branches · **92.85** funcs · **89.49** lines | same tree, vitest 5.1.0 |
+
+The new row is the release gate's reading on `c6a43b43` (`tasks/remaining-6312/gates.sh`, claude
+off PATH): test:ci-env 574 files / 10499 passed; coverage from the v8 text reporter, statements
+16861 / 19175. **Knip is a caliber break for unlisted binaries**: knip 6.45.1 → 6.48.0 (PR #63) on
+the same tree (`3f6d5dcc`, measured 2026-11-28) stops listing `awk`
+(`tests/changelog-entry.test.mjs`) and `mkfifo` (`tests/project-files-not-regular.test.mjs`,
+`tests/steering-above-fifo.test.mjs`, `tests/transcript-digest.test.mjs`), so 7 → 3 is the
+tool, not the code. The one new unused export name is `stripPrivate` in `utils.mjs`: PR #62
+moved its last importers to `lib/host-blocks.mjs`, and the re-export stays because v6.37.0's
+entry points import it (swap-mixed-tree). Otherwise the export name set equals v6.37.0's gate
+reading (`gates-4ab80cc4`). The coverage and test deltas against `755d4e1c` span v6.36.0 to
+v6.37.1 and are not attributed here.
+
 ### Superseded row moved from CLAUDE.md 2026-11-17 (v6.35.4 release tree)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until the re-stamp on `755d4e1c` replaced it:
