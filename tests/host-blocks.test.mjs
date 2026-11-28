@@ -56,9 +56,18 @@ describe('stripPromptBlocks', () => {
     expect(stripPromptBlocks(BLOCK)).toBe('');
   });
 
-  it('removes a block holding an unmatched <private> and keeps the typed text', () => {
+  // Fail closed wherever the opener sits: a leading pair cannot be told apart from one the
+  // user typed, so an unclosed <private> inside it redacts to the end like any other.
+  it('redacts to the end from an unmatched <private> inside the block (fail closed)', () => {
     const block = '<browser_instruction>steps <private>never closed</browser_instruction>';
-    expect(stripPromptBlocks(`${block}\n\nfix the billing retry bug`)).toBe('fix the billing retry bug');
+    expect(stripPromptBlocks(`${block}\n\nfix the billing retry bug`)).toBe('[redacted]');
+  });
+
+  it('a typed leading pair holding an opener does not leak what follows', () => {
+    for (const opener of ['<private>', '<private x>', '<PRIVATE>']) {
+      const text = `<browser_instruction>${opener}</browser_instruction> my password is hunter2`;
+      expect(stripPromptBlocks(text), opener).toBe('[redacted]');
+    }
   });
 
   it('redacts through the closer of a region that opens inside the block, leaking nothing', () => {
@@ -114,13 +123,13 @@ describe('stripPromptBlocks', () => {
     expect(stripPromptBlocks(text)).toBe('  use [redacted] to deploy\n');
   });
 
-  it('ignores up to 16 unclosed openers in the leading block and fails closed at 17', () => {
+  it('fails closed on any number of unclosed openers in the leading block', () => {
     const prompt = (count) => `<browser_instruction>${'<private>'.repeat(count)}</browser_instruction> typed`;
-    expect(stripPromptBlocks(prompt(16))).toBe('typed');
-    expect(stripPromptBlocks(prompt(17))).toBe('[redacted]');
+    for (const count of [1, 16, 17])
+      expect(stripPromptBlocks(prompt(count)), String(count)).toBe('[redacted]');
   });
 
-  it('stays bounded on openers packed inside a block, and fails closed past the bound', () => {
+  it('stays linear on openers packed inside a block, and fails closed', () => {
     const dense = `<browser_instruction>${'<private>'.repeat(12000)}</browser_instruction> typed`;
     const started = performance.now();
     const out = stripPromptBlocks(dense);

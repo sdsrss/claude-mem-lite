@@ -3587,9 +3587,8 @@ async function readUserPromptInput() {
   // prompt_text at the first NUL (and breaking FTS). Single source of truth, so the
   // user_prompts INSERT, FTS query, and continuation detection all see clean text.
   // stripPromptBlocks = stripPrivate + the host-prepended <browser_instruction> block
-  // (not user input; lib/host-blocks.mjs) in ONE pass over the raw text: run in sequence,
-  // an unmatched <private> inside the block would redact through its closer and the typed
-  // text, and in the other order a private region crossing the block's edge would leak.
+  // (not user input; lib/host-blocks.mjs) in ONE pass over the raw text: stripping the
+  // block first would leak a private region that crosses the block's edge.
   // A prompt that was nothing but that block has nothing to record.
   // eslint-disable-next-line no-control-regex -- intentional: NUL/C0 strip prevents SQLite C-string truncation
   const promptText = stripPromptBlocks(rawPrompt).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
