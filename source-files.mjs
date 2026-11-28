@@ -150,7 +150,6 @@ export const SOURCE_FILES = [
   'lib/time-constants.mjs',
   'scoring-sql.mjs',
   'format-utils.mjs',
-  'lib/paused-reader.mjs',
   'lib/doctor-stale-temp.mjs',
   'lib/shard-gc.mjs',
   // Phase-2 task-imperative framing helper (2026-06-29): formatTaskImperative, the single
@@ -183,6 +182,8 @@ export const SOURCE_FILES = [
   // Leaf: the CLI flag suggester and project-utils' project suggester share it.
   'lib/edit-distance.mjs',
   'project-utils.mjs',
+  // After project-utils.mjs: its default project path is inferProjectDir().
+  'lib/paused-reader.mjs',
   // v2.41 god-module split — mem-cli.mjs router + per-cmd handlers under cli/
   'cli/common.mjs',
   'lib/transcript-scan.mjs',
