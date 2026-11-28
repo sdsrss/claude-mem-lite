@@ -2,6 +2,30 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.37.1 — The browser-instruction block in front of a prompt is no longer stored or searched; the handoff reads git state from the project root
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.37.0`.
+
+- **With Claude in Chrome connected, the Claude Code VS Code extension sends each prompt with a
+  `<browser_instruction>` block in front of the typed text. That block is now removed before the
+  prompt is stored, searched at prompt time or imported by `import-jsonl`** (PR #62, from an
+  outside contributor). Until now it was stored as the prompt text, so it became the handoff's
+  "Working On" line. Only well-formed blocks at the start of the prompt are removed, and a prompt
+  that was nothing but the block is not recorded. A `<private>` region that starts inside the
+  block and ends after it is still redacted through its closing tag.
+- **No longer redacted:** a prompt the user starts with
+  `<browser_instruction><private></browser_instruction>` followed by text now stores that text;
+  6.37.0 stored `<browser_instruction>[redacted]`. Recorded in
+  `docs/audits/20261128-v6.37.1-pretag-r1-defects.md` (F1).
+- **The handoff reads git state (branch, HEAD, dirty count), the task list and the paused note
+  from the project root instead of the hook's working directory** (PR #61, from an outside
+  contributor). After a session had `cd`'d into another repository, the handoff carried that
+  repository's branch and HEAD, and the resume check compared that HEAD.
+- **The hint for deferred items older than 30 days (`defer list`, `mem_defer_list`) now says to
+  drop the ones that no longer apply, with a reason** (D#944). It used to say "refresh (still
+  relevant?) or drop", but nothing resets an item's age: `defer update` keeps it.
+
 ## v6.37.0 — PreToolUse recall ranks a file's observations by write time before citation history
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is setting
