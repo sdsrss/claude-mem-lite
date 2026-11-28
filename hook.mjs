@@ -40,7 +40,6 @@ import {
   makeEntryDesc,
   truncate,
   scrubSecrets,
-  stripPrivate,
   EDIT_TOOLS,
   debugCatch,
   debugLog,
@@ -52,6 +51,7 @@ import {
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
 import { inferProjectDir } from './project-utils.mjs';
+import { stripHostBlocks, stripPromptBlocks } from './lib/host-blocks.mjs';
 import { extractFileTargets } from './bash-utils.mjs';
 import { isPluginDisabledInScopes, pluginSettingsScopes, readSettingsScope } from './lib/plugin-key.mjs';
 import { readHookStdin, salvageTruncatedHookEvent, TOOL_INPUT_FILE_MAX_BYTES } from './lib/hook-stdin.mjs';
@@ -3574,8 +3574,9 @@ async function readUserPromptInput() {
   // Check on raw text BEFORE stripPrivate (the marker is a literal sentinel,
   // wrapping it in <private> would never make sense, but order matters: a
   // future <task-notification> with embedded <private> blocks should still
-  // be classified as protocol first.)
-  if (rawPrompt.startsWith('<task-notification>')) return;
+  // be classified as protocol first.) A host block in front would hide the sentinel, so
+  // test past it (lib/host-blocks.mjs).
+  if (stripHostBlocks(rawPrompt).startsWith('<task-notification>')) return;
 
   // Strip user-marked <private>...</private> blocks at the input boundary so
   // every downstream consumer (user_prompts INSERT, FTS query, continuation
@@ -3585,8 +3586,14 @@ async function readUserPromptInput() {
   // embedded NUL terminates SQLite's C string, silently truncating the stored
   // prompt_text at the first NUL (and breaking FTS). Single source of truth, so the
   // user_prompts INSERT, FTS query, and continuation detection all see clean text.
+  // stripPromptBlocks = stripPrivate + the host-prepended <browser_instruction> block
+  // (not user input; lib/host-blocks.mjs) in ONE pass over the raw text: run in sequence,
+  // an unmatched <private> inside the block would redact through its closer and the typed
+  // text, and in the other order a private region crossing the block's edge would leak.
+  // A prompt that was nothing but that block has nothing to record.
   // eslint-disable-next-line no-control-regex -- intentional: NUL/C0 strip prevents SQLite C-string truncation
-  const promptText = stripPrivate(rawPrompt).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  const promptText = stripPromptBlocks(rawPrompt).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  if (!promptText) return;
   return { promptText, hookData };
 }
 

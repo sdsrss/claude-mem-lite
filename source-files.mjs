@@ -52,6 +52,7 @@ export const SOURCE_FILES = [
   'lib/doctor-hook-interpreter.mjs',
   'lib/low-signal-patterns.mjs',
   'lib/private-strip.mjs',
+  'lib/host-blocks.mjs',
   'secret-scrub.mjs',
   'lib/mcp-ownership.mjs',
   'lib/project-rekey.mjs',

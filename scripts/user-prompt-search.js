@@ -11,11 +11,11 @@ import {
   inferProject,
   OBS_BM25,
   notLowSignalTitleClause,
-  stripPrivate,
   neutralizeContextDelimiters,
   MAX_UPS_PROMPT_BYTES,
 } from '../utils.mjs';
 import { readHookStdin } from '../lib/hook-stdin.mjs';
+import { stripHostBlocks, stripPromptBlocks } from '../lib/host-blocks.mjs';
 import { resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 import { liveObsFilterSql, injectionRelevanceSql } from '../lib/inject-search-core.mjs';
 import {
@@ -769,16 +769,22 @@ async function main() {
   if (!rawPrompt || typeof rawPrompt !== 'string') return;
 
   // Skip internal protocol messages (check on raw text — protocol sentinel
-  // would never legitimately be wrapped in <private>).
-  if (rawPrompt.startsWith('<task-notification>')) return;
+  // would never legitimately be wrapped in <private>). Tested past any host block,
+  // as in hook.mjs.
+  if (stripHostBlocks(rawPrompt).startsWith('<task-notification>')) return;
 
   // D#120: session-keyed dedup marker — every read/write below uses this path.
   const injectedIdsFile = injectedIdsFileFor(hookData.session_id);
 
   // Strip <private>...</private> blocks before length gates and FTS query
   // construction — private content must not pad effective length nor leak
-  // into the FTS MATCH query terms. Mirrors hook.mjs handleUserPrompt.
-  const promptText = stripPrivate(rawPrompt);
+  // into the FTS MATCH query terms. Mirrors hook.mjs handleUserPrompt, including the
+  // host-prepended <browser_instruction> block: at ~4KB it filled the capped query on
+  // its own and the typed terms never reached the search. One combined pass because
+  // stripPrivate then stripHostBlocks mishandles a <private> that sits in or crosses the
+  // block (lib/host-blocks.mjs stripPromptBlocks).
+  const promptText = stripPromptBlocks(rawPrompt);
+  if (!promptText) return;
 
   // P0: User-explicit "ignore memory" override (mirrors CC built-in
   // memoryTypes.ts:215). Moved ABOVE the deterministic D# path so it
