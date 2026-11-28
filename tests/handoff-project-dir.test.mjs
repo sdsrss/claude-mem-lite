@@ -5,13 +5,13 @@
 // HEAD sha (`master @ c6ce620` on a repo whose branch is `main`). The wrong sha then also
 // breaks the Stage -1 git anchor in detectContinuationIntent, which compares against it.
 //
-// All four readers must use the project root; each case below fails if its site goes back
-// to process.cwd(). The paused note is read through lib/paused-reader.mjs's default path,
+// With the session's cwd outside the project, all four readers must use the project root;
+// each case below fails if its site goes back to process.cwd(). The paused note is read through lib/paused-reader.mjs's default path,
 // which the test guard neutralises, so that case turns the guard off for itself.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'fs';
 import { createTestDb } from './test-helpers.mjs';
 import { buildAndSaveHandoff, detectContinuationIntent } from '../hook-handoff.mjs';
 import * as gitStateModule from '../lib/git-state.mjs';
@@ -106,6 +106,59 @@ describe('handoff reads the project root, not the process cwd', () => {
       if (savedGuard === undefined) delete process.env.CLAUDE_MEM_TEST_GUARD;
       else process.env.CLAUDE_MEM_TEST_GUARD = savedGuard;
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// EnterWorktree moves the session into <project>/.claude/worktrees/<name> while
+// CLAUDE_PROJECT_DIR stays the main checkout (probed 2026-11-28: a hook dumping its env after
+// EnterWorktree saw cwd, PWD and stdin cwd in the worktree, CLAUDE_PROJECT_DIR at the main
+// checkout). The worktree's branch is the one the session works on, so git state comes from a
+// cwd INSIDE the project; a cwd outside it (the cases above) still reads the project root.
+// The task list and the paused note stay at the project root either way.
+describe('handoff reads git state from a working directory inside the project', () => {
+  let root;
+  let worktree;
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'cml-handoff-wt-')));
+    worktree = join(root, '.claude', 'worktrees', 'w1');
+    mkdirSync(worktree, { recursive: true });
+    process.env.CLAUDE_PROJECT_DIR = root;
+    vi.spyOn(process, 'cwd').mockReturnValue(worktree);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('buildAndSaveHandoff reads git state from the worktree, the task list from the root', () => {
+    seed();
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+    expect(gitSpy).toHaveBeenCalled();
+    for (const [options] of gitSpy.mock.calls) expect(options).toEqual({ cwd: worktree });
+    expect(taskSpy).toHaveBeenCalled();
+    for (const [options] of taskSpy.mock.calls) expect(options).toEqual({ projectPath: root });
+  });
+
+  it('detectContinuationIntent compares HEAD from the worktree', () => {
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, git_sha_at_handoff, match_keywords, working_on, created_at_epoch)
+       VALUES (?, 'exit', 'sess-prev', 'deadbeef1234', 'ranker', 'ranker work', ?)`,
+    ).run(PROJECT, Date.now());
+    detectContinuationIntent(db, 'ok thanks', PROJECT, 'sess-next');
+    expect(gitSpy).toHaveBeenCalled();
+    for (const [options] of gitSpy.mock.calls) expect(options).toEqual({ cwd: worktree });
+  });
+
+  it('a sibling directory whose name starts with the root is outside, so the root is read', () => {
+    const sibling = `${root}-other`;
+    mkdirSync(sibling, { recursive: true });
+    try {
+      process.cwd.mockReturnValue(sibling);
+      seed();
+      buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+      for (const [options] of gitSpy.mock.calls) expect(options).toEqual({ cwd: root });
+    } finally {
+      rmSync(sibling, { recursive: true, force: true });
     }
   });
 });

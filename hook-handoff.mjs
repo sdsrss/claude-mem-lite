@@ -1,7 +1,8 @@
 // claude-mem-lite: Cross-session handoff extraction, detection, and injection
 // Extracted for testability — hook.mjs has module-level side effects
 
-import { basename } from 'path';
+import { basename, isAbsolute, relative } from 'path';
+import { realpathSync } from 'fs';
 import {
   truncate,
   normalizeInline,
@@ -37,6 +38,31 @@ import { inferProjectDir } from './project-utils.mjs';
 import * as pausedReaderModule from './lib/paused-reader.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { summarySourceLabel } from './lib/fast-summary.mjs';
+
+/**
+ * Where the handoff reads git state (branch, HEAD, dirty count): the hook's working directory
+ * when it lies inside the project root, else the root. EnterWorktree moves the session into
+ * <root>/.claude/worktrees/<name> while CLAUDE_PROJECT_DIR stays the main checkout (probed
+ * 2026-11-28), and that worktree's branch is the one the session works on; a subdirectory
+ * reads the same repository as the root. A working directory outside the root (a `cd` into
+ * another repository, PR #61) is not read. The store and the Stage -1 compare both use this,
+ * so they agree. The task list and the paused note stay at the root (inferProjectDir).
+ * @returns {string}
+ */
+function gitStateDir() {
+  let root = inferProjectDir();
+  let cwd = process.cwd();
+  try {
+    const realRoot = realpathSync(root);
+    const realCwd = realpathSync(cwd);
+    root = realRoot;
+    cwd = realCwd;
+  } catch {
+    // Compare the paths as given.
+  }
+  const rel = relative(root, cwd);
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? cwd : root;
+}
 
 /** How much of the first subject prompt `working_on` keeps (see buildAndSaveHandoff). */
 export const WORKING_ON_FIRST_MAX = 600;
@@ -590,7 +616,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   let gitBranch = null;
   let gitDirtyCount = null;
   try {
-    const st = gitStateModule.readGitState({ cwd: inferProjectDir() });
+    const st = gitStateModule.readGitState({ cwd: gitStateDir() });
     gitShaAtHandoff = st.headSha || null;
     gitBranch = st.branch || null;
     // 0 and NULL are different answers here: "measured, and the tree is clean" versus "no
@@ -765,7 +791,7 @@ export function detectContinuationIntent(
   // auto-continuing weeks-old context. For older anchors, the rest of the
   // pipeline (Stage 0/1/2) still evaluates normally.
   try {
-    const currentSha = gitStateModule.readGitState({ cwd: inferProjectDir() }).headSha;
+    const currentSha = gitStateModule.readGitState({ cwd: gitStateDir() }).headSha;
     if (currentSha) {
       // Scope like Stage 2: an 'exit' anchor is cross-session (resume after /exit), but a 'clear'
       // anchor is same-session only — else a parallel same-project session at the same commit
